@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from app.core.log import get_logger
 from app.core.auth_dependency import require_admin
-from app.core.explicit_backend import require_explicit_backend_async
+from app.core.explicit_backend import (require_explicit_backend,
+                                       require_explicit_backend_async)
 from app.core.upload_limits import (MODEL_UPLOAD_MAX_BYTES, ensure_image,
                                     guard_content_length, max_pack_bytes,
                                     read_upload_capped)
@@ -1021,6 +1022,10 @@ def _location_model3d_generate_sync(location_id: str,
         raise HTTPException(status_code=400,
                             detail="source_image required (a building gallery image of the location)")
     backend = str(data.get("backend") or "").strip()
+    if backend:
+        # An explicit pick is answered here, not lost in the background job
+        # (the rig check stays in generate_mesh).
+        require_explicit_backend(backend, media="mesh")
     if not trigger_generation(location_id, source_image=source_image,
                               backend_glob=backend,
                               face_num=_mesh_int(data.get("face_num")) or None,
@@ -1470,6 +1475,8 @@ def _room_model3d_generate_sync(location_id: str, room_id: str,
         raise HTTPException(status_code=400,
                             detail="source_image required (a gallery image assigned to the room)")
     backend = str(data.get("backend") or "").strip()
+    if backend:
+        require_explicit_backend(backend, media="mesh")
     if not trigger_generation(location_id, source_image=source_image,
                               backend_glob=backend, room_id=room_id,
                               face_num=_mesh_int(data.get("face_num")) or None,
@@ -1974,6 +1981,18 @@ def props_admin() -> Dict[str, Any]:
             "mesh_default": mesh.get("default", "")}
 
 
+async def _require_prop_picks(data: Dict[str, Any]) -> None:
+    """Answer a dead explicit pick of a prop chain request with 503 before
+    the background chain starts: the image pick unless the run only meshes,
+    the mesh pick unless it only renders the image."""
+    image_pick = str(data.get("image_backend") or "").strip()
+    mesh_pick = str(data.get("mesh_backend") or "").strip()
+    if image_pick and not data.get("mesh_only"):
+        await require_explicit_backend_async(image_pick)
+    if mesh_pick and not data.get("image_only"):
+        await require_explicit_backend_async(mesh_pick, media="mesh")
+
+
 @router.post("/props/generate")
 async def prop_generate(request: Request) -> Dict[str, Any]:
     """Create a prop from a prompt and kick off the source→mesh chain (body:
@@ -1998,6 +2017,15 @@ def _prop_generate_sync(data: Any) -> Dict[str, Any]:
     name = str(data.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name required")
+    # Explicit picks are answered before the prop record exists — a dead
+    # pick would otherwise leave a prop behind whose chain failed in the
+    # background.
+    image_pick = str(data.get("image_backend") or "").strip()
+    mesh_pick = str(data.get("mesh_backend") or "").strip()
+    if image_pick:
+        require_explicit_backend(image_pick)
+    if mesh_pick:
+        require_explicit_backend(mesh_pick, media="mesh")
     try:
         prop = create_prop(name=name, category=str(data.get("category") or ""),
                            width_m=data.get("width_m"), depth_m=data.get("depth_m"),
@@ -2010,8 +2038,8 @@ def _prop_generate_sync(data: Any) -> Dict[str, Any]:
     trigger_generation(prop["id"],
                         prompt=str(data.get("prompt") or ""),
                         negative=str(data.get("negative") or ""),
-                        image_backend_glob=str(data.get("image_backend") or "").strip(),
-                        mesh_backend_glob=str(data.get("mesh_backend") or "").strip(),
+                        image_backend_glob=image_pick,
+                        mesh_backend_glob=mesh_pick,
                         face_num=_mesh_int(data.get("face_num")) or None,
                         texture_size=_mesh_int(data.get("texture_size")) or None,
                         tier=_tier(data.get("tier")),
@@ -2267,6 +2295,7 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400,
                             detail="mesh_only and image_only are exclusive")
     view, front_reference, reference_variant, views = _view_args(data)
+    await _require_prop_picks(data)
     if not trigger_generation(prop_id,
                               prompt=str(data.get("prompt") or ""),
                               negative=str(data.get("negative") or ""),

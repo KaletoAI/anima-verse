@@ -598,15 +598,8 @@ async def generate_item_image_route(item_id: str, request: Request) -> Dict[str,
 
     backend_name = str(overrides.get("backend") or "").strip()
     if backend_name:
-        import asyncio
-        from app.imagegen.service import get_image_service
-        # The probe is network I/O — off the event loop.
-        if not await asyncio.to_thread(
-                get_image_service()._wait_for_explicit_backend, backend_name):
-            raise HTTPException(
-                status_code=503,
-                detail=f"backend '{backend_name}' is not available — "
-                       f"no automatic fallback")
+        from app.core.explicit_backend import require_explicit_backend_async
+        await require_explicit_backend_async(backend_name)
 
     import threading
     threading.Thread(

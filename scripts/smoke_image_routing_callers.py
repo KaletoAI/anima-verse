@@ -421,6 +421,32 @@ H3 the REAL core, explicit "Cloud" with LoRA "foreign.safetensors" (the
    alone — a second finish would overwrite its duration with 0).
 Fails on commit 3177ddd4 (before this fix): H1 answers {"status":
    "started"} and records one track_start; H2's track stays "pending".
+H4 the character gallery regenerate (its sync body) with backend "Gw"
+   (cooling) -> 503, no track_start, no thread; with "Cloud" (available) ->
+   {"status": "started"} and one track_start (the worker is replaced by a
+   recorder that got backend_name "Cloud").
+H5 prop re-render POST /world/props/{id}/generate (trigger_generation
+   replaced by a recorder): image_backend "Gw" (cooling) -> 503, nothing
+   triggered; the SAME body with mesh_only true -> triggered (the image pick
+   is not used by a mesh-only run, so it is not checked); mesh_backend
+   "MDead" (a cooling mesh backend) -> 503 before anything is triggered;
+   image_backend "Cloud" -> triggered with image_backend_glob "Cloud".
+H6 prop generate (its sync body) with mesh_backend "MDead" (cooling) -> 503
+   and NO prop record was created (the check runs before create_prop).
+H7 the character mesh route with backend "Cloud" — an IMAGE backend,
+   available, but not a mesh backend -> 503 (the pick is resolved within
+   media "mesh"); trigger_generation not called.
+H8 static: every thread-spawning route with an explicit pick calls the ONE
+   helper (require_explicit_backend or its async twin; the prop routes
+   through _require_prop_picks, which calls the async twin) in its body:
+   world.py generate_gallery_image, _location_model3d_generate_sync,
+   _room_model3d_generate_sync, _prop_generate_sync, prop_regenerate,
+   _require_prop_picks; prop_variants.py prop_variant_generate;
+   characters.py _regenerate_character_image_sync,
+   generate_character_model3d; instagram.py _regenerate_post_image_sync,
+   _animate_instagram_post_sync; inventory.py generate_item_image_route —
+   and none of those routes calls _wait_for_explicit_backend itself any
+   more (no per-route copy of the check).
 
 DEFERRED: the surface-texture case of the plan (its C4, occasion
 "surface_texture") waits until app/core/surface_textures.py — which carries
@@ -1642,8 +1668,144 @@ def part_h():
         check("H3 core refusal on the track", (row[0], "does not associate" in (row[1] or "")),
               ("failed", True))
         check("H3 finished exactly once", [f[0] for f in finishes].count(tid), 1)
+
+        # -- H4 character gallery regenerate ------------------------------
+        from app.models.character import (add_character_image_prompt,
+                                          get_character_images_dir,
+                                          save_character_profile)
+        from app.core import character_ops
+        from app.routes import characters as characters_routes
+        save_character_profile("Nell", {"name": "Nell", "appearance": "a tall woman"},
+                               create_new=True)
+        nd = get_character_images_dir("Nell")
+        nd.mkdir(parents=True, exist_ok=True)
+        (nd / "n1.png").write_bytes(png_bytes())
+        add_character_image_prompt("Nell", "n1.png", "a portrait")
+        gw = FakeBackend("Gw", 0, "natural", dead=True)
+        gw.mark_unhealthy("smoke", 300)
+        cloud = FakeBackend("Cloud", 5, "keywords")
+        install_pool(gw, cloud)
+        workers = []
+        _real_worker = character_ops.regenerate_image_worker
+        character_ops.regenerate_image_worker = lambda *a, **k: workers.append(a[4])
+        starts.clear()
+        try:
+            try:
+                characters_routes._regenerate_character_image_sync(
+                    "Nell", "n1.png", {"backend": "Gw"})
+                check("H4 regenerate explicit dead -> 503", "no exception", 503)
+            except HTTPException as e:
+                check("H4 regenerate explicit dead -> 503", e.status_code, 503)
+            time.sleep(0.2)
+            check("H4 no track, no worker", (starts, workers), ([], []))
+            res = characters_routes._regenerate_character_image_sync(
+                "Nell", "n1.png", {"backend": "Cloud"})
+            time.sleep(0.2)
+            check("H4 available pick starts", (res.get("status"), len(starts), workers),
+                  ("started", 1, ["Cloud"]))
+        finally:
+            character_ops.regenerate_image_worker = _real_worker
+
+        # -- H5/H6 prop routes --------------------------------------------
+        from app.core import props
+        mdead = FakeMedia("MDead", 0, "mesh", rig="none", dead=True)
+        mdead.mark_unhealthy("smoke", 300)
+        install_pool(gw, cloud, mdead)
+        pid = props.create_prop(name="Barrel", description="an oak barrel")["id"]
+        triggered = []
+        _real_trigger = props.trigger_generation
+        props.trigger_generation = lambda prop_id, **kw: triggered.append(kw) or True
+
+        class _PropReq:
+            def __init__(self, body):
+                self._body = body
+                self.headers = {"content-length": "1"}
+
+            async def json(self):
+                return dict(self._body)
+
+        def regen(body):
+            try:
+                asyncio.run(world_routes.prop_regenerate(pid, _PropReq(body)))
+                return "ok"
+            except HTTPException as e:
+                return e.status_code
+        try:
+            check("H5 dead image pick", (regen({"image_backend": "Gw"}), len(triggered)),
+                  (503, 0))
+            check("H5 mesh_only ignores the image pick",
+                  (regen({"image_backend": "Gw", "mesh_only": True}), len(triggered)),
+                  ("ok", 1))
+            check("H5 dead mesh pick", (regen({"mesh_backend": "MDead"}), len(triggered)),
+                  (503, 1))
+            check("H5 available image pick",
+                  (regen({"image_backend": "Cloud"}),
+                   triggered[-1].get("image_backend_glob") if triggered else None),
+                  ("ok", "Cloud"))
+            n_before = len(props.list_props())
+            try:
+                world_routes._prop_generate_sync({"name": "Keg", "mesh_backend": "MDead"})
+                check("H6 prop generate dead mesh pick", "no exception", 503)
+            except HTTPException as e:
+                check("H6 prop generate dead mesh pick", e.status_code, 503)
+            check("H6 no prop record", len(props.list_props()) - n_before, 0)
+        finally:
+            props.trigger_generation = _real_trigger
+
+        # -- H7 character mesh --------------------------------------------
+        from app.core import model3d, model_refs
+        mesh_calls = []
+        _real_ref, _real_mtrig = model_refs.find_ref_image, model3d.trigger_generation
+        model_refs.find_ref_image = lambda *a, **k: "tpose.png"
+        model3d.trigger_generation = lambda *a, **k: mesh_calls.append(k) or True
+        try:
+            try:
+                characters_routes.generate_character_model3d("Nell", backend="Cloud")
+                check("H7 image backend as mesh pick", "no exception", 503)
+            except HTTPException as e:
+                check("H7 image backend as mesh pick", e.status_code, 503)
+            check("H7 nothing triggered", mesh_calls, [])
+        finally:
+            model_refs.find_ref_image, model3d.trigger_generation = _real_ref, _real_mtrig
     finally:
         _tq.track_start, _tq.track_finish = _orig_start, _orig_finish
+
+    # -- H8 static: every route goes through the one helper ---------------
+    import ast
+    root = Path(__file__).resolve().parents[1]
+    want = {
+        "app/routes/world.py": ["generate_gallery_image", "_location_model3d_generate_sync",
+                                "_room_model3d_generate_sync", "_prop_generate_sync",
+                                "prop_regenerate", "_require_prop_picks"],
+        "app/routes/prop_variants.py": ["prop_variant_generate"],
+        "app/routes/characters.py": ["_regenerate_character_image_sync",
+                                     "generate_character_model3d"],
+        "app/routes/instagram.py": ["_regenerate_post_image_sync",
+                                    "_animate_instagram_post_sync"],
+        "app/routes/inventory.py": ["generate_item_image_route"],
+    }
+    helpers = {"require_explicit_backend", "require_explicit_backend_async",
+               "_require_prop_picks"}
+    missing, copies = [], []
+    for rel, funcs in want.items():
+        tree = ast.parse((root / rel).read_text())
+        defs = {n.name: n for n in ast.walk(tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        for fn in funcs:
+            node = defs.get(fn)
+            if node is None:
+                missing.append(f"{rel}:{fn} (not found)")
+                continue
+            called = {(c.func.id if isinstance(c.func, ast.Name) else
+                       c.func.attr if isinstance(c.func, ast.Attribute) else "")
+                      for c in ast.walk(node) if isinstance(c, ast.Call)}
+            own = helpers - ({"_require_prop_picks"} if fn == "_require_prop_picks" else set())
+            if not called & own:
+                missing.append(f"{rel}:{fn}")
+            if "_wait_for_explicit_backend" in called:
+                copies.append(f"{rel}:{fn}")
+    check("H8 every listed route calls the helper", missing, [])
+    check("H8 no per-route copy of the check", copies, [])
 
 
 if __name__ == "__main__":

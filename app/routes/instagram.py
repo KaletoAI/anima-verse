@@ -6,6 +6,7 @@ from typing import Dict, Any
 
 from fastapi import Request
 from app.core.log import get_logger
+from app.core.explicit_backend import require_explicit_backend
 
 logger = get_logger("instagram")
 
@@ -295,22 +296,22 @@ def _regenerate_post_image_sync(post_id: str, data: Any):
 
     post = get_post(post_id)
     if not post:
-        raise HTTPException(status_code=404, detail="Post nicht gefunden")
+        raise HTTPException(status_code=404, detail="Post not found")
 
     character_name = post.get("agent_name", "")
     image_filename = post.get("image_filename", "")
     instagram_dir = get_instagram_dir()
     image_path = instagram_dir / image_filename
     if not image_path.exists():
-        raise HTTPException(status_code=404, detail="Bilddatei nicht gefunden")
+        raise HTTPException(status_code=404, detail="Image file not found")
 
-    # Prompt aus Bild-Metadaten laden (neue Struktur) mit Fallback auf alten Feed-Eintrag
+    # The prompt from the image meta, else the one of the feed entry
     img_meta = load_image_meta(image_filename)
     image_prompt = (img_meta or {}).get("prompt", "") or post.get("image_prompt", "")
     if not image_prompt:
-        raise HTTPException(status_code=422, detail="Kein Prompt fuer dieses Bild gespeichert.")
+        raise HTTPException(status_code=422, detail="No prompt stored for this image.")
 
-    # Custom-Prompt aus Dialog uebernimmt gespeicherten Prompt
+    # A custom prompt from the dialog replaces the stored one
     custom_prompt = data.get("custom_prompt", "").strip()
     if custom_prompt:
         image_prompt = custom_prompt
@@ -319,15 +320,19 @@ def _regenerate_post_image_sync(post_id: str, data: Any):
     backend_name = data.get("backend", "").strip()
     loras = data.get("loras")  # Optional: [{name, strength}, ...]
     model_override = data.get("model_override", "").strip()
-    character_names = data.get("character_names")  # Optional: explizite Character-Auswahl
+    character_names = data.get("character_names")  # Optional: explicit character selection
     room_id = data.get("room_id", "").strip()
     negative_prompt_override = data.get("negative_prompt", "").strip()
     create_new = data.get("create_new", False)
     use_room = data.get("use_room", True)
     use_source_as_reference = bool(data.get("use_source_as_reference", False))
-    # Originale Location aus Bild-Metadaten
+    # The original location from the image meta
     original_location_id = (img_meta or {}).get("location", "")
     agent_config = get_character_config(character_name)
+    if backend_name:
+        # A dead explicit pick is the caller's answer (503), not a track
+        # that fails in the background thread.
+        require_explicit_backend(backend_name)
 
     from app.core.task_queue import get_task_queue
     from app.core.task_router import resolve_queue
@@ -357,13 +362,13 @@ def _regenerate_post_image_sync(post_id: str, data: Any):
                 meta = load_image_meta(_actual_filename) or {}
                 meta["prompt"] = final_prompt
                 save_image_meta(_actual_filename, meta)
-            # Bei create_new: neues Bild zum Post hinzufuegen (Carousel)
+            # create_new: add the new image to the post (carousel)
             if create_new and _actual_filename != image_filename:
                 from app.models.instagram import add_post_image
                 add_post_image(post_id, _actual_filename)
             _tq.track_finish(_track_id)
         except Exception as e:
-            logger.error("Instagram Regenerierung fehlgeschlagen: %s", e)
+            logger.error("Instagram regeneration failed: %s", e)
             _tq.track_finish(_track_id, error=str(e))
 
     import threading
@@ -486,21 +491,21 @@ def _animate_instagram_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
 
     post = get_post(post_id)
     if not post:
-        raise HTTPException(status_code=404, detail="Post nicht gefunden")
+        raise HTTPException(status_code=404, detail="Post not found")
 
     character_name = post.get("agent_name", "")
     image_filename = post.get("image_filename", "")
     instagram_dir = get_instagram_dir()
     image_path = instagram_dir / image_filename
     if not image_path.exists():
-        raise HTTPException(status_code=404, detail="Bilddatei nicht gefunden")
+        raise HTTPException(status_code=404, detail="Image file not found")
 
     prompt = data.get("prompt", "").strip()
     if not prompt:
         img_meta = load_image_meta(image_filename)
         prompt = (img_meta or {}).get("prompt", "") or post.get("image_prompt", "")
     if not prompt:
-        raise HTTPException(status_code=422, detail="Kein Prompt angegeben")
+        raise HTTPException(status_code=422, detail="No prompt given")
 
     service = data.get("service", "").strip()
     try:
@@ -519,13 +524,7 @@ def _animate_instagram_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
 
     if service:
         from app.core.lora_library import LoraNotAllowedError, assert_loras_allowed
-        from app.imagegen.service import get_image_service
-        _picked = get_image_service()._wait_for_explicit_backend(service, media="video")
-        if not _picked:
-            raise HTTPException(
-                status_code=503,
-                detail=f"video backend '{service}' is not available — "
-                       f"no automatic fallback")
+        _picked = require_explicit_backend(service, media="video")
         try:
             assert_loras_allowed(_picked, loras)
         except LoraNotAllowedError as e:
@@ -589,7 +588,7 @@ def _animate_instagram_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
             save_image_meta(image_filename, meta)
             _tq.track_finish(_track_id)
         except Exception as e:
-            logger.error("Instagram Animation fehlgeschlagen: %s", e)
+            logger.error("Instagram animation failed: %s", e)
             _tq.track_finish(_track_id, error=str(e))
 
     import threading

@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 from app.core.auth_dependency import require_admin
+from app.core.explicit_backend import require_explicit_backend
 from app.core.http_files import etag_file_response
 from app.core.log import get_logger
 from app.core.upload_limits import (MODEL_UPLOAD_MAX_BYTES, ensure_image,
@@ -1606,6 +1607,9 @@ def generate_character_model3d(character_name: str, force: bool = False,
         raise HTTPException(
             status_code=409,
             detail="No T-pose render for the current outfit — generate it first")
+    if (backend or "").strip():
+        # The rig check stays in generate_mesh (the rig is known there).
+        require_explicit_backend(backend.strip(), media="mesh")
     if not trigger_generation(character_name, force=force,
                               backend_glob=(backend or "").strip(),
                               face_num=face_num or None,
@@ -2166,8 +2170,8 @@ async def detect_image_characters(character_name: str, image_name: str, request:
 async def regenerate_character_image(character_name: str, image_name: str, request: Request) -> Dict[str, Any]:
     """Regenerates an image via the core image-service pipeline.
 
-    Nutzt den gespeicherten Prompt, optional verbessert durch User-Feedback,
-    und generiert ein neues Bild das das alte ersetzt.
+    Uses the stored prompt, optionally improved by user feedback, and
+    renders a new image that replaces the old one (or lands beside it).
     """
     import asyncio
     body = await request.json()
@@ -2181,19 +2185,19 @@ def _regenerate_character_image_sync(character_name: str, image_name: str,
     threadpool."""
     user_id = body.get("user_id", "")
     if ".." in image_name or "/" in image_name:
-        raise HTTPException(status_code=400, detail=f"Ungueltiger Dateiname: {image_name}")
+        raise HTTPException(status_code=400, detail=f"Invalid file name: {image_name}")
 
     images_dir = get_character_images_dir(character_name)
     image_path = images_dir / image_name
     if not image_path.exists():
-        raise HTTPException(status_code=404, detail=f"Bild nicht gefunden: {image_name}")
+        raise HTTPException(status_code=404, detail=f"Image not found: {image_name}")
 
     prompts = get_character_image_prompts(character_name)
     prompt = prompts.get(image_name, "")
     if not prompt:
-        raise HTTPException(status_code=422, detail="Kein Prompt fuer dieses Bild gespeichert.")
+        raise HTTPException(status_code=422, detail="No prompt stored for this image.")
 
-    # Custom-Prompt aus Dialog uebernimmt gespeicherten Prompt
+    # A custom prompt from the dialog replaces the stored one
     custom_prompt = body.get("custom_prompt", "").strip()
     if custom_prompt:
         prompt = custom_prompt
@@ -2202,17 +2206,21 @@ def _regenerate_character_image_sync(character_name: str, image_name: str,
     backend_name = body.get("backend", "").strip()
     loras = body.get("loras")  # Optional: [{name, strength}, ...]
     model_override = body.get("model_override", "").strip()
-    character_names = body.get("character_names")  # Optional: explizite Character-Auswahl
-    room_id = body.get("room_id", "").strip()  # Optional: Raum-Override
-    negative_prompt_override = body.get("negative_prompt", "").strip()  # Optional: Negativ-Prompt aus Dialog
+    character_names = body.get("character_names")  # Optional: explicit character selection
+    room_id = body.get("room_id", "").strip()  # Optional: room override
+    negative_prompt_override = body.get("negative_prompt", "").strip()  # Optional: negative prompt from the dialog
     create_new = body.get("create_new", False)
     use_room = body.get("use_room", True)
     use_source_as_reference = bool(body.get("use_source_as_reference", False))
-    # Originale Location aus Bild-Metadaten (nicht aktuelle Character-Position)
+    # The original location from the image meta (not the character's current one)
     from app.models.character import get_single_image_meta
     _img_meta = get_single_image_meta(character_name, image_name) or {}
     original_location_id = _img_meta.get("location", "")
     agent_config = get_character_config(character_name)
+    if backend_name:
+        # A dead explicit pick is the caller's answer (503), not a track
+        # that fails in the background thread.
+        require_explicit_backend(backend_name)
 
     from app.core.task_queue import get_task_queue
     from app.core.task_router import resolve_queue

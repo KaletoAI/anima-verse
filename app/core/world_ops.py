@@ -3252,22 +3252,16 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
             raise HTTPException(status_code=503, detail="Image service not available")
 
         # An explicit dialog pick renders on exactly that backend — no
-        # routing, no fallback. No pick = the "location" occasion of the image
-        # routing (chain + re-run on the next entry after a failure). Neither
-        # path probes every backend here: _wait_for_explicit_backend probes
-        # the matching ones, the routing its intended entry. The explicit
-        # probe does network calls, so it runs in a thread (a blocked event
-        # loop trips the watchdog).
+        # routing, no fallback (503 when it is not available; the single-mode
+        # route checked it already, this catches a backend that dropped out
+        # since). No pick = the "location" occasion of the image routing
+        # (chain + re-run on the next entry after a failure). Neither path
+        # probes every backend here: the explicit check probes the matching
+        # ones (off the event loop), the routing its intended entry.
         backend = None
         if backend_name:
-            backend = await asyncio.to_thread(
-                lambda: (img_skill._wait_for_explicit_backend(backend_name)
-                         or img_skill.match_backend(backend_name)))
-            if not backend:
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"Selected backend '{backend_name}' is not available "
-                           f"(e.g. invalid API key / offline). No automatic fallback.")
+            from app.core.explicit_backend import require_explicit_backend_async
+            backend = await require_explicit_backend_async(backend_name)
         explicit = backend is not None
         _attempt = {"n": 0}
 
@@ -3665,15 +3659,12 @@ async def generate_time_variant_core(location_name: str, image_name: str,
 
     backend = None
     if backend_name:
-        # _wait_for_explicit_backend probes the matching backends fresh (the
-        # routed path: the routing probes its intended entry) — network
-        # calls, so in a thread (a blocked event loop trips the watchdog).
-        backend = await asyncio.to_thread(
-            img_skill._wait_for_explicit_backend, backend_name, has_input_image=True)
-        if not backend:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Selected backend '{backend_name}' is not available — no automatic fallback.")
+        # The explicit check probes the matching backends fresh, off the
+        # event loop (the routed path: the routing probes its intended
+        # entry); 503 when the pick is not available.
+        from app.core.explicit_backend import require_explicit_backend_async
+        backend = await require_explicit_backend_async(backend_name,
+                                                       has_input_image=True)
         if not _suits(backend):
             raise HTTPException(
                 status_code=400,

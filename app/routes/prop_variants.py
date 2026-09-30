@@ -457,13 +457,15 @@ async def prop_variant_generate(prop_id: str, index: int,
     views a MESH run sends along to the mesh alias.
     """
     from app.core.props import trigger_generation
-    from app.routes.world import _mesh_int, _mesh_lod, _tier, _view_args
+    from app.routes.world import (_mesh_int, _mesh_lod, _require_prop_picks,
+                                  _tier, _view_args)
     _variant(prop_id, index)
     data = await _body(request)
     if bool(data.get("mesh_only")) and bool(data.get("image_only")):
         raise HTTPException(status_code=400,
                             detail="mesh_only and image_only are exclusive")
     view, front_reference, reference_variant, views = _view_args(data)
+    await _require_prop_picks(data)
     started = trigger_generation(
         prop_id,
         prompt=str(data.get("prompt") or ""),
