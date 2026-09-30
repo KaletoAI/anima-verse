@@ -1,15 +1,17 @@
 """Image Generation Skill - Multi-Instance Dispatcher mit Kosten-basierter Auswahl"""
 import base64
+import functools
 import json
 import os
 import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from datetime import datetime
 
 from app.core.timeutils import utc_now_iso
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 from app.imagegen import ImageBackend, BACKEND_REGISTRY
@@ -259,10 +261,30 @@ class GenerationResult:
     gallery_character: str
     files: List[str] = field(default_factory=list)
     skip_gallery: bool = False
+    # The post-render step (situation comment + vision analysis, seconds of
+    # LLM time) of a gallery render — NOT run by generate_on_backend, so the
+    # façade can store the routing marks first (``ImageService._finish``).
+    # Returns the final answer text and finishes the render's tracked task;
+    # None = nothing left to do (skip_gallery, or a test double).
+    after: Optional[Callable[[], str]] = field(default=None, repr=False,
+                                               compare=False)
 
 
 class ImageSaveError(RuntimeError):
     """The images came back but could not be written to the gallery."""
+
+
+def _result_text(gallery_character: str, files: List[str],
+                 comment: Optional[str]) -> str:
+    """The answer text of a gallery render every string caller parses: the
+    action line, one image link per file and the caption, if any."""
+    lines = [f"AKTION: Bild wurde GENERIERT und in der Galerie von {gallery_character} gespeichert. "
+             f"Das Bild wurde NICHT gesendet oder verschickt — es liegt in der Galerie."]
+    for i, file_name in enumerate(files, 1):
+        lines.append(f"![Generated Image {i}](/characters/{gallery_character}/images/{file_name})")
+    if comment:
+        lines.append(f"CAPTION (nur zur Anzeige, NICHT als Fakt behandeln): {comment}")
+    return "\n\n".join(lines)
 
 
 def render_has_reference_image(character_name: str, *,
@@ -2174,55 +2196,36 @@ class ImageService:
                 except Exception as _pp_err:  # noqa: BLE001
                     logger.debug("postprocess trigger skipped: %s", _pp_err)
 
-            # Generate the situation comment + image analysis
-            comment = None
-            if not skip_gallery:
-                _tq.track_update_label(_track_id, "Bildanalyse")
-                logger.info("Starting image analysis + situation comment...")
-                first_image_path = images_dir / saved_files[0]
-                logger.debug("Image file: %s, exists: %s", first_image_path, first_image_path.exists())
-                _subjects = [p["name"] for p in appearances] if photographer_mode and appearances else None
-                # The comment is generated from the AGENT's point of view (it
-                # took the picture) but attached to the gallery_character's image.
-                comment = self._generate_comment(
-                    character_name, rp_context=rp_context,
-                    photographer_subjects=_subjects)
-                if comment:
-                    logger.info("Situation comment saved")
-                    add_character_image_comment(gallery_character, saved_files[0], comment)
-                else:
-                    logger.debug("No situation comment generated (no RP context)")
-                # Objective image analysis: the vision-LLM call uses the agent
-                # profile (language/personality); the result is attached to the
-                # image in the gallery character.
-                analysis = self._generate_image_analysis(str(first_image_path), character_name)
-                if analysis:
-                    from app.models.character import add_character_image_metadata
-                    add_character_image_metadata(gallery_character, saved_files[0], {"image_analysis": analysis})
-                    logger.info("Objective image analysis saved")
-            else:
-                logger.debug("Image analysis skipped (skip_gallery=True)")
-
-            # Return value: image(s) + comment
-            output_lines = []
-            output_lines.append(f"AKTION: Bild wurde GENERIERT und in der Galerie von {gallery_character} gespeichert. "
-                                f"Das Bild wurde NICHT gesendet oder verschickt — es liegt in der Galerie.")
-            for i, file_name in enumerate(saved_files, 1):
-                image_url = f"/characters/{gallery_character}/images/{file_name}"
-                output_lines.append(f"![Generated Image {i}]({image_url})")
-
-            if comment:
-                output_lines.append(f"CAPTION (nur zur Anzeige, NICHT als Fakt behandeln): {comment}")
-
             logger.info("=" * 80)
             logger.info("IMAGE GENERATION FINISHED (via %s)", backend.name)
             logger.info("=" * 80)
 
-            _tq.track_finish(_track_id)
-            return GenerationResult(text="\n\n".join(output_lines), meta=_meta,
+            # The situation comment + image analysis (seconds of LLM time) are
+            # NOT run here: the façade first stores the routing marks, then
+            # runs this step (``_finish``) — so an Improvements scan never sees
+            # a fallback image unmarked while the vision LLM works, and a
+            # failing analysis cannot lose the marks. The tracked task stays
+            # open until the step has run.
+            after = None
+            if skip_gallery:
+                logger.debug("Image analysis skipped (skip_gallery=True)")
+                _tq.track_finish(_track_id)
+            else:
+                _subjects = ([p["name"] for p in appearances]
+                             if photographer_mode and appearances else None)
+                after = functools.partial(
+                    self._post_render, track_id=_track_id,
+                    character_name=character_name,
+                    gallery_character=gallery_character,
+                    image_path=images_dir / saved_files[0],
+                    files=list(saved_files), rp_context=rp_context,
+                    photographer_subjects=_subjects)
+            return GenerationResult(text=_result_text(gallery_character, saved_files, None),
+                                    meta=_meta,
                                     gallery_character=gallery_character,
                                     files=list(saved_files),
-                                    skip_gallery=skip_gallery)
+                                    skip_gallery=skip_gallery,
+                                    after=after)
 
         except Exception as e:
             _tq.track_finish(_track_id, error=str(e)[:200])
@@ -2287,7 +2290,8 @@ class ImageService:
                             f"(disabled, offline, or cooling down).")
                 logger.info("Explicit backend: %s", explicit)
                 rendering["name"] = backend.name
-                return self.generate_on_backend(backend, input_data, explicit=True).text
+                return self._finish(
+                    self.generate_on_backend(backend, input_data, explicit=True), {})
 
             occasion = (input_data.get("occasion") or "photo").strip()
 
@@ -2306,8 +2310,7 @@ class ImageService:
 
             result, route = run_routed(occasion, _render, character=character_name,
                                        has_ref=has_ref, pool=self.pool)
-            self._store_route_meta(result, route_meta(route))
-            return result.text
+            return self._finish(result, route_meta(route))
         except LoraNotAllowedError:
             raise
         except MediaGenerationDisabled:
@@ -2328,6 +2331,65 @@ class ImageService:
             if not isinstance(e, (BackendFailedError, ImageSaveError)):
                 text = _name_once(name, text)
             return f"Error: {text[:300]}"
+
+    def _finish(self, result: "GenerationResult", rmeta: Dict[str, Any]) -> str:
+        """Complete a finished render: store the routing marks FIRST, then run
+        the post-render step (comment + image analysis) and answer with its
+        text. The marks land milliseconds after the image instead of after
+        the vision LLM, and a post-render step that fails cannot lose them;
+        a failing store still runs the step (it finishes the tracked task)."""
+        try:
+            self._store_route_meta(result, rmeta)
+        finally:
+            text = self._run_after(result)
+        return text
+
+    @staticmethod
+    def _run_after(result: "GenerationResult") -> str:
+        """The post-render step of ``result``; its failure costs the caption,
+        never the render (the image is saved and marked)."""
+        if result.after is None:
+            return result.text
+        try:
+            return result.after()
+        except Exception as e:  # noqa: BLE001 — the image stands
+            logger.error("Post-render step (comment/analysis) failed: %s", e)
+            return result.text
+
+    def _post_render(self, *, track_id: str, character_name: str,
+                     gallery_character: str, image_path: Path, files: List[str],
+                     rp_context: str,
+                     photographer_subjects: Optional[List[str]]) -> str:
+        """The situation comment + objective image analysis of a saved
+        gallery render; returns the answer text (with the caption). Always
+        finishes the render's tracked task."""
+        _tq = get_task_queue()
+        try:
+            _tq.track_update_label(track_id, "Bildanalyse")
+            logger.info("Starting image analysis + situation comment...")
+            logger.debug("Image file: %s, exists: %s", image_path, image_path.exists())
+            # The comment is generated from the AGENT's point of view (it took
+            # the picture) but attached to the gallery_character's image.
+            comment = self._generate_comment(
+                character_name, rp_context=rp_context,
+                photographer_subjects=photographer_subjects)
+            if comment:
+                logger.info("Situation comment saved")
+                add_character_image_comment(gallery_character, files[0], comment)
+            else:
+                logger.debug("No situation comment generated (no RP context)")
+            # Objective image analysis: the vision-LLM call uses the agent
+            # profile (language/personality); the result is attached to the
+            # image in the gallery character.
+            analysis = self._generate_image_analysis(str(image_path), character_name)
+            if analysis:
+                from app.models.character import add_character_image_metadata
+                add_character_image_metadata(gallery_character, files[0],
+                                             {"image_analysis": analysis})
+                logger.info("Objective image analysis saved")
+            return _result_text(gallery_character, files, comment)
+        finally:
+            _tq.track_finish(track_id)
 
     def _store_route_meta(self, result: "GenerationResult", rmeta: Dict[str, Any]) -> None:
         """Add the routing fields to a finished generation: into the returned

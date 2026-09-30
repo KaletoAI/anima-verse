@@ -47,6 +47,35 @@ EXPECTED (by hand):
     _name_once("B", "x") -> "B: x"; _name_once("B", "B: x") -> "B: x";
     the failure log of generate_on_backend goes through it (no bare
     f"{backend.name}: {e}" left in its source).
+
+Post-render step (R2b review F-R3-1: the routing marks must not wait for
+the vision LLM). The fake render hands back an ``after`` step bound to the
+REAL ImageService._post_render; _generate_comment answers "a caption",
+_generate_image_analysis is a fake that records, at the moment it runs,
+whether the gallery meta writer already got the routing marks of C/"f.png";
+add_character_image_comment is a recorder; the render's track is a real
+tracked task of the throwaway queue.
+ F14 rules photo ["A","B"] (A fails, B renders): when the analysis runs,
+    the marks write {"routing", "fallback_from"} for C/"f.png" is ALREADY
+    in META_WRITES -> True; the gallery meta writes come in the order
+    [marks, {"image_analysis": "an analysis"}]; the answer is the one the
+    step builds: the action line, "![Generated Image 1](/characters/C/
+    images/f.png)" and "CAPTION (nur zur Anzeige, NICHT als Fakt behandeln):
+    a caption", joined by blank lines; the comment went to C/"f.png"; the
+    track is "completed".
+ F15 the analysis raises RuntimeError("vision down"): the answer is the
+    render's text WITHOUT a caption line (the image is saved — a failing
+    analysis costs the caption, not the render), the marks write is still
+    the first META_WRITES entry with routing position 2, the track is
+    "completed" (not left pending).
+ F16 explicit "B" with the same step: the analysis still runs (1 call), no
+    marks are written (META_WRITES holds only the image_analysis write).
+ F17 static: generate_on_backend no longer calls _generate_image_analysis
+    or _generate_comment itself (the step is _post_render, run by the
+    façade after _store_route_meta), and it hands the step over as after=.
+Fails on commit 6aa7f243 (before this fix): F14-F17 fail — there is no
+    ImageService._post_render and the façade never runs an after step (the
+    analysis ran inside generate_on_backend, before the marks were stored).
 """
 import inspect
 import json
@@ -234,6 +263,86 @@ _gob_src = inspect.getsource(service_mod.ImageService.generate_on_backend)
 check("F13 failure log names once",
       ("_name_once(backend.name" in _gob_src,
        'f"{backend.name}: {e}"' in _gob_src), (True, False))
+
+# -- F14-F17 post-render step after the routing marks ----------------------
+import functools  # noqa: E402
+from app.core.task_queue import get_task_queue  # noqa: E402
+ANALYSIS = {"raise": False, "saw_marks": [], "calls": 0}
+COMMENTS = []
+service_mod.add_character_image_comment = (
+    lambda ch, fn, c: COMMENTS.append((ch, fn, c)))
+svc._generate_comment = lambda *a, **k: "a caption"
+
+
+def fake_analysis(image_path, character_name):
+    ANALYSIS["calls"] += 1
+    ANALYSIS["saw_marks"].append(any(
+        w[:2] == ("C", "f.png") and "routing" in w[2] for w in META_WRITES))
+    if ANALYSIS["raise"]:
+        raise RuntimeError("vision down")
+    return "an analysis"
+
+
+svc._generate_image_analysis = fake_analysis
+TRACKS = []
+
+
+def fake_gob_after(backend, input_data, *, explicit):
+    res = fake_gob(backend, input_data, explicit=explicit)
+    tid = get_task_queue().track_start("image_generation", "smoke",
+                                       start_running=False)
+    TRACKS.append(tid)
+    res.after = functools.partial(
+        svc._post_render, track_id=tid, character_name="C",
+        gallery_character="C", image_path=Path(_TMP) / "f.png", files=["f.png"],
+        rp_context="", photographer_subjects=None)
+    return res
+
+
+def track_status(tid):
+    conn = get_task_queue()._connect()
+    try:
+        row = conn.execute("SELECT status FROM tasks WHERE task_id=?", (tid,)).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+svc.generate_on_backend = fake_gob_after
+fresh_pool()
+RULES = {"photo": ["A", "B"]}
+ANALYSIS.update({"raise": False, "saw_marks": [], "calls": 0})
+COMMENTS.clear()
+ans = gen()
+check("F14 marks stored before the analysis", ANALYSIS["saw_marks"], [True])
+check("F14 write order", [sorted(w[2]) for w in META_WRITES],
+      [["fallback_from", "routing"], ["image_analysis"]])
+check("F14 answer carries the caption", ans.split("\n\n")[1:],
+      ["![Generated Image 1](/characters/C/images/f.png)",
+       "CAPTION (nur zur Anzeige, NICHT als Fakt behandeln): a caption"])
+check("F14 comment stored", COMMENTS, [("C", "f.png", "a caption")])
+check("F14 track completed", track_status(TRACKS[-1]), "completed")
+
+fresh_pool()
+ANALYSIS.update({"raise": True, "saw_marks": [], "calls": 0})
+ans = gen()
+check("F15 raising analysis keeps the render", ans, "done on B")
+check("F15 marks stay", (META_WRITES[0][2].get("routing") or {}).get("position")
+      if META_WRITES else None, 2)
+check("F15 track completed", track_status(TRACKS[-1]), "completed")
+
+fresh_pool()
+ANALYSIS.update({"raise": False, "saw_marks": [], "calls": 0})
+gen(backend="B")
+check("F16 explicit still analyses", ANALYSIS["calls"], 1)
+check("F16 explicit writes no marks", [sorted(w[2]) for w in META_WRITES],
+      [["image_analysis"]])
+
+check("F17 generate_on_backend leaves the step to the façade",
+      ("_generate_image_analysis(" in _gob_src, "_generate_comment(" in _gob_src,
+       "after=after" in _gob_src), (False, False, True))
+svc.generate_on_backend = fake_gob
+
 check("F0 no socket connect", CONNECTS, [])
 
 print()
