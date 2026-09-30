@@ -894,7 +894,7 @@ async def settings_save(request: Request, user=Depends(require_admin)):
     if img_err:
         raise HTTPException(status_code=400, detail=img_err)
 
-    # Diagnose: was kommt im llm_routing wirklich an?
+    # Diagnostics: what actually arrives in llm_routing?
     try:
         _routing_in = merged.get("llm_routing") or []
         _task_log = []
@@ -908,30 +908,28 @@ async def settings_save(request: Request, user=Depends(require_admin)):
                         f"{_e.get('provider','?')}/{_e.get('model','?')}")
         from app.core.log import get_logger as _gl
         _gl("admin_settings").info(
-            "settings_save: llm_routing %d Eintraege, %d Task-Mappings: %s",
+            "settings_save: llm_routing %d entries, %d task mappings: %s",
             len(_routing_in), len(_task_log), _task_log)
     except Exception:
         pass
 
-    _autofill_imagegen_defaults(merged)
-
-    # Diff VOR config.save berechnen — current spiegelt noch den Pre-Save-State.
+    # Compute the diff BEFORE config.save — current still mirrors the pre-save state.
     changed_sections = _diff_top_level_sections(current, merged)
 
     config.save(merged)
-    # Env sofort aktualisieren — vermeidet Server-Restart-Pflicht fuer Felder
-    # die ueber os.environ.get() gelesen werden.
+    # Update the env right away — spares a server restart for fields that
+    # are read through os.environ.get().
     try:
         config._flatten_to_env(merged)
     except Exception as _ee:
-        # Nicht hart fehlschlagen — Save selbst war erfolgreich.
+        # Do not fail hard — the save itself succeeded.
         from app.core.log import get_logger as _gl
         _gl("admin_settings").warning("env-flatten after save failed: %s", _ee)
 
-    # Punktuelle Service-Reloads basierend auf geaenderten Sektionen.
-    # In Thread auslagern: einige Reloads pingen Provider/Backends synchron
-    # (z.B. ImageBackend.check_availability) und wuerden sonst den Event-Loop
-    # mehrere Sekunden blockieren.
+    # Targeted service reloads based on the changed sections. Run in a
+    # thread: some reloads ping providers/backends synchronously (e.g.
+    # ImageBackend.check_availability) and would otherwise block the event
+    # loop for several seconds.
     reloaded = await asyncio.to_thread(_apply_section_reloads, changed_sections)
 
     msg = "Configuration saved (env updated)."
@@ -1178,34 +1176,6 @@ def _llm_task_state_runtime_preset_sync(user, data: Any):
         return {"status": "cleared"}
     tasks = activate_preset_runtime(preset)
     return {"status": "ok", "preset": preset, "disabled": tasks}
-
-
-def _autofill_imagegen_defaults(cfg: Dict[str, Any]) -> None:
-    """When the user has at least one image-gen backend, fill empty
-    outfit/expression/location default-backend fields with the first enabled
-    backend. Does not overwrite existing selections."""
-    img = cfg.get("image_generation") or {}
-    backends = img.get("backends") or []
-    if not isinstance(backends, list) or not backends:
-        return
-    chosen = next(
-        (b.get("name") for b in backends
-         if isinstance(b, dict) and b.get("enabled") and b.get("name")),
-        None,
-    ) or next(
-        (b.get("name") for b in backends
-         if isinstance(b, dict) and b.get("name")),
-        None,
-    )
-    if not chosen:
-        return
-    target = chosen
-    for field in ("outfit_imagegen_default",
-                  "expression_imagegen_default",
-                  "location_imagegen_default"):
-        if not img.get(field):
-            img[field] = target
-    cfg["image_generation"] = img
 
 
 def _validate_llm_routing(routing) -> str:

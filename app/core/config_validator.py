@@ -17,7 +17,6 @@ def validate_config(config: dict) -> List[Dict[str, Any]]:
     issues.extend(_check_image_backends(config))
     issues.extend(_check_tts(config))
     issues.extend(_check_skills(config))
-    issues.extend(_check_server(config))
     issues.extend(_check_embedding(config))
     return issues
 
@@ -173,47 +172,7 @@ def _check_image_backends(config: dict) -> list:
         if api_type in ("civitai", "together") and not api_key:
             issues.append(_err("image_generation", f"Backend '{name}': API key missing (cloud backend '{api_type}')"))
 
-    # Use-case default render targets (backend globs)
-    for field_name, label in [
-        ("outfit_imagegen_default", "Outfit"),
-        ("expression_imagegen_default", "Expression"),
-        ("location_imagegen_default", "Location"),
-    ]:
-        val = ig.get(field_name, "")
-        if val:
-            _check_imagegen_ref(val, backends, "image_generation", label, issues)
-
     return issues
-
-
-def _check_imagegen_ref(val: str, backends: list, section: str, label: str, issues: list):
-    """Validate a render-target spec against the configured backend names.
-
-    Match concept: the name part is a glob (e.g. "Qwen*"); valid when it
-    matches at least one backend name (fnmatch, case-insensitive). An exact
-    name matches itself. Accepted formats: ``backend:<glob>`` or a bare
-    glob. Legacy ``workflow:<glob>`` specs are reported — ComfyUI was
-    removed and such specs are ignored at runtime.
-    """
-    import fnmatch
-    if ":" in val:
-        ref_type, ref_name = val.split(":", 1)
-        if ref_type == "workflow":
-            issues.append(_warn(
-                section,
-                f"{label} default '{val}': ComfyUI was removed — switch to 'backend:<glob>'"))
-            return
-        if ref_type != "backend":
-            return
-        pat = ref_name.strip()
-    else:
-        pat = val.strip()
-    if not pat:
-        return
-    pl = pat.lower()
-    be_names = {b.get("name", "") for b in backends}
-    if not any(fnmatch.fnmatch(str(n).lower(), pl) for n in be_names):
-        issues.append(_warn(section, f"{label} default: no backend matches '{pat}'"))
 
 
 # ── Embedding Checks ──
@@ -273,28 +232,5 @@ def _check_skills(config: dict) -> list:
     searx = skills.get("searx", {})
     if searx.get("enabled") and not searx.get("url"):
         issues.append(_err("skills", "SearX: enabled but no URL configured"))
-
-    return issues
-
-
-# ── Server Checks ──
-
-def _check_server(config: dict) -> list:
-    issues = []
-    # Story engine references
-    se = config.get("story_engine", {})
-    if se.get("enabled"):
-        val = se.get("imagegen_default", "")
-        if val:
-            ig = config.get("image_generation", {})
-            _check_imagegen_ref(val, ig.get("backends", []), "story_engine", "Story Engine", issues)
-
-    # Instagram reference
-    insta = config.get("skills", {}).get("instagram", {})
-    if insta.get("enabled"):
-        val = insta.get("imagegen_default", "")
-        if val:
-            ig = config.get("image_generation", {})
-            _check_imagegen_ref(val, ig.get("backends", []), "skills", "Instagram", issues)
 
     return issues

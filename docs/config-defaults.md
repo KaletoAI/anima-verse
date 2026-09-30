@@ -114,11 +114,12 @@ hier; seitdem liest `app/utils/history_manager.py` `knowledge.daily_summary_days
 
 | Name | Quelle | Default | Leser |
 |---|---|---|---|
-| `OUTFIT_IMAGEGEN_DEFAULT` | `image_generation.outfit_imagegen_default` → Media Generation | `` | app/core/character_ops.py, app/core/expression_regen.py, app/core/world_ops.py |
-| `EXPRESSION_IMAGEGEN_DEFAULT` | `image_generation.expression_imagegen_default` → Media Generation | `` | app/core/expression_regen.py, app/core/character_ops.py |
-| `LOCATION_IMAGEGEN_DEFAULT` | `image_generation.location_imagegen_default` → Media Generation | `` | app/core/world_ops.py, app/core/character_ops.py |
 | `IMAGE_ANALYSIS_PROMPT` | `image_generation.image_analysis_prompt` → Media Generation | langer Vorgabetext im Schema | app/imagegen/service.py |
 | `IMAGE_ANALYSIS_LANGUAGE` | — | `de` | app/imagegen/service.py |
+
+Welches Backend einen Anlass rendert, steht nicht mehr in Env-Variablen, sondern in
+`image_generation.routing` (Admin → Media Generation → Routing); siehe
+`app/imagegen/occasions.py`.
 
 Der **Hauptschalter** `image_generation.enabled` („Media generation enabled",
 Admin-Sektion „Media Generation") wird NICHT in eine Env-Variable gebrückt: er
@@ -171,7 +172,6 @@ hochsetzt.
 | `STORY_ENGINE_COOLDOWN_HOURS` | `story_engine.cooldown_hours` → Story Engine | `6` | app/core/story_engine.py |
 | `STORY_ENGINE_MAX_BEATS` | `story_engine.max_beats` → Story Engine | `5` | app/core/story_engine.py |
 | `STORY_ENGINE_BEAT_IMAGES` | `story_engine.beat_images` → Story Engine | `true` | app/core/story_engine.py |
-| `STORY_ENGINE_IMAGEGEN_DEFAULT` | `story_engine.imagegen_default` → Story Engine | `` | app/core/story_engine.py |
 
 Der Story-Player (`app/routes/story.py`, `story_dev.py`) hat heute **keine UI** — er
 bleibt für eine spätere Wiederverwendung im Code.

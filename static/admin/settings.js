@@ -1219,9 +1219,6 @@ async function applyTaskPreset(preset) {
 function renderFields(fields, data, path) {
     let html = '';
     for (const [fKey, f] of Object.entries(fields)) {
-        // `hidden: true` — kept in the config and saved, never shown (the old
-        // per-occasion defaults while the image routing seeds from them).
-        if (f && f.hidden) continue;
         // Schema-level visibility: a field with `applicable_for` is only shown
         // when `data.api_type` is in the list. While no api_type is set, the
         // type-specific fields stay hidden — the user picks the type first,

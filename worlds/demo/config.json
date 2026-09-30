@@ -140,9 +140,6 @@
         "image_family": "keywords"
       }
     ],
-    "outfit_imagegen_default": "LocalAI-Flux",
-    "expression_imagegen_default": "LocalAI-Flux",
-    "location_imagegen_default": "LocalAI-Flux",
     "use_cases": {
       "character": {
         "styles": {
@@ -598,7 +595,24 @@
     "postprocess_enabled": false,
     "postprocess_trigger_url": "",
     "location_image_width": 512,
-    "location_image_height": 512
+    "location_image_height": 512,
+    "routing": {
+      "expression": [
+        "LocalAI-Flux"
+      ],
+      "tpose": [
+        "LocalAI-Flux"
+      ],
+      "location": [
+        "LocalAI-Flux"
+      ],
+      "scene_view": [
+        "LocalAI-Flux"
+      ],
+      "event": [
+        "LocalAI-Flux"
+      ]
+    }
   },
   "skills": {
     "instagram": {

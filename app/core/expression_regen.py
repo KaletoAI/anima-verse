@@ -536,7 +536,7 @@ def list_expressions(character_name: str) -> list:
     parameters (from the .json sidecar). Newest first.
 
     Each entry: ``{file, mood, activity, equipped_pieces, equipped_items,
-    model, seed, provider, service, workflow, prompt, created_at, use_count,
+    model, seed, provider, service, prompt, created_at, use_count,
     last_used_at}`` — ``activity`` carries the pose catalog key. Images
     without a sidecar (or sidecars without an image) are skipped; only
     complete pairs are displayable.
@@ -592,7 +592,6 @@ def list_expressions(character_name: str) -> list:
             "seed": meta.get("seed"),
             "provider": meta.get("provider", "") or "",
             "service": meta.get("service", "") or "",
-            "workflow": meta.get("workflow", "") or "",
             "prompt": meta.get("prompt", "") or "",
             "created_at": meta.get("created_at", "") or "",
             "use_count": meta.get("use_count", 0) or 0,

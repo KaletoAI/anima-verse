@@ -9,7 +9,7 @@ default fields, empty/duplicate entries dropped, a pattern that matches no
 backend is kept (the overview marks it), the mesh default goes to the mesh
 occasion(s) of the rig its backend has. Pure dict work — no server, no world.
 
-PART A — SEED (phase R1: the old fields stay)
+PART A — SEED
 Mapping (§ 2, with the review's frame/photo correction):
   profile     <- [profile]
   expression  <- [expression, outfit]      tpose <- [expression, outfit]
@@ -41,8 +41,7 @@ A2 fixture B = a real world's values (2026-09-29, world name withheld):
     "scene_view": ["Qwen BL", "Flux2*"], "event": ["Flux*", "Qwen BL", "Flux2*"],
     "frame": ["Flux2*"], "mesh_object": ["Trellis2-Object-Low"],
     "mesh_building": ["Trellis2-Object-Low"]}
-A3 fixture C = legacy prefixes (the migration runs BEFORE
-   _rewrite_legacy_workflow_specs, so it normalises itself):
+A3 fixture C = legacy prefixes (the migration normalises them itself):
    outfit/expression/location "workflow:Z-Image*", event "workflow:",
    story "backend:CivitAI-General", instagram "workflow:Qwen*",
    frame "workflow:Z-Image" ->
@@ -54,12 +53,32 @@ A5 mesh "Mesh*" over {Mesh-Humanoid mixamo, Mesh-Creature generic,
    Mesh-Shrink mesh2mesh none} -> mesh_humanoid AND mesh_creature
    ["Mesh*"]; the mesh2mesh alias does not make it an object chain.
 A6 returns True on the first run, False on the second, dict unchanged.
-A7 an existing routing (even {}) is never touched: returns False.
-A8 R1: the old fields are STILL THERE after the seed (fixture A keeps
-   outfit_imagegen_default == "LocalAI-Flux").
+A7 an existing routing (even {}) is never touched (still {}); it returns
+   True only because the old field next to it is removed (Part B).
 A9 _apply_file_migrations runs it FIRST: its first `if` calls
    _migrate_image_routing (AST), and a full run over fixture C gives the
    routing of A3 (not the post-rewrite values of other steps).
+
+PART B — MIGRATION (phase R2b: the old fields are removed by the same step)
+B1 fixture A: after the migration none of the old keys is left:
+   image_generation.{profile,outfit,expression,location,prop,scene,mesh,
+   timevariant}_imagegen_default, random_events.event_imagegen_default,
+   story_engine.imagegen_default, skills.instagram.imagegen_default,
+   messaging_frame.target — the chains are those of A1; the sections'
+   OTHER keys stay (messaging_frame.prompt).
+B2 an ALREADY seeded config (routing {"photo": ["X"]} + outfit default "Y" +
+   story_engine {imagegen_default "Z", enabled true}) -> True, routing
+   unchanged, both old keys gone, story_engine.enabled still true; a second
+   run -> False.
+B3 the env bridge (`_flatten_to_env`, AST) sets none of PROFILE_, OUTFIT_,
+   EXPRESSION_, LOCATION_, TIMEVARIANT_, PROP_IMAGEGEN_DEFAULT,
+   EVENT_IMAGEGEN_DEFAULT, STORY_ENGINE_IMAGEGEN_DEFAULT.
+B4 LEGACY_SPEC_FIELDS and _rewrite_legacy_workflow_specs are gone (every
+   field they covered is removed).
+B5 the TRACKED demo config (worlds/demo/config.json) holds the A1 chains
+   and none of the old keys.
+B6 the admin schema declares none of the removed fields, and the
+   instagram plugin.yaml has no imagegen_default.
 """
 import ast
 import copy
@@ -151,8 +170,6 @@ def part_a():
     again = copy.deepcopy(cfg)
     check("A6 second run no change", cfgmod._migrate_image_routing(again), False)
     check("A6 second run leaves the dict", again, cfg)
-    check("A8 R1 keeps the old field", cfg["image_generation"].get("outfit_imagegen_default"),
-          "LocalAI-Flux")
 
     _ch, cfg = seeded(FIXTURE_B)
     check("A2 real-world values", cfg["image_generation"]["routing"],
@@ -184,7 +201,7 @@ def part_a():
           {"mesh_humanoid": ["Mesh*"], "mesh_creature": ["Mesh*"]})
 
     f = {"image_generation": {"routing": {}, "outfit_imagegen_default": "X"}}
-    check("A7 existing routing untouched", cfgmod._migrate_image_routing(f), False)
+    check("A7 existing routing: only the old field removed", cfgmod._migrate_image_routing(f), True)
     check("A7 still empty", f["image_generation"]["routing"], {})
 
     src = inspect.getsource(cfgmod._apply_file_migrations)
@@ -199,8 +216,76 @@ def part_a():
           full["image_generation"]["routing"]["photo"], ["CivitAI-General"])
 
 
+OLD_KEYS = ["image_generation.profile_imagegen_default", "image_generation.outfit_imagegen_default",
+            "image_generation.expression_imagegen_default", "image_generation.location_imagegen_default",
+            "image_generation.prop_imagegen_default", "image_generation.scene_imagegen_default",
+            "image_generation.mesh_imagegen_default", "image_generation.timevariant_imagegen_default",
+            "random_events.event_imagegen_default", "story_engine.imagegen_default",
+            "skills.instagram.imagegen_default", "messaging_frame.target"]
+
+
+def _has(cfg, dotted):
+    node = cfg
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return False
+        node = node[part]
+    return True
+
+
+def part_b():
+    import json as _json
+    print("B) migration")
+    cfg = copy.deepcopy(FIXTURE_A)
+    cfg["messaging_frame"]["target"] = "LocalAI-Flux"
+    cfgmod._migrate_image_routing(cfg)
+    check("B1 old keys gone", [k for k in OLD_KEYS if _has(cfg, k)], [])
+    check("B1 other keys stay", cfg["messaging_frame"].get("prompt"), "a phone")
+
+    seeded_cfg = {"image_generation": {"routing": {"photo": ["X"]},
+                                       "outfit_imagegen_default": "Y"},
+                  "story_engine": {"imagegen_default": "Z", "enabled": True}}
+    check("B2 changed", cfgmod._migrate_image_routing(seeded_cfg), True)
+    check("B2 routing kept", seeded_cfg["image_generation"]["routing"], {"photo": ["X"]})
+    check("B2 old keys gone", [k for k in OLD_KEYS if _has(seeded_cfg, k)], [])
+    check("B2 enabled kept", seeded_cfg["story_engine"].get("enabled"), True)
+    check("B2 second run", cfgmod._migrate_image_routing(seeded_cfg), False)
+
+    src = inspect.getsource(cfgmod._flatten_to_env)
+    bridged = [n for n in ("PROFILE_IMAGEGEN_DEFAULT", "OUTFIT_IMAGEGEN_DEFAULT",
+                           "EXPRESSION_IMAGEGEN_DEFAULT", "LOCATION_IMAGEGEN_DEFAULT",
+                           "TIMEVARIANT_IMAGEGEN_DEFAULT", "PROP_IMAGEGEN_DEFAULT",
+                           "EVENT_IMAGEGEN_DEFAULT", "STORY_ENGINE_IMAGEGEN_DEFAULT")
+               if n in src]
+    check("B3 no default bridge", bridged, [])
+    check("B4 legacy rewrite gone", (hasattr(cfgmod, "LEGACY_SPEC_FIELDS"),
+                                     hasattr(cfgmod, "_rewrite_legacy_workflow_specs")),
+          (False, False))
+
+    demo = _json.loads((Path(__file__).resolve().parent.parent / "worlds" / "demo"
+                        / "config.json").read_text(encoding="utf-8"))
+    check("B5 demo chains", demo["image_generation"].get("routing"),
+          {"expression": ["LocalAI-Flux"], "tpose": ["LocalAI-Flux"],
+           "location": ["LocalAI-Flux"], "scene_view": ["LocalAI-Flux"],
+           "event": ["LocalAI-Flux"]})
+    check("B5 demo old keys", [k for k in OLD_KEYS if _has(demo, k)], [])
+
+    from app.core.config_schema import get_schema
+    sch = get_schema()
+    ig_fields = set((sch.get("image_generation") or {}).get("fields", {}))
+    check("B6 image_generation fields", sorted(ig_fields & {k.split(".")[1] for k in OLD_KEYS[:8]}), [])
+    check("B6 event field", "event_imagegen_default" in
+          (sch.get("random_events") or {}).get("fields", {}), False)
+    check("B6 story field", "imagegen_default" in (sch.get("story_engine") or {}).get("fields", {}), False)
+    check("B6 frame target", "target" in (sch.get("messaging_frame") or {}).get("fields", {}), False)
+    yml = (Path(__file__).resolve().parent.parent / "plugins" / "instagram" / "plugin.yaml").read_text(
+        encoding="utf-8")
+    check("B6 instagram yaml", "imagegen_default" in yml, False)
+
+
 if __name__ == "__main__":
     part_a()
+    part_b()
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed: {FAILS}")

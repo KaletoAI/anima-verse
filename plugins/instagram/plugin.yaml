@@ -31,6 +31,5 @@ config_schema:
       caption_style: {type: str, label: Caption style, default: casual}
       hashtag_count: {type: int, label: Hashtag count, default: 5, min: 0, max: 30}
       default_popularity: {type: int, label: Default popularity, default: 50, min: 0, max: 100, description: "Default popularity for new characters (0-100%, overridable per character)"}
-      imagegen_default: {type: imagegen_select, hidden: true, label: Default ImageGen}
       post_cooldown_hours: {type: int, label: Post cooldown (h), default: 12, min: 0, max: 168}
       pending_window_hours: {type: int, label: "Recent posts window (h)", default: 4, min: 1, max: 72, description: "How long new Instagram posts stay visible as 'pending' in the agent-thought prompt (hours). Default 4."}

@@ -69,6 +69,10 @@ F) THE INVERSE OF D, straight from the code and without the document: every
    provider / backend loops and the F5 language loop) carry no string literal
    for their field and are simply not seen — they are array items, whose
    fields live under `sub_arrays` / `is_array`, not flat leaves.
+   The reader must find at least 50 leaves. Lower bound, not a snapshot: 56
+   leaves after the image routing removed the eight per-occasion default
+   bridges (2026-09-29); the bound only guards against a reader that finds
+   nothing.
 
 FAILS BEFORE / PASSES AFTER
 ---------------------------
@@ -246,7 +250,7 @@ def main():
     print("F) every bridged config leaf has a schema field")
     leaves = bridged_leaves()
     check(f"the AST reader found the bridge's leaves ({len(leaves)})",
-          len(leaves) >= 60, str(len(leaves)))
+          len(leaves) >= 50, str(len(leaves)))
     undeclared = sorted(f"{path} ({env})" for path, env in leaves.items()
                         if _schema_field(path) is None)
     check("no bridged setting is missing its config_schema field",

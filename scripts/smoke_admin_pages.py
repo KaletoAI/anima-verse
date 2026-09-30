@@ -25,22 +25,13 @@ the UI while the backend keeps reading it.
 
 `image_generation` carries the two hand-built image routing pages
 (static/admin/settings-image-routing.js): `routing` and `routing_overview`,
-both `custom: true`, placed directly after `general`. A field marked
-`hidden: true` is kept in the config and saved with it, but never rendered
-(settings.js `renderFields` skips it) — so on a paged section it must still
-sit on a (non-custom) page, or nothing would carry it. During phase R1 of the
-image routing the hidden fields are exactly the twelve old per-occasion
-defaults the routing seeded its chains from (config.py
-`_migrate_image_routing`): an edit there after the seed would be lost when
-phase R2b removes them, so none of them may stay editable. Derived from that
-list, by schema path:
-  image_generation.{profile,outfit,expression,location,prop,scene,mesh,
-                    timevariant}_imagegen_default          (8, page `general`)
-  random_events.event_imagegen_default                     (1)
-  story_engine.imagegen_default                            (1)
-  messaging_frame.target                                   (1)
-  skills.instagram.imagegen_default   (1, plugins/instagram/plugin.yaml)
-= 12, and no other field anywhere in the schema or a repo plugin manifest.
+both `custom: true`, placed directly after `general`. During phase R1 the
+twelve old per-occasion image defaults were `hidden: true` (kept, never
+rendered). Since R2b the old defaults are gone (config.py
+`_migrate_image_routing` removes them) and settings.js `renderFields` no
+longer knows `hidden` — so nothing is hidden: expected ZERO `hidden: true`
+fields anywhere in the schema (sections + subsections) or a repo plugin
+manifest, since such a field would now be rendered after all.
 
 Hand-derived expectations, all of them structural: the numbers below are the
 schema's own (10 fields on llm_routing today), never a recorded output.
@@ -152,16 +143,6 @@ def check_llm_routing_lanes(sec: dict) -> None:
               "Lanes sits directly below Model")
 
 
-OLD_IMAGEGEN_DEFAULTS = sorted(
-    [f"image_generation.{k}_imagegen_default" for k in (
-        "profile", "outfit", "expression", "location", "prop", "scene",
-        "mesh", "timevariant")]
-    + ["random_events.event_imagegen_default",
-       "story_engine.imagegen_default",
-       "messaging_frame.target",
-       "skills.instagram.imagegen_default"])
-
-
 def _hidden_paths() -> list:
     """Every `hidden: true` field as a dotted schema path: section fields,
     subsection fields, and the `config_schema` of every repo plugin manifest
@@ -203,13 +184,7 @@ def check_image_routing_pages(sec: dict) -> None:
         check(bool((pages.get(pid) or {}).get("custom")), f"{pid} is custom")
     print("\n[schema] hidden fields")
     hidden = _hidden_paths()
-    check(hidden == OLD_IMAGEGEN_DEFAULTS,
-          f"hidden fields are exactly the 12 old defaults (got {hidden})")
-    general = set((pages.get("general") or {}).get("fields") or [])
-    for path in hidden:
-        if path.startswith("image_generation."):
-            name = path.split(".", 1)[1]
-            check(name in general, f"hidden {name} still sits on page general")
+    check(hidden == [], f"no hidden field left (got {hidden})")
 
 
 def main() -> int:

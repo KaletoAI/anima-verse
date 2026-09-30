@@ -1155,59 +1155,6 @@ def _strip_dead_use_cases(config: dict) -> bool:
     return changed
 
 
-# Config fields that hold a RENDER TARGET — a backend-name glob ("Flux2*", or
-# an exact name), optionally with the tolerated legacy prefix "backend:". The
-# ComfyUI era also wrote "workflow:<glob>" here; that form resolves to None in
-# BackendPool.resolve_spec, so the configured backend was silently ignored and
-# the caller fell back to auto-selection. The rewrite below drops the prefix.
-# The DB counterpart (per-character overrides) is
-# app/core/workflow_spec_migration.py.
-LEGACY_SPEC_FIELDS: tuple = (
-    "image_generation.profile_imagegen_default",
-    "image_generation.outfit_imagegen_default",
-    "image_generation.expression_imagegen_default",
-    "image_generation.location_imagegen_default",
-    "image_generation.prop_imagegen_default",
-    "image_generation.scene_imagegen_default",
-    "image_generation.mesh_imagegen_default",
-    "image_generation.timevariant_imagegen_default",
-    "random_events.event_imagegen_default",
-    "story_engine.imagegen_default",
-    "skills.instagram.imagegen_default",
-    "messaging_frame.target",
-)
-
-
-def _rewrite_legacy_workflow_specs(config: dict) -> bool:
-    """Rewrites "workflow:<glob>" render targets to the bare glob.
-
-    Same pattern as _strip_dead_config_fields above: no fallback reader, no
-    alias — the world file gets the canonical spelling once. Idempotent;
-    returns True only when something actually changed.
-
-    In-memory only — see `migrate_file()` for the disk side.
-    """
-    from app.core.workflow_spec_migration import strip_legacy_workflow_prefix
-    changed = False
-    for dotted in LEGACY_SPEC_FIELDS:
-        *parents, key = dotted.split(".")
-        node = config
-        for part in parents:
-            node = node.get(part) if isinstance(node, dict) else None
-            if not isinstance(node, dict):
-                break
-        if not isinstance(node, dict) or key not in node:
-            continue
-        old = node.get(key)
-        new = strip_legacy_workflow_prefix(old)
-        if new == old:
-            continue
-        node[key] = new
-        changed = True
-        logger.info("Legacy render spec rewritten: %s %r -> %r", dotted, old, new)
-    return changed
-
-
 # Marker for the one-time lane migration below. It is a top-level config key,
 # so it survives the admin save round-trip (/admin/settings/raw hands the whole
 # config back out and config.save writes it) and nothing re-derives it.
@@ -1277,8 +1224,7 @@ def _migrate_entry_lanes(config: dict) -> bool:
 # ── Image routing (development_instructions/plan-image-routing.md § 2) ────
 # The per-occasion default fields the image routing chains replace, in chain
 # order per occasion. Read ONCE, while image_generation.routing does not exist
-# yet. Phase R1 seeds the chains next to the old fields; phase R2b removes the
-# old fields in the same function.
+# yet; the same function then removes the old fields (_IMAGE_ROUTING_LEGACY_FIELDS).
 _IMAGE_ROUTING_SEED: tuple = (
     ("profile", ("image_generation.profile_imagegen_default",)),
     ("expression", ("image_generation.expression_imagegen_default",
@@ -1298,6 +1244,26 @@ _IMAGE_ROUTING_SEED: tuple = (
     ("instagram", ("skills.instagram.imagegen_default",)),
 )
 _IMAGE_ROUTING_MESH_FIELD = "image_generation.mesh_imagegen_default"
+
+# Every old field the chains replace — removed by the migration itself,
+# independent of the marker (a world booted in phase R1 already holds the
+# seeded routing AND the old fields).
+_IMAGE_ROUTING_LEGACY_FIELDS: tuple = tuple(dict.fromkeys(
+    [f for _occ, fields in _IMAGE_ROUTING_SEED for f in fields]
+    + [_IMAGE_ROUTING_MESH_FIELD]))
+
+
+def _pop_dotted(config: dict, dotted: str) -> bool:
+    *parents, key = dotted.split(".")
+    node: Any = config
+    for part in parents:
+        node = node.get(part) if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            return False
+    if key not in node:
+        return False
+    del node[key]
+    return True
 
 
 def _dotted_value(config: dict, dotted: str) -> Any:
@@ -1326,16 +1292,16 @@ def _mesh_routing_occasions(glob: str, backends: Any) -> list:
     img2mesh backends it matches (a mesh2mesh reduction alias never counts)."""
     import fnmatch
     from app.imagegen.occasions import MESH_OCCASIONS_BY_RIG
+    from app.imagegen.routing import describe_config_backend
     rigs = set()
     for b in backends or []:
         if not isinstance(b, dict):
             continue
-        if str(b.get("api_type") or "").strip().lower() != "openai_mesh":
+        kind = describe_config_backend(b)
+        if kind["media"] != "mesh" or kind["category"] == "mesh2mesh":
             continue
-        if str(b.get("category") or "").strip().lower() == "mesh2mesh":
-            continue
-        if fnmatch.fnmatch(str(b.get("name") or "").lower(), glob.lower()):
-            rigs.add(str(b.get("mesh_rig") or "mixamo").strip().lower())
+        if fnmatch.fnmatch(kind["name"].lower(), glob.lower()):
+            rigs.add(kind["rig"])
     out: list = []
     for rig in ("mixamo", "generic", "none"):
         if rig in rigs:
@@ -1345,38 +1311,42 @@ def _mesh_routing_occasions(glob: str, backends: Any) -> list:
 
 def _migrate_image_routing(config: dict) -> bool:
     """Seed ``image_generation.routing`` from the old per-occasion default
-    fields (plan-image-routing.md § 2). Idempotent: the marker is the routing
-    dict itself — once it exists (even empty) nothing is read again.
-
-    Runs FIRST in ``_apply_file_migrations``, i.e. before the legacy
-    ``workflow:`` rewrite, so it normalises the prefixes on its own."""
+    fields ONCE (marker: the routing dict exists), then remove the old fields
+    — every run, so a world seeded in phase R1 loses them too. Idempotent.
+    Runs FIRST in ``_apply_file_migrations`` and normalises the legacy
+    ``workflow:``/``backend:`` prefixes itself."""
+    changed = False
     ig = config.get("image_generation")
     if not isinstance(ig, dict):
         ig = {}
-    if isinstance(ig.get("routing"), dict):
-        return False
-    routing: dict = {}
-    for occasion, fields in _IMAGE_ROUTING_SEED:
-        chain: list = []
-        for dotted in fields:
-            spec = _legacy_route_spec(_dotted_value(config, dotted))
-            if spec and spec.lower() not in {c.lower() for c in chain}:
-                chain.append(spec)
-        if chain:
-            routing[occasion] = chain
-    mesh = _legacy_route_spec(_dotted_value(config, _IMAGE_ROUTING_MESH_FIELD))
-    if mesh:
-        targets = _mesh_routing_occasions(mesh, ig.get("backends"))
-        if not targets:
-            logger.warning("Image routing: the old mesh default %r matches no "
-                           "img2mesh backend — not migrated", mesh)
-        for occasion in targets:
-            routing[occasion] = [mesh]
-    ig["routing"] = routing
-    config["image_generation"] = ig
-    logger.info("Image routing seeded from the old default fields: %s",
-                routing or "(no chains)")
-    return True
+    if not isinstance(ig.get("routing"), dict):
+        routing: dict = {}
+        for occasion, fields in _IMAGE_ROUTING_SEED:
+            chain: list = []
+            for dotted in fields:
+                spec = _legacy_route_spec(_dotted_value(config, dotted))
+                if spec and spec.lower() not in {c.lower() for c in chain}:
+                    chain.append(spec)
+            if chain:
+                routing[occasion] = chain
+        mesh = _legacy_route_spec(_dotted_value(config, _IMAGE_ROUTING_MESH_FIELD))
+        if mesh:
+            targets = _mesh_routing_occasions(mesh, ig.get("backends"))
+            if not targets:
+                logger.warning("Image routing: the old mesh default %r matches no "
+                               "img2mesh backend — not migrated", mesh)
+            for occasion in targets:
+                routing[occasion] = [mesh]
+        ig["routing"] = routing
+        config["image_generation"] = ig
+        logger.info("Image routing seeded from the old default fields: %s",
+                    routing or "(no chains)")
+        changed = True
+    removed = [d for d in _IMAGE_ROUTING_LEGACY_FIELDS if _pop_dotted(config, d)]
+    if removed:
+        logger.info("Image routing: old default fields removed: %s", ", ".join(removed))
+        changed = True
+    return changed
 
 
 def _apply_file_migrations(config: dict, fresh_world: bool) -> bool:
@@ -1402,8 +1372,6 @@ def _apply_file_migrations(config: dict, fresh_world: bool) -> bool:
     if _strip_dead_config_fields(config):
         changed = True
     if _strip_dead_use_cases(config):
-        changed = True
-    if _rewrite_legacy_workflow_specs(config):
         changed = True
     if _seed_default_marketplace_catalogs(config):
         changed = True
@@ -1823,12 +1791,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "OUTFIT_IMAGE_HEIGHT", ig.get("outfit_image_height", 1216))
     _set(env, "LOCATION_IMAGE_WIDTH", ig.get("location_image_width", 1280))
     _set(env, "LOCATION_IMAGE_HEIGHT", ig.get("location_image_height", 720))
-    _set(env, "PROFILE_IMAGEGEN_DEFAULT", ig.get("profile_imagegen_default", ""))
-    _set(env, "OUTFIT_IMAGEGEN_DEFAULT", ig.get("outfit_imagegen_default", ""))
-    _set(env, "EXPRESSION_IMAGEGEN_DEFAULT", ig.get("expression_imagegen_default", ""))
-    _set(env, "LOCATION_IMAGEGEN_DEFAULT", ig.get("location_imagegen_default", ""))
-    _set(env, "TIMEVARIANT_IMAGEGEN_DEFAULT", ig.get("timevariant_imagegen_default", ""))
-    _set(env, "PROP_IMAGEGEN_DEFAULT", ig.get("prop_imagegen_default", ""))
     _set(env, "U2NET_HOME", ig.get("u2net_home", "./models/u2net"))
     _set(env, "REBUILD_LLM_SYSTEM_TEMPLATE", ig.get("rebuild_llm_system_template", ""))
     _set(env, "IMAGE_ANALYSIS_PROMPT", ig.get("image_analysis_prompt", ""))
@@ -1934,7 +1896,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "EVENT_BASE_PROBABILITY", (re_cfg.get("base_probability", 5)) / 100)
     _set(env, "EVENT_RESOLUTION_PROACTIVE", re_cfg.get("resolution_proactive", True))
     _set(env, "EVENT_RESOLUTION_COOLDOWN_MINUTES", re_cfg.get("resolution_cooldown_minutes", 15))
-    _set(env, "EVENT_IMAGEGEN_DEFAULT", re_cfg.get("event_imagegen_default", ""))
     _set(env, "EVENT_RESOLVED_IMAGE_LINGER_MINUTES", re_cfg.get("resolved_image_linger_minutes", 30))
 
     # Story Engine
@@ -1944,7 +1905,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "STORY_ENGINE_COOLDOWN_HOURS", se.get("cooldown_hours", 6))
     _set(env, "STORY_ENGINE_MAX_BEATS", se.get("max_beats", 5))
     _set(env, "STORY_ENGINE_BEAT_IMAGES", se.get("beat_images", True))
-    _set(env, "STORY_ENGINE_IMAGEGEN_DEFAULT", se.get("imagegen_default", ""))
 
     # Purge stale image/video/mesh backend blocks BEFORE writing: this bridge
     # only ever set keys, never removed them. A deleted backend therefore left

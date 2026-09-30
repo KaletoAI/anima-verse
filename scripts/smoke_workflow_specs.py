@@ -26,31 +26,24 @@ What is checked here, all hand-derived, no snapshots:
      ``profile``) and as the fallback of ``tpose``. Checked against the
      catalog, the reader's source line AND the migrated profile, whose key
      must still be ``workflow``.
-  4. The config half of the migration (``config._rewrite_legacy_workflow_specs``)
-     against a hand-built config dict: messaging_frame.target and the imagegen
-     defaults are rewritten, living neighbours stay, the second run is a no-op.
-     The rewriter is in-memory only (``config.load()`` is a read path) — the
-     disk side belongs to ``config.migrate_file()`` and is checked in
-     scripts/smoke_dead_config_fields.py.
+  (4. The config half is gone: the per-occasion default fields it rewrote
+     are migrated into image_generation.routing and removed —
+     scripts/smoke_image_routing_migration.py.)
   5. The per-character half (``migrate_legacy_workflow_specs_once``) against a
      THROWAWAY world: the legacy profile is rewritten, an already-canonical one
-     is left alone, the file-backed skill configs
-     (characters/<name>/skills/*.json, field ``imagegen_workflow``) are swept
-     by FIELD NAME across all skill files, the world_kv marker is set, and a
-     second run is a no-op.
+     is left alone, the world_kv marker is set, and a second run is a no-op.
+     The file-backed skill configs (characters/<name>/skills/*.json, field
+     ``imagegen_workflow``) are NOT touched any more — the field has no
+     reader, so a legacy value there is left as it is.
   6. ``unknown_backend_error``: a glob that names no enabled backend is caught
      BEFORE the render. The ComfyUI era left workflow NAMES here ("Z-Image"),
      which look canonical after the prefix strip but match no backend — the
      render used to die deep in the service with a German message about a
      timeout that never happened.
-  7. The import hole: a character ZIP carries skills/*.json verbatim, so an old
-     export (or a marketplace pack built from one) would smuggle legacy specs
-     back into the world long AFTER the boot migration ran. The import runs the
-     same rewriter.
+  (7. The import-side rewrite of skills/*.json is gone with the field.)
 
 Usage:  ./.venv/bin/python scripts/smoke_workflow_specs.py
 """
-import copy
 import json
 import os
 import sys
@@ -61,8 +54,8 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 # Point the storage root at a throwaway directory BEFORE any app import — the
-# config load path writes to the world's config.json (dead-field strip, spec
-# rewrite), and without STORAGE_DIR there is no world at all: paths.init()
+# config load path writes to the world's config.json (dead-field strip, image
+# routing migration), and without STORAGE_DIR there is no world at all: paths.init()
 # raises StorageNotInitialised, so the tracked worlds/demo cannot be reached.
 # Same reflex as scripts/smoke_dead_config_fields.py.
 _TMP_STORAGE = tempfile.TemporaryDirectory(prefix="smoke_workflow_specs_")
@@ -76,11 +69,10 @@ from app.core import db  # noqa: E402
 
 db.init_schema()
 
-from app.core import config as cfgmod  # noqa: E402
 from app.core.messaging_frame import (  # noqa: E402
     parse_target, unknown_backend_error)
 from app.core.workflow_spec_migration import (  # noqa: E402
-    PROFILE_SPEC_FIELDS, SKILL_SPEC_FIELD, migrate_legacy_workflow_specs_once,
+    PROFILE_SPEC_FIELDS, migrate_legacy_workflow_specs_once,
     strip_legacy_workflow_prefix)
 
 FAILURES = []
@@ -161,50 +153,6 @@ def main():
     eq("the migration targets exactly that field",
        PROFILE_SPEC_FIELDS, (("outfit_imagegen", "workflow"),))
 
-    print("4) the config half against a hand-built config dict")
-    check("messaging_frame.target" in cfgmod.LEGACY_SPEC_FIELDS,
-          "messaging_frame.target is covered")
-    fixture = {
-        "image_generation": {
-            "outfit_imagegen_default": "workflow:Flux*",
-            "expression_imagegen_default": "backend:Krea2",   # stays
-            "location_imagegen_default": "Together*",         # stays
-            "backends": [{"name": "Krea2", "enabled": True}],  # living neighbour
-        },
-        "random_events": {"event_imagegen_default": "workflow:", "enabled": True},
-        "story_engine": {"imagegen_default": "workflow:Z-Image"},
-        "skills": {"instagram": {"imagegen_default": "Flux2*"}},
-        "messaging_frame": {"target": "workflow:Z-Image",
-                            "prompt": "modern smartphone, pure green screen"},
-        "log_level": "INFO",
-    }
-    cfg = copy.deepcopy(fixture)
-    changed = cfgmod._rewrite_legacy_workflow_specs(cfg)
-    check(changed is True, "the rewrite reports a change")
-    for label, dotted, expected in [
-        ("messaging_frame.target", ("messaging_frame", "target"), "Z-Image"),
-        ("outfit default", ("image_generation", "outfit_imagegen_default"), "Flux*"),
-        ("story engine default", ("story_engine", "imagegen_default"), "Z-Image"),
-        ("bare workflow: -> auto", ("random_events", "event_imagegen_default"), ""),
-        ("backend: prefix kept", ("image_generation", "expression_imagegen_default"),
-         "backend:Krea2"),
-        ("bare glob kept", ("image_generation", "location_imagegen_default"), "Together*"),
-        ("nested plugin field kept", ("skills", "instagram", "imagegen_default"), "Flux2*"),
-    ]:
-        node = cfg
-        for part in dotted:
-            node = node.get(part, {}) if isinstance(node, dict) else {}
-        eq(f"{label} rewritten", node, expected)
-    eq("living neighbour untouched",
-       cfg["image_generation"]["backends"], fixture["image_generation"]["backends"])
-    eq("living top-level key untouched", cfg.get("log_level"), "INFO")
-    eq("the prompt sibling of target is untouched",
-       cfg["messaging_frame"]["prompt"], "modern smartphone, pure green screen")
-    eq("no section lost", sorted(cfg.keys()), sorted(fixture.keys()))
-
-    check(cfgmod._rewrite_legacy_workflow_specs(cfg) is False,
-          "second run reports no change")
-
     print("5) the per-character half against a throwaway world")
     from app.models.character import (get_character_dir, get_character_profile,
                                       save_character_profile)
@@ -223,46 +171,20 @@ def main():
         "name": "NoOverride", "description": "no render override at all",
     }, create_new=True)
 
-    # The file-backed skill configs: the sweep goes by FIELD NAME, so a second
-    # skill file with the same field must be caught without naming any skill.
-    def skill_file(character, skill, payload):
-        d = get_character_dir(character, create=True) / "skills"
-        d.mkdir(parents=True, exist_ok=True)
-        p = d / f"{skill}.json"
-        p.write_text(json.dumps(payload), encoding="utf-8")
-        return p
-
-    insta = skill_file("Legacy", "instagram", {
-        SKILL_SPEC_FIELD: "workflow:Qwen*", "imagegen_backend": "",
-        "hashtags": ["#demo"]})
-    video = skill_file("Legacy", "video_generation", {
-        SKILL_SPEC_FIELD: "workflow:Z-Image*", "animate_service": "Together*"})
-    canon = skill_file("Canonical", "instagram", {SKILL_SPEC_FIELD: "Krea2"})
-    other = skill_file("Canonical", "video_generation", {"animate_service": "X*"})
-    other_before = other.read_text(encoding="utf-8")
-    # A broken file must not abort the sweep around it — otherwise the guard
-    # stays unset and the whole migration repeats silently on every boot.
-    # 0xff is not valid UTF-8: that is a UnicodeDecodeError, NOT a
-    # JSONDecodeError (both are ValueError, which is what the sweep catches).
-    binary = get_character_dir("Legacy", create=True) / "skills" / "broken.json"
-    binary.write_bytes(b"\xff\xfe not json at all")
+    # A skill config that still carries the dead field: left alone now.
+    skills_dir = get_character_dir("Legacy", create=True) / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    dead = skills_dir / "instagram.json"
+    dead.write_text(json.dumps({"imagegen_workflow": "workflow:Qwen*"}),
+                    encoding="utf-8")
+    dead_before = dead.read_text(encoding="utf-8")
 
     result = migrate_legacy_workflow_specs_once()
     eq("one character touched", result.get("characters"), 1)
     eq("one field rewritten", result.get("fields"), 1)
-    eq("two skill files rewritten", result.get("skill_files"), 2)
-
-    ins = json.loads(insta.read_text(encoding="utf-8"))
-    eq("the instagram skill config lost its prefix", ins[SKILL_SPEC_FIELD], "Qwen*")
-    eq("its siblings survived", ins.get("hashtags"), ["#demo"])
-    eq("a second skill file with the same field is swept too",
-       json.loads(video.read_text(encoding="utf-8"))[SKILL_SPEC_FIELD], "Z-Image*")
-    eq("an already-canonical skill config is untouched",
-       json.loads(canon.read_text(encoding="utf-8"))[SKILL_SPEC_FIELD], "Krea2")
-    eq("a skill file without the field is not even rewritten",
-       other.read_text(encoding="utf-8"), other_before)
-    eq("the unreadable file is skipped, not repaired",
-       binary.read_bytes(), b"\xff\xfe not json at all")
+    eq("no skill-file count any more", "skill_files" in result, False)
+    eq("the dead skill-config field is not rewritten",
+       dead.read_text(encoding="utf-8"), dead_before)
 
     legacy = (get_character_profile("Legacy") or {}).get("outfit_imagegen") or {}
     eq("the legacy value lost its prefix", legacy.get("workflow"), "Flux*")
@@ -275,23 +197,19 @@ def main():
        (get_character_profile("NoOverride") or {}).get("outfit_imagegen"), None)
 
     check(bool(get_world_setting("migrated_legacy_workflow_specs_v2")),
-          "the world_kv marker is set (the broken file did not abort the sweep)")
+          "the world_kv marker is set")
 
     # Idempotency: values planted AFTER the marker must survive, otherwise the
     # guard is not doing its job (and the second run is not really a no-op).
     prof = get_character_profile("Canonical") or {}
     prof["outfit_imagegen"] = {"workflow": "workflow:Planted", "loras": []}
     save_character_profile("Canonical", prof)
-    skill_file("Canonical", "instagram", {SKILL_SPEC_FIELD: "workflow:Planted"})
     second = migrate_legacy_workflow_specs_once()
     eq("second run touches nothing", second,
-       {"characters": 0, "fields": 0, "skill_files": 0})
+       {"characters": 0, "fields": 0})
     eq("the planted profile value proves the guard held",
        ((get_character_profile("Canonical") or {}).get("outfit_imagegen") or {}
         ).get("workflow"), "workflow:Planted")
-    eq("the planted skill-config value proves it too",
-       json.loads(canon.read_text(encoding="utf-8"))[SKILL_SPEC_FIELD],
-       "workflow:Planted")
 
     print("6) unknown backend: caught before the render, not inside it")
     pool = ["CivitAI-Z-Image", "Flux2-9B Normal", "Together-Fast"]
@@ -310,24 +228,6 @@ def main():
           "'Flux' does not match 'Flux2-9B Normal' either (no substring magic)")
     eq("an empty pool refuses everything",
        bool(unknown_backend_error("Anything", [])), True)
-
-    print("7) the import hole: an old ZIP must not smuggle the legacy spec back")
-    # "Canonical" still carries the value planted after the marker — a genuine
-    # legacy spec inside the export. The boot migration is long done here
-    # (guard set), so only the import-side rewrite can clean this up.
-    from app.core.character_io import (export_character_to_zip,
-                                       import_character_from_zip)
-    blob = export_character_to_zip("Canonical")
-    import io as _io
-    import zipfile as _zip
-    with _zip.ZipFile(_io.BytesIO(blob)) as zf:
-        in_zip = json.loads(zf.read("files/skills/instagram.json"))
-    eq("the export really carries the legacy spec (else the test is empty)",
-       in_zip.get(SKILL_SPEC_FIELD), "workflow:Planted")
-    res = import_character_from_zip(blob, overwrite=True)
-    eq("the import succeeded", res.get("status"), "success")
-    eq("the re-imported skill config is canonical",
-       json.loads(canon.read_text(encoding="utf-8"))[SKILL_SPEC_FIELD], "Planted")
 
     print()
     if FAILURES:
