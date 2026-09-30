@@ -201,6 +201,19 @@ E5 take_scene_photo("Mara") with no dialog backend, prepare_scene_photo
    as an explicit pick — the one-click photo keeps its fallback).
 E6 take_scene_photo("Mara", backend_name="Gw") -> backend_name "Gw",
    occasion "photo" (a backend the user picked stays explicit).
+E7 (fix round 1) explicit "Cloud" with LoRA "foreign.safetensors" (the LoRA
+   library of the throwaway world is empty, so nothing is associated with
+   Cloud) -> LoraNotAllowedError (the hard gate of an explicit pick,
+   CLAUDE.md), raised before any render: Cloud's call count unchanged.
+E8 (fix round 1) the source image's meta carries source_file "older.png"
+   (it was itself a re-render); an explicit create_new regenerate on Cloud
+   -> the NEW file's meta has no "source_file" (the marker belongs to the
+   image it was written for, not to a variant copied from it), and
+   variant_of names the source.
+E9 (fix round 1) take_scene_photo whose regenerate raises
+   LoraNotAllowedError -> the error propagates (a refusal, like the media
+   master switch; /play/scene-photo maps it to 400), it is NOT folded into
+   {"ok": False}.
 
 DEFERRED: the surface-texture case of the plan (its C4, occasion
 "surface_texture") waits until app/core/surface_textures.py — which carries
@@ -787,6 +800,25 @@ def part_e():
     check("E4 occasion photo", get_single_image_meta("Mara", Path(p4).name).get("routing"),
           {"occasion": "photo", "position": 1, "spec": "Cloud"})
 
+    from app.core.lora_library import LoraNotAllowedError
+    n_cloud = len(cloud.calls)
+    try:
+        regenerate_image("Mara", str(src), "a portrait", backend_name="Cloud",
+                         loras=[{"name": "foreign.safetensors", "strength": 1.0}],
+                         create_new=True)
+        check("E7 foreign LoRA refused", "no exception", "LoraNotAllowedError")
+    except LoraNotAllowedError:
+        check("E7 foreign LoRA refused", True, True)
+    check("E7 no backend called", len(cloud.calls) - n_cloud, 0)
+
+    from app.models.character import add_character_image_metadata
+    add_character_image_metadata("Mara", src.name, {"source_file": "older.png"})
+    ok, _p, p8 = regenerate_image("Mara", str(src), "a portrait", backend_name="Cloud",
+                                  create_new=True)
+    m8 = get_single_image_meta("Mara", Path(p8).name)
+    check("E8 no inherited source_file", (ok, "source_file" in m8, m8.get("variant_of")),
+          (True, False, src.name))
+
     from app.core import scene_photo
     calls = []
 
@@ -804,6 +836,15 @@ def part_e():
         calls.clear()
         scene_photo.take_scene_photo("Mara", backend_name="Gw")
         check("E6 a picked backend stays explicit", calls, [("Gw", "photo")])
+
+        def _refuse(**kw):
+            raise LoraNotAllowedError("Cloud", ["foreign.safetensors"])
+        image_regenerate.regenerate_image = _refuse
+        try:
+            got = scene_photo.take_scene_photo("Mara", backend_name="Cloud")
+            check("E9 LoRA refusal propagates", got, "LoraNotAllowedError")
+        except LoraNotAllowedError:
+            check("E9 LoRA refusal propagates", True, True)
     finally:
         scene_photo.prepare_scene_photo = _orig_prep
         image_regenerate.regenerate_image = _orig_regen

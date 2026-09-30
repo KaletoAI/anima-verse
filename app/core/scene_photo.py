@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from app.core.log import get_logger
+from app.core.lora_library import LoraNotAllowedError
 from app.imagegen.base import MediaGenerationDisabled
 
 logger = get_logger("scene_photo")
@@ -211,9 +212,10 @@ def take_scene_photo(avatar: str,
             create_new=True,
             use_room=bool(use_room),
             occasion="photo")
-    except MediaGenerationDisabled:
-        # The world's master switch: not a failed render but a refusal, and
-        # the route maps it to a 409 the player sees verbatim.
+    except (MediaGenerationDisabled, LoraNotAllowedError):
+        # Refusals, not failed renders: the world's master switch (the route
+        # maps it to a 409) and an explicitly picked LoRA the library does
+        # not associate with the picked backend (400) — both verbatim.
         raise
     except Exception as e:
         logger.error("scene photo generation failed: %s", e)

@@ -1393,14 +1393,20 @@ async def play_scene_photo(request: Request, user=Depends(get_current_user)):
     except Exception:
         body = {}
     body = body if isinstance(body, dict) else {}
-    result = await asyncio.to_thread(
-        take_scene_photo, avatar,
-        str(body.get("prompt") or ""),
-        str(body.get("backend") or ""),
-        body.get("loras"),
-        str(body.get("negative_prompt") or ""),
-        body.get("character_names"),
-        bool(body.get("use_room", True)))
+    from app.core.lora_library import LoraNotAllowedError
+    try:
+        result = await asyncio.to_thread(
+            take_scene_photo, avatar,
+            str(body.get("prompt") or ""),
+            str(body.get("backend") or ""),
+            body.get("loras"),
+            str(body.get("negative_prompt") or ""),
+            body.get("character_names"),
+            bool(body.get("use_room", True)))
+    except LoraNotAllowedError as e:
+        # An explicitly picked LoRA the library does not associate with the
+        # picked backend: the user's own choice, said verbatim.
+        raise HTTPException(status_code=400, detail=str(e))
     if not result.get("ok"):
         raise HTTPException(status_code=502,
                             detail=result.get("error", "photo failed"))

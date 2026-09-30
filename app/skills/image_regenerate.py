@@ -225,6 +225,11 @@ def regenerate_image(character_name: str,
             logger.info("Model override: %s", model_override)
         if loras is not None:
             if explicit:
+                # An explicit dialog pick keeps the hard LoRA gate: a LoRA the
+                # library does not associate with THIS backend is refused
+                # before anything is queued (no cooldown, no re-run).
+                from app.core.lora_library import assert_loras_allowed
+                assert_loras_allowed(b, loras)
                 params["lora_inputs"] = loras
             else:
                 from app.core.lora_library import filter_allowed_loras, warn_dropped_loras
@@ -445,6 +450,9 @@ def regenerate_image(character_name: str,
             # Fields that must not be carried over
             _base_meta.pop("image_filename", None)
             _base_meta.pop("image_analysis", None)
+            # A re-render marker belongs to the image it was written for
+            # (fallback_rerender stamps source_file on its replacement).
+            _base_meta.pop("source_file", None)
             _base_meta.update(_regen_meta)
             _regen_meta = _base_meta
             # Take created_at from the original (so they sort together)
