@@ -18,10 +18,10 @@ def enhance_prompt(
     original_prompt: str,
     improvement_request: str,
     agent_config: Optional[dict] = None) -> str:
-    """Verbessert einen Image-Prompt basierend auf User-Feedback via LLM.
+    """Improve an image prompt from user feedback via the LLM.
 
     Returns:
-        Verbesserter Prompt, oder original_prompt bei Fehler/leerem Request.
+        The improved prompt, or original_prompt on an error / empty request.
     """
     if not improvement_request or not improvement_request.strip():
         return original_prompt
@@ -54,7 +54,7 @@ def enhance_prompt(
 
 
 def _save_analysis(output_path: str, analysis: str, character_name: str) -> None:
-    """Speichert die Bildanalyse in den passenden Metadaten (Instagram oder Character-Image)."""
+    """Store the image analysis in the matching metadata (Instagram or character image)."""
     from pathlib import Path as _Path
     filename = _Path(output_path).name
 
@@ -77,7 +77,7 @@ def _save_analysis(output_path: str, analysis: str, character_name: str) -> None
             save_feed(feed)
             logger.info("Bildanalyse in Instagram-Meta gespeichert")
         except Exception as e:
-            logger.warning("Instagram-Meta Speichern fehlgeschlagen: %s", e)
+            logger.warning("Saving the Instagram meta failed: %s", e)
         return
 
     # Character-Bild
@@ -87,7 +87,46 @@ def _save_analysis(output_path: str, analysis: str, character_name: str) -> None
             add_character_image_metadata(character_name, filename, {"image_analysis": analysis})
             logger.info("Bildanalyse in Character-Image-Meta gespeichert")
         except Exception as e:
-            logger.warning("Character-Image-Meta Speichern fehlgeschlagen: %s", e)
+            logger.warning("Saving the character image meta failed: %s", e)
+
+
+def _merge_regen_meta(orig_meta: Dict[str, Any], values: Dict[str, Any],
+                      route_fields: Dict[str, Any], *, create_new: bool,
+                      orig_filename: str, now_iso: str,
+                      source_file: str = "") -> Dict[str, Any]:
+    """The meta a regenerate writes for its output file — ONE dict, written
+    in ONE call.
+
+    ``values`` are the render's own fields; ``route_fields`` is
+    ``routing.route_meta(route)`` (``{}`` for an explicit render). ``routing``
+    and ``fallback_from`` are always set from it, so an explicit render writes
+    them as None: an overwritten file loses an old marker, and a
+    ``create_new`` copy does not inherit the marker of the image it was
+    rendered from.
+
+    ``create_new``: the original's meta is the base, overwritten by the new
+    values; its ``source_file`` is dropped (a re-render marker belongs to the
+    image it was written for). ``source_file`` names the image THIS render
+    replaces (fallback_rerender) — it goes into the same write, so a crash can
+    never leave a replacement without it (the candidate would then be
+    rendered a second time)."""
+    meta = dict(values)
+    meta["routing"] = route_fields.get("routing")
+    meta["fallback_from"] = route_fields.get("fallback_from")
+    if create_new:
+        base = dict(orig_meta or {})
+        # Fields that must not be carried over
+        base.pop("image_filename", None)
+        base.pop("image_analysis", None)
+        base.pop("source_file", None)
+        base.update(meta)
+        meta = base
+        # created_at from the original, so they sort together
+        meta["created_at"] = (orig_meta or {}).get("created_at") or now_iso
+        meta["variant_of"] = orig_filename
+    if source_file:
+        meta["source_file"] = source_file
+    return meta
 
 
 def regenerate_image(character_name: str,
@@ -107,7 +146,8 @@ def regenerate_image(character_name: str,
     use_room: bool = True,
     use_source_as_reference: bool = False,
     source_image_path: str = "",
-    occasion: str = "regenerate") -> Tuple[bool, str, str]:
+    occasion: str = "regenerate",
+    source_file: str = "") -> Tuple[bool, str, str]:
     """Renders an image again. ``create_new=True`` writes a new file next to
     the source instead of overwriting it.
 
@@ -122,6 +162,8 @@ def regenerate_image(character_name: str,
         occasion: the image-routing occasion rendered without an explicit
             backend — "regenerate" (gallery regenerate), "photo" (scene
             photo), "profile" (portrait re-render)
+        source_file: the image this render replaces (fallback_rerender) —
+            written into the new file's meta in the same write
 
     Returns:
         (success, final_prompt, actual_output_path) — final_prompt is the
@@ -413,7 +455,7 @@ def regenerate_image(character_name: str,
         if not _location_val and character_name:
             _location_val = get_character_current_location(character_name) or ""
 
-        _regen_meta = {
+        _regen_values = {
             "prompt": final_prompt,
             "negative_prompt": negative_prompt,
             "backend": backend.name,
@@ -439,28 +481,13 @@ def regenerate_image(character_name: str,
             # from_character: inherited from the original meta on a regenerate
             # — otherwise the origin (e.g. "sent by an NPC to the avatar") is lost.
             "from_character": _orig_meta.get("from_character", ""),
-            # Image routing record — None on an explicit render, so an
-            # overwritten file loses an old marker too.
-            "routing": _routing.get("routing"),
-            "fallback_from": _routing.get("fallback_from"),
         }
-        # create_new: the original metadata is the base, overwritten by the new values
-        if create_new:
-            _base_meta = dict(_orig_meta)
-            # Fields that must not be carried over
-            _base_meta.pop("image_filename", None)
-            _base_meta.pop("image_analysis", None)
-            # A re-render marker belongs to the image it was written for
-            # (fallback_rerender stamps source_file on its replacement).
-            _base_meta.pop("source_file", None)
-            _base_meta.update(_regen_meta)
-            _regen_meta = _base_meta
-            # Take created_at from the original (so they sort together)
-            if _orig_meta.get("created_at"):
-                _regen_meta["created_at"] = _orig_meta["created_at"]
-            else:
-                _regen_meta["created_at"] = _now_iso
-            _regen_meta["variant_of"] = _orig_filename
+        # Image routing record (None on an explicit render) + the create_new
+        # base + source_file — one dict, one write.
+        _regen_meta = _merge_regen_meta(
+            _orig_meta, _regen_values, _routing, create_new=create_new,
+            orig_filename=_orig_filename, now_iso=_now_iso,
+            source_file=source_file)
         _regen_filename = Path(actual_output_path).name
         if "/instagram/" in actual_output_path:
             try:

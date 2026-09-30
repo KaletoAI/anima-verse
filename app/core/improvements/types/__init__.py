@@ -1,6 +1,7 @@
 """Importing this package registers every built-in improvement type."""
 from app.core.improvements import registry
 
+from .fallback_rerender import FallbackRerender
 from .fill_missing import FillMissing
 from .image_rerender import ImageRerender
 from .mesh_from_tpose import MeshFromTpose
@@ -12,6 +13,7 @@ registry.register(FillMissing())
 registry.register(ImageRerender())
 registry.register(SurfaceBake())
 registry.register(MeshFromTpose())
+registry.register(FallbackRerender())
 
-__all__ = ["FillMissing", "ImageRerender", "MeshFromTpose", "ModelReplace",
+__all__ = ["FallbackRerender", "FillMissing", "ImageRerender", "MeshFromTpose", "ModelReplace",
            "SurfaceBake"]

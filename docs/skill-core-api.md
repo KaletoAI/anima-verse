@@ -501,7 +501,9 @@ the step's `error`; the step is retried once, then skipped).
 `app.imagegen.base.BackendBusyError` and `app.core.improvements.base.CandidateBusy`
 mean LOAD, not a defect: the step stays pending and keeps both its attempts. Raise
 `CandidateBusy` when the subject is already being generated somewhere else — most
-producers keep an in-flight set that a direct caller has to honour itself.
+producers keep an in-flight set that a direct caller has to honour itself — or when
+the backend the step needs is not available yet (check that BEFORE calling the
+producer, whose own refusal would be a plain exception).
 
 **Registration** — in the package's `on_load` module (see `docs/plugins.md`), so a
 package without a verb can contribute one too:
@@ -527,3 +529,4 @@ declaration.
 | `image_rerender` | Re-renders portraits/gallery images of one image backend on another |
 | `surface_bake` | Bakes the walkable-surface lattice of room and prop models |
 | `mesh_from_tpose` | Generates the character mesh of every stored outfit combination that has a T-pose render but no model |
+| `fallback_rerender` | Re-renders every image a fallback backend made (image meta `fallback_from`) EXPLICITLY on the backend its intended spec resolves to; while that spec resolves to nothing the step raises `CandidateBusy` and stays pending |

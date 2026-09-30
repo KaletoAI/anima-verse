@@ -378,8 +378,8 @@ def generate_expression(name: str) -> None:
 
 def character_profile(name: str) -> Optional[Dict[str, Any]]:
     """The character's CURRENT profile image as
-    ``{filename, path, backend, prompt, fallback_from}``, or None when there is
-    none.
+    ``{filename, path, backend, prompt, fallback_from, source_file}``, or
+    None when there is none.
 
     "Current" is what the profile field says — the same resolution
     ``GET /characters/{name}/images/profile`` does
@@ -388,7 +388,8 @@ def character_profile(name: str) -> Optional[Dict[str, Any]]:
     generated from; either may be empty for a hand-uploaded picture, and a
     caller that wants to RENDER needs the prompt.  ``fallback_from`` is the
     image-routing marker of a render that did not run on its intended backend
-    (None otherwise).
+    (None otherwise); ``source_file`` the picture this portrait was
+    re-rendered FROM (``""`` for an original).
     """
     from app.models.character import (get_character_image_metadata,
                                       get_character_image_prompts,
@@ -407,6 +408,7 @@ def character_profile(name: str) -> Optional[Dict[str, Any]]:
         "backend": str(meta.get("backend") or ""),
         "prompt": str(get_character_image_prompts(name).get(filename) or ""),
         "fallback_from": meta.get("fallback_from") or None,
+        "source_file": str(meta.get("source_file") or ""),
     }
 
 
@@ -424,6 +426,11 @@ def regenerate_profile(name: str, backend: str) -> None:
     target backend reaches the expressions is by deriving them again from the
     new portrait.
 
+    The new file names the old portrait as ``source_file`` (in the producer's
+    own meta write): the old one stays in the gallery, and without it a
+    re-render of the old one's fallback marker could not see that its
+    replacement already exists.
+
     There is no double-start guard on this path (neither ``character_ops`` nor
     ``image_regenerate`` keeps an in-flight set for a character's portrait), so
     nothing can be reported as :class:`CandidateBusy` here.
@@ -438,7 +445,7 @@ def regenerate_profile(name: str, backend: str) -> None:
         raise RuntimeError("profile image has no stored prompt")
     ok, _final_prompt, new_path = regenerate_image(
         name, current["path"], current["prompt"], backend_name=backend,
-        create_new=True, use_room=False)
+        create_new=True, use_room=False, source_file=current["filename"])
     if not ok or not new_path:
         raise RuntimeError("profile regenerate failed")
     set_character_profile_image(name, Path(new_path).name)
@@ -469,7 +476,11 @@ def character_gallery_images(name: str) -> List[Dict[str, Any]]:
                     "source_file": str(meta.get("source_file") or ""),
                     "room_id": str(meta.get("room_id") or ""),
                     "location": str(meta.get("location") or ""),
-                    "character_names": meta.get("character_names") or None})
+                    # An explicit [] ("nobody") stays [] — only a missing
+                    # entry becomes None (= detect the persons again).
+                    "character_names": (list(meta["character_names"])
+                                        if isinstance(meta.get("character_names"), list)
+                                        else None)})
     return out
 
 
@@ -478,10 +489,17 @@ def regenerate_character_gallery_image(name: str, filename: str, backend: str) -
     (no routing, no fallback) as a NEW file whose meta names the original as
     ``source_file``. The original stays — the admin compares and deletes.
 
+    ``source_file`` travels INTO the producer's own meta write, so a crash
+    between render and bookkeeping can never leave a replacement without it
+    (the candidate would be listed again and rendered twice). An empty
+    ``backend`` is refused: the producer would route it and could land on a
+    fallback again, with a new marker.
+
     The producer is reached through the module attribute so a smoke can swap
     it (the same seam ``regenerate_profile`` offers)."""
-    from app.models.character import add_character_image_metadata
     from app.skills import image_regenerate
+    if not str(backend or "").strip():
+        raise RuntimeError("no backend given — a re-render runs explicitly")
     entry = next((g for g in character_gallery_images(name)
                   if g["filename"] == filename), None)
     if entry is None:
@@ -489,10 +507,10 @@ def regenerate_character_gallery_image(name: str, filename: str, backend: str) -
     ok, _final_prompt, new_path = image_regenerate.regenerate_image(
         name, entry["path"], entry["prompt"], backend_name=backend,
         create_new=True, use_room=True, room_id=entry["room_id"],
-        location_id=entry["location"], character_names=entry["character_names"])
+        location_id=entry["location"], character_names=entry["character_names"],
+        source_file=filename)
     if not ok or not new_path:
         raise RuntimeError("gallery regenerate failed")
-    add_character_image_metadata(name, Path(new_path).name, {"source_file": filename})
 
 
 # ---------------------------------------------------------------------------
