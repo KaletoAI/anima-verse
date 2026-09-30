@@ -567,13 +567,18 @@ def generate_item_image_sync(
 
 @router.post("/items/{item_id}/generate-image")
 async def generate_item_image_route(item_id: str, request: Request) -> Dict[str, Any]:
-    """Generiert ein Bild fuer ein Item — fire-and-forget.
+    """Generates an item image — fire-and-forget.
 
-    Gibt sofort 202 zurueck, Generierung laeuft im Background-Thread
-    ueber die GPU-Queue. User kann mehrere Items hintereinander anklicken.
+    Returns 202 right away; the render runs in a background thread over the
+    GPU queue, so the user can click several items in a row.
 
     Optional overrides from the Game-Admin regenerate dialog:
         backend, model_override, loras, prompt, negative_prompt
+
+    An explicit ``backend`` that is not available is a 503 BEFORE anything
+    is queued — the background thread could only log it, and the user would
+    get no image and no message. (The thread checks again: the backend may
+    drop out in between.)
     """
     item = get_item(item_id)
     if not item:
@@ -590,6 +595,18 @@ async def generate_item_image_route(item_id: str, request: Request) -> Dict[str,
                     overrides[k] = body[k]
     except Exception:
         pass
+
+    backend_name = str(overrides.get("backend") or "").strip()
+    if backend_name:
+        import asyncio
+        from app.imagegen.service import get_image_service
+        # The probe is network I/O — off the event loop.
+        if not await asyncio.to_thread(
+                get_image_service()._wait_for_explicit_backend, backend_name):
+            raise HTTPException(
+                status_code=503,
+                detail=f"backend '{backend_name}' is not available — "
+                       f"no automatic fallback")
 
     import threading
     threading.Thread(

@@ -124,6 +124,24 @@ P8 item image, no backend, rules item ["Gw","Cloud"], dialog prompt "DIALOG"
    no image_prompt / prompt_fragment, so its name is the subject — and is
    not "DIALOG") and no "model"; item meta routing position 2 and
    fallback_from {"occasion":"item","intended_spec":"Gw","position":1}.
+P9 (fix round 1) POST /inventory/items/{id}/generate-image with explicit
+   backend "Gw" while Gw cools down -> HTTPException 503 whose detail names
+   'Gw' and "no automatic fallback"; no background thread is started and no
+   backend is asked (the fire-and-forget thread could only log it).
+P10 (fix round 1) the prop chain `_generate(image_only)` with explicit glob
+   "Gw" while Gw cools down -> {"ok": False, "error": "source render failed:
+   backend 'Gw' is not available — no automatic fallback"}, and the tracked
+   task finishes with that same text (not a bare "source render failed").
+P11 (fix round 1) the prop chain with explicit glob "Busy" whose render
+   raises BackendBusyError("gpu busy") -> the exception propagates out of
+   `_generate`, and the tracked task finishes with error
+   "BackendBusyError: gpu busy" (it used to finish with "" = success).
+P12 (fix round 1) back view of a prop WITHOUT a front image, front_reference
+   on, rules prop ["Q*"] matching "Q-txt" (txt2img, cost 0) and "Q-ref"
+   (img2img, cost 5): there is no picture to slot, so the routing is asked
+   without a reference -> the cheaper Q-txt renders, Q-ref is never asked,
+   and Q-txt gets no reference_images. (With has_ref=True — the old
+   bool(front_reference) — the img2img preference would have picked Q-ref.)
 DEFERRED: the surface-texture case of the plan (its C4, occasion
 "surface_texture") waits until app/core/surface_textures.py — which carries
 another session's uncommitted change — is routed.
@@ -509,6 +527,78 @@ def part_p():
     im = (inventory.get_item(iid) or {}).get("image_meta") or {}
     check("P8 item meta", ((im.get("routing") or {}).get("position"), im.get("fallback_from")),
           (2, {"occasion": "item", "intended_spec": "Gw", "position": 1}))
+
+    from fastapi import HTTPException
+    gw = FakeBackend("Gw", 0, "natural", dead=True)
+    gw.mark_unhealthy("smoke", 300)
+    cloud = FakeBackend("Cloud", 5, "keywords")
+    install_pool(gw, cloud)
+
+    class _Req:
+        async def json(self):
+            return {"backend": "Gw", "prompt": "x"}
+    # The background thread's target is the module-level function, looked up
+    # when the route starts it: a recorder there sees every started render.
+    # (threading.Thread itself must stay real — asyncio.to_thread needs it.)
+    started = []
+    _real_sync = inventory_routes.generate_item_image_sync
+    inventory_routes.generate_item_image_sync = lambda *a, **kw: started.append(a)
+    try:
+        asyncio.run(inventory_routes.generate_item_image_route(iid, _Req()))
+        check("P9 explicit dead -> 503", "no exception", "HTTPException 503")
+    except HTTPException as e:
+        check("P9 explicit dead -> 503", (e.status_code, "'Gw'" in str(e.detail),
+                                          "no automatic fallback" in str(e.detail)),
+              (503, True, True))
+    finally:
+        time.sleep(0.2)          # a wrongly started thread would have run by now
+        inventory_routes.generate_item_image_sync = _real_sync
+    check("P9 no thread, nobody asked", (started, len(gw.calls), len(cloud.calls)),
+          ([], 0, 0))
+
+    from app.core.task_queue import get_task_queue
+    from app.imagegen.base import BackendBusyError
+    track_errors = []
+    _tq = get_task_queue()
+    _orig_finish = _tq.track_finish
+
+    def _record_finish(task_id, error=""):
+        track_errors.append(error)
+        return _orig_finish(task_id, error=error)
+    _tq.track_finish = _record_finish
+    try:
+        res = props._generate(pid, "", "", "Gw", "", image_only=True)
+        why = ("source render failed: backend 'Gw' is not available"
+               " — no automatic fallback")
+        check("P10 chain error names the reason", res, {"ok": False, "error": why})
+        check("P10 track error", track_errors, [why])
+
+        class _BusyBackend(FakeBackend):
+            def generate(self, prompt, negative_prompt, params, log_meta=None):
+                self.calls.append({"prompt": prompt})
+                raise BackendBusyError("gpu busy")
+        install_pool(_BusyBackend("Busy", 0, "natural"))
+        track_errors.clear()
+        try:
+            props._generate(pid, "", "", "Busy", "", image_only=True)
+            check("P11 busy propagates", "no exception", "BackendBusyError")
+        except BackendBusyError:
+            check("P11 busy propagates", True, True)
+        check("P11 track error", track_errors, ["BackendBusyError: gpu busy"])
+    finally:
+        _tq.track_finish = _orig_finish
+
+    q_txt, q_ref = FakeBackend("Q-txt", 0, "keywords"), FakeBackend("Q-ref", 5, "keywords")
+    q_txt.category = "txt2img"
+    install_pool(q_txt, q_ref)
+    set_routing({"prop": ["Q*"]})
+    bare = props.create_prop(name="Stool", description="a three-legged stool")["id"]
+    check("P12 rendered", props._render_source(bare, "", "", "", view="back",
+                                               front_reference=True), True)
+    check("P12 no reference -> cheapest, no slot",
+          (len(q_txt.calls), len(q_ref.calls),
+           "reference_images" in (q_txt.calls[0]["params"] if q_txt.calls else {})),
+          (1, 0, False))
 
 
 if __name__ == "__main__":

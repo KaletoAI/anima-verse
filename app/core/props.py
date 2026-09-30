@@ -5905,7 +5905,8 @@ def _render_source(prop_id: str, backend_glob: str,
                    prompt: str, negative: str, variant: Any = None, *,
                    view: str = "front",
                    front_reference: bool = False,
-                   reference_variant: Any = None) -> bool:
+                   reference_variant: Any = None,
+                   errors: Optional[List[str]] = None) -> bool:
     """txt2img render of the product shot → THIS VARIANT's source image. Runs
     the GPU job on the backend queue channel (like every render). Records the
     image backend + final prompt with the variant. Returns True on success.
@@ -5930,7 +5931,10 @@ def _render_source(prop_id: str, backend_glob: str,
     of the image routing; the source record then carries ``routing`` (and
     ``fallback_from`` behind the intended entry). A dialog ``prompt`` is used
     verbatim on the pick or the chain's FIRST attempt only — a re-run on
-    another backend composes the variant's subject for that backend."""
+    another backend composes the variant's subject for that backend.
+
+    ``errors``, when given, receives the reason of a False (the tracked task
+    of the chain reports it instead of a bare "source render failed")."""
     from app.imagegen.base import BackendFailedError
     from app.imagegen.routing import NoRouteError, route_meta, run_routed
     from app.imagegen.service import get_image_service
@@ -5943,13 +5947,24 @@ def _render_source(prop_id: str, backend_glob: str,
     if backend_glob.strip():
         backend = svc._wait_for_explicit_backend(backend_glob)
         if not backend:
-            logger.warning("Prop %s: backend '%s' is not available — no automatic "
-                           "fallback", prop_id, backend_glob)
+            why = f"backend '{backend_glob}' is not available — no automatic fallback"
+            logger.warning("Prop %s: %s", prop_id, why)
+            if errors is not None:
+                errors.append(why)
             return False
 
     use_case = view_use_case("prop", view)
     meta0 = read_sidecar(prop_id)
     key_areas = meta0.get(KEY_AREAS_KEY) or []
+    # A render may take a FRONT image as its appearance reference — which one
+    # is `reference_front`'s decision (resolved ONCE: the routing asks for a
+    # reference-capable backend only when there really is a picture to slot),
+    # whether the backend can hold it is `_render`'s.
+    front = (reference_front(prop_id, variant, view, reference_variant)
+             if front_reference else None)
+    if front_reference and not front:
+        logger.info("Prop %s: no usable reference image for the %s view of "
+                    "variant %s, rendering from text alone", prop_id, view, variant)
     _attempt = {"n": 0}
 
     def _render(b):
@@ -5983,17 +5998,11 @@ def _render_source(prop_id: str, backend_glob: str,
             n = negative if (negative.strip() and not prompt.strip()) else composed["negative"]
         params: Dict[str, Any] = {"width": 1024, "height": 1024,
                                   "seed": random.randint(1, 2**31 - 1)}
-        # A render may take a FRONT image as its appearance reference — which
-        # one is `reference_front`'s decision, whether the backend can hold it
-        # is this one's. A backend without a slot renders from text alone and
+        # A backend without a reference slot renders from text alone and
         # says so: "log it, do not fail", the rule this reference has had
         # from the start.
-        if front_reference:
-            front = reference_front(prop_id, variant, view, reference_variant)
-            if not front:
-                logger.info("Prop %s: no usable reference image for the %s view of "
-                            "variant %s, rendering from text alone", prop_id, view, variant)
-            elif int(getattr(b, "ref_slot_count", 0) or 0) < 1:
+        if front:
+            if int(getattr(b, "ref_slot_count", 0) or 0) < 1:
                 logger.info("Prop %s: backend %s has no reference slot, %s view "
                             "renders without reference", prop_id, b.name, view)
             else:
@@ -6021,19 +6030,25 @@ def _render_source(prop_id: str, backend_glob: str,
             (images, used, p, n), route = _render(backend), None
         else:
             (images, used, p, n), route = run_routed(
-                "prop", _render, has_ref=bool(front_reference), pool=svc.pool)
+                "prop", _render, has_ref=bool(front), pool=svc.pool)
     except (NoRouteError, BackendFailedError) as e:
         # Nothing usable left in the chain, or the one backend this render
-        # may use failed (it cools down) — the chain reports "source render
-        # failed" instead of dying with a traceback.
+        # may use failed (it cools down) — the chain reports the reason
+        # instead of dying with a traceback.
         logger.warning("Prop %s: source render failed — %s", prop_id, e)
+        if errors is not None:
+            errors.append(str(e))
         return False
     # One writer for every source image (upload, cutout, render): it norms the
     # picture and records the provenance the panel shows for THIS variant
     # (backend + when; prompt/negative in the tooltip) plus the routing marks.
-    return save_source_image(prop_id, images[0], variant, view=view,
-                             backend=used.name, prompt=p, negative=n,
-                             routing=route_meta(route))
+    if save_source_image(prop_id, images[0], variant, view=view,
+                         backend=used.name, prompt=p, negative=n,
+                         routing=route_meta(route)):
+        return True
+    if errors is not None:
+        errors.append(f"the image rendered on {used.name} could not be stored")
+    return False
 
 
 def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
@@ -6114,11 +6129,12 @@ def _generate(prop_id: str, prompt: str, negative: str,
         # count / texture size) without burning an image render; image_only
         # renders a NEW source image and stops — re-meshing is its own,
         # separately triggered step ("3D from this image").
+        _why: List[str] = []
         if not mesh_only and not _render_source(
                 prop_id, image_backend_glob, prompt, negative, variant,
                 view=view, front_reference=front_reference,
-                reference_variant=reference_variant):
-            error = "source render failed"
+                reference_variant=reference_variant, errors=_why):
+            error = "source render failed" + (f": {_why[-1]}" if _why else "")
             return {"ok": False, "error": error}
         if image_only:
             return {"ok": True}
@@ -6263,6 +6279,12 @@ def _generate(prop_id: str, prompt: str, negative: str,
                     prop_id, _stem_of(prop_id, variant), path.name,
                     res.get("backend", ""))
         return {"ok": True}
+    except Exception as e:
+        # Busy / media switch off / cancelled / anything else that escapes
+        # the chain: the tracked task says why instead of finishing as a
+        # success. The caller still sees the exception.
+        error = error or f"{type(e).__name__}: {e}"
+        raise
     finally:
         if task_id:
             try:
