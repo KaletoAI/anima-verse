@@ -702,8 +702,50 @@ def mesh_backend_options(rigs: Tuple[str, ...] = ()) -> List[Dict[str, str]]:
     return out
 
 
-def default_mesh_backend(occasion: str) -> str:
+#: The rigs a subject KIND's mesh must have: a character is bound to one of
+#: :data:`CHARACTER_MESH_RIGS` (which one: ``model3d.required_rig``), buildings
+#: and props are unrigged.
+SUBJECT_MESH_RIGS = {"character": CHARACTER_MESH_RIGS,
+                     "location": ("none",), "prop": ("none",)}
+
+
+def mesh_backend_rig(name: str) -> str:
+    """The rig the img2mesh backend ``name`` delivers, read from its CONFIG
+    entry (``image_generation.backends``) — ``""`` when no such img2mesh
+    backend is configured.
+
+    Configuration, never live availability: candidate scans filter by it, and
+    the engine closes a candidate that drops off the list as done — an offline
+    backend must not make its subjects vanish for good."""
+    from app.core import config
+    from app.imagegen.routing import describe_config_backend
+    name = str(name or "").strip()
+    for entry in config.get("image_generation.backends", []) or []:
+        if not isinstance(entry, dict) or str(entry.get("name") or "").strip() != name:
+            continue
+        kind = describe_config_backend(entry)
+        if kind["media"] == "mesh" and kind["category"] != "mesh2mesh":
+            return kind["rig"] or "mixamo"
+    return ""
+
+
+def character_fits_backend(name: str, backend: str) -> bool:
+    """Whether ``backend`` can mesh character ``name`` at all: its configured
+    rig (``mesh_backend_rig``) is the one the character needs
+    (``model3d.required_rig``). An explicit wrong-rig pick is an error in
+    ``generate_mesh``, so such a character is no candidate for that backend —
+    a candidate that can only fail would burn its attempts and be skipped.
+    A backend that is not configured (renamed, removed) cannot be judged: it
+    keeps every character (its runs fail loudly as an unavailable pick,
+    instead of silently closing every candidate as done)."""
+    from app.core import model3d
+    rig = mesh_backend_rig(backend)
+    return not rig or model3d.required_rig(name) == rig
+
+
+def default_mesh_backend(occasion: str, character: str = "") -> str:
     """What the mesh OCCASION's chain resolves to right now (image routing),
-    ``""`` when nothing is available."""
+    ``""`` when nothing is available. ``character`` applies that character's
+    backend switches (a character mesh renders with them)."""
     from app.imagegen.routing import explain_occasion
-    return str(explain_occasion(occasion).get("resolved") or "").strip()
+    return str(explain_occasion(occasion, character).get("resolved") or "").strip()

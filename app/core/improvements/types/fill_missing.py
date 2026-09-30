@@ -22,7 +22,7 @@ SUBJECTS = [
 ]
 
 
-def _require_route(occasion: str) -> None:
+def _require_route(occasion: str, character: str = "") -> None:
     """The occasion's chain must resolve right now; the producer then renders
     ROUTED (backend "") and falls back along the chain on a failure. Nothing
     available is load, not a defect — the step waits.
@@ -30,8 +30,10 @@ def _require_route(occasion: str) -> None:
     There is no per-entry backend choice here, so each candidate kind names
     its mesh occasion: a character the one of its rig (``mesh_humanoid`` /
     ``mesh_creature``), a building ``mesh_building``, a prop
-    ``mesh_object``."""
-    if not subjects.default_mesh_backend(occasion):
+    ``mesh_object``.  ``character`` applies that character's backend
+    switches, so a passing check is one the producer's routing passes too
+    (otherwise the render would end in NoRouteError = a failed attempt)."""
+    if not subjects.default_mesh_backend(occasion, character):
         raise CandidateBusy(f"no backend available for {occasion} right now")
 
 
@@ -75,7 +77,8 @@ _HANDLERS: Dict[str, tuple] = {
     "character_model": (
         _missing_character_models,
         lambda ident: subjects.character_model(ident) is not None,
-        lambda ident: (_require_route(mesh_occasion_for_rig(model3d.required_rig(ident))),
+        lambda ident: (_require_route(mesh_occasion_for_rig(model3d.required_rig(ident)),
+                                      character=ident),
                        subjects.generate_character_model(ident, "")),
     ),
     "building_model": (

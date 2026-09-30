@@ -240,6 +240,33 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
      to a neighbouring combination — and the pair drops off the list while the
      other two stay.
 
+ 29. (Task 16b fix round 1) An explicit wrong-rig mesh backend is an ERROR in
+     `generate_mesh`, so a character whose rig (`model3d.required_rig`,
+     patched: demo_a / demo_b / demo_d generic, everyone else mixamo) the
+     chosen backend does not deliver is NO candidate — it could only fail
+     and burn its attempts.  The backend's rig comes from its CONFIG entry
+     (`subjects.mesh_backend_rig` over `image_generation.backends`: hy
+     mixamo, tr generic, px / pz none, an unknown name ""), never from live
+     availability: the engine closes a candidate that drops off as done, so
+     an offline backend must not make subjects vanish.  mesh_from_tpose on
+     "hy" therefore keeps demo_c's two combinations and drops demo_d's
+     render; on "tr" only demo_d's; "tr" removed from the live inventory
+     changes nothing; an unconfigured "gone" cannot be judged and drops
+     nobody (demo_c's two + demo_d's one).
+ 30. model_replace (character) filters the same way on the TARGET: demo_d
+     (generic) with a model by "hy" is a candidate for hy -> tr; with
+     demo_c's model made by "tr", tr -> hy yields only demo_c — the generic
+     demo_a / demo_b, also made by "tr", are no subjects of a mixamo target.
+ 31. model_replace.validate refuses a target whose rig does not fit the
+     subject kind (character: mixamo or generic; location / prop: none) and
+     a target that is not a configured mesh backend, each with a message
+     naming both sides; "pz" for a prop validates to itself.  The building
+     case of 12 therefore replaces "px" by "pz".
+     The fill_missing route check of case 6 carries the character
+     (explain_occasion is asked ("mesh_creature", "demo_b")), so that
+     character's backend switches apply to the check as they do to the
+     render.  Cases 29-31 and that call fail on commit 533ac655.
+
 The printed sections follow execution order, so expectations 9 and 10 are
 checked inside the sections whose fixtures they belong to.
 
@@ -360,8 +387,11 @@ EXPRESSION_CACHED = {"value": None}   # what peek_cached_expression answers
 # the real producers record `res["backend"]`.
 ROUTED = {"mesh_humanoid": "hy", "mesh_creature": "tr",
           "mesh_object": "px", "mesh_building": "px"}
-# The rig per character (`model3d.required_rig`); default mixamo.
-RIGS = {"demo_b": "generic"}
+# The rig per character (`model3d.required_rig`); default mixamo. demo_a
+# and demo_b are generic (the model_replace cases replace onto "tr", a
+# generic backend — a mixamo character would not be its subject, case 30).
+RIGS = {"demo_a": "generic", "demo_b": "generic", "demo_d": "generic"}
+EXPLAIN_CALLS = []      # (occasion, character) per explain_occasion call
 
 
 def fake_mesh(character_name, *, force=False, backend_glob="", signature=None,
@@ -505,8 +535,26 @@ model3d.list_mesh_backends = lambda rig="", occasion="": {
     "backends": [b for b in MESH_INVENTORY if not rig or b["rig"] == rig],
     "default": ""}
 model3d.required_rig = lambda name: RIGS.get(name, "mixamo")
-routing.explain_occasion = lambda occasion, character="", pool=None: {
-    "id": occasion, "resolved": ROUTED.get(occasion)}
+
+
+def fake_explain_occasion(occasion, character="", pool=None):
+    EXPLAIN_CALLS.append((occasion, character))
+    return {"id": occasion, "resolved": ROUTED.get(occasion)}
+
+
+routing.explain_occasion = fake_explain_occasion
+# The CONFIGURED mesh backends (`image_generation.backends`) — what
+# `subjects.mesh_backend_rig` reads. "pz" is a second rig-none backend, a
+# legal model_replace target for buildings and props.
+_cfg = config.get_all()
+_ig = dict(_cfg.get("image_generation") or {})
+_ig["backends"] = list(_ig.get("backends") or []) + [
+    {"name": n, "api_type": "openai_mesh", "category": "img2mesh", "mesh_rig": r,
+     "api_url": "http://mesh.invalid", "enabled": True}
+    for n, r in (("hy", "mixamo"), ("tr", "generic"), ("px", "none"),
+                 ("pz", "none"))]
+_cfg["image_generation"] = _ig
+config.save(_cfg)
 
 BAKE_CALLS = []
 BAKE_REASON = {"value": "ok"}      # the reason bake_surface_result reports back
@@ -667,7 +715,10 @@ check_raises("nothing resolves for the rig's occasion → the step waits",
              "no backend available for mesh_creature right now")
 check("the producer was never called", MESH_CALLS, [])
 ROUTED["mesh_creature"] = _saved
+EXPLAIN_CALLS.clear()
 FILL_MISSING.apply(CAND_B, FILL_MISSING.validate(FILL_CHAR), "task-4")
+check("the route check carries the character (its backend switches apply)",
+      EXPLAIN_CALLS, [("mesh_creature", "demo_b")])
 check("apply generates ROUTED (backend '')", MESH_CALLS,
       [{"name": "demo_b", "force": True, "backend_glob": "",
         "signature": None}])
@@ -777,7 +828,7 @@ check("the stored sidecar names the backend the chain resolved",
 check("nothing is missing any more", candidates(FILL_MISSING, FILL_BUILDING), [])
 check("and the location is now a model_replace candidate for 'px'",
       candidates(MODEL_REPLACE, {"subject": "location", "source_backend": "px",
-                                 "target_backend": "hy"}),
+                                 "target_backend": "pz"}),
       [(f"location:{LOC_ID}", "Crossroads Inn")])
 MODEL_PATH = location_model3d.find_building_model(LOC_ID)
 SIDECAR = json.loads(MODEL_PATH.with_suffix(".json").read_text(encoding="utf-8"))
@@ -1137,6 +1188,71 @@ check_raises("a character already being meshed is LOAD, not a defect",
              "demo_c: model generation already running")
 with model3d._lock:
     model3d._generating.discard("demo_c")
+
+# ── [19] a subject the target's rig cannot mesh is no candidate ─────────────
+print("[19] rig-aware candidates and targets")
+D = make_character("demo_d")                       # RIGS: generic
+REFS_D = get_character_dir(D) / "model_refs"
+REFS_D.mkdir(parents=True, exist_ok=True)
+SIG_D = "d0d0d0d0d0d0"
+(REFS_D / f"tpose_{SIG_D}.png").write_bytes(b"\x89PNG fake")
+check("subjects.mesh_backend_rig reads the configured rig",
+      [subjects.mesh_backend_rig(n) for n in ("hy", "tr", "px", "gone")],
+      ["mixamo", "generic", "none", ""])
+check("mesh_from_tpose on 'hy' (mixamo): the generic demo_d is no candidate",
+      candidates(MESH_FROM_TPOSE, FROM_TPOSE),
+      [(f"demo_c:{SIG_A}", "demo_c · 01234567"),
+       (f"demo_c:{SIG_B}", "demo_c · fedcba98")])
+check("mesh_from_tpose on 'tr' (generic): only demo_d",
+      candidates(MESH_FROM_TPOSE, {"backend": "tr"}),
+      [(f"demo_d:{SIG_D}", "demo_d · d0d0d0d0")])
+_saved_inv = list(MESH_INVENTORY)
+MESH_INVENTORY[:] = [b for b in MESH_INVENTORY if b["name"] != "tr"]
+check("the rig comes from the CONFIG: 'tr' offline (gone from the live "
+      "inventory) still keeps demo_d",
+      [(c.key, c.label) for c in MESH_FROM_TPOSE.find_candidates({"backend": "tr"})],
+      [(f"demo_d:{SIG_D}", "demo_d · d0d0d0d0")])
+MESH_INVENTORY[:] = _saved_inv
+check("a backend that is not configured cannot be judged: nobody is dropped",
+      [c.key for c in MESH_FROM_TPOSE.find_candidates({"backend": "gone"})],
+      [f"demo_c:{SIG_A}", f"demo_c:{SIG_B}", f"demo_d:{SIG_D}"])
+write_mesh_sidecar(D, "hy")
+check("model_replace hy -> tr: the generic demo_d (model by hy) is a candidate",
+      candidates(MODEL_REPLACE, {"subject": "character", "source_backend": "hy",
+                                 "target_backend": "tr"}),
+      [("character:demo_d", "demo_d")])
+write_mesh_sidecar(C, "tr")
+check("model_replace tr -> hy: only the mixamo demo_c; the generic demo_a / "
+      "demo_b (models by tr) are no subjects of a mixamo target",
+      candidates(MODEL_REPLACE, {"subject": "character", "source_backend": "tr",
+                                 "target_backend": "hy"}),
+      [("character:demo_c", "demo_c")])
+check_raises("a character target of rig none is refused", ValueError,
+             lambda: MODEL_REPLACE.validate({"subject": "character",
+                                             "source_backend": "hy",
+                                             "target_backend": "px"}),
+             "target backend 'px' delivers rig 'none', character models need "
+             "'mixamo' or 'generic'")
+check_raises("a location target of rig mixamo is refused", ValueError,
+             lambda: MODEL_REPLACE.validate({"subject": "location",
+                                             "source_backend": "px",
+                                             "target_backend": "hy"}),
+             "target backend 'hy' delivers rig 'mixamo', location models need "
+             "'none'")
+check_raises("a prop target of rig generic is refused", ValueError,
+             lambda: MODEL_REPLACE.validate({"subject": "prop",
+                                             "source_backend": "px",
+                                             "target_backend": "tr"}),
+             "target backend 'tr' delivers rig 'generic', prop models need 'none'")
+check_raises("an unconfigured target is refused", ValueError,
+             lambda: MODEL_REPLACE.validate({"subject": "prop",
+                                             "source_backend": "px",
+                                             "target_backend": "gone"}),
+             "target backend 'gone' is not a configured mesh backend")
+check("a rig-none target validates for a prop",
+      MODEL_REPLACE.validate({"subject": "prop", "source_backend": "px",
+                              "target_backend": "pz"}),
+      {"subject": "prop", "source_backend": "px", "target_backend": "pz"})
 
 print()
 if FAILURES:

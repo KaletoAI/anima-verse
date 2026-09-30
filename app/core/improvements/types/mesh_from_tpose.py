@@ -69,7 +69,12 @@ class MeshFromTpose(ImprovementType):
         that has a mesh is subtracted, which is the same disk question
         :meth:`is_done` asks — so no separate pass over it is needed."""
         out: List[Candidate] = []
+        backend = params.get("backend", "")
         for name in subjects.characters():
+            # A character whose rig the chosen backend does not deliver is no
+            # subject of this entry — the explicit pick would only fail.
+            if not subjects.character_fits_backend(name, backend):
+                continue
             # Two directory reads per character, no stat per combination —
             # a character can carry hundreds of stored combinations.
             missing = (subjects.character_tpose_signatures(name)
