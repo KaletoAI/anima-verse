@@ -3224,18 +3224,16 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
 
         # An explicit dialog pick renders on exactly that backend — no
         # routing, no fallback. No pick = the "location" occasion of the image
-        # routing (chain + re-run on the next entry after a failure); the
-        # routing probes its intended entry itself, so only the explicit path
-        # checks availability here.
+        # routing (chain + re-run on the next entry after a failure). Neither
+        # path probes every backend here: _wait_for_explicit_backend probes
+        # the matching ones, the routing its intended entry. The explicit
+        # probe does network calls, so it runs in a thread (a blocked event
+        # loop trips the watchdog).
         backend = None
         if backend_name:
-            # Fresh availability — network calls go into a thread, otherwise
-            # they block the event loop (the watchdog trips).
-            await asyncio.to_thread(
-                lambda: [b.check_availability()
-                         for b in img_skill.backends if b.instance_enabled])
-            backend = (img_skill._wait_for_explicit_backend(backend_name)
-                       or img_skill.match_backend(backend_name))
+            backend = await asyncio.to_thread(
+                lambda: (img_skill._wait_for_explicit_backend(backend_name)
+                         or img_skill.match_backend(backend_name)))
             if not backend:
                 raise HTTPException(
                     status_code=503,
@@ -3638,13 +3636,11 @@ async def generate_time_variant_core(location_name: str, image_name: str,
 
     backend = None
     if backend_name:
-        # Fresh availability — network calls go into a thread, otherwise
-        # they block the event loop (the watchdog trips). The routed path
-        # needs none: the routing probes its intended entry itself.
-        await asyncio.to_thread(
-            lambda: [b.check_availability()
-                     for b in img_skill.backends if b.instance_enabled])
-        backend = img_skill._wait_for_explicit_backend(backend_name, has_input_image=True)
+        # _wait_for_explicit_backend probes the matching backends fresh (the
+        # routed path: the routing probes its intended entry) — network
+        # calls, so in a thread (a blocked event loop trips the watchdog).
+        backend = await asyncio.to_thread(
+            img_skill._wait_for_explicit_backend, backend_name, has_input_image=True)
         if not backend:
             raise HTTPException(
                 status_code=503,

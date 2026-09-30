@@ -63,8 +63,27 @@ B11 explicit "Cloud" with LoRA "foreign.safetensors" (the library is empty,
    "refused".
 B12 no backend, rules location ["Cloud"], a third backend "Spare" outside
    the chain -> Spare is never probed (check_availability count 0): the
-   routing probes only its intended entry, and the gallery core's own
-   probe of every backend runs only for an explicit pick.
+   routing probes only its intended entry. An explicit "Cloud" pick does not
+   probe Spare either (only the backends matching the pick are probed).
+   The B8 room image is named "<unix seconds>_<6 hex>.png" (a suffix, so
+   two room images in one second cannot overwrite each other).
+
+PART C — when describe_room renders a room image (coordinator ruling on the
+12b review). The render prompt of a room is its image_prompt_day, else its
+description. describe_room renders only when the room has no gallery image
+yet OR that render prompt changed; the reply says "Bildgenerierung
+gestartet." exactly when it renders. `_trigger_room_image` is replaced by a
+recorder. Room "Millroom" holds the B8 image; image_prompt_day empty.
+C1 same description again -> render prompt unchanged, image present
+   -> no render, no "gestartet" in the reply.
+C2 new description -> render prompt changed -> one render.
+C3 image_prompt "A mill interior, warm light" -> render prompt becomes that
+   (was the description) -> one render.
+C4 another new description while the image prompt stays -> the render
+   prompt is still the image prompt, image present -> no render.
+C5 room "Loft" (added with a description, no image) described with the SAME
+   description -> no image yet -> one render.
+C6 new room "Cellar" -> created, no image yet -> one render.
 """
 import asyncio
 import io
@@ -292,6 +311,10 @@ def part_b():
     check("B8 room image backend", rm.get("backend"), "Cloud")
     check("B8 room image routing", rm.get("routing"),
           {"occasion": "location", "position": 1, "spec": "Cloud"})
+    import re
+    check("B8 room image name has a suffix",
+          bool(room_images) and bool(re.fullmatch(r"\d+_[0-9a-f]{6}\.png", room_images[0])),
+          True)
 
     gw, cloud = FakeBackend("Gw", 0, "natural", dead=True), FakeBackend("Cloud", 5, "keywords")
     install_pool(gw, cloud)
@@ -331,11 +354,46 @@ def part_b():
     res = gallery({"prompt": "x"})
     check("B12 rendered on the chain", meta_of(res["image"]).get("backend"), "Cloud")
     check("B12 Spare never probed", spare.probes, 0)
+    gallery({"prompt": "x", "backend": "Cloud"})
+    check("B12 explicit pick does not probe Spare", spare.probes, 0)
+    return loc, room["id"]
+
+
+def part_c(loc, millroom_id):
+    print("C) describe_room renders only on a change or a missing image")
+    from app.models import world
+    from app.skills.describe_room_skill import DescribeRoomSkill
+    triggered = []
+    DescribeRoomSkill._trigger_room_image = staticmethod(
+        lambda location_id, room_id: triggered.append(room_id))
+    skill = DescribeRoomSkill({})
+    skill._get_allowed_location_ids = lambda character: [loc]
+
+    def describe(room, **fields):
+        triggered.clear()
+        reply = skill.execute(json.dumps(dict(agent_name="demo", location_id=loc,
+                                              room=room, **fields)))
+        return list(triggered), "Bildgenerierung gestartet." in reply
+
+    check("C1 unchanged description", describe(
+        "Millroom", description="Grinding stones under a timber roof."), ([], False))
+    check("C2 changed description", describe(
+        "Millroom", description="Flour sacks by the grinding stones."), ([millroom_id], True))
+    check("C3 new image prompt", describe(
+        "Millroom", image_prompt="A mill interior, warm light"), ([millroom_id], True))
+    check("C4 description changed, image prompt kept", describe(
+        "Millroom", description="An empty millroom."), ([], False))
+    loft = world.add_room(loc, "Loft", "Beams and dusty grain sacks.")
+    check("C5 room without an image", describe(
+        "Loft", description="Beams and dusty grain sacks."), ([loft["id"]], True))
+    rendered, said = describe("Cellar", description="A cool stone cellar.")
+    cellar = world.get_room_by_name(world.get_location_by_id(loc), "Cellar") or {}
+    check("C6 new room", (rendered, said), ([cellar.get("id")], True))
 
 
 if __name__ == "__main__":
     part_a()
-    part_b()
+    part_c(*part_b())
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed: {FAILS}")

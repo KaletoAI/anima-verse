@@ -188,6 +188,7 @@ class DescribeRoomSkill(BaseSkill):
                     room_name, actual_room_name, location_name)
             old_desc = room.get("description", "")
             room_id = room.get("id", "")
+            old_render_prompt = self._room_image_prompt(room)
 
             # Update the description and/or the image prompt
             final_description = new_description if new_description else old_desc
@@ -202,15 +203,29 @@ class DescribeRoomSkill(BaseSkill):
                 character_name, actual_room_name, location_name,
                 final_description[:60], (new_image_prompt or "")[:60])
 
-            # Generate the image
-            self._trigger_room_image(location_id, room_id)
+            # Render only when the room has no image yet or the prompt the
+            # render uses (image prompt, else description) changed — the tool
+            # is always loaded, and re-sending the same text used to render
+            # (and append a background) again every time.
+            new_render_prompt = self._room_image_prompt({
+                "image_prompt_day": new_image_prompt or room.get("image_prompt_day", ""),
+                "description": final_description})
+            render = (new_render_prompt != old_render_prompt
+                      or not self._room_has_image(location_id, room_id))
+            if render:
+                self._trigger_room_image(location_id, room_id)
+            else:
+                logger.debug("Room image skipped for %s/%s: the image prompt is "
+                             "unchanged and the room already has an image",
+                             location_id, room_id)
 
             parts = [f"Raum aktualisiert: {actual_room_name} ({location_name})"]
             if new_description:
                 parts.append(f"Beschreibung: {new_description}")
             if new_image_prompt:
                 parts.append(f"Image-Prompt: {new_image_prompt}")
-            parts.append("Bildgenerierung gestartet.")
+            if render:
+                parts.append("Bildgenerierung gestartet.")
             return "\n".join(parts)
         else:
             # Create a new room. The reserved rooms do not count: the ground
@@ -284,6 +299,18 @@ class DescribeRoomSkill(BaseSkill):
         return None
 
     @staticmethod
+    def _room_image_prompt(room: Dict[str, Any]) -> str:
+        """The subject a room image renders from: its day image prompt, else
+        its description."""
+        return (room.get("image_prompt_day", "") or room.get("description", "") or "").strip()
+
+    @staticmethod
+    def _room_has_image(location_id: str, room_id: str) -> bool:
+        """Whether a gallery image of the location is assigned to the room."""
+        from app.models.world import get_gallery_image_rooms
+        return room_id in set((get_gallery_image_rooms(location_id) or {}).values())
+
+    @staticmethod
     def _trigger_room_image(location_id: str, room_id: str):
         """Starts the image generation for a room (fire-and-forget) on the
         "location" chain of the image routing.
@@ -295,6 +322,7 @@ class DescribeRoomSkill(BaseSkill):
 
         def _generate():
             import time
+            import uuid
             try:
                 from app.models.world import get_location_by_id, get_room_by_id
                 from app.models.world import get_gallery_dir, save_gallery_prompt, \
@@ -308,18 +336,18 @@ class DescribeRoomSkill(BaseSkill):
                 if not room:
                     return
 
-                description = room.get("image_prompt_day", "") or room.get("description", "")
-                if not description:
-                    return
-
                 # SUBJECT only — framing, "no people" and the photographic
                 # tail are the location style's job (legacy tail, N7).
-                prompt = description
+                prompt = DescribeRoomSkill._room_image_prompt(room)
+                if not prompt:
+                    return
 
                 # The image SERVICE, not the skill-manager lookup: that one
                 # found the TakePhoto VERB (SKILL_ID "image_generation", no
                 # pool) and the room image never rendered.
                 from app.imagegen.routing import route_meta, run_routed
+                from app.imagegen.base import MediaGenerationDisabled
+                from app.imagegen.routing import NoRouteError
                 from app.imagegen.service import get_image_service
                 svc = get_image_service()
                 if not svc.enabled:
@@ -365,13 +393,22 @@ class DescribeRoomSkill(BaseSkill):
                     return images, used, composed.prompt
 
                 logger.info("Room image generation started for %s/%s", location_id, room_id)
-                (images, backend, full_prompt), route = run_routed(
-                    "location", _render, pool=svc.pool)
+                try:
+                    (images, backend, full_prompt), route = run_routed(
+                        "location", _render, pool=svc.pool)
+                except (NoRouteError, MediaGenerationDisabled) as _cfg_state:
+                    # Configuration states (no usable chain entry, media
+                    # switched off) — not a defect, no traceback.
+                    logger.warning("Room image for %s/%s not rendered: %s",
+                                   location_id, room_id, _cfg_state)
+                    return
 
                 loc_id = location.get("id", location_id)
                 gallery_dir = get_gallery_dir(loc_id)
                 gallery_dir.mkdir(parents=True, exist_ok=True)
-                image_name = f"{int(time.time())}.png"
+                # Timestamp + short random suffix: two room images finished in
+                # the same second must not overwrite each other.
+                image_name = f"{int(time.time())}_{uuid.uuid4().hex[:6]}.png"
                 image_path = gallery_dir / image_name
                 image_path.write_bytes(images[0])
 
