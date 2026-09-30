@@ -11,7 +11,7 @@ The former standalone ``AnimateService`` / ``TogetherAnimateService`` classes
 and the ``TOGETHER_ANIMATE_*`` config were retired — see
 ``development_instructions/plan-video-generation.md``.
 """
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
 from app.imagegen.base import MediaGenerationDisabled
@@ -50,14 +50,21 @@ def get_animate_services() -> List[Dict[str, Any]]:
 
 
 def animate_image(source_image_path: str, prompt: str, output_path: str,
-                  service: str = "", loras=None, seconds=None) -> bool:
+                  service: str = "", loras=None, seconds=None,
+                  route_out: Optional[Dict[str, Any]] = None) -> bool:
     """Renders a video from a still via a video backend (image-to-video).
 
     Args:
         source_image_path: still to animate (first frame).
         prompt: motion/action description.
         output_path: where the ``.mp4`` is written.
-        service: video-backend name/glob (empty = cheapest available).
+        service: video-backend name/glob — an explicit pick, never replaced
+            by another backend. Empty = the "video" chain of the image
+            routing (with its fallback along the chain).
+        route_out: optional dict, filled by ``generate_video`` with
+            ``{"backend", "routing"?, "fallback_from"?}`` for the caller's
+            meta (``animate_backend`` / ``animate_routing`` /
+            ``animate_fallback_from`` on the image).
 
     Returns True on success, False on error — except when the world has media
     generation switched off: that is a refusal, not a failed render, so
@@ -71,9 +78,10 @@ def animate_image(source_image_path: str, prompt: str, output_path: str,
             output_path=output_path,
             backend_glob=service,
             loras=loras,
-            seconds=seconds)
+            seconds=seconds,
+            route_out=route_out)
     except MediaGenerationDisabled:
         raise
     except Exception as e:
-        logger.error("animate_image fehlgeschlagen: %s", e)
+        logger.error("animate_image failed: %s", e)
         return False

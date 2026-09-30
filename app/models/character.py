@@ -3631,11 +3631,17 @@ def _save_single_image_meta(character_name: str, image_filename: str, meta: Dict
     )
 
 
-def remove_image_animation(character_name: str, image_filename: str) -> Optional[str]:
-    """Loescht die Animation (Video) eines Bildes + scrubbt animate-Metadaten.
+#: Meta keys an animation writes onto its IMAGE (video skill + animate
+#: routes) — scrubbed together when the video is deleted.
+ANIMATE_META_KEYS = ("animate_prompt", "animate_created_at", "animate_duration_s",
+                     "animate_backend", "animate_routing", "animate_fallback_from")
 
-    Gibt den Namen der geloeschten mp4-Datei zurueck, oder None wenn keine
-    Animation vorhanden war (Route mappt None auf 404)."""
+
+def remove_image_animation(character_name: str, image_filename: str) -> Optional[str]:
+    """Deletes an image's animation (video) and scrubs its animate metadata.
+
+    Returns the name of the deleted mp4 file, or None when there was no
+    animation (the route maps None to 404)."""
     images_dir = get_character_images_dir(character_name)
     stem = Path(image_filename).stem
     video_path = images_dir / f"{stem}.mp4"
@@ -3644,12 +3650,13 @@ def remove_image_animation(character_name: str, image_filename: str) -> Optional
         return None
 
     video_path.unlink()
-    logger.info("Animation geloescht: %s", video_path.name)
+    logger.info("Animation deleted: %s", video_path.name)
 
-    # animate_prompt und animate_created_at aus Metadaten entfernen
+    # Scrub the animation's meta — incl. its video routing, so a deleted
+    # video leaves no backend or fallback mark behind on the image.
     meta = _load_single_image_meta(character_name, image_filename)
     changed = False
-    for key in ("animate_prompt", "animate_created_at"):
+    for key in ANIMATE_META_KEYS:
         if key in meta:
             del meta[key]
             changed = True
@@ -3748,6 +3755,9 @@ def get_character_image_metadata(character_name: str) -> Dict[str, Any]:
         # came from, the intended backend spec of a fallback render, and — for
         # a re-render — the image it replaces.
         "routing", "fallback_from", "source_file",
+        # Video routing of the image's animation — own keys, so the IMAGE's
+        # routing fields above are never overwritten by its video.
+        "animate_backend", "animate_routing", "animate_fallback_from",
     }
     images_dir = get_character_images_dir(character_name)
     for fn, m in all_meta.items():

@@ -5,12 +5,16 @@ Flow:
      it is the "photo" occasion of the image routing (the character's own
      match first, then the photo chain — Admin -> Image routing). There is
      no per-character still-frame backend or model override any more.
-  2. Animate the still with the video backend
+  2. Animate the still; the video backend is the "video" occasion of the
+     image routing (Admin -> Image routing): its chain decides, and a render
+     that fails on one entry is re-run on the next.
 
-Per-character configuration (Characters -> Skills, rendered generically from
-``get_config_fields``):
-  - animate_service:     video backend name/glob (MEDIA_TYPE=="video" in the
-                         image_generation pool; empty = cheapest available)
+The skill has no per-character settings. The former ``animate_service``
+choice (a per-character video backend) is gone with the image routing — a
+named feature loss: a value still stored in a character's skill file is
+ignored, not migrated. Which backend animated an image is recorded on the
+image (``animate_backend``, and for a routed render ``animate_routing`` /
+``animate_fallback_from``).
 
 LoRAs are NOT configured here: they come from the character's image settings
 and the backend's own configuration (Characters -> Image).
@@ -36,14 +40,14 @@ class VideoGenerationSkill(BaseSkill):
     """
     Video Generation Skill.
 
-    Generates an image via the core image service and animates it
-    anschliessend mit dem konfigurierten Animation Service.
+    Generates an image via the core image service and then animates it on
+    the video backend the image routing picks (occasion "video").
 
     Input (JSON):
-        prompt:        Bildbeschreibung (wie bei ImageGenerator)
-        action_prompt: Beschreibung der Bewegung/Aktion fuer die Animation
-        character_name:    Character-Name
-        user_id:       User-ID
+        prompt:        image description (as for the image generator)
+        action_prompt: description of the motion/action for the animation
+        character_name:    character name
+        user_id:       user id
     """
 
     SKILL_ID = "video_generation"
@@ -58,35 +62,9 @@ class VideoGenerationSkill(BaseSkill):
         self.name = meta["name"]
         self.description = meta["description"]
         self.action_hint = meta.get("action_hint", "")
-
-        self._defaults = {
-            "animate_service": "",
-        }
-
-    # ------------------------------------------------------------------
-    # Config
-    # ------------------------------------------------------------------
-
-    def get_config_fields(self) -> Dict[str, Dict[str, Any]]:
-        """Declares the setting for the generic Skills-tab renderer.
-
-        The video backend pick is a ``choice`` field: the option list is not
-        in the declaration but comes from a named source the server resolves
-        (``character_ops.skill_option_source``), so the dropdown always shows
-        the backends this world has right now. The empty option means "world
-        default". The still frame has no field: the image routing decides it
-        (occasion "photo").
-        """
-        return {
-            "animate_service": {
-                "type": "choice",
-                "options_source": "video_backends",
-                "default": "",
-                "label": "Video service",
-                "description": ("Video backend that animates the still. "
-                                "Empty = the cheapest available one."),
-            },
-        }
+        # No per-character settings (``_defaults`` stays empty, so
+        # ``get_config_fields`` declares nothing): the still is the "photo"
+        # occasion, the animation the "video" occasion of the image routing.
 
     # ------------------------------------------------------------------
     # ImageGen Skill Referenz
@@ -131,10 +109,7 @@ class VideoGenerationSkill(BaseSkill):
         if not action_prompt or not action_prompt.strip():
             return "Fehler: action_prompt fehlt (Beschreibung der Bewegung/Aktion fuer die Animation)."
 
-        # 2. Load the per-character config
-        cfg = self._get_effective_config(character_name)
-
-        # 3. Get the image service
+        # 2. Get the image service
         image_skill = self._get_image_skill()
         if not image_skill:
             return "Error: image service is not available."
@@ -208,14 +183,12 @@ class VideoGenerationSkill(BaseSkill):
             video_filename = f"{video_stem}.mp4"
             video_path = images_dir / video_filename
 
-            animate_service = cfg.get("animate_service", "")
-
+            # No backend is named: the "video" chain of the image routing
+            # picks it (and falls back along the chain on a failure).
+            _ro: Dict[str, Any] = {}
             _anim_start = time.time()
-            success = animate_image(
-                source_image_path=str(image_path),
-                prompt=action_prompt,
-                output_path=str(video_path),
-                service=animate_service)
+            success = animate_image(source_image_path=str(image_path), prompt=action_prompt,
+                                    output_path=str(video_path), route_out=_ro)
             _anim_duration = time.time() - _anim_start
 
             if not success:
@@ -232,7 +205,9 @@ class VideoGenerationSkill(BaseSkill):
             from datetime import datetime as _dt
             _meta = {
                 "animate_prompt": action_prompt,
-                "animate_service": animate_service or "auto",
+                "animate_backend": _ro.get("backend", ""),
+                "animate_routing": _ro.get("routing"),
+                "animate_fallback_from": _ro.get("fallback_from"),
                 "animate_created_at": _dt.now().strftime("%Y-%m-%dT%H:%M:%S"),
                 "animate_duration_s": round(_anim_duration, 1),
             }

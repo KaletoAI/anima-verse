@@ -305,17 +305,21 @@ Optional bei jedem Feld: `"label"` (Überschrift) und `"description"`
 (Hilfetext unter der Eingabe). Beide sind **englisch** und laufen im Frontend
 durch `t()`; die Übersetzung gehört nach `shared/languages/<lang>.json`.
 
-Ein `choice`-Feld nennt seine Optionen nicht selbst, sondern **eine Quelle**:
+Ein `choice`-Feld nennt seine Optionen nicht selbst, sondern **eine Quelle**
+(Beispiel — kein mitgelieferter Skill deklariert derzeit ein `choice`-Feld; das
+letzte, `animate_service` des Video-Skills, ist mit dem Bild-Routing entfallen.
+Die Maschinerie prüft `scripts/smoke_skill_choice_fields.py` mit einem
+Probe-Skill):
 
 ```python
 def get_config_fields(self):
     return {
-        "animate_service": {
+        "preview_backend": {
             "type": "choice",
-            "options_source": "video_backends",
+            "options_source": "image_backends",
             "default": "",
-            "label": "Video service",
-            "description": "Video backend that animates the still. Empty = the cheapest available one.",
+            "label": "Preview backend",
+            "description": "Image backend for the preview. Empty = the world default.",
         },
     }
 ```

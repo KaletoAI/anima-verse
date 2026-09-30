@@ -2216,8 +2216,6 @@
     "— world default —": "— Welt-Standard —",
     "(unavailable)": "(nicht verfügbar)",
     "Image backend": "Bild-Backend",
-    "Video service": "Video-Dienst",
-    "Video backend that animates the still. Empty = the cheapest available one.": "Video-Backend, das das Standbild animiert. Leer = das günstigste verfügbare.",
     "Max. new rooms per location": "Max. neue Räume pro Location",
     "Locations to design": "Locations zum Gestalten",
     "Max. pieces per day": "Max. Pieces pro Tag",

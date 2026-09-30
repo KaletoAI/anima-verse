@@ -474,7 +474,14 @@ async def animate_instagram_post(post_id: str, request: Request) -> Dict[str, An
 
 def _animate_instagram_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
     """The blocking body of ``animate_instagram_post`` — runs in the
-    threadpool."""
+    threadpool.
+
+    ``service`` in the body is an explicit pick (the animate dialog's
+    backend): exactly that video backend, never another one. Without it the
+    "video" chain of the image routing picks the backend. An explicit pick
+    that is not available is a 503 and a dialog LoRA it does not know a 400
+    BEFORE anything starts — the background thread could only log it. (The
+    render checks both again: the backend may drop out in between.)"""
     user_id = data.get("user_id", "")
 
     post = get_post(post_id)
@@ -510,6 +517,20 @@ def _animate_instagram_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
                 _s = 1.0
             loras.append({"name": _l["name"].strip(), "strength": _s})
 
+    if service:
+        from app.core.lora_library import LoraNotAllowedError, assert_loras_allowed
+        from app.imagegen.service import get_image_service
+        _picked = get_image_service()._wait_for_explicit_backend(service, media="video")
+        if not _picked:
+            raise HTTPException(
+                status_code=503,
+                detail=f"video backend '{service}' is not available — "
+                       f"no automatic fallback")
+        try:
+            assert_loras_allowed(_picked, loras)
+        except LoraNotAllowedError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
     from app.core.task_queue import get_task_queue
     _tq = get_task_queue()
     _track_id = _tq.track_start(
@@ -535,15 +556,20 @@ def _animate_instagram_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
             # deadlocks (CLAUDE.md). This call runs on its own daemon thread,
             # the tracked task above is what the queue panel shows — the same
             # shape app/skills/video_generation_skill.py has always used.
+            _ro: Dict[str, Any] = {}
             success = animate_image(
                 str(image_path), prompt, output_path, service=service,
-                loras=loras, seconds=seconds or None)
+                loras=loras, seconds=seconds or None, route_out=_ro)
 
             if not success:
-                _tq.track_finish(_track_id, error="Animation fehlgeschlagen")
+                _tq.track_finish(
+                    _track_id,
+                    error=(f"Animation failed on '{service}' (no automatic fallback)"
+                           if service else
+                           "Animation failed — no backend of the video chain rendered"))
                 return
 
-            # Bestehenden Post aktualisieren: video_filename setzen
+            # Update the existing post: set video_filename
             feed = _load_feed()
             for p in feed:
                 if p.get("id") == post_id:
@@ -554,6 +580,12 @@ def _animate_instagram_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
             meta = load_image_meta(image_filename) or {}
             meta["animate_prompt"] = prompt
             meta["animate_created_at"] = utc_now_iso()
+            # The video's own backend/routing keys — the IMAGE's routing
+            # fields stay untouched. An explicit pick writes no routing, and
+            # a re-animation must not keep the marks of the previous video.
+            meta["animate_backend"] = _ro.get("backend", "")
+            meta["animate_routing"] = _ro.get("routing")
+            meta["animate_fallback_from"] = _ro.get("fallback_from")
             save_image_meta(image_filename, meta)
             _tq.track_finish(_track_id)
         except Exception as e:
@@ -567,7 +599,7 @@ def _animate_instagram_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
 
 @router.delete("/post/{post_id}/animation")
 def delete_instagram_animation(post_id: str) -> Dict[str, Any]:
-    """Loescht nur die Animation (Video) eines Posts, nicht das Bild/den Post."""
+    """Deletes only a post's animation (video), not the image or the post."""
     post = get_post(post_id)
     if not post:
         raise HTTPException(status_code=404, detail="Post nicht gefunden")
@@ -585,7 +617,7 @@ def delete_instagram_animation(post_id: str) -> Dict[str, Any]:
         video_path.unlink()
         logger.info("Instagram-Animation geloescht: %s", video_name)
 
-    # video_filename aus dem Post entfernen
+    # Remove video_filename from the post
     feed = load_feed()
     for p in feed:
         if p.get("id") == post_id:
@@ -593,11 +625,12 @@ def delete_instagram_animation(post_id: str) -> Dict[str, Any]:
             break
     save_feed(feed)
 
-    # animate_prompt/animate_created_at aus Bild-Metadaten entfernen
+    # Scrub the animation's meta from the image (incl. its video routing).
+    from app.models.character import ANIMATE_META_KEYS
     image_filename = post.get("image_filename", "")
     meta = load_image_meta(image_filename) or {}
     changed = False
-    for key in ("animate_prompt", "animate_created_at"):
+    for key in ANIMATE_META_KEYS:
         if key in meta:
             del meta[key]
             changed = True

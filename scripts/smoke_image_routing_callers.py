@@ -215,6 +215,52 @@ E9 (fix round 1) take_scene_photo whose regenerate raises
    master switch; /play/scene-photo maps it to 400), it is NOT folded into
    {"ok": False}.
 
+PART F — video (occasion "video"; plan Task 16a). Labels F-V<n>; the mesh
+half (Task 16b) adds its own F cases. Fake pool of video backends: "VDead"
+(cost 0, fails with HTTP 500) and "VOk" (cost 3, renders b"mp4-or-glb");
+`run_on_backend_channel` runs the job inline.
+F-V1 generate_video, no glob, rules video ["VDead","VOk"] -> True; the file
+   holds VOk's bytes; route_out == {"backend": "VOk", "routing":
+   {"occasion": "video", "position": 2, "spec": "VOk"}, "fallback_from":
+   {"occasion": "video", "intended_spec": "VDead", "position": 1}} (VDead
+   is the intended entry, fails at RUNTIME and cools down -> marked,
+   coordinator decision 2).
+F-V2 generate_video, explicit "VDead" (cooling since F-V1) -> False; VOk is
+   not asked again (still its one F-V1 call) — an explicit pick is never
+   routed elsewhere.
+F-V3 explicit "VOk" with route_out -> True, route_out == {"backend": "VOk"}
+   (an explicit render writes neither "routing" nor "fallback_from").
+F-V4 LoRA "foreign.safetensors" (the throwaway LoRA library is empty, so no
+   backend has it): routed (rules video ["VOk"]) -> True, VOk's params carry
+   no "lora_inputs" (soft half of the gate on a routed render); explicit
+   "VOk" -> LoraNotAllowedError before any render (VOk's call count
+   unchanged) — the hard half for a dialog pick.
+F-V5 the video skill: declares no config fields (get_config_fields() == {},
+   `animate_service` gone, not in _defaults). A stale stored skill value
+   {"animate_service": "VDead"} (fresh pool: VDead fresh and dead), rules
+   video ["VOk"]; the still render is replaced by a stub that saves one
+   gallery image -> the skill answers with the video link, VDead is NEVER
+   asked (the stored value is ignored, not migrated — the named feature
+   loss) and the image's meta has animate_backend "VOk", animate_routing
+   {"occasion": "video", "position": 1, "spec": "VOk"},
+   animate_fallback_from None, and no "animate_service" key.
+F-V6 get_character_image_metadata exposes animate_backend /
+   animate_routing / animate_fallback_from for that image (whitelist), and
+   the IMAGE's own "routing" is not the video's (the stub's still carries
+   no routing -> absent).
+F-V7 Instagram animate (the background thread runs inline): no service,
+   rules video ["VDead","VOk"] (fresh pool) -> the post gets its video; the
+   image meta: animate_backend "VOk", animate_routing position 2,
+   animate_fallback_from.intended_spec "VDead". Then explicit service "VOk"
+   -> animate_backend "VOk", animate_routing None, animate_fallback_from
+   None (a re-animation drops the old marks). Explicit "VDead" (cooling)
+   -> HTTPException 503 before anything starts, VOk's calls unchanged.
+   Explicit "VOk" with LoRA "foreign.safetensors" -> HTTPException 400.
+F-V8 deleting the animation scrubs the three keys: the Instagram route
+   (delete_instagram_animation) and the gallery's remove_image_animation.
+Fails on commit 462007bc (before Task 16a): F-V1 aborts with
+   "generate_video() got an unexpected keyword argument 'route_out'".
+
 DEFERRED: the surface-texture case of the plan (its C4, occasion
 "surface_texture") waits until app/core/surface_textures.py — which carries
 another session's uncommitted change — is routed.
@@ -850,12 +896,170 @@ def part_e():
         image_regenerate.regenerate_image = _orig_regen
 
 
+class FakeMedia(FakeBackend):
+    """A video / mesh backend of the fake pool (plan Task 16): MEDIA_TYPE
+    and category set, ``mesh_rig`` for a mesh backend."""
+
+    def __init__(self, name, cost, media, rig="", dead=False):
+        super().__init__(name, cost, "", dead=dead)
+        self.MEDIA_TYPE = media
+        self.category = "img2mesh" if media == "mesh" else "txt2img"
+        if rig:
+            self.mesh_rig = rig
+
+    def generate(self, prompt, negative_prompt, params, log_meta=None):
+        self.calls.append({"params": dict(params)})
+        if self.dead:
+            raise RuntimeError(f"{self.name}: HTTP 500: gone")
+        self.last_result_files = [{"name": f"{self.name}.glb"}]
+        return [b"mp4-or-glb"]
+
+
+class _InlineThread:
+    """Stands in for threading.Thread: start() runs the target right away."""
+
+    def __init__(self, target=None, daemon=None, args=(), kwargs=None, **_kw):
+        self._t, self._a, self._k = target, args, kwargs or {}
+
+    def start(self):
+        self._t(*self._a, **self._k)
+
+
+def part_f_video():
+    print("F) video")
+    from fastapi import HTTPException
+    from app.core.lora_library import LoraNotAllowedError
+    tmp = Path(_TMP)
+    (tmp / "still.png").write_bytes(png_bytes())
+
+    vd, vo = FakeMedia("VDead", 0, "video", dead=True), FakeMedia("VOk", 3, "video")
+    svc = install_pool(vd, vo)
+    set_routing({"video": ["VDead", "VOk"]})
+    ro = {}
+    ok = svc.generate_video(str(tmp / "still.png"), "wave", str(tmp / "v.mp4"), route_out=ro)
+    check("F-V1 routed video", (ok, ro), (True, {
+        "backend": "VOk",
+        "routing": {"occasion": "video", "position": 2, "spec": "VOk"},
+        "fallback_from": {"occasion": "video", "intended_spec": "VDead", "position": 1}}))
+    check("F-V1 file written", (tmp / "v.mp4").read_bytes(), b"mp4-or-glb")
+    check("F-V2 explicit dead", svc.generate_video(str(tmp / "still.png"), "wave",
+                                                   str(tmp / "v2.mp4"), backend_glob="VDead"),
+          False)
+    check("F-V2 VOk not asked again", len(vo.calls), 1)
+    ro = {}
+    ok = svc.generate_video(str(tmp / "still.png"), "wave", str(tmp / "v3.mp4"),
+                            backend_glob="VOk", route_out=ro)
+    check("F-V3 explicit: no routing meta", (ok, ro), (True, {"backend": "VOk"}))
+
+    foreign = [{"name": "foreign.safetensors", "strength": 1.0}]
+    set_routing({"video": ["VOk"]})
+    ok = svc.generate_video(str(tmp / "still.png"), "wave", str(tmp / "v4.mp4"),
+                            loras=foreign)
+    check("F-V4 routed: LoRA filtered", (ok, "lora_inputs" in vo.calls[-1]["params"]),
+          (True, False))
+    n = len(vo.calls)
+    try:
+        svc.generate_video(str(tmp / "still.png"), "wave", str(tmp / "v5.mp4"),
+                           backend_glob="VOk", loras=foreign)
+        check("F-V4 explicit: LoRA refused", "no exception", "LoraNotAllowedError")
+    except LoraNotAllowedError:
+        check("F-V4 explicit: LoRA refused", True, True)
+    check("F-V4 explicit: nothing rendered", len(vo.calls) - n, 0)
+
+    # -- F-V5/F-V6: the video skill -------------------------------------
+    from app.models.character import (get_character_image_metadata,
+                                      get_character_images_dir, get_single_image_meta,
+                                      remove_image_animation, save_character_profile,
+                                      save_character_skill_config)
+    from app.skills.video_generation_skill import VideoGenerationSkill
+    save_character_profile("Mara", {"name": "Mara", "appearance": "a tall woman"},
+                           create_new=True)
+    skill = VideoGenerationSkill({})
+    check("F-V5 no config fields", (skill.get_config_fields(),
+                                    "animate_service" in skill._defaults), ({}, False))
+    save_character_skill_config("Mara", "video_generation", {"animate_service": "VDead"})
+    vd, vo = FakeMedia("VDead", 0, "video", dead=True), FakeMedia("VOk", 3, "video")
+    svc = install_pool(vd, vo)
+    set_routing({"video": ["VOk"]})
+    img_dir = get_character_images_dir("Mara")
+    img_dir.mkdir(parents=True, exist_ok=True)
+    still = "Mara_2_still.png"
+    (img_dir / still).write_bytes(png_bytes())
+    svc.generate_from_input = lambda raw: (
+        f"![Generated Image 1](/characters/Mara/images/{still}?user_id=u)")
+    reply = skill.execute(json.dumps({"prompt": "a portrait", "action_prompt": "she waves",
+                                      "agent_name": "Mara", "user_id": "u"}))
+    meta = get_single_image_meta("Mara", still)
+    check("F-V5 video link", "Mara_2_still.mp4" in reply, True)
+    check("F-V5 stored animate_service ignored", len(vd.calls), 0)
+    check("F-V5 image meta", (meta.get("animate_backend"), meta.get("animate_routing"),
+                              meta.get("animate_fallback_from"), "animate_service" in meta),
+          ("VOk", {"occasion": "video", "position": 1, "spec": "VOk"}, None, False))
+    listed = get_character_image_metadata("Mara").get(still, {})
+    check("F-V6 whitelist", (listed.get("animate_backend"),
+                             (listed.get("animate_routing") or {}).get("occasion"),
+                             "animate_fallback_from" in listed, "routing" in listed),
+          ("VOk", "video", True, False))
+
+    # -- F-V7/F-V8: Instagram animate -----------------------------------
+    import threading as _threading
+    from app.models.instagram import create_post, get_instagram_dir, load_image_meta
+    from app.routes import instagram as ig_routes
+    ig_dir = get_instagram_dir()
+    ig_dir.mkdir(parents=True, exist_ok=True)
+    (ig_dir / "ig_1.png").write_bytes(png_bytes())
+    post = create_post("Mara", "ig_1.png", "a caption", image_prompt="a beach")
+    vd, vo = FakeMedia("VDead", 0, "video", dead=True), FakeMedia("VOk", 3, "video")
+    svc = install_pool(vd, vo)
+    set_routing({"video": ["VDead", "VOk"]})
+    _orig_thread = _threading.Thread
+    _threading.Thread = _InlineThread
+    try:
+        ig_routes._animate_instagram_post_sync(post["id"], {"prompt": "waves"})
+        m = load_image_meta("ig_1.png") or {}
+        check("F-V7 routed", ((ig_dir / "ig_1.mp4").exists(), m.get("animate_backend"),
+                              (m.get("animate_routing") or {}).get("position"),
+                              (m.get("animate_fallback_from") or {}).get("intended_spec")),
+              (True, "VOk", 2, "VDead"))
+        ig_routes._animate_instagram_post_sync(post["id"], {"prompt": "waves",
+                                                            "service": "VOk"})
+        m = load_image_meta("ig_1.png") or {}
+        check("F-V7 explicit: old marks dropped",
+              (m.get("animate_backend"), m.get("animate_routing"),
+               m.get("animate_fallback_from")), ("VOk", None, None))
+        n = len(vo.calls)
+        try:
+            ig_routes._animate_instagram_post_sync(post["id"], {"prompt": "waves",
+                                                                "service": "VDead"})
+            check("F-V7 explicit dead", "no exception", 503)
+        except HTTPException as e:
+            check("F-V7 explicit dead", e.status_code, 503)
+        try:
+            ig_routes._animate_instagram_post_sync(post["id"], {
+                "prompt": "waves", "service": "VOk",
+                "loras": [{"name": "foreign.safetensors", "strength": 1.0}]})
+            check("F-V7 explicit foreign LoRA", "no exception", 400)
+        except HTTPException as e:
+            check("F-V7 explicit foreign LoRA", e.status_code, 400)
+        check("F-V7 nothing rendered by the refusals", len(vo.calls) - n, 0)
+    finally:
+        _threading.Thread = _orig_thread
+
+    ig_routes.delete_instagram_animation(post["id"])
+    m = load_image_meta("ig_1.png") or {}
+    check("F-V8 instagram scrub", sorted(k for k in m if k.startswith("animate_")), [])
+    remove_image_animation("Mara", still)
+    m = get_single_image_meta("Mara", still)
+    check("F-V8 gallery scrub", sorted(k for k in m if k.startswith("animate_")), [])
+
+
 if __name__ == "__main__":
     part_a()
     part_c(*part_b())
     part_p()
     part_d()
     part_e()
+    part_f_video()
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed: {FAILS}")

@@ -556,71 +556,90 @@ class ImageService:
     def generate_video(self, source_image_path: str, action_prompt: str,
                        output_path: str, backend_glob: str = "",
                        character_name: str = "", loras=None,
-                       seconds=None) -> bool:
-        """Renders a video from a still via a MEDIA_TYPE=="video" backend.
+                       seconds=None, occasion: str = "video",
+                       route_out: Optional[Dict[str, Any]] = None) -> bool:
+        """Renders a video from a still via a MEDIA_TYPE=="video" backend and
+        writes the returned MP4 to ``output_path``. Returns True on success.
 
-        Picks a video backend by glob (empty = cheapest available video
-        backend), runs it through the pool's fallback engine, and writes the
-        returned MP4 to ``output_path``. Returns True on success.
+        Backend: ``backend_glob`` (explicit — exactly that backend, never
+        another one, not even when it is cooling down or fails) → otherwise
+        the chain of ``occasion`` (image routing, default "video"): a render
+        that fails on a chain entry is re-run on the next one
+        (``routing.run_routed``).
 
-        Raises ``LoraNotAllowedError`` when a picked LoRA is not associated
-        with the chosen video backend (the gate of
-        ``app/core/lora_library.py``) — that is a bad request, not a failed
-        render, so it does not collapse into the ``False`` return.
+        ``route_out`` (optional) is filled with ``{"backend", "routing"?,
+        "fallback_from"?}`` — ``routing``/``fallback_from`` only for a routed
+        render (the meta contract: an explicit pick writes neither).
+
+        LoRAs: with an explicit pick every ``loras`` entry is a pick of the
+        animate dialog, so a LoRA the library does not associate with that
+        backend raises ``LoraNotAllowedError`` (a bad request, not a failed
+        render — it does not collapse into ``False``). A routed render filters
+        the list per backend instead (soft half of the gate), so a fallback
+        backend never receives a LoRA it does not know.
         """
-        params: Dict[str, Any] = {"source_image_path": source_image_path,
-                                  "reference_images": {"frame": source_image_path}}
-        if loras:
-            params["lora_inputs"] = loras
+        base_params: Dict[str, Any] = {"source_image_path": source_image_path,
+                                       "reference_images": {"frame": source_image_path}}
         if seconds:
-            params["seconds"] = int(seconds)
+            base_params["seconds"] = int(seconds)
+
+        from app.core.lora_library import (assert_loras_allowed, filter_allowed_loras,
+                                           warn_dropped_loras)
+        from app.imagegen.routing import route_meta, run_routed
+        primary = None
         if backend_glob.strip():
             primary = self._wait_for_explicit_backend(backend_glob, media="video")
-        else:
-            vids = self.list_available_backends(character_name, media="video")
-            primary = vids[0] if vids else None
-        if not primary:
-            logger.warning("generate_video: kein Video-Backend verfuegbar (glob=%r)",
-                           backend_glob)
-            return False
+            if not primary:
+                logger.warning("generate_video: backend '%s' unavailable — no "
+                               "automatic fallback", backend_glob)
+                return False
+            # An explicit pick with dialog LoRAs: a mismatch is a bad request.
+            assert_loras_allowed(primary, loras)
 
-        # The HARD half of the LoRA gate: every ``loras`` list that reaches
-        # this function is an explicit pick of the animate dialog (the only
-        # caller that fills it is the animate route via
-        # ``skills/animate.animate_image``; no stored per-character video
-        # LoRAs exist). A mismatch is therefore a bad request, not a stale
-        # config value — it is reported, not silently dropped.
-        from app.core.lora_library import assert_loras_allowed
-        assert_loras_allowed(primary, loras)
+        def _render(b):
+            params = dict(base_params)
+            if loras:
+                if primary is not None:
+                    params["lora_inputs"] = loras
+                else:
+                    kept, dropped = filter_allowed_loras(b, loras)
+                    if dropped:
+                        warn_dropped_loras(b.name, dropped, character_name)
+                    if kept:
+                        params["lora_inputs"] = kept
 
-        def _op(backend: ImageBackend):
-            def _gen():
-                return backend.generate(action_prompt, "", params,
-                                        log_meta={"agent_name": character_name,
-                                                  "original_prompt": action_prompt,
-                                                  "media": "video"})
-            return self.run_on_backend_channel(
-                backend, _gen, task_type="video_generation",
-                agent_name=character_name)
+            def _op(bb):
+                def _gen():
+                    return bb.generate(action_prompt, "", params,
+                                       log_meta={"agent_name": character_name,
+                                                 "original_prompt": action_prompt,
+                                                 "media": "video"})
+                return self.run_on_backend_channel(bb, _gen, task_type="video_generation",
+                                                   agent_name=character_name)
+            return self.run_on_backend(b, _op, character_name=character_name)
+
         try:
-            result, _used = self.run_on_backend(
-                primary, _op, character_name=character_name)
+            if primary is not None:
+                (result, used), route = _render(primary), None
+            else:
+                (result, used), route = run_routed(occasion, _render,
+                                                   character=character_name, pool=self.pool)
         except MediaGenerationDisabled:
             # The world's master switch is not a failed render: the reason has
             # to reach the caller instead of collapsing into a bare False.
             raise
         except Exception as e:
-            logger.error("generate_video fehlgeschlagen: %s", e)
+            logger.error("generate_video failed: %s", e)
             return False
-        if not result:
-            return False
+        if route_out is not None:
+            route_out.update({"backend": used.name, **route_meta(route)})
         try:
             from pathlib import Path as _P
             _P(output_path).parent.mkdir(parents=True, exist_ok=True)
             _P(output_path).write_bytes(result[0])
             return True
         except Exception as e:
-            logger.error("generate_video: Schreiben fehlgeschlagen: %s", e)
+            logger.error("generate_video: write failed: %s", e)
             return False
 
     def list_mesh_backends(self, rig: str = "") -> List[ImageBackend]:
