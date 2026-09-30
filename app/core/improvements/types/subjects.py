@@ -378,14 +378,17 @@ def generate_expression(name: str) -> None:
 
 def character_profile(name: str) -> Optional[Dict[str, Any]]:
     """The character's CURRENT profile image as
-    ``{filename, path, backend, prompt}``, or None when there is none.
+    ``{filename, path, backend, prompt, fallback_from}``, or None when there is
+    none.
 
     "Current" is what the profile field says — the same resolution
     ``GET /characters/{name}/images/profile`` does
     (``get_character_profile_image`` + the images dir).  ``backend`` is what
     the image's own meta records as its maker, ``prompt`` the prompt it was
     generated from; either may be empty for a hand-uploaded picture, and a
-    caller that wants to RENDER needs the prompt.
+    caller that wants to RENDER needs the prompt.  ``fallback_from`` is the
+    image-routing marker of a render that did not run on its intended backend
+    (None otherwise).
     """
     from app.models.character import (get_character_image_metadata,
                                       get_character_image_prompts,
@@ -403,6 +406,7 @@ def character_profile(name: str) -> Optional[Dict[str, Any]]:
         "path": str(path),
         "backend": str(meta.get("backend") or ""),
         "prompt": str(get_character_image_prompts(name).get(filename) or ""),
+        "fallback_from": meta.get("fallback_from") or None,
     }
 
 
@@ -441,13 +445,64 @@ def regenerate_profile(name: str, backend: str) -> None:
     clear_expression_cache(name)
 
 
+def character_gallery_images(name: str) -> List[Dict[str, Any]]:
+    """Every image of a character's gallery that can be re-rendered (it has a
+    stored prompt) — the current PROFILE image excluded (the portrait is its
+    own subject). Read from the image metas on every call."""
+    from app.models.character import (get_character_image_metadata,
+                                      get_character_image_prompts,
+                                      get_character_images_dir,
+                                      get_character_profile_image)
+    images_dir = get_character_images_dir(name)
+    profile = str(get_character_profile_image(name) or "").strip()
+    prompts = get_character_image_prompts(name) or {}
+    out: List[Dict[str, Any]] = []
+    for filename, meta in (get_character_image_metadata(name) or {}).items():
+        if filename == profile or not (images_dir / filename).exists():
+            continue
+        prompt = str(prompts.get(filename) or "").strip()
+        if not prompt:
+            continue
+        out.append({"filename": filename, "path": str(images_dir / filename),
+                    "backend": str(meta.get("backend") or ""), "prompt": prompt,
+                    "fallback_from": meta.get("fallback_from") or None,
+                    "source_file": str(meta.get("source_file") or ""),
+                    "room_id": str(meta.get("room_id") or ""),
+                    "location": str(meta.get("location") or ""),
+                    "character_names": meta.get("character_names") or None})
+    return out
+
+
+def regenerate_character_gallery_image(name: str, filename: str, backend: str) -> None:
+    """Re-render ONE gallery image of a character EXPLICITLY on ``backend``
+    (no routing, no fallback) as a NEW file whose meta names the original as
+    ``source_file``. The original stays — the admin compares and deletes.
+
+    The producer is reached through the module attribute so a smoke can swap
+    it (the same seam ``regenerate_profile`` offers)."""
+    from app.models.character import add_character_image_metadata
+    from app.skills import image_regenerate
+    entry = next((g for g in character_gallery_images(name)
+                  if g["filename"] == filename), None)
+    if entry is None:
+        raise RuntimeError(f"{filename}: nothing to render it from")
+    ok, _final_prompt, new_path = image_regenerate.regenerate_image(
+        name, entry["path"], entry["prompt"], backend_name=backend,
+        create_new=True, use_room=True, room_id=entry["room_id"],
+        location_id=entry["location"], character_names=entry["character_names"])
+    if not ok or not new_path:
+        raise RuntimeError("gallery regenerate failed")
+    add_character_image_metadata(name, Path(new_path).name, {"source_file": filename})
+
+
 # ---------------------------------------------------------------------------
 # Location gallery images
 # ---------------------------------------------------------------------------
 
 def gallery_images(location_id: str) -> List[Dict[str, Any]]:
     """Every gallery image of a location that CAN be rendered again, as
-    ``{filename, backend, prompt, room_id, prompt_type, source_file}``.
+    ``{filename, backend, prompt, room_id, prompt_type, source_file,
+    fallback_from}``.
 
     Three conditions, all from the image's own bookkeeping: the file has to
     exist (``delete_gallery_image`` drops the room/type/background entries but
@@ -460,6 +515,8 @@ def gallery_images(location_id: str) -> List[Dict[str, Any]]:
 
     ``source_file`` is the picture this one was re-rendered FROM, ``""`` for an
     original — that is how a re-render can be recognised again after the fact.
+    ``fallback_from`` is the image-routing marker of a render that did not run
+    on its intended backend (None otherwise).
     """
     from app.models.world import (get_all_gallery_prompts, get_gallery_dir,
                                   get_gallery_image_metas,
@@ -478,7 +535,8 @@ def gallery_images(location_id: str) -> List[Dict[str, Any]]:
         out.append({"filename": filename, "backend": backend, "prompt": prompt,
                     "room_id": str(rooms.get(filename) or ""),
                     "prompt_type": str(types.get(filename) or ""),
-                    "source_file": str((meta or {}).get("source_file") or "")})
+                    "source_file": str((meta or {}).get("source_file") or ""),
+                    "fallback_from": (meta or {}).get("fallback_from") or None})
     return out
 
 
