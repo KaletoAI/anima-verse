@@ -651,10 +651,17 @@ check("scanning for a backend nothing was made by finds nothing",
       candidates(MODEL_REPLACE, {"subject": "character",
                                  "source_backend": "tr",
                                  "target_backend": "hy"}), [])
+# demo_a is mixamo for this one check: "hy" (mixamo) must be able to mesh it,
+# or the rig filter (case 30) drops it before is_done is ever asked and the
+# check proves nothing about the is_done filter.
+RIGS["demo_a"] = "mixamo"
+check("(precondition) 'hy' can mesh demo_a, so only is_done can drop it",
+      subjects.character_fits_backend("demo_a", "hy"), True)
 check("a STORED equal-backend set yields no work either (is_done filter)",
       [(c.key, c.label) for c in MODEL_REPLACE.find_candidates(
           {"subject": "character", "source_backend": "hy",
            "target_backend": "hy"})], [])
+RIGS["demo_a"] = "generic"
 
 # ── [3] apply generates with the TARGET backend ─────────────────────────────
 print("[3] model_replace apply")
