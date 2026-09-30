@@ -397,6 +397,31 @@ Fails on commit d0452bc6 (before fix round 1): G10 expression (options say
    "Own-txt", the render runs on "Own-ref") and G11 (every caller sees the
    character's chain).
 
+PART H — an explicit pick is checked BEFORE a route answers "started"
+(R2b review blocker + ruling N3: one helper,
+app.core.explicit_backend.require_explicit_backend[_async]). Fake pool as in
+part B: "Gw" (dead, cooled via mark_unhealthy), "Cloud" (ok). track_start is
+recorded; a track's row is read back from the throwaway task queue.
+H1 POST /world/locations/{id}/gallery (single mode) with backend "Gw" while
+   Gw cools down -> HTTPException 503 whose detail names 'Gw' and says "no
+   automatic fallback"; NO track was started (the old route created a
+   pending track and answered "started" — the background core refused the
+   pick only then, and the track stayed pending forever); nobody asked.
+H2 the same route, backend "Cloud" (available at the check), while the core
+   is replaced by one that raises HTTPException(503, "backend 'Cloud' went
+   away") before it adopts the track (the race the up-front check cannot
+   close) -> the route answers "started" with a track_id; once the
+   background task has run, that track is "failed" with error
+   "backend 'Cloud' went away" (not pending).
+H3 the REAL core, explicit "Cloud" with LoRA "foreign.safetensors" (the
+   throwaway LoRA library associates nothing with Cloud): the core refuses
+   inside _render with a 400 and finishes the track itself -> the track is
+   "failed" with an error that says "does not associate", and it was
+   finished exactly ONCE (the route's safety net leaves a finished track
+   alone — a second finish would overwrite its duration with 0).
+Fails on commit 3177ddd4 (before this fix): H1 answers {"status":
+   "started"} and records one track_start; H2's track stays "pending".
+
 DEFERRED: the surface-texture case of the plan (its C4, occasion
 "surface_texture") waits until app/core/surface_textures.py — which carries
 another session's uncommitted change — is routed.
@@ -1529,6 +1554,98 @@ def part_g():
           ["rule", "rule", "character", "character"])
 
 
+def _track_row(task_id):
+    from app.core.task_queue import get_task_queue
+    conn = get_task_queue()._connect()
+    try:
+        row = conn.execute("SELECT status, error FROM tasks WHERE task_id=?",
+                           (task_id,)).fetchone()
+        return (row[0], row[1]) if row else None
+    finally:
+        conn.close()
+
+
+def part_h():
+    print("H) explicit pick checked before 'started'")
+    from fastapi import HTTPException
+    from app.core import world_ops
+    from app.core.task_queue import get_task_queue
+    from app.models import world
+    from app.routes import world as world_routes
+    loc = world.add_location("Quay", "A stone quay.")["id"]
+    _tq = get_task_queue()
+    starts, finishes = [], []
+    _orig_start, _orig_finish = _tq.track_start, _tq.track_finish
+
+    def _rec_start(*a, **kw):
+        tid = _orig_start(*a, **kw)
+        starts.append(tid)
+        return tid
+
+    def _rec_finish(task_id, error=""):
+        finishes.append((task_id, error))
+        return _orig_finish(task_id, error=error)
+    _tq.track_start, _tq.track_finish = _rec_start, _rec_finish
+
+    class _Req:
+        def __init__(self, body):
+            self._body = body
+
+        async def json(self):
+            return dict(self._body)
+
+    async def _route(body):
+        res = await world_routes.generate_gallery_image(loc, _Req(body))
+        # The route fires the render as a task; let it run before the loop
+        # closes (asyncio.run would cancel it).
+        others = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        await asyncio.gather(*others, return_exceptions=True)
+        return res
+
+    try:
+        gw = FakeBackend("Gw", 0, "natural", dead=True)
+        gw.mark_unhealthy("smoke", 300)
+        cloud = FakeBackend("Cloud", 5, "keywords")
+        install_pool(gw, cloud)
+        set_routing({"location": ["Gw", "Cloud"]})
+        try:
+            res = asyncio.run(_route({"prompt": "x", "backend": "Gw"}))
+            check("H1 gallery explicit dead -> 503", res, "HTTPException 503")
+        except HTTPException as e:
+            check("H1 gallery explicit dead -> 503",
+                  (e.status_code, "'Gw'" in str(e.detail),
+                   "no automatic fallback" in str(e.detail)), (503, True, True))
+        check("H1 no track, nobody asked", (starts, len(gw.calls), len(cloud.calls)),
+              ([], 0, 0))
+
+        _real_core = world_ops.generate_gallery_image_core
+
+        async def _gone(location_name, data):
+            raise HTTPException(status_code=503, detail="backend 'Cloud' went away")
+        world_ops.generate_gallery_image_core = _gone
+        try:
+            res = asyncio.run(_route({"prompt": "x", "backend": "Cloud"}))
+        finally:
+            world_ops.generate_gallery_image_core = _real_core
+        tid = res.get("track_id") if isinstance(res, dict) else None
+        check("H2 answered started", (res.get("status"), tid in starts), ("started", True))
+        check("H2 track finished with the refusal", _track_row(tid),
+              ("failed", "backend 'Cloud' went away"))
+
+        starts.clear()
+        finishes.clear()
+        res = asyncio.run(_route({"prompt": "x", "backend": "Cloud",
+                                  "loras": [{"name": "foreign.safetensors",
+                                             "strength": 1.0}]}))
+        tid = res.get("track_id")
+        row = _track_row(tid) or ("", "")
+        check("H3 core refusal on the track", (row[0], "does not associate" in (row[1] or "")),
+              ("failed", True))
+        check("H3 finished exactly once", [f[0] for f in finishes].count(tid), 1)
+    finally:
+        _tq.track_start, _tq.track_finish = _orig_start, _orig_finish
+
+
 if __name__ == "__main__":
     part_a()
     part_c(*part_b())
@@ -1538,6 +1655,7 @@ if __name__ == "__main__":
     part_f_video()
     part_f_mesh()
     part_g()
+    part_h()
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed: {FAILS}")

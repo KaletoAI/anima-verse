@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from app.core.log import get_logger
 from app.core.auth_dependency import require_admin
+from app.core.explicit_backend import require_explicit_backend_async
 from app.core.upload_limits import (MODEL_UPLOAD_MAX_BYTES, ensure_image,
                                     guard_content_length, max_pack_bytes,
                                     read_upload_capped)
@@ -3101,52 +3102,64 @@ async def generate_gallery_batch(location_name: str, request: Request) -> Dict[s
 
 @router.post("/locations/{location_name}/gallery")
 async def generate_gallery_image(location_name: str, request: Request) -> Dict[str, Any]:
-    """Generiert ein neues Galerie-Bild fuer einen Ort (per ID oder Name).
+    """Generate a new gallery image for a location (by id or name).
 
-    Single-Mode (kein ``_batch_track_id`` im Body) ist fire-and-forget:
-    Vorab-Validierung + Track-Start, Heavy-Lifting laeuft als
-    ``asyncio.create_task``, die HTTP-Antwort kommt sofort mit
-    ``status=started`` und ``track_id``. Die UI pollt die Galerie
-    bzw. das Queue-Panel auf Fertigstellung.
+    Single mode (no ``_batch_track_id`` in the body) is fire-and-forget:
+    up-front validation (location, an explicit backend pick) + track start,
+    the heavy lifting runs as an ``asyncio.create_task``, the HTTP answer comes
+    at once with ``status=started`` and ``track_id``. The UI polls the gallery
+    or the queue panel for completion.
 
-    Batch-Mode (mit vorhandenem ``_batch_track_id``) bleibt synchron,
-    damit der Batch-Handler die Jobs sequentialisieren kann.
+    Batch mode (with a ``_batch_track_id``) stays synchronous so the batch
+    handler can sequence its jobs.
     """
     try:
         data = await request.json()
         batch_track_id = data.get("_batch_track_id", "")
 
-        # Batch-Mode: synchron — Batch-Loop oben (``generate_gallery_batch``)
-        # awaitet jeden Job. Hier rein in den Inner-Body, ohne Fire-and-Forget.
+        # Batch mode: synchronous — the batch loop (``generate_gallery_batch``)
+        # awaits every job.
         if batch_track_id:
             return await world_ops.generate_gallery_image_core(location_name, data)
 
-        # Single-Mode: fire-and-forget.
-        # Frueh-Validierung damit 404/400 sofort am Client landen, nicht im
-        # Background-Task verloren gehen.
+        # Single mode: fire-and-forget. Validate up front so a 404/503 reaches
+        # the client instead of getting lost in the background task.
         location = resolve_location(location_name)
         if not location:
-            raise HTTPException(status_code=404, detail=f"Ort '{location_name}' nicht gefunden")
+            raise HTTPException(status_code=404, detail=f"Location '{location_name}' not found")
+        # An explicit backend pick that is not available is the caller's
+        # answer, not a background log line: 503 before any track exists
+        # (the background core would refuse it only after the route had
+        # already said "started").
+        backend_name = str(data.get("backend") or "").strip()
+        if backend_name:
+            await require_explicit_backend_async(backend_name)
 
         from app.core.task_queue import get_task_queue
         _tq = get_task_queue()
-        # Pending-Track anlegen (analog zu Batch). Der Inner-Body ruft
-        # track_activate sobald das Backend bekannt ist.
+        # Pending track (like the batch mode); the core activates it once the
+        # backend is known.
         _track_id = _tq.track_start(
-            "image_gen", "Ort-Bild",
+            "image_gen", "Location image",
             agent_name=location.get("name", location_name),
             start_running=False)
-        data["_batch_track_id"] = _track_id  # nutzt den Batch-Aktivierungspfad im Inner-Body
+        data["_batch_track_id"] = _track_id  # the core adopts this track
 
         async def _bg():
-            # Inner-Body handhabt track_finish in seinen except-Blocks. Hier
-            # nur loggen, damit nichts stillschweigend verschwindet.
+            # The core finishes the adopted track in its own except blocks —
+            # but an error it raises BEFORE its render phase (a backend that
+            # dropped out since the check above, a failed prompt rewrite)
+            # would leave the track pending forever. The safety net finishes
+            # only a track that is still open, so the core's own error and
+            # duration stay as it wrote them.
             try:
                 await world_ops.generate_gallery_image_core(location_name, data)
             except HTTPException as he:
-                logger.warning("Gallery Background-Generierung HTTP-Fehler: %s", he.detail)
+                logger.warning("Gallery background render refused: %s", he.detail)
+                _tq.track_finish_if_open(_track_id, error=str(he.detail)[:200])
             except Exception as e:
-                logger.error("Gallery Background-Generierung Fehler: %s", e, exc_info=True)
+                logger.error("Gallery background render failed: %s", e, exc_info=True)
+                _tq.track_finish_if_open(_track_id, error=str(e)[:200])
 
         asyncio.create_task(_bg())
         return {
@@ -3158,7 +3171,7 @@ async def generate_gallery_image(location_name: str, request: Request) -> Dict[s
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Gallery Fehler: %s", e)
+        logger.error("Gallery error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
 

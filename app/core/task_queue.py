@@ -764,6 +764,19 @@ class TaskQueue:
             "Track %s: %s (%.1fs)%s",
             status, task_id, duration_s, f" error={error}" if error else "")
 
+    def track_finish_if_open(self, task_id: str, error: str = "") -> bool:
+        """``track_finish`` for a safety net: finishes the tracked task only
+        while it is still pending or running, so a track its owner already
+        finished keeps its own status, error and duration. Returns True when
+        it finished the task."""
+        with self._write_lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT status FROM tasks WHERE task_id=? AND task_origin='tracked'",
+                (task_id,)).fetchone()
+        if not row or row[0] not in ("pending", "running"):
+            return False
+        self.track_finish(task_id, error=error)
+        return True
 
     def track_cancel(self, task_id: str) -> bool:
         """Cancel a tracked task. Returns True if found."""
