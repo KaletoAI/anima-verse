@@ -84,6 +84,51 @@ C4 another new description while the image prompt stays -> the render
 C5 room "Loft" (added with a description, no image) described with the SAME
    description -> no image yet -> one render.
 C6 new room "Cellar" -> created, no image yet -> one render.
+
+PART P — prop source + item image (occasions "prop", "item"; plan Task 13,
+whose smoke cases the plan numbers C1-C6 — renamed P here because C is the
+describe_room gate above). Same fake pool as part B (Gw dead, family
+natural; Cloud ok, family keywords). A new prop's variant None is its
+primary variant, whose front image is recorded on the MASTER record
+(backend_image / image_routing / image_fallback_from).
+P1 prop source, no glob, rules prop ["Gw","Cloud"] -> True. Gw is the
+   intended entry (ok until it fails), fails at runtime, the re-run lands on
+   Cloud at position 2 -> master record backend_image "Cloud",
+   image_routing {"occasion":"prop","position":2,"spec":"Cloud"},
+   image_fallback_from {"occasion":"prop","intended_spec":"Gw","position":1};
+   the prompt Cloud got differs from Gw's (the "prop" style differs per
+   family: natural prose vs keywords -> recomposed for the new backend).
+P2 prop source with a dialog prompt "DIALOG" (no key areas on the prop, so
+   nothing is appended) -> Gw (first try) receives exactly "DIALOG"; the
+   re-run on Cloud receives a composed prompt, not "DIALOG" (decision 1:
+   a dialog-final prompt is verbatim on the FIRST attempt only).
+P3 prop source, explicit glob "Gw" while Gw cools down since P2 -> False;
+   Cloud not asked (still its one P2 call) — an explicit pick is never
+   routed elsewhere.
+P4 an explicit re-render on Cloud after P1/P2 -> master record backend_image
+   "Cloud" and NO image_routing / image_fallback_from (an explicit pick writes
+   neither, and a new write of the front replaces the old marks).
+P5 item image, no backend, rules item ["Cloud"] -> True; item meta
+   backend "Cloud", routing {"occasion":"item","position":1,"spec":"Cloud"},
+   no fallback_from (position 1 is the intended entry).
+P6 item image, explicit backend "Gw" (cooling via mark_unhealthy) -> False,
+   Cloud not asked. BEHAVIOUR CHANGE: the old path soft-warned and fell back
+   to the automatic pick; an explicit pick now renders there or nowhere.
+P7 item image, explicit "Cloud" with LoRA "foreign.safetensors" (the LoRA
+   library is empty, nothing is associated with Cloud) -> False, Cloud not
+   asked (the hard LoRA gate of an explicit dialog pick, CLAUDE.md).
+P8 item image, no backend, rules item ["Gw","Cloud"], dialog prompt "DIALOG"
+   + model_override "m-dialog" -> True. Gw (first try) receives exactly
+   "DIALOG" with params model "m-dialog"; the re-run on Cloud receives the
+   item's OWN subject composed for Cloud (it names "Lantern" — the item has
+   no image_prompt / prompt_fragment, so its name is the subject — and is
+   not "DIALOG") and no "model"; item meta routing position 2 and
+   fallback_from {"occasion":"item","intended_spec":"Gw","position":1}.
+DEFERRED: the surface-texture case of the plan (its C4, occasion
+"surface_texture") waits until app/core/surface_textures.py — which carries
+another session's uncommitted change — is routed.
+Item renders pass through postprocess_outfit_image (rembg); the smoke
+replaces it with the identity so no model is loaded or downloaded.
 """
 import asyncio
 import io
@@ -391,9 +436,85 @@ def part_c(loc, millroom_id):
     check("C6 new room", (rendered, said), ([cellar.get("id")], True))
 
 
+def part_p():
+    print("P) prop source / item image")
+    from app.core import props
+    from app.models import character as character_mod
+    from app.models import inventory
+    from app.routes import inventory as inventory_routes
+
+    gw, cloud = FakeBackend("Gw", 0, "natural", dead=True), FakeBackend("Cloud", 5, "keywords")
+    install_pool(gw, cloud)
+    set_routing({"prop": ["Gw", "Cloud"], "item": ["Cloud"]})
+    pid = props.create_prop(name="Crate", description="a wooden crate")["id"]
+    ok = props._render_source(pid, "", "", "")
+    rec = props.read_sidecar(pid)
+    check("P1 rendered", ok, True)
+    check("P1 master record", (rec.get("backend_image"), rec.get("image_routing"),
+                               rec.get("image_fallback_from")),
+          ("Cloud", {"occasion": "prop", "position": 2, "spec": "Cloud"},
+           {"occasion": "prop", "intended_spec": "Gw", "position": 1}))
+    check("P1 recomposed", bool(gw.calls) and bool(cloud.calls)
+          and gw.calls[0]["prompt"] != cloud.calls[0]["prompt"], True)
+
+    gw, cloud = FakeBackend("Gw", 0, "natural", dead=True), FakeBackend("Cloud", 5, "keywords")
+    install_pool(gw, cloud)
+    props._render_source(pid, "", "DIALOG", "")
+    check("P2 first try verbatim", gw.calls[0]["prompt"] if gw.calls else None, "DIALOG")
+    check("P2 re-run composed", bool(cloud.calls) and cloud.calls[0]["prompt"] != "DIALOG",
+          True)
+    check("P3 explicit dead", props._render_source(pid, "Gw", "", ""), False)
+    check("P3 Cloud not asked", len(cloud.calls), 1)
+
+    check("P4 explicit renders", props._render_source(pid, "Cloud", "", ""), True)
+    rec = props.read_sidecar(pid)
+    check("P4 explicit clears the marks", (rec.get("backend_image"),
+                                           "image_routing" in rec,
+                                           "image_fallback_from" in rec),
+          ("Cloud", False, False))
+
+    character_mod.postprocess_outfit_image = lambda p: p   # no rembg model
+    cloud = FakeBackend("Cloud", 5, "keywords")
+    install_pool(cloud)
+    item = inventory.add_item("Lantern", description="a brass lantern")
+    iid = item["id"] if isinstance(item, dict) else item
+    check("P5 rendered", inventory_routes.generate_item_image_sync(iid, {}), True)
+    im = (inventory.get_item(iid) or {}).get("image_meta") or {}
+    check("P5 item meta", (im.get("backend"), im.get("routing"), "fallback_from" in im),
+          ("Cloud", {"occasion": "item", "position": 1, "spec": "Cloud"}, False))
+
+    gw = FakeBackend("Gw", 0, "natural", dead=True)
+    gw.mark_unhealthy("smoke", 300)
+    cloud = FakeBackend("Cloud", 5, "keywords")
+    install_pool(gw, cloud)
+    check("P6 explicit dead", inventory_routes.generate_item_image_sync(iid, {"backend": "Gw"}),
+          False)
+    check("P6 nobody asked", (len(gw.calls), len(cloud.calls)), (0, 0))
+
+    check("P7 explicit foreign LoRA", inventory_routes.generate_item_image_sync(
+        iid, {"backend": "Cloud",
+              "loras": [{"name": "foreign.safetensors", "strength": 1.0}]}), False)
+    check("P7 Cloud not asked", len(cloud.calls), 0)
+
+    gw, cloud = FakeBackend("Gw", 0, "natural", dead=True), FakeBackend("Cloud", 5, "keywords")
+    install_pool(gw, cloud)
+    set_routing({"prop": ["Gw", "Cloud"], "item": ["Gw", "Cloud"]})
+    check("P8 rendered", inventory_routes.generate_item_image_sync(
+        iid, {"prompt": "DIALOG", "model_override": "m-dialog"}), True)
+    check("P8 first try verbatim", [(c["prompt"], c["params"].get("model")) for c in gw.calls],
+          [("DIALOG", "m-dialog")])
+    cp = cloud.calls[0] if cloud.calls else {"prompt": "", "params": {}}
+    check("P8 re-run own subject", ("Lantern" in cp["prompt"], "DIALOG" in cp["prompt"],
+                                    "model" in cp["params"]), (True, False, False))
+    im = (inventory.get_item(iid) or {}).get("image_meta") or {}
+    check("P8 item meta", ((im.get("routing") or {}).get("position"), im.get("fallback_from")),
+          (2, {"occasion": "item", "intended_spec": "Gw", "position": 1}))
+
+
 if __name__ == "__main__":
     part_a()
     part_c(*part_b())
+    part_p()
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed: {FAILS}")

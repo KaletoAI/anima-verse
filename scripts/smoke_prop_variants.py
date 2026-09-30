@@ -238,11 +238,18 @@ class FakeQueue:
 
 
 class FakeService:
-    def resolve_imagegen_target(self, glob):
+    # The source render's two ways to a backend (image routing, Task 13): an
+    # explicit glob resolves here, no glob goes through
+    # `routing.run_routed` on `pool` (stubbed in install_fakes to hand the
+    # render this one backend, route None = nothing to mark).
+    pool = None
+
+    def _wait_for_explicit_backend(self, glob, **kw):
         return FakeBackend()
 
-    def _select_backend(self):
-        return FakeBackend()
+    @staticmethod
+    def run_on_backend(backend, op, character_name=""):
+        return op(backend), backend
 
     # The one handoff every render crosses (media master switch, 1044158c):
     # the stub runs the callable inline, no queue, no GPU slot.
@@ -270,7 +277,9 @@ def install_fakes() -> None:
     import app.core.llm_queue as llm_queue
     import app.core.model3d as model3d
     import app.imagegen.service as image_service
+    import app.imagegen.routing as routing
     image_service.get_image_service = lambda: FakeService()
+    routing.run_routed = lambda occasion, render, **kw: (render(FakeBackend()), None)
     llm_queue.get_llm_queue = lambda: FakeQueue()
     model3d.list_mesh_backends = lambda rig: {"default": "fake-mesh",
                                               "backends": []}
