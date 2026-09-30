@@ -2218,7 +2218,6 @@ def _regenerate_character_image_sync(character_name: str, image_name: str,
         prompt = custom_prompt
 
     improvement_request = body.get("improvement_request", "").strip()
-    workflow_name = body.get("workflow", "").strip()
     backend_name = body.get("backend", "").strip()
     loras = body.get("loras")  # Optional: [{name, strength}, ...]
     model_override = body.get("model_override", "").strip()
@@ -2240,14 +2239,14 @@ def _regenerate_character_image_sync(character_name: str, image_name: str,
     _queue = resolve_queue("image_regenerate", {}, agent_name=character_name)
     _track_id = _tq.track_start(
         "image_regenerate", "Bild regenerieren", agent_name=character_name,
-        provider=backend_name or workflow_name or "",
+        provider=backend_name or "",
         queue_name=_queue,
         start_running=False)
 
     import threading
     threading.Thread(
         target=character_ops.regenerate_image_worker,
-        args=(character_name, image_path, prompt, improvement_request, workflow_name,
+        args=(character_name, image_path, prompt, improvement_request,
               backend_name, agent_config, loras, model_override, character_names, room_id,
               original_location_id, negative_prompt_override, _track_id, create_new,
               use_room, use_source_as_reference, _tq),

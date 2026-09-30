@@ -316,7 +316,6 @@ def _regenerate_post_image_sync(post_id: str, data: Any):
         image_prompt = custom_prompt
 
     improvement_request = data.get("improvement_request", "").strip()
-    workflow_name = data.get("workflow", "").strip()
     backend_name = data.get("backend", "").strip()
     loras = data.get("loras")  # Optional: [{name, strength}, ...]
     model_override = data.get("model_override", "").strip()
@@ -336,22 +335,20 @@ def _regenerate_post_image_sync(post_id: str, data: Any):
     _queue = resolve_queue("image_regenerate", {}, agent_name=character_name)
     _track_id = _tq.track_start(
         "image_regenerate", "Instagram Bild regenerieren", agent_name=character_name,
-        provider=backend_name or workflow_name or "",
+        provider=backend_name or "",
         queue_name=_queue,
         start_running=False)
 
     def _run_regen():
         try:
-            _success, final_prompt, actual_path = regenerate_image(character_name, str(image_path),
-                image_prompt, improvement_request, workflow_name, backend_name, agent_config,
-                loras=loras, model_override=model_override,
-                character_names=character_names,
-                room_id=room_id,
+            _success, final_prompt, actual_path = regenerate_image(
+                character_name, str(image_path), image_prompt,
+                improvement_request=improvement_request, backend_name=backend_name,
+                agent_config=agent_config, loras=loras, model_override=model_override,
+                character_names=character_names, room_id=room_id,
                 location_id=original_location_id,
-                negative_prompt_override=negative_prompt_override,
-                track_id=_track_id,
-                create_new=bool(create_new),
-                use_room=bool(use_room),
+                negative_prompt_override=negative_prompt_override, track_id=_track_id,
+                create_new=bool(create_new), use_room=bool(use_room),
                 use_source_as_reference=use_source_as_reference,
                 source_image_path=str(image_path))
             from pathlib import Path as _Path

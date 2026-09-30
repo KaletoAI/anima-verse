@@ -2975,22 +2975,19 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
     return {"status": "success", "image": image_filename, "image_url": image_url}
 
 
-def regenerate_image_worker(character_name, image_path, prompt, improvement_request, workflow_name, backend_name, agent_config, loras, model_override, character_names, room_id, original_location_id, negative_prompt_override, _track_id, create_new, use_room, use_source_as_reference, _tq):
+def regenerate_image_worker(character_name, image_path, prompt, improvement_request, backend_name, agent_config, loras, model_override, character_names, room_id, original_location_id, negative_prompt_override, _track_id, create_new, use_room, use_source_as_reference, _tq):
     from app.skills.image_regenerate import regenerate_image
     from app.models.character import add_character_image_prompt
     from pathlib import Path
     try:
-        _success, final_prompt, actual_path = regenerate_image(character_name, str(image_path),
-            prompt, improvement_request, workflow_name, backend_name, agent_config,
-            loras=loras,
-            model_override=model_override,
-            character_names=character_names,
-            room_id=room_id,
+        _success, final_prompt, actual_path = regenerate_image(
+            character_name, str(image_path), prompt,
+            improvement_request=improvement_request, backend_name=backend_name,
+            agent_config=agent_config, loras=loras, model_override=model_override,
+            character_names=character_names, room_id=room_id,
             location_id=original_location_id,
-            negative_prompt_override=negative_prompt_override,
-            track_id=_track_id,
-            create_new=bool(create_new),
-            use_room=bool(use_room),
+            negative_prompt_override=negative_prompt_override, track_id=_track_id,
+            create_new=bool(create_new), use_room=bool(use_room),
             use_source_as_reference=use_source_as_reference,
             source_image_path=str(image_path))
         _actual_filename = Path(actual_path).name
@@ -2998,7 +2995,7 @@ def regenerate_image_worker(character_name, image_path, prompt, improvement_requ
             add_character_image_prompt(character_name, _actual_filename, final_prompt)
         _tq.track_finish(_track_id)
     except Exception as e:
-        logger.error("Bild-Regenerierung fehlgeschlagen: %s", e)
+        logger.error("Image regeneration failed: %s", e)
         _tq.track_finish(_track_id, error=str(e))
 
 

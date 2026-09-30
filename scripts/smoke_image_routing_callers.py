@@ -175,6 +175,33 @@ D3 scene render (build_scene_state replaced by a fixed state, mode
 D4 event image, rules event ["Gw"] with Gw cooling -> None, Gw never asked
    (a chain with nothing usable does not fall back to another backend).
 
+PART E — gallery regenerate (occasion "regenerate") and scene photo
+("photo"; plan Task 15 + the Task 14 carry-over: the one-click scene photo
+must not pre-resolve a backend and pass it as an explicit pick). Same fake
+pool as part B (Gw dead, family natural; Cloud ok, family keywords).
+Character "Mara" has one gallery image and NO profile image (so the render
+slots no identity reference: has_ref False).
+E1 regenerate_image("Mara", <img>, "a portrait", create_new=True), rules
+   regenerate ["Gw","Cloud"] -> ok and a NEW file (create_new); Gw is the
+   intended entry, fails at runtime, the re-run lands on Cloud at position 2
+   -> the new file's meta: backend "Cloud", routing position 2,
+   fallback_from.intended_spec "Gw".
+E2 explicit backend_name "Gw" (cooling since E1) -> RuntimeError, Cloud not
+   asked again (still its one E1 call) — an explicit pick is never routed.
+E3 explicit backend_name "Cloud" -> the new file's meta routing None and
+   fallback_from None (an explicit render writes neither; stored as None so
+   an overwritten file loses an old marker too).
+E4 occasion="photo", rules photo ["Cloud"] and NO regenerate rules ->
+   routing {"occasion":"photo","position":1,"spec":"Cloud"} (the occasion
+   parameter is what gets routed, not a fixed "regenerate").
+E5 take_scene_photo("Mara") with no dialog backend, prepare_scene_photo
+   replaced by a stub whose dialog preselection default_backend is "Cloud",
+   regenerate_image replaced by a recorder -> the recorder got
+   backend_name "" and occasion "photo" (the preselection is NOT handed over
+   as an explicit pick — the one-click photo keeps its fallback).
+E6 take_scene_photo("Mara", backend_name="Gw") -> backend_name "Gw",
+   occasion "photo" (a backend the user picked stays explicit).
+
 DEFERRED: the surface-texture case of the plan (its C4, occasion
 "surface_texture") waits until app/core/surface_textures.py — which carries
 another session's uncommitted change — is routed.
@@ -719,11 +746,75 @@ def part_d():
     check("D4 nobody asked", (len(gw.calls), len(cloud.calls)), (0, 0))
 
 
+def part_e():
+    print("E) regenerate + scene photo")
+    from app.models.character import (get_character_images_dir, get_single_image_meta,
+                                      save_character_profile)
+    from app.skills import image_regenerate
+    from app.skills.image_regenerate import regenerate_image
+    save_character_profile("Mara", {"name": "Mara", "appearance": "a tall woman"},
+                           create_new=True)
+    img_dir = get_character_images_dir("Mara")
+    img_dir.mkdir(parents=True, exist_ok=True)
+    src = img_dir / "Mara_1_a.png"
+    src.write_bytes(png_bytes())
+
+    gw, cloud = FakeBackend("Gw", 0, "natural", dead=True), FakeBackend("Cloud", 5, "keywords")
+    svc = install_pool(gw, cloud)
+    svc._generate_image_analysis = lambda *a, **k: None
+    set_routing({"regenerate": ["Gw", "Cloud"], "photo": ["Cloud"]})
+    ok, _p, new_path = regenerate_image("Mara", str(src), "a portrait", create_new=True)
+    meta = get_single_image_meta("Mara", Path(new_path).name)
+    check("E1 new file", (ok, Path(new_path).name != src.name), (True, True))
+    check("E1 meta", (meta.get("backend"), (meta.get("routing") or {}).get("position"),
+                      (meta.get("fallback_from") or {}).get("intended_spec")),
+          ("Cloud", 2, "Gw"))
+    try:
+        regenerate_image("Mara", str(src), "a portrait", backend_name="Gw", create_new=True)
+        check("E2 explicit dead", "no exception", "RuntimeError")
+    except RuntimeError:
+        check("E2 explicit dead", True, True)
+    check("E2 Cloud not asked again", len(cloud.calls), 1)
+    ok, _p, p3 = regenerate_image("Mara", str(src), "a portrait", backend_name="Cloud",
+                                  create_new=True)
+    m3 = get_single_image_meta("Mara", Path(p3).name)
+    check("E3 explicit: no marker",
+          (ok, m3.get("backend"), m3.get("routing"), m3.get("fallback_from")),
+          (True, "Cloud", None, None))
+    set_routing({"photo": ["Cloud"]})
+    ok, _p, p4 = regenerate_image("Mara", str(src), "a photo", create_new=True,
+                                  occasion="photo")
+    check("E4 occasion photo", get_single_image_meta("Mara", Path(p4).name).get("routing"),
+          {"occasion": "photo", "position": 1, "spec": "Cloud"})
+
+    from app.core import scene_photo
+    calls = []
+
+    def _recorder(**kw):
+        calls.append((kw.get("backend_name"), kw.get("occasion")))
+        return (False, "", "")
+    _orig_prep, _orig_regen = scene_photo.prepare_scene_photo, image_regenerate.regenerate_image
+    scene_photo.prepare_scene_photo = lambda avatar: {
+        "ok": True, "prompt": "Candid photograph", "subjects": ["Mara"],
+        "present": ["Mara"], "location": "", "room": "", "default_backend": "Cloud"}
+    image_regenerate.regenerate_image = _recorder
+    try:
+        scene_photo.take_scene_photo("Mara")
+        check("E5 one-click photo is routed", calls, [("", "photo")])
+        calls.clear()
+        scene_photo.take_scene_photo("Mara", backend_name="Gw")
+        check("E6 a picked backend stays explicit", calls, [("Gw", "photo")])
+    finally:
+        scene_photo.prepare_scene_photo = _orig_prep
+        image_regenerate.regenerate_image = _orig_regen
+
+
 if __name__ == "__main__":
     part_a()
     part_c(*part_b())
     part_p()
     part_d()
+    part_e()
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed: {FAILS}")

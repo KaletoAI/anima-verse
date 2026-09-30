@@ -1,11 +1,12 @@
 """Image regeneration — replaces an existing image via the core image-service pipeline.
 
-Nutzt den gespeicherten Prompt + optionalen User-Verbesserungswunsch,
-waehlt Workflow + Backend, generiert neu und ueberschreibt die Datei.
+Uses the stored prompt + an optional improvement wish, renders on the
+explicitly picked backend or on the chain of the image-routing occasion, and
+overwrites the file (or writes a new one next to it).
 """
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from app.core.log import get_logger
 from app.core.timeutils import utc_now_iso
@@ -93,7 +94,6 @@ def regenerate_image(character_name: str,
     output_path: str,
     original_prompt: str,
     improvement_request: str = "",
-    workflow_name: str = "",
     backend_name: str = "",
     agent_config: Optional[dict] = None,
     loras: Optional[list] = None,
@@ -106,38 +106,41 @@ def regenerate_image(character_name: str,
     create_new: bool = False,
     use_room: bool = True,
     use_source_as_reference: bool = False,
-    source_image_path: str = "") -> Tuple[bool, str, str]:
-    """Generiert ein Bild neu. Bei create_new=True wird eine neue Datei angelegt statt zu ueberschreiben.
-
-    Returns:
-        (success, final_prompt, actual_output_path)
+    source_image_path: str = "",
+    occasion: str = "regenerate") -> Tuple[bool, str, str]:
+    """Renders an image again. ``create_new=True`` writes a new file next to
+    the source instead of overwriting it.
 
     Args:
-        user_id: User-ID
-        character_name: Character-Name (leer fuer Welt-Bilder)
-        output_path: Pfad der zu ueberschreibenden Bilddatei
-        original_prompt: Gespeicherter Image-Prompt
-        improvement_request: Optionaler Verbesserungswunsch
-        workflow_name: Legacy parameter (ComfyUI removed) — ignored
-        backend_name: Optional backend name/glob (direct backend selection)
-        agent_config: Per-Agent Config (fuer LLM-Override)
+        character_name: character name (empty for world images)
+        output_path: the image file to overwrite (or to derive the new name from)
+        original_prompt: the stored image prompt
+        improvement_request: optional improvement wish (rewritten via LLM)
+        backend_name: explicit — exactly this backend, no fallback; empty =
+            the ``occasion`` chain of the image routing
+        agent_config: per-character config (LLM override)
+        occasion: the image-routing occasion rendered without an explicit
+            backend — "regenerate" (gallery regenerate), "photo" (scene
+            photo), "profile" (portrait re-render)
 
     Returns:
-        (success, final_prompt) — final_prompt ist der tatsaechlich verwendete Prompt
+        (success, final_prompt, actual_output_path) — final_prompt is the
+        prompt actually used.
     """
     final_prompt = original_prompt
 
-    # 1b. Prompt verbessern wenn User-Feedback vorhanden
+    # 1b. Improve the prompt when the user gave feedback
     if improvement_request:
         final_prompt = enhance_prompt(final_prompt, improvement_request, agent_config)
 
-    # 1c. Room-Override: "setting: ..." aus Prompt entfernen und ggf. durch neuen Raum ersetzen
+    # 1c. Room override: drop "setting: ..." from the prompt and replace it
+    # with the chosen room
     if room_id and character_name:
         import re as _re
-        # "setting: Meetingraum (A bright meeting room ...)" oder ", setting: ..." entfernen
+        # Drop "setting: Meeting room (A bright meeting room ...)" or ", setting: ..."
         final_prompt = _re.sub(r',?\s*setting:\s*[^,]*(?:\([^)]*\))?', '', final_prompt).strip()
         final_prompt = _re.sub(r',\s*$', '', final_prompt).strip()
-        # Neuen Raum-Text einfuegen (originale Location verwenden)
+        # Insert the new room text (from the original location)
         from app.models.world import get_location, get_room_by_id
         from app.models.character import get_character_current_location
         _loc_id = location_id or get_character_current_location(character_name)
@@ -158,165 +161,42 @@ def regenerate_image(character_name: str,
     if not skill.enabled:
         raise RuntimeError("Image service not available")
 
-    # 3. Determine backend (backend-only; the ComfyUI workflow axis is gone)
+    # 3. Backend: an explicit pick renders there or nowhere; no pick = the
+    # occasion's chain of the image routing (built per backend in _render).
     backend = None
-
-    if workflow_name:
-        logger.warning(
-            "Legacy workflow selection '%s' ignoriert (ComfyUI entfernt) — "
-            "Backend-Auswahl wird verwendet", workflow_name)
-
     if backend_name:
-        # Provider selection via match glob (e.g. "Together.ai" / "Together*"),
-        # resolved by availability — same as the admin default match.
-        backend = skill.match_backend(backend_name)
+        backend = skill._wait_for_explicit_backend(backend_name)
         if not backend:
-            raise RuntimeError(f"Backend '{backend_name}' nicht verfuegbar")
-    else:
-        backend = skill._wait_for_backend(character_name)
+            raise RuntimeError(f"Backend '{backend_name}' is not available — "
+                               f"no automatic fallback")
+    explicit = backend is not None
 
-    if not backend:
-        raise RuntimeError("Kein Backend verfuegbar")
-
-    # 5. Config + Params
-    cfg = skill._get_instance_config(character_name, backend) if character_name else skill._get_backend_defaults(backend)
-    negative_prompt = negative_prompt_override or cfg.get("negative_prompt", getattr(backend, "negative_prompt", ""))
-
-    params = {
-        "width": cfg.get("width", getattr(backend, "width", 1024)),
-        "height": cfg.get("height", getattr(backend, "height", 1024)),
-    }
-    # Model override (user selection in the dialog, highest priority) —
-    # otherwise the backend's configured default model stays active.
-    if model_override:
-        params["model"] = model_override
-        logger.info("Model-Override: %s", model_override)
-    # LoRA inputs: user override from the dialog
-    if loras is not None:
-        params["lora_inputs"] = loras
-
-    # 6. Resolve reference images (for the generation; no post-processing here)
-    face_refs = {"reference_images": {}, "has_reference_slots": False}
+    # 4. Person detection (backend-independent) ALWAYS runs when
+    # character_name is present — the external post-processing needs
+    # appearances to resolve the persons.
     appearances: list = []
-
-    # Person detection ALWAYS runs when character_name is present — the
-    # external post-processing needs appearances to resolve the persons.
     if character_name:
         try:
             from app.core.prompt_builder import PromptBuilder
             _regen_builder_for_appearances = PromptBuilder(character_name)
             if character_names is not None:
                 _persons = _regen_builder_for_appearances.detect_persons(final_prompt, character_names=character_names)
-                logger.info("Explizite Character-Auswahl: %s", character_names)
+                logger.info("Explicit character selection: %s", character_names)
             else:
                 _persons = _regen_builder_for_appearances.detect_persons(final_prompt)
             if not _persons:
                 _persons = _regen_builder_for_appearances.detect_persons("", character_names=[character_name])
             appearances = [{"name": p.name, "appearance": p.appearance} for p in _persons]
         except Exception as _ape:
-            logger.warning("Appearance-Detection fehlgeschlagen: %s", _ape)
+            logger.warning("Appearance detection failed: %s", _ape)
 
-    if character_name:
-        try:
-            from app.core.prompt_builder import PromptBuilder, PromptVariables
-            _regen_builder = PromptBuilder(character_name)
-            # Resolve persons again for the reference slots (with ref_images etc.)
-            if character_names is not None:
-                persons = _regen_builder.detect_persons(final_prompt, character_names=character_names)
-            else:
-                persons = _regen_builder.detect_persons(final_prompt)
-            if not persons:
-                persons = _regen_builder.detect_persons("", character_names=[character_name])
-            _regen_pv = PromptVariables(persons=persons)
-            _regen_pv.ref_images = {}
-            for idx, p in enumerate(persons, 1):
-                ref = _regen_builder._resolve_person_ref_image(p)
-                if ref:
-                    _regen_pv.ref_images[idx] = ref
-            _regen_builder._collect_location(_regen_pv)
+    _attempt = {"n": 0}
+    # Context for the CENTRAL logging in backend.generate() (final prompt,
+    # backend, model, LoRAs, refs and duration are set by generate() itself).
+    _log_meta = {"agent_name": character_name, "original_prompt": original_prompt,
+                 "auto_enhance": bool(improvement_request)}
 
-            # Room override: inject the background image for the chosen room.
-            # Set BEFORE resolve_reference_slots so the room lands in its
-            # slot according to the priority plan.
-            #
-            # strict_room=True: when the chosen room has no dedicated
-            # gallery images we do NOT fall back to the location default.
-            # Instead ref_image_room is cleared and the background is
-            # generated purely from the text prompt. Otherwise the user
-            # would not notice the room change in the dialog because the
-            # previously chosen default image comes back again.
-            if room_id:
-                from app.models.world import get_background_path
-                from app.models.character import get_character_current_location
-                _loc_id = location_id or get_character_current_location(character_name)
-                if _loc_id:
-                    _bg = get_background_path(_loc_id, room=room_id, strict_room=True)
-                    if _bg and _bg.exists():
-                        _regen_pv.ref_image_room = str(_bg)
-                        logger.info("Room-Override Bild: %s", _bg.name)
-                    else:
-                        # Raum hat keine dedizierten Bilder — Default raus,
-                        # Hintergrund wird aus dem Text-Prompt generiert.
-                        _regen_pv.ref_image_room = ""
-                        logger.info("Room-Override [%s]: keine Gallery-Bilder fuer "
-                                    "Raum %s — kein ref_image_room (Hintergrund "
-                                    "kommt aus dem Text-Prompt)",
-                                    character_name, room_id)
-
-            # Room reference only when selected in the dialog — otherwise free
-            # the slot (e.g. for the self-reference or another person).
-            if not use_room:
-                _regen_pv.ref_image_room = ""
-
-            _ref_slots = getattr(backend, "ref_slot_count", 0)
-            face_refs = _regen_builder.resolve_reference_slots(_regen_pv, max_slots=_ref_slots)
-
-            # Self-reference (current image) into the first free slot — the
-            # dialog already caps the selection to the slot budget, here it
-            # is only inserted when there is actually room.
-            if use_source_as_reference and source_image_path:
-                import re as _re
-                if Path(source_image_path).exists():
-                    _refs = face_refs.get("reference_images") or {}
-                    _used = {int(_m.group(1)) for _k in _refs
-                             if (_m := _re.match(r"input_reference_image_(\d+)$", _k))}
-                    for _n in range(1, _ref_slots + 1):
-                        if _n not in _used:
-                            _refs[f"input_reference_image_{_n}"] = source_image_path
-                            face_refs["reference_images"] = _refs
-                            face_refs["has_reference_slots"] = True
-                            logger.info("Selbst-Referenz in Slot %d: %s", _n, Path(source_image_path).name)
-                            break
-                    else:
-                        logger.info("Selbst-Referenz: kein freier Ref-Slot (max %d)", _ref_slots)
-
-            # Inject the references directly into the generation request.
-            # Backends without reference slots simply get an empty dict.
-            params["reference_images"] = face_refs["reference_images"]
-        except Exception as e:
-            logger.warning(f"Referenz-Aufloesung Fehler: {e}")
-
-    # 6b. Apply use-case style (the prompt is stored without affixes).
-    from app.core import config as _cfg
-    _ucp = _cfg.resolve_use_case_style(
-        "character",
-        backend_model=getattr(backend, "model", "") or "",
-        backend_family=getattr(backend, "image_family", ""))
-    generation_prompt = final_prompt
-    if _ucp.get("prompt_style"):
-        generation_prompt = f"{_ucp['prompt_style']} {generation_prompt}"
-
-    logger.info(f"Backend={backend.name}")
-    logger.info(f"Prompt (clean): {final_prompt[:120]}...")
-    if generation_prompt != final_prompt:
-        logger.info(f"Prompt (with affixes): {generation_prompt[:120]}...")
-    logger.info(f"Output: {output_path}")
-
-    # 7. Generieren (via GPU-Queue wenn Provider zugeordnet)
-    import time as _time
-    _gen_start = _time.time()
-
-    # Track-Aktivierung: Timer erst starten wenn GPU-Arbeit tatsaechlich beginnt
+    # Track activation: the timer starts only when GPU work actually begins.
     def _activate_track(provider_name: str = ""):
         if track_id:
             try:
@@ -327,57 +207,160 @@ def regenerate_image(character_name: str,
             except Exception:
                 pass
 
-    # Backend fallback engine: on a failure of the primary backend the op
-    # automatically switches to the next available backend. The op callback
-    # adapts generation_prompt/params per backend — important when the
-    # fallback has a different api_type.
-    def _build_op(_orig_prompt: str, _orig_neg: str, _orig_params: dict):
-        def _op(b):
-            _activate_track(getattr(b, "name", ""))
-            # Use-case style per backend (family from the backend model).
-            from app.core import config as _cfg
-            _bucp = _cfg.resolve_use_case_style(
-                "character",
-                backend_model=getattr(b, "model", "") or "",
-                backend_family=getattr(b, "image_family", ""))
-            _gen_prompt = _orig_prompt
-            if _bucp.get("prompt_style"):
-                _gen_prompt = f"{_bucp['prompt_style']} {_gen_prompt}"
-            # Negative: call override wins, otherwise use-case
-            _gen_neg = _orig_neg or _bucp.get("prompt_negative", "")
-            _bp = dict(_orig_params)
-            # EVERY backend goes through the backend's GPU channel — two
+    def _render(b) -> Dict[str, Any]:
+        """Config, size, model, LoRAs, reference slots and style — for ``b``.
+        The routing calls it again with the next backend after a failure, so
+        nothing built for another backend is reused."""
+        first = _attempt["n"] == 0
+        _attempt["n"] += 1
+        cfg = (skill._get_instance_config(character_name, b) if character_name
+               else skill._get_backend_defaults(b))
+        negative = negative_prompt_override or cfg.get("negative_prompt",
+                                                       getattr(b, "negative_prompt", ""))
+        params: Dict[str, Any] = {"width": cfg.get("width", getattr(b, "width", 1024)),
+                                  "height": cfg.get("height", getattr(b, "height", 1024))}
+        # A dialog's model name belongs to the backend it was picked for.
+        if model_override and (explicit or first):
+            params["model"] = model_override
+            logger.info("Model override: %s", model_override)
+        if loras is not None:
+            if explicit:
+                params["lora_inputs"] = loras
+            else:
+                from app.core.lora_library import filter_allowed_loras, warn_dropped_loras
+                kept, dropped = filter_allowed_loras(b, loras)
+                if dropped:
+                    warn_dropped_loras(b.name, dropped, character_name)
+                params["lora_inputs"] = kept
+        face_refs: Dict[str, Any] = {"reference_images": {}, "has_reference_slots": False}
+        if character_name:
+            try:
+                from app.core.prompt_builder import PromptBuilder, PromptVariables
+                _regen_builder = PromptBuilder(character_name)
+                # Resolve persons again for the reference slots (with ref_images etc.)
+                if character_names is not None:
+                    persons = _regen_builder.detect_persons(final_prompt, character_names=character_names)
+                else:
+                    persons = _regen_builder.detect_persons(final_prompt)
+                if not persons:
+                    persons = _regen_builder.detect_persons("", character_names=[character_name])
+                _regen_pv = PromptVariables(persons=persons)
+                _regen_pv.ref_images = {}
+                for idx, p in enumerate(persons, 1):
+                    ref = _regen_builder._resolve_person_ref_image(p)
+                    if ref:
+                        _regen_pv.ref_images[idx] = ref
+                _regen_builder._collect_location(_regen_pv)
+
+                # Room override: inject the background image for the chosen room.
+                # Set BEFORE resolve_reference_slots so the room lands in its
+                # slot according to the priority plan.
+                #
+                # strict_room=True: when the chosen room has no dedicated
+                # gallery images we do NOT fall back to the location default.
+                # Instead ref_image_room is cleared and the background is
+                # generated purely from the text prompt. Otherwise the user
+                # would not notice the room change in the dialog because the
+                # previously chosen default image comes back again.
+                if room_id:
+                    from app.models.world import get_background_path
+                    from app.models.character import get_character_current_location
+                    _loc_id = location_id or get_character_current_location(character_name)
+                    if _loc_id:
+                        _bg = get_background_path(_loc_id, room=room_id, strict_room=True)
+                        if _bg and _bg.exists():
+                            _regen_pv.ref_image_room = str(_bg)
+                            logger.info("Room override image: %s", _bg.name)
+                        else:
+                            # The room has no dedicated images — drop the
+                            # default, the background comes from the text prompt.
+                            _regen_pv.ref_image_room = ""
+                            logger.info("Room override [%s]: no gallery images for "
+                                        "room %s — no ref_image_room (the "
+                                        "background comes from the text prompt)",
+                                        character_name, room_id)
+
+                # Room reference only when selected in the dialog — otherwise free
+                # the slot (e.g. for the self-reference or another person).
+                if not use_room:
+                    _regen_pv.ref_image_room = ""
+
+                _ref_slots = getattr(b, "ref_slot_count", 0)
+                face_refs = _regen_builder.resolve_reference_slots(_regen_pv, max_slots=_ref_slots)
+
+                # Self-reference (current image) into the first free slot — the
+                # dialog already caps the selection to the slot budget, here it
+                # is only inserted when there is actually room.
+                if use_source_as_reference and source_image_path:
+                    import re as _re
+                    if Path(source_image_path).exists():
+                        _refs = face_refs.get("reference_images") or {}
+                        _used = {int(_m.group(1)) for _k in _refs
+                                 if (_m := _re.match(r"input_reference_image_(\d+)$", _k))}
+                        for _n in range(1, _ref_slots + 1):
+                            if _n not in _used:
+                                _refs[f"input_reference_image_{_n}"] = source_image_path
+                                face_refs["reference_images"] = _refs
+                                face_refs["has_reference_slots"] = True
+                                logger.info("Self-reference in slot %d: %s", _n, Path(source_image_path).name)
+                                break
+                        else:
+                            logger.info("Self-reference: no free reference slot (max %d)", _ref_slots)
+
+                # Inject the references directly into the generation request.
+                # Backends without reference slots simply get an empty dict.
+                params["reference_images"] = face_refs["reference_images"]
+            except Exception as e:
+                logger.warning(f"Reference resolution error: {e}")
+        # Use-case style for THIS backend (the prompt is stored without affixes).
+        from app.core import config as _cfg
+        _ucp = _cfg.resolve_use_case_style(
+            "character", backend_model=getattr(b, "model", "") or "",
+            backend_family=getattr(b, "image_family", ""))
+        gen_prompt = final_prompt
+        if _ucp.get("prompt_style"):
+            gen_prompt = f"{_ucp['prompt_style']} {gen_prompt}"
+        # Negative: the call's override wins, otherwise the use case's.
+        gen_neg = negative or _ucp.get("prompt_negative", "")
+        logger.info("Backend=%s, prompt (clean): %s...", b.name, final_prompt[:120])
+        if gen_prompt != final_prompt:
+            logger.info("Prompt (with affixes): %s...", gen_prompt[:120])
+
+        def _op(bb):
+            _activate_track(getattr(bb, "name", ""))
+            # EVERY render goes through the backend's GPU channel — two
             # generations must never run in parallel on one backend.
             from app.core.llm_queue import Priority
-            logger.info("GPU-Task (Backend=%s)", b.name)
             return skill.run_on_backend_channel(
-                b,
-                lambda: b.generate(_gen_prompt, _gen_neg, _bp, log_meta=_log_meta),
-                task_type="image_regen",
-                agent_name=character_name,
+                bb, lambda: bb.generate(gen_prompt, gen_neg, params, log_meta=_log_meta),
+                task_type="image_regen", agent_name=character_name,
                 priority=Priority.NORMAL)
-        return _op
+        images, used = skill.run_on_backend(b, op=_op, character_name=character_name)
+        return {"images": images, "backend": used, "params": params,
+                "negative": negative, "face_refs": face_refs}
 
-    # Kontext fuers ZENTRALE Logging in backend.generate() (final_prompt, Backend,
-    # Model, LoRAs, Refs, Dauer setzt generate() selbst).
-    _log_meta = {"agent_name": character_name, "original_prompt": original_prompt,
-                 "auto_enhance": bool(improvement_request)}
+    logger.info("Output: %s", output_path)
+
+    # 5. Generate — explicit on its backend, otherwise on the occasion's chain
+    import time as _time
+    _gen_start = _time.time()
+    from app.imagegen.routing import route_meta, run_routed
+    from app.imagegen.service import render_has_reference_image
     try:
-        _op = _build_op(final_prompt, negative_prompt, params)
-        try:
-            images, backend = skill.run_on_backend(
-                backend, op=_op, character_name=character_name)
-        except RuntimeError as _err:
-            logger.error("Regen: %s", _err)
-            raise
-        if not images:
-            msg = "Backend gab keine Bilder zurueck"
-            logger.error(msg)
-            raise RuntimeError(msg)
+        if explicit:
+            out, route = _render(backend), None
+        else:
+            has_ref = bool(use_source_as_reference and source_image_path) or (
+                bool(character_name) and render_has_reference_image(character_name))
+            out, route = run_routed(occasion, _render, character=character_name,
+                                    has_ref=has_ref, pool=skill.pool)
+        images, backend = out["images"], out["backend"]
+        params, negative_prompt, face_refs = out["params"], out["negative"], out["face_refs"]
+        _routing = route_meta(route)
 
         _gen_duration = _time.time() - _gen_start
 
-        # Bei create_new: neue Datei anlegen statt ueberschreiben
+        # create_new: write a new file instead of overwriting
         actual_output_path = output_path
         if create_new:
             _orig = Path(output_path)
@@ -386,13 +369,13 @@ def regenerate_image(character_name: str,
             import uuid as _uuid
             _new_name = f"{_stem}_v{_uuid.uuid4().hex[:6]}{_suffix}"
             actual_output_path = str(_orig.parent / _new_name)
-            logger.info(f"create_new: Neues Bild als {_new_name}")
+            logger.info(f"create_new: new image as {_new_name}")
 
         Path(actual_output_path).write_bytes(images[0])
-        logger.info(f"Bild erfolgreich geschrieben ({len(images[0])} bytes, {_gen_duration:.1f}s)")
+        logger.info(f"Image written ({len(images[0])} bytes, {_gen_duration:.1f}s)")
 
-        # Post-Processing laeuft extern (Pull-Modell). Die Regenerierung
-        # schreibt nur das Bild; ein externer Dienst uebernimmt die Nachbearbeitung.
+        # Post-processing runs externally (pull model). The regeneration only
+        # writes the image; an external service takes over the post-processing.
 
         # Update metadata (backend, duration)
         import os as _os
@@ -403,7 +386,7 @@ def regenerate_image(character_name: str,
             _ref_meta[_rk] = _os.path.basename(_rv) if _rv else ""
         _now_iso = utc_now_iso()
 
-        # Original-Metadaten laden (fuer location, created_at und andere Felder)
+        # Load the original metadata (for location, created_at and other fields)
         _orig_filename = Path(output_path).name
         _orig_meta = None
         if "/instagram/" in output_path:
@@ -420,7 +403,7 @@ def regenerate_image(character_name: str,
                 pass
         _orig_meta = _orig_meta or {}
 
-        # Location aus Original-Meta oder aus uebergebenem Parameter
+        # Location from the original meta or the passed parameter
         _location_val = location_id or _orig_meta.get("location", "")
         if not _location_val and character_name:
             _location_val = get_character_current_location(character_name) or ""
@@ -448,19 +431,23 @@ def regenerate_image(character_name: str,
                 or getattr(backend, "checkpoint", "")
                 or ""),
             "loras": params.get("lora_inputs", []),
-            # from_character: bei Regen aus Original-Meta erben — sonst geht
-            # die Herkunft (z.B. "von Diego an Avatar gesendet") verloren.
+            # from_character: inherited from the original meta on a regenerate
+            # — otherwise the origin (e.g. "sent by an NPC to the avatar") is lost.
             "from_character": _orig_meta.get("from_character", ""),
+            # Image routing record — None on an explicit render, so an
+            # overwritten file loses an old marker too.
+            "routing": _routing.get("routing"),
+            "fallback_from": _routing.get("fallback_from"),
         }
-        # Bei create_new: alle Original-Metadaten als Basis nehmen, dann mit neuen Werten ueberschreiben
+        # create_new: the original metadata is the base, overwritten by the new values
         if create_new:
             _base_meta = dict(_orig_meta)
-            # Felder entfernen die nicht uebernommen werden sollen
+            # Fields that must not be carried over
             _base_meta.pop("image_filename", None)
             _base_meta.pop("image_analysis", None)
             _base_meta.update(_regen_meta)
             _regen_meta = _base_meta
-            # created_at vom Original uebernehmen (damit sie zusammen sortiert werden)
+            # Take created_at from the original (so they sort together)
             if _orig_meta.get("created_at"):
                 _regen_meta["created_at"] = _orig_meta["created_at"]
             else:
@@ -473,42 +460,43 @@ def regenerate_image(character_name: str,
                 existing_meta = load_image_meta(_regen_filename) or {}
                 existing_meta.update(_regen_meta)
                 save_image_meta(_regen_filename, existing_meta)
-                logger.info("Instagram-Meta aktualisiert: backend=%s", backend.name)
+                logger.info("Instagram meta updated: backend=%s", backend.name)
             except Exception as meta_err:
-                logger.warning("Instagram-Meta Update fehlgeschlagen: %s", meta_err)
+                logger.warning("Instagram meta update failed: %s", meta_err)
         elif character_name:
             try:
                 from app.models.character import add_character_image_metadata
                 add_character_image_metadata(character_name, _regen_filename, _regen_meta)
-                logger.info("Character-Image-Meta aktualisiert: backend=%s", backend.name)
+                logger.info("Character image meta updated: backend=%s", backend.name)
             except Exception as meta_err:
-                logger.warning("Character-Image-Meta Update fehlgeschlagen: %s", meta_err)
+                logger.warning("Character image meta update failed: %s", meta_err)
 
-        # Image-Prompt-Logging passiert jetzt ZENTRAL in backend.generate()
-        # (final, trigger-injiziert) — via log_meta beim generate-Aufruf.
+        # Image-prompt logging happens CENTRALLY in backend.generate()
+        # (final, trigger-injected) — via log_meta on the generate call.
 
-        # Bildanalyse via Vision-LLM (aktualisiert Metadaten)
+        # Image analysis via vision LLM (updates the metadata)
         try:
             analysis = skill._generate_image_analysis(actual_output_path, character_name)
             if analysis:
-                logger.info("Bildanalyse: %s", analysis[:120])
+                logger.info("Image analysis: %s", analysis[:120])
                 _save_analysis(actual_output_path, analysis, character_name)
             else:
-                logger.warning("Bildanalyse leer oder fehlgeschlagen")
+                logger.warning("Image analysis empty or failed")
         except Exception as ana_err:
-            logger.warning("Bildanalyse-Fehler: %s", ana_err)
+            logger.warning("Image analysis error: %s", ana_err)
 
         return True, final_prompt, actual_output_path
     except Exception as e:
-        logger.error(f"Generierung fehlgeschlagen: {e}")
+        logger.error(f"Generation failed: {e}")
         logger.debug("Traceback:", exc_info=True)
-        # Fehlgeschlagene Generierung ebenfalls ins Image-Log schreiben, damit der
-        # fehlerhafte Request im Viewer (Errors-only) sichtbar ist. locals().get(),
-        # weil je nach Abbruchstelle noch nicht alle Variablen gesetzt sind.
+        # A failed generation goes into the image log too, so the broken
+        # request is visible in the viewer (errors only). locals().get(),
+        # because depending on where it broke not every variable is set yet.
         try:
             from app.utils.image_prompt_logger import log_image_prompt
             _lv = locals()
-            _bk = _lv.get("backend")
+            # A routed failure names its backend on the error, not in a local.
+            _bk = _lv.get("backend") or getattr(e, "backend", None)
             log_image_prompt(
                 agent_name=_lv.get("character_name") or "",
                 original_prompt=_lv.get("original_prompt") or "",
@@ -519,5 +507,5 @@ def regenerate_image(character_name: str,
                 duration_s=_lv.get("_gen_duration") or 0.0,
                 error=str(e))
         except Exception as _le:
-            logger.debug("Fehler-Logging (Image) fehlgeschlagen: %s", _le)
+            logger.debug("Failure logging (image) failed: %s", _le)
         raise

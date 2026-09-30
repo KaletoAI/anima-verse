@@ -186,7 +186,10 @@ def take_scene_photo(avatar: str,
     if not prompt:
         prompt = prep["prompt"]
 
-    backend_name = (backend_name or prep.get("default_backend") or "").strip()
+    # Only a backend the user PICKED is explicit. The dialog's preselection
+    # (prep["default_backend"]) is display only — the one-click photo runs on
+    # the "photo" chain and keeps its fallback.
+    backend_name = (backend_name or "").strip()
 
     from app.models.character import get_character_images_dir
     out_dir = get_character_images_dir(avatar)
@@ -206,7 +209,8 @@ def take_scene_photo(avatar: str,
             location_id=loc,
             negative_prompt_override=(negative_prompt or "").strip(),
             create_new=True,
-            use_room=bool(use_room))
+            use_room=bool(use_room),
+            occasion="photo")
     except MediaGenerationDisabled:
         # The world's master switch: not a failed render but a refusal, and
         # the route maps it to a 409 the player sees verbatim.
