@@ -2895,6 +2895,24 @@ async def detect_characters_core(character_name: str, image_name: str, request) 
 # Routes keep auth/parsing/HTTP-mapping + the thread-spawn scaffold; the
 # logic cores and worker bodies moved here 1:1.
 
+def facade_error_status(reason: str) -> int:
+    """HTTP status for the text of an ``Error: …`` answer of the image
+    façade (``ImageService.generate_from_input``, whose contract is a string):
+    409 media switch off, 503 nothing available right now (an unavailable
+    explicit backend, no chain entry usable, a busy backend, no service),
+    400 a bad request, 500 a render that failed."""
+    low = reason.lower()
+    if "media generation is disabled" in low:
+        return 409
+    if ("is not available" in low or "no backend available" in low
+            or "is busy" in low):
+        return 503
+    if ("no image description" in low or "unknown image occasion" in low
+            or "character name missing" in low):
+        return 400
+    return 500
+
+
 async def generate_profile_image_core(character_name: str, request) -> Dict[str, Any]:
     """Generates a new profile image via the core image service."""
     from app.core.dependencies import get_skill_manager
@@ -2921,10 +2939,16 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
     from app.core.lora_library import LoraNotAllowedError
     image_skill = get_image_service()
     if not image_skill.enabled:
-        raise HTTPException(status_code=500, detail="Image service not available")
+        raise HTTPException(status_code=503, detail="Image service not available")
 
     loras_override = data.get("loras")
     model_override = data.get("model_override", "").strip()
+    backend_pick = (data.get("backend") or "").strip()
+    if backend_pick:
+        # A dead explicit pick is a 503 with the no-fallback text (the one
+        # helper every render route uses), not a failed render.
+        from app.core.explicit_backend import require_explicit_backend_async
+        await require_explicit_backend_async(backend_pick)
 
     payload = {
         "prompt": prompt_text,
@@ -2937,7 +2961,7 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
         # match first, then the profile chain). A dialog pick is explicit:
         # exactly that backend, no fallback.
         "occasion": "profile",
-        "backend": (data.get("backend") or "").strip(),
+        "backend": backend_pick,
     }
     if loras_override is not None:
         payload["loras"] = loras_override
@@ -2958,13 +2982,20 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
         # allowed ones, so only a direct API call gets here.
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Bildgenerierung fehlgeschlagen: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
+
+    # The façade answers a refusal or failure as "Error: …" — map it to its
+    # status instead of reporting a missing image.
+    if result.startswith("Error:"):
+        reason = result[len("Error:"):].strip()
+        raise HTTPException(status_code=facade_error_status(reason),
+                            detail=reason[:300])
 
     # Extract the file name from the result
     import re
     image_match = re.search(r'/characters/[^/]+/images/([^?)\n]+)', result)
     if not image_match:
-        raise HTTPException(status_code=500, detail=f"Kein Bild im Ergebnis: {result[:200]}")
+        raise HTTPException(status_code=500, detail=f"No image in the result: {result[:200]}")
 
     image_filename = image_match.group(1)
 

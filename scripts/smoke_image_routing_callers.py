@@ -447,6 +447,21 @@ H8 static: every thread-spawning route with an explicit pick calls the ONE
    _animate_instagram_post_sync; inventory.py generate_item_image_route —
    and none of those routes calls _wait_for_explicit_backend itself any
    more (no per-route copy of the check).
+H9 the profile-image dialog (character_ops.generate_profile_image_core,
+   R2b review F-R3-2 — it used to turn every "Error: …" answer of the
+   façade into a 500 "Kein Bild im Ergebnis: Error: …"). Character "Nell"
+   from H4, pool Gw (cooling) + Cloud:
+   a) backend "Gw" -> 503, detail names 'Gw' and "no automatic fallback";
+   b) no backend, rules profile ["Gw"] (only a cooling entry) -> the façade
+      answers "Error: no backend available for profile: …" -> 503 with the
+      detail "no backend available for profile: …" (no "Error:" prefix);
+   c) the façade replaced by one answering "Error: Cloud: HTTP 500: gone"
+      -> 500, detail "Cloud: HTTP 500: gone";
+   d) the façade answering "Error: Media generation is disabled for this
+      world" -> 409;
+   and no detail of a)-d) is German ("Kein", "fehlgeschlagen").
+   Fails on commit dafc7747 (before this fix): a)-d) all answer 500
+   "Kein Bild im Ergebnis: Error: …".
 
 DEFERRED: the surface-texture case of the plan (its C4, occasion
 "surface_texture") waits until app/core/surface_textures.py — which carries
@@ -1767,6 +1782,34 @@ def part_h():
             check("H7 nothing triggered", mesh_calls, [])
         finally:
             model_refs.find_ref_image, model3d.trigger_generation = _real_ref, _real_mtrig
+
+        # -- H9 profile-image dialog --------------------------------------
+        def profile(body):
+            try:
+                asyncio.run(character_ops.generate_profile_image_core("Nell", _Req(body)))
+                return ("no exception", "")
+            except HTTPException as e:
+                return (e.status_code, str(e.detail))
+        gw = FakeBackend("Gw", 0, "natural", dead=True)
+        gw.mark_unhealthy("smoke", 300)
+        svc = install_pool(gw, FakeBackend("Cloud", 5, "keywords"))
+        a = profile({"prompt": "a face", "backend": "Gw"})
+        check("H9a explicit dead", (a[0], "'Gw'" in a[1], "no automatic fallback" in a[1]),
+              (503, True, True))
+        set_routing({"profile": ["Gw"]})
+        b = profile({"prompt": "a face"})
+        check("H9b chain dead", (b[0], b[1].startswith("no backend available for profile")),
+              (503, True))
+        answers = {}
+        svc.generate_from_input = lambda raw: answers["next"]
+        answers["next"] = "Error: Cloud: HTTP 500: gone"
+        c = profile({"prompt": "a face"})
+        check("H9c render failed", c, (500, "Cloud: HTTP 500: gone"))
+        answers["next"] = "Error: Media generation is disabled for this world"
+        d = profile({"prompt": "a face"})
+        check("H9d media switch", d[0], 409)
+        check("H9 English details", [("Kein" in x[1] or "fehlgeschlagen" in x[1])
+                                     for x in (a, b, c, d)], [False] * 4)
     finally:
         _tq.track_start, _tq.track_finish = _orig_start, _orig_finish
 
