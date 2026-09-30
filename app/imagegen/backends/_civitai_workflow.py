@@ -7,9 +7,16 @@ download the output blobs through their signed URLs. Only the step payload
 differs per backend, so the machinery lives here once (the counterpart of
 ``_gateway_job.py`` for the LLM gateway).
 
-Spec: ``https://orchestration.civitai.com/openapi/v2-consumers.json``.
+Spec: ``https://orchestration.civitai.com/openapi/v2-consumers.json``. Its
+``WorkflowTemplate.required`` lists ``currencies`` — stale: the live API accepts
+a workflow without it (checked 2026-09-30), so the body deliberately omits it.
+The blue -> green -> yellow charging order and the upgrade failing on a too
+low yellow balance come from the guide ("Submitting Work"), not the schema.
 
 Failure semantics follow the busy/cooldown contract in ``base.py``:
+  * mature content: ``allow_mature`` forces yellow Buzz (``allowMatureContent``);
+    otherwise ``upgradeMode: automatic`` pays blue/green first and upgrades to
+    yellow only for a result that turns out mature
   * submit answers 400/422 -> ``GatewayRejectedError`` (the INPUT was refused:
     no cooldown, no re-route; CivitAI's message reaches the caller)
   * submit answers 429/503 -> ``BackendBusyError`` (load)
@@ -112,9 +119,15 @@ def submit(backend: ImageBackend, steps: List[Dict[str, Any]], *,
     first ``status``). Raises per the module docstring."""
     body: Dict[str, Any] = {"steps": steps}
     if allow_mature:
-        # Forces yellow Buzz; left out entirely otherwise so the orchestrator
-        # decides from the currency it charged.
+        # Forces yellow Buzz for every workflow, mature or not.
         body["allowMatureContent"] = True
+    else:
+        # Pay with the cheapest currency (blue -> green -> yellow) and, only
+        # when the result turns out mature, let CivitAI swap the charge to
+        # yellow and deliver. The alternative ("manual") withholds a mature
+        # result paid in blue/green — an output this app could never use, and
+        # one that may read as a failed render (cooldown + re-route).
+        body["upgradeMode"] = "automatic"
     try:
         resp = requests.post(f"{backend.api_url}{WORKFLOWS_PATH}", json=body,
                              headers=headers(backend.api_key), timeout=60)

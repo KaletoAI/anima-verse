@@ -75,6 +75,10 @@ EXPECTED VALUES, derived by hand from the spec
       processing past max_wait           -> PUT status=canceled, THEN busy
       3 polls answering 404              -> DELETE (still queued), [] ->
                                             BackendFailedError + cooldown
+[8] The workflow-level mature-content fields (spec WorkflowTemplate):
+    allow_mature_content off -> upgradeMode "automatic" (spec enum
+    WorkflowUpgradeMode: manual | automatic) and NO allowMatureContent;
+    on -> allowMatureContent true and NO upgradeMode.
 """
 import atexit
 import base64
@@ -287,6 +291,7 @@ class FakeHTTP:
         self.post_resp = post
         self.polls = list(polls)
         self.calls = []
+        self.body = None
 
     def install(self):
         self.saved = {m: getattr(wfapi.requests, m) for m in ("post", "get", "put", "delete")}
@@ -301,6 +306,7 @@ class FakeHTTP:
 
     def _post(self, url, **k):
         self.calls.append(("post", None))
+        self.body = k.get("json")
         return self.post_resp
 
     def _get(self, url, **k):
@@ -406,6 +412,18 @@ check("3x 404: outcome", type(e).__name__, "BackendFailedError")
 check("3x 404: DELETE (still queued) after three polls", calls,
       ["post", "poll", "poll", "poll", "delete"])
 check("3x 404: cooldown", cd, True)
+
+# ── [8] mature content on the workflow ─────────────────────────────────────
+print("[8] mature content: upgradeMode vs allowMatureContent")
+for label, attrs, want in (
+        ("allow_mature_content off", {"allow_mature_content": False},
+         {"upgradeMode": "automatic"}),
+        ("allow_mature_content on", {"allow_mature_content": True},
+         {"allowMatureContent": True})):
+    http = FakeHTTP(Resp(200, wf("succeeded", [OK_BLOB])))
+    run(http, **attrs)
+    body = http.body or {}
+    check(label, {k: v for k, v in body.items() if k != "steps"}, want)
 
 print()
 if FAILED:
