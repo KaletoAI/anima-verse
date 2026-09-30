@@ -331,16 +331,28 @@ der Storyteller-Fallback in `routes/play.py`. Die Storyteller-Whitelist
 
 | Funktion | Semantik |
 |---|---|
-| `get_image_service() -> ImageService` | Singleton der Medien-Engine (Backend-Pool, Auswahl, Pipeline, Vision-Analyse). `svc.enabled` prüfen; `generate_from_input(prompt)` = voller Generierungslauf. Das JSON-Payload nennt seinen Anlass im Feld `occasion` (Katalog `app.imagegen.occasions`, z. B. `photo`, `instagram`; fehlt es: `photo`) — das Bild-Routing wählt dann das Backend samt Rückfall entlang der Kette. `backend` = eine EXPLIZITE Wahl: genau dieses Backend, kein Rückfall. Ein Fehlschlag kommt als String mit Präfix `Error: ` zurück |
+| `get_image_service() -> ImageService` | Singleton der Medien-Engine (Backend-Pool, Auswahl, Pipeline, Vision-Analyse). `svc.enabled` prüfen; `generate_from_input(prompt)` = voller Generierungslauf. Das JSON-Payload nennt seinen Anlass im Feld `occasion` (Katalog `app/imagegen/occasions.py`, z. B. `photo`, `instagram`; fehlt es: `photo`) — ohne `backend` wird der Anlass geroutet (Kette + Neuanlauf + Markierung, siehe Bild-Routing), mit `backend` = eine EXPLIZITE Wahl: genau dieses Backend, kein Rückfall. Ein Fehlschlag kommt als String mit Präfix `Error: ` zurück |
 | `ImageService.run_on_backend_channel(backend, gen_fn, *, task_type, agent_name='', label='', priority=-1)` | **Jeder** Backend-Lauf geht hier durch: der Aufruf wird auf dem GPU-/Backend-Kanal serialisiert und zählt gegen das Job-Budget. Nie `backend.generate` direkt rufen |
-| `app.imagegen.routing.resolve_image_route(occasion, *, character='', has_ref=False, exclude=(), probe=False, pool=None) -> Route` | Löst die Kette eines Anlasses auf EIN Backend auf (`Route.backend`, `.position`, `.spec`, `.is_fallback`); `NoRouteError`, wenn nichts Nutzbares übrig ist. **Vor** dem Komponieren des Prompts rufen — Stil, Negativ, Referenz-Slots und LoRAs hängen am aufgelösten Backend |
-| `app.imagegen.routing.explain_image_routing(character='', pool=None) -> Dict` | Je Anlass die Kette mit Status pro Eintrag und dem Backend, das ein Render nähme — reine Anzeige, prüft **nie** aktiv (kein Probe) |
-| `app.imagegen.routing.run_routed(occasion, render, *, character='', has_ref=False, pool=None) -> Tuple[Any, Route]` | Löst auf und ruft den Callback `render` mit dem Backend; läuft nur dann auf dem nächsten Ketteneintrag neu an, wenn `render` einen `BackendFailedError` **des gerouteten Backends** wirft (Last, 4xx, Abbruch, Hauptschalter: kein Neuanlauf). `render` baut alles Backend-Abhängige selbst; `app.imagegen.routing.route_meta(route)` liefert die Meta-Felder `routing`/`fallback_from` |
 | `reset_image_service()` | Pool-Neuaufbau beim nächsten Zugriff (ruft `skill_manager.reload_skills` automatisch) |
 | `app.imagegen.base.BackendBusyError` | **Last, kein Defekt.** Überlebt die Queue-Grenze als typisierte Exception und wird ohne Cooldown erneut versucht. Ein Paket darf sie nicht in ein generisches „Fehler" umschreiben |
+| `app.imagegen.base.BackendFailedError` | **Ausfall** eines Backends (nach Cooldown) — das EINE Signal, auf das das Bild-Routing neu anläuft. Ein Paket fängt es nicht, um selbst ein anderes Backend zu versuchen |
 
 Das TakePhoto-VERB (`plugins/take_photo`, SKILL_ID `image_generation`) ist nur die
 LLM-Tool-Oberfläche — Pakete, die Bilder brauchen, rufen den Service.
+
+## Bild-Routing — `app.imagegen.routing` ✅
+
+Pro Render-Anlass EINE geordnete Backend-Kette (Admin → Media Generation → Routing), die Figur als Position 0.
+Pakete rufen normalerweise nur `generate_from_input` mit `occasion`; wer selbst rendert, übergibt einen
+Callback `render`, der mit dem aufgelösten Backend gerufen wird und Prompt/Stil/LoRAs/Referenzen für GENAU
+dieses Backend baut.
+
+| Funktion | Semantik |
+|---|---|
+| `resolve_image_route(occasion, *, character='', has_ref=False, exclude=(), probe=False, pool=None) -> Route` | Löst die Kette eines Anlasses auf EIN Backend auf (`Route.backend`, `.position`, `.spec`, `.is_fallback`); leere Kette = billigstes passendes Backend; eine gesetzte Kette ohne nutzbaren Eintrag → `NoRouteError`, nie ein Rückfall auf „billigstes“. **Vor** dem Komponieren des Prompts rufen — Stil, Negativ, Referenz-Slots und LoRAs hängen am aufgelösten Backend |
+| `explain_image_routing(character='', pool=None) -> Dict` | Je Anlass die Kette mit Status pro Eintrag und dem Backend, das ein Render nähme — reine Anzeige, prüft **nie** aktiv (kein Probe) |
+| `run_routed(occasion, render, *, character='', has_ref=False, pool=None) -> Tuple[Any, Route]` | Löst auf und ruft den Callback `render` mit dem Backend; läuft nur dann auf dem nächsten Ketteneintrag neu an, wenn `render` einen `BackendFailedError` **des gerouteten Backends** wirft (Last, 4xx, Abbruch, Hauptschalter: kein Neuanlauf), höchstens `MAX_REENTRIES` = 2 Mal. `render` baut alles Backend-Abhängige selbst |
+| `route_meta(route)` | `{"routing": {...}, "fallback_from": {...}?}` — gehört in die Meta/Sidecar jedes gerouteten Ergebnisses; `fallback_from` nur, wenn ein Laufzeit-Ausfall (Cooldown/nicht erreichbar/Neuanlauf) den vorgesehenen Eintrag übersprang. Eine explizite Wahl schreibt keines der beiden |
 
 ## Queue — `app.core.task_queue` ✅
 

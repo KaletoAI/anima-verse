@@ -5,7 +5,7 @@ Usage:  ./.venv/bin/python scripts/smoke_image_routing_catalog.py
 
 Spec: development_instructions/plan-image-routing.md § 1 + the binding review
 notes ("Katalog (§1)"). No server, no world, no DB — it imports the catalog
-module only (Part A); Part B (and C, added later) scan the callers by AST.
+module only (Part A); Parts B and C scan the callers by AST / text.
 
 PART A — THE CATALOG, DERIVED BY HAND FROM THE SPEC
 ---------------------------------------------------
@@ -66,17 +66,63 @@ B1. Every function of those files whose own body references
     or `x["occasion"] = …`); a CONSTANT value must be a catalog occasion.
 B2. None of those functions writes a "workflow" payload key any more (the
     soft glob is gone, plan-image-routing.md review "Service-Teilung").
-B3. The caller files are exactly EXPECTED_STRING_CALLERS (a new caller must
-    be added here consciously, with its occasion):
+B3. The caller files are exactly the keys of EXPECTED_STRING_CALLERS (a new
+    caller must be added here consciously, with its occasion):
       plugins/take_photo/skill.py         photo      (TakePhoto)
       plugins/instagram/skill_post.py     instagram  (Instagram post)
-      app/core/messaging_frame.py         frame      (no explicit target)
+      app/core/messaging_frame.py         frame      (set only in the branch
+                                                      without an explicit target;
+                                                      a target is an explicit pick)
       app/core/story_engine.py            photo      (story beat image)
       app/routes/story.py                 photo      (visualised scene)
       app/skills/video_generation_skill.py photo     (the video's still)
       app/core/character_ops.py           profile    (portrait, editor route)
       app/core/npc_assets.py              profile    (temporary-NPC portrait)
-      app/core/expression_regen.py        expression / tpose (variants, model refs)
+      app/core/expression_regen.py        COMPUTED   (expression, or tpose for the
+                                                      T-pose use cases / model refs)
+B4. Per file, the constant occasions its facade callers write are exactly
+    {its occasion} from the table; a COMPUTED file writes no constant and at
+    least one computed value (a later constant there would bypass the
+    use-case split).
+
+PART C — every direct caller + every meta writer (AST / git grep, no import)
+------------------------------------------------------------------------
+C1. Every `run_routed(` / `resolve_image_route(` call in app/ + plugins/
+    (also `asyncio.to_thread(run_routed, "<occasion>", …)`) names a CATALOG
+    occasion as a constant first argument — except the functions that take
+    the occasion as a parameter and hand it through (DYNAMIC_OK below).
+C2. Nothing in app/, plugins/, frontend/src, static/admin reads a removed key
+    any more: "_IMAGEGEN_DEFAULT", "imagegen_default", "messaging_frame.target",
+    "imagegen_backend", "imagegen_model", "animate_service" (the migration
+    table in app/core/config.py names the old dotted fields as its SOURCES
+    and is exempt). The quoted forms are searched where the bare word also
+    names something that stays (`imagegen_backend_models`,
+    `list_animate_services`); `"type": "imagegen_model"` in
+    app/core/config_schema.py is the widget type of a backend's model field,
+    not the removed per-character skill field, and is exempt.
+C2b. (binding review C1) The four request handlers that used to pass a
+    request-body "workflow" on as an image soft glob no longer do:
+    app/routes/world.py, app/core/world_ops.py, app/routes/instagram.py,
+    app/routes/characters.py contain no `<data|body|payload>.get("workflow")`,
+    no `<data|body|payload>["workflow"]` (read or write), no name
+    `workflow_name` and no `resolve_imagegen_target(` call. The character's
+    OWN stored glob (`outfit_imagegen.workflow`, edited via
+    `override.get("workflow")` in characters.py) is position 0 of the chain
+    and stays. Proof the check bites: run on app/routes/world.py of commit
+    860a57de^ (before the gallery was routed) it finds
+    `data.get("workflow")` and `body["workflow"]` (>= 2 hits).
+C3. Every meta writer of the spec's review list either calls route_meta( or
+    copies the routing fields (the string literal "fallback_from" in its
+    code) — by AST, so a comment or docstring does not count:
+    service.py, expression_regen.py, world_ops.py, image_regenerate.py,
+    describe_room_skill.py, routes/inventory.py, surface_textures.py,
+    props.py, model3d.py, location_model3d.py, video_generation_skill.py,
+    routes/instagram.py, scene_render.py, event_images.py.
+    DOCUMENTED EXCEPTION: app/core/surface_textures.py is NOT routed yet —
+    another session holds an uncommitted change in that file, so its routing
+    (plan Task 13) is deferred rather than merged into foreign work. It is
+    reported as DEFERRED, not skipped silently, and the check FAILS once the
+    file writes the routing record, so the exception is removed with it.
 """
 import os
 import subprocess
@@ -183,16 +229,17 @@ def part_a():
                                       for r in rows), True)
 
 
+# file -> its constant occasion; None = computed at run time (see B4).
 EXPECTED_STRING_CALLERS = {
-    "plugins/take_photo/skill.py",
-    "plugins/instagram/skill_post.py",
-    "app/core/messaging_frame.py",
-    "app/core/story_engine.py",
-    "app/routes/story.py",
-    "app/skills/video_generation_skill.py",
-    "app/core/character_ops.py",
-    "app/core/npc_assets.py",
-    "app/core/expression_regen.py",
+    "plugins/take_photo/skill.py": "photo",
+    "plugins/instagram/skill_post.py": "instagram",
+    "app/core/messaging_frame.py": "frame",
+    "app/core/story_engine.py": "photo",
+    "app/routes/story.py": "photo",
+    "app/skills/video_generation_skill.py": "photo",
+    "app/core/character_ops.py": "profile",
+    "app/core/npc_assets.py": "profile",
+    "app/core/expression_regen.py": None,
 }
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -254,8 +301,9 @@ def part_b():
         if _references_facade(ast.walk(tree)):
             trees[f] = tree
     files = set(trees)
-    check("B3 the caller files", files, EXPECTED_STRING_CALLERS)
+    check("B3 the caller files", files, set(EXPECTED_STRING_CALLERS))
     for f in sorted(files):
+        consts, computed = set(), 0
         for fn in ast.walk(trees[f]):
             if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
@@ -267,11 +315,164 @@ def part_b():
             check(f"B1 {f}:{fn.name} occasions are in the catalog", bad, [])
             check(f"B2 {f}:{fn.name} writes no workflow key",
                   len(_payload_keys(fn, "workflow")), 0)
+            for v in occ:
+                if isinstance(v, ast.Constant):
+                    consts.add(v.value)
+                else:
+                    computed += 1
+        want = EXPECTED_STRING_CALLERS.get(f, "")
+        if want is None:
+            check(f"B4 {f} computes its occasion", (consts, computed > 0), (set(), True))
+        else:
+            check(f"B4 {f} occasion", consts, {want})
+
+
+DYNAMIC_OK = {
+    ("app/imagegen/service.py", "generate_from_input"),
+    ("app/imagegen/service.py", "generate_video"),
+    ("app/imagegen/service.py", "generate_mesh"),
+    ("app/skills/image_regenerate.py", "regenerate_image"),
+    ("app/imagegen/routing.py", "run_routed"),
+}
+META_WRITERS = [
+    "app/imagegen/service.py", "app/core/expression_regen.py", "app/core/world_ops.py",
+    "app/skills/image_regenerate.py", "app/skills/describe_room_skill.py",
+    "app/routes/inventory.py", "app/core/surface_textures.py", "app/core/props.py",
+    "app/core/model3d.py", "app/core/location_model3d.py",
+    "app/skills/video_generation_skill.py", "app/routes/instagram.py",
+    "app/core/scene_render.py", "app/core/event_images.py",
+]
+# Meta writers whose routing is deferred, with the reason (C3).
+DEFERRED_META_WRITERS = {
+    "app/core/surface_textures.py":
+        "not routed yet: another session holds an uncommitted change in the "
+        "file, so plan Task 13 waits instead of merging into foreign work",
+}
+# Quoted where the bare word also names something that stays
+# (`imagegen_backend_models`, `list_animate_services`).
+REMOVED = ["_IMAGEGEN_DEFAULT", "imagegen_default", "messaging_frame.target",
+           '"imagegen_backend"', '"imagegen_model"', '"animate_service"']
+# (file, line text) pairs that match REMOVED but name something that stays.
+REMOVED_EXEMPT = [
+    ("app/core/config_schema.py", '"type": "imagegen_model"'),
+]
+SOFT_GLOB_FILES = ["app/routes/world.py", "app/core/world_ops.py",
+                   "app/routes/instagram.py", "app/routes/characters.py"]
+_BODY_NAMES = {"data", "body", "payload"}
+
+
+def _soft_glob_reads(source):
+    """C2b: request-body "workflow" reads/writes and the old resolver in
+    *source*. Returns a list of short descriptions (empty = clean)."""
+    import ast
+    hits = []
+    for node in ast.walk(ast.parse(source)):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get" and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in _BODY_NAMES and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "workflow"):
+            hits.append(f'{node.func.value.id}.get("workflow") line {node.lineno}')
+        elif (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name)
+              and node.value.id in _BODY_NAMES and isinstance(node.slice, ast.Constant)
+              and node.slice.value == "workflow"):
+            hits.append(f'{node.value.id}["workflow"] line {node.lineno}')
+        elif isinstance(node, ast.Name) and node.id == "workflow_name":
+            hits.append(f"workflow_name line {node.lineno}")
+        elif isinstance(node, ast.arg) and node.arg == "workflow_name":
+            hits.append(f"workflow_name parameter line {node.lineno}")
+        elif (isinstance(node, ast.Call)
+              and getattr(node.func, "attr", getattr(node.func, "id", ""))
+              == "resolve_imagegen_target"):
+            hits.append(f"resolve_imagegen_target( line {node.lineno}")
+    return hits
+
+
+def _writes_routing_record(tree):
+    """C3 by AST: a call of `route_meta(...)` or the string literal
+    "fallback_from" in code (a comment never counts, and a docstring is never
+    exactly that string)."""
+    import ast
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call)
+                and getattr(node.func, "id", getattr(node.func, "attr", "")) == "route_meta"):
+            return True
+        if isinstance(node, ast.Constant) and node.value == "fallback_from":
+            return True
+    return False
+
+
+def part_c():
+    import ast
+    from app.imagegen.occasions import occasion_ids
+    print("C) direct callers + meta writers")
+    ids = set(occasion_ids())
+    n_calls = 0
+    for f in _tracked_py("app", "plugins"):
+        text = (ROOT / f).read_text(encoding="utf-8")
+        if "run_routed" not in text and "resolve_image_route(" not in text:
+            continue
+        tree = ast.parse(text, filename=f)
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in _own_nodes(fn):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = getattr(node.func, "id", getattr(node.func, "attr", ""))
+                if name in ("run_routed", "resolve_image_route"):
+                    arg = node.args[0] if node.args else None
+                elif (node.args and isinstance(node.args[0], ast.Name)
+                      and node.args[0].id == "run_routed"):
+                    # asyncio.to_thread(run_routed, "<occasion>", render, …)
+                    arg = node.args[1] if len(node.args) > 1 else None
+                else:
+                    continue
+                n_calls += 1
+                if isinstance(arg, ast.Constant):
+                    check(f"C1 {f}:{fn.name} -> {arg.value}", arg.value in ids, True)
+                else:
+                    check(f"C1 {f}:{fn.name} passes a variable occasion",
+                          (f, fn.name) in DYNAMIC_OK, True)
+    # Counted by hand at Task 19: 8 constant call sites (event, prop,
+    # scene_view, 3x world_ops, item, describe_room) plus 6 dynamic
+    # hand-throughs — the scan must not quietly come back (nearly) empty.
+    check("C1 the scan found the routed callers (>= 10)", n_calls >= 10, True)
+
+    cmd = ["git", "grep", "-n", "-F"]
+    for r in REMOVED:
+        cmd += ["-e", r]
+    cmd += ["--", "app", "plugins", "frontend/src", "static/admin",
+            ":!app/core/config.py"]
+    out = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True).stdout
+    left = [ln for ln in out.splitlines()
+            if not any(ln.startswith(f + ":") and frag in ln
+                       for f, frag in REMOVED_EXEMPT)]
+    check("C2 no reader of a removed key", left, [])
+
+    for f in SOFT_GLOB_FILES:
+        check(f"C2b {f} reads no request-body workflow glob",
+              _soft_glob_reads((ROOT / f).read_text(encoding="utf-8")), [])
+    old = subprocess.run(["git", "show", "860a57de^:app/routes/world.py"], cwd=ROOT,
+                         capture_output=True, text=True).stdout
+    check("C2b proof: the check finds the old gallery soft glob (>= 2)",
+          len(_soft_glob_reads(old)) >= 2, True)
+
+    for f in META_WRITERS:
+        writes = _writes_routing_record(
+            ast.parse((ROOT / f).read_text(encoding="utf-8"), filename=f))
+        if f in DEFERRED_META_WRITERS:
+            print(f"  DEFERRED {f}: {DEFERRED_META_WRITERS[f]}")
+            check(f"C3 {f} still deferred (drop the exception once routed)",
+                  writes, False)
+            continue
+        check(f"C3 {f} writes the routing record", writes, True)
 
 
 if __name__ == "__main__":
     part_a()
     part_b()
+    part_c()
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed: {FAILS}")
