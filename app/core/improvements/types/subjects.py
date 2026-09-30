@@ -65,12 +65,12 @@ def generate_character_model(name: str, backend: str,
     missing, because a signature candidate exists precisely because it has no
     model yet.
 
-    ``backend`` is a wish, not a guarantee: ``generate_for_current_outfit``
-    hands it to ``service.generate_mesh`` together with the character's
-    REQUIRED rig, and a backend whose ``mesh_rig`` does not match is dropped
-    there in favour of the cheapest rig-correct one — a wrong-rig mesh binds
-    unusably.  That is the established semantics of the whole mesh chain and
-    is deliberately not second-guessed here.
+    ``backend`` empty = routed: the mesh occasion chain of the character's
+    rig (image routing).  A named ``backend`` is an explicit pick:
+    ``generate_for_current_outfit`` hands it to ``service.generate_mesh``
+    together with the character's REQUIRED rig, and a backend whose
+    ``mesh_rig`` does not match is an ERROR there (no silent re-pick — a
+    wrong-rig mesh binds unusably, and a swap would hide the wrong choice).
 
     Takes over ``model3d``'s own double-start guard: the producer is called
     directly (not through ``trigger_generation``, which is the thread
@@ -195,7 +195,8 @@ _BUILDING_JOB_KIND = "improvement"
 
 
 def generate_building_model(location_id: str, backend: str) -> None:
-    """Blocking mesh generation for a location's building, on ``backend``."""
+    """Blocking mesh generation for a location's building, on ``backend``
+    (empty = routed on the "mesh_building" chain)."""
     from app.core import location_model3d
     # Someone else's job on this subject (the admin's, a shrink run) — the
     # claim below cannot see it, because the mesh jobs key by image+backend+tier.
@@ -297,7 +298,8 @@ def prop_has_source(ident: str) -> bool:
 
 
 def generate_prop_model(ident: str, backend: str) -> None:
-    """Blocking re-mesh of an existing source image, on ``backend``.
+    """Blocking re-mesh of an existing source image, on ``backend`` (empty =
+    routed on the "mesh_object" chain).
 
     ``ident`` names the VARIANT this run is about (``"<prop id>#<index>"``, a
     bare id = the primary one): a prop carries several meshes of the same
@@ -683,8 +685,8 @@ def mesh_backend_options(rigs: Tuple[str, ...] = ()) -> List[Dict[str, str]]:
     ``rigs`` narrows the list to the rig kinds a subject can actually be bound
     to — pass :data:`CHARACTER_MESH_RIGS` for character meshes, so a prop-only
     backend is not offered for a job that could never use it.  The rig is IN
-    the label because it decides whether a pick survives: ``generate_mesh``
-    drops a backend whose rig does not match the character's.
+    the label because it decides whether a pick works: ``generate_mesh``
+    refuses a backend whose rig does not match the character's.
 
     Read live on every call — the backend list is admin config and changes
     while the server runs, so a schema that froze it at import would keep
@@ -700,7 +702,8 @@ def mesh_backend_options(rigs: Tuple[str, ...] = ()) -> List[Dict[str, str]]:
     return out
 
 
-def default_mesh_backend() -> str:
-    """The admin's default mesh backend, ``""`` when none is configured."""
-    from app.core import model3d
-    return str(model3d.list_mesh_backends().get("default") or "").strip()
+def default_mesh_backend(occasion: str) -> str:
+    """What the mesh OCCASION's chain resolves to right now (image routing),
+    ``""`` when nothing is available."""
+    from app.imagegen.routing import explain_occasion
+    return str(explain_occasion(occasion).get("resolved") or "").strip()

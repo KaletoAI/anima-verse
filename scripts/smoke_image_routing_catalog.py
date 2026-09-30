@@ -43,6 +43,11 @@ A8. backend_fits, one line each (kind = media/category/rig/ref_slot_count):
 A9. mesh_occasion_for_rig: mixamo -> mesh_humanoid, generic -> mesh_creature,
     none -> mesh_object, none + building=True -> mesh_building.
     MESH_OCCASIONS_BY_RIG["none"] == ("mesh_object", "mesh_building").
+    An empty rig is "mixamo" (the backend default) -> mesh_humanoid; a rig
+    the catalog does not know ("bogus") raises UnknownOccasionError (Task 1
+    review carry-over: guessing mesh_humanoid for it would mesh with a
+    skeleton nobody asked for). Fails on commit 4893221f, which answered
+    "mesh_humanoid" for "bogus".
 A10. catalog_payload() has 19 rows in catalog order, each with the keys
     id, label, media, category, rig, character_scoped, needs_ref_slot, covers;
     every label is a non-empty English string.
@@ -162,6 +167,12 @@ def part_a():
     check("A9 none", occ.mesh_occasion_for_rig("none"), "mesh_object")
     check("A9 none building", occ.mesh_occasion_for_rig("none", building=True), "mesh_building")
     check("A9 table", occ.MESH_OCCASIONS_BY_RIG["none"], ("mesh_object", "mesh_building"))
+    check("A9 empty rig = mixamo", occ.mesh_occasion_for_rig(""), "mesh_humanoid")
+    try:
+        got = occ.mesh_occasion_for_rig("bogus")
+        check("A9 unknown rig raises", got, "UnknownOccasionError")
+    except occ.UnknownOccasionError:
+        check("A9 unknown rig raises", "UnknownOccasionError", "UnknownOccasionError")
 
     rows = occ.catalog_payload()
     check("A10 payload order", [r["id"] for r in rows], expected_ids)

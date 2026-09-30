@@ -873,7 +873,8 @@ def delete_location_route(
 def location_model3d_status(location_id: str) -> Dict[str, Any]:
     """Building-model status: {exists, pending, meta, backends, default,
     shrink_backends}. ``backends`` = the available rig-'none' img2mesh
-    backends; ``default`` = the admin default only when its rig is 'none';
+    backends; ``default`` = what the "mesh_building" chain of the image
+    routing resolves to right now;
     ``shrink_backends`` = the mesh→mesh aliases behind "Create low variant"
     (empty = none configured)."""
     from app.core.location_model3d import get_building_info

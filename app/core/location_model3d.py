@@ -438,7 +438,8 @@ def get_building_info(location_id: str, room_id: str = "") -> Dict[str, Any]:
     """Status for the admin UI: ``{exists, pending, meta, models, backends,
     default, blender}``. ``meta`` is the ACTIVE model's sidecar, ``models``
     the full list (newest first); ``backends`` = all available rig-'none' mesh
-    backends, ``default`` = the admin default only when its rig is 'none';
+    backends, ``default`` = what the "mesh_building" chain of the image
+    routing resolves to right now;
     ``blender`` = the refinement runner's state, the gate for the CPU
     distance-mesh action (without a usable Blender the panel hides it instead
     of offering a button that always fails)."""
@@ -457,7 +458,7 @@ def get_building_info(location_id: str, room_id: str = "") -> Dict[str, Any]:
         # missing one instead of the store inventing a placeholder).
         "tiers": sorted(_gallery(owner, room_id).tiers()) if owner else [],
     }
-    out.update(list_mesh_backends("none"))  # {"backends": [...], "default": ""}
+    out.update(list_mesh_backends("none", occasion="mesh_building"))
     # mesh→mesh aliases (the "Create low variant" action on a stored file) —
     # a separate list: they consume a MESH, so they must never show up in the
     # normal generate dialog.
@@ -1167,7 +1168,8 @@ def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
                       main_file: str, backend: str, owner: str,
                       room_id: str = "",
                       source_image: str = "",
-                      texture_size: Any = None) -> str:
+                      texture_size: Any = None,
+                      routing: Optional[Dict[str, Any]] = None) -> str:
     """Store the LOD stages of ONE generation as their own gallery files and
     return the SMALLEST one's file name (the caller selects it as ``low``).
 
@@ -1176,7 +1178,11 @@ def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
     ``face_num`` is the REQUESTED count read from the delivered file name (the
     real one is only inside the GLB); ``source_file`` names this run's main
     mesh, so the pair is visible in the admin list. Further stages stay stored
-    but unselected — the admin can promote any of them."""
+    but unselected — the admin can promote any of them.
+
+    ``routing`` carries the run's ``routing``/``fallback_from`` meta (image
+    routing): a stage comes out of the same job as the main file, so it is
+    marked like it."""
     smallest = ""
     for stage in stages:
         blob = stage.get("blob") or b""
@@ -1194,6 +1200,7 @@ def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
             "source_image": source_image,
             "source_file": main_file,
             "location": owner,
+            **(routing or {}),
         }
         if stage.get("faces"):
             meta["face_num"] = int(stage["faces"])
@@ -1225,7 +1232,12 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
     full+low pair.
 
     ``view_images`` adds back/left/right gallery files for a multi-view
-    alias (single-slot aliases get the front only)."""
+    alias (single-slot aliases get the front only).
+
+    ``backend_glob`` is an explicit pick (that alias or nothing); empty = the
+    "mesh_building" chain of the image routing, whose ``routing`` /
+    ``fallback_from`` meta lands on the model's sidecar (and its LOD
+    stages')."""
     from app.models.world import get_gallery_dir
     from app.imagegen.service import get_image_service
     owner = _owner_id(location_id)
@@ -1295,7 +1307,8 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
             face_num=face_num,
             texture_size=texture_size,
             lod_faces=lod_faces,
-            view_images=view_paths or None)
+            view_images=view_paths or None,
+            occasion="mesh_building")
         if not res.get("ok"):
             error = str(res.get("error") or "generation failed")
             logger.error("Location model %s failed: %s", owner, error)
@@ -1312,6 +1325,9 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
             "backend": res.get("backend", ""),
             "location": owner,
         }
+        for _rk in ("routing", "fallback_from"):
+            if res.get(_rk):
+                meta[_rk] = res[_rk]
         if view_paths:
             # Which extra views went into this mesh — file names, like
             # "source_image".
@@ -1330,7 +1346,9 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
                     path.stat().st_size, source_image)
         low = _store_lod_stages(gallery, res.get("stages") or [], path.name,
                                 res.get("backend", ""), owner, room_id,
-                                source_image, texture_size)
+                                source_image, texture_size,
+                                routing={k: res[k] for k in ("routing", "fallback_from")
+                                         if res.get(k)})
         if low:
             select_model(location_id, low, room_id, LOW_TIER)
             logger.info("Location model %s: LOD stage %s selected as low "

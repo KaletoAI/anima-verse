@@ -1613,7 +1613,8 @@ def generate_character_model3d(character_name: str, force: bool = False,
                                backend: str = "", face_num: int = 0,
                                texture_size: int = 0) -> Dict[str, Any]:
     """Starts the mesh generation for the current outfit (T-pose render as
-    input). ``backend`` picks the mesh backend (empty = admin default);
+    input). ``backend`` picks the mesh backend (empty = the rig's mesh
+    occasion chain of the image routing);
     ``face_num``/``texture_size`` override the backend defaults for THIS run
     (0 = default; texture size reaches the gateway once its alias declares
     the param). Cached per combination — ``force=1`` re-generates."""

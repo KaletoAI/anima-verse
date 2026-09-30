@@ -45,9 +45,23 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
   6. `fill_missing` asks the opposite question: subjects WITHOUT the asset.
      demo_a has a mesh (case 3) and the temporary NPC is not a subject at all
      (case 7), so demo_b is the only candidate.  Its `apply` has no backend
-     parameter — it must use the admin default, which the patched backend
-     inventory reports as "tr".  Afterwards demo_b has a model, so the
-     candidate list is empty.
+     parameter: it names the MESH OCCASION of the candidate kind (image
+     routing, plan Task 16 review note "fill_missing nennt den Anlass pro
+     Kandidatenart") — for a character the occasion of its rig
+     (`mesh_occasion_for_rig(required_rig)`).  demo_b's rig is patched to
+     "generic" → occasion "mesh_creature".  The routing is replaced by a
+     table ROUTED (occasion → the backend `explain_occasion` resolves):
+     mesh_humanoid "hy", mesh_creature "tr", mesh_object and mesh_building
+     "px" — so `subjects.default_mesh_backend("mesh_creature")` is "tr".
+     With mesh_creature missing from ROUTED (nothing resolves) `apply`
+     raises `CandidateBusy("no backend available for mesh_creature right
+     now")` — load, the step waits — and the producer is not called.  With
+     it back, the producer is called with backend_glob "" (ROUTED: the
+     producer renders on the chain and may fall back along it), and the fake
+     producer records the backend the chain resolved ("tr") in the sidecar,
+     as the real one does.  Afterwards demo_b has a model, so the candidate
+     list is empty.  Fails on commit 4893221f (before Task 16b): [6] aborts
+     with "default_mesh_backend() takes 0 positional arguments".
 
   7. `subjects.characters()` is the ROSTER minus the temporary NPCs: demo_a
      and demo_b are in it, the character whose template is `npc-temporary`
@@ -57,8 +71,10 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
      without `source.png` is therefore not a `fill_missing prop_model`
      candidate at all; after the file appears it is, and `apply` calls
      `props._generate` with `mesh_only=True` (re-mesh the existing product
-     shot, never burn a new image render) and `mesh_backend_glob` = the
-     admin default "tr".
+     shot, never burn a new image render) and `mesh_backend_glob` "" (routed
+     on "mesh_object"); the stored mesh records "px" (ROUTED["mesh_object"]).
+     With mesh_object missing from ROUTED `apply` is CandidateBusy naming
+     "mesh_object", the producer not called.
 
   9. Replacing a backend BY ITSELF is not an improvement, it is a treadmill:
      every candidate would already be `is_done`, the engine would apply
@@ -70,8 +86,9 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
  10. `_generate` does NOT take its module's in-flight slot — only the
      `trigger_*` wrappers do — so calling it directly has to hold the slot,
      or a parallel admin run meshes the same subject twice.  Pre-holding the
-     prop's own job key (`props._gen_key(pid, None, "tr")`, the very key
-     `props.trigger_generation` uses) makes `apply` raise `CandidateBusy`
+     prop's own job key (`props._gen_key(pid, None, "")` — the routed run has
+     backend "", the very key `props.trigger_generation` uses for a routed
+     run) makes `apply` raise `CandidateBusy`
      without calling the producer; after a successful apply the key is gone
      again, so a second apply runs instead of reporting busy.
 
@@ -88,9 +105,12 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
 
  12. The building handler runs end to end: with a source image and no model
      the location is the only candidate, `apply` calls
-     `location_model3d._generate` with ("new.png", "tr"), the stored sidecar
-     then names backend "tr" — so the location drops out of `fill_missing`
-     and becomes a `model_replace` candidate for source "tr".  Its slot is
+     `location_model3d._generate` with ("new.png", "") — routed on
+     "mesh_building" —, the stored sidecar then names backend "px"
+     (ROUTED["mesh_building"]) — so the location drops out of `fill_missing`
+     and becomes a `model_replace` candidate for source "px".  With
+     mesh_building missing from ROUTED `apply` is CandidateBusy naming
+     "mesh_building", the producer not called.  Its slot is
      claimed for the duration: a pre-claimed job makes `apply` busy without
      calling the producer, and after a successful apply `is_pending` is False.
 
@@ -251,6 +271,8 @@ from app.core.improvements.base import CandidateBusy  # noqa: E402
 from app.core.improvements.types import subjects  # noqa: E402
 from app.core.model_store import write_sidecar  # noqa: E402
 from app.core.timeutils import utc_now_iso  # noqa: E402
+from app.imagegen import routing  # noqa: E402
+from app.imagegen.occasions import mesh_occasion_for_rig  # noqa: E402
 from app.models import world  # noqa: E402
 from app.models.character import (add_character_image_metadata,  # noqa: E402
                                   add_character_image_prompt,
@@ -333,13 +355,23 @@ EXPRESSION_CALLS = []
 EXPRESSION_CACHED = {"value": None}   # what peek_cached_expression answers
 
 
+# The image routing's answer per mesh occasion (what `explain_occasion`
+# resolves). A routed producer run (backend "") records THAT backend, like
+# the real producers record `res["backend"]`.
+ROUTED = {"mesh_humanoid": "hy", "mesh_creature": "tr",
+          "mesh_object": "px", "mesh_building": "px"}
+# The rig per character (`model3d.required_rig`); default mixamo.
+RIGS = {"demo_b": "generic"}
+
+
 def fake_mesh(character_name, *, force=False, backend_glob="", signature=None,
               **kwargs):
     MESH_CALLS.append({"name": character_name, "force": force,
                        "backend_glob": backend_glob, "signature": signature})
     if MESH_RESULT["value"] is not None:
         return MESH_RESULT["value"]
-    write_mesh_sidecar(character_name, backend_glob, signature)
+    routed = ROUTED[mesh_occasion_for_rig(model3d.required_rig(character_name))]
+    write_mesh_sidecar(character_name, backend_glob or routed, signature)
     return {"ok": True}
 
 
@@ -354,7 +386,7 @@ def fake_prop_generate(prop_id, prompt, negative, image_backend_glob,
     props.write_model_sidecar(path, {
         "created_at": utc_now_iso(), "source": "generated", "format": "glb",
         "rig": "none", "tier": props.DEFAULT_TIER,
-        "backend": mesh_backend_glob})
+        "backend": mesh_backend_glob or ROUTED["mesh_object"]})
     gallery.select(path.name, props.DEFAULT_TIER)
     return {"ok": True}
 
@@ -371,7 +403,7 @@ def fake_building_generate(location_id, source_image, backend_glob,
     write_sidecar(path, {"created_at": utc_now_iso(), "source": "generated",
                          "format": "glb", "rig": "none",
                          "tier": location_model3d.DEFAULT_TIER,
-                         "backend": backend_glob,
+                         "backend": backend_glob or ROUTED["mesh_building"],
                          "source_image": source_image})
     gallery.select(path.name, location_model3d.DEFAULT_TIER)
     return {"ok": True}
@@ -469,9 +501,12 @@ world_ops.generate_gallery_image_core = fake_gallery_generate
 MESH_INVENTORY = [{"name": "hy", "rig": "mixamo"},
                   {"name": "tr", "rig": "generic"},
                   {"name": "px", "rig": "none"}]
-model3d.list_mesh_backends = lambda rig="": {
+model3d.list_mesh_backends = lambda rig="", occasion="": {
     "backends": [b for b in MESH_INVENTORY if not rig or b["rig"] == rig],
-    "default": "tr"}
+    "default": ""}
+model3d.required_rig = lambda name: RIGS.get(name, "mixamo")
+routing.explain_occasion = lambda occasion, character="", pool=None: {
+    "id": occasion, "resolved": ROUTED.get(occasion)}
 
 BAKE_CALLS = []
 BAKE_REASON = {"value": "ok"}      # the reason bake_surface_result reports back
@@ -618,16 +653,26 @@ check("and the guard is released again",
 # ── [6] fill_missing over character models ──────────────────────────────────
 print("[6] fill_missing character_model")
 FILL_CHAR = {"subject": "character_model"}
-check("the admin default is what the inventory reports",
-      subjects.default_mesh_backend(), "tr")
+check("the occasion's resolved backend is what the routing reports",
+      subjects.default_mesh_backend("mesh_creature"), "tr")
 check("only the character without a mesh is a candidate",
       candidates(FILL_MISSING, FILL_CHAR), [("character:demo_b", "demo_b")])
 MESH_CALLS.clear()
 CAND_B = FILL_MISSING.find_candidates(FILL_MISSING.validate(FILL_CHAR))[0]
+_saved = ROUTED.pop("mesh_creature")
+check_raises("nothing resolves for the rig's occasion → the step waits",
+             CandidateBusy,
+             lambda: FILL_MISSING.apply(CAND_B, FILL_MISSING.validate(FILL_CHAR),
+                                        "task-4a"),
+             "no backend available for mesh_creature right now")
+check("the producer was never called", MESH_CALLS, [])
+ROUTED["mesh_creature"] = _saved
 FILL_MISSING.apply(CAND_B, FILL_MISSING.validate(FILL_CHAR), "task-4")
-check("apply generates with the admin default backend", MESH_CALLS,
-      [{"name": "demo_b", "force": True, "backend_glob": "tr",
+check("apply generates ROUTED (backend '')", MESH_CALLS,
+      [{"name": "demo_b", "force": True, "backend_glob": "",
         "signature": None}])
+check("the stored mesh records the backend the chain resolved",
+      (subjects.character_model("demo_b") or {}).get("backend"), "tr")
 check("is_done is simply 'the asset exists now'",
       FILL_MISSING.is_done(CAND_B, FILL_MISSING.validate(FILL_CHAR)), True)
 check("nothing is missing any more", candidates(FILL_MISSING, FILL_CHAR), [])
@@ -649,7 +694,7 @@ check("with the product shot on disk it becomes a candidate",
       candidates(FILL_MISSING, FILL_PROP), [(f"prop:{PROP}", "Oak Chair")])
 PROP_CALLS.clear()
 CAND_P = FILL_MISSING.find_candidates(FILL_MISSING.validate(FILL_PROP))[0]
-PROP_KEY = props._gen_key(PROP, None, "tr")
+PROP_KEY = props._gen_key(PROP, None, "")
 with props._lock:
     props._generating.add(PROP_KEY)
 check_raises("a held job key makes apply busy", CandidateBusy,
@@ -659,12 +704,19 @@ check_raises("a held job key makes apply busy", CandidateBusy,
 check("the producer was never called", PROP_CALLS, [])
 with props._lock:
     props._generating.discard(PROP_KEY)
+_saved = ROUTED.pop("mesh_object")
+check_raises("nothing resolves for mesh_object → the step waits", CandidateBusy,
+             lambda: FILL_MISSING.apply(CAND_P, FILL_MISSING.validate(FILL_PROP),
+                                        "task-5a"),
+             "no backend available for mesh_object right now")
+check("the producer was never called", PROP_CALLS, [])
+ROUTED["mesh_object"] = _saved
 FILL_MISSING.apply(CAND_P, FILL_MISSING.validate(FILL_PROP), "task-6")
-check("apply re-meshes the existing image with the default backend", PROP_CALLS,
-      [{"prop_id": PROP, "mesh_backend_glob": "tr", "mesh_only": True}])
+check("apply re-meshes the existing image ROUTED (backend '')", PROP_CALLS,
+      [{"prop_id": PROP, "mesh_backend_glob": "", "mesh_only": True}])
 check("the job slot is released again", props._generating, set())
-check("the stored mesh records the backend that made it",
-      (subjects.prop_model(PROP) or {}).get("backend"), "tr")
+check("the stored mesh records the backend the chain resolved",
+      (subjects.prop_model(PROP) or {}).get("backend"), "px")
 check("and the prop is no longer missing a model",
       candidates(FILL_MISSING, FILL_PROP), [])
 
@@ -706,16 +758,25 @@ check_raises("a claimed slot makes apply busy", CandidateBusy,
                                         "task-7"))
 check("the producer was never called", BUILDING_CALLS, [])
 location_model3d.release_job(LOC_ID, kind=subjects._BUILDING_JOB_KIND)
+_saved = ROUTED.pop("mesh_building")
+check_raises("nothing resolves for mesh_building → the step waits",
+             CandidateBusy,
+             lambda: FILL_MISSING.apply(CAND_L,
+                                        FILL_MISSING.validate(FILL_BUILDING),
+                                        "task-7a"),
+             "no backend available for mesh_building right now")
+check("the producer was never called", BUILDING_CALLS, [])
+ROUTED["mesh_building"] = _saved
 FILL_MISSING.apply(CAND_L, FILL_MISSING.validate(FILL_BUILDING), "task-8")
-check("apply meshes the newest building image with the default backend",
+check("apply meshes the newest building image ROUTED (backend '')",
       BUILDING_CALLS, [{"location_id": LOC_ID, "source_image": "new.png",
-                        "backend_glob": "tr"}])
+                        "backend_glob": ""}])
 check("the slot is released again", location_model3d.is_pending(LOC_ID), False)
-check("the stored sidecar names the backend that made it",
-      (subjects.building_model(LOC_ID) or {}).get("backend"), "tr")
+check("the stored sidecar names the backend the chain resolved",
+      (subjects.building_model(LOC_ID) or {}).get("backend"), "px")
 check("nothing is missing any more", candidates(FILL_MISSING, FILL_BUILDING), [])
-check("and the location is now a model_replace candidate for 'tr'",
-      candidates(MODEL_REPLACE, {"subject": "location", "source_backend": "tr",
+check("and the location is now a model_replace candidate for 'px'",
+      candidates(MODEL_REPLACE, {"subject": "location", "source_backend": "px",
                                  "target_backend": "hy"}),
       [(f"location:{LOC_ID}", "Crossroads Inn")])
 MODEL_PATH = location_model3d.find_building_model(LOC_ID)

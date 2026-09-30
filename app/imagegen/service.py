@@ -667,7 +667,7 @@ class ImageService:
                       mesh_name: str = "", face_num=None, texture_size=None,
                       no_fingers=None, rig: str = "",
                       view_images: Optional[Dict[str, str]] = None,
-                      lod_faces=None) -> Dict[str, Any]:
+                      lod_faces=None, occasion: str = "") -> Dict[str, Any]:
         """Generates a 3D model from one or more views via a MEDIA_TYPE=="mesh"
         backend.
 
@@ -678,10 +678,19 @@ class ImageService:
         schema declares, so an alias with a single ``input_image`` slot gets
         the front view only, a multi-view alias every view we hold.
 
-        ``rig`` ("mixamo" for humanoids, "generic" for everything else) narrows
-        the candidates: a humanoid must not be meshed by a generic alias and
-        vice versa. ``backend_glob`` picks a specific alias (its rig is
-        verified); empty = cheapest available backend of that rig.
+        ``rig`` ("mixamo" for humanoids, "generic" for other characters,
+        "none" for props/buildings) is what the caller needs: a humanoid must
+        not be meshed by a generic alias and vice versa.
+
+        Backend: ``backend_glob`` (explicit — exactly that alias, never
+        another one; an alias whose rig is not ``rig`` is an error, not a
+        silent re-pick, because a wrong-rig mesh binds unusably) → otherwise
+        the chain of ``occasion`` (image routing; empty = the mesh occasion of
+        ``rig``, ``mesh_occasion_for_rig``). Every entry of a mesh chain only
+        resolves to backends of the occasion's rig, so a render that fails on
+        one entry is re-run on the next one WITHIN the rig
+        (``routing.run_routed``) — the "no fallback between mesh backends"
+        rule was about the wrong rig, never about a same-rig chain.
 
         A job returns up to THREE files (model + basecolor + metallic map); the
         rig decides which of them must be stored (see ``_split_mesh_files``).
@@ -698,7 +707,9 @@ class ImageService:
         thus fill a full+low pair.
 
         Returns {"ok", "path", "texture_path", "format", "rig", "filename",
-        "backend", "stages"}.
+        "backend", "stages"} plus, for a routed render, ``routing`` and (when
+        it ran behind the intended chain entry) ``fallback_from``
+        (``routing.route_meta``); ``{"ok": False, "error"}`` on a failure.
         """
         # Keyed by VIEW, not by slot name: the backend does the slot mapping
         # from the alias schema.
@@ -708,7 +719,7 @@ class ImageService:
             if path:
                 refs[view] = path
         if len(refs) > 1:
-            logger.info("generate_mesh: %d Zusatz-Ansicht(en) dabei (%s)",
+            logger.info("generate_mesh: %d extra view(s) included (%s)",
                         len(refs) - 1,
                         ", ".join(v for v in refs if v != "front"))
         params: Dict[str, Any] = {
@@ -733,70 +744,69 @@ class ImageService:
         if no_fingers is not None:
             params["no_fingers"] = bool(no_fingers)
 
+        from app.imagegen.occasions import mesh_occasion_for_rig
+        from app.imagegen.routing import route_meta, run_routed
         primary = None
         if backend_glob.strip():
             primary = self._wait_for_explicit_backend(backend_glob, media="mesh")
-            if primary and rig and (getattr(primary, "mesh_rig", "mixamo") or "mixamo") != rig:
-                logger.warning(
-                    "generate_mesh: Backend '%s' liefert rig=%s, benoetigt wird "
-                    "rig=%s — waehle passendes Backend", primary.name,
-                    getattr(primary, "mesh_rig", "?"), rig)
-                # A rig mismatch is the one case that may re-pick: the named
-                # alias CANNOT deliver what the caller needs.
-                primary = None
-            elif not primary:
-                # A mesh generation never falls back between mesh backends: a
-                # wrong alias binds unusably (splat aliases have no UVs), and a
-                # multi-view request would silently lose its extra views. Say so
-                # instead of rendering somewhere else (generate_video does the
-                # same at this place).
-                logger.warning("generate_mesh: Backend '%s' nicht verfuegbar — "
-                               "kein Fallback auf ein anderes Mesh-Backend",
-                               backend_glob)
+            if not primary:
+                # An explicit pick is never routed elsewhere: a wrong alias
+                # binds unusably (splat aliases have no UVs), and a multi-view
+                # request would silently lose its extra views. Say so instead
+                # of rendering somewhere else (generate_video does the same).
+                logger.warning("generate_mesh: backend '%s' unavailable — no "
+                               "automatic fallback", backend_glob)
+                return {"ok": False, "error": f"mesh backend '{backend_glob}' unavailable"}
+            _prig = (getattr(primary, "mesh_rig", "mixamo") or "mixamo")
+            if rig and _prig != rig:
+                # An explicit pick is never re-picked — a wrong-rig mesh binds
+                # unusably, and a silent swap hides the wrong choice.
                 return {"ok": False,
-                        "error": f"mesh backend '{backend_glob}' unavailable"}
-        if not primary:
-            meshes = self.list_mesh_backends(rig)
-            primary = meshes[0] if meshes else None
-        if not primary:
-            logger.warning("generate_mesh: kein Mesh-Backend verfuegbar "
-                           "(glob=%r, rig=%r)", backend_glob, rig)
-            return {"ok": False, "error": f"no {rig or 'mesh'} backend available"}
+                        "error": f"mesh backend '{primary.name}' delivers rig "
+                                 f"'{_prig}', '{rig}' is needed"}
 
-        def _op(backend: ImageBackend):
-            def _gen():
-                blobs = backend.generate("", "", params,
-                                         log_meta={"agent_name": character_name,
-                                                   "original_prompt": "",
-                                                   "media": "mesh"})
-                # Capture the delivered file metadata ON THIS THREAD: the
-                # channel runs _gen on a queue worker and last_result_files is
-                # thread-local — read later from the caller thread it is
-                # empty (that once mislabeled a delivered GLB as .fbx and the
-                # viewer's FBXLoader died on "cannot find the version number").
-                meta = list(getattr(backend, "last_result_files", []) or [])
-                return {"blobs": blobs, "files": meta} if blobs else []
-            return self.run_on_backend_channel(
-                backend, _gen, task_type="mesh_generation",
-                agent_name=character_name)
+        def _render(b):
+            def _op(bb):
+                def _gen():
+                    blobs = bb.generate("", "", params,
+                                        log_meta={"agent_name": character_name,
+                                                  "original_prompt": "",
+                                                  "media": "mesh"})
+                    # Capture the delivered file metadata ON THIS THREAD: the
+                    # channel runs _gen on a queue worker and last_result_files
+                    # is thread-local — read later from the caller thread it
+                    # is empty (that once mislabeled a delivered GLB as .fbx
+                    # and the viewer's FBXLoader died on "cannot find the
+                    # version number").
+                    meta = list(getattr(bb, "last_result_files", []) or [])
+                    return {"blobs": blobs, "files": meta} if blobs else []
+                return self.run_on_backend_channel(bb, _gen, task_type="mesh_generation",
+                                                   agent_name=character_name)
+            # Busy (no cooldown) vs. defect (cooldown + BackendFailedError,
+            # which run_routed re-runs on the next chain entry) is decided by
+            # the runner.
+            return self.run_on_backend(b, _op, character_name=character_name)
+
         try:
-            # Busy (no cooldown) vs. defect (cooldown) is handled by the
-            # runner; there is no cross-backend fallback anywhere anymore.
-            result, used = self.run_on_backend(
-                primary, _op, character_name=character_name)
+            if primary is not None:
+                (result, used), route = _render(primary), None
+            else:
+                occ = occasion or mesh_occasion_for_rig(rig or "mixamo")
+                (result, used), route = run_routed(occ, _render, character=character_name,
+                                                   pool=self.pool)
         except MediaGenerationDisabled:
             # Master switch, not a failed generation — see generate_video.
             raise
         except Exception as e:
-            logger.error("generate_mesh fehlgeschlagen: %s", e)
+            logger.error("generate_mesh failed: %s", e)
             return {"ok": False, "error": str(e)}
-        if not result:
-            return {"ok": False, "error": "generation failed"}
         files: List[Dict[str, Any]] = [dict(f, blob=b) for f, b
                                        in zip(result["files"], result["blobs"])]
         used_rig = (getattr(used, "mesh_rig", "mixamo") or "mixamo")
-        return self._store_mesh_files(files, used_rig, output_path,
-                                      getattr(used, "name", ""))
+        out = self._store_mesh_files(files, used_rig, output_path, getattr(used, "name", ""))
+        if out.get("ok"):
+            out.update(route_meta(route))
+        return out
 
     @staticmethod
     def _store_mesh_files(files: List[Dict[str, Any]], used_rig: str,

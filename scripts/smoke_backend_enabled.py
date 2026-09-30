@@ -4,9 +4,10 @@
   IMG-5 (a)  the per-CHARACTER backend flag may only RESTRICT — a globally
              disabled backend must never come back through a character's
              frozen skill config.
-  IMG-4      ``generate_mesh`` never falls back between mesh backends: an
-             explicitly named alias that is unavailable is an ERROR, not an
-             invitation to render on the cheapest other one.
+  IMG-4      ``generate_mesh`` never falls back from an explicit pick: an
+             explicitly named alias that is unavailable (or delivers the
+             wrong rig) is an ERROR, not an invitation to render on the
+             cheapest other one.
 
 No server, no network, no world DB: fake backends plus a hand-written
 "agent instances" provider drive ``BackendPool`` directly, and the mesh case
@@ -38,8 +39,16 @@ NOT available) and ``MeshGen`` (rig "generic", available).
   [3a] glob "MeshB", rig "mixamo" -> ok=False, error names MeshB; the runner is
        never entered (no silent render on MeshA).
   [3b] glob "MeshGen", rig "mixamo" -> the alias CAN be resolved but delivers
-       the wrong rig; that one case may re-pick, and it must land on MeshA.
-  [3c] glob "" (caller named nothing), rig "mixamo" -> MeshA, as before.
+       the wrong rig -> ok=False, the error names the needed rig, nothing
+       rendered. BEHAVIOUR CHANGE (image routing, plan Task 16b; binding
+       decision "explicit = no fallback"): this case used to re-pick MeshA;
+       an explicit pick is now never re-picked. Fails on commit 4893221f
+       (used == ["MeshA"]).
+  [3c] glob "" (caller named nothing), rig "mixamo" -> routed on the
+       "mesh_humanoid" occasion; the throwaway config has no chain for it,
+       so the empty chain picks the cheapest AVAILABLE backend of the
+       occasion's kind: MeshA (MeshB is unavailable, MeshGen is rig
+       generic = wrong kind) — as before.
 
 Before the fix [3a] silently rendered on MeshA (``meshes[0]``) and [1e]/[2e]
 selected a globally disabled backend; verified by re-running this script
@@ -111,7 +120,7 @@ for label, global_on, override, expected in TABLE:
           [expected] if expected else [])
 
 # --------------------------------------------------------------------------
-print("[3] generate_mesh never falls back between mesh backends")
+print("[3] generate_mesh never falls back from an explicit pick")
 mesh_a = _Fake("MeshA", media="mesh", rig="mixamo", cost=2.0)
 mesh_b = _Fake("MeshB", media="mesh", rig="mixamo", available=False, cost=1.0)
 mesh_gen = _Fake("MeshGen", media="mesh", rig="generic", cost=1.0)
@@ -123,9 +132,9 @@ used = []
 
 def _fake_runner(primary, op, character_name=""):
     """Stands in for the pool's runner: records the chosen backend and
-    answers 'nothing came back', so no channel or gateway is touched."""
+    answers an empty delivery, so no channel or gateway is touched."""
     used.append(primary.name)
-    return None, primary
+    return {"blobs": [], "files": []}, primary
 
 
 svc.run_on_backend = _fake_runner
@@ -139,9 +148,12 @@ check("3a explicit unavailable: error names it",
 check("3a explicit unavailable: nothing rendered", used, [])
 
 used.clear()
-svc.generate_mesh("/tmp/none.png", "/tmp/out.glb",
-                  backend_glob="MeshGen", rig="mixamo")
-check("3b rig mismatch re-picks", used, ["MeshA"])
+res = svc.generate_mesh("/tmp/none.png", "/tmp/out.glb",
+                        backend_glob="MeshGen", rig="mixamo")
+check("3b explicit wrong rig: ok", res.get("ok"), False)
+check("3b explicit wrong rig: error names the rig",
+      "'mixamo' is needed" in str(res.get("error")), True)
+check("3b explicit wrong rig: nothing rendered", used, [])
 
 used.clear()
 svc.generate_mesh("/tmp/none.png", "/tmp/out.glb", backend_glob="", rig="mixamo")

@@ -8,8 +8,11 @@ instead of failing twice and being skipped.
 """
 from typing import Any, Dict, List
 
-from app.core.improvements.base import Candidate, ImprovementType, ParamField
+from app.core import model3d
+from app.core.improvements.base import (Candidate, CandidateBusy,
+                                        ImprovementType, ParamField)
 from app.core.improvements.types import subjects
+from app.imagegen.occasions import mesh_occasion_for_rig
 
 SUBJECTS = [
     {"value": "character_model", "label": "Character models"},
@@ -19,13 +22,17 @@ SUBJECTS = [
 ]
 
 
-def _default_backend() -> str:
-    """The mesh backend a fill-in runs on — there is no per-entry choice here,
-    so a world without an admin default has nothing to generate with."""
-    backend = subjects.default_mesh_backend()
-    if not backend:
-        raise RuntimeError("no default mesh backend configured")
-    return backend
+def _require_route(occasion: str) -> None:
+    """The occasion's chain must resolve right now; the producer then renders
+    ROUTED (backend "") and falls back along the chain on a failure. Nothing
+    available is load, not a defect — the step waits.
+
+    There is no per-entry backend choice here, so each candidate kind names
+    its mesh occasion: a character the one of its rig (``mesh_humanoid`` /
+    ``mesh_creature``), a building ``mesh_building``, a prop
+    ``mesh_object``."""
+    if not subjects.default_mesh_backend(occasion):
+        raise CandidateBusy(f"no backend available for {occasion} right now")
 
 
 def _missing_character_models() -> List[Candidate]:
@@ -68,17 +75,20 @@ _HANDLERS: Dict[str, tuple] = {
     "character_model": (
         _missing_character_models,
         lambda ident: subjects.character_model(ident) is not None,
-        lambda ident: subjects.generate_character_model(ident, _default_backend()),
+        lambda ident: (_require_route(mesh_occasion_for_rig(model3d.required_rig(ident))),
+                       subjects.generate_character_model(ident, "")),
     ),
     "building_model": (
         _missing_buildings,
         lambda ident: subjects.building_model(ident) is not None,
-        lambda ident: subjects.generate_building_model(ident, _default_backend()),
+        lambda ident: (_require_route("mesh_building"),
+                       subjects.generate_building_model(ident, "")),
     ),
     "prop_model": (
         _missing_prop_models,
         lambda ident: subjects.prop_model(ident) is not None,
-        lambda ident: subjects.generate_prop_model(ident, _default_backend()),
+        lambda ident: (_require_route("mesh_object"),
+                       subjects.generate_prop_model(ident, "")),
     ),
     "character_expressions": (
         _missing_expressions,

@@ -51,6 +51,18 @@ Hand-derived expectations
     C5 502 "park timeout"        → 1 POST, BackendBusyError
     C6 poll_job: job "failed" with error "park timeout" → BackendBusyError;
        with error "CUDA out of memory" → [] (a defect, as before)
+    C7 poll_job, a LOST job (Task 16b, review carry-over of 16a: with image
+       routing a failed mesh/video is re-run on the next chain entry, so the
+       abandoned job must not keep running on the gateway). Lost = 3
+       consecutive 404s, or more than 10 (= 11) other failed polls:
+       C7a GET → 404 always          → 3 GETs, [] and exactly ONE POST to
+                                       http://gw.invalid/v1/jobs/j1/cancel
+       C7b GET → 500 always          → 11 GETs, [], one cancel POST
+       C7c GET raises ConnectionError→ 11 GETs, [], one cancel POST
+       C7d GET → 404, the cancel POST raises → still [] (best effort: the
+                                       cancel never raises out of poll_job)
+       C7e C6's "failed" job (the gateway ENDED it) → no cancel POST (0)
+       Fails on commit 4893221f: C7a-C7d see 0 cancel POSTs.
 [D] localai_video ``_generate``:
     D1 503 (no header), always   → 4 POSTs, waits [2, 8, 20], RuntimeError
     D2 503 Retry-After: 3        → 1 POST, BackendBusyError
@@ -286,6 +298,60 @@ check("C6 failed job on park timeout → BackendBusyError",
       isinstance(res, BackendBusyError), repr(res))
 res = poll_failed("CUDA out of memory")
 check("C6 failed job on a real error → [] (defect)", res == [], repr(res))
+
+
+def poll_lost(get_answer, cancel_raises=False):
+    """poll_job against a gateway whose GET answers ``get_answer()`` (a
+    response, or an exception to raise); returns (gets, cancel posts, result)."""
+    gets, posts = [], []
+
+    def _get(url, **_kw):
+        gets.append(url)
+        ans = get_answer()
+        if isinstance(ans, Exception):
+            raise ans
+        return ans
+
+    def _post(url, **_kw):
+        posts.append(url)
+        if cancel_raises:
+            raise requests.exceptions.ConnectionError("gateway gone")
+        return FakeResponse(200)
+
+    real = gj.requests.get, gj.requests.post, gj.time.sleep
+    gj.requests.get, gj.requests.post = _get, _post
+    gj.time.sleep = lambda _s: None
+    try:
+        res = gj.poll_job(_JobBackend(), "j1", max_wait=60, max_queue_wait=60,
+                          poll_interval=0, on_done=lambda sd, t: [b"x"])
+    except Exception as e:  # noqa: BLE001 — the raised error IS the result
+        res = e
+    finally:
+        gj.requests.get, gj.requests.post, gj.time.sleep = real
+    return gets, posts, res
+
+
+CANCEL = ["http://gw.invalid/v1/jobs/j1/cancel"]
+gets, posts, res = poll_lost(lambda: FakeResponse(404))
+check("C7a 3x404: 3 GETs, [], one cancel POST",
+      len(gets) == 3 and res == [] and posts == CANCEL,
+      f"{len(gets)} {res!r} {posts}")
+gets, posts, res = poll_lost(lambda: FakeResponse(500))
+check("C7b 11x500: 11 GETs, [], one cancel POST",
+      len(gets) == 11 and res == [] and posts == CANCEL,
+      f"{len(gets)} {res!r} {posts}")
+gets, posts, res = poll_lost(
+    lambda: requests.exceptions.ConnectionError("reset"))
+check("C7c 11 poll exceptions: 11 GETs, [], one cancel POST",
+      len(gets) == 11 and res == [] and posts == CANCEL,
+      f"{len(gets)} {res!r} {posts}")
+gets, posts, res = poll_lost(lambda: FakeResponse(404), cancel_raises=True)
+check("C7d a failing cancel never raises: []",
+      res == [] and posts == CANCEL, f"{res!r} {posts}")
+gets, posts, res = poll_lost(
+    lambda: FakeResponse(200, payload={"status": "failed", "error": "CUDA out of memory"}))
+check("C7e a failed job is not cancelled", res == [] and posts == [],
+      f"{res!r} {posts}")
 
 # ── [D] localai_video ───────────────────────────────────────────────────
 print("\n[D] localai_video _generate")

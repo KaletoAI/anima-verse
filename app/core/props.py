@@ -6053,7 +6053,8 @@ def _render_source(prop_id: str, backend_glob: str,
 
 def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
                       main_file: str, backend: str,
-                      texture_size: Any = None) -> str:
+                      texture_size: Any = None,
+                      routing: Optional[Dict[str, Any]] = None) -> str:
     """Store the LOD stages of ONE generation as their own gallery files and
     select the SMALLEST for tier ``low``. Returns the selected file name.
 
@@ -6062,7 +6063,11 @@ def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
     companion of the main one. ``face_num`` is the REQUESTED count from the
     file name (the real one is only inside the GLB), ``source_file`` names the
     run's main mesh so the pair is visible in the admin list. Extra stages stay
-    in the gallery unselected — the admin can promote any of them."""
+    in the gallery unselected — the admin can promote any of them.
+
+    ``routing`` carries the run's ``routing``/``fallback_from`` meta (image
+    routing): a stage comes out of the same job as the main file, so it is
+    marked like it."""
     selected = ""
     for stage in stages:
         blob = stage.get("blob") or b""
@@ -6085,6 +6090,7 @@ def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
             **({"face_num": int(stage.get("faces") or 0)}
                if stage.get("faces") else {}),
             **({"texture_size": int(texture_size)} if texture_size else {}),
+            **(routing or {}),
         })
         # Smallest requested stage wins the low slot; the stages arrive sorted
         # ascending, so the FIRST stored one is it.
@@ -6147,16 +6153,6 @@ def _generate(prop_id: str, prompt: str, negative: str,
             return {"ok": False, "error": error}
 
         from app.imagegen.service import get_image_service
-        if not mesh_backend_glob.strip():
-            # Same admin default the character 3D tab uses — without it the
-            # pool picks the cheapest mesh backend, which is arbitrary when
-            # several share cost 0. list_mesh_backends blanks the default when
-            # it is not a rig-'none' MESH backend: the setting also holds
-            # image-backend names, and one of those as a mesh glob matches
-            # nothing (or the wrong thing).
-            from app.core.model3d import list_mesh_backends
-            mesh_backend_glob = str(
-                list_mesh_backends("none").get("default") or "").strip()
         g = model_gallery(prop_id, variant)
         if not g:
             error = "bad prop id"
@@ -6203,7 +6199,9 @@ def _generate(prop_id: str, prompt: str, negative: str,
             face_num=face_num,
             texture_size=texture_size,
             view_images=view_paths or None,
-            lod_faces=lod_faces)
+            lod_faces=lod_faces,
+            # An empty glob = the "mesh_object" chain of the image routing.
+            occasion="mesh_object")
         if not res.get("ok"):
             error = str(res.get("error") or "mesh generation failed")
             logger.error("Prop %s mesh failed: %s", prop_id, error)
@@ -6232,13 +6230,16 @@ def _generate(prop_id: str, prompt: str, negative: str,
             **({"view_images": {v: Path(p).name
                                 for v, p in view_paths.items()}}
                if view_paths else {}),
+            **{k: res[k] for k in ("routing", "fallback_from") if res.get(k)},
         })
         g.select(path.name, tier)
         # LOD stages of the SAME job (§ 3.2): each becomes its own gallery
         # file, the smallest fills the `low` slot — one generation leaves a
         # complete full+low pair.
         low = _store_lod_stages(g, res.get("stages") or [], path.name,
-                                res.get("backend", ""), texture_size)
+                                res.get("backend", ""), texture_size,
+                                routing={k: res[k] for k in ("routing", "fallback_from")
+                                         if res.get(k)})
         if low:
             logger.info("Prop %s: LOD stage %s selected as low variant",
                         prop_id, low)

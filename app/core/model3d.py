@@ -24,6 +24,7 @@ from urllib.parse import quote
 from app.core.log import get_logger
 from app.core.model_refs import current_outfit_state, find_ref_image
 from app.core.timeutils import utc_now_iso
+from app.imagegen.occasions import mesh_occasion_for_rig
 
 logger = get_logger(__name__)
 
@@ -304,10 +305,17 @@ def required_rig(character_name: str) -> str:
     return "mixamo" if is_humanoid(character_name) else "generic"
 
 
-def list_mesh_backends(rig: str = "") -> Dict[str, Any]:
+def list_mesh_backends(rig: str = "", occasion: str = "") -> Dict[str, Any]:
     """Available mesh backends (optionally only those producing ``rig``) + the
-    admin default, so the generate dialog can offer a choice (Low vs High)."""
-    from app.core import config
+    ``default`` the generate dialog preselects, so it can offer a choice (Low
+    vs High).
+
+    ``default`` is what the mesh OCCASION's chain resolves to right now
+    (image routing, ``explain_occasion``): ``occasion`` when given (a building
+    passes "mesh_building"), else the occasion of ``rig``
+    (``mesh_occasion_for_rig``). A rig-less call has no occasion and no
+    default; a resolved backend that is not in ``backends`` is not
+    preselected."""
     from app.imagegen.service import get_image_service
     out = []
     try:
@@ -329,10 +337,21 @@ def list_mesh_backends(rig: str = "") -> Dict[str, Any]:
                 "rig": getattr(b, "mesh_rig", "mixamo"),
             })
     except Exception as e:
-        logger.debug("Mesh-Backends listen fehlgeschlagen: %s", e)
-    default = str(config.get("image_generation.mesh_imagegen_default", "") or "").strip()
+        logger.debug("Listing mesh backends failed: %s", e)
+    # The dialogs preselect what the occasion's chain resolves to right now
+    # (image routing); a rig-less call has no occasion and no default.
+    default = ""
+    try:
+        occ = occasion or (mesh_occasion_for_rig(rig) if rig else "")
+        if occ:
+            from app.imagegen.routing import explain_occasion
+            default = str(explain_occasion(occ).get("resolved") or "")
+    except Exception as e:
+        logger.debug("Mesh default for rig=%r occasion=%r not resolved: %s",
+                     rig, occasion, e)
+        default = ""
     if default and not any(b["name"] == default for b in out):
-        default = ""  # the admin default is for another rig — don't preselect it
+        default = ""
     return {"backends": out, "default": default}
 
 
@@ -1017,23 +1036,19 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     """Generates the mesh for the currently worn outfit — or a given
     combination — from its T-pose render.
 
-    Backend: ``backend_glob`` → admin default (``image_generation.
-    mesh_imagegen_default``) → cheapest available mesh backend.
-    ``prefer_cheapest`` skips the admin default (the auto-generate hook
-    always takes the cheapest matching backend). Cached per combination —
-    an existing mesh is kept unless ``force``.
+    Backend: ``backend_glob`` (explicit) → the mesh occasion's chain of the
+    image routing (``mesh_occasion_for_rig`` of the character's rig);
+    ``prefer_cheapest`` = cheapest available of the rig (auto hook).
+    Cached per combination — an existing mesh is kept unless ``force``.
     ``signature`` None = the worn combination; set = that combination drives
     the cache check, the T-pose input and the target file (the outfit batch
     pre-warms combinations without dressing the character).
     Blocking (minutes); call from a worker thread.
     """
-    from app.core import config
     from app.imagegen.service import get_image_service
     from app.core.task_queue import get_task_queue
 
-    if not backend_glob and not prefer_cheapest:
-        backend_glob = str(
-            config.get("image_generation.mesh_imagegen_default", "") or "").strip()
+    rig = required_rig(character_name)
 
     if signature is None:
         _, _, signature = current_outfit_state(character_name)
@@ -1043,6 +1058,15 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             logger.info("Model3D %s: Kombination %s bereits erzeugt (%s)",
                         character_name, signature, cached.name)
             return {"ok": True, "cached": True, "path": str(cached)}
+
+    if not backend_glob and prefer_cheapest:
+        # The auto-mesh hook keeps its rule (user decision 2026-07-18): the
+        # cheapest AVAILABLE backend of the character's rig — explicit, no
+        # chain. Every other call without a glob is routed.
+        cheapest = get_image_service().list_mesh_backends(rig)
+        if not cheapest:
+            return {"ok": False, "error": f"no {rig} mesh backend available"}
+        backend_glob = cheapest[0].name
 
     src = find_ref_image(character_name, "tpose", signature)
     if not src:
@@ -1074,7 +1098,6 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         pass
 
     error = ""
-    rig = required_rig(character_name)
     # Per-character override; None = the backend's configured default. One
     # load — the meta block below reuses it (each load reads the profile).
     no_fingers = get_model3d_options(character_name).get("no_fingers")
@@ -1089,10 +1112,11 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             face_num=face_num,
             texture_size=texture_size,
             no_fingers=no_fingers,
-            view_images=view_images or None)
+            view_images=view_images or None,
+            occasion=mesh_occasion_for_rig(rig))
         if not res.get("ok"):
             error = str(res.get("error") or "generation failed")
-            logger.error("Model3D %s fehlgeschlagen: %s", character_name, error)
+            logger.error("Model3D %s failed: %s", character_name, error)
             return {"ok": False, "error": error}
 
         path = Path(res["path"])
@@ -1119,6 +1143,9 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             "character": character_name,
             "no_fingers": no_fingers,
         }
+        for _rk in ("routing", "fallback_from"):
+            if res.get(_rk):
+                meta[_rk] = res[_rk]
         if view_images:
             # Which extra views went into this mesh — same shape as
             # "source_image": file names, not absolute paths.
@@ -1293,8 +1320,9 @@ def trigger_generation(character_name: str, *, force: bool = False,
                        face_num: Any = None,
                        texture_size: Any = None) -> bool:
     """Starts the mesh generation in the background.
-    ``backend_glob`` picks the mesh backend (empty = admin default →
-    cheapest; ``prefer_cheapest`` always cheapest — the auto hook).
+    ``backend_glob`` picks the mesh backend (empty = the rig's mesh occasion
+    chain of the image routing; ``prefer_cheapest`` always cheapest of the
+    rig — the auto hook).
     False when one is already running for this character."""
     with _lock:
         if character_name in _generating:

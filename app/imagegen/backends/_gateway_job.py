@@ -22,7 +22,9 @@ Failure semantics mirror the busy/cooldown contract in ``base.py``:
   * a started job fails with "park timeout" / "backend busy" ->
     ``BackendBusyError`` (load, no cooldown)
   * gateway loses the job (repeated 404) or keeps failing the poll (5xx /
-    network) -> ``[]`` (the job is gone/broken -> cooldown is correct)
+    network) -> ``[]`` (the job is gone/broken -> cooldown is correct); the
+    job is cancelled first (best effort), because a routed re-run starts the
+    same work on the next backend and must not leave this one running
 
 The lost-job caps are the point of this module: a gateway restart makes
 ``/v1/jobs/{id}`` answer 404 forever, and without a cap the worker polls until
@@ -147,6 +149,21 @@ def submit_job(backend: ImageBackend, url: str, payload: Dict[str, Any],
     return job_id
 
 
+def _cancel_lost_job(backend: ImageBackend, job_id: str) -> None:
+    """Best-effort ``POST /v1/jobs/{id}/cancel`` for a job we give up on.
+
+    A lost job may still be running on the gateway (a flapping poll, not a
+    forgotten job): with image routing the caller re-runs the same mesh or
+    video on the next chain entry, and the abandoned job would keep a GPU busy
+    for nothing. Never raises — the verdict ("lost") stands either way."""
+    try:
+        requests.post(f"{backend.api_url}/v1/jobs/{job_id}/cancel",
+                      headers=backend._headers(), timeout=10)
+    except Exception as e:                                  # noqa: BLE001
+        logger.debug("%s: cancel of lost job %s failed: %s", backend.name,
+                     job_id, e)
+
+
 def poll_job(backend: ImageBackend, job_id: str, *,
              max_wait: int, max_queue_wait: int, poll_interval: float,
              on_done: Callable[[Dict[str, Any], float], List[bytes]]
@@ -161,8 +178,9 @@ def poll_job(backend: ImageBackend, job_id: str, *,
 
     Returns the result blobs (or ``[]``). Raises ``BackendBusyError`` when the
     job runs or waits past its budget (load, no cooldown). A lost job — 3
-    consecutive 404s, or more than 10 other failed polls — returns ``[]``
-    (gone/broken -> cooldown is correct).
+    consecutive 404s, or more than 10 other failed polls — is cancelled
+    (best effort, ``_cancel_lost_job``) and returns ``[]`` (gone/broken ->
+    cooldown is correct).
     """
     start = time.time()
     queued_since = start
@@ -186,16 +204,19 @@ def poll_job(backend: ImageBackend, job_id: str, *,
                 if poll.status_code == 404:
                     misses_404 += 1
                     if misses_404 >= _MAX_CONSEC_404:
-                        logger.error("%s: Job %s %d× in Folge 404 — Gateway kennt "
-                                     "den Job nicht mehr, Abbruch", backend.name,
-                                     job_id, misses_404)
+                        logger.error("%s: job %s answered 404 %d times in a "
+                                     "row — the gateway no longer knows it, "
+                                     "giving up", backend.name, job_id,
+                                     misses_404)
+                        _cancel_lost_job(backend, job_id)
                         return []
                 else:
                     misses_other += 1
                     if misses_other > _MAX_CONSEC_OTHER:
-                        logger.error("%s: Job %s %d fehlgeschlagene Polls in Folge "
-                                     "(zuletzt HTTP %d) — Abbruch", backend.name,
+                        logger.error("%s: job %s: %d failed polls in a row "
+                                     "(last HTTP %d) — giving up", backend.name,
                                      job_id, misses_other, poll.status_code)
+                        _cancel_lost_job(backend, job_id)
                         return []
                 logger.debug("%s: Job-Poll HTTP %d", backend.name, poll.status_code)
                 continue
@@ -245,9 +266,10 @@ def poll_job(backend: ImageBackend, job_id: str, *,
         except Exception as e:
             misses_other += 1
             if misses_other > _MAX_CONSEC_OTHER:
-                logger.error("%s: Job %s %d fehlgeschlagene Polls in Folge "
-                             "(zuletzt %s) — Abbruch", backend.name, job_id,
+                logger.error("%s: job %s: %d failed polls in a row "
+                             "(last %s) — giving up", backend.name, job_id,
                              misses_other, e)
+                _cancel_lost_job(backend, job_id)
                 return []
             logger.warning("%s: Poll-Fehler: %s", backend.name, e)
             continue

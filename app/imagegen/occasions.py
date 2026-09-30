@@ -144,10 +144,16 @@ def backend_fits(occasion_id: str, kind: Dict[str, Any]) -> bool:
 
 
 def mesh_occasion_for_rig(rig: str, *, building: bool = False) -> str:
-    rig = (rig or "mixamo").strip().lower()
+    """The mesh occasion a generation of this rig runs on. An empty rig is
+    "mixamo" (the backend default); a rig the catalog does not know raises
+    ``UnknownOccasionError`` — guessing a humanoid chain for it would mesh
+    with a skeleton nobody asked for."""
+    rig = (rig or "mixamo").strip().lower() or "mixamo"
+    if rig not in MESH_OCCASIONS_BY_RIG:
+        raise UnknownOccasionError(f"no mesh occasion for rig '{rig}'")
     if rig == "none":
         return "mesh_building" if building else "mesh_object"
-    return MESH_OCCASIONS_BY_RIG.get(rig, ("mesh_humanoid",))[0]
+    return MESH_OCCASIONS_BY_RIG[rig][0]
 
 
 def catalog_payload() -> List[Dict[str, Any]]:
