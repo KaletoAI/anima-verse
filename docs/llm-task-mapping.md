@@ -256,10 +256,10 @@ These run on image/audio backends, not on a language model, and are not part of
 
 | Task | Backend | Purpose |
 |---|---|---|
-| Image generation | `localai` / `a1111` / `civitai` / `together` / `openai_diffusion` | Images from prompts. |
+| Image generation | `localai` / `a1111` / `civitai` / `together` / `openai_diffusion` | Images from prompts (`civitai` with category `img2img`: from an init image). |
 | Image regeneration | same | An existing image again, with changes. |
 | TTS | XTTS / F5 / Magpie | Speech audio. |
-| Video generation | `openai_video` / `localai_video` / `together_video` | One MP4 from an image. |
+| Video generation | `openai_video` / `localai_video` / `together_video` / `civitai_video` | One MP4 from an image. |
 | Mesh generation | `openai_mesh` | A 3D model from reference renders. |
 
 ---

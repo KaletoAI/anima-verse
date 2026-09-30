@@ -1502,7 +1502,7 @@ async def imagegen_backend_models(backend_name: str,
                         if mid:
                             models.append(mid)
             models.sort()
-        elif api_type == "civitai":
+        elif api_type in ("civitai", "civitai_video"):
             # CivitAI has no useful model listing via API — return only the
             # configured AIR URN as the single option.
             if cur_model:

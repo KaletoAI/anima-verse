@@ -1814,8 +1814,10 @@ def _flatten_to_env(config: dict) -> None:
                      "ref_slot_count",
                      "full_mask", "mask_grow", "inner_crop",
                      "mask_format", "lora_url", "lora_filter",
-                     # Video backends (localai_video / together_video)
-                     "seconds", "video_endpoint",
+                     # Video backends (localai_video / together_video / civitai_video)
+                     "seconds", "video_endpoint", "video_engine",
+                     # CivitAI (civitai / civitai_video)
+                     "denoise_strength", "allow_mature_content",
                      # Mesh backend (openai_mesh, img2mesh)
                      "mesh_endpoint", "mesh_rig", "remove_background",
                      "face_num", "face_num_max", "no_fingers", "mesh_steps"]:

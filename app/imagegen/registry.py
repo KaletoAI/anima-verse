@@ -1,6 +1,7 @@
 """Registry of available media backend types (image / video / mesh)."""
 from app.imagegen.backends.a1111 import A1111Backend
 from app.imagegen.backends.civitai import CivitAIBackend
+from app.imagegen.backends.civitai_video import CivitAIVideoBackend
 from app.imagegen.backends.localai import LocalAIBackend
 from app.imagegen.backends.localai_video import LocalAIVideoBackend
 from app.imagegen.backends.openai_chat import OpenAIChatImageBackend
@@ -23,6 +24,7 @@ BACKEND_REGISTRY = {
     "localai_video": LocalAIVideoBackend,
     "together_video": TogetherVideoBackend,
     "openai_video": OpenAIVideoBackend,
+    "civitai_video": CivitAIVideoBackend,
     # 3D mesh (MEDIA_TYPE == "mesh")
     "openai_mesh": OpenAIMeshBackend,
 }

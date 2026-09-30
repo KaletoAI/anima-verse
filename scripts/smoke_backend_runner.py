@@ -91,13 +91,16 @@ Hand-derived expectations
       raises the 400 RuntimeError must RAISE it. Before the fix: ``[]``.
       Checked for the generations path AND the edits/inpaint path, because
       both carried the same swallowing handler.
-  [6] ``CivitAIBackend._generate`` with ``max_wait = 0``: the job is created,
-      the polling loop never runs (``time.time() - start < 0`` is false at
-      once), so no blobUrl arrives. That is a job still queued or rendering —
-      LOAD — and must raise ``BackendBusyError``, the same class
-      ``openai_diffusion`` raises on its request timeout. Before the fix:
-      ``[]``, which the runner read as a failure and answered with a 300s
-      cooldown on a backend that was merely slow.
+  [6] ``CivitAIBackend._generate`` (Orchestration v2) with
+      ``max_queue_wait = 0``: the workflow is submitted and still
+      ``scheduled``, so the queue budget is spent at once. That is a job
+      still queued — LOAD — and must raise ``BackendBusyError``, the same
+      class ``openai_diffusion`` raises on its request timeout. Before the
+      2026-09 fix: ``[]``, which the runner read as a failure and answered
+      with a 300s cooldown on a backend that was merely slow. Since the v2
+      move the abandoned workflow is DELETEd first (a queued workflow is
+      refunded) — a retry must not leave a paid job running in parallel —
+      so the DELETE must come BEFORE the exception.
   [7] ``_wait_for_explicit_backend("nope")`` on a pool that cannot match it
       logs exactly ONE warning; with ``log_missing=False`` it logs NONE.
       The soft-match path in ``service.generate`` passes False: it falls back
@@ -282,27 +285,48 @@ print("[6] a civitai polling timeout is load, not a defect")
 
 
 class _Resp:
-    """Just enough of a requests.Response for the job-creation call."""
+    """Just enough of a requests.Response for the workflow submit."""
 
-    status_code = 200
+    status_code = 202
+    content = b"{}"
+    text = ""
 
     @staticmethod
     def json():
-        return {"token": "tok", "jobs": [{"jobId": "j"}]}
+        return {"id": "wf1", "status": "scheduled"}
 
-    text = ""
+
+_calls = []
+_requests = civitai_mod.requests
+_orig = {m: getattr(_requests, m) for m in ("post", "get", "put", "delete")}
+
+
+def _record(method, result=None):
+    def _fn(*a, **k):
+        _calls.append(method)
+        return result
+    return _fn
 
 
 civ = civitai_mod.CivitAIBackend("c", "http://x", 1.0, "C_",
                                  api_key="k", model="urn:air:sdxl:checkpoint:civitai:1@2")
-civ.max_wait = 0            # the poll loop cannot run a single round
-civitai_mod.requests.post = lambda *a, **k: _Resp()
+civ.max_queue_wait = 0      # the queue budget is spent before the first poll
+civ.poll_interval = 0
+_requests.post = _record("post", _Resp())
+_requests.get = _record("get")        # a poll would be a bug here
+_requests.put = _record("put")
+_requests.delete = _record("delete")
 raised = None
 try:
     civ._generate("a prompt", "", {})
 except BaseException as e:   # noqa: BLE001
     raised = e
+finally:
+    for _m, _fn in _orig.items():
+        setattr(_requests, _m, _fn)
 check("civitai timeout: exception type", type(raised).__name__, "BackendBusyError")
+check("civitai timeout: the queued workflow is DELETEd before the raise",
+      _calls, ["post", "delete"])
 
 print("[7] the miss is announced by whoever owns the policy")
 

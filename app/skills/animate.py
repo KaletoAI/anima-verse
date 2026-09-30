@@ -1,7 +1,8 @@
 """Image-to-video animation — thin adapter over the image-generation pool.
 
 Video generation was folded into ``app/imagegen`` (a backend media-type:
-``localai_video`` / ``together_video`` with ``MEDIA_TYPE == "video"``), so it
+``localai_video`` / ``together_video`` / ``openai_video`` / ``civitai_video``
+with ``MEDIA_TYPE == "video"``), so it
 runs through the same BackendPool / matching / fallback / per-backend queue as
 image generation. This module keeps the small "animate this still" seam its
 callers use (``video_generation_skill``, ``instagram``, ``character_ops``) and

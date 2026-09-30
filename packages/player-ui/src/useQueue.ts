@@ -112,7 +112,7 @@ export interface ChannelStatus {
 // so new backend types can never misclassify as LLM providers again.
 const IMAGE_BACKEND_TYPES = new Set([
   'civitai', 'together', 'openai_chat', 'openai_diffusion', 'a1111', 'localai',
-  'localai_video', 'together_video', 'openai_video',
+  'localai_video', 'together_video', 'openai_video', 'civitai_video',
 ])
 
 // Non-LLM tasks that also run over provider channels (image/TTS) —

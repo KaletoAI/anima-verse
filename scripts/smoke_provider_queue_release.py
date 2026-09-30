@@ -71,8 +71,13 @@ The expectations, derived by hand
     b) ``openai_video`` with TIMEOUT=120 and no MAX_WAIT: class defaults
        max_wait=900 and max_queue_wait = 900*4 = 3600 -> budget 4500 ->
        max(120, 4500) + 60 = 4560.
-    c) ``civitai`` with TIMEOUT=1, MAX_WAIT=5 (the scaled-down polling case):
-       budget 5 -> max(1, 5) + 60 = 65.
+    c) ``civitai`` with TIMEOUT=1, MAX_WAIT=5, MAX_QUEUE_WAIT=10 (the
+       scaled-down polling case; since the v2 move civitai budgets its queued
+       phase separately): budget 10 + 5 = 15 -> max(1, 15) + 60 = 75.
+    c2) ``civitai`` with TIMEOUT=1, MAX_WAIT=5 and no MAX_QUEUE_WAIT: class
+       default 600 -> budget 605 -> max(1, 605) + 60 = 665.
+    c3) ``civitai_video`` with no budgets at all: class defaults max_wait=900
+       + max_queue_wait=1800 = 2700, no timeout -> max(0, 2700) + 60 = 2760.
     d) ``a1111`` has no polling budget at all: the plain HTTP rule stays,
        TIMEOUT=60 -> 90, and no TIMEOUT -> None (queue default 300).
 
@@ -308,8 +313,12 @@ check("a) together_video timeout=60, max_wait=600 -> 660",
       budget("together_video", "SMOKE_BE_1_", 60, MAX_WAIT=600), 660)
 check("b) openai_video timeout=120, defaults 900 + 3600 -> 4560",
       budget("openai_video", "SMOKE_BE_2_", 120), 4560)
-check("c) civitai timeout=1, max_wait=5 -> 65",
-      budget("civitai", "SMOKE_BE_3_", 1, MAX_WAIT=5), 65)
+check("c) civitai timeout=1, max_wait=5, max_queue_wait=10 -> 75",
+      budget("civitai", "SMOKE_BE_3_", 1, MAX_WAIT=5, MAX_QUEUE_WAIT=10), 75)
+check("c2) civitai timeout=1, max_wait=5, default queue 600 -> 665",
+      budget("civitai", "SMOKE_BE_3_", 1, MAX_WAIT=5), 665)
+check("c3) civitai_video defaults 900 + 1800 -> 2760",
+      budget("civitai_video", "SMOKE_BE_5_", None), 2760)
 check("d) a1111 has no polling budget: timeout=60 -> 90",
       budget("a1111", "SMOKE_BE_4_", 60), 90)
 check("d) a1111 without a timeout stays on the queue default",

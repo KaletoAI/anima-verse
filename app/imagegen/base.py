@@ -252,12 +252,10 @@ class ImageBackend(ABC):
         # /v1/images/generations) read the same attribute.
         self.category = os.environ.get(f"{env_prefix}CATEGORY", "").strip().lower()
 
-        # Reference-image slot budget (see DEFAULT_REF_SLOT_COUNT).
-        _slots_str = os.environ.get(f"{env_prefix}REF_SLOT_COUNT", "").strip()
-        try:
-            self.ref_slot_count = int(_slots_str) if _slots_str else self.DEFAULT_REF_SLOT_COUNT
-        except ValueError:
-            self.ref_slot_count = self.DEFAULT_REF_SLOT_COUNT
+        # Reference-image slot budget (see DEFAULT_REF_SLOT_COUNT) — one rule
+        # for the live instance and the config view (config_ref_slot_count).
+        self.ref_slot_count = self.config_ref_slot_count(
+            self.category, os.environ.get(f"{env_prefix}REF_SLOT_COUNT", "").strip())
 
         # Fallback removed entirely (2026-07-18, user decision): a render
         # runs on exactly the chosen backend — run_on_backend handles busy
@@ -280,6 +278,21 @@ class ImageBackend(ABC):
         # same group share one Semaphore(1), e.g. an LLM provider and this
         # backend on one physical GPU.
         self.serialize_group = os.environ.get(f"{env_prefix}SERIALIZE_GROUP", "").strip()
+
+    @classmethod
+    def config_ref_slot_count(cls, category: str, configured: Any) -> int:
+        """How many reference slots an entry of this type gets — the ONE rule
+        both the live instance (``__init__``) and the config view
+        (``routing.describe_config_backend``) use, so the two cannot drift.
+        ``category`` arrives trimmed + lower-cased, ``configured`` is the raw
+        ``ref_slot_count`` value (empty = the class default). Types whose slot
+        budget follows from something else override this (civitai: category)."""
+        if configured in (None, ""):
+            return cls.DEFAULT_REF_SLOT_COUNT
+        try:
+            return int(configured)
+        except (TypeError, ValueError):
+            return cls.DEFAULT_REF_SLOT_COUNT
 
     @property
     def effective_cost(self) -> float:

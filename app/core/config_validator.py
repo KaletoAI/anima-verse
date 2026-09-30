@@ -169,7 +169,7 @@ def _check_image_backends(config: dict) -> list:
         # + localai_video/openai_video are generic (gateway may run keyless) and
         # together_video falls back to the Together PROVIDER key at runtime ->
         # no hard requirement for those.
-        if api_type in ("civitai", "together") and not api_key:
+        if api_type in ("civitai", "civitai_video", "together") and not api_key:
             issues.append(_err("image_generation", f"Backend '{name}': API key missing (cloud backend '{api_type}')"))
 
     return issues

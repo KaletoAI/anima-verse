@@ -134,14 +134,16 @@ def describe_config_backend(entry: Dict[str, Any]) -> Dict[str, Any]:
     from app.imagegen.registry import BACKEND_REGISTRY
     cls = BACKEND_REGISTRY.get(str(entry.get("api_type") or "").strip().lower())
     media = getattr(cls, "MEDIA_TYPE", "image") if cls else "image"
+    category = str(entry.get("category") or "").strip().lower()
     ref = entry.get("ref_slot_count")
-    if ref in (None, ""):
-        ref = getattr(cls, "DEFAULT_REF_SLOT_COUNT", 0) if cls else 0
+    if cls:
+        # The same rule the live instance applies (ImageBackend.__init__).
+        ref = cls.config_ref_slot_count(category, ref)
     rig = str(entry.get("mesh_rig") or "").strip().lower() or "mixamo"
     return {
         "name": str(entry.get("name") or ""),
         "media": media,
-        "category": str(entry.get("category") or "").strip().lower(),
+        "category": category,
         "rig": rig if media == "mesh" else "",
         "ref_slot_count": int(ref or 0),
         "enabled": entry.get("enabled", True) is not False,

@@ -185,7 +185,7 @@ stops acting autonomously).
   - **`openai_diffusion`** — `/v1/images/generations` (DALL·E-style) endpoints. Sends reference
     images as base64 and supports inline `<lora:name:weight>` LoRAs; API key optional.
 
-  **Video** is a backend type in the same list (`openai_video`, `localai_video`, `together_video`) and
+  **Video** is a backend type in the same list (`openai_video`, `localai_video`, `together_video`, `civitai_video`) and
   returns one MP4; **3D meshes** are another (`openai_mesh`). Backends are matched per use case with
   cost-based selection and failover — except mesh backends, which never fall back onto each other
   because a wrong-rig mesh binds unusably.
@@ -301,7 +301,7 @@ corresponding feature.
 |--------------------|------------------------------------------------------------------------------|
 | **LLM (required)** | Ollama · any OpenAI-compatible API (LocalAI, vLLM, llama-swap, …) · Anthropic |
 | Image generation   | Stable Diffusion WebUI (A1111/Forge, run with `--listen --api`) · CivitAI · Together.ai · LocalAI · `openai_chat` · `openai_diffusion` |
-| Video generation   | `openai_video` · `localai_video` · `together_video`                           |
+| Video generation   | `openai_video` · `localai_video` · `together_video` · `civitai_video`         |
 | 3D meshes          | `openai_mesh` (an image-to-3D gateway)                                        |
 | Text-to-speech     | XTTS v2 · F5-TTS · Magpie (Riva)                                              |
 | Web search         | SearX / SearXNG                                                               |
