@@ -6,16 +6,14 @@ import { Field } from '../../components/Field'
 
 /**
  * Per-character image-generation overrides (Characters → Image):
- *  - Backend match: a glob over image-backend names (e.g. "Flux*"). The server
- *    resolves it to a concrete backend at render time, picking among matches by
- *    availability — independent of the global fallback. A model picker is
- *    intentionally absent (the model comes from the backend). It governs every
- *    render of this character that names no backend of its own: the outfit and
- *    variant previews, and — since it is the soft fallback in
- *    ImageService.generate_from_input — chat photos and TakePhoto turns, which
- *    would otherwise land on the cheapest backend by round-robin.
+ *  - Backend match: a glob over image-backend names (e.g. "Flux*"). It is
+ *    position 0 before the occasion chain of the image routing (Admin → Media
+ *    Generation → Routing): every render of this character that names no
+ *    backend of its own (outfit and variant previews, portraits, chat photos,
+ *    TakePhoto turns) tries this match first, then the chain. A model picker
+ *    is intentionally absent (the model comes from the backend).
  *  - T-pose backend match: a second glob used ONLY for the T-pose reference
- *    renders (the image->3D input), e.g. a pose-controlled backend alias.
+ *    renders (the image->3D input) — position 0 of the T-pose chain.
  *  - LoRA override: LoRAs always applied for this character.
  *  - T-pose LoRAs: replace the LoRA override for the T-pose reference renders
  *    (different backend, different LoRA ecosystem — no merge).
@@ -63,13 +61,6 @@ function globToRegex(glob: string): RegExp {
   return new RegExp('^' + escaped + '$', 'i')
 }
 
-// Make a match spec readable: "backend:LocalAI-Flux" -> "LocalAI-Flux".
-function formatMatchSpec(spec: string): string {
-  const s = (spec || '').trim()
-  if (s.startsWith('backend:')) return s.slice(8)
-  return s
-}
-
 /** The buffered record laid OVER the stored one, key by key — what the panel
  *  shows when it is re-opened while the sheet still holds unsaved edits. */
 function withDraft(stored: Override, draft: Record<string, unknown>): Override {
@@ -106,7 +97,6 @@ export function ImageOverrides({
   const [loras, setLoras] = useState<Lora[]>([])
   const [tposeLoras, setTposeLoras] = useState<Lora[]>([])
   const [backends, setBackends] = useState<string[]>([])  // image-backend names (match target)
-  const [outfitDefault, setOutfitDefault] = useState('')  // global outfit default (match spec)
   const [availableLoras, setAvailableLoras] = useState<Array<{ name: string; missing?: boolean }>>([])
   const [tposeLoraOptions, setTposeLoraOptions] = useState<Array<{ name: string; missing?: boolean }>>([])
   const [loading, setLoading] = useState(false)
@@ -155,7 +145,7 @@ export function ImageOverrides({
           apiGet<{ workflow?: string; tpose_workflow?: string; loras?: Lora[]; tpose_loras?: Lora[] }>(
             `/characters/${encodeURIComponent(character)}/outfit-imagegen`,
           ),
-          apiGet<{ options?: Array<{ name?: string; category?: string }>; outfit_imagegen_default?: string }>('/world/imagegen-options'),
+          apiGet<{ options?: Array<{ name?: string; category?: string }> }>('/world/imagegen-options'),
           apiGet<{ loras?: Array<{ name: string; missing?: boolean }> }>(
             `/characters/outfit-lora-options?character_name=${encodeURIComponent(character)}`,
           ),
@@ -180,7 +170,6 @@ export function ImageOverrides({
             .filter((o) => o.name && o.category !== 'inpaint')
             .map((o) => o.name as string),
         )
-        setOutfitDefault(opts.outfit_imagegen_default || '')
         setAvailableLoras((loraOpts.loras || []).filter((l) => l.name && l.name !== 'None'))
         setTposeLoraOptions((tposeOpts.loras || []).filter((l) => l.name && l.name !== 'None'))
       } catch (e) {
@@ -292,7 +281,7 @@ export function ImageOverrides({
           <Field
             label={t('Backend match (glob)')}
             help="imagegen_target"
-            hint={t('e.g. "Flux*" or an exact backend name. Matched against image-backend names; the server picks an available match at render time. Applies to every render of this character that names no backend itself — outfit and variant previews as well as chat photos. Empty = global default.') + ' ' + savedHint}
+            hint={t('e.g. "Flux*" or an exact backend name. Position 0 before the occasion chain (Admin → Media Generation → Routing): every render of this character that names no backend itself tries this match first — outfit and variant previews, portraits, chat photos. Empty = the occasion chain alone.') + ' ' + savedHint}
           >
             <input
               className="ga-input"
@@ -307,12 +296,7 @@ export function ImageOverrides({
           <Field label={t('Currently matches')} hint={t('Backends matching the pattern right now.')}>
             <div className="ga-img-matches">
               {pattern.trim() === '' ? (
-                <span className="ga-sched-muted">
-                  {t('— global default —')}
-                  {outfitDefault ? (
-                    <span className="ga-img-match-chip" style={{ marginLeft: 6 }}>{formatMatchSpec(outfitDefault)}</span>
-                  ) : null}
-                </span>
+                <span className="ga-sched-muted">{t('— occasion chain —')}</span>
               ) : matching.length === 0 ? (
                 <span className="ga-img-nomatch">{t('no match')}</span>
               ) : (
@@ -328,7 +312,7 @@ export function ImageOverrides({
         <div className="ga-form-row">
           <Field
             label={t('T-pose backend match (glob)')}
-            hint={t('Backend for the T-pose reference renders only (front and the extra 3D views) — e.g. a pose-controlled alias. Empty = the render match above / global default.') + ' ' + savedHint}
+            hint={t('Backend for the T-pose reference renders only (front and the extra 3D views) — position 0 of the T-pose chain. Empty = the render match above, then the chain.') + ' ' + savedHint}
           >
             <input
               className="ga-input"

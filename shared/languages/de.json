@@ -313,7 +313,6 @@
     "Duplicate the selected entry": "Aktuellen Eintrag duplizieren",
     "Duration": "Dauer",
     "Duration in hours": "Dauer in Stunden",
-    "e.g. \"Flux*\" or an exact backend name. Matched against image-backend names; the server picks an available match at render time. Applies to every render of this character that names no backend itself — outfit and variant previews as well as chat photos. Empty = global default.": "z.B. \"Flux*\" oder ein exakter Backend-Name. Wird gegen die Image-Backend-Namen gematcht; der Server wählt beim Rendern ein verfügbares Match. Gilt für jeden Render dieses Charakters, der selbst kein Backend nennt — Outfit- und Varianten-Vorschauen ebenso wie Chat-Fotos. Leer = globaler Standard.",
     "e.g. \"Modern-day Berlin. Adults only. Slice-of-life with occasional supernatural twists. Characters speak everyday German; English fine for slang.\"": "z.B. \"Modernes Berlin. Nur Erwachsene. Slice-of-life mit gelegentlich übernatürlichen Wendungen. Characters sprechen Alltags-Deutsch; Englisch ok für Slang.\"",
     "e.g. 'Drunk — clouded memory'": "z.B. 'Drunk — clouded memory'",
     "e.g. 'holding a hammer' or 'black leather jacket, slim fit'": "z.B. 'mit einem Hammer in der Hand' oder 'schwarze Lederjacke, slim fit'",
@@ -1678,7 +1677,6 @@
     "Right view": "Ansicht rechts",
     "Render this extra T-pose view for multi-view 3D generation": "Diese zusätzliche T-Pose-Ansicht für die Multi-View-3D-Erzeugung rendern",
     "T-pose backend match (glob)": "T-Pose-Backend-Match (Glob)",
-    "Backend for the T-pose reference renders only (front and the extra 3D views) — e.g. a pose-controlled alias. Empty = the render match above / global default.": "Backend nur für die T-Pose-Referenz-Renders (Front und die zusätzlichen 3D-Ansichten) — z. B. ein pose-gesteuerter Alias. Leer = das Render-Match darüber / globaler Standard.",
     "Backends matching the T-pose pattern right now.": "Backends, die aktuell auf das T-Pose-Muster passen.",
     "— render match above —": "— Render-Match darüber —",
     "T-pose LoRAs": "T-Pose-LoRAs",
@@ -2338,6 +2336,17 @@
     "New key": "Neuer Key",
     "Key renamed": "Key umbenannt",
     "Not updated for": "Nicht aktualisiert für",
-    "Every stored reference in this world follows the new key. Other worlds keep the old key and fall back to the default pose there.": "Alle gespeicherten Verweise dieser Welt folgen dem neuen Key. Andere Welten behalten den alten Key und fallen dort auf die Standard-Pose zurück."
+    "Every stored reference in this world follows the new key. Other worlds keep the old key and fall back to the default pose there.": "Alle gespeicherten Verweise dieser Welt folgen dem neuen Key. Andere Welten behalten den alten Key und fallen dort auf die Standard-Pose zurück.",
+    "Auto (routing)": "Auto (Routing)",
+    "Auto (routing) — no backend available": "Auto (Routing) — gerade kein Backend verfügbar",
+    "— occasion chain —": "— Anlass-Kette —",
+    "e.g. \"Flux*\" or an exact backend name. Position 0 before the occasion chain (Admin → Media Generation → Routing): every render of this character that names no backend itself tries this match first — outfit and variant previews, portraits, chat photos. Empty = the occasion chain alone.": "z.B. \"Flux*\" oder ein exakter Backend-Name. Position 0 vor der Anlass-Kette (Admin → Media Generation → Routing): jeder Render dieser Figur, der selbst kein Backend nennt, versucht zuerst dieses Muster — Outfit- und Varianten-Vorschauen, Portraits, Chat-Fotos. Leer = nur die Anlass-Kette.",
+    "Backend for the T-pose reference renders only (front and the extra 3D views) — position 0 of the T-pose chain. Empty = the render match above, then the chain.": "Backend nur für die T-Pose-Referenz-Renders (Front und die zusätzlichen 3D-Ansichten) — Position 0 der T-Pose-Kette. Leer = das Render-Muster oben, dann die Kette.",
+    "cooling down": "kühlt ab",
+    "unavailable": "nicht verfügbar",
+    "disabled": "abgeschaltet",
+    "disabled for this character": "für diese Figur abgeschaltet",
+    "wrong kind of backend": "falsche Backend-Art",
+    "matches no backend": "passt auf kein Backend"
   }
 }

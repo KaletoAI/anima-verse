@@ -708,6 +708,7 @@ export function LocationGallery({
       viewChoice={dialogType === 'building'
         ? { value: buildingView, onChange: setBuildingView } : undefined}
       frontReferences={dialogType === 'building' ? frontImages : undefined}
+      occasion="location"
       onSubmit={submitGenerate}
       onClose={() => setDialogType(null)}
     />
@@ -725,6 +726,7 @@ export function LocationGallery({
       defaultUseSource
       requireSourceReference
       defaultCreateNew
+      occasion="location"
       onSubmit={(payload) => submitRegenRef(payload, regenTarget)}
       onClose={() => setRegenTarget(null)}
     />

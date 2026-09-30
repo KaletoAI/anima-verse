@@ -43,9 +43,25 @@ interface ImagegenOption {
   prompt_styles?: Record<string, string>
 }
 
+/** One entry of the occasion's chain, as `explain_occasion` reports it. */
+interface RoutingChainRow {
+  spec: string
+  source?: 'character' | 'rule' | string
+  position?: number
+  // ok / cooldown / unavailable / disabled / disabled_for_character /
+  // wrong_kind / no_match — labelled client-side via ROUTING_STATUS_LABEL.
+  status: string
+  backend?: string
+}
+
 interface ImagegenOptionsResponse {
   options: ImagegenOption[]
-  default_location?: string
+  // Only with `?occasion=`: what the image routing resolves right now.
+  occasion?: string
+  resolved?: string | null
+  via?: string
+  reason?: string
+  chain?: RoutingChainRow[]
   // World master switch (image_generation.enabled). False = the server
   // refuses every render with 409, so the dialog blocks its own submit
   // instead of letting the user compose a prompt for nothing.
@@ -201,6 +217,19 @@ interface Props {
    *  for back/left/right and when non-empty. The pick is emitted as
    *  `front_reference`. */
   frontReferences?: string[]
+  /**
+   * Render occasion of the image routing (app/imagegen/occasions.py). Set = the
+   * dialog offers 'Auto (routing)' as the preselected entry: no backend is sent,
+   * the server routes with fallback + marker. A concrete pick stays explicit —
+   * that backend or an error.
+   */
+  occasion?: string
+  /**
+   * Character whose own backend match is position 0 of the occasion chain.
+   * Only for the character being edited or the player's own avatar — the
+   * server ignores it for anyone else.
+   */
+  occasionCharacter?: string
 }
 
 // Charakter-Eintrag: manche Endpunkte liefern Strings, andere {name, type}-Objekte
@@ -210,6 +239,21 @@ type CharOpt = string | { name: string; type?: string }
 const charName = (c: CharOpt): string => (typeof c === 'string' ? c : c?.name || '')
 
 const LORA_SLOTS = 4
+
+// Backend-select value of "Auto (routing)" — never a backend name.
+const AUTO = '__auto__'
+
+// Source strings for the chain statuses of the routing (routing.STATUS_*):
+// the server's status_text is composed English, so the code is labelled here.
+const ROUTING_STATUS_LABEL: Record<string, string> = {
+  ok: 'ok',
+  cooldown: 'cooling down',
+  unavailable: 'unavailable',
+  disabled: 'disabled',
+  disabled_for_character: 'disabled for this character',
+  wrong_kind: 'wrong kind of backend',
+  no_match: 'matches no backend',
+}
 
 // Source strings for the view selector — 'Back view' etc., never a bare
 // 'Back' (which collides with the navigation label in the translations).
@@ -225,7 +269,7 @@ export function ImageGenDialog({
   showCreateNew, defaultCreateNew,
   enhanceEndpoint = '/world/imagegen-enhance-prompt', onSubmit, onClose,
   mode = 'create', hideNegative, characterOptions,
-  viewChoice, frontReferences,
+  viewChoice, frontReferences, occasion, occasionCharacter,
 }: Props) {
   const isRegen = mode === 'regenerate'
   const { t } = useI18n()
@@ -247,8 +291,10 @@ export function ImageGenDialog({
   const [selectedChars, setSelectedChars] = useState<string[]>([])
   const [options, setOptions] = useState<ImagegenOption[] | null>(null)
   const [mediaOff, setMediaOff] = useState(false)
-  const [defaultLocationOpt, setDefaultLocationOpt] = useState<string>('')
-  const [optionKey, setOptionKey] = useState<string>('') // selected backend name
+  // Backend the occasion's chain resolves to right now ('' = none / no occasion).
+  const [routedName, setRoutedName] = useState<string>('')
+  const [routedChain, setRoutedChain] = useState<RoutingChainRow[]>([])
+  const [optionKey, setOptionKey] = useState<string>('') // selected backend name or AUTO
   const [loraSlots, setLoraSlots] = useState<LoraDefault[]>(
     () => Array.from({ length: LORA_SLOTS }, () => ({ name: 'None', strength: 1.0 })),
   )
@@ -332,14 +378,19 @@ export function ImageGenDialog({
   // Load options once when dialog first opens.
   useEffect(() => {
     if (!open || options !== null) return
-    apiGet<ImagegenOptionsResponse>('/world/imagegen-options')
+    const qs = occasion
+      ? `?occasion=${encodeURIComponent(occasion)}`
+        + (occasionCharacter ? `&character=${encodeURIComponent(occasionCharacter)}` : '')
+      : ''
+    apiGet<ImagegenOptionsResponse>(`/world/imagegen-options${qs}`)
       .then((d) => {
         setOptions(d.options || [])
         setMediaOff(d.media_generation_enabled === false)
-        setDefaultLocationOpt(d.default_location || '')
+        setRoutedName(d.resolved || '')
+        setRoutedChain(d.chain || [])
       })
       .catch(() => setOptions([]))
-  }, [open, options])
+  }, [open, options, occasion, occasionCharacter])
 
   // Selectable backends: inpaint targets belong only in the Map-Fit/Match-Edges
   // dialogs, never in the normal render selection. Available backends first,
@@ -351,23 +402,37 @@ export function ImageGenDialog({
             ...list.filter((o) => o.available === false)]
   }, [options])
 
-  // Pick initial entry once the list arrives (default spec may carry a
-  // legacy "backend:" prefix — compare against the bare backend name).
+  // Pick the initial entry once the list arrives: with an occasion that is
+  // "Auto (routing)", otherwise the first backend.
   useEffect(() => {
     if (!entries.length || optionKey) return
-    const def = defaultLocationOpt.replace(/^backend:/i, '').trim()
-    let match = def ? entries.find((e) => e.name === def) : null
+    if (occasion) {
+      const routed = entries.find((e) => e.name === routedName)
+      // An edit that needs the source in a slot cannot run "auto" on a
+      // backend without one — then the first slot-capable backend is picked.
+      if (requireSourceReference && (routed?.ref_slot_count || 0) === 0) {
+        const withSlot = entries.find((e) => (e.ref_slot_count || 0) > 0)
+        setOptionKey((withSlot || entries[0]).name)
+        return
+      }
+      setOptionKey(AUTO)
+      return
+    }
+    let match: ImagegenOption | undefined = entries[0]
     // "Adjust this image" NEEDS a reference slot — preselecting a slotless
-    // default would only show the blocked-submit hint. Prefer the first
+    // backend would only show the blocked-submit hint. Prefer the first
     // reference-capable backend (available ones sort first) instead.
     if (requireSourceReference && (match?.ref_slot_count || 0) === 0) {
       match = entries.find((e) => (e.ref_slot_count || 0) > 0) || match
     }
-    setOptionKey((match || entries[0]).name)
-  }, [entries, defaultLocationOpt, optionKey, requireSourceReference])
-
+    setOptionKey(match.name)
+  }, [entries, routedName, occasion, optionKey, requireSourceReference])
+  const isAuto = optionKey === AUTO
+  // Under "Auto" everything backend-dependent (style, compose preview, LoRAs,
+  // slots) follows the backend the chain resolves to right now.
+  const effectiveName = isAuto ? routedName : optionKey
   const currentOption = useMemo<ImagegenOption | null>(
-    () => entries.find((e) => e.name === optionKey) || null, [entries, optionKey])
+    () => entries.find((e) => e.name === effectiveName) || null, [entries, effectiveName])
 
   // Backend without a negative input (resolved server-side from the
   // auto/yes/no setting): there is nothing to type into, because the
@@ -398,11 +463,11 @@ export function ImageGenDialog({
   const composeKey = useMemo(
     () => (composeRequest ? JSON.stringify(composeRequest) : ''), [composeRequest])
   useEffect(() => {
-    if (!open || !composeKey || !optionKey) return
+    if (!open || !composeKey || !effectiveName) return
     let dropped = false
     apiPost<ComposePreview>(
       '/world/compose-preview',
-      { ...(JSON.parse(composeKey) as Record<string, unknown>), backend: optionKey },
+      { ...(JSON.parse(composeKey) as Record<string, unknown>), backend: effectiveName },
     )
       .then((r) => {
         if (dropped) return
@@ -413,7 +478,7 @@ export function ImageGenDialog({
       })
       .catch(() => { if (!dropped) setComposeWarnings([]) })
     return () => { dropped = true }
-  }, [open, composeKey, optionKey])
+  }, [open, composeKey, effectiveName])
 
   // "Compose with AI": the same endpoint with llm=true — the LLM stage runs on
   // the mechanical result and its output lands in the (editable) prompt field.
@@ -422,12 +487,12 @@ export function ImageGenDialog({
   // answer is cached again afterwards) — the way to get a fresh rewrite when
   // nothing in the inputs changed but the last one was not good.
   const composeWithLlm = useCallback(async (recompose = false) => {
-    if (!composeKey || !optionKey || composing) return
+    if (!composeKey || !effectiveName || composing) return
     setComposing(true)
     try {
       const r = await apiPost<ComposePreview>('/world/compose-preview', {
         ...(JSON.parse(composeKey) as Record<string, unknown>),
-        backend: optionKey, llm: true, ...(recompose ? { recompose: true } : {}),
+        backend: effectiveName, llm: true, ...(recompose ? { recompose: true } : {}),
       })
       setPrompt(r.prompt || '')
       setComposeWarnings(r.warnings || [])
@@ -437,7 +502,7 @@ export function ImageGenDialog({
     } finally {
       setComposing(false)
     }
-  }, [composeKey, optionKey, composing])
+  }, [composeKey, effectiveName, composing])
 
   // ESC closes; lock body scroll while open.
   useEffect(() => {
@@ -485,8 +550,9 @@ export function ImageGenDialog({
       payload.llm_composed = true
       payload.cache_hit = composeLlm.cached
     }
-    // Exact backend name — backends match their own name on the server.
-    payload.backend = currentOption.name
+    // "Auto (routing)": no backend — the server routes the occasion (with
+    // fallback + marker). A concrete pick is explicit: that backend or an error.
+    if (!isAuto) payload.backend = currentOption.name
     if (currentOption.has_loras) {
       const active = loraSlots.filter((l) => l.name && l.name !== 'None')
       payload.loras = active.length ? active : null
@@ -518,7 +584,7 @@ export function ImageGenDialog({
     } finally {
       setSubmitting(false)
     }
-  }, [currentOption, prompt, prefixText, suffixText, settingsPrefix,
+  }, [currentOption, isAuto, prompt, prefixText, suffixText, settingsPrefix,
       settingsSuffix, styleText, styleUseCase, composeRequest, composeLlm,
       loraSlots, onSubmit, onClose,
       isRegen, showCreateNew, createNew,
@@ -624,10 +690,29 @@ export function ImageGenDialog({
                 disabled={submitting}
                 onChange={(e) => setOptionKey(e.target.value)}
               >
+                {occasion ? (
+                  <option value={AUTO}>
+                    {routedName ? `${t('Auto (routing)')} → ${routedName}`
+                      : t('Auto (routing) — no backend available')}
+                  </option>
+                ) : null}
                 {entries.map((e) => (
                   <option key={e.name} value={e.name}>{e.label || e.name}</option>
                 ))}
               </select>
+              {isAuto && routedChain.length ? (
+                // The occasion's chain as the server evaluates it right now —
+                // why "Auto" lands where it does (Admin → Media Generation → Routing).
+                <div className="ga-form-hint">
+                  {routedChain.map((r, i) => (
+                    <div key={`${r.source || ''}${r.position ?? i}`}>
+                      {r.source === 'character' ? t('Character') : String(r.position ?? i + 1)}
+                      {'. '}{r.spec || '—'}{' — '}
+                      {t(ROUTING_STATUS_LABEL[r.status] || r.status)}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
 
               {showResolution ? (
                 <>

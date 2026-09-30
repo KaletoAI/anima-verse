@@ -607,6 +607,7 @@ export function ItemsTab() {
                 open
                 title={t('Generate item image — {name}').replace('{name}', draft.name || draft.id)}
                 defaultPrompt={buildItemPrompt(draft)}
+                occasion="item"
                 onSubmit={submitGenerateImage}
                 onClose={() => setGenDialogOpen(false)}
               />

@@ -190,6 +190,8 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
           open
           title={t('Generate profile image')}
           defaultPrompt={genPrompt}
+          occasion="profile"
+          occasionCharacter={character}
           onSubmit={submitGenerate}
           onClose={() => setGenOpen(false)}
         />

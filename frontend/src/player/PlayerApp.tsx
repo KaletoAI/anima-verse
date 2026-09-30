@@ -587,6 +587,8 @@ export function PlayerApp() {
                 defaultPrompt={ctl.prompt}
                 showRoomReference
                 characterOptions={{ detected: ctl.subjects, available: ctl.available }}
+                occasion="photo"
+                occasionCharacter={data?.avatar || ''}
                 onSubmit={ctl.onSubmit}
                 onClose={ctl.onClose}
               />
@@ -713,6 +715,7 @@ export function PlayerApp() {
             mode="regenerate"
             showRoomReference
             characterOptions={{ detected: ctl.detected, available: ctl.available }}
+            occasion="regenerate"
             onSubmit={ctl.onSubmit}
             onClose={ctl.onClose}
           />
@@ -739,6 +742,7 @@ export function PlayerApp() {
               mode="regenerate"
               showRoomReference
               characterOptions={{ detected: ctl.detected, available: ctl.available }}
+              occasion="regenerate"
               onSubmit={ctl.onSubmit}
               onClose={ctl.onClose}
             />

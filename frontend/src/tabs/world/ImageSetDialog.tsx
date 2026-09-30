@@ -6,9 +6,10 @@ import { useToast } from '../../lib/Toast'
 import { isFloorRoom, type Location } from './worldTypes'
 
 /**
- * ImageSetDialog — generates a whole image SET for one location with ONE
- * chosen backend: the location itself and/or every room, each as
- * day + night. Uses the existing batch endpoint
+ * ImageSetDialog — generates a whole image SET for one location: the
+ * location itself and/or every room, each as day + night. The preselected
+ * "Auto (routing)" sends no backend — every job is routed on the `location`
+ * occasion chain (with fallback + marker); a concrete pick is explicit. Uses the existing batch endpoint
  * POST /world/locations/{id}/gallery/batch (sequential background jobs,
  * visible as tracks in the task panel).
  *
@@ -32,7 +33,9 @@ export function ImageSetDialog({ location, onClose }: {
   const { t } = useI18n()
   const { toast } = useToast()
   const [options, setOptions] = useState<BackendOpt[] | null>(null)
+  // '' = "Auto (routing)": no backend in the body, the server routes.
   const [backend, setBackend] = useState('')
+  const [routedName, setRoutedName] = useState('')
   const [incLocation, setIncLocation] = useState(true)
   const [incRooms, setIncRooms] = useState(true)
   const [incDay, setIncDay] = useState(true)
@@ -40,12 +43,14 @@ export function ImageSetDialog({ location, onClose }: {
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
-    apiGet<{ options?: BackendOpt[] }>('/world/imagegen-options')
+    apiGet<{ options?: BackendOpt[]; resolved?: string | null }>(
+      '/world/imagegen-options?occasion=location')
       .then((d) => {
         // Inpaint backends are edit-only targets — not for set generation.
         const opts = (d.options || []).filter((o) => (o.category || '') !== 'inpaint')
         setOptions(opts)
-        if (opts.length) setBackend(opts[0].name)
+        setRoutedName(d.resolved || '')
+        setBackend('')
       })
       .catch(() => setOptions([]))
   }, [])
@@ -113,6 +118,10 @@ export function ImageSetDialog({ location, onClose }: {
               <label className="ga-imagegen-label">{t('Backend')}</label>
               <select className="ga-input" value={backend} disabled={submitting}
                 onChange={(e) => setBackend(e.target.value)}>
+                <option value="">
+                  {routedName ? `${t('Auto (routing)')} → ${routedName}`
+                    : t('Auto (routing) — no backend available')}
+                </option>
                 {options.map((o) => (
                   <option key={o.name} value={o.name}>{o.label}</option>
                 ))}
