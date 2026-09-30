@@ -505,57 +505,37 @@ def get_outfit_lora_options(character_name: str = "",
     """Returns the LoRA list for the outfit-piece editor.
 
     Args:
-        character_name: whose match globs decide the backend.
-        target: "render" (default) scopes the list to the normal render match
-            (outfit_imagegen.workflow); "tpose" scopes it to the T-pose match
-            (outfit_imagegen.tpose_workflow), falling back to the render match
-            when that glob is empty — the same fallback the render chain uses.
+        character_name: whose own backend match is position 0 of the chain.
+        target: "render" (default) scopes the list to the backend of the
+            image routing's "expression" occasion (outfit and variant
+            renders); "tpose" to the "tpose" occasion (its position 0 is
+            outfit_imagegen.tpose_workflow, else outfit_imagegen.workflow).
 
     Response:
         loras: [{name, missing}] from the LoRA library, scoped to the backend
-        the outfit/variant render would resolve (no 'None' entry).
+        the render would resolve right now (no 'None' entry); empty when the
+        chain resolves to nothing.
     """
     from app.imagegen.service import get_image_service
     imagegen = get_image_service()
     if not imagegen.enabled:
         return {"loras": []}
 
-    # LoRA-library entries for the backend that the VARIANT/OUTFIT generation
-    # would actually resolve for this character — mirror of the chain in
-    # expression_regen: per-character match glob (outfit_imagegen.workflow)
-    # → expression/outfit default spec → cheapest enabled agent backend.
-    # Without this, the Add-LoRA list ignored the page's "Backend match".
     try:
-        import os as _os
         from app.core.config import get_lora_options
+        from app.imagegen.routing import explain_occasion
         from app.imagegen.service import render_has_reference_image
-        # These are outfit/variant renders: they pin the profile image as
-        # identity reference. Resolve the SAME img2img preference the render
-        # applies (from the profile image), so this LoRA list matches the
-        # backend that will actually run.
-        _has_ref = render_has_reference_image(character_name)
-        eff = None
-        if character_name:
-            try:
-                from app.models.character import get_character_profile
-                _ovr = (get_character_profile(character_name) or {}).get("outfit_imagegen") or {}
-                _glob = (_ovr.get("workflow") or "").strip() if isinstance(_ovr, dict) else ""
-                if target == "tpose" and isinstance(_ovr, dict):
-                    # Empty T-pose glob falls back to the render match — same
-                    # chain expression_regen walks for the T-pose use cases.
-                    _glob = (_ovr.get("tpose_workflow") or "").strip() or _glob
-                if _glob:
-                    eff = imagegen.match_backend(_glob, has_input_image=_has_ref)
-            except Exception:
-                eff = None
-        if not eff:
-            _default = (_os.environ.get("EXPRESSION_IMAGEGEN_DEFAULT", "").strip()
-                        or _os.environ.get("OUTFIT_IMAGEGEN_DEFAULT", "").strip())
-            if _default:
-                eff = imagegen.resolve_imagegen_target(_default)
-        if not eff and character_name:
-            eff = imagegen._select_backend_for_agent(character_name,
-                                                     has_input_image=_has_ref)
+        # The same backend the render would take: the occasion's chain with
+        # the character's own match as position 0 and the character's
+        # backend switches applied (image routing). Outfit/variant renders
+        # pin the profile image as identity reference, so the same img2img
+        # preference inside a glob applies as in the render
+        # (render_has_reference_image — one rule for both).
+        _occ = "tpose" if target == "tpose" else "expression"
+        _name = str(explain_occasion(
+            _occ, character=character_name or "",
+            has_ref=render_has_reference_image(character_name)).get("resolved") or "")
+        eff = next((b for b in imagegen.backends if b.name == _name), None)
         lib_options = get_lora_options(
             eff.name if eff else "",
             lora_filter=(getattr(eff, "lora_filter", "") or "") if eff else "")

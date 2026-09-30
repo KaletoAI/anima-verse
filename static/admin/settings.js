@@ -1398,16 +1398,12 @@ function renderInput(f, val, path) {
             return renderProviderSelect(val, path);
         case 'model_select':
             return renderModelSelect(val, path);
-        case 'imagegen_select':
-            return renderImagegenSelect(val, path);
         case 'imagegen_backend_select':
             return renderImagegenBackendSelect(val, path);
         case 'imagegen_model_select':
             return renderImagegenModelSelect(val, path);
         case 'imagegen_model':
             return renderImagegenModelCombo(val, path);
-        case 'imagegen_target_select':
-            return renderImagegenTargetSelect(val, path);
         default: // str / number
             return '<input type="text" id="' + esc(id) + '" value="' + esc(val) + '" '
                 + _phAttr(f)
@@ -1433,21 +1429,6 @@ function renderModelSelect(val, path) {
     select += '</select>';
     select += ' <button class="btn btn-sm" onclick="loadModels(\'' + sJs(path) + '\')">Load Models</button>';
     return select;
-}
-
-function renderImagegenSelect(val, path) {
-    // Default MATCH: combobox with backend-name glob suggestions + free text
-    // (values are bare backend globs). Resolved via resolve_imagegen_target ->
-    // match_backend (by availability). A legacy "backend:" prefix is tolerated.
-    const backends = CONFIG.image_generation?.backends || [];
-    const sugg = new Set();
-    for (const be of backends) {
-        if (be.enabled === false) continue;  // do not suggest disabled backends
-        sugg.add(be.name);
-    }
-    let opts = '';
-    for (const s of sugg) opts += '<option value="' + esc(s) + '">';
-    return '<input type="text" id="f-' + esc(path) + '" list="dl-' + esc(path) + '" value="' + esc(val || '') + '" placeholder="e.g. LocalAI-Flux" onchange="setVal(\'' + sJs(path) + '\', this.value)"><datalist id="dl-' + esc(path) + '">' + opts + '</datalist>';
 }
 
 function renderImagegenBackendSelect(val, path) {
@@ -1505,45 +1486,6 @@ async function loadImagegenBackendModels(path, backendName) {
         opts = '<option value="' + esc(currentVal) + '" selected>' + esc(currentVal) + ' (custom)</option>' + opts;
     }
     sel.innerHTML = opts;
-}
-
-// Backend selection for imagegen_target_select fields.
-// Value format: the bare backend name (as served by /settings/imagegen-targets)
-let IMAGEGEN_TARGETS_CACHE = null;
-
-async function loadImagegenTargets() {
-    if (IMAGEGEN_TARGETS_CACHE) return IMAGEGEN_TARGETS_CACHE;
-    try {
-        const r = await fetch('/admin/settings/imagegen-targets', { credentials: 'same-origin' });
-        const d = await r.json();
-        IMAGEGEN_TARGETS_CACHE = d.targets || [];
-    } catch {
-        IMAGEGEN_TARGETS_CACHE = [];
-    }
-    return IMAGEGEN_TARGETS_CACHE;
-}
-
-function renderImagegenTargetSelect(val, path) {
-    // Render with the current value first; the list loads asynchronously
-    let html = '<select id="f-' + esc(path) + '" onchange="setVal(\'' + sJs(path) + '\', this.value)">';
-    if (val) html += '<option value="' + esc(val) + '" selected>' + esc(val) + '</option>';
-    html += '<option value="">— Auto (cloud preferred) —</option>';
-    html += '</select>';
-    // Async populate
-    setTimeout(async () => {
-        const targets = await loadImagegenTargets();
-        const sel = document.getElementById('f-' + path);
-        if (!sel) return;
-        let opts = '<option value="">— Auto (cloud preferred) —</option>';
-        for (const t of targets) {
-            const dis = t.available ? '' : ' disabled';
-            const tag = t.available ? '' : ' (offline)';
-            const sl = t.value === val ? ' selected' : '';
-            opts += '<option value="' + esc(t.value) + '"' + sl + dis + '>' + esc(t.label + tag) + '</option>';
-        }
-        sel.innerHTML = opts;
-    }, 0);
-    return html;
 }
 
 function renderImagegenModelSelect(val, path) {

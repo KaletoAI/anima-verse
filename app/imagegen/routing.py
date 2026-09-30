@@ -125,19 +125,24 @@ def describe_backend(b: Any) -> Dict[str, Any]:
 
 
 def describe_config_backend(entry: Dict[str, Any]) -> Dict[str, Any]:
-    """Kind of a CONFIG backend entry (save validator — the entry may not be
-    instantiated yet)."""
+    """Kind of a CONFIG backend entry (save validator, config migration,
+    mesh seed — the entry may not be instantiated yet). ``category`` and
+    ``mesh_rig`` are trimmed + lower-cased like the live backend reads them
+    (``ImageBackend.category``, ``OpenAIMeshBackend.mesh_rig``): a stray
+    space in the admin field must not turn a "none" rig into a rig no mesh
+    occasion knows. A blank rig is "mixamo" (the backend default)."""
     from app.imagegen.registry import BACKEND_REGISTRY
     cls = BACKEND_REGISTRY.get(str(entry.get("api_type") or "").strip().lower())
     media = getattr(cls, "MEDIA_TYPE", "image") if cls else "image"
     ref = entry.get("ref_slot_count")
     if ref in (None, ""):
         ref = getattr(cls, "DEFAULT_REF_SLOT_COUNT", 0) if cls else 0
+    rig = str(entry.get("mesh_rig") or "").strip().lower() or "mixamo"
     return {
         "name": str(entry.get("name") or ""),
         "media": media,
-        "category": str(entry.get("category") or "").lower(),
-        "rig": (str(entry.get("mesh_rig") or "mixamo").lower() if media == "mesh" else ""),
+        "category": str(entry.get("category") or "").strip().lower(),
+        "rig": rig if media == "mesh" else "",
         "ref_slot_count": int(ref or 0),
         "enabled": entry.get("enabled", True) is not False,
     }
@@ -386,12 +391,13 @@ def _pos_label(position: Optional[int]) -> str:
 
 
 def _explain_one(row: Dict[str, Any], character: str, backends: List[Any],
-                 switches: Dict[str, Any], p: Any) -> Dict[str, Any]:
+                 switches: Dict[str, Any], p: Any,
+                 has_ref: bool = False) -> Dict[str, Any]:
     oid = row["id"]
     entries = chain_for(oid, character)
     chain, resolved, position = [], None, None
     for spec, source, pos in entries:
-        status, live, names = _evaluate(oid, spec, backends, switches, set(), False)
+        status, live, names = _evaluate(oid, spec, backends, switches, set(), has_ref)
         b = _cheapest_no_rotation(live) if status == STATUS_OK else None
         chain.append({"spec": spec, "source": source, "position": pos,
                       "status": status, "status_text": STATUS_TEXT[status],
@@ -399,7 +405,7 @@ def _explain_one(row: Dict[str, Any], character: str, backends: List[Any],
         if b is not None and resolved is None:
             resolved, position = b.name, pos
     if not entries:
-        b = _empty_chain_pick(oid, backends, switches, set(), False, p, rotate=False)
+        b = _empty_chain_pick(oid, backends, switches, set(), has_ref, p, rotate=False)
         via = "cheapest" if b else "none"
         resolved = b.name if b else None
         reason = ("empty chain — cheapest available backend of this kind" if b
@@ -421,14 +427,21 @@ def _explain_one(row: Dict[str, Any], character: str, backends: List[Any],
             "intended_spec": intended["spec"] if intended else ""}
 
 
-def explain_occasion(occasion: str, character: str = "", pool: Any = None) -> Dict[str, Any]:
+def explain_occasion(occasion: str, character: str = "", pool: Any = None, *,
+                     has_ref: bool = False) -> Dict[str, Any]:
     """``explain_image_routing`` for ONE occasion (dialog preselection, the
-    LoRA list of a character render, the mesh dialogs' default)."""
+    LoRA list of a character render, the mesh dialogs' default). Never
+    probes, never advances the round-robin.
+
+    ``has_ref``: the render will slot a reference image — inside a glob the
+    img2img backends are preferred, exactly as ``resolve_image_route`` does
+    for that render (the character LoRA list passes the variant render's
+    ``render_has_reference_image``, so both land on the same backend)."""
     get_occasion(occasion)
     p = _pool(pool)
     row = next(r for r in catalog_payload() if r["id"] == occasion)
     return _explain_one(row, character, list(p.backends),
-                        _character_switches(character), p)
+                        _character_switches(character), p, has_ref=has_ref)
 
 
 def explain_image_routing(character: str = "", pool: Any = None) -> Dict[str, Any]:

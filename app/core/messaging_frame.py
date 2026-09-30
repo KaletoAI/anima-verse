@@ -163,14 +163,15 @@ def _process_chroma_key(image_bytes: bytes) -> Tuple[bytes, Dict[str, Any]]:
 def parse_target(target: str) -> Tuple[str, str]:
     """Turns the configured render target into a plain backend-name glob.
 
-    The canonical form is a bare backend glob ("Flux2*", or an exact backend
-    name as served by /admin/settings/imagegen-targets); ``backend:<glob>`` is
-    the tolerated legacy prefix. The ComfyUI-era ``workflow:<glob>`` is NOT a
+    The canonical form is a bare backend glob ("Flux2*", or the exact name of
+    an enabled image backend); ``backend:<glob>`` is the tolerated legacy
+    prefix. An empty target is no pick: the "frame" chain of the image routing
+    (Admin → Media Generation → Routing) decides. The ComfyUI-era ``workflow:<glob>`` is NOT a
     target format any more — it resolves to nothing at render time, so it is
     rejected here instead of silently falling back to some other backend.
 
     Returns:
-        (glob, error) — ``glob`` empty means auto-selection; ``error`` empty
+        (glob, error) — ``glob`` empty means the "frame" chain decides; ``error`` empty
         means the spec was accepted. Pure function, no service access.
     """
     spec = (target or "").strip()
@@ -192,7 +193,7 @@ def parse_target(target: str) -> Tuple[str, str]:
 
 
 def unknown_backend_error(glob: str, backend_names) -> str:
-    """Checks the glob against the backends the admin select actually offers.
+    """Checks an explicit glob against the enabled image backends of the pool.
 
     The ComfyUI era left WORKFLOW names in this field ("Z-Image", "Flux") —
     after the legacy prefix is stripped they look canonical but match no
@@ -208,8 +209,9 @@ def unknown_backend_error(glob: str, backend_names) -> str:
     if not pattern or any(fnmatch.fnmatch(n.lower(), pattern) for n in names):
         return ""
     offered = ", ".join(sorted(names)) if names else "none"
-    return (f"No enabled backend matches '{glob}' — pick a backend in "
-            f"Admin → Settings → Messaging frame. Enabled backends: {offered}")
+    return (f"No enabled backend matches '{glob}' — name one of them, or send "
+            f"no target to render on the Messaging frame chain (Admin → Media "
+            f"Generation → Routing). Enabled backends: {offered}")
 
 
 def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
@@ -217,10 +219,11 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
 
     Args:
         prompt: image prompt (e.g. "modern smartphone, pure green screen, isolated").
-        target: render target as served by /admin/settings/imagegen-targets —
-            a backend-name glob, the legacy "backend:<glob>" (an EXPLICIT pick:
-            exactly that backend, no fallback), or empty = routed through the
-            image routing's "frame" occasion.
+        target: an optional EXPLICIT render target from the request body —
+            a backend-name glob or the legacy "backend:<glob>" (exactly that
+            backend, no fallback); empty = routed on the image routing's
+            "frame" chain (Admin → Media Generation → Routing), the normal
+            case since the admin field went away.
 
     Returns:
         dict with status, path, bbox, frame_size, or error.
@@ -242,8 +245,7 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
     except Exception as e:
         return {"status": "error", "error": f"image service missing: {e}"}
 
-    # 3. The glob must name a backend the pool knows — same list the admin
-    # select offers (/admin/settings/imagegen-targets: enabled image backends).
+    # 3. An explicit glob must name an enabled image backend of the pool.
     if backend_glob:
         known = [b.name for b in getattr(image_skill, "backends", [])
                  if getattr(b, "instance_enabled", False)
@@ -274,8 +276,8 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
             "negative_prompt": "person, people, face, reflection, text, watermark, blurry, lowres",
         }
         if backend_glob:
-            # Explicit pick: the user chose this backend in the admin select —
-            # match it or fail, never render on a different one silently.
+            # Explicit pick: the request named this backend — match it or
+            # fail, never render on a different one silently.
             payload["backend"] = backend_glob
         else:
             # No pick: the "frame" chain of the image routing decides.

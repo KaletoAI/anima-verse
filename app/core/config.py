@@ -878,11 +878,14 @@ def _seed_default_mesh_backends(config: dict) -> bool:
     existing world's backend list is the admin's, and silently appending
     aliases to it would resurrect entries they deleted on purpose.
 
-    In-memory only — see `migrate_file()` for the disk side.
+    In-memory only — see `migrate_file()` for the disk side. A mesh backend
+    is recognised by its media kind (``routing.describe_config_backend``, the
+    one source the routing migration and the save validator use too).
     """
+    from app.imagegen.routing import describe_config_backend
     ig = config.setdefault("image_generation", {})
     backends = ig.setdefault("backends", [])
-    if any(isinstance(b, dict) and b.get("api_type") == "openai_mesh"
+    if any(isinstance(b, dict) and describe_config_backend(b)["media"] == "mesh"
            for b in backends):
         return False
     backends.extend(_default_mesh_backend_entries())

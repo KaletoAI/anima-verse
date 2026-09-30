@@ -2947,9 +2947,14 @@ def get_gallery_image(
 
 
 @router.get("/imagegen-options")
-def get_imagegen_options() -> Dict[str, Any]:
-    """Returns available image-generation backends (without character binding)."""
-    return world_ops.build_imagegen_options()
+def get_imagegen_options(occasion: str = "", character: str = "") -> Dict[str, Any]:
+    """Available image-generation backends; with `occasion`, also what the
+    image routing resolves that occasion to right now (dialog preselection)."""
+    from app.imagegen.occasions import UnknownOccasionError
+    try:
+        return world_ops.build_imagegen_options(occasion.strip(), character.strip())
+    except UnknownOccasionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/imagegen-enhance-prompt")

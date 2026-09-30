@@ -79,6 +79,27 @@ B5 the TRACKED demo config (worlds/demo/config.json) holds the A1 chains
    and none of the old keys.
 B6 the admin schema declares none of the removed fields, and the
    instagram plugin.yaml has no imagegen_default.
+
+PART C — one kind source for config entries (Task 18a, from the Task 17
+review): `routing.describe_config_backend` trims + lower-cases `category`
+and `mesh_rig` like the live backend does (`ImageBackend.category`,
+`OpenAIMeshBackend.mesh_rig` = strip().lower(), blank = "mixamo").
+C1 {"api_type": "openai_mesh", "mesh_rig": "None ", "category": " IMG2MESH "}
+   -> rig "none", category "img2mesh"; mesh_rig "  " -> rig "mixamo".
+C2 mesh default "Obj*" over {Obj-A: rig "none ", img2mesh} -> routing
+   {"mesh_object": ["Obj*"], "mesh_building": ["Obj*"]} (before: rig
+   "none " is no rig the catalog knows -> the default was dropped).
+   Mesh default "Obj*" over {Obj-H: rig "mixamo", Obj-Shrink: rig "none",
+   category "mesh2mesh "} -> {"mesh_humanoid": ["Obj*"]} only (before: the
+   shrink alias with a trailing space counted as img2mesh and added the
+   object + building chains).
+C3 `_seed_default_mesh_backends` recognises a mesh backend by
+   describe_config_backend(...)["media"] == "mesh": a config whose only
+   backend has api_type " OpenAI_Mesh " (resolves to the mesh class) ->
+   False, nothing appended; a config with only an image backend -> True,
+   the default catalog appended.
+Fails on commit 4eb1856e (before Task 18a): C1 (untrimmed), both C2 cases
+and the first C3 case (the api_type comparison seeds a second catalog).
 """
 import ast
 import copy
@@ -283,9 +304,38 @@ def part_b():
     check("B6 instagram yaml", "imagegen_default" in yml, False)
 
 
+def part_c():
+    print("C) one kind source for config entries")
+    from app.imagegen.routing import describe_config_backend
+    k = describe_config_backend({"name": "M", "api_type": "openai_mesh",
+                                 "mesh_rig": "None ", "category": " IMG2MESH "})
+    check("C1 trimmed", (k["media"], k["rig"], k["category"]), ("mesh", "none", "img2mesh"))
+    k = describe_config_backend({"name": "M", "api_type": "openai_mesh", "mesh_rig": "  "})
+    check("C1 blank rig", k["rig"], "mixamo")
+    c = {"image_generation": {"mesh_imagegen_default": "Obj*", "backends": [
+        mesh("Obj-A", "none ")]}}
+    cfgmod._migrate_image_routing(c)
+    check("C2 rig with a trailing space migrates", c["image_generation"]["routing"],
+          {"mesh_object": ["Obj*"], "mesh_building": ["Obj*"]})
+    c = {"image_generation": {"mesh_imagegen_default": "Obj*", "backends": [
+        mesh("Obj-H", "mixamo"), mesh("Obj-Shrink", "none", "mesh2mesh ")]}}
+    cfgmod._migrate_image_routing(c)
+    check("C2 mesh2mesh with a trailing space never counts", c["image_generation"]["routing"],
+          {"mesh_humanoid": ["Obj*"]})
+    c = {"image_generation": {"backends": [
+        {"name": "Mx", "api_type": " OpenAI_Mesh ", "enabled": True}]}}
+    check("C3 mesh recognised by kind", (cfgmod._seed_default_mesh_backends(c),
+                                         len(c["image_generation"]["backends"])), (False, 1))
+    c = {"image_generation": {"backends": [img("Flux")]}}
+    check("C3 image-only config seeded", (cfgmod._seed_default_mesh_backends(c),
+                                          len(c["image_generation"]["backends"]) > 1),
+          (True, True))
+
+
 if __name__ == "__main__":
     part_a()
     part_b()
+    part_c()
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed: {FAILS}")

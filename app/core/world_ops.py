@@ -2540,8 +2540,15 @@ def build_gallery_payload(location_name: str) -> Dict[str, Any]:
     }
 
 
-def build_imagegen_options() -> Dict[str, Any]:
-    """Returns available image-generation backends (without character binding)."""
+def build_imagegen_options(occasion: str = "", character: str = "") -> Dict[str, Any]:
+    """Returns available image-generation backends (without character binding).
+
+    With ``occasion``, the answer also says what the image routing resolves
+    that occasion to right now (``routing.explain_occasion`` — never probes):
+    ``occasion``, ``resolved`` (backend name or None), ``via``, ``reason`` and
+    the evaluated ``chain``. ``character`` puts that character's own match in
+    front of a character-scoped chain (position 0). An unknown occasion
+    raises ``UnknownOccasionError`` (the route answers 400)."""
     from app.core.prompt_adapters import get_target_model
 
     from app.imagegen.base import media_generation_enabled
@@ -2550,9 +2557,19 @@ def build_imagegen_options() -> Dict[str, Any]:
     # dialogs disable their Generate button on it instead of letting the user
     # compose a prompt that the server will only refuse (409).
     media_on = media_generation_enabled()
+    if occasion:
+        from app.imagegen.occasions import get_occasion
+        get_occasion(occasion)          # UnknownOccasionError before anything else
     imagegen = get_image_service()
     if not imagegen.enabled:
-        return {"options": [], "media_generation_enabled": media_on}
+        result: Dict[str, Any] = {"options": [], "media_generation_enabled": media_on}
+        if occasion:
+            # No image service = nothing a render could run on; the same keys
+            # as below so the dialog reads one shape.
+            result.update({"occasion": occasion, "resolved": None, "via": "none",
+                           "reason": "image generation is not available",
+                           "chain": []})
+        return result
 
     options = []
     # Backends (CivitAI, Together, LocalAI, …). Every ENABLED backend is
@@ -2624,14 +2641,15 @@ def build_imagegen_options() -> Dict[str, Any]:
             opt["lora_options"] = get_lora_options(
                 b.name, lora_filter=getattr(b, "lora_filter", "") or "")
         options.append(opt)
-    # Default preselection for locations
-    loc_default = os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip()
     result = {"options": options, "media_generation_enabled": media_on}
-    # Global outfit default (match spec, e.g. "backend:LocalAI-Flux") — the
-    # character-render match UI shows it when no override is set.
-    result["outfit_imagegen_default"] = (os.environ.get("OUTFIT_IMAGEGEN_DEFAULT") or "").strip()
-    if loc_default:
-        result["default_location"] = loc_default
+    # What the occasion's chain resolves to right now (image routing) — the
+    # dialogs show it as "Auto (routing) → <backend>" and scope LoRAs/slots on it.
+    if occasion:
+        from app.imagegen.routing import explain_occasion
+        row = explain_occasion(occasion, character=character)
+        result.update({"occasion": occasion, "resolved": row["resolved"],
+                       "via": row["via"], "reason": row["reason"],
+                       "chain": row["chain"]})
     return result
 
 

@@ -333,6 +333,52 @@ F-M10 the prop mesh (props._generate mesh_only, glob "", the landing hooks
 Fails on commit 4893221f (before Task 16b): F-M1 aborts with
    "generate_mesh() got an unexpected keyword argument 'occasion'".
 
+PART G — dialog options (plan Task 18a). Pool 1: "Gw" (cost 0, family
+natural) cooling via mark_unhealthy, "Cloud" (cost 5, family keywords).
+G1 build_imagegen_options("location") with rules location ["Gw","Cloud"]
+   and Gw cooling -> resolved "Cloud", via "chain", chain statuses
+   ["cooldown","ok"]; no "default_location" / "outfit_imagegen_default" key
+   (the env bridge of the old default fields is gone, R2b).
+G2 build_imagegen_options() without occasion -> no "resolved" key.
+G3 the route answers 400 for occasion "mesh_low" (not in the catalog).
+G4 get_outfit_lora_options("", "render") scopes on the expression chain's
+   resolved backend: with rules expression ["Cloud"] the answer lists the
+   LoRA library entries of "Cloud" (checked via a patched get_lora_options
+   that records its backend argument).
+G5 neither build_imagegen_options nor get_outfit_lora_options reads
+   os.environ (source check: the configuration is not an environment
+   variable, CLAUDE.md).
+G6-G9 the character LoRA list resolves the backend EXACTLY like the routed
+   variant render (Task 11 review): the same occasion (expression, or tpose
+   for target "tpose"), the character's own match as position 0, the
+   character's backend switches, and the img2img preference of a render
+   that slots the profile image. The render side is the REAL string façade
+   (generate_from_input with the payload keys the variant render sends:
+   agent_name, occasion, profile_only, skip_gallery) whose
+   generate_on_backend is replaced by a recorder of the backend name.
+   Pool 2: "Rule" (cost 1, img2img), "Own-txt" (cost 0, txt2img), "Own-ref"
+   (cost 5, img2img). Character "Vela": outfit_imagegen {"workflow":
+   "Own*"}; rules expression ["Rule"], tpose ["Rule"].
+G6 Vela without a profile image: no reference -> "Own*" is position 0,
+   both Own backends are live, the cheaper Own-txt wins -> LoRA scope
+   ["Own-txt"], the render ran on "Own-txt".
+G7 Vela WITH a profile image: the render slots it (has_ref) -> inside the
+   glob the img2img backend is preferred -> LoRA scope ["Own-ref"], the
+   render ran on "Own-ref" (without has_ref the list would say Own-txt).
+G8 Own-txt and Own-ref switched off for Vela (per-character backend
+   switches, skill config image_generation.instances) -> position 0 is
+   disabled_for_character, position 1 "Rule" resolves -> LoRA scope
+   ["Rule"], the render ran on "Rule"; /world/imagegen-options?occasion=
+   expression&character=Vela says resolved "Rule" and its chain[0] is the
+   character's own entry (source "character", status
+   "disabled_for_character").
+G9 switches back on; target "tpose" with tpose_workflow "Rule" -> LoRA
+   scope ["Rule"], the tpose render ran on "Rule"; with tpose_workflow ""
+   the tpose chain falls back to the workflow match -> ["Own-ref"] and the
+   render on "Own-ref".
+Fails on commit 4eb1856e (before Task 18a): G1 aborts with
+   "build_imagegen_options() takes 0 positional arguments but 1 was given".
+
 DEFERRED: the surface-texture case of the plan (its C4, occasion
 "surface_texture") waits until app/core/surface_textures.py — which carries
 another session's uncommitted change — is routed.
@@ -1318,6 +1364,116 @@ def part_f_mesh():
         patched.clear()
 
 
+def part_g():
+    print("G) dialog options")
+    import inspect
+    from fastapi import HTTPException
+    from app.core import world_ops
+    from app.routes import characters as characters_routes
+    from app.routes import world as world_routes
+    import app.core.config as cfg_mod
+    gw = FakeBackend("Gw", 0, "natural")
+    gw.mark_unhealthy("smoke", 300)
+    cloud = FakeBackend("Cloud", 5, "keywords")
+    install_pool(gw, cloud)
+    set_routing({"location": ["Gw", "Cloud"], "expression": ["Cloud"]})
+    d = world_ops.build_imagegen_options("location")
+    check("G1 resolved", (d.get("resolved"), d.get("via"),
+                          [r["status"] for r in d.get("chain", [])]),
+          ("Cloud", "chain", ["cooldown", "ok"]))
+    check("G1 old keys gone", ("default_location" in d, "outfit_imagegen_default" in d),
+          (False, False))
+    check("G2 no occasion", "resolved" in world_ops.build_imagegen_options(), False)
+    try:
+        world_routes.get_imagegen_options(occasion="mesh_low", character="")
+        check("G3 unknown occasion", "no exception", 400)
+    except HTTPException as e:
+        check("G3 unknown occasion", e.status_code, 400)
+
+    def lora_scope(character, target):
+        seen = []
+        _real = cfg_mod.get_lora_options
+        cfg_mod.get_lora_options = lambda name, lora_filter="": seen.append(name) or []
+        try:
+            characters_routes.get_outfit_lora_options(character_name=character,
+                                                      target=target)
+        finally:
+            cfg_mod.get_lora_options = _real
+        return seen[-1:] if seen else []
+
+    check("G4 LoRA scope", lora_scope("", "render"), ["Cloud"])
+    check("G5 no environment reads",
+          ["os.environ" in inspect.getsource(f)
+           for f in (world_ops.build_imagegen_options,
+                     characters_routes.get_outfit_lora_options)],
+          [False, False])
+
+    from app.models.character import (get_character_images_dir, save_character_profile,
+                                      save_character_skill_config,
+                                      set_character_profile_image)
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile
+    rule = FakeBackend("Rule", 1, "natural")
+    own_txt = FakeBackend("Own-txt", 0, "natural")
+    own_txt.category = "txt2img"
+    own_ref = FakeBackend("Own-ref", 5, "natural")
+    svc = install_pool(rule, own_txt, own_ref)
+    rendered = []
+
+    def _record(b, data, explicit):
+        rendered.append(b.name)
+        return service_mod.GenerationResult(text="ok", meta={}, gallery_character="Vela",
+                                             files=[], skip_gallery=True)
+    svc.generate_on_backend = _record
+    set_routing({"expression": ["Rule"], "tpose": ["Rule"]})
+    save_character_profile("Vela", {"name": "Vela", "appearance": "a short woman",
+                                    "outfit_imagegen": {"workflow": "Own*"}},
+                           create_new=True)
+
+    def set_override(**fields):
+        with keyed_lock("character_profile", "Vela"):
+            prof = get_character_profile("Vela")
+            prof["outfit_imagegen"] = {**(prof.get("outfit_imagegen") or {}), **fields}
+            save_character_profile("Vela", prof)
+
+    def render(occasion):
+        rendered.clear()
+        svc.generate_from_input(json.dumps({
+            "prompt": "a variant", "input": "a variant", "agent_name": "Vela",
+            "user_id": "", "set_profile": False, "skip_gallery": True,
+            "auto_enhance": False, "occasion": occasion, "profile_only": True}))
+        return rendered[-1:]
+
+    check("G6 no reference: LoRA scope / render",
+          (lora_scope("Vela", "render"), render("expression")),
+          (["Own-txt"], ["Own-txt"]))
+    img_dir = get_character_images_dir("Vela")
+    img_dir.mkdir(parents=True, exist_ok=True)
+    (img_dir / "Vela_profile.png").write_bytes(png_bytes())
+    check("G7 profile image set", set_character_profile_image("Vela", "Vela_profile.png"),
+          True)
+    check("G7 reference: LoRA scope / render",
+          (lora_scope("Vela", "render"), render("expression")),
+          (["Own-ref"], ["Own-ref"]))
+    save_character_skill_config("Vela", "image_generation", {"instances": {
+        "Own-txt": {"enabled": False}, "Own-ref": {"enabled": False}}})
+    check("G8 switched off: LoRA scope / render",
+          (lora_scope("Vela", "render"), render("expression")),
+          (["Rule"], ["Rule"]))
+    d = world_routes.get_imagegen_options(occasion="expression", character="Vela")
+    first = (d.get("chain") or [{}])[0]
+    check("G8 options with character",
+          (d.get("resolved"), first.get("source"), first.get("status")),
+          ("Rule", "character", "disabled_for_character"))
+    save_character_skill_config("Vela", "image_generation", {"instances": {}})
+    set_override(tpose_workflow="Rule")
+    check("G9 tpose match: LoRA scope / render",
+          (lora_scope("Vela", "tpose"), render("tpose")), (["Rule"], ["Rule"]))
+    set_override(tpose_workflow="")
+    check("G9 tpose falls back to the workflow match: LoRA scope / render",
+          (lora_scope("Vela", "tpose"), render("tpose")), (["Own-ref"], ["Own-ref"]))
+
+
 if __name__ == "__main__":
     part_a()
     part_c(*part_b())
@@ -1326,6 +1482,7 @@ if __name__ == "__main__":
     part_e()
     part_f_video()
     part_f_mesh()
+    part_g()
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed: {FAILS}")

@@ -1358,37 +1358,6 @@ async def media_backend_online(request: Request, user=Depends(require_admin)):
     return {"name": name, "available": available, **backend.runtime_status()}
 
 
-@router.get("/settings/imagegen-targets")
-def imagegen_targets(user=Depends(require_admin)):
-    """Returns the list of image-gen targets for admin selects (backends only).
-
-    Format: [{"value": "CivitAI", "label": "...", "type": "backend", "available": True}, ...]
-    """
-    try:
-        from app.core.dependencies import get_skill_manager
-        from app.imagegen.service import get_image_service
-        img = get_image_service()
-        if not img.enabled:
-            return {"targets": []}
-    except Exception as e:
-        return {"targets": [], "error": str(e)}
-
-    out = []
-    for b in img.backends:
-        if not b.instance_enabled:
-            continue
-        # These selects pick IMAGE render targets — skip video backends.
-        if getattr(b, "MEDIA_TYPE", "image") != "image":
-            continue
-        out.append({
-            "value": b.name,
-            "label": f"{b.name} ({b.api_type})",
-            "type": "backend",
-            "available": bool(b.available),
-        })
-    return {"targets": out}
-
-
 @router.get("/templates/list")
 def templates_list(user=Depends(require_admin)):
     """List all .md files under shared/templates/llm/."""
