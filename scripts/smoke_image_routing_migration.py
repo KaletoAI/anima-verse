@@ -98,8 +98,12 @@ C3 `_seed_default_mesh_backends` recognises a mesh backend by
    backend has api_type " OpenAI_Mesh " (resolves to the mesh class) ->
    False, nothing appended; a config with only an image backend -> True,
    the default catalog appended.
+C4 (fix round 1) the live mesh backend reads its rig like C1: an
+   OpenAIMeshBackend with MESH_RIG "  " has mesh_rig "mixamo" (was "" —
+   blank after the strip), MESH_RIG " None " -> "none".
 Fails on commit 4eb1856e (before Task 18a): C1 (untrimmed), both C2 cases
 and the first C3 case (the api_type comparison seeds a second catalog).
+Fails on commit d0452bc6 (before fix round 1): C4 (mesh_rig "" for "  ").
 """
 import ast
 import copy
@@ -330,6 +334,15 @@ def part_c():
     check("C3 image-only config seeded", (cfgmod._seed_default_mesh_backends(c),
                                           len(c["image_generation"]["backends"]) > 1),
           (True, True))
+
+    from app.imagegen.backends.openai_mesh import OpenAIMeshBackend
+    rigs = []
+    for raw in ("  ", " None "):
+        os.environ["SMOKE_RIG_MESH_RIG"] = raw
+        rigs.append(OpenAIMeshBackend(name="R", api_url="http://mesh.invalid", cost=1,
+                                      env_prefix="SMOKE_RIG_", model="R").mesh_rig)
+    del os.environ["SMOKE_RIG_MESH_RIG"]
+    check("C4 live rig reading", rigs, ["mixamo", "none"])
 
 
 if __name__ == "__main__":

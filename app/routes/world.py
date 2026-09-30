@@ -2946,13 +2946,33 @@ def get_gallery_image(
     )
 
 
+def _routing_character_for_caller(character: str) -> str:
+    """``character`` when the requesting user may see that character's image
+    routing (its own backend match, its per-character backend switches):
+    an admin, or a user who has it in allowed_characters. Anyone else gets
+    "" — the options are then explained without the character."""
+    from app.core import users
+    from app.core.auth_dependency import get_current_user_from_ctx
+    if not character:
+        return ""
+    user = get_current_user_from_ctx()
+    if not user:
+        return ""
+    if user.get("role") == users.ROLE_ADMIN:
+        return character
+    return character if character in (user.get("allowed_characters") or []) else ""
+
+
 @router.get("/imagegen-options")
 def get_imagegen_options(occasion: str = "", character: str = "") -> Dict[str, Any]:
     """Available image-generation backends; with `occasion`, also what the
-    image routing resolves that occasion to right now (dialog preselection)."""
+    image routing resolves that occasion to right now (dialog preselection).
+    `character` is honoured only for an admin or a character the caller
+    controls (see ``_routing_character_for_caller``), otherwise ignored."""
     from app.imagegen.occasions import UnknownOccasionError
     try:
-        return world_ops.build_imagegen_options(occasion.strip(), character.strip())
+        return world_ops.build_imagegen_options(
+            occasion.strip(), _routing_character_for_caller(character.strip()))
     except UnknownOccasionError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

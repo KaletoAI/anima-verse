@@ -180,8 +180,10 @@ class OpenAIMeshBackend(ImageBackend):
         #              inseparable pair
         #   none    -> unrigged, ONE glb (textures embedded); static props /
         #              building models — never matched to a character
+        # Blank / whitespace-only = "mixamo", the same reading as
+        # routing.describe_config_backend (one rule for config + live).
         self.mesh_rig = (os.environ.get(f"{env_prefix}MESH_RIG", "")
-                         or "mixamo").strip().lower()
+                         or "").strip().lower() or "mixamo"
         # Alias params (schema: input_remove_background / input_face_num /
         # input_no_fingers)
         self.remove_background = str(

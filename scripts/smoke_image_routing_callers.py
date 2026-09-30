@@ -369,15 +369,33 @@ G8 Own-txt and Own-ref switched off for Vela (per-character backend
    switches, skill config image_generation.instances) -> position 0 is
    disabled_for_character, position 1 "Rule" resolves -> LoRA scope
    ["Rule"], the render ran on "Rule"; /world/imagegen-options?occasion=
-   expression&character=Vela says resolved "Rule" and its chain[0] is the
-   character's own entry (source "character", status
+   expression&character=Vela asked by an ADMIN says resolved "Rule" and its
+   chain[0] is the character's own entry (source "character", status
    "disabled_for_character").
 G9 switches back on; target "tpose" with tpose_workflow "Rule" -> LoRA
    scope ["Rule"], the tpose render ran on "Rule"; with tpose_workflow ""
    the tpose chain falls back to the workflow match -> ["Own-ref"] and the
    render on "Own-ref".
+G10 (fix round 1) the dialog preselection names the backend the façade
+   renders on: switches on, tpose_workflow "", Vela has her profile image.
+   build_imagegen_options("expression", "Vela") -> resolved "Own-ref" (a
+   character render slots the portrait -> img2img preferred) and the façade
+   render of occasion "expression" ran on "Own-ref"; a "profile" render
+   CREATES the portrait (set_profile) and slots none ->
+   build_imagegen_options("profile", "Vela") resolved "Own-txt" and the
+   façade render with set_profile True ran on "Own-txt".
+G11 (fix round 1) ?character= on the open route is honoured only for an
+   admin or a user with the character in allowed_characters; anyone else
+   gets the chain WITHOUT the character (no position 0 — its own match and
+   switches are per-character config). Route
+   get_imagegen_options("expression", "Vela"), chain[0].source:
+   no user -> "rule"; user role "user" with allowed [] -> "rule";
+   user with allowed ["Vela"] -> "character"; admin -> "character".
 Fails on commit 4eb1856e (before Task 18a): G1 aborts with
    "build_imagegen_options() takes 0 positional arguments but 1 was given".
+Fails on commit d0452bc6 (before fix round 1): G10 expression (options say
+   "Own-txt", the render runs on "Own-ref") and G11 (every caller sees the
+   character's chain).
 
 DEFERRED: the surface-texture case of the plan (its C4, occasion
 "surface_texture") waits until app/core/surface_textures.py — which carries
@@ -1460,7 +1478,17 @@ def part_g():
     check("G8 switched off: LoRA scope / render",
           (lora_scope("Vela", "render"), render("expression")),
           (["Rule"], ["Rule"]))
-    d = world_routes.get_imagegen_options(occasion="expression", character="Vela")
+    from app.core.auth_dependency import current_user_ctx
+
+    def as_user(user, fn):
+        tok = current_user_ctx.set(user)
+        try:
+            return fn()
+        finally:
+            current_user_ctx.reset(tok)
+    admin = {"id": 1, "username": "demo", "role": "admin", "allowed_characters": []}
+    d = as_user(admin, lambda: world_routes.get_imagegen_options(
+        occasion="expression", character="Vela"))
     first = (d.get("chain") or [{}])[0]
     check("G8 options with character",
           (d.get("resolved"), first.get("source"), first.get("status")),
@@ -1472,6 +1500,33 @@ def part_g():
     set_override(tpose_workflow="")
     check("G9 tpose falls back to the workflow match: LoRA scope / render",
           (lora_scope("Vela", "tpose"), render("tpose")), (["Own-ref"], ["Own-ref"]))
+
+    def render_profile():
+        rendered.clear()
+        svc.generate_from_input(json.dumps({
+            "prompt": "a portrait", "input": "a portrait", "agent_name": "Vela",
+            "user_id": "", "set_profile": True, "skip_gallery": True,
+            "auto_enhance": False, "occasion": "profile"}))
+        return rendered[-1:]
+    check("G10 expression: options resolved / façade render",
+          ([world_ops.build_imagegen_options("expression", "Vela").get("resolved")],
+           render("expression")), (["Own-ref"], ["Own-ref"]))
+    check("G10 profile: options resolved / façade render",
+          ([world_ops.build_imagegen_options("profile", "Vela").get("resolved")],
+           render_profile()), (["Own-txt"], ["Own-txt"]))
+
+    def source_for(user):
+        d = as_user(user, lambda: world_routes.get_imagegen_options(
+            occasion="expression", character="Vela"))
+        return (d.get("chain") or [{}])[0].get("source")
+    check("G11 who may see the character's routing",
+          [source_for(None),
+           source_for({"id": 2, "username": "demo", "role": "user",
+                       "allowed_characters": []}),
+           source_for({"id": 2, "username": "demo", "role": "user",
+                       "allowed_characters": ["Vela"]}),
+           source_for(admin)],
+          ["rule", "rule", "character", "character"])
 
 
 if __name__ == "__main__":
