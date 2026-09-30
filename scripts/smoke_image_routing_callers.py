@@ -142,6 +142,39 @@ P12 (fix round 1) back view of a prop WITHOUT a front image, front_reference
    without a reference -> the cheaper Q-txt renders, Q-ref is never asked,
    and Q-txt gets no reference_images. (With has_ref=True — the old
    bool(front_reference) — the img2img preference would have picked Q-ref.)
+
+PART D — scene view + event image (occasions "scene_view", "event"; plan
+Task 14 + binding review note B2). Same fake pool as part B.
+D1 the scene-view cache key is sha1("<state sig>|scene_view|<intended
+   spec>")[:16], the intended spec being `routing.intended_spec_for` — the
+   first chain entry that passes the CONFIGURATION filters (matched, fits,
+   enabled, allowed); availability is ignored. Rules scene_view
+   ["Gw","Cloud"] with both backends present -> key of "abc|scene_view|Gw".
+   Gw put into a cooldown -> the intended entry is still Gw (a cooldown is a
+   runtime state, not configuration) -> the key does NOT change (a fallback
+   render is served until the chain changes). Rules ["Nope","Cloud"]: "Nope"
+   matches no backend (no_match = configuration skip) -> intended "Cloud"
+   -> key of "abc|scene_view|Cloud". Rules ["Cloud"] -> the same key as
+   ["Nope","Cloud"], and a different one from the Gw key (another chain,
+   another render).
+D2 event image: a location with a background image, rules event
+   ["Gw","Cloud"], Gw fails at runtime -> _do_generate returns a path; its
+   sidecar "<image>.json" has backend "Cloud", backend_type "fake",
+   routing {"occasion":"event","position":2,"spec":"Cloud"}, fallback_from
+   {"occasion":"event","intended_spec":"Gw","position":1}; Cloud got the
+   background in reference slot 1.
+D3 scene render (build_scene_state replaced by a fixed state, mode
+   "only_background", no persons): rules scene_view ["Gw","Cloud"], Gw fails
+   at runtime -> {"ok": True, "cached": False} with sig ==
+   _scene_sig(<state sig>) (computed while Gw was still the intended entry);
+   the scene sidecar has location + room + backend "Cloud", routing position
+   2 and fallback_from intended_spec "Gw"; Cloud got the background in
+   reference slot 1 and a prompt recomposed for its family (differs from
+   Gw's). A second render_scene of the same state (no force) is served from
+   the cache: {"cached": True} with the same sig, nobody asked again.
+D4 event image, rules event ["Gw"] with Gw cooling -> None, Gw never asked
+   (a chain with nothing usable does not fall back to another backend).
+
 DEFERRED: the surface-texture case of the plan (its C4, occasion
 "surface_texture") waits until app/core/surface_textures.py — which carries
 another session's uncommitted change — is routed.
@@ -601,10 +634,96 @@ def part_p():
           (1, 0, False))
 
 
+def part_d():
+    import hashlib
+    print("D) scene view + event image")
+    from app.core import event_images, scene_render
+    from app.imagegen import routing
+    from app.models import world
+
+    def key(spec):
+        return hashlib.sha1(f"abc|scene_view|{spec}".encode("utf-8")).hexdigest()[:16]
+
+    gw, cloud = FakeBackend("Gw", 0, "natural"), FakeBackend("Cloud", 5, "keywords")
+    install_pool(gw, cloud)
+    set_routing({"scene_view": ["Gw", "Cloud"]})
+    check("D1 sig from the intended entry", scene_render._scene_sig("abc"), key("Gw"))
+    gw.mark_unhealthy("smoke", 300)
+    check("D1 cooldown keeps the intended entry",
+          routing.intended_spec_for("scene_view"), "Gw")
+    check("D1 cooldown keeps the sig", scene_render._scene_sig("abc"), key("Gw"))
+    set_routing({"scene_view": ["Nope", "Cloud"]})
+    check("D1 no_match is not intended", routing.intended_spec_for("scene_view"), "Cloud")
+    check("D1 sig of the configured entry", scene_render._scene_sig("abc"), key("Cloud"))
+    set_routing({"scene_view": ["Cloud"]})
+    check("D1 another chain, another sig",
+          (scene_render._scene_sig("abc"), scene_render._scene_sig("abc") != key("Gw")),
+          (key("Cloud"), True))
+
+    loc = world.add_location("Harbour", "A small harbour.")["id"]
+    gdir = world.get_gallery_dir(loc)
+    gdir.mkdir(parents=True, exist_ok=True)
+    (gdir / "bg.png").write_bytes(png_bytes())
+    world.toggle_background_image(loc, "bg.png")
+    gw, cloud = FakeBackend("Gw", 0, "natural", dead=True), FakeBackend("Cloud", 5, "keywords")
+    install_pool(gw, cloud)
+    set_routing({"event": ["Gw", "Cloud"]})
+    out = event_images._do_generate("ev-smoke", loc, "a storm rolls in", False)
+    side = json.loads(Path(out).with_suffix(".json").read_text(encoding="utf-8")) if out else {}
+    check("D2 sidecar", side,
+          {"backend": "Cloud", "backend_type": "fake",
+           "routing": {"occasion": "event", "position": 2, "spec": "Cloud"},
+           "fallback_from": {"occasion": "event", "intended_spec": "Gw", "position": 1}})
+    check("D2 background slotted",
+          cloud.calls[0]["params"].get("reference_images", {})
+          .get("input_reference_image_1", "").endswith("bg.png") if cloud.calls else False,
+          True)
+
+    bg = gdir / "bg.png"
+    state = {"location": loc, "room": "", "label": "Harbour", "mode": "only_background",
+             "setting": "harbour", "conditions": "", "bg_path": bg, "chars": [],
+             "event_text": "", "sig": "state-d3"}
+    scene_render.build_scene_state = lambda avatar: dict(state)
+    gw, cloud = FakeBackend("Gw", 0, "natural", dead=True), FakeBackend("Cloud", 5, "keywords")
+    install_pool(gw, cloud)
+    set_routing({"scene_view": ["Gw", "Cloud"]})
+    want_sig = scene_render._scene_sig("state-d3")
+    res = scene_render.render_scene("demo", force=True)
+    check("D3 rendered", (res.get("ok"), res.get("cached"), res.get("sig")),
+          (True, False, want_sig))
+    try:
+        meta = json.loads(scene_render._scene_meta_path(want_sig).read_text(encoding="utf-8"))
+    except Exception:
+        meta = {}
+    check("D3 scene sidecar", (meta.get("location"), meta.get("room"), meta.get("backend"),
+                               (meta.get("routing") or {}).get("position"),
+                               (meta.get("fallback_from") or {}).get("intended_spec")),
+          (loc, "", "Cloud", 2, "Gw"))
+    check("D3 background slotted on Cloud",
+          cloud.calls[0]["params"].get("reference_images") if cloud.calls else None,
+          {"input_reference_image_1": str(bg)})
+    check("D3 recomposed for Cloud", bool(gw.calls) and bool(cloud.calls)
+          and gw.calls[0]["prompt"] != cloud.calls[0]["prompt"], True)
+    res = scene_render.render_scene("demo")
+    check("D3 cached under the same sig", (res.get("cached"), res.get("sig")),
+          (True, want_sig))
+    check("D3 nobody asked again", (len(gw.calls), len(cloud.calls)), (1, 1))
+
+    gw = FakeBackend("Gw", 0, "natural")
+    gw.mark_unhealthy("smoke", 300)
+    cloud = FakeBackend("Cloud", 5, "keywords")
+    install_pool(gw, cloud)
+    set_routing({"event": ["Gw"]})
+    check("D4 nothing usable -> None",
+          event_images._do_generate("ev-smoke-2", loc, "fog", False), None)
+    check("D4 nobody asked", (len(gw.calls), len(cloud.calls)), (0, 0))
+
+
 if __name__ == "__main__":
     part_a()
     part_c(*part_b())
     part_p()
+    part_d()
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed: {FAILS}")

@@ -15,15 +15,18 @@ so any generate backend (Qwen, Flux, Krea2, …) can be used flexibly:
 - ``only_background``: only the room background as reference — every
   person is described in text (appearance from the profile + pose).
 
-Backend selection follows the event-image pattern: config glob
-``image_generation.scene_imagegen_default`` (fallback: location default,
-then cheapest available). The prompt per mode is a config template
+The backend comes from the ``scene_view`` occasion of the image routing
+(``app/imagegen/routing.py``): its chain, re-run on the next entry after a
+backend failure — references, people lines and prompt are rebuilt for every
+backend tried. The prompt per mode is a config template
 (``scene_prompt_multi_ref`` / ``scene_prompt_only_background``).
 
-Results are cached per scene signature — (mode, backend, location, room,
-background file, present characters + reference images) — under
-``worlds/<w>/scene_render/``. Rendering is manual-only (player button);
-``force=True`` bypasses the cache with a fresh seed.
+Results are cached per scene signature — (mode, location, room, background
+file, present characters + reference images) plus the occasion's INTENDED
+chain entry (``_scene_sig``) — under ``worlds/<w>/scene_render/``; the
+sidecar ``<sig>.json`` records location, room, the backend that rendered and
+the routing marks. Rendering is manual-only (player button); ``force=True``
+bypasses the cache with a fresh seed.
 """
 import hashlib
 import json
@@ -138,16 +141,30 @@ def _scene_meta_path(sig: str) -> Path:
     return get_scene_dir() / f"{sig}.json"
 
 
-def _write_scene_meta(sig: str, location: str, room: str) -> None:
+def _write_scene_meta(sig: str, location: str, room: str,
+                      extra: Optional[Dict[str, Any]] = None) -> None:
     """Sidecar next to the rendered image — lets the stale-image fallbacks
     filter by location (a render for the kitchen must never stand in for
-    the beach)."""
+    the beach), and records which backend / chain entry rendered it
+    (``extra``: backend, backend_type, routing, fallback_from)."""
     try:
         _scene_meta_path(sig).write_text(
-            json.dumps({"location": location, "room": room}),
+            json.dumps({"location": location, "room": room, **(extra or {})}),
             encoding="utf-8")
     except Exception:
         pass
+
+
+def _scene_sig(state_sig: str) -> str:
+    """Cache key of a scene render: the scene state + the ``scene_view``
+    occasion + its chain's INTENDED entry (``routing.intended_spec_for`` —
+    configuration filters only). Not the backend that rendered: a cooldown
+    never changes the key, so a fallback render is served until the chain
+    itself changes, and editing the chain produces a fresh render."""
+    from app.imagegen.routing import intended_spec_for
+    intended = intended_spec_for("scene_view")
+    return hashlib.sha1(
+        f"{state_sig}|scene_view|{intended}".encode("utf-8")).hexdigest()[:16]
 
 
 def _newest_scene_image(location_id: str = "") -> Optional[Path]:
@@ -193,25 +210,6 @@ def _fill_template(tpl: str, **vars_: str) -> str:
     for k, v in vars_.items():
         tpl = tpl.replace("{" + k + "}", v)
     return tpl
-
-
-def _resolve_backend():
-    """Backend via ``scene_imagegen_default`` glob; falls back to the
-    location default, then to the cheapest available backend."""
-    try:
-        from app.core.dependencies import get_skill_manager
-    except Exception:
-        return None
-    from app.imagegen.service import get_image_service
-    img_skill = get_image_service()
-    if not img_skill.enabled:
-        return None
-    default = (str(config.get("image_generation.scene_imagegen_default", "") or "").strip()
-               or str(config.get("image_generation.location_imagegen_default", "") or "").strip())
-    backend = img_skill.resolve_imagegen_target(default)
-    if not backend:
-        backend = img_skill._select_backend()
-    return backend
 
 
 def _person_image_path(name: str) -> Optional[Path]:
@@ -454,13 +452,13 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
     if not state:
         return {"ok": False, "error": "No location or no room background."}
 
-    backend = _resolve_backend()
-    if not backend:
+    from app.imagegen.service import get_image_service
+    svc = get_image_service()
+    if not svc.enabled:
         return {"ok": False, "error": "No image backend available."}
-    # Backend is part of the cache key: switching the scene backend must
-    # produce a fresh render instead of serving the other backend's result.
-    sig = hashlib.sha1(
-        f"{state['sig']}|{backend.name}".encode("utf-8")).hexdigest()[:16]
+    # The occasion's intended chain entry is part of the cache key: editing
+    # the chain produces a fresh render instead of serving the old one.
+    sig = _scene_sig(state["sig"])
     out_path = get_scene_image_path(sig)
     if out_path.exists() and not force:
         return {"ok": True, "sig": sig, "cached": True}
@@ -488,136 +486,128 @@ def _render_scene_inner(avatar: str, force: bool = False) -> Dict[str, Any]:
     w, h = _safe_dims(*dims)
 
     mode = state["mode"]
-    slots = int(getattr(backend, "ref_slot_count", 0) or 0)
     count_word = _beings_phrase([c["name"] for c in state["chars"]])
-    warning = ""
-    if getattr(backend, "category", "") == "inpaint":
-        # The edits path does img2img on ONE input — it neither composes
-        # references nor renders text persons reliably.
-        warning = (f"Backend '{backend.name}' is an edits/inpaint alias — "
-                   f"scene rendering needs a generate alias.")
-        logger.warning("scene render: %s", warning)
-
-    # References: background always in slot 1; profile images of the
-    # present characters only in multi_ref mode (slot budget applies).
-    refs: Dict[str, str] = {}
-    ref_slot_of: Dict[str, int] = {}
-    if slots >= 1:
-        refs["input_reference_image_1"] = str(state["bg_path"])
-        if mode == "multi_ref":
-            with_img = [c for c in state["chars"] if c["image"]]
-            for i, c in enumerate(with_img[:max(0, slots - 1)], start=2):
-                refs[f"input_reference_image_{i}"] = str(c["image"])
-                ref_slot_of[c["name"]] = i
-
-    # People lines: EVERY person carries their appearance/outfit as text —
-    # slotted persons additionally bind their identity to a reference image.
-    # The reference image supplies the face/identity, the text supplies the
-    # appearance + worn outfit (the expression photo's outfit is often wrong);
-    # without the text description multi_ref produces garbage.
     all_names = [c["name"] for c in state["chars"]]
-    lines = []
-    for c in state["chars"]:
-        part = c["name"]
-        bits = []
-        if c["name"] in ref_slot_of:
-            bits.append(f"identity from reference image {ref_slot_of[c['name']]}")
-        desc = _appearance_text(c["name"])
-        if desc:
-            bits.append(desc)
-        if bits:
-            part += f" ({'; '.join(bits)})"
-        act = c["activity"]
-        if act:
-            # Another present character's name inside a pose hint ("lying
-            # beside Kai") makes the model instantiate that person AGAIN —
-            # neutralize names of co-present characters.
-            for other in all_names:
-                if other != c["name"]:
-                    act = re.sub(rf"\b{re.escape(other)}\b", "them", act,
-                                 flags=re.IGNORECASE)
-            part += f": {act}"
-        lines.append(part)
-
     tpl_key, tpl_default = (
         ("scene_prompt_multi_ref", PROMPT_MULTI_REF_DEFAULT)
         if mode == "multi_ref"
         else ("scene_prompt_only_background", PROMPT_ONLY_BG_DEFAULT))
-    if lines:
-        prompt = _fill_template(
-            _prompt_template(tpl_key, tpl_default),
-            label=state["label"], count=count_word,
-            setting=state["setting"], people="; ".join(lines))
-    else:
-        prompt = (f"The exact {state['setting']} from the reference image, "
-                  f"keeping its layout, lighting and perspective")
     _ev = (state.get("event_text") or "").strip()
-    if _ev:
-        if len(_ev) > 240:
-            _ev = _ev[:240].rstrip() + "…"
-        prompt += f" Ongoing event shaping this scene: {_ev}"
+    if len(_ev) > 240:
+        _ev = _ev[:240].rstrip() + "…"
     # Built-in anti-duplicate negative — handed to the composer, which merges
     # it with the use-case negative (deduplicated, one place).
     _neg_base = ("additional people, extra person, extra animal, crowd, "
                  "duplicated person, duplicated animal, clone, twins, "
                  "second copy of the same person")
     from app.core.prompt_compose import compose as _compose
-    _subject = prompt
-    _composed = _compose(use_case="scene", subject=prompt, backend=backend,
-                         negative_extra=_neg_base,
-                         conditions=state.get("conditions", ""))
-    prompt = _composed.prompt
-    negative = _composed.negative
-    for _w in _composed.warnings:
-        logger.info("Prompt composer (scene): %s", _w)
-
-    params: Dict[str, Any] = {
-        "width": w, "height": h,
-        "seed": random.randint(1, 2**31 - 1),
-    }
-    if refs:
-        params["reference_images"] = refs
-
     from app.core.task_queue import get_task_queue
+    from app.imagegen.routing import route_meta, run_routed
     _tq = get_task_queue()
-    _track_id = _tq.track_start("scene_render", f"Scene: {state['label']}",
-                                agent_name=avatar, provider=backend.name)
-    _log_meta = {"agent_name": avatar or "scene",
-                 "original_prompt": _subject, "auto_enhance": False,
-                 "compose": _composed.meta,
-                 "prompt_location": state.get("location", "")}
+
+    def _render(b):
+        """References, people lines and the composed prompt depend on the
+        backend's reference-slot budget and family — built FOR ``b``; the
+        routing calls it again with the next backend after a failure."""
+        slots = int(getattr(b, "ref_slot_count", 0) or 0)
+        # References: background always in slot 1; profile images of the
+        # present characters only in multi_ref mode (slot budget applies).
+        refs: Dict[str, str] = {}
+        ref_slot_of: Dict[str, int] = {}
+        if slots >= 1:
+            refs["input_reference_image_1"] = str(state["bg_path"])
+            if mode == "multi_ref":
+                with_img = [c for c in state["chars"] if c["image"]]
+                for i, c in enumerate(with_img[:max(0, slots - 1)], start=2):
+                    refs[f"input_reference_image_{i}"] = str(c["image"])
+                    ref_slot_of[c["name"]] = i
+        # People lines: EVERY person carries their appearance/outfit as text
+        # — slotted persons additionally bind their identity to a reference
+        # image. The reference supplies the face/identity, the text the
+        # appearance + worn outfit (the expression photo's outfit is often
+        # wrong); without the text description multi_ref produces garbage.
+        lines = []
+        for c in state["chars"]:
+            part = c["name"]
+            bits = []
+            if c["name"] in ref_slot_of:
+                bits.append(f"identity from reference image {ref_slot_of[c['name']]}")
+            desc = _appearance_text(c["name"])
+            if desc:
+                bits.append(desc)
+            if bits:
+                part += f" ({'; '.join(bits)})"
+            act = c["activity"]
+            if act:
+                # Another present character's name inside a pose hint
+                # ("lying beside Kai") makes the model instantiate that
+                # person AGAIN — neutralize names of co-present characters.
+                for other in all_names:
+                    if other != c["name"]:
+                        act = re.sub(rf"\b{re.escape(other)}\b", "them", act,
+                                     flags=re.IGNORECASE)
+                part += f": {act}"
+            lines.append(part)
+        if lines:
+            subject = _fill_template(
+                _prompt_template(tpl_key, tpl_default),
+                label=state["label"], count=count_word,
+                setting=state["setting"], people="; ".join(lines))
+        else:
+            subject = (f"The exact {state['setting']} from the reference image, "
+                       f"keeping its layout, lighting and perspective")
+        if _ev:
+            subject += f" Ongoing event shaping this scene: {_ev}"
+        composed = _compose(use_case="scene", subject=subject, backend=b,
+                            negative_extra=_neg_base,
+                            conditions=state.get("conditions", ""))
+        for _w in composed.warnings:
+            logger.info("Prompt composer (scene): %s", _w)
+        params: Dict[str, Any] = {"width": w, "height": h,
+                                  "seed": random.randint(1, 2**31 - 1)}
+        if refs:
+            params["reference_images"] = refs
+        track_id = _tq.track_start("scene_render", f"Scene: {state['label']}",
+                                   agent_name=avatar, provider=b.name)
+        _log_meta = {"agent_name": avatar or "scene", "original_prompt": subject,
+                     "auto_enhance": False, "compose": composed.meta,
+                     "prompt_location": state.get("location", "")}
+
+        def _op(bb):
+            # EVERY backend goes through the backend's GPU channel — two
+            # generations must never run in parallel on one backend.
+            return svc.run_on_backend_channel(
+                bb, lambda: bb.generate(composed.prompt, composed.negative, params,
+                                        log_meta=_log_meta),
+                task_type="scene_render", agent_name=avatar,
+                label=f"Scene: {state['label']}")
+        try:
+            images, used = svc.run_on_backend(b, op=_op)
+        except Exception as e:
+            _tq.track_finish(track_id, error=(str(e) or type(e).__name__)[:200])
+            raise
+        _tq.track_finish(track_id)
+        return images, used, len(refs)
+
+    # The chain never offers an inpaint backend for scene_view (the occasion
+    # only admits generate backends), so the old "edits alias" warning is gone.
     try:
-        # EVERY backend goes through the backend's GPU channel — two
-        # generations must never run in parallel on one backend.
-        from app.imagegen.service import get_image_service
-        images = get_image_service().run_on_backend_channel(
-            backend,
-            lambda: backend.generate(prompt, negative, params,
-                                     log_meta=_log_meta),
-            task_type="scene_render",
-            agent_name=avatar,
-            label=f"Scene: {state['label']}")
+        (images, used, n_refs), route = run_routed(
+            "scene_view", _render, has_ref=True, pool=svc.pool)
     except Exception as e:
-        logger.error("scene render failed (%s): %s", backend.name, e)
-        _tq.track_finish(_track_id, error=str(e))
-        return {"ok": False, "error": str(e)}
-
-    if not images:
-        _tq.track_finish(_track_id, error="empty backend result")
-        return {"ok": False, "error": "Backend returned no image."}
-
+        # Nothing usable in the chain, the routed backend(s) failed, load,
+        # the media switch — the player sees the real reason.
+        logger.error("scene render failed: %s", e)
+        return {"ok": False, "error": str(e) or type(e).__name__}
     try:
         out_path.write_bytes(images[0])
-        _write_scene_meta(sig, state["location"], state["room"])
+        _write_scene_meta(sig, state["location"], state["room"],
+                          {"backend": used.name, "backend_type": used.api_type,
+                           **route_meta(route)})
     except Exception as e:
-        _tq.track_finish(_track_id, error=str(e))
-        return {"ok": False, "error": str(e)}
-    _tq.track_finish(_track_id)
+        return {"ok": False, "error": str(e) or type(e).__name__}
     _last_gen_ts = time.time()
-    logger.info("scene rendered: %s (%s, mode=%s, %d chars, %d refs, %dx%d)",
+    logger.info("scene rendered: %s (%s, mode=%s, %d chars, %d refs, %dx%d, via %s)",
                 out_path.name, state["label"], mode, len(state["chars"]),
-                len(refs), w, h)
-    result = {"ok": True, "sig": sig, "cached": False}
-    if warning:
-        result["warning"] = warning
-    return result
+                n_refs, w, h, used.name)
+    return {"ok": True, "sig": sig, "cached": False}

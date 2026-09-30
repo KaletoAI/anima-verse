@@ -1,28 +1,31 @@
-"""Event-Illustration Pipeline.
+"""Event illustration pipeline.
 
-Generiert Bilder fuer disruption/danger-Events, die den Hintergrund der
-Location waehrend des Events ueberlagern. Auch das "After"-Bild bei
-Resolution wird hier produziert.
+Renders images for disruption/danger events that overlay the location's
+background while the event lasts. The "after" image on resolution is
+produced here too.
 
-Ablauf:
-1. ``trigger_event_image(event_id, location_id, image_prompt)`` wird beim
-   Event-Spawn aufgerufen. Sind background_image und ein passendes
-   Backend/Workflow vorhanden, wird ein Bild generiert und
-   ``image_path`` im Event-Payload gesetzt.
-2. ``trigger_event_resolved_image(event_id, ...)`` wird im
-   ``resolve_event``-Pfad aufgerufen. Output: ``resolved_image_path``.
-3. ``get_effective_background_event(location_id)`` liefert den Pfad, den
-   der ``/locations/{id}/background``-Endpoint bevorzugt ausliefert —
-   Event-Bild bei aktivem ungeloesten Event, Resolved-Bild im
-   Linger-Fenster, sonst faellt der Endpoint auf den normalen
-   Location-Background zurueck.
+Flow:
+1. ``trigger_event_image(event_id, location_id, image_prompt)`` is called
+   when an event spawns. With a background image and a backend of the
+   ``event`` occasion available, an image is rendered and ``image_path`` is
+   set in the event payload.
+2. ``trigger_event_resolved_image(event_id, ...)`` is called on the
+   ``resolve_event`` path. Output: ``resolved_image_path``.
+3. ``get_effective_background_event(location_id)`` returns the path the
+   ``/locations/{id}/background`` endpoint prefers — the event image while an
+   unresolved event is active, the resolved image in the linger window, else
+   the endpoint falls back to the normal location background.
 
-Per-world default: ``EVENT_IMAGEGEN_DEFAULT`` from config.json is resolved
-like location/outfit images (format ``backend:<glob>``).
+The backend comes from the ``event`` occasion of the image routing
+(``app/imagegen/routing.py``): its chain, re-run on the next entry after a
+backend failure. Every event image has a sidecar ``<image>.json`` with the
+backend that rendered it and the routing marks (``routing``, and
+``fallback_from`` behind the intended entry).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import threading
@@ -55,40 +58,6 @@ def _event_image_filename(event_id: str, resolved: bool) -> str:
 
 def _event_image_path(event_id: str, resolved: bool) -> Path:
     return get_events_image_dir() / _event_image_filename(event_id, resolved)
-
-
-# ---------------------------------------------------------------------------
-# Backend selection
-# ---------------------------------------------------------------------------
-
-def _resolve_backend():
-    """Resolves the image backend from the ``EVENT_IMAGEGEN_DEFAULT`` spec.
-
-    Fallback chain (user decision 2026-07-06: the scene-render backend
-    choice also governs events): event default → scene render default →
-    location default → cheapest available backend. Returns None when no
-    backend is available.
-    """
-    try:
-        from app.core.dependencies import get_skill_manager
-    except Exception:
-        return None
-
-    from app.imagegen.service import get_image_service
-    img_skill = get_image_service()
-    if not img_skill.enabled:
-        return None
-
-    from app.core import config as _cfg
-    default = (os.environ.get("EVENT_IMAGEGEN_DEFAULT", "").strip()
-               or str(_cfg.get("image_generation.scene_imagegen_default", "") or "").strip()
-               or os.environ.get("LOCATION_IMAGEGEN_DEFAULT", "").strip())
-    # Match concept: glob + availability instead of an exact backend name.
-    backend = img_skill.resolve_imagegen_target(default)
-
-    if not backend:
-        backend = img_skill._select_backend()
-    return backend
 
 
 # ---------------------------------------------------------------------------
@@ -258,7 +227,9 @@ def _do_generate(event_id: str,
                   resolved: bool) -> Optional[Path]:
     """Synchronous generation (already serialized in the queue).
 
-    Returns the path of the stored image, or None.
+    Returns the path of the stored image, or None. The image gets a sidecar
+    ``<image>.json`` = ``{"backend", "backend_type", "routing",
+    "fallback_from"?}``.
     """
     from app.models.world import get_background_path
     from app.models.events import update_event_fields
@@ -269,18 +240,20 @@ def _do_generate(event_id: str,
     # gets a day/night-wrong template.
     bg_path = get_background_path(location_id)
     if not bg_path or not bg_path.exists():
-        logger.info("Event-Bild [%s]: kein Background — skip", event_id)
+        logger.info("Event image [%s]: no background — skip", event_id)
         return None
 
     dims = _read_image_dimensions(bg_path)
     if not dims:
-        logger.info("Event-Bild [%s]: Background-Dimensionen unbekannt — skip", event_id)
+        logger.info("Event image [%s]: background dimensions unknown — skip", event_id)
         return None
     w, h = _safe_dims(*dims)
 
-    backend = _resolve_backend()
-    if not backend:
-        logger.warning("Event-Bild [%s]: kein Backend verfuegbar", event_id)
+    from app.imagegen.routing import route_meta, run_routed
+    from app.imagegen.service import get_image_service
+    svc = get_image_service()
+    if not svc.enabled:
+        logger.warning("Event image [%s]: image service not available", event_id)
         return None
 
     # Open-air locations get the world calendar's weather into the prompt;
@@ -288,61 +261,64 @@ def _do_generate(event_id: str,
     from app.models.world import get_location_by_id, resolve_indoor_flag
     _outdoor = resolve_indoor_flag(get_location_by_id(location_id) or {},
                                    None) == "outdoor"
-
     from app.core.prompt_compose import compose as _compose
     from app.core.prompt_compose import outdoor_conditions as _conditions
-    _composed = _compose(use_case="event", subject=image_prompt,
-                         backend=backend,
-                         conditions=_conditions(_outdoor))
-    full_prompt = _composed.prompt
-    negative = _composed.negative
-    for _w in _composed.warnings:
-        logger.info("Prompt composer (event): %s", _w)
 
-    params: Dict[str, Any] = {
-        "width": w,
-        "height": h,
-        # The generation must not come from a cache — fresh seed per run.
-        "seed": random.randint(1, 2**31 - 1),
-    }
+    def _render(b):
+        """Prompt, negative and reference slot built FOR ``b`` — the routing
+        calls it again with the next backend after a failure."""
+        composed = _compose(use_case="event", subject=image_prompt, backend=b,
+                            conditions=_conditions(_outdoor))
+        for _w in composed.warnings:
+            logger.info("Prompt composer (event): %s", _w)
+        params: Dict[str, Any] = {
+            "width": w, "height": h,
+            # The generation must not come from a cache — fresh seed per run.
+            "seed": random.randint(1, 2**31 - 1),
+        }
+        # The location background as the reference — where the backend has
+        # a slot for it.
+        if int(getattr(b, "ref_slot_count", 0) or 0) >= 1:
+            params["reference_images"] = {"input_reference_image_1": str(bg_path)}
+        _log_meta = {"agent_name": f"Event {event_id}",
+                     "original_prompt": image_prompt, "auto_enhance": False,
+                     "compose": composed.meta}
 
-    # Reference image (current location background) as slot 1.
-    params["reference_images"] = {"input_reference_image_1": str(bg_path)}
+        def _op(bb):
+            # EVERY backend goes through the backend's GPU channel — two
+            # generations must never run in parallel on one backend.
+            return svc.run_on_backend_channel(
+                bb, lambda: bb.generate(composed.prompt, composed.negative, params,
+                                        log_meta=_log_meta),
+                task_type="event_image", agent_name="system",
+                label=f"Event: {event_id}{' (after)' if resolved else ''}")
+        return svc.run_on_backend(b, op=_op)
 
-    _log_meta = {"agent_name": f"Event {event_id}",
-                 "original_prompt": image_prompt, "auto_enhance": False,
-                 "compose": _composed.meta}
     try:
-        # EVERY backend goes through the backend's GPU channel — two
-        # generations must never run in parallel on one backend.
-        from app.imagegen.service import get_image_service
-        images = get_image_service().run_on_backend_channel(
-            backend,
-            lambda: backend.generate(full_prompt, negative, params,
-                                     log_meta=_log_meta),
-            task_type="event_image",
-            agent_name="system",
-            label=f"Event: {event_id}{' (after)' if resolved else ''}")
+        (images, used), route = run_routed("event", _render, has_ref=True,
+                                           pool=svc.pool)
     except Exception as e:
-        logger.error("Event-Bild [%s] Backend-Fehler: %s", event_id, e)
-        return None
-
-    if not images:
-        logger.warning("Event-Bild [%s]: leeres Backend-Ergebnis", event_id)
+        # Nothing usable in the chain, the routed backend(s) failed, load,
+        # the media switch — logged with the real reason.
+        logger.error("Event image [%s] failed: %s", event_id, e)
         return None
 
     out_path = _event_image_path(event_id, resolved)
     try:
         out_path.write_bytes(images[0])
+        out_path.with_suffix(".json").write_text(json.dumps(
+            {"backend": used.name, "backend_type": used.api_type,
+             **route_meta(route)}), encoding="utf-8")
     except Exception as e:
-        logger.error("Event-Bild [%s] write_bytes Fehler: %s", event_id, e)
+        logger.error("Event image [%s] could not be stored: %s", event_id, e)
         return None
 
     field = "resolved_image_path" if resolved else "image_path"
     update_event_fields(event_id, **{field: str(out_path)})
     publish_image_ready(event_id, location_id, "resolved" if resolved else "event")
-    logger.info("Event-Bild [%s] %s generiert: %s (%dx%d)",
-                event_id, "resolved" if resolved else "active", out_path.name, w, h)
+    logger.info("Event image [%s] %s rendered: %s (%dx%d, via %s)",
+                event_id, "resolved" if resolved else "active", out_path.name,
+                w, h, used.name)
     # Post-processing hand-off (pull model), fire-and-forget. No bytes sent.
     try:
         from app.core import postprocess_trigger

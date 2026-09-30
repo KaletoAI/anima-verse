@@ -153,11 +153,17 @@ def prepare_scene_photo(avatar: str) -> Dict[str, Any]:
     if desc:
         prompt = f"{prompt}\n{desc}"
 
-    from app.core.scene_render import _resolve_backend
-    backend = _resolve_backend()
+    # The dialog's preselection: the backend the "photo" occasion resolves
+    # to for this avatar right now (never probes, never rotates).
+    from app.imagegen.routing import explain_occasion
+    try:
+        default_backend = explain_occasion("photo", character=avatar).get("resolved") or ""
+    except Exception as e:
+        logger.debug("scene photo: photo routing lookup failed: %s", e)
+        default_backend = ""
     return {"ok": True, "prompt": prompt, "subjects": subjects,
             "present": present, "location": loc, "room": room,
-            "default_backend": getattr(backend, "name", "") or ""}
+            "default_backend": default_backend}
 
 
 def take_scene_photo(avatar: str,
