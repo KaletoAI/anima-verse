@@ -1165,7 +1165,6 @@
     "{n} failed": "{n} fehlgeschlagen",
     "{n} image jobs started — watch the task panel": "{n} Bild-Jobs gestartet — siehe Task-Panel",
     "{n} images deleted": "{n} Bilder gelöscht",
-    "{n} images will be generated sequentially on the chosen backend.": "{n} Bilder werden nacheinander auf dem gewählten Backend erzeugt.",
     "{n} installed": "{n} installiert",
     "{n} line points · {m} in the outline": "{n} Linienpunkte · {m} im Umriss",
     "{n} of {max} points — click the first one to close, Escape discards": "{n} von {max} Punkten — Klick auf den ersten schließt, Escape verwirft",
@@ -2347,6 +2346,8 @@
     "disabled": "abgeschaltet",
     "disabled for this character": "für diese Figur abgeschaltet",
     "wrong kind of backend": "falsche Backend-Art",
-    "matches no backend": "passt auf kein Backend"
+    "matches no backend": "passt auf kein Backend",
+    "{n} images will be generated one after another.": "{n} Bilder werden nacheinander erzeugt.",
+    "The routing resolves no backend for location images right now — pick a backend or fill the chain (Admin → Media Generation → Routing).": "Das Routing findet für Ortsbilder gerade kein Backend — ein Backend wählen oder die Kette füllen (Admin → Media Generation → Routing)."
   }
 }

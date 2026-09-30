@@ -716,6 +716,9 @@ export function PlayerApp() {
             showRoomReference
             characterOptions={{ detected: ctl.detected, available: ctl.available }}
             occasion="regenerate"
+            // Regenerate is only offered on the player's own avatar's images,
+            // and the server routes with that owner as position 0.
+            occasionCharacter={data?.avatar || ''}
             onSubmit={ctl.onSubmit}
             onClose={ctl.onClose}
           />

@@ -78,8 +78,11 @@ export function ImageSetDialog({ location, onClose }: {
     return out
   }, [incLocation, incRooms, incDay, incNight, location.name, rooms])
 
+  // "Auto (routing)" with nothing to route to would only queue failing jobs.
+  const autoBlocked = backend === '' && !routedName
+
   const start = async () => {
-    if (!jobs.length || submitting) return
+    if (!jobs.length || submitting || autoBlocked) return
     setSubmitting(true)
     try {
       const body: Record<string, unknown> = { jobs }
@@ -136,15 +139,20 @@ export function ImageSetDialog({ location, onClose }: {
                 {check(t('Night'), incNight, setIncNight)}
               </div>
               <div className="ga-form-hint">
-                {t('{n} images will be generated sequentially on the chosen backend.')
+                {t('{n} images will be generated one after another.')
                   .replace('{n}', String(jobs.length))}
               </div>
+              {autoBlocked ? (
+                <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>
+                  {t('The routing resolves no backend for location images right now — pick a backend or fill the chain (Admin → Media Generation → Routing).')}
+                </div>
+              ) : null}
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <button className="ga-btn ga-btn-sm" onClick={onClose} disabled={submitting}>
                   {t('Cancel')}
                 </button>
                 <button className="ga-btn ga-btn-sm ga-btn-primary" onClick={() => { void start() }}
-                  disabled={submitting || !jobs.length}>
+                  disabled={submitting || !jobs.length || autoBlocked}>
                   {submitting ? t('Starting…') : t('Generate {n} images').replace('{n}', String(jobs.length))}
                 </button>
               </div>

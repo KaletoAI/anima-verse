@@ -99,7 +99,8 @@ export interface InstagramImageGenControl {
  *  `/instagram/post/{id}/animate`. */
 export interface InstagramAnimateSubmit {
   prompt: string
-  service: string
+  /** Absent = "Auto (routing)": the server renders on the "video" chain. */
+  service?: string
   /** Optional LoRAs for gateway video aliases. */
   loras?: Array<{ name: string; strength: number }>
   /** Optional video length in seconds (empty = backend default). */

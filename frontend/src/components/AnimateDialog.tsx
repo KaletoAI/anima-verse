@@ -12,15 +12,19 @@ import { useEnlarge } from './ZoomButton'
  *
  * The caller wires it to a concrete subject (Instagram post or gallery image):
  *  - `onSuggest({system_prompt, llm_override})` → returns a suggested prompt
- *  - `onSubmit({prompt, service})` → fires the animate request (fire-and-forget;
+ *  - `onSubmit({prompt, service?})` → fires the animate request (fire-and-forget;
  *    the caller posts + polls the track_id).
+ * The preselected service entry is "Auto (routing)": it sends NO `service`, so
+ * the server renders on the "video" chain of the image routing (with fallback
+ * + marker). A concrete pick sends `service` — explicit, that backend or an error.
  * Rendered via portal so the fixed modal escapes transformed grid panels (/play).
  * Reuses the ga-modal-* classes (loaded on /play via the game-admin CSS bundle).
  */
 
 export interface AnimateSubmit {
   prompt: string
-  service: string
+  /** Absent = "Auto (routing)" (the server routes the video occasion). */
+  service?: string
   /** Optional LoRAs for gateway video aliases — ONE half of a Wan high/low
    *  pair suffices, the gateway resolves the counterpart. */
   loras?: Array<{ name: string; strength: number }>
@@ -48,6 +52,9 @@ interface Props {
   onClose: () => void
 }
 
+// Service-select value of "Auto (routing)" — never a backend name.
+const AUTO = '__auto__'
+
 export function AnimateDialog({
   open, title, sourceImageUrl, defaultPrompt,
   onSuggest, onSubmit, onClose,
@@ -55,7 +62,12 @@ export function AnimateDialog({
   const { t } = useI18n()
   const enlarge = useEnlarge()
   const [services, setServices] = useState<AnimateService[] | null>(null)
-  const [serviceId, setServiceId] = useState('')
+  const [serviceId, setServiceId] = useState(AUTO)
+  // Video backend the "video" chain resolves to right now ('' = none).
+  const [routedName, setRoutedName] = useState('')
+  const isAuto = serviceId === AUTO
+  // Under "Auto" the LoRA offer follows the backend the chain resolves to.
+  const effectiveService = isAuto ? routedName : serviceId
   const [prompt, setPrompt] = useState(defaultPrompt)
   const [llmModels, setLlmModels] = useState<string[]>([])
   // 'provider::name' entries → searchable ModelPicker options (grouped).
@@ -84,24 +96,25 @@ export function AnimateDialog({
   // A service switch resets picks the new service does not offer.
   useEffect(() => {
     const offered = new Set(
-      (services?.find((s) => s.id === serviceId)?.loras || []).map((l) => l.name))
+      (services?.find((s) => s.id === effectiveService)?.loras || []).map((l) => l.name))
     setLoraSlots((prev) => {
       if (prev.every((s) => !s.name || offered.has(s.name))) return prev
       return prev.map((s) => (!s.name || offered.has(s.name) ? s : { name: '', strength: '1.0' }))
     })
-  }, [services, serviceId])
+  }, [services, effectiveService])
 
   // Load services and the LLM list once.
   useEffect(() => {
     if (!open || services !== null) return
     apiGet<AnimateService[]>('/characters/animate/services')
       .then((list) => {
-        const arr = Array.isArray(list) ? list : []
-        setServices(arr)
-        const first = arr.find((s) => s.enabled) || arr[0]
-        if (first) setServiceId(first.id)
+        setServices(Array.isArray(list) ? list : [])
+        setServiceId(AUTO)
       })
       .catch(() => setServices([]))
+    apiGet<{ resolved?: string | null }>('/world/imagegen-options?occasion=video')
+      .then((d) => setRoutedName(d.resolved || ''))
+      .catch(() => setRoutedName(''))
     apiGet<{ providers?: Record<string, { models?: { name: string }[] }> }>('/characters/available-models')
       .then((d) => {
         const out: string[] = []
@@ -134,21 +147,22 @@ export function AnimateDialog({
   }, [onSuggest, systemPrompt, llmOverride])
 
   const handleSubmit = useCallback(async () => {
-    if (!serviceId) return
+    if (!effectiveService) return
     setSubmitting(true)
     try {
       const loras = loraSlots
         .map((s) => ({ name: s.name, strength: parseFloat(s.strength) || 1.0 }))
         .filter((l) => l.name && l.name !== 'None')
       const secs = parseInt(seconds, 10)
-      await onSubmit({ prompt: prompt.trim(), service: serviceId,
+      // "Auto (routing)": no service — the server routes the video occasion.
+      await onSubmit({ prompt: prompt.trim(), ...(isAuto ? {} : { service: serviceId }),
                        loras: loras.length ? loras : undefined,
                        seconds: Number.isFinite(secs) && secs > 0 ? secs : undefined })
       onClose()
     } finally {
       setSubmitting(false)
     }
-  }, [serviceId, prompt, loraSlots, seconds, onSubmit, onClose])
+  }, [effectiveService, isAuto, serviceId, prompt, loraSlots, seconds, onSubmit, onClose])
 
   if (!open) return null
 
@@ -169,6 +183,10 @@ export function AnimateDialog({
               <label className="ga-imagegen-label">{t('Animation service')}</label>
               <select className="ga-input" value={serviceId} disabled={submitting}
                 onChange={(e) => setServiceId(e.target.value)}>
+                <option value={AUTO}>
+                  {routedName ? `${t('Auto (routing)')} → ${routedName}`
+                    : t('Auto (routing) — no backend available')}
+                </option>
                 {services.map((s) => (
                   <option key={s.id} value={s.id} disabled={s.enabled === false}>
                     {s.label}{s.enabled === false ? ` (${t('disabled')})` : ''}
@@ -177,7 +195,7 @@ export function AnimateDialog({
               </select>
 
               {(() => {
-                const svcLoras = services.find((s) => s.id === serviceId)?.loras || []
+                const svcLoras = services.find((s) => s.id === effectiveService)?.loras || []
                 if (!svcLoras.length) return null
                 return (
                   <>
@@ -252,7 +270,7 @@ export function AnimateDialog({
         </div>
         <div className="ga-modal-footer">
           <button className="ga-btn" onClick={onClose} disabled={submitting}>{t('Cancel')}</button>
-          <button className="ga-btn ga-btn-primary" onClick={handleSubmit} disabled={submitting || !serviceId || !prompt.trim()}>
+          <button className="ga-btn ga-btn-primary" onClick={handleSubmit} disabled={submitting || !effectiveService || !prompt.trim()}>
             {submitting ? '…' : '🎬 ' + t('Animate')}
           </button>
         </div>

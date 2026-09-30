@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
@@ -375,22 +375,31 @@ export function ImageGenDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, detectedKey])
 
-  // Load options once when dialog first opens.
+  // Load the options when the dialog first opens, and again whenever the
+  // occasion or its character changes (the routed backend depends on both).
+  const optionsQuery = occasion
+    ? `?occasion=${encodeURIComponent(occasion)}`
+      + (occasionCharacter ? `&character=${encodeURIComponent(occasionCharacter)}` : '')
+    : ''
+  const latestQuery = useRef(optionsQuery)
+  latestQuery.current = optionsQuery
+  const [loadedQuery, setLoadedQuery] = useState<string | null>(null)
   useEffect(() => {
-    if (!open || options !== null) return
-    const qs = occasion
-      ? `?occasion=${encodeURIComponent(occasion)}`
-        + (occasionCharacter ? `&character=${encodeURIComponent(occasionCharacter)}` : '')
-      : ''
-    apiGet<ImagegenOptionsResponse>(`/world/imagegen-options${qs}`)
+    if (!open || loadedQuery === optionsQuery) return
+    const q = optionsQuery
+    setLoadedQuery(q)
+    setOptions(null)
+    setOptionKey('')
+    apiGet<ImagegenOptionsResponse>(`/world/imagegen-options${q}`)
       .then((d) => {
+        if (latestQuery.current !== q) return   // a newer query took over
         setOptions(d.options || [])
         setMediaOff(d.media_generation_enabled === false)
         setRoutedName(d.resolved || '')
         setRoutedChain(d.chain || [])
       })
-      .catch(() => setOptions([]))
-  }, [open, options, occasion, occasionCharacter])
+      .catch(() => { if (latestQuery.current === q) setOptions([]) })
+  }, [open, loadedQuery, optionsQuery])
 
   // Selectable backends: inpaint targets belong only in the Map-Fit/Match-Edges
   // dialogs, never in the normal render selection. Available backends first,
