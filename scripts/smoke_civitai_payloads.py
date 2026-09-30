@@ -10,7 +10,7 @@ Usage:  ./.venv/bin/python scripts/smoke_civitai_payloads.py
 
 EXPECTED VALUES, derived by hand from the spec
 (``https://orchestration.civitai.com/openapi/v2-consumers.json``) and the plan
-(``development_instructions/plan-civitai-img2img-video.md`` § 4, § 6)
+(``development_instructions/done/plan-civitai-img2img-video.md`` § 4, § 6)
 ---------------------------------------------------------------------------
 [1] textToImage, SDXL AIR, entry 1000x700, steps 25, cfg 7, clipSkip 2,
     params seed 42. Width/height are rounded to multiples of 64:
