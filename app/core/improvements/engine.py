@@ -6,6 +6,8 @@ The engine never names an improvement type — it asks the registry.  It never
 runs work itself either: it submits one task, the queue worker calls
 ``handle_step`` back, and the type does the work synchronously in that call.
 """
+import threading
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Set, Tuple
 
 from app.core import user_activity
@@ -24,10 +26,43 @@ STEP_PRIORITY = 90            # far behind anything the player is waiting for
 QUEUE_NAME = "improvements"
 SCAN_INTERVAL_S = 600         # how often a standing entry re-asks its type
 MAX_ATTEMPTS = 2              # a defect gets one retry, then the step is skipped
+BUSY_DEFER_S = 300            # a step that came back busy sits out this long
 
 # Improvement ids whose next step ignores the idle rule exactly once — the
 # admin's "run now" button. In-memory on purpose: a restart forgets it.
 _run_now: Set[str] = set()
+
+# Steps that came back BUSY (BackendBusyError / CandidateBusy), keyed
+# (improvement_id, candidate_key) -> SYSTEM time until which ``tick`` passes
+# them over. Without it the first pending step is submitted on every tick, and
+# one candidate whose backend is down for hours blocks every later step of
+# every entry. In-memory on purpose: the engine runs in ONE process (the
+# periodic tick and the TaskQueue worker that calls ``handle_step`` are both
+# threads of the server), and a restart forgetting a deferral only means that
+# step is tried once more right away — it then defers itself again.
+_busy_until: Dict[Tuple[str, str], datetime] = {}
+_busy_lock = threading.Lock()
+
+
+def _defer(improvement_id: str, key: str) -> None:
+    with _busy_lock:
+        _busy_until[(improvement_id, key)] = utc_now() + timedelta(seconds=BUSY_DEFER_S)
+
+
+def _undefer(improvement_id: str, key: str) -> None:
+    with _busy_lock:
+        _busy_until.pop((improvement_id, key), None)
+
+
+def _deferred(improvement_id: str, key: str, now: datetime) -> bool:
+    with _busy_lock:
+        until = _busy_until.get((improvement_id, key))
+        if until is None:
+            return False
+        if until <= now:
+            del _busy_until[(improvement_id, key)]
+            return False
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -159,12 +194,22 @@ def tick() -> Dict[str, Any]:
     if not allowed and not (reason == "active" and _run_now):
         return {"scanned": scanned, "submitted": "", "reason": reason}
 
+    now = utc_now()
+    deferred = 0
     for row in ordered_queue():
         if row["status"] != "pending":
             continue
         if reason == "active" and row["improvement_id"] not in _run_now:
             continue
+        # A step that just came back busy waits out BUSY_DEFER_S so the steps
+        # behind it get their turn. The admin's run-now is an explicit "try
+        # this entry now" and overrides the wait.
+        if (row["improvement_id"] not in _run_now
+                and _deferred(row["improvement_id"], row["candidate_key"], now)):
+            deferred += 1
+            continue
         _run_now.discard(row["improvement_id"])
+        _undefer(row["improvement_id"], row["candidate_key"])
         # Mark FIRST, submit second. A worker can pick the task up — and even
         # finish it — before ``submit`` has returned here; a mark_running after
         # that would overwrite the handler's 'done' back to 'running'.
@@ -186,7 +231,10 @@ def tick() -> Dict[str, Any]:
     # pending step (its last one finished between the click and this tick) —
     # it can never fire, so it is spent here instead of sticking forever.
     _run_now.clear()
-    return {"scanned": scanned, "submitted": "", "reason": "empty"}
+    # "deferred": pending steps exist, but every one of them came back busy
+    # within the last BUSY_DEFER_S — nothing is submitted this tick.
+    return {"scanned": scanned, "submitted": "",
+            "reason": "deferred" if deferred else "empty"}
 
 
 def periodic_tick() -> None:
@@ -240,9 +288,11 @@ def handle_step(payload: Dict[str, Any]) -> Dict[str, Any]:
         with user_activity.suppressed():
             improvement_type.apply(candidate, improvement["params"], task_id)
     except (BackendBusyError, CandidateBusy) as e:
-        # Load, not a defect — the candidate keeps both its attempts.
+        # Load, not a defect — the candidate keeps both its attempts, and sits
+        # out BUSY_DEFER_S so it does not block the steps behind it.
         store.mark_result(improvement_id, key, status="pending", error=str(e),
                           count_attempt=False)
+        _defer(improvement_id, key)
         return {"busy": str(e)}
     except Exception as e:  # noqa: BLE001 — every defect is one attempt
         logger.warning("improvement step %s/%s failed: %s",

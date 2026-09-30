@@ -3530,13 +3530,20 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
                            for l in (params.get("lora_inputs") or params.get("loras") or [])
                            if isinstance(l, dict) and (l.get("name") or "").strip()
                            and l.get("name") != "None"]
-            set_gallery_image_meta(loc_id, image_name, {
+            _gallery_meta = {
                 "backend": backend.name,
                 "backend_type": backend.api_type,
                 "model": _model_used,
                 "loras": _loras_used,
                 **route_meta(route),
-            })
+            }
+            # A re-render names the picture it replaces (fallback_rerender) in
+            # the SAME write — a crash in between would leave a replacement
+            # nobody recognises as one, and the original would be rendered again.
+            _source_file = str(data.get("source_file") or "").strip()
+            if _source_file:
+                _gallery_meta["source_file"] = _source_file
+            set_gallery_image_meta(loc_id, image_name, _gallery_meta)
 
             # Set the image type when prompt_type is given
             # (day/night/building-<view>)

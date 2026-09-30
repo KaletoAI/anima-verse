@@ -161,6 +161,17 @@ taken from the ``submit`` call.
      step, 500 s old after it.  Otherwise the queue would keep itself awake and
      never run a second step.
 
+ 23. A busy step does not block the queue.  H is a one_shot with ("ka",
+     "A-step") and ("kb", "B-step"); every other entry is done or paused, the
+     user idle 960 s.  The label order submits ka first; it comes back busy
+     (behaviour "busy") → pending, attempts 0, and deferred for BUSY_DEFER_S.
+     The next tick passes ka over and submits kb.  kb comes back busy too, so
+     both are deferred: the next tick submits nothing, reason "deferred".
+     With the engine's clock moved BUSY_DEFER_S + 1 s ahead the window has
+     passed, and the tick submits ka again (label order, the first step).
+     Run-now overrides a deferral: with ka and kb deferred again and the user
+     active 60 s, ``request_run_now(H)`` makes the tick submit ka.
+
 Usage:  ./.venv/bin/python scripts/smoke_improvements.py
 """
 import os
@@ -728,6 +739,52 @@ check("the step runs", engine.handle_step({"improvement_id": G,
 check("…and the producer's own touch changed nothing",
       500.0 <= user_activity.seconds_since() < 501.0, True)
 FakeType.behaviour = "ok"
+
+# ── 23. a busy step is deferred ──────────────────────────────────────────────
+print("\n23. a busy step is deferred, the steps behind it run")
+FakeType.candidates = [("ka", "A-step"), ("kb", "B-step")]
+H = store.create("fake", "H", {}, "one_shot")["id"]
+engine.scan(H)
+user_activity._set_for_test(960)
+
+
+def busy_round(expected_key):
+    """tick → the step it submits → the worker → busy."""
+    result = engine.tick()
+    payload = step_tasks()[-1]["payload"] if result["submitted"] else None
+    if result["submitted"]:
+        worker_done(result["submitted"])
+        FakeType.behaviour = "busy"
+        engine.handle_step({"improvement_id": H, "candidate_key": expected_key,
+                            "_task_id": result["submitted"]})
+        FakeType.behaviour = "ok"
+    return payload
+
+
+check("the first tick submits ka", busy_round("ka"),
+      {"improvement_id": H, "candidate_key": "ka"})
+check("…which came back busy: pending, no attempt spent",
+      (step_of(H, "ka")["status"], step_of(H, "ka")["attempts"]), ("pending", 0))
+check("the next tick passes ka over and submits kb", busy_round("kb"),
+      {"improvement_id": H, "candidate_key": "kb"})
+result = engine.tick()
+check("both deferred → nothing this tick",
+      (result["submitted"], result["reason"]), ("", "deferred"))
+_real_now = engine.utc_now
+engine.utc_now = lambda: _real_now() + timedelta(seconds=engine.BUSY_DEFER_S + 1)
+try:
+    check("after the window ka is eligible again", busy_round("ka"),
+          {"improvement_id": H, "candidate_key": "ka"})
+    busy_round("kb")                  # both deferred again, from the moved clock
+finally:
+    engine.utc_now = _real_now
+user_activity._set_for_test(60)
+engine.request_run_now(H)
+result = engine.tick()
+check("run-now overrides the deferral",
+      (result["submitted"] != "", step_tasks()[-1]["payload"]),
+      (True, {"improvement_id": H, "candidate_key": "ka"}))
+worker_done(result["submitted"])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

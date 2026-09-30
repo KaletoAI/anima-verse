@@ -7,13 +7,16 @@ scan — straight from the metas, nothing is stored — and re-renders each one
 EXPLICITLY on the backend the intended spec resolves to right now (no further
 fallback, so the replacement carries no marker).
 
-While the intended spec resolves to nothing (still cooling down, offline),
-``apply`` raises ``CandidateBusy``: the step stays pending and is tried again
-on a later tick. Done = a replacement exists (``source_file`` = the
-candidate) without a marker; for a portrait: the current profile image has no
-marker.
+While the intended spec resolves to nothing for a RUNTIME reason (cooling
+down, offline), ``apply`` raises ``CandidateBusy``: the step stays pending and
+is tried again later. A CONFIGURATION reason (the spec matches no backend any
+more, wrong kind, disabled, switched off for the character) is a plain error —
+waiting cannot fix it, so the step spends its attempts and is skipped. Done =
+a replacement exists (``source_file`` = the candidate) without a marker —
+among the gallery images or, for a character, the current profile image; for
+a portrait: the current profile image has no marker.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from app.core.improvements.base import (Candidate, CandidateBusy,
                                         ImprovementType, ParamField)
@@ -38,6 +41,20 @@ def _wanted(marker: Optional[Dict[str, Any]], occasion: str) -> bool:
     return not occasion or marker.get("occasion") == occasion
 
 
+def _replaced(rows: List[Dict[str, Any]],
+              profile: Optional[Dict[str, Any]] = None) -> Set[str]:
+    """The file names that already HAVE an unmarked replacement: every
+    ``source_file`` of an image without ``fallback_from``. For a character the
+    current portrait counts too — the gallery listing leaves it out, and a
+    re-rendered portrait turns the old (still marked) one into a gallery
+    image whose replacement already exists."""
+    done = {r["source_file"] for r in rows
+            if r.get("source_file") and not r.get("fallback_from")}
+    if profile and profile.get("source_file") and not profile.get("fallback_from"):
+        done.add(profile["source_file"])
+    return done
+
+
 class FallbackRerender(ImprovementType):
     id = "fallback_rerender"
     label = "Re-render fallback images"
@@ -50,17 +67,25 @@ class FallbackRerender(ImprovementType):
 
     # ── candidates ────────────────────────────────────────────────────
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
+        # Each character's gallery/profile and each location's gallery is read
+        # ONCE per scan; the done test runs against that one read (the same
+        # rule ``is_done`` applies to a single candidate).
         subject, occasion = params["subject"], params.get("occasion", "")
         out: List[Candidate] = []
         if subject == "character_images":
             for name in subjects.characters():
                 prof = subjects.character_profile(name) or {}
+                # A marked current portrait is by definition not done.
                 if prof.get("prompt") and _wanted(prof.get("fallback_from"), occasion):
                     out.append(Candidate(f"character:{name}", name))
         elif subject == "character_gallery":
             for name in subjects.characters():
-                for img in subjects.character_gallery_images(name):
-                    if _wanted(img["fallback_from"], occasion):
+                rows = subjects.character_gallery_images(name)
+                if not any(_wanted(r["fallback_from"], occasion) for r in rows):
+                    continue
+                done = _replaced(rows, subjects.character_profile(name))
+                for img in rows:
+                    if _wanted(img["fallback_from"], occasion) and img["filename"] not in done:
                         out.append(Candidate(f"gallery:{name}:{img['filename']}",
                                              f"{name} / {img['filename']}"))
         else:
@@ -68,11 +93,12 @@ class FallbackRerender(ImprovementType):
                 loc_id = loc.get("id") or ""
                 if not loc_id:
                     continue
-                for img in subjects.gallery_images(loc_id):
-                    if _wanted(img["fallback_from"], occasion):
+                rows = subjects.gallery_images(loc_id)
+                done = _replaced(rows)
+                for img in rows:
+                    if _wanted(img["fallback_from"], occasion) and img["filename"] not in done:
                         out.append(Candidate(f"location:{loc_id}:{img['filename']}",
                                              f"{loc.get('name') or loc_id} / {img['filename']}"))
-        out = [c for c in out if not self.is_done(c, params)]
         return sorted(out, key=lambda c: (c.label.lower(), c.key))
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
@@ -81,18 +107,10 @@ class FallbackRerender(ImprovementType):
             return not (subjects.character_profile(ident) or {}).get("fallback_from")
         if kind == "gallery":
             name, filename = ident.split(":", 1)
-            # The replacement may be the current PORTRAIT, which the gallery
-            # listing leaves out: a re-rendered portrait turns the old one
-            # (still marked) into a gallery image whose replacement already
-            # exists.
-            prof = subjects.character_profile(name) or {}
-            if prof.get("source_file") == filename and not prof.get("fallback_from"):
-                return True
-            return any(g["source_file"] == filename and not g["fallback_from"]
-                       for g in subjects.character_gallery_images(name))
+            return filename in _replaced(subjects.character_gallery_images(name),
+                                         subjects.character_profile(name))
         loc_id, filename = ident.split(":", 1)
-        return any(g["source_file"] == filename and not g["fallback_from"]
-                   for g in subjects.gallery_images(loc_id))
+        return filename in _replaced(subjects.gallery_images(loc_id))
 
     # ── work ──────────────────────────────────────────────────────────
     def _marker(self, kind: str, ident: str) -> Dict[str, Any]:
@@ -109,7 +127,8 @@ class FallbackRerender(ImprovementType):
         return (row or {}).get("fallback_from") or {}
 
     def apply(self, candidate: Candidate, params: Dict[str, Any], task_id: str) -> None:
-        from app.imagegen.routing import STATUS_TEXT, resolve_spec
+        from app.imagegen.routing import (STATUS_COOLDOWN, STATUS_TEXT,
+                                          STATUS_UNAVAILABLE, resolve_spec)
         from app.imagegen.service import render_has_reference_image
         kind, ident = candidate.key.split(":", 1)
         marker = self._marker(kind, ident)
@@ -130,9 +149,16 @@ class FallbackRerender(ImprovementType):
         status, backend = resolve_spec(occasion, spec, character=character,
                                        has_ref=render_has_reference_image(character))
         if backend is None:
-            raise CandidateBusy(
-                f"{spec} for {occasion} is not available "
-                f"({STATUS_TEXT.get(status, status)})")
+            text = STATUS_TEXT.get(status, status)
+            if status in (STATUS_COOLDOWN, STATUS_UNAVAILABLE):
+                # Runtime: the backend comes back on its own — wait for it.
+                raise CandidateBusy(f"{spec} for {occasion} is not available ({text})")
+            # Configuration (no_match / wrong_kind / disabled /
+            # disabled_for_character): waiting fixes nothing — a failed
+            # attempt, skipped after the engine's attempts.
+            raise RuntimeError(
+                f"intended spec '{spec}' for {occasion} cannot render ({text}) — "
+                f"fix the routing or the backend configuration")
         if kind == "character":
             subjects.regenerate_profile(ident, backend.name)
         elif kind == "gallery":

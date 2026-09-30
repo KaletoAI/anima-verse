@@ -57,6 +57,18 @@ B8 apply("location:<loc>:x.png") -> regenerate_gallery_image(loc, "x.png",
 B9 the type is registered; smoke_improvement_types lists six types.
 B10 a marker without an intended spec is a defect, not load: apply raises a
    plain RuntimeError (a failed attempt), never CandidateBusy.
+B1b one scan reads Mara's gallery once and her profile once (one character
+   with a marked image), and the Harbour gallery once (one location) — not
+   once per candidate.
+B11 runtime vs configuration: Big A offline WITHOUT a cooldown (status
+   unavailable) -> CandidateBusy; a marker whose intended spec "Nope*"
+   matches no backend (no_match) -> plain RuntimeError; "Big*" with Big A
+   switched off (instance_enabled False -> disabled) -> plain RuntimeError.
+   None of the three reaches the producer.
+B12 the backend drops out between resolve and render: the producer raises
+   ExplicitBackendUnavailable -> both character helpers
+   (regenerate_character_gallery_image, regenerate_profile) raise
+   CandidateBusy, not a plain RuntimeError.
 """
 import os
 import sys
@@ -216,6 +228,27 @@ def part_b():
         return [c.key for c in t.find_candidates(t.validate(params))]
 
     check("B1 gallery", cands({"subject": "character_gallery"}), ["gallery:Mara:c.png"])
+    reads = {"gallery": 0, "profile": 0, "location": 0}
+    real = (subjects.character_gallery_images, subjects.character_profile,
+            subjects.gallery_images)
+
+    def counted(key, fn):
+        def wrapper(*a, **kw):
+            reads[key] += 1
+            return fn(*a, **kw)
+        return wrapper
+
+    subjects.character_gallery_images = counted("gallery", real[0])
+    subjects.character_profile = counted("profile", real[1])
+    subjects.gallery_images = counted("location", real[2])
+    try:
+        cands({"subject": "character_gallery"})
+        loc_rows = cands({"subject": "location_gallery"})
+    finally:
+        (subjects.character_gallery_images, subjects.character_profile,
+         subjects.gallery_images) = real
+    check("B1b one read per character / location",
+          (reads, len(loc_rows)), ({"gallery": 1, "profile": 1, "location": 1}, 1))
     check("B2 portrait", cands({"subject": "character_images"}), ["character:Mara"])
     loc = next(l["id"] for l in subjects.locations() if l.get("name") == "Harbour")
     check("B3 location", cands({"subject": "location_gallery"}), [f"location:{loc}:x.png"])
@@ -265,6 +298,47 @@ def part_b():
     except RuntimeError:
         got = "RuntimeError"
     check("B10 marker without spec", (got, len(REGEN_CALLS)), ("RuntimeError", n))
+
+    def outcome(key, marker):
+        fn = key.split(":")[2]
+        add_character_image_metadata("Mara", fn, {"fallback_from": marker})
+        n = len(REGEN_CALLS)
+        try:
+            t.apply(Candidate(key, fn), t.validate({"subject": "character_gallery"}), "t6")
+            got = "no exception"
+        except CandidateBusy:
+            got = "CandidateBusy"
+        except RuntimeError:
+            got = "RuntimeError"
+        return got, len(REGEN_CALLS) - n
+
+    big._available = False                    # offline, no cooldown
+    check("B11 unavailable -> busy", outcome("gallery:Mara:e.png", MARK), ("CandidateBusy", 0))
+    big._available = True
+    check("B11 no_match -> error", outcome("gallery:Mara:e.png", {
+        "occasion": "photo", "intended_spec": "Nope*", "position": 0}), ("RuntimeError", 0))
+    big.instance_enabled = False
+    check("B11 disabled -> error", outcome("gallery:Mara:e.png", MARK), ("RuntimeError", 0))
+    big.instance_enabled = True
+
+    def gone(*a, **kw):
+        raise image_regenerate.ExplicitBackendUnavailable("Big A is not available")
+
+    image_regenerate.regenerate_image = gone
+    try:
+        for label, fn in (("gallery", lambda: subjects.regenerate_character_gallery_image(
+                              "Mara", "e.png", "Big A")),
+                          ("portrait", lambda: subjects.regenerate_profile("Mara", "Big A"))):
+            try:
+                fn()
+                got = "no exception"
+            except CandidateBusy:
+                got = "CandidateBusy"
+            except RuntimeError:
+                got = "RuntimeError"
+            check(f"B12 {label}: dropped-out backend -> busy", got, "CandidateBusy")
+    finally:
+        image_regenerate.regenerate_image = fake_regenerate_image
 
 
 if __name__ == "__main__":

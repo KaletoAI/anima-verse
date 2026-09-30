@@ -156,8 +156,9 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
 
  19. A gallery re-render is a NEW file, so "done" cannot be a property of the
      candidate file: after `apply` the new image carries `backend` = the target
-     AND `source_file` = the candidate — the meta the core wrote survives, the
-     source is only merged in — and `is_done` answers True through that pair,
+     AND `source_file` = the candidate — `apply` hands the source to the core,
+     which writes it in its OWN meta write next to the backend (no second write
+     a crash could lose) — and `is_done` answers True through that pair,
      so the candidate disappears from the list.  The background flag follows
      the picture: the core flags the new file, the old one is unflagged, or the
      location would keep showing the image that was just superseded.
@@ -485,9 +486,11 @@ async def fake_gallery_generate(location_name, data):
     new_name = f"{2000 + GALLERY_SEQ['n']}.png"
     (world.get_gallery_dir(location_name) / new_name).write_bytes(b"\x89PNG fake")
     world.save_gallery_prompt(location_name, new_name, data["prompt"])
-    world.set_gallery_image_meta(location_name, new_name, {
-        "backend": data["backend"], "backend_type": "http", "model": "",
-        "loras": []})
+    meta = {"backend": data["backend"], "backend_type": "http", "model": "",
+            "loras": []}
+    if data.get("source_file"):
+        meta["source_file"] = data["source_file"]      # same write, as the core
+    world.set_gallery_image_meta(location_name, new_name, meta)
     # Mirror of the core: every building VIEW is mesh art, never a room
     # background (`building-front` … `building-right`).
     from app.core.view_prompts import building_view
@@ -965,8 +968,9 @@ IMAGE_RERENDER.apply(CAND_G, IMAGE_RERENDER.validate(GALLERY_RERENDER),
 check("apply renders the STORED (already composed) prompt on the target "
       "backend, with the image's type", GALLERY_CALLS,
       [{"prompt": "a mill by the river, daylight", "settings_applied": True,
-        "room_id": "", "prompt_type": "", "backend": "zimg"}])
-check("the new image names its source — and the core's own meta survives it",
+        "room_id": "", "prompt_type": "", "backend": "zimg",
+        "source_file": "shot.png"}])
+check("the new image names its source, next to the core's own meta",
       world.get_gallery_image_metas(MILL_ID).get("2001.png"),
       {"backend": "zimg", "backend_type": "http", "model": "", "loras": [],
        "source_file": "shot.png"})

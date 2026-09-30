@@ -13,6 +13,13 @@ from app.core.timeutils import utc_now_iso
 logger = get_logger("image_regen")
 
 
+class ExplicitBackendUnavailable(RuntimeError):
+    """The explicitly picked backend is not available right now (disabled,
+    offline or cooling down) — no automatic fallback. A RuntimeError, so
+    every existing caller keeps treating it as a failure; a caller that can
+    wait (the improvements queue) tells it apart from a defect."""
+
+
 
 def enhance_prompt(
     original_prompt: str,
@@ -209,8 +216,8 @@ def regenerate_image(character_name: str,
     if backend_name:
         backend = skill._wait_for_explicit_backend(backend_name)
         if not backend:
-            raise RuntimeError(f"Backend '{backend_name}' is not available — "
-                               f"no automatic fallback")
+            raise ExplicitBackendUnavailable(
+                f"Backend '{backend_name}' is not available — no automatic fallback")
     explicit = backend is not None
 
     # 4. Person detection (backend-independent) ALWAYS runs when

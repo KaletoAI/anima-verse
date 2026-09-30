@@ -432,20 +432,27 @@ def regenerate_profile(name: str, backend: str) -> None:
     replacement already exists.
 
     There is no double-start guard on this path (neither ``character_ops`` nor
-    ``image_regenerate`` keeps an in-flight set for a character's portrait), so
-    nothing can be reported as :class:`CandidateBusy` here.
+    ``image_regenerate`` keeps an in-flight set for a character's portrait);
+    the one :class:`CandidateBusy` here is a backend that is not available
+    (any more) when the render starts.
     """
     from app.core.expression_regen import clear_expression_cache
     from app.models.character import set_character_profile_image
-    from app.skills.image_regenerate import regenerate_image
+    from app.skills.image_regenerate import (ExplicitBackendUnavailable,
+                                             regenerate_image)
     current = character_profile(name)
     if not current:
         raise RuntimeError("no profile image")
     if not current["prompt"]:
         raise RuntimeError("profile image has no stored prompt")
-    ok, _final_prompt, new_path = regenerate_image(
-        name, current["path"], current["prompt"], backend_name=backend,
-        create_new=True, use_room=False, source_file=current["filename"])
+    try:
+        ok, _final_prompt, new_path = regenerate_image(
+            name, current["path"], current["prompt"], backend_name=backend,
+            create_new=True, use_room=False, source_file=current["filename"])
+    except ExplicitBackendUnavailable as gone:
+        # The backend dropped out after the caller picked it — load, not a
+        # defect of this portrait (the location path maps its 503 the same way).
+        raise CandidateBusy(str(gone)) from gone
     if not ok or not new_path:
         raise RuntimeError("profile regenerate failed")
     set_character_profile_image(name, Path(new_path).name)
@@ -504,11 +511,16 @@ def regenerate_character_gallery_image(name: str, filename: str, backend: str) -
                   if g["filename"] == filename), None)
     if entry is None:
         raise RuntimeError(f"{filename}: nothing to render it from")
-    ok, _final_prompt, new_path = image_regenerate.regenerate_image(
-        name, entry["path"], entry["prompt"], backend_name=backend,
-        create_new=True, use_room=True, room_id=entry["room_id"],
-        location_id=entry["location"], character_names=entry["character_names"],
-        source_file=filename)
+    try:
+        ok, _final_prompt, new_path = image_regenerate.regenerate_image(
+            name, entry["path"], entry["prompt"], backend_name=backend,
+            create_new=True, use_room=True, room_id=entry["room_id"],
+            location_id=entry["location"], character_names=entry["character_names"],
+            source_file=filename)
+    except image_regenerate.ExplicitBackendUnavailable as gone:
+        # The backend dropped out after the caller picked it — load, not a
+        # defect of this image (the location path maps its 503 the same way).
+        raise CandidateBusy(str(gone)) from gone
     if not ok or not new_path:
         raise RuntimeError("gallery regenerate failed")
 
@@ -564,9 +576,9 @@ def regenerate_gallery_image(location_id: str, filename: str,
 
     The render lands as a NEW gallery file — the generator only overwrites in
     place when the caller asks for a replacement, and an improvement must not
-    destroy the picture it was asked to improve upon.  Afterwards the new image
-    carries ``source_file`` (which picture it replaces), and the background
-    flag follows it: the core already flagged the new file, so the old one is
+    destroy the picture it was asked to improve upon.  The new image carries
+    ``source_file`` (which picture it replaces) — the core writes it in the
+    same meta write as the backend — and the background flag follows it: the core already flagged the new file, so the old one is
     unflagged here, or the location would show the picture that was meant to be
     superseded.
 
@@ -594,10 +606,7 @@ def regenerate_gallery_image(location_id: str, filename: str,
 
     from app.core.world_ops import generate_gallery_image_core
     from app.imagegen.base import BackendBusyError
-    from app.models.world import (get_background_images,
-                                  get_gallery_image_metas,
-                                  remove_background_image,
-                                  set_gallery_image_meta)
+    from app.models.world import get_background_images, remove_background_image
     entry = next((g for g in gallery_images(location_id)
                   if g["filename"] == filename), None)
     if entry is None:
@@ -609,6 +618,8 @@ def regenerate_gallery_image(location_id: str, filename: str,
             "room_id": entry["room_id"],
             "prompt_type": entry["prompt_type"],
             "backend": backend,
+            # Written by the core in the same meta write as the backend.
+            "source_file": filename,
         })) or {}
     except BackendBusyError as busy:
         raise CandidateBusy(str(busy)) from busy
@@ -625,11 +636,6 @@ def regenerate_gallery_image(location_id: str, filename: str,
     new_name = str(result.get("image") or "").strip()
     if not new_name:
         raise RuntimeError("gallery render produced no image")
-    # Merge: the core has just written this image's meta (backend, model,
-    # LoRAs) and `set_gallery_image_meta` REPLACES the entry.
-    meta = dict((get_gallery_image_metas(location_id) or {}).get(new_name) or {})
-    meta["source_file"] = filename
-    set_gallery_image_meta(location_id, new_name, meta)
     if new_name in get_background_images(location_id):
         remove_background_image(location_id, filename)
 
