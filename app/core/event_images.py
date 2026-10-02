@@ -43,7 +43,7 @@ logger = get_logger("event_images")
 
 
 # ---------------------------------------------------------------------------
-# Pfade
+# Paths
 # ---------------------------------------------------------------------------
 
 def get_events_image_dir() -> Path:
@@ -58,6 +58,26 @@ def _event_image_filename(event_id: str, resolved: bool) -> str:
 
 def _event_image_path(event_id: str, resolved: bool) -> Path:
     return get_events_image_dir() / _event_image_filename(event_id, resolved)
+
+
+def remove_event_images(event_id: str) -> int:
+    """Remove the files of a DELETED event: ``<id>.png``,
+    ``<id>_resolved.png`` and their ``.json`` sidecars. Call only after the
+    row is gone. Never creates the events dir; an unsafe id removes nothing.
+    Returns how many files were removed."""
+    from app.core import media_cleanup
+    eid = media_cleanup.safe_key(str(event_id or ""))
+    if not eid:
+        return 0
+    d = get_storage_dir() / "events"
+    if not d.is_dir():
+        return 0
+    paths = []
+    for resolved in (False, True):
+        img = d / _event_image_filename(eid, resolved)
+        paths += [img, img.with_suffix(".json")]
+    return media_cleanup.remove_files(
+        p for p in paths if media_cleanup.contained(d, p))
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +334,15 @@ def _do_generate(event_id: str,
         return None
 
     field = "resolved_image_path" if resolved else "image_path"
-    update_event_fields(event_id, **{field: str(out_path)})
+    if update_event_fields(event_id, **{field: str(out_path)}) is None:
+        # The event was deleted or expired during the render: nothing names
+        # these files any more, so they go now — and no client is told about
+        # an image, no postprocess hook is handed a removed path.
+        from app.core import media_cleanup
+        media_cleanup.remove_files([out_path, out_path.with_suffix(".json")])
+        logger.info("Event image [%s] discarded: event gone during render",
+                    event_id)
+        return None
     publish_image_ready(event_id, location_id, "resolved" if resolved else "event")
     logger.info("Event image [%s] %s rendered: %s (%dx%d, via %s)",
                 event_id, "resolved" if resolved else "active", out_path.name,

@@ -279,6 +279,13 @@ def expire_events() -> int:
                 delete_rules_by_event(str_id)
         except Exception as _e:
             logger.debug("delete_rules_by_event(expiry) failed: %s", _e)
+        # The rows are gone, so their images go too (files after the DB).
+        try:
+            from app.core.event_images import remove_event_images
+            for str_id in expired_ids:
+                remove_event_images(str_id)
+        except Exception as _e:
+            logger.warning("remove_event_images(expiry) failed: %s", _e)
         logger.info("%d expired events removed", len(expired_ids))
     return len(expired_ids)
 
@@ -419,6 +426,11 @@ def delete_event(event_id: str) -> bool:
             delete_rules_by_event(event_id)
         except Exception as _e:
             logger.debug("delete_rules_by_event(delete) failed: %s", _e)
+        try:
+            from app.core.event_images import remove_event_images
+            remove_event_images(event_id)
+        except Exception as _e:
+            logger.warning("remove_event_images(delete) failed: %s", _e)
         return True
     return False
 

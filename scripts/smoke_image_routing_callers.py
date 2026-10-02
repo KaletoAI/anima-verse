@@ -961,7 +961,10 @@ def part_d():
     gw, cloud = FakeBackend("Gw", 0, "natural", dead=True), FakeBackend("Cloud", 5, "keywords")
     install_pool(gw, cloud)
     set_routing({"event": ["Gw", "Cloud"]})
-    out = event_images._do_generate("ev-smoke", loc, "a storm rolls in", False)
+    # A real event row: an image whose event is gone is discarded.
+    from app.models.events import add_event
+    ev_id = add_event("a storm rolls in", location_id=loc, category="danger")["id"]
+    out = event_images._do_generate(ev_id, loc, "a storm rolls in", False)
     side = json.loads(Path(out).with_suffix(".json").read_text(encoding="utf-8")) if out else {}
     check("D2 sidecar", side,
           {"backend": "Cloud", "backend_type": "fake",
@@ -1364,6 +1367,9 @@ def part_f_mesh():
         patched[(mod, name)] = getattr(mod, name)
         setattr(mod, name, value)
     char_dir = tmp / "m3d-char"
+    # What get_model3d_dir does for an existing character; the mesh store
+    # never creates the directory itself.
+    char_dir.mkdir(parents=True, exist_ok=True)
     patch(model3d, "required_rig", lambda name: "mixamo")
     patch(model3d, "find_ref_image", lambda name, kind, sig=None: tmp / "src.png")
     patch(model3d, "get_model3d_dir", lambda name: char_dir)
