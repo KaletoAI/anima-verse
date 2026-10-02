@@ -258,43 +258,76 @@ def remove_post_image(post_id: str, image_filename: str) -> bool:
             if post.get("image_filename") == image_filename:
                 post["image_filename"] = filenames[0]
         save_feed(feed)
+        # The image, its meta and its video. Outside the files-after-DB
+        # guarantee: ``save_feed`` swallows its own errors.
+        _remove_post_media(image_filename)
 
-        # Bild-Datei und Meta loeschen
-        instagram_dir = get_instagram_dir()
-        img_path = instagram_dir / image_filename
-        if img_path.exists():
-            try:
-                img_path.unlink()
-            except Exception:
-                pass
-        meta_path = get_image_meta_path(image_filename)
-        if meta_path.exists():
-            try:
-                meta_path.unlink()
-            except Exception:
-                pass
-        # Video loeschen falls vorhanden
-        video_path = instagram_dir / (Path(image_filename).stem + ".mp4")
-        if video_path.exists():
-            try:
-                video_path.unlink()
-            except Exception:
-                pass
-
-        logger.info("Bild %s aus Post %s entfernt (%d Bilder verbleiben)",
+        logger.info("Image %s removed from post %s (%d images left)",
                     image_filename, post_id, len(filenames))
         return True
     return False
 
 
+def _post_files(post: Dict[str, Any]) -> set:
+    """Every image file name a post names (main image + carousel)."""
+    names = set(post.get("image_filenames") or [])
+    names.add(post.get("image_filename") or "")
+    return {n for n in names if isinstance(n, str) and n}
+
+
+def _remove_post_media(image_filename: str) -> int:
+    """Remove one post image with its meta ``.json`` and its ``<stem>.mp4``
+    video. A name with a directory part, or one that resolves outside the
+    Instagram dir, removes nothing. Returns how many files were removed."""
+    from app.core import media_cleanup
+    name = image_filename or ""
+    if not name or "/" in name or "\\" in name or ".." in name:
+        if name:
+            logger.warning("instagram media: refused unsafe name %r", name[:80])
+        return 0
+    d = get_instagram_dir()
+    paths = [d / name, get_image_meta_path(name), d / (Path(name).stem + ".mp4")]
+    return media_cleanup.remove_files(
+        p for p in paths if media_cleanup.contained(d, p))
+
+
 def delete_post(post_id: str) -> bool:
-    """Loescht einen Post. Gibt True zurueck wenn gefunden und geloescht."""
+    """Delete a post and the media files only it names. True when the row
+    was removed.
+
+    An explicit row DELETE (not ``save_feed``, which deletes by absence and
+    swallows its errors), so the files go only after a delete that really
+    happened. A file another post still names stays."""
+    pid = str(post_id or "")
+    if not pid:
+        return False
     feed = load_feed()
-    new_feed = [p for p in feed if p.get("id") != post_id]
-    if len(new_feed) < len(feed):
-        save_feed(new_feed)
-        return True
-    return False
+    post = next((p for p in feed if p.get("id") == pid), None)
+    files = _post_files(post) if post else set()
+    try:
+        with transaction() as conn:
+            n = conn.execute(
+                "DELETE FROM events WHERE kind='instagram_post' "
+                "AND json_extract(payload, '$.id')=?", (pid,)).rowcount
+            # A post whose payload carries no id is keyed by its row id
+            # (``save_feed``) — it has to be deletable under that id too.
+            if n <= 0 and pid.isdigit():
+                n = conn.execute(
+                    "DELETE FROM events WHERE kind='instagram_post' AND id=? "
+                    "AND json_extract(payload, '$.id') IS NULL",
+                    (int(pid),)).rowcount
+    except Exception as e:
+        logger.error("delete_post DB error (%s): %s", pid, e)
+        return False
+    if n <= 0:
+        return False
+    still_named = set()
+    for other in feed:
+        if other is not post:
+            still_named |= _post_files(other)
+    for name in sorted(files - still_named):
+        _remove_post_media(name)
+    return True
 
 
 def add_comment(post_id: str,

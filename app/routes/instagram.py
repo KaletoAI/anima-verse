@@ -68,34 +68,10 @@ def get_single_post(post_id: str) -> Dict[str, Any]:
 
 @router.delete("/post/{post_id}")
 def delete_single_post(post_id: str) -> Dict[str, Any]:
-    """Loescht einen Post und das zugehoerige Bild."""
-    post = get_post(post_id)
-    if not post:
-        raise HTTPException(status_code=404, detail="Post nicht gefunden")
-
-    # Bild-Datei und Metadaten loeschen
-    image_filename = post.get("image_filename", "")
-    if image_filename:
-        instagram_dir = get_instagram_dir()
-        image_path = instagram_dir / image_filename
-        if image_path.exists():
-            try:
-                image_path.unlink()
-            except Exception:
-                pass
-        # Metadaten-Datei loeschen
-        from app.models.instagram import get_image_meta_path
-        meta_path = get_image_meta_path(image_filename)
-        if meta_path.exists():
-            try:
-                meta_path.unlink()
-            except Exception:
-                pass
-
-    # Post aus Feed entfernen
+    """Delete a post together with its images, metas and videos."""
     if delete_post(post_id):
-        return {"status": "success", "message": f"Post {post_id} geloescht"}
-    raise HTTPException(status_code=404, detail="Post nicht gefunden")
+        return {"status": "success", "message": f"Post {post_id} deleted"}
+    raise HTTPException(status_code=404, detail="Post not found")
 
 
 @router.delete("/post/{post_id}/image/{image_filename}")
