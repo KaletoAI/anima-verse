@@ -34,7 +34,8 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query,
 from app.core import config
 from app.core.auth_dependency import require_admin
 from app.core.log import get_logger
-from app.core.marketplace_publish import build_upload, get_job, start_bulk
+from app.core.marketplace_publish import (BulkJobRunning, build_upload, get_job,
+                                          start_bulk)
 from app.core.marketplace_store import CatalogRepo, MarketplaceError, fetch_catalog
 from app.core.marketplace_store import publish as store_publish
 from app.core.paths import get_storage_dir
@@ -1096,14 +1097,7 @@ def _remove_skill_package_route_sync(body: Any) -> Dict[str, Any]:
 
 # ── Publish ──────────────────────────────────────────────────────────────
 
-# ── Export helpers (mirror local UI export, but in-memory) ────────────────
-
-def _export_zip_for(pack_type: str, entity_id: str) -> bytes:
-    """Delegation only — the dispatcher itself lives in `content_io` so the
-    collection builder and this route cannot drift apart."""
-    from app.core.content_io import export_zip_for
-    return export_zip_for(pack_type, entity_id)
-
+# ── Slug helper ──────────────────────────────────────────────────────────
 
 def _slug_for_pack(primary: str, fallback: str) -> str:
     """Filename-safe slug: ``primary``, or ``fallback`` when it is empty.
@@ -1313,9 +1307,12 @@ async def publish_bulk(request: Request) -> Dict[str, Any]:
     if not ids:
         raise HTTPException(status_code=400, detail="entity_ids required")
     catalog, repo = _publish_catalog((body.get("catalog_id") or "").strip())
-    job = start_bulk(repo, catalog["_id"], pack_type, ids, _parse_tags(body.get("tags")),
-                     max_pack_mb=_max_pack_mb(),
-                     sweep_age_s=int(_cfg().get("cache_ttl_minutes") or 60) * 60)
+    try:
+        job = start_bulk(repo, catalog["_id"], pack_type, ids, _parse_tags(body.get("tags")),
+                         max_pack_mb=_max_pack_mb(),
+                         sweep_age_s=int(_cfg().get("cache_ttl_minutes") or 60) * 60)
+    except BulkJobRunning as e:
+        raise HTTPException(status_code=409, detail=str(e))
     # The next /catalog fetch must not answer from a cache that predates it.
     _cache_path(catalog["_id"]).unlink(missing_ok=True)
     return job

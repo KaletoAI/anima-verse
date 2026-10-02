@@ -386,10 +386,10 @@ check("traversal member written outside the prop dir", outside.exists(), False)
 check("directory still the exported one", dir_snapshot(), EXPORTED)
 
 print("\n[8] marketplace dispatchers know the type")
+from app.core.content_io import export_zip_for as _export_zip_for  # noqa: E402
 from app.routes.content_packs import (SUPPORTED_TYPES,  # noqa: E402
                                       _dispatch_install,
-                                      _dispatch_install_selected,
-                                      _export_zip_for)
+                                      _dispatch_install_selected)
 check("SUPPORTED_TYPES", "prop" in SUPPORTED_TYPES, True)
 check("_export_zip_for type",
       json.loads(zipfile.ZipFile(io.BytesIO(_export_zip_for("prop", PID)))

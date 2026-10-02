@@ -468,10 +468,14 @@ export function BulkPublishButton({
   packType,
   entityIds,
   onDone,
+  onRunningChange,
 }: {
   packType: 'prop'
   entityIds: string[]
   onDone?: () => void
+  /** Told when a job starts and ends — the host must keep this button
+   *  mounted meanwhile, or the progress and the summary are lost. */
+  onRunningChange?: (running: boolean) => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -483,6 +487,13 @@ export function BulkPublishButton({
   const btnRef = useRef<HTMLButtonElement | null>(null)
   const running = job?.status === 'running'
   const close = useCallback(() => { if (!running) setOpen(false) }, [running])
+  // The poller reads these through refs, so a new callback identity does not
+  // restart the interval.
+  const doneRef = useRef(onDone)
+  doneRef.current = onDone
+  const runningRef = useRef(onRunningChange)
+  runningRef.current = onRunningChange
+  useEffect(() => { runningRef.current?.(running) }, [running])
 
   useEffect(() => {
     if (!open) return
@@ -498,11 +509,12 @@ export function BulkPublishButton({
   }, [open])
 
   // Poll the running job; sum it up once it ends.
+  const jobId = job?.id
   useEffect(() => {
-    if (!job || job.status !== 'running') return
+    if (!jobId || !running) return
     const timer = setInterval(async () => {
       try {
-        const r = await fetch(`/api/content/publish/jobs/${encodeURIComponent(job.id)}`,
+        const r = await fetch(`/api/content/publish/jobs/${encodeURIComponent(jobId)}`,
           { credentials: 'same-origin' })
         const d = (await r.json()) as BulkJob
         if (!r.ok) return
@@ -514,14 +526,14 @@ export function BulkPublishButton({
             .replace('{same}', String(count('no_change')))
             .replace('{bad}', String(count('error') + count('skipped'))),
           d.status === 'done' && !count('error') ? 'success' : 'error')
-          onDone?.()
+          doneRef.current?.()
         }
       } catch {
         // a missed poll is retried on the next tick
       }
     }, 2000)
     return () => clearInterval(timer)
-  }, [job, onDone, t, toast])
+  }, [jobId, running, t, toast])
 
   const start = async () => {
     try {
@@ -542,8 +554,8 @@ export function BulkPublishButton({
   const failures = (job?.items || []).filter((i) => i.status === 'error' || i.status === 'skipped')
   return (
     <span style={{ display: 'inline-block' }}>
-      <button ref={btnRef} className="ga-btn ga-btn-sm" disabled={entityIds.length === 0}
-        onClick={() => setOpen((o) => !o)}
+      <button ref={btnRef} className="ga-btn ga-btn-sm" disabled={entityIds.length === 0 && !running}
+        onClick={() => setOpen((o) => (running ? true : !o))}
         title={t('Publish every selected entry as its own pack')}>
         ↑↑ {t('Publish selected')} ({entityIds.length})
       </button>

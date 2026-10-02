@@ -31,8 +31,12 @@ logger = get_logger("marketplace_publish")
 #: A pack at or above this size is published with a warning (decision
 #: 2026-10-02: large packs go public, the admin is told).
 LARGE_PACK_BYTES = 50 * 1024 * 1024
-#: Packs per store call in the bulk job.
+#: Packs per store call in the bulk job — and the bytes a chunk may hold
+#: before it is sent early (a few huge packs must not sit in memory together).
 CHUNK = 10
+CHUNK_BYTES = 256 * 1024 * 1024
+#: Finished jobs kept for their status page; older ones are forgotten.
+KEEP_FINISHED_JOBS = 20
 
 
 def build_upload(pack_type: str, entity_id: str, name: str, description: str,
@@ -117,62 +121,91 @@ def _set_item(job_id: str, index: int, **fields: Any) -> None:
         job["done"] = sum(1 for i in job["items"] if i["status"] != "pending")
 
 
+def _abort(job_id: str, error: str) -> None:
+    """End a job early: what was published stays published, every item not
+    reached yet is "skipped" — reported, not retried."""
+    with _JOBS_LOCK:
+        job = _JOBS[job_id]
+        for item in job["items"]:
+            if item["status"] == "pending":
+                item["status"] = "skipped"
+        job["done"] = len(job["items"])
+        job["status"] = "error"
+        job["error"] = error
+
+
 def _run(job_id: str, repo: CatalogRepo, pack_type: str, tags: List[str],
          max_pack_mb: int, sweep_age_s: int) -> None:
     with _JOBS_LOCK:
         entity_ids = [i["entity_id"] for i in _JOBS[job_id]["items"]]
+
+    def send(chunk: List[Tuple[int, PackUpload, List[str]]]) -> None:
+        results = publish(repo, pack_type, [u for _, u, _ in chunk],
+                          sweep_age_s=sweep_age_s, flush_every=len(chunk))
+        for (k, upload, warnings), res in zip(chunk, results):
+            _set_item(job_id, k, status=res["status"], pack_id=res["pack_id"],
+                      error=res.get("error") or "",
+                      warnings=warnings + list(res.get("warnings") or []))
+
     try:
-        for start in range(0, len(entity_ids), CHUNK):
-            chunk: List[Tuple[int, PackUpload, List[str]]] = []
-            for k in range(start, min(start + CHUNK, len(entity_ids))):
-                eid = entity_ids[k]
-                try:
-                    name, description = default_text(pack_type, eid)
-                    upload, warnings = build_upload(pack_type, eid, name, description,
-                                                    tags, max_pack_mb=max_pack_mb)
-                except (ValueError, OSError) as e:
-                    _set_item(job_id, k, status="error", error=str(e))
-                    continue
-                if len(upload.zip_bytes) > repo.host_limit:
-                    _set_item(job_id, k, status="error", pack_id=upload.entry["id"],
-                              error="over the host's per-file limit")
-                    continue
-                chunk.append((k, upload, warnings))
-            if not chunk:
+        chunk: List[Tuple[int, PackUpload, List[str]]] = []
+        size = 0
+        for k, eid in enumerate(entity_ids):
+            try:
+                name, description = default_text(pack_type, eid)
+                upload, warnings = build_upload(pack_type, eid, name, description,
+                                                tags, max_pack_mb=max_pack_mb)
+            except (ValueError, OSError) as e:
+                logger.warning("bulk publish %s: %s could not be packed: %s", job_id, eid, e)
+                _set_item(job_id, k, status="error", error=str(e))
                 continue
-            results = publish(repo, pack_type, [u for _, u, _ in chunk],
-                              sweep_age_s=sweep_age_s, flush_every=len(chunk))
-            for (k, upload, warnings), res in zip(chunk, results):
-                _set_item(job_id, k, status=res["status"], pack_id=res["pack_id"],
-                          error=res.get("error") or "",
-                          warnings=warnings + list(res.get("warnings") or []))
+            except Exception as e:  # noqa: BLE001 — one broken entity, not the job
+                logger.exception("bulk publish %s: %s could not be packed", job_id, eid)
+                _set_item(job_id, k, status="error", error=str(e) or type(e).__name__)
+                continue
+            if len(upload.zip_bytes) > repo.host_limit:
+                _set_item(job_id, k, status="error", pack_id=upload.entry["id"],
+                          error="over the host's per-file limit")
+                continue
+            chunk.append((k, upload, warnings))
+            size += len(upload.zip_bytes)
+            if len(chunk) >= CHUNK or size >= CHUNK_BYTES:
+                send(chunk)
+                chunk, size = [], 0
+        if chunk:
+            send(chunk)
         _update(job_id, status="done")
     except (MarketplaceError, httpx.HTTPError) as e:
-        # A whole store call failed (lost index race, host down): what was
-        # published before stays published; the rest is reported, not retried.
+        # A whole store call failed (lost index race, host down).
         logger.warning("bulk publish %s stopped: %s", job_id, e)
-        with _JOBS_LOCK:
-            job = _JOBS[job_id]
-            for item in job["items"]:
-                if item["status"] == "pending":
-                    item["status"] = "skipped"
-            job["status"] = "error"
-            job["error"] = str(e)
+        _abort(job_id, str(e))
     except Exception as e:  # noqa: BLE001 — a crashed thread must still end the job
-        logger.error("bulk publish %s crashed: %s", job_id, e)
-        _update(job_id, status="error", error=str(e))
+        logger.exception("bulk publish %s crashed", job_id)
+        _abort(job_id, str(e) or type(e).__name__)
+
+
+class BulkJobRunning(RuntimeError):
+    """A bulk publish to this catalog is running already."""
+
+    def __init__(self, job_id: str):
+        super().__init__(f"a bulk publish to this catalog is running ({job_id})")
+        self.job_id = job_id
 
 
 def start_bulk(repo: CatalogRepo, catalog_id: str, pack_type: str,
                entity_ids: List[str], tags: List[str], *, max_pack_mb: int,
                sweep_age_s: int) -> Dict[str, Any]:
-    """Start a bulk publish in the background; one running job per catalog
-    (the store serializes publishes anyway) — a second start returns the
-    running job instead."""
+    """Start a bulk publish in the background. One running job per catalog
+    (the store serializes publishes anyway): a second start raises
+    :class:`BulkJobRunning` — its selection would otherwise vanish behind
+    somebody else's progress bar."""
     with _JOBS_LOCK:
         for job in _JOBS.values():
             if job["catalog_id"] == catalog_id and job["status"] == "running":
-                return _snapshot(job)
+                raise BulkJobRunning(job["id"])
+        finished = [j for j in _JOBS if _JOBS[j]["status"] != "running"]
+        for old in finished[:-KEEP_FINISHED_JOBS or None]:
+            del _JOBS[old]
         job_id = uuid.uuid4().hex[:12]
         ids = list(dict.fromkeys(e for e in entity_ids if e))
         _JOBS[job_id] = {
@@ -191,8 +224,3 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     with _JOBS_LOCK:
         job = _JOBS.get(job_id)
         return _snapshot(job) if job else None
-
-
-def list_jobs() -> List[Dict[str, Any]]:
-    with _JOBS_LOCK:
-        return [_snapshot(j) for j in _JOBS.values()]

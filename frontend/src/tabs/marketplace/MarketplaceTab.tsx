@@ -95,7 +95,8 @@ export function MarketplaceTab() {
   const enlarge = useEnlarge()
   const { toast } = useToast()
   const [catalogs, setCatalogs] = useState<CatalogRef[]>([])
-  // Packs whose thumbnail failed to load show the type symbol instead.
+  // Thumbnail URLs that failed to load: those packs show the type symbol. Keyed
+  // by URL — a republished pack gets a new one and is tried again.
   const [brokenThumbs, setBrokenThumbs] = useState<Set<string>>(new Set())
   const [activeId, setActiveId] = useState<string>('')
   const [catalog, setCatalog] = useState<Catalog | null>(null)
@@ -385,9 +386,9 @@ export function MarketplaceTab() {
                     }}
                   >
                     <span style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
-                      {p.thumbnail_url && !brokenThumbs.has(p.id) ? (
+                      {p.thumbnail_url && !brokenThumbs.has(p.thumbnail_url) ? (
                         <img src={p.thumbnail_url} alt="" loading="lazy"
-                          onError={() => setBrokenThumbs((b) => new Set(b).add(p.id))}
+                          onError={() => setBrokenThumbs((b) => new Set(b).add(p.thumbnail_url || ''))}
                           style={{ width: 40, height: 40, objectFit: 'contain', borderRadius: 4,
                             background: '#0d1117', flex: 'none' }} />
                       ) : (
