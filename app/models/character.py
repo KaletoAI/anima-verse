@@ -1005,14 +1005,19 @@ def delete_character(character_name: str) -> bool:
         logger.error("delete_character DB-Fehler fuer %s: %s", character_name, e)
         return False
 
-    # 2) Storage-Verzeichnis entfernen
+    # 2) Remove the storage directory — after the DB sweep. The cached
+    #    thumbnails of its images go first (their key needs the live path).
     try:
         char_dir = get_user_characters_dir() / character_name
+        images_dir = char_dir / "images"
+        if images_dir.is_dir():
+            from app.core.thumbnails import forget_sources
+            forget_sources(f for f in images_dir.iterdir() if f.is_file())
         if char_dir.exists():
             import shutil
             shutil.rmtree(char_dir)
     except Exception as e:
-        logger.warning("delete_character: Verzeichnis fuer %s nicht entfernbar: %s",
+        logger.warning("delete_character: directory of %s not removable: %s",
                        character_name, e)
 
     logger.info("Character '%s' geloescht (DB + Storage)", character_name)
@@ -3050,12 +3055,17 @@ def _get_outfit_sidecar_path(character_name: str, image_filename: str) -> Path:
 
 
 def save_outfit_image_meta(character_name: str, image_filename: str, meta: Dict[str, Any]):
-    """Schreibt die Sidecar-Metadaten eines Outfit-Bildes."""
+    """Write the sidecar metadata of an outfit image. Never creates the
+    character dir: for a deleted character the write is skipped (logged)."""
     p = _get_outfit_sidecar_path(character_name, image_filename)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(
-        json.dumps(meta, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8")
+    try:
+        p.parent.mkdir(exist_ok=True)
+        p.write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8")
+    except OSError as e:
+        logger.warning("Outfit image meta %s/%s not written: %s",
+                       character_name, image_filename, e)
 
 
 def get_character_outfits(character_name: str) -> List[Dict]:

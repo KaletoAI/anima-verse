@@ -81,9 +81,10 @@ def _get_expressions_dir(character_name: str) -> Path:
     of character + equipped + pose key + expression key + state.
     """
     from app.models.character import get_character_outfits_dir
-    expr_dir = get_character_outfits_dir(character_name)
-    expr_dir.mkdir(parents=True, exist_ok=True)
-    return expr_dir
+    # get_character_outfits_dir creates outfits/ only under an EXISTING
+    # character dir — no mkdir here, or polling a deleted character's
+    # portrait would conjure a ghost directory.
+    return get_character_outfits_dir(character_name)
 
 
 def _safe_name(name: str) -> str:
@@ -511,6 +512,8 @@ def clear_expression_cache(character_name: str) -> int:
     """Clear all cached expression images for a character."""
     expr_dir = _get_expressions_dir(character_name)
     count = 0
+    if not expr_dir.is_dir():
+        return 0
     for f in expr_dir.iterdir():
         if not f.is_file():
             continue
@@ -1153,11 +1156,20 @@ def generate_expression_image(character_name: str,
         # location instead of the expression-variant cache.
         if output_stem is not None:
             out_dir = output_stem.parent
-            out_dir.mkdir(parents=True, exist_ok=True)
             out_stem_name = output_stem.name
+            # Only the own subdir, never the character dir above it.
+            if out_dir.parent.is_dir():
+                out_dir.mkdir(exist_ok=True)
         else:
             out_dir = _get_expressions_dir(character_name)
             out_stem_name = cache_key
+        if not out_dir.is_dir():
+            # The character was deleted during the render: drop the result
+            # instead of recreating its directory as a ghost.
+            src_path.unlink(missing_ok=True)
+            logger.warning("Expression render for %s discarded: %s is gone",
+                           character_name, out_dir)
+            return None
         tmp_path = out_dir / f".tmp_{out_stem_name}{src_path.suffix}"
         shutil.move(str(src_path), str(tmp_path))
 

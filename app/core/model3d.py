@@ -859,7 +859,12 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
     from app.blender import runner
     from app.blender.refine import unavailable_reason
     out_dir = tier_dir(character_name, LOW_TIER)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        # parents=False: a character deleted meanwhile must not come back as
+        # a ghost directory through its LOD tier.
+        out_dir.mkdir(exist_ok=True)
+    except FileNotFoundError:
+        return {"ok": False, "error": "no_model"}
     import tempfile
     with tempfile.TemporaryDirectory(prefix="av-lod-") as tmp:
         res = runner.run("lod", inputs={"model": path},
@@ -893,7 +898,11 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
                     "error": "reduced mesh rewrote the rig frames: "
                              + "; ".join(frames.get("errors") or [])}
         target = out_dir / path.name
-        target.write_bytes(blob)
+        try:
+            target.write_bytes(blob)
+        except FileNotFoundError:
+            # Deleted during the Blender run (up to 600 s).
+            return {"ok": False, "error": "no_model"}
     side = {
         "created_at": utc_now_iso(),
         "source": "lod",
@@ -1089,6 +1098,10 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
                     character_name, signature, ", ".join(sorted(view_images)))
 
     out_dir = get_model3d_dir(character_name)
+    if not out_dir.is_dir():
+        # The character was deleted while this job waited in the queue —
+        # no GPU run for a result nobody can store.
+        return {"ok": False, "error": "character_gone"}
     task_id = ""
     try:
         task_id = get_task_queue().track_start(

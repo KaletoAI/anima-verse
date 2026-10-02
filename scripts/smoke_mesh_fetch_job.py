@@ -203,6 +203,9 @@ class _Pool:
 
 
 out_dir = Path(_TMP) / "out"
+# The caller creates the target dir at job start (model3d: get_model3d_dir);
+# the store never creates it — a vanished dir means a deleted subject.
+out_dir.mkdir(parents=True, exist_ok=True)
 CALLS.clear()
 # the TWIN alias answers for gw1 — the label must still name the alias the
 # job view reports, not whichever sibling on that gateway was asked

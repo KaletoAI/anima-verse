@@ -186,6 +186,10 @@ def _pick_main_model(models: List[Dict[str, Any]], rig: str):
     return models[0]
 
 
+#: The error of a mesh job whose target directory vanished while it ran.
+_TARGET_GONE = "target directory is gone (subject deleted during generation)"
+
+
 def _split_mesh_files(files: List[Dict[str, Any]], rig: str):
     """Picks the files a mesh job's result must be STORED as, per
     mesh-client-spec § 2 + § 3.1/3.2. Returns ``(model, texture, stages)`` —
@@ -861,8 +865,14 @@ class ImageService:
         if suffix and suffix != out.suffix.lower():
             out = out.with_suffix(suffix)
         texture_path = ""
+        # The caller created the target dir at job start. Gone now = its
+        # subject was deleted during the generation: the result is dropped,
+        # never written into a recreated ghost directory.
+        if not out.parent.is_dir():
+            logger.warning("generate_mesh: %s is gone, result discarded",
+                           out.parent)
+            return {"ok": False, "error": _TARGET_GONE}
         try:
-            out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(model["blob"])
             if texture is not None:
                 # PNG or JPEG — per FILE, so the delivered extension is the
@@ -1082,11 +1092,14 @@ class ImageService:
         suffix = _mesh_file_suffix(model)
         if suffix and suffix != out.suffix.lower():
             out = out.with_suffix(suffix)
+        if not out.parent.is_dir():   # see _store_mesh_files
+            logger.warning("generate_mesh_variant: %s is gone, result "
+                           "discarded", out.parent)
+            return {"ok": False, "error": _TARGET_GONE}
         try:
-            out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(model["blob"])
         except OSError as e:
-            logger.error("generate_mesh_variant: Schreiben fehlgeschlagen: %s", e)
+            logger.error("generate_mesh_variant: write failed: %s", e)
             return {"ok": False, "error": str(e)}
         return {"ok": True, "path": str(out),
                 "format": out.suffix.lstrip(".").lower(), "rig": "none",

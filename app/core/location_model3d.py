@@ -853,6 +853,10 @@ def _reduce_to_low(location_id: str, owner: str, room_id: str, src: Path,
         out["error"] = res.get("error") or "distance mesh not built"
         return out
     gallery = _gallery(owner, room_id)
+    if not gallery.dir.is_dir():
+        # Deleted during the Blender run — ``new_path`` would recreate it.
+        out["error"] = "subject deleted during generation"
+        return out
     target = gallery.new_path()
     target.write_bytes(res["blob"])
     meta: Dict[str, Any] = {

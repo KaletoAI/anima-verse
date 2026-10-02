@@ -6251,6 +6251,11 @@ def _generate(prop_id: str, prompt: str, negative: str,
             else:
                 logger.info("Prop %s: requested %s view has no image, skipped",
                             prop_id, v)
+        # The source render took minutes: a prop deleted meanwhile must not
+        # come back through ``new_path`` (which creates its directory).
+        if not read_sidecar(prop_id):
+            error = "subject deleted during generation"
+            return {"ok": False, "error": error}
         res = get_image_service().generate_mesh(
             source_image_path=str(src),
             output_path=str(g.new_path()),
