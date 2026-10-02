@@ -458,14 +458,22 @@ def water_basis() -> List[Dict[str, Any]]:
 
     A world that flags no kind as water contributes an empty list and costs
     nothing, exactly like :func:`relief_basis` on a world without hills.
+
+    THE LAND PAINTED OVER A WATER IS IN HERE TOO (``covers``, v11): since the
+    topmost painted area decides whether a point is wet
+    (``core.heightfield.water_areas_covered``), painting a meadow over a sea
+    raises the ground under it exactly as moving the sea's outline would. Only
+    the polygons travel — a cover's kind does not matter as long as it is not
+    water, and turning it INTO water moves it out of this list and into the one
+    above, which changes the hash anyway.
     """
-    from app.core.heightfield import water_areas, water_meta
+    from app.core.heightfield import water_areas_covered, water_meta
     from app.core.terrain_types import effective_catalog, water_kind_defaults
     from app.models.terrain import list_areas
     catalog = effective_catalog()
     speeds = water_flow_speeds()
     out: List[Dict[str, Any]] = []
-    for area, _box in water_areas(list_areas(), catalog):
+    for area, _box, covers in water_areas_covered(list_areas(), catalog):
         kind = str(area.get("kind") or "")
         meta = water_meta(area, water_kind_defaults(kind, catalog))
         out.append({"id": area.get("id"), "polygon": area.get("polygon"),
@@ -484,7 +492,8 @@ def water_basis() -> List[Dict[str, Any]]:
                     # tiles it had. They are the only inputs of this signature
                     # that do not move ``h_final`` by a millimetre.
                     "speed": meta.flow_speed_m_s,
-                    "kind_speed": speeds.get(kind)})
+                    "kind_speed": speeds.get(kind),
+                    "covers": [c.get("polygon") for c, _cbox in covers]})
     return out
 
 

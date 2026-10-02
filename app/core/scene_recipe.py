@@ -4002,13 +4002,20 @@ def _painted_waters() -> List[Dict[str, Any]]:
     water is this room on" and "which ground is at this point" cannot name two
     different lakes. A world that flags no kind as water answers an empty list
     and every floor plan below costs nothing.
+
+    EACH ENTRY IS A COPY CARRYING ``covers`` — the outlines of the land painted
+    over that water (``heightfield.water_areas_covered``, v11): the topmost
+    painted area decides whether a point is wet, so a house on an island painted
+    into a sea does not lie on the sea. The key exists only on this in-memory
+    copy, never in the stored area.
     """
-    from app.core.heightfield import water_areas
+    from app.core.heightfield import water_areas_covered
     from app.core.terrain_types import effective_catalog
     from app.models.terrain import list_areas
     try:
-        return [area for area, _box
-                in water_areas(list_areas(), effective_catalog())]
+        return [{**area, "covers": [c.get("polygon") for c, _cbox in covers]}
+                for area, _box, covers
+                in water_areas_covered(list_areas(), effective_catalog())]
     except Exception:                    # noqa: BLE001 — no world, no water
         logger.warning("floor plan: painted water unreadable — no map "
                        "reference", exc_info=True)
@@ -4038,6 +4045,10 @@ def _map_water_ref(polygon: Optional[List[List[float]]],
     LAST CONTAINING AREA WINS on a tie, which is the priority law of the whole
     ground (§ A16.7): ``waters`` arrives in paint order, so a later lake painted
     over an earlier one is the one a room on both is said to lie on.
+
+    A PROBE UNDER LAND IS NOT ON THE WATER: an entry's optional ``covers``
+    (:func:`_painted_waters`) are the outlines painted over it, and a probe
+    inside one of them does not count for that water.
     """
     # The rings are parsed ONCE and probed with the pre-parsed primitives of
     # app/core/heightfield.py (``_ring`` / ``_inside_ring``) — the same ray
@@ -4082,7 +4093,25 @@ def _map_water_ref(polygon: Optional[List[List[float]]],
         if (max(rxs) < min_x or min(rxs) > max_x
                 or max(rzs) < min_z or min(rzs) > max_z):
             continue
-        inside = sum(1 for px, pz in probes if _inside_ring(px, pz, ring))
+        # Each cover with its box, and only the ones reaching the hull's box:
+        # a drawn road is a thousand-point ring, and most never come near.
+        covers = []
+        for raw in (area.get("covers") or ()):
+            cring = _ring(raw)
+            if cring is None:
+                continue
+            cbox = (min(p[0] for p in cring), min(p[1] for p in cring),
+                    max(p[0] for p in cring), max(p[1] for p in cring))
+            if (cbox[2] < min_x or cbox[0] > max_x
+                    or cbox[3] < min_z or cbox[1] > max_z):
+                continue
+            covers.append((cring, cbox))
+        inside = sum(1 for px, pz in probes
+                     if _inside_ring(px, pz, ring)
+                     and not any(c[1][0] <= px <= c[1][2]
+                                 and c[1][1] <= pz <= c[1][3]
+                                 and _inside_ring(px, pz, c[0])
+                                 for c in covers))
         share = inside / len(probes)
         # A MAJORITY, so STRICTLY more than half — a room lying exactly half on
         # the water is not on it, and a tie between two lakes is won by the

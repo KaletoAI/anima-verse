@@ -4409,6 +4409,23 @@ Boden nur senken — ein Ufer, das ohnehin unter dem Spiegel liegt, bleibt liege
 Am Rand (`d_innen = 0`) ist der Carve `min(h, Spiegel)` — die Platte trifft das
 Gelände, und genau das ist die Uferlinie.
 
+> **v11 (2026-10-02): DIE OBERSTE GEMALTE FLÄCHE ENTSCHEIDET, OB EIN PUNKT NASS
+> IST.** Eine Fläche einer Nicht-Wasser-Art, die in der Malreihenfolge
+> (`z_order`, dann Malreihenfolge) NACH einem Wasser kommt, beendet dieses Wasser
+> dort, wo sie liegt (`heightfield.water_areas_covered`): kein Carve, kein
+> Raster-Texel, Höhenflächen wirken darunter normal. „Innerhalb des Polygons"
+> heißt damit „im OFFENEN Teil des Polygons", und `d_innen` ist der Abstand zur
+> **Wasserlinie** — dem Umriss, soweit kein Land darüber liegt, plus den Rändern
+> der überdeckenden Landflächen, soweit sie im offenen Wasser liegen. Eine in ein
+> Meer gemalte Insel bekommt so ein Ufer wie ein Seerand (Bett-Rampe, `sd` = 0 an
+> ihrer Kante, Dilatationsring mit negativem `sd` unter dem Land). Wasser über
+> Wasser stapelt wie bisher (der Carve nimmt das tiefere Bett), ein Weg über
+> einem Fluss ist ein Damm, ein Wald über einem Fluss trockener Wald — der
+> Waldboden-LOOK eines Flussbetts ist `meta.bed_kind`. Dieselbe Regel galt schon
+> für `terrain_query.kind_at`, die Ebenen-Maske und das `typeAt` des Clients.
+> Ein Wasser ohne Land darüber rechnet exakt wie vorher. Prüfung:
+> `scripts/smoke_water_topmost.py`.
+
 > **INVARIANTE 2 — kein Texel über dem Spiegel.** Für jede Probe, die tiefer
 > als `shore_ramp_m` im Polygon liegt, gilt `h_final ≤ water_level − ε` mit
 > `ε = min(water_depth_m, 0,25)`. Damit ist „grünes Terrain sticht fern durchs
@@ -8883,6 +8900,7 @@ nicht.
 | `scripts/smoke_terrain_layers.py` **[13]** | Bett-Art als Layer (Oberfläche + eigene Übergangsbreite, zwei Betten = zwei Layer), die rote Probe „nichts malt die Wasser-Textur aufs Gelände", das EINE Prädikat Zeile für Zeile, und das **Kantengesetz**: dieselben zwei Rechtecke in zwei Malreihenfolgen geben die zwei Breiten |
 | `scripts/smoke_scene_recipe.py` **[4w]** | `map_water` von Hand (100 % / 75 % → Verweis; 50 % / 25 % / 0 % → keiner), Letzter-gewinnt, und dass der Eintrag sonst nichts über Wasser sagt |
 | `scripts/smoke_terrain_types.py`, `scripts/smoke_nav_grid.py` | Sanitizer der Art-Vorgaben bzw. der Bett-Carve unter der Laufregel |
+| `scripts/smoke_water_topmost.py` | **v11:** die oberste gemalte Fläche entscheidet — Gras über Wasser ist trocken (0 statt −2, +10-m-Höhenfläche bleibt 10), Insel-Ufer mit Bett-Rampe (−0,3125 / −1,0 / −2 bei 1/2/10 m), Ring unter der Insel (sd −2/−4, bei 4,5 m nichts), Wasser über Wasser unverändert, See auf der Insel ohne Meeres-Carve (9), Weg über Fluss = Damm, keine Phantom-Wasserlinie auf gemeinsamen Landkanten, `height_sig` und `map_water` über den echten Store |
 
 ### Ein Wasser-Gesetz — W2 (Client) (§ A16.3 / § A16.7 / § A19 Nr. 5 / § G4)
 
@@ -9261,7 +9279,10 @@ bedeckt  = INNERHALB des Umrisses ODER innerhalb WATER_RASTER_DILATION_M
 ```
 
 **„Oberstes" ist die Regel des Bodens** — die zuletzt gemalte Fläche gewinnt,
-dieselbe, mit der `_kind_at` die Bodenart auflöst. **Innen schlägt dilatiert**,
+dieselbe, mit der `_kind_at` die Bodenart auflöst. Seit v11 gilt sie auch gegen
+LAND: ist die oberste Fläche über `p` eine Nicht-Wasser-Art, ist `p` trocken;
+„innerhalb des Umrisses" heißt dann „im offenen Teil", und `sd` wie die
+Dilatation messen gegen die Wasserlinie (siehe den v11-Kasten beim Carve). **Innen schlägt dilatiert**,
 in zwei Durchgängen: der Ring außerhalb eines Flusses ist eine Filter-Reparatur
 und keine Autorenschaft, also muss ein Punkt, der wirklich in einem See liegt,
 den See lesen, auch wenn ein später gemalter Fluss dorthin reicht.

@@ -1817,7 +1817,7 @@ for _name in ("_bank_clamp", "_relief_weight", "water_bank_box",
     check(f"red: HeightModel.{_name} is gone", hasattr(BMODEL, _name), False)
 check("red: `final` names three stages, not four",
       "_bank_clamp" in inspect.getsource(hf.HeightModel.final), False)
-check("HEIGHT_BAKE_VERSION", hf.HEIGHT_BAKE_VERSION, 10)
+check("HEIGHT_BAKE_VERSION", hf.HEIGHT_BAKE_VERSION, 11)
 
 print("\n[10b] the band outside the outline is the authored step, probe by "
       "probe")
@@ -1942,26 +1942,49 @@ check("…and half a metre further out there is no water at all",
 
 # ── [11] THE RELIEF REACHES THE WATERLINE AGAIN (v8) ────────────────────
 print("\n[11] the micro-relief runs up to the water again — no 16 m collar")
-# THE FIXTURE of the fade sections, unchanged, so every number is the same
-# probe with the guard taken out:
+# THE FIXTURE of the fade sections, so every number is the same probe with
+# the guard taken out:
 #
-#   FADE_LAKE    square (0,0)-(40,40), kind "lake", NO water_level,
-#                water_depth_m 2.0, shore_ramp_m 4.0
 #   FADE_MEADOW  kind "g" over (-40,-40)-(80,80), amplitude 1.0, wave 16,
-#                painted AFTER the lake, so `_kind_at` answers "g" inside the
-#                polygon too
+#                painted FIRST
+#   FADE_LAKE    square (0,0)-(40,40), kind "lake", NO water_level,
+#                water_depth_m 2.0, shore_ramp_m 4.0, painted OVER the meadow
+#                and carrying the SAME two relief numbers itself
+#
+# THE ORDER IS v11's (2026-10-02). Until then the meadow was painted AFTER the
+# lake so that `_kind_at` answered "g" inside the polygon too; since v11 the
+# topmost painted area decides whether a point is wet, and a meadow over the
+# whole lake would be dry ground. Relief UNDER the water is therefore the
+# LAKE's own now: same amplitude and wave, but the seed of ITS kind
+# (`fnv1a("lake")`, SEED_L), so the hills inside the polygon are a different
+# pattern of the same size. Outside the polygon nothing changed.
+#
+# THE RIM IS THE SEAM between the two patterns, and the ray-casting rule
+# (`_inside_ring`, half-open) decides which side a point ON the outline
+# belongs to: the bottom (z = 0) and left (x = 0) edges count as inside — the
+# lake's seed — the top (z = 40) and right (x = 40) edges as outside — the
+# meadow's. Every relief probe around the rim lands in one of the two areas,
+# so the edge rule never cuts a dip here.
 #
 # There is no height area under this fixture, so `natural` IS the relief —
 # and since v8 it is the relief at FULL amplitude everywhere, inside the
 # polygon included. The weight table of v6 (0 at the outline, 0.011 one metre
 # out, 0.5 at 8 m, 1 at 16 m) is gone with the function that computed it.
-FADE_LAKE = {"id": "ta_fade_lake", "kind": "lake", "z_order": 0,
-             "polygon": [[0, 0], [40, 0], [40, 40], [0, 40]],
-             "meta": {"water_depth_m": 2.0, "shore_ramp_m": 4.0}}
-FADE_MEADOW = {"id": "ta_fade_meadow", "kind": "g", "z_order": 1,
+FADE_MEADOW = {"id": "ta_fade_meadow", "kind": "g", "z_order": 0,
                "polygon": [[-40, -40], [80, -40], [80, 80], [-40, 80]],
                "meta": {"relief_amplitude_m": 1.0, "relief_wave_m": 16.0}}
-FMODEL = hf.build_model([], [], [FADE_LAKE, FADE_MEADOW], CATALOG)
+FADE_LAKE = {"id": "ta_fade_lake", "kind": "lake", "z_order": 1,
+             "polygon": [[0, 0], [40, 0], [40, 40], [0, 40]],
+             "meta": {"water_depth_m": 2.0, "shore_ramp_m": 4.0,
+                      "relief_amplitude_m": 1.0, "relief_wave_m": 16.0}}
+FMODEL = hf.build_model([], [], [FADE_MEADOW, FADE_LAKE], CATALOG)
+SEED_L = fnv1a("lake")
+_ring_lake = hf._ring(FADE_LAKE["polygon"])
+
+
+def fade_seed(px, pz):
+    """Which pattern a point of the fade fixture carries — see the seam note."""
+    return SEED_L if hf._inside_ring(px, pz, _ring_lake) else SEED_G
 
 
 def v6_weight(d):
@@ -1982,8 +2005,8 @@ for d in (0.0, 1.0, 2.0, 4.0, 8.0, 12.0, 16.0, 17.0):
         check_not(f"…and NOT the {round(v6_weight(d), 6)} of it v6 left",
                   round(FMODEL.natural(x, 10.0), 12),
                   round(hand_noise(x, 10.0, SEED_G) * v6_weight(d), 12))
-near("…and INSIDE the polygon the relief is back too",
-     FMODEL.natural(20.0, 20.0), hand_noise(20.0, 20.0, SEED_G), 1e-12)
+near("…and INSIDE the polygon the relief is back too — the lake's own",
+     FMODEL.natural(20.0, 20.0), hand_noise(20.0, 20.0, SEED_L), 1e-12)
 check_not("…which is not the flat 0.0 the fade left there",
           round(FMODEL.natural(20.0, 20.0), 12), 0.0)
 near("the CARVE is what removes it under the water: level - depth",
@@ -1997,13 +2020,14 @@ print("  [11b] the mirror is the median of a WOBBLING rim again")
 FPROF = FMODEL.water_profile_by_area["ta_fade_lake"]
 FRIM = hf._rim_samples(FADE_LAKE["polygon"])
 check("…over 80 rim samples", len(FRIM), 80)
-_rim_h = sorted(hand_noise(px, pz, SEED_G) for px, pz in FRIM)
+_rim_h = sorted(hand_noise(px, pz, fade_seed(px, pz)) for px, pz in FRIM)
 _rim_median = (_rim_h[39] + _rim_h[40]) / 2.0
 near(f"the derived mirror is that hand median ({round(_rim_median, 6)})",
      FPROF.level_up, _rim_median, 1e-12)
 check_not("…and NOT the exact 0.0 a relief-free rim gave v6",
           round(FPROF.level_up, 12), 0.0)
-_over = max(hand_noise(px, pz, SEED_G) for px, pz in FRIM) - _rim_median
+_over = max(hand_noise(px, pz, fade_seed(px, pz))
+            for px, pz in FRIM) - _rim_median
 check_true(f"the rim spreads {round(_rim_h[-1] - _rim_h[0], 3)} m over one "
            "lake again", _rim_h[-1] - _rim_h[0] > 1.0)
 check_true(f"…and its highest point stands {round(_over, 3)} m over its own "
@@ -2035,7 +2059,6 @@ print("  [11d] the collar the fade flattened is landscape again")
 # the other way round: how much wave stands in the first 4 m of the collar now.
 _collar = []
 _gx = -8.0
-_ring_lake = hf._ring(FADE_LAKE["polygon"])
 while _gx <= 48.0 + 1e-9:
     _gz = -8.0
     while _gz <= 48.0 + 1e-9:
@@ -2054,10 +2077,10 @@ check_true(f"…where v6 left {round(_worst_v6, 4)} m of it — the flattening "
            "nobody authored", _worst_v6 < 0.5 * _worst_v8)
 
 print("  [11e] a 0-ramp basin is still a basin — the CARVE never moved")
-STEP_LAKE = {"id": "ta_step_lake", "kind": "lake", "z_order": 0,
+STEP_LAKE = {"id": "ta_step_lake", "kind": "lake", "z_order": 1,
              "polygon": [[0, 0], [40, 0], [40, 40], [0, 40]],
              "meta": {"water_depth_m": 2.0, "shore_ramp_m": 0.0}}
-SMODEL = hf.build_model([], [], [STEP_LAKE, FADE_MEADOW], CATALOG)
+SMODEL = hf.build_model([], [], [FADE_MEADOW, STEP_LAKE], CATALOG)
 near("the BED of a 0-ramp basin is full depth at the rim",
      SMODEL.final(39.0, 20.0), SMODEL.water_profile_by_area[
          "ta_step_lake"].level_up - 2.0, 1e-12)
@@ -2081,7 +2104,7 @@ check_not("moving ONLY the code version moves the signature", _after, _before)
 near("…and it is exactly 10 characters, like the other one", len(_after), 10,
      0)
 check("the restored version is the one this bake ships",
-      hf.HEIGHT_BAKE_VERSION, 10)
+      hf.HEIGHT_BAKE_VERSION, 11)
 _get_field_src = inspect.getsource(hf.get_field)
 check_true("get_field rejects a stored raster whose sig differs",
            'stored.get("sig") == sig' in _get_field_src)
@@ -2404,17 +2427,49 @@ check("...a corner probe: (24, 24) is 4 m from BOTH edges, so 4",
       round(MODEL.water_at(24.0, 24.0)[3], 6), 4.0)
 check_true("...and outside the ring there is no tuple to read at all",
            MODEL.water_at(14.0, 40.0) is None)
-# THE PAINTED BED CHANGES NOTHING HERE, which is the whole point: the water
-# raster is built from the WATER stamps, and a sand area painted inside the lake
-# is not one. Same lake, same numbers, with a bed area drawn over it.
-_BED = {"id": "ta_bed", "kind": "meadow", "z_order": 5,
-        "polygon": [[24, 24], [56, 24], [56, 56], [24, 56]], "meta": {}}
-_BEDMODEL = hf.build_model([SLOPE], [PLOT], list(TERRAIN) + [_BED], CATALOG)
-check("a lake with a PAINTED BED answers the same sd mid-lake",
+# A PAINTED BED CHANGES NOTHING HERE: a bed is the lake's ``meta.bed_kind``,
+# which the ground compositor paints and the water stamps never read. Same
+# lake, same numbers, with a bed kind set.
+_BEDLAKE = dict(WATER_SET, meta=dict(WATER_SET["meta"], bed_kind="g"))
+_BEDMODEL = hf.build_model([SLOPE], [PLOT], [_BEDLAKE, WATER_AUTO, GRASS],
+                           CATALOG)
+check("a lake with a bed_kind answers the same sd mid-lake",
       round(_BEDMODEL.water_at(40.0, 40.0)[3], 6), 20.0)
 check("...and the same level",
       round(_BEDMODEL.water_at(40.0, 40.0)[0], 6),
       round(MODEL.water_at(40.0, 40.0)[0], 6))
+# BUT A SHAPE PAINTED OVER THE LAKE IS AN ISLAND (v11, 2026-10-02) — the
+# topmost painted area decides whether a point is wet. Until v11 this very
+# meadow left every number of the lake unchanged ("a bed drawn over it"); the
+# bed has been ``bed_kind`` since, and a land area on top of a water is land.
+#
+# BY HAND, the lake (20..60)², mirror 3, depth 2, shore ramp 3, the island
+# (24..56)² on top of it, the SLOPE making natural(x) = min(x, 200-x)/10:
+#   (40, 40)  under the island, 16 m from its edge — past the 4 m ring:
+#             water None; no carve, so final = natural(40) = 4.0 (it was
+#             3 - 2 = 1.0, the bed, before)
+#   (22, 40)  open water, 2 m from the outline AND 2 m from the island:
+#             sd 2.0; the bed is 3 - 2*ss(2/3) = 3 - 2*20/27 = 3 - 40/27,
+#             below natural(22) = 2.2, so that is final
+#   (23, 40)  3 m from the outline, 1 m from the island: sd = 1.0 — the
+#             distance is to the WATERLINE, the island's edge included
+#   (25, 40)  under the island, 1 m in: the dilation ring, sd = -1.0
+_ISLAND = {"id": "ta_island", "kind": "g", "z_order": 5,
+           "polygon": [[24, 24], [56, 24], [56, 56], [24, 56]], "meta": {}}
+_ISLMODEL = hf.build_model([SLOPE], [PLOT], list(TERRAIN) + [_ISLAND],
+                           CATALOG)
+check("an island mid-lake is dry: no water tuple 16 m inside it",
+      _ISLMODEL.water_at(40.0, 40.0), None)
+near("...and no carve: the ground is natural(40) = 4.0, not the 1.0 bed",
+     _ISLMODEL.final(40.0, 40.0), 4.0, 1e-12)
+check("open water 2 m from both the outline and the island: sd 2",
+      round(_ISLMODEL.water_at(22.0, 40.0)[3], 6), 2.0)
+near("...and the bed ramps toward the island like toward a rim: 3 - 40/27",
+     _ISLMODEL.final(22.0, 40.0), 3.0 - 40.0 / 27.0, 1e-12)
+check("1 m off the island the sd is 1 — the island's edge IS a waterline",
+      round(_ISLMODEL.water_at(23.0, 40.0)[3], 6), 1.0)
+check("1 m inside the island: the dilation ring, sd -1",
+      round(_ISLMODEL.water_at(25.0, 40.0)[3], 6), -1.0)
 # THE GUARANTEE THE GATE RESTS ON: every point INSIDE an outline reads four
 # corners that all carry a real distance, so a bilinear sd can never be dragged
 # negative there by a dry corner. It is the dilation argument of [12b], read
@@ -2763,15 +2818,24 @@ check("a window that only touches the lake ships a ONE-entry palette",
       _KW_LAKE[4], ["lake"])
 check("...and its grid indexes that one entry", _KW_LAKE[5][0], [0] * 5)
 
-print("\n[12j] THE CONVICTION — a river through a forest painted over it")
+print("\n[12j] a river under a forest painted over it — dry forest since v11")
 # THE USER'S CASE, 2026-08-25: "lake AND river show patches that look like
 # forest floor, and at the river the flow direction reads wrong". A generated
-# map paints a wood over the whole valley and draws the river into it; whichever
-# was painted LAST is the topmost PAINTED kind, and that is the only thing the
-# id mask could report.
+# map had painted a wood over the whole valley and the river into it, and the
+# renderer picked its water look out of the ground compositor's id mask, which
+# names the topmost PAINTED kind — the forest. v10 answered with the kind
+# channel of the water raster, which named the river WHATEVER was painted over
+# it.
 #
-#   forest : the box (-1,-1)-(121,81), kind "g", painted LAST (topmost)
-#   river  : the box (15,37)-(105,43), kind "river", painted first
+# v11 (2026-10-02) CHANGES THE PREMISE: the topmost painted area decides
+# whether a point is wet, the rule the mask, `kind_at` and the client's
+# `typeAt` already answered with. A forest painted over a river is DRY FOREST
+# now, so the mask and the water field agree; a river is drawn by painting it
+# OVER the ground it runs through (the map spec says exactly that), and a
+# forest-floor LOOK of its bed is `meta.bed_kind`.
+#
+#   forest : the box (-1,-1)-(121,81), kind "g"
+#   river  : the box (15,37)-(105,43), kind "river", mirror 1.0, flow 90 deg
 _FA_RIVER = {"id": "ta_fa_river", "kind": "river", "z_order": 0,
              "polygon": [[15, 37], [105, 37], [105, 43], [15, 43]],
              "meta": {"water_level": 1.0, "flow_dir_deg": 90.0}}
@@ -2780,45 +2844,40 @@ _FA_FOREST = {"id": "ta_fa_forest", "kind": "g", "z_order": 9,
               "meta": {}}
 _FA_AREAS = [_FA_RIVER, _FA_FOREST]
 _FAMODEL = hf.build_model([], [], _FA_AREAS, CATALOG_R)
-# THE RED PROBE, measured on the very mechanism that was asked: the ground
-# compositor's own model. At mid-river the TOPMOST PAINTED kind is the forest,
-# and the forest layer is not water — so the id pair the fragment fetched there
-# was (forest, forest), both halves failed `is_water`, and the pick fell to the
-# stand-in row: the world's PRIMARY water, with a lake's tint, a lake's opaque
-# depth and a lake's flow_speed.
+# THE MASK, measured on the ground compositor's own model: at mid-river the
+# topmost painted kind is the forest, and the forest layer is not water.
 _FA_LM = TL2.LayerModel(_FA_AREAS, CATALOG_R, "meadow")
 _FA_TOP = _FA_LM.layer_at(60.0, 40.0)
 _FA_TOP_ROW = _FA_LM.layers[_FA_TOP]
-_FA_RIVER_ROW = next(e for e in _FA_LM.layers if e["kind"] == "river")
-print(f"    mid-river (60, 40): id pair ({_FA_TOP}, {_FA_TOP}) = "
-      f"({_FA_TOP_ROW['kind']}, {_FA_TOP_ROW['kind']}); the river's own layer "
-      f"is {_FA_RIVER_ROW['index']}")
-check("RED: the topmost PAINTED kind at mid-river is the forest, not the water",
+check("forest OVER the river: the mask names the forest at mid-river",
       _FA_TOP_ROW["kind"], "g")
-check("RED: ...and that layer is not water, so BOTH halves of the id pair fail "
-      "the `is_water` test the fragment picked its row with",
-      _FA_TOP_ROW["water"], False)
-check_true("RED: ...while the river's own layer exists and IS water — the mask "
-           "simply never names it here",
-           _FA_RIVER_ROW["water"] is True
-           and _FA_RIVER_ROW["index"] != _FA_TOP_ROW["index"])
-# THE FIX, on the same point: the water field names the river, because the water
-# field is built from the WATER stamps and a forest is not one.
-check("the water raster names the RIVER at mid-river, whatever is painted over "
-      "it", _FAMODEL.water_at(60.0, 40.0)[4], "river")
-_FAW = _FAMODEL.water_raster(0.0, 30.0, 2.0, 61, 11)
+check("...and that layer is not water", _FA_TOP_ROW["water"], False)
+# THE WATER FIELD NOW SAYS THE SAME. By hand: no height area and no relief, so
+# natural = 0 everywhere; the river is covered over its whole outline, so it
+# carves nothing and writes no texel — not even a dilation ring, because its
+# waterline is empty.
+check("...and the water field agrees: no water at mid-river",
+      _FAMODEL.water_at(60.0, 40.0), None)
+near("...no carve either — the ground is the flat 0.0, not the 1 - depth bed",
+     _FAMODEL.final(60.0, 40.0), 0.0, 1e-12)
+check("...and the window over the whole river is DRY: no water block at all",
+      _FAMODEL.water_raster(0.0, 30.0, 2.0, 61, 11), None)
+# THE ORDER THAT DRAWS A RIVER: painted over the forest. The water field names
+# the river, the mask names the river's own (water) layer — the two agree here
+# as well, which is the whole point of one rule.
+_FA_UP = [dict(_FA_FOREST, z_order=0), dict(_FA_RIVER, z_order=9)]
+_FAUMODEL = hf.build_model([], [], _FA_UP, CATALOG_R)
+_FA_ULM = TL2.LayerModel(_FA_UP, CATALOG_R, "meadow")
+_FA_UROW = _FA_ULM.layers[_FA_ULM.layer_at(60.0, 40.0)]
+check("river OVER the forest: the water raster names the river at mid-river",
+      _FAUMODEL.water_at(60.0, 40.0)[4], "river")
+check("...and the mask names the river's layer, which IS water",
+      (_FA_UROW["kind"], _FA_UROW["water"]), ("river", True))
+_FAW = _FAUMODEL.water_raster(0.0, 30.0, 2.0, 61, 11)
 check("...the window's palette holds exactly that one water", _FAW[4], ["river"])
 check("...and every WET texel of the window indexes it",
       sorted({_FAW[5][_j][_i] for _j in range(11) for _i in range(61)
               if _FAW[0][_j][_i] is not None}), [0])
-# The forest is painted over the whole window, so the id mask names it at EVERY
-# one of those texels — which is the measure of how much of the river the old
-# rule got wrong: all of it.
-check("RED: the id mask names the forest at every wet texel of that window — "
-      "the whole river drew with the wrong water",
-      sorted({_FA_LM.layer_at(_i * 2.0, 30.0 + _j * 2.0)
-              for _j in range(11) for _i in range(61)
-              if _FAW[0][_j][_i] is not None}), [_FA_TOP])
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failures")
 for name in FAILURES:

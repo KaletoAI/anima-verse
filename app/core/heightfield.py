@@ -208,7 +208,19 @@ logger = get_logger("heightfield")
 #: level and the ``sd`` are the topmost water's. ``h_final`` does not move; the
 #: counter turns because a v9 tile carries no palette and the renderer has
 #: nothing to index its look table by.
-HEIGHT_BAKE_VERSION = 10
+#:
+#: v11 (2026-10-02, bug "Wasser über Land"): THE TOPMOST PAINTED AREA DECIDES
+#: WHETHER A POINT IS WET. A land area painted over a water (later in z_order /
+#: paint order, :func:`water_areas_covered`) now ENDS that water where it lies:
+#: no carve, no raster texel, the height areas under it act normally, and the
+#: waterline it draws is a shore like a lake's rim (bed ramp, ``sd`` = 0 on its
+#: edge, dilation ring with negative ``sd``). Until here the carve and the raster
+#: looked at water polygons alone, so a sea painted under a whole island drowned
+#: it — while ``kind_at``, the layer mask and the client's ``typeAt`` already
+#: called the same ground dry. A water with no land over it takes the old code
+#: path untouched, so worlds that never paint land over water bake the same
+#: numbers; the counter turns because those that do get a different ``h_final``.
+HEIGHT_BAKE_VERSION = 11
 
 #: Distance between two support points, in metres. Four metres is the scale of
 #: the thing being described: a hill is tens of metres wide, and a walker
@@ -1777,6 +1789,63 @@ def water_areas(terrain_areas: Sequence[Dict[str, Any]],
     return out
 
 
+def water_areas_covered(terrain_areas: Sequence[Dict[str, Any]],
+                        catalog: Optional[Dict[str, Dict[str, Any]]]
+                        ) -> List[Tuple[Dict[str, Any],
+                                        Tuple[float, float, float, float],
+                                        List[Tuple[Dict[str, Any],
+                                                   Tuple[float, float,
+                                                         float, float]]]]]:
+    """:func:`water_areas`, each with the LAND painted above it — its covers.
+
+    THE TOPMOST PAINTED AREA DECIDES WHETHER A POINT IS WET (2026-10-02). It is
+    the rule ``terrain_query.kind_at``, the layer mask, the scatter occluders
+    and the client's ``typeAt`` already answered with; the carve and the water
+    raster were the two readers that looked at water polygons alone, so a sea
+    painted over the whole map with an island painted on top of it flooded the
+    island — every building stood on its plateau like a rock in the water. A
+    water is water only where no area painted AFTER it is land.
+
+    A COVER is every usable polygon that comes LATER in the bottom-to-top list
+    (``models.terrain.list_areas``: z_order, then paint order) than the water,
+    is not of a water kind, and whose box overlaps the water's box. An area
+    without a kind covers too — ``kind_at`` answers the world's default kind
+    there, which hides what lies under it just as well. Water painted over
+    water is NOT a cover: two stacked waters keep stacking exactly as before
+    (the carve takes the deeper bed, the raster the upper water).
+
+    A ROAD OVER A RIVER IS A CAUSEWAY now, and a forest over a river is dry
+    forest. A river bed that should LOOK like forest floor is what
+    ``meta.bed_kind`` exists for; a bridge is a prop over a road painted
+    BELOW the river.
+
+    Same order and same entries as :func:`water_areas`, so the two can never
+    disagree about which waters there are.
+    """
+    from app.core.terrain_types import is_water_kind
+    from app.models.heightfield import polygon_bounds
+    catalog = catalog or {}
+    usable: List[Tuple[Dict[str, Any], Tuple[float, float, float, float],
+                       bool]] = []
+    for area in (terrain_areas or []):
+        if len(area.get("polygon") or []) < 3:
+            continue
+        box = polygon_bounds(area.get("polygon"))
+        if box is None:
+            continue
+        usable.append((area, box,
+                       is_water_kind(str(area.get("kind") or ""), catalog)))
+    out = []
+    for pos, (area, box, is_water) in enumerate(usable):
+        if not is_water:
+            continue
+        covers = [(above, above_box)
+                  for above, above_box, above_water in usable[pos + 1:]
+                  if not above_water and _overlaps(box, above_box)]
+        out.append((area, box, covers))
+    return out
+
+
 def _ring(points: Any) -> Optional[List[Tuple[float, float]]]:
     """A polygon parsed ONCE into float pairs, or None when it is not one.
 
@@ -1897,6 +1966,202 @@ def _ring_distance(x: float, z: float,
     if _inside_ring(x, z, ring):
         return 0.0
     return _ring_edge_distance(x, z, ring)
+
+
+#: How far to either side of a boundary candidate the WET test probes, in
+#: metres. Outlines are stored to the centimetre, so a millimetre is far below
+#: anything authored and far above the float noise of a world coordinate.
+_COVER_SIDE_PROBE_M = 1e-3
+
+#: Waterline pieces per distance chunk. Each chunk carries its own box, and a
+#: chunk whose box lies farther away than the best distance found so far is
+#: skipped whole — the reason a sea with a detailed island does not pay every
+#: island vertex at every point of the open water.
+_COVER_CHUNK_SEGMENTS = 16
+
+#: Bucket size of the pair search that splits the raw edges at their crossings.
+_COVER_PAIR_CELL_M = 32.0
+
+
+def _segment_params(ax: float, az: float, bx: float, bz: float,
+                    cx: float, cz: float, dx: float, dz: float
+                    ) -> List[float]:
+    """Where segment c–d meets segment a–b, as parameters ``t`` in (0, 1) of a–b.
+
+    A proper crossing or a T junction gives its one ``t``; two COLLINEAR
+    overlapping segments give the parameters of c and d that fall inside — two
+    land areas sharing an edge is the ordinary case for drawn rectangles, and
+    the shared stretch has to become its own piece so the side test can see
+    that both sides of it are dry.
+    """
+    ex, ez = bx - ax, bz - az
+    fx, fz = dx - cx, dz - cz
+    wx, wz = cx - ax, cz - az
+    len_e = math.hypot(ex, ez)
+    len_f = math.hypot(fx, fz)
+    if len_e < 1e-12 or len_f < 1e-12:
+        return []
+    denom = ex * fz - ez * fx
+    if abs(denom) > 1e-12 * len_e * len_f:
+        t = (wx * fz - wz * fx) / denom
+        u = (wx * ez - wz * ex) / denom
+        if 0.0 < t < 1.0 and -1e-12 <= u <= 1.0 + 1e-12:
+            return [t]
+        return []
+    # Parallel: only a COLLINEAR pair (c within a micrometre of the line a–b)
+    # overlaps.
+    if abs(ex * wz - ez * wx) / len_e > 1e-6:
+        return []
+    len2 = len_e * len_e
+    out = []
+    for px, pz in ((cx, cz), (dx, dz)):
+        t = ((px - ax) * ex + (pz - az) * ez) / len2
+        if 0.0 < t < 1.0:
+            out.append(t)
+    return out
+
+
+class _CoveredWater:
+    """The WET part of one water that has land painted over it.
+
+    ``wet(x, z)`` — inside the water's outline and inside none of its covers
+    (:func:`water_areas_covered`). ``edge_distance(x, z)`` — the distance to
+    the WATERLINE of that wet region: the parts of the water's own outline no
+    cover hides, plus the parts of the covers' outlines that lie in the open
+    water. That is the shoreline the carve ramps its bed up to and the zero
+    level set the raster's ``sd`` channel is measured against, so an island
+    painted into a sea gets a shore exactly like a lake's rim — bed rising to
+    the mirror over ``shore_ramp_m``, ``sd`` crossing 0 on the island's edge,
+    the dilation ring reaching the usual few metres in under the land with a
+    NEGATIVE ``sd`` (which the client never lifts).
+
+    THE WATERLINE IS BUILT ONCE, without a polygon clipper: every raw edge
+    (outline and covers) is split where it meets another, and a piece is kept
+    when the wet test answers differently a millimetre to its left and to its
+    right. That definition is what makes it robust — a stretch two land areas
+    share is dry on both sides and drops out, a cover edge inside another cover
+    is dry on both sides and drops out, a stretch of the water's outline under
+    land is dry on both sides and drops out — and it makes the distance EXACT
+    on both sides of the line, not an estimate.
+
+    A WATER WITHOUT COVERS NEVER GETS ONE of these: it keeps the plain ring
+    primitives, so every world that paints no land over its water bakes the
+    very same numbers it baked before.
+    """
+
+    __slots__ = ("ring", "covers", "chunks")
+
+    def __init__(self, ring: List[Tuple[float, float]],
+                 covers: List[Tuple[List[Tuple[float, float]],
+                                    Tuple[float, float, float, float]]],
+                 box: Tuple[float, float, float, float]):
+        self.ring = ring
+        self.covers = covers
+        self.chunks: List[Tuple[Tuple[float, float, float, float],
+                                List[Tuple[float, float, float, float]]]] = []
+        self._build_waterline(box)
+
+    def wet(self, x: float, z: float) -> bool:
+        if not _inside_ring(x, z, self.ring):
+            return False
+        for cring, cbox in self.covers:
+            if (cbox[0] <= x <= cbox[2] and cbox[1] <= z <= cbox[3]
+                    and _inside_ring(x, z, cring)):
+                return False
+        return True
+
+    def _build_waterline(self, box: Tuple[float, float, float, float]) -> None:
+        raw: List[Tuple[float, float, float, float]] = []
+        for ring in [self.ring] + [c[0] for c in self.covers]:
+            j = len(ring) - 1
+            for i in range(len(ring)):
+                ax, az = ring[j]
+                bx, bz = ring[i]
+                j = i
+                # A cover edge wholly outside the water's box can never bound
+                # the wet region, which lies inside the outline.
+                if ring is not self.ring and (
+                        max(ax, bx) < box[0] or min(ax, bx) > box[2]
+                        or max(az, bz) < box[1] or min(az, bz) > box[3]):
+                    continue
+                raw.append((ax, az, bx, bz))
+        cell = _COVER_PAIR_CELL_M
+        buckets: Dict[Tuple[int, int], List[int]] = {}
+        spans = []
+        for idx, (ax, az, bx, bz) in enumerate(raw):
+            i0, i1 = int(min(ax, bx) // cell), int(max(ax, bx) // cell)
+            j0, j1 = int(min(az, bz) // cell), int(max(az, bz) // cell)
+            spans.append((i0, i1, j0, j1))
+            for jj in range(j0, j1 + 1):
+                for ii in range(i0, i1 + 1):
+                    buckets.setdefault((ii, jj), []).append(idx)
+        probe = _COVER_SIDE_PROBE_M
+        wet = self.wet
+        pieces: List[Tuple[float, float, float, float]] = []
+        for idx, (ax, az, bx, bz) in enumerate(raw):
+            i0, i1, j0, j1 = spans[idx]
+            others = set()
+            for jj in range(j0, j1 + 1):
+                for ii in range(i0, i1 + 1):
+                    others.update(buckets.get((ii, jj), ()))
+            others.discard(idx)
+            ts = [0.0, 1.0]
+            for other in others:
+                ts.extend(_segment_params(ax, az, bx, bz, *raw[other]))
+            ts.sort()
+            ex, ez = bx - ax, bz - az
+            length = math.hypot(ex, ez)
+            if length < 1e-12:
+                continue
+            nx, nz = -ez / length * probe, ex / length * probe
+            for k in range(len(ts) - 1):
+                t0, t1 = ts[k], ts[k + 1]
+                if (t1 - t0) * length < 1e-6:
+                    continue
+                tm = (t0 + t1) * 0.5
+                mx, mz = ax + ex * tm, az + ez * tm
+                if wet(mx + nx, mz + nz) != wet(mx - nx, mz - nz):
+                    pieces.append((ax + ex * t0, az + ez * t0,
+                                   ax + ex * t1, az + ez * t1))
+        step = _COVER_CHUNK_SEGMENTS
+        for k in range(0, len(pieces), step):
+            chunk = pieces[k:k + step]
+            self.chunks.append(((min(min(p[0], p[2]) for p in chunk),
+                                 min(min(p[1], p[3]) for p in chunk),
+                                 max(max(p[0], p[2]) for p in chunk),
+                                 max(max(p[1], p[3]) for p in chunk)),
+                                chunk))
+
+    def edge_distance(self, x: float, z: float,
+                      cap: float = math.inf) -> float:
+        """Distance to the waterline, or ``cap`` when nothing is closer.
+
+        The cap is a shortcut and never a different answer below it: the carve
+        only needs the distance up to its shore ramp (the profile is flat past
+        it) and the dilation only up to its ring.
+        """
+        best = cap
+        for (x0, z0, x1, z1), chunk in self.chunks:
+            gx = x0 - x if x < x0 else (x - x1 if x > x1 else 0.0)
+            gz = z0 - z if z < z0 else (z - z1 if z > z1 else 0.0)
+            if gx * gx + gz * gz >= best * best:
+                continue
+            for ax, az, bx, bz in chunk:
+                dx, dz = bx - ax, bz - az
+                len2 = dx * dx + dz * dz
+                if len2 < 1e-18:
+                    px, pz = ax, az
+                else:
+                    t = ((x - ax) * dx + (z - az) * dz) / len2
+                    if t < 0.0:
+                        t = 0.0
+                    elif t > 1.0:
+                        t = 1.0
+                    px, pz = ax + t * dx, az + t * dz
+                d = math.hypot(x - px, z - pz)
+                if d < best:
+                    best = d
+        return best
 
 
 def _crop(grid: Sequence[Sequence[Any]], pad: int, cols: int,
@@ -2041,8 +2306,22 @@ class HeightModel:
         # nothing outside the ring — a grown box would only hand it candidates
         # it rejects.
         self._water_index = _BoxIndex([w[1] for w in self.water])
-        self._water_fast = [(_ring(w[0]) or [], w[2], w[3], w[4], w[5], w[6])
-                            for w in self.water]
+        # THE SEVENTH ENTRY IS THE COVERED SHAPE (2026-10-02): None for a water
+        # with no land painted over it — which keeps the plain ring primitives
+        # and therefore exactly the numbers it baked before — or the
+        # :class:`_CoveredWater` that knows where its open water really ends.
+        self._water_fast = []
+        for w, (_area, _box, _meta, covers) in zip(self.water,
+                                                   self._water_input):
+            ring = _ring(w[0]) or []
+            shape = None
+            if ring and covers:
+                rings = [(_ring(c.get("polygon")), cbox) for c, cbox in covers]
+                rings = [(r, cbox) for r, cbox in rings if r]
+                if rings:
+                    shape = _CoveredWater(ring, rings, w[1])
+            self._water_fast.append((ring, w[2], w[3], w[4], w[5], w[6],
+                                     shape))
         # THE WATER RASTER HAS ITS OWN INDEX (K-A E1), grown by the DILATION and
         # not by the shore ramp: the raster writes :data:`WATER_RASTER_DILATION_M`
         # past every outline whatever the ramp is, and a ramp of 0 (a basin with
@@ -2183,8 +2462,12 @@ class HeightModel:
                     catalog: Optional[Dict[str, Dict[str, Any]]]
                     ) -> List[Tuple[Dict[str, Any],
                                     Tuple[float, float, float, float],
-                                    WaterMeta]]:
-        """Every painted water with its box and its resolved meta — READ ONCE.
+                                    WaterMeta,
+                                    List[Tuple[Dict[str, Any],
+                                               Tuple[float, float, float,
+                                                     float]]]]]:
+        """Every painted water with its box, its resolved meta and the land
+        painted over it (:func:`water_areas_covered`) — READ ONCE.
 
         Split out of :meth:`_build_water` because the outlines and their metas
         are needed BEFORE a single height is evaluated, while the mirror levels
@@ -2193,11 +2476,12 @@ class HeightModel:
         """
         from app.core.terrain_types import water_kind_defaults
         out = []
-        for area, box in water_areas(terrain_areas, catalog):
+        for area, box, covers in water_areas_covered(terrain_areas, catalog):
             kind = str(area.get("kind") or "")
             out.append((area, box,
                         water_meta(area, water_kind_defaults(kind,
-                                                             catalog or {}))))
+                                                             catalog or {})),
+                        covers))
         return out
 
     def _build_water(self) -> List[WaterStamp]:
@@ -2233,7 +2517,7 @@ class HeightModel:
         median per KNOT, and the rule is in :meth:`_stroke_profile`.
         """
         out: List[WaterStamp] = []
-        for area, box, meta in self._water_input:
+        for area, box, meta, _covers in self._water_input:
             polygon = area.get("polygon")
             profile = self.water_profile_for(polygon, meta)
             # THE FLOW FACTOR IS RESOLVED ONCE, HERE (K-A E1) — the area's own
@@ -2534,19 +2818,34 @@ class HeightModel:
         invariant grows with it: past the shore ramp the second argument of the
         ``min`` is ``level_at(x,z) − depth``, so ``h ≤ level_at(x,z) − ε`` holds
         POINTWISE, not against an average.
+
+        ONLY WHERE THE WATER IS ON TOP (v11). A water with land painted over it
+        (:func:`water_areas_covered`) carves only its OPEN part, and ``d`` is
+        the distance to that part's waterline — the island's edge included — so
+        the bed rises to an island exactly as it rises to a rim. Waters stacked
+        on waters still all take part in the ``min``: shallows painted over a
+        sea keep the sea's deeper bed, as before.
         """
         if not self.water:
             return h
         fast = self._water_fast
         for idx in self._water_index.at(x, z):
-            ring, water_profile, depth, ramp, _factor, _kind = fast[idx]
-            if not ring or not _inside_ring(x, z, ring):
-                continue
+            ring, water_profile, depth, ramp, _factor, _kind, shape = fast[idx]
+            if shape is None:
+                if not ring or not _inside_ring(x, z, ring):
+                    continue
+                edge = (_ring_edge_distance(x, z, ring) if ramp > 0.0
+                        else 0.0)
+            else:
+                # LAND PAINTED OVER THIS WATER (2026-10-02): no carve where it
+                # lies, and the shore ramp runs up to ITS edge as well.
+                if not shape.wet(x, z):
+                    continue
+                edge = shape.edge_distance(x, z, ramp) if ramp > 0.0 else 0.0
             if ramp <= 0.0:
                 profile = depth
             else:
-                profile = depth * smoothstep(
-                    _ring_edge_distance(x, z, ring) / ramp)
+                profile = depth * smoothstep(edge / ramp)
             bed = water_level_at(water_profile, x, z) - profile
             if bed < h:
                 h = bed
@@ -2655,6 +2954,13 @@ class HeightModel:
         2. failing that, the topmost water whose outline lies within
            :data:`WATER_RASTER_DILATION_M` — the DILATION.
 
+        LAND PAINTED OVER A WATER ENDS IT (v11). For a water with covers
+        (:func:`water_areas_covered`) "contains" means its OPEN part, and both
+        the dilation test and the ``sd`` below measure against that part's
+        waterline — so a point under an island is dry, the ring reaches the
+        usual few metres in under the island with a negative ``sd``, and the
+        zero level set is the island's painted edge.
+
         AUTHORSHIP BEATS DILATION, which is why it is two passes and not one:
         the ring outside a river is a filter fix, and a point that really lies
         in a lake must read the lake even when a river painted later reaches
@@ -2696,23 +3002,34 @@ class HeightModel:
         every channel of this tuple is that water's. The renderer's whole LOOK
         table (tint, wavelength, still and flowing speed, opaque depth) is keyed
         by kind, and the ground compositor's mask cannot supply that key: it
-        names the topmost painted kind of the GROUND, which over a river running
-        through a forest area painted above it is the forest.
+        names the topmost painted kind of the GROUND, which over a lake with a
+        ``bed_kind`` is the bed. (A forest painted ABOVE a river was the other
+        example until v11; since then that ground is dry forest.)
         """
         if not self.water:
             return None
         fast = self._water_fast
         candidates = self._water_raster_index.at(x, z)
         for idx in reversed(candidates):
-            ring, profile, _depth, _ramp, factor, kind = fast[idx]
-            if ring and _inside_ring(x, z, ring):
+            ring, profile, _depth, _ramp, factor, kind, shape = fast[idx]
+            if shape is None:
+                if ring and _inside_ring(x, z, ring):
+                    return (*_water_sample(profile, x, z, factor),
+                            _ring_edge_distance(x, z, ring), kind)
+            elif shape.wet(x, z):
                 return (*_water_sample(profile, x, z, factor),
-                        _ring_edge_distance(x, z, ring), kind)
+                        shape.edge_distance(x, z), kind)
         for idx in reversed(candidates):
-            ring, profile, _depth, _ramp, factor, kind = fast[idx]
+            ring, profile, _depth, _ramp, factor, kind, shape = fast[idx]
             if not ring:
                 continue
-            edge = _ring_edge_distance(x, z, ring)
+            if shape is None:
+                edge = _ring_edge_distance(x, z, ring)
+            else:
+                # Capped above the ring's reach: below the cap the answer is
+                # the exact distance, at the cap it is "too far".
+                edge = shape.edge_distance(x, z,
+                                           2.0 * WATER_RASTER_DILATION_M)
             if edge <= WATER_RASTER_DILATION_M:
                 return (*_water_sample(profile, x, z, factor), -edge, kind)
         return None
