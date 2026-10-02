@@ -9,6 +9,7 @@ import { useEnlarge } from '../../components/ZoomButton'
 import { ListPane } from '../../components/ListPane'
 import { PackFacts, type PackFactsMap } from '../../lib/PackFacts'
 import { PACK_TYPE_ICON } from '../../lib/packTypeIcon'
+import { formatBytes } from '../../lib/formatBytes'
 
 /**
  * Marketplace — browse an online catalog of content packs and install them
@@ -89,19 +90,13 @@ function hasCharacter(pack: Pack): boolean {
     && (pack.contents || []).some((c) => c.type === 'character')
 }
 
-function formatBytes(n?: number): string {
-  if (!n) return ''
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
-
 export function MarketplaceTab() {
   const { t } = useI18n()
   const enlarge = useEnlarge()
   const { toast } = useToast()
   const [catalogs, setCatalogs] = useState<CatalogRef[]>([])
+  // Packs whose thumbnail failed to load show the type symbol instead.
+  const [brokenThumbs, setBrokenThumbs] = useState<Set<string>>(new Set())
   const [activeId, setActiveId] = useState<string>('')
   const [catalog, setCatalog] = useState<Catalog | null>(null)
   const [loading, setLoading] = useState(false)
@@ -390,8 +385,9 @@ export function MarketplaceTab() {
                     }}
                   >
                     <span style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
-                      {p.thumbnail_url ? (
+                      {p.thumbnail_url && !brokenThumbs.has(p.id) ? (
                         <img src={p.thumbnail_url} alt="" loading="lazy"
+                          onError={() => setBrokenThumbs((b) => new Set(b).add(p.id))}
                           style={{ width: 40, height: 40, objectFit: 'contain', borderRadius: 4,
                             background: '#0d1117', flex: 'none' }} />
                       ) : (

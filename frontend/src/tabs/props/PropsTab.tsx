@@ -11,7 +11,7 @@
  * starting state.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ImportButton } from '../../components/ImportExport'
+import { BulkPublishButton, ImportButton } from '../../components/ImportExport'
 import { ListHeader } from '../../components/ListHeader'
 import { ListPane } from '../../components/ListPane'
 import { MeshBackendDialog } from '../../components/MeshBackendDialog'
@@ -87,6 +87,18 @@ export function PropsTab() {
   // from, so a wrong one eats a room — this filter is where the admin finds
   // them (plan-furnish-v2.md § 2 B3).
   const [estimatedOnly, setEstimatedOnly] = useState(false)
+  // Selection mode for the bulk publish: a click on a row ticks it instead of
+  // opening it (plan-marketplace-props.md Teil E).
+  const [pickMode, setPickMode] = useState(false)
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const togglePick = useCallback((id: string) => {
+    setPicked((cur) => {
+      const next = new Set(cur)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
   // The classify run: the confirmation the button opens, and whether it is
   // running (the route is synchronous — it holds the LLM call).
   const [classifyOpen, setClassifyOpen] = useState(false)
@@ -235,9 +247,28 @@ export function PropsTab() {
               <ImportButton
                 onImported={() => { void load(); setCacheBump((b) => b + 1) }}
               />
+              <button className={`ga-btn ga-btn-sm${pickMode ? ' ga-btn-primary' : ''}`}
+                onClick={() => { setPickMode((m) => !m); setPicked(new Set()) }}
+                title={t('Tick props to publish them to a marketplace catalog in one go.')}>
+                ☑ {t('Select')}
+              </button>
             </>
           }
         />
+        {pickMode ? (
+          <div className="ga-form-row" style={{ padding: '0 8px 8px', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12 }}>{t('{n} selected').replace('{n}', String(picked.size))}</span>
+            <button className="ga-btn ga-btn-sm"
+              onClick={() => setPicked(new Set(visible.map((p) => p.id)))}>
+              {t('Select all shown')}
+            </button>
+            <button className="ga-btn ga-btn-sm" disabled={picked.size === 0}
+              onClick={() => setPicked(new Set())}>
+              {t('Clear')}
+            </button>
+            <BulkPublishButton packType="prop" entityIds={[...picked]} />
+          </div>
+        ) : null}
         <div className="ga-form-row" style={{ padding: '0 8px 8px' }}>
           <input className="ga-input" value={query} placeholder={t('Search…')}
             onChange={(e) => setQuery(e.target.value)} />
@@ -284,9 +315,13 @@ export function PropsTab() {
                   <button
                     type="button"
                     className={`ga-list-row${isActive ? ' is-active' : ''}`}
-                    onClick={() => navigate(p.id)}
+                    onClick={() => (pickMode ? togglePick(p.id) : navigate(p.id))}
                   >
                     <span className="ga-list-row-main">
+                      {pickMode ? (
+                        <input type="checkbox" readOnly checked={picked.has(p.id)}
+                          aria-label={t('Select')} style={{ pointerEvents: 'none' }} />
+                      ) : null}
                       {p.has_source ? (
                         <img className="ga-list-thumb" alt=""
                           src={`/assets/props/${encodeURIComponent(p.id)}/source?v=${cacheBump}`} />

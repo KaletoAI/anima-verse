@@ -4,6 +4,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { downloadBlob } from '../lib/download'
 import { useToast } from '../lib/Toast'
 import { summarizeImport, type ImportResult } from '../lib/importNotes'
+import { formatBytes } from '../lib/formatBytes'
 import { PackFacts, type PackFactsMap } from '../lib/PackFacts'
 
 export interface ExportOption {
@@ -56,9 +57,14 @@ function AnchoredPopover({
     place()
     window.addEventListener('resize', place)
     window.addEventListener('scroll', place, true)
+    // Content that arrives later (a fetched preview) grows the box — place
+    // it again, or it overflows the viewport near the bottom.
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(place) : null
+    if (observer && boxRef.current) observer.observe(boxRef.current)
     return () => {
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
+      observer?.disconnect()
     }
   }, [anchorRef, minWidth])
 
@@ -213,10 +219,6 @@ interface PublishInspect {
   thumbnail: string
 }
 
-function formatMB(n: number): string {
-  return n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`
-}
-
 /**
  * Publish-to-catalog button. Opens a small inline form that asks for the
  * target catalog + name + tags + description and shows what would go up
@@ -239,7 +241,8 @@ export function PublishButton({
   const { t } = useI18n()
   const { toast } = useToast()
   const [open, setOpen] = useState(false)
-  const [catalogs, setCatalogs] = useState<{ id: string; name: string }[]>([])
+  const [catalogs, setCatalogs] = useState<{ id: string; name: string; host_limit: number }[]>([])
+  const [catalogsLoaded, setCatalogsLoaded] = useState(false)
   const [catalogId, setCatalogId] = useState<string>('')
   const [name, setName] = useState<string>(defaultName || entityId || '')
   const [tags, setTags] = useState<string>('')
@@ -249,11 +252,14 @@ export function PublishButton({
   const [inspectError, setInspectError] = useState('')
   const btnRef = useRef<HTMLButtonElement | null>(null)
   const close = useCallback(() => setOpen(false), [])
+  const hostLimit = catalogs.find((c) => c.id === catalogId)?.host_limit || 0
 
-  // What would be published — rebuilt whenever the dialog opens or the
-  // catalog changes (the host's per-file limit depends on the catalog).
+  // What would be published — built ONCE per opening (a full export on the
+  // server), after the catalog list is in; the host's per-file limit comes
+  // with that list, so switching catalogs needs no second export. `name`
+  // only names a pack without an entity id (states), hence not a dependency.
   useEffect(() => {
-    if (!open) return
+    if (!open || !catalogsLoaded) return
     let cancelled = false
     setInspect(null)
     setInspectError('')
@@ -261,7 +267,7 @@ export function PublishButton({
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pack_type: packType, entity_id: entityId || '', name, catalog_id: catalogId }),
+      body: JSON.stringify({ pack_type: packType, entity_id: entityId || '', name }),
     })
       .then(async (r) => {
         const d = await r.json().catch(() => ({}))
@@ -272,18 +278,19 @@ export function PublishButton({
       .catch((e) => { if (!cancelled) setInspectError((e as Error).message) })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, catalogId, packType, entityId])
+  }, [open, catalogsLoaded, packType, entityId])
 
   useEffect(() => {
     if (!open) return
     fetch('/api/content/catalogs', { credentials: 'same-origin' })
       .then((r) => r.json())
       .then((d) => {
-        const list = (d.catalogs || []) as { id: string; name: string }[]
+        const list = (d.catalogs || []) as { id: string; name: string; host_limit: number }[]
         setCatalogs(list)
         if (list.length > 0 && !catalogId) setCatalogId(list[0].id)
       })
       .catch(() => {})
+      .finally(() => setCatalogsLoaded(true))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
@@ -319,12 +326,13 @@ export function PublishButton({
       if (!res.ok) {
         throw new Error(result.detail || `HTTP ${res.status}`)
       }
-      if (result.status === 'no_change') {
-        toast(t('Already up to date in catalog'))
-      } else {
-        toast(t('Published as {id}').replace('{id}', result.pack_id || name))
-      }
-      for (const w of (result.warnings || []) as string[]) toast(w, 'error')
+      // ONE toast: the toast area holds a single message, so warnings ride
+      // along with the outcome instead of replacing it.
+      const warnings = (result.warnings || []) as string[]
+      const outcome = result.status === 'no_change'
+        ? t('Already up to date in catalog')
+        : t('Published as {id}').replace('{id}', result.pack_id || name)
+      toast([outcome, ...warnings].join(' — '), warnings.length ? 'info' : 'success')
       setOpen(false)
       setTags('')
       setDescription('')
@@ -357,7 +365,7 @@ export function PublishButton({
                 {inspect ? (
                   <>
                     <div style={{ color: '#8b949e' }}>
-                      {inspect.pack_id} · {formatMB(inspect.size_bytes)}
+                      {inspect.pack_id} · {formatBytes(inspect.size_bytes)}
                     </div>
                     <PackFacts facts={inspect.facts} labels={inspect.fact_labels} />
                   </>
@@ -368,7 +376,11 @@ export function PublishButton({
                 )}
               </div>
             </div>
-            {(inspect?.warnings || []).map((w) => (
+            {[...(inspect?.warnings || []),
+              ...(inspect && hostLimit && inspect.size_bytes > hostLimit
+                ? [t("Over the catalog host's per-file limit ({mb} MB) — the publish will be refused.")
+                    .replace('{mb}', String(Math.floor(hostLimit / (1024 * 1024))))]
+                : [])].map((w) => (
               <div key={w} style={{ fontSize: 11, color: '#d29922' }}>⚠ {w}</div>
             ))}
             <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -429,6 +441,155 @@ export function PublishButton({
               </button>
               <button className="ga-btn ga-btn-sm" onClick={close} disabled={busy}>
                 {t('Cancel')}
+              </button>
+            </div>
+          </div>
+        </AnchoredPopover>
+      ) : null}
+    </span>
+  )
+}
+
+interface BulkJob {
+  id: string
+  status: 'running' | 'done' | 'error'
+  total: number
+  done: number
+  error: string
+  items: { entity_id: string; status: string; pack_id: string; error: string; warnings: string[] }[]
+}
+
+/**
+ * Publish MANY entities at once — each as its own pack, named after itself
+ * (POST /api/content/publish/bulk). The server works in the background; this
+ * polls the job and shows the progress, then sums the outcome up.
+ */
+export function BulkPublishButton({
+  packType,
+  entityIds,
+  onDone,
+}: {
+  packType: 'prop'
+  entityIds: string[]
+  onDone?: () => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [open, setOpen] = useState(false)
+  const [catalogs, setCatalogs] = useState<{ id: string; name: string }[]>([])
+  const [catalogId, setCatalogId] = useState('')
+  const [tags, setTags] = useState('')
+  const [job, setJob] = useState<BulkJob | null>(null)
+  const btnRef = useRef<HTMLButtonElement | null>(null)
+  const running = job?.status === 'running'
+  const close = useCallback(() => { if (!running) setOpen(false) }, [running])
+
+  useEffect(() => {
+    if (!open) return
+    fetch('/api/content/catalogs', { credentials: 'same-origin' })
+      .then((r) => r.json())
+      .then((d) => {
+        const list = (d.catalogs || []) as { id: string; name: string }[]
+        setCatalogs(list)
+        if (list.length > 0 && !catalogId) setCatalogId(list[0].id)
+      })
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  // Poll the running job; sum it up once it ends.
+  useEffect(() => {
+    if (!job || job.status !== 'running') return
+    const timer = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/content/publish/jobs/${encodeURIComponent(job.id)}`,
+          { credentials: 'same-origin' })
+        const d = (await r.json()) as BulkJob
+        if (!r.ok) return
+        setJob(d)
+        if (d.status !== 'running') {
+          const count = (s: string) => d.items.filter((i) => i.status === s).length
+          toast(t('Published {ok}, unchanged {same}, failed {bad}')
+            .replace('{ok}', String(count('success')))
+            .replace('{same}', String(count('no_change')))
+            .replace('{bad}', String(count('error') + count('skipped'))),
+          d.status === 'done' && !count('error') ? 'success' : 'error')
+          onDone?.()
+        }
+      } catch {
+        // a missed poll is retried on the next tick
+      }
+    }, 2000)
+    return () => clearInterval(timer)
+  }, [job, onDone, t, toast])
+
+  const start = async () => {
+    try {
+      const res = await fetch('/api/content/publish/bulk', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ catalog_id: catalogId, pack_type: packType, entity_ids: entityIds, tags }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.detail || `HTTP ${res.status}`)
+      setJob(d as BulkJob)
+    } catch (e) {
+      toast(t('Publish failed') + ': ' + (e as Error).message, 'error')
+    }
+  }
+
+  const failures = (job?.items || []).filter((i) => i.status === 'error' || i.status === 'skipped')
+  return (
+    <span style={{ display: 'inline-block' }}>
+      <button ref={btnRef} className="ga-btn ga-btn-sm" disabled={entityIds.length === 0}
+        onClick={() => setOpen((o) => !o)}
+        title={t('Publish every selected entry as its own pack')}>
+        ↑↑ {t('Publish selected')} ({entityIds.length})
+      </button>
+      {open ? (
+        <AnchoredPopover anchorRef={btnRef} onClose={close} minWidth={300} padding={12}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 360 }}>
+            <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {t('Catalog')}
+              <select className="ga-input" value={catalogId} disabled={running || catalogs.length === 0}
+                onChange={(e) => setCatalogId(e.target.value)}>
+                {catalogs.length === 0 ? (
+                  <option value="">{t('No catalogs configured')}</option>
+                ) : catalogs.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </label>
+            <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {t('Tags')} <span style={{ color: '#8b949e', fontSize: 10 }}>{t('comma-separated, for every pack')}</span>
+              <input className="ga-input" value={tags} disabled={running}
+                onChange={(e) => setTags(e.target.value)} />
+            </label>
+            {job ? (
+              <div style={{ fontSize: 12 }}>
+                <progress max={job.total || 1} value={job.done} style={{ width: '100%' }} />
+                <div style={{ color: '#8b949e' }}>
+                  {job.done}/{job.total}
+                  {job.status === 'running' ? ` · ${t('publishing…')}` : ''}
+                  {job.status === 'error' && job.error ? ` · ${job.error}` : ''}
+                </div>
+                {failures.length > 0 ? (
+                  <ul style={{ margin: '6px 0 0', paddingLeft: 16, maxHeight: 120, overflow: 'auto' }}>
+                    {failures.map((i) => (
+                      <li key={i.entity_id} style={{ color: '#f85149' }}>
+                        {i.entity_id}: {i.error || t('skipped')}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <button className="ga-btn ga-btn-sm ga-btn-primary" onClick={start}
+                disabled={running || !catalogId || entityIds.length === 0}>
+                {running ? t('Publishing…') : t('Publish {n} packs').replace('{n}', String(entityIds.length))}
+              </button>
+              <button className="ga-btn ga-btn-sm" onClick={close} disabled={running}>
+                {t('Close')}
               </button>
             </div>
           </div>

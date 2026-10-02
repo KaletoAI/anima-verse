@@ -34,8 +34,8 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query,
 from app.core import config
 from app.core.auth_dependency import require_admin
 from app.core.log import get_logger
-from app.core.marketplace_store import (CatalogRepo, MarketplaceError,
-                                        PackUpload, content_hash, fetch_catalog)
+from app.core.marketplace_publish import build_upload, get_job, start_bulk
+from app.core.marketplace_store import CatalogRepo, MarketplaceError, fetch_catalog
 from app.core.marketplace_store import publish as store_publish
 from app.core.paths import get_storage_dir
 from app.core.upload_limits import read_upload_capped
@@ -282,10 +282,17 @@ def _annotate(cached: Dict[str, Any], stale: bool, catalog: Dict[str, Any]) -> D
 
 @router.get("/catalogs")
 def list_catalogs() -> Dict[str, Any]:
-    """List configured catalogs (id, name, url) — no auth tokens leak out."""
+    """List configured catalogs (id, name, url, host_limit = the host's
+    per-file limit in bytes, 0 when the URL names no repository) — no auth
+    tokens leak out."""
+    def limit(c: Dict[str, Any]) -> int:
+        try:
+            return _catalog_repo(c).host_limit
+        except ValueError:
+            return 0
     return {
         "catalogs": [
-            {"id": c["_id"], "name": c["name"], "url": c["url"]}
+            {"id": c["_id"], "name": c["name"], "url": c["url"], "host_limit": limit(c)}
             for c in _list_catalogs()
         ],
     }
@@ -1099,8 +1106,7 @@ def _export_zip_for(pack_type: str, entity_id: str) -> bytes:
 
 
 def _slug_for_pack(primary: str, fallback: str) -> str:
-    """Filename-safe slug for a published pack: ``primary`` is the entity id,
-    ``fallback`` (the display name) only names a pack without one (states).
+    """Filename-safe slug: ``primary``, or ``fallback`` when it is empty.
 
     Delegation only — the ONE slug rule lives in `content_io._pack_slug`, which
     the collection builder uses for its sub-pack names too, so a published pack
@@ -1154,57 +1160,10 @@ async def pack_thumbnail(request: Request, catalog_id: str = Query(""),
                               cache_control="private, max-age=86400")
 
 
-#: A pack at or above this size is published with a warning (decision
-#: 2026-10-02: large packs go public, the admin is told).
-LARGE_PACK_BYTES = 50 * 1024 * 1024
-
-
 def _parse_tags(raw: Any) -> List[str]:
     if isinstance(raw, str):
         return [t.strip() for t in raw.split(",") if t.strip()]
     return [str(t).strip() for t in (raw or []) if str(t).strip()]
-
-
-def _build_upload(pack_type: str, entity_id: str, name: str, description: str,
-                  tags: List[str]) -> Tuple[PackUpload, List[str]]:
-    """Export ONE entity and describe it for the catalog — shared by publish,
-    the publish preview and the bulk job. ``ValueError`` for an entity that
-    cannot be exported."""
-    from app.core.content_io import make_thumbnail, pack_preview
-    zip_bytes = _export_zip_for(pack_type, entity_id)
-    preview = pack_preview(pack_type, entity_id)
-    slug = _slug_for_pack(entity_id, name or pack_type)
-    import zipfile as _zip
-    with _zip.ZipFile(io.BytesIO(zip_bytes)) as zf:
-        try:
-            manifest = json.loads(zf.read("manifest.json"))
-        except (KeyError, ValueError):
-            manifest = {}
-    entry = {
-        "id": f"{pack_type}-{slug}",
-        "type": pack_type,
-        "slug": slug,
-        "name": name,
-        "description": description,
-        "tags": tags,
-        "content_sha256": content_hash(zip_bytes),
-        "manifest_version": manifest.get("version"),
-        "facts": preview["facts"],
-    }
-    if preview.get("labels"):
-        entry["fact_labels"] = preview["labels"]
-    warnings: List[str] = []
-    size = len(zip_bytes)
-    if size >= LARGE_PACK_BYTES:
-        warnings.append(f"Large pack ({size // (1024 * 1024)} MB) — slow to download.")
-    if size > _max_pack_mb() * 1024 * 1024:
-        warnings.append(
-            f"Larger than this world's install limit ({_max_pack_mb()} MB, "
-            "content_marketplace.max_pack_mb) — installs with that limit refuse it.")
-    upload = PackUpload(entry=entry, zip_bytes=zip_bytes,
-                        checksum_sha256=hashlib.sha256(zip_bytes).hexdigest(),
-                        thumb_bytes=make_thumbnail(preview["image"]))
-    return upload, warnings
 
 
 def _publish_body(body: Dict[str, Any]) -> Tuple[str, str, str, str, List[str]]:
@@ -1243,7 +1202,8 @@ async def inspect_publish(request: Request) -> Dict[str, Any]:
     pack_type, entity_id, name, description, tags = _publish_body(body)
     try:
         upload, warnings = await asyncio.to_thread(
-            _build_upload, pack_type, entity_id, name or entity_id, description, tags)
+            build_upload, pack_type, entity_id, name or entity_id, description, tags,
+            max_pack_mb=_max_pack_mb())
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     catalog = _resolve_catalog((body.get("catalog_id") or "").strip())
@@ -1292,7 +1252,8 @@ async def publish_pack(request: Request) -> Dict[str, Any]:
 
     try:
         upload, warnings = await asyncio.to_thread(
-            _build_upload, pack_type, entity_id, name, description, tags)
+            build_upload, pack_type, entity_id, name, description, tags,
+            max_pack_mb=_max_pack_mb())
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if len(upload.zip_bytes) > repo.host_limit:
@@ -1330,3 +1291,45 @@ async def publish_pack(request: Request) -> Dict[str, Any]:
         "size_bytes": len(upload.zip_bytes),
         "warnings": warnings,
     }
+
+
+#: Pack types the bulk publish offers — props, where whole libraries go up at
+#: once (plan-marketplace-props.md Teil E).
+BULK_TYPES = {"prop"}
+_BULK_CACHE_BUSTED: set = set()
+
+
+@router.post("/publish/bulk")
+async def publish_bulk(request: Request) -> Dict[str, Any]:
+    """Publish many entities of one type in the background — each its OWN pack
+    (name = the entity's name, description = its own). Body:
+    ``{catalog_id, pack_type, entity_ids: [...], tags?}``. Answers the job;
+    ``GET /publish/jobs/{id}`` reports its progress."""
+    body = await request.json()
+    pack_type = (body.get("pack_type") or "").strip()
+    if pack_type not in BULK_TYPES:
+        raise HTTPException(status_code=400, detail=f"bulk publish supports: {sorted(BULK_TYPES)}")
+    ids = [str(e).strip() for e in (body.get("entity_ids") or []) if str(e).strip()]
+    if not ids:
+        raise HTTPException(status_code=400, detail="entity_ids required")
+    catalog, repo = _publish_catalog((body.get("catalog_id") or "").strip())
+    job = start_bulk(repo, catalog["_id"], pack_type, ids, _parse_tags(body.get("tags")),
+                     max_pack_mb=_max_pack_mb(),
+                     sweep_age_s=int(_cfg().get("cache_ttl_minutes") or 60) * 60)
+    # The next /catalog fetch must not answer from a cache that predates it.
+    _cache_path(catalog["_id"]).unlink(missing_ok=True)
+    return job
+
+
+@router.get("/publish/jobs/{job_id}")
+def publish_job(job_id: str) -> Dict[str, Any]:
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="no such job")
+    if job["status"] != "running" and job_id not in _BULK_CACHE_BUSTED:
+        # Once, when the job has ended: the catalog changed under the cache.
+        _BULK_CACHE_BUSTED.add(job_id)
+        catalog = _resolve_catalog(job["catalog_id"])
+        if catalog:
+            _cache_path(catalog["_id"]).unlink(missing_ok=True)
+    return job

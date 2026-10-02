@@ -30,20 +30,16 @@ function useFactLabels(): Record<string, string> {
     props: t('Props'),
     items: t('Items'),
     has_3d: t('3D model'),
-    species: t('Species'),
-    gender: t('Gender'),
-    age: t('Age'),
-    height: t('Height'),
+    wearable: t('Wearable'),
+    outfits: t('Outfits'),
   }
 }
 
-function formatFact(key: string, value: unknown, yes: string, no: string, ownLabel: boolean): string {
+function formatFact(key: string, value: unknown, yes: string, no: string): string {
   if (typeof value === 'boolean') return value ? yes : no
   if (key === 'dims_m' && Array.isArray(value)) {
     return value.map((v) => Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })).join(' × ') + ' m'
   }
-  // A template label already names its unit ("Height (cm)").
-  if (key === 'height' && typeof value === 'number' && !ownLabel) return `${value} cm`
   if (Array.isArray(value)) return value.map(String).join(', ')
   if (typeof value === 'number') return value.toLocaleString()
   return String(value)
@@ -64,7 +60,7 @@ export function PackFacts({ facts, labels: own }: {
         {rows.map(([k, v]) => (
           <tr key={k}>
             <td style={{ color: '#8b949e', padding: '1px 12px 1px 0', whiteSpace: 'nowrap' }}>{labelOf(k)}</td>
-            <td style={{ padding: '1px 0' }}>{formatFact(k, v, t('yes'), t('no'), Boolean(own && own[k]))}</td>
+            <td style={{ padding: '1px 0' }}>{formatFact(k, v, t('yes'), t('no'))}</td>
           </tr>
         ))}
       </tbody>

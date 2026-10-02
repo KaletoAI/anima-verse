@@ -200,7 +200,8 @@ except cp.HTTPException as e:
     check("swept upstream", e.status_code, 404)
 
 print("\n[7] the publish builder carries facts and thumbnail")
-upload, warnings = cp._build_upload("prop", chair, "Chair", "", [])
+from app.core.marketplace_publish import build_upload  # noqa: E402
+upload, warnings = build_upload("prop", chair, "Chair", "", [], max_pack_mb=500)
 check("facts", upload.entry["facts"], pv["facts"])
 check("thumbnail bytes", bool(upload.thumb_bytes), True)
 check("no warnings for a small pack", warnings, [])
@@ -221,7 +222,7 @@ check("labels", cv["labels"], {"species": "Species", "breed": "Breed / Subspecie
                                "gender": "Gender", "age": "Age",
                                "height": "Height (cm)"})
 check("image", cv["image"].name if cv["image"] else None, "mira.png")
-cu, _ = cp._build_upload("character", "Mira", "Mira", "", [])
+cu, _ = build_upload("character", "Mira", "Mira", "", [], max_pack_mb=500)
 check("builder stores the labels", cu.entry.get("fact_labels"), cv["labels"])
 
 print("\n[9] make_thumbnail without a usable picture")

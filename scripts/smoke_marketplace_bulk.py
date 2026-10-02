@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""Smoke run for the marketplace BULK publish (plan-marketplace-props.md
+Teil E, ``app/core/marketplace_publish.py``). Throwaway storage; the store's
+``publish`` is replaced by a recorder, so no host is involved. By hand:
+
+Seed: 23 props "P00".."P22", job list = the 23 ids with the unknown id
+"nope" inserted at position 5 → 24 items. CHUNK = 10, so the job works the
+item positions in chunks [0..9], [10..19], [20..23]:
+
+[1] all goes well → three store calls with 9, 10, 4 packs (chunk 1 lost
+    "nope" to its export error); flush_every equals the chunk size each time
+    (one index write per call); job "done", done == total == 24; "nope" is
+    "error", the 23 props "success"; each pack is named after its prop
+    ("P00", …) and carries the given tags.
+[2] the SECOND store call raises (a lost index race) → job "error"; chunk 1
+    stays published (9 success + "nope" error), the 14 items of chunks 2 and 3
+    are "skipped" — reported, not retried.
+[3] a second start for the same catalog while a job runs → the running job
+    comes back (same id), no second job.
+
+Usage:  ./.venv/bin/python scripts/smoke_marketplace_bulk.py
+"""
+import os
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+STORAGE = Path(tempfile.mkdtemp(prefix="marketplace-bulk-smoke-"))
+os.environ["STORAGE_DIR"] = str(STORAGE)
+os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="marketplace-bulk-clips-")
+
+from app.core import paths  # noqa: E402
+paths.init(STORAGE)
+from app.core import db  # noqa: E402
+db.init_schema()
+
+from app.core import marketplace_publish as mp  # noqa: E402
+from app.core import props  # noqa: E402
+from app.core.marketplace_store import CatalogRepo, MarketplaceError  # noqa: E402
+
+FAILURES = []
+
+
+def check(label, actual, expected):
+    ok = actual == expected
+    print(f"  {'✓' if ok else '✗'} {label}: {actual!r}"
+          + ("" if ok else f" — expected {expected!r}"))
+    if not ok:
+        FAILURES.append(label)
+
+
+ids = [props.create_prop(name=f"P{i:02d}", category="misc")["id"] for i in range(23)]
+job_ids = ids[:5] + ["nope"] + ids[5:]
+repo = CatalogRepo.from_url("https://github.com/o/r", "tok")
+calls = []
+
+
+def wait(job_id):
+    for _ in range(600):
+        job = mp.get_job(job_id)
+        if job["status"] != "running":
+            return job
+        time.sleep(0.05)
+    return mp.get_job(job_id)
+
+
+def recorder(fail_on=None, gate=None):
+    def fake(repo_, pack_type, uploads, *, sweep_age_s, flush_every, **kw):
+        if gate:
+            gate.wait(10)
+        calls.append((len(uploads), flush_every,
+                      [u.entry["name"] for u in uploads], [u.entry["tags"] for u in uploads]))
+        if fail_on and len(calls) == fail_on:
+            raise MarketplaceError("another publish wrote the catalog index at the same time")
+        return [{"pack_id": u.entry["id"], "status": "success"} for u in uploads]
+    return fake
+
+
+print("\n[1] a clean run")
+mp.publish = recorder()
+job = wait(mp.start_bulk(repo, "main", "prop", job_ids, ["town"],
+                         max_pack_mb=500, sweep_age_s=3600)["id"])
+check("chunk sizes", [c[0] for c in calls], [9, 10, 4])
+check("one index write per call", [c[1] for c in calls], [9, 10, 4])
+check("status", job["status"], "done")
+check("done / total", (job["done"], job["total"]), (24, 24))
+check("nope", next(i["status"] for i in job["items"] if i["entity_id"] == "nope"), "error")
+check("successes", sum(i["status"] == "success" for i in job["items"]), 23)
+check("named after the props", calls[0][2][:3], ["P00", "P01", "P02"])
+check("tags", calls[0][3][0], ["town"])
+
+print("\n[2] the second store call fails")
+calls.clear()
+mp.publish = recorder(fail_on=2)
+job = wait(mp.start_bulk(repo, "main", "prop", job_ids, [],
+                         max_pack_mb=500, sweep_age_s=3600)["id"])
+statuses = [i["status"] for i in job["items"]]
+check("status", job["status"], "error")
+check("chunk 1 published", statuses[:10].count("success"), 9)
+check("nope still an error", statuses[5], "error")
+check("chunks 2 and 3 skipped", statuses[10:], ["skipped"] * 14)
+check("error reported", "at the same time" in job["error"], True)
+
+print("\n[3] one running job per catalog")
+calls.clear()
+gate = threading.Event()
+mp.publish = recorder(gate=gate)
+first = mp.start_bulk(repo, "main", "prop", ids[:2], [], max_pack_mb=500, sweep_age_s=3600)
+second = mp.start_bulk(repo, "main", "prop", ids[2:4], [], max_pack_mb=500, sweep_age_s=3600)
+check("same job", second["id"], first["id"])
+gate.set()
+check("first job ends done", wait(first["id"])["status"], "done")
+
+print("\nall checks passed" if not FAILURES
+      else f"\n{len(FAILURES)} check(s) FAILED: {FAILURES}")
+sys.exit(1 if FAILURES else 0)

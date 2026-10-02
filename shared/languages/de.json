@@ -2361,6 +2361,17 @@
     "Published": "Veröffentlicht",
     "Checking pack…": "Pack wird geprüft …",
     "Breed / Subspecies": "Rasse / Unterart",
-    "Height (cm)": "Größe (cm)"
+    "Height (cm)": "Größe (cm)",
+    "Published {ok}, unchanged {same}, failed {bad}": "Veröffentlicht {ok}, unverändert {same}, fehlgeschlagen {bad}",
+    "Publish every selected entry as its own pack": "Jeden ausgewählten Eintrag als eigenes Pack veröffentlichen",
+    "Publish selected": "Auswahl veröffentlichen",
+    "comma-separated, for every pack": "kommagetrennt, für jedes Pack",
+    "publishing…": "wird veröffentlicht …",
+    "Publish {n} packs": "{n} Packs veröffentlichen",
+    "Tick props to publish them to a marketplace catalog in one go.": "Props ankreuzen, um sie gesammelt in einen Marketplace-Katalog zu veröffentlichen.",
+    "Select all shown": "Alle gezeigten auswählen",
+    "Wearable": "Tragbar",
+    "Outfits": "Outfits",
+    "Over the catalog host's per-file limit ({mb} MB) — the publish will be refused.": "Über dem Dateilimit des Katalog-Hosts ({mb} MB) — der Publish wird abgelehnt."
   }
 }
