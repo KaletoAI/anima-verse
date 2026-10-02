@@ -409,6 +409,18 @@ def update_event_fields(event_id: str, **fields) -> Optional[Dict[str, Any]]:
     return evt
 
 
+def event_exists(event_id: str) -> Optional[bool]:
+    """Whether the event's row is still there: True / False, None when the
+    DB could not be asked. Unlike :func:`get_event` a read error is never
+    mistaken for "gone" — a caller that deletes files on "gone" needs that."""
+    try:
+        conn = get_connection()
+        return _row_id_for(conn, str(event_id or "")) is not None
+    except Exception as e:
+        logger.error("event_exists DB error (%s): %s", event_id, e)
+        return None
+
+
 def get_event(event_id: str) -> Optional[Dict[str, Any]]:
     """Returns an event by id, or None."""
     for evt in _load_events():

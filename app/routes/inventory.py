@@ -369,6 +369,58 @@ def _alpha_coverage_too_low(image_path: Path, threshold_pct: float = 5.0) -> boo
         return False
 
 
+def _store_item_image(item_id: str, blob: bytes) -> str:
+    """Store a finished item render and make it the item's image; returns
+    the stored file name, '' when the item is gone or not writable.
+
+    Runs after a render of minutes: the item is looked up FRESH before its
+    directory is created, so a deleted item does not come back as an empty
+    ``items/<id>/``. If it disappears between that check and the switch, the
+    new file and the then empty directory go again."""
+    item = get_item(item_id)
+    if not item:
+        logger.warning("Item image [%s]: item deleted during the render — "
+                       "result discarded", item_id)
+        return ""
+    if item.get("_shared"):
+        from app.core.paths import get_shared_dir
+        item_dir = get_shared_dir() / "items" / item_id
+    else:
+        item_dir = get_storage_dir() / "items" / item_id
+    item_dir.mkdir(parents=True, exist_ok=True)
+    image_name = f"{int(time.time())}.png"
+    image_path = item_dir / image_name
+    image_path.write_bytes(blob)
+    # rembg post-process: the green prompt background + u2net cut the subject
+    # out reliably on a high-contrast backdrop. Sanity check on the alpha
+    # coverage — when rembg removed the subject along with the background
+    # (typical for non-person subjects), the original is kept.
+    try:
+        from app.models.character import postprocess_outfit_image
+        processed = postprocess_outfit_image(image_path)
+        if processed.exists() and _alpha_coverage_too_low(processed):
+            logger.warning("Item image [%s]: rembg coverage too low — keeping "
+                           "the original with the green background", item_id)
+            image_path = item_dir / image_name
+            image_path.write_bytes(blob)
+        elif processed.name != image_name:
+            image_name = processed.name
+    except Exception:
+        pass
+    # Switch to the new image and drop the one the item points at NOW (read
+    # fresh under a lock — a second queued render may have replaced it).
+    if not replace_item_image(item_id, image_name):
+        logger.warning("Item image [%s]: item gone or not writable — "
+                       "discarding %s", item_id, image_name)
+        (item_dir / image_name).unlink(missing_ok=True)
+        try:
+            item_dir.rmdir()          # only when it is empty now
+        except OSError:
+            pass
+        return ""
+    return image_name
+
+
 def generate_item_image_sync(
     item_id: str,
     overrides: Dict[str, Any] | None = None) -> bool:
@@ -515,38 +567,8 @@ def generate_item_image_sync(
         logger.error("Item image [%s] failed: %s", item_id, e)
         return False
 
-    if item.get("_shared"):
-        from app.core.paths import get_shared_dir
-        item_dir = get_shared_dir() / "items" / item_id
-    else:
-        item_dir = get_storage_dir() / "items" / item_id
-    item_dir.mkdir(parents=True, exist_ok=True)
-    image_name = f"{int(time.time())}.png"
-    image_path = item_dir / image_name
-    image_path.write_bytes(images[0])
-    # rembg post-process: the green prompt background + u2net cut the subject
-    # out reliably on a high-contrast backdrop. Sanity check on the alpha
-    # coverage — when rembg removed the subject along with the background
-    # (typical for non-person subjects), the original is kept.
-    try:
-        from app.models.character import postprocess_outfit_image
-        processed = postprocess_outfit_image(image_path)
-        if processed.exists() and _alpha_coverage_too_low(processed):
-            logger.warning("Item image [%s]: rembg coverage too low — keeping "
-                           "the original with the green background", item_id)
-            image_path = item_dir / image_name
-            image_path.write_bytes(images[0])
-        elif processed.name != image_name:
-            image_name = processed.name
-    except Exception:
-        pass
-    # Switch to the new image and drop the one the item points at NOW (read
-    # fresh under a lock — the snapshot above is minutes old and a second
-    # queued render may have replaced it in between).
-    if not replace_item_image(item_id, image_name):
-        logger.warning("Item image [%s]: item gone or not writable — "
-                       "discarding %s", item_id, image_name)
-        (item_dir / image_name).unlink(missing_ok=True)
+    image_name = _store_item_image(item_id, images[0])
+    if not image_name:
         return False
     # Caption data (backend + model) — like the location galleries, shown in
     # the Game-Admin as the caption under the item image — plus the routing

@@ -678,20 +678,19 @@ def delete_item(item_id: str) -> bool:
         _remove_item_media(_get_shared_dir() / "items", item_id)
         logger.info("Shared item deleted: %s", item_id)
         return True
-    items = _load_items()
-    new_items = [i for i in items if i.get("id") != item_id]
-    if len(new_items) < len(items):
-        # Explizit aus der DB entfernen — _save_items ist nur UPSERT.
+    if any(i.get("id") == item_id for i in _load_items()):
+        # An explicit row DELETE — and nothing else: re-upserting the other
+        # items from the snapshot read above would clobber a concurrent edit
+        # of any of them.
         try:
             with transaction() as conn:
                 conn.execute("DELETE FROM items WHERE id=?", (item_id,))
-                # Auch aus Inventaren + Raum-Ablage entfernen
+                # Also out of every inventory and room storage
                 conn.execute("DELETE FROM inventory_items WHERE item_id=?", (item_id,))
         except Exception as e:
             # The row is still there: its files stay too.
             logger.error("delete_item DB error for %s: %s", item_id, e)
             return False
-        _save_items(new_items)
         _remove_item_media(get_storage_dir() / "items", item_id)
         logger.info("Item deleted: %s", item_id)
         return True

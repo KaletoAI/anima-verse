@@ -254,23 +254,29 @@ class ModelGallery:
         os.replace(tmp, target)
 
     def _update_selection(
-            self, change: Callable[[Dict[str, Dict[str, str]]], bool]) -> None:
+            self, change: Callable[[Dict[str, Dict[str, str]]], bool]) -> bool:
         """The ONE read-modify-write of ``selection.json``: under the
         directory's lock, from a FRESH read (never the memo), written only
         when ``change`` reports that it changed something.
 
-        A directory that is gone belongs to a deleted subject (a mesh job's
-        final select after ``delete_prop`` / ``delete_location``): nothing is
-        written, so its ``selection.json`` cannot recreate the directory."""
+        The gallery never creates its directory here: a missing one may
+        belong to a deleted subject (a mesh job's final select after
+        ``delete_prop`` / ``delete_location``), and writing would recreate it
+        as a ghost. Whether a missing dir is "deleted" or "not created yet"
+        only the STORE knows (it can look the subject up), so a store that
+        writes for a live subject creates the dir first (see
+        ``location_model3d.select_model``). False = nothing written because
+        the directory does not exist."""
         if not self.dir.is_dir():
-            logger.info("model selection: %s is gone (subject deleted), "
-                        "not written", self.dir)
-            return
+            logger.warning("model selection: %s does not exist, not written",
+                           self.dir)
+            return False
         with keyed_lock(SEL_LOCK, str(self.dir.resolve())):
             self._sel = None
             sel = self._read_all()
             if change(sel):
                 self._write_all(sel)
+        return True
 
     def selection(self) -> Dict[str, str]:
         """``{tier: filename}`` of THIS stem (values may be ``__none__``)."""
@@ -303,7 +309,7 @@ class ModelGallery:
         DECLINED" (resolution falls through to the full model and the
         auto-LOD demand leaves it alone).
         False when a non-empty file does not belong to the stem or is
-        missing."""
+        missing, or when the directory does not exist (nothing persisted)."""
         tier = normalize_tier(tier) or DEFAULT_TIER
         if filename and not self.file(filename):
             return False
@@ -321,8 +327,7 @@ class ModelGallery:
             sel[self.stem] = entry
             return True
 
-        self._update_selection(change)
-        return True
+        return self._update_selection(change)
 
     def find(self, tier: str = "", *, fallback: bool = True) -> Optional[Path]:
         """The active model file of ``tier``, or None.

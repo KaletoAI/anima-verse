@@ -18,7 +18,9 @@ from a run:
       foreign ``evt_other.png``: ``delete_event`` → 4 removed, 1 left. A
       second event (TTL 1 game hour) with its four files, clock +2 h,
       ``expire_events()`` → 1 and its 4 files gone. ``remove_event_images
-      ("../evil")`` → 0.
+      ("../evil")`` → 0. A render that finishes while its event's UPDATE
+      fails keeps its 2 files (live event, write error); one that finishes
+      after the row is gone removes them (0 left).
   [C] Instagram. Post p1 with carousel p1/p2/p3 (+ one .json each, + p2.mp4
       = 7 files) and post q (q.png + q.json). ``delete_post(p1)`` → True,
       7 files gone, q's 2 remain, 1 post left. Post r whose carousel reuses
@@ -27,7 +29,10 @@ from a run:
   [D] model gallery. ``model_100.glb/.json`` + ``raw/model_100.glb`` and the
       same for 200. Deleting model_100 removes ``raw/model_100.glb`` and keeps
       ``raw/model_200.glb``; deleting the rest leaves no file and no ``raw/``.
-      A selection write into a directory that is gone does not recreate it.
+      A selection write into a directory that is gone does not recreate it
+      and says so (``select("")`` → False, not a silent True). A LIVE place
+      without any model yet still persists the "no model" sentinel through
+      ``location_model3d.select_model`` (→ True, ``none_selected()`` True).
   [E] outfit cache GC (inventory stubbed: shirt + jeans owned).
       A = model3d/A.glb + A.json (manifest names a removed piece) + low/A.glb
       + raw/A.glb; B = low/B.glb only; C = model3d/C.glb without a sidecar,
@@ -42,7 +47,10 @@ from a run:
       create one. 1.png set; ``replace_item_image(2.png)`` removes 1.png;
       ``replace_item_image(3.png)`` removes 2.png (read fresh, not from the
       caller's stale idea that 1.png is current) → only 3.png; replacing with
-      the same name removes nothing. ``delete_item`` → True, the dir is gone.
+      the same name removes nothing. ``delete_item`` → True, the dir is gone,
+      and the OTHER item's row is untouched (no snapshot re-upsert: an edit
+      made after the delete read its snapshot survives). A render that
+      finishes for a deleted item stores nothing and leaves no ``items/<id>``.
   [G] no ghost dir. After ``delete_character``, every read and late writer
       below leaves ``characters/<name>`` absent, and the mesh store answers
       the "target directory is gone" error.
@@ -144,6 +152,13 @@ def section_a_h_locations() -> None:
     check("A: '' refused", media_cleanup.remove_owned_dir(root, ""), False)
     check("A: 'a/b' refused", media_cleanup.remove_owned_dir(root, "a/b"), False)
     check("A: the decoy survives", decoy.is_dir(), True)
+    from app.core import location_model3d
+    upsert_location({"id": "ee55ff66", "name": "Fresh", "description": "",
+                     "rooms": []})
+    check("A: deselect on a live place without models",
+          location_model3d.select_model("ee55ff66", ""), True)
+    check("A: ...the 'no model' sentinel is persisted",
+          location_model3d._gallery("ee55ff66").none_selected(), True)
 
 
 def section_b_events() -> None:
@@ -173,6 +188,50 @@ def section_b_events() -> None:
     check("its 4 files gone too",
           sorted(f.name for f in ev_dir.iterdir()), ["evt_other.png"])
     check("an unsafe id removes nothing", remove_event_images("../evil"), 0)
+
+    # _do_generate's tail: render pipeline stubbed, only the store decision
+    # is real.
+    import app.core.event_images as ei
+    import app.imagegen.routing as routing
+    import app.imagegen.service as service
+    import app.models.events as events
+    import app.models.world as world
+    bg = STORAGE / "bg.png"
+    bg.write_bytes(png_bytes())
+
+    class _Svc:
+        enabled = True
+        pool = None
+
+    class _Used:
+        name, api_type = "fake", "fake"
+    saved = (world.get_background_path, service.get_image_service,
+             routing.run_routed, routing.route_meta, events._update_event,
+             ei.publish_image_ready)
+    world.get_background_path = lambda lid: bg
+    service.get_image_service = lambda: _Svc()
+    routing.run_routed = lambda *a, **k: (([png_bytes()], _Used()), None)
+    routing.route_meta = lambda route: {}
+    ei.publish_image_ready = lambda *a, **k: None
+    try:
+        e3 = add_event("a flood", category="danger")["id"]
+        events._update_event = lambda evt: False          # a DB write error
+        check("live event, write error → None",
+              ei._do_generate(e3, "cc33dd44", "water", False), None)
+        check("...its 2 files are kept",
+              sorted(f.name for f in ev_dir.iterdir() if f.stem == e3),
+              [f"{e3}.json", f"{e3}.png"])
+        events._update_event = saved[4]
+        e4 = add_event("a quake", category="danger")["id"]
+        delete_event(e4)
+        check("gone event → None",
+              ei._do_generate(e4, "cc33dd44", "rubble", False), None)
+        check("...its files are removed",
+              [f.name for f in ev_dir.iterdir() if f.stem == e4], [])
+    finally:
+        (world.get_background_path, service.get_image_service,
+         routing.run_routed, routing.route_meta, events._update_event,
+         ei.publish_image_ready) = saved
 
 
 def section_c_instagram() -> None:
@@ -234,7 +293,8 @@ def section_d_model_gallery() -> None:
     check("no file left", files_under(d), 0)
     check("raw/ removed once empty", (d / "raw").exists(), False)
     gone = STORAGE / "gallery_gone"
-    ModelGallery(gone, "model").select("")
+    check("select('') on a missing dir → False (nothing persisted)",
+          ModelGallery(gone, "model").select(""), False)
     check("a selection write does not recreate a deleted dir", gone.exists(), False)
 
 
@@ -323,9 +383,27 @@ def section_f_h_items() -> None:
     check("3.png kept", (d / "3.png").exists(), True)
     thumb_of(d / "3.png")
     t1 = thumb_count()
-    check("delete_item", delete_item(iid), True)
+    other = add_item("Rope", item_id="item_y")["id"]
+    import app.models.inventory as inv
+    real_load = inv._load_items
+    stale = real_load()                       # the snapshot delete_item reads
+    from app.core.db import transaction
+    with transaction() as conn:               # an edit AFTER that read
+        conn.execute("UPDATE items SET name='Rope (edited)' WHERE id=?", (other,))
+    inv._load_items = lambda: stale
+    try:
+        check("delete_item", delete_item(iid), True)
+    finally:
+        inv._load_items = real_load
     check("item dir gone", d.exists(), False)
     check("H: its thumbnail dropped", thumb_count(), t1 - 1)
+    from app.models.inventory import get_item
+    check("the other item's later edit survives the delete",
+          (get_item(other) or {}).get("name"), "Rope (edited)")
+    from app.routes.inventory import _store_item_image
+    check("a render for the deleted item stores nothing",
+          _store_item_image(iid, png_bytes()), "")
+    check("...and leaves no items/<id>", d.exists(), False)
 
 
 def section_g_h_ghost_dirs() -> None:

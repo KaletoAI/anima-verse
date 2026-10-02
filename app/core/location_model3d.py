@@ -153,6 +153,12 @@ def select_model(location_id: str, filename: str, room_id: str = "",
     owner = _owner_id(location_id)
     if not owner:
         return False
+    if not filename:
+        # A deselection of a LIVE place (the owner resolved) may come before
+        # any model was stored, i.e. before new_path() created the dir — the
+        # sentinel still has to persist. A non-empty filename needs no mkdir:
+        # the file it names exists, so its dir does too.
+        _model_dir(owner, create=True)
     if not _gallery(owner, room_id).select(filename, tier):
         return False
     # EVERY room landing path ends here — upload, generation, shrink and the

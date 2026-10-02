@@ -335,13 +335,21 @@ def _do_generate(event_id: str,
 
     field = "resolved_image_path" if resolved else "image_path"
     if update_event_fields(event_id, **{field: str(out_path)}) is None:
-        # The event was deleted or expired during the render: nothing names
-        # these files any more, so they go now — and no client is told about
-        # an image, no postprocess hook is handed a removed path.
-        from app.core import media_cleanup
-        media_cleanup.remove_files([out_path, out_path.with_suffix(".json")])
-        logger.info("Event image [%s] discarded: event gone during render",
-                    event_id)
+        # No client is told about an image the row does not name, no
+        # postprocess hook is handed it. Whether the files go depends on WHY
+        # the write failed: a row that is gone (deleted or expired during the
+        # render) names nothing any more — the files go. A failed write of a
+        # LIVE event (or a DB that cannot say) keeps them: the name is fixed
+        # per event, so the next render overwrites it.
+        from app.models.events import event_exists
+        if event_exists(event_id) is False:
+            from app.core import media_cleanup
+            media_cleanup.remove_files([out_path, out_path.with_suffix(".json")])
+            logger.info("Event image [%s] discarded: event gone during render",
+                        event_id)
+        else:
+            logger.warning("Event image [%s] stored as %s but not recorded on "
+                           "the event (write failed)", event_id, out_path.name)
         return None
     publish_image_ready(event_id, location_id, "resolved" if resolved else "event")
     logger.info("Event image [%s] %s rendered: %s (%dx%d, via %s)",
