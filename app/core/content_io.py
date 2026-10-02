@@ -72,12 +72,15 @@ def _strip_runtime_keys(item: Dict[str, Any]) -> Dict[str, Any]:
     return cleaned
 
 
-def _item_dir_for(item_id: str, *, shared: bool) -> Path:
+def _item_dir_for(item_id: str, *, shared: bool, create: bool = False) -> Path:
     """The item's file directory. Both helpers run the id through
     ``inventory.require_item_id`` — an id out of a ZIP is attacker-controlled
-    and must never become a path component of its own choosing."""
+    and must never become a path component of its own choosing. Created only
+    with ``create=True`` (the import paths); an export reads."""
     from app.models.inventory import _get_item_dir, _get_shared_item_dir
-    return _get_shared_item_dir(item_id) if shared else _get_item_dir(item_id)
+    if shared:
+        return _get_shared_item_dir(item_id, create=create)
+    return _get_item_dir(item_id, create=create)
 
 
 def _write_item_files(
@@ -178,7 +181,7 @@ def restore_embedded_items(zf: zipfile.ZipFile) -> List[str]:
 
     new_ids: List[str] = [(it.get("id") or "").strip() for it in new_items]
     for iid in new_ids:
-        dest = _item_dir_for(iid, shared=False)
+        dest = _item_dir_for(iid, shared=False, create=True)
         prefix = f"item_files/{iid}/"
         for member in zf.namelist():
             if not member.startswith(prefix):
@@ -355,7 +358,7 @@ def _restore_item_files(
     # A rmtree one directory too high would take the whole storage with it.
     require_item_id(final_id)
     require_item_id(original_id)
-    dst_dir = _item_dir_for(final_id, shared=shared)
+    dst_dir = _item_dir_for(final_id, shared=shared, create=True)
     base = ((get_shared_dir() if shared else get_storage_dir()) / "items")
     try:
         resolved = dst_dir.resolve()

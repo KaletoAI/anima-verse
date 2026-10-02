@@ -8,8 +8,8 @@ from typing import Dict, Any, List
 from app.core.log import get_logger
 from app.core.paths import get_storage_dir
 from app.models.inventory import (
-    list_items, get_item, add_item, update_item, delete_item, set_item_image,
-    set_item_image_meta,
+    list_items, get_item, add_item, update_item, delete_item,
+    set_item_image_meta, replace_item_image,
     get_room_items, add_item_to_room, remove_item_from_room,
     get_character_inventory, add_to_inventory, remove_from_inventory,
     update_inventory_entry)
@@ -540,15 +540,14 @@ def generate_item_image_sync(
             image_name = processed.name
     except Exception:
         pass
-    old_image = item.get("image")
-    if old_image and old_image != image_name:
-        old_path = item_dir / old_image
-        if old_path.exists():
-            try:
-                old_path.unlink()
-            except Exception:
-                pass
-    set_item_image(item_id, image_name)
+    # Switch to the new image and drop the one the item points at NOW (read
+    # fresh under a lock — the snapshot above is minutes old and a second
+    # queued render may have replaced it in between).
+    if not replace_item_image(item_id, image_name):
+        logger.warning("Item image [%s]: item gone or not writable — "
+                       "discarding %s", item_id, image_name)
+        (item_dir / image_name).unlink(missing_ok=True)
+        return False
     # Caption data (backend + model) — like the location galleries, shown in
     # the Game-Admin as the caption under the item image — plus the routing
     # marks of a routed render.

@@ -81,9 +81,13 @@ def require_item_id(item_id: str) -> str:
     return iid
 
 
-def _get_item_dir(item_id: str) -> Path:
+def _get_item_dir(item_id: str, *, create: bool = False) -> Path:
+    """``items/<id>``. Created only for a WRITE (``create=True``) — a read
+    path (image lookup, delete, export, a move's source) must never leave an
+    empty item directory behind."""
     item_dir = get_storage_dir() / "items" / require_item_id(item_id)
-    item_dir.mkdir(parents=True, exist_ok=True)
+    if create:
+        item_dir.mkdir(parents=True, exist_ok=True)
     return item_dir
 
 
@@ -97,9 +101,12 @@ def _get_shared_items_file() -> Path:
     return sd / "items.json"
 
 
-def _get_shared_item_dir(item_id: str) -> Path:
+def _get_shared_item_dir(item_id: str, *, create: bool = False) -> Path:
+    """``shared/items/<id>``; created only with ``create=True`` (see
+    :func:`_get_item_dir`)."""
     d = _get_shared_dir() / "items" / require_item_id(item_id)
-    d.mkdir(parents=True, exist_ok=True)
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
     return d
 
 
@@ -204,8 +211,10 @@ def _load_items() -> List[Dict[str, Any]]:
             return []
 
 
-def _save_items(items: List[Dict[str, Any]]):
-    """Speichert alle Item-Definitionen in die DB (Upsert)."""
+def _save_items(items: List[Dict[str, Any]]) -> bool:
+    """Upsert the given item definitions into the DB. True when every row
+    was written (an error is logged per item, never raised)."""
+    ok = True
     now = utc_now_iso()
     for item in items:
         item_id = item.get("id", "")
@@ -242,7 +251,9 @@ def _save_items(items: List[Dict[str, Any]]):
                     now,
                 ))
         except Exception as e:
-            logger.error("_save_items Fehler fuer %s: %s", item_id, e)
+            logger.error("_save_items error for %s: %s", item_id, e)
+            ok = False
+    return ok
 
 
 def list_items() -> List[Dict[str, Any]]:
@@ -662,12 +673,10 @@ def delete_item(item_id: str) -> bool:
         new_shared = [s for s in shared if s.get("id") != item_id]
         if len(new_shared) == len(shared):
             return False
+        # Raises on a failed write — then no file is touched.
         _save_shared_items(new_shared)
-        item_dir = _get_shared_item_dir(item_id)
-        if item_dir.exists():
-            import shutil
-            shutil.rmtree(item_dir, ignore_errors=True)
-        logger.info("Shared-Item geloescht: %s", item_id)
+        _remove_item_media(_get_shared_dir() / "items", item_id)
+        logger.info("Shared item deleted: %s", item_id)
         return True
     items = _load_items()
     new_items = [i for i in items if i.get("id") != item_id]
@@ -679,16 +688,27 @@ def delete_item(item_id: str) -> bool:
                 # Auch aus Inventaren + Raum-Ablage entfernen
                 conn.execute("DELETE FROM inventory_items WHERE item_id=?", (item_id,))
         except Exception as e:
-            logger.error("delete_item DB-Fehler fuer %s: %s", item_id, e)
+            # The row is still there: its files stay too.
+            logger.error("delete_item DB error for %s: %s", item_id, e)
+            return False
         _save_items(new_items)
-        # Bild-Verzeichnis loeschen
-        item_dir = _get_item_dir(item_id)
-        if item_dir.exists():
-            import shutil
-            shutil.rmtree(item_dir, ignore_errors=True)
-        logger.info("Item geloescht: %s", item_id)
+        _remove_item_media(get_storage_dir() / "items", item_id)
+        logger.info("Item deleted: %s", item_id)
         return True
     return False
+
+
+def _remove_item_media(root: Path, item_id: str) -> None:
+    """Remove ``root/<item_id>`` (with the cached thumbnails of its files) —
+    only after the item's record is gone."""
+    from app.core import media_cleanup, thumbnails
+    d = root / item_id
+    if d.is_dir() and not d.is_symlink() and media_cleanup.contained(root, d):
+        try:
+            thumbnails.forget_sources(f for f in d.iterdir() if f.is_file())
+        except OSError as e:
+            logger.debug("item media: thumb sweep %s: %s", d, e)
+    media_cleanup.remove_owned_dir(root, item_id)
 
 
 def move_item_to_shared(item_id: str) -> Dict[str, Any]:
@@ -716,7 +736,7 @@ def move_item_to_shared(item_id: str) -> Dict[str, Any]:
 
     # 2) Bild-Verzeichnis uebertragen (copy, dann source loeschen)
     src = _get_item_dir(item_id)
-    dst = _get_shared_item_dir(item_id)
+    dst = _get_shared_item_dir(item_id, create=True)
     if src.exists():
         for child in src.iterdir():
             _tgt = dst / child.name
@@ -757,7 +777,7 @@ def move_item_to_world(item_id: str) -> Dict[str, Any]:
 
     # 2) Bild-Verzeichnis uebertragen
     src = _get_shared_item_dir(item_id)
-    dst = _get_item_dir(item_id)
+    dst = _get_item_dir(item_id, create=True)
     if src.exists():
         for child in src.iterdir():
             _tgt = dst / child.name
@@ -785,13 +805,47 @@ def set_item_image(item_id: str, image_filename: str) -> bool:
                 _save_shared_items(shared)
                 return True
         return False
-    items = _load_items()
-    for item in items:
+    for item in _load_items():
         if item.get("id") == item_id:
             item["image"] = image_filename
-            _save_items(items)
-            return True
+            # Upsert of THIS item only — rewriting every item from a snapshot
+            # would clobber a concurrent edit of another one.
+            return _save_items([item])
     return False
+
+
+def replace_item_image(item_id: str, new_name: str) -> bool:
+    """Point the item at ``new_name`` and remove the image it pointed at
+    BEFORE — read fresh under ``keyed_lock("item_image", id)``.
+
+    The old image is taken from the record at the moment of the switch, never
+    from a snapshot taken when a render started: two queued regenerations
+    would otherwise both remove the same first image and orphan the second.
+    The old file goes only after the new name is stored, and never when it
+    IS the new name (two renders finishing in the same second). False = the
+    item is gone or the write failed; nothing is removed then."""
+    from app.core import media_cleanup, thumbnails
+    from app.core.keyed_lock import keyed_lock
+    iid = require_item_id(item_id)
+    with keyed_lock("item_image", iid):
+        item = get_item(iid)
+        if not item:
+            return False
+        old = (item.get("image") or "").strip()
+        if not set_item_image(iid, new_name):
+            return False
+        if not old or old == new_name:
+            return True
+        d = _get_shared_item_dir(iid) if item.get("_shared") else _get_item_dir(iid)
+        old_path = d / old
+        if ("/" in old or "\\" in old or old.startswith(".")
+                or not media_cleanup.contained(d, old_path)):
+            logger.warning("replace_item_image %s: old name %r refused", iid, old[:80])
+            return True
+        if old_path.is_file():
+            thumbnails.forget_sources([old_path])
+            media_cleanup.remove_files([old_path])
+    return True
 
 
 def set_item_image_meta(item_id: str, meta: Dict[str, Any]) -> bool:
@@ -973,12 +1027,6 @@ def find_item_location(item_id: str,
 # 3. CHARACTER-INVENTAR
 # ============================================================
 
-def _get_inventory_file(character_name: str) -> Path:
-    char_dir = get_storage_dir() / "characters" / character_name
-    char_dir.mkdir(parents=True, exist_ok=True)
-    return char_dir / "inventory.json"
-
-
 def _load_inventory(character_name: str) -> Dict[str, Any]:
     """Laedt das Inventar eines Characters aus der DB."""
     try:
@@ -1016,16 +1064,9 @@ def _load_inventory(character_name: str) -> Dict[str, Any]:
             pass
         return {"inventory": inventory, "max_slots": max_slots, "last_updated": None}
     except Exception as e:
-        logger.warning("_load_inventory DB-Fehler fuer %s: %s", character_name, e)
-        # Fallback: JSON-Datei
-        path = _get_inventory_file(character_name)
-        if not path.exists():
-            return {"inventory": [], "max_slots": 20, "last_updated": None}
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return data
-        except Exception:
-            return {"inventory": [], "max_slots": 20, "last_updated": None}
+        # No JSON fallback reader: the DB is the only source of character data.
+        logger.warning("_load_inventory DB error for %s: %s", character_name, e)
+        return {"inventory": [], "max_slots": 20, "last_updated": None}
 
 
 def _save_inventory(character_name: str, data: Dict[str, Any]):

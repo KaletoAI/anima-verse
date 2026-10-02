@@ -307,7 +307,7 @@ _save_items([{
     "prompt_fragment": "a wooden mug of ale",
 }])
 from app.models.inventory import _get_item_dir  # noqa: E402
-(_get_item_dir(item_id) / "bild.png").write_bytes(b"PNG-item")
+(_get_item_dir(item_id, create=True) / "bild.png").write_bytes(b"PNG-item")
 check("item placed in room", add_item_to_room(loc_id, room1_id, item_id), True)
 
 # --- Export ---------------------------------------------------------------
