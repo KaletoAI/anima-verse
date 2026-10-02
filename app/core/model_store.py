@@ -30,7 +30,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 from app.core.keyed_lock import keyed_lock
 from app.core.model3d import MODEL_EXTS
@@ -90,6 +90,47 @@ def read_sidecar(model_path: Path) -> Dict[str, Any]:
 def write_sidecar(model_path: Path, meta: Dict[str, Any]) -> None:
     model_path.with_suffix(".json").write_text(
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def companion_files(model_path: Path) -> List[Path]:
+    """A stored model file and what travels with it — its JSON sidecar and its
+    baked surface lattice — as far as they exist. The unit an export copies.
+
+    The lattice only while it is still ANCHORED to this file: one that already
+    reads as "no surface" here would be revived on the far side, where the
+    import re-binds every lattice whose size matches."""
+    from app.core.model_surface import is_anchored, surface_path
+    p = Path(model_path)
+    out = [f for f in (p, p.with_suffix(".json")) if f.exists()]
+    if surface_path(p).exists() and is_anchored(p):
+        out.append(surface_path(p))
+    return out
+
+
+def export_files(directory: Path, stems: Iterable[str],
+                 exts: Sequence[str] = MODEL_EXTS) -> List[Path]:
+    """The files a store directory NEEDS to serve ``stems`` — what the readers
+    resolve, not what happens to lie in the folder.
+
+    Per stem, every tier :meth:`ModelGallery.tiers` resolves (the selection,
+    the "newest file" fallback of a stem without an entry, nothing for the
+    ``__none__`` sentinel) with its :func:`companion_files`, plus the
+    ``selection.json`` itself, unchanged. The gallery history — files no tier
+    resolves to — and backup folders such as ``raw/`` stay behind. A store
+    with extra per-file companions (the prop store's areas and LOD parents)
+    adds those on top. ``exts`` must be the extensions the store's own
+    readers build their galleries with — the "newest file" fallback picks from
+    exactly those."""
+    d = Path(directory)
+    out: Dict[Path, None] = {}
+    for stem in dict.fromkeys(s for s in stems if s):
+        for model in ModelGallery(d, stem, exts).tiers().values():
+            for f in companion_files(model):
+                out[f] = None
+    sel = d / SEL_FILE
+    if sel.exists():
+        out[sel] = None
+    return sorted(out)
 
 
 class ModelGallery:

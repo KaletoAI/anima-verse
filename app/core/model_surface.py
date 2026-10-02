@@ -263,6 +263,50 @@ def _valid(surface: Dict[str, Any], model_path: Path, rotation: Any) -> bool:
     return _norm_rotation(surface.get("rotation")) == _norm_rotation(rotation)
 
 
+def is_anchored(model_path: Path) -> bool:
+    """The stored lattice still describes THESE bytes (name, size, mtime) —
+    the source half of :func:`_valid`, without the rotation."""
+    surface = _load(model_path)
+    src = _source_of(model_path)
+    return bool(surface and src and surface.get("source") == src)
+
+
+def reanchor_imported(model_path: Path) -> bool:
+    """Bind an IMPORTED lattice to the model file it arrived with.
+
+    A lattice is valid only for ``{name, size, mtime}`` of its model
+    (:func:`_valid`), and an import writes the bytes anew — a fresh mtime, and
+    for a location's rooms a fresh name — so every imported lattice used to
+    read back as "no surface" and the ground fell back to the flat box
+    without a word. The SIZE is the check that this lattice still measured
+    these bytes; only then the name and mtime are moved onto the new file.
+    True when the lattice was re-anchored."""
+    sp = surface_path(model_path)
+    if not sp.exists():
+        return False
+    try:
+        surface = json.loads(sp.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    src = _source_of(model_path)
+    old = surface.get("source") if isinstance(surface, dict) else None
+    if not src or not isinstance(old, dict) or old.get("size") != src["size"]:
+        return False
+    if old == src:
+        return False
+    surface["source"] = src
+    tmp = sp.with_name(sp.name + ".tmp")
+    try:
+        tmp.write_text(json.dumps(surface, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, sp)
+    except OSError as e:
+        logger.info("surface not re-anchored (%s): %s", Path(model_path).name, e)
+        tmp.unlink(missing_ok=True)
+        return False
+    _forget_loaded(sp)
+    return True
+
+
 def read_surface(model_path: Path, rotation: Any) -> Optional[Dict[str, Any]]:
     """The stored surface, or None when absent or no longer valid."""
     surface = _load(model_path)

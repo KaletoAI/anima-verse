@@ -22,7 +22,10 @@ Expectations, derived by hand from that seed:
   [1] export_prop_to_zip(pid) namelist, sorted:
         files/model_1.glb, files/model_1.json, files/selection.json,
         files/sidecar.json, files/source.png, manifest.json
-      i.e. the WHOLE props/<pid>/ directory under files/, nothing else.
+      i.e. the prop's export set (props.export_files) under files/ — here
+      every seeded file resolves (the one mesh is selected), so the set
+      equals the seed; what the set LEAVES OUT is
+      scripts/smoke_content_slim_export.py's subject.
       manifest.version   == 1
       manifest.type      == "prop"
       manifest.prop_id   == pid
@@ -78,10 +81,12 @@ place (byte-identical to the export, see [5]/[8]).
   [9] export_collection_to_zip("Testpaket", [location, prop]) —
       manifest.version == 1, type "collection", name "Testpaket",
       contents == [{"type": "location", "name": "Old Mill",
-                    "file": "packs/location-old-mill.zip"},
+                    "file": "packs/location-<LOC_ID>.zip"},
                    {"type": "prop", "name": "Oak Chair",
-                    "file": "packs/prop-oak-chair.zip"}]
-      i.e. the slug is "<type>-<name>" and the names come out of each SUB
+                    "file": "packs/prop-<PID>.zip"}]
+      i.e. the slug is "<type>-<entity id>" (2026-10-02: two props may share a
+      display name, never an id — both ids here are already lowercase slugs,
+      so the slug IS the id), while the displayed names come out of each SUB
       manifest (location_name / prop_name), not out of the request.
       namelist, sorted: manifest.json + the two packs/*.zip — nothing else.
       Every sub-ZIP carries its own manifest of the declared type, and the
@@ -90,7 +95,7 @@ place (byte-identical to the export, see [5]/[8]).
       scripts/make_collection_pack.py writes.
 
  [10] Twice the SAME prop in one collection → the slug is numbered instead of
-      colliding: packs/prop-oak-chair.zip + packs/prop-oak-chair-2.zip, both
+      colliding: packs/prop-<PID>.zip + packs/prop-<PID>-2.zip, both
       members really in the ZIP.
 
  [11] Rejections, before a single byte is packed:
@@ -119,7 +124,7 @@ place (byte-identical to the export, see [5]/[8]).
       Nothing aborts: the entry after a non-success entry still runs.
 
  [15] Selection filter: _dispatch_install_selected(blob,
-      selected_ids={"packs/prop-oak-chair.zip"}) → exactly ONE result (the
+      selected_ids={"packs/prop-<PID>.zip"}) → exactly ONE result (the
       prop), and the number of "Old Mill*" locations is unchanged. An empty
       selection means all (that is [14]).
 
@@ -224,11 +229,13 @@ def dir_snapshot() -> dict:
             for p in sorted(d.rglob("*")) if p.is_file()}
 
 
-print("[1] export_prop_to_zip — the whole prop directory + manifest")
+print("[1] export_prop_to_zip — the resolved file set + manifest")
 blob = export_prop_to_zip(PID)
 zf = zipfile.ZipFile(io.BytesIO(blob))
 names = sorted(zf.namelist())
-check("namelist", names, [f"files/{n}" for n in ALL_NAMES] + ["manifest.json"])
+check("namelist", names, ["files/model_1.glb", "files/model_1.json",
+                          "files/selection.json", "files/sidecar.json",
+                          "files/source.png", "manifest.json"])
 manifest = json.loads(zf.read("manifest.json"))
 check("manifest.version", manifest["version"], 1)
 check("manifest.type", manifest["type"], "prop")
@@ -433,17 +440,17 @@ check("manifest.type", cman["type"], "collection")
 check("manifest.name", cman["name"], "Testpaket")
 check("contents length", len(cman["contents"]), 2)
 check("contents", cman["contents"], [
-    {"type": "location", "name": "Old Mill", "file": "packs/location-old-mill.zip"},
-    {"type": "prop", "name": "Oak Chair", "file": "packs/prop-oak-chair.zip"},
+    {"type": "location", "name": "Old Mill", "file": f"packs/location-{LOC_ID}.zip"},
+    {"type": "prop", "name": "Oak Chair", "file": f"packs/prop-{PID}.zip"},
 ])
 check("namelist", sorted(czf.namelist()),
-      ["manifest.json", "packs/location-old-mill.zip", "packs/prop-oak-chair.zip"])
+      ["manifest.json", f"packs/location-{LOC_ID}.zip", f"packs/prop-{PID}.zip"])
 for entry in cman["contents"]:
     sub = json.loads(zipfile.ZipFile(io.BytesIO(czf.read(entry["file"])))
                      .read("manifest.json"))
     check(f"sub manifest type of {entry['file']}", sub["type"], entry["type"])
 check("the prop pack travels byte-identical",
-      czf.read("packs/prop-oak-chair.zip"), PROP_PACK)
+      czf.read(f"packs/prop-{PID}.zip"), PROP_PACK)
 czf.close()
 
 print("\n[10] a slug collision is numbered, never overwritten")
@@ -454,9 +461,9 @@ twice = export_collection_to_zip("Doppelt", [
 tzf = zipfile.ZipFile(io.BytesIO(twice))
 tman = json.loads(tzf.read("manifest.json"))
 check("files", [e["file"] for e in tman["contents"]],
-      ["packs/prop-oak-chair.zip", "packs/prop-oak-chair-2.zip"])
+      [f"packs/prop-{PID}.zip", f"packs/prop-{PID}-2.zip"])
 check("both members really in the ZIP", sorted(tzf.namelist()),
-      ["manifest.json", "packs/prop-oak-chair-2.zip", "packs/prop-oak-chair.zip"])
+      ["manifest.json", f"packs/prop-{PID}-2.zip", f"packs/prop-{PID}.zip"])
 tzf.close()
 
 print("\n[11] rejections happen before anything is packed")
@@ -479,9 +486,9 @@ cprev = preview_import_zip(coll)
 check("type", cprev["type"], "collection")
 check("multi", cprev["multi"], True)
 check("elements", cprev["elements"], [
-    {"kind": "location", "id": "packs/location-old-mill.zip",
+    {"kind": "location", "id": f"packs/location-{LOC_ID}.zip",
      "name": "Old Mill", "exists": False},
-    {"kind": "prop", "id": "packs/prop-oak-chair.zip",
+    {"kind": "prop", "id": f"packs/prop-{PID}.zip",
      "name": "Oak Chair", "exists": False},
 ])
 
@@ -507,7 +514,7 @@ check("the location arrived a second time", mill_count(), 2)
 
 print("\n[15] the selection filter picks single entries")
 sel_one = _dispatch_install_selected(
-    coll, selected_ids={"packs/prop-oak-chair.zip"}, overwrite=False)
+    coll, selected_ids={f"packs/prop-{PID}.zip"}, overwrite=False)
 check("one result only", len(sel_one["results"]), 1)
 check("and it is the prop", sel_one["results"][0]["type"], "prop")
 check("no further location was created", mill_count(), 2)
@@ -517,7 +524,7 @@ broken_coll = io.BytesIO()
 src_coll = zipfile.ZipFile(io.BytesIO(coll))
 with zipfile.ZipFile(broken_coll, "w", zipfile.ZIP_DEFLATED) as dst_coll:
     for m in src_coll.namelist():
-        if m == "packs/location-old-mill.zip":
+        if m == f"packs/location-{LOC_ID}.zip":
             continue                       # the entry stays in the manifest
         dst_coll.writestr(m, src_coll.read(m))
 src_coll.close()

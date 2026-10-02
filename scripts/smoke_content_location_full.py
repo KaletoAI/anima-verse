@@ -31,11 +31,13 @@ Seed (all files are dummy bytes, nothing is generated):
     dir, placed in room 1 via add_item_to_room().
 
 Expectations, derived by hand from the seed above:
-  files/model3d/<rel>      — one entry per file under model3d/, so
-                             building_1.glb and selection.json are both there.
-  props/<pid>/<rel>        — the WHOLE prop dir, i.e. model_1.glb AND
-                             sidecar.json (without the sidecar the prop has no
-                             dims on the far side).
+  files/model3d/<rel>      — the resolved model set: every seeded model is
+                             selected, so all 7 files are there, building_1.glb
+                             and selection.json included.
+  props/<pid>/<rel>        — the prop's export set, i.e. model_1.glb (the
+                             newest — only — file of a stem without a
+                             selection) AND sidecar.json (without the sidecar
+                             the prop has no dims on the far side).
   db/items.json            — the referenced world item, character-export shape.
   item_files/<item_id>/bild.png
   manifest.version         == 1 (MANIFEST_VERSION is unchanged — the new keys

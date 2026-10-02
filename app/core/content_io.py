@@ -600,29 +600,46 @@ def export_location_to_zip(location_id: str) -> bytes:
                 zf.write(fp, arcname)
                 file_entries.append(f"gallery/{rel}")
 
-        # 3D models (building + per-room GLBs, sidecars, selection.json). Clones
-        # redirect to their template's store, same as the gallery does.
-        from app.core.location_model3d import _model_dir, _owner_id
+        # 3D models: what the stores RESOLVE for the building and every room
+        # (selected tiers + sidecars + lattices + selection.json), never the
+        # gallery history. The stems come from the rooms, not from the file
+        # names — a purely numeric room id makes "room_<id>.glb" and
+        # "room_<id>_<ts>.glb" ambiguous. Clones redirect to their template's
+        # store, same as the gallery does.
+        from app.core.location_model3d import _model_dir, _owner_id, _stem
+        from app.core.model_store import export_files as model_export_files
         model_dir = _model_dir(_owner_id(canonical_id))
         model3d_count = 0
         if model_dir.exists():
-            for fp in sorted(model_dir.rglob("*")):
-                if fp.is_file():
-                    zf.write(fp, f"files/model3d/{fp.relative_to(model_dir).as_posix()}")
-                    model3d_count += 1
+            stems = [_stem()] + [
+                _stem(str(room.get("id") or ""))
+                for room in (loc.get("rooms") or [])
+                if isinstance(room, dict) and room.get("id")]
+            sel_path = model_dir / "selection.json"
+            try:
+                sel = json.loads(sel_path.read_text(encoding="utf-8")) if sel_path.exists() else {}
+            except (OSError, ValueError):
+                sel = {}
+            if isinstance(sel, dict):
+                stems += [str(k) for k in sel]
+            for fp in model_export_files(model_dir, stems):
+                zf.write(fp, f"files/model3d/{fp.relative_to(model_dir).as_posix()}")
+                model3d_count += 1
 
         # Referenced props travel as a dependency — a placement without its prop
         # renders as "missing" forever (room_recipe.py:395).
+        # Same file set as a single prop export (props.export_files).
         from app.core.props import _prop_dir
+        from app.core.props import export_files as prop_export_files
         prop_ids = _referenced_prop_ids(loc)
         bundled_props: List[str] = []
         for pid in prop_ids:
             d = _prop_dir(pid)
-            if not d or not d.is_dir():
+            files = prop_export_files(pid) if d else []
+            if not files:
                 continue
-            for fp in sorted(d.rglob("*")):
-                if fp.is_file():
-                    zf.write(fp, f"props/{pid}/{fp.relative_to(d).as_posix()}")
+            for fp in files:
+                zf.write(fp, f"props/{pid}/{fp.relative_to(d).as_posix()}")
             bundled_props.append(pid)
 
         # Room items (rooms[].items[].item_id) — same embed shape as character ZIPs.
@@ -1061,6 +1078,7 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     model_prefix = "files/model3d/"
     model_dir: Optional[Path] = None
     model3d_files = 0
+    written_models: List[Path] = []
     for member in zf.namelist():
         if not member.startswith(model_prefix):
             continue
@@ -1074,7 +1092,9 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
         target = model_dir / (f"{head}/{new_base}" if head else new_base)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(zf.read(member))
+        written_models.append(target)
         model3d_files += 1
+    _reanchor_surfaces(written_models)
 
     # selection.json names the ACTIVE file per stem ({stem: {tier: filename}}) —
     # both sides carry old room ids and have to follow the rename, or the
@@ -1128,6 +1148,7 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
             target = dest / safe
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(zf.read(member))
+        _reanchor_surfaces(dest.iterdir())
         # A pack authored before 2026-08-25 carries the size, subject, ground
         # offset and markers on the PROP record, which nothing reads any more.
         # The boot migration ran long before this import, so the sidecar is
@@ -1187,15 +1208,29 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
 # Props
 # ---------------------------------------------------------------------------
 
+def _reanchor_surfaces(paths: Any) -> None:
+    """Re-bind the baked surface lattice of every imported model file to the
+    file as it now lies on disk (new mtime, maybe a new name) — see
+    :func:`model_surface.reanchor_imported`."""
+    from app.core.model3d import MODEL_EXTS
+    from app.core.model_surface import reanchor_imported
+    for p in paths:
+        p = Path(p)
+        if p.is_file() and p.suffix.lower() in MODEL_EXTS:
+            reanchor_imported(p)
+
+
 def export_prop_to_zip(prop_id: str) -> bytes:
     """Export ONE prop of the active world as a ZIP.
 
     A prop is a pure file entity (``props/<prop_id>/``, no DB row), so the
-    export is the whole directory under ``files/`` plus the manifest: the
-    master ``sidecar.json``, every mesh with its own sidecar, the selection
-    and the source render.
+    export is its file set under ``files/`` plus the manifest — exactly what
+    :func:`props.export_files` names (master record, the meshes the gallery
+    resolves with their companions, the source images), never the gallery
+    history or the refine backups. Download, location pack and marketplace
+    all carry this one set.
     """
-    from app.core.props import _prop_dir, get_prop, safe_prop_id
+    from app.core.props import _prop_dir, export_files, get_prop, safe_prop_id
 
     pid = safe_prop_id(prop_id)
     if not pid:
@@ -1210,9 +1245,7 @@ def export_prop_to_zip(prop_id: str) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         files: List[str] = []
-        for fp in sorted(src.rglob("*")):
-            if not fp.is_file():
-                continue
+        for fp in export_files(pid):
             rel = fp.relative_to(src).as_posix()
             zf.write(fp, f"files/{rel}")
             files.append(rel)
@@ -1297,6 +1330,7 @@ def import_prop_from_zip(
             target = dst / rel
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(blob)
+        _reanchor_surfaces(dst.iterdir())
         count = len(payload)
     finally:
         zf.close()
@@ -1706,8 +1740,9 @@ def export_collection_to_zip(name: str, entries: List[Dict[str, str]]) -> bytes:
 
     ``entries`` is ``[{"type": ..., "id": ...}]``. Each entry is exported
     through :func:`export_zip_for` and stored as ``packs/<slug>.zip``; the
-    slug is ``<type>-<name>`` and a repeated slug is numbered (``-2``, ``-3``)
-    instead of overwriting its predecessor.
+    slug is ``<type>-<entity id>`` (the display name only for ``states``,
+    which has no id) and a repeated slug is numbered (``-2``, ``-3``) instead
+    of overwriting its predecessor.
 
     The manifest is the format the installer already consumes
     (``content_packs._install_collection``, ``scripts/make_collection_pack.py``)::
@@ -1738,7 +1773,9 @@ def export_collection_to_zip(name: str, entries: List[Dict[str, str]]) -> bytes:
             raise ValueError(f"{pack_type} {entity_id!r} produced an unreadable pack: {e}")
         label = _pack_display_name(sub_manifest, pack_type, entity_id)
 
-        slug = f"{_pack_slug(pack_type)}-{_pack_slug(label)}"
+        # Named after the ENTITY ID, like a published pack: two props may
+        # share a display name, never an id.
+        slug = f"{_pack_slug(pack_type)}-{_pack_slug(entity_id or label)}"
         candidate, n = slug, 1
         while f"packs/{candidate}.zip" in used:
             n += 1

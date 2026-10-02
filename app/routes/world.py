@@ -2158,7 +2158,8 @@ def _prop_mount_classify_sync(data: Any) -> Dict[str, Any]:
 @router.get("/props/{prop_id}/export")
 def export_prop_route(prop_id: str,
                       _: Dict[str, Any] = Depends(require_admin)) -> StreamingResponse:
-    """Streams a single-prop ZIP (the whole props/<prop_id>/ directory)."""
+    """Streams a single-prop ZIP — the prop's export set
+    (``props.export_files``), the same one the marketplace publishes."""
     from app.core.content_io import export_prop_to_zip
     from app.core.props import safe_prop_id
     try:

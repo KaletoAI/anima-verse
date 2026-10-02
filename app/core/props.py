@@ -199,7 +199,9 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from app.core.game_time import (current_season_tokens, sanitize_season_tags,
                                 season_tags_active)
 from app.core.log import get_logger
-from app.core.model_store import (DEFAULT_TIER, ModelGallery, normalize_tier,
+from app.core.model_store import (DEFAULT_TIER, ModelGallery, companion_files,
+                                  export_files as store_export_files,
+                                  normalize_tier,
                                   read_sidecar as read_model_sidecar,
                                   write_sidecar as write_model_sidecar)
 from app.core.model_validate import (MeshNotShrinkable, glb_bounds,
@@ -3008,6 +3010,49 @@ def model_gallery(prop_id: str, variant: Any = None) -> Optional[ModelGallery]:
         return None
     stem = _stem_of(prop_id, variant)
     return ModelGallery(d, stem, (".glb",)) if stem else None
+
+
+def export_files(prop_id: str) -> List[Path]:
+    """Every file a COPY of this prop needs — the one export set of a prop,
+    whether it goes to disk, into a location pack or onto a marketplace.
+
+    The master record, then per variant (ALL of them — a variant that is out
+    of season today is still part of the object) what its readers resolve:
+    the tier meshes the gallery serves with their sidecars and lattices
+    (:func:`model_store.export_files`), each mesh's areas sidecar, the FULL
+    file a LOW mesh inherits its areas from (``inherits_from`` — read while it
+    exists, so it has to travel even when it is no longer selected), and the
+    source image of every view. What no reader asks for stays behind: the
+    gallery history, the refine backups in ``raw/``, leftovers like
+    ``scene_asset/``. ``[]`` for an unknown prop."""
+    pid = safe_prop_id(prop_id)
+    d = _prop_dir(pid) if pid else None
+    meta = read_sidecar(pid) if pid else {}
+    if not d or not d.is_dir() or not meta:
+        return []
+    entries = _variant_list(meta)
+    out: Dict[Path, None] = {d / "sidecar.json": None}
+    for f in store_export_files(d, [e["stem"] for e in entries], (".glb",)):
+        out[f] = None
+    for i, entry in enumerate(entries):
+        g = ModelGallery(d, entry["stem"], (".glb",))
+        for mesh in g.tiers().values():
+            meshes = [mesh]
+            # Followed exactly as ``_file_areas_owner`` follows it.
+            parent = str(read_model_sidecar(mesh).get(INHERITS_FROM_KEY) or "")
+            if parent and mesh.with_name(parent).exists():
+                meshes.append(mesh.with_name(parent))
+            for m in meshes:
+                for f in companion_files(m):
+                    out[f] = None
+                areas = areas_sidecar_path(m)
+                if areas and areas.exists():
+                    out[areas] = None
+        for view in VIEWS:
+            img = source_path(pid, i, view=view)
+            if img:
+                out[img] = None
+    return sorted(out)
 
 
 def model_path(prop_id: str, tier: str = "",

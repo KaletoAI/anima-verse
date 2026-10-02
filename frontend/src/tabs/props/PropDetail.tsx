@@ -1014,8 +1014,9 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 : `${t('Re-render the source image from the target variant’s description (the prop’s name as fallback) and mesh it as ANOTHER model variant of this prop — the existing variants stay untouched. At the limit the run lands in the last variant.')} ${t('Maximum active variants:')} ${variantMax}`}>
               🧊 {pending ? t('Generating…') : t('Regenerate')}
             </button>
-            {/* The whole props/<id>/ folder travels: sidecar, meshes,
-                selection and source render. */}
+            {/* The prop's export set travels (props.export_files): sidecar,
+                the meshes the gallery serves, selection and source renders —
+                the same ZIP the marketplace publishes. */}
             <ExportButton
               endpoint={`/world/props/${encodeURIComponent(prop.id)}/export`}
               filename={`prop_${prop.id}.zip`}

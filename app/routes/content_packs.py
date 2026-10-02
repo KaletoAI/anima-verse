@@ -1302,15 +1302,16 @@ def _pack_content_hash(zip_bytes: bytes) -> str:
     return h.hexdigest()
 
 
-def _slug_for_pack(name: str, fallback: str) -> str:
-    """Filename-safe slug for a published pack, with a fallback source name.
+def _slug_for_pack(primary: str, fallback: str) -> str:
+    """Filename-safe slug for a published pack: ``primary`` is the entity id,
+    ``fallback`` (the display name) only names a pack without one (states).
 
     Delegation only — the ONE slug rule lives in `content_io._pack_slug`. Both
     write into the same `packs/<slug>.zip` namespace (publish here, sub-packs
     in the collection builder), so a second rule would let the two drift.
     """
     from app.core.content_io import _pack_slug
-    return _pack_slug(name or fallback)
+    return _pack_slug(primary or fallback)
 
 
 @router.post("/publish")
@@ -1362,7 +1363,9 @@ async def publish_pack(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"repo prep failed: {e}")
 
     # 3. Place ZIP + sidecar JSON side by side under packs/
-    slug = _slug_for_pack(name, entity_id or pack_type)
+    # The ENTITY ID names the pack (two props may share a display name, never
+    # an id); only `states`, which has no id, falls back to the name.
+    slug = _slug_for_pack(entity_id, name or pack_type)
     packs_dir = repo_dir / "packs"
     packs_dir.mkdir(parents=True, exist_ok=True)
     zip_path = packs_dir / f"{slug}.zip"
