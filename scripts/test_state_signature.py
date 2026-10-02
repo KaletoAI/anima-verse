@@ -116,9 +116,10 @@ def main() -> None:
 
         # -- cache GC --------------------------------------------------------
         check("GC: reachable base keeps state variant",
-              _entry_valid(f"{neutral}-sdeadbeef", None, set(), {neutral}))
+              _entry_valid(f"{neutral}-sdeadbeef", None, set(), lambda: {neutral}))
         check("GC: unreachable base drops state variant",
-              not _entry_valid("f00dfeedf00d-sdeadbeef", None, set(), {neutral}))
+              not _entry_valid("f00dfeedf00d-sdeadbeef", None, set(),
+                               lambda: {neutral}))
     finally:
         prompt_filters.collect_image_modifiers = orig
 

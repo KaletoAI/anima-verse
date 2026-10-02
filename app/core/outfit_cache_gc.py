@@ -7,7 +7,10 @@ Two caches key on the SAME signature (``model_refs.current_outfit_state``):
   ``tpose_back`` / ``tpose_left`` / ``tpose_right`` (legacy:
   ``tpose_animal``);
 * ``characters/<name>/model3d/`` — ``<sig>.glb|fbx`` plus ``<sig>.json`` and,
-  for FBX, ``<sig>.png``.
+  for FBX, ``<sig>.png``; the reduced tiers (``low/<sig>.*``) and the
+  untouched originals (``raw/<sig>.*``) belong to the same entry. A group
+  whose top-level model is gone can never be served — it is stale whatever
+  its manifest says, and its leftovers go with a purge.
 
 Entries go stale when an outfit piece is deleted, or when the signature rule
 changes (37f6328 collapsed covered pieces onto one signature). The hard part
@@ -32,10 +35,13 @@ So there are two ways to judge a cache entry, in this order:
    number before anything is deleted — it regenerates on the next wear.
 
 The worn combination is never reported stale, whatever the rules say.
+The reachable set is only enumerated when an entry WITHOUT a manifest exists
+— with every entry carrying one, the cartesian product is never built.
 """
 
+import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set
 
 from app.core.log import get_logger
 
@@ -48,6 +54,11 @@ MAX_REACHABLE_COMBOS = 5_000_000
 #: parses as kind "tpose" with a mangled signature.
 REF_PREFIXES = ("tpose_animal_", "tpose_back_", "tpose_left_", "tpose_right_",
                 "tpose_", "pose_")
+#: The shape of a mesh cache key: ``model_refs.outfit_signature`` (md5[:12])
+#: plus the optional state suffix ``STATE_SIG_SEP`` + ``state_fingerprint``
+#: (md5[:8]). Only a stem of this shape is ever handed to the purger, whose
+#: argument goes into a glob.
+_MESH_SIG_RE = re.compile(r"[0-9a-f]{12}(-s[0-9a-f]{8})?")
 
 
 def reachable_signatures(character_name: str) -> Set[str]:
@@ -132,9 +143,10 @@ def _inventory_ids(character_name: str) -> Set[str]:
 
 
 def _entry_valid(signature: str, manifest: Optional[Dict[str, Any]],
-                 owned: Set[str], reachable: Set[str],
+                 owned: Set[str], reachable: Callable[[], Set[str]],
                  character_name: str = "") -> bool:
-    """The rule of this module, for one cache entry.
+    """The rule of this module, for one cache entry. ``reachable`` is called
+    only for an entry without a manifest (it may enumerate millions).
 
     State variants (``<base>-s<fp>``, model_refs.STATE_SIG_SEP) are judged
     by their outfit base: the state fingerprint is not reconstructible from
@@ -148,7 +160,7 @@ def _entry_valid(signature: str, manifest: Optional[Dict[str, Any]],
             return False
         return _sign(manifest["pieces"], manifest["items"],
                      character_name) == base
-    return base in reachable
+    return base in reachable()
 
 
 def _ref_files(character_name: str) -> Dict[str, List[Path]]:
@@ -170,17 +182,37 @@ def _ref_files(character_name: str) -> Dict[str, List[Path]]:
 
 
 def _mesh_files(character_name: str) -> Dict[str, List[Path]]:
-    """signature → its mesh files (model + sidecar + texture)."""
-    from app.core.model3d import MODEL_EXTS
+    """signature → its mesh files (model + sidecar + texture), including the
+    reduced tiers (``low/``) and the raw backups (``raw/``) of the same
+    signature — exactly what ``model3d._purge_combination`` removes."""
+    from app.blender.refine import RAW_DIR_NAME
+    from app.core.model3d import FULL_TIER, MODEL_EXTS, MODEL_TIERS
     from app.models.character import get_character_dir
     out: Dict[str, List[Path]] = {}
     d = get_character_dir(character_name) / "model3d"
     if not d.exists():
         return out
-    for p in sorted(d.iterdir()):
-        if p.is_file() and p.suffix.lower() in MODEL_EXTS + (".json", ".png"):
-            out.setdefault(p.stem, []).append(p)
+    keep = MODEL_EXTS + (".json", ".png", ".jpg", ".jpeg")
+    subdirs = [d / t for t in MODEL_TIERS if t != FULL_TIER] + [d / RAW_DIR_NAME]
+    for folder in [d] + subdirs:
+        if not folder.is_dir():
+            continue
+        any_suffix = folder.name == RAW_DIR_NAME    # the purger takes raw/<sig>.*
+        for p in sorted(folder.iterdir()):
+            if p.is_file() and (any_suffix or p.suffix.lower() in keep):
+                out.setdefault(p.stem, []).append(p)
     return out
+
+
+def _has_top_model(signature: str, files: Iterable[Path]) -> bool:
+    """True when the group has a top-level model file — the only one
+    ``model3d.find_model3d`` serves."""
+    from app.core.model3d import MODEL_EXTS
+    for p in files:
+        if (p.stem == signature and p.suffix.lower() in MODEL_EXTS
+                and p.parent.name == "model3d"):
+            return True
+    return False
 
 
 def _worn_signature(character_name: str) -> str:
@@ -219,7 +251,16 @@ def verify_cache(character_name: str) -> Dict[str, Any]:
     sidecar. Raises ValueError when the reachable set is refused (see
     ``reachable_signatures``).
     """
-    reachable = reachable_signatures(character_name)
+    memo: List[Set[str]] = []
+
+    def reachable() -> Set[str]:
+        # Lazy: a ValueError (too many combinations) surfaces only when an
+        # entry without a manifest really needs the set.
+        if not memo:
+            memo.append(reachable_signatures(character_name))
+        return memo[0]
+
+    from app.core.model3d import _stored_manifest
     owned = _inventory_ids(character_name)
     worn = _worn_signature(character_name)
 
@@ -234,7 +275,17 @@ def verify_cache(character_name: str) -> Dict[str, Any]:
             if signature and signature == worn:
                 valid += 1
                 continue
-            manifest = read_manifest(_sidecar_of(files) or Path("/nonexistent"))
+            if key == "meshes":
+                # A lone low/raw leftover can never be served: stale.
+                if not _has_top_model(signature, files):
+                    stale_bytes += _bytes_of(files)
+                    if signature not in stale:
+                        stale.append(signature)
+                    continue
+                # Own sidecar, else the T-pose sidecar of the same signature.
+                manifest = _stored_manifest(character_name, signature)
+            else:
+                manifest = read_manifest(_sidecar_of(files) or Path("/nonexistent"))
             if _entry_valid(signature, manifest, owned, reachable,
                             character_name):
                 valid += 1
@@ -266,19 +317,43 @@ def purge_stale(character_name: str,
     skipped = len(wanted - allowed)
     deleted = 0
     freed = 0
-    for files_of in (_ref_files, _mesh_files):
-        for signature, files in files_of(character_name).items():
-            if signature not in wanted or signature not in allowed:
-                continue
-            for p in files:
-                try:
-                    size = p.stat().st_size
-                    p.unlink()
-                    deleted += 1
-                    freed += size
-                except OSError as e:
-                    logger.warning("Cache GC %s: %s not removed: %s",
-                                   character_name, p.name, e)
+    for signature, files in _mesh_files(character_name).items():
+        if signature not in wanted or signature not in allowed:
+            continue
+        if not _MESH_SIG_RE.fullmatch(signature):
+            logger.warning("Cache GC %s: %r is no signature, not purged",
+                           character_name, signature)
+            continue
+        # Through the ONE purger of a combination (model, sidecar, texture,
+        # tiers, raw backup); counted from the list gathered before.
+        sizes = {}
+        for p in files:
+            try:
+                sizes[p] = p.stat().st_size
+            except OSError:
+                pass
+        from app.core.model3d import _purge_combination, get_model3d_dir
+        try:
+            _purge_combination(get_model3d_dir(character_name), signature)
+        except OSError as e:
+            logger.warning("Cache GC %s: %s not fully removed: %s",
+                           character_name, signature, e)
+        for p, size in sizes.items():
+            if not p.exists():
+                deleted += 1
+                freed += size
+    for signature, files in _ref_files(character_name).items():
+        if signature not in wanted or signature not in allowed:
+            continue
+        for p in files:
+            try:
+                size = p.stat().st_size
+                p.unlink()
+                deleted += 1
+                freed += size
+            except OSError as e:
+                logger.warning("Cache GC %s: %s not removed: %s",
+                               character_name, p.name, e)
     logger.info("Cache GC %s: %d file(s) deleted, %.1f MB freed, %d signature(s) "
                 "skipped (no longer stale)", character_name, deleted,
                 freed / 1e6, skipped)
