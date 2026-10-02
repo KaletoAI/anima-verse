@@ -167,6 +167,9 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
         {variants.map((v) => {
           const isSelected = v.index === selected
           const isBusy = generating.includes(v.index)
+          // A delete renumbers every variant behind this one, so a run there
+          // blocks it too (server: variant_delete_blocked).
+          const behindBusy = !isBusy && generating.some((g) => g > v.index)
           // Does this variant render right now? Computed HERE, not read off
           // the record: the chips may hold an unsaved tag, and a badge that
           // still answered from the last load would contradict the chip the
@@ -286,14 +289,16 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                 <button
                   type="button"
                   className={`ga-btn ga-btn-sm${armedDel === v.index ? ' ga-btn-danger' : ''}`}
-                  disabled={busy || isBusy || variants.length < 2}
+                  disabled={busy || isBusy || behindBusy || variants.length < 2}
                   onClick={() => {
                     if (armedDel === v.index) remove(v.index)
                     else setArmedDel(v.index)
                   }}
                   title={isBusy
                     ? t('This variant is generating right now — the run is about to write the very files a delete would remove.')
-                    : variants.length < 2
+                    : behindBusy
+                      ? t('A variant after this one is generating — a delete would renumber it under the running job.')
+                      : variants.length < 2
                       ? t('A prop always keeps one variant.')
                       : t('Delete this variant with all its stored meshes.')}
                 >

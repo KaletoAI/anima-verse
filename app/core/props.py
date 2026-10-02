@@ -4214,9 +4214,10 @@ def delete_variant(prop_id: str, variant: int) -> bool:
     source-image law); a freed stem is handed out again, and an inherited
     picture would silently become the next variant's re-mesh input.
 
-    Refused as well while THIS variant is generating: the run is about to write
-    the very files the delete removes, and a deletion renumbers every variant
-    behind it — the job would land in a stranger's slot."""
+    Refused as well while THIS variant or any variant BEHIND it is generating
+    (:func:`variant_delete_blocked`): the run is about to write the very files
+    the delete removes, and a deletion renumbers every variant behind it — a
+    job addressed by index would land in a stranger's slot."""
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
@@ -4228,7 +4229,7 @@ def delete_variant(prop_id: str, variant: int) -> bool:
         return False
     if not 0 <= i < len(entries) or len(entries) <= 1:
         return False
-    if variant_generating(pid, i):
+    if variant_delete_blocked(pid, i):
         return False
     g = model_gallery(pid, i)
     if g:
@@ -5793,6 +5794,21 @@ def variant_generating(prop_id: str, variant: Any) -> bool:
     except (TypeError, ValueError):
         return False
     return idx in pending_variants(pid).get(pid, [])
+
+
+def variant_delete_blocked(prop_id: str, variant: Any) -> bool:
+    """Would deleting this variant pull the ground from under a running job?
+    True while it OR any variant behind it is generating: a delete renumbers
+    every variant behind the gap, and a job finishes by its store index — a
+    run of variant 2 would write its record into what used to be variant 3
+    (live finding 2026-09-05, ``pine-tree``). The variants IN FRONT keep
+    their index, so their jobs never block."""
+    pid = safe_prop_id(prop_id)
+    try:
+        idx = int(variant)
+    except (TypeError, ValueError):
+        return False
+    return any(j >= idx for j in pending_variants(pid).get(pid, []))
 
 
 # ── Generation chain: prompt → txt2img source image → img2mesh GLB ───────

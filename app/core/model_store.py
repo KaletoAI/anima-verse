@@ -26,11 +26,13 @@ a store whose files were dropped in by hand still serves.
 """
 import hashlib
 import json
+import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from app.core.keyed_lock import keyed_lock
 from app.core.model3d import MODEL_EXTS
 
 # Named resolution tiers, in FALLBACK ORDER: a consumer that asks for a tier
@@ -40,6 +42,9 @@ TIERS = ("full", "low")
 DEFAULT_TIER = "full"
 
 SEL_FILE = "selection.json"
+# keyed_lock namespace of a selection read-modify-write — keyed by the
+# DIRECTORY, because every stem of a directory shares the one selection file.
+SEL_LOCK = "model_selection"
 # Selection sentinel: the admin explicitly chose NO model for this stem —
 # nothing is rendered instead of falling back to the newest file (a 404 on
 # the meta route is the normal no-model state).
@@ -97,6 +102,12 @@ class ModelGallery:
     composition asks the same gallery a dozen questions in a row, and one
     prop placement should not cost a dozen reads. Instances are therefore
     SHORT-LIVED by contract — every store builds one per call.
+
+    The memo serves READS only. Every WRITE of the selection goes through
+    :meth:`_update_selection`: a fresh read under the directory's lock. A
+    generation job holds its gallery for minutes, and a write from its stale
+    memo used to put back a stem that a variant delete had removed meanwhile
+    (and drop whatever another stem had selected in between).
     """
 
     def __init__(self, directory: Path, stem: str,
@@ -187,10 +198,27 @@ class ModelGallery:
         return out
 
     def _write_all(self, sel: Dict[str, Dict[str, str]]) -> None:
+        """Atomic replace — a concurrent reader sees the old or the new file,
+        never a half-written one (which would read back as "no selection" and
+        fall through to the newest file)."""
         self._sel = None
         self.dir.mkdir(parents=True, exist_ok=True)
-        (self.dir / SEL_FILE).write_text(
-            json.dumps(sel, indent=2, ensure_ascii=False), encoding="utf-8")
+        target = self.dir / SEL_FILE
+        tmp = target.with_name(f".{SEL_FILE}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(sel, indent=2, ensure_ascii=False),
+                       encoding="utf-8")
+        os.replace(tmp, target)
+
+    def _update_selection(
+            self, change: Callable[[Dict[str, Dict[str, str]]], bool]) -> None:
+        """The ONE read-modify-write of ``selection.json``: under the
+        directory's lock, from a FRESH read (never the memo), written only
+        when ``change`` reports that it changed something."""
+        with keyed_lock(SEL_LOCK, str(self.dir.resolve())):
+            self._sel = None
+            sel = self._read_all()
+            if change(sel):
+                self._write_all(sel)
 
     def selection(self) -> Dict[str, str]:
         """``{tier: filename}`` of THIS stem (values may be ``__none__``)."""
@@ -225,22 +253,23 @@ class ModelGallery:
         False when a non-empty file does not belong to the stem or is
         missing."""
         tier = normalize_tier(tier) or DEFAULT_TIER
-        sel = self._read_all()
-        entry = dict(sel.get(self.stem) or {})
-        if not filename:
-            # EVERY tier persists the sentinel (user finding 2026-08-20):
-            # dropping the entry made a deselected ``low`` indistinguishable
-            # from a never-built one, so the auto-LOD demand rebuilt and
-            # re-selected it on the next payload — the deselection never
-            # stuck. With the sentinel the tier is DECLINED: resolution falls
-            # through to the full model and the demand stays quiet.
-            entry[tier] = SEL_NONE
-        else:
-            if not self.file(filename):
-                return False
-            entry[tier] = filename
-        sel[self.stem] = entry
-        self._write_all(sel)
+        if filename and not self.file(filename):
+            return False
+        # EVERY tier persists the sentinel on an empty filename (user finding
+        # 2026-08-20): dropping the entry made a deselected ``low``
+        # indistinguishable from a never-built one, so the auto-LOD demand
+        # rebuilt and re-selected it on the next payload — the deselection
+        # never stuck. With the sentinel the tier is DECLINED: resolution
+        # falls through to the full model and the demand stays quiet.
+        value = filename or SEL_NONE
+
+        def change(sel: Dict[str, Dict[str, str]]) -> bool:
+            entry = dict(sel.get(self.stem) or {})
+            entry[tier] = value
+            sel[self.stem] = entry
+            return True
+
+        self._update_selection(change)
         return True
 
     def find(self, tier: str = "", *, fallback: bool = True) -> Optional[Path]:
@@ -308,9 +337,8 @@ class ModelGallery:
         exist (a deleted prop model variant). ``select('')`` cannot do it: on
         the default tier it writes the ``__none__`` sentinel, which is a
         statement about a subject that is still there."""
-        sel = self._read_all()
-        if sel.pop(self.stem, None) is not None:
-            self._write_all(sel)
+        self._update_selection(
+            lambda sel: sel.pop(self.stem, None) is not None)
 
     def delete(self, filename: str = "") -> bool:
         """Remove ONE stored file (+ its sidecar and its baked surface) or ALL
@@ -341,19 +369,22 @@ class ModelGallery:
             if lattice.exists():
                 lattice.unlink()
             removed = True
-        sel = self._read_all()
-        entry = dict(sel.get(self.stem) or {})
-        changed = False
-        for t, name in list(entry.items()):
-            if not name or name == SEL_NONE or (self.dir / name).exists():
-                continue
-            remaining = self.files()
-            if t == DEFAULT_TIER and remaining:
-                entry[t] = remaining[0].name
-            else:
-                entry.pop(t, None)
-            changed = True
-        if changed:
-            sel[self.stem] = entry
-            self._write_all(sel)
+
+        def change(sel: Dict[str, Dict[str, str]]) -> bool:
+            entry = dict(sel.get(self.stem) or {})
+            changed = False
+            for t, name in list(entry.items()):
+                if not name or name == SEL_NONE or (self.dir / name).exists():
+                    continue
+                remaining = self.files()
+                if t == DEFAULT_TIER and remaining:
+                    entry[t] = remaining[0].name
+                else:
+                    entry.pop(t, None)
+                changed = True
+            if changed:
+                sel[self.stem] = entry
+            return changed
+
+        self._update_selection(change)
         return removed

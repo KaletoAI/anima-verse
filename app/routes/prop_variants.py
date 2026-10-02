@@ -288,13 +288,14 @@ async def prop_variant_active(prop_id: str, index: int,
 @router.delete("/props/{prop_id}/variants/{index}")
 def prop_variant_delete(prop_id: str, index: int) -> Dict[str, Any]:
     """Remove one variant WITH its stored meshes. Refused for the last
-    remaining variant, and while THIS variant is generating."""
-    from app.core.props import delete_variant, variant_generating
+    remaining variant, and while this variant or one behind it is generating
+    (the delete renumbers those)."""
+    from app.core.props import delete_variant, variant_delete_blocked
     _variant(prop_id, index)
-    if variant_generating(prop_id, index):
+    if variant_delete_blocked(prop_id, index):
         raise HTTPException(
             status_code=409,
-            detail="This variant is generating right now")
+            detail="This variant or one after it is generating right now")
     if not delete_variant(prop_id, index):
         raise HTTPException(status_code=409,
                             detail="A prop needs at least one variant")
