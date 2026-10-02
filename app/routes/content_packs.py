@@ -1278,6 +1278,30 @@ def _export_zip_for(pack_type: str, entity_id: str) -> bytes:
     return export_zip_for(pack_type, entity_id)
 
 
+def _pack_content_hash(zip_bytes: bytes) -> str:
+    """SHA-256 over what a pack CONTAINS: member names and bytes, with the
+    manifest's ``exported_at`` left out. Every export stamps the moment it was
+    made, so the ZIP checksum changes on every publish even when nothing else
+    did — this hash is what tells "unchanged" apart."""
+    import zipfile as _zip
+    h = hashlib.sha256()
+    with _zip.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        for name in sorted(zf.namelist()):
+            data = zf.read(name)
+            if name == "manifest.json":
+                try:
+                    manifest = json.loads(data)
+                except ValueError:
+                    manifest = None
+                if isinstance(manifest, dict):
+                    manifest.pop("exported_at", None)
+                    data = json.dumps(manifest, sort_keys=True,
+                                      ensure_ascii=False).encode("utf-8")
+            h.update(name.encode("utf-8") + b"\0")
+            h.update(hashlib.sha256(data).digest())
+    return h.hexdigest()
+
+
 def _slug_for_pack(name: str, fallback: str) -> str:
     """Filename-safe slug for a published pack, with a fallback source name.
 
@@ -1343,17 +1367,41 @@ async def publish_pack(request: Request) -> Dict[str, Any]:
     packs_dir.mkdir(parents=True, exist_ok=True)
     zip_path = packs_dir / f"{slug}.zip"
     sidecar_path = packs_dir / f"{slug}.json"
+    content_sha = _pack_content_hash(zip_bytes)
+    pack_id = f"{pack_type}-{slug}"
+
+    # Same content and same catalog text as what is already published → no
+    # commit at all (the fresh ZIP differs from the stored one by its export
+    # stamp alone, so git would always see a change).
+    try:
+        previous = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        previous = {}
+    if (isinstance(previous, dict)
+            and previous.get("content_sha256") == content_sha
+            and previous.get("name") == name
+            and previous.get("description") == description
+            and (previous.get("tags") or []) == tags
+            and zip_path.exists()):
+        logger.info("publish: nothing changed for %s", pack_id)
+        return {
+            "status": "no_change",
+            "pack_id": pack_id,
+            "message": "Pack content identical to what's already in the catalog.",
+        }
+
     zip_path.write_bytes(zip_bytes)
     sha = hashlib.sha256(zip_bytes).hexdigest()
 
     sidecar = {
-        "id": f"{pack_type}-{slug}",
+        "id": pack_id,
         "type": pack_type,
         "name": name,
         "slug": slug,
         "tags": tags,
         "description": description,
         "checksum_sha256": sha,
+        "content_sha256": content_sha,
         "size_bytes": len(zip_bytes),
         "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
@@ -1369,10 +1417,10 @@ async def publish_pack(request: Request) -> Dict[str, Any]:
             _run_git(repo_dir, "commit", "-m", commit_msg)
         except RuntimeError as e:
             if "nothing to commit" in str(e):
-                logger.info("publish: nothing changed for %s", entry["id"])
+                logger.info("publish: nothing changed for %s", pack_id)
                 return {
                     "status": "no_change",
-                    "pack_id": entry["id"],
+                    "pack_id": pack_id,
                     "message": "Pack content identical to what's already in the catalog.",
                 }
             raise
