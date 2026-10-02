@@ -398,6 +398,12 @@ Deinstallation = Ordner löschen + Reload (R7).
 Inhalt nie kollidieren. NSFW- und andere private Pakete werden ausschließlich so
 verteilt — nie in diesem SFW-Repo.
 
+Veröffentlichen: ein fertiges Paket-ZIP geht mit
+`./.venv/bin/python scripts/marketplace_publish.py --world worlds/<welt> --catalog "<Katalog>"
+--type skill_package --zip <paket>.zip --name "<Name>" [--thumb <bild>]` in den Katalog — als
+Release-Asset des Katalog-Repos (`packs-skill_package`), dieselbe Ablage wie der Publish-Button
+(`app/core/marketplace_store.py`). Private Pakete gehören in einen privaten Forgejo-Katalog.
+
 ## Pakete im Repo
 
 | Paket | Skill-IDs | Beschreibung |

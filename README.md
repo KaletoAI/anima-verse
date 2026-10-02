@@ -260,9 +260,14 @@ stops acting autonomously).
 - **Improvements queue:** the Game-Admin collects "this world could use X" findings as typed,
   gated work items and runs them through the task queue.
 - **Content marketplace:** install content and skill packages from one or more configured catalogs
-  (each cached per world, optional auth token). **Installed skill packages** are listed in the same
-  tab and can be removed again — installing runs code, so it asks for an explicit confirmation;
-  removing deletes the folder under `plugins/installed/` and reloads the skills.
+  (each cached per world, optional auth token) — with a thumbnail and the pack's facts (size,
+  variants, rooms, identity …) before you install. A catalog is a Git repository whose RELEASES hold
+  the packs (no git history for binaries): **Publish** on any character, item, location, prop, rule
+  or states block uploads it there, the Props tab publishes a whole selection at once, and
+  `scripts/marketplace_publish.py` publishes a ready-made skill package ZIP. A GitHub catalog must be
+  public; a private one lives on Forgejo with a token. **Installed skill packages** are listed in
+  the same tab and can be removed again — installing runs code, so it asks for an explicit
+  confirmation; removing deletes the folder under `plugins/installed/` and reloads the skills.
 
 ### Platform
 - **Plugin system:** every skill is a self-contained package under the top-level `plugins/`
@@ -468,7 +473,7 @@ worlds/{world}/
   chat_uploads/             # user-uploaded chat images
   ui/                       # per-world UI assets (e.g. the messaging frame)
   tmp/                      # temporary files (TTS audio, story stills, …)
-  .cache/                   # thumbnails and marketplace catalog caches (disposable)
+  .cache/                   # thumbnails, marketplace catalog caches + pack thumbnails (disposable)
 ```
 
 Cross-world, read-only resources shared by every world live under `shared/`: character / expression /
