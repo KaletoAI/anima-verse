@@ -21,7 +21,7 @@ Plus one bug in ``publish_pack``:
   (C) its "nothing to commit" branch read an undefined name (a NameError → 500
       instead of ``no_change``), and the branch could never be reached anyway:
       every export stamps ``exported_at`` into its manifest, so the ZIP always
-      differed. ``_pack_content_hash`` leaves exactly that stamp out.
+      differed. ``marketplace_store.content_hash`` leaves exactly that stamp out.
 
 Hand-derived cases:
 
@@ -131,7 +131,7 @@ def main() -> int:
     check("no job → nothing blocked", got == [False] * 4, str(got))
 
     print("\n[3] the content hash ignores the export stamp only")
-    from app.routes.content_packs import _pack_content_hash
+    from app.core.marketplace_store import content_hash as _pack_content_hash
 
     def pack(stamp: str, body: bytes, name: str = "Tree") -> bytes:
         buf = io.BytesIO()

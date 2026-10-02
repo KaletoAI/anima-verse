@@ -35,7 +35,7 @@ def main() -> None:
     paths.init(world_dir)
     try:
         from app.core import config
-        config.load()
+        config.load(paths.get_config_path())
     except Exception as e:  # config is not needed for reading world content
         print(f"[warn] config.load failed (continuing): {e}")
 

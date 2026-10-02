@@ -1,8 +1,10 @@
-"""Content Marketplace routes — catalog fetch + pack install.
+"""Content Marketplace routes — catalog fetch, pack install, publish.
 
 Multi-catalog: `content_marketplace.catalogs` is a list of
-`{name, url, auth_token, enabled}` entries. Each catalog has its own
-on-disk cache under `worlds/<w>/.cache/content_catalog_<slug>.json`.
+`{name, url, auth_token, enabled}` entries; `url` names a repository whose
+RELEASES hold the packs (`app/core/marketplace_store.py` — no git). Each
+catalog has its own on-disk cache under
+`worlds/<w>/.cache/content_catalog_<slug>.json`.
 
 A pack download streams into a temp file in that same `.cache` dir, capped at
 `content_marketplace.max_pack_mb` — nothing is buffered in RAM.
@@ -14,18 +16,16 @@ catalog and download requests. A bare token is prepended with `token `
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import json
 import os
 import re
-import shutil
-import subprocess
 import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse, urlunparse, quote
 
 import httpx
 from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query,
@@ -34,6 +34,9 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query,
 from app.core import config
 from app.core.auth_dependency import require_admin
 from app.core.log import get_logger
+from app.core.marketplace_store import (CatalogRepo, MarketplaceError,
+                                        PackUpload, content_hash, fetch_catalog)
+from app.core.marketplace_store import publish as store_publish
 from app.core.paths import get_storage_dir
 from app.core.upload_limits import read_upload_capped
 
@@ -172,162 +175,14 @@ def _write_cache(slug: str, data: Dict[str, Any]) -> None:
 
 # ── HTTP ─────────────────────────────────────────────────────────────────
 
-def _derive_listing_endpoints(catalog_url: str) -> Dict[str, str]:
-    """From a repo URL or a legacy index.json URL, derive:
-        listing_url – API URL that returns the packs/ directory listing
-        raw_base    – prefix for direct ZIP downloads (used in clone too)
-        host_kind   – 'github' | 'forgejo'
-        branch      – branch name
-
-    Supported user inputs (all map to the same backend operation):
-        https://github.com/<org>/<repo>
-        https://github.com/<org>/<repo>/tree/<branch>
-        https://github.com/<org>/<repo>/tree/<branch>/packs
-        http(s)://<host>/<owner>/<repo>                          (Forgejo)
-        http(s)://<host>/<owner>/<repo>/src/branch/<branch>      (Forgejo)
-        legacy: …/<branch>/index.json (raw URL)                  (backwards-compat)
-    """
-    parsed = urlparse(catalog_url.strip().rstrip("/"))
-    host = parsed.netloc
-    parts = [p for p in parsed.path.split("/") if p]
-
-    # GitHub repo page: github.com/<org>/<repo>(/tree/<branch>(/<sub>)?)?
-    if host == "github.com" and len(parts) >= 2:
-        org, repo = parts[0], parts[1]
-        branch = "main"
-        if len(parts) >= 4 and parts[2] == "tree":
-            branch = parts[3]
-        return {
-            "host_kind": "github",
-            "branch": branch,
-            "listing_url": f"https://api.github.com/repos/{org}/{repo}/contents/packs?ref={branch}",
-            "raw_base": f"https://raw.githubusercontent.com/{org}/{repo}/{branch}",
-            "clone_url": f"https://github.com/{org}/{repo}.git",
-        }
-
-    # Legacy raw index.json: raw.githubusercontent.com/<org>/<repo>/<branch>/index.json
-    if host == "raw.githubusercontent.com" and len(parts) >= 4:
-        org, repo, branch = parts[0], parts[1], parts[2]
-        return {
-            "host_kind": "github",
-            "branch": branch,
-            "listing_url": f"https://api.github.com/repos/{org}/{repo}/contents/packs?ref={branch}",
-            "raw_base": f"https://raw.githubusercontent.com/{org}/{repo}/{branch}",
-            "clone_url": f"https://github.com/{org}/{repo}.git",
-        }
-
-    # Forgejo repo page: <host>/<owner>/<repo>(/src/branch/<branch>(/<sub>)?)?
-    if len(parts) >= 2 and "src" not in parts[:2] and "raw" not in parts[:2]:
-        owner, repo = parts[0], parts[1]
-        branch = "main"
-        if len(parts) >= 5 and parts[2] == "src" and parts[3] == "branch":
-            branch = parts[4]
-        scheme = parsed.scheme or "http"
-        return {
-            "host_kind": "forgejo",
-            "branch": branch,
-            "listing_url": f"{scheme}://{host}/api/v1/repos/{owner}/{repo}/contents/packs?ref={branch}",
-            "raw_base": f"{scheme}://{host}/{owner}/{repo}/raw/branch/{branch}",
-            "clone_url": f"{scheme}://{host}/{owner}/{repo}.git",
-        }
-
-    # Legacy raw forgejo: <host>/<owner>/<repo>/raw/branch/<branch>/index.json
-    if "raw" in parts and "branch" in parts:
-        i = parts.index("raw")
-        if i >= 2 and len(parts) >= i + 3 and parts[i + 1] == "branch":
-            owner, repo, branch = parts[0], parts[1], parts[i + 2]
-            scheme = parsed.scheme or "http"
-            return {
-                "host_kind": "forgejo",
-                "branch": branch,
-                "listing_url": f"{scheme}://{host}/api/v1/repos/{owner}/{repo}/contents/packs?ref={branch}",
-                "raw_base": f"{scheme}://{host}/{owner}/{repo}/raw/branch/{branch}",
-                "clone_url": f"{scheme}://{host}/{owner}/{repo}.git",
-            }
-
-    raise ValueError(
-        f"cannot derive listing endpoint from URL {catalog_url!r} — "
-        "use the repo page URL (e.g. https://github.com/<org>/<repo>) "
-        "or Forgejo equivalent"
-    )
-
-
-def _decode_content(entry: Dict[str, Any]) -> Optional[bytes]:
-    """GitHub & Forgejo include base64 content inline for small files."""
-    encoding = (entry.get("encoding") or "").lower()
-    content = entry.get("content")
-    if not content or encoding != "base64":
-        return None
-    import base64
+def _catalog_repo(catalog: Dict[str, Any]) -> CatalogRepo:
+    """The catalog's repository on its Git host (releases storage, see
+    ``app/core/marketplace_store.py``). A URL that names no repository is a
+    ``ValueError`` — the routes map it to a 400."""
     try:
-        return base64.b64decode(content)
-    except Exception:
-        return None
-
-
-async def _fetch_catalog(url: str, headers: Dict[str, str], timeout: float = 15.0) -> Dict[str, Any]:
-    """Scan the catalog's `packs/` directory via the host's contents API.
-
-    No central index.json — each pack is described by a sidecar JSON
-    (`<slug>.json`) alongside the `<slug>.zip`. This produces the same
-    shape `{packs: [...]}` that the UI already consumes.
-    """
-    endpoints = _derive_listing_endpoints(url)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
-        resp = await client.get(endpoints["listing_url"])
-        if resp.status_code == 404:
-            raise ValueError("no `packs/` directory found in the catalog repo")
-        resp.raise_for_status()
-        listing = resp.json()
-        if not isinstance(listing, list):
-            raise ValueError(f"unexpected listing shape: {type(listing).__name__}")
-
-        zips: Dict[str, Dict[str, Any]] = {}
-        sidecars: Dict[str, Dict[str, Any]] = {}
-        for entry in listing:
-            if not isinstance(entry, dict) or entry.get("type") != "file":
-                continue
-            name = entry.get("name") or ""
-            if name.lower().endswith(".zip"):
-                zips[name[:-4]] = entry
-            elif name.lower().endswith(".json"):
-                sidecars[name[:-5]] = entry
-
-        # For sidecars whose content was not inlined (over the API's size
-        # limit), fetch them individually. Most are tiny so the inline
-        # content path is the common case.
-        packs: List[Dict[str, Any]] = []
-        for slug, zip_entry in zips.items():
-            side_entry = sidecars.get(slug)
-            meta: Dict[str, Any] = {}
-            if side_entry:
-                data = _decode_content(side_entry)
-                if data is None:
-                    side_url = side_entry.get("download_url") or ""
-                    if side_url:
-                        sr = await client.get(side_url)
-                        if sr.status_code == 200:
-                            data = sr.content
-                if data:
-                    try:
-                        meta = json.loads(data)
-                    except json.JSONDecodeError:
-                        meta = {}
-            pack = {
-                "id": meta.get("id") or f"{meta.get('type', 'pack')}-{slug}",
-                "type": meta.get("type") or "item",
-                "name": meta.get("name") or slug,
-                "slug": slug,
-                "size_bytes": zip_entry.get("size"),
-                "checksum_sha256": meta.get("checksum_sha256") or meta.get("sha256") or "",
-                "tags": meta.get("tags") or [],
-                "description": meta.get("description") or "",
-                "contents": meta.get("contents") or None,
-                "download_url": zip_entry.get("download_url") or f"{endpoints['raw_base']}/packs/{slug}.zip",
-            }
-            packs.append(pack)
-
-    return {"packs": packs, "source_url": url, "host_kind": endpoints["host_kind"]}
+        return CatalogRepo.from_url(catalog["url"], catalog["auth_token"])
+    except MarketplaceError as e:
+        raise ValueError(str(e))
 
 
 def _mb_label(nbytes: int) -> str:
@@ -413,7 +268,6 @@ async def get_catalog(
 
     slug = catalog["_id"]
     url = catalog["url"]
-    headers = _auth_header(catalog["auth_token"])
     ttl = int(_cfg().get("cache_ttl_minutes") or 60)
 
     cached = _read_cache(slug)
@@ -427,7 +281,7 @@ async def get_catalog(
                 cached["configured"] = True
                 return _annotate(cached, stale=True, catalog=catalog)
         _inflight_catalog[url] = time.time()
-        data = await _fetch_catalog(url, headers)
+        data = await asyncio.to_thread(fetch_catalog, _catalog_repo(catalog))
         data["_fetched_at"] = time.time()
         data["source_url"] = url
         data["configured"] = True
@@ -623,7 +477,23 @@ async def install_pack(request: Request) -> Dict[str, Any]:
     headers = _auth_header(catalog["auth_token"])
     tmp: Optional[Path] = None
     try:
-        tmp = await _download(download_url, headers)
+        try:
+            tmp = await _download(download_url, headers)
+        except httpx.HTTPStatusError as e:
+            # A replaced pack's old file is swept once no catalog cache can
+            # still name it — a cache older than that answers 404 here. Load
+            # the catalog fresh ONCE and resolve the pack again.
+            if e.response.status_code != 404:
+                raise
+            fresh = await asyncio.to_thread(fetch_catalog, _catalog_repo(catalog))
+            fresh.update({"_fetched_at": time.time(), "source_url": catalog["url"],
+                          "configured": True})
+            _write_cache(catalog["_id"], fresh)
+            pack = _find_pack(fresh, pack_id)
+            if not pack or not (pack.get("download_url") or "").strip():
+                raise HTTPException(status_code=404,
+                                    detail=f"pack '{pack_id}' is no longer in the catalog")
+            tmp = await _download(pack["download_url"].strip(), headers)
         _verify_checksum(tmp, (pack.get("checksum_sha256") or ""))
         result = _install_downloaded(pack_type, tmp, overwrite=overwrite,
                                      mode=mode, intro=intro)
@@ -633,6 +503,8 @@ async def install_pack(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(e))
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"download failed: {e}")
+    except MarketplaceError as e:
+        raise HTTPException(status_code=502, detail=f"catalog refresh failed: {e}")
     finally:
         if tmp is not None:
             tmp.unlink(missing_ok=True)
@@ -1181,94 +1053,6 @@ def _remove_skill_package_route_sync(body: Any) -> Dict[str, Any]:
 
 # ── Publish ──────────────────────────────────────────────────────────────
 
-# When publishing we need to derive (a) the clone URL of the catalog's repo
-# and (b) the raw-path prefix for download_urls. Both are derived from the
-# catalog_url. We support GitHub-raw and Forgejo-raw patterns; anything
-# else needs manual repo_url configuration (not implemented in v1).
-
-_CLONE_DIR_NAME = "publish_repos"
-
-
-def _publish_root() -> Path:
-    p = get_storage_dir() / ".cache" / _CLONE_DIR_NAME
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
-def _derive_repo_info(catalog_url: str) -> Tuple[str, str, str]:
-    """Thin wrapper around _derive_listing_endpoints for the publish path.
-
-    Returns (clone_url, branch, raw_base) for git operations.
-    """
-    ep = _derive_listing_endpoints(catalog_url)
-    return ep["clone_url"], ep["branch"], ep["raw_base"]
-
-
-def _embed_token_in_url(clone_url: str, token: str) -> str:
-    """Embed the PAT into the clone URL so a non-interactive git push works.
-
-    For both GitHub and Forgejo the pattern `https://<token>@host/...` is
-    accepted; for git the username can be anything when a token is supplied,
-    so we use `git`.
-    """
-    if not token:
-        return clone_url
-    parsed = urlparse(clone_url)
-    if not parsed.scheme.startswith("http"):
-        return clone_url
-    netloc = f"git:{quote(token, safe='')}@{parsed.hostname}"
-    if parsed.port:
-        netloc += f":{parsed.port}"
-    return urlunparse(parsed._replace(netloc=netloc))
-
-
-def _run_git(cwd: Path, *args: str, timeout: int = 60) -> str:
-    """Run git non-interactively. Token must be in the URL, not the prompt."""
-    env = {
-        "GIT_TERMINAL_PROMPT": "0",
-        "PATH": "/usr/bin:/usr/local/bin",
-        "HOME": str(cwd),
-    }
-    try:
-        proc = subprocess.run(
-            ["git", *args], cwd=cwd, env=env, check=True,
-            capture_output=True, text=True, timeout=timeout,
-        )
-        return proc.stdout
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"git {' '.join(args)} failed: {e.stderr.strip() or e.stdout.strip()}")
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"git {' '.join(args)} timed out after {timeout}s")
-
-
-def _ensure_clone(catalog: Dict[str, Any]) -> Tuple[Path, str, str]:
-    """Make sure a local clone exists & is up-to-date. Returns
-    (repo_dir, branch, base_url). Clones on first use, otherwise
-    fetches + resets the working tree to origin's HEAD."""
-    catalog_url = catalog["url"]
-    token = catalog["auth_token"]
-    clone_url, branch, base_url = _derive_repo_info(catalog_url)
-    auth_clone_url = _embed_token_in_url(clone_url, token)
-
-    repo_dir = _publish_root() / catalog["_id"]
-    if not (repo_dir / ".git").exists():
-        repo_dir.parent.mkdir(parents=True, exist_ok=True)
-        if repo_dir.exists():
-            shutil.rmtree(repo_dir)
-        # clone with token; immediately scrub it from the remote URL
-        _run_git(_publish_root(), "clone", "--depth", "1", "--branch", branch,
-                 auth_clone_url, str(repo_dir), timeout=120)
-        _run_git(repo_dir, "remote", "set-url", "origin", clone_url)
-        _run_git(repo_dir, "config", "user.email", "marketplace@anima-verse.local")
-        _run_git(repo_dir, "config", "user.name", "Anima-Verse Publisher")
-    else:
-        # Refresh: fetch + hard reset so prior local commits don't desync.
-        # Token-injected URL is only used for the fetch, not stored.
-        _run_git(repo_dir, "fetch", auth_clone_url, branch, timeout=60)
-        _run_git(repo_dir, "reset", "--hard", "FETCH_HEAD")
-    return repo_dir, branch, base_url
-
-
 # ── Export helpers (mirror local UI export, but in-memory) ────────────────
 
 def _export_zip_for(pack_type: str, entity_id: str) -> bytes:
@@ -1278,49 +1062,132 @@ def _export_zip_for(pack_type: str, entity_id: str) -> bytes:
     return export_zip_for(pack_type, entity_id)
 
 
-def _pack_content_hash(zip_bytes: bytes) -> str:
-    """SHA-256 over what a pack CONTAINS: member names and bytes, with the
-    manifest's ``exported_at`` left out. Every export stamps the moment it was
-    made, so the ZIP checksum changes on every publish even when nothing else
-    did — this hash is what tells "unchanged" apart."""
-    import zipfile as _zip
-    h = hashlib.sha256()
-    with _zip.ZipFile(io.BytesIO(zip_bytes)) as zf:
-        for name in sorted(zf.namelist()):
-            data = zf.read(name)
-            if name == "manifest.json":
-                try:
-                    manifest = json.loads(data)
-                except ValueError:
-                    manifest = None
-                if isinstance(manifest, dict):
-                    manifest.pop("exported_at", None)
-                    data = json.dumps(manifest, sort_keys=True,
-                                      ensure_ascii=False).encode("utf-8")
-            h.update(name.encode("utf-8") + b"\0")
-            h.update(hashlib.sha256(data).digest())
-    return h.hexdigest()
-
-
 def _slug_for_pack(primary: str, fallback: str) -> str:
     """Filename-safe slug for a published pack: ``primary`` is the entity id,
     ``fallback`` (the display name) only names a pack without one (states).
 
-    Delegation only — the ONE slug rule lives in `content_io._pack_slug`. Both
-    write into the same `packs/<slug>.zip` namespace (publish here, sub-packs
-    in the collection builder), so a second rule would let the two drift.
+    Delegation only — the ONE slug rule lives in `content_io._pack_slug`, which
+    the collection builder uses for its sub-pack names too, so a published pack
+    and the same entity inside a collection carry the same slug.
     """
     from app.core.content_io import _pack_slug
     return _pack_slug(primary or fallback)
 
 
+#: A pack at or above this size is published with a warning (decision
+#: 2026-10-02: large packs go public, the admin is told).
+LARGE_PACK_BYTES = 50 * 1024 * 1024
+
+
+def _parse_tags(raw: Any) -> List[str]:
+    if isinstance(raw, str):
+        return [t.strip() for t in raw.split(",") if t.strip()]
+    return [str(t).strip() for t in (raw or []) if str(t).strip()]
+
+
+def _build_upload(pack_type: str, entity_id: str, name: str, description: str,
+                  tags: List[str]) -> Tuple[PackUpload, List[str]]:
+    """Export ONE entity and describe it for the catalog — shared by publish,
+    the publish preview and the bulk job. ``ValueError`` for an entity that
+    cannot be exported."""
+    zip_bytes = _export_zip_for(pack_type, entity_id)
+    slug = _slug_for_pack(entity_id, name or pack_type)
+    import zipfile as _zip
+    with _zip.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        try:
+            manifest = json.loads(zf.read("manifest.json"))
+        except (KeyError, ValueError):
+            manifest = {}
+    entry = {
+        "id": f"{pack_type}-{slug}",
+        "type": pack_type,
+        "slug": slug,
+        "name": name,
+        "description": description,
+        "tags": tags,
+        "content_sha256": content_hash(zip_bytes),
+        "manifest_version": manifest.get("version"),
+        "facts": {},
+    }
+    warnings: List[str] = []
+    size = len(zip_bytes)
+    if size >= LARGE_PACK_BYTES:
+        warnings.append(f"Large pack ({size // (1024 * 1024)} MB) — slow to download.")
+    if size > _max_pack_mb() * 1024 * 1024:
+        warnings.append(
+            f"Larger than this world's install limit ({_max_pack_mb()} MB, "
+            "content_marketplace.max_pack_mb) — installs with that limit refuse it.")
+    upload = PackUpload(entry=entry, zip_bytes=zip_bytes,
+                        checksum_sha256=hashlib.sha256(zip_bytes).hexdigest())
+    return upload, warnings
+
+
+def _publish_body(body: Dict[str, Any]) -> Tuple[str, str, str, str, List[str]]:
+    pack_type = (body.get("pack_type") or "").strip()
+    entity_id = (body.get("entity_id") or "").strip()
+    name = (body.get("name") or "").strip()
+    description = (body.get("description") or "").strip()
+    if pack_type not in SUPPORTED_TYPES:
+        raise HTTPException(status_code=400, detail=f"unsupported pack type: {pack_type!r}")
+    if pack_type != "states" and not entity_id:
+        raise HTTPException(status_code=400, detail="entity_id required")
+    return pack_type, entity_id, name, description, _parse_tags(body.get("tags"))
+
+
+def _publish_catalog(catalog_id: str) -> Tuple[Dict[str, Any], CatalogRepo]:
+    catalog = _resolve_catalog(catalog_id)
+    if not catalog:
+        raise HTTPException(status_code=400, detail="catalog not found")
+    if not (catalog.get("auth_token") or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="This catalog has no auth token — publishing needs one with "
+                   "write access to the repository's releases.")
+    try:
+        return catalog, _catalog_repo(catalog)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/publish/inspect")
+async def inspect_publish(request: Request) -> Dict[str, Any]:
+    """What a publish WOULD upload — built exactly like the publish, nothing
+    leaves the server. Body: ``{pack_type, entity_id, name?, catalog_id?}``.
+    The dialog shows the slug, the size and the warnings before the click."""
+    body = await request.json()
+    pack_type, entity_id, name, description, tags = _publish_body(body)
+    try:
+        upload, warnings = await asyncio.to_thread(
+            _build_upload, pack_type, entity_id, name or entity_id, description, tags)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    catalog = _resolve_catalog((body.get("catalog_id") or "").strip())
+    if catalog:
+        try:
+            limit = _catalog_repo(catalog).host_limit
+        except ValueError:
+            limit = 0
+        if limit and len(upload.zip_bytes) > limit:
+            warnings.append(
+                f"Over the host's per-file limit ({limit // (1024 * 1024)} MB) — "
+                "the publish will be refused.")
+    return {
+        "pack_id": upload.entry["id"],
+        "slug": upload.entry["slug"],
+        "size_bytes": len(upload.zip_bytes),
+        "warnings": warnings,
+        "facts": upload.entry["facts"],
+    }
+
+
 @router.post("/publish")
 async def publish_pack(request: Request) -> Dict[str, Any]:
     """Publish an entity from the current world to one of the configured
-    catalogs.
+    catalogs — as a release asset of the catalog repository plus a new line in
+    that type's index (``app/core/marketplace_store.py``). No git involved.
 
     Body:
-      catalog_id   – which catalog to push to
+      catalog_id   – which catalog to publish to
       pack_type    – character | item | rule | states | location | prop
       entity_id    – id of the thing being exported (ignored for states)
       name         – display name in the catalog
@@ -1328,124 +1195,48 @@ async def publish_pack(request: Request) -> Dict[str, Any]:
       tags         – optional comma-separated string or list
     """
     body = await request.json()
-    catalog_id = (body.get("catalog_id") or "").strip()
-    pack_type = (body.get("pack_type") or "").strip()
-    entity_id = (body.get("entity_id") or "").strip()
-    name = (body.get("name") or "").strip()
-    description = (body.get("description") or "").strip()
-    raw_tags = body.get("tags") or []
-    if isinstance(raw_tags, str):
-        tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
-    else:
-        tags = [str(t).strip() for t in raw_tags if str(t).strip()]
-
-    if pack_type not in SUPPORTED_TYPES:
-        raise HTTPException(status_code=400, detail=f"unsupported pack type: {pack_type!r}")
-    if pack_type != "states" and not entity_id:
-        raise HTTPException(status_code=400, detail="entity_id required")
+    pack_type, entity_id, name, description, tags = _publish_body(body)
     if not name:
         raise HTTPException(status_code=400, detail="name required")
+    catalog, repo = _publish_catalog((body.get("catalog_id") or "").strip())
 
-    catalog = _resolve_catalog(catalog_id)
-    if not catalog:
-        raise HTTPException(status_code=400, detail="catalog not found")
-
-    # 1. Build the ZIP
     try:
-        zip_bytes = _export_zip_for(pack_type, entity_id)
+        upload, warnings = await asyncio.to_thread(
+            _build_upload, pack_type, entity_id, name, description, tags)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    if len(upload.zip_bytes) > repo.host_limit:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Pack is {len(upload.zip_bytes) // (1024 * 1024)} MB — over the "
+                   f"host's per-file limit of {repo.host_limit // (1024 * 1024)} MB.")
 
-    # 2. Clone / refresh the target repo
+    ttl_s = int(_cfg().get("cache_ttl_minutes") or 60) * 60
     try:
-        repo_dir, branch, base_url = _ensure_clone(catalog)
-    except (ValueError, RuntimeError) as e:
-        raise HTTPException(status_code=400, detail=f"repo prep failed: {e}")
+        results = await asyncio.to_thread(
+            store_publish, repo, pack_type, [upload], sweep_age_s=ttl_s)
+    except (MarketplaceError, httpx.HTTPError) as e:
+        raise HTTPException(status_code=502, detail=f"publish failed: {e}")
+    result = results[0]
+    warnings += result.get("warnings") or []
+    if result["status"] == "error":
+        raise HTTPException(status_code=502, detail=f"publish failed: {result['error']}")
 
-    # 3. Place ZIP + sidecar JSON side by side under packs/
-    # The ENTITY ID names the pack (two props may share a display name, never
-    # an id); only `states`, which has no id, falls back to the name.
-    slug = _slug_for_pack(entity_id, name or pack_type)
-    packs_dir = repo_dir / "packs"
-    packs_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = packs_dir / f"{slug}.zip"
-    sidecar_path = packs_dir / f"{slug}.json"
-    content_sha = _pack_content_hash(zip_bytes)
-    pack_id = f"{pack_type}-{slug}"
-
-    # Same content and same catalog text as what is already published → no
-    # commit at all (the fresh ZIP differs from the stored one by its export
-    # stamp alone, so git would always see a change).
-    try:
-        previous = json.loads(sidecar_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        previous = {}
-    if (isinstance(previous, dict)
-            and previous.get("content_sha256") == content_sha
-            and previous.get("name") == name
-            and previous.get("description") == description
-            and (previous.get("tags") or []) == tags
-            and zip_path.exists()):
-        logger.info("publish: nothing changed for %s", pack_id)
-        return {
-            "status": "no_change",
-            "pack_id": pack_id,
-            "message": "Pack content identical to what's already in the catalog.",
-        }
-
-    zip_path.write_bytes(zip_bytes)
-    sha = hashlib.sha256(zip_bytes).hexdigest()
-
-    sidecar = {
-        "id": pack_id,
-        "type": pack_type,
-        "name": name,
-        "slug": slug,
-        "tags": tags,
-        "description": description,
-        "checksum_sha256": sha,
-        "content_sha256": content_sha,
-        "size_bytes": len(zip_bytes),
-        "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    sidecar_path.write_text(
-        json.dumps(sidecar, ensure_ascii=False, indent=2), encoding="utf-8",
-    )
-
-    # 5. Commit + push (token re-embedded only for the push call)
-    try:
-        _run_git(repo_dir, "add", "-A")
-        commit_msg = f"Publish {pack_type}: {name}"
-        try:
-            _run_git(repo_dir, "commit", "-m", commit_msg)
-        except RuntimeError as e:
-            if "nothing to commit" in str(e):
-                logger.info("publish: nothing changed for %s", pack_id)
-                return {
-                    "status": "no_change",
-                    "pack_id": pack_id,
-                    "message": "Pack content identical to what's already in the catalog.",
-                }
-            raise
-        clone_url, _, _ = _derive_repo_info(catalog["url"])
-        auth_push_url = _embed_token_in_url(clone_url, catalog["auth_token"])
-        _run_git(repo_dir, "push", auth_push_url, f"HEAD:{branch}", timeout=120)
-    except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=f"git push failed: {e}")
-
-    # 6. Bust local catalog cache so the next /catalog fetch sees the new pack.
-    cp = _cache_path(catalog["_id"])
-    if cp.exists():
-        cp.unlink()
-
-    download_url = f"{base_url}/packs/{slug}.zip"
-    logger.info("publish: %s → %s (%d bytes)", sidecar["id"], catalog["name"], len(zip_bytes))
+    # The next /catalog fetch must see the new pack.
+    _cache_path(catalog["_id"]).unlink(missing_ok=True)
+    if result["status"] == "no_change":
+        return {"status": "no_change", "pack_id": result["pack_id"],
+                "message": "Pack content identical to what's already in the catalog.",
+                "warnings": warnings}
+    logger.info("publish: %s → %s (%d bytes)", result["pack_id"], catalog["name"],
+                len(upload.zip_bytes))
     return {
         "status": "success",
-        "pack_id": sidecar["id"],
+        "pack_id": result["pack_id"],
         "pack_name": name,
         "catalog_id": catalog["_id"],
         "catalog_name": catalog["name"],
-        "download_url": download_url,
-        "size_bytes": len(zip_bytes),
+        "download_url": result.get("download_url"),
+        "size_bytes": len(upload.zip_bytes),
+        "warnings": warnings,
     }

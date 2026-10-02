@@ -268,6 +268,16 @@ check("user GET /admin/settings/image-routing/effective",
 check("admin GET /admin/settings/image-routing/effective",
       status("GET", "/admin/settings/image-routing/effective", "admin"), 200)
 check("user GET /logs/llm", status("GET", "/logs/llm", "user"), 403)
+# The marketplace is admin-only as a whole (`/api/content` prefix) — the
+# publish preview and publish write to an external host with the catalog token.
+check("anon POST /api/content/publish/inspect",
+      status("POST", "/api/content/publish/inspect"), 401)
+check("user POST /api/content/publish/inspect",
+      status("POST", "/api/content/publish/inspect", "user"), 403)
+check("user POST /api/content/publish",
+      status("POST", "/api/content/publish", "user"), 403)
+check("admin POST /api/content/publish/inspect",
+      status("POST", "/api/content/publish/inspect", "admin"), 200)
 check("user DELETE /world/locations/x",
       status("DELETE", "/world/locations/x", "user"), 403)
 check("user GET /world/locations", status("GET", "/world/locations", "user"), 200)

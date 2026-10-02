@@ -1323,14 +1323,14 @@ SECTIONS = {
                         "type": "str",
                         "label": "Catalog URL",
                         "default": "",
-                        "description": "Catalog repo URL — pack list is discovered via the hosting API. Examples: https://github.com/<org>/<repo> — or Forgejo: http(s)://<host>/<owner>/<repo>. Legacy raw …/index.json URLs are still accepted for backwards compatibility.",
+                        "description": "Catalog repository URL — the packs live in the repository's RELEASES (one 'packs-<type>' release per pack type, managed by Publish). Examples: https://github.com/<org>/<repo> (must be public) — or Forgejo: http(s)://<host>/<owner>/<repo> (may be private, with a token).",
                     },
                     "auth_token": {
                         "type": "password",
                         "label": "Auth token",
                         "sensitive": True,
                         "default": "",
-                        "description": "Optional. PAT for private repos. Bare token gets prepended with 'token '; an already-prefixed value (e.g. 'Bearer xyz') is used as-is. Sent to both catalog and download URLs of this entry.",
+                        "description": "Needed to PUBLISH (write access to the repository's releases; GitHub fine-grained PAT: Contents read and write) and to read a private Forgejo catalog. Bare token gets prepended with 'token '; an already-prefixed value (e.g. 'Bearer xyz') is used as-is.",
                     },
                     "enabled": {
                         "type": "bool",
