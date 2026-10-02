@@ -2348,6 +2348,19 @@
     "wrong kind of backend": "falsche Backend-Art",
     "matches no backend": "passt auf kein Backend",
     "{n} images will be generated one after another.": "{n} Bilder werden nacheinander erzeugt.",
-    "The routing resolves no backend for location images right now — pick a backend or fill the chain (Admin → Media Generation → Routing).": "Das Routing findet für Ortsbilder gerade kein Backend — ein Backend wählen oder die Kette füllen (Admin → Media Generation → Routing)."
+    "The routing resolves no backend for location images right now — pick a backend or fill the chain (Admin → Media Generation → Routing).": "Das Routing findet für Ortsbilder gerade kein Backend — ein Backend wählen oder die Kette füllen (Admin → Media Generation → Routing).",
+    "Variants": "Varianten",
+    "Storeys": "Stockwerke",
+    "Images": "Bilder",
+    "3D model": "3D-Modell",
+    "Species": "Spezies",
+    "Gender": "Geschlecht",
+    "Age": "Alter",
+    "yes": "ja",
+    "no": "nein",
+    "Published": "Veröffentlicht",
+    "Checking pack…": "Pack wird geprüft …",
+    "Breed / Subspecies": "Rasse / Unterart",
+    "Height (cm)": "Größe (cm)"
   }
 }

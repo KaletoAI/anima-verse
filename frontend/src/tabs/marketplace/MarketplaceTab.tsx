@@ -7,6 +7,8 @@ import { CollectionBuilder } from './CollectionBuilder'
 import { InstalledSkillPackages } from './InstalledSkillPackages'
 import { useEnlarge } from '../../components/ZoomButton'
 import { ListPane } from '../../components/ListPane'
+import { PackFacts, type PackFactsMap } from '../../lib/PackFacts'
+import { PACK_TYPE_ICON } from '../../lib/packTypeIcon'
 
 /**
  * Marketplace — browse an online catalog of content packs and install them
@@ -30,6 +32,12 @@ interface Pack {
   tags?: string[]
   description?: string
   preview_image?: string
+  // Served through /api/content/thumbnail (the server holds the catalog token).
+  thumbnail_url?: string
+  facts?: PackFactsMap
+  // Labels of template-driven facts (characters) — see PackFacts.
+  fact_labels?: Record<string, string>
+  published_at?: string
   download_url?: string
   checksum_sha256?: string
   // Only present on type=collection — the index.json may include a contents
@@ -381,11 +389,24 @@ export function MarketplaceTab() {
                       setMode('full'); setIntro(''); setOverwrite(false)
                     }}
                   >
-                    <span className="ga-list-row-main">
-                      <strong>{p.name || p.id}</strong>
-                      <span className="ga-list-row-sub">
-                        — {PRETTY_TYPE[p.type] || p.type}
-                        {p.size_bytes ? ` · ${formatBytes(p.size_bytes)}` : ''}
+                    <span style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
+                      {p.thumbnail_url ? (
+                        <img src={p.thumbnail_url} alt="" loading="lazy"
+                          style={{ width: 40, height: 40, objectFit: 'contain', borderRadius: 4,
+                            background: '#0d1117', flex: 'none' }} />
+                      ) : (
+                        <span aria-hidden style={{ width: 40, height: 40, flex: 'none', display: 'flex',
+                          alignItems: 'center', justifyContent: 'center', fontSize: 20,
+                          background: '#161b22', borderRadius: 4 }}>
+                          {PACK_TYPE_ICON[p.type] || '📦'}
+                        </span>
+                      )}
+                      <span className="ga-list-row-main">
+                        <strong>{p.name || p.id}</strong>
+                        <span className="ga-list-row-sub">
+                          — {PRETTY_TYPE[p.type] || p.type}
+                          {p.size_bytes ? ` · ${formatBytes(p.size_bytes)}` : ''}
+                        </span>
                       </span>
                     </span>
                   </button>
@@ -424,7 +445,11 @@ export function MarketplaceTab() {
               {PRETTY_TYPE[selected.type] || selected.type}
               {selected.version ? ` · v${selected.version}` : ''}
               {selected.size_bytes ? ` · ${formatBytes(selected.size_bytes)}` : ''}
+              {selected.published_at
+                ? ` · ${t('Published')} ${new Date(selected.published_at).toLocaleDateString()}`
+                : ''}
             </div>
+            <PackFacts facts={selected.facts} labels={selected.fact_labels} />
             {selected.tags && selected.tags.length > 0 ? (
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 12 }}>
                 {selected.tags.map((tg) => (

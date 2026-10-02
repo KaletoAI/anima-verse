@@ -4,6 +4,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { downloadBlob } from '../lib/download'
 import { useToast } from '../lib/Toast'
 import { summarizeImport, type ImportResult } from '../lib/importNotes'
+import { PackFacts, type PackFactsMap } from '../lib/PackFacts'
 
 export interface ExportOption {
   key: string
@@ -202,11 +203,27 @@ export function ExportButton({
   )
 }
 
+interface PublishInspect {
+  pack_id: string
+  slug: string
+  size_bytes: number
+  warnings: string[]
+  facts: PackFactsMap
+  fact_labels: Record<string, string>
+  thumbnail: string
+}
+
+function formatMB(n: number): string {
+  return n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`
+}
+
 /**
  * Publish-to-catalog button. Opens a small inline form that asks for the
- * target catalog + name + tags + description, then POSTs to /api/content/publish.
- * The backend clones the catalog's git repo, drops the ZIP, updates index.json,
- * and pushes — so this is a heavyweight call (network + git).
+ * target catalog + name + tags + description and shows what would go up
+ * (POST /api/content/publish/inspect: thumbnail, size, facts, warnings), then
+ * POSTs to /api/content/publish. The backend uploads the ZIP (and thumbnail)
+ * as release assets of the catalog repository and rewrites that type's index
+ * — a network call that can take a while for a large pack.
  */
 export function PublishButton({
   packType,
@@ -228,8 +245,34 @@ export function PublishButton({
   const [tags, setTags] = useState<string>('')
   const [description, setDescription] = useState<string>('')
   const [busy, setBusy] = useState(false)
+  const [inspect, setInspect] = useState<PublishInspect | null>(null)
+  const [inspectError, setInspectError] = useState('')
   const btnRef = useRef<HTMLButtonElement | null>(null)
   const close = useCallback(() => setOpen(false), [])
+
+  // What would be published — rebuilt whenever the dialog opens or the
+  // catalog changes (the host's per-file limit depends on the catalog).
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setInspect(null)
+    setInspectError('')
+    fetch('/api/content/publish/inspect', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pack_type: packType, entity_id: entityId || '', name, catalog_id: catalogId }),
+    })
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`)
+        return d as PublishInspect
+      })
+      .then((d) => { if (!cancelled) setInspect(d) })
+      .catch((e) => { if (!cancelled) setInspectError((e as Error).message) })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, catalogId, packType, entityId])
 
   useEffect(() => {
     if (!open) return
@@ -281,6 +324,7 @@ export function PublishButton({
       } else {
         toast(t('Published as {id}').replace('{id}', result.pack_id || name))
       }
+      for (const w of (result.warnings || []) as string[]) toast(w, 'error')
       setOpen(false)
       setTags('')
       setDescription('')
@@ -303,7 +347,30 @@ export function PublishButton({
       </button>
       {open ? (
         <AnchoredPopover anchorRef={btnRef} onClose={close} minWidth={280} padding={12}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 340 }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+              {inspect?.thumbnail ? (
+                <img src={inspect.thumbnail} alt=""
+                  style={{ width: 72, height: 72, objectFit: 'contain', borderRadius: 4, background: '#0d1117' }} />
+              ) : null}
+              <div style={{ fontSize: 12, minWidth: 0 }}>
+                {inspect ? (
+                  <>
+                    <div style={{ color: '#8b949e' }}>
+                      {inspect.pack_id} · {formatMB(inspect.size_bytes)}
+                    </div>
+                    <PackFacts facts={inspect.facts} labels={inspect.fact_labels} />
+                  </>
+                ) : inspectError ? (
+                  <div style={{ color: '#f85149' }}>{inspectError}</div>
+                ) : (
+                  <div style={{ color: '#8b949e' }}>{t('Checking pack…')}</div>
+                )}
+              </div>
+            </div>
+            {(inspect?.warnings || []).map((w) => (
+              <div key={w} style={{ fontSize: 11, color: '#d29922' }}>⚠ {w}</div>
+            ))}
             <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
               {t('Catalog')}
               <select
