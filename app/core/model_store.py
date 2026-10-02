@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 from app.core.keyed_lock import keyed_lock
+from app.core.log import get_logger
 from app.core.model3d import MODEL_EXTS
 
 # Named resolution tiers, in FALLBACK ORDER: a consumer that asks for a tier
@@ -49,6 +50,8 @@ SEL_LOCK = "model_selection"
 # nothing is rendered instead of falling back to the newest file (a 404 on
 # the meta route is the normal no-model state).
 SEL_NONE = "__none__"
+
+logger = get_logger("model_store")
 
 
 def normalize_tier(tier: Any) -> str:
@@ -254,7 +257,15 @@ class ModelGallery:
             self, change: Callable[[Dict[str, Dict[str, str]]], bool]) -> None:
         """The ONE read-modify-write of ``selection.json``: under the
         directory's lock, from a FRESH read (never the memo), written only
-        when ``change`` reports that it changed something."""
+        when ``change`` reports that it changed something.
+
+        A directory that is gone belongs to a deleted subject (a mesh job's
+        final select after ``delete_prop`` / ``delete_location``): nothing is
+        written, so its ``selection.json`` cannot recreate the directory."""
+        if not self.dir.is_dir():
+            logger.info("model selection: %s is gone (subject deleted), "
+                        "not written", self.dir)
+            return
         with keyed_lock(SEL_LOCK, str(self.dir.resolve())):
             self._sel = None
             sel = self._read_all()
@@ -385,7 +396,14 @@ class ModelGallery:
         """Remove ONE stored file (+ its sidecar and its baked surface) or ALL
         files of the stem. A selection pointing at a removed file moves to the
         newest remaining one (default tier) or is dropped (any other tier) —
-        never dangling."""
+        never dangling.
+
+        The untouched original a refine kept in ``raw/<file>`` goes too: left
+        behind, it would block the backup of a later file of the same name
+        (``refine.apply_script`` backs up only once). A raw file that cannot
+        be removed is logged, never a failed delete. All file work happens
+        BEFORE the selection lock is taken."""
+        from app.blender.refine import raw_backup_path
         from app.core.model_surface import surface_path
         removed = False
         if filename:
@@ -404,12 +422,23 @@ class ModelGallery:
             # ever collect it, and a lattice outliving its mesh would be read
             # back the moment a new file happened to land under the same name.
             lattice = surface_path(p)
+            raw = raw_backup_path(p)
             p.unlink()
             if sidecar.exists():
                 sidecar.unlink()
             if lattice.exists():
                 lattice.unlink()
+            try:
+                raw.unlink(missing_ok=True)
+            except OSError as e:
+                logger.warning("model gallery: raw backup %s not removed: %s",
+                               raw, e)
             removed = True
+        if targets:
+            try:
+                raw_backup_path(targets[0]).parent.rmdir()   # only when empty
+            except OSError:
+                pass
 
         def change(sel: Dict[str, Dict[str, str]]) -> bool:
             entry = dict(sel.get(self.stem) or {})
