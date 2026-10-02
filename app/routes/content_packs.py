@@ -235,8 +235,43 @@ def _is_fresh(cached: Dict[str, Any], ttl_minutes: int) -> bool:
     return (time.time() - float(fetched)) < (ttl_minutes * 60)
 
 
+def _thumbnail_url(catalog_id: str, pack: Dict[str, Any]) -> str:
+    """Where the browser loads a pack's thumbnail: through THIS server, which
+    holds the catalog token (it never reaches the browser) and caches the file.
+    The asset name rides along so the URL changes with the content — the
+    browser may then keep it for a day without ever showing an old picture."""
+    thumb = pack.get("thumbnail") or {}
+    if not thumb.get("download_url"):
+        return ""
+    from urllib.parse import urlencode
+    return "/api/content/thumbnail?" + urlencode(
+        {"catalog_id": catalog_id, "pack_id": pack.get("id") or "",
+         "asset": thumb.get("asset") or ""})
+
+
+def _sweep_thumb_cache(catalog_id: str, packs: List[Dict[str, Any]]) -> None:
+    """Drop cached thumbnails no pack of the freshly fetched catalog names —
+    every republish with new content leaves one behind otherwise."""
+    d = _cache_dir() / "content_thumbs" / catalog_id
+    if not d.is_dir():
+        return
+    keep = {str((p.get("thumbnail") or {}).get("asset") or "") for p in packs}
+    for f in d.iterdir():
+        if f.is_file() and f.name not in keep:
+            f.unlink(missing_ok=True)
+
+
 def _annotate(cached: Dict[str, Any], stale: bool, catalog: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(cached)
+    packs = []
+    for pack in cached.get("packs") or []:
+        pack = dict(pack)
+        url = _thumbnail_url(catalog["_id"], pack)
+        if url:
+            pack["thumbnail_url"] = url
+            pack["preview_image"] = url
+        packs.append(pack)
+    out["packs"] = packs
     out["stale"] = stale
     out["catalog_id"] = catalog["_id"]
     out["catalog_name"] = catalog["name"]
@@ -286,6 +321,7 @@ async def get_catalog(
         data["source_url"] = url
         data["configured"] = True
         _write_cache(slug, data)
+        _sweep_thumb_cache(slug, data.get("packs") or [])
         return _annotate(data, stale=False, catalog=catalog)
     except Exception as e:
         logger.warning("catalog fetch failed (%s): %s", slug, e)
@@ -1074,6 +1110,50 @@ def _slug_for_pack(primary: str, fallback: str) -> str:
     return _pack_slug(primary or fallback)
 
 
+#: A cached thumbnail larger than this is not one we wrote.
+THUMB_MAX_BYTES = 2 * 1024 * 1024
+_THUMB_ASSET = re.compile(r"^[a-z0-9][a-z0-9._-]*\.webp$")
+
+
+@router.get("/thumbnail")
+async def pack_thumbnail(request: Request, catalog_id: str = Query(""),
+                         pack_id: str = Query(""), asset: str = Query("")):
+    """A pack's catalog thumbnail, fetched with the catalog's token once and
+    then served from ``.cache/content_thumbs/<catalog>/``. The asset name is
+    content-addressed, so a cached file never goes stale; ``asset`` in the
+    query only makes the URL change with it (see :func:`_thumbnail_url`) — the
+    file served is always the one the cached catalog names."""
+    from app.core.http_files import etag_file_response
+    catalog = _resolve_catalog(catalog_id)
+    cached = _read_cache(catalog["_id"]) if catalog else None
+    pack = _find_pack(cached or {}, pack_id) if cached else None
+    thumb = (pack or {}).get("thumbnail") or {}
+    name, url = str(thumb.get("asset") or ""), str(thumb.get("download_url") or "")
+    if not catalog or not _THUMB_ASSET.match(name) or not url:
+        raise HTTPException(status_code=404, detail="no thumbnail")
+    base = (_cache_dir() / "content_thumbs").resolve()
+    target = (base / catalog["_id"] / name).resolve()
+    if base not in target.parents:
+        raise HTTPException(status_code=404, detail="no thumbnail")
+    if not target.is_file():
+        try:
+            tmp = await _download(url, _auth_header(catalog["auth_token"]),
+                                  max_bytes=THUMB_MAX_BYTES)
+        except httpx.HTTPStatusError as e:
+            # Swept upstream while this server's catalog cache still names it.
+            code = 404 if e.response.status_code == 404 else 502
+            raise HTTPException(status_code=code, detail=f"thumbnail download failed: {e}")
+        except (httpx.HTTPError, ValueError) as e:
+            raise HTTPException(status_code=502, detail=f"thumbnail download failed: {e}")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(tmp, target)
+        finally:
+            tmp.unlink(missing_ok=True)
+    return etag_file_response(target, request, "image/webp",
+                              cache_control="private, max-age=86400")
+
+
 #: A pack at or above this size is published with a warning (decision
 #: 2026-10-02: large packs go public, the admin is told).
 LARGE_PACK_BYTES = 50 * 1024 * 1024
@@ -1090,7 +1170,9 @@ def _build_upload(pack_type: str, entity_id: str, name: str, description: str,
     """Export ONE entity and describe it for the catalog — shared by publish,
     the publish preview and the bulk job. ``ValueError`` for an entity that
     cannot be exported."""
+    from app.core.content_io import make_thumbnail, pack_preview
     zip_bytes = _export_zip_for(pack_type, entity_id)
+    preview = pack_preview(pack_type, entity_id)
     slug = _slug_for_pack(entity_id, name or pack_type)
     import zipfile as _zip
     with _zip.ZipFile(io.BytesIO(zip_bytes)) as zf:
@@ -1107,8 +1189,10 @@ def _build_upload(pack_type: str, entity_id: str, name: str, description: str,
         "tags": tags,
         "content_sha256": content_hash(zip_bytes),
         "manifest_version": manifest.get("version"),
-        "facts": {},
+        "facts": preview["facts"],
     }
+    if preview.get("labels"):
+        entry["fact_labels"] = preview["labels"]
     warnings: List[str] = []
     size = len(zip_bytes)
     if size >= LARGE_PACK_BYTES:
@@ -1118,7 +1202,8 @@ def _build_upload(pack_type: str, entity_id: str, name: str, description: str,
             f"Larger than this world's install limit ({_max_pack_mb()} MB, "
             "content_marketplace.max_pack_mb) — installs with that limit refuse it.")
     upload = PackUpload(entry=entry, zip_bytes=zip_bytes,
-                        checksum_sha256=hashlib.sha256(zip_bytes).hexdigest())
+                        checksum_sha256=hashlib.sha256(zip_bytes).hexdigest(),
+                        thumb_bytes=make_thumbnail(preview["image"]))
     return upload, warnings
 
 
@@ -1171,12 +1256,17 @@ async def inspect_publish(request: Request) -> Dict[str, Any]:
             warnings.append(
                 f"Over the host's per-file limit ({limit // (1024 * 1024)} MB) — "
                 "the publish will be refused.")
+    import base64
     return {
         "pack_id": upload.entry["id"],
         "slug": upload.entry["slug"],
         "size_bytes": len(upload.zip_bytes),
         "warnings": warnings,
         "facts": upload.entry["facts"],
+        "fact_labels": upload.entry.get("fact_labels") or {},
+        "thumbnail": ("data:image/webp;base64,"
+                      + base64.b64encode(upload.thumb_bytes).decode("ascii")
+                      if upload.thumb_bytes else ""),
     }
 
 

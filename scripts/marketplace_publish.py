@@ -12,7 +12,8 @@ Usage:
     ./.venv/bin/python scripts/marketplace_publish.py \\
         --world "worlds/<world>" --catalog "<catalog name>" \\
         --type skill_package --zip ../anima-verse-packs/dist/<pkg>.zip \\
-        --name "<display name>" [--slug <slug>] [--description "..."] [--tags a,b]
+        --name "<display name>" [--slug <slug>] [--description "..."] [--tags a,b] \\
+        [--thumb <picture>]
 
 ``--slug`` defaults to the ZIP's file name without ``.zip``; the pack id is
 ``<type>-<slug>``. Publishing the same content and text again is a no-op.
@@ -36,13 +37,15 @@ def main() -> int:
     ap.add_argument("--slug", default="")
     ap.add_argument("--description", default="")
     ap.add_argument("--tags", default="")
+    ap.add_argument("--thumb", type=Path, default=None,
+                    help="picture for the catalog thumbnail (scaled like a world pack's)")
     args = ap.parse_args()
 
     from app.core import paths
     paths.init(args.world)
     from app.core import config
     config.load(paths.get_config_path())
-    from app.core.content_io import _pack_slug
+    from app.core.content_io import _pack_slug, make_thumbnail
     from app.core.marketplace_store import (CatalogRepo, PackUpload, content_hash,
                                             publish)
 
@@ -66,7 +69,8 @@ def main() -> int:
         print(f"{args.zip.name} is over the host's per-file limit")
         return 1
     result = publish(repo, args.pack_type, [PackUpload(
-        entry=entry, zip_bytes=data, checksum_sha256=hashlib.sha256(data).hexdigest())])[0]
+        entry=entry, zip_bytes=data, checksum_sha256=hashlib.sha256(data).hexdigest(),
+        thumb_bytes=make_thumbnail(args.thumb))])[0]
     print(f"{result['pack_id']}: {result['status']}"
           + (f" — {result.get('error')}" if result["status"] == "error" else "")
           + (f" — {result.get('download_url')}" if result.get("download_url") else ""))

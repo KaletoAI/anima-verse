@@ -342,7 +342,7 @@ class PackUpload:
     thumb_bytes: Optional[bytes] = None
 
 
-_TEXT_KEYS = ("name", "description", "tags", "facts")
+_TEXT_KEYS = ("name", "description", "tags", "facts", "fact_labels")
 
 
 def _unchanged(old: Optional[Dict[str, Any]], new: Dict[str, Any]) -> bool:

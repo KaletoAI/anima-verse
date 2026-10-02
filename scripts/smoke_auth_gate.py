@@ -278,6 +278,10 @@ check("user POST /api/content/publish",
       status("POST", "/api/content/publish", "user"), 403)
 check("admin POST /api/content/publish/inspect",
       status("POST", "/api/content/publish/inspect", "admin"), 200)
+check("anon GET /api/content/thumbnail",
+      status("GET", "/api/content/thumbnail"), 401)
+check("user GET /api/content/thumbnail",
+      status("GET", "/api/content/thumbnail", "user"), 403)
 check("user DELETE /world/locations/x",
       status("DELETE", "/world/locations/x", "user"), 403)
 check("user GET /world/locations", status("GET", "/world/locations", "user"), 200)

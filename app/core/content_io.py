@@ -1718,6 +1718,179 @@ def export_zip_for(pack_type: str, entity_id: str) -> bytes:
     raise ValueError(f"publish not supported for pack type {pack_type!r}")
 
 
+#: Longest edge of a catalog thumbnail (plan-marketplace-props.md D2).
+THUMB_MAX_PX = 384
+
+
+def make_thumbnail(image_path: Optional[Path]) -> Optional[bytes]:
+    """A catalog thumbnail of ``image_path``: longest edge ``THUMB_MAX_PX``,
+    WebP. ``None`` when there is no usable picture."""
+    if not image_path or not Path(image_path).is_file():
+        return None
+    try:
+        from PIL import Image
+        with Image.open(image_path) as im:
+            im = im.convert("RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB")
+            im.thumbnail((THUMB_MAX_PX, THUMB_MAX_PX))
+            buf = io.BytesIO()
+            im.save(buf, "WEBP", quality=80)
+            return buf.getvalue()
+    except (OSError, ValueError, Image.DecompressionBombError) as e:
+        logger.warning("thumbnail of %s failed: %s", image_path, e)
+        return None
+
+
+def _drop_empty(facts: Dict[str, Any]) -> Dict[str, Any]:
+    """Facts nobody filled in are not facts — absent instead of empty."""
+    return {k: v for k, v in facts.items()
+            if v is not None and v != "" and v != [] and v != {}}
+
+
+def _prop_preview(entity_id: str) -> Dict[str, Any]:
+    from app.core import props
+    pid = props.safe_prop_id(entity_id)
+    meta = props.read_sidecar(pid) if pid else {}
+    if not meta:
+        return {"image": None, "facts": {}, "labels": {}}
+    entries = props._variant_list(meta)
+    primary = props.primary_variant(pid)
+    dims = props.variant_dims(meta, primary)
+    # Straight off the gallery: ``model_tiers`` would order a missing distance
+    # mesh, and ``model_path`` falls back to the low file — a preview must
+    # neither start a Blender job nor count the wrong mesh.
+    gallery = props.model_gallery(pid, primary)
+    full = gallery.find("full", fallback=False) if gallery else None
+    facts = {
+        "category": meta.get("category") or "",
+        "mount": meta.get("mount") or "",
+        "slots": len(meta.get("slots") or []) or None,
+        "dims_m": [dims["width_m"], dims["depth_m"], dims["height_m"]],
+        "variants": len(entries),
+        "seasons": sorted({str(x) for e in entries for x in (e.get("seasons") or [])}),
+        "tiers": sorted(gallery.tiers()) if gallery else [],
+        "tris": props._source_triangles(full) or None,
+    }
+    return {"image": props.source_path(pid), "facts": _drop_empty(facts), "labels": {}}
+
+
+def _location_preview(entity_id: str) -> Dict[str, Any]:
+    from app.core.location_model3d import _model_dir, _owner_id
+    from app.core.model_store import ModelGallery
+    from app.core.view_prompts import building_view
+    from app.models.world import (GROUND_ROOM_ID, get_gallery_dir,
+                                  get_gallery_image_rooms, get_gallery_image_types,
+                                  get_location_by_id, is_floor_room,
+                                  list_gallery_images, resolve_location)
+    loc = get_location_by_id(entity_id) or resolve_location(entity_id)
+    if not loc:
+        return {"image": None, "facts": {}, "labels": {}}
+    lid = loc.get("id") or entity_id
+    rooms = [r for r in (loc.get("rooms") or []) if isinstance(r, dict)
+             and r.get("id") != GROUND_ROOM_ID and not is_floor_room(str(r.get("id") or ""))]
+    levels = {int(((r.get("layout") or {}).get("level")) or 0) for r in rooms}
+    gdir = get_gallery_dir(lid)
+    images = list_gallery_images(lid)            # newest first
+    types, room_of = get_gallery_image_types(lid), get_gallery_image_rooms(lid)
+    # The outside front view is what a location looks like from the map; the
+    # newest picture of the location itself next, a room picture last.
+    pick = (next((n for n in images if building_view(types.get(n)) == "front"
+                  and n not in room_of), None)
+            or next((n for n in images if n not in room_of), None)
+            or (images[0] if images else None))
+    items = sum(len(r.get("items") or []) for r in (loc.get("rooms") or [])
+                if isinstance(r, dict))
+    facts = {
+        "rooms": len(rooms),
+        "storeys": len(levels),
+        "images": len(images),
+        "props": len(_referenced_prop_ids(loc)),
+        "items": items,
+        "has_3d": bool(ModelGallery(_model_dir(_owner_id(lid)), "building").tiers()),
+    }
+    return {"image": (gdir / pick) if pick else None, "facts": _drop_empty(facts),
+            "labels": {}}
+
+
+#: A free-text identity field is a fact only while it is short and one line
+#: (a breed is, a personality is not).
+_SHORT_TEXT_FACT = 40
+
+
+def _identity_facts(name: str, profile: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]]:
+    """The character's identity as its OWN template describes it: the
+    ``identity`` section's ``select`` and ``number`` fields, plus ``text``
+    fields with a short one-line value — in template order, with the
+    template's labels (the field list differs per template: an animal has a
+    species and a breed, a human does not). A field that only repeats the
+    character's name is left out — the pack's title already says it."""
+    from app.models.character_template import get_template
+    tmpl = get_template(profile.get("template") or "human-default") or {}
+    section = next((s for s in tmpl.get("sections") or []
+                    if isinstance(s, dict) and s.get("id") == "identity"), {})
+    facts: Dict[str, Any] = {}
+    labels: Dict[str, str] = {}
+    for field in section.get("fields") or []:
+        key, kind = str(field.get("key") or ""), field.get("type")
+        value = profile.get(key)
+        if not key or value in (None, "", [], {}) or value == name:
+            continue
+        if kind == "text":
+            if not isinstance(value, str) or len(value) > _SHORT_TEXT_FACT or "\n" in value:
+                continue
+        elif kind not in ("select", "number"):
+            continue
+        facts[key] = value
+        labels[key] = str(field.get("label") or key)
+    return facts, labels
+
+
+def _character_preview(entity_id: str) -> Dict[str, Any]:
+    from app.core.model3d import find_model3d
+    from app.models.character import (get_character_images_dir,
+                                      get_character_outfits,
+                                      get_character_profile,
+                                      get_character_profile_image)
+    profile = get_character_profile(entity_id) or {}
+    if not profile:
+        return {"image": None, "facts": {}, "labels": {}}
+    name = get_character_profile_image(entity_id, profile=profile)
+    image = (get_character_images_dir(entity_id) / name) if name else None
+    facts, labels = _identity_facts(entity_id, profile)
+    facts["outfits"] = len(get_character_outfits(entity_id) or [])
+    facts["has_3d"] = find_model3d(entity_id) is not None
+    return {"image": image if image and image.is_file() else None,
+            "facts": _drop_empty(facts), "labels": labels}
+
+
+def _item_preview(entity_id: str) -> Dict[str, Any]:
+    from app.models.inventory import get_item, get_item_image_path
+    item = get_item(entity_id) or {}
+    path = get_item_image_path(entity_id) if item else ""
+    facts = {"category": item.get("category") or "",
+             "wearable": bool(item.get("outfit_piece")) if item else None}
+    return {"image": Path(path) if path else None, "facts": _drop_empty(facts),
+            "labels": {}}
+
+
+def pack_preview(pack_type: str, entity_id: str) -> Dict[str, Any]:
+    """The ONE preview dispatcher, beside :func:`export_zip_for`: what the
+    marketplace shows of a pack BEFORE it is installed —
+    ``{"image": Optional[Path], "facts": {...}, "labels": {...}}``. Fact keys
+    of props, locations and items are fixed (the UI labels them); a
+    character's come from its template, so their labels travel along in
+    ``labels``. Types without a picture or facts (rule, states) answer with
+    neither; the catalog then shows the type symbol."""
+    if pack_type == "prop":
+        return _prop_preview(entity_id)
+    if pack_type == "location":
+        return _location_preview(entity_id)
+    if pack_type == "character":
+        return _character_preview(entity_id)
+    if pack_type == "item":
+        return _item_preview(entity_id)
+    return {"image": None, "facts": {}, "labels": {}}
+
+
 def _pack_slug(text: str) -> str:
     """Filename-safe lowercase slug; empty input yields ``"pack"``."""
     base = re.sub(r"[^a-zA-Z0-9._-]+", "-", (text or "").strip()).strip("-_.").lower()
