@@ -138,6 +138,37 @@ def _forget_source(token: str) -> None:
         logger.debug("thumb forget failed (%s): %s", token, exc)
 
 
+def forget_sources(paths) -> int:
+    """Drop every cached thumbnail of the given source files.
+
+    For the delete paths that remove thumbnailed sources (a location gallery,
+    a character's images, an item image): a deleted source is never requested
+    again, so :func:`get_thumbnail` would never drop its entries. Call it
+    BEFORE the files go — the token is computed from the resolved path.
+    One scan of the cache dir; the dir is never created here. Returns how many
+    cache files were removed."""
+    tokens = set()
+    for p in paths:
+        try:
+            tokens.add(_source_token(Path(p).resolve()))
+        except OSError:
+            continue
+    if not tokens:
+        return 0
+    d = get_storage_dir() / ".cache" / "thumbs"
+    removed = 0
+    try:
+        if not d.is_dir():
+            return 0
+        for f in d.iterdir():
+            if f.name.split("_", 1)[0] in tokens:
+                f.unlink(missing_ok=True)
+                removed += 1
+    except OSError as exc:  # a cache that cannot be tidied is not an error
+        logger.debug("thumb forget_sources failed: %s", exc)
+    return removed
+
+
 def _render(src: Path, width: int, out: Path) -> None:
     """Decode ``src``, scale it to at most ``width`` and write ``out``.
 

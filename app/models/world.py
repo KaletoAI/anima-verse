@@ -2467,6 +2467,8 @@ def delete_location(identifier: str) -> bool:
     target the engine then refused; a ``home_location`` pointing nowhere sends
     the auto-sleep down its no-path branch every single time. So every
     reference goes with the place — see :func:`purge_location_references`.
+    Its gallery and building models go too, after the rows and outside the
+    lock — see :func:`_remove_location_media`.
     """
     with world_write_lock:
         locations = list_locations()
@@ -2479,16 +2481,44 @@ def delete_location(identifier: str) -> bool:
         # One explicit DELETE per place, never "everything the snapshot does
         # not mention" — a concurrent writer's fresh location is none of this
         # delete's business.
-        removed = False
-        for tid in target_ids:
-            if delete_location_row(tid):
-                removed = True
-        if removed:
+        removed_ids = {tid for tid in target_ids if delete_location_row(tid)}
+        if removed_ids:
             # AFTER the write: the reference sweep reads the world list to
             # decide what is dangling, so it has to see the place already gone.
-            purge_location_references(target_ids)
-            return True
+            purge_location_references(removed_ids)
+    if not removed_ids:
         return False
+    # The files go OUTSIDE the write lock: an rmtree of a big gallery must not
+    # block every other world write.
+    _remove_location_media(removed_ids)
+    return True
+
+
+def _remove_location_media(location_ids: Set[str]) -> int:
+    """Remove the media a deleted location owned: ``world_gallery/<id>/``
+    (with the cached thumbnails of its images) and ``locations/<id>/`` (the
+    building models). Call only AFTER the DB rows are gone. Uses the raw ids
+    — the row no longer resolves, so ``delete_building_model`` cannot.
+    A legacy gallery keyed by NAME (the ``get_gallery_dir`` fallback) is not
+    found here; it stays behind. Returns how many galleries were removed."""
+    from app.core import media_cleanup, thumbnails
+    storage = get_storage_dir()
+    galleries = 0
+    for lid in sorted(i for i in location_ids if i):
+        if not media_cleanup.safe_key(lid):
+            logger.warning("location media: unsafe id %r, files left alone", lid)
+            continue
+        gdir = storage / "world_gallery" / lid
+        if gdir.is_dir() and not gdir.is_symlink():
+            try:
+                thumbnails.forget_sources(
+                    f for f in gdir.iterdir() if f.is_file())
+            except OSError as e:
+                logger.debug("location media: thumb sweep %s: %s", gdir, e)
+        if media_cleanup.remove_owned_dir(storage / "world_gallery", lid):
+            galleries += 1
+        media_cleanup.remove_owned_dir(storage / "locations", lid)
+    return galleries
 
 
 def cleanup_orphan_location_references() -> Dict[str, int]:
@@ -2667,7 +2697,6 @@ def migrate_transit_places_once() -> Dict[str, int]:
 
 def _migrate_transit_places_locked() -> Dict[str, int]:
     """The body of :func:`migrate_transit_places_once`, under the write lock."""
-    import shutil
     data = _load_world_data()
     locations = data.get("locations", [])
     # ONE pass, so the count and the effect can never disagree: a flagged
@@ -2693,18 +2722,6 @@ def _migrate_transit_places_locked() -> Dict[str, int]:
                        lid or "-", l.get("name") or "",
                        "yes" if has_gallery else "no")
     deleted_galleries = 0
-    for vid in victim_ids:
-        gdir = get_storage_dir() / "world_gallery" / vid
-        if not gdir.is_dir():
-            continue
-        try:
-            shutil.rmtree(gdir)
-            deleted_galleries += 1
-        except OSError as e:
-            # One unreadable directory must never abort the boot — the record
-            # still goes, the files stay behind and are named for a human.
-            logger.warning("transit gallery %s could not be removed: %s",
-                           gdir, e)
     fields_stripped = 0
     for l in survivors:
         for k in _TRANSIT_KEYS:
@@ -2714,8 +2731,11 @@ def _migrate_transit_places_locked() -> Dict[str, int]:
     if victims or fields_stripped:
         # Explicit deletes for the victims, an upsert for the survivors — the
         # snapshot is never handed over as "this is the whole world".
-        for vid in victim_ids:
-            delete_location_row(vid)
+        gone_ids = {vid for vid in victim_ids if delete_location_row(vid)}
+        # Files only AFTER the rows are gone. Boot-only, so the rmtree under
+        # the write lock blocks nobody. A directory that cannot be removed is
+        # logged by the helper and never aborts the boot.
+        deleted_galleries = _remove_location_media(gone_ids)
         if fields_stripped:
             upsert_locations(survivors)
         if victim_ids:
