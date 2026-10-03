@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+"""Smoke: every config section and field has a scope (instance / world).
+
+Usage:  ./.venv/bin/python scripts/smoke_config_scope.py
+
+No server, no world DB. The storage root is a throwaway temp dir (set before
+any app import); the plugin packages are discovered so their config
+subsections are part of the schema (``config_schema.get_schema()`` injects
+them under ``skills``). Nothing under ``worlds/`` or ``instance/`` is read or
+written.
+
+WHY
+
+The server config moves out of the per-world ``config.json`` into an instance
+layer. Which file a value belongs to is decided by its ``scope`` in the
+schema: ``instance`` = the server/host (endpoints, keys, LLM providers, image
+backends, ports), ``world`` = the simulation of one world (chat rules, NPC
+behaviour, calendar). ``mixed`` marks only a node whose children differ.
+``app/core/config_scope.py::scope_of(path)`` answers the question for any
+dotted config path; the recursive split of a config (next task) is built on
+``scope_of`` and ``child_scopes_differ``.
+
+PART 1 — what is checked, and where every expected value comes from
+-------------------------------------------------------------------
+
+0) SELF-TEST of the endpoint-name matcher on hand cases: ``url``,
+   ``webhook_url``, ``api_key``, ``auth_token``, ``endpoint``,
+   ``endpoints_list`` and a ``password``-typed field match; ``enabled``,
+   ``engines``, ``urls_seen`` and ``categories`` do not. A matcher that cannot
+   see a ``url`` would make check C vacuous.
+
+A) Every NON-virtual schema section declares ``scope`` and the value is one
+   of instance/world/mixed. ``llm_simple`` is virtual (a page over
+   ``llm_routing``, no config key of its own) and has no scope.
+   Every explicit ``scope`` anywhere (section, field, sub_array, subsection,
+   plugin field) is one of the three values, and ``mixed`` appears only on a
+   node with children, never on a field.
+
+B) The scope table of the plan (spec § 5, E3, E4, E5), written out by hand:
+     instance: server, providers, llm_retry, llm_routing, lanes, embedding,
+               decision, tts, knowledge, content_marketplace, ui,
+               image_generation (section)
+     world:    chat, thoughts, intents, relationships, social_reactions,
+               random_events, npc, story_engine, game, messaging_frame,
+               game_calendar, game_seasons, memory (section)
+     mixed:    skills
+   plus the four deeper declarations:
+     memory.fields.chat_retention_days        -> instance
+     image_generation.sub_arrays.use_cases    -> world
+     skills.subsections.outfit_change         -> world
+     (plugin) skills.searx.fields.url         -> instance
+   and the rule that no schema section is missing from this table.
+
+C) ENDPOINT RULE (E5): every field of a plugin config subsection whose name
+   is ``url``, ``*_url``, ``api_key``, ``*token*`` or ``endpoint*``, or whose
+   type is ``password``, declares ``scope: instance``. A host address or a key
+   is the server's business even when the package's other settings are
+   world settings. Covers every discovered package — repo, ``installed/`` and
+   the symlinked private packs (whose fix would belong in the packs repo).
+
+D) HAND TABLE for ``scope_of`` — each row derived from the four rules of the
+   plan, not from running the code:
+     server.log_level                -> instance  field, inherits section
+                                                  ``server: instance`` (rule 2)
+     providers                       -> instance  section declaration
+     image_generation                -> mixed     section is instance, but
+                                                  sub_array use_cases is world
+                                                  -> children differ (rule 4)
+     image_generation.backends       -> instance  sub_array without own scope
+                                                  inherits the section
+     image_generation.routing        -> instance  not in the schema (written
+                                                  by the routing page) ->
+                                                  nearest known parent (rule 3)
+     image_generation.use_cases      -> world     own declaration wins (rule 2)
+     image_generation.enabled        -> instance  field inherits section
+     memory                          -> mixed     section world, field
+                                                  chat_retention_days instance
+     memory.max_messages             -> world     field inherits section
+     memory.chat_retention_days      -> instance  own declaration (rule 2)
+     chat.chattiness                 -> world     field inherits section
+     skills                          -> mixed     declared mixed; outfit_change
+                                                  world, searx mixed
+     skills.searx                    -> mixed     plugin subsection without own
+                                                  scope = world (E5), but its
+                                                  field url is instance
+     skills.searx.url                -> instance  own declaration (plugin.yaml)
+     skills.searx.enabled            -> world     field inherits the plugin
+                                                  subsection's E5 default
+     skills.outfit_change.language   -> world     inherits outfit_change: world
+     decision.points                 -> instance  unknown key (page-written),
+                                                  parent decision: instance
+     llm_task_state.disabled_tasks   -> instance  root from EXTRA_ROOTS (read by
+                                                  llm_task_state.py; not in the
+                                                  schema, kept on instance)
+     game_seasons                    -> world     section declaration
+     telegram                        -> None      unknown root (rule 1)
+     llm_lanes_migrated              -> None      unknown root (rule 1)
+   The ``skills.searx*`` rows and ``skills`` itself need the searx package
+   loaded (``skills`` is mixed only through searx.url — without it every
+   skills subsection is world and the section resolves to world, rule 4);
+   when searx is not discoverable those rows are SKIPPED with the reason.
+
+E) ``child_scopes_differ`` on hand cases: memory, image_generation -> True
+   (same reasons as in D); server, image_generation.backends,
+   chat.chattiness, llm_task_state, an unknown root -> False; skills and
+   skills.searx -> True (SKIP without searx). ``scope_of(p) == mixed``
+   exactly when ``child_scopes_differ(p)`` — checked for every row of D.
+"""
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+
+_TMP = tempfile.mkdtemp(prefix="smoke_cfg_scope_")
+os.environ["STORAGE_DIR"] = _TMP
+
+from app.core import paths  # noqa: E402
+
+paths.init(_TMP)
+
+_failures = []
+_skips = []
+_checks = 0
+
+VALID = ("instance", "world", "mixed")
+
+
+def check(cond, msg):
+    global _checks
+    _checks += 1
+    if not cond:
+        _failures.append(msg)
+
+
+def skip(msg):
+    _skips.append(msg)
+
+
+# ---------------------------------------------------------------------------
+# Endpoint-name matcher (part C)
+# ---------------------------------------------------------------------------
+
+def is_endpoint_field(name: str, fdef: dict) -> bool:
+    if isinstance(fdef, dict) and fdef.get("type") == "password":
+        return True
+    return (name == "url" or name.endswith("_url") or name == "api_key"
+            or "token" in name or name.startswith("endpoint"))
+
+
+def self_test():
+    yes = ["url", "webhook_url", "api_key", "auth_token", "endpoint", "endpoints_list"]
+    no = ["enabled", "engines", "urls_seen", "categories"]
+    for n in yes:
+        check(is_endpoint_field(n, {"type": "str"}), f"self-test: {n!r} must match")
+    for n in no:
+        check(not is_endpoint_field(n, {"type": "str"}), f"self-test: {n!r} must not match")
+    check(is_endpoint_field("secret", {"type": "password"}),
+          "self-test: a password-typed field must match")
+
+
+# ---------------------------------------------------------------------------
+# Part A — declarations present and valid
+# ---------------------------------------------------------------------------
+
+def _walk_nodes(node, where, is_field=False):
+    """Yield (where, scope, is_field, has_children) for every schema node."""
+    yield where, node.get("scope"), is_field, bool(
+        node.get("fields") or node.get("sub_arrays") or node.get("subsections"))
+    for fname, fdef in (node.get("fields") or {}).items():
+        if isinstance(fdef, dict):
+            yield from _walk_nodes(fdef, f"{where}.{fname}", is_field=True)
+    for kind in ("sub_arrays", "subsections"):
+        for cname, cdef in (node.get(kind) or {}).items():
+            if isinstance(cdef, dict):
+                yield from _walk_nodes(cdef, f"{where}.{cname}")
+
+
+def part_a(schema):
+    for sname, sdef in schema.items():
+        if sdef.get("virtual"):
+            check("scope" not in sdef, f"A: virtual section {sname} must not declare a scope")
+            continue
+        check(sdef.get("scope") in VALID,
+              f"A: section {sname} has no valid scope (got {sdef.get('scope')!r})")
+        for where, scope, is_field, has_children in _walk_nodes(sdef, sname):
+            if scope is None:
+                continue
+            check(scope in VALID, f"A: {where} has invalid scope {scope!r}")
+            if scope == "mixed":
+                check(not is_field and has_children,
+                      f"A: {where} is 'mixed' but is a field / has no children")
+
+
+# ---------------------------------------------------------------------------
+# Part B — the scope table
+# ---------------------------------------------------------------------------
+
+TABLE_INSTANCE = ["server", "providers", "llm_retry", "llm_routing", "lanes",
+                  "embedding", "decision", "tts", "knowledge",
+                  "content_marketplace", "ui", "image_generation"]
+TABLE_WORLD = ["chat", "thoughts", "intents", "relationships", "social_reactions",
+               "random_events", "npc", "story_engine", "game", "messaging_frame",
+               "game_calendar", "game_seasons", "memory"]
+TABLE_MIXED = ["skills"]
+TABLE_VIRTUAL = ["llm_simple"]
+
+
+def part_b(schema, has_searx):
+    for s in TABLE_INSTANCE:
+        check(schema.get(s, {}).get("scope") == "instance", f"B: section {s} must be instance")
+    for s in TABLE_WORLD:
+        check(schema.get(s, {}).get("scope") == "world", f"B: section {s} must be world")
+    for s in TABLE_MIXED:
+        check(schema.get(s, {}).get("scope") == "mixed", f"B: section {s} must be mixed")
+    known = set(TABLE_INSTANCE + TABLE_WORLD + TABLE_MIXED + TABLE_VIRTUAL)
+    for s in schema:
+        check(s in known, f"B: section {s} is not in the scope table — classify it")
+    mem = schema["memory"]["fields"]["chat_retention_days"]
+    check(mem.get("scope") == "instance", "B: memory.chat_retention_days must declare instance")
+    uc = schema["image_generation"]["sub_arrays"]["use_cases"]
+    check(uc.get("scope") == "world", "B: image_generation.use_cases must declare world")
+    oc = schema["skills"]["subsections"]["outfit_change"]
+    check(oc.get("scope") == "world", "B: skills.outfit_change must declare world")
+    if has_searx:
+        url = schema["skills"]["subsections"]["searx"]["fields"]["url"]
+        check(url.get("scope") == "instance", "B: skills.searx.url must declare instance")
+    else:
+        skip("B: skills.searx.url — searx package not discoverable")
+
+
+# ---------------------------------------------------------------------------
+# Part C — endpoint rule over plugin fields
+# ---------------------------------------------------------------------------
+
+def part_c():
+    from app.plugins.registry import packages
+    pkgs = packages()
+    check(len(pkgs) > 0, "C: no plugin package discovered — the endpoint rule would be vacuous")
+    for pkg in pkgs:
+        for sub, sdef in (pkg.config_subsections or {}).items():
+            for fname, fdef in ((sdef or {}).get("fields") or {}).items():
+                if is_endpoint_field(fname, fdef):
+                    where = f"{pkg.id}: skills.{sub}.{fname}"
+                    if pkg.dir.is_symlink():
+                        where += " (private pack — fix in anima-verse-packs)"
+                    check((fdef or {}).get("scope") == "instance",
+                          f"C: {where} is an endpoint/key field without scope: instance")
+
+
+# ---------------------------------------------------------------------------
+# Part D/E — scope_of and child_scopes_differ
+# ---------------------------------------------------------------------------
+
+HAND_TABLE = [
+    ("server.log_level", "instance"),
+    ("providers", "instance"),
+    ("image_generation", "mixed"),
+    ("image_generation.backends", "instance"),
+    ("image_generation.routing", "instance"),
+    ("image_generation.use_cases", "world"),
+    ("image_generation.enabled", "instance"),
+    ("memory", "mixed"),
+    ("memory.max_messages", "world"),
+    ("memory.chat_retention_days", "instance"),
+    ("chat.chattiness", "world"),
+    ("skills", "mixed"),
+    ("skills.searx", "mixed"),
+    ("skills.searx.url", "instance"),
+    ("skills.searx.enabled", "world"),
+    ("skills.outfit_change.language", "world"),
+    ("decision.points", "instance"),
+    ("llm_task_state.disabled_tasks", "instance"),
+    ("game_seasons", "world"),
+    ("telegram", None),
+    ("llm_lanes_migrated", None),
+]
+
+DIFFER_TABLE = [
+    ("memory", True),
+    ("image_generation", True),
+    ("skills", True),
+    ("skills.searx", True),
+    ("server", False),
+    ("image_generation.backends", False),
+    ("chat.chattiness", False),
+    ("llm_task_state", False),
+    ("telegram", False),
+]
+
+
+def _needs_searx(path):
+    # ``skills`` is only mixed BECAUSE of searx.url: without the package every
+    # skills subsection is world and the section resolves to world (rule 4).
+    return path == "skills" or path.startswith("skills.searx")
+
+
+def part_d_e(cs, has_searx):
+    check(cs.INSTANCE == "instance" and cs.WORLD == "world" and cs.MIXED == "mixed",
+          "D: INSTANCE/WORLD/MIXED constants")
+    check(cs.EXTRA_ROOTS == {"llm_task_state": cs.INSTANCE},
+          f"D: EXTRA_ROOTS must be {{'llm_task_state': 'instance'}}, got {cs.EXTRA_ROOTS!r}")
+    for path, want in HAND_TABLE:
+        if _needs_searx(path) and not has_searx:
+            skip(f"D: scope_of({path!r}) — searx package not discoverable")
+            continue
+        got = cs.scope_of(path)
+        check(got == want, f"D: scope_of({path!r}) = {got!r}, expected {want!r}")
+        check((got == cs.MIXED) == cs.child_scopes_differ(path),
+              f"D: scope_of({path!r}) == mixed must equal child_scopes_differ")
+    for path, want in DIFFER_TABLE:
+        if _needs_searx(path) and not has_searx:
+            skip(f"E: child_scopes_differ({path!r}) — searx package not discoverable")
+            continue
+        got = cs.child_scopes_differ(path)
+        check(got is want, f"E: child_scopes_differ({path!r}) = {got!r}, expected {want!r}")
+
+
+def main():
+    from app.plugins.loader import discover_packages
+    discover_packages()
+    from app.core.config_schema import get_schema
+    schema = get_schema()
+    has_searx = "searx" in (schema.get("skills", {}).get("subsections") or {})
+
+    self_test()
+    part_a(schema)
+    part_b(schema, has_searx)
+    part_c()
+    try:
+        from app.core import config_scope as cs
+    except ImportError as e:
+        check(False, f"D: app.core.config_scope not importable: {e}")
+    else:
+        part_d_e(cs, has_searx)
+
+    print()
+    for s in _skips:
+        print(f"SKIP {s}")
+    if _failures:
+        print(f"FAILED {len(_failures)} of {_checks} checks:")
+        for f in _failures:
+            print(f"  - {f}")
+        sys.exit(1)
+    print(f"OK — {_checks} checks passed, {len(_skips)} skipped")
+
+
+if __name__ == "__main__":
+    main()

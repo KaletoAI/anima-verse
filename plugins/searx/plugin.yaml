@@ -8,11 +8,13 @@ skills:
 templates:
   llm: templates/llm
 config_schema:                  # /admin/settings -> Skills -> SearX Web Search
+  # No subsection scope = world (the skill settings of this world); the
+  # host address is the server's and declares scope: instance.
   searx:
     label: SearX Web Search
     fields:
       enabled: {type: bool, label: Enabled, default: false}
-      url: {type: str, label: "SearX URL", default: "http://localhost:8888", description: "Base URL of the SearX instance (its /search endpoint is called)"}
+      url: {type: str, scope: instance, label: "SearX URL", default: "http://localhost:8888", description: "Base URL of the SearX instance (its /search endpoint is called)"}
       engines: {type: str, label: Engines, default: "", placeholder: "google,duckduckgo,bing", description: "Comma-separated search engines. Empty = the SearX instance's own default engines."}
       categories: {type: str, label: Categories, default: "", placeholder: "general", description: "Comma-separated SearX categories. Empty = the instance's default."}
       num_results: {type: int, label: "Max results", default: 5, min: 1, max: 50}

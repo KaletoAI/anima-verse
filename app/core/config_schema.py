@@ -7,6 +7,13 @@ admin UI rendering and server-side validation.
 
 # Field types: str, int, float, bool, text (multiline), select, password, json_str
 # "array" and "object" are handled by section-level definitions
+#
+# Scope: every non-virtual section declares "scope" — "instance" (the server /
+# host: endpoints, keys, providers, backends) or "world" (the simulation of one
+# world). A field, sub_array or subsection may override it; "mixed" is declared
+# only on a node whose children differ (skills). A skill package's subsection
+# without its own scope is "world", its endpoint/key fields declare
+# "scope: instance" in plugin.yaml. Resolution: app/core/config_scope.py.
 
 import copy
 from typing import Any
@@ -44,6 +51,7 @@ SECTIONS = {
     "server": {
         "label": "Server",
         "icon": "⚙",
+        "scope": "instance",
         "fields": {
             "log_level": {
                 "type": "select",
@@ -155,6 +163,7 @@ SECTIONS = {
     "providers": {
         "label": "LLM Providers",
         "icon": "🤖",
+        "scope": "instance",
         "is_array": True,
         "item_label_field": "name",
         "fields": {
@@ -176,6 +185,7 @@ SECTIONS = {
     "llm_retry": {
         "label": "LLM Busy-Retry",
         "icon": "🔁",
+        "scope": "instance",
         "fields": {
             "busy_max_attempts": {"type": "int", "label": "Max Busy Retries", "default": 3, "min": 0, "max": 10, "description": "When an LLM provider answers 503 ('busy' — the gateway is at its parallel-call limit), wait and retry the SAME model this many times before giving up. 0 disables busy-retry. Triggers ONLY on a real 503 / Service Unavailable; other errors (500/502/504/timeout) keep the cooldown + fallback path."},
             "busy_base_delay_seconds": {"type": "float", "label": "Busy Retry Base Delay (s)", "default": 10, "min": 1, "max": 120, "step": 1, "description": "Backoff base wait before retrying a busy (503) model. Doubles each attempt (e.g. 10 → 20 → 40s), capped at 120s. Keep total backoff under the provider Timeout so the queue worker does not abort mid-wait. SYSTEM time."},
@@ -192,6 +202,7 @@ SECTIONS = {
     "llm_routing": {
         "label": "LLM Routing (Advanced)",
         "icon": "🔧",
+        "scope": "instance",
         "nav_sub": True,
         "is_array": True,
         "item_label_field": ["name", "model"],
@@ -293,6 +304,7 @@ SECTIONS = {
     "lanes": {
         "label": "Cache Lanes",
         "icon": "🛣️",
+        "scope": "instance",
         "fields": {
             "affinity_wait_seconds": {
                 "type": "int",
@@ -323,6 +335,7 @@ SECTIONS = {
     "embedding": {
         "label": "Embedding",
         "icon": "🔢",
+        "scope": "instance",
         "fields": {
             "backend": {
                 "type": "select",
@@ -364,6 +377,7 @@ SECTIONS = {
     "decision": {
         "label": "Decision models",
         "icon": "⚖️",
+        "scope": "instance",
         "description": ("Optional typed decisions (yes/no, pick one, scale) from a fast "
                         "decision model — Laya, openjev or Jev over the Jev protocol "
                         "(POST <url>/v1/systemone). Off = nothing is ever asked; every "
@@ -406,6 +420,7 @@ SECTIONS = {
     "chat": {
         "label": "Chat / Anti-Repetition",
         "icon": "💬",
+        "scope": "world",
         "fields": {
             "frequency_penalty": {"type": "float", "label": "Frequency Penalty", "default": 0.3, "min": 0, "max": 2, "step": 0.05, "description": "Static token-repetition penalty sent to the chat model on every reply (OpenAI param). 0 = off, 0.3 = light, 0.6+ = strong. This is a global default ON TOP of the per-model base temperature configured in LLM Routing — not a per-model sampling value. Some backends ignore it."},
             "top_p": {"type": "float", "label": "Nucleus cut-off (top_p)", "default": 0, "min": 0, "max": 1, "step": 0.01, "description": "Nucleus sampling cut-off sent with every chat and thought reply. 0 (the default) = do not send it, the provider default (usually 1.0 = no cut-off) applies. 0.95 keeps the unlikely tail of the distribution closed. Strongly recommended whenever the reactive temperature bump below is enabled: without a cut-off, every temperature step lifts the least likely tokens the most, which is how a raised temperature turns into multi-script gibberish."},
@@ -423,11 +438,12 @@ SECTIONS = {
     "memory": {
         "label": "Memory / Gedaechtnis",
         "icon": "🧠",
+        "scope": "world",
         "fields": {
             "short_term_days": {"type": "int", "label": "Short-term (days)", "default": 3, "min": 1, "max": 14, "description": "Chat history in the prompt (stage 1). Episodics older than this are consolidated into daily summaries. SYSTEM time (real days — consolidation follows the real calendar, not the game clock)."},
             "mid_term_days": {"type": "int", "label": "Mid-term (days)", "default": 30, "min": 7, "max": 180, "description": "Daily summaries older than this are consolidated into weekly summaries (stage 2 → 3). SYSTEM time (real days)."},
             "long_term_days": {"type": "int", "label": "Long-term (days)", "default": 90, "min": 30, "max": 365, "description": "Weekly summaries older than this are consolidated into monthly summaries. SYSTEM time (real days)."},
-            "chat_retention_days": {"type": "int", "label": "Chat retention (days)", "default": 90, "min": 0, "max": 3650, "description": "Raw chat messages older than this are deleted once their game day has been summarized — a daily summary, or the week/season summary that day summary was later folded into. A game day that was never rolled up keeps its messages regardless of age, so nothing is lost that no summary preserved. 0 = keep forever. SYSTEM time (real days), like the consolidation thresholds above."},
+            "chat_retention_days": {"type": "int", "scope": "instance", "label": "Chat retention (days)", "default": 90, "min": 0, "max": 3650, "description": "Raw chat messages older than this are deleted once their game day has been summarized — a daily summary, or the week/season summary that day summary was later folded into. A game day that was never rolled up keeps its messages regardless of age, so nothing is lost that no summary preserved. 0 = keep forever. SYSTEM time (real days), like the consolidation thresholds above."},
             "max_messages": {"type": "int", "label": "Max Nachrichten", "default": 100, "min": 10, "max": 500, "description": "Safety-Cap: Maximale Anzahl Chat-Nachrichten im Prompt."},
             "session_gap_hours": {"type": "int", "label": "Session gap (hours)", "default": 4, "min": 0, "max": 24, "description": "Gap between turns after which the chat history is cut — turns before the last such gap move into the session summary. 0 = disabled. SYSTEM time (real hours)."},
             "max_semantic": {"type": "int", "label": "Max facts", "default": 50, "min": 10, "max": 200, "description": "Maximum number of semantic memories per character (hard cap, weakest removed at consolidation). Global default — override per NPC in the character editor (Memory section)."},
@@ -453,6 +469,7 @@ SECTIONS = {
     "image_generation": {
         "label": "Media Generation",
         "icon": "🎨",
+        "scope": "instance",
         # Generic section paging: a section with `pages` is split into several
         # navigation sub-entries, each rendering only the listed fields and
         # sub_arrays (in the listed order). Purely a presentation concern —
@@ -727,6 +744,9 @@ SECTIONS = {
         "sub_arrays": {
             "use_cases": {
                 "label": "Use-Cases (Styles)",
+                # The styles are the look of THIS world; the backends that
+                # render them are the server's (section scope).
+                "scope": "world",
                 "use_cases_editor": True,
             },
             "lora_triggers": {
@@ -858,6 +878,7 @@ SECTIONS = {
     "tts": {
         "label": "Text-to-Speech",
         "icon": "🔊",
+        "scope": "instance",
         "fields": {
             "enabled": {"type": "bool", "label": "TTS Aktiviert", "default": False},
             "auto": {"type": "bool", "label": "Auto-TTS", "default": False, "description": "Automatisch Audio generieren fuer jede Antwort"},
@@ -910,6 +931,7 @@ SECTIONS = {
     "skills": {
         "label": "Skills",
         "icon": "🛠",
+        "scope": "mixed",
         "subsections": {
             # SearX lives in plugins/searx/plugin.yaml — the core names no
             # skill package (plan-skill-plugin-architecture.md R1), and a
@@ -917,6 +939,7 @@ SECTIONS = {
             # takes the settings with it.
             "outfit_change": {
                 "label": "Outfit Change",
+                "scope": "world",
                 "fields": {
                     "generate_image": {"type": "bool", "label": "Generate image", "default": True},
                     "language": {"type": "select", "label": "Language", "choices": ["de", "en"], "default": "en"},
@@ -928,6 +951,7 @@ SECTIONS = {
     "knowledge": {
         "label": "Knowledge System",
         "icon": "📚",
+        "scope": "instance",
         "fields": {
             "daily_summary_days": {"type": "int", "label": "Daily summary days", "default": 7, "min": 1, "description": "Number of past days shown in the system prompt. SYSTEM time (real days)."},
             "batch_size": {"type": "int", "label": "Batch Size", "default": 5, "min": 1},
@@ -940,6 +964,7 @@ SECTIONS = {
     "relationships": {
         "label": "Relationships",
         "icon": "❤",
+        "scope": "world",
         "fields": {
             "summary_enabled": {"type": "bool", "label": "Analyse sentiment after conversations", "default": True, "description": "After every exchange a small LLM call rates how both sides felt about it (and whether it was romantic). Those ratings move the relationship's feeling, its romantic value and thereby its type. Off: no extra call — a conversation then only adds the fixed default deltas (closeness +2, feeling +0.05 for both)."},
         },
@@ -947,6 +972,7 @@ SECTIONS = {
     "social_reactions": {
         "label": "Social Reactions",
         "icon": "👥",
+        "scope": "world",
         "fields": {
             "enabled": {"type": "bool", "label": "Enabled", "default": True, "description": "When a character posts, other characters react to it (runs in the task queue)."},
         },
@@ -954,6 +980,7 @@ SECTIONS = {
     "thoughts": {
         "label": "Gedanken",
         "icon": "🧠",
+        "scope": "world",
         "fields": {
             "min_turn_gap_seconds": {"type": "int", "label": "Min Turn Gap (s)", "default": 30, "min": 0, "max": 600, "description": "Minimum pause (seconds) between two consecutive thought turns. Keeps the AgentLoop from over-pacing with few characters. Does not apply to in_chat_skip / errors (those have their own backoffs). SYSTEM time."},
             "min_per_char_cooldown_minutes": {"type": "int", "label": "Min Per-Char Cooldown (min)", "default": 5, "min": 0, "max": 240, "description": "Minimum wait (minutes) before the same character gets another real thought turn. Bumps (external triggers like avatar room entry) bypass the cooldown. SYSTEM time."},
@@ -962,6 +989,7 @@ SECTIONS = {
     "intents": {
         "label": "Plans & Tasks",
         "icon": "📌",
+        "scope": "world",
         "fields": {
             "self_intent_ttl_days": {"type": "int", "label": "Own plans expire after (game days)", "default": 3, "min": 0, "max": 365, "description": "A plan a character sets itself through an [INTENT:] marker (standing or on arriving at a place) expires after this many GAME days unless it is finished before. 'now' plans expire after one game hour, timed plans one game hour after their time. Tasks the player gave and admin-created intents never expire on their own; reflection goals neither. 0 = own plans never expire. Applies to intents created from now on. GAME time (follows the game clock/factor)."},
         },
@@ -969,6 +997,7 @@ SECTIONS = {
     "random_events": {
         "label": "Zufaellige Events",
         "icon": "🎲",
+        "scope": "world",
         "fields": {
             "enabled": {"type": "bool", "label": "Aktiviert", "default": True, "description": "Automatische Event-Generierung an besetzten Locations"},
             "base_probability": {"type": "int", "label": "Base probability %", "default": 5, "min": 0, "max": 50, "description": "Probability per hour per location; overridable per location. The generator rolls on a SYSTEM-time hourly tick (real hours, independent of the game-clock factor)."},
@@ -986,6 +1015,7 @@ SECTIONS = {
     "npc": {
         "label": "NPCs (automatic)",
         "icon": "🧑‍🌾",
+        "scope": "world",
         "fields": {
             "auto_spawn_enabled": {
                 "type": "bool", "label": "Automatic NPCs", "default": True,
@@ -1078,6 +1108,7 @@ SECTIONS = {
     "story_engine": {
         "label": "Story Engine",
         "icon": "📖",
+        "scope": "world",
         "fields": {
             "enabled": {"type": "bool", "label": "Aktiviert", "default": False, "description": "Story Arc Fortschritt (Background-Prozess)"},
             "max_active_arcs": {"type": "int", "label": "Max Active Arcs", "default": 2, "min": 1, "description": "Maximale aktive Arcs pro User"},
@@ -1089,6 +1120,7 @@ SECTIONS = {
     "game": {
         "label": "Game",
         "icon": "🎮",
+        "scope": "world",
         "fields": {
             "travel_speed_m_s": {
                 "type": "float",
@@ -1217,6 +1249,7 @@ SECTIONS = {
     "ui": {
         "label": "UI / Image Downscaling",
         "icon": "🎨",
+        "scope": "instance",
         "fields": {
             "_grp_downscale": {"type": "group_header", "label": "Image Downscaling"},
             "downscale_enabled": {
@@ -1267,6 +1300,7 @@ SECTIONS = {
     "content_marketplace": {
         "label": "Content Marketplace",
         "icon": "📦",
+        "scope": "instance",
         "fields": {
             "cache_ttl_minutes": {
                 "type": "int",
@@ -1327,6 +1361,7 @@ SECTIONS = {
     "messaging_frame": {
         "label": "Messaging frame (phone chat layout)",
         "icon": "📱",
+        "scope": "world",
         "fields": {
             "prompt": {
                 "type": "text",
@@ -1363,6 +1398,7 @@ SECTIONS = {
     "game_calendar": {
         "label": "Game calendar",
         "icon": "🗓️",
+        "scope": "world",
         "fields": {
             "_calendar_note": {"type": "note", "text": (
                 "Game time is a WORLD calendar of seasons and days — there are "
@@ -1421,6 +1457,7 @@ SECTIONS = {
     "game_seasons": {
         "label": "Game calendar — seasons",
         "icon": "🗓️",
+        "scope": "world",
         "nav_sub": True,
         "is_array": True,
         "item_label_field": "name",
