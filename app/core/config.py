@@ -1059,9 +1059,14 @@ def _strip_legacy_imagegen_prompt_fields(config: dict) -> bool:
 #     unet_weight_dtype), the removed grid-map fit/edge pipeline (mapfit_*,
 #     map_image_prompt_suffix, map_tile_vision_analysis, commit 245f1bf) and
 #     the dropped collage scene mode (scene_prompt_collage — its living
-#     siblings scene_prompt_multi_ref / scene_prompt_only_background stay).
-#   chat / inventory / random_events — single leftovers; item image size runs
-#     through ui.downscale_item_max_dim instead.
+#     siblings scene_prompt_multi_ref / scene_prompt_only_background stay),
+#     leftovers that only sat in world files (context_render_*,
+#     scene_asset_rembg, tpose_view_*) and the prompt-enhancer template
+#     rebuild_llm_system_template (schema field + env bridge, read by nobody).
+#   chat / random_events — single leftovers.
+#   server — jwt_secret (see below) and storage_dir: the world is selected by
+#     paths.init() / STORAGE_DIR BEFORE any config is read, so the bridged
+#     value selected nothing.
 DEAD_CONFIG_FIELDS: dict = {
     "image_generation": (
         "comfy_default_workflow",
@@ -1073,24 +1078,34 @@ DEAD_CONFIG_FIELDS: dict = {
         "map_tile_vision_analysis",
         "unet_weight_dtype",
         "scene_prompt_collage",
+        "context_render_grid",
+        "context_render_figure",
+        "scene_asset_rembg",
+        "tpose_view_back",
+        "tpose_view_left",
+        "tpose_view_right",
+        "rebuild_llm_system_template",
     ),
     "chat": ("auto_wake_stamina",),
     # Sessions are opaque random tokens (app/core/sessions.py), nothing signs
     # a JWT — the field was schema, validator warning and env bridge only.
-    "server": ("jwt_secret",),
-    "inventory": ("item_image_width", "item_image_height"),
+    "server": ("jwt_secret", "storage_dir"),
     "random_events": ("event_image_denoise_strength",),
 }
 
-# The same names again, this time at the TOP LEVEL of config.json. Older worlds
-# predate the sectioning: worlds/demo and worlds/hotopia carry
-# item_image_width/height as top-level keys and have no "inventory" section at
-# all, so a section-only strip would walk straight past them. None of the dead
-# names is a living top-level key (they have no schema entry anywhere), so
-# sweeping all of them at both depths is safe and keeps the two lists from
-# drifting apart.
+# Dead names that no section owns any more and that only survive at the TOP
+# LEVEL of older world files (worlds/hotopia predates the sectioning). Item
+# image size runs through ui.downscale_item_max_dim instead; "inventory" is no
+# schema section, so a section variant is not swept here.
+DEAD_TOPLEVEL_ONLY_FIELDS: tuple = ("item_image_width", "item_image_height")
+
+# The section names again, this time at the TOP LEVEL of config.json, plus the
+# top-level-only names above. None of the dead names is a living top-level key
+# (they have no schema entry anywhere), so sweeping all of them at both depths
+# is safe and keeps the lists from drifting apart.
 DEAD_TOPLEVEL_FIELDS: tuple = tuple(sorted(
-    {k for keys in DEAD_CONFIG_FIELDS.values() for k in keys}))
+    {k for keys in DEAD_CONFIG_FIELDS.values() for k in keys}
+    | set(DEAD_TOPLEVEL_ONLY_FIELDS)))
 
 
 def _strip_dead_config_fields(config: dict) -> bool:
@@ -1773,7 +1788,6 @@ def _flatten_to_env(config: dict) -> None:
     # Server
     server = config.get("server", {})
     _set(env, "LOG_LEVEL", server.get("log_level", field_default("server", "log_level")))
-    _set(env, "STORAGE_DIR", server.get("storage_dir", field_default("server", "storage_dir")))
 
     # Providers (1-indexed)
     for i, prov in enumerate(config.get("providers", []), start=1):
@@ -1804,7 +1818,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "LOCATION_IMAGE_WIDTH", ig.get("location_image_width", field_default("image_generation", "location_image_width")))
     _set(env, "LOCATION_IMAGE_HEIGHT", ig.get("location_image_height", field_default("image_generation", "location_image_height")))
     _set(env, "U2NET_HOME", ig.get("u2net_home", field_default("image_generation", "u2net_home")))
-    _set(env, "REBUILD_LLM_SYSTEM_TEMPLATE", ig.get("rebuild_llm_system_template", field_default("image_generation", "rebuild_llm_system_template")))
     _set(env, "IMAGE_ANALYSIS_PROMPT", ig.get("image_analysis_prompt", field_default("image_generation", "image_analysis_prompt")))
 
     # ImageGen Backends (1-indexed)
@@ -1900,7 +1913,7 @@ def _flatten_to_env(config: dict) -> None:
     # The AgentLoop reads these values directly via config.get() (no env
     # bridge needed any more); the mapping stays only for code that still
     # expects the env variable.
-    pro = config.get("thoughts", config.get("proactive", {}))
+    pro = config.get("thoughts", {})
     _set(env, "THOUGHT_MIN_TURN_GAP_SECONDS", pro.get("min_turn_gap_seconds", field_default("thoughts", "min_turn_gap_seconds")))
     _set(env, "THOUGHT_MIN_PER_CHAR_COOLDOWN_MINUTES", pro.get("min_per_char_cooldown_minutes", field_default("thoughts", "min_per_char_cooldown_minutes")))
 

@@ -44,6 +44,7 @@ from app.core.timeutils import parse_iso, utc_now
 from app.core.turn_trace import begin_trace, set_trace
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from app.core.config_schema import field_default
 from app.core.log import get_logger
 from app.core.perception import STORYTELLER_SPEAKER
 
@@ -80,12 +81,13 @@ _ROOM_CONVO_ACTIVE_SEC = 240
 
 # Pacing — keeps the loop from over-ticking with few characters.
 # Values are read live from the world config (admin tab "Gedanken"):
-#   thoughts.min_turn_gap_seconds        (default 30)
-#   thoughts.min_per_char_cooldown_minutes (default 5)
+#   thoughts.min_turn_gap_seconds
+#   thoughts.min_per_char_cooldown_minutes
+# Their fallbacks ARE the schema defaults (one source, see field_default).
 # Both cooldowns apply in addition to the importance round-robin and the
 # in-chat-skip / no_llm backoffs.
-_MIN_TURN_GAP_DEFAULT = 30
-_MIN_PER_CHAR_COOLDOWN_MIN_DEFAULT = 5
+_MIN_TURN_GAP_DEFAULT = field_default("thoughts", "min_turn_gap_seconds")
+_MIN_PER_CHAR_COOLDOWN_MIN_DEFAULT = field_default("thoughts", "min_per_char_cooldown_minutes")
 
 # The task ids whose PROMPT a loop turn produces — they decide the cache key
 # and the LLM entry the turn will run on (plan-cache-lanes.md § 3).

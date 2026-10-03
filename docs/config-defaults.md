@@ -218,14 +218,15 @@ Spieltag vergangen ist. Steht die Weltuhr still, zerfaellt nichts.
 
 | Name | Quelle | Default | Leser |
 |---|---|---|---|
-| `STORAGE_DIR` | `server.storage_dir` → Server | `./worlds/demo` (gesetzt von `start.sh` / `docker/docker-entrypoint.sh`, nicht von `paths.py`) | app/core/paths.py |
+| `STORAGE_DIR` | — (Pfad-Override, kein `config.json`-Feld) | `./worlds/demo` (gesetzt von `start.sh` / `docker/docker-entrypoint.sh`, nicht von `paths.py`) | app/core/paths.py |
 
 Achtung, Henne und Ei: **welche Welt geöffnet wird, entscheidet der Start**
 (`./start.sh --world NAME` / `--storage /pfad`, sonst die Umgebungsvariable, sonst
 `./worlds/demo` — diesen Default setzt `start.sh`; `paths.init()` selbst kennt keinen
 und wirft ohne Argument und ohne `STORAGE_DIR` `StorageNotInitialised`). `paths.init()`
-läuft VOR `config.load()`; der gebrückte Wert aus
-`config.json` wird also gesetzt, wählt aber nichts mehr aus.
+läuft VOR `config.load()` — die Welt kann ihren eigenen Ort nicht festlegen, deshalb
+gibt es dafür kein `config.json`-Feld (das frühere `server.storage_dir` wählte nichts
+aus und ist gestrichen).
 
 ---
 

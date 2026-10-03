@@ -59,6 +59,11 @@ B) The env bridge, ``config._flatten_to_env``. Its AST yields every
    type: bool by truthiness of "1/true/yes", numbers numerically), and the
    consumer's own default must be that value too — as a literal, or as a
    ``field_default(...)`` call naming the bridged field.
+   Only LITERAL env names are in scope, on both sides: a name built at run
+   time — the numbered provider / backend blocks, e.g.
+   ``f"PROVIDER_{n}_API_KEY"`` in ``app/imagegen/backends/together_video.py``
+   — is neither a bridge leaf this reader renders past index 1 nor an env
+   consumer the scan can match, so its default is not compared here.
 
 C) The table rows explicitly, values written down BY HAND from the
    2026-10-03 table of the task (AD = the world "Anima Divide", which stores
@@ -79,7 +84,13 @@ C) The table rows explicitly, values written down BY HAND from the
    Plus behaviour: ``_world_tz()`` with the field stored at its default is
    ``timezone.utc``; ``anti_repetition_overrides`` with ``chat.top_p`` stored
    at its default sends no ``top_p``, the same as with the field absent;
-   ``agent_loop._get_per_char_cooldown_min()`` returns 5 both ways.
+   ``agent_loop._get_per_char_cooldown_min()`` returns 5 both ways. The
+   agent_loop fallback constant is itself ``field_default(...)`` since
+   2026-10-03, so "constant == schema default" is no separate check any more
+   (part A already proves the read names field_default of the SAME field);
+   the hand value 5 stays pinned by the behaviour check.
+   C is self-contained: it runs the bridge itself before reading
+   ``IMAGE_ANALYSIS_PROMPT`` instead of relying on part B having run.
 
 FAILS BEFORE / PASSES AFTER
 ---------------------------
@@ -118,11 +129,9 @@ INTENTIONAL = {
 }
 
 # Env consumers whose default deliberately differs from the bridged schema default.
+# (STORAGE_DIR left this list on 2026-10-03: server.storage_dir is gone and the
+# bridge no longer writes it — it is a pure path override, not config.)
 ENV_INTENTIONAL = {
-    "STORAGE_DIR": "a path override that selects the world BEFORE any config is "
-                   "read (paths.init); empty = not set -> StorageNotInitialised. "
-                   "server.storage_dir cannot be its default — the config lives "
-                   "inside the storage dir",
 }
 
 # Every env consumer of a bridged field with a schema default:
@@ -718,6 +727,8 @@ def part_c():
             check(f"schema default {'.'.join(path)} == {want!r}", False, f"KeyError {e}")
             continue
         check(f"schema default {'.'.join(path)} == {want!r}", same(got, want), f"schema {got!r}")
+    os.environ.pop("IMAGE_ANALYSIS_PROMPT", None)
+    cfg._flatten_to_env({})
     check("image_analysis_prompt bridges the schema prompt",
           os.environ.get("IMAGE_ANALYSIS_PROMPT")
           == field_default("image_generation", "image_analysis_prompt"),
@@ -748,9 +759,6 @@ def part_c():
     check("chat.top_p absent -> no top_p override", top_absent is False)
     check("chat.top_p stored at schema default -> no top_p override (same as absent)",
           top_stored is False)
-    check("agent_loop constant == schema default",
-          agent_loop._MIN_PER_CHAR_COOLDOWN_MIN_DEFAULT
-          == field_default("thoughts", "min_per_char_cooldown_minutes"))
     check("per-char cooldown: absent == stored at default == 5",
           cd_absent == cd_stored == 5, f"absent {cd_absent}, stored {cd_stored}")
 

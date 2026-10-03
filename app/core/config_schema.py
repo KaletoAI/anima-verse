@@ -8,6 +8,7 @@ admin UI rendering and server-side validation.
 # Field types: str, int, float, bool, text (multiline), select, password, json_str
 # "array" and "object" are handled by section-level definitions
 
+import copy
 from typing import Any
 
 # The season atmosphere levels are owned by the calendar module — the schema
@@ -92,13 +93,6 @@ SECTIONS = {
                                "Empty = no cross-origin access at all. A wildcard is not "
                                "supported: with credentials it would let any web page a "
                                "user opens read this API. Takes effect after a restart.",
-                "requires_restart": True,
-            },
-            "storage_dir": {
-                "type": "str",
-                "label": "Storage Directory",
-                "default": "./storage",
-                "description": "Basisverzeichnis fuer Datenbanken, Configs und Uploads",
                 "requires_restart": True,
             },
             "timezone": {
@@ -578,12 +572,11 @@ SECTIONS = {
             },
             {
                 "id": "analysis",
-                "label": "Analysis & rebuild prompts",
+                "label": "Analysis prompt",
                 "icon": "🔍",
-                "description": "Prompts for post-generation image analysis and for rebuilding a prompt from an existing image.",
+                "description": "Prompt for post-generation image analysis.",
                 "fields": [
                     "image_analysis_prompt",
-                    "rebuild_llm_system_template",
                 ],
             },
         ],
@@ -729,19 +722,6 @@ SECTIONS = {
                     "- If something is ambiguous or partially visible, describe it as such.\n"
                     "- Plain text only — no markdown."
                 ),
-            },
-            "rebuild_llm_system_template": {
-                "type": "text",
-                "label": "Rebuild LLM System Prompt",
-                "default": (
-                    "You are an image prompt enhancer for the {target_model} image model. "
-                    "{prompt_instruction} "
-                    "Rewrite the following prompt in the style requested, keeping ALL factual content "
-                    "(persons, outfits, pose, expression, scene, location, mood). "
-                    "Do NOT add new visual elements, do NOT remove any. "
-                    "Respond with ONLY the rewritten prompt, no preamble, no commentary."
-                ),
-                "description": "System prompt for the image-prompt-enhancer LLM. Placeholders: {target_model} (z_image/qwen/flux), {prompt_instruction} (from the use-case config).",
             },
         },
         "sub_arrays": {
@@ -1537,14 +1517,14 @@ def get_schema() -> dict:
     injected at read time, so a removed package takes its settings
     section with it (no orphaned config UI).
     """
-    try:
-        from app.plugins.registry import config_subsections
-        subs = config_subsections()
-    except Exception:
-        subs = {}
+    # Lazy (the app.plugins package __init__ pulls in the loader and
+    # app.skills.base, far too much for this data module at import time)
+    # but NOT swallowed: a broken registry import must fail loudly instead of
+    # silently dropping every package's settings section.
+    from app.plugins.registry import config_subsections
+    subs = config_subsections()
     if not subs:
         return SECTIONS
-    import copy
     schema = copy.deepcopy(SECTIONS)
     schema.setdefault("skills", {}).setdefault("subsections", {}).update(
         copy.deepcopy(subs))
@@ -1577,11 +1557,9 @@ def field_default(section: str, *keys: str) -> Any:
         subsections = dict(node.get("subsections") or {})
         if section == "skills":
             # Package subsections win on collision, as in get_schema().
-            try:
-                from app.plugins.registry import config_subsections
-                subsections.update(config_subsections())
-            except Exception:
-                pass
+            # Lazy for the same reason as there, and just as loud.
+            from app.plugins.registry import config_subsections
+            subsections.update(config_subsections())
         node = subsections.get(sub)
         if not isinstance(node, dict):
             raise KeyError(".".join((section,) + tuple(keys)))
@@ -1589,7 +1567,6 @@ def field_default(section: str, *keys: str) -> Any:
     if (name.startswith("_") or not isinstance(fdef, dict)
             or fdef.get("type") in _PSEUDO_FIELD_TYPES or "default" not in fdef):
         raise KeyError(".".join((section,) + tuple(keys)))
-    import copy
     return copy.deepcopy(fdef["default"])
 
 

@@ -12,21 +12,50 @@ normalises only in memory and NEVER touches a file, while the explicit
 idempotent. Before the split, every script that merely opened a world rewrote
 its tracked config.json.
 
-The fixture is the table of the 14 fields — the 13 of the finding plus
-``server.jwt_secret`` (2026-09-21: sessions are opaque random tokens, nothing
-signs a JWT) — written out by
-hand here, so the constant in app/core/config.py cannot quietly grow or
-shrink without this file disagreeing:
+The fixture is the table of the 20 section fields — the 13 of the finding
+plus ``server.jwt_secret`` (2026-09-21: sessions are opaque random tokens,
+nothing signs a JWT), plus the seven of the instance-config cleanup
+(2026-10-03, I0b): six ``image_generation`` leftovers that only sat in world
+files and ``rebuild_llm_system_template`` (schema field + env bridge, read by
+nobody), plus ``server.storage_dir`` (the world is chosen by ``paths.init`` /
+``STORAGE_DIR`` BEFORE any config is read; the bridged value selected
+nothing). Written out by hand here, so the constant in app/core/config.py
+cannot quietly grow or shrink without this file disagreeing:
 
     image_generation : comfy_default_workflow, comfyui_workflows,
                        mapfit_backend, mapfit_workflow_file,
                        mapfit_imagegen_default, map_image_prompt_suffix,
                        map_tile_vision_analysis, unet_weight_dtype,
-                       scene_prompt_collage
+                       scene_prompt_collage,
+                       context_render_grid, context_render_figure,
+                       scene_asset_rembg, tpose_view_back, tpose_view_left,
+                       tpose_view_right, rebuild_llm_system_template
     chat             : auto_wake_stamina
-    inventory        : item_image_width, item_image_height
     random_events    : event_image_denoise_strength
-    server           : jwt_secret
+    server           : jwt_secret, storage_dir
+
+The ``inventory`` entry (item_image_width/height) is gone from that table:
+``inventory`` is no schema section at all, so from the instance layer on it
+is dropped as an unknown root. The two names stay known at the TOP LEVEL
+only (``DEAD_TOPLEVEL_ONLY_FIELDS``) — worlds/hotopia still carries them
+there — and test 5 is their hand case.
+
+Test 1b is the "no reader" half for every name of the table: no string
+literal ``"<name>"`` / ``"<dotted.path>.<name>"`` and no attribute access
+``.<name>`` anywhere in app/, plugins/ (the symlinked private packs
+FOLLOWED), frontend/src, packages, client3d/src or static/ (the built bundle
+under static/game_admin/assets excluded — it is generated from
+frontend/src). In app/core/config.py only the two constant blocks are
+blanked out, so a bridge line like ``server.get("storage_dir", …)`` is still
+seen. f-string readers (``f"tpose_view_{v}"``) are out of reach of that scan;
+they were checked by hand (task report).
+
+Test 11 pins two bridge cuts of the same cleanup: ``_flatten_to_env`` no
+longer writes ``STORAGE_DIR`` from ``server.storage_dir``, and the legacy
+``proactive`` section no longer stands in for ``thoughts`` — a world with only
+``proactive.min_turn_gap_seconds = 99`` bridges the schema default 30 (by hand
+from config_schema ``thoughts.min_turn_gap_seconds``), not 99. Its counter-check
+writes the same 99 under ``thoughts`` and sees it arrive.
 
 Beside the flat table there is a NESTED strip: ``image_generation.use_cases``
 entries whose render occasion is gone — ``map`` and ``mapfit``, removed with
@@ -35,9 +64,8 @@ flat sweep walks past them; test 4c is their hand case, and the world fixture
 of tests 8/9 carries both so the end-to-end path proves it too.
 
 The fields live at TWO depths: normally inside their section, but worlds older
-than the sectioning (worlds/demo, worlds/hotopia) carry
-``item_image_width``/``item_image_height`` at the top level and have no
-``inventory`` section at all — test 5 is the hand case for that.
+than the sectioning (worlds/hotopia) carry ``item_image_width`` /
+``item_image_height`` at the top level — test 5 is the hand case for that.
 
 The point of the file is the pair of counter-checks:
   * the LIVING neighbours of the dead fields survive — most sharply
@@ -54,11 +82,21 @@ The point of the file is the pair of counter-checks:
     then does produce them — without that red run, test 6 would pass on any
     broken assertion.
 
+FAILS BEFORE: against commit e7363832 (the code before the I0b cleanup) test 1
+fails (14 fields, an inventory entry), 1b names the readers it still had —
+the bridge lines ``server.get("storage_dir", …)`` /
+``ig.get("rebuild_llm_system_template", …)`` and their schema entries — test 2
+finds the seven new names left in the dict, and the run stops at test 5 with
+an AttributeError (no ``DEAD_TOPLEVEL_ONLY_FIELDS``).
+
 Usage:  ./.venv/bin/python scripts/smoke_dead_config_fields.py
 """
+import ast
 import copy
 import json
 import os
+import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -111,12 +149,22 @@ EXPECTED_DEAD = {
         "map_tile_vision_analysis",
         "unet_weight_dtype",
         "scene_prompt_collage",
+        "context_render_grid",
+        "context_render_figure",
+        "scene_asset_rembg",
+        "tpose_view_back",
+        "tpose_view_left",
+        "tpose_view_right",
+        "rebuild_llm_system_template",
     },
     "chat": {"auto_wake_stamina"},
-    "inventory": {"item_image_width", "item_image_height"},
     "random_events": {"event_image_denoise_strength"},
-    "server": {"jwt_secret"},
+    "server": {"jwt_secret", "storage_dir"},
 }
+
+# Names that are dead at the TOP LEVEL only (no section owns them any more).
+EXPECTED_DEAD_TOPLEVEL_ONLY = {"item_image_width", "item_image_height"}
+EXPECTED_TOTAL = 20
 
 # The nested strip's table, by hand: use-case entries with no render occasion.
 EXPECTED_DEAD_USE_CASES = {"map", "mapfit"}
@@ -135,6 +183,8 @@ LIVING = {
     "ui": {"downscale_item_max_dim": 768},                  # image_postprocess.py
     "server": {"log_level": "INFO"},
 }
+# image_analysis_prompt is the living sibling of the dead rebuild template.
+LIVING["image_generation"]["image_analysis_prompt"] = "describe it"
 
 
 def check(cond, msg):
@@ -145,8 +195,70 @@ def check(cond, msg):
         FAILURES.append(msg)
 
 
+REPO = Path(__file__).resolve().parents[1]
+# Where a reader could live. static/game_admin/assets is the build of
+# frontend/src and is skipped; app/core/config.py is scanned with its two
+# constant blocks blanked out (they NAME the fields, they do not read them).
+READER_ROOTS = ["app", "plugins", "frontend/src", "packages", "client3d/src", "static"]
+READER_SUFFIXES = {".py", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".json", ".yaml",
+                   ".yml", ".md", ".html", ".css"}
+
+
+def _reader_corpus():
+    """[(relative path, text)] of every tracked file under READER_ROOTS plus
+    every file inside a symlinked package under plugins/ (git does not
+    follow those)."""
+    out = subprocess.run(["git", "ls-files", "-z", "--"] + READER_ROOTS,
+                         cwd=REPO, capture_output=True, text=True, check=True).stdout
+    files = [REPO / f for f in out.split("\0") if f]
+    for pkg in (REPO / "plugins").iterdir():
+        if pkg.is_symlink() and pkg.is_dir():
+            for dirpath, dirnames, filenames in os.walk(pkg, followlinks=True):
+                dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+                files.extend(Path(dirpath) / f for f in filenames)
+    corpus = []
+    for f in files:
+        rel = os.path.relpath(f, REPO)
+        if rel.startswith("static/game_admin/assets/") or f.suffix not in READER_SUFFIXES:
+            continue
+        if not f.is_file():
+            continue
+        text = f.read_text(encoding="utf-8", errors="replace")
+        if rel == "app/core/config.py":
+            text = _blank_constants(text)
+        corpus.append((rel, text))
+    return corpus
+
+
+def _blank_constants(text):
+    """config.py with the DEAD_* constant assignments replaced by blank lines."""
+    lines = text.splitlines()
+    for node in ast.parse(text).body:
+        target = None
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target = node.target.id
+        elif isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
+            target = node.targets[0].id
+        if target in ("DEAD_CONFIG_FIELDS", "DEAD_TOPLEVEL_ONLY_FIELDS"):
+            for i in range(node.lineno - 1, node.end_lineno):
+                lines[i] = ""
+    return "\n".join(lines)
+
+
+def readers_of(name, corpus):
+    """Lines that read *name* as a config key: a string literal that IS the
+    name or ends a dotted path with it, or an attribute access ``.name``."""
+    pat = re.compile(r"([\"'](?:\w+\.)*" + re.escape(name) + r"[\"'])|(\." + re.escape(name) + r"\b)")
+    hits = []
+    for rel, text in corpus:
+        for ln, line in enumerate(text.splitlines(), 1):
+            if pat.search(line):
+                hits.append(f"{rel}:{ln}")
+    return hits
+
+
 def build_fixture() -> dict:
-    """A world config carrying all 14 dead fields plus living neighbours."""
+    """A world config carrying all 20 dead fields plus living neighbours."""
     cfg = copy.deepcopy(LIVING)
     dead_values = {
         "comfy_default_workflow": "flux.json",
@@ -159,10 +271,16 @@ def build_fixture() -> dict:
         "unet_weight_dtype": "fp8_e4m3fn",
         "scene_prompt_collage": "collage prompt",
         "auto_wake_stamina": 40,
-        "item_image_width": 512,
-        "item_image_height": 512,
         "event_image_denoise_strength": 0.6,
         "jwt_secret": "change-me",
+        "storage_dir": "./storage",
+        "context_render_grid": True,
+        "context_render_figure": True,
+        "scene_asset_rembg": False,
+        "tpose_view_back": True,
+        "tpose_view_left": False,
+        "tpose_view_right": False,
+        "rebuild_llm_system_template": "You are an image prompt enhancer.",
     }
     for section, keys in EXPECTED_DEAD.items():
         for key in keys:
@@ -184,18 +302,35 @@ def main():
     print("1) the constant matches the finding's table")
     actual = {s: set(k) for s, k in cfgmod.DEAD_CONFIG_FIELDS.items()}
     check(actual == EXPECTED_DEAD,
-          f"DEAD_CONFIG_FIELDS == 14 fields of the table (got {actual})")
-    check(sum(len(v) for v in actual.values()) == 14,
-          "14 fields in total")
+          f"DEAD_CONFIG_FIELDS == {EXPECTED_TOTAL} fields of the table (got {actual})")
+    check(sum(len(v) for v in actual.values()) == EXPECTED_TOTAL,
+          f"{EXPECTED_TOTAL} fields in total")
+    check("inventory" not in cfgmod.DEAD_CONFIG_FIELDS,
+          "no inventory entry (no schema section, dropped as unknown root)")
     check(set(cfgmod.DEAD_USE_CASES) == EXPECTED_DEAD_USE_CASES,
           f"DEAD_USE_CASES == map + mapfit (got {set(cfgmod.DEAD_USE_CASES)})")
     check(not (EXPECTED_DEAD_USE_CASES & set(cfgmod._DEFAULT_IMAGE_USE_CASES)),
           "neither dead use case is a built-in default any more")
 
+    print("1b) no reader of any dead name (string key or attribute)")
+    corpus = _reader_corpus()
+    check(len(corpus) >= 500 and any(r.startswith("frontend/src/") for r, _ in corpus)
+          and any(r == "app/core/config.py" for r, _ in corpus),
+          f"the corpus is real ({len(corpus)} files, lower bound 500)")
+    # Counter-check: the scan sees a living key and its bridge line.
+    check(any(h.startswith("app/core/config.py:")
+              for h in readers_of("image_analysis_prompt", corpus)),
+          "counter-check: the living image_analysis_prompt bridge line IS seen")
+    dead_names = sorted({k for keys in EXPECTED_DEAD.values() for k in keys}
+                        | EXPECTED_DEAD_TOPLEVEL_ONLY)
+    for name in dead_names:
+        hits = readers_of(name, corpus)
+        check(not hits, f"{name}: no reader (got {hits[:4]})")
+
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "config.json"
 
-        print("2) the strip removes exactly the 14 — in memory, no file")
+        print(f"2) the strip removes exactly the {EXPECTED_TOTAL} — in memory, no file")
         cfg = build_fixture()
         changed = cfgmod._strip_dead_config_fields(cfg)
         check(changed is True, "returns True on the first run")
@@ -242,32 +377,39 @@ def main():
               "a config without use_cases is left alone")
 
         print("5) top-level strays (worlds older than the sectioning)")
+        check(set(cfgmod.DEAD_TOPLEVEL_ONLY_FIELDS) == EXPECTED_DEAD_TOPLEVEL_ONLY,
+              "DEAD_TOPLEVEL_ONLY_FIELDS == the two item sizes")
         check(set(cfgmod.DEAD_TOPLEVEL_FIELDS)
-              == {k for keys in EXPECTED_DEAD.values() for k in keys},
-              "DEAD_TOPLEVEL_FIELDS == the same 14 names, flat")
-        # worlds/demo and worlds/hotopia look exactly like this: the two item
-        # sizes sit at the top level and there is NO inventory section.
+              == ({k for keys in EXPECTED_DEAD.values() for k in keys}
+                  | EXPECTED_DEAD_TOPLEVEL_ONLY),
+              f"DEAD_TOPLEVEL_FIELDS == the {EXPECTED_TOTAL} names flat + the two "
+              f"item sizes")
+        # worlds/hotopia looks exactly like this: the two item sizes sit at
+        # the top level. The lane-migration marker is the one LIVING root key
+        # that is no section (config._LANE_MIGRATION_MARKER).
+        marker = cfgmod._LANE_MIGRATION_MARKER
         old = {
             "item_image_width": 256,
             "item_image_height": 256,
-            "log_level": "INFO",
             "storage_dir": "./storage",
+            marker: True,
+            "log_level": "INFO",
+            "server": {"storage_dir": "./storage", "log_level": "DEBUG"},
             "image_generation": {"mapfit_backend": "comfy-1",
                                  "scene_prompt_multi_ref": "keep me"},
-            "inventory": {"item_image_width": 128, "max_items": 50},
         }
         check(cfgmod._strip_dead_config_fields(old) is True,
               "returns True — the top-level strays count as a change")
         check("item_image_width" not in old and "item_image_height" not in old,
               "both top-level item sizes are gone")
-        check("item_image_width" not in old["inventory"],
-              "the section variant falls too")
+        check("storage_dir" not in old and "storage_dir" not in old["server"],
+              "storage_dir falls at both depths")
         check("mapfit_backend" not in old["image_generation"],
               "the section sweep still works alongside")
-        check(old["log_level"] == "INFO" and old["storage_dir"] == "./storage",
-              "living TOP-LEVEL fields stay")
+        check(old[marker] is True and old["log_level"] == "INFO",
+              "living TOP-LEVEL keys stay (lane marker, log_level)")
         check(old["image_generation"].get("scene_prompt_multi_ref") == "keep me"
-              and old["inventory"].get("max_items") == 50,
+              and old["server"].get("log_level") == "DEBUG",
               "living section fields stay")
 
     print("6) today's schema prefill seeds neither reappearing field")
@@ -323,7 +465,8 @@ def main():
                 # them — seeded before the map-icon teardown.
                 "use_cases": {"map": {"styles": {}}, "mapfit": {"styles": {}}},
             },
-            "inventory": {"item_image_width": 128, "max_items": 50},
+            "server": {"storage_dir": "./storage"},
+            "inventory": {"max_items": 50},
             "item_image_height": 256,
         }
         world.write_text(json.dumps(fixture, indent=2), encoding="utf-8")
@@ -343,7 +486,7 @@ def main():
         check("mapfit_backend" not in loaded["image_generation"],
               "in memory: the dead section field is stripped")
         check("item_image_height" not in loaded
-              and "item_image_width" not in loaded.get("inventory", {}),
+              and "storage_dir" not in loaded.get("server", {}),
               "in memory: the dead fields at both depths are stripped")
         check("prompt_prefix" not in loaded["image_generation"]["backends"][0],
               "in memory: the legacy backend prompt field is stripped")
@@ -364,7 +507,7 @@ def main():
         check(world.read_bytes() != before_bytes, "the file did change")
         check("mapfit_backend" not in after["image_generation"]
               and "item_image_height" not in after
-              and "item_image_width" not in after["inventory"],
+              and "storage_dir" not in after.get("server", {}),
               "on disk: the dead fields are gone")
         check("prompt_prefix" not in after["image_generation"]["backends"][0]
               and after["image_generation"]["backends"][0]["category"] == "txt2img",
@@ -392,6 +535,31 @@ def main():
         check(cfgmod.migrate_file(world) is False, "returns False — nothing to do")
         check(world.read_bytes() == settled_bytes, "config.json byte-identical")
         check(world.stat().st_mtime_ns == settled_mtime, "mtime unchanged")
+
+    print("11) the bridge: no STORAGE_DIR, no proactive fallback")
+    saved_env = dict(os.environ)
+    try:
+        before = os.environ.get("STORAGE_DIR")
+        cfgmod._flatten_to_env({"server": {"storage_dir": "/x"}})
+        check(os.environ.get("STORAGE_DIR") == before,
+              f"server.storage_dir does not reach STORAGE_DIR "
+              f"(got {os.environ.get('STORAGE_DIR')!r})")
+        os.environ.pop("THOUGHT_MIN_TURN_GAP_SECONDS", None)
+        cfgmod._flatten_to_env({"proactive": {"min_turn_gap_seconds": 99}})
+        got = os.environ.get("THOUGHT_MIN_TURN_GAP_SECONDS")
+        check(got == "30",
+              f"proactive.min_turn_gap_seconds=99 is ignored -> schema default 30 "
+              f"(got {got!r})")
+        os.environ.pop("THOUGHT_MIN_TURN_GAP_SECONDS", None)
+        cfgmod._flatten_to_env({"thoughts": {"min_turn_gap_seconds": 99}})
+        got = os.environ.get("THOUGHT_MIN_TURN_GAP_SECONDS")
+        check(got == "99",
+              f"counter-check: thoughts.min_turn_gap_seconds=99 arrives (got {got!r})")
+    finally:
+        os.environ.clear()
+        os.environ.update(saved_env)
+    check(os.environ.get("STORAGE_DIR") == _TMP_STORAGE.name,
+          "env restored: STORAGE_DIR is the throwaway dir again")
 
     print()
     if FAILURES:
