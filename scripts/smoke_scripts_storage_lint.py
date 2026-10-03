@@ -88,9 +88,44 @@ Part 4 pins the same rule for the INSTANCE directory (per-installation
 server config): ``paths.init_instance`` takes the argument, else
 ``INSTANCE_DIR``, else raises ``paths.InstanceNotInitialised``.
 
+PART 5 — a script that imports ``app.server`` sets INSTANCE_DIR first
+
+``app/server.py`` runs ``paths.init()`` and ``paths.init_instance()`` WITHOUT
+an argument at import time, so for it only the environment decides — a
+``paths.init(tmp)`` / ``paths.init_instance(tmp)`` in the script is simply
+re-resolved.  A script that imports it must therefore WRITE both
+``os.environ["INSTANCE_DIR"]`` and ``os.environ["STORAGE_DIR"]`` (assignment
+or ``setdefault``) before a module-level import; for an import inside a
+function any write in the file counts (same reasoning as part 2).  Hand-derived
+fixtures, then a counter-check on a violating file in a temp directory, then
+the real scan.
+
+PART 6 — who touches the REAL instance is listed
+
+A script reaches the real instance when it
+
+  * calls ``init_instance()`` with NO argument (the env decides — for a
+    check that is no redirect at all, cf. fixture 10 above),
+  * calls ``init_instance(X)`` where X is not a temp path,
+  * writes ``os.environ["INSTANCE_DIR"]`` with a value that is not a temp path,
+  * or reads ``get_instance_config_path()`` / ``get_instance_dir()`` without a
+    temp redirect before it (module level: an earlier line; inside a function:
+    anywhere in the file).
+
+"Temp path" is computed, not guessed: an expression that contains a call to
+``mkdtemp`` / ``TemporaryDirectory``, or a name every assignment of which is
+such an expression (``with … as tmp`` included; transitive, so
+``INST = Path(tempfile.mkdtemp())`` and ``str(INST)`` both count).  Scope-blind
+on purpose — the scripts here are flat.  Everything else — a literal,
+``REPO / "instance"``, ``args.instance`` — is the real instance.  Such a script
+must be named in ``INTENTIONAL_REAL_INSTANCE`` with the reason (the CLI tools
+that pass ``--instance``); a stale entry fails as well.  Check scripts never
+belong there: they use a temp instance.
+
 Exit code 0 = paths.py has no default world and no default instance AND every
-candidate redirects its storage.  Exit 1 lists what is wrong — including the line numbers that decide
-a script's verdict.
+candidate redirects its storage AND every app.server importer sets
+INSTANCE_DIR AND every real-instance reach is listed.  Exit 1 lists what is
+wrong — including the line numbers that decide a script's verdict.
 """
 import ast
 import os
@@ -126,6 +161,21 @@ INTENTIONAL_REAL_WORLD = {
     # This lint itself: it parses sources; the only app module it imports is
     # app.core.paths (part 4), which opens no world.
     "smoke_scripts_storage_lint.py",
+}
+
+# Scripts that reach the REAL instance directory on purpose (part 6).  CLI
+# tools that need instance config (providers, routing, catalogs + tokens) take
+# ``--instance PATH`` with the default ``<repo>/instance`` set in the tool.
+INTENTIONAL_REAL_INSTANCE = {
+    "review_presets.py":
+        "CLI tool: calls the LLMs configured in the instance "
+        "(providers, llm_routing); --instance, default <repo>/instance",
+    "marketplace_publish.py":
+        "CLI tool: publishes to a catalog whose URL + auth_token are instance "
+        "config; --instance, default <repo>/instance",
+    "smoke_scripts_storage_lint.py":
+        "this lint: part 4 calls init_instance() without an argument on purpose "
+        "(INSTANCE_DIR popped) to prove it raises, and restores INSTANCE_DIR",
 }
 
 # scripts/legacy/ is out of scope wholesale: retired tools, kept only for
@@ -478,7 +528,11 @@ def paths_has_no_default_instance() -> None:
       e. argument AND env                  -> the argument wins
 
     Measured in-process on a fresh ``importlib.reload(paths)`` (module state
-    reset) with ``INSTANCE_DIR`` removed; the environment is restored after.
+    reset) with ``INSTANCE_DIR`` removed.  Afterwards the environment is
+    restored AND the module reloaded once more, so a later in-process part never
+    sees ``paths`` pointing at the deleted temp directory.  An exception of the
+    WRONG type where a raise is expected is a FAIL line, not a traceback (same
+    as part 3's WRONG-TYPE probe).
     """
     import importlib
     import tempfile
@@ -487,6 +541,16 @@ def paths_has_no_default_instance() -> None:
     if str(REPO) not in sys.path:
         sys.path.insert(0, str(REPO))
     saved = os.environ.pop("INSTANCE_DIR", None)
+
+    def expect_raise(label, fn, exc) -> None:
+        try:
+            fn()
+            check(label, False, "no raise")
+        except exc:
+            check(label, True)
+        except Exception as e:              # any other type is a failure too
+            check(label, False, "WRONG-TYPE:" + type(e).__name__)
+
     try:
         import app.core.paths as paths
         paths = importlib.reload(paths)
@@ -497,18 +561,12 @@ def paths_has_no_default_instance() -> None:
         if exc is None:
             return
 
-        try:
-            paths.get_instance_dir()
-            check("get_instance_dir() raises when uninitialised", False, "no raise")
-        except exc:
-            check("get_instance_dir() raises when uninitialised", True)
+        expect_raise("get_instance_dir() raises when uninitialised",
+                     paths.get_instance_dir, exc)
         check("instance_initialised() is False when uninitialised",
               paths.instance_initialised() is False)
-        try:
-            paths.init_instance()
-            check("init_instance() without argument and env raises", False, "no raise")
-        except exc:
-            check("init_instance() without argument and env raises", True)
+        expect_raise("init_instance() without argument and env raises",
+                     paths.init_instance, exc)
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -531,10 +589,459 @@ def paths_has_no_default_instance() -> None:
                   got == want_b, str(got))
             got = paths.init_instance(tmp / "c")
             check("argument beats INSTANCE_DIR", got == (tmp / "c").resolve(), str(got))
+    except Exception as e:
+        check("part 4 runs", False, f"{type(e).__name__}: {e}")
     finally:
         os.environ.pop("INSTANCE_DIR", None)
         if saved is not None:
             os.environ["INSTANCE_DIR"] = saved
+        mod = sys.modules.get("app.core.paths")
+        if mod is not None:
+            importlib.reload(mod)       # module state no longer names the temp dir
+
+
+# ------------------------------------------- shared AST helpers (parts 5, 6)
+
+def is_env_key(node, key: str) -> bool:
+    """True for the subscript ``os.environ[<key>]`` (or bare ``environ``)."""
+    if not isinstance(node, ast.Subscript):
+        return False
+    if dotted(node.value).split(".")[-1] != "environ":
+        return False
+    k = node.slice
+    return isinstance(k, ast.Constant) and k.value == key
+
+
+def env_writes(tree, key: str):
+    """[(lineno, value expr)] for every WRITE of ``os.environ[<key>]``.
+
+    Assignment, augmented/annotated assignment, or
+    ``os.environ.setdefault(<key>, value)`` — the same shapes part 2 accepts
+    for STORAGE_DIR.  A read (``.get``) is not a write.
+    """
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            if any(is_env_key(t, key) for t in node.targets):
+                out.append((node.lineno, node.value))
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            if is_env_key(node.target, key):
+                out.append((node.lineno, node.value))
+        elif (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "setdefault"
+                and dotted(node.func.value).split(".")[-1] == "environ"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == key):
+            out.append((node.lineno, node.args[1] if len(node.args) > 1 else None))
+    return out
+
+
+def nested_lines(tree) -> set:
+    """Line numbers of every node inside a function or class body."""
+    lines = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for inner in ast.walk(node):
+                if inner is not node and hasattr(inner, "lineno"):
+                    lines.add(inner.lineno)
+    return lines
+
+
+def call_name(node) -> str:
+    """Last segment of a call's function name (``paths.init_instance`` -> ``init_instance``)."""
+    if not isinstance(node, ast.Call):
+        return ""
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return ""
+
+
+TEMP_CALLS = {"mkdtemp", "TemporaryDirectory"}
+
+
+def is_temp(expr, temp: set) -> bool:
+    """True if *expr* contains a temp-dir call or a temp name."""
+    if expr is None:
+        return False
+    for node in ast.walk(expr):
+        if call_name(node) in TEMP_CALLS:
+            return True
+        if isinstance(node, ast.Name) and node.id in temp:
+            return True
+    return False
+
+
+def temp_names(tree) -> set:
+    """Names EVERY binding of which is a temp-path expression (fixpoint).
+
+    Bindings counted: ``=``, annotated ``=``, ``:=``, augmented ``+=`` etc.,
+    ``with X as name``, tuple unpacking and ``for name in …`` (the last two
+    have no value per name, so such a name is never temp).  A name's
+    references to ITSELF are ignored when judging it (``tmp = Path(tmp)``), but
+    at least one binding has to stand on its own.  Scope-blind: one namespace
+    for the whole file.
+    """
+    values: dict = {}
+
+    def bind(target, value):
+        if isinstance(target, ast.Name):
+            values.setdefault(target.id, []).append(value)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                bind(elt, None)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                bind(t, node.value)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)) and node.value is not None:
+            bind(node.target, node.value)
+        elif isinstance(node, ast.NamedExpr):
+            bind(node.target, node.value)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    bind(item.optional_vars, item.context_expr)
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            bind(node.target, None)
+
+    temp: set = set()
+    changed = True
+    while changed:
+        changed = False
+        for name, vals in values.items():
+            if name in temp or any(v is None for v in vals):
+                continue
+            if (all(is_temp(v, temp | {name}) for v in vals)
+                    and any(is_temp(v, temp) for v in vals)):
+                temp.add(name)
+                changed = True
+    return temp
+
+
+# ---------------------------------------- part 5: app.server importers
+
+def server_imports(tree):
+    """[lineno] of every import that loads ``app.server``."""
+    out = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(a.name == "app.server" or a.name.startswith("app.server.")
+                   for a in node.names):
+                out.append(node.lineno)
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            mod = node.module or ""
+            if mod == "app.server" or mod.startswith("app.server."):
+                out.append(node.lineno)
+            elif mod == "app" and any(a.name == "server" for a in node.names):
+                out.append(node.lineno)
+    return sorted(out)
+
+
+def server_verdict(source: str):
+    """('no-server' | 'clean' | 'offender', detail) — see PART 5."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return "no-server", ""
+    imports = server_imports(tree)
+    if not imports:
+        return "no-server", ""
+    nested = nested_lines(tree)
+    problems = []
+    for key in ("INSTANCE_DIR", "STORAGE_DIR"):
+        writes = [line for line, _ in env_writes(tree, key)]
+        for imp in imports:
+            if imp in nested:
+                ok = bool(writes)          # deferred: runs on the call
+            else:
+                ok = any(w < imp for w in writes)
+            if not ok:
+                where = (f"written only on line {min(writes)}" if writes
+                         else "never written")
+                problems.append(f"imports app.server on line {imp}, {key} {where}")
+    return ("offender" if problems else "clean"), "; ".join(problems)
+
+
+SERVER_FIXTURES = [
+    ("a both env vars written, then import app.server", "clean", """
+import os, tempfile
+os.environ["STORAGE_DIR"] = tempfile.mkdtemp()
+os.environ["INSTANCE_DIR"] = tempfile.mkdtemp()
+import app.server as server
+"""),
+    ("b only STORAGE_DIR written", "offender", """
+import os, tempfile
+os.environ["STORAGE_DIR"] = tempfile.mkdtemp()
+import app.server
+"""),
+    ("c INSTANCE_DIR written after the import", "offender", """
+import os, tempfile
+os.environ["STORAGE_DIR"] = tempfile.mkdtemp()
+from app.server import app
+os.environ["INSTANCE_DIR"] = tempfile.mkdtemp()
+"""),
+    ("d from app import server, nothing written", "offender", """
+from app import server
+"""),
+    ("e import inside a function, writes later in the file", "clean", """
+import os, tempfile
+def main():
+    import app.server
+os.environ.setdefault("STORAGE_DIR", tempfile.mkdtemp())
+os.environ.setdefault("INSTANCE_DIR", tempfile.mkdtemp())
+"""),
+    ("f paths.init_instance(tmp) is not enough (app.server re-reads the env)",
+     "offender", """
+import os, tempfile
+from app.core import paths
+os.environ["STORAGE_DIR"] = tempfile.mkdtemp()
+paths.init_instance(tempfile.mkdtemp())
+import app.server
+"""),
+    ("g app.server only named in a docstring and a comment", "no-server", '''
+"""Never imports app.server."""
+# import app.server
+from app.core import paths
+'''),
+    ("h INSTANCE_DIR only read, never written", "offender", """
+import os, tempfile
+os.environ["STORAGE_DIR"] = tempfile.mkdtemp()
+print(os.environ.get("INSTANCE_DIR"))
+import app.server
+"""),
+]
+
+BAD_SERVER_FILE = """import os, tempfile
+os.environ["STORAGE_DIR"] = tempfile.mkdtemp()
+import app.server
+"""
+
+
+def scan_server(root: Path):
+    """([(name, detail)] offenders, candidate count) for the scripts under *root*."""
+    offenders, candidates = [], 0
+    for path in sorted(root.rglob("*.py")):
+        if set(path.relative_to(root).parts[:-1]) & SKIPPED_DIRS:
+            continue
+        state, detail = server_verdict(path.read_text(encoding="utf-8", errors="replace"))
+        if state == "no-server":
+            continue
+        candidates += 1
+        if state == "offender":
+            offenders.append((path.name, detail))
+    return offenders, candidates
+
+
+def server_importers_set_instance() -> None:
+    """Part 5: an ``app.server`` importer writes INSTANCE_DIR + STORAGE_DIR first."""
+    import tempfile
+
+    print("5. a script that imports app.server writes INSTANCE_DIR (and STORAGE_DIR) first")
+    for label, expected, src in SERVER_FIXTURES:
+        got = server_verdict(src)[0]
+        check(f"{label} -> {expected}", got == expected, got)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "bad_server_import.py").write_text(BAD_SERVER_FILE, encoding="utf-8")
+        (root / "good.py").write_text(SERVER_FIXTURES[0][2], encoding="utf-8")
+        offenders, n = scan_server(root)
+        check("counter-check: a violating file in a temp dir is caught",
+              [o[0] for o in offenders] == ["bad_server_import.py"] and n == 2,
+              f"{offenders}, {n} candidate(s)")
+
+    offenders, n = scan_server(SCRIPTS)
+    print(f"  {n} script(s) import app.server, "
+          f"{len(offenders)} without INSTANCE_DIR/STORAGE_DIR first")
+    for name, detail in offenders:
+        check(name, False, detail)
+    if not offenders:
+        print("  OK  every app.server importer writes both env vars before the import")
+
+
+# -------------------------------------- part 6: real-instance reaches
+
+INSTANCE_READERS = {"get_instance_config_path", "get_instance_dir"}
+
+
+def instance_verdict(source: str):
+    """('none' | 'temp' | 'real', [reason, …]) — see PART 6."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return "none", []
+    temp = temp_names(tree)
+    nested = nested_lines(tree)
+    redirects, reads, real = [], [], []
+    for node in ast.walk(tree):
+        name = call_name(node)
+        if name == "init_instance":
+            arg = node.args[0] if node.args else next(
+                (k.value for k in node.keywords if k.arg == "instance_dir"), None)
+            if arg is None:
+                real.append((node.lineno, "init_instance() without an argument"))
+            elif is_temp(arg, temp):
+                redirects.append(node.lineno)
+            else:
+                real.append((node.lineno, f"init_instance({ast.unparse(arg)})"))
+        elif name in INSTANCE_READERS:
+            reads.append((node.lineno, name))
+    for line, value in env_writes(tree, "INSTANCE_DIR"):
+        if is_temp(value, temp):
+            redirects.append(line)
+        else:
+            shown = ast.unparse(value) if value is not None else "?"
+            real.append((line, f"INSTANCE_DIR = {shown}"))
+    for line, name in reads:
+        if line in nested:
+            ok = bool(redirects)           # deferred: runs on the call
+        else:
+            ok = any(r < line for r in redirects)
+        if not ok:
+            real.append((line, f"{name}() without a temp instance before it"))
+    if real:
+        return "real", [f"line {ln}: {what}" for ln, what in sorted(real)]
+    if redirects or reads:
+        return "temp", []
+    return "none", []
+
+
+INSTANCE_FIXTURES = [
+    ("1 init_instance(mkdtemp()), then the config path", "temp", """
+import tempfile
+from app.core import paths
+paths.init_instance(tempfile.mkdtemp())
+print(paths.get_instance_config_path())
+"""),
+    ("2 init_instance() without an argument", "real", """
+from app.core import paths
+paths.init_instance()
+"""),
+    ("3 init_instance(REPO / 'instance')", "real", """
+from pathlib import Path
+from app.core import paths
+REPO = Path(__file__).resolve().parents[1]
+paths.init_instance(REPO / "instance")
+"""),
+    ("4 init_instance(args.instance) - the CLI shape", "real", """
+import argparse
+from app.core import paths
+args = argparse.ArgumentParser().parse_args()
+paths.init_instance(args.instance)
+"""),
+    ("5 config path read, no init at all", "real", """
+from app.core import paths
+print(paths.get_instance_config_path())
+"""),
+    ("6 config path read BEFORE the temp init", "real", """
+import tempfile
+from app.core import paths
+p = paths.get_instance_config_path()
+paths.init_instance(tempfile.mkdtemp())
+"""),
+    ("7 INSTANCE_DIR = str(temp name), then get_instance_dir()", "temp", """
+import os, tempfile
+from pathlib import Path
+from app.core import paths
+INST = Path(tempfile.mkdtemp(prefix="x-"))
+os.environ["INSTANCE_DIR"] = str(INST)
+print(paths.get_instance_dir())
+"""),
+    ("8 with TemporaryDirectory() as tmp; tmp = Path(tmp); tmp / 'a'", "temp", """
+import tempfile
+from pathlib import Path
+from app.core import paths
+with tempfile.TemporaryDirectory() as tmp:
+    tmp = Path(tmp)
+    paths.init_instance(tmp / "a")
+"""),
+    ("9 INSTANCE_DIR written with a literal", "real", """
+import os
+os.environ["INSTANCE_DIR"] = "/srv/anima/instance"
+"""),
+    ("10 init_instance() only named in a docstring", "none", '''
+"""Never calls paths.init_instance() or get_instance_config_path()."""
+from app.core import paths
+'''),
+    ("11 read inside a function, temp init later in the file", "temp", """
+import tempfile
+from app.core import paths
+def show():
+    print(paths.get_instance_config_path())
+paths.init_instance(tempfile.mkdtemp())
+"""),
+    ("12 a name bound once temp, once not, is not temp", "real", """
+import sys, tempfile
+from app.core import paths
+d = tempfile.mkdtemp()
+d = sys.argv[1]
+paths.init_instance(d)
+"""),
+]
+
+BAD_INSTANCE_FILE = """from pathlib import Path
+from app.core import paths
+paths.init_instance(Path(__file__).resolve().parents[1] / "instance")
+print(paths.get_instance_config_path())
+"""
+
+
+def scan_instance(root: Path, whitelist: dict):
+    """(unlisted [(name, reasons)], stale [name], real count) for *root*."""
+    unlisted, real_names = [], set()
+    for path in sorted(root.rglob("*.py")):
+        if set(path.relative_to(root).parts[:-1]) & SKIPPED_DIRS:
+            continue
+        state, reasons = instance_verdict(
+            path.read_text(encoding="utf-8", errors="replace"))
+        if state != "real":
+            continue
+        real_names.add(path.name)
+        if path.name not in whitelist:
+            unlisted.append((path.name, reasons))
+    stale = sorted(n for n in whitelist if n not in real_names)
+    return unlisted, stale, len(real_names)
+
+
+def real_instance_reaches_listed() -> None:
+    """Part 6: every reach of the real instance is listed with its reason."""
+    import tempfile
+
+    print("6. a script that reaches the REAL instance is listed with a reason")
+    for label, expected, src in INSTANCE_FIXTURES:
+        got = instance_verdict(src)[0]
+        check(f"{label} -> {expected}", got == expected, got)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "bad_real_instance.py").write_text(BAD_INSTANCE_FILE, encoding="utf-8")
+        (root / "good.py").write_text(INSTANCE_FIXTURES[0][2], encoding="utf-8")
+        (root / "listed.py").write_text(INSTANCE_FIXTURES[1][2], encoding="utf-8")
+        unlisted, stale, n = scan_instance(
+            root, {"listed.py": "fixture", "gone.py": "fixture"})
+        check("counter-check: a violating file in a temp dir is caught",
+              [u[0] for u in unlisted] == ["bad_real_instance.py"] and n == 2,
+              f"{unlisted}, {n} real")
+        check("counter-check: a stale whitelist entry is caught",
+              stale == ["gone.py"], str(stale))
+
+    for name, reason in INTENTIONAL_REAL_INSTANCE.items():
+        check(f"{name} names a reason", bool(reason and reason.strip()))
+    unlisted, stale, n = scan_instance(SCRIPTS, INTENTIONAL_REAL_INSTANCE)
+    print(f"  {n} script(s) reach the real instance, "
+          f"{len(INTENTIONAL_REAL_INSTANCE)} listed in INTENTIONAL_REAL_INSTANCE")
+    for name, reasons in unlisted:
+        check(f"{name} is not in INTENTIONAL_REAL_INSTANCE", False, "; ".join(reasons))
+    for name in stale:
+        check(f"{name} is listed but no longer reaches the real instance", False,
+              "remove the entry")
+    if not unlisted and not stale:
+        print("  OK  every real-instance reach is listed, no stale entry")
 
 
 def main() -> int:
@@ -558,6 +1065,12 @@ def main() -> int:
 
     print()
     paths_has_no_default_instance()
+
+    print()
+    server_importers_set_instance()
+
+    print()
+    real_instance_reaches_listed()
 
     print()
     if FAILURES:

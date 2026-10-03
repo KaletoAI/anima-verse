@@ -6,11 +6,12 @@ repository (``anima-verse-packs/build_catalog.py`` writes ``dist/<pkg>.zip``).
 Same storage as the Publish button (``app/core/marketplace_store.py``): the ZIP
 becomes a release asset of the catalog repository and a line in that type's
 index. The catalog (URL + token) is INSTANCE config: it is read from the
-instance directory named by INSTANCE_DIR (plus the world's config), exactly
-as the server would read it; nothing in either is written.
+instance directory named by --instance (default: <repo>/instance, the one
+start.sh uses) plus the world's config, exactly as the server would read it;
+nothing in either is written.
 
 Usage:
-    INSTANCE_DIR=./instance ./.venv/bin/python scripts/marketplace_publish.py \\
+    ./.venv/bin/python scripts/marketplace_publish.py [--instance <dir>] \\
         --world "worlds/<world>" --catalog "<catalog name>" \\
         --type skill_package --zip ../anima-verse-packs/dist/<pkg>.zip \\
         --name "<display name>" [--slug <slug>] [--description "..."] [--tags a,b] \\
@@ -24,13 +25,19 @@ import hashlib
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
+
+# The instance default is set HERE, in the tool — app/ code names no instance.
+DEFAULT_INSTANCE = REPO / "instance"
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--world", required=True, help="world directory (the catalogs come from the instance config)")
+    ap.add_argument("--instance", type=Path, default=DEFAULT_INSTANCE,
+                    help=f"instance directory holding the catalogs (default: {DEFAULT_INSTANCE})")
     ap.add_argument("--catalog", required=True, help="catalog display name (content_marketplace.catalogs[].name)")
     ap.add_argument("--type", required=True, dest="pack_type", help="pack type, e.g. skill_package")
     ap.add_argument("--zip", required=True, type=Path)
@@ -44,12 +51,7 @@ def main() -> int:
 
     from app.core import paths
     paths.init(args.world)
-    try:
-        paths.init_instance()
-    except paths.InstanceNotInitialised as e:
-        print(f"{e}\n  the catalogs (URL + token) are instance config: "
-              f"set INSTANCE_DIR (e.g. ./instance)")
-        return 2
+    paths.init_instance(args.instance)
     from app.core import config
     config.load(paths.get_config_path(), paths.get_instance_config_path())
     from app.core.content_io import _pack_slug, make_thumbnail

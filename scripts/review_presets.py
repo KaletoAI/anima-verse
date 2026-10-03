@@ -6,8 +6,8 @@ an enriched target JSON with a review block per entry.
 
 Needs a world (it reads that world's config): pass --world <name>
 (-> worlds/<name>) or set STORAGE_DIR. There is no default world. The LLM
-providers and the routing are INSTANCE config: set INSTANCE_DIR to the
-instance directory (start.sh uses ./instance). There is no default instance.
+providers and the routing are INSTANCE config: --instance PATH names the
+instance directory (default: <repo>/instance, the one start.sh uses).
 
 Usage:
   python scripts/review_presets.py --world demo --list
@@ -48,55 +48,38 @@ from typing import Any, Dict, List, Optional
 _project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_project_root))
 
-# CLI pre-parsing for --world only (it has to happen before paths.init()).
-# The full argument parser follows later in main().
-import os as _os  # noqa: E402
-_world_override = None
-for i, _arg in enumerate(sys.argv):
-    if _arg == "--world" and i + 1 < len(sys.argv):
-        _world_override = sys.argv[i + 1]
-        break
-    if _arg.startswith("--world="):
-        _world_override = _arg.split("=", 1)[1]
-        break
+# The instance default is set HERE, in the tool — app/ code names no instance.
+DEFAULT_INSTANCE = _project_root / "instance"
 
-# Bootstrap exactly like app/server.py:
-#   1. paths.init()  — set the storage dir (via --world or STORAGE_DIR; there
-#      is NO default world any more, so without either this exits)
-#   2. paths.init_instance() — the instance dir (INSTANCE_DIR, no default)
-#   3. config.load() — load both config layers, fill os.environ
-#   4. initialise provider_manager — reads the providers from the env
-#   5. use llm_router — LLMInstance for explicit model overrides
-from app.core import paths as _paths_mod  # noqa: E402
-try:
-    if _world_override:
-        _paths_mod.init(Path("worlds") / _world_override)
-    else:
-        _paths_mod.init()
-except _paths_mod.StorageNotInitialised as _e:
-    print(f"ERROR: {_e}\n"
-          "       This tool reads a real world: pass --world <name> "
-          "(-> worlds/<name>) or set STORAGE_DIR.", file=sys.stderr)
-    sys.exit(2)
 
-try:
-    _paths_mod.init_instance()
-except _paths_mod.InstanceNotInitialised as _e:
-    print(f"ERROR: {_e}\n"
-          "       This tool calls the configured LLMs: set INSTANCE_DIR to the "
-          "instance directory (e.g. ./instance).", file=sys.stderr)
-    sys.exit(2)
+def _bootstrap(world: Optional[str], instance: Path) -> None:
+    """Bootstrap like app/server.py, but with explicit directories.
 
-from app.core.config import load as _load_config  # noqa: E402
-_load_config(_paths_mod.get_config_path(), _paths_mod.get_instance_config_path())
+      1. paths.init()          — the storage dir (--world, else STORAGE_DIR;
+                                 there is no default world: without either this exits)
+      2. paths.init_instance() — the instance dir from --instance
+      3. config.load()         — both config layers, fills os.environ
+      4. provider_manager      — reads the providers (as in the server lifespan);
+                                 llm_router resolves lazily
+    """
+    from app.core import paths
+    try:
+        if world:
+            paths.init(Path("worlds") / world)
+        else:
+            paths.init()
+    except paths.StorageNotInitialised as e:
+        print(f"ERROR: {e}\n"
+              "       This tool reads a real world: pass --world <name> "
+              "(-> worlds/<name>) or set STORAGE_DIR.", file=sys.stderr)
+        sys.exit(2)
+    paths.init_instance(instance)
 
-from app.core.provider_manager import (  # noqa: E402
-    get_provider_manager, initialize_provider_manager,
-)
-from app.core.llm_router import create_llm_instance  # noqa: E402
+    from app.core.config import load as load_config
+    load_config(paths.get_config_path(), paths.get_instance_config_path())
 
-# Initialise the providers (as in the server lifespan); llm_router resolves lazily.
-initialize_provider_manager()
+    from app.core.provider_manager import initialize_provider_manager
+    initialize_provider_manager()
 
 
 # ============================================================================
@@ -151,6 +134,7 @@ def _guess_kind(source_path: Path) -> str:
 
 def list_available_llms() -> List[Dict[str, str]]:
     """Lists every available provider::model combination."""
+    from app.core.provider_manager import get_provider_manager
     pm = get_provider_manager()
     result = []
     all_models = pm.list_all_models()
@@ -190,6 +174,7 @@ def resolve_llm(identifier: str):
         print("       Show the available LLMs with --list.")
         sys.exit(1)
 
+    from app.core.llm_router import create_llm_instance
     provider_name, model_name = identifier.split("::", 1)
     instance = create_llm_instance(
         task="tools",
@@ -366,6 +351,9 @@ def main():
                         help="World name (subdirectory of worlds/). Selects which storage/config "
                              "is loaded. Required when STORAGE_DIR is not set — "
                              "there is no default world.")
+    parser.add_argument("--instance", type=Path, default=DEFAULT_INSTANCE,
+                        help="Instance directory: the LLM providers and the routing "
+                             f"are instance config (default: {DEFAULT_INSTANCE})")
     parser.add_argument("--llm", type=str,
                         help="LLM as 'provider::model' (e.g. local-llm::qwen3-8b)")
     parser.add_argument("--source", type=str,
@@ -379,6 +367,7 @@ def main():
     parser.add_argument("--no-resume", action="store_true",
                         help="Rewrite the target from scratch instead of keeping existing reviews")
     args = parser.parse_args()
+    _bootstrap(args.world, args.instance)
 
     if args.list:
         print_available_llms()

@@ -399,8 +399,9 @@ Inhalt nie kollidieren. NSFW- und andere private Pakete werden ausschließlich s
 verteilt — nie in diesem SFW-Repo.
 
 Veröffentlichen: ein fertiges Paket-ZIP geht mit
-`./.venv/bin/python scripts/marketplace_publish.py --world worlds/<welt> --catalog "<Katalog>"
---type skill_package --zip <paket>.zip --name "<Name>" [--thumb <bild>]` in den Katalog — als
+`./.venv/bin/python scripts/marketplace_publish.py [--instance <dir>] --world worlds/<welt> --catalog "<Katalog>"
+--type skill_package --zip <paket>.zip --name "<Name>" [--thumb <bild>]` in den Katalog
+(Katalog-URL und Token sind Instanz-Config; `--instance` ist per Default `<repo>/instance`) — als
 Release-Asset des Katalog-Repos (`packs-skill_package`), dieselbe Ablage wie der Publish-Button
 (`app/core/marketplace_store.py`). Private Pakete gehören in einen privaten Forgejo-Katalog.
 
