@@ -127,7 +127,137 @@ E) ``child_scopes_differ`` on hand cases: memory, image_generation -> True
    chat.chattiness, llm_task_state, an unknown root -> False; skills and
    skills.searx -> True (SKIP without searx). ``scope_of(p) == mixed``
    exactly when ``child_scopes_differ(p)`` — checked for every row of D.
+
+PART 2 — shipped defaults, prune, split by scope
+------------------------------------------------
+
+The instance and world files store only what DIFFERS from what ships, and
+each value in the file its scope names. ``config_scope.shipped_default``,
+``prune`` and ``split_by_scope`` are that rule.
+
+Schema defaults used below, read by hand from ``app/core/config_schema.py``
+(check S0 verifies each against the schema, so a changed default fails
+loudly instead of silently shifting the expectations):
+     server.log_level                 "INFO"
+     server.time_format               "24h"    (X = "12h" is a deviation)
+     server.api_key                   no default (password field)
+     game_calendar.day_bucket_noon    12       (10 is a deviation)
+     game_calendar._calendar_note     note field = pseudo, never a default
+     tts.xtts.url                     "http://localhost:8020"  (subsection)
+     image_generation.enabled         True
+     memory.max_messages              100
+     skills.searx.url                 "http://localhost:8888"  (plugin.yaml)
+     skills.searx.enabled             False                    (plugin.yaml)
+List defaults NOT in the schema, and only these three:
+     content_marketplace.catalogs  = config._DEFAULT_MARKETPLACE_CATALOGS
+     image_generation.backends     = config._default_mesh_backend_entries()
+     game_seasons                  = game_time.default_seasons_config()
+Use-case seed (what ``config._seed_default_use_cases`` writes per shipped
+use case, readers fall back to "" / False for a missing key):
+     {"styles": {fam: {"prompt_style": "", "prompt_negative": "",
+                       "prompt_instruction": ""} for fam in natural, keywords},
+      "llm_compose": False}
+
+S0) The constants above equal the schema; the game_calendar schema defaults
+    equal ``game_time.default_calendar_config()`` field by field (the
+    calendar is pruned field-wise through the schema — no special case).
+
+S1) shipped_default(path) -> (has, value):
+     server.log_level                      (True, "INFO")
+     server.api_key                        (False, None)  no default
+     server._grp_x                         (False, None)  pseudo name
+     game_calendar._calendar_note          (False, None)  note field
+     game_calendar.day_bucket_noon         (True, 12)
+     tts.xtts.url                          (True, "http://localhost:8020")
+     skills.searx.url                      (True, "http://localhost:8888")
+     providers                             (False, None)  array, no default
+     providers.0.name                      (False, None)  inside a list entry
+     game_seasons                          (True, default_seasons_config())
+     game_seasons.0                        (False, None)  a list ENTRY, not the list
+     content_marketplace.catalogs          (True, the catalog constant)
+     image_generation.backends             (True, the mesh seed entries)
+     image_generation.use_cases.scene      (True, the seed)
+     image_generation.use_cases.my_uc      (False, None)  not a shipped use
+                                           case: the seeding never re-adds it,
+                                           so dropping it would lose the key
+     telegram.x                            (False, None)  unknown root
+    and the returned value is a copy: mutating it changes no later answer.
+
+S2) prune(cfg) -> copy, cfg itself unchanged:
+     {"server": {"log_level": "INFO", "time_format": "12h"}}
+        -> {"server": {"time_format": "12h"}}
+     {"server": {"log_level": "INFO", "time_format": "24h"}}      -> {}
+     {"content_marketplace": {"catalogs": <copy of the default>}} -> {}
+     {"content_marketplace": {"catalogs": []}}                    -> unchanged
+                                                   ([] = an explicit deviation)
+     {"image_generation": {"backends": <copy of the seed>}}       -> {}
+     {"image_generation": {"backends": []}}                       -> unchanged
+     {"game_seasons": default_seasons_config()}                   -> {}
+     {"game_seasons": <default with the first season renamed>}    -> unchanged
+     {"game_calendar": {"day_bucket_noon": 10}}                   -> unchanged
+     {"game_calendar": {"day_bucket_noon": 12}}                   -> {}
+     {"game_calendar": default_calendar_config()}                 -> {}
+     {"providers": [{"name": "a", "type": "openai", "extra": {}, "_x": 1}]}
+        -> unchanged (a list is one value; nothing inside an entry is pruned,
+           not even its empty dict or its "_" key)
+     {"image_generation": {"routing": {}, "use_cases": {"scene": <seed>,
+        "prop": <seed with natural.prompt_style "x">}}}
+        -> {"image_generation": {"use_cases": {"prop": <that entry, whole>}}}
+     {"image_generation": {"use_cases": {"my_uc": <seed>}}}       -> unchanged
+     {"image_generation": {"routing": {"scene": []}}}             -> unchanged
+                                                   ([] kept at any depth)
+     {"image_generation": {"routing": {"_x": ["a"]}}}             -> unchanged
+                       (routing is page-written data, not a schema section:
+                        a "_" key there is data, not a pseudo field)
+     {"image_generation": {"enabled": 1}}                         -> unchanged
+                       (1 is not the bool True: a bool default only matches
+                        a bool, so pruning cannot change a value's type)
+     {"server": {"_grp_x": 1}}                                    -> {}
+     {"tts": {"xtts": {"_note": 1, "url": "http://localhost:8020"}}} -> {}
+     {"decision": {"points": {}}, "knowledge": {}}                -> {}
+     {"skills": {"searx": {"url": "http://localhost:8888", "enabled": True}}}
+        -> {"skills": {"searx": {"enabled": True}}}
+     {"telegram": {"x": 1}}                                       -> unchanged
+     {"telegram": {}}                                             -> {}
+
+S3) split_by_scope on
+     {"server": {"log_level": "DEBUG"},
+      "chat": {"chattiness": 0.7},
+      "image_generation": {"backends": [{"name": "b"}],
+                           "use_cases": {"scene": {"llm_compose": True}},
+                           "routing": {"scene": ["b"]}},
+      "memory": {"max_messages": 5, "chat_retention_days": 9},
+      "skills": {"searx": {"url": "u", "enabled": True},
+                 "outfit_change": {"language": "de"}},
+      "llm_task_state": {"disabled_tasks": ["x"]},
+      "game_seasons": [{"id": "s"}],
+      "telegram": {}}
+    instance (rows of the Part 1 table D: server, image_generation.backends
+    and .routing, memory.chat_retention_days, skills.searx.url and
+    llm_task_state are instance):
+     {"server": {"log_level": "DEBUG"},
+      "image_generation": {"backends": [{"name": "b"}],
+                           "routing": {"scene": ["b"]}},
+      "memory": {"chat_retention_days": 9},
+      "skills": {"searx": {"url": "u"}},
+      "llm_task_state": {"disabled_tasks": ["x"]}}
+    world:
+     {"chat": {"chattiness": 0.7},
+      "image_generation": {"use_cases": {"scene": {"llm_compose": True}}},
+      "memory": {"max_messages": 5},
+      "skills": {"searx": {"enabled": True},
+                 "outfit_change": {"language": "de"}},
+      "game_seasons": [{"id": "s"}]}
+    unknown == ["telegram"]. Both parts are copies (mutating them leaves the
+    input unchanged). The skills rows need searx (SKIP without it).
+
+S4) PRE-DISCOVERY (runs before ``discover_packages()``, next to Part P):
+    ``split_by_scope({"skills": {"searx": {"url": "u", "enabled": True}}})``
+    puts url on the instance side and enabled on the world side, and
+    ``shipped_default("skills.searx.url") == (True, "http://localhost:8888")``
+    — the config load at boot sees the plugin fields before discovery.
 """
+import copy
 import os
 import re
 import sys
@@ -399,8 +529,212 @@ def part_p_after_discovery(had_searx):
                           "expected 'world'")
 
 
+# ---------------------------------------------------------------------------
+# Part 2 — shipped defaults, prune, split by scope
+# ---------------------------------------------------------------------------
+
+SCHEMA_DEFAULTS = [
+    (("server", "log_level"), "INFO"),
+    (("server", "time_format"), "24h"),
+    (("game_calendar", "day_bucket_noon"), 12),
+    (("tts", "xtts", "url"), "http://localhost:8020"),
+    (("image_generation", "enabled"), True),
+    (("memory", "max_messages"), 100),
+]
+SEARX_DEFAULTS = [
+    (("skills", "searx", "url"), "http://localhost:8888"),
+    (("skills", "searx", "enabled"), False),
+]
+FAMILIES = ("natural", "keywords")
+
+
+def _seed():
+    return {"styles": {fam: {"prompt_style": "", "prompt_negative": "",
+                             "prompt_instruction": ""} for fam in FAMILIES},
+            "llm_compose": False}
+
+
+def _has_api(cs, *names):
+    missing = [n for n in names if not hasattr(cs, n)]
+    check(not missing, f"2: config_scope lacks {missing}")
+    return not missing
+
+
+def part_2_before_discovery():
+    """S4 — runs before discover_packages()."""
+    from app.core import config_scope as cs
+    if not _has_api(cs, "split_by_scope", "shipped_default"):
+        return
+    from app.plugins import loader
+    if "searx" not in loader.manifest_config_schemas():
+        skip("S4: searx not among the manifests")
+        return
+    inst, world, unknown = cs.split_by_scope(
+        {"skills": {"searx": {"url": "u", "enabled": True}}})
+    check(inst == {"skills": {"searx": {"url": "u"}}},
+          f"S4: pre-discovery instance part = {inst!r}")
+    check(world == {"skills": {"searx": {"enabled": True}}},
+          f"S4: pre-discovery world part = {world!r}")
+    check(unknown == [], f"S4: pre-discovery unknown = {unknown!r}")
+    got = cs.shipped_default("skills.searx.url")
+    check(got == (True, "http://localhost:8888"),
+          f"S4: pre-discovery shipped_default('skills.searx.url') = {got!r}")
+    check(loader.is_discovered() is False, "S4: split/default must not trigger discovery")
+
+
+def part_2(cs, has_searx):
+    if not _has_api(cs, "shipped_default", "prune", "split_by_scope"):
+        return
+    from app.core import config as cfgmod
+    from app.core.config_schema import field_default
+    from app.core.game_time import default_calendar_config, default_seasons_config
+
+    # S0 — the docstring constants are the schema's
+    for keys, want in SCHEMA_DEFAULTS + (SEARX_DEFAULTS if has_searx else []):
+        try:
+            got = field_default(*keys)
+        except KeyError:
+            got = "<no default>"
+        check(got == want, f"S0: schema default {'.'.join(keys)} = {got!r}, docstring says {want!r}")
+    try:
+        field_default("server", "api_key")
+        check(False, "S0: server.api_key must have no schema default")
+    except KeyError:
+        pass
+    cal_schema = {}
+    from app.core.config_schema import SECTIONS
+    for name, fdef in SECTIONS["game_calendar"]["fields"].items():
+        try:
+            cal_schema[name] = field_default("game_calendar", name)
+        except KeyError:
+            pass
+    check(cal_schema == default_calendar_config(),
+          f"S0: game_calendar schema defaults {cal_schema!r} != default_calendar_config() "
+          f"{default_calendar_config()!r}")
+    check(list(cfgmod._PROMPT_STYLE_FAMILIES) == list(FAMILIES),
+          f"S0: prompt style families {cfgmod._PROMPT_STYLE_FAMILIES!r}")
+
+    # S1 — shipped_default
+    sd = cs.shipped_default
+    rows = [
+        ("server.log_level", (True, "INFO")),
+        ("server.api_key", (False, None)),
+        ("server._grp_x", (False, None)),
+        ("game_calendar._calendar_note", (False, None)),
+        ("game_calendar.day_bucket_noon", (True, 12)),
+        ("tts.xtts.url", (True, "http://localhost:8020")),
+        ("providers", (False, None)),
+        ("providers.0.name", (False, None)),
+        ("game_seasons", (True, default_seasons_config())),
+        ("game_seasons.0", (False, None)),
+        ("content_marketplace.catalogs", (True, cfgmod._DEFAULT_MARKETPLACE_CATALOGS)),
+        ("image_generation.backends", (True, cfgmod._default_mesh_backend_entries())),
+        ("image_generation.use_cases.scene", (True, _seed())),
+        ("image_generation.use_cases.my_uc", (False, None)),
+        ("telegram.x", (False, None)),
+    ]
+    if has_searx:
+        rows.append(("skills.searx.url", (True, "http://localhost:8888")))
+    else:
+        skip("S1: skills.searx.url — searx package not discoverable")
+    for path, want in rows:
+        got = sd(path)
+        check(got == want, f"S1: shipped_default({path!r}) = {got!r:.120}, expected {want!r:.120}")
+    has, val = sd("content_marketplace.catalogs")
+    val.append({"name": "mutated"})
+    check(sd("content_marketplace.catalogs")[1] == cfgmod._DEFAULT_MARKETPLACE_CATALOGS,
+          "S1: shipped_default must return a copy")
+
+    # S2 — prune
+    seasons_changed = default_seasons_config()
+    seasons_changed[0]["name"] = "Renamed"
+    prop = _seed()
+    prop["styles"]["natural"]["prompt_style"] = "x"
+    cases = [
+        ({"server": {"log_level": "INFO", "time_format": "12h"}},
+         {"server": {"time_format": "12h"}}),
+        ({"server": {"log_level": "INFO", "time_format": "24h"}}, {}),
+        ({"content_marketplace": {"catalogs": copy.deepcopy(cfgmod._DEFAULT_MARKETPLACE_CATALOGS)}}, {}),
+        ({"content_marketplace": {"catalogs": []}}, None),
+        ({"image_generation": {"backends": cfgmod._default_mesh_backend_entries()}}, {}),
+        ({"image_generation": {"backends": []}}, None),
+        ({"game_seasons": default_seasons_config()}, {}),
+        ({"game_seasons": seasons_changed}, None),
+        ({"game_calendar": {"day_bucket_noon": 10}}, None),
+        ({"game_calendar": {"day_bucket_noon": 12}}, {}),
+        ({"game_calendar": default_calendar_config()}, {}),
+        ({"providers": [{"name": "a", "type": "openai", "extra": {}, "_x": 1}]}, None),
+        ({"image_generation": {"routing": {}, "use_cases": {"scene": _seed(), "prop": prop}}},
+         {"image_generation": {"use_cases": {"prop": prop}}}),
+        ({"image_generation": {"use_cases": {"my_uc": _seed()}}}, None),
+        ({"image_generation": {"routing": {"scene": []}}}, None),
+        ({"image_generation": {"routing": {"_x": ["a"]}}}, None),
+        ({"image_generation": {"enabled": 1}}, None),
+        ({"server": {"_grp_x": 1}}, {}),
+        ({"tts": {"xtts": {"_note": 1, "url": "http://localhost:8020"}}}, {}),
+        ({"decision": {"points": {}}, "knowledge": {}}, {}),
+        ({"telegram": {"x": 1}}, None),
+        ({"telegram": {}}, {}),
+    ]
+    if has_searx:
+        cases.append(({"skills": {"searx": {"url": "http://localhost:8888", "enabled": True}}},
+                      {"skills": {"searx": {"enabled": True}}}))
+    for cfg, want in cases:
+        if want is None:
+            want = copy.deepcopy(cfg)
+        before = copy.deepcopy(cfg)
+        got = cs.prune(cfg)
+        check(got == want and type(got) is dict,
+              f"S2: prune({cfg!r:.160}) = {got!r:.160}, expected {want!r:.160}")
+        check(cfg == before, f"S2: prune mutated its input {before!r:.120}")
+    got = cs.prune({"image_generation": {"enabled": 1}})
+    check(type(got.get("image_generation", {}).get("enabled")) is int,
+          "S2: the int 1 must survive as int, not be matched against the bool default")
+
+    # S3 — split_by_scope
+    src = {
+        "server": {"log_level": "DEBUG"},
+        "chat": {"chattiness": 0.7},
+        "image_generation": {"backends": [{"name": "b"}],
+                             "use_cases": {"scene": {"llm_compose": True}},
+                             "routing": {"scene": ["b"]}},
+        "memory": {"max_messages": 5, "chat_retention_days": 9},
+        "llm_task_state": {"disabled_tasks": ["x"]},
+        "game_seasons": [{"id": "s"}],
+        "telegram": {},
+    }
+    want_inst = {
+        "server": {"log_level": "DEBUG"},
+        "image_generation": {"backends": [{"name": "b"}], "routing": {"scene": ["b"]}},
+        "memory": {"chat_retention_days": 9},
+        "llm_task_state": {"disabled_tasks": ["x"]},
+    }
+    want_world = {
+        "chat": {"chattiness": 0.7},
+        "image_generation": {"use_cases": {"scene": {"llm_compose": True}}},
+        "memory": {"max_messages": 5},
+        "game_seasons": [{"id": "s"}],
+    }
+    if has_searx:
+        src["skills"] = {"searx": {"url": "u", "enabled": True},
+                         "outfit_change": {"language": "de"}}
+        want_inst["skills"] = {"searx": {"url": "u"}}
+        want_world["skills"] = {"searx": {"enabled": True}, "outfit_change": {"language": "de"}}
+    else:
+        skip("S3: skills rows of split_by_scope — searx package not discoverable")
+    before = copy.deepcopy(src)
+    inst, world, unknown = cs.split_by_scope(src)
+    check(inst == want_inst, f"S3: instance part = {inst!r}")
+    check(world == want_world, f"S3: world part = {world!r}")
+    check(unknown == ["telegram"], f"S3: unknown roots = {unknown!r}")
+    inst["image_generation"]["backends"].append({"name": "mutated"})
+    world["memory"]["max_messages"] = 99
+    check(src == before, "S3: split_by_scope must return copies (input changed)")
+
+
 def main():
     had_searx = part_p_before_discovery()
+    part_2_before_discovery()
     from app.plugins.loader import discover_packages
     discover_packages()
     part_p_after_discovery(had_searx)
@@ -418,6 +752,7 @@ def main():
         check(False, f"D: app.core.config_scope not importable: {e}")
     else:
         part_d_e(cs, has_searx)
+        part_2(cs, has_searx)
 
     print()
     for s in _skips:

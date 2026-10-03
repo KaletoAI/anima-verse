@@ -29,8 +29,14 @@ The skill packages' subsections are part of the schema view under
 server boot) they come from the manifests alone
 (``loader.manifest_config_schemas()``, imports no package code); afterwards
 from the registry — so ``skills.searx.url`` is instance either way.
+
+On top of the scope rules sit the two operations the config layers are
+written with: ``prune`` keeps only what differs from what ships
+(``shipped_default``), ``split_by_scope`` sorts a config into its instance
+and its world part.
 """
 
+import copy
 import re
 from typing import Any, Dict, Optional, Set, Tuple
 
@@ -142,7 +148,11 @@ def _resolve(path: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     path left the known schema, or for an ``EXTRA_ROOTS`` root) and the scope
     declared or inherited there. ``(None, None)`` for an unknown root.
     """
-    parts = _segments(path)
+    return _resolve_parts(_segments(path))
+
+
+def _resolve_parts(parts) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """``_resolve`` on already split keys (a dict key may contain a dot)."""
     if not parts:
         return None, None
     root = parts[0]
@@ -183,7 +193,10 @@ def scope_of(path: str) -> Optional[str]:
     ``None`` for an unknown root (rule 1). See the module docstring for the
     rules.
     """
-    node, scope = _resolve(path)
+    return _scope_at(*_resolve(path))
+
+
+def _scope_at(node: Optional[Dict[str, Any]], scope: Optional[str]) -> Optional[str]:
     if scope is None:
         return None
     if node is None:
@@ -192,3 +205,200 @@ def scope_of(path: str) -> Optional[str]:
     if len(scopes) > 1:
         return MIXED
     return next(iter(scopes))
+
+
+# ---------------------------------------------------------------------------
+# Shipped defaults, prune, split
+# ---------------------------------------------------------------------------
+
+_DROP = object()
+
+
+def _use_case_seed() -> Dict[str, Any]:
+    """What ``config._seed_default_use_cases`` writes for one shipped use case."""
+    from app.core.config import _PROMPT_STYLE_FAMILIES
+    return {
+        "styles": {fam: {"prompt_style": "", "prompt_negative": "",
+                         "prompt_instruction": ""} for fam in _PROMPT_STYLE_FAMILIES},
+        "llm_compose": False,
+    }
+
+
+def _list_default(parts: Tuple[str, ...]) -> Tuple[bool, Any]:
+    """The three list defaults that do not come from the schema."""
+    if parts == ("content_marketplace", "catalogs"):
+        from app.core.config import _DEFAULT_MARKETPLACE_CATALOGS
+        return True, copy.deepcopy(_DEFAULT_MARKETPLACE_CATALOGS)
+    if parts == ("image_generation", "backends"):
+        from app.core.config import _default_mesh_backend_entries
+        return True, _default_mesh_backend_entries()
+    if parts == ("game_seasons",):
+        from app.core.game_time import default_seasons_config
+        return True, default_seasons_config()
+    return False, None
+
+
+def _fields_node(parts: Tuple[str, ...]) -> Optional[Dict[str, Any]]:
+    """The schema section or subsection at ``parts`` — a node whose keys are
+    fields. ``None`` for anything else: an array section, a sub_array, a key
+    the schema does not know (page-written data such as ``routing``)."""
+    if not parts:
+        return None
+    node = _schema_view().get(parts[0])
+    if not isinstance(node, dict) or node.get("virtual") or node.get("is_array"):
+        return None
+    for seg in parts[1:]:
+        node = (node.get("subsections") or {}).get(seg)
+        if not isinstance(node, dict):
+            return None
+    return node
+
+
+def _is_pseudo_name(name: Any) -> bool:
+    return isinstance(name, str) and name.startswith("_")
+
+
+def _shipped_default_parts(parts: Tuple[str, ...]) -> Tuple[bool, Any]:
+    if not parts or any(not isinstance(p, str) or not p for p in parts):
+        return False, None
+    has, value = _list_default(parts)
+    if has:
+        return True, value
+    if len(parts) == 3 and parts[:2] == ("image_generation", "use_cases"):
+        from app.core.config import _DEFAULT_IMAGE_USE_CASES
+        if parts[2] in _DEFAULT_IMAGE_USE_CASES:
+            return True, _use_case_seed()
+        return False, None
+    if len(parts) < 2:
+        return False, None
+    node = _fields_node(parts[:-1])
+    name = parts[-1]
+    if node is None or _is_pseudo_name(name):
+        return False, None
+    fdef = (node.get("fields") or {}).get(name)
+    if (not isinstance(fdef, dict) or fdef.get("type") in _PSEUDO_FIELD_TYPES
+            or "default" not in fdef):
+        return False, None
+    return True, copy.deepcopy(fdef["default"])
+
+
+def shipped_default(path: str) -> Tuple[bool, Any]:
+    """``(True, value)`` when the config value at ``path`` has a shipped
+    default, else ``(False, None)``. The value is a copy.
+
+    Sources, and only these:
+
+    - the schema ``default`` of a field — of a section or of a subsection,
+      skill packages' subsections included (from the manifests before
+      discovery). Pseudo fields (``_`` name, ``note``/``group_header``) and
+      fields inside array items never have one;
+    - the list defaults outside the schema: ``content_marketplace.catalogs``,
+      ``image_generation.backends`` (the mesh seed), ``game_seasons``;
+    - ``image_generation.use_cases.<uc>`` for a SHIPPED use case: the empty
+      seed structure ``config._seed_default_use_cases`` writes. A custom use
+      case has none — the seeding would not bring it back.
+
+    A path naming a list entry (``game_seasons.0``, ``providers[1].name``)
+    has no default: a list is one value.
+    """
+    parts = [p.strip() for p in str(path or "").split(".")]
+    if any(_INDEX_RE.search(p) or p.isdigit() for p in parts):
+        return False, None
+    return _shipped_default_parts(tuple(parts))
+
+
+def _same(a: Any, b: Any) -> bool:
+    """Equality that never matches a bool against a number (``1 != True``)."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return type(a) is type(b) and a == b
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    if isinstance(a, (dict, list)) or isinstance(b, (dict, list)):
+        return False
+    return a == b
+
+
+def _prune_value(value: Any, parts: Tuple[str, ...]) -> Any:
+    if isinstance(value, dict) and not value:
+        return _DROP
+    has, default = _shipped_default_parts(parts)
+    if has:
+        # A value with a shipped default is ONE value: dropped when equal,
+        # kept whole otherwise (a changed use case keeps all its keys).
+        return _DROP if _same(value, default) else copy.deepcopy(value)
+    if not isinstance(value, dict):
+        # Scalars without a default and every list stay — nothing inside a
+        # list entry is pruned.
+        return copy.deepcopy(value)
+    drop_pseudo = _fields_node(parts) is not None
+    out: Dict[str, Any] = {}
+    for key, child in value.items():
+        if drop_pseudo and _is_pseudo_name(key):
+            continue
+        kept = _prune_value(child, parts + (key,))
+        if kept is not _DROP:
+            out[key] = kept
+    return out if out else _DROP
+
+
+def prune(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """A copy of ``cfg`` without what ships anyway.
+
+    Removes values equal to their ``shipped_default`` (a bool default only
+    matches a bool), pseudo fields (``_`` keys of a schema section or
+    subsection) and empty dicts at any depth. Keeps ``[]`` (an emptied list
+    is a deviation), every list as one value — nothing inside a list entry is
+    touched — and ``_`` keys of page-written data such as ``routing``.
+    Root keys are never pseudo fields; an unknown root is kept unless it is
+    empty.
+    """
+    out: Dict[str, Any] = {}
+    for root, value in (cfg or {}).items():
+        kept = _prune_value(value, (root,))
+        if kept is not _DROP:
+            out[root] = kept
+    return out
+
+
+def _put(target: Dict[str, Any], parts: Tuple[str, ...], value: Any) -> None:
+    for seg in parts[:-1]:
+        target = target.setdefault(seg, {})
+    target[parts[-1]] = value
+
+
+def _split_into(parts: Tuple[str, ...], value: Any, instance: Dict[str, Any],
+                world: Dict[str, Any]) -> None:
+    node, declared = _resolve_parts(list(parts))
+    scope = _scope_at(node, declared)
+    if scope == MIXED and isinstance(value, dict):
+        for key, child in value.items():
+            _split_into(parts + (key,), child, instance, world)
+        return
+    if scope == MIXED:
+        # Not a dict where the schema expects children: it stays with the
+        # scope an unknown key directly under the node would get.
+        scope = _inherited(declared)
+    _put(instance if scope == INSTANCE else world, parts, copy.deepcopy(value))
+
+
+def split_by_scope(cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], list]:
+    """Sort a config into ``(instance_part, world_part, unknown_roots)``.
+
+    Recursive: a node whose scope is ``MIXED`` is split per child, at any
+    depth (``skills.searx.url`` instance, ``skills.searx.enabled`` world); a
+    node of one scope moves as a whole. Unknown roots (rule 1) go to neither
+    part and are listed in input order. Both parts are copies. A ``MIXED``
+    node with no keys (``skills: {}``) lands in neither part — pruning would
+    drop it anyway.
+    """
+    instance: Dict[str, Any] = {}
+    world: Dict[str, Any] = {}
+    unknown: list = []
+    for root, value in (cfg or {}).items():
+        if _resolve_parts([root])[1] is None:
+            unknown.append(root)
+            continue
+        _split_into((root,), value, instance, world)
+    return instance, world, unknown
