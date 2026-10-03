@@ -3,8 +3,9 @@
 #
 # World selection via the WORLD environment variable (default: demo).
 # paths.init() reads STORAGE_DIR — we map WORLD onto it. There is NO .env file:
-# providers/backends are configured per world in config.json or through
-# /admin/settings (see docker/DEPLOYMENT.md).
+# providers/backends are server settings and live in the instance config
+# (<instance>/config.json + secrets.json, shared by every world), edited
+# through /admin/settings.
 #
 # The instance directory (per-installation server config + secrets) is a
 # path override like STORAGE_DIR: paths.init_instance() reads INSTANCE_DIR and

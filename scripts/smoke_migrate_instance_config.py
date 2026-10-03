@@ -18,6 +18,8 @@ FIXTURE — four directories under <tmp>/worlds:
   other  its own provider "OtherLLM" (+ key), telegram, proactive, chat.
   bare   chat only (written with indent 4, so a rewrite would show).
   nocfg  no config.json at all.
+  linked a SYMLINK to a world outside the worlds dir (another checkout),
+         with its own provider + key.
 
 EXPECTATIONS, derived by hand from the scope rules and the migrations:
 
@@ -38,7 +40,16 @@ EXPECTATIONS, derived by hand from the scope rules and the migrations:
   * bare is byte-identical (nothing to change -> not rewritten).
   * The backup holds config.json + secrets.json of src, other, bare,
     byte-identical to the originals; nocfg is listed as "no config.json".
+  * linked is left alone by default: its files stay byte-identical, it is
+    not backed up, and the report lists it as "SKIPPED (symlink → <path>)".
+    With --follow-symlinks it is migrated like any world (providers gone,
+    secrets.json deleted, backed up) and the report shows "(symlink → …)".
+    A symlinked SOURCE without the flag exits 2.
+  * The report labels image_generation.comfyui_workflows (a DEAD_CONFIG_FIELDS
+    entry) "dead field, stripped" and the legacy outfit_imagegen_default
+    "consumed by the migrations".
   * A second run exits 2; with --if-needed it exits 0; neither writes.
+  * An instance secrets.json without a config.json exits 2, nothing written.
   * config.load(src, instance) yields providers / chat / routing equal to the
     values hard-coded below.
   * --dry-run prints the report and writes nothing (no backup dir either).
@@ -84,6 +95,7 @@ SRC_CONFIG = {
     ],
     "image_generation": {
         "outfit_imagegen_default": "flux*",
+        "comfyui_workflows": {"old": "workflow.json"},
         "backends": [
             {"name": "flux-a", "api_type": "a1111", "api_url": "http://img.local:7860",
              "api_key": "", "enabled": True, "category": "txt2img", "cost": 1},
@@ -118,6 +130,10 @@ OTHER_CONFIG = {
 OTHER_SECRETS = {"providers": [{"api_key": "sk-other"}],
                  "telegram": {"password": "tg-pass"}}
 BARE_CONFIG = {"chat": {"chattiness": 0.9}}
+LINKED_CONFIG = {"providers": [{"name": "Elsewhere", "type": "openai",
+                                "api_base": "http://elsewhere.local/v1", "api_key": ""}],
+                 "chat": {"chattiness": 0.4}}
+LINKED_SECRETS = {"providers": [{"api_key": "sk-elsewhere"}]}
 
 # ── Hard-coded expectations (by hand, see the docstring) ─────────────────
 
@@ -148,13 +164,24 @@ def build(root: Path) -> Path:
                                                  encoding="utf-8")
     (worlds / "nocfg").mkdir(parents=True)
     (worlds / "nocfg" / "notes.txt").write_text("not a world config\n", encoding="utf-8")
+    # Another checkout's world, reached through a symlink.
+    target = root / "elsewhere" / "linked"
+    target.mkdir(parents=True)
+    (target / "config.json").write_text(json.dumps(LINKED_CONFIG, indent=2), encoding="utf-8")
+    (target / "secrets.json").write_text(json.dumps(LINKED_SECRETS, indent=2), encoding="utf-8")
+    (worlds / "linked").symlink_to(target, target_is_directory=True)
     return worlds
 
 
 def snapshot(root: Path) -> dict:
-    """{relative path: bytes} of every file under ``root``."""
-    return {str(p.relative_to(root)): p.read_bytes()
-            for p in sorted(root.rglob("*")) if p.is_file()}
+    """{relative path: bytes} of every file under ``root`` — symlinked
+    directories are NOT descended (the linked world is checked on its own)."""
+    out = {}
+    for dirpath, _dirs, files in os.walk(root, followlinks=False):
+        for name in files:
+            p = Path(dirpath) / name
+            out[str(p.relative_to(root))] = p.read_bytes()
+    return dict(sorted(out.items()))
 
 
 def run(root: Path, *extra: str) -> subprocess.CompletedProcess:
@@ -171,10 +198,28 @@ def read(path: Path):
 
 
 def main() -> int:
+    try:
+        run_checks()
+    except Exception as e:  # noqa: BLE001 — a crash is a failure, not a traceback
+        import traceback
+        traceback.print_exc()
+        check("the smoke ran to the end", False, f"{type(e).__name__}: {e}")
+    finally:
+        shutil.rmtree(TMP, ignore_errors=True)
+    print()
+    if FAILURES:
+        print(f"FAILED: {len(FAILURES)} check(s): {', '.join(FAILURES)}")
+        return 1
+    print("All checks passed.")
+    return 0
+
+
+def run_checks() -> None:
     print("1. the real run on the fixture")
     root = TMP / "run"
     worlds = build(root)
     before = snapshot(worlds)
+    linked_before = snapshot(root / "elsewhere")
     proc = run(root, "--from", "src")
     out = proc.stdout
     check("exit code 0", proc.returncode == 0,
@@ -186,7 +231,7 @@ def main() -> int:
     check("instance/config.json written", inst_cfg.is_file())
     check("instance/secrets.json written", inst_sec.is_file())
     if not (inst_cfg.is_file() and inst_sec.is_file()):
-        return finish()
+        return
     inst = read(inst_cfg)
     check("instance has the providers of src (keys blanked)",
           [p.get("name") for p in inst.get("providers") or []] == ["Local", "Cloud"]
@@ -235,6 +280,19 @@ def main() -> int:
 
     check("bare is byte-identical",
           (worlds / "bare" / "config.json").read_bytes() == before["bare/config.json"])
+    check("linked (symlink) is byte-identical", snapshot(root / "elsewhere") == linked_before)
+    check("the report lists linked as SKIPPED (symlink)",
+          any("'linked'" in line and "SKIPPED (symlink → " in line
+              and "--follow-symlinks" in line for line in out.splitlines()))
+    check("only the three real worlds were verified", "verified: 3 world(s)" in out)
+    check("the dead field is labelled 'dead field, stripped'",
+          "image_generation.comfyui_workflows [dead field, stripped]" in out)
+    check("the legacy default is labelled 'consumed by the migrations'",
+          "image_generation.outfit_imagegen_default [consumed by the migrations]" in out)
+    check("the dead field reaches neither layer",
+          "comfyui_workflows" not in inst_cfg.read_text(encoding="utf-8")
+          and "comfyui_workflows" not in (worlds / "src" / "config.json").read_text(
+              encoding="utf-8"))
     check("nocfg untouched",
           (worlds / "nocfg" / "notes.txt").read_bytes() == before["nocfg/notes.txt"])
 
@@ -256,8 +314,12 @@ def main() -> int:
     check("chat", cfg.get("chat") == EXPECTED_CHAT, json.dumps(cfg.get("chat")))
     check("routing", (cfg.get("image_generation") or {}).get("routing") == EXPECTED_ROUTING,
           json.dumps((cfg.get("image_generation") or {}).get("routing")))
-    config.check_instance_ready(worlds / "src" / "config.json", inst_cfg)
-    check("check_instance_ready passes for src", True)
+    try:
+        config.check_instance_ready(worlds / "src" / "config.json", inst_cfg)
+        ready, detail = True, ""
+    except Exception as e:  # noqa: BLE001
+        ready, detail = False, f"{type(e).__name__}: {e}"
+    check("check_instance_ready passes for src", ready, detail)
 
     print("3. a second run")
     after_first = snapshot(root)
@@ -271,7 +333,7 @@ def main() -> int:
 
     print("4. --dry-run")
     droot = TMP / "dry"
-    dworlds = build(droot)
+    build(droot)
     dbefore = snapshot(droot)
     proc = run(droot, "--from", "src", "--dry-run")
     check("exit code 0", proc.returncode == 0, f"rc={proc.returncode} {proc.stderr}")
@@ -283,7 +345,6 @@ def main() -> int:
           and not (droot / "instance").exists())
     check("no secret value in the report",
           not any(s in proc.stdout for s in ("sk-local", "sk-cloud", "img-key", "tg-pass")))
-    del dworlds
 
     print("5. an unreadable world file aborts before the first write")
     broot = TMP / "broken"
@@ -303,17 +364,54 @@ def main() -> int:
     check("nothing written", snapshot(broot) == bbefore
           and not (broot / "backup").exists() and not (broot / "instance").exists())
 
-    return finish()
 
+    print("7. --follow-symlinks migrates the linked world")
+    froot = TMP / "follow"
+    fworlds = build(froot)
+    fbefore = snapshot(froot / "elsewhere")
+    proc = run(froot, "--from", "src", "--follow-symlinks")
+    check("exit code 0", proc.returncode == 0,
+          f"rc={proc.returncode} {proc.stdout[-500:]} {proc.stderr[-500:]}")
+    linked = read(fworlds / "linked" / "config.json")
+    check("linked has no providers, keeps chat",
+          "providers" not in linked and linked.get("chat") == {"chattiness": 0.4},
+          json.dumps(linked))
+    check("linked secrets.json deleted", not (fworlds / "linked" / "secrets.json").exists())
+    check("the report marks linked as a symlink",
+          any("World 'linked'" in line and "(symlink → " in line
+              for line in proc.stdout.splitlines()))
+    check("all four worlds verified", "verified: 4 world(s)" in proc.stdout)
+    fstamps = sorted((froot / "backup").glob("instance-config-*"))
+    check("linked is backed up byte-identical",
+          len(fstamps) == 1
+          and (fstamps[0] / "linked" / "config.json").read_bytes()
+          == fbefore["linked/config.json"]
+          and (fstamps[0] / "linked" / "secrets.json").read_bytes()
+          == fbefore["linked/secrets.json"])
 
-def finish() -> int:
-    shutil.rmtree(TMP, ignore_errors=True)
-    print()
-    if FAILURES:
-        print(f"FAILED: {len(FAILURES)} check(s): {', '.join(FAILURES)}")
-        return 1
-    print("All checks passed.")
-    return 0
+    print("8. a symlinked SOURCE without --follow-symlinks")
+    sroot = TMP / "linked_source"
+    build(sroot)
+    sbefore = snapshot(sroot)
+    proc = run(sroot, "--from", "linked")
+    check("exit code 2", proc.returncode == 2, f"rc={proc.returncode}")
+    check("the message names --follow-symlinks", "--follow-symlinks" in proc.stdout)
+    check("nothing written", snapshot(sroot) == sbefore
+          and not (sroot / "backup").exists() and not (sroot / "instance").exists())
+
+    print("9. an instance secrets.json without a config.json")
+    iroot = TMP / "stray_secrets"
+    build(iroot)
+    (iroot / "instance").mkdir()
+    (iroot / "instance" / "secrets.json").write_text('{"providers": {}}', encoding="utf-8")
+    ibefore = snapshot(iroot)
+    proc = run(iroot, "--from", "src")
+    check("exit code 2", proc.returncode == 2, f"rc={proc.returncode} {proc.stdout}")
+    check("the message names the stray file",
+          str(iroot / "instance" / "secrets.json") in proc.stdout)
+    proc = run(iroot, "--from", "src", "--if-needed")
+    check("--if-needed: still exit code 2", proc.returncode == 2, f"rc={proc.returncode}")
+    check("nothing written", snapshot(iroot) == ibefore and not (iroot / "backup").exists())
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ Usage:
         [--worlds-dir DIR]   (default: <repo>/worlds)
         [--instance DIR]     (default: <repo>/instance)
         [--backup-dir DIR]   (default: <repo>/migration_backup)
-        [--dry-run] [--if-needed]
+        [--dry-run] [--if-needed] [--follow-symlinks]
 
 Run it with the server STOPPED. Since the two config layers exist
 (``app/core/config.py``), a world's config.json holds only world settings;
@@ -21,8 +21,12 @@ THE ORDER IS LOAD-BEARING:
 1. Pre-check. The instance config.json exists -> exit 2 (``--if-needed``:
    exit 0, no action). An instance secrets.json without a config.json ->
    exit 2 (it would be overwritten). The source world has no config.json ->
-   exit 2. Then EVERY world (a subdirectory of ``--worlds-dir`` with a
-   config.json; the others are listed as "no config.json") is read strictly:
+   exit 2. A world directory that is a symlink or resolves outside
+   ``--worlds-dir`` belongs to another checkout: it is NOT read, backed up,
+   written or verified, only listed as SKIPPED — unless
+   ``--follow-symlinks`` (a symlinked SOURCE without it -> exit 2). Then
+   EVERY world (a subdirectory of ``--worlds-dir`` with a config.json; the
+   others are listed as "no config.json") is read strictly:
    an unreadable config.json or secrets.json aborts the run with exit 2,
    naming the file, before anything is written.
 2. Plan, in memory. Per world: config.json with ITS OWN secrets.json merged
@@ -73,6 +77,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
@@ -101,6 +106,8 @@ class World:
     def __init__(self, name: str, directory: Path):
         self.name = name
         self.dir = directory
+        # The resolved target when the directory is a followed symlink.
+        self.link: Optional[Path] = None
         self.config_path = directory / "config.json"
         self.secrets_path = directory / "secrets.json"
         self.original: dict = {}        # file name -> bytes as read
@@ -168,15 +175,32 @@ def _file_json(data: bytes, path: Path) -> dict:
 
 # ── 1. Pre-check + strict read ──────────────────────────────────────────────
 
-def discover_worlds(worlds_dir: Path) -> tuple:
-    """``(worlds, skipped_names)`` — a world is a subdirectory with a config.json."""
-    worlds, skipped = [], []
+def _foreign_target(d: Path, worlds_dir: Path) -> Optional[Path]:
+    """The resolved path when ``d`` is a symlink or resolves outside
+    ``worlds_dir`` (another checkout's world), else None."""
+    resolved = d.resolve()
+    if d.is_symlink() or resolved.parent != worlds_dir.resolve():
+        return resolved
+    return None
+
+
+def discover_worlds(worlds_dir: Path, follow_symlinks: bool) -> tuple:
+    """``(worlds, skipped_names, symlinked)`` — a world is a subdirectory
+    with a config.json. ``symlinked`` = ``[(name, resolved path)]`` of the
+    symlinked / outside worlds left alone (without ``follow_symlinks``)."""
+    worlds, skipped, symlinked = [], [], []
     for d in sorted(p for p in worlds_dir.iterdir() if p.is_dir()):
-        if (d / "config.json").is_file():
-            worlds.append(World(d.name, d))
-        else:
+        if not (d / "config.json").is_file():
             skipped.append(d.name)
-    return worlds, skipped
+            continue
+        target = _foreign_target(d, worlds_dir)
+        if target is not None and not follow_symlinks:
+            symlinked.append((d.name, target))
+            continue
+        w = World(d.name, d)
+        w.link = target
+        worlds.append(w)
+    return worlds, skipped, symlinked
 
 
 def read_world(w: World) -> None:
@@ -250,11 +274,21 @@ def file_outcome(w: World) -> str:
 
 # ── 3. Report ───────────────────────────────────────────────────────────────
 
-def report(source: World, worlds: list, skipped: list, inst_cfg: Path) -> None:
+def _dead_field(dotted_key: str) -> bool:
+    """True for a key ``_strip_dead_config_fields`` removes (feature gone)."""
+    parts = dotted_key.split(".")
+    if len(parts) == 1:
+        return parts[0] in config.DEAD_TOPLEVEL_FIELDS
+    return len(parts) == 2 and parts[1] in config.DEAD_CONFIG_FIELDS.get(parts[0], ())
+
+
+def report(source: World, worlds: list, skipped: list, symlinked: list,
+           inst_cfg: Path) -> None:
     src_raw_inst = config_scope.split_by_scope(source.raw)[0]
     for w in worlds:
         is_source = w is source
-        print(f"\nWorld '{w.name}'{' (source of the instance)' if is_source else ''}:")
+        print(f"\nWorld '{w.name}'{' (source of the instance)' if is_source else ''}"
+              f"{f' (symlink → {w.link})' if w.link else ''}:")
         roots = [k for k in w.raw_instance_keys if "." not in k]
         subs = [k for k in w.raw_instance_keys if "." in k]
 
@@ -262,7 +296,9 @@ def report(source: World, worlds: list, skipped: list, inst_cfg: Path) -> None:
             out = []
             for k in keys:
                 notes = []
-                if _value_at(w.migrated, k) is None:
+                if _value_at(w.migrated, k) is None and _dead_field(k):
+                    notes.append("dead field, stripped")
+                elif _value_at(w.migrated, k) is None:
                     # A legacy field the migrations consumed (the old
                     # *_imagegen_default fields seed image_generation.routing).
                     notes.append("consumed by the migrations")
@@ -286,6 +322,9 @@ def report(source: World, worlds: list, skipped: list, inst_cfg: Path) -> None:
                   f"Set the matching 'thoughts' fields in /admin/settings if this "
                   f"world relied on it.")
         print(f"  files: {file_outcome(w)}")
+    for name, target in symlinked:
+        print(f"\nWorld '{name}': SKIPPED (symlink → {target}) — pass "
+              f"--follow-symlinks to migrate it")
     for name in skipped:
         print(f"\nSkipped '{name}': no config.json")
 
@@ -388,6 +427,9 @@ def main(argv=None) -> int:
                     help=f"where the backup goes (default: {DEFAULT_BACKUP})")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the report, write nothing (no backup either)")
+    ap.add_argument("--follow-symlinks", action="store_true",
+                    help="also migrate world directories that are symlinks or resolve "
+                         "outside --worlds-dir (default: skip them)")
     ap.add_argument("--if-needed", action="store_true",
                     help="exit 0 without action when the instance config exists")
     args = ap.parse_args(argv)
@@ -415,8 +457,12 @@ def main(argv=None) -> int:
             raise Refused(f"worlds directory {worlds_dir} does not exist")
         if not (worlds_dir / args.source / "config.json").is_file():
             raise Refused(f"source world '{args.source}' has no config.json in {worlds_dir}")
-        worlds, skipped = discover_worlds(worlds_dir)
+        worlds, skipped, symlinked = discover_worlds(worlds_dir, args.follow_symlinks)
         source = next((w for w in worlds if w.name == args.source), None)
+        linked = dict(symlinked)
+        if source is None and args.source in linked:
+            raise Refused(f"source world '{args.source}' is a symlink → "
+                          f"{linked[args.source]} — pass --follow-symlinks to migrate it")
         if source is None:
             # e.g. "--from ../x": a config.json, but not a world of this dir.
             raise Refused(f"'{args.source}' is not a world directory of {worlds_dir}")
@@ -435,7 +481,7 @@ def main(argv=None) -> int:
           + (" — DRY RUN, nothing is written" if args.dry_run else ""))
     print(f"  worlds dir: {worlds_dir}")
     print(f"  instance:   {inst_dir}")
-    report(source, worlds, skipped, inst_cfg)
+    report(source, worlds, skipped, symlinked, inst_cfg)
     if args.dry_run:
         print("\nDry run — nothing written.")
         return EXIT_OK
