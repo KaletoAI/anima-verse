@@ -80,7 +80,7 @@ _IN_CHAT_WARM_MIN = 30
 _ROOM_CONVO_ACTIVE_SEC = 240
 
 # Pacing — keeps the loop from over-ticking with few characters.
-# Values are read live from the world config (admin tab "Gedanken"):
+# Values are read live from the world config (admin section `thoughts`):
 #   thoughts.min_turn_gap_seconds
 #   thoughts.min_per_char_cooldown_minutes
 # Their fallbacks ARE the schema defaults (one source, see field_default).
@@ -949,8 +949,8 @@ class AgentLoop:
                         continue
                     # Real turn — global minimum gap to the next one so the
                     # loop does not tick too tightly with few characters.
-                    # The value comes from the admin config (tab
-                    # "Gedanken" → Min Turn Gap).
+                    # The value comes from the admin config (section
+                    # `thoughts` → Min Turn Gap).
                     gap = _get_min_turn_gap()
                     if gap > 0:
                         await asyncio.sleep(gap)
