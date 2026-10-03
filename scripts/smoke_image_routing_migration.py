@@ -79,8 +79,10 @@ B3 the env bridge (`_flatten_to_env`, AST) sets none of PROFILE_, OUTFIT_,
    EVENT_IMAGEGEN_DEFAULT, STORY_ENGINE_IMAGEGEN_DEFAULT.
 B4 LEGACY_SPEC_FIELDS and _rewrite_legacy_workflow_specs are gone (every
    field they covered is removed).
-B5 the TRACKED demo config (worlds/demo/config.json) holds the A1 chains
-   and none of the old keys.
+B5 the TRACKED demo config (worlds/demo/config.json) holds no routing and
+   none of the old keys: since the instance-config split the chains are
+   instance scope, and scripts/migrate_instance_config.py moved the demo's
+   A1 chains out of the world file.
 B6 the admin schema declares none of the removed fields, and the
    instagram plugin.yaml has no imagegen_default.
 
@@ -297,10 +299,8 @@ def part_b():
 
     demo = _json.loads((Path(__file__).resolve().parent.parent / "worlds" / "demo"
                         / "config.json").read_text(encoding="utf-8"))
-    check("B5 demo chains", demo["image_generation"].get("routing"),
-          {"expression": ["LocalAI-Flux"], "tpose": ["LocalAI-Flux"],
-           "location": ["LocalAI-Flux"], "scene_view": ["LocalAI-Flux"],
-           "event": ["LocalAI-Flux"]})
+    check("B5 demo has no routing (instance scope)",
+          "routing" in (demo.get("image_generation") or {}), False)
     check("B5 demo old keys", [k for k in OLD_KEYS if _has(demo, k)], [])
 
     from app.core.config_schema import get_schema

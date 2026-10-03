@@ -53,9 +53,10 @@ R5  NO INSTANCE VALUE. The demo world's config.json is a WORLD layer file;
     every value whose ``scope_of`` is ``instance`` belongs to the instance
     config and is ignored when it sits in a world file. The check lists the
     keys ``split_by_scope`` puts on the instance side (a mixed node is split
-    per child). ``R5_ACTIVE = False`` until the demo world is migrated
-    (instance-config plan, Task 9): until then the finding prints as a SKIP
-    with its count. The detector's counter-check runs either way.
+    per child). Active since the demo world was migrated
+    (``scripts/migrate_instance_config.py``, instance-config plan, Task 9);
+    ``R5_ACTIVE = False`` would print the finding as a SKIP with its count.
+    The detector's counter-check runs either way.
 
 Exit code 0 = all rules hold. Exit 1 prints every violation.
 """
@@ -80,9 +81,9 @@ from app.imagegen.registry import BACKEND_REGISTRY  # noqa: E402
 
 DEMO_CONFIG = REPO / "worlds" / "demo" / "config.json"
 
-# Flipped to True by the migration of worlds/demo (instance-config plan,
-# Task 9) — until then the demo still carries its instance settings.
-R5_ACTIVE = False
+# True since the migration of worlds/demo (instance-config plan, Task 9):
+# the demo config carries no instance settings any more.
+R5_ACTIVE = True
 
 failures_skipped: list = []
 

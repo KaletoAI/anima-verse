@@ -52,6 +52,9 @@ COPY plugins/ ./plugins/
 COPY worlds/ ./worlds/
 COPY start.sh fetch_models.sh ./
 COPY docker/docker-entrypoint.sh ./docker-entrypoint.sh
+# The entrypoint runs the one-time instance-config migration on every start
+# (a no-op once the instance config exists).
+COPY scripts/migrate_instance_config.py ./scripts/migrate_instance_config.py
 RUN chmod +x ./start.sh ./fetch_models.sh ./docker-entrypoint.sh
 
 # Lokale Modelle vorab holen (u2net fuer rembg + bge-small fuer Pose-Embeddings).
