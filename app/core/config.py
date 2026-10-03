@@ -1816,8 +1816,59 @@ def restart_pending_fields() -> list:
     return sorted(set(pending))
 
 
+def named_entries(items: Any) -> Optional[dict]:
+    """``{name: entry}`` when ``items`` is a NAMED LIST, else None.
+
+    A named list is a list whose entries are ALL dicts with a non-empty,
+    unique string ``name`` (providers, image backends, decision endpoints,
+    marketplace catalogs). An empty list is a named list without entries.
+    It is a pure function of the list content: the secrets file, the merge
+    of that file and the admin save all decide with this one helper whether
+    entries are matched by name or by position.
+    """
+    if not isinstance(items, list):
+        return None
+    out: dict = {}
+    for entry in items:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if not isinstance(name, str) or not name or name in out:
+            return None
+        out[name] = entry
+    return out
+
+
+def pair_entries(new: list, current: list) -> list:
+    """For every entry of ``new``, its counterpart in ``current`` (or None).
+
+    Two named lists pair by name. A RENAME pairs by index: ``new[i]`` has a
+    name ``current`` does not know AND ``current[i]`` has a name ``new`` does
+    not know. Any other entry has no counterpart — an entry inserted
+    mid-list never inherits from its neighbour. If either list is not a
+    named list, entries pair by index.
+    """
+    new_named = named_entries(new)
+    cur_named = named_entries(current)
+    if new_named is None or cur_named is None:
+        return [current[i] if i < len(current) else None for i in range(len(new))]
+    out = []
+    for i, entry in enumerate(new):
+        name = entry["name"]
+        if name in cur_named:
+            out.append(cur_named[name])
+        elif i < len(current) and current[i]["name"] not in new_named:
+            out.append(current[i])
+        else:
+            out.append(None)
+    return out
+
+
 def _deep_merge(base: Any, overlay: Any) -> None:
-    """In-place deep merge of overlay into base. Lists are merged element-wise by index."""
+    """In-place deep merge of overlay into base.
+
+    A list overlay merges element-wise by index. A dict overlay onto a list
+    is the by-name form of a named list (``_split_secrets``): each key is
+    an entry name; an unknown name is ignored with a warning.
+    """
     if isinstance(base, dict) and isinstance(overlay, dict):
         for k, v in overlay.items():
             if k in base and isinstance(base[k], (dict, list)) and isinstance(v, (dict, list)):
@@ -1831,15 +1882,26 @@ def _deep_merge(base: Any, overlay: Any) -> None:
                     _deep_merge(base[i], v)
                 else:
                     base[i] = v
+    elif isinstance(base, list) and isinstance(overlay, dict):
+        by_name = named_entries(base) or {}
+        for name, v in overlay.items():
+            entry = by_name.get(name)
+            if entry is None or not isinstance(v, dict):
+                logger.warning("Config secrets: no list entry named '%s' — ignored", name)
+                continue
+            _deep_merge(entry, v)
 
 
 def _split_secrets(data: Any) -> tuple:
     """Walk data and split sensitive values out.
 
     Returns (clean, secrets). Sensitive string values are blanked in clean and
-    placed into a parallel structure in secrets. Lists keep position; entries
-    without secrets become empty dicts/lists in the secrets shape and are
-    pruned at the top level if entirely empty.
+    placed into a parallel structure in secrets. A named list
+    (``named_entries``) becomes a dict by entry name holding only the entries
+    with secrets, so inserting or reordering entries never moves a key to
+    another entry. Any other list keeps position; entries without secrets
+    become empty dicts/lists in the secrets shape, and a list without any
+    secret is dropped.
     """
     if isinstance(data, dict):
         clean: dict = {}
@@ -1859,15 +1921,19 @@ def _split_secrets(data: Any) -> tuple:
         return clean, secrets
 
     if isinstance(data, list):
+        named = named_entries(data) is not None
         clean_list: list = []
         secrets_list: list = []
-        any_secrets = False
+        secrets_by_name: dict = {}
         for item in data:
             sub_clean, sub_secrets = _split_secrets(item)
             clean_list.append(sub_clean)
             secrets_list.append(sub_secrets if sub_secrets else {})
-            if sub_secrets:
-                any_secrets = True
+            if sub_secrets and named:
+                secrets_by_name[item["name"]] = sub_secrets
+        if named:
+            return clean_list, secrets_by_name
+        any_secrets = any(secrets_list)
         return clean_list, (secrets_list if any_secrets else [])
 
     return data, None

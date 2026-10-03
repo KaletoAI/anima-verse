@@ -1969,17 +1969,18 @@ def _fill_defaults(obj: dict, fields: dict) -> None:
 
 
 def _preserve_unsent_subarray_fields(merged: dict, current: dict) -> None:
-    """Bewahrt Schema-Felder in sub_array/is_dict-Items, wenn der Payload sie
-    weglaesst.
+    """Keep schema fields of sub_array/is_dict items the payload leaves out.
 
-    Frontend-Bug: `setVal()` aktualisiert CONFIG nur bei `onchange`. Wenn ein
-    Feld vor dem ersten Edit undefined ist (z.B. weil ein neues Schema-Feld
-    in einer alten Welt-Config noch fehlt) und der User es nie anfasst,
-    bleibt CONFIG undefined → JSON.stringify laesst den Key weg →
-    `_merge_sensitive` wertet den fehlenden Key als 'absichtlich geloescht'.
+    Frontend bug: `setVal()` updates CONFIG only on `onchange`. A field that
+    is undefined before its first edit (e.g. a new schema field an old world
+    config still lacks) and that the user never touches stays undefined ->
+    JSON.stringify drops the key -> `_merge_sensitive` reads the missing key
+    as 'deliberately deleted'.
 
     We walk all schema `sub_arrays` (e.g. image_generation.backends) and
-    carry missing fields over from the current config.
+    carry missing fields over from the current config. List items pair via
+    `config.pair_entries` — by name for named lists — so an entry inserted
+    mid-list never inherits its neighbour's fields.
     """
     schema = get_schema()
     for sec_key, sec_def in schema.items():
@@ -2011,10 +2012,7 @@ def _preserve_unsent_subarray_fields(merged: dict, current: dict) -> None:
             else:
                 if not isinstance(cur_sub, list) or not isinstance(new_sub, list):
                     continue
-                for i, new_item in enumerate(new_sub):
-                    if i >= len(cur_sub):
-                        break
-                    cur_item = cur_sub[i]
+                for new_item, cur_item in zip(new_sub, config.pair_entries(new_sub, cur_sub)):
                     if not isinstance(cur_item, dict) or not isinstance(new_item, dict):
                         continue
                     for f in field_keys:
@@ -2043,13 +2041,14 @@ def _preserve_unsent_image_routing(merged: dict, current: dict) -> None:
 def _merge_sensitive(new: Any, current: Any) -> Any:
     """Recursively merge, keeping current values where new has masked placeholders.
 
-    WICHTIG: Keys die im neuen Dict FEHLEN wurden bewusst geloescht und
-    werden NICHT aus current wiederhergestellt. Nur bei Leaf-Werten mit
-    '***'-Maskierung greift der Sensitive-Schutz.
+    IMPORTANT: keys MISSING from the new dict were deleted on purpose and are
+    NOT restored from current. Only leaf values masked with '***' are
+    protected. List items pair via `config.pair_entries` — by name for named
+    lists, so a masked key stays with its entry when entries move.
     """
     if isinstance(new, dict) and isinstance(current, dict):
         result = {}
-        # Nur Keys aus new uebernehmen — fehlende Keys = geloescht.
+        # Take only the keys of new — a missing key means deleted.
         for key in new:
             if key in current:
                 result[key] = _merge_sensitive(new[key], current[key])
@@ -2058,8 +2057,8 @@ def _merge_sensitive(new: Any, current: Any) -> Any:
         return result
     if isinstance(new, list) and isinstance(current, list):
         return [
-            _merge_sensitive(new[i], current[i]) if i < len(current) else new[i]
-            for i in range(len(new))
+            item if counterpart is None else _merge_sensitive(item, counterpart)
+            for item, counterpart in zip(new, config.pair_entries(new, current))
         ]
     # If new value is a masked placeholder, keep current
     if isinstance(new, str) and new.startswith("***"):

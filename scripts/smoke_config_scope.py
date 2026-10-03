@@ -345,6 +345,55 @@ defaults (Part 2):
     raises ``ValueError``; ``check_instance_ready`` raises too (strict read).
     The same for a corrupt WORLD secrets.json: a save that would delete it
     (no world secrets left) raises instead, and the file stays.
+
+PART 4 — secrets and unsent fields keyed by entry NAME, not list position
+-------------------------------------------------------------------------
+
+A NAMED LIST is a list whose entries are ALL dicts with a non-empty, unique
+``name`` (``providers``, ``image_generation.backends``, ``decision.endpoints``,
+``content_marketplace.catalogs``). ``config.named_entries(lst)`` is the one
+detector: ``{name: entry}`` for a named list, else None. In ``secrets.json`` a
+named list is a dict by name; every other list stays by index. The admin save
+(``_merge_sensitive`` / ``_preserve_unsent_subarray_fields``) pairs the
+entries of two named lists by name; a RENAME (payload[i] has a name current
+does not know AND current[i] has a name the payload does not know) pairs by
+index; otherwise an entry has no counterpart. Symptom of the old index rule:
+inserting a backend mid-list shifted every key after it (401 on an unrelated
+backend). Expectations by hand:
+
+8.0 DETECTOR. ``named_entries`` of ``[{"name":"a"},{"name":"b"}]`` has the
+    keys a, b; ``[]`` -> ``{}``; None for a duplicate name, an empty name, a
+    missing name, a non-dict entry.
+8.1 INSERT, SAVE, RELOAD. Instance ``image_generation.backends`` =
+    ``[a, b, c]`` (``{"name": ...}`` each) + an INDEX-format instance
+    secrets.json ``{"image_generation": {"backends": [{}, {"api_key": "KB"},
+    {"api_key": "KC"}]}}`` (the old format is still read): after ``load``
+    b has "KB", c has "KC", a none. ``x`` is inserted at position 1 and saved:
+    ``i/secrets.json`` is exactly ``{"image_generation": {"backends":
+    {"b": {"api_key": "KB"}, "c": {"api_key": "KC"}}}}``, neither key is in
+    ``i/config.json``. ``load`` again: a, x without a key, b "KB", c "KC".
+    Then a SECOND insert directly in ``i/config.json`` (``y`` at position 0,
+    secrets.json untouched) and ``load``: still b "KB", c "KC", y none — the
+    by-name file does not depend on the position (the old index file
+    would hand y the key of a, a that of x, ...).
+8.2 UNKNOWN NAME. A by-name secret for ``zz`` (no such backend) is ignored:
+    the backend list keeps its 4 names and "ZZ" is nowhere in it.
+8.3 MASKED KEY AT A NEW POSITION. current backends ``[a, b(KB), c(KC)]``,
+    payload ``[a, x, b("***"), c("***")]``: ``_merge_sensitive`` gives
+    b "KB", c "KC" (old code: b got KC, c nothing), x keeps no api_key.
+8.4 UNSENT FIELD. current ``[a, b(category "img2img"), c]``, payload
+    ``[a, x, b, c]`` without any category: ``_preserve_unsent_subarray_fields``
+    gives b "img2img" (its own field back) and x NO category (old code: x
+    inherited b's, b inherited c's absence).
+8.5 RENAME. current ``[a, b, c(KC, category "inpaint")]``, payload
+    ``[a, b, c2("***")]`` without category: ``_merge_sensitive`` keeps "KC" on
+    c2 and ``_preserve_unsent_subarray_fields`` carries "inpaint" to c2.
+8.6 UNNAMED LIST STAYS BY INDEX. ``_split_secrets({"l": [{"api_key": "k0"},
+    {"x": 1}]})`` -> secrets ``{"l": [{"api_key": "k0"}, {}]}``; the same with
+    a duplicate name (``[{"name":"d","api_key":"k"},{"name":"d"}]``) -> a
+    list, not a dict. ``_merge_sensitive`` over an unnamed list pairs index
+    1 with index 1 (``[{}, {"api_key": "***"}]`` against ``[{}, {"api_key":
+    "K1"}]`` -> "K1"). ``_deep_merge`` of a list overlay stays by index.
 """
 import copy
 import os
@@ -1087,6 +1136,113 @@ def part_3():
         check(ws.read_text(encoding="utf-8") == '{"broken": ', "6.11: the broken secrets.json is kept")
 
 
+# ---------------------------------------------------------------------------
+# Part 4 — secrets and unsent fields keyed by entry name
+# ---------------------------------------------------------------------------
+
+def _keys_by_name(backends):
+    return {b.get("name"): b.get("api_key") for b in backends or []}
+
+
+def part_4():
+    from app.core import config as cfg
+    from app.routes import admin_settings as adm
+
+    # 8.0 detector
+    ne = getattr(cfg, "named_entries", None)
+    if ne is None:
+        check(False, "8.0: app.core.config lacks named_entries")
+    else:
+        got = ne([{"name": "a"}, {"name": "b"}])
+        check(got is not None and list(got) == ["a", "b"], f"8.0: named list (got {got!r})")
+        check(ne([]) == {}, f"8.0: empty list is named and empty (got {ne([])!r})")
+        for label, lst in (("duplicate", [{"name": "a"}, {"name": "a"}]),
+                           ("empty name", [{"name": "a"}, {"name": ""}]),
+                           ("missing name", [{"name": "a"}, {"x": 1}]),
+                           ("non-dict", [{"name": "a"}, "b"])):
+            check(ne(lst) is None, f"8.0: {label} -> not a named list (got {ne(lst)!r})")
+
+    # 8.1 / 8.2 insert, save, reload
+    with tempfile.TemporaryDirectory() as tmp:
+        w, i = _layers(tmp)
+        _write(w, {"chat": {"chattiness": 0.3}})
+        _write(i, {"image_generation": {"backends": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}})
+        isec = i.parent / "secrets.json"
+        _write(isec, {"image_generation": {"backends": [{}, {"api_key": "KB"}, {"api_key": "KC"}]}})
+        cfg.load(w, i)
+        got = _keys_by_name(cfg.get("image_generation.backends"))
+        check(got == {"a": None, "b": "KB", "c": "KC"}, f"8.1: index-format secrets are read ({got!r})")
+        data = copy.deepcopy(cfg.get_all())
+        data["image_generation"]["backends"].insert(1, {"name": "x"})
+        cfg.save(data)
+        want = {"image_generation": {"backends": {"b": {"api_key": "KB"}, "c": {"api_key": "KC"}}}}
+        check(_read(isec) == want, f"8.1: secrets.json by name (got {_read(isec)!r})")
+        itext = i.read_text(encoding="utf-8")
+        check("KB" not in itext and "KC" not in itext, "8.1: no key in i/config.json")
+        cfg.load(w, i)
+        got = _keys_by_name(cfg.get("image_generation.backends"))
+        check(got == {"a": None, "x": None, "b": "KB", "c": "KC"}, f"8.1: reload after insert ({got!r})")
+        conf = _read(i)
+        conf["image_generation"]["backends"].insert(0, {"name": "y"})
+        _write(i, conf)
+        cfg.load(w, i)
+        got = _keys_by_name(cfg.get("image_generation.backends"))
+        check(got == {"y": None, "a": None, "x": None, "b": "KB", "c": "KC"},
+              f"8.1: a hand insert in config.json keeps every key on its entry ({got!r})")
+
+        # 8.2 unknown name
+        _write(i, {"image_generation": {"backends": [{"name": "a"}, {"name": "x"},
+                                                      {"name": "b"}, {"name": "c"}]}})
+        _write(isec, {"image_generation": {"backends": {"b": {"api_key": "KB"},
+                                                        "zz": {"api_key": "ZZ"}}}})
+        cfg.load(w, i)
+        bes = cfg.get("image_generation.backends")
+        check([b.get("name") for b in bes] == ["a", "x", "b", "c"] and "ZZ" not in repr(bes),
+              f"8.2: an unknown name is ignored ({bes!r})")
+        check(_keys_by_name(bes).get("b") == "KB", "8.2: the known name still gets its key")
+
+    def section(backends):
+        return {"image_generation": {"backends": backends}}
+
+    # 8.3 masked key at a new position
+    current = section([{"name": "a"}, {"name": "b", "api_key": "KB"}, {"name": "c", "api_key": "KC"}])
+    payload = section([{"name": "a"}, {"name": "x"}, {"name": "b", "api_key": "***"},
+                       {"name": "c", "api_key": "***"}])
+    merged = adm._merge_sensitive(payload, current)
+    got = _keys_by_name(merged["image_generation"]["backends"])
+    check(got == {"a": None, "x": None, "b": "KB", "c": "KC"}, f"8.3: masked keys by name ({got!r})")
+
+    # 8.4 unsent field
+    current = section([{"name": "a"}, {"name": "b", "category": "img2img"}, {"name": "c"}])
+    merged = section([{"name": "a"}, {"name": "x"}, {"name": "b"}, {"name": "c"}])
+    adm._preserve_unsent_subarray_fields(merged, current)
+    bes = {b["name"]: b for b in merged["image_generation"]["backends"]}
+    check(bes["b"].get("category") == "img2img", f"8.4: b keeps its own unsent field ({bes['b']!r})")
+    check("category" not in bes["x"], f"8.4: x inherits nothing from b ({bes['x']!r})")
+    check("category" not in bes["c"], f"8.4: c inherits nothing ({bes['c']!r})")
+
+    # 8.5 rename
+    current = section([{"name": "a"}, {"name": "b"},
+                       {"name": "c", "api_key": "KC", "category": "inpaint"}])
+    payload = section([{"name": "a"}, {"name": "b"}, {"name": "c2", "api_key": "***"}])
+    merged = adm._merge_sensitive(payload, current)
+    adm._preserve_unsent_subarray_fields(merged, current)
+    c2 = merged["image_generation"]["backends"][2]
+    check(c2.get("api_key") == "KC", f"8.5: the key survives the rename ({c2!r})")
+    check(c2.get("category") == "inpaint", f"8.5: the unsent field follows the rename ({c2!r})")
+
+    # 8.6 unnamed lists stay by index
+    _, sec = cfg._split_secrets({"l": [{"api_key": "k0"}, {"x": 1}]})
+    check(sec == {"l": [{"api_key": "k0"}, {}]}, f"8.6: unnamed list secrets by index ({sec!r})")
+    _, sec = cfg._split_secrets({"l": [{"name": "d", "api_key": "k"}, {"name": "d"}]})
+    check(sec == {"l": [{"api_key": "k"}, {}]}, f"8.6: duplicate names -> by index ({sec!r})")
+    got = adm._merge_sensitive({"l": [{}, {"api_key": "***"}]}, {"l": [{}, {"api_key": "K1"}]})
+    check(got == {"l": [{}, {"api_key": "K1"}]}, f"8.6: _merge_sensitive by index ({got!r})")
+    base = {"l": [{"a": 1}, {"a": 2}]}
+    cfg._deep_merge(base, {"l": [{}, {"api_key": "K"}]})
+    check(base == {"l": [{"a": 1}, {"a": 2, "api_key": "K"}]}, f"8.6: _deep_merge by index ({base!r})")
+
+
 def main():
     had_searx = part_p_before_discovery()
     part_2_before_discovery()
@@ -1109,6 +1265,7 @@ def main():
         part_d_e(cs, has_searx)
         part_2(cs, has_searx)
     part_3()
+    part_4()
 
     print()
     for s in _skips:
