@@ -10,7 +10,8 @@ cools down and raises BackendFailedError exactly like in production — and
 returns a GenerationResult. Chain rules / character spec / switches come in
 through the routing test seams. Throwaway storage, no server, no network:
 the service is built without its backend probe (`_load_instances` stubbed
-to an empty list — the tmp world seeds default mesh backends on a LAN URL)
+to an empty list — the empty tmp instance seeds the default mesh backends
+on a LAN URL)
 and `socket.socket.connect` raises, so any connect attempt fails F0.
 
 Fakes: A (cost 1) fails with HTTP 500, B (cost 2) renders, Busy (cost 1)
@@ -97,11 +98,14 @@ def _no_connect(self, address, *a, **k):
 socket.socket.connect = _no_connect
 socket.socket.connect_ex = _no_connect
 _TMP = tempfile.mkdtemp(prefix="facade-")
+_INST = tempfile.mkdtemp(prefix="facade-instance-")
+os.environ["INSTANCE_DIR"] = _INST
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="facade-clips-")
 from app.core import paths  # noqa: E402
 paths.init(_TMP)
+paths.init_instance(_INST)
 from app.core import config, db  # noqa: E402
-config.load(Path(_TMP) / "config.json")
+config.load(Path(_TMP) / "config.json", paths.get_instance_config_path())
 db.init_schema()
 
 from app.imagegen import routing  # noqa: E402

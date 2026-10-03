@@ -5,7 +5,10 @@ defining its own ``STORAGE_DIR = Path("./storage")``.
 
 Initialization order (in server.py):
     1. paths.init(storage_dir)          # from CLI / env
-    2. config.load(paths.get_config_path())  # config.json lives inside storage
+    2. paths.init_instance(instance_dir)  # from CLI / env (INSTANCE_DIR)
+    3. config.load(paths.get_config_path(), paths.get_instance_config_path())
+       # world config.json lives inside storage, instance config.json inside
+       # the instance directory
 
 THERE IS NO DEFAULT WORLD.  ``init`` takes the explicit argument, else the
 ``STORAGE_DIR`` environment variable, and raises ``StorageNotInitialised``

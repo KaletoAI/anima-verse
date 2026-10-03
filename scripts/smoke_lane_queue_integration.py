@@ -113,23 +113,12 @@ THE EXPECTATIONS, DERIVED BY HAND
     decides how long the check runs — not what the right answer is. That the
     wait says so in the log is checked too: at least one ERROR line per slice.
 
-[7] Finding F2 (second review) — the boot migration of the lane counts runs
-    EXACTLY ONCE per world. The provider's max_concurrent stays where it is
-    (it sizes the worker pool and is the GPU limit), so a migration that only
-    asks "has this entry a value?" would copy the provider number onto every
-    entry again on every boot — and an entry created later in the admin UI
-    writes no max_concurrent, so a `tool` entry would come up with the
-    provider's 4 lanes although § 10 of the plan keeps tool/vision at 1.
-    Two boots over the same dict, no disk, no server:
-      boot 1: provider P has max_concurrent=4. The enabled entry without a
-              value gets 4, an entry with its own 2 keeps 2, a DISABLED entry
-              is left alone (it describes no running pool), and an entry of
-              another provider is not touched. The marker is set.
-      boot 2: the admin has added a `tool` entry — enabled, no max_concurrent.
-              The migration must do NOTHING: return False and leave the new
-              entry without a value, which means one lane.
-    A fresh world (no providers/llm_routing at all) still gets the marker, so
-    the step is over for good there too.
+[7] (retired 2026-10-03) The one-time boot migration of the lane counts
+    (``config._migrate_entry_lanes`` + its root marker) is gone with the
+    instance-config layers: every source world already carries the marker,
+    so the step had nothing left to do, and the marker would be an unknown
+    root key of the world file. The number stays retired to keep the
+    section numbers of the review findings stable.
 
 [8] Item 7a — the rp_first TOOL CALL takes a lane of its own, and doing so on
     a ONE-LANE pool must not block the turn that is already holding that lane.
@@ -647,45 +636,6 @@ pq_mod._LANE_WAIT_WARN = _REAL_WAIT_SLICE
 if second.get("id"):
     QUEUE.register_chat_done(second["id"])
 check("the pool is free again after the second chat", pool(POOL_A)["busy"], 0)
-
-# ── [7] F2: the lane migration runs exactly once ───────────────────────────
-print("\n[7] the boot migration of the lane counts runs once")
-from app.core.config import _migrate_entry_lanes  # noqa: E402
-
-world = {
-    "providers": [
-        {"name": "P", "max_concurrent": 4},
-        {"name": "Other", "max_concurrent": 8},
-    ],
-    "llm_routing": [
-        {"provider": "P", "model": "chat-model"},
-        {"provider": "P", "model": "own-value", "max_concurrent": 2},
-        {"provider": "P", "model": "off-model", "enabled": False},
-        {"provider": "Other", "model": "x", "enabled": True},
-    ],
-}
-check("boot 1 changes something", _migrate_entry_lanes(world), True)
-lanes = {e["model"]: e.get("max_concurrent") for e in world["llm_routing"]}
-check("the enabled entry without a value got the provider's number",
-      lanes["chat-model"], 4)
-check("an entry with its own value keeps it", lanes["own-value"], 2)
-check("a disabled entry is left alone", lanes["off-model"], None)
-check("the other provider's entry got ITS number", lanes["x"], 8)
-check("the marker is set", world.get("llm_lanes_migrated"), True)
-
-# Boot 2: the admin added a tool entry meanwhile — enabled, no lane count.
-world["llm_routing"].append({"provider": "P", "model": "tool", "enabled": True})
-check("boot 2 changes nothing", _migrate_entry_lanes(world), False)
-lanes2 = {e["model"]: e.get("max_concurrent") for e in world["llm_routing"]}
-check("the new tool entry stays at one lane (no value)", lanes2["tool"], None)
-check("and nothing else moved either",
-      (lanes2["chat-model"], lanes2["own-value"], lanes2["off-model"]),
-      (4, 2, None))
-
-fresh: dict = {}
-check("a fresh world gets the marker too", _migrate_entry_lanes(fresh), True)
-check("and nothing else", fresh, {"llm_lanes_migrated": True})
-check("a second run over it does nothing", _migrate_entry_lanes(fresh), False)
 
 # ── [8] item 7a: the nested tool call takes a lane, without self-blocking ──
 print("\n[8] the rp_first tool call gets its own lane (R6 order)")

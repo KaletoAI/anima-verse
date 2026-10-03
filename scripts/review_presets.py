@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""LLM-basierte Review von Expression/Pose-Presets.
+"""LLM-based review of expression/pose presets.
 
-Laesst ein LLM alle Presets (Keys + Prompt + Synonyme) einer Datei bewerten
-und schreibt einen angereicherten Ziel-JSON mit Review-Block pro Eintrag.
+Lets an LLM rate every preset (keys + prompt + synonyms) of a file and writes
+an enriched target JSON with a review block per entry.
 
-Needs a world (it reads that world's LLM routing/config): pass --world <name>
-(-> worlds/<name>) or set STORAGE_DIR. There is no default world.
+Needs a world (it reads that world's config): pass --world <name>
+(-> worlds/<name>) or set STORAGE_DIR. There is no default world. The LLM
+providers and the routing are INSTANCE config: set INSTANCE_DIR to the
+instance directory (start.sh uses ./instance). There is no default instance.
 
 Usage:
   python scripts/review_presets.py --world demo --list
@@ -18,7 +20,7 @@ Usage:
       --target /tmp/pose_generated_review.json \
       --limit 20
 
-Ausgabeformat (Ziel-JSON, gleiche Struktur wie Quelle + "_review" pro Preset):
+Output format (target JSON, same structure as the source + "_review" per preset):
   {
     "presets": {
       "happy": {
@@ -42,7 +44,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Projekt-Root ins sys.path damit wir app.* importieren koennen
+# Project root on sys.path so app.* can be imported
 _project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_project_root))
 
@@ -61,9 +63,10 @@ for i, _arg in enumerate(sys.argv):
 # Bootstrap exactly like app/server.py:
 #   1. paths.init()  — set the storage dir (via --world or STORAGE_DIR; there
 #      is NO default world any more, so without either this exits)
-#   2. config.load() — load the JSON config, fill os.environ
-#   3. initialise provider_manager — reads the providers from the env
-#   4. use llm_router — LLMInstance for explicit model overrides
+#   2. paths.init_instance() — the instance dir (INSTANCE_DIR, no default)
+#   3. config.load() — load both config layers, fill os.environ
+#   4. initialise provider_manager — reads the providers from the env
+#   5. use llm_router — LLMInstance for explicit model overrides
 from app.core import paths as _paths_mod  # noqa: E402
 try:
     if _world_override:
@@ -76,20 +79,28 @@ except _paths_mod.StorageNotInitialised as _e:
           "(-> worlds/<name>) or set STORAGE_DIR.", file=sys.stderr)
     sys.exit(2)
 
+try:
+    _paths_mod.init_instance()
+except _paths_mod.InstanceNotInitialised as _e:
+    print(f"ERROR: {_e}\n"
+          "       This tool calls the configured LLMs: set INSTANCE_DIR to the "
+          "instance directory (e.g. ./instance).", file=sys.stderr)
+    sys.exit(2)
+
 from app.core.config import load as _load_config  # noqa: E402
-_load_config(_paths_mod.get_config_path())
+_load_config(_paths_mod.get_config_path(), _paths_mod.get_instance_config_path())
 
 from app.core.provider_manager import (  # noqa: E402
     get_provider_manager, initialize_provider_manager,
 )
 from app.core.llm_router import create_llm_instance  # noqa: E402
 
-# Provider initialisieren (wie im Server-Lifespan); llm_router resolved lazy.
+# Initialise the providers (as in the server lifespan); llm_router resolves lazily.
 initialize_provider_manager()
 
 
 # ============================================================================
-# LLM-Prompts fuer Review
+# LLM prompts for the review
 # ============================================================================
 
 _REVIEW_SYSTEM_EXPRESSION = (
@@ -125,7 +136,7 @@ _REVIEW_USER_TEMPLATE = (
 
 
 def _guess_kind(source_path: Path) -> str:
-    """Erraet ob expression oder pose basierend auf Pfad."""
+    """Guesses expression or pose from the path."""
     s = str(source_path).lower()
     if "expression" in s:
         return "expression"
@@ -139,7 +150,7 @@ def _guess_kind(source_path: Path) -> str:
 # ============================================================================
 
 def list_available_llms() -> List[Dict[str, str]]:
-    """Listet alle verfuegbaren provider::model Kombinationen."""
+    """Lists every available provider::model combination."""
     pm = get_provider_manager()
     result = []
     all_models = pm.list_all_models()
@@ -158,10 +169,10 @@ def list_available_llms() -> List[Dict[str, str]]:
 
 
 def print_available_llms():
-    """Gibt verfuegbare LLMs gruppiert nach Provider aus."""
+    """Prints the available LLMs grouped by provider."""
     llms = list_available_llms()
     if not llms:
-        print("Keine LLMs gefunden. Pruefe PROVIDER_* in .env und Config.")
+        print("No LLMs found. Check the providers in the instance config.")
         return
     current = ""
     for entry in sorted(llms, key=lambda x: (x["provider"], x["model"])):
@@ -173,10 +184,10 @@ def print_available_llms():
 
 
 def resolve_llm(identifier: str):
-    """Loest 'provider::model' in einen LLMClient (app.core.llm_client) auf."""
+    """Resolves 'provider::model' into an LLMClient (app.core.llm_client)."""
     if "::" not in identifier:
-        print(f"FEHLER: LLM muss im Format provider::model angegeben werden (z.B. 'local-llm::qwen3-8b').")
-        print("       Verfuegbare LLMs mit --list anzeigen.")
+        print(f"ERROR: give the LLM as provider::model (e.g. 'local-llm::qwen3-8b').")
+        print("       Show the available LLMs with --list.")
         sys.exit(1)
 
     provider_name, model_name = identifier.split("::", 1)
@@ -188,8 +199,8 @@ def resolve_llm(identifier: str):
         max_tokens=400,
     )
     if not instance:
-        print(f"FEHLER: Kann LLM nicht erstellen: {identifier}")
-        print("       Verfuegbare LLMs mit --list anzeigen.")
+        print(f"ERROR: cannot create LLM: {identifier}")
+        print("       Show the available LLMs with --list.")
         sys.exit(1)
     return instance.create_llm()
 
@@ -199,9 +210,9 @@ def resolve_llm(identifier: str):
 # ============================================================================
 
 def _parse_llm_json(content: str) -> Optional[Dict[str, Any]]:
-    """Extrahiert JSON-Block aus LLM-Antwort (robust gegen Markdown-Wrapper)."""
+    """Extracts the JSON block from an LLM answer (robust against Markdown wrappers)."""
     text = (content or "").strip()
-    # Thinking-Tokens rauswerfen
+    # Drop thinking tokens
     text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
     text = re.sub(r"```(?:json)?\s*|\s*```", "", text, flags=re.IGNORECASE).strip()
     m = re.search(r"\{[\s\S]*\}", text)
@@ -220,14 +231,14 @@ def review_preset(
     system_prompt: str,
     timeout_s: float = 60.0,
 ) -> Dict[str, Any]:
-    """Laesst das LLM einen einzelnen Preset-Eintrag bewerten."""
+    """Lets the LLM rate a single preset entry."""
     prompt = _REVIEW_USER_TEMPLATE.format(
         key=key,
         prompt=entry.get("prompt", ""),
         synonyms=", ".join(entry.get("synonyms", [])) or "(none)",
     )
-    # Plain OpenAI-style message dicts — LLMClient.invoke() versteht sie direkt
-    # ueber to_openai_messages() (kein LangChain noetig).
+    # Plain OpenAI-style message dicts — LLMClient.invoke() understands them
+    # directly via to_openai_messages() (no LangChain needed).
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": prompt},
@@ -257,7 +268,7 @@ def review_preset(
             "_elapsed_s": round(dt, 2),
         }
 
-    # Validierung + Normalisierung
+    # Validation + normalisation
     result: Dict[str, Any] = {
         "rating": parsed.get("rating"),
         "issues": parsed.get("issues") or [],
@@ -278,17 +289,17 @@ def run_review(
     limit: Optional[int] = None,
     resume: bool = True,
 ) -> None:
-    """Laeuft das Review fuer alle Presets und schreibt inkrementell ins Target."""
+    """Runs the review over all presets and writes the target incrementally."""
     system = _REVIEW_SYSTEM_POSE if kind == "pose" else _REVIEW_SYSTEM_EXPRESSION
 
     with open(source, "r", encoding="utf-8") as f:
         src = json.load(f)
     presets = src.get("presets", {})
     if not presets:
-        print(f"FEHLER: Keine 'presets' in {source}")
+        print(f"ERROR: no 'presets' in {source}")
         sys.exit(1)
 
-    # Ziel laden (fuer Resume) oder leer initialisieren
+    # Load the target (for resume) or start empty
     dst: Dict[str, Any] = {k: v for k, v in src.items() if k != "presets"}
     dst["presets"] = {}
     if resume and target.exists():
@@ -299,22 +310,22 @@ def run_review(
                 if v.get("_review"):
                     dst["presets"][k] = v
         except Exception as e:
-            print(f"WARN: Resume-Datei ungueltig ({e}), starte neu")
+            print(f"WARN: resume file invalid ({e}), starting over")
 
     total = len(presets)
     done = 0
     skipped_existing = 0
-    print(f"Review: {total} Eintraege aus {source.name} via {kind}-Prompt")
+    print(f"Review: {total} entries from {source.name} via the {kind} prompt")
 
     for i, (key, entry) in enumerate(presets.items(), start=1):
         if limit and done >= limit:
-            print(f"Limit {limit} erreicht, stoppe.")
+            print(f"Limit {limit} reached, stopping.")
             break
 
-        # Schon bewertet? Skip
+        # Already rated? Skip
         if key in dst["presets"] and dst["presets"][key].get("_review"):
             skipped_existing += 1
-            print(f"  [{i}/{total}] {key}: SKIP (bereits reviewt)")
+            print(f"  [{i}/{total}] {key}: SKIP (already reviewed)")
             continue
 
         review = review_preset(llm, key, entry, system)
@@ -323,20 +334,20 @@ def run_review(
         dst["presets"][key] = merged
         done += 1
 
-        # Kompakte Status-Zeile
+        # Compact status line
         r = review.get("rating")
         keep = "KEEP" if review.get("keep") else "DROP"
         issues = review.get("issues") or []
         issue_txt = f" — {issues[0]}" if issues else ""
         print(f"  [{i}/{total}] {key}: rating={r} {keep}{issue_txt}")
 
-        # Inkrementell speichern (Crash-sicher)
+        # Save incrementally (crash-safe)
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, "w", encoding="utf-8") as f:
             json.dump(dst, f, ensure_ascii=False, indent=2)
 
-    print(f"\nFertig: {done} bewertet, {skipped_existing} uebersprungen")
-    print(f"Ziel: {target}")
+    print(f"\nDone: {done} rated, {skipped_existing} skipped")
+    print(f"Target: {target}")
 
 
 # ============================================================================
@@ -345,28 +356,28 @@ def run_review(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="LLM-Review fuer Expression/Pose-Presets",
+        description="LLM review of expression/pose presets",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     parser.add_argument("--list", action="store_true",
-                        help="Liste verfuegbarer LLMs ausgeben")
+                        help="Print the available LLMs")
     parser.add_argument("--world", type=str,
-                        help="World-Name (Unterordner in worlds/). Bestimmt welcher storage/config "
-                             "geladen wird. Pflicht, wenn STORAGE_DIR nicht gesetzt ist — "
-                             "eine Default-Welt gibt es nicht.")
+                        help="World name (subdirectory of worlds/). Selects which storage/config "
+                             "is loaded. Required when STORAGE_DIR is not set — "
+                             "there is no default world.")
     parser.add_argument("--llm", type=str,
-                        help="LLM als 'provider::model' (z.B. local-llm::qwen3-8b)")
+                        help="LLM as 'provider::model' (e.g. local-llm::qwen3-8b)")
     parser.add_argument("--source", type=str,
-                        help="Quell-JSON (z.B. shared/templates/expression/expression_presets.json)")
+                        help="Source JSON (e.g. shared/templates/expression/expression_presets.json)")
     parser.add_argument("--target", type=str,
-                        help="Ziel-JSON (wird ueberschrieben bzw. fortgesetzt)")
+                        help="Target JSON (overwritten or resumed)")
     parser.add_argument("--kind", choices=["expression", "pose"],
-                        help="Review-Typ (auto-detected aus source falls nicht gesetzt)")
+                        help="Review kind (auto-detected from the source if not set)")
     parser.add_argument("--limit", type=int, default=None,
-                        help="Nur N Eintraege bewerten (fuer schnelle Tests)")
+                        help="Rate only N entries (for quick tests)")
     parser.add_argument("--no-resume", action="store_true",
-                        help="Ziel komplett neu schreiben, statt existierende Reviews zu behalten")
+                        help="Rewrite the target from scratch instead of keeping existing reviews")
     args = parser.parse_args()
 
     if args.list:
@@ -374,12 +385,12 @@ def main():
         return
 
     if not args.llm or not args.source or not args.target:
-        parser.error("--llm, --source und --target sind erforderlich (oder --list nutzen)")
+        parser.error("--llm, --source and --target are required (or use --list)")
 
     source = Path(args.source)
     target = Path(args.target)
     if not source.exists():
-        print(f"FEHLER: Quelle existiert nicht: {source}")
+        print(f"ERROR: source does not exist: {source}")
         sys.exit(1)
 
     kind = args.kind or _guess_kind(source)

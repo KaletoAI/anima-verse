@@ -282,12 +282,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 STORAGE = Path(tempfile.mkdtemp(prefix="improvtypes-smoke-"))
+# The configured mesh backends below are INSTANCE config: config.save() puts
+# them into this throwaway instance file, never into a world.
+INSTANCE = Path(tempfile.mkdtemp(prefix="improvtypes-instance-"))
+os.environ["INSTANCE_DIR"] = str(INSTANCE)
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="improvtypes-clips-")
 
 from app.core import paths  # noqa: E402
 paths.init(STORAGE)
+paths.init_instance(INSTANCE)
 from app.core import config, db  # noqa: E402
-config.load(STORAGE / "config.json")
+config.load(STORAGE / "config.json", paths.get_instance_config_path())
 db.init_schema()
 
 from fastapi import HTTPException  # noqa: E402

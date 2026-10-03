@@ -5,9 +5,9 @@ Usage:
     ./.venv/bin/python scripts/smoke_admin_controls.py
 
 Runs against a THROWAWAY storage directory — never touches a real world.
-``STORAGE_DIR`` and ``ANIMATION_CLIPS_DIR`` are redirected BEFORE any app
-module is imported, so ``app.server``'s own ``paths.init()`` lands in the
-same temp dir.
+``STORAGE_DIR``, ``INSTANCE_DIR`` and ``ANIMATION_CLIPS_DIR`` are redirected
+BEFORE any app module is imported, so ``app.server``'s own ``paths.init()`` /
+``paths.init_instance()`` land in temp dirs.
 
 The 2026-09-21 decision ("Punkt 3") deleted the old vanilla-UI outfit /
 character / location routes EXCEPT four functions that have no replacement.
@@ -139,6 +139,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 STORAGE = Path(tempfile.mkdtemp(prefix="admctl-smoke-"))
 os.environ["STORAGE_DIR"] = str(STORAGE)
+# app.server runs paths.init_instance() and reads <instance>/config.json.
+os.environ["INSTANCE_DIR"] = tempfile.mkdtemp(prefix="admctl-instance-")
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="admctl-clips-")
 
 from app.core import paths  # noqa: E402

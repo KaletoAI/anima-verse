@@ -5,11 +5,12 @@ repository (``anima-verse-packs/build_catalog.py`` writes ``dist/<pkg>.zip``).
 
 Same storage as the Publish button (``app/core/marketplace_store.py``): the ZIP
 becomes a release asset of the catalog repository and a line in that type's
-index. The catalog (URL + token) is read from a world's config, exactly as the
-server would read it; nothing in that world is written.
+index. The catalog (URL + token) is INSTANCE config: it is read from the
+instance directory named by INSTANCE_DIR (plus the world's config), exactly
+as the server would read it; nothing in either is written.
 
 Usage:
-    ./.venv/bin/python scripts/marketplace_publish.py \\
+    INSTANCE_DIR=./instance ./.venv/bin/python scripts/marketplace_publish.py \\
         --world "worlds/<world>" --catalog "<catalog name>" \\
         --type skill_package --zip ../anima-verse-packs/dist/<pkg>.zip \\
         --name "<display name>" [--slug <slug>] [--description "..."] [--tags a,b] \\
@@ -29,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--world", required=True, help="world directory whose config names the catalog")
+    ap.add_argument("--world", required=True, help="world directory (the catalogs come from the instance config)")
     ap.add_argument("--catalog", required=True, help="catalog display name (content_marketplace.catalogs[].name)")
     ap.add_argument("--type", required=True, dest="pack_type", help="pack type, e.g. skill_package")
     ap.add_argument("--zip", required=True, type=Path)
@@ -43,8 +44,14 @@ def main() -> int:
 
     from app.core import paths
     paths.init(args.world)
+    try:
+        paths.init_instance()
+    except paths.InstanceNotInitialised as e:
+        print(f"{e}\n  the catalogs (URL + token) are instance config: "
+              f"set INSTANCE_DIR (e.g. ./instance)")
+        return 2
     from app.core import config
-    config.load(paths.get_config_path())
+    config.load(paths.get_config_path(), paths.get_instance_config_path())
     from app.core.content_io import _pack_slug, make_thumbnail
     from app.core.marketplace_store import (CatalogRepo, PackUpload, content_hash,
                                             publish)
@@ -53,7 +60,7 @@ def main() -> int:
     catalog = next((c for c in catalogs if isinstance(c, dict)
                     and (c.get("name") or "").strip() == args.catalog), None)
     if not catalog:
-        print(f"no catalog named {args.catalog!r} in {args.world}")
+        print(f"no catalog named {args.catalog!r} in the instance config")
         return 2
     if not (catalog.get("auth_token") or "").strip():
         print("the catalog has no auth token — publishing needs write access to releases")

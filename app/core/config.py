@@ -1,23 +1,34 @@
 """Centralized JSON-based configuration module.
 
-Replaces .env / python-dotenv with a single storage/config.json file.
-Provides get(dotpath), get_section(dotpath), and a backward-compatibility
-bridge that populates os.environ so that existing code keeps working
-during the migration phase.
+The configuration lives in TWO layers, each a ``config.json`` plus a sibling
+``secrets.json`` (gitignored, holds api keys / passwords):
+
+- the INSTANCE layer (``<instance>/config.json``, ``paths.init_instance``) —
+  what belongs to the installation: endpoints, keys, LLM providers, image
+  backends, ports;
+- the WORLD layer (``worlds/<w>/config.json``, ``paths.init``) — what belongs
+  to the simulation of one world: chat rules, NPC behaviour, calendar.
+
+Which layer owns a value is its schema ``scope`` (``app/core/config_scope``).
+In memory the two are ONE dict: ``get(dotpath)`` / ``get_section(dotpath)``
+never ask for a layer. On disk each file stores only what differs from what
+ships (``config_scope.prune``). A backward-compatibility bridge populates
+os.environ so that existing code keeps working.
 """
 import json
 import os
 import re
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
+from app.core import config_scope, paths
 from app.core.log import get_logger
 
 logger = get_logger("config")
 
 _CONFIG: dict = {}
-# Mutable — updated by load() when an explicit path is passed
 # Keys this module generates for the numbered image/video/mesh backend blocks.
 _IMAGEGEN_ENV_RE = re.compile(r"^SKILL_IMAGEGEN_\d+_")
 
@@ -30,8 +41,17 @@ _IMAGEGEN_ENV_RE = re.compile(r"^SKILL_IMAGEGEN_\d+_")
 # purpose; anything past it is logged as an error at load.
 MAX_IMAGE_BACKENDS = 200
 
+# The world layer's config.json. Mutable — updated by load() when an explicit
+# path is passed.
 _CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "storage" / "config.json"
-_SECRETS_PATH: Optional[Path] = None  # set in load() — sibling of _CONFIG_PATH
+# The instance layer's config.json — remembered by load() so reload() and
+# save() address the same file. None = no instance layer (a script that
+# opened a world without one); save() then refuses to drop instance values.
+_INSTANCE_PATH: Optional[Path] = None
+
+# One lock for load / save / migrate_file: a save must never interleave with
+# a reload reading the half-written pair of files.
+_LOCK = threading.RLock()
 
 # Snapshot of every `requires_restart: true` field's value at boot time.
 # Filled once in load() and never overwritten — so the admin UI can tell
@@ -789,9 +809,10 @@ _DEFAULT_MARKETPLACE_CATALOGS = [
 
 
 def _seed_default_marketplace_catalogs(config: dict) -> bool:
-    """Seeds the public catalog on a fresh world.
+    """Seeds the public catalog when the instance layer names none.
 
-    Idempotent: only fires when `content_marketplace.catalogs` is absent.
+    Idempotent: only fires when `content_marketplace.catalogs` is absent —
+    which is also what a pruned layer file stores for the shipped catalog.
     If the admin clears the list to [], it stays empty — explicit choice
     beats implicit re-seeding.
 
@@ -871,24 +892,22 @@ def _default_mesh_backend_entries() -> list:
 
 
 def _seed_default_mesh_backends(config: dict) -> bool:
-    """Seeds the mesh backend catalog (img2mesh + mesh2mesh) into a BRAND-NEW
-    world's config.
+    """Seeds the mesh backend catalog (img2mesh + mesh2mesh) as the backend
+    list when ``image_generation.backends`` is MISSING.
 
-    Only ever called for a world whose config.json did not exist yet: an
-    existing world's backend list is the admin's, and silently appending
-    aliases to it would resurrect entries they deleted on purpose.
+    The seed list is the shipped default of ``image_generation.backends``
+    (``config_scope.shipped_default``): a layer file stores the list only when
+    it differs from the seed, so a missing key means "the shipped list" and
+    this brings it back. A list the admin edited — emptied to ``[]``
+    included — is in the file and is never touched: appending aliases to it
+    would resurrect entries they deleted on purpose.
 
-    In-memory only — see `migrate_file()` for the disk side. A mesh backend
-    is recognised by its media kind (``routing.describe_config_backend``, the
-    one source the routing migration and the save validator use too).
+    In-memory only — see `migrate_file()` for the disk side.
     """
-    from app.imagegen.routing import describe_config_backend
     ig = config.setdefault("image_generation", {})
-    backends = ig.setdefault("backends", [])
-    if any(isinstance(b, dict) and describe_config_backend(b)["media"] == "mesh"
-           for b in backends):
+    if "backends" in ig:
         return False
-    backends.extend(_default_mesh_backend_entries())
+    ig["backends"] = _default_mesh_backend_entries()
     logger.info("Default mesh backends seeded (%d)",
                 len(_DEFAULT_MESH_BACKENDS) + 1)
     return True
@@ -1173,72 +1192,6 @@ def _strip_dead_use_cases(config: dict) -> bool:
     return changed
 
 
-# Marker for the one-time lane migration below. It is a top-level config key,
-# so it survives the admin save round-trip (/admin/settings/raw hands the whole
-# config back out and config.save writes it) and nothing re-derives it.
-_LANE_MIGRATION_MARKER = "llm_lanes_migrated"
-
-
-def _migrate_entry_lanes(config: dict) -> bool:
-    """ONCE per world: the provider's ``max_concurrent`` becomes the lane count
-    of that provider's enabled LLM entries (plan-cache-lanes.md § 5).
-
-    How many LLM calls run at once is decided per ENTRY now, not per provider
-    — and an entry without a value has ONE lane. A world that had a provider
-    at 4 parallel requests would therefore silently drop to strictly serial
-    work the first time the new code runs. This carries the number over, once,
-    to every enabled entry of that provider that has no own value yet. No
-    fallback reader anywhere: after this the entry is the only place the
-    number lives.
-
-    "Once" is the load-bearing word, and it is why the marker exists. The
-    provider field itself stays (it sizes the channel's worker pool and is the
-    GPU limit), so a plain "copy it onto every entry without a value" would
-    run again on EVERY boot: an entry created later in the admin UI writes no
-    ``max_concurrent`` and would silently inherit the provider's number at the
-    next start — a ``tool`` entry would come up with 4 lanes although § 10 of
-    the plan keeps tool/vision at 1. With the marker set, this whole step is
-    skipped and an entry without a value simply means one lane, forever.
-
-    Disabled entries are left alone: they describe no running pool, and
-    turning one on in the admin should give it the documented default.
-
-    In-memory only — see `migrate_file()` for the disk side.
-    """
-    if config.get(_LANE_MIGRATION_MARKER):
-        return False
-    config[_LANE_MIGRATION_MARKER] = True
-    providers = config.get("providers")
-    routing = config.get("llm_routing")
-    if not isinstance(providers, list) or not isinstance(routing, list):
-        return True
-    per_provider = {}
-    for prov in providers:
-        if not isinstance(prov, dict):
-            continue
-        name = (prov.get("name") or "").strip()
-        value = int(prov.get("max_concurrent") or 1)
-        if name and value > 1:
-            per_provider[name] = value
-    if not per_provider:
-        return True
-    changed = []
-    for entry in routing:
-        if not isinstance(entry, dict) or entry.get("max_concurrent"):
-            continue
-        if entry.get("enabled") is False:
-            continue
-        lanes = per_provider.get((entry.get("provider") or "").strip())
-        if not lanes:
-            continue
-        entry["max_concurrent"] = lanes
-        changed.append(f"{entry.get('provider')}/{entry.get('model')}={lanes}")
-    if changed:
-        logger.info("LLM entries got their lane count from the provider: %s",
-                    ", ".join(changed))
-    return True
-
-
 # ── Image routing (development_instructions/plan-image-routing.md § 2) ────
 # The per-occasion default fields the image routing chains replace, in chain
 # order per occasion. Read ONCE, while image_generation.routing does not exist
@@ -1367,13 +1320,21 @@ def _migrate_image_routing(config: dict) -> bool:
     return changed
 
 
-def _apply_file_migrations(config: dict, fresh_world: bool) -> bool:
+def _apply_file_migrations(config: dict) -> bool:
     """Runs every load-time normalisation over ``config``, IN MEMORY.
 
+    ``config`` is the UNION of both layers (instance + world): a migration
+    may read a field of one layer and write the other (the image routing
+    chains are instance data seeded from old fields, some of them world
+    fields), so it runs once on the joined dict, never per layer.
+
     Strip (dead/legacy fields) + seed (use-case blocks, marketplace catalog,
-    and — for a brand-new world only — the mesh backend catalog) + the two
-    one-time renames. Every step is idempotent, so a second run over the same
-    dict returns False. Returns True when any step changed something.
+    mesh backend catalog — each only where its key is MISSING, which is what
+    a pruned layer file stores for a shipped default) + the two one-time
+    renames. Every step is idempotent. Returns True when any step changed
+    something — informational only: ``_migrate_image_routing`` re-seeds the
+    pruned ``routing: {}`` on every load, so this flag is never a reason to
+    write a file. Writers compare content (``_write_if_changed``).
 
     This is the shared body of `load()` (which never touches disk) and
     `migrate_file()` (which persists the very same result).
@@ -1383,7 +1344,7 @@ def _apply_file_migrations(config: dict, fresh_world: bool) -> bool:
         changed = True
     if _seed_default_use_cases(config):
         changed = True
-    if fresh_world and _seed_default_mesh_backends(config):
+    if _seed_default_mesh_backends(config):
         changed = True
     if _strip_legacy_imagegen_prompt_fields(config):
         changed = True
@@ -1397,110 +1358,294 @@ def _apply_file_migrations(config: dict, fresh_world: bool) -> bool:
         changed = True
     if _migrate_lora_triggers(config):
         changed = True
-    if _migrate_entry_lanes(config):
-        changed = True
     return changed
 
 
-def migrate_file(config_path: Optional[Path] = None) -> bool:
+# ── The two layers on disk ────────────────────────────────────────────────
+
+class InstanceConfigMissing(RuntimeError):
+    """The instance config does not exist yet while the world config still
+    carries instance settings — the server must not start (it would run
+    without them, and the first admin save would drop them for good)."""
+
+
+def _read_json_file(path: Path) -> dict:
+    """The JSON object stored in ``path``; ``{}`` when the file is missing.
+
+    Raises ``ValueError`` when the file exists but holds no readable JSON
+    object — callers decide whether that is fatal.
+    """
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        raise ValueError(f"cannot read {path}: {e}") from e
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} is not a JSON object")
+    return data
+
+
+def _resolve_instance_path(instance_path: Optional[Path]) -> Optional[Path]:
+    """Argument > the initialised instance directory > None (no layer)."""
+    if instance_path:
+        return Path(instance_path)
+    if paths.instance_initialised():
+        return paths.get_instance_config_path()
+    return None
+
+
+def _layer_with_secrets(path: Path, strict: bool) -> dict:
+    """One layer's config.json with ITS OWN secrets.json overlaid.
+
+    Unreadable files are logged and read as empty — unless ``strict``, then
+    the ``ValueError`` propagates (a writer must not replace a file it could
+    not read).
+    """
+    data: dict = {}
+    for i, f in enumerate((path, path.parent / "secrets.json")):
+        try:
+            part = _read_json_file(f)
+        except ValueError as e:
+            if strict:
+                raise
+            logger.error("Failed to load config: %s", e)
+            continue
+        if i == 0:
+            data = part
+            if not f.exists():
+                logger.info("Config file not found: %s — this layer is empty", f)
+        elif part:
+            _deep_merge(data, part)
+    return data
+
+
+def _split_keys(part: dict, prefix: tuple = ()) -> list:
+    """The dotted keys at which ``split_by_scope`` cut ``part`` — a mixed
+    node is descended, every other value is one key."""
+    out = []
+    for key, value in part.items():
+        parts = prefix + (str(key),)
+        dotted = ".".join(parts)
+        if isinstance(value, dict) and config_scope.child_scopes_differ(dotted):
+            out.extend(_split_keys(value, parts))
+        else:
+            out.append(dotted)
+    return out
+
+
+def _key_list(part: dict, limit: int = 8) -> str:
+    """``_split_keys`` for a message: the first ``limit`` keys, then a count."""
+    keys = _split_keys(part)
+    more = f" and {len(keys) - limit} more" if len(keys) > limit else ""
+    return ", ".join(keys[:limit]) + more
+
+
+def _read_layer(path: Path, layer: str, strict: bool = False) -> dict:
+    """Read one layer and keep only what its scope owns.
+
+    A key of the other layer's scope and an unknown root key are ignored
+    with one warning each — the file is not changed here; the next save or
+    ``migrate_file`` drops them from it.
+    """
+    data = _layer_with_secrets(path, strict)
+    inst, world, unknown = config_scope.split_by_scope(data)
+    own, foreign = (inst, world) if layer == config_scope.INSTANCE else (world, inst)
+    for root in unknown:
+        logger.warning("Config %s: unknown root key '%s' ignored", path, root)
+    other = (config_scope.WORLD if layer == config_scope.INSTANCE
+             else config_scope.INSTANCE)
+    for key in _split_keys(foreign):
+        logger.warning("Config %s: '%s' belongs to the %s config — ignored",
+                       path, key, other)
+    return own
+
+
+def _compose(world_path: Path, instance_path: Optional[Path],
+             strict: bool = False) -> dict:
+    """Both layers, read fresh, joined and migrated — the in-memory config
+    before the calendar materialization."""
+    union = (_read_layer(instance_path, config_scope.INSTANCE, strict)
+             if instance_path is not None else {})
+    # The two parts are disjoint (split by scope), so the merge only joins
+    # the dicts of mixed nodes.
+    _deep_merge(union, _read_layer(world_path, config_scope.WORLD, strict))
+    _apply_file_migrations(union)
+    return union
+
+
+def _json_equal(a: Any, b: Any) -> bool:
+    """Same JSON content — key order aside, ``1``/``1.0``/``true`` apart."""
+    return (json.dumps(a, sort_keys=True, ensure_ascii=False)
+            == json.dumps(b, sort_keys=True, ensure_ascii=False))
+
+
+def _write_if_changed(path: Path, data: dict) -> bool:
+    """Write ``data`` unless the file already holds exactly that content.
+
+    The comparison is on the parsed JSON, never on the text and never on a
+    "changed" flag. A missing or unreadable file always counts as different.
+    """
+    if path.exists():
+        try:
+            if _json_equal(_read_json_file(path), data):
+                return False
+        except ValueError:
+            pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(path, data)
+    logger.info("Config written: %s", path)
+    return True
+
+
+def _write_layer(path: Path, pruned: dict) -> bool:
+    """Persist one layer's pruned part: config.json + its secrets.json.
+
+    An empty secrets part deletes the layer's secrets.json. Returns True
+    when any file was written or deleted.
+    """
+    clean, secrets = _split_secrets(pruned)
+    wrote = _write_if_changed(path, clean)
+    secrets_path = path.parent / "secrets.json"
+    if secrets:
+        wrote = _write_if_changed(secrets_path, secrets) or wrote
+    elif secrets_path.exists():
+        secrets_path.unlink()
+        logger.info("Secrets file removed (nothing secret left): %s", secrets_path)
+        wrote = True
+    return wrote
+
+
+def _persist(data: dict, world_path: Path,
+             instance_path: Optional[Path]) -> tuple:
+    """Split ``data`` by scope, prune each part and write what changed.
+
+    Returns ``(wrote, pruned_world_part)``. Unknown root keys are dropped
+    (logged). Without an instance path a NON-empty pruned instance part is
+    refused with ``RuntimeError`` before anything is written — writing only
+    the world would silently drop those settings.
+    """
+    inst, world, unknown = config_scope.split_by_scope(data)
+    if unknown:
+        logger.warning("Config save: unknown root key(s) dropped: %s",
+                       ", ".join(unknown))
+    inst_pruned = config_scope.prune(inst)
+    world_pruned = config_scope.prune(world)
+    if instance_path is None and inst_pruned:
+        raise RuntimeError(
+            "no instance path — refusing to drop instance settings: "
+            + _key_list(inst_pruned))
+    wrote = False
+    if instance_path is not None:
+        wrote = _write_layer(Path(instance_path), inst_pruned)
+    wrote = _write_layer(Path(world_path), world_pruned) or wrote
+    return wrote, world_pruned
+
+
+def check_instance_ready(world_path: Path, instance_path: Path) -> None:
+    """Refuse to boot while the world still holds the instance settings.
+
+    Raises ``InstanceConfigMissing`` when the instance config.json does not
+    exist AND the world's config.json + secrets.json carry instance-scoped
+    values that differ from what ships. A missing world file never blocks
+    (a new world), nor does a world whose instance part prunes to nothing
+    (a fresh clone, a world that only ever had defaults there).
+    """
+    world_path = Path(world_path)
+    instance_path = Path(instance_path)
+    if instance_path.exists() or not world_path.exists():
+        return
+    data = _layer_with_secrets(world_path, strict=False)
+    inst, _world, _unknown = config_scope.split_by_scope(data)
+    pending = config_scope.prune(inst)
+    if not pending:
+        return
+    raise InstanceConfigMissing(
+        f"The instance config {instance_path} does not exist, but the world "
+        f"config {world_path} still carries instance settings "
+        f"({_key_list(pending)}). Move them into the instance "
+        f"first:\n"
+        f'  ./.venv/bin/python scripts/migrate_instance_config.py '
+        f'--from "{world_path.parent.name}"')
+
+
+def migrate_file(config_path: Optional[Path] = None,
+                 instance_path: Optional[Path] = None) -> bool:
     """Applies the load-time normalisations TO DISK. Returns True if written.
 
     `load()` is a pure READ path — it normalises only the in-memory config, so
     that merely opening a world (a smoke script, a CLI, an export run) leaves
-    the world's files byte-identical. Persisting is this function's job, and it
-    is called from exactly one place: the server boot, right after `load()` —
-    the RUNNING world's config.json is meant to stay current. The admin save
-    path needs no call: it serialises the whole in-memory config back out
-    (`/admin/settings/raw` -> page state -> `config.save`), so the seeded and
-    stripped state lands there by itself.
+    the files byte-identical. Persisting is this function's job, and the
+    server boot calls it right after `load()`.
 
-    Deliberately works on a FRESH READ of the file rather than on `_CONFIG`:
-    by the time boot calls this, `_CONFIG` carries the secrets.json overlay,
-    and dumping that would leak API keys into the tracked config.json. The
-    re-read dict is exactly what the old in-load writers used to persist.
+    Runs the pipeline of `load()` on FRESH reads of both layers (``_CONFIG``
+    is never touched; it carries the materialized calendar) and then the
+    write path of `save()`: split by scope, prune, split out the secrets,
+    write each file only when its content differs. A missing layer file is
+    created — as ``{}`` when its pruned part is empty — so a fresh clone and
+    a new world reach a stable state: the next call writes nothing.
+
+    Paths: the world file is the argument, else the remembered world path;
+    the instance file is the argument, else the initialised instance
+    directory's, else none (then a non-empty instance part raises like
+    `save()`). An unreadable layer file skips the whole migration (logged) —
+    a file that could not be read is never replaced.
     """
-    path = Path(config_path) if config_path else _CONFIG_PATH
-    fresh_world = not path.exists()
-    on_disk: dict = {}
-    if not fresh_world:
+    with _LOCK:
+        world_path = Path(config_path) if config_path else _CONFIG_PATH
+        inst_path = _resolve_instance_path(instance_path)
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                on_disk = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            logger.error("Config migration skipped — cannot read %s: %s", path, e)
+            union = _compose(world_path, inst_path, strict=True)
+        except ValueError as e:
+            logger.error("Config migration skipped — %s", e)
             return False
-        if not isinstance(on_disk, dict):
-            logger.error("Config migration skipped — %s is not an object", path)
-            return False
-
-    if not _apply_file_migrations(on_disk, fresh_world):
-        return False
-
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write_json(path, on_disk)
-        logger.info("Config file migrated (strip + seed) -> %s", path)
-        return True
-    except OSError as e:
-        logger.error("Failed to write migrated config to %s: %s", path, e)
-        return False
+        wrote, _world = _persist(union, world_path, inst_path)
+        if wrote:
+            logger.info("Config files migrated (strip + seed + prune) -> %s, %s",
+                        world_path, inst_path)
+        return wrote
 
 
-def load(config_path: Optional[Path] = None) -> dict:
-    """Load configuration from JSON file, then overlay secrets.json on top.
+def load(config_path: Optional[Path] = None,
+         instance_path: Optional[Path] = None) -> dict:
+    """Load both config layers into ONE in-memory dict.
 
-    secrets.json (sibling of config.json) holds sensitive fields and is gitignored.
-    Falls back to empty config if config.json doesn't exist.
-    Also populates os.environ for backward compatibility.
+    Per layer: config.json, then the secrets.json of THE SAME layer on top,
+    then only the part that layer's scope owns is kept (a foreign-scope key
+    or an unknown root key is ignored with a warning). The two parts are
+    joined, the load-time migrations run once on the union, and the result
+    populates os.environ for backward compatibility.
 
-    READ-ONLY: the strip/seed normalisations below run in memory only, so
-    loading a world never modifies its files. `migrate_file()` persists them.
+    Paths: the world file is ``config_path``, else the last one used. The
+    instance file is ``instance_path``, else the initialised instance
+    directory's (``paths.init_instance``), else none — a script that opens a
+    world without an instance sees no instance settings. Both are
+    remembered; `reload()` reads the same pair.
+
+    READ-ONLY: nothing is written here. `migrate_file()` persists the
+    normalisations.
     """
-    global _CONFIG, _CONFIG_PATH, _SECRETS_PATH
-    if config_path:
-        _CONFIG_PATH = Path(config_path)
-    _SECRETS_PATH = _CONFIG_PATH.parent / "secrets.json"
-    path = _CONFIG_PATH
+    global _CONFIG, _CONFIG_PATH, _INSTANCE_PATH, _BOOT_RESTART_SNAPSHOT
+    with _LOCK:
+        if config_path:
+            _CONFIG_PATH = Path(config_path)
+        _INSTANCE_PATH = _resolve_instance_path(instance_path)
+        if _INSTANCE_PATH is None:
+            logger.info("No instance config — loading the world layer only (%s)",
+                        _CONFIG_PATH)
+        _CONFIG = _compose(_CONFIG_PATH, _INSTANCE_PATH)
+        logger.info("Config loaded: world %s, instance %s", _CONFIG_PATH, _INSTANCE_PATH)
 
-    # A world whose config.json does not exist yet gets the one-time defaults
-    # a NEW world starts with (mesh backends); an existing world never does.
-    fresh_world = not path.exists()
+        # Populate os.environ for backward compatibility
+        _flatten_to_env(_CONFIG)
 
-    if fresh_world:
-        logger.warning("Config file not found: %s — using empty config", path)
-        _CONFIG = {}
-    else:
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                _CONFIG = json.load(f)
-            logger.info("Config loaded from %s", path)
-        except (json.JSONDecodeError, IOError) as e:
-            logger.error("Failed to load config from %s: %s", path, e)
-            _CONFIG = {}
+        # Freeze the boot snapshot of the restart-requiring fields (once only,
+        # the first load wins — later reload() calls do not change it).
+        if _BOOT_RESTART_SNAPSHOT is None:
+            _BOOT_RESTART_SNAPSHOT = _collect_restart_values(_CONFIG)
 
-    # Normalise IN MEMORY — nothing lands on disk here (see migrate_file()).
-    _apply_file_migrations(_CONFIG, fresh_world)
-
-    # Overlay secrets.json (gitignored — holds api keys / passwords)
-    if _SECRETS_PATH.exists():
-        try:
-            with open(_SECRETS_PATH, "r", encoding="utf-8") as f:
-                secrets = json.load(f)
-            _deep_merge(_CONFIG, secrets)
-            logger.info("Secrets overlaid from %s", _SECRETS_PATH)
-        except (json.JSONDecodeError, IOError) as e:
-            logger.error("Failed to load secrets from %s: %s", _SECRETS_PATH, e)
-
-    # Populate os.environ for backward compatibility
-    _flatten_to_env(_CONFIG)
-
-    # Freeze the boot snapshot of the restart-requiring fields (once only,
-    # the first load wins — later reload() calls do not change it).
-    global _BOOT_RESTART_SNAPSHOT
-    if _BOOT_RESTART_SNAPSHOT is None:
-        _BOOT_RESTART_SNAPSHOT = _collect_restart_values(_CONFIG)
-
-    _materialize_game_calendar_defaults(_CONFIG)
+        _materialize_game_calendar_defaults(_CONFIG)
 
     _invalidate_config_derived_caches()
     return _CONFIG
@@ -1558,14 +1703,11 @@ def _invalidate_config_derived_caches() -> None:
 
 
 def _collect_restart_values(cfg: dict) -> dict:
-    """Liest aktuelle Werte aller `requires_restart`-Pfade aus cfg."""
-    try:
-        from app.core.config_schema import iter_restart_required_paths
-    except Exception:
-        return {}
+    """Reads the current values of every `requires_restart` path from cfg."""
+    from app.core.config_schema import iter_restart_required_paths
     result = {}
     for path in iter_restart_required_paths():
-        # Pfade mit '[*]' (Array-Item-Felder) auflösen wir gegen alle Indizes
+        # Paths with '[*]' (array item fields) are resolved against every index
         if "[*]" in path:
             for resolved in _expand_wildcards(cfg, path):
                 result[resolved] = get(resolved)
@@ -1575,7 +1717,7 @@ def _collect_restart_values(cfg: dict) -> dict:
 
 
 def _expand_wildcards(cfg: dict, path: str) -> list:
-    """Expandiert '[*]'-Wildcards gegen die aktuellen Array-Längen in cfg."""
+    """Expands '[*]' wildcards against the current array lengths in cfg."""
     if "[*]" not in path:
         return [path]
     prefix, _, rest = path.partition("[*]")
@@ -1673,8 +1815,10 @@ def _split_secrets(data: Any) -> tuple:
 
 
 def reload() -> dict:
-    """Reload configuration from disk (uses same path as last load)."""
-    return load()
+    """Reload both layers from disk — the world AND instance path of the
+    last load (an instance given as an argument is kept, not re-resolved)."""
+    with _LOCK:
+        return load(_CONFIG_PATH, _INSTANCE_PATH)
 
 
 def get(path: str, default: Any = None) -> Any:
@@ -1705,30 +1849,36 @@ def get_all() -> dict:
 
 
 def save(data: dict, config_path: Optional[Path] = None) -> None:
-    """Save configuration. Sensitive fields are split out into secrets.json (gitignored)."""
+    """Save the whole in-memory config into its two layers.
+
+    ``data`` is split by scope (unknown root keys are dropped), each part is
+    pruned to what differs from what ships, the sensitive fields go into the
+    layer's own secrets.json (gitignored; an empty secrets part deletes the
+    file) — and a file is written only when its JSON content differs from
+    what is on disk. ``config_path`` is the WORLD file (default: the
+    remembered one); the instance file is the one the last `load()` used.
+
+    Without an instance file a non-empty pruned instance part raises
+    ``RuntimeError("no instance path — refusing to drop instance settings")``
+    and nothing is written; an empty one is simply not written.
+
+    Known limits of the pruning:
+
+    - ``/settings/raw`` materializes the bool/select defaults into list
+      entries (``admin_settings._fill_item_defaults``), and nothing inside a
+      list entry is pruned. So the seeded mesh backends land in the instance
+      file after the first admin save — no loss, just not pruned.
+    - A season list equal to the shipped one is pruned, i.e. MISSING on
+      disk; ``game_calendar_migration.py`` (atmosphere step) reads a missing
+      list as "no own values yet" (``game_seasons_are_defaults()``), which is
+      the right reading for a list nobody edited.
+    """
     global _CONFIG, _GAME_SEASONS_MATERIALIZED
-    path = config_path or _CONFIG_PATH
-    secrets_path = path.parent / "secrets.json"
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    clean, secrets = _split_secrets(data)
-
-    _atomic_write_json(path, clean)
-    logger.info("Config saved to %s", path)
-
-    if secrets:
-        _atomic_write_json(secrets_path, secrets)
-        logger.info("Secrets saved to %s", secrets_path)
-    elif secrets_path.exists():
-        try:
-            secrets_path.unlink()
-        except OSError:
-            pass
-
-    _CONFIG = data
-    if isinstance(data.get("game_seasons"), list) and data["game_seasons"]:
-        _GAME_SEASONS_MATERIALIZED = False
+    with _LOCK:
+        world_path = Path(config_path) if config_path else _CONFIG_PATH
+        _wrote, world_pruned = _persist(data, world_path, _INSTANCE_PATH)
+        _CONFIG = data
+        _GAME_SEASONS_MATERIALIZED = "game_seasons" not in world_pruned
     _invalidate_config_derived_caches()
 
 
@@ -1910,9 +2060,10 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "SKILL_KNOWLEDGE_SEARCH_MAX_RETURN", kn.get("search_max_return", field_default("knowledge", "search_max_return")))
 
     # Thoughts — AgentLoop pacing.
-    # The AgentLoop reads these values directly via config.get() (no env
-    # bridge needed any more); the mapping stays only for code that still
-    # expects the env variable.
+    # The AgentLoop reads these values directly via config.get(); nothing
+    # reads these two env variables any more. The lines are kept only as
+    # the bridge's pinned behaviour (scripts/smoke_dead_config_fields.py
+    # test 11 checks the schema-default fallback through them).
     pro = config.get("thoughts", {})
     _set(env, "THOUGHT_MIN_TURN_GAP_SECONDS", pro.get("min_turn_gap_seconds", field_default("thoughts", "min_turn_gap_seconds")))
     _set(env, "THOUGHT_MIN_PER_CHAR_COOLDOWN_MINUTES", pro.get("min_per_char_cooldown_minutes", field_default("thoughts", "min_per_char_cooldown_minutes")))

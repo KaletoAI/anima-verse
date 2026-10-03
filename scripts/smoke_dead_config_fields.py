@@ -12,6 +12,19 @@ normalises only in memory and NEVER touches a file, while the explicit
 idempotent. Before the split, every script that merely opened a world rewrote
 its tracked config.json.
 
+Since the instance-config layers (2026-10-03) tests 8-10 run on a PAIR of
+files — ``<tmp>/w/config.json`` (world) and ``<tmp>/i/config.json``
+(instance) — and every dead field sits in the file of its scope (the
+``image_generation`` and ``server`` ones are instance, ``chat`` and the use
+cases world). Two expectation changes, both by design of the layers:
+  * the fixture has no root ``log_level`` and no ``inventory`` — neither is a
+    schema section, so both are unknown roots and dropped at load (with a
+    warning); they would prove nothing about the strip;
+  * the SEEDED blocks (use-case structure, marketplace catalog) are checked
+    IN MEMORY (``config.get``) only: on disk each layer is pruned to what
+    differs from what ships, and a seed equals its shipped default — so after
+    ``migrate_file`` it is ABSENT from the file, which test 9 checks too.
+
 The fixture is the table of the 20 section fields — the 13 of the finding
 plus ``server.jwt_secret`` (2026-09-21: sessions are opaque random tokens,
 nothing signs a JWT), plus the seven of the instance-config cleanup
@@ -43,9 +56,10 @@ there — and test 5 is their hand case.
 Test 1b is the "no reader" half for every name of the table: no string
 literal ``"<name>"`` / ``"<dotted.path>.<name>"`` and no attribute access
 ``.<name>`` anywhere in app/, plugins/ (the symlinked private packs
-FOLLOWED), frontend/src, packages, client3d/src or static/ (the built bundle
-under static/game_admin/assets excluded — it is generated from
-frontend/src). In app/core/config.py only the two constant blocks are
+FOLLOWED; marketplace installs under plugins/installed are user-local and not
+scanned — the corpus is ``git ls-files`` plus the symlinked packs),
+frontend/src, packages, client3d/src or static/ (the built bundle under
+static/game_admin/assets excluded — it is generated from frontend/src). In app/core/config.py only the two constant blocks are
 blanked out, so a bridge line like ``server.get("storage_dir", …)`` is still
 seen. f-string readers (``f"tpose_view_{v}"``) are out of reach of that scan;
 they were checked by hand (task report).
@@ -71,7 +85,8 @@ The point of the file is the pair of counter-checks:
   * the LIVING neighbours of the dead fields survive — most sharply
     ``scene_prompt_collage`` falls while ``scene_prompt_multi_ref`` and
     ``scene_prompt_only_background`` (read in app/core/scene_render.py) stay,
-    and a living TOP-LEVEL key (``log_level``) is not caught by the flat sweep;
+    and a living TOP-LEVEL key (``llm_task_state``, the one root outside the
+    schema sections that has a reader) is not caught by the flat sweep;
   * the seeding source is really gone — the two fields that used to reappear
     in freshly created worlds (``mapfit_imagegen_default`` /
     ``map_tile_vision_analysis``) came from schema entries in
@@ -178,7 +193,6 @@ LIVING = {
         "lora_triggers": [],
     },
     "chat": {"context_messages": 20},
-    "inventory": {"max_items": 50},
     "random_events": {"enabled": True},
     "ui": {"downscale_item_max_dim": 768},                  # image_postprocess.py
     "server": {"log_level": "INFO"},
@@ -385,15 +399,13 @@ def main():
               f"DEAD_TOPLEVEL_FIELDS == the {EXPECTED_TOTAL} names flat + the two "
               f"item sizes")
         # worlds/hotopia looks exactly like this: the two item sizes sit at
-        # the top level. The lane-migration marker is the one LIVING root key
-        # that is no section (config._LANE_MIGRATION_MARKER).
-        marker = cfgmod._LANE_MIGRATION_MARKER
+        # the top level. llm_task_state is the one LIVING root key that is no
+        # schema section (config_scope.EXTRA_ROOTS, read by llm_task_state.py).
         old = {
             "item_image_width": 256,
             "item_image_height": 256,
             "storage_dir": "./storage",
-            marker: True,
-            "log_level": "INFO",
+            "llm_task_state": {"disabled_tasks": ["x"]},
             "server": {"storage_dir": "./storage", "log_level": "DEBUG"},
             "image_generation": {"mapfit_backend": "comfy-1",
                                  "scene_prompt_multi_ref": "keep me"},
@@ -406,8 +418,8 @@ def main():
               "storage_dir falls at both depths")
         check("mapfit_backend" not in old["image_generation"],
               "the section sweep still works alongside")
-        check(old[marker] is True and old["log_level"] == "INFO",
-              "living TOP-LEVEL keys stay (lane marker, log_level)")
+        check(old["llm_task_state"] == {"disabled_tasks": ["x"]},
+              "the living TOP-LEVEL key stays (llm_task_state)")
         check(old["image_generation"].get("scene_prompt_multi_ref") == "keep me"
               and old["server"].get("log_level") == "DEBUG",
               "living section fields stay")
@@ -448,43 +460,51 @@ def main():
           "with the removed schema entries back, both fields DO appear")
 
     # ── The read/write split ────────────────────────────────────────────────
-    # A world file carrying a dead field at BOTH depths, a legacy backend
-    # category, a legacy prompt field, and none of the seeded blocks. Plus a
-    # secrets.json, because migrate_file() must not leak it into config.json.
+    # A world + instance pair carrying dead fields at BOTH depths, a legacy
+    # backend category, a legacy prompt field, and none of the seeded blocks.
+    # Plus an instance secrets.json, because migrate_file() must not leak it
+    # into config.json.
     with tempfile.TemporaryDirectory() as tmp:
-        world = Path(tmp) / "config.json"
-        fixture = {
-            "log_level": "INFO",
+        world = Path(tmp) / "w" / "config.json"
+        inst = Path(tmp) / "i" / "config.json"
+        world.parent.mkdir()
+        inst.parent.mkdir()
+        world_fixture = {
+            "chat": {"auto_wake_stamina": 40, "chattiness": 0.3},
+            "image_generation": {
+                # Both dead use cases, as an older world's config.json holds
+                # them — seeded before the map-icon teardown.
+                "use_cases": {"map": {"styles": {}}, "mapfit": {"styles": {}}},
+            },
+            "item_image_height": 256,
+        }
+        instance_fixture = {
             "image_generation": {
                 "mapfit_backend": "comfy-1",
                 "scene_prompt_multi_ref": "keep me",
                 "backends": [{"name": "gpu-a", "enabled": True,
                               "category": "generate", "prompt_prefix": "old",
                               "api_key": ""}],
-                # Both dead use cases, as an older world's config.json holds
-                # them — seeded before the map-icon teardown.
-                "use_cases": {"map": {"styles": {}}, "mapfit": {"styles": {}}},
             },
-            "server": {"storage_dir": "./storage"},
-            "inventory": {"max_items": 50},
-            "item_image_height": 256,
+            "server": {"storage_dir": "./storage", "log_level": "DEBUG"},
         }
-        world.write_text(json.dumps(fixture, indent=2), encoding="utf-8")
-        (Path(tmp) / "secrets.json").write_text(
+        world.write_text(json.dumps(world_fixture, indent=2), encoding="utf-8")
+        inst.write_text(json.dumps(instance_fixture, indent=2), encoding="utf-8")
+        (inst.parent / "secrets.json").write_text(
             json.dumps({"image_generation": {"backends": [{"api_key": "sk-SECRET"}]}}),
             encoding="utf-8")
-        before_bytes = world.read_bytes()
-        before_mtime = world.stat().st_mtime_ns
+        before = {f: (f.read_bytes(), f.stat().st_mtime_ns) for f in (world, inst)}
 
         print("8) a bare config.load() writes NOTHING")
-        loaded = cfgmod.load(world)
-        check(world.read_bytes() == before_bytes,
-              "config.json is byte-identical after load")
-        check(world.stat().st_mtime_ns == before_mtime,
-              "config.json mtime unchanged after load")
+        loaded = cfgmod.load(world, inst)
+        for f, (data, mtime) in before.items():
+            check(f.read_bytes() == data, f"{f.parent.name}/config.json is byte-identical after load")
+            check(f.stat().st_mtime_ns == mtime, f"{f.parent.name}/config.json mtime unchanged after load")
         # …while the RUNNING config looks exactly as it always did.
         check("mapfit_backend" not in loaded["image_generation"],
               "in memory: the dead section field is stripped")
+        check("auto_wake_stamina" not in loaded["chat"],
+              "in memory: the dead world field is stripped")
         check("item_image_height" not in loaded
               and "storage_dir" not in loaded.get("server", {}),
               "in memory: the dead fields at both depths are stripped")
@@ -492,49 +512,54 @@ def main():
               "in memory: the legacy backend prompt field is stripped")
         check(loaded["image_generation"]["backends"][0]["category"] == "txt2img",
               "in memory: the backend category is migrated")
-        check(set(loaded["image_generation"].get("use_cases", {}))
+        check(loaded["image_generation"]["backends"][0]["api_key"] == "sk-SECRET",
+              "in memory: the instance secret is overlaid")
+        check(set(cfgmod.get("image_generation.use_cases", {}))
               == set(cfgmod._DEFAULT_IMAGE_USE_CASES),
-              "in memory: every use-case block is seeded")
-        check(bool(loaded.get("content_marketplace", {}).get("catalogs")),
+              "in memory: every use-case block is seeded (map/mapfit gone)")
+        check(bool(cfgmod.get("content_marketplace.catalogs")),
               "in memory: the marketplace catalog is seeded")
         check(loaded["image_generation"]["scene_prompt_multi_ref"] == "keep me"
-              and loaded["log_level"] == "INFO",
+              and loaded["chat"]["chattiness"] == 0.3
+              and loaded["server"]["log_level"] == "DEBUG",
               "in memory: living fields survive")
 
-        print("9) migrate_file() writes exactly that strip+seed diff")
-        check(cfgmod.migrate_file(world) is True, "returns True — it wrote")
-        after = json.loads(world.read_text(encoding="utf-8"))
-        check(world.read_bytes() != before_bytes, "the file did change")
-        check("mapfit_backend" not in after["image_generation"]
-              and "item_image_height" not in after
-              and "storage_dir" not in after.get("server", {}),
-              "on disk: the dead fields are gone")
-        check("prompt_prefix" not in after["image_generation"]["backends"][0]
-              and after["image_generation"]["backends"][0]["category"] == "txt2img",
+        print("9) migrate_file() writes exactly that strip+seed diff, pruned")
+        check(cfgmod.migrate_file(world, inst) is True, "returns True — it wrote")
+        w_after = json.loads(world.read_text(encoding="utf-8"))
+        i_after = json.loads(inst.read_text(encoding="utf-8"))
+        check(w_after == {"chat": {"chattiness": 0.3}},
+              f"on disk (world): only the living field is left ({w_after})")
+        check("mapfit_backend" not in i_after["image_generation"]
+              and "storage_dir" not in i_after.get("server", {}),
+              "on disk (instance): the dead fields are gone")
+        check("prompt_prefix" not in i_after["image_generation"]["backends"][0]
+              and i_after["image_generation"]["backends"][0]["category"] == "txt2img",
               "on disk: legacy prompt field stripped, category migrated")
-        check(set(after["image_generation"].get("use_cases", {}))
-              == set(cfgmod._DEFAULT_IMAGE_USE_CASES),
-              "on disk: every use-case block is seeded")
-        check(bool(after.get("content_marketplace", {}).get("catalogs")),
-              "on disk: the marketplace catalog is seeded")
-        check(after["image_generation"]["scene_prompt_multi_ref"] == "keep me"
-              and after["log_level"] == "INFO"
-              and after["inventory"]["max_items"] == 50,
+        # The seeds equal their shipped defaults, so the pruned files do not
+        # carry them — they live in memory only (test 8).
+        check("use_cases" not in w_after.get("image_generation", {})
+              and "content_marketplace" not in i_after,
+              "on disk: the seeded blocks are pruned (equal to what ships)")
+        check(i_after["image_generation"]["scene_prompt_multi_ref"] == "keep me"
+              and i_after["server"] == {"log_level": "DEBUG"},
               "on disk: living fields survive")
-        # The two things that must NOT ride along: migrate_file works on a
-        # fresh read of the file, not on the in-memory config, which carries
-        # the secrets overlay and the materialized game calendar.
-        check(after["image_generation"]["backends"][0]["api_key"] == "",
+        # The two things that must NOT ride along: the secret stays in the
+        # instance's secrets.json, and the in-memory-only calendar defaults
+        # are not persisted (they equal what ships).
+        check(i_after["image_generation"]["backends"][0]["api_key"] == "",
               "on disk: no secret leaked out of secrets.json")
-        check("game_seasons" not in after and "game_calendar" not in after,
+        check("sk-SECRET" in (inst.parent / "secrets.json").read_text(encoding="utf-8"),
+              "on disk: the secret is still in the instance's secrets.json")
+        check("game_seasons" not in w_after and "game_calendar" not in w_after,
               "on disk: the in-memory-only calendar defaults are not persisted")
 
         print("10) migrate_file() is idempotent — the second call writes nothing")
-        settled_bytes = world.read_bytes()
-        settled_mtime = world.stat().st_mtime_ns
-        check(cfgmod.migrate_file(world) is False, "returns False — nothing to do")
-        check(world.read_bytes() == settled_bytes, "config.json byte-identical")
-        check(world.stat().st_mtime_ns == settled_mtime, "mtime unchanged")
+        settled = {f: (f.read_bytes(), f.stat().st_mtime_ns) for f in (world, inst)}
+        check(cfgmod.migrate_file(world, inst) is False, "returns False — nothing to do")
+        for f, (data, mtime) in settled.items():
+            check(f.read_bytes() == data, f"{f.parent.name}/config.json byte-identical")
+            check(f.stat().st_mtime_ns == mtime, f"{f.parent.name}/config.json mtime unchanged")
 
     print("11) the bridge: no STORAGE_DIR, no proactive fallback")
     saved_env = dict(os.environ)

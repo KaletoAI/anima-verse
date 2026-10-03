@@ -487,11 +487,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 _TMP = tempfile.mkdtemp(prefix="routing-callers-")
 os.environ["STORAGE_DIR"] = _TMP
+# The routing chains are INSTANCE config: set_routing() saves them into this
+# throwaway instance file, never into a world.
+_INST = tempfile.mkdtemp(prefix="routing-callers-instance-")
+os.environ["INSTANCE_DIR"] = _INST
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="routing-callers-clips-")
 from app.core import paths  # noqa: E402
 paths.init(_TMP)
+paths.init_instance(_INST)
 from app.core import config, db  # noqa: E402
-config.load(Path(_TMP) / "config.json")
+config.load(Path(_TMP) / "config.json", paths.get_instance_config_path())
 db.init_schema()
 from app.imagegen import service as service_mod  # noqa: E402
 

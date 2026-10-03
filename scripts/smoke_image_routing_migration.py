@@ -57,7 +57,11 @@ A7 an existing routing (even {}) is never touched (still {}); it returns
    True only because the old field next to it is removed (Part B).
 A9 _apply_file_migrations runs it FIRST: its first `if` calls
    _migrate_image_routing (AST), and a full run over fixture C gives the
-   routing of A3 (not the post-rewrite values of other steps).
+   routing of A3 (not the post-rewrite values of other steps). Called as
+   ``_apply_file_migrations(full)`` since the instance-config layers
+   (2026-10-03): the ``fresh_world`` flag is gone — the migrations run once
+   on the union of both layers, and the mesh seed hangs on a MISSING
+   ``image_generation.backends`` key instead of a missing world file.
 
 PART B — MIGRATION (phase R2b: the old fields are removed by the same step)
 B1 fixture A: after the migration none of the old keys is left:
@@ -93,11 +97,15 @@ C2 mesh default "Obj*" over {Obj-A: rig "none ", img2mesh} -> routing
    category "mesh2mesh "} -> {"mesh_humanoid": ["Obj*"]} only (before: the
    shrink alias with a trailing space counted as img2mesh and added the
    object + building chains).
-C3 `_seed_default_mesh_backends` recognises a mesh backend by
-   describe_config_backend(...)["media"] == "mesh": a config whose only
-   backend has api_type " OpenAI_Mesh " (resolves to the mesh class) ->
-   False, nothing appended; a config with only an image backend -> True,
-   the default catalog appended.
+C3 `_seed_default_mesh_backends` never appends to an existing list: a
+   config whose only backend has api_type " OpenAI_Mesh " -> False, nothing
+   appended. Since the instance-config layers (2026-10-03) the seed hangs on
+   a MISSING ``image_generation.backends`` key only — a pruned instance file
+   stores the shipped list as "absent", and any list in the file is the
+   admin's — so a config with only an IMAGE backend is now left alone too
+   (False, 1 entry; it used to get the catalog appended), a config without
+   the key gets the 12 + 1 catalog entries (True, 13), and an emptied list
+   stays empty (False, 0).
 C4 (fix round 1) the live mesh backend reads its rig like C1: an
    OpenAIMeshBackend with MESH_RIG "  " has mesh_rig "mixamo" (was "" —
    blank after the strip), MESH_RIG " None " -> "none".
@@ -236,7 +244,7 @@ def part_a():
     check("A9 first step", isinstance(call, ast.Call) and getattr(call.func, "id", ""),
           "_migrate_image_routing")
     full = copy.deepcopy(FIXTURE_C)
-    cfgmod._apply_file_migrations(full, False)
+    cfgmod._apply_file_migrations(full)
     check("A9 full run keeps the seeded chains",
           full["image_generation"]["routing"]["photo"], ["CivitAI-General"])
 
@@ -331,9 +339,15 @@ def part_c():
     check("C3 mesh recognised by kind", (cfgmod._seed_default_mesh_backends(c),
                                          len(c["image_generation"]["backends"])), (False, 1))
     c = {"image_generation": {"backends": [img("Flux")]}}
-    check("C3 image-only config seeded", (cfgmod._seed_default_mesh_backends(c),
-                                          len(c["image_generation"]["backends"]) > 1),
-          (True, True))
+    check("C3 image-only list is the admin's", (cfgmod._seed_default_mesh_backends(c),
+                                                len(c["image_generation"]["backends"])),
+          (False, 1))
+    c = {"image_generation": {}}
+    check("C3 missing list seeded", (cfgmod._seed_default_mesh_backends(c),
+                                     len(c["image_generation"]["backends"])), (True, 13))
+    c = {"image_generation": {"backends": []}}
+    check("C3 emptied list stays empty", (cfgmod._seed_default_mesh_backends(c),
+                                          c["image_generation"]["backends"]), (False, []))
 
     from app.imagegen.backends.openai_mesh import OpenAIMeshBackend
     rigs = []

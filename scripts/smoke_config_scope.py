@@ -256,6 +256,78 @@ S4) PRE-DISCOVERY (runs before ``discover_packages()``, next to Part P):
     puts url on the instance side and enabled on the world side, and
     ``shipped_default("skills.searx.url") == (True, "http://localhost:8888")``
     — the config load at boot sees the plugin fields before discovery.
+
+PART 3 — the two config layers: config.load / save / migrate_file
+-----------------------------------------------------------------
+
+``config.load(world, instance)`` reads each layer (file + the secrets.json
+of THE SAME layer), keeps only the part whose scope that layer owns, joins
+the two, runs the load-time migrations once and keeps the result in memory.
+``save`` and ``migrate_file`` split by scope, prune, split out the secrets
+and write a file only when its JSON content differs from what is on disk.
+Every case runs in its own ``tempfile.TemporaryDirectory()``: ``<tmp>/w`` is
+the world directory, ``<tmp>/i`` the instance directory, each with a
+``config.json``. "Unchanged" is measured by mtime: before the step, every
+file's mtime is set to a fixed old value (``os.utime``) — any write moves it
+to now, however fast the step runs.
+
+Expectations by hand from the scope table (Part 1 D) and the shipped
+defaults (Part 2):
+
+6.1 UNION. World ``{"chat": {"chattiness": 0.3}, "providers": [{"name": "w"}]}``,
+    instance ``{"providers": [{"name": "i"}], "server": {"log_level": "DEBUG"}}``.
+    providers is instance, so the world's copy is a foreign key and ignored:
+    ``providers[0].name == "i"``, ``chat.chattiness == 0.3`` (world),
+    ``server.log_level == "DEBUG"`` (instance).
+6.2 SAVE SPLITS. ``save(get_all())``: the world file has no ``providers``,
+    the instance file no ``chat``; the world file is exactly
+    ``{"chat": {"chattiness": 0.3}}`` and the instance file exactly the two
+    instance keys — every seeded block (use cases, catalogs, mesh backends,
+    the routing dict, the calendar) equals its shipped default and is pruned.
+6.3 IDEMPOTENT. A second ``save(get_all())`` and then ``migrate_file`` leave
+    both mtimes unchanged; ``migrate_file`` returns False. Counter-check (the
+    handover finding): ``_apply_file_migrations`` over a fresh read of the
+    same two files DOES report a change — ``routing: {}`` is pruned on disk
+    and re-seeded on every load — so the "no write" above comes from the
+    content comparison, not from the migration flag.
+6.4 START GUARD. ``check_instance_ready``: world
+    ``{"providers": [{"name": "x", "api_base": "u"}]}`` without an instance
+    file raises ``InstanceConfigMissing`` whose message names
+    ``scripts/migrate_instance_config.py --from "<world dir name>"``. A world
+    with only ``chat`` does not raise; a world with
+    ``server.log_level = "INFO"`` (= the schema default -> pruned to nothing)
+    does not raise; a missing world file never raises; an existing instance
+    file never raises.
+6.5 NO INSTANCE. ``paths.instance_initialised()`` is False in this script.
+    ``load(w)`` with the world of 6.1: ``get("providers") is None`` (the
+    world's providers are foreign). ``save`` with ``server.log_level`` changed
+    raises ``RuntimeError`` and writes nothing. ``save`` with only
+    ``chat.chattiness`` changed to 0.7 writes the world (0.7 on disk) and
+    creates no other file. (Not 0.5: that is the schema default and would be
+    pruned to an empty world file.)
+6.6 SECRETS PER LAYER. Instance config ``{"providers": [{"name": "i"}]}`` +
+    instance secrets ``{"providers": [{"api_key": "k"}]}``:
+    ``get("providers")[0]["api_key"] == "k"``; after ``save`` "k" is in
+    ``i/secrets.json`` and not in ``i/config.json``. A world secrets.json
+    ``{"providers": [{"api_key": "WELT"}]}``: "WELT" is nowhere in
+    ``get("providers")``; after ``save`` ``w/secrets.json`` is gone.
+6.7 SEEDS. Instance ``{}``: ``content_marketplace.catalogs`` equals
+    ``config._DEFAULT_MARKETPLACE_CATALOGS``, ``image_generation.backends``
+    has 13 entries (12 in ``_DEFAULT_MESH_BACKENDS`` + 1 shrink alias). After
+    ``migrate_file`` the instance file is still ``{}`` with the old mtime.
+    Counter-check: an instance with ``image_generation.backends: []`` keeps
+    the empty list (the seed hangs on a MISSING key only).
+6.8 RELOAD. ``load(w, i)``, then ``reload()``:
+    ``get("server.log_level") == "DEBUG"`` — the instance path is remembered.
+6.9 ADMIN PAYLOAD. The settled 6.1 pair; the effective config goes through
+    ``admin_settings._apply_schema_defaults`` (a copy — what
+    ``/settings/raw`` hands out), then ``_merge_sensitive(payload,
+    get_all())`` (what ``/settings/save`` does), then ``save``: the world
+    file keeps its mtime. Every bool/select default the payload materialised
+    into a world section equals its shipped default and is pruned.
+6.10 FRESH STATE. Empty directories: ``check_instance_ready`` does not
+    raise, ``migrate_file`` creates both files as ``{}`` and returns True, a
+    second ``migrate_file`` returns False and writes nothing.
 """
 import copy
 import os
@@ -732,6 +804,217 @@ def part_2(cs, has_searx):
     check(src == before, "S3: split_by_scope must return copies (input changed)")
 
 
+# ---------------------------------------------------------------------------
+# Part 3 — the two config layers
+# ---------------------------------------------------------------------------
+
+_OLD_NS = 1_000_000_000  # 1970-01-01T00:00:01 — any write moves past it
+
+
+def _write(path, data):
+    import json
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _read(path):
+    import json
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _age(*files):
+    """Set every existing file's mtime to the fixed old value."""
+    for f in files:
+        if f.exists():
+            os.utime(f, ns=(_OLD_NS, _OLD_NS))
+
+
+def _untouched(f):
+    return f.exists() and f.stat().st_mtime_ns == _OLD_NS
+
+
+def _layers(tmp):
+    w = Path(tmp) / "w" / "config.json"
+    i = Path(tmp) / "i" / "config.json"
+    w.parent.mkdir(parents=True, exist_ok=True)
+    i.parent.mkdir(parents=True, exist_ok=True)
+    return w, i
+
+
+WORLD_61 = {"chat": {"chattiness": 0.3}, "providers": [{"name": "w"}]}
+INSTANCE_61 = {"providers": [{"name": "i"}], "server": {"log_level": "DEBUG"}}
+
+
+def part_3():
+    from app.core import config as cfg
+    missing = [n for n in ("check_instance_ready", "InstanceConfigMissing", "migrate_file")
+               if not hasattr(cfg, n)]
+    if missing:
+        check(False, f"3: app.core.config lacks {missing}")
+        return
+    from app.core import paths as p
+    check(not p.instance_initialised(),
+          "3: precondition — this script never initialises an instance directory")
+
+    # 6.1 / 6.2 / 6.3 / 6.8 / 6.9 on one settled pair
+    with tempfile.TemporaryDirectory() as tmp:
+        w, i = _layers(tmp)
+        _write(w, WORLD_61)
+        _write(i, INSTANCE_61)
+        try:
+            cfg.load(w, i)
+        except TypeError as e:
+            check(False, f"6.1: load(world, instance) not supported: {e}")
+            return
+        check(cfg.get("providers.0.name") == "i",
+              f"6.1: providers come from the instance (got {cfg.get('providers')!r})")
+        check(cfg.get("chat.chattiness") == 0.3, "6.1: chat.chattiness 0.3 from the world")
+        check(cfg.get("server.log_level") == "DEBUG", "6.1: server.log_level DEBUG from the instance")
+
+        cfg.save(cfg.get_all())
+        wd, idd = _read(w), _read(i)
+        check("providers" not in wd, f"6.2: world file has no providers ({wd!r:.120})")
+        check("chat" not in idd, f"6.2: instance file has no chat ({idd!r:.120})")
+        check(wd == {"chat": {"chattiness": 0.3}}, f"6.2: world file = {wd!r:.200}")
+        check(idd == INSTANCE_61, f"6.2: instance file = {idd!r:.200}")
+
+        _age(w, i)
+        cfg.save(cfg.get_all())
+        check(_untouched(w) and _untouched(i), "6.3: a second save writes neither file")
+        wrote = cfg.migrate_file(w, i)
+        check(wrote is False, f"6.3: migrate_file on the settled pair returns False (got {wrote!r})")
+        check(_untouched(w) and _untouched(i), "6.3: migrate_file writes neither file")
+        union = _read(i)
+        union.update(_read(w))
+        check(cfg._apply_file_migrations(union) is True,
+              "6.3: counter-check — the migrations DO report a change on the settled "
+              "files (routing {} re-seeded), so the no-write is the content comparison")
+
+        cfg.load(w, i)
+        cfg.reload()
+        check(cfg.get("server.log_level") == "DEBUG",
+              f"6.8: reload keeps the instance (log_level {cfg.get('server.log_level')!r})")
+        check(cfg.get("providers.0.name") == "i", "6.8: reload keeps the instance providers")
+
+        from app.routes import admin_settings
+        payload = copy.deepcopy(cfg.get_all())
+        admin_settings._apply_schema_defaults(payload)
+        merged = admin_settings._merge_sensitive(payload, cfg.get_all())
+        _age(w, i)
+        cfg.save(merged)
+        check(_untouched(w), f"6.9: the admin payload leaves the world file alone "
+                             f"(now {_read(w)!r:.300})")
+
+    # 6.4 start guard
+    with tempfile.TemporaryDirectory() as tmp:
+        w, i = _layers(tmp)
+        _write(w, {"providers": [{"name": "x", "api_base": "u"}]})
+        try:
+            cfg.check_instance_ready(w, i)
+            check(False, "6.4: a world with providers and no instance file must raise")
+        except cfg.InstanceConfigMissing as e:
+            msg = str(e)
+            check("scripts/migrate_instance_config.py" in msg and '--from "w"' in msg,
+                  f"6.4: the message names the migration command for world 'w' ({msg!r:.200})")
+        for label, data in (("only chat", {"chat": {"chattiness": 0.3}}),
+                            ("server.log_level at its default", {"server": {"log_level": "INFO"}})):
+            _write(w, data)
+            try:
+                cfg.check_instance_ready(w, i)
+            except cfg.InstanceConfigMissing as e:
+                check(False, f"6.4: {label} must not raise ({e})")
+        _write(w, {"providers": [{"name": "x"}]})
+        _write(i, {})
+        try:
+            cfg.check_instance_ready(w, i)
+        except cfg.InstanceConfigMissing as e:
+            check(False, f"6.4: an existing instance file must not raise ({e})")
+        w.unlink()
+        i.unlink()
+        try:
+            cfg.check_instance_ready(w, i)
+        except cfg.InstanceConfigMissing as e:
+            check(False, f"6.4: a missing world file must not raise ({e})")
+
+    # 6.5 no instance
+    with tempfile.TemporaryDirectory() as tmp:
+        w, _i = _layers(tmp)
+        _write(w, WORLD_61)
+        cfg.load(w)
+        check(cfg.get("providers") is None,
+              f"6.5: without an instance there are no providers (got {cfg.get('providers')!r})")
+        data = copy.deepcopy(cfg.get_all())
+        data.setdefault("server", {})["log_level"] = "DEBUG"
+        _age(w)
+        try:
+            cfg.save(data)
+            check(False, "6.5: saving an instance value without an instance path must raise")
+        except RuntimeError as e:
+            check("no instance path" in str(e), f"6.5: RuntimeError names the cause ({e})")
+        check(_untouched(w), "6.5: the refused save wrote nothing")
+        data = copy.deepcopy(cfg.get_all())
+        data["chat"]["chattiness"] = 0.7
+        cfg.save(data)
+        check(_read(w) == {"chat": {"chattiness": 0.7}}, f"6.5: world written ({_read(w)!r:.200})")
+        files = sorted(str(f.relative_to(tmp)) for f in Path(tmp).rglob("*") if f.is_file())
+        check(files == ["w/config.json"], f"6.5: no other file created ({files})")
+
+    # 6.6 secrets per layer
+    with tempfile.TemporaryDirectory() as tmp:
+        w, i = _layers(tmp)
+        _write(w, {"chat": {"chattiness": 0.3}})
+        _write(w.parent / "secrets.json", {"providers": [{"api_key": "WELT"}]})
+        _write(i, {"providers": [{"name": "i", "api_key": ""}]})
+        _write(i.parent / "secrets.json", {"providers": [{"api_key": "k"}]})
+        cfg.load(w, i)
+        check(cfg.get("providers.0.api_key") == "k",
+              f"6.6: the instance secret is overlaid (got {cfg.get('providers')!r})")
+        check("WELT" not in repr(cfg.get("providers")),
+              "6.6: the world secrets.json smuggles no instance value in")
+        cfg.save(cfg.get_all())
+        isec = (i.parent / "secrets.json").read_text(encoding="utf-8")
+        check('"k"' in isec, f"6.6: the key is in i/secrets.json ({isec!r})")
+        check('"k"' not in i.read_text(encoding="utf-8"), "6.6: the key is not in i/config.json")
+        check(not (w.parent / "secrets.json").exists(), "6.6: w/secrets.json is gone after save")
+
+    # 6.7 seeds
+    with tempfile.TemporaryDirectory() as tmp:
+        w, i = _layers(tmp)
+        _write(w, {})
+        _write(i, {})
+        cfg.load(w, i)
+        check(cfg.get("content_marketplace.catalogs") == cfg._DEFAULT_MARKETPLACE_CATALOGS,
+              "6.7: the marketplace catalog is seeded in memory")
+        backends = cfg.get("image_generation.backends") or []
+        check(len(backends) == 13 == len(cfg._DEFAULT_MESH_BACKENDS) + 1,
+              f"6.7: 13 mesh backends seeded in memory (got {len(backends)})")
+        _age(w, i)
+        wrote = cfg.migrate_file(w, i)
+        check(wrote is False, f"6.7: migrate_file writes nothing (got {wrote!r})")
+        check(_read(i) == {} and _untouched(i), "6.7: the instance stays {} with its old mtime")
+        check(_untouched(w), "6.7: the world stays untouched")
+        _write(i, {"image_generation": {"backends": []}})
+        cfg.load(w, i)
+        check(cfg.get("image_generation.backends") == [],
+              "6.7: counter-check — an emptied backend list is not re-seeded")
+
+    # 6.10 fresh state
+    with tempfile.TemporaryDirectory() as tmp:
+        w, i = _layers(tmp)
+        try:
+            cfg.check_instance_ready(w, i)
+        except cfg.InstanceConfigMissing as e:
+            check(False, f"6.10: empty directories must not raise ({e})")
+        wrote = cfg.migrate_file(w, i)
+        check(wrote is True, f"6.10: migrate_file creates the files (got {wrote!r})")
+        check(w.exists() and _read(w) == {} and i.exists() and _read(i) == {},
+              "6.10: both files exist as {}")
+        _age(w, i)
+        wrote = cfg.migrate_file(w, i)
+        check(wrote is False and _untouched(w) and _untouched(i),
+              f"6.10: a second migrate_file writes nothing (got {wrote!r})")
+
+
 def main():
     had_searx = part_p_before_discovery()
     part_2_before_discovery()
@@ -753,6 +1036,7 @@ def main():
     else:
         part_d_e(cs, has_searx)
         part_2(cs, has_searx)
+    part_3()
 
     print()
     for s in _skips:

@@ -16,15 +16,19 @@ top-level keys that an old flatten-to-sections migration had left behind
 ``config._flatten_to_env`` only ever walks SECTIONS — so they were pure noise
 that survived every admin save round-trip.
 
-THE FOUR RULES, each derived by hand from the source named with it:
+THE FIVE RULES, each derived by hand from the source named with it:
 
 R1  ROOT KEYS. ``app/core/config.py`` resolves every value through a section
     (``config.get("tts.backend")``, ``_flatten_to_env`` -> ``config.get(
-    "<section>", {})``), so the only legal root keys are the section names of
-    ``app/core/config_schema.SECTIONS`` plus the migration markers config.py
-    writes at the root itself — today exactly one:
-    ``config._LANE_MIGRATION_MARKER`` ("llm_lanes_migrated", set by
-    ``_migrate_entry_lanes``). Anything else is a leftover.
+    "<section>", {})``), and since the instance-config layers (2026-10-03) a
+    world file is read through ``config_scope.split_by_scope``: a root key
+    with no scope (``config_scope.scope_of(root) is None``) is an unknown
+    root and ignored at load. So the legal root keys of a WORLD file are the
+    world roots — ``scope_of(root)`` is ``world`` or ``mixed``. An
+    ``instance`` root is not legal there either, but that is R5's finding
+    (reported there, not twice). There are no migration markers any more:
+    the lane-count marker ("llm_lanes_migrated") went with its one-time
+    migration — anything without a scope is a leftover.
 
 R2  NO PRIVATE HOST. A shipped config must not name a machine on someone's
     LAN. Forbidden in every tracked text file under ``worlds/demo/`` and in
@@ -45,7 +49,15 @@ R4  LIVE REFERENCES. Every task id under ``llm_routing[].tasks[].task`` must
     every ``image_generation.backends[].api_type`` must be a key of
     ``app/imagegen/registry.BACKEND_REGISTRY``.
 
-Exit code 0 = all four rules hold. Exit 1 prints every violation.
+R5  NO INSTANCE VALUE. The demo world's config.json is a WORLD layer file;
+    every value whose ``scope_of`` is ``instance`` belongs to the instance
+    config and is ignored when it sits in a world file. The check lists the
+    keys ``split_by_scope`` puts on the instance side (a mixed node is split
+    per child). ``R5_ACTIVE = False`` until the demo world is migrated
+    (instance-config plan, Task 9): until then the finding prints as a SKIP
+    with its count. The detector's counter-check runs either way.
+
+Exit code 0 = all rules hold. Exit 1 prints every violation.
 """
 import os
 import re
@@ -62,12 +74,17 @@ sys.path.insert(0, str(REPO))
 
 import json  # noqa: E402
 
-from app.core import config as config_mod  # noqa: E402
-from app.core.config_schema import SECTIONS  # noqa: E402
+from app.core import config_scope  # noqa: E402
 from app.core.llm_tasks import TASK_TYPES  # noqa: E402
 from app.imagegen.registry import BACKEND_REGISTRY  # noqa: E402
 
 DEMO_CONFIG = REPO / "worlds" / "demo" / "config.json"
+
+# Flipped to True by the migration of worlds/demo (instance-config plan,
+# Task 9) — until then the demo still carries its instance settings.
+R5_ACTIVE = False
+
+failures_skipped: list = []
 
 failures: list = []
 
@@ -91,15 +108,57 @@ def tracked(pattern: str) -> list:
 def part_root_keys() -> dict:
     print("1. root keys of worlds/demo/config.json (R1)")
     cfg = json.loads(DEMO_CONFIG.read_text(encoding="utf-8"))
-    valid = set(SECTIONS) | {config_mod._LANE_MIGRATION_MARKER}
-    stray = sorted(k for k in cfg if k not in valid)
-    check_true(f"every root key is a SECTIONS name or a migration marker "
-               f"({len(cfg)} key(s))", not stray, "stray: " + ", ".join(stray))
-    # Counter-check: the rule is not vacuous — a section name must be accepted
-    # and an invented key rejected.
-    check_true("the rule accepts a real section name", "image_generation" in valid)
-    check_true("the rule rejects an invented key", "codeformer_weight" not in valid)
+    world_roots = (config_scope.WORLD, config_scope.MIXED)
+    # Instance roots are R5's finding, not R1's.
+    stray = sorted(k for k in cfg if config_scope.scope_of(k) is None)
+    check_true(f"every root key is a known root ({len(cfg)} key(s))",
+               not stray, "stray: " + ", ".join(stray))
+    # Counter-check: the rule is not vacuous — a world root and a mixed root
+    # must be accepted, an invented key and the retired lane marker rejected,
+    # and an instance root is not a world root.
+    check_true("the rule accepts a world root", config_scope.scope_of("chat") in world_roots)
+    check_true("the rule accepts a mixed root",
+               config_scope.scope_of("image_generation") in world_roots)
+    check_true("the rule rejects an invented key", config_scope.scope_of("codeformer_weight") is None)
+    check_true("the rule rejects the retired lane marker",
+               config_scope.scope_of("llm_lanes_migrated") is None)
+    check_true("an instance root is no world root (R5 reports it)",
+               config_scope.scope_of("providers") == config_scope.INSTANCE)
     return cfg
+
+
+# ── R5 ──────────────────────────────────────────────────────────────────────
+def _instance_keys(cfg: dict) -> list:
+    """The dotted keys ``split_by_scope`` puts on the instance side."""
+    inst, _world, _unknown = config_scope.split_by_scope(cfg)
+    out = []
+
+    def walk(node, prefix):
+        for key, value in node.items():
+            dotted = f"{prefix}.{key}" if prefix else key
+            if isinstance(value, dict) and config_scope.child_scopes_differ(dotted):
+                walk(value, dotted)
+            else:
+                out.append(dotted)
+    walk(inst, "")
+    return out
+
+
+def part_instance_values(cfg: dict) -> None:
+    print("5. no instance-scoped value in worlds/demo/config.json (R5)")
+    probe = {"chat": {"chattiness": 0.3}, "providers": [],
+             "memory": {"max_messages": 5, "chat_retention_days": 3}}
+    found = _instance_keys(probe)
+    check_true("the detector finds an instance root and a nested instance field",
+               found == ["providers", "memory.chat_retention_days"], str(found))
+    keys = _instance_keys(cfg)
+    if not R5_ACTIVE:
+        print(f"  SKIP R5 inactive until the demo world is migrated (Task 9): "
+              f"{len(keys)} instance key(s) still in the demo config")
+        failures_skipped.append("R5")
+        return
+    check_true("no instance key in the demo world config", not keys,
+               "instance keys: " + ", ".join(keys[:12]))
 
 
 # ── R2 ──────────────────────────────────────────────────────────────────────
@@ -217,11 +276,13 @@ def main() -> int:
     part_private_hosts()
     part_secrets(cfg)
     part_references(cfg)
+    part_instance_values(cfg)
     print()
     if failures:
         print(f"FAILED: {len(failures)} check(s): {', '.join(failures)}")
         return 1
-    print("All checks passed.")
+    print("All checks passed." + (f" (skipped: {', '.join(failures_skipped)})"
+                                  if failures_skipped else ""))
     return 0
 
 

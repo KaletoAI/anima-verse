@@ -32,16 +32,24 @@ from pathlib import Path
 # paths.StorageNotInitialised instead of silently opening the tracked demo world.
 from app.core import paths as _paths
 _paths.init()
+# The instance directory (per-installation server config) comes the same way:
+# INSTANCE_DIR from start.sh (default ./instance) or docker (/app/instance).
+_paths.init_instance()
 
-# Load JSON config from the (now-known) storage directory. The load itself is
-# read-only; migrate_file() is the ONE place that persists the dead-field strip
-# and the default seeding — the running world's config.json stays current,
-# while every script that merely loads a world leaves it untouched.
+# Load the JSON config: the instance layer + the world layer. The boot refuses
+# to start while the world still carries instance settings and no instance
+# config exists (InstanceConfigMissing names the migration command). The load
+# itself is read-only; migrate_file() is the ONE place that persists the
+# dead-field strip, the default seeding and the pruning — the running pair of
+# files stays current, while every script that merely loads a world leaves
+# them untouched.
 from app.core.config import (load as _load_config,
                              migrate_file as _migrate_config_file,
+                             check_instance_ready as _check_instance_ready,
                              get as _config_get)
-_load_config(_paths.get_config_path())
-_migrate_config_file(_paths.get_config_path())
+_check_instance_ready(_paths.get_config_path(), _paths.get_instance_config_path())
+_load_config(_paths.get_config_path(), _paths.get_instance_config_path())
+_migrate_config_file(_paths.get_config_path(), _paths.get_instance_config_path())
 
 # Initialise the world DB (idempotent, creates world.db if needed)
 from app.core.db import init_schema as _init_db_schema

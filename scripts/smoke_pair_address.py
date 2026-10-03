@@ -100,7 +100,10 @@ os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="pairaddr-clips-")
 # [7] imports ``app.server`` to read the route table, and that module runs its
 # OWN ``paths.init()``. Without STORAGE_DIR it would re-point the process at
 # the tracked worlds/demo mid-run and every later write would land there.
+# It also runs paths.init_instance(), which needs INSTANCE_DIR.
 os.environ["STORAGE_DIR"] = str(STORAGE)
+INSTANCE = Path(tempfile.mkdtemp(prefix="pairaddr-instance-"))
+os.environ["INSTANCE_DIR"] = str(INSTANCE)
 
 from app.core import paths  # noqa: E402
 paths.init(STORAGE)
@@ -271,6 +274,8 @@ from fastapi.routing import _IncludedRouter  # noqa: E402
 
 check("[7] importing app.server kept the throwaway storage",
       paths.get_storage_dir() == STORAGE, str(paths.get_storage_dir()))
+check("[7] importing app.server used the throwaway instance",
+      paths.get_instance_dir() == INSTANCE.resolve(), str(paths.get_instance_dir()))
 
 
 def walk_routes(routes, prefix=""):

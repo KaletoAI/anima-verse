@@ -4,9 +4,9 @@
 Usage:  ./.venv/bin/python scripts/smoke_skill_choice_fields.py
 
 Runs against a THROWAWAY storage directory — never touches a real world.
-``STORAGE_DIR`` and ``ANIMATION_CLIPS_DIR`` are redirected BEFORE any app
-module is imported, so ``app.server``'s own ``paths.init()`` lands in the same
-temp dir. No server, no network, no image backend is contacted: the pool is a
+``STORAGE_DIR``, ``INSTANCE_DIR`` and ``ANIMATION_CLIPS_DIR`` are redirected
+BEFORE any app module is imported, so ``app.server``'s own ``paths.init()`` /
+``paths.init_instance()`` land in temp dirs. No server, no network, no image backend is contacted: the pool is a
 handful of fake ``ImageBackend`` instances, built the way
 ``scripts/smoke_backend_enabled.py`` builds them, and
 ``app.imagegen.service.get_image_service`` is pointed at them.
@@ -157,6 +157,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 STORAGE = Path(tempfile.mkdtemp(prefix="skillchoice-smoke-"))
 os.environ["STORAGE_DIR"] = str(STORAGE)
+# app.server runs paths.init_instance() and reads <instance>/config.json.
+os.environ["INSTANCE_DIR"] = tempfile.mkdtemp(prefix="skillchoice-instance-")
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="skillchoice-clips-")
 
 from app.core import paths  # noqa: E402

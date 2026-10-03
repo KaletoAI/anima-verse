@@ -724,6 +724,5 @@
   },
   "messaging_frame": {
     "prompt": "photorealistic modern smartphone, isolated on white, screen is pure chroma green, centered, no person, no reflection, top-down product photo"
-  },
-  "llm_lanes_migrated": true
+  }
 }
