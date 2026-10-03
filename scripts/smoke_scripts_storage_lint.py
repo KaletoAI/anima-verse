@@ -84,8 +84,12 @@ recorded from a run:
  12. ``os.environ.setdefault("STORAGE_DIR", tmp)`` before it     -> clean
      (a write, just a conditional one — scripts here use this form)
 
-Exit code 0 = paths.py has no default world AND every candidate redirects its
-storage.  Exit 1 lists what is wrong — including the line numbers that decide
+Part 4 pins the same rule for the INSTANCE directory (per-installation
+server config): ``paths.init_instance`` takes the argument, else
+``INSTANCE_DIR``, else raises ``paths.InstanceNotInitialised``.
+
+Exit code 0 = paths.py has no default world and no default instance AND every
+candidate redirects its storage.  Exit 1 lists what is wrong — including the line numbers that decide
 a script's verdict.
 """
 import ast
@@ -119,7 +123,8 @@ INTENTIONAL_REAL_WORLD = {
     "review_presets.py",
     # Task-queue CLI; takes its DB path from the legacy root .env.
     "queue_cli.py",
-    # This lint itself: it parses sources, it imports no app module.
+    # This lint itself: it parses sources; the only app module it imports is
+    # app.core.paths (part 4), which opens no world.
     "smoke_scripts_storage_lint.py",
 }
 
@@ -456,6 +461,82 @@ def paths_has_no_default() -> None:
           lines.get("shared", ""))
 
 
+def paths_has_no_default_instance() -> None:
+    """Part 4: the instance directory follows the same rule as the storage root.
+
+    ``paths.init_instance()`` resolves: explicit argument, else ``INSTANCE_DIR``
+    — and nothing else.  The default ``<repo>/instance`` lives in ``start.sh``,
+    Docker sets ``/app/instance``; app code names no instance.  Expected
+    values, derived by hand from that order:
+
+      a. fresh module, no ``INSTANCE_DIR``  -> ``get_instance_dir()`` raises
+         ``InstanceNotInitialised``, ``instance_initialised()`` is False
+      b. ``init_instance()`` with neither  -> raises ``InstanceNotInitialised``
+      c. ``init_instance(tmp/"a")``        -> ``(tmp/"a").resolve()``, created,
+         config path ``(tmp/"a").resolve()/"config.json"``
+      d. ``INSTANCE_DIR=tmp/"b"``, no arg  -> ``(tmp/"b").resolve()``
+      e. argument AND env                  -> the argument wins
+
+    Measured in-process on a fresh ``importlib.reload(paths)`` (module state
+    reset) with ``INSTANCE_DIR`` removed; the environment is restored after.
+    """
+    import importlib
+    import tempfile
+
+    print("4. app/core/paths.py has no default instance")
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
+    saved = os.environ.pop("INSTANCE_DIR", None)
+    try:
+        import app.core.paths as paths
+        paths = importlib.reload(paths)
+
+        exc = getattr(paths, "InstanceNotInitialised", None)
+        check("paths defines InstanceNotInitialised(RuntimeError)",
+              isinstance(exc, type) and issubclass(exc, RuntimeError))
+        if exc is None:
+            return
+
+        try:
+            paths.get_instance_dir()
+            check("get_instance_dir() raises when uninitialised", False, "no raise")
+        except exc:
+            check("get_instance_dir() raises when uninitialised", True)
+        check("instance_initialised() is False when uninitialised",
+              paths.instance_initialised() is False)
+        try:
+            paths.init_instance()
+            check("init_instance() without argument and env raises", False, "no raise")
+        except exc:
+            check("init_instance() without argument and env raises", True)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            want_a = (tmp / "a").resolve()
+            got = paths.init_instance(tmp / "a")
+            check("init_instance(tmp/a) -> (tmp/a).resolve()", got == want_a, str(got))
+            check("…and creates the directory", want_a.is_dir())
+            check("get_instance_dir() returns it", paths.get_instance_dir() == want_a)
+            check("get_instance_config_path() = <instance>/config.json",
+                  paths.get_instance_config_path() == want_a / "config.json",
+                  str(paths.get_instance_config_path()))
+            check("instance_initialised() is True after init",
+                  paths.instance_initialised() is True)
+
+            paths = importlib.reload(paths)
+            os.environ["INSTANCE_DIR"] = str(tmp / "b")
+            want_b = (tmp / "b").resolve()
+            got = paths.init_instance()
+            check("INSTANCE_DIR=tmp/b, no argument -> (tmp/b).resolve()",
+                  got == want_b, str(got))
+            got = paths.init_instance(tmp / "c")
+            check("argument beats INSTANCE_DIR", got == (tmp / "c").resolve(), str(got))
+    finally:
+        os.environ.pop("INSTANCE_DIR", None)
+        if saved is not None:
+            os.environ["INSTANCE_DIR"] = saved
+
+
 def main() -> int:
     db_modules = world_db_modules()
     self_test(db_modules)
@@ -474,6 +555,9 @@ def main() -> int:
 
     print()
     paths_has_no_default()
+
+    print()
+    paths_has_no_default_instance()
 
     print()
     if FAILURES:

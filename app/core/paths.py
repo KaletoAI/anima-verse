@@ -19,6 +19,14 @@ started (``start.sh``, ``docker/docker-entrypoint.sh``), not in this module.
 Paths under ``shared/`` (templates, languages, schemas, clips, rig) are
 repo-relative and deliberately need NO storage: a pure-shared script works
 without a world.
+
+THERE IS NO DEFAULT INSTANCE either.  The instance directory holds the
+per-installation server config (``<instance>/config.json``) — everything that
+belongs to the installation rather than to one world.  ``init_instance``
+takes the explicit argument, else the ``INSTANCE_DIR`` environment variable,
+and raises ``InstanceNotInitialised`` when it has neither.  The default
+``<repo>/instance`` is set by ``start.sh``; Docker sets ``/app/instance``;
+CLI tools pass ``--instance`` explicitly.
 """
 
 import os
@@ -36,6 +44,18 @@ _NOT_INITIALISED = (
 
 class StorageNotInitialised(RuntimeError):
     """No storage root was chosen before world data was touched."""
+
+
+_instance_dir: Optional[Path] = None
+
+_INSTANCE_NOT_INITIALISED = (
+    "instance not initialised — call app.core.paths.init_instance(<dir>) or "
+    "set INSTANCE_DIR before touching the server config"
+)
+
+
+class InstanceNotInitialised(RuntimeError):
+    """No instance directory was chosen before the server config was touched."""
 
 
 def init(storage_dir: Optional[Union[str, Path]] = None) -> Path:
@@ -71,6 +91,53 @@ def get_storage_dir() -> Path:
     if _storage_dir is None:
         raise StorageNotInitialised(_NOT_INITIALISED)
     return _storage_dir
+
+
+def init_instance(instance_dir: Optional[Union[str, Path]] = None) -> Path:
+    """Set the instance directory.  Called once by whoever starts server or tool.
+
+    Resolution order:
+        1. Explicit *instance_dir* argument  (from CLI ``--instance``)
+        2. ``INSTANCE_DIR`` environment variable
+
+    No third step: without either, this raises ``InstanceNotInitialised``.
+    There is no default instance — ``start.sh`` / Docker set it.
+    The directory is created when missing.
+    """
+    global _instance_dir
+
+    if instance_dir:
+        resolved = Path(instance_dir).resolve()
+    else:
+        env = os.environ.get("INSTANCE_DIR", "").strip()
+        if not env:
+            raise InstanceNotInitialised(_INSTANCE_NOT_INITIALISED)
+        resolved = Path(env).resolve()
+
+    resolved.mkdir(parents=True, exist_ok=True)
+    _instance_dir = resolved
+    return _instance_dir
+
+
+def get_instance_dir() -> Path:
+    """Return the instance directory.
+
+    Raises ``InstanceNotInitialised`` when none was selected — every other
+    instance-derived accessor inherits that.
+    """
+    if _instance_dir is None:
+        raise InstanceNotInitialised(_INSTANCE_NOT_INITIALISED)
+    return _instance_dir
+
+
+def get_instance_config_path() -> Path:
+    """The per-installation server config: ``<instance>/config.json``."""
+    return get_instance_dir() / "config.json"
+
+
+def instance_initialised() -> bool:
+    """True once ``init_instance`` has chosen a directory."""
+    return _instance_dir is not None
 
 
 def get_account_path() -> Path:

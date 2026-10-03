@@ -51,6 +51,10 @@ worlds/*/*.db-shm
 worlds/*/*.db-wal
 worlds/*/secrets.json
 
+# Per-installation server config + secrets: the image gets its own instance
+# volume (/app/instance), never the host's.
+instance
+
 # Private Skill-Pakete: Symlinks in das separate anima-verse-packs-Repo, das
 # AUSSERHALB des Build-Contexts liegt — Docker folgt solchen Links nicht und
 # legte sie als tote Links ins Image. Sie gehoeren ohnehin nicht in ein Image

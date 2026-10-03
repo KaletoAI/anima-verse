@@ -6,6 +6,8 @@
 #   ./start.sh                       Start the main app (default storage: ./worlds/demo)
 #   ./start.sh --world demo          Start with storage: ./worlds/demo
 #   ./start.sh --storage /path/to/x  Start with custom storage directory
+#   ./start.sh --instance /path/to/i Use a custom instance directory (server
+#                                    config + secrets; default: ./instance)
 #   ./start.sh --stop                Stop the main app
 #   ./start.sh --restart             Restart the main app
 #   ./start.sh --with-3d             ... and also the 3D client (own process)
@@ -285,6 +287,7 @@ show_status() {
 
 ACTION="start"
 STORAGE_ARG=""
+INSTANCE_ARG=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -299,12 +302,17 @@ while [[ $# -gt 0 ]]; do
         --storage)
             STORAGE_ARG="$2"
             shift 2 ;;
+        --instance)
+            INSTANCE_ARG="$2"
+            shift 2 ;;
         --help|-h)
-            echo "Usage: $0 [--stop|--restart|--status] [--with-3d] [--world NAME|--storage PATH]"
+            echo "Usage: $0 [--stop|--restart|--status] [--with-3d] [--world NAME|--storage PATH] [--instance PATH]"
             echo ""
             echo "  (no flags)       Start the main app (storage: ./worlds/demo)"
             echo "  --world NAME     Use ./worlds/NAME as storage directory"
             echo "  --storage PATH   Use custom storage directory"
+            echo "  --instance PATH  Use custom instance directory (server config +"
+            echo "                   secrets of this installation; default: ./instance)"
             echo "  --with-3d        Also start the 3D client (separate process,"
             echo "                   port \$CLIENT3D_PORT, default $CLIENT3D_PORT)"
             echo "  --stop           Stop the main app AND the 3D client"
@@ -336,6 +344,13 @@ else
     export STORAGE_DIR="${STORAGE_DIR:-$SCRIPT_DIR/worlds/demo}"
 fi
 echo "[config] Storage directory: $STORAGE_DIR"
+
+# Export the instance directory (per-installation server config + secrets).
+# Same rule as the storage root: app/core/paths.py has no default instance,
+# start.sh hands one over for EVERY action.
+#   --instance  >  an INSTANCE_DIR already in the environment  >  ./instance
+export INSTANCE_DIR="${INSTANCE_ARG:-${INSTANCE_DIR:-$SCRIPT_DIR/instance}}"
+echo "[config] Instance directory: $INSTANCE_DIR"
 
 # ── Load specific config from .env ────────────────────────────────────────────
 # Only extract specific keys we need (source would fail on unquoted values with spaces)

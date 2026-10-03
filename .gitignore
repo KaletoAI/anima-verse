@@ -16,6 +16,8 @@ frontend/dist/
 # Per-world secrets overlay (api keys, passwords) — never commit
 worlds/*/secrets.json
 secrets.json
+# Per-installation server config and secrets (INSTANCE_DIR) — never commit
+/instance/
 
 # Internal planning notes — not for public release
 development_instructions/

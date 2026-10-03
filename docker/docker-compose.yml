@@ -20,6 +20,10 @@ services:
       # und ueberlebt danach Restarts. "docker compose down -v" setzt auf die
       # frische Demo zurueck.
       - anima_worlds:/app/worlds
+      # Instance directory (per-installation server config + secrets,
+      # INSTANCE_DIR=/app/instance). Its own volume: it belongs to the
+      # installation, not to a world, and survives rebuilds and restarts.
+      - anima_instance:/app/instance
       # Lokale Modelle (u2net fuer rembg, bge-small fuer Pose-Embeddings) —
       # persistiert, damit sie nicht bei jedem Neuaufbau neu geladen werden.
       - anima_models:/app/models
@@ -29,5 +33,6 @@ services:
 
 volumes:
   anima_worlds:
+  anima_instance:
   anima_models:
   anima_logs:
