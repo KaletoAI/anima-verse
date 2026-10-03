@@ -420,6 +420,37 @@ dropped with one warning naming the secrets.json. Expectations by hand:
     knows) and its ``"***"`` becomes ``""`` — a mask is never persisted
     literally.
 
+PART 5 — final review fixes (guard command, season flag, one warning per file)
+-----------------------------------------------------------------------------
+
+9.1 GUARD COMMAND (M1). World ``<tmp>/w/config.json`` with providers,
+    instance ``<tmp>/i/config.json`` missing: the message holds
+    ``--from "w" --instance "<tmp>/i" --worlds-dir "<tmp>"`` (the world's
+    grandparent ``<tmp>`` is not ``<repo>/worlds``, so --worlds-dir is
+    named). For a world path ``<repo>/worlds/demo/config.json``
+    ``_migration_command`` names ``--from "demo"`` and ``--instance`` but
+    NOT ``--worlds-dir`` (the tool's default). Pure path arithmetic — no
+    file under ``<repo>`` is read.
+9.2 SEASON FLAG (M2). World ``{"game_seasons": default_seasons_config()}``
+    (the shipped list, written out): ``load(w, i)`` sees a list ->
+    ``game_seasons_are_defaults()`` is False. ``migrate_file(w, i)`` prunes
+    the default-equal list from the file (returns True, the file has no
+    ``game_seasons``) and the flag follows the disk: True — the same value
+    ``save()`` sets and the next ``load()`` would read. Counter-check: a
+    ``migrate_file`` of ANOTHER world (not the loaded one) with the same list
+    leaves the flag alone (set it False first, it stays False).
+9.3 ONE WARNING PER FILE (M8). World with seven instance roots in this
+    order — providers, server, embedding, decision, content_marketplace,
+    tts, llm_routing — plus chat: ``load(w, i)`` logs exactly ONE warning
+    about foreign keys for the world file, reading
+    ``7 key(s) belong to the instance config and are ignored (providers,
+    server, embedding, decision, content_marketplace and 2 more)`` (limit 5)
+    and naming ``scripts/migrate_instance_config.py``; at DEBUG the seven
+    single keys are logged, one record each. An instance file with a world
+    key (``chat``) gets one warning ``1 key(s) belong to the world config``
+    that says the next save drops it (the migration script is no remedy
+    there).
+
 KNOWN LIMIT. Pairing by name needs BOTH lists to be named lists. A payload
 entry without a name (or two entries with the same name) makes the whole list
 fall back to index pairing — including the neighbour inheritance in
@@ -1345,6 +1376,91 @@ def part_4():
     check(got == {"a": None, "c": "KC", "b2": ""}, f"8.10: unpartnered mask -> '' ({got!r})")
 
 
+def part_5():
+    import logging
+    from app.core import config as cfg
+    from app.core.game_time import default_seasons_config
+
+    # 9.1 guard command
+    with tempfile.TemporaryDirectory() as tmp:
+        w, i = _layers(tmp)
+        _write(w, {"providers": [{"name": "x", "api_base": "u"}]})
+        try:
+            cfg.check_instance_ready(w, i)
+            check(False, "9.1: the guard must raise")
+        except cfg.InstanceConfigMissing as e:
+            want = (f'--from "w" --instance "{Path(tmp).resolve() / "i"}" '
+                    f'--worlds-dir "{Path(tmp).resolve()}"')
+            check(want in str(e), f"9.1: the command fits world + instance ({e})")
+    cmd = cfg._migration_command(REPO / "worlds" / "demo" / "config.json",
+                                 Path("/nonexistent/inst/config.json"))
+    check('--from "demo"' in cmd and '--instance "/nonexistent/inst"' in cmd
+          and "--worlds-dir" not in cmd,
+          f"9.1: a world in <repo>/worlds needs no --worlds-dir ({cmd})")
+
+    # 9.2 season flag after migrate_file
+    with tempfile.TemporaryDirectory() as tmp:
+        w, i = _layers(tmp)
+        _write(w, {"game_seasons": default_seasons_config()})
+        _write(i, {})
+        cfg.load(w, i)
+        check(cfg.game_seasons_are_defaults() is False,
+              "9.2: a written-out list loads as not materialized")
+        wrote = cfg.migrate_file(w, i)
+        check(wrote is True and "game_seasons" not in _read(w),
+              f"9.2: migrate_file prunes the default list ({wrote!r}, {_read(w)!r:.120})")
+        check(cfg.game_seasons_are_defaults() is True,
+              "9.2: the flag follows the disk after migrate_file, as after save()")
+        other = Path(tmp) / "other" / "config.json"
+        _write(other, {"game_seasons": default_seasons_config()})
+        cfg._note_seasons_on_disk({"game_seasons": []})
+        cfg.migrate_file(other, i)
+        check(cfg.game_seasons_are_defaults() is False,
+              "9.2: migrate_file of another world leaves the flag alone")
+
+    # 9.3 one warning per file
+    class _Grab(logging.Handler):
+        def __init__(self):
+            super().__init__(logging.DEBUG)
+            self.records = []
+
+        def emit(self, record):
+            self.records.append((record.levelno, record.getMessage()))
+
+    grab = _Grab()
+    old_level = cfg.logger.level
+    cfg.logger.addHandler(grab)
+    cfg.logger.setLevel(logging.DEBUG)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            w, i = _layers(tmp)
+            _write(w, {"providers": [{"name": "a"}], "server": {"log_level": "DEBUG"},
+                       "embedding": {"backend": "external"}, "decision": {"enabled": True},
+                       "content_marketplace": {"catalogs": []}, "tts": {"enabled": True},
+                       "llm_routing": [], "chat": {"chattiness": 0.3}})
+            _write(i, {"chat": {"chattiness": 0.9}})
+            cfg.load(w, i)
+            warn_w = [m for lv, m in grab.records if lv == logging.WARNING
+                      and str(w) in m and "belong to the" in m]
+            check(len(warn_w) == 1, f"9.3: ONE warning for the world file ({warn_w!r:.400})")
+            want = ("7 key(s) belong to the instance config and are ignored (providers, "
+                    "server, embedding, decision, content_marketplace and 2 more)")
+            check(bool(warn_w) and want in warn_w[0]
+                  and "scripts/migrate_instance_config.py" in warn_w[0],
+                  f"9.3: count, first five names, the hint ({warn_w!r:.400})")
+            dbg = [m for lv, m in grab.records if lv == logging.DEBUG
+                   and str(w) in m and "belongs to the instance config" in m]
+            check(len(dbg) == 7, f"9.3: seven single keys at DEBUG (got {len(dbg)})")
+            warn_i = [m for lv, m in grab.records if lv == logging.WARNING
+                      and str(i) in m and "belong to the" in m]
+            check(len(warn_i) == 1 and "1 key(s) belong to the world config" in warn_i[0]
+                  and "next save drops" in warn_i[0],
+                  f"9.3: the instance file's one warning ({warn_i!r:.300})")
+    finally:
+        cfg.logger.removeHandler(grab)
+        cfg.logger.setLevel(old_level)
+
+
 def main():
     had_searx = part_p_before_discovery()
     part_2_before_discovery()
@@ -1368,6 +1484,7 @@ def main():
         part_2(cs, has_searx)
     part_3()
     part_4()
+    part_5()
 
     print()
     for s in _skips:

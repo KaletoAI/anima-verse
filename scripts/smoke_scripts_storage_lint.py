@@ -526,6 +526,13 @@ def paths_has_no_default_instance() -> None:
          config path ``(tmp/"a").resolve()/"config.json"``
       d. ``INSTANCE_DIR=tmp/"b"``, no arg  -> ``(tmp/"b").resolve()``
       e. argument AND env                  -> the argument wins
+      f. a directory init_instance CREATES is private: mode 0700 — also
+         when its parent is missing too (``tmp/"n"/"inst"``), and also under
+         umask 0o277 (``tmp/"u"``, parent exists), where a bare
+         ``mkdir(mode=0o700)`` would leave 0500 — so the chmod is measured,
+         not the umask
+      g. an EXISTING directory (chmod 0755 beforehand) keeps 0755 — the
+         user's own permissions are not touched
 
     Measured in-process on a fresh ``importlib.reload(paths)`` (module state
     reset) with ``INSTANCE_DIR`` removed.  Afterwards the environment is
@@ -589,6 +596,25 @@ def paths_has_no_default_instance() -> None:
                   got == want_b, str(got))
             got = paths.init_instance(tmp / "c")
             check("argument beats INSTANCE_DIR", got == (tmp / "c").resolve(), str(got))
+
+            check("f. a created instance directory is 0700",
+                  (want_a.stat().st_mode & 0o777) == 0o700, oct(want_a.stat().st_mode & 0o777))
+            paths.init_instance(tmp / "n" / "inst")
+            mode = (tmp / "n" / "inst").stat().st_mode & 0o777
+            check("f. …0700 with a missing parent", mode == 0o700, oct(mode))
+            old_umask = os.umask(0o277)
+            try:
+                paths.init_instance(tmp / "u")
+            finally:
+                os.umask(old_umask)
+            mode = (tmp / "u").stat().st_mode & 0o777
+            check("f. …0700 under umask 0o277", mode == 0o700, oct(mode))
+            own = tmp / "own"
+            own.mkdir()
+            os.chmod(own, 0o755)
+            paths.init_instance(own)
+            mode = own.stat().st_mode & 0o777
+            check("g. an existing directory keeps its mode (0755)", mode == 0o755, oct(mode))
     except Exception as e:
         check("part 4 runs", False, f"{type(e).__name__}: {e}")
     finally:

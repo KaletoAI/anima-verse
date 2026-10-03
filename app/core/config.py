@@ -1448,9 +1448,12 @@ def _key_list(part: dict, limit: int = 8) -> str:
 def _read_layer(path: Path, layer: str, strict: bool = False) -> dict:
     """Read one layer and keep only what its scope owns.
 
-    A key of the other layer's scope and an unknown root key are ignored
-    with one warning each — the file is not changed here; the next save or
-    ``migrate_file`` drops them from it.
+    An unknown root key is ignored with one warning each. Keys of the other
+    layer's scope are ignored with ONE warning per file (count, the first
+    few names, what to do) — an unmigrated world carries dozens of them, and
+    one line per key would bury the boot log; the single keys are logged at
+    DEBUG. The file is not changed here; the next save or ``migrate_file``
+    drops them from it.
     """
     data = _layer_with_secrets(path, strict)
     inst, world, unknown = config_scope.split_by_scope(data)
@@ -1459,9 +1462,17 @@ def _read_layer(path: Path, layer: str, strict: bool = False) -> dict:
         logger.warning("Config %s: unknown root key '%s' ignored", path, root)
     other = (config_scope.WORLD if layer == config_scope.INSTANCE
              else config_scope.INSTANCE)
-    for key in _split_keys(foreign):
-        logger.warning("Config %s: '%s' belongs to the %s config — ignored",
-                       path, key, other)
+    keys = _split_keys(foreign)
+    if keys:
+        hint = ("move them with scripts/migrate_instance_config.py"
+                if layer == config_scope.WORLD
+                else "the next save drops them from this file")
+        logger.warning("Config %s: %d key(s) belong to the %s config and are "
+                       "ignored (%s) — %s", path, len(keys), other,
+                       _key_list(foreign, limit=5), hint)
+        for key in keys:
+            logger.debug("Config %s: '%s' belongs to the %s config — ignored",
+                         path, key, other)
     return own
 
 
@@ -1608,8 +1619,27 @@ def check_instance_ready(world_path: Path, instance_path: Path) -> None:
         f"config {world_path} still carries instance settings "
         f"({_key_list(pending)}). Move them into the instance "
         f"first:\n"
-        f'  ./.venv/bin/python scripts/migrate_instance_config.py '
-        f'--from "{world_path.parent.name}"')
+        f"  {_migration_command(world_path, instance_path)}")
+
+
+# The tool's default --worlds-dir; the guard names it only when it differs.
+_REPO_WORLDS_DIR = Path(__file__).resolve().parents[2] / "worlds"
+
+
+def _migration_command(world_path: Path, instance_path: Path) -> str:
+    """The migration call that fits THIS world and instance.
+
+    ``--instance`` always (the tool's default is ``<repo>/instance``, the
+    server's may be anything via ``--instance`` / ``INSTANCE_DIR``);
+    ``--worlds-dir`` only when the world does not live in ``<repo>/worlds``
+    (``start.sh --storage``)."""
+    worlds_dir = Path(world_path).resolve().parent.parent
+    cmd = (f'./.venv/bin/python scripts/migrate_instance_config.py '
+           f'--from "{Path(world_path).parent.name}" '
+           f'--instance "{Path(instance_path).resolve().parent}"')
+    if worlds_dir != _REPO_WORLDS_DIR.resolve():
+        cmd += f' --worlds-dir "{worlds_dir}"'
+    return cmd
 
 
 def migrate_file(config_path: Optional[Path] = None,
@@ -1632,7 +1662,9 @@ def migrate_file(config_path: Optional[Path] = None,
     the instance file is the argument, else the initialised instance
     directory's, else none (then a non-empty instance part raises like
     `save()`). An unreadable layer file skips the whole migration (logged) —
-    a file that could not be read is never replaced.
+    a file that could not be read is never replaced. When the world file is
+    the loaded one, ``game_seasons_are_defaults()`` follows the file
+    afterwards, as after `save()` (``_note_seasons_on_disk``).
     """
     with _LOCK:
         world_path = Path(config_path) if config_path else _CONFIG_PATH
@@ -1642,7 +1674,11 @@ def migrate_file(config_path: Optional[Path] = None,
         except ValueError as e:
             logger.error("Config migration skipped — %s", e)
             return False
-        wrote, _world = _persist(union, world_path, inst_path)
+        wrote, world_pruned = _persist(union, world_path, inst_path)
+        if Path(world_path).resolve() == Path(_CONFIG_PATH).resolve():
+            # The loaded world's file now holds the pruned list — the flag
+            # follows the disk exactly as after `save()`.
+            _note_seasons_on_disk(world_pruned)
         if wrote:
             logger.info("Config files migrated (strip + seed + prune) -> %s, %s",
                         world_path, inst_path)
@@ -1711,6 +1747,15 @@ _GAME_SEASONS_MATERIALIZED = False
 def game_seasons_are_defaults() -> bool:
     """True when the loaded `game_seasons` came from `Calendar.default()`."""
     return _GAME_SEASONS_MATERIALIZED
+
+
+def _note_seasons_on_disk(world_pruned: dict) -> None:
+    """After a write of the world file: the season list is "the shipped
+    default" exactly when pruning left it out of that file. One rule for
+    `save()` and `migrate_file()` — a default-equal list is pruned, i.e.
+    MISSING on disk, which the next `load()` reads as materialized too."""
+    global _GAME_SEASONS_MATERIALIZED
+    _GAME_SEASONS_MATERIALIZED = "game_seasons" not in world_pruned
 
 
 def _materialize_game_calendar_defaults(cfg: dict) -> None:
@@ -2039,12 +2084,12 @@ def save(data: dict, config_path: Optional[Path] = None) -> None:
       list as "no own values yet" (``game_seasons_are_defaults()``), which is
       the right reading for a list nobody edited.
     """
-    global _CONFIG, _GAME_SEASONS_MATERIALIZED
+    global _CONFIG
     with _LOCK:
         world_path = Path(config_path) if config_path else _CONFIG_PATH
         _wrote, world_pruned = _persist(data, world_path, _INSTANCE_PATH)
         _CONFIG = data
-        _GAME_SEASONS_MATERIALIZED = "game_seasons" not in world_pruned
+        _note_seasons_on_disk(world_pruned)
     _invalidate_config_derived_caches()
 
 

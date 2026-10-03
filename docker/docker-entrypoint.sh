@@ -18,7 +18,9 @@ export INSTANCE_DIR=/app/instance
 
 # First start after the instance-config split: move the world's server
 # settings (providers, backends, keys, ...) into the instance. A no-op once
-# the instance config exists (--if-needed); a failure must not keep the
+# the instance holds settings, or while the world carries none (--if-needed;
+# an instance that is still the empty {} of an earlier boot is migrated
+# into); a failure must not keep the
 # container down — the server's start check then names the problem. The
 # backup goes into the instance volume: /app/migration_backup would be lost
 # with the next image rebuild.

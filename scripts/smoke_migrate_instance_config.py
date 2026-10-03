@@ -55,9 +55,40 @@ EXPECTATIONS, derived by hand from the scope rules and the migrations:
   * --dry-run prints the report and writes nothing (no backup dir either).
   * An unreadable secrets.json in any world aborts with exit 2 before the
     first write, naming the file. A missing source world exits 2.
+  * The instance directory the run creates is 0700 (paths.make_private_dir).
+
+EMPTY INSTANCE (final review fix I1) — the server boot's migrate_file writes
+instance/config.json = {} on a fresh clone; an old world dropped in later
+must still be migratable:
+
+  10.1 instance/config.json = "{}" + the fixture. check_instance_ready(src)
+       raises InstanceConfigMissing ("holds no settings"); the command its
+       message prints names --from "src", --instance "<root>/instance" and —
+       the worlds live in <tmp>, not <repo>/worlds — --worlds-dir
+       "<root>/worlds". Run as printed (plus --backup-dir): exit 0,
+       "verified", the instance gets the providers of src and
+       EXPECTED_INSTANCE_SECRETS, the report says the empty instance is
+       replaced, and the backup holds instance.config.json == b"{}" next to
+       the world originals.
+  10.2 The same with --if-needed: src carries instance values, the instance
+       prunes to nothing -> it migrates (exit 0, providers Local + Cloud).
+  10.3 Instance "{}", --if-needed --from bare (chat only: no instance value
+       before or after the migrations) -> exit 0, "carries no instance
+       settings", nothing written, no backup.
+  10.4 No instance at all, --if-needed --from bare -> the same: exit 0,
+       nothing written, no instance directory.
+  10.5 Instance config.json {"embedding": {}} (prunes to nothing on its
+       own) + secrets.json {"embedding": {"api_key": "k"}}: the overlay sets
+       the sensitive string into the existing section, the pruned instance
+       is NOT empty -> without --if-needed exit 2 ("already holds
+       settings"), with it exit 0 — neither writes. (Counter-case not
+       tested here: a secret whose SECTION is missing from config.json is
+       dropped by the overlay — config._layer_with_secrets — so it would
+       not count, exactly as the server would not see it.)
 """
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -229,6 +260,8 @@ def run_checks() -> None:
     inst_cfg = root / "instance" / "config.json"
     inst_sec = root / "instance" / "secrets.json"
     check("instance/config.json written", inst_cfg.is_file())
+    mode = (root / "instance").stat().st_mode & 0o777 if (root / "instance").is_dir() else None
+    check("the instance directory it created is 0700", mode == 0o700, oct(mode or 0))
     check("instance/secrets.json written", inst_sec.is_file())
     if not (inst_cfg.is_file() and inst_sec.is_file()):
         return
@@ -412,6 +445,100 @@ def run_checks() -> None:
     proc = run(iroot, "--from", "src", "--if-needed")
     check("--if-needed: still exit code 2", proc.returncode == 2, f"rc={proc.returncode}")
     check("nothing written", snapshot(iroot) == ibefore and not (iroot / "backup").exists())
+
+    print("10. an EMPTY instance ({} from a boot) and a world with instance values")
+    eroot = TMP / "empty_instance"
+    eworlds = build(eroot)
+    (eroot / "instance").mkdir()
+    (eroot / "instance" / "config.json").write_text("{}", encoding="utf-8")
+    eorig = snapshot(eworlds)
+    from app.core import config
+    cmd = None
+    try:
+        config.check_instance_ready(eworlds / "src" / "config.json",
+                                    eroot / "instance" / "config.json")
+        check("10.1 the guard blocks", False)
+    except config.InstanceConfigMissing as e:
+        msg = str(e)
+        check("10.1 the guard blocks (holds no settings)", "holds no settings" in msg, msg)
+        want = (f'--from "src" --instance "{(eroot / "instance").resolve()}" '
+                f'--worlds-dir "{eworlds.resolve()}"')
+        check("10.1 the printed command names --from, --instance and --worlds-dir",
+              want in msg, msg)
+        line = next((ln.strip() for ln in msg.splitlines()
+                     if "migrate_instance_config.py" in ln), "")
+        cmd = shlex.split(line)
+    if cmd:
+        # Run the command as printed; only the interpreter and the backup dir
+        # are this smoke's own.
+        cmd = [PY, str(REPO / cmd[1])] + cmd[2:] + ["--backup-dir", str(eroot / "backup")]
+        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO))
+        check("10.1 the printed command: exit 0", proc.returncode == 0,
+              f"rc={proc.returncode}\n{proc.stdout[-800:]}\n{proc.stderr[-800:]}")
+        check("10.1 verified", "verified" in proc.stdout)
+        check("10.1 the report says the empty instance is replaced",
+              "holds no settings — replaced" in proc.stdout)
+        icfg = eroot / "instance" / "config.json"
+        isec = eroot / "instance" / "secrets.json"
+        check("10.1 the instance has the providers of src",
+              [p.get("name") for p in read(icfg).get("providers") or []] == ["Local", "Cloud"])
+        check("10.1 the instance secrets", isec.is_file() and read(isec) == EXPECTED_INSTANCE_SECRETS)
+        estamps = sorted((eroot / "backup").glob("instance-config-*"))
+        if len(estamps) == 1:
+            backed = snapshot(estamps[0])
+            check("10.1 the empty instance file is backed up",
+                  backed.get("instance.config.json") == b"{}", sorted(backed))
+            originals = {k: v for k, v in eorig.items()
+                         if k.endswith(("config.json", "secrets.json"))}
+            backed.pop("instance.config.json", None)
+            check("10.1 the worlds are backed up byte-identical", backed == originals,
+                  f"{sorted(backed)} vs {sorted(originals)}")
+        else:
+            check("10.1 exactly one backup directory", False, str(estamps))
+
+    e2 = TMP / "empty_instance_if_needed"
+    build(e2)
+    (e2 / "instance").mkdir()
+    (e2 / "instance" / "config.json").write_text("{}", encoding="utf-8")
+    proc = run(e2, "--from", "src", "--if-needed")
+    check("10.2 --if-needed migrates into the empty instance", proc.returncode == 0
+          and [p.get("name") for p in read(e2 / "instance" / "config.json").get("providers") or []]
+          == ["Local", "Cloud"], f"rc={proc.returncode} {proc.stdout[-500:]}")
+
+    e3 = TMP / "empty_instance_bare"
+    build(e3)
+    (e3 / "instance").mkdir()
+    (e3 / "instance" / "config.json").write_text("{}", encoding="utf-8")
+    e3before = snapshot(e3)
+    proc = run(e3, "--from", "bare", "--if-needed")
+    check("10.3 --if-needed, source without instance values: exit 0", proc.returncode == 0,
+          f"rc={proc.returncode} {proc.stdout[-500:]}")
+    check("10.3 says so", "carries no instance settings" in proc.stdout, proc.stdout[-300:])
+    check("10.3 nothing written", snapshot(e3) == e3before and not (e3 / "backup").exists())
+
+    e4 = TMP / "no_instance_bare"
+    build(e4)
+    e4before = snapshot(e4)
+    proc = run(e4, "--from", "bare", "--if-needed")
+    check("10.4 no instance, --if-needed, source without instance values: exit 0, no action",
+          proc.returncode == 0 and snapshot(e4) == e4before
+          and not (e4 / "instance").exists() and not (e4 / "backup").exists(),
+          f"rc={proc.returncode} {proc.stdout[-300:]}")
+
+    e5 = TMP / "secret_only_instance"
+    build(e5)
+    (e5 / "instance").mkdir()
+    (e5 / "instance" / "config.json").write_text('{"embedding": {}}', encoding="utf-8")
+    (e5 / "instance" / "secrets.json").write_text('{"embedding": {"api_key": "k"}}',
+                                                  encoding="utf-8")
+    e5before = snapshot(e5)
+    proc = run(e5, "--from", "src")
+    check("10.5 a secret makes the instance non-empty: exit 2", proc.returncode == 2
+          and "already holds settings" in proc.stdout, f"rc={proc.returncode} {proc.stdout[-300:]}")
+    proc = run(e5, "--from", "src", "--if-needed")
+    check("10.5 --if-needed: exit 0", proc.returncode == 0, f"rc={proc.returncode}")
+    check("10.5 neither run wrote anything", snapshot(e5) == e5before
+          and not (e5 / "backup").exists())
 
 
 if __name__ == "__main__":

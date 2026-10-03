@@ -18,17 +18,25 @@ world part.
 
 THE ORDER IS LOAD-BEARING:
 
-1. Pre-check. The instance config.json exists -> exit 2 (``--if-needed``:
-   exit 0, no action). An instance secrets.json without a config.json ->
-   exit 2 (it would be overwritten). The source world has no config.json ->
-   exit 2. A world directory that is a symlink or resolves outside
+1. Pre-check. The instance config.json is read strictly (with its
+   secrets.json; unreadable -> exit 2). It holds settings — its instance
+   part, secrets included, is non-empty after pruning -> exit 2
+   (``--if-needed``: exit 0, no action). An instance that prunes to nothing
+   (the ``{}`` the server boot creates on a fresh clone, before an old world
+   was dropped in) counts as NOT migrated: the run proceeds and replaces it,
+   its files are backed up too. An instance secrets.json without a
+   config.json -> exit 2 (it would be overwritten). The source world has no
+   config.json -> exit 2. A world directory that is a symlink or resolves outside
    ``--worlds-dir`` belongs to another checkout: it is NOT read, backed up,
    written or verified, only listed as SKIPPED — unless
    ``--follow-symlinks`` (a symlinked SOURCE without it -> exit 2). Then
    EVERY world (a subdirectory of ``--worlds-dir`` with a config.json; the
    others are listed as "no config.json") is read strictly:
    an unreadable config.json or secrets.json aborts the run with exit 2,
-   naming the file, before anything is written.
+   naming the file, before anything is written. ``--if-needed`` then ends
+   with exit 0 and no action when the SOURCE world carries no instance
+   settings (none before and none after the load-time migrations) — exactly
+   the case in which ``config.check_instance_ready`` lets that world boot.
 2. Plan, in memory. Per world: config.json with ITS OWN secrets.json merged
    on top (``config._layer_with_secrets``), then ``_apply_file_migrations``
    on that RAW, UNSPLIT union — ``_migrate_image_routing`` must still see the
@@ -49,14 +57,17 @@ THE ORDER IS LOAD-BEARING:
    the backup directory.
 4. Backup. config.json + secrets.json of every world go byte-identical to
    ``<backup-dir>/instance-config-<utc stamp>/<world>/`` (read back and
-   compared). The path is printed.
+   compared), an existing (empty) instance's files to
+   ``instance.config.json`` / ``instance.secrets.json`` beside them. The
+   path is printed.
 5. Write. First the instance, then every world — the same shape
    ``config.save`` produces: pruned, sensitive values split into the layer's
    own secrets.json (named lists by entry name), a secrets.json only when
    non-empty (an empty world secrets.json is deleted), a file only when its
-   content changes, atomically. Right before the first write every world
-   file is compared with the bytes read in step 1 — a file changed meanwhile
-   aborts the run (exit 1).
+   content changes, atomically; a missing instance directory is created
+   0700. Right before the first write every world file and both instance
+   files are compared with the bytes read in step 1 — a file changed
+   meanwhile aborts the run (exit 1).
 6. Verify. For every migrated world: ``config.load(world, instance,
    strict=True)`` succeeds, ``check_instance_ready`` passes, and re-reading
    both layers yields exactly the planned pruned parts (the next boot's
@@ -82,7 +93,7 @@ from typing import Optional
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from app.core import config, config_scope  # noqa: E402
+from app.core import config, config_scope, paths  # noqa: E402
 from app.core.timeutils import utc_now  # noqa: E402
 
 DEFAULT_WORLDS = REPO / "worlds"
@@ -119,6 +130,17 @@ class World:
         self.raw_unknown: list = []
         self.migrated_away: list = []
         self.pruned_default: list = []
+
+
+class Instance:
+    """The instance directory's two files as read in step 1."""
+
+    def __init__(self, directory: Path):
+        self.dir = directory
+        self.config_path = directory / "config.json"
+        self.secrets_path = directory / "secrets.json"
+        self.original: dict = {}        # file name -> bytes as read
+        self.pruned: dict = {}          # its instance part, secrets on top, pruned
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -226,6 +248,31 @@ def read_world(w: World) -> None:
             raise Refused(f"{f} changed while it was being read — is the server running?")
     if w.secrets_path.exists() and w.secrets_path.name not in w.original:
         raise Refused(f"{w.secrets_path} appeared while it was being read")
+
+
+def read_instance(inst: Instance) -> None:
+    """Read an existing instance strictly. Raises ``Refused`` naming the file."""
+    for f in (inst.config_path, inst.secrets_path):
+        if f.exists():
+            try:
+                inst.original[f.name] = f.read_bytes()
+                _file_json(inst.original[f.name], f)
+            except (OSError, ValueError) as e:
+                raise Refused(f"cannot read {f}: {e}") from e
+    try:
+        data = config._layer_with_secrets(inst.config_path, strict=True)
+    except ValueError as e:
+        raise Refused(str(e)) from e
+    inst.pruned = config_scope.prune(config_scope.split_by_scope(data)[0])
+
+
+def carries_instance_values(w: World) -> bool:
+    """True when the world holds instance settings worth moving: its raw
+    instance part (what ``check_instance_ready`` measures) or the one after
+    the load-time migrations (a legacy field that seeds the routing) is
+    non-empty after pruning."""
+    raw_inst = config_scope.split_by_scope(w.raw)[0]
+    return bool(w.inst_pruned) or bool(config_scope.prune(raw_inst))
 
 
 # ── 2. Plan ─────────────────────────────────────────────────────────────────
@@ -342,7 +389,17 @@ def report(source: World, worlds: list, skipped: list, symlinked: list,
 
 # ── 4. Backup ───────────────────────────────────────────────────────────────
 
-def backup(worlds: list, backup_dir: Path) -> Path:
+def _backup_file(dst: Path, data: bytes) -> None:
+    with open(dst, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.chmod(dst, 0o600)
+    if dst.read_bytes() != data:
+        raise RuntimeError(f"backup {dst} differs from the original")
+
+
+def backup(worlds: list, inst: Instance, backup_dir: Path) -> Path:
     stamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
     root = backup_dir / f"instance-config-{stamp}"
     n = 1
@@ -355,21 +412,17 @@ def backup(worlds: list, backup_dir: Path) -> Path:
         target = root / w.name
         target.mkdir()
         for fname, data in w.original.items():
-            dst = target / fname
-            with open(dst, "wb") as f:
-                f.write(data)
-                f.flush()
-                os.fsync(f.fileno())
-            os.chmod(dst, 0o600)
-            if dst.read_bytes() != data:
-                raise RuntimeError(f"backup {dst} differs from the original")
+            _backup_file(target / fname, data)
+    # Files, not a directory: any directory name could also be a world's.
+    for fname, data in inst.original.items():
+        _backup_file(root / f"instance.{fname}", data)
     return root
 
 
 # ── 5. Write ────────────────────────────────────────────────────────────────
 
-def assert_unchanged(worlds: list) -> None:
-    for w in worlds:
+def assert_unchanged(worlds: list, inst: Instance) -> None:
+    for w in list(worlds) + [inst]:
         for f in (w.config_path, w.secrets_path):
             now = f.read_bytes() if f.exists() else None
             if now != w.original.get(f.name):
@@ -377,8 +430,10 @@ def assert_unchanged(worlds: list) -> None:
                                    f"is the server running?")
 
 
-def write(source: World, worlds: list, inst_cfg: Path) -> None:
-    assert_unchanged(worlds)
+def write(source: World, worlds: list, inst: Instance) -> None:
+    assert_unchanged(worlds, inst)
+    inst_cfg = inst.config_path
+    paths.make_private_dir(inst.dir)
     config._write_layer(inst_cfg, source.inst_pruned)
     print(f"  written: {inst_cfg}"
           + (f", {inst_cfg.parent / 'secrets.json'}"
@@ -412,6 +467,16 @@ def verify(source: World, worlds: list, inst_cfg: Path) -> list:
     return problems
 
 
+def restore_hint(backup_root: Path, inst: Instance) -> str:
+    """What to undo by hand. Only the two instance FILES — the instance
+    directory may hold other things (Docker puts the backup there)."""
+    undo = (f"copy its instance.*.json back into {inst.dir} (without the "
+            f"'instance.' prefix)"
+            if inst.original
+            else f"remove {inst.config_path} and {inst.secrets_path}")
+    return f"Restore the world files from {backup_root} and {undo}"
+
+
 # ── Main ────────────────────────────────────────────────────────────────────
 
 def main(argv=None) -> int:
@@ -431,7 +496,8 @@ def main(argv=None) -> int:
                     help="also migrate world directories that are symlinks or resolve "
                          "outside --worlds-dir (default: skip them)")
     ap.add_argument("--if-needed", action="store_true",
-                    help="exit 0 without action when the instance config exists")
+                    help="exit 0 without action when the instance already holds "
+                         "settings or the source world carries none")
     args = ap.parse_args(argv)
     # The app modules log every step at INFO; this tool prints its own
     # report — keep warnings (e.g. a secret without a counterpart).
@@ -443,14 +509,17 @@ def main(argv=None) -> int:
     inst_sec = inst_dir / "secrets.json"
 
     # 1. Pre-check.
+    inst = Instance(inst_dir)
     try:
         if inst_cfg.exists():
-            if args.if_needed:
-                print(f"Instance config {inst_cfg} exists — nothing to do.")
-                return EXIT_OK
-            raise Refused(f"the instance config {inst_cfg} already exists — "
-                          f"the migration has run")
-        if inst_sec.exists():
+            read_instance(inst)
+            if inst.pruned:
+                if args.if_needed:
+                    print(f"Instance config {inst_cfg} holds settings — nothing to do.")
+                    return EXIT_OK
+                raise Refused(f"the instance config {inst_cfg} already holds settings "
+                              f"({config._key_list(inst.pruned)}) — the migration has run")
+        elif inst_sec.exists():
             raise Refused(f"{inst_sec} exists without a config.json — it would be "
                           f"overwritten; move it away first")
         if not worlds_dir.is_dir():
@@ -475,12 +544,17 @@ def main(argv=None) -> int:
     # 2. Plan.
     for w in worlds:
         plan_world(w)
+    if args.if_needed and not carries_instance_values(source):
+        print(f"World '{source.name}' carries no instance settings — nothing to do.")
+        return EXIT_OK
 
     # 3. Report.
     print(f"Instance config migration — source world '{source.name}'"
           + (" — DRY RUN, nothing is written" if args.dry_run else ""))
     print(f"  worlds dir: {worlds_dir}")
-    print(f"  instance:   {inst_dir}")
+    print(f"  instance:   {inst_dir}"
+          + (" (exists, holds no settings — replaced; its files are backed up)"
+             if inst.original else ""))
     report(source, worlds, skipped, symlinked, inst_cfg)
     if args.dry_run:
         print("\nDry run — nothing written.")
@@ -488,7 +562,7 @@ def main(argv=None) -> int:
 
     # 4. Backup.
     try:
-        backup_root = backup(worlds, args.backup_dir.resolve())
+        backup_root = backup(worlds, inst, args.backup_dir.resolve())
     except Exception as e:  # noqa: BLE001
         print(f"\nFAILED: backup — {e}. Nothing else was written.")
         return EXIT_FAILED
@@ -496,10 +570,10 @@ def main(argv=None) -> int:
 
     # 5. Write.
     try:
-        write(source, worlds, inst_cfg)
+        write(source, worlds, inst)
     except Exception as e:  # noqa: BLE001
-        print(f"\nFAILED while writing: {e}\nRestore the world files from {backup_root} "
-              f"and remove {inst_dir} before running again.")
+        print(f"\nFAILED while writing: {e}\n{restore_hint(backup_root, inst)} "
+              f"before running again.")
         return EXIT_FAILED
 
     # 6. Verify.
@@ -508,7 +582,7 @@ def main(argv=None) -> int:
         print("\nVERIFICATION FAILED:")
         for p in problems:
             print(f"  {p}")
-        print(f"Restore the world files from {backup_root} and remove {inst_dir}.")
+        print(f"{restore_hint(backup_root, inst)}.")
         return EXIT_FAILED
     print(f"\nverified: {len(worlds)} world(s) load with the instance, "
           f"none blocks the start, a re-read writes nothing")

@@ -96,6 +96,27 @@ def get_storage_dir() -> Path:
     return _storage_dir
 
 
+def make_private_dir(directory: Union[str, Path]) -> bool:
+    """Create ``directory`` as 0700 when it is missing; returns True if it
+    was created here.
+
+    The parents come with the usual umask permissions. The chmod after the
+    mkdir makes the mode independent of the umask — and it touches only a
+    directory this call created: an existing one (the user's own choice of
+    permissions) is left alone.
+    """
+    directory = Path(directory)
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        directory.mkdir(mode=0o700)
+    except FileExistsError:
+        if not directory.is_dir():
+            raise
+        return False
+    os.chmod(directory, 0o700)
+    return True
+
+
 def init_instance(instance_dir: Optional[Union[str, Path]] = None) -> Path:
     """Set the instance directory.  Called once by whoever starts server or tool.
 
@@ -105,7 +126,9 @@ def init_instance(instance_dir: Optional[Union[str, Path]] = None) -> Path:
 
     No third step: without either, this raises ``InstanceNotInitialised``.
     There is no default instance — ``start.sh`` / Docker set it.
-    The directory is created when missing.
+    The directory is created when missing, private (0700): it holds the
+    installation's keys and passwords. An existing directory keeps the
+    permissions its owner gave it.
     """
     global _instance_dir
 
@@ -117,7 +140,7 @@ def init_instance(instance_dir: Optional[Union[str, Path]] = None) -> Path:
             raise InstanceNotInitialised(_INSTANCE_NOT_INITIALISED)
         resolved = Path(env).resolve()
 
-    resolved.mkdir(parents=True, exist_ok=True)
+    make_private_dir(resolved)
     _instance_dir = resolved
     return _instance_dir
 
