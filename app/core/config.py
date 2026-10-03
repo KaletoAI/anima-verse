@@ -1420,7 +1420,7 @@ def _layer_with_secrets(path: Path, strict: bool) -> dict:
             if not f.exists():
                 logger.info("Config file not found: %s — this layer is empty", f)
         elif part:
-            _deep_merge(data, part)
+            _deep_merge(data, part, secrets_from=f)
     return data
 
 
@@ -1862,34 +1862,75 @@ def pair_entries(new: list, current: list) -> list:
     return out
 
 
-def _deep_merge(base: Any, overlay: Any) -> None:
+def _uniquely_named(items: list) -> dict:
+    """``{name: entry}`` for the entries of ``items`` whose name is a
+    non-empty string no other entry carries — all of them for a named list,
+    the pairable part of any other list."""
+    by_name: dict = {}
+    dupes: set = set()
+    for entry in items:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if not isinstance(name, str) or not name:
+            continue
+        if name in by_name:
+            dupes.add(name)
+        by_name[name] = entry
+    for name in dupes:
+        by_name.pop(name)
+    return by_name
+
+
+def _deep_merge(base: Any, overlay: Any,
+                secrets_from: Optional[Path] = None) -> None:
     """In-place deep merge of overlay into base.
 
     A list overlay merges element-wise by index. A dict overlay onto a list
     is the by-name form of a named list (``_split_secrets``): each key is
     an entry name; an unknown name is ignored with a warning.
+
+    ``secrets_from`` marks the overlay as that secrets.json, which has the
+    parallel shape ``_split_secrets`` writes: a value with no counterpart in
+    the config (a missing key, a list entry that is not there) is set only
+    when it is a sensitive string; anything else is dropped with a warning
+    naming the file — never grafted into the config in a shape the readers
+    do not expect.
     """
+    src = f" {secrets_from}" if secrets_from is not None else ""
+
+    def _drop(what: str) -> None:
+        logger.warning("Config secrets%s: %s has no counterpart in config.json — ignored",
+                       src, what)
+
     if isinstance(base, dict) and isinstance(overlay, dict):
         for k, v in overlay.items():
             if k in base and isinstance(base[k], (dict, list)) and isinstance(v, (dict, list)):
-                _deep_merge(base[k], v)
-            else:
+                _deep_merge(base[k], v, secrets_from)
+            elif secrets_from is None or (_is_sensitive(k) and isinstance(v, str)):
                 base[k] = v
+            else:
+                _drop(f"'{k}'")
     elif isinstance(base, list) and isinstance(overlay, list):
         for i, v in enumerate(overlay):
-            if i < len(base):
-                if isinstance(base[i], (dict, list)) and isinstance(v, (dict, list)):
-                    _deep_merge(base[i], v)
-                else:
-                    base[i] = v
+            if i < len(base) and isinstance(base[i], (dict, list)) and isinstance(v, (dict, list)):
+                _deep_merge(base[i], v, secrets_from)
+            elif i < len(base) and secrets_from is None:
+                base[i] = v
+            elif secrets_from is not None and v not in ({}, []):
+                _drop(f"list position {i}")
     elif isinstance(base, list) and isinstance(overlay, dict):
-        by_name = named_entries(base) or {}
+        by_name = _uniquely_named(base)
+        if len(by_name) != len(base):
+            logger.warning("Config secrets%s: %d of %d list entries have no unique name "
+                           "— they take no secrets by name", src,
+                           len(base) - len(by_name), len(base))
         for name, v in overlay.items():
             entry = by_name.get(name)
             if entry is None or not isinstance(v, dict):
-                logger.warning("Config secrets: no list entry named '%s' — ignored", name)
+                logger.warning("Config secrets%s: no list entry named '%s' — ignored", src, name)
                 continue
-            _deep_merge(entry, v)
+            _deep_merge(entry, v, secrets_from)
+    elif secrets_from is not None:
+        _drop(f"a {type(overlay).__name__} value")
 
 
 def _split_secrets(data: Any) -> tuple:

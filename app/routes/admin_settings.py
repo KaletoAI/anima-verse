@@ -2038,13 +2038,27 @@ def _preserve_unsent_image_routing(merged: dict, current: dict) -> None:
         new_ig["routing"] = cur_ig["routing"]
 
 
+def _drop_masked(value: Any) -> Any:
+    """``value`` with every '***'-masked string blanked to "" — for a payload
+    part that has no stored counterpart to unmask from. A mask is never
+    persisted literally."""
+    if isinstance(value, dict):
+        return {k: _drop_masked(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_drop_masked(v) for v in value]
+    if isinstance(value, str) and value.startswith("***"):
+        return ""
+    return value
+
+
 def _merge_sensitive(new: Any, current: Any) -> Any:
     """Recursively merge, keeping current values where new has masked placeholders.
 
     IMPORTANT: keys MISSING from the new dict were deleted on purpose and are
     NOT restored from current. Only leaf values masked with '***' are
     protected. List items pair via `config.pair_entries` — by name for named
-    lists, so a masked key stays with its entry when entries move.
+    lists, so a masked key stays with its entry when entries move. A masked
+    value without a counterpart (new key, unpaired entry) becomes "".
     """
     if isinstance(new, dict) and isinstance(current, dict):
         result = {}
@@ -2053,11 +2067,11 @@ def _merge_sensitive(new: Any, current: Any) -> Any:
             if key in current:
                 result[key] = _merge_sensitive(new[key], current[key])
             else:
-                result[key] = new[key]
+                result[key] = _drop_masked(new[key])
         return result
     if isinstance(new, list) and isinstance(current, list):
         return [
-            item if counterpart is None else _merge_sensitive(item, counterpart)
+            _drop_masked(item) if counterpart is None else _merge_sensitive(item, counterpart)
             for item, counterpart in zip(new, config.pair_entries(new, current))
         ]
     # If new value is a masked placeholder, keep current

@@ -394,6 +394,37 @@ backend). Expectations by hand:
     list, not a dict. ``_merge_sensitive`` over an unnamed list pairs index
     1 with index 1 (``[{}, {"api_key": "***"}]`` against ``[{}, {"api_key":
     "K1"}]`` -> "K1"). ``_deep_merge`` of a list overlay stays by index.
+
+Review fix round 1 — the secrets overlay knows the shape ``_split_secrets``
+writes: a key MISSING from config.json is set only when it is a sensitive
+string; any other value without a counterpart (a by-name dict, a list) is
+dropped with one warning naming the secrets.json. Expectations by hand:
+
+8.7 NO LIST IN config.json. Instance ``{"server": {"log_level": "DEBUG"}}``
+    + secrets ``{"providers": {"p": {"api_key": "KP"}}}``: ``load`` and
+    ``load(strict=True)`` raise nothing, ``get("providers") is None``, and a
+    warning names ``i/secrets.json`` and ``providers``.
+8.8 CORRUPT config.json + by-name secrets. Instance config.json with a
+    syntax error + the secrets of 8.7: a non-strict ``load`` raises nothing
+    and reads the layer as empty (``get("providers") is None``,
+    ``get("server.log_level")`` is not "DEBUG").
+8.9 PARTLY NAMED BASE. Instance backends ``[{"name": "a"}, {"name": ""}]``
+    (not a named list: one empty name) + secrets ``{"image_generation":
+    {"backends": {"a": {"api_key": "KA"}}}}``: a still gets "KA" (its name is
+    unique and non-empty), and ONE warning names ``i/secrets.json`` and says
+    the list has entries without a unique name. The next ``save`` writes the
+    list in the index format (``[{"api_key": "KA"}, {}]``) — the key is kept.
+8.10 MASK WITHOUT PARTNER. current ``[a, b(KB), c(KC)]``, payload
+    ``[a, c("***"), b2("***")]`` (rename b -> b2 plus a reorder in one save):
+    c gets "KC"; b2 has no partner (its index 2 holds c, which the payload
+    knows) and its ``"***"`` becomes ``""`` — a mask is never persisted
+    literally.
+
+KNOWN LIMIT. Pairing by name needs BOTH lists to be named lists. A payload
+entry without a name (or two entries with the same name) makes the whole list
+fall back to index pairing — including the neighbour inheritance in
+``_preserve_unsent_subarray_fields`` that the name pairing prevents. The next
+save after the entry got its name pairs and writes by name again.
 """
 import copy
 import os
@@ -1241,6 +1272,77 @@ def part_4():
     base = {"l": [{"a": 1}, {"a": 2}]}
     cfg._deep_merge(base, {"l": [{}, {"api_key": "K"}]})
     check(base == {"l": [{"a": 1}, {"a": 2, "api_key": "K"}]}, f"8.6: _deep_merge by index ({base!r})")
+
+    # Review fix round 1 — capture the config logger's warnings
+    import logging
+
+    class _Grab(logging.Handler):
+        def __init__(self):
+            super().__init__(logging.WARNING)
+            self.msgs = []
+
+        def emit(self, record):
+            self.msgs.append(record.getMessage())
+
+    grab = _Grab()
+    cfg.logger.addHandler(grab)
+    try:
+        # 8.7 no list in config.json
+        with tempfile.TemporaryDirectory() as tmp:
+            w, i = _layers(tmp)
+            _write(w, {"chat": {"chattiness": 0.3}})
+            _write(i, {"server": {"log_level": "DEBUG"}})
+            isec = i.parent / "secrets.json"
+            _write(isec, {"providers": {"p": {"api_key": "KP"}}})
+            for strict in (False, True):
+                grab.msgs.clear()
+                try:
+                    cfg.load(w, i, strict=strict)
+                except Exception as e:  # noqa: BLE001
+                    check(False, f"8.7: load(strict={strict}) raised {type(e).__name__}: {e}")
+                    continue
+                check(cfg.get("providers") is None,
+                      f"8.7: strict={strict} — no providers ({cfg.get('providers')!r})")
+                check(any(str(isec) in m and "providers" in m for m in grab.msgs),
+                      f"8.7: strict={strict} — a warning names the secrets file ({grab.msgs!r:.300})")
+
+            # 8.8 corrupt config.json + by-name secrets
+            i.write_text('{"server": {"log_level": "DEBUG"},}', encoding="utf-8")
+            try:
+                cfg.load(w, i)
+                check(cfg.get("providers") is None, "8.8: corrupt layer -> no providers")
+                check(cfg.get("server.log_level") != "DEBUG", "8.8: corrupt layer read as empty")
+            except Exception as e:  # noqa: BLE001
+                check(False, f"8.8: load raised {type(e).__name__}: {e}")
+
+        # 8.9 partly named base
+        with tempfile.TemporaryDirectory() as tmp:
+            w, i = _layers(tmp)
+            _write(w, {"chat": {"chattiness": 0.3}})
+            _write(i, {"image_generation": {"backends": [{"name": "a"}, {"name": ""}]}})
+            isec = i.parent / "secrets.json"
+            _write(isec, {"image_generation": {"backends": {"a": {"api_key": "KA"}}}})
+            grab.msgs.clear()
+            cfg.load(w, i)
+            bes = cfg.get("image_generation.backends") or []
+            check(bes and bes[0].get("api_key") == "KA", f"8.9: a keeps its key ({bes!r})")
+            hits = [m for m in grab.msgs if str(isec) in m and "unique name" in m]
+            check(len(hits) == 1, f"8.9: one warning about the unpairable entries ({grab.msgs!r:.300})")
+            check(not any("no list entry named 'a'" in m for m in grab.msgs),
+                  "8.9: no misleading 'no entry named a' warning")
+            cfg.save(cfg.get_all())
+            got = _read(isec) if isec.exists() else None
+            check(got == {"image_generation": {"backends": [{"api_key": "KA"}, {}]}},
+                  f"8.9: the next save keeps the key (index format) ({got!r})")
+    finally:
+        cfg.logger.removeHandler(grab)
+
+    # 8.10 mask without partner
+    current = section([{"name": "a"}, {"name": "b", "api_key": "KB"}, {"name": "c", "api_key": "KC"}])
+    payload = section([{"name": "a"}, {"name": "c", "api_key": "***"}, {"name": "b2", "api_key": "***"}])
+    merged = adm._merge_sensitive(payload, current)
+    got = _keys_by_name(merged["image_generation"]["backends"])
+    check(got == {"a": None, "c": "KC", "b2": ""}, f"8.10: unpartnered mask -> '' ({got!r})")
 
 
 def main():
