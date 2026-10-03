@@ -18,6 +18,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Set
 
+from app.core.config_schema import field_default
 from app.core.log import get_logger
 from app.core.expression_pose_maps import (
     get_expression_prompt,
@@ -1078,9 +1079,12 @@ def generate_expression_image(character_name: str,
     # Resolution from admin config (image_generation.outfit_image_width/height)
     # — expression variants use the same resolution as wardrobe outfit images.
     # An explicit override wins (the T-pose needs a wider frame than the
-    # portrait format). When unset, generation falls back to the backend default.
-    outfit_w = override_width or int(os.environ.get("OUTFIT_IMAGE_WIDTH", 0) or 0) or None
-    outfit_h = override_height or int(os.environ.get("OUTFIT_IMAGE_HEIGHT", 0) or 0) or None
+    # portrait format). The env bridge always sets both; the fallback is the
+    # schema default, the same value the bridge uses for an absent field.
+    outfit_w = override_width or int(os.environ.get(
+        "OUTFIT_IMAGE_WIDTH", field_default("image_generation", "outfit_image_width")) or 0) or None
+    outfit_h = override_height or int(os.environ.get(
+        "OUTFIT_IMAGE_HEIGHT", field_default("image_generation", "outfit_image_height")) or 0) or None
 
     # Single prompt: prefix + character + outfit + pose + expression in one string
     parts = [_prompt_prefix, character_prompt]

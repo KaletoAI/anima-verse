@@ -26,18 +26,22 @@ from app.core.game_time import GameDuration, GameTime
 from app.core.timeutils import parse_iso, utc_now, game_time
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.core.config_schema import field_default
 from app.core.log import get_logger
 
 logger = get_logger("random_events")
 
-# Live-Getter — bei jedem Aufruf wird os.environ neu gelesen, damit Admin-UI-
-# Aenderungen ohne Server-Restart greifen.
+# Live getters — os.environ is re-read on every call, so admin UI changes take
+# effect without a server restart.
 def is_enabled() -> bool:
     return os.environ.get("EVENT_GENERATION_ENABLED", "true").lower() in ("true", "1", "yes")
 
 
 def base_probability() -> float:
-    return float(os.environ.get("EVENT_BASE_PROBABILITY", "0.10"))
+    # The env value is the percent field / 100 (config._flatten_to_env).
+    return float(os.environ.get(
+        "EVENT_BASE_PROBABILITY",
+        field_default("random_events", "base_probability") / 100))
 
 
 def resolution_cooldown_min() -> int:

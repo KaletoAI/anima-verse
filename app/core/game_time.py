@@ -632,7 +632,7 @@ def display_time_format() -> str:
     :data:`TIME_FORMATS`; ``24h`` when unset or unknown."""
     try:
         from app.core import config
-        value = (config.get("server.time_format") or "").strip()
+        value = str(config.get("server.time_format") or "24h").strip()
     except Exception:
         value = ""
     return value if value in TIME_FORMATS else "24h"

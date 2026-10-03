@@ -1758,45 +1758,54 @@ def _flatten_to_env(config: dict) -> None:
 
     This maps the structured JSON back into the flat PROVIDER_1_NAME etc.
     format that existing code expects via os.environ.get() / os.getenv().
+
+    The fallback for an absent field is its schema default (``field_default``)
+    — the ONE source, so a value stored at its default and an absent value
+    bridge the same. Fields without a schema default keep their literal. The
+    package-owned ``skills.searx.enabled`` keeps its literal too: package
+    subsections exist in the schema only after plugin discovery, which runs
+    after the first config load.
     """
+    from app.core.config_schema import field_default
+
     env = {}
 
     # Server
     server = config.get("server", {})
-    _set(env, "LOG_LEVEL", server.get("log_level", "INFO"))
-    _set(env, "STORAGE_DIR", server.get("storage_dir", "./storage"))
+    _set(env, "LOG_LEVEL", server.get("log_level", field_default("server", "log_level")))
+    _set(env, "STORAGE_DIR", server.get("storage_dir", field_default("server", "storage_dir")))
 
     # Providers (1-indexed)
     for i, prov in enumerate(config.get("providers", []), start=1):
         p = f"PROVIDER_{i}_"
         _set(env, f"{p}NAME", prov.get("name", ""))
-        _set(env, f"{p}TYPE", prov.get("type", "openai"))
+        _set(env, f"{p}TYPE", prov.get("type", field_default("providers", "type")))
         _set(env, f"{p}API_BASE", prov.get("api_base", ""))
-        _set(env, f"{p}API_KEY", prov.get("api_key", ""))
-        _set(env, f"{p}TIMEOUT", prov.get("timeout", 120))
-        _set(env, f"{p}MAX_CONCURRENT", prov.get("max_concurrent", 1))
+        _set(env, f"{p}API_KEY", prov.get("api_key", field_default("providers", "api_key")))
+        _set(env, f"{p}TIMEOUT", prov.get("timeout", field_default("providers", "timeout")))
+        _set(env, f"{p}MAX_CONCURRENT", prov.get("max_concurrent", field_default("providers", "max_concurrent")))
         _set(env, f"{p}SERIALIZE_GROUP", prov.get("serialize_group", ""))
 
-    # Memory Thresholds (3-Stufen-System)
+    # Memory thresholds (three-tier system)
     memory = config.get("memory", {})
-    _set(env, "MEMORY_SHORT_TERM_DAYS", memory.get("short_term_days", 3))
-    _set(env, "MEMORY_MID_TERM_DAYS", memory.get("mid_term_days", 30))
-    _set(env, "MEMORY_LONG_TERM_DAYS", memory.get("long_term_days", 90))
-    _set(env, "CHAT_HISTORY_MAX_MESSAGES", memory.get("max_messages", 100))
-    _set(env, "CHAT_SESSION_GAP_HOURS", memory.get("session_gap_hours", 4))
-    _set(env, "MEMORY_MAX_SEMANTIC", memory.get("max_semantic", 50))
-    _set(env, "MEMORY_COMMITMENT_MAX_DAYS", memory.get("commitment_max_days", 5))
-    _set(env, "MEMORY_COMMITMENT_COMPLETED_DAYS", memory.get("commitment_completed_days", 3))
+    _set(env, "MEMORY_SHORT_TERM_DAYS", memory.get("short_term_days", field_default("memory", "short_term_days")))
+    _set(env, "MEMORY_MID_TERM_DAYS", memory.get("mid_term_days", field_default("memory", "mid_term_days")))
+    _set(env, "MEMORY_LONG_TERM_DAYS", memory.get("long_term_days", field_default("memory", "long_term_days")))
+    _set(env, "CHAT_HISTORY_MAX_MESSAGES", memory.get("max_messages", field_default("memory", "max_messages")))
+    _set(env, "CHAT_SESSION_GAP_HOURS", memory.get("session_gap_hours", field_default("memory", "session_gap_hours")))
+    _set(env, "MEMORY_MAX_SEMANTIC", memory.get("max_semantic", field_default("memory", "max_semantic")))
+    _set(env, "MEMORY_COMMITMENT_MAX_DAYS", memory.get("commitment_max_days", field_default("memory", "commitment_max_days")))
+    _set(env, "MEMORY_COMMITMENT_COMPLETED_DAYS", memory.get("commitment_completed_days", field_default("memory", "commitment_completed_days")))
 
     # Image Generation
     ig = config.get("image_generation", {})
-    _set(env, "OUTFIT_IMAGE_WIDTH", ig.get("outfit_image_width", 832))
-    _set(env, "OUTFIT_IMAGE_HEIGHT", ig.get("outfit_image_height", 1216))
-    _set(env, "LOCATION_IMAGE_WIDTH", ig.get("location_image_width", 1280))
-    _set(env, "LOCATION_IMAGE_HEIGHT", ig.get("location_image_height", 720))
-    _set(env, "U2NET_HOME", ig.get("u2net_home", "./models/u2net"))
-    _set(env, "REBUILD_LLM_SYSTEM_TEMPLATE", ig.get("rebuild_llm_system_template", ""))
-    _set(env, "IMAGE_ANALYSIS_PROMPT", ig.get("image_analysis_prompt", ""))
+    _set(env, "OUTFIT_IMAGE_WIDTH", ig.get("outfit_image_width", field_default("image_generation", "outfit_image_width")))
+    _set(env, "OUTFIT_IMAGE_HEIGHT", ig.get("outfit_image_height", field_default("image_generation", "outfit_image_height")))
+    _set(env, "LOCATION_IMAGE_WIDTH", ig.get("location_image_width", field_default("image_generation", "location_image_width")))
+    _set(env, "LOCATION_IMAGE_HEIGHT", ig.get("location_image_height", field_default("image_generation", "location_image_height")))
+    _set(env, "U2NET_HOME", ig.get("u2net_home", field_default("image_generation", "u2net_home")))
+    _set(env, "REBUILD_LLM_SYSTEM_TEMPLATE", ig.get("rebuild_llm_system_template", field_default("image_generation", "rebuild_llm_system_template")))
+    _set(env, "IMAGE_ANALYSIS_PROMPT", ig.get("image_analysis_prompt", field_default("image_generation", "image_analysis_prompt")))
 
     # ImageGen Backends (1-indexed)
     for i, be in enumerate(ig.get("backends", []), start=1):
@@ -1833,29 +1842,29 @@ def _flatten_to_env(config: dict) -> None:
 
     # TTS
     tts = config.get("tts", {})
-    _set(env, "TTS_ENABLED", tts.get("enabled", False))
-    _set(env, "TTS_AUTO", tts.get("auto", False))
-    _set(env, "TTS_CHUNK_SIZE", tts.get("chunk_size", 300))
-    _set(env, "TTS_BACKEND", tts.get("backend", "xtts"))
-    _set(env, "TTS_FALLBACK_BACKEND", tts.get("fallback_backend", ""))
+    _set(env, "TTS_ENABLED", tts.get("enabled", field_default("tts", "enabled")))
+    _set(env, "TTS_AUTO", tts.get("auto", field_default("tts", "auto")))
+    _set(env, "TTS_CHUNK_SIZE", tts.get("chunk_size", field_default("tts", "chunk_size")))
+    _set(env, "TTS_BACKEND", tts.get("backend", field_default("tts", "backend")))
+    _set(env, "TTS_FALLBACK_BACKEND", tts.get("fallback_backend", field_default("tts", "fallback_backend")))
 
     xtts = tts.get("xtts", {})
-    _set(env, "TTS_XTTS_URL", xtts.get("url", ""))
+    _set(env, "TTS_XTTS_URL", xtts.get("url", field_default("tts", "xtts", "url")))
     _set(env, "TTS_XTTS_SPEAKER_WAV", xtts.get("speaker_wav", ""))
-    _set(env, "TTS_XTTS_LANGUAGE", xtts.get("language", "de"))
+    _set(env, "TTS_XTTS_LANGUAGE", xtts.get("language", field_default("tts", "xtts", "language")))
 
     magpie = tts.get("magpie", {})
-    _set(env, "TTS_MAGPIE_URL", magpie.get("url", ""))
+    _set(env, "TTS_MAGPIE_URL", magpie.get("url", field_default("tts", "magpie", "url")))
     _set(env, "TTS_MAGPIE_VOICE", magpie.get("voice", ""))
-    _set(env, "TTS_MAGPIE_LANGUAGE", magpie.get("language", "de-DE"))
+    _set(env, "TTS_MAGPIE_LANGUAGE", magpie.get("language", field_default("tts", "magpie", "language")))
 
     f5 = tts.get("f5", {})
-    _set(env, "TTS_F5_URL", f5.get("url", ""))
+    _set(env, "TTS_F5_URL", f5.get("url", field_default("tts", "f5", "url")))
     _set(env, "TTS_F5_REF_AUDIO", f5.get("ref_audio", ""))
     _set(env, "TTS_F5_REF_TEXT", f5.get("ref_text", ""))
-    _set(env, "TTS_F5_SPEED", f5.get("speed", 1.0))
-    _set(env, "TTS_F5_REMOVE_SILENCE", f5.get("remove_silence", False))
-    _set(env, "TTS_F5_NFE_STEPS", f5.get("nfe_steps", 32))
+    _set(env, "TTS_F5_SPEED", f5.get("speed", field_default("tts", "f5", "speed")))
+    _set(env, "TTS_F5_REMOVE_SILENCE", f5.get("remove_silence", field_default("tts", "f5", "remove_silence")))
+    _set(env, "TTS_F5_NFE_STEPS", f5.get("nfe_steps", field_default("tts", "f5", "nfe_steps")))
     _set(env, "TTS_F5_CUSTOM_CFG", f5.get("custom_cfg", ""))
     for lang, ldata in f5.get("languages", {}).items():
         ul = lang.upper()
@@ -1875,41 +1884,41 @@ def _flatten_to_env(config: dict) -> None:
     # `name`/`description` of a skill come from its skills/<id>.md template
     # since the plugin migration — the bridge used to set env vars nobody read.
     oc = skills.get("outfit_change", {})
-    _set(env, "SKILL_OUTFIT_CHANGE_GENERATE_IMAGE", oc.get("generate_image", True))
-    _set(env, "SKILL_OUTFIT_CHANGE_LANGUAGE", oc.get("language", "en"))
-    _set(env, "SKILL_OUTFIT_CHANGE_MAX_OUTFITS", oc.get("max_outfits", 10))
+    _set(env, "SKILL_OUTFIT_CHANGE_GENERATE_IMAGE", oc.get("generate_image", field_default("skills", "outfit_change", "generate_image")))
+    _set(env, "SKILL_OUTFIT_CHANGE_LANGUAGE", oc.get("language", field_default("skills", "outfit_change", "language")))
+    _set(env, "SKILL_OUTFIT_CHANGE_MAX_OUTFITS", oc.get("max_outfits", field_default("skills", "outfit_change", "max_outfits")))
 
     # Knowledge
     kn = config.get("knowledge", {})
-    _set(env, "SKILL_KNOWLEDGE_BATCH_SIZE", kn.get("batch_size", 5))
-    _set(env, "SKILL_KNOWLEDGE_MAX_INPUT_TOKENS", kn.get("max_input_tokens", 12000))
-    _set(env, "SKILL_KNOWLEDGE_MAX_OUTPUT_TOKENS", kn.get("max_output_tokens", 1500))
-    _set(env, "SKILL_KNOWLEDGE_SEARCH_MAX_CANDIDATES", kn.get("search_max_candidates", 50))
-    _set(env, "SKILL_KNOWLEDGE_SEARCH_MAX_RETURN", kn.get("search_max_return", 8))
+    _set(env, "SKILL_KNOWLEDGE_BATCH_SIZE", kn.get("batch_size", field_default("knowledge", "batch_size")))
+    _set(env, "SKILL_KNOWLEDGE_MAX_INPUT_TOKENS", kn.get("max_input_tokens", field_default("knowledge", "max_input_tokens")))
+    _set(env, "SKILL_KNOWLEDGE_MAX_OUTPUT_TOKENS", kn.get("max_output_tokens", field_default("knowledge", "max_output_tokens")))
+    _set(env, "SKILL_KNOWLEDGE_SEARCH_MAX_CANDIDATES", kn.get("search_max_candidates", field_default("knowledge", "search_max_candidates")))
+    _set(env, "SKILL_KNOWLEDGE_SEARCH_MAX_RETURN", kn.get("search_max_return", field_default("knowledge", "search_max_return")))
 
     # Thoughts — AgentLoop pacing.
     # The AgentLoop reads these values directly via config.get() (no env
     # bridge needed any more); the mapping stays only for code that still
     # expects the env variable.
     pro = config.get("thoughts", config.get("proactive", {}))
-    _set(env, "THOUGHT_MIN_TURN_GAP_SECONDS", pro.get("min_turn_gap_seconds", 30))
-    _set(env, "THOUGHT_MIN_PER_CHAR_COOLDOWN_MINUTES", pro.get("min_per_char_cooldown_minutes", 5))
+    _set(env, "THOUGHT_MIN_TURN_GAP_SECONDS", pro.get("min_turn_gap_seconds", field_default("thoughts", "min_turn_gap_seconds")))
+    _set(env, "THOUGHT_MIN_PER_CHAR_COOLDOWN_MINUTES", pro.get("min_per_char_cooldown_minutes", field_default("thoughts", "min_per_char_cooldown_minutes")))
 
     # Random Events
     re_cfg = config.get("random_events", {})
-    _set(env, "EVENT_GENERATION_ENABLED", re_cfg.get("enabled", True))
-    _set(env, "EVENT_BASE_PROBABILITY", (re_cfg.get("base_probability", 5)) / 100)
-    _set(env, "EVENT_RESOLUTION_PROACTIVE", re_cfg.get("resolution_proactive", True))
-    _set(env, "EVENT_RESOLUTION_COOLDOWN_MINUTES", re_cfg.get("resolution_cooldown_minutes", 15))
-    _set(env, "EVENT_RESOLVED_IMAGE_LINGER_MINUTES", re_cfg.get("resolved_image_linger_minutes", 30))
+    _set(env, "EVENT_GENERATION_ENABLED", re_cfg.get("enabled", field_default("random_events", "enabled")))
+    _set(env, "EVENT_BASE_PROBABILITY", (re_cfg.get("base_probability", field_default("random_events", "base_probability"))) / 100)
+    _set(env, "EVENT_RESOLUTION_PROACTIVE", re_cfg.get("resolution_proactive", field_default("random_events", "resolution_proactive")))
+    _set(env, "EVENT_RESOLUTION_COOLDOWN_MINUTES", re_cfg.get("resolution_cooldown_minutes", field_default("random_events", "resolution_cooldown_minutes")))
+    _set(env, "EVENT_RESOLVED_IMAGE_LINGER_MINUTES", re_cfg.get("resolved_image_linger_minutes", field_default("random_events", "resolved_image_linger_minutes")))
 
     # Story Engine
     se = config.get("story_engine", {})
-    _set(env, "STORY_ENGINE_ENABLED", se.get("enabled", False))
-    _set(env, "STORY_ENGINE_MAX_ACTIVE_ARCS", se.get("max_active_arcs", 2))
-    _set(env, "STORY_ENGINE_COOLDOWN_HOURS", se.get("cooldown_hours", 6))
-    _set(env, "STORY_ENGINE_MAX_BEATS", se.get("max_beats", 5))
-    _set(env, "STORY_ENGINE_BEAT_IMAGES", se.get("beat_images", True))
+    _set(env, "STORY_ENGINE_ENABLED", se.get("enabled", field_default("story_engine", "enabled")))
+    _set(env, "STORY_ENGINE_MAX_ACTIVE_ARCS", se.get("max_active_arcs", field_default("story_engine", "max_active_arcs")))
+    _set(env, "STORY_ENGINE_COOLDOWN_HOURS", se.get("cooldown_hours", field_default("story_engine", "cooldown_hours")))
+    _set(env, "STORY_ENGINE_MAX_BEATS", se.get("max_beats", field_default("story_engine", "max_beats")))
+    _set(env, "STORY_ENGINE_BEAT_IMAGES", se.get("beat_images", field_default("story_engine", "beat_images")))
 
     # Purge stale image/video/mesh backend blocks BEFORE writing: this bridge
     # only ever set keys, never removed them. A deleted backend therefore left

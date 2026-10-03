@@ -18,18 +18,20 @@ import json
 import os
 from typing import Any, Dict, Optional
 
+from app.core.config_schema import field_default
 from app.core.log import get_logger
 
 logger = get_logger("story_engine")
 
 # ---------------------------------------------------------------------------
-# Konfiguration
+# Configuration
 # ---------------------------------------------------------------------------
-# Konfigurationszugriffe als Funktionen — bei jedem Aufruf wird os.environ neu
-# gelesen, damit Aenderungen aus der Admin-UI sofort wirken (keine Modul-Konstanten
-# die nur beim Import gesetzt werden).
+# Config access as functions — os.environ is re-read on every call so admin UI
+# changes take effect at once (no module constants set only at import time).
 def is_enabled() -> bool:
-    return os.environ.get("STORY_ENGINE_ENABLED", "true").lower() in ("true", "1", "yes")
+    return os.environ.get(
+        "STORY_ENGINE_ENABLED",
+        str(field_default("story_engine", "enabled"))).lower() in ("true", "1", "yes")
 
 
 def max_active_arcs() -> int:

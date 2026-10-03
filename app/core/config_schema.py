@@ -8,6 +8,8 @@ admin UI rendering and server-side validation.
 # Field types: str, int, float, bool, text (multiline), select, password, json_str
 # "array" and "object" are handled by section-level definitions
 
+from typing import Any
+
 # The season atmosphere levels are owned by the calendar module — the schema
 # only offers them as dropdown choices (one source, no drifting copy).
 from app.core.game_time import TEMPERATURE_LEVELS, WEATHER_KINDS  # noqa: E402
@@ -102,12 +104,13 @@ SECTIONS = {
             "timezone": {
                 "type": "str",
                 "label": "World Timezone",
-                "default": "Europe/Berlin",
+                "default": "",
+                "placeholder": "e.g. Europe/Berlin",
                 "description": "IANA timezone (e.g. Europe/Berlin) the SYSTEM clock is shown "
                                "in — header system time, log and queue stamps. Storage stays "
                                "UTC. GAME time is a world calendar and has NO timezone, so "
-                               "this never changes what the characters see. Empty or an "
-                               "unknown name = UTC.",
+                               "this never changes what the characters see. Empty (the "
+                               "default) or an unknown name = UTC.",
             },
             "time_format": {
                 "type": "select",
@@ -411,7 +414,7 @@ SECTIONS = {
         "icon": "💬",
         "fields": {
             "frequency_penalty": {"type": "float", "label": "Frequency Penalty", "default": 0.3, "min": 0, "max": 2, "step": 0.05, "description": "Static token-repetition penalty sent to the chat model on every reply (OpenAI param). 0 = off, 0.3 = light, 0.6+ = strong. This is a global default ON TOP of the per-model base temperature configured in LLM Routing — not a per-model sampling value. Some backends ignore it."},
-            "top_p": {"type": "float", "label": "Nucleus cut-off (top_p)", "default": 0.95, "min": 0, "max": 1, "step": 0.01, "description": "Nucleus sampling cut-off sent with every chat and thought reply. 0 = do not send it, the provider default (usually 1.0 = no cut-off) applies. The default 0.95 keeps the unlikely tail of the distribution closed. Strongly recommended whenever the reactive temperature bump below is enabled: without a cut-off, every temperature step lifts the least likely tokens the most, which is how a raised temperature turns into multi-script gibberish."},
+            "top_p": {"type": "float", "label": "Nucleus cut-off (top_p)", "default": 0, "min": 0, "max": 1, "step": 0.01, "description": "Nucleus sampling cut-off sent with every chat and thought reply. 0 (the default) = do not send it, the provider default (usually 1.0 = no cut-off) applies. 0.95 keeps the unlikely tail of the distribution closed. Strongly recommended whenever the reactive temperature bump below is enabled: without a cut-off, every temperature step lifts the least likely tokens the most, which is how a raised temperature turns into multi-script gibberish."},
             "anti_rep_penalty_step": {"type": "float", "label": "Penalty bump per repetition", "default": 0.15, "min": 0, "max": 1, "step": 0.05, "description": "Reactive anti-loop: when the character repeats phrases across its recent replies, the token-repetition penalty is raised by this amount PER detected repetition. This is the targeted instrument — it acts on the tokens actually being repeated. 0 = disable the reactive penalty bump."},
             "anti_rep_penalty_max": {"type": "float", "label": "Penalty ceiling", "default": 1.0, "min": 0, "max": 2, "step": 0.05, "description": "Upper bound for the reactively-raised repetition penalty."},
             "anti_rep_step": {"type": "float", "label": "Temperature bump per repetition (legacy)", "default": 0, "min": 0, "max": 0.5, "step": 0.05, "description": "Reactive anti-loop via temperature, added on top of the LLM Routing base temperature per detected repetition. Off by default since 2026-08-03: at a raised temperature of 1.10, two of two replies of one model collapsed into multi-script token salad, against zero of 26 at its configured 0.80 in the same window. Prefer the penalty bump above. If you enable this anyway, set the nucleus cut-off as well and keep the ceiling low."},
@@ -657,15 +660,15 @@ SECTIONS = {
             "outfit_image_width": {
                 "type": "int",
                 "label": "Outfit width (px)",
-                "default": 640,
+                "default": 832,
                 "min": 64,
                 "max": 4096,
                 "description": (
                     "Portrait format (~2:3) for full-body outfits. Render time scales roughly "
                     "linearly with the pixel count, so only steps with a real performance "
                     "effect are worth taking:\n"
-                    "  - 640x960   (~0.6 MP — the default, fast enough to iterate on)\n"
-                    "  - 832x1216  (~1.0 MP — SDXL/Flux sweet spot)\n"
+                    "  - 640x960   (~0.6 MP — fast enough to iterate on)\n"
+                    "  - 832x1216  (~1.0 MP — the default, SDXL/Flux sweet spot)\n"
                     "  - 1024x1536 (~1.6 MP — ca. 60% more time/VRAM, more detail)\n"
                     "Beyond that (e.g. 1280x1920) time keeps growing linearly while the "
                     "quality gain flattens out and repetition artefacts get more likely — "
@@ -675,7 +678,7 @@ SECTIONS = {
             "outfit_image_height": {
                 "type": "int",
                 "label": "Outfit height (px)",
-                "default": 960,
+                "default": 1216,
                 "min": 64,
                 "max": 4096,
                 "description": "See Outfit width for the recommended bucket combinations at the same ratio.",
@@ -973,7 +976,7 @@ SECTIONS = {
         "icon": "🧠",
         "fields": {
             "min_turn_gap_seconds": {"type": "int", "label": "Min Turn Gap (s)", "default": 30, "min": 0, "max": 600, "description": "Minimum pause (seconds) between two consecutive thought turns. Keeps the AgentLoop from over-pacing with few characters. Does not apply to in_chat_skip / errors (those have their own backoffs). SYSTEM time."},
-            "min_per_char_cooldown_minutes": {"type": "int", "label": "Min Per-Char Cooldown (min)", "default": 10, "min": 0, "max": 240, "description": "Minimum wait (minutes) before the same character gets another real thought turn. Bumps (external triggers like avatar room entry) bypass the cooldown. SYSTEM time."},
+            "min_per_char_cooldown_minutes": {"type": "int", "label": "Min Per-Char Cooldown (min)", "default": 5, "min": 0, "max": 240, "description": "Minimum wait (minutes) before the same character gets another real thought turn. Bumps (external triggers like avatar room entry) bypass the cooldown. SYSTEM time."},
         },
     },
     "intents": {
@@ -988,7 +991,7 @@ SECTIONS = {
         "icon": "🎲",
         "fields": {
             "enabled": {"type": "bool", "label": "Aktiviert", "default": True, "description": "Automatische Event-Generierung an besetzten Locations"},
-            "base_probability": {"type": "int", "label": "Base probability %", "default": 0, "min": 0, "max": 50, "description": "Probability per hour per location; overridable per location. The generator rolls on a SYSTEM-time hourly tick (real hours, independent of the game-clock factor)."},
+            "base_probability": {"type": "int", "label": "Base probability %", "default": 5, "min": 0, "max": 50, "description": "Probability per hour per location; overridable per location. The generator rolls on a SYSTEM-time hourly tick (real hours, independent of the game-clock factor)."},
             "entry_roll_enabled": {"type": "bool", "label": "Roll-on-Entry", "default": True, "description": "Sofort wuerfeln wenn ein Avatar/Character eine Location betritt — zusaetzlich zum stuendlichen Tick. Macht 'beim Betreten passiert was' moeglich."},
             "entry_roll_cooldown_minutes": {"type": "int", "label": "Entry Cooldown (min)", "default": 10, "min": 0, "max": 120, "description": "Minimum distance between two roll-on-entry rolls per (character, location). Prevents dice spam on quick in-and-out. SYSTEM time (real minutes)."},
             "entry_roll_jitter_seconds": {"type": "int", "label": "Entry Jitter (s)", "default": 3, "min": 0, "max": 30, "description": "Random delay of 0–N seconds before the event pops up after entry. 0 = immediately; otherwise it feels like something 'happens' after arrival. SYSTEM time."},
@@ -1546,6 +1549,48 @@ def get_schema() -> dict:
     schema.setdefault("skills", {}).setdefault("subsections", {}).update(
         copy.deepcopy(subs))
     return schema
+
+
+_PSEUDO_FIELD_TYPES = ("note", "group_header")
+
+
+def field_default(section: str, *keys: str) -> Any:
+    """The schema default of one field — the ONE source for its fallback.
+
+    The path is section > optional subsection > field, e.g.
+    ``field_default("thoughts", "min_per_char_cooldown_minutes")`` or
+    ``field_default("tts", "xtts", "url")``. Covered are a section's
+    ``fields``, its ``subsections.<x>.fields`` and the skill packages'
+    subsections that ``get_schema()`` injects under ``skills``.
+
+    Raises ``KeyError`` when the field is missing, has no ``default``, or is a
+    pseudo field (name starting with ``_`` or type ``note``/``group_header``).
+    The value is a copy, so a caller can never mutate the schema.
+    """
+    if not keys:
+        raise KeyError(section)
+    *subs, name = keys
+    node = SECTIONS.get(section)
+    if not isinstance(node, dict):
+        raise KeyError(section)
+    for sub in subs:
+        subsections = dict(node.get("subsections") or {})
+        if section == "skills":
+            # Package subsections win on collision, as in get_schema().
+            try:
+                from app.plugins.registry import config_subsections
+                subsections.update(config_subsections())
+            except Exception:
+                pass
+        node = subsections.get(sub)
+        if not isinstance(node, dict):
+            raise KeyError(".".join((section,) + tuple(keys)))
+    fdef = (node.get("fields") or {}).get(name)
+    if (name.startswith("_") or not isinstance(fdef, dict)
+            or fdef.get("type") in _PSEUDO_FIELD_TYPES or "default" not in fdef):
+        raise KeyError(".".join((section,) + tuple(keys)))
+    import copy
+    return copy.deepcopy(fdef["default"])
 
 
 def iter_restart_required_paths() -> list:

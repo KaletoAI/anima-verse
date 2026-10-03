@@ -22,6 +22,7 @@ from app.imagegen.base import (BackendBusyError, MediaGenerationDisabled,
 from app.imagegen.selection import BackendPool
 
 from app.core.config import MAX_IMAGE_BACKENDS
+from app.core.config_schema import field_default
 from app.core.log import get_logger
 from app.core.task_queue import get_task_queue
 from app.models.character import (
@@ -1268,15 +1269,11 @@ class ImageService:
             logger.error("Fehler beim Laden des Bildes fuer Analyse: %s", e)
             return None
 
-        prompt_text = os.environ.get("IMAGE_ANALYSIS_PROMPT", "").strip() or (
-            "Describe this image in detail. Include:\n"
-            "- People: appearance, clothing, pose, expression\n"
-            "- Setting: location, environment, lighting\n"
-            "- Objects and activities visible\n"
-            "- Overall mood and atmosphere\n\n"
-            "Be factual and objective. Respond ONLY with the description, "
-            "no formatting, no markdown, no quotes. 2-4 sentences."
-        )
+        # One source: the schema default is both the bridge's value for an
+        # absent field and the fallback for an empty one.
+        default_prompt = field_default("image_generation", "image_analysis_prompt")
+        prompt_text = (os.environ.get("IMAGE_ANALYSIS_PROMPT", default_prompt).strip()
+                       or default_prompt)
 
         # Language from env (default: German)
         analysis_lang = os.environ.get("IMAGE_ANALYSIS_LANGUAGE", "de").strip()

@@ -25,6 +25,10 @@ Zwei Feinheiten der Bridge, die Überraschungen erklären:
   Default-Spalte unten der **effektiv wirksame** Wert.
 - Die Bridge räumt nur die generierten `SKILL_IMAGEGEN_{N}_*`-Blöcke auf. Alle anderen
   Namen werden nur gesetzt, nie entfernt.
+- **Fehlt** ein Feld in `config.json`, setzt die Bridge seinen **Schema-Default**
+  (`config_schema.field_default(...)`) — eine Quelle statt zwei. Wo ein Leser noch einen
+  eigenen Code-Default trägt, ist es derselbe Wert; `scripts/smoke_config_defaults_consistent.py`
+  prüft beides. Ein auf den Default gesetztes und ein fehlendes Feld wirken also gleich.
 
 Für migrierte Skill-Pakete (Instagram, MarkdownWriter, NotifyUser, ImageGen …) liegt
 die Config im **Paket-Manifest** (`config_schema` in `plugins/<pkg>/plugin.yaml`) und
@@ -153,13 +157,14 @@ liegen ebenfalls dort (`image_generation.blender_*`, Unterseite „Blender refin
 | Name | Quelle | Default | Leser |
 |---|---|---|---|
 | `EVENT_GENERATION_ENABLED` | `random_events.enabled` → Zufaellige Events | `true` | app/core/random_events.py |
-| `EVENT_BASE_PROBABILITY` | `random_events.base_probability` (Prozent) → Zufaellige Events | `0` ⇒ Wahrscheinlichkeit `0.0` | app/core/random_events.py |
+| `EVENT_BASE_PROBABILITY` | `random_events.base_probability` (Prozent) → Zufaellige Events | `5` ⇒ Wahrscheinlichkeit `0.05` | app/core/random_events.py |
 | `EVENT_RESOLUTION_COOLDOWN_MINUTES` | `random_events.resolution_cooldown_minutes` → Zufaellige Events | `15` | app/core/random_events.py |
 | `EVENT_RESOLUTION_PROACTIVE` | `random_events.resolution_proactive` → Zufaellige Events | `true` | app/core/random_events.py |
 
-Die Bridge teilt den Prozentwert durch 100. Der Schema-Default ist **0**, ein frisch
-angelegtes `config.json` erzeugt also keine Events, bis jemand „Base probability %"
-hochsetzt.
+Die Bridge teilt den Prozentwert durch 100. Der Schema-Default ist **5** (seit
+2026-10-03; vorher stand im Schema `0`, die Bridge setzte für ein fehlendes Feld aber
+schon immer `5`, und das war der wirksame Wert). Abschalten geht über
+`random_events.enabled`.
 
 ---
 
@@ -265,7 +270,8 @@ und Server-Strings, die durch `t(en, lang)` laufen.
   `fields` einer Sektion und für `sub_arrays`, **nicht für `subsections`**. Die
   TTS-Backend-Felder und die Skill-Untersektionen zeigen ihren Default daher als
   grauen Platzhalter, materialisieren ihn aber nicht in `config.json`. Wirksam ist er
-  trotzdem — die Env-Bridge und die Leser tragen denselben Wert als Code-Default.
+  trotzdem — die Env-Bridge setzt für ein fehlendes Feld den Schema-Default
+  (`field_default`), und die Leser tragen denselben Wert als Code-Default.
 
 Erledigt (2026-09-21, Teil der Config-Altlasten-Runde):
 

@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from app.core.config_schema import field_default
 from app.core.log import get_logger
 logger = get_logger("tts")
 
@@ -316,7 +317,7 @@ class TTSService:
         """Loads config from environment variables."""
         self.enabled = os.environ.get("TTS_ENABLED", "false").lower() in ("true", "1", "yes")
         self.auto = os.environ.get("TTS_AUTO", "false").lower() in ("true", "1", "yes")
-        self.chunk_size = int(os.environ.get("TTS_CHUNK_SIZE", "0"))
+        self.chunk_size = int(os.environ.get("TTS_CHUNK_SIZE", field_default("tts", "chunk_size")))
         self.backend = os.environ.get("TTS_BACKEND", "xtts").lower()
         self.fallback_backend = os.environ.get("TTS_FALLBACK_BACKEND", "").lower()
 

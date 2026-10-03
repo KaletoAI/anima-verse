@@ -114,7 +114,7 @@ def get_scene_image_path(sig: str) -> Path:
 def get_scene_render_mode() -> str:
     """'multi_ref' (default): background + profile images as references.
     'only_background': background reference only, persons as text."""
-    m = str(config.get("image_generation.scene_render_mode", "") or "").strip().lower()
+    m = str(config.get("image_generation.scene_render_mode") or "multi_ref").strip().lower()
     return m if m in ("multi_ref", "only_background") else "multi_ref"
 
 
@@ -131,7 +131,7 @@ _inflight = False
 
 def _scene_cooldown_s() -> int:
     try:
-        v = config.get("image_generation.scene_render_cooldown_s", "")
+        v = config.get("image_generation.scene_render_cooldown_s", 120)
         return int(v) if str(v).strip() != "" else 120
     except (TypeError, ValueError):
         return 120
