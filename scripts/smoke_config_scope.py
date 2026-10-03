@@ -296,8 +296,14 @@ defaults (Part 2):
     ``scripts/migrate_instance_config.py --from "<world dir name>"``. A world
     with only ``chat`` does not raise; a world with
     ``server.log_level = "INFO"`` (= the schema default -> pruned to nothing)
-    does not raise; a missing world file never raises; an existing instance
-    file never raises.
+    does not raise; a missing world file never raises. An EXISTING instance
+    file blocks the same way when it prunes to nothing: the providers world
+    with instance ``{}`` raises (message "holds no settings") — a half-run
+    migration or a world restored from a backup would otherwise lose those
+    providers on the next save. An instance with a setting of its own
+    (``server.log_level = "DEBUG"`` ≠ the default "INFO") does not raise, and
+    instance ``{}`` with a chat-only world does not raise either (nothing to
+    lose — the fresh-clone state after the migration).
 6.5 NO INSTANCE. ``paths.instance_initialised()`` is False in this script.
     ``load(w)`` with the world of 6.1: ``get("providers") is None`` (the
     world's providers are foreign). ``save`` with ``server.log_level`` changed
@@ -328,6 +334,17 @@ defaults (Part 2):
 6.10 FRESH STATE. Empty directories: ``check_instance_ready`` does not
     raise, ``migrate_file`` creates both files as ``{}`` and returns True, a
     second ``migrate_file`` returns False and writes nothing.
+6.11 CORRUPT LAYER FILE (review fix round 1). The instance config.json
+    holds real providers but has a syntax error (trailing comma). A
+    non-strict ``load`` logs it and reads that layer as empty —
+    ``get("providers") is None`` — and then ``save(get_all())`` raises
+    ``RuntimeError`` ("refusing to overwrite unreadable") and leaves BOTH
+    files byte-identical (the world is checked before anything is written,
+    so a refusal never leaves one layer rewritten). ``migrate_file`` returns
+    False and writes nothing; ``load(..., strict=True)`` (the server boot)
+    raises ``ValueError``; ``check_instance_ready`` raises too (strict read).
+    The same for a corrupt WORLD secrets.json: a save that would delete it
+    (no world secrets left) raises instead, and the file stays.
 """
 import copy
 import os
@@ -927,8 +944,20 @@ def part_3():
         _write(i, {})
         try:
             cfg.check_instance_ready(w, i)
+            check(False, "6.4: an instance that prunes to nothing must block like a missing one")
         except cfg.InstanceConfigMissing as e:
-            check(False, f"6.4: an existing instance file must not raise ({e})")
+            check("holds no settings" in str(e), f"6.4: message says the instance is empty ({e})")
+        _write(i, {"server": {"log_level": "DEBUG"}})
+        try:
+            cfg.check_instance_ready(w, i)
+        except cfg.InstanceConfigMissing as e:
+            check(False, f"6.4: an instance with own settings must not raise ({e})")
+        _write(w, {"chat": {"chattiness": 0.3}})
+        _write(i, {})
+        try:
+            cfg.check_instance_ready(w, i)
+        except cfg.InstanceConfigMissing as e:
+            check(False, f"6.4: instance {{}} with a chat-only world must not raise ({e})")
         w.unlink()
         i.unlink()
         try:
@@ -1013,6 +1042,49 @@ def part_3():
         wrote = cfg.migrate_file(w, i)
         check(wrote is False and _untouched(w) and _untouched(i),
               f"6.10: a second migrate_file writes nothing (got {wrote!r})")
+
+    # 6.11 corrupt layer file
+    with tempfile.TemporaryDirectory() as tmp:
+        w, i = _layers(tmp)
+        _write(w, {"chat": {"chattiness": 0.3}})
+        i.write_text('{"providers": [{"name": "real"}], "server": {"log_level": "DEBUG"},}',
+                     encoding="utf-8")
+        before = {f: f.read_bytes() for f in (w, i)}
+        cfg.load(w, i)
+        check(cfg.get("providers") is None, "6.11: a non-strict load reads the broken layer as empty")
+        try:
+            cfg.save(cfg.get_all())
+            check(False, "6.11: save over an unreadable instance file must raise")
+        except RuntimeError as e:
+            check("refusing to overwrite unreadable" in str(e), f"6.11: save refusal names the cause ({e})")
+        check(all(f.read_bytes() == b for f, b in before.items()),
+              "6.11: both files byte-identical after the refused save")
+        check(cfg.migrate_file(w, i) is False and all(f.read_bytes() == b for f, b in before.items()),
+              "6.11: migrate_file skips and writes nothing")
+        try:
+            cfg.load(w, i, strict=True)
+            check(False, "6.11: a strict load of a broken layer must raise")
+        except ValueError:
+            pass
+        _write(w, {"providers": [{"name": "x"}]})
+        try:
+            cfg.check_instance_ready(w, i)
+            check(False, "6.11: check_instance_ready must not read a broken instance as empty")
+        except ValueError:
+            pass
+    with tempfile.TemporaryDirectory() as tmp:
+        w, i = _layers(tmp)
+        _write(w, {"chat": {"chattiness": 0.3}})
+        _write(i, INSTANCE_61)
+        ws = w.parent / "secrets.json"
+        ws.write_text('{"broken": ', encoding="utf-8")
+        cfg.load(w, i)
+        try:
+            cfg.save(cfg.get_all())
+            check(False, "6.11: deleting an unreadable world secrets.json must raise")
+        except RuntimeError:
+            pass
+        check(ws.read_text(encoding="utf-8") == '{"broken": ', "6.11: the broken secrets.json is kept")
 
 
 def main():

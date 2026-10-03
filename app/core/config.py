@@ -48,6 +48,9 @@ _CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "storage" / "conf
 # save() address the same file. None = no instance layer (a script that
 # opened a world without one); save() then refuses to drop instance values.
 _INSTANCE_PATH: Optional[Path] = None
+# Whether the last load() was strict (unreadable layer file -> raise); reload()
+# keeps it, so the server's reloads stay as loud as its boot.
+_LOAD_STRICT = False
 
 # One lock for load / save / migrate_file: a save must never interleave with
 # a reload reading the half-written pair of files.
@@ -1465,7 +1468,14 @@ def _read_layer(path: Path, layer: str, strict: bool = False) -> dict:
 def _compose(world_path: Path, instance_path: Optional[Path],
              strict: bool = False) -> dict:
     """Both layers, read fresh, joined and migrated — the in-memory config
-    before the calendar materialization."""
+    before the calendar materialization.
+
+    The migrations see only what survived the split: legacy instance fields
+    in a WORLD file (``image_generation.*_imagegen_default``, providers, a
+    world secrets.json) are foreign-scope and dropped before
+    ``_migrate_image_routing`` could read them. Moving an old world over is
+    therefore the migration script's job — it runs the migrations on the raw,
+    unsplit union and carries the world's secrets into the instance."""
     union = (_read_layer(instance_path, config_scope.INSTANCE, strict)
              if instance_path is not None else {})
     # The two parts are disjoint (split by scope), so the merge only joins
@@ -1485,18 +1495,30 @@ def _write_if_changed(path: Path, data: dict) -> bool:
     """Write ``data`` unless the file already holds exactly that content.
 
     The comparison is on the parsed JSON, never on the text and never on a
-    "changed" flag. A missing or unreadable file always counts as different.
+    "changed" flag. A missing file counts as different; an existing file that
+    cannot be read raises (``_assert_readable``) — it was loaded as empty, so
+    writing the in-memory state over it would drop everything it holds.
     """
-    if path.exists():
-        try:
-            if _json_equal(_read_json_file(path), data):
-                return False
-        except ValueError:
-            pass
+    if path.exists() and _json_equal(_assert_readable(path), data):
+        return False
     path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write_json(path, data)
     logger.info("Config written: %s", path)
     return True
+
+
+def _assert_readable(path: Path) -> dict:
+    """The parsed content of an EXISTING layer file, or ``RuntimeError``.
+
+    Every writer goes through this before it replaces or deletes a file: a
+    file that could not be read was loaded as ``{}`` (non-strict load), and
+    overwriting it with the degraded in-memory state would lose its content
+    for good. A broken file is the admin's to repair, never ours to replace.
+    """
+    try:
+        return _read_json_file(path)
+    except ValueError as e:
+        raise RuntimeError(f"refusing to overwrite unreadable config file — {e}") from e
 
 
 def _write_layer(path: Path, pruned: dict) -> bool:
@@ -1511,6 +1533,7 @@ def _write_layer(path: Path, pruned: dict) -> bool:
     if secrets:
         wrote = _write_if_changed(secrets_path, secrets) or wrote
     elif secrets_path.exists():
+        _assert_readable(secrets_path)
         secrets_path.unlink()
         logger.info("Secrets file removed (nothing secret left): %s", secrets_path)
         wrote = True
@@ -1536,6 +1559,13 @@ def _persist(data: dict, world_path: Path,
         raise RuntimeError(
             "no instance path — refusing to drop instance settings: "
             + _key_list(inst_pruned))
+    # Every target must be readable BEFORE the first write — a refusal in
+    # the second layer must not leave the first one already rewritten.
+    targets = [Path(world_path)] + ([Path(instance_path)] if instance_path is not None else [])
+    for target in targets:
+        for f in (target, target.parent / "secrets.json"):
+            if f.exists():
+                _assert_readable(f)
     wrote = False
     if instance_path is not None:
         wrote = _write_layer(Path(instance_path), inst_pruned)
@@ -1546,23 +1576,35 @@ def _persist(data: dict, world_path: Path,
 def check_instance_ready(world_path: Path, instance_path: Path) -> None:
     """Refuse to boot while the world still holds the instance settings.
 
-    Raises ``InstanceConfigMissing`` when the instance config.json does not
-    exist AND the world's config.json + secrets.json carry instance-scoped
-    values that differ from what ships. A missing world file never blocks
-    (a new world), nor does a world whose instance part prunes to nothing
-    (a fresh clone, a world that only ever had defaults there).
+    Raises ``InstanceConfigMissing`` when the world's config.json +
+    secrets.json carry instance-scoped values that differ from what ships
+    AND the instance holds none: its config.json does not exist, or it and
+    its secrets.json prune to nothing (a half-run migration, a world copied
+    back from a backup — the next save would silently drop those values).
+    A missing world file never blocks (a new world), nor does a world whose
+    instance part prunes to nothing (a fresh clone, a world that only ever
+    had defaults there). An instance with settings of its own never blocks.
+
+    Strict reads: an unreadable layer file raises ``ValueError`` here.
     """
     world_path = Path(world_path)
     instance_path = Path(instance_path)
-    if instance_path.exists() or not world_path.exists():
+    if not world_path.exists():
         return
-    data = _layer_with_secrets(world_path, strict=False)
+    if instance_path.exists():
+        own = _read_layer(instance_path, config_scope.INSTANCE, strict=True)
+        if config_scope.prune(own):
+            return
+        state = "holds no settings"
+    else:
+        state = "does not exist"
+    data = _layer_with_secrets(world_path, strict=True)
     inst, _world, _unknown = config_scope.split_by_scope(data)
     pending = config_scope.prune(inst)
     if not pending:
         return
     raise InstanceConfigMissing(
-        f"The instance config {instance_path} does not exist, but the world "
+        f"The instance config {instance_path} {state}, but the world "
         f"config {world_path} still carries instance settings "
         f"({_key_list(pending)}). Move them into the instance "
         f"first:\n"
@@ -1608,7 +1650,7 @@ def migrate_file(config_path: Optional[Path] = None,
 
 
 def load(config_path: Optional[Path] = None,
-         instance_path: Optional[Path] = None) -> dict:
+         instance_path: Optional[Path] = None, strict: bool = False) -> dict:
     """Load both config layers into ONE in-memory dict.
 
     Per layer: config.json, then the secrets.json of THE SAME layer on top,
@@ -1623,29 +1665,38 @@ def load(config_path: Optional[Path] = None,
     world without an instance sees no instance settings. Both are
     remembered; `reload()` reads the same pair.
 
+    ``strict`` (the server boot): an existing layer file (config.json or
+    secrets.json) that is no readable JSON object raises ``ValueError`` —
+    the start ends loudly instead of running on an empty layer. Non-strict
+    (scripts) logs the error and reads that file as empty; every writer then
+    refuses to replace it (``_assert_readable``). `reload()` keeps the mode.
+
     READ-ONLY: nothing is written here. `migrate_file()` persists the
     normalisations.
     """
-    global _CONFIG, _CONFIG_PATH, _INSTANCE_PATH, _BOOT_RESTART_SNAPSHOT
+    global _CONFIG, _CONFIG_PATH, _INSTANCE_PATH, _BOOT_RESTART_SNAPSHOT, _LOAD_STRICT
     with _LOCK:
-        if config_path:
-            _CONFIG_PATH = Path(config_path)
-        _INSTANCE_PATH = _resolve_instance_path(instance_path)
-        if _INSTANCE_PATH is None:
+        world_path = Path(config_path) if config_path else _CONFIG_PATH
+        inst_path = _resolve_instance_path(instance_path)
+        if inst_path is None:
             logger.info("No instance config — loading the world layer only (%s)",
-                        _CONFIG_PATH)
-        _CONFIG = _compose(_CONFIG_PATH, _INSTANCE_PATH)
-        logger.info("Config loaded: world %s, instance %s", _CONFIG_PATH, _INSTANCE_PATH)
+                        world_path)
+        cfg = _compose(world_path, inst_path, strict=strict)
+        _CONFIG_PATH, _INSTANCE_PATH, _LOAD_STRICT = world_path, inst_path, strict
+        logger.info("Config loaded: world %s, instance %s", world_path, inst_path)
 
         # Populate os.environ for backward compatibility
-        _flatten_to_env(_CONFIG)
+        _flatten_to_env(cfg)
 
         # Freeze the boot snapshot of the restart-requiring fields (once only,
         # the first load wins — later reload() calls do not change it).
         if _BOOT_RESTART_SNAPSHOT is None:
-            _BOOT_RESTART_SNAPSHOT = _collect_restart_values(_CONFIG)
+            _BOOT_RESTART_SNAPSHOT = _collect_restart_values(cfg)
 
-        _materialize_game_calendar_defaults(_CONFIG)
+        # Complete the dict BEFORE it is published: a lock-free reader of
+        # _CONFIG must never see it without its calendar.
+        _materialize_game_calendar_defaults(cfg)
+        _CONFIG = cfg
 
     _invalidate_config_derived_caches()
     return _CONFIG
@@ -1710,10 +1761,18 @@ def _collect_restart_values(cfg: dict) -> dict:
         # Paths with '[*]' (array item fields) are resolved against every index
         if "[*]" in path:
             for resolved in _expand_wildcards(cfg, path):
-                result[resolved] = get(resolved)
+                result[resolved] = _value_at(cfg, resolved)
         else:
-            result[path] = get(path)
+            result[path] = _value_at(cfg, path)
     return result
+
+
+def _value_at(cfg: dict, path: str) -> Any:
+    """``get(path)`` against ``cfg`` instead of the loaded config."""
+    try:
+        return _resolve_path(cfg, path)
+    except (KeyError, IndexError, TypeError):
+        return None
 
 
 def _expand_wildcards(cfg: dict, path: str) -> list:
@@ -1818,7 +1877,7 @@ def reload() -> dict:
     """Reload both layers from disk — the world AND instance path of the
     last load (an instance given as an argument is kept, not re-resolved)."""
     with _LOCK:
-        return load(_CONFIG_PATH, _INSTANCE_PATH)
+        return load(_CONFIG_PATH, _INSTANCE_PATH, strict=_LOAD_STRICT)
 
 
 def get(path: str, default: Any = None) -> Any:

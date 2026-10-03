@@ -48,7 +48,9 @@ from app.core.config import (load as _load_config,
                              check_instance_ready as _check_instance_ready,
                              get as _config_get)
 _check_instance_ready(_paths.get_config_path(), _paths.get_instance_config_path())
-_load_config(_paths.get_config_path(), _paths.get_instance_config_path())
+# strict: a broken config.json / secrets.json ends the start loudly instead of
+# running on an empty layer that the next save would write over the file.
+_load_config(_paths.get_config_path(), _paths.get_instance_config_path(), strict=True)
 _migrate_config_file(_paths.get_config_path(), _paths.get_instance_config_path())
 
 # Initialise the world DB (idempotent, creates world.db if needed)
