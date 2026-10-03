@@ -10,10 +10,11 @@ admin UI rendering and server-side validation.
 #
 # Scope: every non-virtual section declares "scope" — "instance" (the server /
 # host: endpoints, keys, providers, backends) or "world" (the simulation of one
-# world). A field, sub_array or subsection may override it; "mixed" is declared
-# only on a node whose children differ (skills). A skill package's subsection
-# without its own scope is "world", its endpoint/key fields declare
-# "scope: instance" in plugin.yaml. Resolution: app/core/config_scope.py.
+# world). A field, sub_array or subsection may override it. Resolution yields
+# "mixed" for any node with differing children; declare "mixed" only where a
+# section has no single scope (skills). A skill package's subsection without
+# its own scope is "world", its endpoint/key fields declare "scope: instance"
+# in plugin.yaml. Resolution: app/core/config_scope.py.
 
 import copy
 from typing import Any

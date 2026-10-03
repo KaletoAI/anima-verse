@@ -23,6 +23,12 @@ Resolution rules of ``scope_of(path)``:
 
 Array indices in a path (``providers.0.api_key``, ``backends[2]``) are
 ignored — every item of an array shares the item schema.
+
+The skill packages' subsections are part of the schema view under
+``skills.subsections``. Before plugin discovery has run (config load at
+server boot) they come from the manifests alone
+(``loader.manifest_config_schemas()``, imports no package code); afterwards
+from the registry — so ``skills.searx.url`` is instance either way.
 """
 
 import re
@@ -42,13 +48,51 @@ _INDEX_RE = re.compile(r"\[[^\]]*\]")
 
 
 def _segments(path: str) -> list:
-    """Split a dotted path, dropping array indices (``x[0]``, ``x.3``)."""
+    """Split a dotted path, dropping array indices (``x[0]``, ``x.3``).
+
+    A digit-only segment is ALWAYS taken as a list index and dropped — a
+    config dict key made of digits cannot be addressed by a dotted path.
+    """
     out = []
     for seg in str(path or "").split("."):
         seg = _INDEX_RE.sub("", seg).strip()
         if seg and not seg.isdigit():
             out.append(seg)
     return out
+
+
+# (key, view): the schema view of the current discovery state. Rebuilt when
+# discovery runs or the registry changes, never frozen on the pre-discovery
+# view.
+_view_cache: Tuple[Any, Optional[Dict[str, Any]]] = (None, None)
+
+
+def _schema_view() -> Dict[str, Any]:
+    """The schema with the skill packages' subsections under ``skills``.
+
+    Like ``config_schema.get_schema()``, but before discovery the package
+    subsections come from the manifests (side-effect free) instead of the
+    still empty registry. Read-only: shared with the schema module, never
+    mutate it.
+    """
+    global _view_cache
+    # Lazy: the app.plugins package pulls in the loader and app.skills.base.
+    from app.plugins import loader, registry
+    discovered = loader.is_discovered()
+    key = (True, registry.generation()) if discovered else (False,)
+    cached_key, view = _view_cache
+    if view is not None and cached_key == key:
+        return view
+    from app.core.config_schema import SECTIONS
+    subs = registry.config_subsections() if discovered else loader.manifest_config_schemas()
+    view = dict(SECTIONS)
+    if subs:
+        skills = dict(view.get("skills") or {})
+        # Package subsections win on collision, as in get_schema().
+        skills["subsections"] = {**(skills.get("subsections") or {}), **subs}
+        view["skills"] = skills
+    _view_cache = (key, view)
+    return view
 
 
 def _children(node: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -104,9 +148,7 @@ def _resolve(path: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     root = parts[0]
     if root in EXTRA_ROOTS:
         return None, EXTRA_ROOTS[root]
-    # Lazy: get_schema() injects the skill packages' subsections at read time.
-    from app.core.config_schema import get_schema
-    node = get_schema().get(root)
+    node = _schema_view().get(root)
     if not isinstance(node, dict) or node.get("virtual"):
         return None, None
     scope = node.get("scope")

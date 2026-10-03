@@ -23,6 +23,28 @@ dotted config path; the recursive split of a config (next task) is built on
 PART 1 — what is checked, and where every expected value comes from
 -------------------------------------------------------------------
 
+P) PRE-DISCOVERY (runs first, before ``discover_packages()``). The config is
+   split at config load, and at server boot that is BEFORE plugin discovery
+   — when the registry, and with it ``get_schema()``, knows no package
+   subsection. ``config_scope`` then reads the subsections from the
+   manifests (``loader.manifest_config_schemas()``):
+     - ``loader.is_discovered()`` is False and the registry is empty;
+     - the manifest scan imports no package code: no ``plugins.<pkg>.*`` and
+       no ``plugins_onload_*`` module appears in ``sys.modules`` that was not
+       there before, and the registry is still empty afterwards;
+     - ``scope_of("skills.searx.url") == instance`` (searx declares it in its
+       plugin.yaml) and ``scope_of("skills.searx") == mixed`` (enabled is
+       world by the E5 default, url instance -> rule 4);
+       without the manifest view both would be ``world``: an unknown key under
+       ``skills`` inherits the section's mixed -> world (rule 3);
+     - after ``discover_packages()`` the same two answers (row D below), and
+       the view follows the registry: a probe package registered with a
+       subsection ``zz_probe`` whose field ``a`` declares instance makes
+       ``scope_of("skills.zz_probe.a") == instance``; unregistered again it is
+       ``world`` (unknown key under skills, rule 3) — the view is rebuilt,
+       not frozen.
+   SKIP when searx is not among the manifests.
+
 0) SELF-TEST of the endpoint-name matcher on hand cases: ``url``,
    ``webhook_url``, ``api_key``, ``auth_token``, ``endpoint``,
    ``endpoints_list`` and a ``password``-typed field match; ``enabled``,
@@ -319,9 +341,69 @@ def part_d_e(cs, has_searx):
         check(got is want, f"E: child_scopes_differ({path!r}) = {got!r}, expected {want!r}")
 
 
+def _plugin_modules():
+    return {m for m in sys.modules
+            if m.startswith("plugins.") or m.startswith("plugins_onload_")}
+
+
+def part_p_before_discovery():
+    """Part P, first half — runs before discover_packages()."""
+    from app.plugins import loader, registry
+    from app.core import config_scope as cs
+    check(loader.is_discovered() is False, "P: is_discovered() must be False before discovery")
+    check(registry.packages() == [], "P: registry must be empty before discovery")
+    before = _plugin_modules()
+    subs = loader.manifest_config_schemas()
+    new_mods = _plugin_modules() - before
+    check(not new_mods, f"P: the manifest scan imported package code: {sorted(new_mods)}")
+    check(registry.packages() == [], "P: the manifest scan must not touch the registry")
+    check(isinstance(subs, dict) and subs, "P: manifest_config_schemas() returned nothing")
+    if "searx" not in subs:
+        skip("P: skills.searx before discovery — searx not among the manifests")
+        return False
+    for path, want in (("skills.searx.url", "instance"), ("skills.searx", "mixed"),
+                       ("skills.searx.enabled", "world")):
+        got = cs.scope_of(path)
+        check(got == want, f"P: before discovery scope_of({path!r}) = {got!r}, expected {want!r}")
+    check(_plugin_modules() - before == set(),
+          "P: scope_of before discovery imported package code")
+    check(loader.is_discovered() is False, "P: scope_of must not trigger discovery")
+    return True
+
+
+def part_p_after_discovery(had_searx):
+    """Part P, second half — after discover_packages()."""
+    from pathlib import Path as _P
+    from app.plugins import loader, registry
+    from app.plugins.registry import Package
+    from app.core import config_scope as cs
+    check(loader.is_discovered() is True, "P: is_discovered() must be True after discovery")
+    if had_searx:
+        check(cs.scope_of("skills.searx.url") == "instance",
+              "P: after discovery scope_of('skills.searx.url') must stay instance")
+        check(cs.scope_of("skills.searx") == "mixed",
+              "P: after discovery scope_of('skills.searx') must stay mixed")
+    probe = Package(id="zz_probe", dir=_P(_TMP), manifest={"name": "zz_probe"},
+                    config_subsections={"zz_probe": {
+                        "label": "probe",
+                        "fields": {"a": {"type": "str", "scope": "instance", "default": ""}}}})
+    registry.register_package(probe)
+    try:
+        got = cs.scope_of("skills.zz_probe.a")
+        check(got == "instance", f"P: registered probe: scope_of('skills.zz_probe.a') = {got!r}, "
+                                 "expected 'instance' (view not rebuilt?)")
+    finally:
+        registry.unregister_package("zz_probe")
+    got = cs.scope_of("skills.zz_probe.a")
+    check(got == "world", f"P: unregistered probe: scope_of('skills.zz_probe.a') = {got!r}, "
+                          "expected 'world'")
+
+
 def main():
+    had_searx = part_p_before_discovery()
     from app.plugins.loader import discover_packages
     discover_packages()
+    part_p_after_discovery(had_searx)
     from app.core.config_schema import get_schema
     schema = get_schema()
     has_searx = "searx" in (schema.get("skills", {}).get("subsections") or {})

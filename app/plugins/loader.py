@@ -37,6 +37,7 @@ Skill name/description resolve from ``<llm templates>/skills/<skill_id>.md``
 when present (same format as shared/templates/llm/skills/) — otherwise the
 skill class sets them itself.
 """
+import copy
 import importlib.util
 import json
 import os
@@ -261,6 +262,89 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
     return pkg
 
 
+def _collect_packages(base: Path, *, warn: bool = True) -> List[Package]:
+    """Scan ``base`` and ``base/installed`` for manifests — no side effects.
+
+    Parses every ``plugin.yaml`` (repo packages win over an installed one of
+    the same id) and drops the packages whose ``requires`` are not all
+    present (F9), repeated until stable so dependency chains unwind. Reads
+    files only: no package code is imported, no registry is touched.
+    ``warn=False`` keeps the shadow/inert warnings quiet for a second scan
+    that would only repeat them.
+    """
+    found: Dict[str, Package] = {}
+
+    def _scan(root: Path, *, installed: bool) -> None:
+        if not root.exists():
+            if not installed and warn:
+                logger.info("Plugin directory not found: %s", root)
+            return
+        for entry in sorted(root.iterdir()):
+            manifest = entry / "plugin.yaml"
+            if not entry.is_dir() or not manifest.exists():
+                continue
+            if installed and entry.name in found:
+                if warn:
+                    logger.warning(
+                        "Installed package '%s' shadows a repo package — skipped",
+                        entry.name)
+                continue
+            try:
+                meta = _load_yaml(manifest)
+            except Exception as e:
+                logger.error("Error reading %s: %s", manifest, e)
+                continue
+            pkg = _parse_package(entry, meta)
+            if pkg:
+                found[pkg.id] = pkg
+
+    _scan(base, installed=False)
+    _scan(base / INSTALLED_DIR_NAME, installed=True)
+
+    # Dependency presence (F9): a package whose `requires` are not all
+    # present stays completely inert (no verbs, no contributions).
+    while True:
+        broken = [p for p in found.values()
+                  if any(r not in found for r in p.requires)]
+        if not broken:
+            break
+        for p in broken:
+            if warn:
+                missing = [r for r in p.requires if r not in found]
+                logger.warning("Package '%s' inert — required package(s) missing: %s",
+                               p.id, ", ".join(missing))
+            found.pop(p.id, None)
+    return [found[k] for k in sorted(found)]
+
+
+def is_discovered() -> bool:
+    """True once ``discover_packages()`` populated the registry from PLUGIN_DIR."""
+    return _discovered
+
+
+_manifest_schemas: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+def manifest_config_schemas() -> Dict[str, Dict[str, Any]]:
+    """The packages' ``config_schema`` subsections, read from the manifests only.
+
+    For code that needs the skills' settings schema BEFORE discovery has run
+    (the config scope split at config load, app/core/config_scope.py).
+    Same roots and the same rules as ``discover_packages`` — repo wins over
+    installed, packages with missing ``requires`` contribute nothing — but
+    side-effect free: no package code is imported, no on_load runs, the
+    registry stays untouched. The manifests are static, so the result is
+    cached per process; the caller gets a copy.
+    """
+    global _manifest_schemas
+    if _manifest_schemas is None:
+        subs: Dict[str, Dict[str, Any]] = {}
+        for pkg in _collect_packages(PLUGIN_DIR, warn=False):
+            subs.update(pkg.config_subsections)
+        _manifest_schemas = subs
+    return copy.deepcopy(_manifest_schemas)
+
+
 def discover_packages(plugin_dir: Optional[Path] = None,
                       force: bool = False) -> List[Package]:
     """Discover all packages and (re)populate the registry.
@@ -275,47 +359,8 @@ def discover_packages(plugin_dir: Optional[Path] = None,
 
     base = plugin_dir or PLUGIN_DIR
     registry.clear_registry()
-
-    def _scan(root: Path, *, installed: bool) -> None:
-        if not root.exists():
-            if not installed:
-                logger.info("Plugin directory not found: %s", root)
-            return
-        for entry in sorted(root.iterdir()):
-            manifest = entry / "plugin.yaml"
-            if not entry.is_dir() or not manifest.exists():
-                continue
-            if installed and registry.get_package(entry.name):
-                logger.warning(
-                    "Installed package '%s' shadows a repo package — skipped",
-                    entry.name)
-                continue
-            try:
-                meta = _load_yaml(manifest)
-            except Exception as e:
-                logger.error("Error reading %s: %s", manifest, e)
-                continue
-            pkg = _parse_package(entry, meta)
-            if pkg:
-                registry.register_package(pkg)
-
-    _scan(base, installed=False)
-    _scan(base / INSTALLED_DIR_NAME, installed=True)
-
-    # Dependency presence (F9): a package whose `requires` are not all
-    # present stays completely inert (no verbs, no contributions) —
-    # repeated until stable so dependency chains unwind.
-    while True:
-        present = {p.id for p in registry.packages()}
-        broken = [p for p in registry.packages()
-                  if any(r not in present for r in p.requires)]
-        if not broken:
-            break
-        for p in broken:
-            missing = [r for r in p.requires if r not in present]
-            logger.warning("Package '%s' inert — required package(s) missing: %s",
-                           p.id, ", ".join(missing))
-            registry.unregister_package(p.id)
+    for pkg in _collect_packages(base):
+        registry.register_package(pkg)
 
     if plugin_dir is None:
         _discovered = True

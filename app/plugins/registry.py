@@ -123,17 +123,32 @@ class Package:
 
 _packages: Dict[str, Package] = {}
 
+# Bumped on every change of the registry, so a consumer that caches a view
+# derived from it (app/core/config_scope.py) knows when to rebuild.
+_generation = 0
+
+
+def generation() -> int:
+    """A counter that changes whenever a package is (un)registered."""
+    return _generation
+
 
 def clear_registry() -> None:
+    global _generation
     _packages.clear()
+    _generation += 1
 
 
 def register_package(pkg: Package) -> None:
+    global _generation
     _packages[pkg.id] = pkg
+    _generation += 1
 
 
 def unregister_package(package_id: str) -> None:
+    global _generation
     _packages.pop(package_id, None)
+    _generation += 1
 
 
 def get_package(package_id: str) -> Optional[Package]:
