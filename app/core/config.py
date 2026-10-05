@@ -15,6 +15,7 @@ never ask for a layer. On disk each file stores only what differs from what
 ships (``config_scope.prune``). A backward-compatibility bridge populates
 os.environ so that existing code keeps working.
 """
+import copy
 import json
 import os
 import re
@@ -31,6 +32,7 @@ logger = get_logger("config")
 _CONFIG: dict = {}
 # Keys this module generates for the numbered image/video/mesh backend blocks.
 _IMAGEGEN_ENV_RE = re.compile(r"^SKILL_IMAGEGEN_\d+_")
+_PROVIDER_ENV_RE = re.compile(r"^PROVIDER_\d+_")
 
 # Upper bound of the SKILL_IMAGEGEN_{N}_* scan — the single source of truth for
 # everyone who walks the numbered backend blocks (the image service that loads
@@ -1394,6 +1396,11 @@ def _apply_file_migrations(config: dict) -> bool:
 
 # ── The two layers on disk ────────────────────────────────────────────────
 
+class ConfigWriteRefused(RuntimeError):
+    """A write was refused before writing: an unreadable layer file or a
+    missing instance path would lose settings. Admin routes answer with 409."""
+
+
 class InstanceConfigMissing(RuntimeError):
     """The instance config does not exist yet while the world config still
     carries instance settings — the server must not start (it would run
@@ -1547,7 +1554,7 @@ def _write_if_changed(path: Path, data: dict) -> bool:
 
 
 def _assert_readable(path: Path) -> dict:
-    """The parsed content of an EXISTING layer file, or ``RuntimeError``.
+    """The parsed content of an EXISTING layer file, or ``ConfigWriteRefused``.
 
     Every writer goes through this before it replaces or deletes a file: a
     file that could not be read was loaded as ``{}`` (non-strict load), and
@@ -1557,7 +1564,7 @@ def _assert_readable(path: Path) -> dict:
     try:
         return _read_json_file(path)
     except ValueError as e:
-        raise RuntimeError(f"refusing to overwrite unreadable config file — {e}") from e
+        raise ConfigWriteRefused(f"refusing to overwrite unreadable config file — {e}") from e
 
 
 def _write_layer(path: Path, pruned: dict) -> bool:
@@ -1585,7 +1592,7 @@ def _persist(data: dict, world_path: Path,
 
     Returns ``(wrote, pruned_world_part)``. Unknown root keys are dropped
     (logged). Without an instance path a NON-empty pruned instance part is
-    refused with ``RuntimeError`` before anything is written — writing only
+    refused with ``ConfigWriteRefused`` before anything is written — writing only
     the world would silently drop those settings.
     """
     inst, world, unknown = config_scope.split_by_scope(data)
@@ -1595,7 +1602,7 @@ def _persist(data: dict, world_path: Path,
     inst_pruned = config_scope.prune(inst)
     world_pruned = config_scope.prune(world)
     if instance_path is None and inst_pruned:
-        raise RuntimeError(
+        raise ConfigWriteRefused(
             "no instance path — refusing to drop instance settings: "
             + _key_list(inst_pruned))
     # Every target must be readable BEFORE the first write — a refusal in
@@ -2098,19 +2105,11 @@ def save(data: dict, config_path: Optional[Path] = None) -> None:
     remembered one); the instance file is the one the last `load()` used.
 
     Without an instance file a non-empty pruned instance part raises
-    ``RuntimeError("no instance path — refusing to drop instance settings")``
+    ``ConfigWriteRefused("no instance path — refusing to drop instance settings")``
     and nothing is written; an empty one is simply not written.
 
-    Known limits of the pruning:
-
-    - ``/settings/raw`` materializes the bool/select defaults into list
-      entries (``admin_settings._fill_item_defaults``), and nothing inside a
-      list entry is pruned. So the seeded mesh backends land in the instance
-      file after the first admin save — no loss, just not pruned.
-    - A season list equal to the shipped one is pruned, i.e. MISSING on
-      disk; ``game_calendar_migration.py`` (atmosphere step) reads a missing
-      list as "no own values yet" (``game_seasons_are_defaults()``), which is
-      the right reading for a list nobody edited.
+    Admin layer saves strip materialized item defaults before passing the
+    candidate here. Lists remain whole values during pruning.
     """
     global _CONFIG
     with _LOCK:
@@ -2119,6 +2118,25 @@ def save(data: dict, config_path: Optional[Path] = None) -> None:
         _CONFIG = data
         _note_seasons_on_disk(world_pruned)
     _invalidate_config_derived_caches()
+
+
+def save_part(scope: str, part: dict) -> dict:
+    """Replace one scope and save the current union under the module lock."""
+    with _LOCK:
+        inst, world, _unknown = config_scope.split_by_scope(_CONFIG)
+        if scope == config_scope.INSTANCE:
+            inst = copy.deepcopy(part)
+        elif scope == config_scope.WORLD:
+            world = copy.deepcopy(part)
+        else:
+            raise ValueError(f"unknown scope {scope!r}")
+        union = inst
+        _deep_merge(union, world)
+        save(union)
+        # Keep the env publication under the lock so concurrent saves cannot
+        # publish an older union after the newest one.
+        _flatten_to_env(union)
+        return union
 
 
 def _atomic_write_json(path: Path, data: Any) -> None:
@@ -2323,13 +2341,13 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "STORY_ENGINE_MAX_BEATS", se.get("max_beats", field_default("story_engine", "max_beats")))
     _set(env, "STORY_ENGINE_BEAT_IMAGES", se.get("beat_images", field_default("story_engine", "beat_images")))
 
-    # Purge stale image/video/mesh backend blocks BEFORE writing: this bridge
+    # Purge stale provider and image/video/mesh backend blocks BEFORE writing: this bridge
     # only ever set keys, never removed them. A deleted backend therefore left
     # its SKILL_IMAGEGEN_{N}_* block behind and would come back as a phantom
     # instance on the next load — and a field cleared in the admin kept its old
     # value (_set skips empty values). Both are gone now: every generated key
     # that the current config does not produce is removed.
-    for key in [k for k in os.environ if _IMAGEGEN_ENV_RE.match(k)]:
+    for key in [k for k in os.environ if _IMAGEGEN_ENV_RE.match(k) or _PROVIDER_ENV_RE.match(k)]:
         if key not in env:
             del os.environ[key]
 

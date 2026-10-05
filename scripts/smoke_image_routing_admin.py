@@ -43,7 +43,7 @@ patched; the stored config is
   {"image_generation": {"backends": <fixture>, "routing": {"photo": ["Flux2*"]}}}):
  S1 payload image_generation WITHOUT a "routing" key (the admin page sends
     JSON.stringify(CONFIG); a tab loaded before the chains existed has none)
-    -> the saved routing is still {"photo": ["Flux2*"]}. _merge_sensitive
+    -> the saved routing is still {"photo": ["Flux2*"]}. merge_sensitive
     alone treats a missing key as deleted; a dropped routing would make the
     next load re-seed from the old default fields and lose every edited chain
     ("never delete by absence").
@@ -183,7 +183,8 @@ SAVED = []
 adm.config.get_all = lambda: copy.deepcopy(STORED)
 adm.config.save = lambda data, config_path=None: SAVED.append(copy.deepcopy(data))
 adm.config._flatten_to_env = lambda data: None
-adm._apply_section_reloads = lambda keys: []
+from app.core import config_admin
+config_admin.apply_section_reloads = lambda keys, scope: []
 
 
 class _Req:

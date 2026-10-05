@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Tuple
 import httpx
 
 from app.core.log import get_logger
-from app.core import config
+from app.core import config, config_admin
 from app.core.config_schema import get_schema
 from app.core.auth_dependency import require_admin
 
@@ -66,19 +66,19 @@ def llm_stats_page():
 def llm_stats_data(
                    request: Request,
                    user=Depends(require_admin)):
-    """Aggregierte LLM-Call-Statistik fuer den Admin-Stats-Tab.
+    """Aggregated LLM call statistics for the admin statistics tab.
 
-    Query-Parameter:
-        from, to     : ISO-Timestamps (inklusiv). Default: letzte 24h.
-        agents       : komma-separierte Liste von agent_name. Default: alle.
-        group_by_agent : "1" = pro (task, model, provider, agent),
-                         sonst (default) = pro (task, model, provider).
-        task         : optionaler Task-Filter (Substring-Match).
+    Query parameters:
+        from, to     : ISO timestamps (inclusive). Default: last 24 hours.
+        agents       : Comma-separated agent names. Default: all.
+        group_by_agent : "1" = per (task, model, provider, agent),
+                         otherwise (default) = per (task, model, provider).
+        task         : Optional task filter (substring match).
 
     Response:
         {
             "from": iso, "to": iso,
-            "agents": [alle distinct agent_names im Zeitraum],
+            "agents": [all distinct agent names in the time range],
             "rows": [{
                 task, model, provider, agent_name,
                 calls, avg_duration, min_duration, max_duration, p90_duration,
@@ -128,9 +128,8 @@ def llm_stats_data(
     cur = conn.execute(sql, params)
     raw_rows = cur.fetchall()
 
-    # Distinct agents im Zeitraum (fuer Filter-Dropdown). Wir lesen das
-    # immer ungefiltert, damit der User auch nach Filter-Wechsel die
-    # vollstaendige Liste sieht.
+    # Read distinct agents in the time range without the other filters,
+    # so the dropdown keeps its full list when filters change.
     agents_sql = (
         "SELECT DISTINCT agent_name FROM llm_call_stats "
         "WHERE ts >= ? AND ts <= ? AND agent_name != '' "
@@ -256,11 +255,10 @@ _MASKABLE_FILTER_FIELDS = ("icon", "label", "condition", "drop_blocks",
 
 @router.get("/prompt-filters/data")
 def prompt_filters_data(user=Depends(require_admin)):
-    """Liste der gemergten Prompt-Filter (shared baseline + world overlay).
+    """Return merged prompt filters from the shared baseline and world overlay.
 
-    Jeder Eintrag bekommt ein ``source``-Feld: "shared" / "world".
-    Wenn dieselbe id in beiden vorkommt, gewinnt world (overlay) und
-    source="world override".
+    Each entry has a ``source`` field: "shared" / "world". For ids present
+    in both layers, the world entry wins with source="world override".
 
     An override entry also carries ``masked_fields``: the fields the shared
     baseline fills and the world row leaves empty. The overlay REPLACES the
@@ -344,21 +342,19 @@ def prompt_filters_data(user=Depends(require_admin)):
 
 @router.get("/prompt-filters/validate")
 def prompt_filters_validate(condition: str = "", user=Depends(require_admin)):
-    """Live-Validierung einer Condition fuer den Editor — nutzt EXAKT dieselbe
-    Funktion wie die Laufzeit-Pruefung (keine Frontend-Regex-Duplikate)."""
+    """Validate an editor condition using the runtime validation function."""
     from app.core.activity_engine import validate_condition_references
     return {"warnings": validate_condition_references(condition or "")}
 
 
-# Kontextsensitive Editor-Hilfe (eine Quelle fuer das ausklappbare Help-Panel im
-# Game-Admin). Pro Feld/Kontext ein Topic-Key; der Editor setzt ihn beim Fokus.
+# Context-sensitive editor help for the Game Admin help panel.
+# Each field/context has a topic key selected when the editor focuses it.
 _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
     "condition": {
         "title": "Condition syntax",
         "intro": "Filter id triggers via the profile tag (condition:<this-id> is redundant). This expression triggers ADDITIONALLY:",
         "items": [
-            # __STATS__ / Stat-Werte werden im Endpoint dynamisch aus den
-            # Character-Templates befuellt (Stats sind NICHT hartkodiert).
+            # The endpoint fills stat values from character templates.
             {"code": "__STATS__", "text": "Status values (from the character template, e.g. stat>N / <N / =N)"},
             {"code": "__FLAGS__", "text": "State flags (declared by skill packages; true while set)"},
             {"code": "gender=male, template!=human-roleplay", "text": "Profile field equals / differs (string compare, any top-level profile field)"},
@@ -461,11 +457,10 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
 
 @router.get("/help-topics")
 def help_topics(user=Depends(require_admin)):
-    """Hilfe-Themen fuers kontextsensitive Help-Panel (eine Quelle, kein Frontend-Duplikat).
+    """Return context-sensitive help topics.
 
-    Der ``__STATS__``-Platzhalter im condition-Topic wird mit den echten Stat-Keys
-    aus den Character-Templates der Welt befuellt — die Stats sind nicht hartkodiert
-    und koennen pro Welt/Template variieren.
+    Fill ``__STATS__`` with actual stat keys from the world's character
+    templates; these can vary by world and template.
     """
     import copy as _copy
     topics = _copy.deepcopy(_HELP_TOPICS)
@@ -486,7 +481,7 @@ def help_topics(user=Depends(require_admin)):
                 if it.get("code") in repl:
                     it["code"] = repl[it["code"]]
     except Exception as _se:
-        logger.debug("Dynamische Stat-Keys fuer Help-Topics fehlgeschlagen: %s", _se)
+        logger.debug("Dynamic stat keys for help topics failed: %s", _se)
     # Romantic-interests help: filled by the attraction package's provider
     # (package-aware — anatomy phrases only when those packages are loaded).
     try:
@@ -582,9 +577,8 @@ def _prompt_filters_save_sync(user, body: Any):
 
     if not fid:
         raise HTTPException(status_code=400, detail="id required")
-    # condition ist im neuen Modell optional — Filter-id triggert
-    # implizit ueber den Profil-Tag, condition ist nur ein zusaetzlicher
-    # Stat-/Composite-Trigger.
+    # The profile tag triggers the filter id. A condition is an optional
+    # additional stat/composite trigger.
     if not isinstance(drop_blocks, list):
         raise HTTPException(status_code=400,
                              detail="drop_blocks must be a list")
@@ -614,11 +608,10 @@ def _prompt_filters_save_sync(user, body: Any):
 
 @router.delete("/prompt-filters/{filter_id}")
 def prompt_filters_delete(filter_id: str, user=Depends(require_admin)):
-    """Entfernt den world-overlay-Eintrag fuer diese id.
+    """Remove the world overlay entry for this id.
 
-    Wenn dieselbe id auch im shared baseline existiert, wird damit der
-    Override aufgehoben — der baseline-Filter greift wieder. Wenn die id
-    nur in world existierte, ist der Filter danach komplett weg.
+    A shared baseline entry with the same id becomes active again. A
+    world-only entry disappears completely.
     """
     from app.core.db import transaction
 
@@ -775,7 +768,7 @@ def settings_raw(user=Depends(require_admin)):
     """
     import copy
     data = copy.deepcopy(config.get_all())
-    _apply_schema_defaults(data)
+    config_admin.apply_schema_defaults(data, get_schema())
     return data
 
 
@@ -810,67 +803,6 @@ async def lora_library_sync(user=Depends(require_admin)):
     return result
 
 
-def _diff_top_level_sections(current: dict, merged: dict) -> list:
-    """Liefert die Top-Level-Schluessel, deren Inhalt sich zwischen
-    current und merged geaendert hat. JSON-Vergleich, weil sub-arrays/dicts
-    beliebig verschachtelt sein koennen.
-    """
-    import json
-    keys = set(current.keys()) | set(merged.keys())
-    changed = []
-    for k in keys:
-        if json.dumps(current.get(k), sort_keys=True, default=str) != \
-           json.dumps(merged.get(k), sort_keys=True, default=str):
-            changed.append(k)
-    return sorted(changed)
-
-
-def _apply_section_reloads(changed_keys: list) -> list:
-    """Ruft punktuell die zur jeweiligen Sektion passenden Reload-Funktionen
-    auf. Errors werden geloggt, aber nie geworfen — Save selbst bleibt erfolgreich.
-
-    Returns: Liste der tatsaechlich getriggerten Reload-Labels fuer das UI.
-    """
-    if not changed_keys:
-        return []
-
-    from app.core.log import get_logger as _gl
-    _log = _gl("admin_settings")
-    triggered = []
-
-    def _run(label: str, fn):
-        try:
-            fn()
-            triggered.append(label)
-            _log.info("settings_save: reloaded '%s' (trigger: %s)", label, changed_keys)
-        except Exception as e:
-            _log.warning("settings_save: reload '%s' failed: %s", label, e)
-
-    # Provider manager: providers + image_generation (image backends get
-    # their own channels, so both sections affect the channel setup).
-    if "providers" in changed_keys or "image_generation" in changed_keys:
-        from app.core.provider_manager import reload_provider_manager
-        _run("providers", reload_provider_manager)
-
-    # Skill-Manager: skills + image_generation (Image-Skill liest Backends
-    # aus os.environ-Bloecken, die nur beim Skill-Init gelesen werden).
-    if "skills" in changed_keys or "image_generation" in changed_keys:
-        from app.core.dependencies import _skill_manager
-        if _skill_manager is not None:
-            _run("skills", _skill_manager.reload_skills)
-
-    # TTS-Service.
-    if "tts" in changed_keys:
-        from app.core.tts_service import reload_tts_service
-        _run("tts", reload_tts_service)
-
-    # Video backends live in image_generation.backends now, so the image
-    # service reload above (image_generation changed_keys) covers them — no
-    # separate animation hook anymore.
-
-    return triggered
-
-
 @router.post("/settings/save")
 async def settings_save(request: Request, user=Depends(require_admin)):
     """Save config. Fields with masked values (***...) are kept from current config."""
@@ -878,11 +810,11 @@ async def settings_save(request: Request, user=Depends(require_admin)):
 
     # Merge: keep current values for masked sensitive fields
     current = config.get_all()
-    merged = _merge_sensitive(new_data, current)
+    merged = config_admin.merge_sensitive(new_data, current)
     # Protect fields in sub_array/is_dict items (e.g. image backends) that the
     # frontend omits on save when the CONFIG value is undefined.
-    _preserve_unsent_subarray_fields(merged, current)
-    _preserve_unsent_image_routing(merged, current)
+    config_admin._preserve_unsent_subarray_fields(merged, current, get_schema())
+    config_admin._preserve_unsent_image_routing(merged, current)
 
     # Structural validation (e.g. llm_routing order uniqueness)
     err = _validate_llm_routing(merged.get("llm_routing"))
@@ -914,7 +846,7 @@ async def settings_save(request: Request, user=Depends(require_admin)):
         pass
 
     # Compute the diff BEFORE config.save — current still mirrors the pre-save state.
-    changed_sections = _diff_top_level_sections(current, merged)
+    changed_sections = config_admin.diff_sections(current, merged)
 
     config.save(merged)
     # Update the env right away — spares a server restart for fields that
@@ -930,7 +862,7 @@ async def settings_save(request: Request, user=Depends(require_admin)):
     # thread: some reloads ping providers/backends synchronously (e.g.
     # ImageBackend.check_availability) and would otherwise block the event
     # loop for several seconds.
-    reloaded = await asyncio.to_thread(_apply_section_reloads, changed_sections)
+    reloaded = await asyncio.to_thread(config_admin.apply_section_reloads, changed_sections, "instance")
 
     msg = "Configuration saved (env updated)."
     if reloaded:
@@ -1160,7 +1092,7 @@ def llm_task_state_get(user=Depends(require_admin)):
 
 @router.post("/settings/llm-task-state/runtime-preset")
 async def llm_task_state_runtime_preset(request: Request, user=Depends(require_admin)):
-    """Aktiviert ein Preset als Runtime-Disable (nicht persistent)."""
+    """Activate a preset as a runtime disable without persisting it."""
     data = await request.json()
     return await asyncio.to_thread(_llm_task_state_runtime_preset_sync, user,
                                    data)
@@ -1179,9 +1111,9 @@ def _llm_task_state_runtime_preset_sync(user, data: Any):
 
 
 def _validate_llm_routing(routing) -> str:
-    """Prueft llm_routing: pro (task, order) darf es nur einen Eintrag geben.
+    """Check that each (task, order) occurs once in llm_routing.
 
-    Returns leere String wenn OK, sonst Fehlermeldung.
+    Return an empty string on success, otherwise an error message.
     """
     if not isinstance(routing, list):
         return ""
@@ -1189,8 +1121,7 @@ def _validate_llm_routing(routing) -> str:
     for idx, entry in enumerate(routing):
         if not isinstance(entry, dict):
             continue
-        # Disabled-Eintraege werden zur Laufzeit ignoriert -> auch
-        # Order-Konflikte zwischen disabled+enabled sind erlaubt.
+        # Runtime ignores disabled entries, so their order may overlap.
         if entry.get("enabled") is False:
             continue
         tasks = entry.get("tasks") or []
@@ -1345,14 +1276,14 @@ async def media_backend_online(request: Request, user=Depends(require_admin)):
     body = await request.json()
     name = str((body or {}).get("name") or "").strip()
     if not name:
-        raise HTTPException(status_code=422, detail="'name' fehlt")
+        raise HTTPException(status_code=422, detail="'name' is required")
     from app.imagegen.service import get_image_service
     img = get_image_service()
     backend = next((b for b in img.backends if b.name == name), None)
     if backend is None:
         raise HTTPException(status_code=404,
-                            detail=f"Backend '{name}' ist nicht instanziiert "
-                                   f"(neu angelegte brauchen einen Neustart)")
+                            detail=f"Backend '{name}' is not instantiated "
+                                   f"(new backends require a restart)")
     # The probe is a blocking HTTP call (up to ~10s) — keep the loop free.
     available = await asyncio.to_thread(backend.clear_cooldown)
     return {"name": name, "available": available, **backend.runtime_status()}
@@ -1542,7 +1473,7 @@ async def provider_models(provider_name: str, user=Depends(require_admin)):
 
 @router.get("/settings/providers-list")
 def providers_list(user=Depends(require_admin)):
-    """Namen aller konfigurierten Provider — fuer den Suitability-Test-Picker."""
+    """Return configured provider names for the suitability test picker."""
     return {"providers": [p.get("name", "") for p in config.get("providers", [])
                           if p.get("name")]}
 
@@ -1563,9 +1494,11 @@ async def llm_suitability_cases_rebuild(user=Depends(require_admin)):
 
 @router.post("/settings/llm-suitability-test/start")
 async def llm_suitability_test_start(request: Request, user=Depends(require_admin)):
-    """Startet den Eignungstest fuer EIN Modell asynchron im Hintergrund und gibt
-    den initialen Status zurueck. Fortschritt/Ergebnis via .../status pollen.
-    Das Gesamtergebnis wird am Ende in model_capabilities.json gespeichert."""
+    """Start a background suitability test for one model and return its status.
+
+    Poll .../status for progress/results. The final result is saved to
+    model_capabilities.json.
+    """
     body = await request.json()
     return await asyncio.to_thread(_llm_suitability_test_start_sync,
                                    user, body)
@@ -1597,8 +1530,7 @@ def llm_suitability_test_status(provider: str = "", model: str = "",
 
 @router.get("/settings/llm-suitability-test/jobs")
 def llm_suitability_test_jobs(user=Depends(require_admin)):
-    """Alle bekannten Test-Jobs (laufend/fertig/fehler) — fuer die 'laufende
-    Tests'-Liste. Ohne Check-Details (nur Kurzstatus)."""
+    """Return all known test jobs for the running tests list, with short status."""
     from app.core.model_suitability import list_jobs
     jobs = []
     for j in list_jobs():
@@ -1630,9 +1562,7 @@ def _settings_validate_sync(user, data: Any):
 
 @router.get("/settings/restart-pending")
 def settings_restart_pending(user=Depends(require_admin)):
-    """Liste der Felder, die seit dem letzten Server-Start veraendert wurden
-    und nur durch einen Restart wirksam werden.
-    """
+    """Return fields changed since startup that require a server restart."""
     return {"pending": config.restart_pending_fields()}
 
 
@@ -1837,253 +1767,10 @@ _AGENT_LOOP_HTML = """<!DOCTYPE html>
 """
 
 
-def _apply_schema_defaults(data: dict) -> None:
-    """Prefills empty config fields with their schema defaults.
-
-    Iterates over SECTIONS from config_schema and fills missing or empty
-    values whenever a 'default' is defined — so the admin user immediately
-    sees which fallback would be active.
-    """
-    schema = get_schema()
-    for section_key, section_def in schema.items():
-        # Virtual sections (e.g. llm_simple) have no config field of their
-        # own — don't create one, or an empty {} lands in config.json.
-        if section_def.get("virtual"):
-            continue
-        is_array = section_def.get("is_array", False)
-        fields = section_def.get("fields", {})
-        # sub_arrays (e.g. image_generation.backends): fill defaults on each
-        # item, honoring applicable_for/visible_when so type-specific fields
-        # don't get materialized on items they never render for.
-        for sub_key, sub_def in (section_def.get("sub_arrays") or {}).items():
-            sub_fields = (sub_def or {}).get("fields", {})
-            section_data = data.get(section_key)
-            items = section_data.get(sub_key) if isinstance(section_data, dict) else None
-            if sub_fields and isinstance(items, list):
-                for item in items:
-                    if isinstance(item, dict):
-                        _fill_item_defaults(item, sub_fields)
-        if is_array:
-            items = data.get(section_key)
-            if not isinstance(items, list):
-                continue
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                _fill_defaults(item, fields)
-                for nested_key, nested_def in fields.items():
-                    if isinstance(nested_def, dict) and nested_def.get("is_array"):
-                        nested_items = item.get(nested_key)
-                        if isinstance(nested_items, list):
-                            nested_fields = nested_def.get("item_fields", {})
-                            for ni in nested_items:
-                                if isinstance(ni, dict):
-                                    _fill_defaults(ni, nested_fields)
-        else:
-            section_data = data.get(section_key)
-            if not isinstance(section_data, dict):
-                # Section fehlt oder ist None → frisch anlegen, NICHT in Top-Level
-                # droppen (das wuerde die Schema-Felder ausserhalb ihrer Section
-                # ablegen, das Frontend rendert sie dann gar nicht oder crasht).
-                section_data = {}
-                data[section_key] = section_data
-            _fill_defaults(section_data, fields)
-
-
-def _visible_when_ok(item: dict, cond: dict) -> bool:
-    """Evaluates a schema `visible_when` condition against a config item.
-
-    Every entry must match: a plain value compares for equality, a LIST means
-    "one of these" (e.g. Category in [txt2img, img2img]). Mirrors the client
-    side in static/admin/settings.js.
-    """
-    for key, want in cond.items():
-        cur = item.get(key) or ""
-        if isinstance(want, (list, tuple, set)):
-            if cur not in want:
-                return False
-        elif cur != want:
-            return False
-    return True
-
-
-def _fill_item_defaults(item: dict, fields: dict) -> None:
-    """Like _fill_defaults, but skips fields the item never renders:
-    `applicable_for` mismatching the item's api_type, and `visible_when`
-    conditions on sibling values (evaluated in field order, so a default
-    filled earlier — e.g. category='generate' — gates later fields).
-    Placeholder-type fields are never materialized (_PLACEHOLDER_TYPES)."""
-    for key, field_def in fields.items():
-        if not isinstance(field_def, dict):
-            continue
-        if field_def.get("type") in _PLACEHOLDER_TYPES:
-            continue
-        applicable = field_def.get("applicable_for")
-        if applicable and (item.get("api_type") or "") not in applicable:
-            continue
-        not_applicable = field_def.get("not_applicable_for")
-        if not_applicable and (item.get("api_type") or "") in not_applicable:
-            continue
-        cond = field_def.get("visible_when")
-        if isinstance(cond, dict) and not _visible_when_ok(item, cond):
-            continue
-        default = field_def.get("default")
-        if default is None:
-            continue
-        current = item.get(key)
-        if current is None or current == "":
-            item[key] = default
-            logger.debug("Config-Default gesetzt (item): %s = %r", key, default)
-
-
-# Field types whose default is shown GREYED as a placeholder in the empty
-# field instead of being materialized (user directive 2026-07-06, like the
-# use-case styles editor): writing the default in would persist it on save
-# and freeze future built-in updates. Bool/select cannot display a
-# placeholder and keep real default values.
-_PLACEHOLDER_TYPES = {"str", "text", "int", "float", "number"}
-
-
-def _fill_defaults(obj: dict, fields: dict) -> None:
-    """Sets missing/empty values in obj to the field default (bool/select
-    only — see _PLACEHOLDER_TYPES) and clears legacy-default leftovers."""
-    for key, field_def in fields.items():
-        if not isinstance(field_def, dict):
-            continue
-        current = obj.get(key)
-        # Legacy cleanup: a stored value that is just an old shipped default
-        # (persisted by the former prefill) counts as "not customized" —
-        # clear it so the placeholder + current built-in apply again.
-        legacy = field_def.get("legacy_defaults")
-        if legacy and isinstance(current, str) and current.strip() in legacy:
-            obj[key] = ""
-            continue
-        if field_def.get("type") in _PLACEHOLDER_TYPES:
-            continue
-        default = field_def.get("default")
-        if default is None:
-            continue
-        if current is None or current == "":
-            obj[key] = default
-            logger.debug("Config-Default gesetzt: %s = %r", key, default)
-
-
-def _preserve_unsent_subarray_fields(merged: dict, current: dict) -> None:
-    """Keep schema fields of sub_array/is_dict items the payload leaves out.
-
-    Frontend bug: `setVal()` updates CONFIG only on `onchange`. A field that
-    is undefined before its first edit (e.g. a new schema field an old world
-    config still lacks) and that the user never touches stays undefined ->
-    JSON.stringify drops the key -> `_merge_sensitive` reads the missing key
-    as 'deliberately deleted'.
-
-    We walk all schema `sub_arrays` (e.g. image_generation.backends) and
-    carry missing fields over from the current config. List items pair via
-    `config.pair_entries` — by name for named lists — so an entry inserted
-    mid-list never inherits its neighbour's fields.
-    """
-    schema = get_schema()
-    for sec_key, sec_def in schema.items():
-        sub_arrays = sec_def.get("sub_arrays") or {}
-        if not sub_arrays:
-            continue
-        cur_sec = current.get(sec_key)
-        new_sec = merged.get(sec_key)
-        if not isinstance(cur_sec, dict) or not isinstance(new_sec, dict):
-            continue
-        for sub_key, sub_def in sub_arrays.items():
-            field_keys = list((sub_def.get("fields") or {}).keys())
-            if not field_keys:
-                continue
-            cur_sub = cur_sec.get(sub_key)
-            new_sub = new_sec.get(sub_key)
-            if cur_sub is None or new_sub is None:
-                continue
-            if sub_def.get("is_dict"):
-                if not isinstance(cur_sub, dict) or not isinstance(new_sub, dict):
-                    continue
-                for item_id, new_item in new_sub.items():
-                    cur_item = cur_sub.get(item_id)
-                    if not isinstance(cur_item, dict) or not isinstance(new_item, dict):
-                        continue
-                    for f in field_keys:
-                        if f not in new_item and f in cur_item:
-                            new_item[f] = cur_item[f]
-            else:
-                if not isinstance(cur_sub, list) or not isinstance(new_sub, list):
-                    continue
-                for new_item, cur_item in zip(new_sub, config.pair_entries(new_sub, cur_sub)):
-                    if not isinstance(cur_item, dict) or not isinstance(new_item, dict):
-                        continue
-                    for f in field_keys:
-                        if f not in new_item and f in cur_item:
-                            new_item[f] = cur_item[f]
-
-
-def _preserve_unsent_image_routing(merged: dict, current: dict) -> None:
-    """Keep the stored ``image_generation.routing`` when the payload's
-    image_generation section carries no routing (key missing or null).
-
-    The settings page posts ``JSON.stringify(CONFIG)``; a tab loaded before
-    the chains existed has no ``routing`` key, and ``_merge_sensitive`` reads
-    a missing key as deleted. A dropped routing would make the next config
-    load re-seed the chains from the old default fields, silently discarding
-    every edited chain — so absence never deletes. An explicit ``{}`` is a
-    real clear and is saved as such."""
-    cur_ig = current.get("image_generation")
-    new_ig = merged.get("image_generation")
-    if not isinstance(cur_ig, dict) or not isinstance(new_ig, dict):
-        return
-    if new_ig.get("routing") is None and cur_ig.get("routing") is not None:
-        new_ig["routing"] = cur_ig["routing"]
-
-
-def _drop_masked(value: Any) -> Any:
-    """``value`` with every '***'-masked string blanked to "" — for a payload
-    part that has no stored counterpart to unmask from. A mask is never
-    persisted literally."""
-    if isinstance(value, dict):
-        return {k: _drop_masked(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_drop_masked(v) for v in value]
-    if isinstance(value, str) and value.startswith("***"):
-        return ""
-    return value
-
-
-def _merge_sensitive(new: Any, current: Any) -> Any:
-    """Recursively merge, keeping current values where new has masked placeholders.
-
-    IMPORTANT: keys MISSING from the new dict were deleted on purpose and are
-    NOT restored from current. Only leaf values masked with '***' are
-    protected. List items pair via `config.pair_entries` — by name for named
-    lists, so a masked key stays with its entry when entries move. A masked
-    value without a counterpart (new key, unpaired entry) becomes "".
-    """
-    if isinstance(new, dict) and isinstance(current, dict):
-        result = {}
-        # Take only the keys of new — a missing key means deleted.
-        for key in new:
-            if key in current:
-                result[key] = _merge_sensitive(new[key], current[key])
-            else:
-                result[key] = _drop_masked(new[key])
-        return result
-    if isinstance(new, list) and isinstance(current, list):
-        return [
-            _drop_masked(item) if counterpart is None else _merge_sensitive(item, counterpart)
-            for item, counterpart in zip(new, config.pair_entries(new, current))
-        ]
-    # If new value is a masked placeholder, keep current
-    if isinstance(new, str) and new.startswith("***"):
-        return current
-    return new
-
-
 def _build_settings_html() -> str:
     """Build the complete admin settings HTML page."""
     return '''<!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -2095,9 +1782,9 @@ def _build_settings_html() -> str:
 <nav class="sidebar">
     <h1>Admin</h1>
     <div id="world-badge" style="margin: 4px 0 12px 8px; padding: 4px 8px; background:#1f3a5f; color:#79c0ff; font-size:12px; border-radius:4px; display:inline-block;">world: <span id="world-name">…</span></div>
-    <div class="nav-section-label">Server-Einstellungen</div>
+    <div class="nav-section-label">Server settings</div>
     <div id="nav-links"></div>
-    <div class="nav-section-label">Verwaltung</div>
+    <div class="nav-section-label">Management</div>
     <a href="#" data-section="_users" onclick="event.preventDefault(); activateIframe('_users', '/admin/users', 'User management')"><span class="nav-icon">👥</span> User management</a>
     <a href="#" data-section="_models" onclick="event.preventDefault(); activateIframe('_models', '/admin/models', 'Model Capabilities')"><span class="nav-icon">🧩</span> Model Capabilities</a>
     <a href="#" data-section="_agent_loop" onclick="event.preventDefault(); activateIframe('_agent_loop', '/admin/agent-loop', 'Agent Loop')"><span class="nav-icon">🔄</span> Agent Loop</a>
@@ -2236,8 +1923,8 @@ def _build_llm_stats_html() -> str:
 </head>
 <body>
 
-<h1>LLM Call Statistik</h1>
-<p class="hint">Aggregat aus <code>llm_call_stats</code>. Zeitraum + Character filterbar. Aufgeschluesselt nach Task x Model x Provider; mit Toggle auch nach Character.</p>
+<h1>LLM Call Statistics</h1>
+<p class="hint">Aggregated <code>llm_call_stats</code>. Filter by time range and character. Breakdown by task, model and provider, with an optional character breakdown.</p>
 
 <div class="filter-bar">
     <div class="preset-row">
@@ -2252,7 +1939,7 @@ def _build_llm_stats_html() -> str:
     <label>Character
         <select id="agent-select" multiple size="3"></select>
     </label>
-    <label><input type="checkbox" id="group-by-agent"> nach Character aufschluesseln</label>
+    <label><input type="checkbox" id="group-by-agent"> Break down by character</label>
     <button class="btn btn-primary" onclick="loadData()">Apply</button>
 </div>
 

@@ -90,8 +90,8 @@ The point of the file is the pair of counter-checks:
   * the seeding source is really gone — the two fields that used to reappear
     in freshly created worlds (``mapfit_imagegen_default`` /
     ``map_tile_vision_analysis``) came from schema entries in
-    app/core/config_schema.py that ``_apply_schema_defaults``
-    (app/routes/admin_settings.py) materializes into config.json on every
+    app/core/config_schema.py that ``apply_schema_defaults``
+    (app/core/config_admin.py) materializes into config.json on every
     admin save round-trip. Test 6 shows today's schema produces neither;
     test 7 puts the two removed schema entries back and shows the SAME call
     then does produce them — without that red run, test 6 would pass on any
@@ -425,12 +425,13 @@ def main():
               "living section fields stay")
 
     print("6) today's schema prefill seeds neither reappearing field")
-    from app.routes import admin_settings  # noqa: E402
+    from app.core import config_admin
+    from app.core.config_schema import get_schema  # noqa: E402
     data = {}
-    admin_settings._apply_schema_defaults(data)
+    config_admin.apply_schema_defaults(data, get_schema())
     ig = data.get("image_generation", {})
     for key in ("mapfit_imagegen_default", "map_tile_vision_analysis"):
-        check(key not in ig, f"{key} not materialized by _apply_schema_defaults")
+        check(key not in ig, f"{key} not materialized by apply_schema_defaults")
     seeded_dead = [k for s, keys in EXPECTED_DEAD.items()
                    for k in keys if k in data.get(s, {})]
     check(not seeded_dead,
@@ -447,13 +448,8 @@ def main():
         "type": "bool", "label": "Analyze neighbor tiles for map prompts",
         "default": False,
     }
-    original = admin_settings.get_schema
-    try:
-        admin_settings.get_schema = lambda: legacy
-        red = {}
-        admin_settings._apply_schema_defaults(red)
-    finally:
-        admin_settings.get_schema = original
+    red = {}
+    config_admin.apply_schema_defaults(red, legacy)
     red_ig = red.get("image_generation", {})
     check(red_ig.get("mapfit_imagegen_default") == ""
           and red_ig.get("map_tile_vision_analysis") is False,

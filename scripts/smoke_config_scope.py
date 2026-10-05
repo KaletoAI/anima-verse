@@ -326,8 +326,8 @@ defaults (Part 2):
 6.8 RELOAD. ``load(w, i)``, then ``reload()``:
     ``get("server.log_level") == "DEBUG"`` — the instance path is remembered.
 6.9 ADMIN PAYLOAD. The settled 6.1 pair; the effective config goes through
-    ``admin_settings._apply_schema_defaults`` (a copy — what
-    ``/settings/raw`` hands out), then ``_merge_sensitive(payload,
+    ``config_admin.apply_schema_defaults`` (a copy — what
+    ``/settings/raw`` hands out), then ``merge_sensitive(payload,
     get_all())`` (what ``/settings/save`` does), then ``save``: the world
     file keeps its mtime. Every bool/select default the payload materialised
     into a world section equals its shipped default and is pruned.
@@ -354,7 +354,7 @@ A NAMED LIST is a list whose entries are ALL dicts with a non-empty, unique
 ``content_marketplace.catalogs``). ``config.named_entries(lst)`` is the one
 detector: ``{name: entry}`` for a named list, else None. In ``secrets.json`` a
 named list is a dict by name; every other list stays by index. The admin save
-(``_merge_sensitive`` / ``_preserve_unsent_subarray_fields``) pairs the
+(``merge_sensitive`` / ``_preserve_unsent_subarray_fields``) pairs the
 entries of two named lists by name; a RENAME (payload[i] has a name current
 does not know AND current[i] has a name the payload does not know) pairs by
 index; otherwise an entry has no counterpart. Symptom of the old index rule:
@@ -379,19 +379,19 @@ backend). Expectations by hand:
 8.2 UNKNOWN NAME. A by-name secret for ``zz`` (no such backend) is ignored:
     the backend list keeps its 4 names and "ZZ" is nowhere in it.
 8.3 MASKED KEY AT A NEW POSITION. current backends ``[a, b(KB), c(KC)]``,
-    payload ``[a, x, b("***"), c("***")]``: ``_merge_sensitive`` gives
+    payload ``[a, x, b("***"), c("***")]``: ``merge_sensitive`` gives
     b "KB", c "KC" (old code: b got KC, c nothing), x keeps no api_key.
 8.4 UNSENT FIELD. current ``[a, b(category "img2img"), c]``, payload
     ``[a, x, b, c]`` without any category: ``_preserve_unsent_subarray_fields``
     gives b "img2img" (its own field back) and x NO category (old code: x
     inherited b's, b inherited c's absence).
 8.5 RENAME. current ``[a, b, c(KC, category "inpaint")]``, payload
-    ``[a, b, c2("***")]`` without category: ``_merge_sensitive`` keeps "KC" on
+    ``[a, b, c2("***")]`` without category: ``merge_sensitive`` keeps "KC" on
     c2 and ``_preserve_unsent_subarray_fields`` carries "inpaint" to c2.
 8.6 UNNAMED LIST STAYS BY INDEX. ``_split_secrets({"l": [{"api_key": "k0"},
     {"x": 1}]})`` -> secrets ``{"l": [{"api_key": "k0"}, {}]}``; the same with
     a duplicate name (``[{"name":"d","api_key":"k"},{"name":"d"}]``) -> a
-    list, not a dict. ``_merge_sensitive`` over an unnamed list pairs index
+    list, not a dict. ``merge_sensitive`` over an unnamed list pairs index
     1 with index 1 (``[{}, {"api_key": "***"}]`` against ``[{}, {"api_key":
     "K1"}]`` -> "K1"). ``_deep_merge`` of a list overlay stays by index.
 
@@ -1024,10 +1024,11 @@ def part_3():
               f"6.8: reload keeps the instance (log_level {cfg.get('server.log_level')!r})")
         check(cfg.get("providers.0.name") == "i", "6.8: reload keeps the instance providers")
 
-        from app.routes import admin_settings
+        from app.core import config_admin
+        from app.core.config_schema import get_schema
         payload = copy.deepcopy(cfg.get_all())
-        admin_settings._apply_schema_defaults(payload)
-        merged = admin_settings._merge_sensitive(payload, cfg.get_all())
+        config_admin.apply_schema_defaults(payload, get_schema())
+        merged = config_admin.merge_sensitive(payload, cfg.get_all())
         _age(w, i)
         cfg.save(merged)
         check(_untouched(w), f"6.9: the admin payload leaves the world file alone "
@@ -1208,7 +1209,8 @@ def _keys_by_name(backends):
 
 def part_4():
     from app.core import config as cfg
-    from app.routes import admin_settings as adm
+    from app.core import config_admin as adm
+    from app.core.config_schema import get_schema
 
     # 8.0 detector
     ne = getattr(cfg, "named_entries", None)
@@ -1270,14 +1272,14 @@ def part_4():
     current = section([{"name": "a"}, {"name": "b", "api_key": "KB"}, {"name": "c", "api_key": "KC"}])
     payload = section([{"name": "a"}, {"name": "x"}, {"name": "b", "api_key": "***"},
                        {"name": "c", "api_key": "***"}])
-    merged = adm._merge_sensitive(payload, current)
+    merged = adm.merge_sensitive(payload, current)
     got = _keys_by_name(merged["image_generation"]["backends"])
     check(got == {"a": None, "x": None, "b": "KB", "c": "KC"}, f"8.3: masked keys by name ({got!r})")
 
     # 8.4 unsent field
     current = section([{"name": "a"}, {"name": "b", "category": "img2img"}, {"name": "c"}])
     merged = section([{"name": "a"}, {"name": "x"}, {"name": "b"}, {"name": "c"}])
-    adm._preserve_unsent_subarray_fields(merged, current)
+    adm._preserve_unsent_subarray_fields(merged, current, get_schema())
     bes = {b["name"]: b for b in merged["image_generation"]["backends"]}
     check(bes["b"].get("category") == "img2img", f"8.4: b keeps its own unsent field ({bes['b']!r})")
     check("category" not in bes["x"], f"8.4: x inherits nothing from b ({bes['x']!r})")
@@ -1287,8 +1289,8 @@ def part_4():
     current = section([{"name": "a"}, {"name": "b"},
                        {"name": "c", "api_key": "KC", "category": "inpaint"}])
     payload = section([{"name": "a"}, {"name": "b"}, {"name": "c2", "api_key": "***"}])
-    merged = adm._merge_sensitive(payload, current)
-    adm._preserve_unsent_subarray_fields(merged, current)
+    merged = adm.merge_sensitive(payload, current)
+    adm._preserve_unsent_subarray_fields(merged, current, get_schema())
     c2 = merged["image_generation"]["backends"][2]
     check(c2.get("api_key") == "KC", f"8.5: the key survives the rename ({c2!r})")
     check(c2.get("category") == "inpaint", f"8.5: the unsent field follows the rename ({c2!r})")
@@ -1298,8 +1300,8 @@ def part_4():
     check(sec == {"l": [{"api_key": "k0"}, {}]}, f"8.6: unnamed list secrets by index ({sec!r})")
     _, sec = cfg._split_secrets({"l": [{"name": "d", "api_key": "k"}, {"name": "d"}]})
     check(sec == {"l": [{"api_key": "k"}, {}]}, f"8.6: duplicate names -> by index ({sec!r})")
-    got = adm._merge_sensitive({"l": [{}, {"api_key": "***"}]}, {"l": [{}, {"api_key": "K1"}]})
-    check(got == {"l": [{}, {"api_key": "K1"}]}, f"8.6: _merge_sensitive by index ({got!r})")
+    got = adm.merge_sensitive({"l": [{}, {"api_key": "***"}]}, {"l": [{}, {"api_key": "K1"}]})
+    check(got == {"l": [{}, {"api_key": "K1"}]}, f"8.6: merge_sensitive by index ({got!r})")
     base = {"l": [{"a": 1}, {"a": 2}]}
     cfg._deep_merge(base, {"l": [{}, {"api_key": "K"}]})
     check(base == {"l": [{"a": 1}, {"a": 2, "api_key": "K"}]}, f"8.6: _deep_merge by index ({base!r})")
@@ -1371,7 +1373,7 @@ def part_4():
     # 8.10 mask without partner
     current = section([{"name": "a"}, {"name": "b", "api_key": "KB"}, {"name": "c", "api_key": "KC"}])
     payload = section([{"name": "a"}, {"name": "c", "api_key": "***"}, {"name": "b2", "api_key": "***"}])
-    merged = adm._merge_sensitive(payload, current)
+    merged = adm.merge_sensitive(payload, current)
     got = _keys_by_name(merged["image_generation"]["backends"])
     check(got == {"a": None, "c": "KC", "b2": ""}, f"8.10: unpartnered mask -> '' ({got!r})")
 
