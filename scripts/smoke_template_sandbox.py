@@ -233,16 +233,16 @@ probe.write_text("## user\nONE\n", encoding="utf-8")
 pt.register_package_template_dirs([cache_dir])
 
 first = pt.render_task("smoke_cache_probe")
-t1 = pt._compiled_cache["tasks/smoke_cache_probe.md"][3]
+t1 = pt._compiled_cache["tasks/smoke_cache_probe.md"][1]
 second = pt.render_task("smoke_cache_probe")
-t2 = pt._compiled_cache["tasks/smoke_cache_probe.md"][3]
+t2 = pt._compiled_cache["tasks/smoke_cache_probe.md"][1]
 check("[4] unchanged file reuses the compiled template", t1 is t2, True)
 check("[4] cached render is correct", (first[1], second[1]), ("ONE", "ONE"))
 
 probe.write_text("## user\nTWO AND MORE\n", encoding="utf-8")
 os.utime(probe, (0, 0))  # force a different mtime even on a coarse clock
 third = pt.render_task("smoke_cache_probe")
-t3 = pt._compiled_cache["tasks/smoke_cache_probe.md"][3]
+t3 = pt._compiled_cache["tasks/smoke_cache_probe.md"][1]
 check("[4] edited file recompiles", t3 is not t1, True)
 check("[4] edited file renders the new text", third[1], "TWO AND MORE")
 

@@ -48,14 +48,9 @@ _MEASURE_RE = re.compile(r"\d+(?:[.,]\d+)?\s+by\s+\d+(?:[.,]\d+)?\s+met(?:re|er)
 
 
 def _template_stamp() -> str:
-    """Modification time of the template — part of the cache key, so editing
-    the template in /admin/templates invalidates the cached prompts."""
-    from app.core.prompt_templates import template_search_dirs
-    for directory in template_search_dirs():
-        path = directory / "tasks" / f"{TEMPLATE}.md"
-        if path.exists():
-            return str(int(path.stat().st_mtime))
-    return "0"
+    """Override hash or file mtime, including all world override dependencies."""
+    from app.core import prompt_templates
+    return prompt_templates.template_stamp(f"tasks/{TEMPLATE}.md")
 
 
 def cache_key(style: str, subject: str, hint: str, family: str,

@@ -30,6 +30,10 @@ live-editable at /admin/templates, so a plain `Environment` would turn
 interpolate strings, lists and dicts the caller passes in — none of them
 needs an underscore attribute or `.format`, so the sandbox costs nothing
 here and every escape route raises `SecurityError` instead.
+
+World overrides replace whole templates from world.db, including every
+Jinja include. Revision tokens invalidate process caches after each write;
+persistent template stamps also fingerprint all world overrides.
 """
 from __future__ import annotations
 
@@ -38,7 +42,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-from jinja2 import FileSystemLoader, StrictUndefined, Template
+from jinja2 import BaseLoader, FileSystemLoader, StrictUndefined, Template, TemplateNotFound
 from jinja2.sandbox import SandboxedEnvironment
 
 # Resolve template dir relative to repo root: <repo>/shared/templates/llm
@@ -49,10 +53,37 @@ _TEMPLATE_DIR = Path(__file__).resolve().parents[2] / "shared" / "templates" / "
 _package_template_dirs: List[Path] = []
 
 
+class _OverlayLoader(BaseLoader):
+    """World override first, shipped file second — for top-level renders and
+    every {% include %}. Each source carries the override revision it was
+    read under; a later override write makes it stale, so Jinja's cache
+    reloads it (a plain FunctionLoader with uptodate=True kept a stale
+    include forever when a load raced a write)."""
+
+    def __init__(self, files: FileSystemLoader):
+        self.files = files
+
+    def get_source(self, environment, template):
+        from app.core import template_overrides
+        rev = template_overrides.revision()          # BEFORE the lookup
+        ov = template_overrides.lookup(template)
+        if ov is not None:
+            return ov.content, None, lambda: template_overrides.revision() == rev
+        source, filename, file_uptodate = self.files.get_source(environment, template)
+        return source, filename, (lambda: file_uptodate()
+                                  and template_overrides.revision() == rev)
+
+    def list_templates(self):
+        return self.files.list_templates()
+
+
+def _file_loader() -> FileSystemLoader:
+    return FileSystemLoader([str(_TEMPLATE_DIR)] + [str(p) for p in _package_template_dirs])
+
+
 def _build_env() -> SandboxedEnvironment:
     return SandboxedEnvironment(
-        loader=FileSystemLoader(
-            [str(_TEMPLATE_DIR)] + [str(p) for p in _package_template_dirs]),
+        loader=_OverlayLoader(_file_loader()),
         autoescape=False,
         undefined=StrictUndefined,
         trim_blocks=True,
@@ -62,6 +93,44 @@ def _build_env() -> SandboxedEnvironment:
 
 
 _env = _build_env()
+
+
+def shipped_source(name: str) -> str:
+    """The shipped text of template ``name`` — never an override."""
+    return _file_loader().get_source(_env, name)[0]
+
+
+def template_stamp(name: str) -> str:
+    """A string that changes whenever the EFFECTIVE text of ``name`` — or of
+    anything it may {% include %} — can have changed through an override:
+    the shipped file's mtime (or "ov" when ``name`` itself is overridden)
+    plus a fingerprint of ALL of this world's overrides. Any override write
+    therefore re-keys the persistent caches built on templates
+    (prompt_compose); overrides are rare, a spurious miss costs one LLM call."""
+    from app.core import template_overrides
+    ov = template_overrides.lookup(name)
+    if ov is not None:
+        own = "ov"
+    else:
+        _src, filename, _up = _file_loader().get_source(_env, name)
+        own = "f:" + str(os.stat(filename).st_mtime_ns)
+    return own + "|" + template_overrides.fingerprint()
+
+
+def check_syntax(source: str) -> None:
+    """``ValueError`` with the line when ``source`` is no valid template."""
+    from jinja2 import TemplateSyntaxError
+    try:
+        _env.parse(_strip_frontmatter(source))
+    except TemplateSyntaxError as e:
+        raise ValueError(f"Template syntax error, line {e.lineno}: {e.message}") from e
+
+
+def clear_caches() -> None:
+    """Drop every compiled/cached template (after an override write)."""
+    _env.cache.clear()
+    _compiled_cache.clear()
+    _skill_meta_cache.clear()
 
 
 def register_package_template_dirs(dirs: List[Path]) -> None:
@@ -124,33 +193,38 @@ def _split_system_user(body: str) -> Tuple[str, str]:
     return system, user
 
 
-# Compiled bodies, keyed by template name -> (file, mtime_ns, size, Template).
-# `from_string` bypasses Jinja's own cache, so every render used to re-read the
-# file from disk and recompile it (LLM-9: 3.4 ms for chat/chat_stream.md, on
-# every single chat turn). Templates are live-editable at /admin/templates, so
-# the key carries the file's mtime+size: a saved edit changes both and the next
-# render recompiles by itself — no invalidation call anywhere.
-_compiled_cache: Dict[str, Tuple[str, int, int, Template]] = {}
+# Compiled bodies: name -> (revision/file token, Template).
+# Revision checks also reject stale entries inserted after cache invalidation.
+_compiled_cache: Dict[str, Tuple[tuple, Template]] = {}
 
 
 def _compile(template_name: str) -> Template:
-    """Compile a template's body (frontmatter stripped), cached by mtime."""
+    """Compile the body, cached by world override revision and file identity."""
+    from app.core import template_overrides
+    rev = template_overrides.revision()
+    ov = template_overrides.lookup(template_name)
     hit = _compiled_cache.get(template_name)
-    if hit is not None:
-        filename, mtime_ns, size, tmpl = hit
+    if ov is not None:
+        token = (rev, "override")
+        if hit is not None and hit[0] == token:
+            return hit[1]
+        tmpl = _env.from_string(_strip_frontmatter(ov.content))
+        _compiled_cache[template_name] = (token, tmpl)
+        return tmpl
+    if hit is not None and hit[0][0] == rev and hit[0][1] != "override":
+        _rev, filename, mtime_ns, size = hit[0]
         try:
             st = os.stat(filename)
             if st.st_mtime_ns == mtime_ns and st.st_size == size:
-                return tmpl
+                return hit[1]
         except OSError:
-            pass  # moved or deleted — fall through to a fresh lookup
+            pass
     raw, filename, _uptodate = _env.loader.get_source(_env, template_name)
     tmpl = _env.from_string(_strip_frontmatter(raw))
     if filename:
         try:
             st = os.stat(filename)
-            _compiled_cache[template_name] = (filename, st.st_mtime_ns,
-                                              st.st_size, tmpl)
+            _compiled_cache[template_name] = ((rev, filename, st.st_mtime_ns, st.st_size), tmpl)
         except OSError:
             pass
     return tmpl
@@ -184,7 +258,7 @@ def template_exists(template_path: str) -> bool:
 _SKILL_META_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
 _FRONT_KEY_RE = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.+?)\s*$", re.MULTILINE)
 
-_skill_meta_cache: Dict[str, Dict[str, str]] = {}
+_skill_meta_cache: Dict[str, Tuple[tuple, Dict[str, str]]] = {}
 
 
 def load_skill_meta(skill_file: str) -> Dict[str, str]:
@@ -200,11 +274,14 @@ def load_skill_meta(skill_file: str) -> Dict[str, str]:
     Returns ``{"name": "...", "description": "..."}``. Description is
     stripped of leading/trailing whitespace so the template can use
     multi-line bodies. Result is cached per process — the cache is
-    invalidated when ``save_template`` clears the Jinja env cache (admin
-    template editor save path).
+    invalidated after override writes and checked against the world
+    override revision to reject late cache insertions.
     """
-    if skill_file in _skill_meta_cache:
-        return _skill_meta_cache[skill_file]
+    from app.core import template_overrides
+    rev = template_overrides.revision()
+    hit = _skill_meta_cache.get(skill_file)
+    if hit is not None and hit[0] == rev:
+        return hit[1]
 
     template_name = f"skills/{skill_file}.md"
     raw = _env.loader.get_source(_env, template_name)[0]
@@ -229,7 +306,7 @@ def load_skill_meta(skill_file: str) -> Dict[str, str]:
     meta = dict(front)
     meta["name"] = name
     meta["description"] = description
-    _skill_meta_cache[skill_file] = meta
+    _skill_meta_cache[skill_file] = (rev, meta)
     return meta
 
 

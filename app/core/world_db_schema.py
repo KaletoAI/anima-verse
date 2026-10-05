@@ -1,15 +1,15 @@
-"""Schema-Definitionen fuer die Welt-DB.
+"""Schema definitions for the world DB.
 
-Alle CREATE TABLE / CREATE INDEX Statements zentral verwaltet. Migrations-
-Philosophie: idempotent, IF NOT EXISTS ueberall — Schema-Aenderungen laufen
-bei jedem init_schema() durch.
+All CREATE TABLE / CREATE INDEX statements are managed centrally.
+Migrations are idempotent: IF NOT EXISTS throughout, applied at every
+init_schema() call.
 
-Konventionen:
-- Primary Keys als explizites PK, keine ROWID-Abhaengigkeiten
-- Timestamps als ISO-Strings (TEXT) fuer Sort-Ordering
-- Komplexe/variable Strukturen als JSON-Blobs (TEXT + json_valid Check)
-- IDs fuer Welt-Items mit Praefix `w_`, Shared mit `s_` (Shared bleibt JSON)
-- Foreign Keys: AN, ON DELETE CASCADE wo sinnvoll
+Conventions:
+- Explicit primary keys, no ROWID dependencies
+- ISO timestamps (TEXT) for sorting
+- Complex/variable structures as JSON blobs (TEXT + json_valid checks)
+- World item IDs use `w_`, shared IDs use `s_` (shared data stays JSON)
+- Foreign keys enabled, ON DELETE CASCADE where appropriate
 """
 
 SCHEMA_VERSION = 8  # 8: seamless world — metre positions, terrain tables
@@ -60,7 +60,7 @@ def rooms_rebuild_needed(table_info) -> bool:
 
 
 SCHEMA_STATEMENTS = [
-    # ── Kern / Welt ────────────────────────────────────────────────────
+    # ── Core / World ────────────────────────────────────────────────────
     """CREATE TABLE IF NOT EXISTS world_kv (
         key   TEXT PRIMARY KEY,
         value TEXT
@@ -100,10 +100,9 @@ SCHEMA_STATEMENTS = [
         name   TEXT NOT NULL,
         effect TEXT DEFAULT '{}'
     )""",
-    # Prompt-Filter: pro Zustand (drunk, exhausted, ...) wird definiert
-    # welche Bloecke aus dem Thought-Prompt rausfliegen + welcher Modifier-
-    # Text dem LLM stattdessen gezeigt wird. Ueberschreibt by id den
-    # gleichnamigen Eintrag aus shared/prompt_filters/filters.json.
+    # Prompt filters define which thought-prompt blocks to remove for each
+    # state (drunk, exhausted, ...) and which modifier text to show instead.
+    # Overrides the same id in shared/prompt_filters/filters.json.
     """CREATE TABLE IF NOT EXISTS prompt_filters (
         id              TEXT PRIMARY KEY,
         condition       TEXT NOT NULL,
@@ -114,6 +113,16 @@ SCHEMA_STATEMENTS = [
         meta            TEXT DEFAULT '{}',
         icon            TEXT DEFAULT '',
         image_modifier  TEXT DEFAULT ''
+    )""",
+    # Per-world LLM template overrides (plan-instanz-config I6): the override
+    # replaces the whole template of that Jinja name; base_hash is the sha256
+    # of the shipped file when the override was saved (editor warning when
+    # the shipped template changed since).
+    """CREATE TABLE IF NOT EXISTS llm_template_overrides (
+        path        TEXT PRIMARY KEY,
+        content     TEXT NOT NULL,
+        base_hash   TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
     )""",
 
     # ── Characters ─────────────────────────────────────────────────────
@@ -143,7 +152,7 @@ SCHEMA_STATEMENTS = [
         FOREIGN KEY(character_name) REFERENCES characters(name) ON DELETE CASCADE
     )""",
 
-    # ── Chat-Historie ──────────────────────────────────────────────────
+    # ── Chat history ──────────────────────────────────────────────────
     """CREATE TABLE IF NOT EXISTS chat_messages (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         character_name TEXT NOT NULL,
@@ -165,11 +174,11 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_chat_char_ts ON chat_messages (character_name, ts)",
     "CREATE INDEX IF NOT EXISTS idx_chat_ts ON chat_messages (ts)",
 
-    # ── Raum-Konversation: Wahrnehmungs-Stream ─────────────────────────
-    # plan-room-conversation Phase 1. `utterances` = kanonische Wahrheit
-    # (eine Zeile pro Sprechakt), `perceptions` = Fan-Out (eine Zeile pro
-    # Wahrnehmendem, beim Schreiben bereits gefiltert). Geheimer Inhalt
-    # liegt NUR in `utterances`; whisper_meta-Perceptions tragen keinen Inhalt.
+    # ── Room conversation: perception stream ─────────────────────────
+    # plan-room-conversation phase 1: `utterances` are canonical truth
+    # (one row per speech act); `perceptions` fan out to each perceiver,
+    # filtered at write time. Secret content lives ONLY in `utterances`;
+    # whisper_meta perceptions carry no content.
     """CREATE TABLE IF NOT EXISTS utterances (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
         ts           TEXT NOT NULL,
@@ -198,10 +207,10 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_perceptions_perceiver_ts ON perceptions (perceiver, ts)",
     "CREATE INDEX IF NOT EXISTS idx_perceptions_utterance ON perceptions (utterance_id)",
 
-    # Szenen (plan-room-conversation §7): eine offene Szene pro Raum, getouched
-    # bei jeder Äußerung. Beim Verebben (Idle) schließt der Loop sie, konsolidiert
-    # die Roh-Wahrnehmungen in eine Szenen-Summary (→ Teilnehmer-Gedächtnis) und
-    # prunt die Perceptions. status: open | consolidated.
+    # Scenes (plan-room-conversation §7): one open scene per room, touched
+    # on every utterance. On idle, the loop closes it, consolidates raw
+    # perceptions into a scene summary (participant memory), then prunes
+    # perceptions. status: open | consolidated.
     """CREATE TABLE IF NOT EXISTS scenes (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         location_id    TEXT NOT NULL,
@@ -215,13 +224,12 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_scenes_open ON scenes (status, location_id, room_id)",
     "CREATE INDEX IF NOT EXISTS idx_scenes_activity ON scenes (status, last_activity_ts)",
 
-    # ── Gedanken-Journal (plan-thought-journal.md) ─────────────────────
-    # Das Narrativ eines Thought-Turns — PRIVAT. Genau drei Konsumenten:
-    # der eigene naechste Thought-Prompt, die eigene Tages-Konsolidierung,
-    # das Admin-Panel. Es fliesst NIE in den Perception-Stream, in fremde
-    # Prompts, in Chat-Historien oder in Notifications; Speichern ist
-    # Lagerung, keine Zustellung (der Verbs-only-Vertrag bleibt). Roh ist
-    # transient: nach der Tages-Konsolidierung wird geprunt.
+    # ── Thought journal (plan-thought-journal.md) ─────────────────────
+    # The narrative of a thought turn is PRIVATE. Exactly three consumers:
+    # the owner's next thought prompt, daily consolidation, and admin panel.
+    # It NEVER enters perceptions, other characters' prompts, chat history,
+    # or notifications. Storage is not delivery (the verbs-only contract
+    # remains). Raw entries are transient, pruned after daily consolidation.
     """CREATE TABLE IF NOT EXISTS thoughts (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         character_name TEXT NOT NULL,
@@ -270,7 +278,7 @@ SCHEMA_STATEMENTS = [
         FOREIGN KEY(character_name) REFERENCES characters(name) ON DELETE CASCADE
     )""",
 
-    # ── Histories (Zeit-Serien) ────────────────────────────────────────
+    # ── Histories (time series) ────────────────────────────────────────
     """CREATE TABLE IF NOT EXISTS mood_history (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         character_name TEXT NOT NULL,
@@ -298,8 +306,8 @@ SCHEMA_STATEMENTS = [
         reason         TEXT DEFAULT '',
         FOREIGN KEY(character_name) REFERENCES characters(name) ON DELETE CASCADE
     )""",
-    # social_dialog_history ist entfernt — Social-Dialog laeuft als forced_thought
-    # ueber die normale Chat-History (plan-thoughts-and-conversation).
+    # social_dialog_history was removed: social dialogue runs as forced_thought
+    # through normal chat history (plan-thoughts-and-conversation).
     """CREATE TABLE IF NOT EXISTS diary_entries (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         character_name TEXT NOT NULL,
@@ -310,7 +318,7 @@ SCHEMA_STATEMENTS = [
         FOREIGN KEY(character_name) REFERENCES characters(name) ON DELETE CASCADE
     )""",
 
-    # ── Content (Welt-Level) ───────────────────────────────────────────
+    # ── Content (world level) ───────────────────────────────────────────
     """CREATE TABLE IF NOT EXISTS items (
         id            TEXT PRIMARY KEY,         -- w_... (Welt) / s_... (nur referenziert, liegt in shared)
         name          TEXT NOT NULL,
@@ -359,10 +367,10 @@ SCHEMA_STATEMENTS = [
         created_at     TEXT NOT NULL,
         updated_at     TEXT NOT NULL
     )""",
-    # Vereinheitlichte Intents (plan-intents-unified.md): EIN Eintrag für alles,
-    # was ein Character tun soll/will — vom Menschen gesetzt (source=human, frühere
-    # Assignments) ODER vom Character (source=character: Versprechen, Retrospect-
-    # Ziele). trigger/action/participants/meta als JSON.
+    # Unified intents (plan-intents-unified.md): ONE entry for everything a
+    # character should/wants to do, set by a human (source=human, formerly
+    # assignments) OR a character (source=character: promises, retrospect
+    # goals). trigger/action/participants/meta are JSON.
     """CREATE TABLE IF NOT EXISTS intents (
         id             TEXT PRIMARY KEY,
         source         TEXT NOT NULL DEFAULT 'character',
@@ -463,7 +471,7 @@ SCHEMA_STATEMENTS = [
         updated_at   TEXT NOT NULL
     )""",
 
-    # ── Inventar ──────────────────────────────────────────────────────
+    # ── Inventory ──────────────────────────────────────────────────────
     """CREATE TABLE IF NOT EXISTS inventory_items (
         character_name TEXT NOT NULL,
         item_id        TEXT NOT NULL,
@@ -528,7 +536,7 @@ SCHEMA_STATEMENTS = [
         value TEXT
     )""",
 
-    # ── Image-Metadaten (redundant zum Sidecar-JSON auf Disk) ──────────
+    # ── Image metadata (duplicated in sidecar JSON on disk) ──────────
     """CREATE TABLE IF NOT EXISTS image_metadata (
         filename       TEXT PRIMARY KEY,
         character_name TEXT,
@@ -545,7 +553,7 @@ SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_image_char ON image_metadata (character_name, directory)",
     "CREATE INDEX IF NOT EXISTS idx_image_created ON image_metadata (created_at)",
 
-    # ── Model-Capabilities (Cache) ─────────────────────────────────────
+    # ── Model capabilities (cache) ─────────────────────────────────────
     """CREATE TABLE IF NOT EXISTS model_capabilities (
         model        TEXT PRIMARY KEY,
         capabilities TEXT DEFAULT '{}'
@@ -636,7 +644,7 @@ SCHEMA_STATEMENTS = [
         PRIMARY KEY (axis, kind, key)
     )""",
 
-    # ── LLM Call Statistik (fuer Dauer-Schaetzung + Admin-Auswertung) ──
+    # ── LLM call statistics (duration estimates + admin analysis) ──
     """CREATE TABLE IF NOT EXISTS llm_call_stats (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         ts          TEXT NOT NULL,
@@ -673,10 +681,10 @@ SCHEMA_STATEMENTS = [
         PRIMARY KEY (day, point, endpoint, question)
     )""",
 
-    # ── Party-System (gemeinsam reisen) ───────────────────────────────────
-    # Eine Party = ein Leader + N Follower (JSON-Liste). Nur der Leader bewegt
-    # sich selbst; Follower werden mitgezogen (siehe save_character_current_*).
-    # Ein Character ist in hoechstens einer Party. Siehe app/core/party_engine.py.
+    # ── Party system (travelling together) ───────────────────────────────────
+    # A party has one leader and N followers (JSON list). Only the leader
+    # moves independently; followers move along (save_character_current_*).
+    # A character belongs to at most one party. See app/core/party_engine.py.
     """CREATE TABLE IF NOT EXISTS parties (
         party_id   TEXT PRIMARY KEY,
         leader     TEXT NOT NULL,
@@ -725,7 +733,7 @@ SCHEMA_STATEMENTS = [
     # ── LLM prompt composition cache (prompt_compose_llm.py) ─────────────
     # Same input -> same composed prompt: a regenerate series and a batch run
     # cost ONE call, not one per image. Key = sha256 over style, subject,
-    # shape hint, family and the template's mtime (editing the template in
+    # shape hint, family and the template stamp (editing the template in
     # /admin/templates starts a new generation of keys). No eviction.
     """CREATE TABLE IF NOT EXISTS prompt_compose_cache (
         key        TEXT PRIMARY KEY,
@@ -845,7 +853,7 @@ SCHEMA_STATEMENTS = [
         PRIMARY KEY (sig, tx, tz)
     )""",
 
-    # ── The EXPLORATION MEMORY (Fog-Gedaechtnis, 2026-08-16) ─────────────────
+    # ── The EXPLORATION MEMORY (fog memory, 2026-08-16) ─────────────────
     # Where a character has actually stood, as 64 m cells anchored at the world
     # origin: cell (cx, cz) covers [cx*64, (cx+1)*64) on both axes. The overview
     # veil spares these in addition to the known location footprints.
@@ -896,8 +904,8 @@ SCHEMA_STATEMENTS = [
 ]
 
 
-# ALTER TABLE migrations — laufen nach allen CREATEs idempotent durch.
-# Pattern: pro Tabelle die fehlenden Spalten hinzufuegen, OperationalError = existiert schon.
+# ALTER TABLE migrations run idempotently after all CREATE statements.
+# Add missing columns per table; OperationalError means the column exists.
 ALTER_MIGRATIONS = [
     # thoughts: characters present at the time of the thought (JSON name list)
     # — context for the admin journal (user feedback 2026-07-29). Old rows
