@@ -1294,7 +1294,7 @@ def templates_list(user=Depends(require_admin)):
 def templates_read(path: str, user=Depends(require_admin)):
     from app.core.template_preview import read_template
     try:
-        return {"path": path, "content": read_template(path)}
+        return {"path": path, **read_template(path)}
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Template not found: {path}")
     except ValueError as e:
@@ -1315,10 +1315,20 @@ def _templates_save_sync(user, body: Any):
         raise HTTPException(status_code=400, detail="path + content required")
     from app.core.template_preview import save_template
     try:
-        save_template(path, content)
+        result = save_template(path, content)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"status": "saved", "path": path}
+    return {"status": "saved", "path": path, **result}
+
+
+@router.delete("/templates/override")
+def templates_delete_override(path: str, user=Depends(require_admin)):
+    """Drop the world's override so the shipped template applies again."""
+    from app.core.template_preview import delete_template_override
+    try:
+        return {"removed": delete_template_override(path)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/templates/render")
@@ -1345,6 +1355,9 @@ _TEMPLATES_PAGE_HTML = """<!DOCTYPE html>
 </head>
 <body>
 <div class="topbar">
+  <span id="world">World: …</span>
+  <span id="origin"></span>
+  <button id="btn-delete-override" hidden>Delete override</button>
   <label>Template</label>
   <select id="sel-template"></select>
   <label>Avatar</label>
@@ -1355,14 +1368,18 @@ _TEMPLATES_PAGE_HTML = """<!DOCTYPE html>
   <button id="btn-render">Refresh preview</button>
   <span id="status">—</span>
 </div>
+<div id="base-warning" class="warn" hidden></div>
 <div class="cols">
   <div class="col">
     <div class="col-header">Edit (raw markdown)</div>
     <textarea id="editor" spellcheck="false" placeholder="Pick a template above…"></textarea>
   </div>
   <div class="col">
-    <div class="col-header">Preview (real data, what production would build)</div>
+    <div class="col-header">Preview (real data, what production would build)
+      <button id="btn-view-preview">Preview</button><button id="btn-view-diff">Diff to shipped</button>
+    </div>
     <pre class="preview" id="preview">—</pre>
+    <pre class="preview" id="diff" hidden></pre>
     <div class="note" id="note">—</div>
   </div>
 </div>

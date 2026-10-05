@@ -19,18 +19,19 @@ The capture exception is a ``BaseException`` subclass so that
 Public API
 ----------
     list_templates() -> list[dict]
-    read_template(rel_path) -> str
-    save_template(rel_path, content) -> None
+    read_template(rel_path) -> dict
+    save_template(rel_path, content) -> dict
     render_with_real_data(rel_path, agent, avatar) -> dict
         {ok, output, note}
 """
 from __future__ import annotations
 
+import re
 from contextlib import contextmanager
 
 from app.core.timeutils import parse_iso
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
 
@@ -74,6 +75,24 @@ def list_templates() -> List[Dict[str, Any]]:
                 "kind": kind,
                 "has_preview": False,
             })
+    from app.core import prompt_templates, template_overrides
+    overrides = template_overrides.all_overrides()
+    seen = set()
+    for entry in out:
+        name = editor_to_name(entry["path"])
+        seen.add(name)
+        shipped = _shipped_or_none(name)
+        ov = overrides.get(name)
+        entry["override"] = ov is not None
+        entry["base_changed"] = bool(ov and shipped is not None
+                                     and ov.base_hash != template_overrides.content_hash(shipped))
+        first = next((root / name for root in prompt_templates.template_search_dirs()
+                      if (root / name).is_file()), None)
+        entry["shadowed"] = bool(first and first.resolve() != _resolve_safe(entry["path"]).resolve())
+    for name in sorted(overrides.keys() - seen):
+        if _shipped_or_none(name) is None:
+            out.append({"path": name, "kind": "orphan", "override": True,
+                        "has_preview": False, "base_changed": False, "shadowed": False})
     return out
 
 
@@ -93,23 +112,68 @@ def _resolve_safe(rel_path: str) -> Path:
     return p
 
 
-def read_template(rel_path: str) -> str:
-    p = _resolve_safe(rel_path)
-    if not p.exists():
-        raise FileNotFoundError(rel_path)
-    return p.read_text(encoding="utf-8")
+_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./-]*\.md$")
 
 
-def save_template(rel_path: str, content: str) -> None:
-    p = _resolve_safe(rel_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content, encoding="utf-8")
+def editor_to_name(rel_path: str) -> str:
+    """The Jinja name of an editor path (plugin:<pkg>/<rel> -> <rel>)."""
+    if rel_path.startswith("plugin:"):
+        return rel_path[len("plugin:"):].partition("/")[2]
+    return rel_path
+
+
+def _canonical_name(rel_path: str) -> str:
+    """Validate a Jinja name without requiring a registry entry or file."""
+    name = editor_to_name(rel_path)
+    if not _NAME_RE.fullmatch(name) or ".." in name.split("/"):
+        raise ValueError(f"Invalid template name: {rel_path}")
+    return name
+
+
+def _shipped_or_none(name: str) -> Optional[str]:
+    from jinja2 import TemplateNotFound
+    from app.core import prompt_templates
     try:
-        from app.core.prompt_templates import _env, _invalidate_skill_meta_cache
-        _env.cache.clear()
-        _invalidate_skill_meta_cache()
-    except Exception:
-        pass
+        return prompt_templates.shipped_source(name)
+    except TemplateNotFound:
+        return None
+
+
+def read_template(rel_path: str) -> Dict[str, Any]:
+    from app.core import paths, template_overrides
+    name = _canonical_name(rel_path)
+    shipped = _shipped_or_none(name)
+    ov = template_overrides.lookup(name)
+    if shipped is None and ov is None:
+        raise FileNotFoundError(rel_path)
+    return {
+        "content": ov.content if ov else shipped,
+        "shipped": shipped or "",
+        "origin": "override" if ov else "shipped",
+        "orphan": shipped is None,
+        "base_changed": bool(ov and shipped is not None
+                             and ov.base_hash != template_overrides.content_hash(shipped)),
+        "world": paths.get_storage_dir().name,
+    }
+
+
+def save_template(rel_path: str, content: str) -> Dict[str, Any]:
+    from app.core import prompt_templates, template_overrides
+    name = _canonical_name(rel_path)
+    shipped = _shipped_or_none(name)
+    if shipped is None:
+        raise ValueError(f"No shipped template: {rel_path}")
+    prompt_templates.check_syntax(content)
+    if content == shipped:
+        template_overrides.delete_override(name)
+        return {"origin": "shipped"}
+    template_overrides.set_override(name, content, template_overrides.content_hash(shipped))
+    return {"origin": "override"}
+
+
+def delete_template_override(rel_path: str) -> bool:
+    from app.core import template_overrides
+    return template_overrides.delete_override(_canonical_name(rel_path))
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +270,7 @@ def _drive_agent_thought(agent: str, avatar: str) -> PreviewResult:
 
 
 def _drive_agent_thought_in_chat(agent: str, avatar: str) -> PreviewResult:
-    """In-chat-Variante (10–30min seit letztem Chat-Turn). Selbe Datenbasis."""
+    """In-chat variant (10–30 minutes since the last chat turn), using the same data."""
     return _drive_agent_thought_template(agent, "chat/agent_thought_in_chat.md")
 
 

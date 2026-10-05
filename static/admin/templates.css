@@ -21,3 +21,12 @@ textarea, pre.preview { flex:1; margin:0; padding:10px; background:#0d1117; colo
 textarea:focus { background:#010409; }
 .note { padding:6px 10px; background:#161b22; border-top:1px solid #30363d; font-size:11px; color:#8b949e; }
 .no-preview { opacity:0.5; }
+
+[hidden] { display:none !important; }
+.add { background: #12361f; }
+.del { background: #3d1418; }
+.warn { padding:10px 14px; color:#f0b72f; background:#332b16; border-bottom:1px solid #665327; }
+#origin.override { color: #f0b72f; }
+#world, #origin { font-size:12px; }
+button:disabled { opacity:0.5; cursor:default; }
+.col-header button { background:#0d1117; color:#c9d1d9; border:1px solid #30363d; border-radius:4px; padding:4px 8px; cursor:pointer; }

@@ -7,9 +7,15 @@ subprocess prints A SHIPPED; F SQL stores exactly path/content/base_hash/
 updated_at; G old includes become stale; H own override rekeys composition
 and deletion restores its key; I any child override rekeys composition;
 J skill metadata replaces its name and rejects an old-revision cache entry.
+Task 8 expectations: G saving/deleting leaves every shipped file hash unchanged;
+H reads X as override with shipped source and unchanged base; I wrong base hash
+flags read/list; J1/J2 invalid syntax preserves absent/existing override;
+K saving shipped source removes override; L orphan reads/lists/deletes but cannot
+save, and traversal deletion is rejected.
 Every part starts and ends with no overrides. Only temporary storage is used.
 """
 import os
+import hashlib
 from pathlib import Path
 import subprocess
 import sys
@@ -97,23 +103,23 @@ def main():
             save(inner, "OVERRIDE")
             assert overrides.fingerprint() == fingerprint
             assert overrides.lookup(inner).content == "OVERRIDE"
-        with part("G"):
+        with part("Task7-G"):
             old = pt._env.get_template(inner)
             save(inner, "NEW")
             assert old.is_up_to_date is False
             assert pt.render(outer) == "A NEW"
-        with part("H"):
+        with part("Task7-H"):
             k0 = key()
             name = "tasks/image_prompt_compose.md"
             save(name, pt.shipped_source(name) + "\nX")
             assert key() != k0
             overrides.delete_override(name)
             assert key() == k0
-        with part("I"):
+        with part("Task7-I"):
             k0 = key()
             save("chat/intent_markers.md", "X")
             assert key() != k0
-        with part("J"):
+        with part("Task7-J"):
             skill = next((pt._TEMPLATE_DIR / "skills").glob("*.md")).stem
             old_rev = overrides.revision()
             old = pt.load_skill_meta(skill)
@@ -121,6 +127,60 @@ def main():
             assert pt.load_skill_meta(skill)["name"] == "Other"
             pt._skill_meta_cache[skill] = (old_rev, old)
             assert pt.load_skill_meta(skill)["name"] == "Other"
+        from app.core import template_preview as editor
+        name = "tasks/consolidation_daily.md"
+        with part("Task8-H"):
+            assert isinstance(editor.read_template(name), dict), "read_template must return metadata, not a string"
+            editor.save_template(name, "X")
+            data = editor.read_template(name)
+            assert isinstance(data, dict), "read_template must return metadata, not a string"
+            assert data["origin"] == "override" and data["content"] == "X"
+            assert data["shipped"] == pt.shipped_source(name)
+            assert data["base_changed"] is False and data["world"] == "world"
+        def hashes():
+            return {str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+                    for folder in pt.template_search_dirs() for p in folder.rglob("*") if p.is_file()}
+        with part("Task8-G"):
+            before = hashes()
+            editor.save_template(name, "X")
+            editor.delete_template_override(name)
+            assert hashes() == before
+        with part("Task8-I"):
+            overrides.set_override(name, "X", "0" * 64)
+            assert editor.read_template(name)["base_changed"] is True
+            assert next(t for t in editor.list_templates() if t["path"] == name)["base_changed"] is True
+        for existing in (False, True):
+            with part("Task8-J2" if existing else "Task8-J1"):
+                if existing:
+                    save(name, "X")
+                try:
+                    editor.save_template(name, "{% if %}")
+                except ValueError as exc:
+                    assert "line 1" in str(exc)
+                else:
+                    raise AssertionError("invalid syntax accepted")
+                ov = overrides.lookup(name)
+                assert (ov.content == "X") if existing else (ov is None)
+        with part("Task8-K"):
+            save(name, "X")
+            assert editor.save_template(name, pt.shipped_source(name))["origin"] == "shipped"
+            assert overrides.lookup(name) is None
+        with part("Task8-L"):
+            orphan = "gone/vanished.md"
+            overrides.set_override(orphan, "X", "0" * 64)
+            data = editor.read_template(orphan)
+            assert data["origin"] == "override" and data["orphan"] is True
+            assert data["shipped"] == ""
+            assert next(t for t in editor.list_templates() if t["path"] == orphan)["kind"] == "orphan"
+            assert editor.delete_template_override(orphan) is True
+            for action in (lambda: editor.save_template(orphan, "Y"),
+                           lambda: editor.delete_template_override("../x.md")):
+                try:
+                    action()
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("invalid operation accepted")
         assert overrides.fingerprint() == ""
         print("ALL CHECKS PASSED")
 

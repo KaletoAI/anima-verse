@@ -308,8 +308,3 @@ def load_skill_meta(skill_file: str) -> Dict[str, str]:
     meta["description"] = description
     _skill_meta_cache[skill_file] = (rev, meta)
     return meta
-
-
-def _invalidate_skill_meta_cache() -> None:
-    """Called from template_preview.save_template after a write."""
-    _skill_meta_cache.clear()
