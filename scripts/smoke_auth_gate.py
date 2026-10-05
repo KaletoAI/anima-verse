@@ -37,6 +37,8 @@ A) THE GATE (SEC-2) — ``auth_gate_middleware``, mounted exactly as
      user      DELETE /characters/Mara/images/x/animation
                                              -> 200   (own gallery, deeper path)
      user      GET /admin/settings           -> 403   (admin prefix)
+     user      GET /admin/world-settings     -> 403   (admin prefix)
+     user      PUT /admin/world-settings     -> 403   (admin prefix)
      user      GET /admin/settings/image-routing/effective
                                              -> 403   (admin prefix, image
                                                        routing Overview)
@@ -263,6 +265,8 @@ check("user DELETE /characters/Mara", status("DELETE", "/characters/Mara", "user
 check("user DELETE /characters/Mara/images/x/animation",
       status("DELETE", "/characters/Mara/images/x/animation", "user"), 200)
 check("user GET /admin/settings", status("GET", "/admin/settings", "user"), 403)
+check("user GET /admin/world-settings", status("GET", "/admin/world-settings", "user"), 403)
+check("user PUT /admin/world-settings", status("PUT", "/admin/world-settings", "user"), 403)
 check("user GET /admin/settings/image-routing/effective",
       status("GET", "/admin/settings/image-routing/effective", "user"), 403)
 check("admin GET /admin/settings/image-routing/effective",
