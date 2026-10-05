@@ -2124,6 +2124,8 @@ def save_part(scope: str, part: dict) -> dict:
     """Replace one scope and save the current union under the module lock."""
     with _LOCK:
         inst, world, _unknown = config_scope.split_by_scope(_CONFIG)
+        other_scope = config_scope.WORLD if scope == config_scope.INSTANCE else config_scope.INSTANCE
+        other_part = copy.deepcopy(world if scope == config_scope.INSTANCE else inst)
         if scope == config_scope.INSTANCE:
             inst = copy.deepcopy(part)
         elif scope == config_scope.WORLD:
@@ -2132,6 +2134,10 @@ def save_part(scope: str, part: dict) -> dict:
             raise ValueError(f"unknown scope {scope!r}")
         union = inst
         _deep_merge(union, world)
+        union_inst, union_world, _unknown = config_scope.split_by_scope(union)
+        actual_other = union_world if other_scope == config_scope.WORLD else union_inst
+        if json.dumps(actual_other, sort_keys=True) != json.dumps(other_part, sort_keys=True):
+            raise ValueError(f"save_part would change the {other_scope} layer")
         save(union)
         # Keep the env publication under the lock so concurrent saves cannot
         # publish an older union after the newest one.

@@ -180,7 +180,8 @@ def _migrate_atmosphere(stats: Dict[str, int]) -> None:
     a shipped default. The config is saved, then the two keys are dropped, so
     a second boot finds nothing and does nothing.
     """
-    from app.core import config
+    import copy
+    from app.core import config, config_admin
     from app.core.db import get_connection, transaction
     from app.core.game_time import TEMPERATURE_LEVELS, WEATHER_KINDS
 
@@ -202,7 +203,7 @@ def _migrate_atmosphere(stats: Dict[str, int]) -> None:
         wanted["weather"] = weather
 
     if wanted:
-        cfg = config.get_all()
+        cfg = copy.deepcopy(config_admin.layer_part("world"))
         seasons = cfg.get("game_seasons")
         # A season list that is the shipped default has no "own" values yet.
         overwrite = config.game_seasons_are_defaults()
@@ -217,7 +218,7 @@ def _migrate_atmosphere(stats: Dict[str, int]) -> None:
                     season[field_name] = value
                     changed += 1
         if changed:
-            config.save(cfg)
+            config.save_part("world", cfg)
             stats["atmosphere"] += changed
 
     with transaction() as conn:

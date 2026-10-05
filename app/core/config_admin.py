@@ -429,6 +429,15 @@ def prepare_layer(scope: str, values: dict, resets=()) -> tuple[dict, dict]:
     schema = config_scope.schema_for(scope)
     if not isinstance(values, dict):
         raise LayerSaveError("body must be a JSON object")
+    def check_objects(data, prefix=""):
+        for key, value in data.items():
+            path = f"{prefix}.{key}" if prefix else key
+            if config_scope.scope_of(path) == config_scope.MIXED and not isinstance(value, dict):
+                raise LayerSaveError(f"{path} must be an object")
+            if isinstance(value, dict):
+                check_objects(value, path)
+
+    check_objects(values)
     resets = check_resets(scope, resets)
     inst, world, unknown = config_scope.split_by_scope(values)
     own, other = (inst, world) if scope == config_scope.INSTANCE else (world, inst)
@@ -454,7 +463,10 @@ def prepare_layer(scope: str, values: dict, resets=()) -> tuple[dict, dict]:
 def commit_layer(scope: str, merged: dict, current: dict) -> dict:
     """Persist exactly the prepared candidate and reload affected services."""
     changed = diff_sections(current, merged)
-    config.save_part(scope, merged)
+    try:
+        config.save_part(scope, merged)
+    except ValueError as e:
+        raise LayerSaveError(str(e)) from e
     return {"changed_sections": changed,
             "reloaded": apply_section_reloads(changed, scope), "warnings": []}
 

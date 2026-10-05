@@ -29,10 +29,11 @@ Reconciliation rules per scanned backend B:
   indistinguishable) leaves that backend's associations untouched instead of
   mass-flagging them missing.
 """
+import copy
 import threading
 from typing import Any, Dict, List
 
-from app.core import config
+from app.core import config, config_admin
 from app.core.log import get_logger
 
 logger = get_logger("lora_library")
@@ -68,13 +69,7 @@ def sync_lora_library() -> Dict[str, Any]:
         return result
 
     with _sync_lock:
-        data = config.get_all()
-        ig = data.setdefault("image_generation", {})
-        triggers: List[Any] = ig.get("lora_triggers")
-        if not isinstance(triggers, list):
-            triggers = []
-        changed = False
-
+        discoveries = []
         for b in getattr(imagegen, "backends", []):
             if not getattr(b, "instance_enabled", True):
                 continue
@@ -93,82 +88,93 @@ def sync_lora_library() -> Dict[str, Any]:
                 logger.info("lora sync: %s returned no LoRAs — skipped", b.name)
                 continue
             result["scanned"].append(b.name)
-            nameset = set(names)
+            discoveries.append((b, names))
 
-            by_name: Dict[str, Dict[str, Any]] = {}
+        with config._LOCK:
+            part = copy.deepcopy(config_admin.layer_part("instance"))
+            ig = part.setdefault("image_generation", {})
+            triggers: List[Any] = ig.get("lora_triggers")
+            if not isinstance(triggers, list):
+                triggers = []
+            changed = False
+
+            for b, names in discoveries:
+                nameset = set(names)
+
+                by_name: Dict[str, Dict[str, Any]] = {}
+                for e in triggers:
+                    if isinstance(e, dict):
+                        n = (e.get("lora") or "").strip()
+                        if n and n not in by_name:
+                            by_name[n] = e
+
+                # Reported names: new discoveries + confirmed associations.
+                for n in names:
+                    e = by_name.get(n)
+                    if e is None:
+                        e = {"lora": n, "word": "", "source": "discovered",
+                             "backends": [b.name], "missing_on": []}
+                        triggers.append(e)
+                        by_name[n] = e
+                        result["added"] += 1
+                        changed = True
+                        continue
+                    backends = e.setdefault("backends", [])
+                    if not backends:
+                        continue  # "all backends" entry — never reconciled
+                    if b.name not in backends:
+                        backends.append(b.name)
+                        changed = True
+                    missing_on = e.get("missing_on") or []
+                    if b.name in missing_on:
+                        e["missing_on"] = [x for x in missing_on if x != b.name]
+                        changed = True
+
+                # Associations of B whose LoRA vanished from the listing.
+                kept: List[Any] = []
+                for e in triggers:
+                    if not isinstance(e, dict):
+                        kept.append(e)
+                        continue
+                    backends = e.get("backends") or []
+                    lname = (e.get("lora") or "").strip()
+                    if b.name not in backends or lname in nameset:
+                        kept.append(e)
+                        continue
+                    if _is_touched(e):
+                        missing_on = e.setdefault("missing_on", [])
+                        if b.name not in missing_on:
+                            missing_on.append(b.name)
+                            changed = True
+                        kept.append(e)
+                        continue
+                    remaining = [x for x in backends if x != b.name]
+                    changed = True
+                    if remaining:
+                        e["backends"] = remaining
+                        kept.append(e)
+                    else:
+                        result["removed"] += 1  # last association gone — drop
+                triggers = kept
+
+            # Missing count over the scanned backends (for the admin toast).
             for e in triggers:
                 if isinstance(e, dict):
-                    n = (e.get("lora") or "").strip()
-                    if n and n not in by_name:
-                        by_name[n] = e
+                    result["missing"] += sum(
+                        1 for x in (e.get("missing_on") or [])
+                        if x in result["scanned"])
 
-            # Reported names: new discoveries + confirmed associations.
-            for n in names:
-                e = by_name.get(n)
-                if e is None:
-                    e = {"lora": n, "word": "", "source": "discovered",
-                         "backends": [b.name], "missing_on": []}
-                    triggers.append(e)
-                    by_name[n] = e
-                    result["added"] += 1
-                    changed = True
-                    continue
-                backends = e.setdefault("backends", [])
-                if not backends:
-                    continue  # "all backends" entry — never reconciled
-                if b.name not in backends:
-                    backends.append(b.name)
-                    changed = True
-                missing_on = e.get("missing_on") or []
-                if b.name in missing_on:
-                    e["missing_on"] = [x for x in missing_on if x != b.name]
-                    changed = True
-
-            # Associations of B whose LoRA vanished from the listing.
-            kept: List[Any] = []
-            for e in triggers:
-                if not isinstance(e, dict):
-                    kept.append(e)
-                    continue
-                backends = e.get("backends") or []
-                lname = (e.get("lora") or "").strip()
-                if b.name not in backends or lname in nameset:
-                    kept.append(e)
-                    continue
-                if _is_touched(e):
-                    missing_on = e.setdefault("missing_on", [])
-                    if b.name not in missing_on:
-                        missing_on.append(b.name)
-                        changed = True
-                    kept.append(e)
-                    continue
-                remaining = [x for x in backends if x != b.name]
-                changed = True
-                if remaining:
-                    e["backends"] = remaining
-                    kept.append(e)
-                else:
-                    result["removed"] += 1  # last association gone — drop
-            triggers = kept
-
-        # Missing count over the scanned backends (for the admin toast).
-        for e in triggers:
-            if isinstance(e, dict):
-                result["missing"] += sum(
-                    1 for x in (e.get("missing_on") or [])
-                    if x in result["scanned"])
-
-        if changed:
-            ig["lora_triggers"] = triggers
-            config.save(data)
-            # A changed association must be able to warn again (and an
-            # obsolete warning must stop repeating) — see warn_dropped_loras.
-            with _dropped_lock:
-                _dropped_logged.clear()
-            logger.info("lora sync: +%d added, -%d removed, %d missing "
-                        "(scanned: %s)", result["added"], result["removed"],
-                        result["missing"], ", ".join(result["scanned"]) or "-")
-        result["changed"] = changed
+            if changed:
+                ig["lora_triggers"] = triggers
+                config.save_part("instance", part)
+                # A changed association must be able to warn again (and an
+                # obsolete warning must stop repeating) — see warn_dropped_loras.
+                with _dropped_lock:
+                    _dropped_logged.clear()
+                logger.info("lora sync: +%d added, -%d removed, %d missing "
+                            "(scanned: %s)", result["added"], result["removed"],
+                            result["missing"], ", ".join(result["scanned"]) or "-")
+            result["changed"] = changed
     return result
 
 

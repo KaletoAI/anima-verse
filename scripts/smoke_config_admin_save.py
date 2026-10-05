@@ -85,6 +85,10 @@ N  API guards and recursive lists: non-object bodies, malformed resets,
    counterpart is removed; a non-default value and a new entry retain their
    values. Duplicate names in a nested list report that list's dotted path.
 
+O  memory=null in a world save is rejected mentioning memory, with instance
+   bytes unchanged. Direct cross-layer save_part candidates raise ValueError
+   before either config or secret file is written. commit_layer maps it to LayerSaveError.
+
 L  Env bridge follows the newest union: an instance save setting tts.backend
    to a non-default choice, then a world save -> os.environ value of the
    tts.backend bridge key (read the key name from config._flatten_to_env)
@@ -243,5 +247,33 @@ check(merged == {"entries": [{"name": "one", "mode": "custom", "children": [
     {"name": "new", "enabled": True}]}, "N nested strip keeps new and custom values")
 check(adm.duplicate_names({"a": {"b": [{"name": "dup"}, {"name": "dup"}]}})
       == ["a.b: duplicate name 'dup'"], "N nested duplicate path")
+setup({"memory": {"chat_retention_days": 42}})
+before = [(p, p.read_bytes()) for folder in (inst, world)
+          for p in folder.glob("*.json")]
+try:
+    adm.save_layer("world", {"memory": None})
+except adm.LayerSaveError as e:
+    check("memory" in str(e), "O mixed object rejected")
+else:
+    check(False, "O mixed object rejected")
+check(all(p.read_bytes() == data for p, data in before), "O malformed save writes nothing")
+setup({"memory": {"chat_retention_days": 42}})
+for scope, candidate in (("world", {"memory": None}),
+                         ("instance", {"chat": {"injected_world_value": 1}})):
+    before = [(p, p.read_bytes()) for folder in (inst, world)
+              for p in folder.glob("*.json")]
+    try:
+        config.save_part(scope, candidate)
+    except ValueError as e:
+        check("save_part would change the" in str(e), "O direct guard " + scope)
+    else:
+        check(False, "O direct guard " + scope)
+    check(all(p.read_bytes() == data for p, data in before), "O guard writes nothing " + scope)
+try:
+    adm.commit_layer("world", {"memory": None}, adm.layer_part("world"))
+except adm.LayerSaveError:
+    check(True, "O commit maps guard")
+else:
+    check(False, "O commit maps guard")
 print(f"{len(failures)} failure(s)")
 sys.exit(bool(failures))

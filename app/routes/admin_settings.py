@@ -1318,6 +1318,9 @@ def _templates_save_sync(user, body: Any):
         result = save_template(path, content)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    from app.core.template_preview import _canonical_name
+    if _canonical_name(path).startswith("skills/"):
+        result["reloaded"] = config_admin.apply_section_reloads(["skills"], "world")
     return {"status": "saved", "path": path, **result}
 
 
@@ -1326,7 +1329,11 @@ def templates_delete_override(path: str, user=Depends(require_admin)):
     """Drop the world's override so the shipped template applies again."""
     from app.core.template_preview import delete_template_override
     try:
-        return {"removed": delete_template_override(path)}
+        result = {"removed": delete_template_override(path)}
+        from app.core.template_preview import _canonical_name
+        if result["removed"] and _canonical_name(path).startswith("skills/"):
+            result["reloaded"] = config_admin.apply_section_reloads(["skills"], "world")
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -12,6 +12,8 @@ H reads X as override with shipped source and unchanged base; I wrong base hash
 flags read/list; J1/J2 invalid syntax preserves absent/existing override;
 K saving shipped source removes override; L orphan reads/lists/deletes but cannot
 save, and traversal deletion is rejected.
+Route regression: saving/deleting skills/outfit_change.md reloads running skills
+once each and reports ["skills"]; tasks/consolidation_daily.md never reloads.
 Every part starts and ends with no overrides. Only temporary storage is used.
 """
 import os
@@ -181,6 +183,31 @@ def main():
                     pass
                 else:
                     raise AssertionError("invalid operation accepted")
+        from app.core import dependencies
+        from app.routes import admin_settings as routes
+        class SkillManager:
+            calls = 0
+            def reload_skills(self):
+                self.calls += 1
+        manager = SkillManager()
+        previous = dependencies._skill_manager
+        dependencies._skill_manager = manager
+        try:
+            for template, expected in (("skills/outfit_change.md", ["skills"]),
+                                       ("tasks/consolidation_daily.md", [])):
+                with part("Route " + template):
+                    initial = manager.calls
+                    response = routes._templates_save_sync(None, {"path": template, "content": "X"})
+                    assert response.get("reloaded", []) == expected
+                    assert manager.calls == initial + bool(expected)
+                    assert overrides.lookup(template).content == "X"
+                    response = routes.templates_delete_override(template, user=None)
+                    assert response["removed"] is True
+                    assert response.get("reloaded", []) == expected
+                    assert manager.calls == initial + 2 * bool(expected)
+                    assert overrides.lookup(template) is None
+        finally:
+            dependencies._skill_manager = previous
         assert overrides.fingerprint() == ""
         print("ALL CHECKS PASSED")
 
