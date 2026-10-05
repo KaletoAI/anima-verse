@@ -36,13 +36,13 @@ Expected, by hand:
     "media_generation_enabled" = base.media_generation_enabled() (patched to
     True -> True; to False -> False: with the world's master switch off the
     Overview shows a banner that nothing renders)
- R3 settings_save calls _validate_image_routing (source check)
+ R3 settings_save worker calls _validate_image_routing (source check)
 
-settings_save end to end (config.get_all / save / env flatten / reloads
+settings_save end to end (config_admin.layer_part / config.save_part / reloads
 patched; the stored config is
   {"image_generation": {"backends": <fixture>, "routing": {"photo": ["Flux2*"]}}}):
  S1 payload image_generation WITHOUT a "routing" key (the admin page sends
-    JSON.stringify(CONFIG); a tab loaded before the chains existed has none)
+    {values: CONFIG, resets: []}; a tab loaded before the chains existed has none)
     -> the saved routing is still {"photo": ["Flux2*"]}. merge_sensitive
     alone treats a missing key as deleted; a dropped routing would make the
     next load re-seed from the old default fields and lose every edited chain
@@ -173,15 +173,15 @@ check("R2 media switch off",
       False)
 routing.explain_image_routing = _real_explain
 _img_base.media_generation_enabled = _real_media_on
-check("R3 save wiring", "_validate_image_routing(" in inspect.getsource(adm.settings_save), True)
+check("R3 save wiring", "_validate_image_routing(" in inspect.getsource(adm._settings_save_sync), True)
 
 
 # ── settings_save end to end ────────────────────────────────────────────
 STORED = {"image_generation": {"backends": copy.deepcopy(BACKENDS),
                                "routing": {"photo": ["Flux2*"]}}}
 SAVED = []
-adm.config.get_all = lambda: copy.deepcopy(STORED)
-adm.config.save = lambda data, config_path=None: SAVED.append(copy.deepcopy(data))
+adm.config_admin.layer_part = lambda scope: copy.deepcopy(STORED)
+adm.config.save_part = lambda scope, part: SAVED.append(copy.deepcopy(part)) or part
 adm.config._flatten_to_env = lambda data: None
 from app.core import config_admin
 config_admin.apply_section_reloads = lambda keys, scope: []
@@ -192,7 +192,7 @@ class _Req:
         self._payload = payload
 
     async def json(self):
-        return copy.deepcopy(self._payload)
+        return {"values": copy.deepcopy(self._payload), "resets": []}
 
 
 def save(ig_extra, with_routing_key=True, backends=None, extra=None):

@@ -1,5 +1,6 @@
 
 let CONFIG = {};
+const RESETS = new Set();
 let SCHEMA = {};
 let USE_CASE_DEFAULTS = { use_cases: [], families: [], defaults: {} };
 let PROVIDERS_CACHE = {};
@@ -244,7 +245,7 @@ function renderUseCasesMasterDetail(path) {
 }
 
 function renderUseCaseDetail(uc) {
-    if (!uc) return '<div class="md-empty-detail">Use-Case links auswaehlen.</div>';
+    if (!uc) return '<div class="md-empty-detail">Select a use case on the left.</div>';
     const D = USE_CASE_DEFAULTS || { families: [], defaults: {} };
     const FIELDS = [['prompt_style', 'Style'], ['prompt_negative', 'Negative'], ['prompt_instruction', 'Instruction']];
     let html = '<div class="md-detail-head"><span class="md-detail-title">' + esc(uc) + '</span></div>';
@@ -1528,7 +1529,7 @@ async function loadImagegenModelCombo(path, base) {
     const dlId = 'dl-' + path.replace(/[^a-zA-Z0-9]/g, '-');
     const dl = document.getElementById(dlId);
     if (!dl) return;
-    if (!apiUrl) { toast('Bitte zuerst die API URL eintragen', 'error'); return; }
+    if (!apiUrl) { toast('Enter the API URL first', 'error'); return; }
     try {
         const qs = new URLSearchParams({ api_type: apiType, api_url: apiUrl, api_key: apiKey }).toString();
         const resp = await fetch('/admin/settings/imagegen-backends/' + encodeURIComponent(name || '_new') + '/models?' + qs, { credentials: 'same-origin' });
@@ -1536,9 +1537,9 @@ async function loadImagegenModelCombo(path, base) {
         if (data.error) { toast('Load Models: ' + data.error, 'error'); return; }
         const list = data.models || [];
         dl.innerHTML = list.map(m => '<option value="' + esc(m) + '"></option>').join('');
-        toast(list.length ? (list.length + ' Modelle geladen') : 'Keine Modelle gefunden', list.length ? 'success' : 'error');
+        toast(list.length ? (list.length + ' models loaded') : 'No models found', list.length ? 'success' : 'error');
     } catch (e) {
-        toast('Load Models fehlgeschlagen: ' + e.message, 'error');
+        toast('Load Models failed: ' + e.message, 'error');
     }
 }
 
@@ -1591,9 +1592,9 @@ function renderArrayItem(def, item, path, index, labelField) {
     html += '<div class="array-item-header" onclick="toggleArrayItem(this, \'' + sJs(path) + '\')">';
     html += '<span class="chevron">▶</span> ';
     html += '<span class="title" style="margin-left:6px;">' + esc(label) + '</span>';
-    if (item.enabled === false) html += '<span class="badge">deaktiviert</span>';
+    if (item.enabled === false) html += '<span class="badge">disabled</span>';
     if (item.type) html += '<span class="badge">' + esc(item.type || item.api_type || '') + '</span>';
-    html += '<button class="btn btn-sm" style="margin-left:8px;" title="Als neuen Eintrag duplizieren" onclick="event.stopPropagation(); duplicateItem(\'' + sJs(path) + '\')">⧉</button>';
+    html += '<button class="btn btn-sm" style="margin-left:8px;" title="Duplicate as a new entry" onclick="event.stopPropagation(); duplicateItem(\'' + sJs(path) + '\')">⧉</button>';
     html += '<button class="btn btn-sm btn-danger" style="margin-left:4px;" onclick="event.stopPropagation(); removeItem(\'' + sJs(path) + '\')">✕</button>';
     html += '</div>';
     html += '<div class="array-item-body">';
@@ -1700,7 +1701,7 @@ function renderMasterDetail(def, items, path) {
         html += '</tr>';
     }
     if (!order.length) {
-        html += '<tr><td colspan="' + cols.length + '"><span class="md-empty">Keine Eintraege</span></td></tr>';
+        html += '<tr><td colspan="' + cols.length + '"><span class="md-empty">No entries</span></td></tr>';
     }
     html += '</tbody></table>';
     html += '<button class="btn btn-sm" style="margin-top:10px;" onclick="addArrayItem(\'' + sJs(path) + '\', \'' + (def.is_dict ? 'dict' : 'array') + '\')">+ Add</button>';
@@ -1714,7 +1715,7 @@ function renderMasterDetail(def, items, path) {
 }
 
 function renderMasterDetailBody(def, items, path, sel) {
-    if (!sel) return '<div class="md-empty-detail">Eintrag links auswaehlen oder neu anlegen.</div>';
+    if (!sel) return '<div class="md-empty-detail">Select an entry on the left or create one.</div>';
     let item;
     if (def.is_dict) {
         item = (items || {})[sel.slice(path.length + 1)];
@@ -1722,14 +1723,14 @@ function renderMasterDetailBody(def, items, path, sel) {
         const m = sel.match(/\[(\d+)\]$/);
         item = m ? (items || [])[parseInt(m[1], 10)] : null;
     }
-    if (!item) return '<div class="md-empty-detail">Eintrag links auswaehlen oder neu anlegen.</div>';
+    if (!item) return '<div class="md-empty-detail">Select an entry on the left or create one.</div>';
 
-    const label = _itemLabel(item, def.item_label_field, 'Eintrag');
+    const label = _itemLabel(item, def.item_label_field, 'Entry');
     let html = '<div class="md-detail-head">';
     html += '<span class="md-detail-title">' + esc(label) + '</span>';
     html += '<span style="flex:1;"></span>';
-    html += '<button class="btn btn-sm" title="Als neuen Eintrag duplizieren" onclick="duplicateItem(\'' + sJs(sel) + '\')">⧉</button>';
-    html += '<button class="btn btn-sm btn-danger" style="margin-left:4px;" title="Loeschen" onclick="removeItem(\'' + sJs(sel) + '\')">✕</button>';
+    html += '<button class="btn btn-sm" title="Duplicate as a new entry" onclick="duplicateItem(\'' + sJs(sel) + '\')">⧉</button>';
+    html += '<button class="btn btn-sm btn-danger" style="margin-left:4px;" title="Delete" onclick="removeItem(\'' + sJs(sel) + '\')">✕</button>';
     html += '</div>';
     html += renderFields(def.fields, item, sel);
     return html;
@@ -2150,7 +2151,7 @@ async function runActionButton(endpoint, method, path, bodyFrom, confirmMsg, btn
         if (el && 'value' in el) {
             v = el.value;
         }
-        // 2. Fallback: gespeicherter CONFIG-Wert
+        // 2. Fallback: stored CONFIG value
         if (v === undefined || v === null || v === '') {
             v = getVal(sibling);
         }
@@ -2199,13 +2200,14 @@ async function saveConfig() {
         const resp = await fetch('/admin/settings/save', {
             method: 'POST',
             headers: authHeaders(),
-            body: JSON.stringify(CONFIG)
+            body: JSON.stringify({ values: CONFIG, resets: [...RESETS] })
         });
         const result = await resp.json();
         // The image routing Rules page keeps the outcome (a refused chain,
         // save warnings) on screen — a toast is gone after three seconds.
         if (typeof imageRoutingSaveResult === 'function') imageRoutingSaveResult(resp.ok, result);
         if (resp.ok) {
+            RESETS.clear();
             // URL/key changes should apply immediately, without a page reload:
             // invalidate the provider and imagegen backend model caches.
             for (const k of Object.keys(PROVIDERS_CACHE)) delete PROVIDERS_CACHE[k];

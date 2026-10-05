@@ -11,8 +11,7 @@ from typing import Any, Dict, List, Tuple
 import httpx
 
 from app.core.log import get_logger
-from app.core import config, config_admin
-from app.core.config_schema import get_schema
+from app.core import config, config_admin, config_scope
 from app.core.auth_dependency import require_admin
 
 from app.core.timeutils import parse_iso, utc_now, utc_now_iso
@@ -547,12 +546,12 @@ def _write_shared_filters(filters: List[Dict[str, Any]]) -> None:
 
 @router.post("/prompt-filters/save")
 async def prompt_filters_save(request: Request, user=Depends(require_admin)):
-    """Upsert eines Filters in die per-world prompt_filters-Tabelle.
+    """Upsert a filter in the world prompt_filters table.
 
     Body: {id, condition, label, drop_blocks: [...], prompt_modifier,
            icon, image_modifier, enabled}.
-    Wenn die id auch in shared/prompt_filters/filters.json existiert, ist das
-    ein Override. Sonst wird ein neuer world-only Filter angelegt.
+    An id also present in shared/prompt_filters/filters.json creates an
+    override; otherwise this creates a new world-only filter.
     """
 
     body = await request.json()
@@ -761,15 +760,11 @@ async def prompt_filters_import(
 
 @router.get("/settings/raw")
 def settings_raw(user=Depends(require_admin)):
-    """Return full config without masking (for save round-trip).
+    """The instance config, unmasked, with bool/select defaults prefilled.
 
-    Empty fields are pre-filled with their schema default so the admin UI
-    immediately shows what value would apply if left untouched.
+    World settings are edited in Game-Admin Setup (/admin/world-settings).
     """
-    import copy
-    data = copy.deepcopy(config.get_all())
-    config_admin.apply_schema_defaults(data, get_schema())
-    return data
+    return config_admin.layer_view(config_scope.INSTANCE)
 
 
 @router.post("/settings/lora-library/clear-discovered")
@@ -778,7 +773,7 @@ def lora_library_clear_discovered(user=Depends(require_admin)):
     stay). Reset helper — e.g. to re-test the per-backend LoRA filter with a
     clean discovery run. Persists server-side so a following sync works on
     the cleared state."""
-    data = config.get_all()
+    data = config_admin.layer_part(config_scope.INSTANCE)
     ig = data.setdefault("image_generation", {})
     triggers = ig.get("lora_triggers") or []
     kept = [e for e in triggers
@@ -786,7 +781,7 @@ def lora_library_clear_discovered(user=Depends(require_admin)):
     removed = len(triggers) - len(kept)
     if removed:
         ig["lora_triggers"] = kept
-        config.save(data)
+        config.save_part(config_scope.INSTANCE, data)
     return {"removed": removed, "lora_triggers": kept}
 
 
@@ -805,26 +800,34 @@ async def lora_library_sync(user=Depends(require_admin)):
 
 @router.post("/settings/save")
 async def settings_save(request: Request, user=Depends(require_admin)):
-    """Save config. Fields with masked values (***...) are kept from current config."""
-    new_data = await request.json()
+    """Save instance settings after validating the final prepared candidate."""
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be a JSON object")
+    values, resets = body.get("values"), body.get("resets")
+    if not isinstance(values, dict):
+        raise HTTPException(400, "values must be a JSON object")
+    if not isinstance(resets, list):
+        raise HTTPException(400, "resets must be a list of paths")
+    return await asyncio.to_thread(_settings_save_sync, values, resets)
 
-    # Merge: keep current values for masked sensitive fields
-    current = config.get_all()
-    merged = config_admin.merge_sensitive(new_data, current)
-    # Protect fields in sub_array/is_dict items (e.g. image backends) that the
-    # frontend omits on save when the CONFIG value is undefined.
-    config_admin._preserve_unsent_subarray_fields(merged, current, get_schema())
-    config_admin._preserve_unsent_image_routing(merged, current)
 
-    # Structural validation (e.g. llm_routing order uniqueness)
-    err = _validate_llm_routing(merged.get("llm_routing"))
-    if err:
-        raise HTTPException(status_code=400, detail=err)
-    img_err, img_warnings = _validate_image_routing(
-        merged.get("image_generation"),
-        stored_routing=(current.get("image_generation") or {}).get("routing"))
-    if img_err:
-        raise HTTPException(status_code=400, detail=img_err)
+def _settings_save_sync(values: dict, resets: list):
+    """Prepare, validate and persist in the worker thread."""
+    try:
+        merged, current = config_admin.prepare_layer(config_scope.INSTANCE, values, resets)
+        err = _validate_llm_routing(merged.get("llm_routing"))
+        if err:
+            raise HTTPException(400, err)
+        img_err, img_warnings = _validate_image_routing(
+            merged.get("image_generation"),
+            stored_routing=(current.get("image_generation") or {}).get("routing"))
+        if img_err:
+            raise HTTPException(400, img_err)
+    except config_admin.LayerSaveError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except config.ConfigWriteRefused as exc:
+        raise HTTPException(409, str(exc)) from exc
 
     # Diagnostics: what actually arrives in llm_routing?
     try:
@@ -845,24 +848,14 @@ async def settings_save(request: Request, user=Depends(require_admin)):
     except Exception:
         pass
 
-    # Compute the diff BEFORE config.save — current still mirrors the pre-save state.
-    changed_sections = config_admin.diff_sections(current, merged)
-
-    config.save(merged)
-    # Update the env right away — spares a server restart for fields that
-    # are read through os.environ.get().
     try:
-        config._flatten_to_env(merged)
-    except Exception as _ee:
-        # Do not fail hard — the save itself succeeded.
-        from app.core.log import get_logger as _gl
-        _gl("admin_settings").warning("env-flatten after save failed: %s", _ee)
-
-    # Targeted service reloads based on the changed sections. Run in a
-    # thread: some reloads ping providers/backends synchronously (e.g.
-    # ImageBackend.check_availability) and would otherwise block the event
-    # loop for several seconds.
-    reloaded = await asyncio.to_thread(config_admin.apply_section_reloads, changed_sections, "instance")
+        result = config_admin.commit_layer(config_scope.INSTANCE, merged, current)
+    except config_admin.LayerSaveError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except config.ConfigWriteRefused as exc:
+        raise HTTPException(409, str(exc)) from exc
+    changed_sections = result["changed_sections"]
+    reloaded = result["reloaded"]
 
     msg = "Configuration saved (env updated)."
     if reloaded:
@@ -875,6 +868,7 @@ async def settings_save(request: Request, user=Depends(require_admin)):
         "warnings": img_warnings,
         "changed_sections": changed_sections,
         "reloaded": reloaded,
+        "overrides": config_admin.origin(config_scope.INSTANCE)["overrides"],
     }
 
 
@@ -1136,8 +1130,8 @@ def _validate_llm_routing(routing) -> str:
                 continue
             key = (task_id, int(order))
             if key in seen:
-                return (f"LLM Routing: task '{task_id}' mit order {order} "
-                        f"ist doppelt (Eintrag #{seen[key]+1} und #{idx+1}).")
+                return (f"LLM Routing: task '{task_id}' with order {order} "
+                        f"is duplicated (entries #{seen[key]+1} and #{idx+1}).")
             seen[key] = idx
     return ""
 
@@ -1235,20 +1229,20 @@ def _validate_image_routing(img_cfg: Any,
 
 @router.get("/settings/schema")
 def settings_schema(user=Depends(require_admin)):
-    """Return field schema for UI rendering."""
-    return get_schema()
+    """The schema of instance-scope settings."""
+    return config_scope.schema_for(config_scope.INSTANCE)
 
 
-@router.get("/settings/use-case-defaults")
-def settings_use_case_defaults(user=Depends(require_admin)):
-    """Eingebaute Use-Case-Style-Defaults (pro use_case × Familie) — dienen in
-    der Admin-UI als grauer Placeholder bei leerem Feld."""
-    from app.core.config import _DEFAULT_IMAGE_USE_CASES, _PROMPT_STYLE_FAMILIES
-    return {
-        "use_cases": list(_DEFAULT_IMAGE_USE_CASES.keys()),
-        "families": _PROMPT_STYLE_FAMILIES,
-        "defaults": _DEFAULT_IMAGE_USE_CASES,
-    }
+@router.get("/settings/origin")
+def settings_origin(user=Depends(require_admin)):
+    """The instance's own deviations from shipped defaults (dotted paths)."""
+    return config_admin.origin(config_scope.INSTANCE)
+
+
+@router.get("/settings/shipped-defaults")
+def settings_shipped_defaults(user=Depends(require_admin)):
+    """Shipped instance defaults for the read-only panel and reset actions."""
+    return config_scope.shipped_tree(config_scope.INSTANCE)
 
 
 @router.get("/settings/media-backend-status")
@@ -1401,7 +1395,7 @@ async def imagegen_backend_models(backend_name: str,
     api_url = (api_url or b.get("api_url") or "").rstrip("/")
     cur_model = b.get("model", "")
     if not api_url:
-        return {"backend": backend_name, "models": [], "error": "Keine API URL"}
+        return {"backend": backend_name, "models": [], "error": "No API URL"}
     models: list = []
     # Each media kind wants its own models (declared type on the gateway).
     if api_type in ("localai_video", "together_video", "openai_video"):
@@ -1459,8 +1453,8 @@ async def provider_models(provider_name: str, user=Depends(require_admin)):
     if not provider:
         raise HTTPException(404, f"Provider '{provider_name}' not found")
     try:
-        # list_models() macht ggf. einen sync HTTP-Call (Cache-Miss/Refresh) →
-        # in einen Thread auslagern, damit der Event-Loop frei bleibt.
+        # list_models() may make a synchronous HTTP call on cache miss/refresh.
+        # Run it in a thread to keep the event loop responsive.
         items = await asyncio.to_thread(provider.list_models, True)
         models = sorted({(m.get("name") or "") for m in (items or [])
                          if isinstance(m, dict) and m.get("name")})
@@ -1480,14 +1474,14 @@ def providers_list(user=Depends(require_admin)):
 
 @router.get("/settings/llm-suitability-cases")
 def llm_suitability_cases(user=Depends(require_admin)):
-    """Info zum eingefrorenen Fixture-Satz (Anzahl Faelle, pro Task, Build-Zeit)."""
+    """Describe the frozen fixture set (case counts, tasks, build time)."""
     from app.core.model_suitability import cases_info
     return cases_info()
 
 
 @router.post("/settings/llm-suitability-cases/rebuild")
 async def llm_suitability_cases_rebuild(user=Depends(require_admin)):
-    """Extrahiert den Fixture-Satz neu aus logs/llm_calls.jsonl."""
+    """Rebuild the fixture set from logs/llm_calls.jsonl."""
     from app.core.model_suitability import build_cases_from_log
     return await asyncio.to_thread(build_cases_from_log)
 
@@ -1519,7 +1513,7 @@ def _llm_suitability_test_start_sync(user, body: Any):
 @router.get("/settings/llm-suitability-test/status")
 def llm_suitability_test_status(provider: str = "", model: str = "",
                                 user=Depends(require_admin)):
-    """Aktueller Status/Fortschritt eines (laufenden oder fertigen) Tests."""
+    """Current status and progress of a running or completed test."""
     from app.core.model_suitability import get_job
     if not model:
         raise HTTPException(400, "model required")
