@@ -453,7 +453,7 @@ SECTIONS = {
         },
     },
     "memory": {
-        "label": "Memory / Gedaechtnis",
+        "label": "Memory",
         "icon": "🧠",
         "scope": "world",
         "world_group": "memory_chat",
@@ -462,7 +462,7 @@ SECTIONS = {
             "mid_term_days": {"type": "int", "label": "Mid-term (days)", "default": 30, "min": 7, "max": 180, "description": "Daily summaries older than this are consolidated into weekly summaries (stage 2 → 3). SYSTEM time (real days)."},
             "long_term_days": {"type": "int", "label": "Long-term (days)", "default": 90, "min": 30, "max": 365, "description": "Weekly summaries older than this are consolidated into monthly summaries. SYSTEM time (real days)."},
             "chat_retention_days": {"type": "int", "scope": "instance", "label": "Chat retention (days)", "default": 90, "min": 0, "max": 3650, "description": "Raw chat messages older than this are deleted once their game day has been summarized — a daily summary, or the week/season summary that day summary was later folded into. A game day that was never rolled up keeps its messages regardless of age, so nothing is lost that no summary preserved. 0 = keep forever. SYSTEM time (real days), like the consolidation thresholds above."},
-            "max_messages": {"type": "int", "label": "Max Nachrichten", "default": 100, "min": 10, "max": 500, "description": "Safety-Cap: Maximale Anzahl Chat-Nachrichten im Prompt."},
+            "max_messages": {"type": "int", "label": "Max messages", "default": 100, "min": 10, "max": 500, "description": "Safety cap: maximum number of chat messages in the prompt."},
             "session_gap_hours": {"type": "int", "label": "Session gap (hours)", "default": 4, "min": 0, "max": 24, "description": "Gap between turns after which the chat history is cut — turns before the last such gap move into the session summary. 0 = disabled. SYSTEM time (real hours)."},
             "max_semantic": {"type": "int", "label": "Max facts", "default": 50, "min": 10, "max": 200, "description": "Maximum number of semantic memories per character (hard cap, weakest removed at consolidation). Global default — override per NPC in the character editor (Memory section)."},
             "max_commitments": {"type": "int", "label": "Max commitments", "default": 20, "min": 1, "max": 200, "description": "Maximum number of commitment memories per character (count cap at consolidation; 'important'/importance≥4 protected — age rules apply separately). Global default — override per NPC in the character editor."},
@@ -620,8 +620,8 @@ SECTIONS = {
             "enabled": {"type": "bool", "label": "Media generation enabled", "default": True, "description": "Master switch for every image, video and 3D-mesh generation of this world. Off: requests are refused with a clear message and no task is queued; existing media stay served. Per-backend switches still apply when on."},
 
             # --- Post-Processing Hand-off ---
-            "postprocess_enabled": {"type": "bool", "label": "Post-Processing aktiviert", "default": False, "description": "Nach dem Erzeugen eines geeigneten Bildes einen externen Post-Processing-Dienst benachrichtigen. Der Dienst liest das Bild selbst (Galerie-API / Dateisystem) und schreibt das Ergebnis ueber den API-Endpoint zurueck. Dieses Programm bearbeitet keine Bilder selbst und sendet keine Bild-Bytes."},
-            "postprocess_trigger_url": {"type": "str", "label": "Post-Processing Trigger URL", "default": "", "description": "Basis-URL, die nach der Erzeugung benachrichtigt wird. Das Programm haengt Parameter an (welt-relativer Bildpfad). Es werden KEINE Bild-Bytes gesendet. Beispiel: http://127.0.0.1:8005/trigger"},
+            "postprocess_enabled": {"type": "bool", "label": "Post-processing enabled", "default": False, "description": "Notify an external post-processing service after generating an eligible image. The service reads the image itself (gallery API / filesystem) and writes the result back through the API endpoint. This application does not process images itself or send image bytes."},
+            "postprocess_trigger_url": {"type": "str", "label": "Post-Processing Trigger URL", "default": "", "description": "Base URL notified after generation. The application appends parameters (world-relative image path). NO image bytes are sent. Example: http://127.0.0.1:8005/trigger"},
 
             "prop_variant_max": {"type": "int", "label": "Prop Model Variants (max)", "default": 4, "min": 1, "max": 16, "description": "How many ACTIVE 3D model variants one prop may carry. Scatter and repeated placements spread over the variants, so a wood is not the same tree twenty times. Every active variant is another mesh a client downloads for the same object — raise it only for props that are placed in large numbers. Generating a model appends a variant until this cap is reached."},
             "scene_render_mode": {"type": "select", "label": "Scene Render Mode", "choices": ["multi_ref", "only_background"], "default": "multi_ref", "description": "How the 'Rendered' view builds its request. 'multi_ref': background + the present characters' expression images as reference images, pose from text. 'only_background': only the background as reference — every person is described in text (appearance + pose). Both work with any generate backend (Qwen, Flux, Krea2, …)."},
@@ -737,8 +737,8 @@ SECTIONS = {
                 "description": "See Location Background Width.",
             },
 
-            # --- Sonstiges ---
-            "u2net_home": {"type": "str", "label": "U2Net Model Path", "default": "./models/u2net", "description": "Pfad fuer u2net-Modell (Hintergrundentfernung via rembg)"},
+            # --- Miscellaneous ---
+            "u2net_home": {"type": "str", "label": "U2Net Model Path", "default": "./models/u2net", "description": "Path for the U2Net model (background removal via rembg)"},
             "image_analysis_prompt": {
                 "type": "text",
                 "label": "Image Analysis Prompt",
@@ -899,9 +899,9 @@ SECTIONS = {
         "icon": "🔊",
         "scope": "instance",
         "fields": {
-            "enabled": {"type": "bool", "label": "TTS Aktiviert", "default": False},
-            "auto": {"type": "bool", "label": "Auto-TTS", "default": False, "description": "Automatisch Audio generieren fuer jede Antwort"},
-            "chunk_size": {"type": "int", "label": "Chunk Size (Zeichen)", "default": 300, "min": 0, "description": "Audio ab dieser Zeichenanzahl erzeugen (0 = ein Audio nach komplettem Text)"},
+            "enabled": {"type": "bool", "label": "TTS enabled", "default": False},
+            "auto": {"type": "bool", "label": "Auto-TTS", "default": False, "description": "Automatically generate audio for every reply"},
+            "chunk_size": {"type": "int", "label": "Chunk size (characters)", "default": 300, "min": 0, "description": "Generate audio after this many characters (0 = one audio clip after the complete text)"},
             "backend": {
                 "type": "select",
                 "label": "Backend",
@@ -913,7 +913,7 @@ SECTIONS = {
                 "label": "Fallback Backend",
                 "choices": ["", "xtts", "f5", "magpie"],
                 "default": "",
-                "description": "Falls primaeres Backend nicht erreichbar",
+                "description": "Used when the primary backend is unreachable",
             },
         },
         "subsections": {
@@ -921,7 +921,7 @@ SECTIONS = {
                 "label": "XTTS v2",
                 "fields": {
                     "url": {"type": "str", "label": "XTTS URL", "default": "http://localhost:8020"},
-                    "speaker_wav": {"type": "str", "label": "Speaker WAV", "description": "Eigene WAV oder built-in: calm_female, female, male"},
+                    "speaker_wav": {"type": "str", "label": "Speaker WAV", "description": "Custom WAV or built-in: calm_female, female, male"},
                     "language": {"type": "str", "label": "Language", "default": "de"},
                 },
             },
@@ -929,7 +929,7 @@ SECTIONS = {
                 "label": "Magpie (NVIDIA Riva)",
                 "fields": {
                     "url": {"type": "str", "label": "Magpie URL", "default": "http://localhost:9000"},
-                    "voice": {"type": "str", "label": "Stimme", "description": "Format: Magpie-Multilingual.{LANG}.{Name}[.{Emotion}]"},
+                    "voice": {"type": "str", "label": "Voice", "description": "Format: Magpie-Multilingual.{LANG}.{Name}[.{Emotion}]"},
                     "language": {"type": "str", "label": "Language", "default": "de-DE"},
                 },
             },
@@ -937,12 +937,12 @@ SECTIONS = {
                 "label": "F5-TTS",
                 "fields": {
                     "url": {"type": "str", "label": "F5 URL", "default": "http://localhost:7860"},
-                    "ref_audio": {"type": "str", "label": "Referenz Audio", "description": "Pfad zur WAV-Datei fuer Voice Cloning (5-8 Sekunden empfohlen)"},
-                    "ref_text": {"type": "str", "label": "Referenz Text", "description": "Transkription des Referenz-Audios (leer = auto-detect)"},
-                    "speed": {"type": "float", "label": "Geschwindigkeit", "default": 1.0, "min": 0.1, "max": 3.0, "step": 0.1, "description": "1.0 = normal"},
-                    "remove_silence": {"type": "bool", "label": "Stille entfernen", "default": False},
-                    "nfe_steps": {"type": "int", "label": "NFE Steps", "default": 32, "min": 1, "max": 64, "description": "Mehr = bessere Qualitaet, langsamer"},
-                    "custom_cfg": {"type": "text", "label": "Custom Config (JSON)", "description": "Base-Architektur Config fuer alle Custom-Modelle"},
+                    "ref_audio": {"type": "str", "label": "Reference audio", "description": "Path to the WAV file for voice cloning (5–8 seconds recommended)"},
+                    "ref_text": {"type": "str", "label": "Reference text", "description": "Transcript of the reference audio (empty = auto-detect)"},
+                    "speed": {"type": "float", "label": "Speed", "default": 1.0, "min": 0.1, "max": 3.0, "step": 0.1, "description": "1.0 = normal"},
+                    "remove_silence": {"type": "bool", "label": "Remove silence", "default": False},
+                    "nfe_steps": {"type": "int", "label": "NFE Steps", "default": 32, "min": 1, "max": 64, "description": "More = better quality, slower"},
+                    "custom_cfg": {"type": "text", "label": "Custom Config (JSON)", "description": "Base architecture configuration for all custom models"},
                 },
             },
         },
@@ -1019,17 +1019,17 @@ SECTIONS = {
         },
     },
     "random_events": {
-        "label": "Zufaellige Events",
+        "label": "Random events",
         "icon": "🎲",
         "scope": "world",
         "world_group": "story",
         "fields": {
-            "enabled": {"type": "bool", "label": "Aktiviert", "default": True, "description": "Automatische Event-Generierung an besetzten Locations"},
+            "enabled": {"type": "bool", "label": "Enabled", "default": True, "description": "Automatic event generation at occupied locations"},
             "base_probability": {"type": "int", "label": "Base probability %", "default": 5, "min": 0, "max": 50, "description": "Probability per hour per location; overridable per location. The generator rolls on a SYSTEM-time hourly tick (real hours, independent of the game-clock factor)."},
-            "entry_roll_enabled": {"type": "bool", "label": "Roll-on-Entry", "default": True, "description": "Sofort wuerfeln wenn ein Avatar/Character eine Location betritt — zusaetzlich zum stuendlichen Tick. Macht 'beim Betreten passiert was' moeglich."},
+            "entry_roll_enabled": {"type": "bool", "label": "Roll-on-Entry", "default": True, "description": "Roll immediately when an avatar/character enters a location, in addition to the hourly tick. Allows events to happen on arrival."},
             "entry_roll_cooldown_minutes": {"type": "int", "label": "Entry Cooldown (min)", "default": 10, "min": 0, "max": 120, "description": "Minimum distance between two roll-on-entry rolls per (character, location). Prevents dice spam on quick in-and-out. SYSTEM time (real minutes)."},
             "entry_roll_jitter_seconds": {"type": "int", "label": "Entry Jitter (s)", "default": 3, "min": 0, "max": 30, "description": "Random delay of 0–N seconds before the event pops up after entry. 0 = immediately; otherwise it feels like something 'happens' after arrival. SYSTEM time."},
-            "resolution_proactive": {"type": "bool", "label": "Proaktive Event-Aufloesung", "default": True, "description": "Characters an betroffener Location versuchen offene disruption/danger Events automatisch zu loesen (alle 5 Min)."},
+            "resolution_proactive": {"type": "bool", "label": "Proactive event resolution", "default": True, "description": "Characters at the affected location automatically try to resolve open disruption/danger events (every 5 minutes)."},
             "resolution_cooldown_minutes": {"type": "int", "label": "Resolution Cooldown (min)", "default": 15, "min": 1, "max": 240, "description": "Minimum distance between two resolution attempts on the same event. SYSTEM time (real minutes)."},
             "resolved_image_linger_minutes": {"type": "int", "label": "Resolved-Image Linger (min)", "default": 30, "min": 0, "max": 240, "description": "How long the 'after' illustration of a resolved disruption/danger event keeps overriding the normal location background before reverting. SYSTEM time (real minutes)."},
         },
@@ -1137,11 +1137,11 @@ SECTIONS = {
         "scope": "world",
         "world_group": "story",
         "fields": {
-            "enabled": {"type": "bool", "label": "Aktiviert", "default": False, "description": "Story Arc Fortschritt (Background-Prozess)"},
-            "max_active_arcs": {"type": "int", "label": "Max Active Arcs", "default": 2, "min": 1, "description": "Maximale aktive Arcs pro User"},
+            "enabled": {"type": "bool", "label": "Enabled", "default": False, "description": "Story arc progression (background process)"},
+            "max_active_arcs": {"type": "int", "label": "Max Active Arcs", "default": 2, "min": 1, "description": "Maximum active arcs per user"},
             "cooldown_hours": {"type": "int", "label": "Cooldown (hours)", "default": 6, "min": 1, "description": "Minimum cooldown between arc advances per user. SYSTEM time (real hours)."},
-            "max_beats": {"type": "int", "label": "Max Beats", "default": 5, "min": 1, "description": "Maximale Beats pro Arc bevor Aufloesung"},
-            "beat_images": {"type": "bool", "label": "Beat Bilder", "default": True, "description": "Bilder pro Story-Beat generieren"},
+            "max_beats": {"type": "int", "label": "Max Beats", "default": 5, "min": 1, "description": "Maximum beats per arc before resolution"},
+            "beat_images": {"type": "bool", "label": "Beat images", "default": True, "description": "Generate images for each story beat"},
         },
     },
     "game": {

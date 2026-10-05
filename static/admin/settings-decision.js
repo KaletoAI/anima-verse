@@ -1,7 +1,7 @@
 // Decision models (development_instructions/plan-decision-models.md § 3.2).
 // Endpoints = the generic paged-section page plus a test panel; Points and
 // Shadow results are built here. Loaded after settings.js on /admin/settings
-// and uses its esc(), sJs(), toast(), authHeaders(), renderPagedSection(),
+// and uses its dcEsc(), sJs(), toast(), authHeaders(), renderPagedSection(),
 // CONFIG, SCHEMA and ACTIVE_PAGE — no escaper of its own.
 
 let DC_POINTS = [];
@@ -16,20 +16,24 @@ async function renderDecisionPage(pageId) {
 }
 
 function dcSection() {
-    if (!CONFIG.decision || typeof CONFIG.decision !== 'object') CONFIG.decision = {};
-    return CONFIG.decision;
+    return CONFIG.decision && typeof CONFIG.decision === 'object' ? CONFIG.decision : {};
 }
 
 function dcPoints() {
-    const s = dcSection();
-    if (!s.points || typeof s.points !== 'object' || Array.isArray(s.points)) s.points = {};
-    return s.points;
+    const points = dcSection().points;
+    return points && typeof points === 'object' && !Array.isArray(points) ? points : {};
 }
 
 function dcPointCfg(id) {
-    const p = dcPoints();
-    if (!p[id] || typeof p[id] !== 'object') p[id] = {};
-    return p[id];
+    return dcPoints()[id] || {};
+}
+
+// Only edit handlers create missing point containers.
+function dcPointForEdit(id) {
+    if (!CONFIG.decision || typeof CONFIG.decision !== 'object') CONFIG.decision = {};
+    if (!CONFIG.decision.points || typeof CONFIG.decision.points !== 'object' || Array.isArray(CONFIG.decision.points)) CONFIG.decision.points = {};
+    if (!CONFIG.decision.points[id] || typeof CONFIG.decision.points[id] !== 'object') CONFIG.decision.points[id] = {};
+    return CONFIG.decision.points[id];
 }
 
 function dcEndpointNames() {
@@ -38,8 +42,8 @@ function dcEndpointNames() {
 
 function dcTitle(pageLabel, pageIcon) {
     const sec = SCHEMA.decision || {};
-    return '<h1 class="section-title">' + esc(sec.icon || '') + ' ' + esc(sec.label || 'Decision models')
-         + ' <span style="color:#8b949e;">›</span> ' + esc(pageIcon) + ' ' + esc(pageLabel) + '</h1>';
+    return '<h1 class="section-title">' + dcEsc(sec.icon || '') + ' ' + dcEsc(sec.label || 'Decision models')
+         + ' <span style="color:#8b949e;">›</span> ' + dcEsc(pageIcon) + ' ' + dcEsc(pageLabel) + '</h1>';
 }
 
 async function dcFetch(url, opts) {
@@ -63,9 +67,9 @@ async function appendDecisionTestPanel() {
     names.forEach((n, i) => {
         const st = status[n] || {};
         const blocked = st.blocked_for_s > 0
-            ? ' <span style="color:#f85149;">blocked for ' + esc(st.blocked_for_s) + ' s after repeated failures</span>' : '';
+            ? ' <span style="color:#f85149;">blocked for ' + dcEsc(st.blocked_for_s) + ' s after repeated failures</span>' : '';
         html += '<div style="display:flex;gap:10px;align-items:center;margin:6px 0;">'
-              + '<code>' + esc(n) + '</code>' + blocked
+              + '<code>' + dcEsc(n) + '</code>' + blocked
               + '<button class="btn btn-sm" onclick="decisionTest(\'' + sJs(n) + '\', ' + i + ', this)">Test</button>'
               + '<span class="desc" id="dc-test-' + i + '"></span></div>';
     });
@@ -111,60 +115,70 @@ function dcRenderPoints() {
     if (!dcSection().enabled) html += '<div class="desc" style="color:#d29922;margin-bottom:10px;">The master switch (Endpoints page) is off — no point runs.</div>';
     html += '<table class="data-table" style="width:100%;"><thead><tr><th>Point</th><th>Mode</th><th>Endpoints (first decides)</th><th>Min confidence</th><th>Timeout (s)</th></tr></thead><tbody>';
     for (const p of DC_POINTS) {
+        if (ONLY_OVERRIDES && originOf('decision.points.' + p.id) !== 'instance') continue;
         const c = dcPoints()[p.id] || {};
         const mode = c.mode || 'off';
         const eps = Array.isArray(c.endpoints) ? c.endpoints : [];
         const origin = p.registered ? (p.origin === 'core' ? 'core' : 'plugin: ' + p.origin) : 'not loaded';
-        html += '<tr' + (p.registered ? '' : ' style="opacity:.55;"') + '><td><b>' + esc(p.label) + '</b> <code>' + esc(p.id) + '</code>'
-              + '<div class="desc">' + esc(p.description) + '</div><div class="desc">' + esc(origin) + '</div></td>';
+        html += '<tr' + (p.registered ? '' : ' style="opacity:.55;"') + '><td><b>' + dcEsc(p.label) + '</b> <code>' + dcEsc(p.id) + '</code>' + originBadge('decision.points.' + p.id)
+              + '<div class="desc">' + dcEsc(p.description) + '</div><div class="desc">' + dcEsc(origin) + '</div></td>';
         html += '<td><select onchange="dcSet(\'' + sJs(p.id) + '\', \'mode\', this.value)">'
               + ['off', 'shadow', 'on'].map(m => '<option value="' + m + '"' + (m === mode ? ' selected' : '') + '>' + m + '</option>').join('')
               + '</select></td>';
         html += '<td>';
         eps.forEach((n, i) => {
             const missing = names.indexOf(n) === -1 ? ' <span style="color:#f85149;">(no such endpoint)</span>' : '';
-            html += '<div style="display:flex;gap:6px;align-items:center;margin:2px 0;"><code>' + esc(n) + '</code>' + missing
+            html += '<div style="display:flex;gap:6px;align-items:center;margin:2px 0;"><code>' + dcEsc(n) + '</code>' + missing
                   + (i > 0 ? '<button class="btn btn-sm" title="Move up" onclick="dcMoveUp(\'' + sJs(p.id) + '\', ' + i + ')">↑</button>' : '')
                   + '<button class="btn btn-sm" title="Remove" onclick="dcRemoveEp(\'' + sJs(p.id) + '\', ' + i + ')">×</button></div>';
         });
         const addable = names.filter(n => eps.indexOf(n) === -1);
         if (addable.length) {
             html += '<select onchange="dcAddEp(\'' + sJs(p.id) + '\', this.value)"><option value="">+ add endpoint</option>'
-                  + addable.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('') + '</select>';
+                  + addable.map(n => '<option value="' + dcEsc(n) + '">' + dcEsc(n) + '</option>').join('') + '</select>';
         }
         html += '</td>';
-        html += '<td><input type="number" min="0" max="1" step="0.05" style="width:80px;" value="' + esc(c.min_confidence !== undefined ? c.min_confidence : p.default_min_confidence)
+        html += '<td><input type="number" min="0" max="1" step="0.05" style="width:80px;" value="' + dcEsc(c.min_confidence !== undefined ? c.min_confidence : p.default_min_confidence)
               + '" onchange="dcSetNum(\'' + sJs(p.id) + '\', \'min_confidence\', this.value)"></td>';
-        html += '<td><input type="number" min="0.1" max="60" step="0.5" style="width:80px;" value="' + esc(c.timeout_s !== undefined ? c.timeout_s : p.default_timeout_s)
+        html += '<td><input type="number" min="0.1" max="60" step="0.5" style="width:80px;" value="' + dcEsc(c.timeout_s !== undefined ? c.timeout_s : p.default_timeout_s)
               + '" onchange="dcSetNum(\'' + sJs(p.id) + '\', \'timeout_s\', this.value)"></td></tr>';
     }
     html += '</tbody></table></div>';
     document.getElementById('content').innerHTML = html;
 }
 
-function dcSet(id, field, value) { dcPointCfg(id)[field] = value; }
+function dcSet(id, field, value) {
+    touchPath('decision.points.' + id);
+    dcPointForEdit(id)[field] = value;
+}
 
 function dcSetNum(id, field, value) {
     const n = parseFloat(value);
-    if (!isNaN(n)) dcPointCfg(id)[field] = n;
+    if (!isNaN(n)) {
+        touchPath('decision.points.' + id);
+        dcPointForEdit(id)[field] = n;
+    }
 }
 
 function dcAddEp(id, name) {
     if (!name) return;
-    const c = dcPointCfg(id);
+    touchPath('decision.points.' + id);
+    const c = dcPointForEdit(id);
     c.endpoints = (Array.isArray(c.endpoints) ? c.endpoints : []).filter(x => x !== name);
     c.endpoints.push(name);
     dcRenderPoints();
 }
 
 function dcRemoveEp(id, i) {
-    const c = dcPointCfg(id);
+    touchPath('decision.points.' + id);
+    const c = dcPointForEdit(id);
     if (Array.isArray(c.endpoints)) c.endpoints.splice(i, 1);
     dcRenderPoints();
 }
 
 function dcMoveUp(id, i) {
-    const a = dcPointCfg(id).endpoints || [];
+    touchPath('decision.points.' + id);
+    const a = dcPointForEdit(id).endpoints || [];
     if (i > 0 && i < a.length) { const t = a[i - 1]; a[i - 1] = a[i]; a[i] = t; }
     dcRenderPoints();
 }
@@ -199,16 +213,16 @@ async function renderDecisionShadowPage(days) {
           + '<th>Answers</th><th>Unsure</th><th>Agreement</th></tr></thead><tbody>';
     for (const r of rows) {
         const call = r.question === '';
-        const errs = Object.entries(r.errors || {}).map(([k, v]) => esc(k) + ' ' + esc(v)).join(', ') || '—';
+        const errs = Object.entries(r.errors || {}).map(([k, v]) => dcEsc(k) + ' ' + dcEsc(v)).join(', ') || '—';
         const judged = (r.agree || 0) + (r.disagree || 0);
-        html += '<tr><td><code>' + esc(r.point) + '</code></td><td><code>' + esc(r.endpoint) + '</code></td>'
-              + '<td>' + (call ? '<i>calls</i>' : '<code>' + esc(r.question) + '</code>') + '</td>'
-              + '<td>' + (call ? esc(r.calls) : '') + '</td><td>' + (call ? errs : '') + '</td>'
-              + '<td>' + (call ? esc(r.p50 || '—') : '') + '</td><td>' + (call ? esc(r.p95 || '—') : '') + '</td>'
-              + '<td>' + (call ? esc(r.no_outcome) : '') + '</td><td>' + (call ? esc(r.taken) : '') + '</td>'
-              + '<td>' + (call ? '' : esc(r.answers)) + '</td>'
+        html += '<tr><td><code>' + dcEsc(r.point) + '</code></td><td><code>' + dcEsc(r.endpoint) + '</code></td>'
+              + '<td>' + (call ? '<i>calls</i>' : '<code>' + dcEsc(r.question) + '</code>') + '</td>'
+              + '<td>' + (call ? dcEsc(r.calls) : '') + '</td><td>' + (call ? errs : '') + '</td>'
+              + '<td>' + (call ? dcEsc(r.p50 || '—') : '') + '</td><td>' + (call ? dcEsc(r.p95 || '—') : '') + '</td>'
+              + '<td>' + (call ? dcEsc(r.no_outcome) : '') + '</td><td>' + (call ? dcEsc(r.taken) : '') + '</td>'
+              + '<td>' + (call ? '' : dcEsc(r.answers)) + '</td>'
               + '<td>' + (call ? '' : pct(r.low_conf || 0, r.answers || 0)) + '</td>'
-              + '<td>' + (call ? '' : pct(r.agree || 0, judged) + ' <span class="desc">(' + esc(judged) + ')</span>') + '</td></tr>';
+              + '<td>' + (call ? '' : pct(r.agree || 0, judged) + ' <span class="desc">(' + dcEsc(judged) + ')</span>') + '</td></tr>';
     }
     html += '</tbody></table>' + dcDisSection(rows) + '</div>';
     content.innerHTML = html;
@@ -229,7 +243,7 @@ function dcDisSection(statRows) {
          + '<div style="display:flex;gap:14px;align-items:center;margin-bottom:8px;">'
          + '<label>Point <select onchange="dcDisSet(\'point\', this.value)">'
          + '<option value=""' + (DC_DIS.point ? '' : ' selected') + '>all</option>'
-         + points.map(p => '<option value="' + esc(p) + '"' + (p === DC_DIS.point ? ' selected' : '') + '>' + esc(p) + '</option>').join('')
+         + points.map(p => '<option value="' + dcEsc(p) + '"' + (p === DC_DIS.point ? ' selected' : '') + '>' + dcEsc(p) + '</option>').join('')
          + '</select></label>'
          + '<label><input type="checkbox"' + (DC_DIS.unsure ? ' checked' : '') + ' onchange="dcDisSet(\'unsure\', this.checked)"> include unsure</label>'
          + '</div><div id="dc-dis-body"><div class="desc">Loading…</div></div></div>';
@@ -249,7 +263,7 @@ async function dcLoadDisagreements() {
         data = await dcFetch('/admin/settings/decision/disagreements?point=' + encodeURIComponent(DC_DIS.point)
                              + '&limit=50&include_unsure=' + (DC_DIS.unsure ? 'true' : 'false'));
     } catch (e) {
-        if (seq === DC_DIS.seq) body.innerHTML = '<div class="desc">Could not load the disagreements: ' + esc(e.message) + '</div>';
+        if (seq === DC_DIS.seq) body.innerHTML = '<div class="desc">Could not load the disagreements: ' + dcEsc(e.message) + '</div>';
         return;
     }
     if (seq !== DC_DIS.seq) return;  // a newer request is on its way
@@ -266,18 +280,22 @@ async function dcLoadDisagreements() {
         let details = '<details><summary>state</summary>';
         if (!keys.length) details += '<div class="desc">not recorded</div>';
         for (const k of keys) {
-            details += '<div style="white-space:pre-wrap;word-break:break-word;margin:4px 0;"><b>' + esc(k) + ':</b> ' + esc(state[k]) + '</div>';
+            details += '<div style="white-space:pre-wrap;word-break:break-word;margin:4px 0;"><b>' + dcEsc(k) + ':</b> ' + dcEsc(state[k]) + '</div>';
         }
         if ((r.options || []).length) {
-            details += '<div style="white-space:pre-wrap;margin:4px 0;"><b>options:</b> ' + esc(r.options.join(', ')) + '</div>';
+            details += '<div style="white-space:pre-wrap;margin:4px 0;"><b>options:</b> ' + dcEsc(r.options.join(', ')) + '</div>';
         }
         details += '</details>';
-        html += '<tr><td>' + esc(r.starttime) + '</td><td><code>' + esc(r.point) + '</code></td><td><code>' + esc(r.endpoint) + '</code></td>'
-              + '<td><code>' + esc(r.question) + '</code></td>'
-              + '<td><code>' + esc(r.predicted) + '</code> <span class="desc">(' + esc(Number(r.confidence).toFixed(2))
+        html += '<tr><td>' + dcEsc(r.starttime) + '</td><td><code>' + dcEsc(r.point) + '</code></td><td><code>' + dcEsc(r.endpoint) + '</code></td>'
+              + '<td><code>' + dcEsc(r.question) + '</code></td>'
+              + '<td><code>' + dcEsc(r.predicted) + '</code> <span class="desc">(' + dcEsc(Number(r.confidence).toFixed(2))
               + (r.confident ? '' : ', unsure') + ')</span></td>'
-              + '<td><code>' + esc(r.actual) + '</code></td><td>' + details + '</td></tr>';
+              + '<td><code>' + dcEsc(r.actual) + '</code></td><td>' + details + '</td></tr>';
     }
     html += '</tbody></table>';
     body.innerHTML = html;
+}
+
+function dcEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }

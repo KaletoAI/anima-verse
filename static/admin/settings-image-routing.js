@@ -1,8 +1,7 @@
 // ── Media Generation › Routing: ONE backend chain per render occasion ──
 // development_instructions/plan-image-routing.md § 6. Loaded AFTER
 // static/admin/settings.js and uses its globals at run time (CONFIG, SCHEMA,
-// ACTIVE_PAGE, esc, sJs, toast, authHeaders) — deliberately no escaper of its
-// own (scripts/smoke_admin_escape.mjs: one escaper per file).
+// ACTIVE_PAGE, sJs, toast, authHeaders). This file owns one quote-safe escaper.
 //
 // Two pages of the paged section `image_generation` (config_schema.py):
 //   routing           Rules — one card per occasion with its ordered chain
@@ -255,7 +254,13 @@ function irRouting() {
 // Edit handlers call this first: null means "refused" (toast + re-render,
 // which shows why).
 function irRoutingForEdit() {
-    const r = irRouting();
+    let r = irRouting();
+    if (irStored() === undefined) {
+        touchPath('image_generation.routing');
+        if (!CONFIG.image_generation) CONFIG.image_generation = {};
+        CONFIG.image_generation.routing = {};
+        r = CONFIG.image_generation.routing;
+    }
     if (!r) { toast(IR_TEXT.notLoaded, 'error'); irRerender(); }
     return r;
 }
@@ -275,15 +280,15 @@ async function irLoadCatalog() {
 
 function irTitle(label, icon) {
     const sec = SCHEMA.image_generation || {};
-    return '<h1 class="section-title">' + esc(sec.icon || '') + ' ' + esc(sec.label || 'Media Generation')
-         + ' <span style="color:#8b949e;">›</span> ' + esc(icon) + ' ' + esc(label) + '</h1>';
+    return '<h1 class="section-title">' + irEsc(sec.icon || '') + ' ' + irEsc(sec.label || 'Media Generation')
+         + ' <span style="color:#8b949e;">›</span> ' + irEsc(icon) + ' ' + irEsc(label) + '</h1>';
 }
 
 function irMediaBadge(o) {
     const m = o.media === 'video' ? IR_TEXT.mediaVideo : (o.media === 'mesh' ? IR_TEXT.mediaMesh : IR_TEXT.mediaImage);
     let t = m + (o.rig ? ' · ' + o.rig : '');
     if (o.character_scoped) t += ' · ' + IR_TEXT.charScoped;
-    return '<span class="rt-taskchip">' + esc(t) + '</span>';
+    return '<span class="rt-taskchip">' + irEsc(t) + '</span>';
 }
 
 async function renderImageRoutingPage(pageId) {
@@ -324,38 +329,43 @@ function irSaveNoticeHtml() {
     const err = n.kind === 'error';
     let html = '<div class="rt-card problem" style="margin-bottom:12px;">'
              + '<div style="font-size:12px; font-weight:600; color:' + (err ? '#f85149' : '#d29922') + ';">'
-             + (err ? '✖ ' : '⚠ ') + esc(err ? IR_TEXT.saveRefused : IR_TEXT.saveWarnings) + '</div>';
-    for (const line of n.lines) html += '<div class="desc ' + (err ? 'rt-err' : 'rt-warn') + '">' + esc(line) + '</div>';
+             + (err ? '✖ ' : '⚠ ') + irEsc(err ? IR_TEXT.saveRefused : IR_TEXT.saveWarnings) + '</div>';
+    for (const line of n.lines) html += '<div class="desc ' + (err ? 'rt-err' : 'rt-warn') + '">' + irEsc(line) + '</div>';
     return html + '</div>';
 }
 
 // ── Rules page ─────────────────────────────────────────────────────────
 function renderImageRoutingRules(content) {
-    const stored = irStored();
+    const stored = irStored() === undefined ? {} : irStored();
     const occs = IR_OCCASIONS || [];
     const known = new Set(occs.map(o => o.id));
     const survey = irSurvey(stored, known);
+    if (ONLY_OVERRIDES && originOf('image_generation.routing') !== 'instance') {
+        content.innerHTML = '<div class="section active"><p>No overrides on this page.</p></div>';
+        return;
+    }
     let html = '<div class="section active">' + irTitle(IR_TEXT.rulesTitle, '🧭');
-    html += '<div class="desc" style="margin-bottom:12px;">' + esc(IR_TEXT.rulesIntro) + ' ' + esc(IR_TEXT.saveHint) + '</div>';
+    html += '<div class="list-origin">' + originBadge('image_generation.routing') + '</div>';
+    html += '<div class="desc" style="margin-bottom:12px;">' + irEsc(IR_TEXT.rulesIntro) + ' ' + irEsc(IR_TEXT.saveHint) + '</div>';
     html += irSaveNoticeHtml();
     if (IR_OCCASIONS === null) {
-        html += '<div class="rt-err">' + esc(IR_TEXT.catalogFailed) + '</div></div>';
+        html += '<div class="rt-err">' + irEsc(IR_TEXT.catalogFailed) + '</div></div>';
         content.innerHTML = html;
         return;
     }
 
     if (!survey.loaded) {
         html += '<div class="rt-card problem" style="margin-bottom:12px;"><div class="rt-err">'
-             + esc(IR_TEXT.notLoaded) + '</div></div></div>';
+             + irEsc(IR_TEXT.notLoaded) + '</div></div></div>';
         content.innerHTML = html;
         return;
     }
 
     if (!survey.root_ok) {
         html += '<div class="rt-card problem" style="margin-bottom:12px;">'
-             + '<div class="rt-err">' + esc(irFmt(IR_TEXT.rootMalformed, { raw: irRaw(stored) })) + '</div>'
+             + '<div class="rt-err">' + irEsc(irFmt(IR_TEXT.rootMalformed, { raw: irRaw(stored) })) + '</div>'
              + '<div style="margin-top:6px;"><button class="btn btn-sm" onclick="irResetRouting()">'
-             + esc(IR_TEXT.rootReset) + '</button></div></div></div>';
+             + irEsc(IR_TEXT.rootReset) + '</button></div></div></div>';
         content.innerHTML = html;
         return;
     }
@@ -363,12 +373,12 @@ function renderImageRoutingRules(content) {
 
     if (survey.unknown.length) {
         html += '<div class="rt-card problem" style="margin-bottom:12px;">';
-        html += '<div style="font-size:12px; font-weight:600; color:#d29922;">⚠ ' + esc(IR_TEXT.unknownTitle) + '</div>';
-        html += '<div class="desc">' + esc(IR_TEXT.unknownHint) + '</div>';
+        html += '<div style="font-size:12px; font-weight:600; color:#d29922;">⚠ ' + irEsc(IR_TEXT.unknownTitle) + '</div>';
+        html += '<div class="desc">' + irEsc(IR_TEXT.unknownHint) + '</div>';
         for (const occ of survey.unknown) {
-            html += '<div class="rt-chain-row"><span class="rt-err">' + esc(occ) + '</span>'
-                 + '<span class="rt-muted">' + esc(irRaw(routing[occ])) + '</span>'
-                 + '<span style="margin-left:auto;"><button class="btn btn-sm" title="' + esc(IR_TEXT.remove) + '" '
+            html += '<div class="rt-chain-row"><span class="rt-err">' + irEsc(occ) + '</span>'
+                 + '<span class="rt-muted">' + irEsc(irRaw(routing[occ])) + '</span>'
+                 + '<span style="margin-left:auto;"><button class="btn btn-sm" title="' + irEsc(IR_TEXT.remove) + '" '
                  + 'onclick="irDropOccasion(\'' + sJs(occ) + '\')">✕</button></span></div>';
         }
         html += '</div>';
@@ -378,16 +388,16 @@ function renderImageRoutingRules(content) {
     for (const o of occs) {
         html += '<div class="rt-card">';
         html += '<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">'
-             + '<span style="font-size:12px; color:#58a6ff; font-weight:600;" title="' + esc(o.covers || '') + '">'
-             + esc(o.label) + '</span>' + irMediaBadge(o)
-             + '<span class="rt-muted" style="font-size:11px;">— ' + esc(o.id) + '</span></div>';
-        if (o.covers) html += '<div class="desc rt-muted">' + esc(o.covers) + '</div>';
-        if (o.character_scoped) html += '<div class="desc rt-muted">' + esc(IR_TEXT.position0) + '</div>';
+             + '<span style="font-size:12px; color:#58a6ff; font-weight:600;" title="' + irEsc(o.covers || '') + '">'
+             + irEsc(o.label) + '</span>' + irMediaBadge(o)
+             + '<span class="rt-muted" style="font-size:11px;">— ' + irEsc(o.id) + '</span></div>';
+        if (o.covers) html += '<div class="desc rt-muted">' + irEsc(o.covers) + '</div>';
+        if (o.character_scoped) html += '<div class="desc rt-muted">' + irEsc(IR_TEXT.position0) + '</div>';
         if (malformed.has(o.id)) {
             html += '<div class="rt-chain-row"><span class="rt-err">'
-                 + esc(irFmt(IR_TEXT.malformed, { raw: irRaw(routing[o.id]) })) + '</span>'
+                 + irEsc(irFmt(IR_TEXT.malformed, { raw: irRaw(routing[o.id]) })) + '</span>'
                  + '<span style="margin-left:auto;"><button class="btn btn-sm" '
-                 + 'onclick="irDropOccasion(\'' + sJs(o.id) + '\')">' + esc(IR_TEXT.removeChain) + '</button></span></div>';
+                 + 'onclick="irDropOccasion(\'' + sJs(o.id) + '\')">' + irEsc(IR_TEXT.removeChain) + '</button></span></div>';
             html += '</div>';
             continue;
         }
@@ -403,50 +413,51 @@ function irChainHtml(o, chain) {
     const fitting = backends.filter(b => irFits(o, b)).map(b => b.name);
     const dl = 'ir-dl-' + o.id;
     const notes = irEntryNotes(chain);
-    let html = '<datalist id="' + esc(dl) + '">' + fitting.map(n => '<option value="' + esc(n) + '">').join('') + '</datalist>';
-    if (!chain.length) html += '<div class="desc rt-muted">' + esc(IR_TEXT.emptyChain) + '</div>';
+    let html = '<datalist id="' + irEsc(dl) + '">' + fitting.map(n => '<option value="' + irEsc(n) + '">').join('') + '</datalist>';
+    if (!chain.length) html += '<div class="desc rt-muted">' + irEsc(IR_TEXT.emptyChain) + '</div>';
     chain.forEach((spec, i) => {
         html += '<div class="rt-chain-row">';
         html += '<span class="rt-muted" style="min-width:20px;">' + (i + 1) + '.</span>';
-        html += '<input type="text" list="' + esc(dl) + '" value="' + esc(spec) + '" style="min-width:220px;" '
+        html += '<input type="text" list="' + irEsc(dl) + '" value="' + irEsc(spec) + '" style="min-width:220px;" '
              + 'onchange="irSetEntry(\'' + sJs(o.id) + '\', ' + i + ', this.value)">';
-        if (notes[i] === 'empty') html += '<span class="rt-warn">' + esc(IR_TEXT.entryEmpty) + '</span>';
-        else if (notes[i] === 'duplicate') html += '<span class="rt-warn">' + esc(IR_TEXT.entryDuplicate) + '</span>';
+        if (notes[i] === 'empty') html += '<span class="rt-warn">' + irEsc(IR_TEXT.entryEmpty) + '</span>';
+        else if (notes[i] === 'duplicate') html += '<span class="rt-warn">' + irEsc(IR_TEXT.entryDuplicate) + '</span>';
         else {
             const verdict = irVerdict(o, spec, backends);
-            if (verdict === 'no_match') html += '<span class="rt-warn">' + esc(IR_TEXT.noMatch) + '</span>';
-            else if (verdict === 'wrong_kind') html += '<span class="rt-err">' + esc(IR_TEXT.wrongKind) + '</span>';
+            if (verdict === 'no_match') html += '<span class="rt-warn">' + irEsc(IR_TEXT.noMatch) + '</span>';
+            else if (verdict === 'wrong_kind') html += '<span class="rt-err">' + irEsc(IR_TEXT.wrongKind) + '</span>';
             else {
                 const names = irMatches(spec, backends);
                 const shown = names.slice(0, 4).join(', ') + (names.length > 4 ? ' ' + irFmt(IR_TEXT.more, { n: names.length - 4 }) : '');
-                html += '<span class="rt-muted">' + esc(irFmt(IR_TEXT.matches, { names: shown })) + '</span>';
+                html += '<span class="rt-muted">' + irEsc(irFmt(IR_TEXT.matches, { names: shown })) + '</span>';
             }
         }
         html += '<span style="margin-left:auto; display:inline-flex; gap:4px;">';
-        html += '<button class="btn btn-sm" title="' + esc(IR_TEXT.moveUp) + '"' + (i === 0 ? ' disabled' : '')
+        html += '<button class="btn btn-sm" title="' + irEsc(IR_TEXT.moveUp) + '"' + (i === 0 ? ' disabled' : '')
              + ' onclick="irMoveEntry(\'' + sJs(o.id) + '\', ' + i + ', -1)">↑</button>';
-        html += '<button class="btn btn-sm" title="' + esc(IR_TEXT.moveDown) + '"' + (i === chain.length - 1 ? ' disabled' : '')
+        html += '<button class="btn btn-sm" title="' + irEsc(IR_TEXT.moveDown) + '"' + (i === chain.length - 1 ? ' disabled' : '')
              + ' onclick="irMoveEntry(\'' + sJs(o.id) + '\', ' + i + ', 1)">↓</button>';
-        html += '<button class="btn btn-sm" title="' + esc(IR_TEXT.remove) + '"'
+        html += '<button class="btn btn-sm" title="' + irEsc(IR_TEXT.remove) + '"'
              + ' onclick="irRemoveEntry(\'' + sJs(o.id) + '\', ' + i + ')">✕</button>';
         html += '</span></div>';
     });
     html += '<div style="margin-top:6px; display:flex; gap:6px; align-items:center;">'
-         + '<input type="text" id="ir-new-' + esc(o.id) + '" list="' + esc(dl) + '" placeholder="' + esc(IR_TEXT.addPlaceholder) + '" '
+         + '<input type="text" id="ir-new-' + irEsc(o.id) + '" list="' + irEsc(dl) + '" placeholder="' + irEsc(IR_TEXT.addPlaceholder) + '" '
          + 'style="min-width:220px;" onkeydown="if (event.key === \'Enter\') irAddFromInput(\'' + sJs(o.id) + '\')">'
-         + '<button class="btn btn-sm" onclick="irAddFromInput(\'' + sJs(o.id) + '\')">' + esc(IR_TEXT.add) + '</button></div>';
+         + '<button class="btn btn-sm" onclick="irAddFromInput(\'' + sJs(o.id) + '\')">' + irEsc(IR_TEXT.add) + '</button></div>';
     return html;
 }
 
 function irAddFromInput(occ) {
     const el = document.getElementById('ir-new-' + occ);
-    if (!el) return;
+    if (!el || !irNormSpec(el.value)) return;
     const r = irRoutingForEdit();
     if (!r) return;
     if (!irAdd(r, occ, el.value)) {
         if (irNormSpec(el.value)) toast(IR_TEXT.duplicate, 'error');
         return;
     }
+    touchPath('image_generation.routing');
     irRerender();
 }
 
@@ -454,22 +465,24 @@ function irSetEntry(occ, idx, value) {
     const r = irRoutingForEdit();
     if (!r) return;
     if (!irSet(r, occ, idx, value)) toast(IR_TEXT.duplicate, 'error');
+    else touchPath('image_generation.routing');
     irRerender();
 }
 
 function irMoveEntry(occ, idx, delta) {
     const r = irRoutingForEdit();
-    if (r && irMove(r, occ, idx, delta)) irRerender();
+    if (r && irMove(r, occ, idx, delta)) { touchPath('image_generation.routing'); irRerender(); }
 }
 
 function irRemoveEntry(occ, idx) {
     const r = irRoutingForEdit();
-    if (r && irRemove(r, occ, idx)) irRerender();
+    if (r && irRemove(r, occ, idx)) { touchPath('image_generation.routing'); irRerender(); }
 }
 
 function irDropOccasion(occ) {
     const r = irRoutingForEdit();
     if (!r) return;
+    touchPath('image_generation.routing');
     delete r[occ];
     irRerender();
 }
@@ -482,6 +495,7 @@ function irResetRouting() {
         irRerender();
         return;
     }
+    touchPath('image_generation.routing');
     ig.routing = {};
     irRerender();
 }
@@ -493,16 +507,16 @@ async function renderImageRoutingOverview(content) {
         catch (e) { IR_CHARACTERS = []; }
     }
     let html = '<div class="section active">' + irTitle(IR_TEXT.overviewTitle, '📋');
-    html += '<div class="desc" style="margin-bottom:4px;">' + esc(IR_TEXT.ovBanner) + '</div>';
-    html += '<div class="desc" style="margin-bottom:8px;">' + esc(IR_TEXT.ovTie) + '</div>';
+    html += '<div class="desc" style="margin-bottom:4px;">' + irEsc(IR_TEXT.ovBanner) + '</div>';
+    html += '<div class="desc" style="margin-bottom:8px;">' + irEsc(IR_TEXT.ovTie) + '</div>';
     html += '<div style="margin-bottom:12px; display:flex; gap:8px; align-items:center;">'
-         + '<span class="desc">' + esc(IR_TEXT.ovCharacter) + '</span>'
+         + '<span class="desc">' + irEsc(IR_TEXT.ovCharacter) + '</span>'
          + '<select onchange="irOverviewCharacter(this.value)">'
-         + '<option value="">' + esc(IR_TEXT.ovNoCharacter) + '</option>'
-         + IR_CHARACTERS.map(n => '<option value="' + esc(n) + '"' + (n === IR_OV_CHARACTER ? ' selected' : '') + '>' + esc(n) + '</option>').join('')
+         + '<option value="">' + irEsc(IR_TEXT.ovNoCharacter) + '</option>'
+         + IR_CHARACTERS.map(n => '<option value="' + irEsc(n) + '"' + (n === IR_OV_CHARACTER ? ' selected' : '') + '>' + irEsc(n) + '</option>').join('')
          + '</select>'
-         + '<button class="btn btn-sm" onclick="irOverviewRefresh()">' + esc(IR_TEXT.refresh) + '</button></div>';
-    html += '<div id="ir-ov-body" class="desc">' + esc(IR_TEXT.loading) + '</div></div>';
+         + '<button class="btn btn-sm" onclick="irOverviewRefresh()">' + irEsc(IR_TEXT.refresh) + '</button></div>';
+    html += '<div id="ir-ov-body" class="desc">' + irEsc(IR_TEXT.loading) + '</div></div>';
     content.innerHTML = html;
     let data = null, what = '';
     try {
@@ -531,29 +545,33 @@ function irOverviewBody(data) {
     // at the one hand-off — the chains below still resolve, nothing runs.
     if (data.media_generation_enabled === false) {
         html += '<div class="rt-card problem" style="margin-bottom:8px;"><div class="rt-err">'
-              + esc(IR_TEXT.ovMediaOff) + '</div></div>';
+              + irEsc(IR_TEXT.ovMediaOff) + '</div></div>';
     }
     for (const o of (data.occasions || [])) {
         html += '<div class="rt-card" style="margin-bottom:4px;">';
-        html += '<div style="font-size:12px; color:#58a6ff; font-weight:600;">' + esc(o.label) + ' ' + irMediaBadge(o)
-             + ' <span class="rt-muted" style="font-weight:400;">— ' + esc(o.id) + '</span></div>';
+        html += '<div style="font-size:12px; color:#58a6ff; font-weight:600;">' + irEsc(o.label) + ' ' + irMediaBadge(o)
+             + ' <span class="rt-muted" style="font-weight:400;">— ' + irEsc(o.id) + '</span></div>';
         let status;
-        if (o.via === 'none') status = '<span class="rt-warn">' + esc(IR_TEXT.ovNone) + '</span>';
-        else status = '<span class="' + (o.via === 'cheapest' ? 'rt-muted' : 'rt-ok') + '">' + esc(IR_TEXT.ovResolved) + ' '
-                    + esc(o.resolved || '') + (o.via === 'cheapest' ? ' (' + esc(IR_TEXT.ovCheapest) + ')' : '') + '</span>';
+        if (o.via === 'none') status = '<span class="rt-warn">' + irEsc(IR_TEXT.ovNone) + '</span>';
+        else status = '<span class="' + (o.via === 'cheapest' ? 'rt-muted' : 'rt-ok') + '">' + irEsc(IR_TEXT.ovResolved) + ' '
+                    + irEsc(o.resolved || '') + (o.via === 'cheapest' ? ' (' + irEsc(IR_TEXT.ovCheapest) + ')' : '') + '</span>';
         html += '<div class="rt-chain-row">' + status + '</div>';
-        if (o.reason) html += '<div class="desc rt-muted">' + esc(o.reason) + '</div>';
+        if (o.reason) html += '<div class="desc rt-muted">' + irEsc(o.reason) + '</div>';
         for (const row of (o.chain || [])) {
             const cls = row.status === 'ok' ? 'rt-ok' : (row.status === 'wrong_kind' || row.status === 'no_match' ? 'rt-err' : 'rt-warn');
             const pos = row.position === 0 ? IR_TEXT.ovCharPos : String(row.position);
             html += '<div class="rt-chain-row">'
-                 + '<span class="rt-muted" style="min-width:20px;">' + esc(pos) + '.</span>'
-                 + '<span>' + esc(row.spec) + '</span>'
-                 + '<span class="' + cls + '">' + esc(row.status_text || row.status) + '</span>'
-                 + (row.backend ? '<span class="rt-muted">→ ' + esc(row.backend) + '</span>' : '')
+                 + '<span class="rt-muted" style="min-width:20px;">' + irEsc(pos) + '.</span>'
+                 + '<span>' + irEsc(row.spec) + '</span>'
+                 + '<span class="' + cls + '">' + irEsc(row.status_text || row.status) + '</span>'
+                 + (row.backend ? '<span class="rt-muted">→ ' + irEsc(row.backend) + '</span>' : '')
                  + '</div>';
         }
         html += '</div>';
     }
     return html;
+}
+
+function irEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }

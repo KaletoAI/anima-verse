@@ -2,7 +2,12 @@
 let CONFIG = {};
 const RESETS = new Set();
 let SCHEMA = {};
-let USE_CASE_DEFAULTS = { use_cases: [], families: [], defaults: {} };
+let OVERRIDES = new Set();
+let SHIPPED = {};
+let DIRTY = false;
+let MUTATION_REVISION = 0;
+let ONLY_OVERRIDES = false;
+try { ONLY_OVERRIDES = localStorage.getItem('settings-only-overrides') === 'true'; } catch (e) { /* storage unavailable */ }
 let PROVIDERS_CACHE = {};
 let PROVIDERS_VISION = {};  // provName -> Set(vision model names)
 // Runtime state of the media backends (name -> {available, cooldown_seconds,
@@ -28,21 +33,25 @@ function toggleArrayItem(el, path) {
 // ── Init ──
 async function init() {
     try {
-        const [dataResp, schemaResp] = await Promise.all([
+        const [dataResp, schemaResp, originResp, shippedResp] = await Promise.all([
             fetch('/admin/settings/raw', { credentials: 'same-origin' }),
-            fetch('/admin/settings/schema', { credentials: 'same-origin' })
+            fetch('/admin/settings/schema', { credentials: 'same-origin' }),
+            fetch('/admin/settings/origin', { credentials: 'same-origin' }),
+            fetch('/admin/settings/shipped-defaults', { credentials: 'same-origin' })
         ]);
         if (dataResp.status === 401 || dataResp.status === 403) {
             const ret = encodeURIComponent(window.location.pathname + window.location.hash);
             window.location.href = '/?return=' + ret;
             return;
         }
+        for (const response of [dataResp, schemaResp, originResp, shippedResp]) {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+        }
         CONFIG = await dataResp.json();
         SCHEMA = await schemaResp.json();
-        try {
-            const ucResp = await fetch('/admin/settings/use-case-defaults', { credentials: 'same-origin' });
-            if (ucResp.ok) USE_CASE_DEFAULTS = await ucResp.json();
-        } catch (e) { /* defaults stay empty */ }
+        OVERRIDES = new Set((await originResp.json()).overrides || []);
+        SHIPPED = await shippedResp.json();
+        document.getElementById('only-overrides').checked = ONLY_OVERRIDES;
         await loadMediaStatus();
         buildNav();
         // Restore the section/page from the URL hash, else the first section.
@@ -81,7 +90,7 @@ function parseHash() {
     const section = slash === -1 ? raw : raw.slice(0, slash);
     const page = slash === -1 ? null : raw.slice(slash + 1);
     const base = section.indexOf('::') !== -1 ? section.slice(0, section.indexOf('::')) : section;
-    if (!SCHEMA[base] && section !== 'llm_simple') return null;
+    if (!SCHEMA[base] && section !== 'llm_simple' && section !== 'shipped_defaults') return null;
     return { section: section, page: page || null };
 }
 
@@ -124,6 +133,7 @@ function buildNav() {
     const nav = document.getElementById('nav-links');
     nav.innerHTML = '';
     for (const [key, sec] of Object.entries(SCHEMA)) {
+        if (ONLY_OVERRIDES && !sectionHasOverride(key)) continue;
         const a = document.createElement('a');
         a.href = '#' + key;
         // nav_sub: render as an indented sub-item (e.g. LLM Routing under the
@@ -142,6 +152,7 @@ function buildNav() {
         // sub_arrays too, so the generic sub-array entries below are skipped.
         if (isPaged(sec)) {
             for (const page of resolvePages(sec)) {
+                if (ONLY_OVERRIDES && !pageHasOverride(key, sec, page)) continue;
                 const pa = document.createElement('a');
                 pa.className = 'nav-sub';
                 pa.href = '#' + navKey(key, page.id);
@@ -156,6 +167,7 @@ function buildNav() {
         // own page (key "<sec>::<arr>").
         if (sec.sub_arrays) {
             for (const [arrKey, arrDef] of Object.entries(sec.sub_arrays)) {
+                if (ONLY_OVERRIDES && originOf(key + '.' + arrKey) !== 'instance') continue;
                 const subKey = key + '::' + arrKey;
                 const sa = document.createElement('a');
                 sa.className = 'nav-sub';
@@ -167,17 +179,29 @@ function buildNav() {
             }
         }
     }
+    const defaults = document.createElement('a');
+    defaults.href = '#shipped_defaults';
+    defaults.dataset.section = 'shipped_defaults';
+    defaults.textContent = 'Shipped defaults';
+    defaults.onclick = e => { e.preventDefault(); activateSection('shipped_defaults'); };
+    nav.appendChild(defaults);
+    nav.querySelectorAll('a').forEach(link => {
+        link.classList.toggle('active', link.dataset.section === navKey(ACTIVE_SECTION, ACTIVE_PAGE));
+    });
 }
 
 function activateSection(key, pageId) {
-    ACTIVE_SECTION = key;
+    const special = key === 'shipped_defaults' || key === 'llm_simple' ||
+        (key.includes('::') && SCHEMA[key.split('::')[0]]?.sub_arrays?.[key.split('::')[1]]);
     const sec = SCHEMA[key];
+    if (!sec && !special) return;
+    ACTIVE_SECTION = key;
     // Paged section: fall back to the first page (parent nav entry, or a hash
     // naming a page that no longer exists).
-    if (isPaged(sec)) {
-        const pages = resolvePages(sec);
+    if (sec && isPaged(sec)) {
+        const pages = resolvePages(sec).filter(p => !ONLY_OVERRIDES || pageHasOverride(key, sec, p));
         const hit = pages.find(p => p.id === pageId);
-        ACTIVE_PAGE = hit ? hit.id : pages[0].id;
+        ACTIVE_PAGE = hit ? hit.id : (pages[0] ? pages[0].id : null);
     } else {
         ACTIVE_PAGE = null;
     }
@@ -209,143 +233,11 @@ function activateIframe(key, url, title) {
     content.innerHTML = '<iframe src="' + esc(safeUrl(url)) + '" title="' + esc(title) + '"></iframe>';
 }
 
-// World badge in the sidebar — visible on every page + iframe children.
-fetch('/admin/world-name', { credentials: 'same-origin', cache: 'no-store' })
-  .then(r => r.ok ? r.json() : null)
-  .then(d => {
-      const el = document.getElementById('world-name');
-      if (el && d && d.world) el.textContent = d.world;
-  })
-  .catch(() => {});
-
 // ── Render Section ──
-// Master-detail editor for image_generation.use_cases (use-case list on the
-// left, families × style/negative/instruction on the right). An empty field
-// shows the built-in default as a grey placeholder.
-function renderUseCasesMasterDetail(path) {
-    const D = USE_CASE_DEFAULTS || { use_cases: [], families: [], defaults: {} };
-    const ucs = D.use_cases || [];
-    let sel = SELECTED_ITEM[path];
-    if (ucs.indexOf(sel) === -1) sel = ucs.length ? ucs[0] : null;
-    SELECTED_ITEM[path] = sel;
-    let html = '<p class="hint" style="opacity:.7;margin-bottom:12px">'
-          + 'Style / Negative / Instruction per use case × family. An empty field means the built-in default (grey). '
-          + 'Which family applies is determined by the <b>Image Family</b> of the backend. '
-          + 'Placeholders in a style: <code>{subject}</code> (what the picture shows) and '
-          + '<code>{fabric}</code>, which fills in for a dressed character and drops out for an '
-          + 'undressed one — so a bare figure is not rendered against a style asking for fabric textures.</p>';
-    html += '<div class="md-grid"><div class="md-list"><table class="md-table"><thead><tr><th>Use-Case</th></tr></thead><tbody>';
-    for (const uc of ucs) {
-        const active = (uc === sel) ? ' active' : '';
-        html += '<tr class="md-row' + active + '" onclick="selectMasterItem(\'' + sJs(path) + '\', \'' + sJs(uc) + '\')"><td>' + esc(uc) + '</td></tr>';
-    }
-    html += '</tbody></table></div>';
-    html += '<div class="md-detail">' + renderUseCaseDetail(sel) + '</div></div>';
-    return html;
-}
-
-function renderUseCaseDetail(uc) {
-    if (!uc) return '<div class="md-empty-detail">Select a use case on the left.</div>';
-    const D = USE_CASE_DEFAULTS || { families: [], defaults: {} };
-    const FIELDS = [['prompt_style', 'Style'], ['prompt_negative', 'Negative'], ['prompt_instruction', 'Instruction']];
-    let html = '<div class="md-detail-head"><span class="md-detail-title">' + esc(uc) + '</span></div>';
-    // Opt-in LLM stage — per USE CASE, not per family: it rewrites whatever
-    // the mechanical composer produced, in that family's voice.
-    const llmPath = 'image_generation.use_cases.' + uc + '.llm_compose';
-    html += '<div class="field" style="margin:0 0 14px 0">'
-          + '<label style="font-size:.85em;display:flex;align-items:center;gap:6px">'
-          + '<input type="checkbox" ' + (getVal(llmPath) ? 'checked' : '') + ' '
-          + 'onchange="setVal(\'' + sJs(llmPath) + '\', this.checked)"> Compose via LLM (opt-in)</label>'
-          + '<div class="hint" style="opacity:.7;font-size:.78em;margin-top:2px">'
-          + 'When enabled, an LLM rewrites the composed prompt into one coherent, '
-          + 'positively-exhaustive English prompt. Shown editable in the render dialog.</div>'
-          + '<div style="margin-top:6px;display:flex;align-items:center;gap:8px">'
-          + '<button type="button" class="btn btn-sm" onclick="clearComposeCache(this)">Clear LLM compose cache</button>'
-          + '<span class="hint" style="opacity:.7;font-size:.78em" id="compose-cache-size"></span></div></div>';
-    loadComposeCacheSize();
-    for (const fam of (D.families || [])) {
-        html += '<div style="margin:4px 0 16px 0;padding-left:8px;border-left:2px solid var(--border,#30363d)">';
-        html += '<div style="opacity:.6;font-size:.8em;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">' + esc(fam) + '</div>';
-        for (const fp of FIELDS) {
-            const fld = fp[0], lbl = fp[1];
-            const p = 'image_generation.use_cases.' + uc + '.styles.' + fam + '.' + fld;
-            const val = getVal(p) || '';
-            const def = (((D.defaults || {})[uc] || {})[fam] || {})[fld] || '';
-            // "Copy default": fills the empty field with the built-in default so
-            // it can be edited as a starting point (otherwise only a grey
-            // placeholder). Offered only when a default exists and the field is
-            // empty (never overwrites the user's own input by accident).
-            const copyBtn = (def && !val)
-                ? ' <button type="button" class="btn btn-sm" '
-                  + 'style="margin-left:8px;font-size:.72em;padding:1px 6px;vertical-align:middle" '
-                  + 'title="Copy the built-in default into this field to edit it" '
-                  + 'onclick="copyUseCaseDefault(\'' + sJs(p) + '\', \'' + sJs(uc) + '\', \'' + sJs(fam) + '\', \'' + fld + '\')">Copy default</button>'
-                : '';
-            html += '<div class="field" style="margin-bottom:8px"><label style="font-size:.8em;opacity:.8">' + esc(lbl) + copyBtn + '</label>';
-            html += '<textarea rows="2" style="width:100%;font-family:inherit;resize:vertical" '
-                  + 'placeholder="' + esc(def) + '" '
-                  + 'onchange="setVal(\'' + sJs(p) + '\', this.value)">' + esc(val) + '</textarea>';
-            // The subject slot: the composer weaves the subject INTO the style
-            // sentence where the placeholder sits (early tokens steer diffusion).
-            if (fld === 'prompt_style') {
-                html += '<div class="hint" style="opacity:.7;font-size:.78em;margin-top:2px">'
-                      + 'Optional placeholder <code>{subject}</code> — replaced with the subject text; '
-                      + 'without it the subject is appended.</div>';
-            }
-            html += '</div>';
-        }
-        html += '</div>';
-    }
-    return html;
-}
-
-// "Copy default": writes the built-in use-case default into the field so it
-// can be edited. uc/fam/fld select the default, p is the path to set.
-async function loadComposeCacheSize() {
-    const el = document.getElementById('compose-cache-size');
-    if (!el) return;
-    try {
-        const r = await fetch('/world/compose-cache', { credentials: 'same-origin', cache: 'no-store' });
-        const d = await r.json();
-        el.textContent = (d.entries || 0) + ' cached prompts';
-    } catch (e) { el.textContent = ''; }
-}
-
-async function clearComposeCache(btn) {
-    // The cache keys on every input, so it never expires on its own — this
-    // button is the only way to make "Compose with AI" start from scratch
-    // for unchanged inputs (e.g. after a model swap).
-    if (btn) btn.disabled = true;
-    try {
-        const r = await fetch('/world/compose-cache/clear', { method: 'POST', credentials: 'same-origin' });
-        const d = await r.json();
-        toast('LLM compose cache cleared (' + (d.cleared || 0) + ' entries)');
-    } catch (e) {
-        toast('Could not clear the compose cache', 'error');
-    } finally {
-        if (btn) btn.disabled = false;
-        loadComposeCacheSize();
-    }
-}
-
-function copyUseCaseDefault(p, uc, fam, fld) {
-    const D = USE_CASE_DEFAULTS || { defaults: {} };
-    const def = (((D.defaults || {})[uc] || {})[fam] || {})[fld] || '';
-    if (!def) return;
-    setVal(p, def);
-    renderSection(ACTIVE_SECTION);
-}
-
-// Repository: LoRA -> activation word. ONE entry per unique LoRA — {lora,
-// word, source, backends, missing_on}; the image-creation code automatically
-// prepends the word to the prompt whenever the LoRA is used. Stored in
-// image_generation.lora_triggers (per world). The discovery sync job
-// consolidates every backend with a LoRA Query URL into this list; every
-// LoRA dropdown in the UI feeds from this library, scoped to its backend.
 function renderLoraTriggersEditor(path) {
     const items = getVal(path) || [];
     let html = '<p class="hint" style="opacity:.7;margin-bottom:12px">'
-             + 'Central LoRA library of the world — <b>every LoRA dropdown</b> (game admin + player UI) '
+             + 'Central LoRA library of the instance — <b>every LoRA dropdown</b> (game admin + player UI) '
              + 'feeds from this list, scoped to the selected backend. One entry per LoRA with the backends '
              + 'that have it; one activation word per LoRA: whenever an image uses the LoRA, '
              + 'the word is automatically prepended to the prompt.</p>';
@@ -425,6 +317,7 @@ function renderLoraTriggersEditor(path) {
 }
 
 function addLoraTrigger(path) {
+    touchPath(path);
     const arr = _ensureContainer(path, 'array');
     arr.push({ lora: '', word: '', source: 'manual', backends: [], missing_on: [] });
     renderSection(ACTIVE_SECTION);
@@ -434,6 +327,7 @@ function addLoraTrigger(path) {
 // also clears its missing flag; an empty list means "all backends".
 function ltAddBackend(ip, name) {
     if (!name) return;
+    touchPath(ip);
     const e = getVal(ip) || {};
     if (!Array.isArray(e.backends)) e.backends = [];
     if (e.backends.indexOf(name) === -1) e.backends.push(name);
@@ -441,6 +335,7 @@ function ltAddBackend(ip, name) {
 }
 
 function ltRemoveBackend(ip, name) {
+    touchPath(ip);
     const e = getVal(ip) || {};
     e.backends = (e.backends || []).filter(function (b) { return b !== name; });
     e.missing_on = (e.missing_on || []).filter(function (b) { return b !== name; });
@@ -451,6 +346,7 @@ function ltRemoveBackend(ip, name) {
 // a duplicate name (entries are unique per LoRA; the sync and the dropdowns
 // only honor the first occurrence).
 function ltRename(ip, inp) {
+    touchPath(ip);
     const v = inp.value;
     ltTouch(ip, 'lora', v);
     setVal(ip + '.lora', v);
@@ -466,6 +362,7 @@ function ltRename(ip, inp) {
 // Only flips when the value actually changed (focus/no-op edits don't count).
 function ltTouch(ip, field, newVal) {
     if ((getVal(ip + '.' + field) || '') === (newVal || '')) return;
+    touchPath(ip);
     if (getVal(ip + '.source') === 'discovered') setVal(ip + '.source', 'manual');
 }
 
@@ -478,6 +375,7 @@ async function clearDiscoveredLoras() {
         });
         const d = await resp.json();
         if (!resp.ok) throw new Error((d && d.detail) || ('HTTP ' + resp.status));
+        touchPath('image_generation.lora_triggers');
         if (!CONFIG.image_generation) CONFIG.image_generation = {};
         CONFIG.image_generation.lora_triggers = d.lora_triggers || [];
         toast('Removed ' + (d.removed || 0) + ' discovered entr' + ((d.removed || 0) === 1 ? 'y' : 'ies'), 'success');
@@ -496,6 +394,7 @@ async function syncLoraLibrary() {
         });
         const d = await resp.json();
         if (!resp.ok) throw new Error((d && d.detail) || ('HTTP ' + resp.status));
+        touchPath('image_generation.lora_triggers');
         if (!CONFIG.image_generation) CONFIG.image_generation = {};
         CONFIG.image_generation.lora_triggers = d.lora_triggers || [];
         const scanned = (d.scanned || []).length;
@@ -508,15 +407,27 @@ async function syncLoraLibrary() {
     }
 }
 
-function renderSection(key, pageId) {
-    // Compound-Key "<section>::<subArray>" -> eigene Sub-Array-Seite.
+async function renderSection(key, pageId) {
+    const hint = document.getElementById('providers-hint');
+    if (hint) hint.hidden = (CONFIG.providers || []).length > 0;
+    if (!key) return;
+    if (key === 'shipped_defaults') {
+        document.getElementById('content').innerHTML = '<div class="section active"><h1 class="section-title">Shipped defaults</h1><pre id="shipped-pre"></pre></div>';
+        document.getElementById('shipped-pre').textContent = JSON.stringify(SHIPPED, null, 2);
+        return;
+    }
+    if (ONLY_OVERRIDES && !sectionHasOverride(key)) {
+        document.getElementById('content').innerHTML = '<div class="section active"><p>No overrides on this page.</p></div>';
+        return;
+    }
+    // Compound key "<section>::<subArray>" opens its own sub-array page.
     if (key.indexOf('::') !== -1) { renderSubArrayPage(key); return; }
-    // Einfache, kategorie-basierte LLM-Seite (befuellt CONFIG.llm_routing).
-    if (key === 'llm_simple') { renderLlmSimpleEditor(); return; }
+    // Simple category-based LLM page.
+    if (key === 'llm_simple') { await renderLlmSimpleEditor(); return; }
     // Task-centric LLM routing editor — its own file (settings-routing.js),
     // loaded after this one, renders all three pages of the section.
     if (key === 'llm_routing') {
-        renderLlmRoutingPage(pageId === undefined || pageId === null
+        await renderLlmRoutingPage(pageId === undefined || pageId === null
             ? (key === ACTIVE_SECTION ? ACTIVE_PAGE : null)
             : pageId);
         return;
@@ -524,7 +435,7 @@ function renderSection(key, pageId) {
     // Decision models — its own file (settings-decision.js) renders the
     // Points and Shadow pages and adds the test panel to Endpoints.
     if (key === 'decision') {
-        renderDecisionPage(pageId === undefined || pageId === null
+        await renderDecisionPage(pageId === undefined || pageId === null
             ? (key === ACTIVE_SECTION ? ACTIVE_PAGE : null)
             : pageId);
         return;
@@ -535,11 +446,12 @@ function renderSection(key, pageId) {
         const want = (pageId === undefined || pageId === null)
             ? (key === ACTIVE_SECTION ? ACTIVE_PAGE : null) : pageId;
         if (want === 'routing' || want === 'routing_overview') {
-            renderImageRoutingPage(want);
+            await renderImageRoutingPage(want);
             return;
         }
     }
     const sec = SCHEMA[key];
+    if (!sec) return;
     // Paged section: the many renderSection(ACTIVE_SECTION) rerenders (field
     // edits, array add/remove) pass no page — stay on the current one.
     if (isPaged(sec)) {
@@ -569,6 +481,7 @@ function renderSection(key, pageId) {
     // Subsections
     if (sec.subsections) {
         for (const [subKey, sub] of Object.entries(sec.subsections)) {
+            if (ONLY_OVERRIDES && originOf(key + '.' + subKey) !== 'instance') continue;
             const subData = data[subKey] || {};
             html += '<div class="subsection">';
             html += '<div class="subsection-title">' + esc(sub.label) + '</div>';
@@ -582,7 +495,8 @@ function renderSection(key, pageId) {
     // renderSubArrayPage), so the main page does not get overloaded.
 
     // Array sections (providers)
-    if (sec.is_array) {
+    if (sec.is_array && (!ONLY_OVERRIDES || originOf(key) === 'instance')) {
+        html += originBadge(key);
         html += '<div style="margin-bottom: 12px;">';
         html += '<button class="btn btn-sm" onclick="addArrayItem(\'' + sJs(key) + '\', \'array\')">+ Add ' + esc(sec.label) + '</button>';
         html += '</div>';
@@ -619,13 +533,14 @@ function renderSubArrayPage(key) {
 function renderSubArrayBody(arrDef, parentData, parentKey, arrKey) {
     const path = parentKey + '.' + arrKey;
     const items = (parentData && parentData[arrKey]) || (arrDef.is_dict ? {} : []);
-    if (arrDef.use_cases_editor) return renderUseCasesMasterDetail(path);
-    if (arrDef.lora_triggers_editor) return renderLoraTriggersEditor(path);
-    if (arrDef.master_detail) return renderMasterDetail(arrDef, items, path);
+    if (ONLY_OVERRIDES && originOf(path) !== 'instance') return '';
+    const heading = '<div class="list-origin">' + originBadge(path) + '</div>';
+    if (arrDef.lora_triggers_editor) return heading + renderLoraTriggersEditor(path);
+    if (arrDef.master_detail) return heading + renderMasterDetail(arrDef, items, path);
     let html = '<div style="margin-bottom:12px;"><button class="btn btn-sm" onclick="addArrayItem(\'' + sJs(path) + '\', \'' + (arrDef.is_dict ? 'dict' : 'array') + '\')">+ Add</button></div>';
     if (arrDef.is_dict) html += renderDictItems(arrDef, items, path);
     else html += renderArrayItems(arrDef, items, path);
-    return html;
+    return heading + html;
 }
 
 // One page of a paged section: only the fields and sub-arrays the page lists,
@@ -720,27 +635,44 @@ async function renderLlmSimpleEditor() {
          + 'Opening this page changes nothing. Press <b>Save</b> when done.</div>';
 
     const providers = CONFIG.providers || [];
+    if (!ONLY_OVERRIDES || originOf('llm_routing') === 'instance') html += '<div class="list-origin">' + originBadge('llm_routing') + '</div>';
     for (const cat of LLM_SIMPLE_CATS) {
+        const modelPath = cat.key === 'embedding' && (CONFIG.embedding || {}).backend === 'internal'
+            ? 'embedding.internal_model' : 'llm_routing';
+        const configPath = cat.key === 'embedding' ? 'embedding' : 'llm_routing';
+        if (ONLY_OVERRIDES && (cat.key === 'embedding'
+            ? !['embedding.backend', modelPath].some(path => originOf(path) === 'instance')
+            : originOf(configPath) !== 'instance')) continue;
         const sel = LLM_SIMPLE_SEL[cat.key] || {};
         html += '<div class="subsection">';
         html += '<div class="subsection-title">' + esc(cat.label) + '</div>';
         html += '<div class="desc" style="margin-bottom:8px;">' + esc(cat.desc) + '</div>';
         html += '<div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">';
-        // Provider
-        html += '<select id="llmsimple-prov-' + cat.key + '" onchange="llmSimpleSetProvider(\'' + cat.key + '\', this.value)">';
-        html += '<option value="">— none —</option>';
-        if (cat.key === 'embedding') {
-            html += '<option value="' + LLM_SIMPLE_INTERNAL + '"' + (sel.provider === LLM_SIMPLE_INTERNAL ? ' selected' : '') + '>Internal (built-in — no setup)</option>';
+        // External embedding models share the whole-list routing badge above.
+        const embedding = cat.key === 'embedding';
+        const showBackend = !embedding || !ONLY_OVERRIDES || originOf('embedding.backend') === 'instance';
+        const showModel = !embedding || !ONLY_OVERRIDES || originOf(modelPath) === 'instance';
+        if (showBackend) {
+            if (embedding) html += originBadge('embedding.backend');
+            // Provider
+            html += '<select id="llmsimple-prov-' + cat.key + '" onchange="llmSimpleSetProvider(\'' + cat.key + '\', this.value)">';
+            html += '<option value="">— none —</option>';
+            if (cat.key === 'embedding') {
+                html += '<option value="' + LLM_SIMPLE_INTERNAL + '"' + (sel.provider === LLM_SIMPLE_INTERNAL ? ' selected' : '') + '>Internal (built-in — no setup)</option>';
+            }
+            for (const p of providers) {
+                html += '<option value="' + esc(p.name) + '"' + (p.name === sel.provider ? ' selected' : '') + '>' + esc(p.name) + ' (' + esc(p.type) + ')</option>';
+            }
+            html += '</select>';
         }
-        for (const p of providers) {
-            html += '<option value="' + esc(p.name) + '"' + (p.name === sel.provider ? ' selected' : '') + '>' + esc(p.name) + ' (' + esc(p.type) + ')</option>';
+        if (showModel) {
+            if (embedding && modelPath === 'embedding.internal_model') html += originBadge(modelPath);
+            // Model
+            html += '<select id="llmsimple-model-' + cat.key + '" onchange="llmSimpleSetModel(\'' + cat.key + '\', this.value)" style="min-width:240px;">';
+            html += '<option value="' + esc(sel.model || '') + '" selected>' + esc(sel.model || '— select —') + '</option>';
+            html += '</select>';
+            html += '<button class="btn btn-sm" onclick="llmSimpleLoadModels(\'' + cat.key + '\')">Load Models</button>';
         }
-        html += '</select>';
-        // Model
-        html += '<select id="llmsimple-model-' + cat.key + '" onchange="llmSimpleSetModel(\'' + cat.key + '\', this.value)" style="min-width:240px;">';
-        html += '<option value="' + esc(sel.model || '') + '" selected>' + esc(sel.model || '— select —') + '</option>';
-        html += '</select>';
-        html += '<button class="btn btn-sm" onclick="llmSimpleLoadModels(\'' + cat.key + '\')">Load Models</button>';
         html += '</div>';
         html += '<div id="llmsimple-split-' + cat.key + '" class="desc" style="display:none; margin-top:6px; color:#d29922;"></div>';
         html += '</div>';
@@ -976,11 +908,13 @@ async function llmSimpleCommit(cat, next, prev) {
             llmSimplePopulateModels(cat, false);
             return;
         }
+        touchPath('llm_routing');
         CONFIG.llm_routing = llmSimpleAssign(routing, ids, next.provider, next.model,
             { name: meta.label, temperature: LLM_SIMPLE_TEMP[cat] });
     }
     LLM_SIMPLE_SEL[cat] = next;
     if (cat === 'embedding') {
+        touchPath('embedding');
         if (!CONFIG.embedding) CONFIG.embedding = {};
         if (internal) {
             CONFIG.embedding.backend = 'internal';
@@ -1187,6 +1121,7 @@ function onRoutingModelChanged(path) {
 }
 
 function toggleTaskPersistent(taskId, disable) {
+    touchPath('llm_task_state.disabled_tasks');
     if (!CONFIG.llm_task_state) CONFIG.llm_task_state = { disabled_tasks: [] };
     const arr = CONFIG.llm_task_state.disabled_tasks || [];
     const idx = arr.indexOf(taskId);
@@ -1210,16 +1145,17 @@ async function applyTaskPreset(preset) {
         } else {
             toast('Runtime preset "' + preset + '" active (' + (data.disabled || []).length + ' tasks off)', 'success');
         }
-        renderLlmRoutingPage('tasks');
+        await renderLlmRoutingPage('tasks');
     } catch (e) {
         toast('Preset error: ' + e.message, 'error');
     }
 }
 
 // ── Render Fields ──
-function renderFields(fields, data, path) {
+function renderFields(fields, data, path, inItem = false) {
     let html = '';
     for (const [fKey, f] of Object.entries(fields)) {
+        if (!inItem && ONLY_OVERRIDES && originOf(path + '.' + fKey) !== 'instance') continue;
         // Schema-level visibility: a field with `applicable_for` is only shown
         // when `data.api_type` is in the list. While no api_type is set, the
         // type-specific fields stay hidden — the user picks the type first,
@@ -1330,7 +1266,7 @@ function renderFields(fields, data, path) {
         // `half: true` fields occupy one grid column instead of both, so two
         // adjacent half fields (e.g. Width | Height) share one row.
         html += '<div class="field' + (f.half ? ' field-half' : '') + '"' + embedAttr + '>';
-        html += '<label for="f-' + esc(fullPath) + '">' + esc(f.label) + pill + '</label>';
+        html += '<label for="f-' + esc(fullPath) + '">' + esc(f.label) + pill + (!inItem ? originBadge(fullPath) : '') + '</label>';
         html += '<div class="input-wrap">';
         html += renderInput(f, val, fullPath);
         // Show the schema default next to the description so the effective
@@ -1453,7 +1389,7 @@ function refreshImagegenModelSelect(backendPath) {
     if (!modelEl) return;
     const backendName = getVal(backendPath) || '';
     if (!backendName) {
-        modelEl.innerHTML = '<option value="">— Backend zuerst waehlen —</option>';
+        modelEl.innerHTML = '<option value="">— Select a backend first —</option>';
         return;
     }
     loadImagegenBackendModels(modelPath, backendName);
@@ -1515,7 +1451,7 @@ function renderImagegenModelCombo(val, path) {
     const parts = path.split('.');
     const base = parts.slice(0, -1).join('.');
     const dlId = 'dl-' + path.replace(/[^a-zA-Z0-9]/g, '-');
-    let html = '<input type="text" list="' + dlId + '" id="f-' + esc(path) + '" value="' + esc(val) + '" placeholder="z.B. flux.2-klein-4b" onchange="setVal(\'' + sJs(path) + '\', this.value)">';
+    let html = '<input type="text" list="' + dlId + '" id="f-' + esc(path) + '" value="' + esc(val) + '" placeholder="e.g. flux.2-klein-4b" onchange="setVal(\'' + sJs(path) + '\', this.value)">';
     html += '<datalist id="' + dlId + '"></datalist>';
     html += ' <button class="btn btn-sm" type="button" onclick="loadImagegenModelCombo(\'' + sJs(path) + '\', \'' + sJs(base) + '\')">Load Models</button>';
     return html;
@@ -1598,7 +1534,7 @@ function renderArrayItem(def, item, path, index, labelField) {
     html += '<button class="btn btn-sm btn-danger" style="margin-left:4px;" onclick="event.stopPropagation(); removeItem(\'' + sJs(path) + '\')">✕</button>';
     html += '</div>';
     html += '<div class="array-item-body">';
-    html += renderFields(def.fields, item, path);
+    html += renderFields(def.fields, item, path, true);
     html += '</div></div>';
     return html;
 }
@@ -1689,7 +1625,7 @@ function renderMasterDetail(def, items, path) {
     const cols = def.list_columns || [{ field: def.item_label_field || 'name', label: 'Name' }];
 
     let html = '<div class="md-grid">';
-    // Links: Tabelle
+    // Left: table
     html += '<div class="md-list">';
     html += '<table class="md-table"><thead><tr>';
     for (const c of cols) html += '<th>' + esc(c.label) + '</th>';
@@ -1706,7 +1642,7 @@ function renderMasterDetail(def, items, path) {
     html += '</tbody></table>';
     html += '<button class="btn btn-sm" style="margin-top:10px;" onclick="addArrayItem(\'' + sJs(path) + '\', \'' + (def.is_dict ? 'dict' : 'array') + '\')">+ Add</button>';
     html += '</div>';
-    // Rechts: Detail
+    // Right: detail
     html += '<div class="md-detail" id="detail-' + esc(path) + '">';
     html += renderMasterDetailBody(def, items, path, sel);
     html += '</div>';
@@ -1732,7 +1668,7 @@ function renderMasterDetailBody(def, items, path, sel) {
     html += '<button class="btn btn-sm" title="Duplicate as a new entry" onclick="duplicateItem(\'' + sJs(sel) + '\')">⧉</button>';
     html += '<button class="btn btn-sm btn-danger" style="margin-left:4px;" title="Delete" onclick="removeItem(\'' + sJs(sel) + '\')">✕</button>';
     html += '</div>';
-    html += renderFields(def.fields, item, sel);
+    html += renderFields(def.fields, item, sel, true);
     return html;
 }
 
@@ -1806,12 +1742,97 @@ function applyEmbedVisibility() {
 }
 
 // ── Data Access ──
+// Origin compares parsed segments, including bracket and dotted indices.
+function pathsOverlap(a, b) {
+    const left = parsePath(a).map(String), right = parsePath(b).map(String);
+    return left.slice(0, Math.min(left.length, right.length)).every((v, i) => v === right[i]);
+}
+
+function originOf(path) {
+    return [...OVERRIDES].some(o => pathsOverlap(o, path)) ? 'instance' : 'default';
+}
+
+function shippedAt(path) {
+    let cur = SHIPPED;
+    for (const seg of parsePath(path)) {
+        if (cur === null || typeof cur !== 'object' || !Object.prototype.hasOwnProperty.call(cur, seg)) return { has: false };
+        cur = cur[seg];
+    }
+    return { has: true, value: JSON.parse(JSON.stringify(cur)) };
+}
+
+function originBadge(path) {
+    const origin = originOf(path);
+    let html = '<span class="origin origin-' + origin + '">' + (origin === 'instance' ? 'Instance' : 'Default (GitHub)') + '</span>';
+    if (origin === 'instance') html += ' <button type="button" class="btn btn-xs" onclick="resetToDefault(\'' + sJs(path) + '\')">Reset to default</button>';
+    return html;
+}
+
+function markDirty() {
+    MUTATION_REVISION++;
+    DIRTY = true;
+    const btn = document.getElementById('btn-save');
+    if (btn) btn.textContent = 'Save*';
+}
+
+// Called only by edits: an overlapping pending reset must not undo the edit.
+function touchPath(path) {
+    for (const reset of [...RESETS]) if (pathsOverlap(reset, path)) RESETS.delete(reset);
+    markDirty();
+}
+
+function deleteVal(path) {
+    const parts = parsePath(path);
+    let obj = CONFIG;
+    for (const seg of parts.slice(0, -1)) {
+        if (obj === null || typeof obj !== 'object' || !(seg in obj)) return;
+        obj = obj[seg];
+    }
+    if (obj && typeof obj === 'object') delete obj[parts[parts.length - 1]];
+}
+
+async function resetToDefault(path) {
+    const shipped = shippedAt(path);
+    if (shipped.has) setVal(path, shipped.value);
+    else deleteVal(path);
+    RESETS.add(path);
+    for (const override of [...OVERRIDES]) {
+        if (override === path || override.startsWith(path + '.')) OVERRIDES.delete(override);
+    }
+    markDirty();
+    buildNav();
+    await renderSection(ACTIVE_SECTION, ACTIVE_PAGE);
+}
+
+function sectionHasOverride(key) {
+    if (key === 'llm_routing') return ['llm_routing', 'llm_task_state'].some(p => originOf(p) === 'instance');
+    if (key === 'llm_simple') return ['llm_routing', 'embedding'].some(p => originOf(p) === 'instance');
+    return originOf(key.replace('::', '.')) === 'instance';
+}
+
+function pageHasOverride(key, sec, page) {
+    if (key === 'llm_routing' && page.id === 'tasks') return sectionHasOverride(key);
+    if (sec.is_array) return originOf(key) === 'instance';
+    if (key === 'image_generation' && ['routing', 'routing_overview'].includes(page.id)) return originOf(key + '.routing') === 'instance';
+    if (key === 'decision' && page.id === 'points') return originOf('decision.points') === 'instance';
+    if (key === 'decision' && page.id === 'shadow') return originOf('decision.points') === 'instance';
+    return [...page.fields, ...page.sub_arrays].some(f => originOf(key + '.' + f) === 'instance');
+}
+
+async function setOnlyOverrides(value) {
+    ONLY_OVERRIDES = value;
+    try { localStorage.setItem('settings-only-overrides', String(value)); } catch (e) { /* storage unavailable */ }
+    buildNav();
+    if (ACTIVE_SECTION && !ACTIVE_SECTION.startsWith('_')) await renderSection(ACTIVE_SECTION, ACTIVE_PAGE);
+}
+
 function setVal(path, value) {
+    touchPath(path);
     const parts = parsePath(path);
     let obj = CONFIG;
     for (let i = 0; i < parts.length - 1; i++) {
         const p = parts[i];
-        if (obj[p] === undefined) {
+        if (obj[p] === undefined || obj[p] === null || typeof obj[p] !== 'object') {
             obj[p] = (typeof parts[i+1] === 'number') ? [] : {};
         }
         obj = obj[p];
@@ -1950,7 +1971,7 @@ function askText(message, defaultValue) {
 
 // ── Actions ──
 async function addArrayItem(path, type) {
-    const obj = _ensureContainer(path, type);
+    let obj;
     if (type === 'dict') {
         const id = await askText('New entry key:', '');
         if (!id) return;
@@ -1959,11 +1980,16 @@ async function addArrayItem(path, type) {
         // keeps the original input.
         const key = id.replace(/[.\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
         if (!key) { toast('Invalid key', 'error'); return; }
+        obj = getVal(path) || {};
         if (obj[key] !== undefined) { toast('Entry already exists: ' + key, 'error'); return; }
+        touchPath(path);
+        obj = _ensureContainer(path, type);
         obj[key] = { name: id };
         // Select the new entry in the master-detail view (no-op for accordion).
         SELECTED_ITEM[path] = path + '.' + key;
     } else {
+        touchPath(path);
+        obj = _ensureContainer(path, type);
         if (path === 'llm_routing') {
             obj.push({ name: '', enabled: true, preload_on_startup: false, provider: '', model: '', temperature: 0.7, tasks: [] });
         } else if (path === 'content_marketplace.catalogs') {
@@ -1978,6 +2004,7 @@ async function addArrayItem(path, type) {
 
 async function removeItem(path) {
     if (!await askConfirm('Remove this item?', 'Remove')) return;
+    touchPath(path);
     const parts = parsePath(path);
     let obj = CONFIG;
     for (let i = 0; i < parts.length - 1; i++) {
@@ -2017,6 +2044,7 @@ async function duplicateItem(path) {
     }
     if (typeof last === 'number') {
         // Array: insert right behind the original
+        touchPath(path);
         parent.splice(last + 1, 0, copy);
         const arrPath = path.replace(/\[\d+\]$/, '');
         SELECTED_ITEM[arrPath] = arrPath + '[' + (last + 1) + ']';
@@ -2028,6 +2056,7 @@ async function duplicateItem(path) {
         const newKey = rawKey.replace(/[.\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
         if (!newKey) { toast('Invalid key', 'error'); return; }
         if (parent[newKey] !== undefined) { toast('Key already exists: ' + newKey, 'error'); return; }
+        touchPath(parts.slice(0, -1).join('.') + '.' + newKey);
         parent[newKey] = copy;
         const arrPath = path.replace(/\.[^.\[\]]+$/, '');
         SELECTED_ITEM[arrPath] = arrPath + '.' + newKey;
@@ -2126,8 +2155,8 @@ async function validateConfig() {
             content.innerHTML = html;
         }
         if (result.errors > 0) toast(result.errors + ' errors found', 'error');
-        else if (result.warnings > 0) toast(result.warnings + ' Warnungen', 'success');
-        else toast('Alles OK!', 'success');
+        else if (result.warnings > 0) toast(result.warnings + ' warnings', 'success');
+        else toast('All OK!', 'success');
     } catch (e) {
         toast('Validation failed: ' + e.message, 'error');
     }
@@ -2196,18 +2225,32 @@ async function saveConfig() {
     const btn = document.getElementById('btn-save');
     btn.disabled = true;
     btn.textContent = 'Saving...';
+    const submittedRevision = MUTATION_REVISION;
+    const submittedResets = [...RESETS];
     try {
         const resp = await fetch('/admin/settings/save', {
             method: 'POST',
             headers: authHeaders(),
-            body: JSON.stringify({ values: CONFIG, resets: [...RESETS] })
+            body: JSON.stringify({ values: CONFIG, resets: submittedResets })
         });
         const result = await resp.json();
         // The image routing Rules page keeps the outcome (a refused chain,
         // save warnings) on screen — a toast is gone after three seconds.
         if (typeof imageRoutingSaveResult === 'function') imageRoutingSaveResult(resp.ok, result);
         if (resp.ok) {
-            RESETS.clear();
+            OVERRIDES = new Set(result.overrides || []);
+            // A newer edit or reset must remain pending, including a reset
+            // repeated for a submitted path. Conservatively retain all resets
+            // when the configuration changed during the request.
+            if (MUTATION_REVISION === submittedRevision) {
+                for (const path of submittedResets) RESETS.delete(path);
+                DIRTY = false;
+            }
+            const content = document.getElementById('content');
+            const top = content.scrollTop;
+            buildNav();
+            await renderSection(ACTIVE_SECTION, ACTIVE_PAGE);
+            content.scrollTop = top;
             // URL/key changes should apply immediately, without a page reload:
             // invalidate the provider and imagegen backend model caches.
             for (const k of Object.keys(PROVIDERS_CACHE)) delete PROVIDERS_CACHE[k];
@@ -2222,7 +2265,7 @@ async function saveConfig() {
         toast('Save failed: ' + e.message, 'error');
     }
     btn.disabled = false;
-    btn.textContent = 'Save';
+    btn.textContent = DIRTY ? 'Save*' : 'Save';
 }
 
 async function loadRestartPending() {

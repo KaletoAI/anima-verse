@@ -201,8 +201,8 @@ def llm_stats_data(
     }
 
 
-# Prompt-Block-Keys, die ein Filter gezielt unterdruecken kann — entspricht den
-# *_block ctx-Keys in app/core/thought_context.py.
+# Prompt block keys a filter can selectively suppress — matching the
+# *_block context keys in app/core/thought_context.py.
 _PROMPT_FILTER_BLOCK_KEYS = [
     "inbox_block", "events_block", "assignments_block", "general_task",
     "commitments_block", "outfit_decision_block", "arc_block",
@@ -273,7 +273,7 @@ def prompt_filters_data(user=Depends(require_admin)):
     world = {(e.get("id") or "").strip(): e
              for e in _load_world() if e.get("id")}
 
-    # Condition-Referenzen mit DENSELBEN Resolvern wie die Live-Evaluierung pruefen.
+    # Validate condition references with the SAME resolvers as live evaluation.
     from app.core.activity_engine import validate_condition_references
 
     out = []
@@ -1775,10 +1775,11 @@ def _build_settings_html() -> str:
 
 <nav class="sidebar">
     <h1>Admin</h1>
-    <div id="world-badge" style="margin: 4px 0 12px 8px; padding: 4px 8px; background:#1f3a5f; color:#79c0ff; font-size:12px; border-radius:4px; display:inline-block;">world: <span id="world-name">…</span></div>
-    <div class="nav-section-label">Server settings</div>
+    <div class="instance-heading">Instance settings — shared by every world</div>
+    <a href="/game-admin#setup">World settings: Game-Admin → Setup</a>
+    <div class="nav-section-label">Instance settings</div>
     <div id="nav-links"></div>
-    <div class="nav-section-label">Management</div>
+    <div class="nav-section-label">Administration</div>
     <a href="#" data-section="_users" onclick="event.preventDefault(); activateIframe('_users', '/admin/users', 'User management')"><span class="nav-icon">👥</span> User management</a>
     <a href="#" data-section="_models" onclick="event.preventDefault(); activateIframe('_models', '/admin/models', 'Model Capabilities')"><span class="nav-icon">🧩</span> Model Capabilities</a>
     <a href="#" data-section="_agent_loop" onclick="event.preventDefault(); activateIframe('_agent_loop', '/admin/agent-loop', 'Agent Loop')"><span class="nav-icon">🔄</span> Agent Loop</a>
@@ -1798,9 +1799,11 @@ def _build_settings_html() -> str:
     <div class="toolbar" id="settings-toolbar">
         <button class="btn btn-primary" onclick="saveConfig()" id="btn-save">Save</button>
         <button class="btn" onclick="validateConfig()" id="btn-validate" style="border-color:#d29922; color:#d29922;">Validate</button>
+        <label class="override-filter"><input type="checkbox" id="only-overrides" onchange="setOnlyOverrides(this.checked)"> Only my overrides</label>
         <span class="spacer"></span>
         <span id="status-msg" style="font-size: 12px; color: #8b949e;"></span>
     </div>
+    <div id="providers-hint" class="providers-hint" hidden>No LLM provider configured — add one under Providers.</div>
     <div class="content" id="content">
         <div class="loading"><div class="spinner"></div><p style="margin-top: 12px;">Loading configuration...</p></div>
     </div>

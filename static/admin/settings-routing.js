@@ -1,6 +1,6 @@
 // ── LLM Routing (Advanced): the task-centric editor ─────────────────────
 // plan-llm-routing-ui.md. Loaded AFTER static/admin/settings.js, so
-// every global of that file (CONFIG, SCHEMA, esc, toast, loadLlmCatalog,
+// every global of that file (CONFIG, SCHEMA, toast, loadLlmCatalog,
 // renderRequirementBadges, ensureModelCaps, …) is available at run time.
 //
 // The section is a PAGED schema section (config_schema.py → llm_routing.pages):
@@ -52,8 +52,9 @@ function unassignTask(routing, taskId, entryIdx) {
     const entry = routing[entryIdx];
     if (!entry || !Array.isArray(entry.tasks)) return false;
     const before = entry.tasks.length;
-    entry.tasks = entry.tasks.filter(t => !(t && t.task === taskId));
-    if (entry.tasks.length === before) return false;
+    const remaining = entry.tasks.filter(t => !(t && t.task === taskId));
+    if (remaining.length === before) return false;
+    entry.tasks = remaining;
     renumberTask(routing, taskId);
     return true;
 }
@@ -195,8 +196,8 @@ const RT_TEXT = {
     poolSharedOff: 'This entry is disabled; the running entries of {pool} use {n}.',
     poolSynced: 'Lanes set to {n} for {names} — they share {pool}.',
     poolAdopted: 'This entry now shares {pool} with {names} and took their lane count ({n}).',
-    poolAligned: 'Entries on the same model share one set of lanes. Differing values were '
-               + 'aligned to the value that was already in force: {pools}. Save to keep it.',
+    poolAligned: 'Entries on the same model share one set of lanes. The values currently in force are '
+               + '{pools}. Edit Lanes to apply a shared value to every entry.',
     // Overview page: what the server resolves right now.
     ovBanner: 'Shows the SAVED configuration as the server resolves it right now — '
             + 'unsaved changes on the other pages are not included.',
@@ -260,8 +261,7 @@ function rtEntryLabel(entry, idx) {
 }
 
 function rtRouting() {
-    if (!Array.isArray(CONFIG.llm_routing)) CONFIG.llm_routing = [];
-    return CONFIG.llm_routing;
+    return Array.isArray(CONFIG.llm_routing) ? CONFIG.llm_routing : [];
 }
 
 // ── Page dispatch ──────────────────────────────────────────────────────
@@ -270,9 +270,19 @@ async function renderLlmRoutingPage(pageId) {
     if (RT_KEEP_STATE) RT_KEEP_STATE = false; else RT_TASK_STATE = null;
     const page = pageId || 'tasks';
     if (page !== 'llms') RT_POOL_ALIGNED = null;
-    if (page === 'llms') return renderLlmRoutingLlmsPage(content);
-    if (page === 'overview') return renderLlmRoutingOverviewPage(content);
-    return renderLlmRoutingTasksPage(content);
+    if (ONLY_OVERRIDES && !(page === 'tasks' ? sectionHasOverride('llm_routing') : originOf('llm_routing') === 'instance')) {
+        content.innerHTML = '<div class="section active"><p>No overrides on this page.</p></div>';
+        return;
+    }
+    if (page === 'llms') await renderLlmRoutingLlmsPage(content);
+    else if (page === 'overview') await renderLlmRoutingOverviewPage(content);
+    else await renderLlmRoutingTasksPage(content);
+    const title = content.querySelector('.section-title');
+    if (title) {
+        let badges = originBadge('llm_routing');
+        if (page === 'tasks') badges += ' <span>Active tasks</span> ' + originBadge('llm_task_state.disabled_tasks');
+        title.insertAdjacentHTML('afterend', '<div class="list-origin">' + badges + '</div>');
+    }
 }
 
 // Re-render the Tasks page in place. Scroll position and (for the search box)
@@ -608,16 +618,19 @@ function rtAssign(taskId, entryIdxOrNew) {
     if (isNaN(idx)) return;
     const changed = assignTask(rtRouting(), taskId, idx);
     RT_NEW_FORM = null;
+    if (changed) touchPath('llm_routing');
     rtRerender(changed ? RT_TEXT.saveHint : '');
 }
 
 function rtUnassign(taskId, entryIdx) {
     const changed = unassignTask(rtRouting(), taskId, entryIdx);
+    if (changed) touchPath('llm_routing');
     rtRerender(changed ? RT_TEXT.saveHint : '');
 }
 
 function rtMove(taskId, entryIdx, delta) {
     if (!moveTask(rtRouting(), taskId, entryIdx, delta)) return;
+    touchPath('llm_routing');
     rtRerender(RT_TEXT.saveHint);
 }
 
@@ -638,6 +651,7 @@ function rtGroupAssign(category, entryIdx) {
         if (assignTask(routing, t.id, idx)) n++;
     }
     if (!n) { rtRerender(); toast(RT_TEXT.groupNone, 'error'); return; }
+    touchPath('llm_routing');
     rtRerender(rtFmt(RT_TEXT.groupAssigned, { n: n, llm: rtEntryLabel(routing[idx], idx) }) + ' — ' + RT_TEXT.saveHint);
 }
 
@@ -675,6 +689,8 @@ function rtNewLlmCreate(taskId) {
     };
     if (!isNaN(maxTok)) entry.max_tokens = maxTok;
     const routing = rtRouting();
+    touchPath('llm_routing');
+    if (!Array.isArray(CONFIG.llm_routing)) CONFIG.llm_routing = routing;
     routing.push(entry);
     // A second sampling profile of a model that already has an entry runs on
     // that model's lanes — it starts with their number, not with 1.
@@ -686,6 +702,7 @@ function rtNewLlmCreate(taskId) {
 
 function rtRemoveUnknown(entryIdx, taskId) {
     const changed = unassignTask(rtRouting(), taskId, entryIdx);
+    if (changed) touchPath('llm_routing');
     rtRerender(changed ? RT_TEXT.saveHint : '');
 }
 
@@ -739,7 +756,8 @@ async function renderLlmRoutingLlmsPage(content) {
     // A config from before the lane count was kept in step may hold several
     // values for one model. The notice stays up until the page is left, so a
     // re-render (delete confirmation, …) does not make it vanish unread.
-    const aligned = normalizePoolLanes(routing);
+    // Survey a copy: rendering must never normalize the stored entries.
+    const aligned = normalizePoolLanes(JSON.parse(JSON.stringify(routing)));
     if (aligned.length) RT_POOL_ALIGNED = aligned;
 
     let html = '<div class="section active">';
@@ -802,7 +820,7 @@ function rtRenderEntryItem(def, fields, item, path, idx) {
     // Outside the body, so the question stays visible on a collapsed item.
     if (RT_DELETE_ASK === idx) html += rtDeleteConfirmBox(item, idx);
     html += '<div class="array-item-body">';
-    html += renderFields(fields, item, path);
+    html += renderFields(fields, item, path, true);
     html += '</div></div>';
     return html;
 }
@@ -874,6 +892,7 @@ function rtSetLanes(path, value) {
     if (!m) { setVal(path, value); return; }
     const routing = rtRouting();
     const idx = parseInt(m[1], 10);
+    touchPath('llm_routing');
     const touched = setPoolLanes(routing, idx, value);
     rtRefreshPools();
     if (touched.length > 1) {
@@ -889,6 +908,7 @@ function rtPoolMembershipChanged(path) {
     if (!m) return;
     const routing = rtRouting();
     const idx = parseInt(m[1], 10);
+    touchPath('llm_routing');
     const adopted = adoptPoolLanes(routing, idx);
     rtRefreshPools();
     if (adopted) {
@@ -940,6 +960,7 @@ async function rtDeleteEntryConfirm(idx) {
     RT_DELETE_ASK = null;
     if (!entry) { await renderLlmRoutingPage('llms'); return; }
     const tasks = (entry.tasks || []).map(t => t && t.task).filter(Boolean);
+    touchPath('llm_routing');
     routing.splice(idx, 1);
     // The removed entry left holes in its tasks' chains — close them.
     for (const tid of tasks) renumberTask(routing, tid);
@@ -1141,4 +1162,8 @@ function rtOverviewStatus(t) {
     if (t.via === 'disabled') return '<span class="rt-muted">' + esc(RT_TEXT.ovDisabled) + '</span>';
     return '<span class="rt-warn">' + esc(RT_TEXT.ovNone)
          + (t.reason ? ' — ' + esc(t.reason) : '') + '</span>';
+}
+
+function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
