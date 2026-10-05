@@ -20,8 +20,24 @@ server. Text **embeddings** for
 pose matching run **inside** the container on CPU (`fastembed`/ONNX), so no
 embedding endpoint is required. Image generation, TTS etc. are optional
 external services configured later through the admin UI. There is **no `.env`
-file**: all configuration lives per-world in `config.json` / `world.db` and is
-edited at `/admin/settings`.
+file**: server settings live in `instance/config.json` plus `instance/secrets.json`,
+edited at `/admin/settings`; world settings live in `worlds/<world>/config.json`,
+edited in Game-Admin → Setup (including image styles). Both config layers store
+only deviations from shipped defaults. `/admin/settings` shows Default (GitHub) /
+Instance origins, Reset to default, Only my overrides and a Shipped defaults panel.
+LLM template edits at `/admin/templates` are world overrides in `world.db`, never
+writes to `shared/templates/llm/`.
+
+The instance directory is `/app/instance` in Docker (`INSTANCE_DIR`, persisted in
+`anima_instance`); local starts select it with `start.sh --instance` or `INSTANCE_DIR`.
+The entrypoint runs `scripts/migrate_instance_config.py --from "$WORLD" --if-needed`
+to migrate old world server settings when needed, with backups in the instance volume.
+
+A fresh instance ships `ollama-local` (`http://localhost:11434/v1`) and
+`openai-compatible-local` (`http://localhost:8080/v1`). Adapt or replace them in
+LLM Providers; editing an entry makes the whole list the instance's own, and `[]`
+stays empty. **Inside Docker, localhost is the container itself.** Use the host IP
+or a configured `host.docker.internal` hostname for a backend on the Docker host.
 
 The image ships the curated **demo world** (`worlds/demo`, including its
 `world.db` with characters, locations and rooms) so the deployment has content
@@ -149,25 +165,21 @@ docker compose logs -f   # follow startup; Ctrl-C to stop following
 
 3. Go to **`http://192.168.8.109:8100/admin/settings`**.
 
-4. **LLM Providers** — edit the provider named **`LocalAI`** and set its
+4. **LLM Providers** — edit **`openai-compatible-local`** (or add your own provider) and set its
    **API Base URL** to your LocalAI URL:
 
    ```
-   http://192.168.8.197:8080
+   http://192.168.8.197:8080/v1
    ```
 
    Leave the API key empty (LocalAI accepts unauthenticated requests by default).
    Save.
 
-5. **LLM Routing** — the demo ships two LLM entries on the `LocalAI` provider: a
-   chat/RP model for `chat_stream`, `story_stream`, `storyteller` and `thought`, and a
-   small vision-capable model for the utility tasks (`intent`, `extraction`,
-   `extraction_chat_state`, `spell_detect`, `consolidation`, `relationship_summary`,
-   `image_prompt`, `image_recognition`, `translation`, `instagram_caption`, the
-   random-event and generation helpers). Open the **LLMs** page and set each entry's
-   **Model** to a model your LocalAI actually serves (see `GET /v1/models`); the
-   **Tasks** page shows which task ends up where and the **Overview** page shows what
-   the server would resolve right now.
+5. **LLM Routing** — on the **LLMs** page, create entries using your configured
+   provider and model names it actually serves (`GET /v1/models`). Use a chat/RP
+   model for `chat_stream`, `story_stream`, `storyteller` and `thought`, and a
+   vision-capable utility model for tool and vision tasks. Assign chains on the
+   **Tasks** page; **Overview** shows what the server would resolve right now.
 
    **Minimal setup:** one entry, one general instruct model with tool/function
    calling, and give it every task. A task nobody routes falls back to its parent
@@ -241,6 +253,7 @@ State lives in named Docker volumes, not in the image:
 
 | Volume | Mount | Contents |
 |---|---|---|
+| `anima_instance` | `/app/instance` | Installation-wide server config and secrets; survives rebuilds and restarts. |
 | `anima_worlds` | `/app/worlds` | World data: characters, state, `config.json`, images. Seeded from the baked demo on first start. |
 | `anima_models` | `/app/models` | `u2net` (background removal) + `bge-small` (pose embeddings). |
 | `anima_logs` | `/app/logs` | `main.log`, `llm_calls.jsonl`, `image_prompts.jsonl`. |

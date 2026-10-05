@@ -49,7 +49,10 @@ the queue for latency but still take a lane. Two image generations never run in 
 backend.
 
 **Prompts are Jinja2 templates, not Python string-building.** Every LLM prompt lives under
-`shared/templates/llm/` and is live-editable at `/admin/templates`.
+`shared/templates/llm/` and is editable per world at `/admin/templates` (saved as a world override
+in `world.db`; the shipped file only changes by commit). The editor shows the World and origin,
+a diff to shipped, a stale-base warning when the shipped template changed, and Delete override.
+The loader checks world overrides before shipped templates, including for `{% include %}`.
 
 **Default-deny authentication.** Without a session every route answers `401` (a browser navigation
 gets redirected to a login form instead), and non-admins get `403` on the admin surfaces. Only the
@@ -69,10 +72,11 @@ to playing — chat, movement, own inventory and outfit, gifts, scene photos, ca
     poses, world-dev, observer, mind …).
 - **Server-rendered admin pages** (Python) — `/admin/settings`, `/admin/users`, `/admin/models`,
   `/admin/agent-loop`, `/admin/templates`, `/admin/llm-stats`, `/logs/llm`,
-  `/logs/image-prompts`, `/dashboard`. These are the configuration surface; there is no React
-  replacement for them. A large settings section can split itself into navigation sub-pages
+  `/logs/image-prompts`, `/dashboard`. These are server-rendered administration pages: `/admin/settings` edits instance settings,
+  `/admin/templates` edits per-world LLM templates, and the dashboard, statistics and logs provide monitoring.
+  World settings live in Game-Admin → Setup. A large settings section can split itself into navigation sub-pages
   (schema key `pages`) — **LLM Routing (Advanced)** does (*Tasks · LLMs · Overview*) and so does
-  **Media Generation** (*General & defaults · Backends · Use-cases (styles) · LoRA library · Scene
+  **Media Generation** (*General & defaults · Backends · LoRA library · Scene
   rendering · Reference renders & sizes · Blender refinement (3D) · Analysis & rebuild prompts*).
   Saving stays section-wide, the URL hash (`#image_generation/blender`) survives a reload.
 - **3D client** (`client3d/`, Three.js + a small React HUD) — a zoomable Age-of-Empires-style view
@@ -91,8 +95,8 @@ stops acting autonomously).
 ## Features
 
 ### LLM & routing
-- Multiple providers per world (types: **OpenAI-compatible**, **Ollama**, **Anthropic**) configured
-  through the admin UI — API keys land in a gitignored `secrets.json`.
+- Multiple providers per instance (types: **OpenAI-compatible**, **Ollama**, **Anthropic**) configured
+  through the admin UI — API keys land in gitignored `instance/secrets.json`.
 - **Task-centric routing** (`/admin/settings → LLM Routing`): the **Tasks** page gives every one of
   the 28 tasks an ordered chain of LLM entries, the **LLMs** page holds the entries themselves
   (provider, model, lanes, temperature, max tokens), the **Overview** page shows what the server
@@ -454,11 +458,14 @@ World data is **DB-only** — there are no JSON mirrors or backups on disk. Ever
 world directory is configuration or binary content, created on demand:
 
 ```
+instance/                   # installation-wide server settings (gitignored)
+  config.json               # instance overrides: providers, routing, media backends, TTS, …
+  secrets.json              # instance API keys / passwords (gitignored, overlaid at load)
 worlds/{world}/
   world.db                  # primary data store (see above)
   task_queue.db             # persistent task queue
-  config.json               # per-world config: LLM providers, media backends, TTS, routing, …
-  secrets.json              # API keys / passwords (gitignored, overlaid at load)
+  config.json               # world-scope settings only (chat/NPC/story tuning, calendar, image styles)
+  secrets.json              # world-scope secrets only (gitignored, overlaid at load)
   world_setup.json          # optional per-world briefing injected into prompts
   knowledge/                # source files for the knowledge-extraction skill
   characters/{Name}/        # per-character galleries, generated images, outfits, soul/, 3D models
@@ -475,6 +482,9 @@ worlds/{world}/
   tmp/                      # temporary files (TTS audio, story stills, …)
   .cache/                   # thumbnails, marketplace catalog caches + pack thumbnails (disposable)
 ```
+
+Both config layers store only deviations from the shipped default. LLM template overrides
+are stored in the world database (`llm_template_overrides`), not in the shared template tree.
 
 Cross-world, read-only resources shared by every world live under `shared/`: character / expression /
 pose / soul templates, the LLM prompt templates, the item catalog, surface textures, the animation
@@ -514,6 +524,48 @@ it needs the style.
 
 ## Getting started
 
+### 1. Instance — configure your backends
+
+`./start.sh --instance ./instance --world demo` selects the installation's config directory;
+otherwise `INSTANCE_DIR` is used, then `./instance`. Server settings live in `instance/config.json`
+and sensitive values in its `secrets.json`. Configure them at **`/admin/settings`**.
+
+A fresh instance ships two example providers (`config._DEFAULT_PROVIDERS`): **`ollama-local`** at
+`http://localhost:11434/v1` and **`openai-compatible-local`** at `http://localhost:8080/v1`.
+Adapt or replace them under **LLM Providers**. Editing any entry makes the whole list the instance's
+own; an explicit empty `[]` stays empty and shows “No LLM provider configured”. If no local server
+is running, startup logs a failed availability check per entry; an unserved localhost port normally
+returns “connection refused” immediately.
+
+Fields and whole lists show **Default (GitHub)** or **Instance**; entries of a list share
+the list's origin. **Reset to default** removes an override;
+**Only my overrides** filters the page and **Shipped defaults** displays the delivered values.
+The instance API exposes `/admin/settings/raw`, `/admin/settings/schema`,
+`/admin/settings/origin`, `/admin/settings/shipped-defaults` and `/admin/settings/save`
+(save body: `{values, resets}`).
+
+For old worlds carrying server settings, stop the server before migrating. Prefer the exact
+command printed by the startup refusal: it includes the selected instance path and, when needed,
+the custom worlds directory. For example:
+
+```bash
+./.venv/bin/python scripts/migrate_instance_config.py --from <world> --instance <instance-dir> --worlds-dir <worlds-dir>
+```
+
+`--instance <instance-dir>` defaults to `<repo>/instance`; `--worlds-dir <worlds-dir>` defaults to `<repo>/worlds`.
+The tool takes instance settings from the chosen `--from <world>` world and removes instance settings
+from **every eligible world** under `--worlds-dir <worlds-dir>` (subdirectories with `config.json`; symlinks
+and directories resolving outside that root are skipped unless the migration option `scripts/migrate_instance_config.py --follow-symlinks` is given).
+Before writing, it makes byte-identical backups of the world config/secrets files and any existing
+instance config/secrets files. Use `scripts/migrate_instance_config.py --from <world> --dry-run` with the same path options to inspect the report without writing files or backups.
+
+### 2. World — configure the simulation
+
+World settings live in `worlds/<world>/config.json` and are edited in **Game-Admin → Setup**.
+Its sub-tabs follow the schema's `world_group` and include the image styles editor.
+`GET /admin/world-settings` loads the world settings; `PUT /admin/world-settings` saves
+`{values, resets}` for the world layer only.
+
 The quickest start is the **bundled `demo` world** — `./start.sh --world demo` boots it as-is; you
 only need to point it at an LLM backend in the admin UI. To build your own world from zero instead,
 the full step-by-step walk-through (create a world, configure providers, build characters, the map,
@@ -526,8 +578,7 @@ setups that work out of the box:
 ### Option A — LocalAI (self-hosted, OpenAI-compatible)
 
 [LocalAI](https://localai.io) serves chat, vision and image models behind one OpenAI-compatible
-endpoint, so it slots straight into Anima Verse as a normal `openai` provider. What the demo world
-is configured for:
+endpoint, so it slots straight into Anima Verse as a normal `openai` provider. A suggested instance configuration:
 
 - **One LLM provider** `LocalAI`, type `openai`, `api_base = http://<host>:8080/v1`, no API key.
   Then split the routing across two LLM entries:

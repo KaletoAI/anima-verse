@@ -4,8 +4,22 @@
 
 Die App liest Konfiguration **nicht** aus einer `.env` und nicht aus
 Umgebungsvariablen (Ausnahmen: `queue_cli.py` für `TASK_QUEUE_DB` und das
-`docker/`-Setup). Konfiguriert wird **pro Welt** in `worlds/<welt>/config.json`, über
-die Admin-UI `/admin/settings`.
+`docker/`-Setup sowie die Pfad-Overrides `STORAGE_DIR` und `INSTANCE_DIR`).
+Konfiguration hat **zwei Ebenen**: Server-Einstellungen liegen in
+`instance/config.json` mit `instance/secrets.json` und werden unter `/admin/settings`
+bearbeitet. Welt-Einstellungen liegen in `worlds/<welt>/config.json` und werden unter
+Game-Admin → Setup bearbeitet (Untertabs nach `world_group`, einschließlich Bildstile).
+Beide Dateien speichern nur Abweichungen; `/admin/settings` zeigt die Herkunft pro Feld.
+Die Marken heißen „Default (GitHub)“ und „Instance“; „Reset to default“ entfernt eine
+Abweichung, „Only my overrides“ filtert sie und „Shipped defaults“ zeigt die ausgelieferten Werte.
+Die Instanz-Routen sind `/admin/settings/raw`, `/admin/settings/schema`,
+`/admin/settings/origin`, `/admin/settings/shipped-defaults` und `/admin/settings/save`
+(Speichern mit `{values, resets}`). Die Welt nutzt `GET`/`PUT /admin/world-settings`.
+
+Eine frische Instanz bringt zwei Beispiel-Provider aus `config._DEFAULT_PROVIDERS` mit:
+`ollama-local` (`http://localhost:11434/v1`) und `openai-compatible-local`
+(`http://localhost:8080/v1`). Sie lassen sich unter LLM Providers anpassen oder ersetzen.
+Eine Änderung macht die ganze Liste zur Instanz-Abweichung; ein leeres `[]` bleibt leer.
 
 Die GROSSBUCHSTABEN-Namen unten sind trotzdem keine Fiktion: sie sind die internen
 Anker einer **Env-Bridge**. `config.load()` ruft am Ende `_flatten_to_env(config)`
@@ -15,7 +29,7 @@ zwei Sorten Zeile in diesem Dokument:
 
 | Sorte | Woran erkennbar | Wie man sie ändert |
 |---|---|---|
-| **gebrückt** | Spalte „Quelle" nennt einen `config.json`-Pfad und die Admin-Sektion | über `/admin/settings`. Der Wert landet über `_flatten_to_env` unter dem genannten Namen |
+| **gebrückt** | Spalte „Quelle" nennt einen `config.json`-Pfad und die Admin-Sektion | über `/admin/settings` (Instanz) oder Game-Admin → Setup (Welt). Der Wert landet über `_flatten_to_env` unter dem genannten Namen |
 | **nur Code-Default** | Quelle „—" | gar nicht über die Admin-UI. Der genannte Wert ist der Default im `os.environ.get(...)`-Aufruf selbst; ihn zu ändern heißt, eine echte Prozess-Umgebungsvariable zu setzen oder den Code anzufassen |
 
 Zwei Feinheiten der Bridge, die Überraschungen erklären:
@@ -186,7 +200,7 @@ bleibt für eine spätere Wiederverwendung im Code.
 ## Beziehungen
 
 Hier gibt es keine env-Brücke mehr. Die einzige Einstellung ist
-`relationships.summary_enabled` (Admin → Relationships, Default `true`), und
+`relationships.summary_enabled` (Game-Admin → Setup → Gameplay → Relationships, Default `true`), und
 `app/core/chat_engine.py` liest sie direkt per `config.get()`: steht sie auf
 `false`, entfällt der Sentiment-LLM-Call nach einem Gespräch und die Beziehung
 bekommt nur die festen Default-Deltas.
@@ -215,6 +229,30 @@ Spieltag vergangen ist. Steht die Weltuhr still, zerfaellt nichts.
 ---
 
 ## Storage
+
+Die Instanz wird separat mit `./start.sh --instance /pfad` gewählt, sonst über
+`INSTANCE_DIR`, sonst `./instance`. `paths.init_instance()` selbst hat keinen Default.
+In Docker liegt sie auf `anima_instance` unter `/app/instance`. Jede Ebene überlagert
+nur ihre eigene `config.json` mit ihrer eigenen `secrets.json`; Secrets gehören zur
+jeweiligen Ebene. Für die Migration alter Welten muss der Server gestoppt sein.
+Bevorzugt den exakten Befehl aus der Startverweigerung verwenden: Er enthält den
+gewählten Instanzpfad und bei Bedarf das eigene Weltverzeichnis. Beispiel:
+
+```bash
+./.venv/bin/python scripts/migrate_instance_config.py --from <welt> --instance <instanzverzeichnis> --worlds-dir <weltverzeichnis>
+```
+
+Ohne `--instance` verwendet das Werkzeug `<repo>/instance`, ohne `--worlds-dir`
+`<repo>/worlds`. Es übernimmt die Instanz-Einstellungen aus der mit `--from`
+gewählten Welt und entfernt Instanz-Einstellungen aus **jeder geeigneten Welt**
+unter `--worlds-dir` (Unterverzeichnisse mit `config.json`; Symlinks und außerhalb
+liegende Ziele werden ohne `--follow-symlinks` übersprungen). Vor dem Schreiben
+legt es byte-identische Backups der Config-/Secrets-Dateien der Welten und der
+bereits vorhandenen Instanz an. Mit `--dry-run` wird nur der Bericht ausgegeben,
+ohne Dateien oder Backups zu schreiben. Der Docker-Entrypoint ruft die Migration
+mit `--if-needed` auf.
+LLM-Template-Änderungen unter `/admin/templates` liegen als Welt-Overrides in `world.db`
+(Tabelle `llm_template_overrides`), nicht in `shared/templates/llm/`.
 
 | Name | Quelle | Default | Leser |
 |---|---|---|---|
