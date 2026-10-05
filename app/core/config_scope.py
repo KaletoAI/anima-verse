@@ -225,7 +225,10 @@ def _use_case_seed() -> Dict[str, Any]:
 
 
 def _list_default(parts: Tuple[str, ...]) -> Tuple[bool, Any]:
-    """The three list defaults that do not come from the schema."""
+    """The four list defaults that do not come from the schema."""
+    if parts == ("providers",):
+        from app.core.config import _DEFAULT_PROVIDERS
+        return True, copy.deepcopy(_DEFAULT_PROVIDERS)
     if parts == ("content_marketplace", "catalogs"):
         from app.core.config import _DEFAULT_MARKETPLACE_CATALOGS
         return True, copy.deepcopy(_DEFAULT_MARKETPLACE_CATALOGS)
@@ -292,7 +295,8 @@ def shipped_default(path: str) -> Tuple[bool, Any]:
       skill packages' subsections included (from the manifests before
       discovery). Pseudo fields (``_`` name, ``note``/``group_header``) and
       fields inside array items never have one;
-    - the list defaults outside the schema: ``content_marketplace.catalogs``,
+    - the four list defaults outside the schema: ``providers`` (the example
+      seed), ``content_marketplace.catalogs``,
       ``image_generation.backends`` (the mesh seed), ``game_seasons``;
     - ``image_generation.use_cases.<uc>`` for a SHIPPED use case: the empty
       seed structure ``config._seed_default_use_cases`` writes. A custom use
@@ -402,3 +406,192 @@ def split_by_scope(cfg: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any],
             continue
         _split_into((root,), value, instance, world)
     return instance, world, unknown
+
+
+# ---------------------------------------------------------------------------
+# Per-scope views for the two admin surfaces
+# ---------------------------------------------------------------------------
+
+_LAYOUT_TYPES = ("group_header", "note")
+_ACTION_TYPES = ("button", "image_preview")
+
+
+def _is_data_field(name: str, fdef: Any) -> bool:
+    return (isinstance(fdef, dict) and not _is_pseudo_name(name)
+            and fdef.get("type") not in _LAYOUT_TYPES + _ACTION_TYPES)
+
+
+def _keeps(path: str, scope: str) -> bool:
+    got = scope_of(path)
+    return got == scope or got == MIXED
+
+
+def _filter_fields(fields: Dict[str, Any], prefix: str, declared: str,
+                   scope: str) -> Dict[str, Any]:
+    """The fields of one node that belong to ``scope`` — layout fields
+    follow the data fields around them (see Task 1 rules)."""
+    items = list(fields.items())
+    kept_data = {name for name, fdef in items
+                 if _is_data_field(name, fdef) and _keeps(f"{prefix}.{name}", scope)}
+    out: Dict[str, Any] = {}
+    for i, (name, fdef) in enumerate(items):
+        if not isinstance(fdef, dict):
+            continue
+        ftype = fdef.get("type")
+        if _is_data_field(name, fdef):
+            if name in kept_data:
+                out[name] = copy.deepcopy(fdef)
+        elif ftype == "group_header":
+            for nxt, ndef in items[i + 1:]:
+                if isinstance(ndef, dict) and ndef.get("type") == "group_header":
+                    break
+                if nxt in kept_data:
+                    out[name] = copy.deepcopy(fdef)
+                    break
+        elif ftype == "note":
+            prev = next((p for p, pdef in reversed(items[:i])
+                         if _is_data_field(p, pdef)), None)
+            if prev is not None and prev in kept_data:
+                out[name] = copy.deepcopy(fdef)
+        elif _inherited(declared) == scope:   # button, image_preview, _ names
+            out[name] = copy.deepcopy(fdef)
+    return out
+
+
+def _filter_node(node: Dict[str, Any], path: str, declared: str,
+                 scope: str) -> Dict[str, Any]:
+    """A filtered copy of one section/subsection node (MIXED or matching)."""
+    out = {k: copy.deepcopy(v) for k, v in node.items()
+           if k not in ("fields", "subsections", "sub_arrays", "pages")}
+    if node.get("fields"):
+        fields = _filter_fields(node["fields"], path, declared, scope)
+        if fields:
+            out["fields"] = fields
+    for kind in ("subsections", "sub_arrays"):
+        kept = {}
+        for name, child in (node.get(kind) or {}).items():
+            if not isinstance(child, dict):
+                continue
+            cpath = f"{path}.{name}"
+            got = scope_of(cpath)
+            if got == scope:
+                kept[name] = copy.deepcopy(child)
+            elif got == MIXED:
+                sub = _filter_node(child, cpath, child.get("scope") or _inherited(declared), scope)
+                if sub.get("fields") or sub.get("subsections") or sub.get("sub_arrays") or sub.get("pages"):
+                    kept[name] = sub
+        if kept:
+            out[kind] = kept
+    pages = []
+    for page in node.get("pages") or []:
+        p = copy.deepcopy(page)
+        p["fields"] = [f for f in page.get("fields") or [] if f in (out.get("fields") or {})]
+        p["sub_arrays"] = [a for a in page.get("sub_arrays") or [] if a in (out.get("sub_arrays") or {})]
+        if p.get("custom"):
+            if declared == scope:
+                pages.append(p)
+        elif p["fields"] or p["sub_arrays"]:
+            pages.append(p)
+    if pages:
+        out["pages"] = pages
+    return out
+
+
+def schema_for(scope: str) -> Dict[str, Any]:
+    """The schema view restricted to ``scope`` ("instance" or "world").
+
+    A section of that scope stays whole, a section of the other scope goes,
+    a MIXED section is filtered down to its ``scope`` part (fields,
+    subsections, sub_arrays, pages). The virtual sections (``llm_simple``)
+    are UI pages of the instance's LLM routing and stay in the instance view
+    only. A deep copy — callers may mutate it.
+    """
+    if scope not in (INSTANCE, WORLD):
+        raise ValueError(f"scope must be {INSTANCE!r} or {WORLD!r}: {scope!r}")
+    out: Dict[str, Any] = {}
+    for root, node in _schema_view().items():
+        if not isinstance(node, dict):
+            continue
+        if node.get("virtual"):
+            if scope == INSTANCE:
+                out[root] = copy.deepcopy(node)
+            continue
+        got = scope_of(root)
+        if got == scope:
+            out[root] = copy.deepcopy(node)
+        elif got == MIXED:
+            sub = _filter_node(node, root, node["scope"], scope)
+            if sub.get("fields") or sub.get("subsections") or sub.get("sub_arrays") or sub.get("pages"):
+                out[root] = sub
+    return out
+
+
+def _tree_fields(node: Dict[str, Any], parts: Tuple[str, ...],
+                 into: Dict[str, Any]) -> None:
+    for name, fdef in (node.get("fields") or {}).items():
+        if not _is_data_field(name, fdef):
+            continue
+        has, value = _shipped_default_parts(parts + (name,))
+        if has:
+            into[name] = value
+    for name, child in (node.get("subsections") or {}).items():
+        sub: Dict[str, Any] = {}
+        _tree_fields(child, parts + (name,), sub)
+        if sub:
+            into[name] = sub
+    for name in (node.get("sub_arrays") or {}):
+        has, value = _shipped_default_parts(parts + (name,))
+        if has:
+            into[name] = value
+
+
+def shipped_tree(scope: str) -> Dict[str, Any]:
+    """What ships for ``scope``, as one config-shaped dict.
+
+    Built only from ``shipped_default`` (schema defaults, the four list
+    defaults, the use-case seed of every shipped use case), walked over
+    ``schema_for(scope)``. A section or subsection without any default is
+    absent; a list without a shipped default (``llm_routing``) is absent — the
+    UI reads "absent" as "Reset removes the key".
+    """
+    from app.core.config import _DEFAULT_IMAGE_USE_CASES
+    out: Dict[str, Any] = {}
+    for root, node in schema_for(scope).items():
+        if node.get("virtual"):
+            continue
+        if node.get("is_array"):
+            has, value = _shipped_default_parts((root,))
+            if has:
+                out[root] = value
+            continue
+        part: Dict[str, Any] = {}
+        _tree_fields(node, (root,), part)
+        if root == "image_generation" and "use_cases" in (node.get("sub_arrays") or {}):
+            part["use_cases"] = {uc: _shipped_default_parts((root, "use_cases", uc))[1]
+                                 for uc in _DEFAULT_IMAGE_USE_CASES}
+        if part:
+            out[root] = part
+    return out
+
+
+def override_paths(pruned_part: Dict[str, Any]) -> list[str]:
+    """The dotted paths at which a PRUNED config part deviates from what ships.
+
+    A value with a shipped default is one path (a changed use case, a season
+    list), a list is one path, a dict without a default is descended. The
+    UI marks a field "Instance"/"World" when its path, an ancestor or a
+    descendant of it is in this list.
+    """
+    out: list = []
+
+    def walk(value: Any, parts: Tuple[str, ...]) -> None:
+        has, _default = _shipped_default_parts(parts)
+        if isinstance(value, dict) and value and not has:
+            for key, child in value.items():
+                walk(child, parts + (str(key),))
+        else:
+            out.append(".".join(parts))
+
+    for root, value in (pruned_part or {}).items():
+        walk(value, (str(root),))
+    return sorted(out)

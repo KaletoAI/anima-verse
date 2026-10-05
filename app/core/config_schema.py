@@ -48,6 +48,21 @@ SCENE_PROMPT_LEGACY_DEFAULTS = (
     "The exact {setting} from the reference image, keeping its layout, lighting and perspective. Compose {count} into the scene and NO ONE else — each person appears exactly once, no additional people, no duplicates. People: {people}",
 )
 
+# Game-Admin → Setup: the sub-tabs the world-scope settings are grouped into,
+# in display order. Every section that carries world-scope values names its
+# group with "world_group" (scripts/smoke_config_scope_views.py checks that
+# none is missing). "image_styles" is rendered by its own editor.
+WORLD_GROUPS = [
+    {"id": "gameplay", "label": "Gameplay"},
+    {"id": "npcs", "label": "NPCs"},
+    {"id": "story", "label": "Story & events"},
+    {"id": "memory_chat", "label": "Memory & chat"},
+    {"id": "calendar", "label": "Calendar & seasons"},
+    {"id": "messaging", "label": "Messaging frame"},
+    {"id": "skills", "label": "Skills (world)"},
+    {"id": "image_styles", "label": "Image styles"},
+]
+
 SECTIONS = {
     "server": {
         "label": "Server",
@@ -422,6 +437,7 @@ SECTIONS = {
         "label": "Chat / Anti-Repetition",
         "icon": "💬",
         "scope": "world",
+        "world_group": "memory_chat",
         "fields": {
             "frequency_penalty": {"type": "float", "label": "Frequency Penalty", "default": 0.3, "min": 0, "max": 2, "step": 0.05, "description": "Static token-repetition penalty sent to the chat model on every reply (OpenAI param). 0 = off, 0.3 = light, 0.6+ = strong. This is a global default ON TOP of the per-model base temperature configured in LLM Routing — not a per-model sampling value. Some backends ignore it."},
             "top_p": {"type": "float", "label": "Nucleus cut-off (top_p)", "default": 0, "min": 0, "max": 1, "step": 0.01, "description": "Nucleus sampling cut-off sent with every chat and thought reply. 0 (the default) = do not send it, the provider default (usually 1.0 = no cut-off) applies. 0.95 keeps the unlikely tail of the distribution closed. Strongly recommended whenever the reactive temperature bump below is enabled: without a cut-off, every temperature step lifts the least likely tokens the most, which is how a raised temperature turns into multi-script gibberish."},
@@ -440,6 +456,7 @@ SECTIONS = {
         "label": "Memory / Gedaechtnis",
         "icon": "🧠",
         "scope": "world",
+        "world_group": "memory_chat",
         "fields": {
             "short_term_days": {"type": "int", "label": "Short-term (days)", "default": 3, "min": 1, "max": 14, "description": "Chat history in the prompt (stage 1). Episodics older than this are consolidated into daily summaries. SYSTEM time (real days — consolidation follows the real calendar, not the game clock)."},
             "mid_term_days": {"type": "int", "label": "Mid-term (days)", "default": 30, "min": 7, "max": 180, "description": "Daily summaries older than this are consolidated into weekly summaries (stage 2 → 3). SYSTEM time (real days)."},
@@ -471,6 +488,7 @@ SECTIONS = {
         "label": "Media Generation",
         "icon": "🎨",
         "scope": "instance",
+        "world_group": "image_styles",
         # Generic section paging: a section with `pages` is split into several
         # navigation sub-entries, each rendering only the listed fields and
         # sub_arrays (in the listed order). Purely a presentation concern —
@@ -695,7 +713,7 @@ SECTIONS = {
                 "description": "See Outfit width for the recommended bucket combinations at the same ratio.",
             },
 
-            # --- Location-Background Groesse ---
+            # --- Location background size ---
             "location_image_width": {
                 "type": "int",
                 "label": "Location Background Width (px)",
@@ -933,6 +951,7 @@ SECTIONS = {
         "label": "Skills",
         "icon": "🛠",
         "scope": "mixed",
+        "world_group": "skills",
         "subsections": {
             # SearX lives in plugins/searx/plugin.yaml — the core names no
             # skill package (plan-skill-plugin-architecture.md R1), and a
@@ -966,6 +985,7 @@ SECTIONS = {
         "label": "Relationships",
         "icon": "❤",
         "scope": "world",
+        "world_group": "gameplay",
         "fields": {
             "summary_enabled": {"type": "bool", "label": "Analyse sentiment after conversations", "default": True, "description": "After every exchange a small LLM call rates how both sides felt about it (and whether it was romantic). Those ratings move the relationship's feeling, its romantic value and thereby its type. Off: no extra call — a conversation then only adds the fixed default deltas (closeness +2, feeling +0.05 for both)."},
         },
@@ -974,6 +994,7 @@ SECTIONS = {
         "label": "Social Reactions",
         "icon": "👥",
         "scope": "world",
+        "world_group": "gameplay",
         "fields": {
             "enabled": {"type": "bool", "label": "Enabled", "default": True, "description": "When a character posts, other characters react to it (runs in the task queue)."},
         },
@@ -982,6 +1003,7 @@ SECTIONS = {
         "label": "Gedanken",
         "icon": "🧠",
         "scope": "world",
+        "world_group": "npcs",
         "fields": {
             "min_turn_gap_seconds": {"type": "int", "label": "Min Turn Gap (s)", "default": 30, "min": 0, "max": 600, "description": "Minimum pause (seconds) between two consecutive thought turns. Keeps the AgentLoop from over-pacing with few characters. Does not apply to in_chat_skip / errors (those have their own backoffs). SYSTEM time."},
             "min_per_char_cooldown_minutes": {"type": "int", "label": "Min Per-Char Cooldown (min)", "default": 5, "min": 0, "max": 240, "description": "Minimum wait (minutes) before the same character gets another real thought turn. Bumps (external triggers like avatar room entry) bypass the cooldown. SYSTEM time."},
@@ -991,6 +1013,7 @@ SECTIONS = {
         "label": "Plans & Tasks",
         "icon": "📌",
         "scope": "world",
+        "world_group": "gameplay",
         "fields": {
             "self_intent_ttl_days": {"type": "int", "label": "Own plans expire after (game days)", "default": 3, "min": 0, "max": 365, "description": "A plan a character sets itself through an [INTENT:] marker (standing or on arriving at a place) expires after this many GAME days unless it is finished before. 'now' plans expire after one game hour, timed plans one game hour after their time. Tasks the player gave and admin-created intents never expire on their own; reflection goals neither. 0 = own plans never expire. Applies to intents created from now on. GAME time (follows the game clock/factor)."},
         },
@@ -999,6 +1022,7 @@ SECTIONS = {
         "label": "Zufaellige Events",
         "icon": "🎲",
         "scope": "world",
+        "world_group": "story",
         "fields": {
             "enabled": {"type": "bool", "label": "Aktiviert", "default": True, "description": "Automatische Event-Generierung an besetzten Locations"},
             "base_probability": {"type": "int", "label": "Base probability %", "default": 5, "min": 0, "max": 50, "description": "Probability per hour per location; overridable per location. The generator rolls on a SYSTEM-time hourly tick (real hours, independent of the game-clock factor)."},
@@ -1017,6 +1041,7 @@ SECTIONS = {
         "label": "NPCs (automatic)",
         "icon": "🧑‍🌾",
         "scope": "world",
+        "world_group": "npcs",
         "fields": {
             "auto_spawn_enabled": {
                 "type": "bool", "label": "Automatic NPCs", "default": True,
@@ -1110,6 +1135,7 @@ SECTIONS = {
         "label": "Story Engine",
         "icon": "📖",
         "scope": "world",
+        "world_group": "story",
         "fields": {
             "enabled": {"type": "bool", "label": "Aktiviert", "default": False, "description": "Story Arc Fortschritt (Background-Prozess)"},
             "max_active_arcs": {"type": "int", "label": "Max Active Arcs", "default": 2, "min": 1, "description": "Maximale aktive Arcs pro User"},
@@ -1122,6 +1148,7 @@ SECTIONS = {
         "label": "Game",
         "icon": "🎮",
         "scope": "world",
+        "world_group": "gameplay",
         "fields": {
             "travel_speed_m_s": {
                 "type": "float",
@@ -1363,6 +1390,7 @@ SECTIONS = {
         "label": "Messaging frame (phone chat layout)",
         "icon": "📱",
         "scope": "world",
+        "world_group": "messaging",
         "fields": {
             "prompt": {
                 "type": "text",
@@ -1400,6 +1428,7 @@ SECTIONS = {
         "label": "Game calendar",
         "icon": "🗓️",
         "scope": "world",
+        "world_group": "calendar",
         "fields": {
             "_calendar_note": {"type": "note", "text": (
                 "Game time is a WORLD calendar of seasons and days — there are "
@@ -1459,6 +1488,7 @@ SECTIONS = {
         "label": "Game calendar — seasons",
         "icon": "🗓️",
         "scope": "world",
+        "world_group": "calendar",
         "nav_sub": True,
         "is_array": True,
         "item_label_field": "name",
@@ -1609,11 +1639,11 @@ def field_default(section: str, *keys: str) -> Any:
 
 
 def iter_restart_required_paths() -> list:
-    """Sammelt alle Schema-Pfade mit `requires_restart: true`.
+    """Collect all schema paths marked ``requires_restart: true``.
 
-    Liefert eine Liste von dot-notation Pfaden, die einem geladenen Config-Dict
-    entsprechen — z.B. ``server.cors_origins`` oder
-    ``providers[*].api_url`` (Wildcard fuer alle Array-Items).
+    Return dotted paths corresponding to a loaded config dict, e.g.
+    ``server.cors_origins`` or ``providers[*].api_url`` (a wildcard for
+    every array item).
     """
     paths = []
 

@@ -170,7 +170,7 @@ S1) shipped_default(path) -> (has, value):
      game_calendar.day_bucket_noon         (True, 12)
      tts.xtts.url                          (True, "http://localhost:8020")
      skills.searx.url                      (True, "http://localhost:8888")
-     providers                             (False, None)  array, no default
+     providers                             (True, _DEFAULT_PROVIDERS)  E11 example seed
      providers.0.name                      (False, None)  inside a list entry
      game_seasons                          (True, default_seasons_config())
      game_seasons.0                        (False, None)  a list ENTRY, not the list
@@ -305,8 +305,8 @@ defaults (Part 2):
     instance ``{}`` with a chat-only world does not raise either (nothing to
     lose — the fresh-clone state after the migration).
 6.5 NO INSTANCE. ``paths.instance_initialised()`` is False in this script.
-    ``load(w)`` with the world of 6.1: ``get("providers") is None`` (the
-    world's providers are foreign). ``save`` with ``server.log_level`` changed
+    ``load(w)`` with the world of 6.1 seeds ``_DEFAULT_PROVIDERS`` (E11);
+    the world's providers are foreign. ``save`` with ``server.log_level`` changed
     raises ``RuntimeError`` and writes nothing. ``save`` with only
     ``chat.chattiness`` changed to 0.7 writes the world (0.7 on disk) and
     creates no other file. (Not 0.5: that is the schema default and would be
@@ -337,7 +337,7 @@ defaults (Part 2):
 6.11 CORRUPT LAYER FILE (review fix round 1). The instance config.json
     holds real providers but has a syntax error (trailing comma). A
     non-strict ``load`` logs it and reads that layer as empty —
-    ``get("providers") is None`` — and then ``save(get_all())`` raises
+    E11 seeds ``_DEFAULT_PROVIDERS`` — then ``save(get_all())`` raises
     ``RuntimeError`` ("refusing to overwrite unreadable") and leaves BOTH
     files byte-identical (the world is checked before anything is written,
     so a refusal never leaves one layer rewritten). ``migrate_file`` returns
@@ -402,12 +402,12 @@ dropped with one warning naming the secrets.json. Expectations by hand:
 
 8.7 NO LIST IN config.json. Instance ``{"server": {"log_level": "DEBUG"}}``
     + secrets ``{"providers": {"p": {"api_key": "KP"}}}``: ``load`` and
-    ``load(strict=True)`` raise nothing, ``get("providers") is None``, and a
+    ``load(strict=True)`` raise nothing; E11 seeds ``_DEFAULT_PROVIDERS``. A
     warning names ``i/secrets.json`` and ``providers``.
 8.8 CORRUPT config.json + by-name secrets. Instance config.json with a
     syntax error + the secrets of 8.7: a non-strict ``load`` raises nothing
-    and reads the layer as empty (``get("providers") is None``,
-    ``get("server.log_level")`` is not "DEBUG").
+    and reads the layer as empty: E11 seeds ``_DEFAULT_PROVIDERS`` and
+    ``get("server.log_level")`` is not "DEBUG".
 8.9 PARTLY NAMED BASE. Instance backends ``[{"name": "a"}, {"name": ""}]``
     (not a named list: one empty name) + secrets ``{"image_generation":
     {"backends": {"a": {"api_key": "KA"}}}}``: a still gets "KA" (its name is
@@ -823,7 +823,7 @@ def part_2(cs, has_searx):
         ("game_calendar._calendar_note", (False, None)),
         ("game_calendar.day_bucket_noon", (True, 12)),
         ("tts.xtts.url", (True, "http://localhost:8020")),
-        ("providers", (False, None)),
+        ("providers", (True, cfgmod._DEFAULT_PROVIDERS)),
         ("providers.0.name", (False, None)),
         ("game_seasons", (True, default_seasons_config())),
         ("game_seasons.0", (False, None)),
@@ -1081,8 +1081,8 @@ def part_3():
         w, _i = _layers(tmp)
         _write(w, WORLD_61)
         cfg.load(w)
-        check(cfg.get("providers") is None,
-              f"6.5: without an instance there are no providers (got {cfg.get('providers')!r})")
+        check(cfg.get("providers") == cfg._DEFAULT_PROVIDERS,
+              f"6.5: without an instance E11 seeds example providers (got {cfg.get('providers')!r})")
         data = copy.deepcopy(cfg.get_all())
         data.setdefault("server", {})["log_level"] = "DEBUG"
         _age(w)
@@ -1162,7 +1162,7 @@ def part_3():
                      encoding="utf-8")
         before = {f: f.read_bytes() for f in (w, i)}
         cfg.load(w, i)
-        check(cfg.get("providers") is None, "6.11: a non-strict load reads the broken layer as empty")
+        check(cfg.get("providers") == cfg._DEFAULT_PROVIDERS, "6.11: a non-strict load reads the broken layer as empty and seeds E11 examples")
         try:
             cfg.save(cfg.get_all())
             check(False, "6.11: save over an unreadable instance file must raise")
@@ -1332,8 +1332,8 @@ def part_4():
                 except Exception as e:  # noqa: BLE001
                     check(False, f"8.7: load(strict={strict}) raised {type(e).__name__}: {e}")
                     continue
-                check(cfg.get("providers") is None,
-                      f"8.7: strict={strict} — no providers ({cfg.get('providers')!r})")
+                check(cfg.get("providers") == cfg._DEFAULT_PROVIDERS,
+                      f"8.7: strict={strict} — E11 example providers ({cfg.get('providers')!r})")
                 check(any(str(isec) in m and "providers" in m for m in grab.msgs),
                       f"8.7: strict={strict} — a warning names the secrets file ({grab.msgs!r:.300})")
 
@@ -1341,7 +1341,7 @@ def part_4():
             i.write_text('{"server": {"log_level": "DEBUG"},}', encoding="utf-8")
             try:
                 cfg.load(w, i)
-                check(cfg.get("providers") is None, "8.8: corrupt layer -> no providers")
+                check(cfg.get("providers") == cfg._DEFAULT_PROVIDERS, "8.8: corrupt layer -> E11 example providers")
                 check(cfg.get("server.log_level") != "DEBUG", "8.8: corrupt layer read as empty")
             except Exception as e:  # noqa: BLE001
                 check(False, f"8.8: load raised {type(e).__name__}: {e}")

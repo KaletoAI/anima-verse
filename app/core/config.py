@@ -801,6 +801,32 @@ def resolve_use_case_style(use_case: str, image_family: str = "",
     return get_use_case_prompts(use_case, target, clothed=clothed)
 
 
+# Example LLM providers a FRESH instance starts with (E11, user decision
+# 2026-10-04): the two common local servers, so the providers page and the
+# LLM routing have something to point at on first start. Only name / type /
+# api_base — everything else is schema default. A provider the admin edits,
+# adds or deletes makes the whole list the instance's own (a list is one
+# value); an emptied list stays empty.
+_DEFAULT_PROVIDERS = [
+    {"name": "ollama-local", "type": "ollama", "api_base": "http://localhost:11434/v1"},
+    {"name": "openai-compatible-local", "type": "openai", "api_base": "http://localhost:8080/v1"},
+]
+
+
+def _seed_default_providers(config: dict) -> bool:
+    """Seeds the example providers when the instance names none.
+
+    Idempotent: only fires when ``providers`` is absent — which is also what
+    a pruned instance file stores for the shipped list. ``[]`` stays empty.
+    In-memory only — see `migrate_file()` for the disk side.
+    """
+    if "providers" in config:
+        return False
+    import copy
+    config["providers"] = copy.deepcopy(_DEFAULT_PROVIDERS)
+    return True
+
+
 _DEFAULT_MARKETPLACE_CATALOGS = [
     {
         "name": "Anima-Verse Public",
@@ -1356,6 +1382,8 @@ def _apply_file_migrations(config: dict) -> bool:
     if _strip_dead_use_cases(config):
         changed = True
     if _seed_default_marketplace_catalogs(config):
+        changed = True
+    if _seed_default_providers(config):
         changed = True
     if _migrate_backend_categories(config):
         changed = True
