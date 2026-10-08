@@ -235,7 +235,10 @@ def _update_item_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
     prev_fragment = (prev.get("prompt_fragment") or "").strip()
 
     updates = {k: v for k, v in body.items() if k != "user_id"}
-    updated = update_item(item_id, updates)
+    try:
+        updated = update_item(item_id, updates)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not updated:
         raise HTTPException(status_code=404, detail="Item not found")
 

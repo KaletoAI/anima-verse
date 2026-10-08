@@ -2,7 +2,8 @@
 
 Usage: .venv/bin/python scripts/smoke_extension_rig_p3.py
 
-Hand derivation (E4): distinct full covers multiply .5*.8=.4; mirrors
+Hand derivation (E4): occupied underwear_top with empty covers (.5) and
+outer full coverage (.8) multiply .5*.8=.4; mirrors
 count once and hidden layers still count. Partial .6 yields 1-(1-.6)/2=.8.
 No pieces gives factor 1. Package gravity .35 times character 2 gives .7.
 World gain .6 replaces 1 for its group only. Revisions track inputs even
@@ -73,6 +74,32 @@ def main():
             return motion(p)['groups']['sample_group']['gain']
         check(abs(gain()-.4) < 1e-12, 'distinct covers .5 x .8; mirror once; hidden layer counts')
         check(gain({**profile, 'equipped_pieces': {'top': a['id'], 'bottom': a['id']}}) == .5, 'mirror once')
+        occupied = inventory.add_item('occupied', category='outfit_piece', item_id='p3_occupied',
+            outfit_piece={'slots': ['underwear_top'], 'motion_damping': .5,
+                          'partially_covers': ['underwear_bottom']})
+        check(occupied['outfit_piece']['covers'] == [], 'occupied fixture has empty covers')
+        check(abs(gain({**profile, 'equipped_pieces': {
+            'underwear_top': occupied['id'], 'outer': b['id']}}) - .4) < 1e-12,
+            'occupied full beats partial; .5 x .8 gives .4')
+        occupied_profile = {**profile, 'equipped_pieces': {'underwear_top': occupied['id']}}
+        check(gain(occupied_profile) == .5, 'occupied snapshot warmed')
+        check(inventory.delete_item(occupied['id']), 'delete occupied fixture')
+        check(gain(occupied_profile) == 1, 'item deletion invalidates snapshot')
+        from app.routes.inventory import _create_item_route_sync, _update_item_route_sync
+        from fastapi import HTTPException
+        for bad in (2, True, 'x'):
+            for adapter in (
+                lambda: _create_item_route_sync({'name': 'invalid', 'category': 'outfit_piece',
+                    'outfit_piece': {'slots': ['top'], 'motion_damping': bad}}),
+                lambda: _update_item_route_sync(a['id'], {'outfit_piece': {
+                    **a['outfit_piece'], 'motion_damping': bad}}),
+            ):
+                try:
+                    adapter()
+                except HTTPException as exc:
+                    check(exc.status_code == 400, 'HTTP adapter rejects invalid damping')
+                else:
+                    raise AssertionError('HTTP adapter accepted invalid damping')
         c = item('p3_c', ['legs'], .6, True)
         check(gain({**profile, 'equipped_pieces': {'legs': c['id']}}) == .8, 'partial cover .6 gives .8')
         check(gain({'template': 'human-default', 'outfit_description': 'plain outfit'}) == 1, 'free text no damping')
@@ -89,6 +116,38 @@ def main():
                 raise AssertionError('invalid character scale accepted')
         apply_profile_update('sample', {'fields': {'motion_gravity_scale': 2}})
         check(get_character_profile('sample')['motion_gravity_scale'] == 2, 'character field round trip')
+        from unittest.mock import patch
+        with patch.object(inventory, '_load_items', wraps=inventory._load_items) as reads, \
+                patch.object(inventory, '_load_shared_items', wraps=inventory._load_shared_items) as shared_reads:
+            inventory.update_item(a['id'], {'name': 'counted'})
+            reads.reset_mock()
+            shared_reads.reset_mock()
+            motion()
+            motion_payload('second', profile)
+            first_reads = reads.call_count
+            first_shared_reads = shared_reads.call_count
+            motion()
+            motion_payload('second', profile)
+            check(first_reads > 0 and reads.call_count == first_reads
+                  and first_shared_reads == 1 and shared_reads.call_count == first_shared_reads,
+                  'two unchanged polls: second poll has zero new item reads')
+        with patch('app.core.extension_rig.rig_groups_for', return_value=[]), \
+                patch.object(inventory, '_load_items', side_effect=AssertionError('unexpected read')):
+            check(motion()['groups'] == {}, 'no applicable groups skips item reads')
+        shared_file = root / 'shared-items.json'
+        shared_file.write_text(json.dumps({'items': [{'id': 'shared_fixture', 'category': 'outfit_piece',
+            'outfit_piece': {'slots': ['underwear_top'], 'motion_damping': .5}}]}))
+        shared_profile = {**profile, 'equipped_pieces': {'underwear_top': 'shared_fixture'}}
+        with patch.object(inventory, '_get_shared_items_file', return_value=shared_file):
+            check(gain(shared_profile) == .5, 'shared snapshot resolves item')
+            before_shared = motion(shared_profile)
+            inventory.update_item('shared_fixture', {'outfit_piece': {
+                'slots': ['underwear_top'], 'motion_damping': .4}})
+            check(gain(shared_profile) == .4 and motion(shared_profile)['rev'] != before_shared['rev'],
+                  'shared item edit invalidates snapshot and revision')
+            shared_file.write_text(json.dumps({'items': [{'id': 'shared_fixture', 'category': 'outfit_piece',
+                'outfit_piece': {'slots': ['underwear_top'], 'motion_damping': .25}}]}))
+            check(gain(shared_profile) == .25, 'shared file reload invalidates snapshot')
         baseline = motion()
         check(motion() == baseline, 'stable reads')
         changed = copy.deepcopy(profile)
@@ -107,6 +166,8 @@ def main():
         from app.models.character import set_character_pos
         from app.routes.world_settings import get_extension_motion
         set_character_pos('sample', 0, 0)
+        check(save_character_profile('second', profile, create_new=True), 'second poll character fixture')
+        set_character_pos('second', 0, 0)
         def world_row():
             return next(row for row in world_ops.build_worldmap_payload(show_all=True)['characters']
                         if row['name'] == 'sample')
@@ -116,7 +177,14 @@ def main():
         mesh.parent.mkdir(parents=True, exist_ok=True)
         mesh.write_bytes(glb(['mixamorig:' + name for name in BASE_JOINT_NAMES]))
         mesh.with_suffix('.json').write_text(json.dumps({'pieces': profile['equipped_pieces'], 'items': []}))
-        old_row = world_row()
+        from app.core.motion_item_cache import invalidate
+        invalidate()
+        with patch.object(inventory, '_load_items', wraps=inventory._load_items) as reads:
+            old_row = world_row()
+            first_reads = reads.call_count
+            world_row()
+            check(first_reads > 0 and reads.call_count == first_reads,
+                  'worldmap second poll has zero new item reads')
         check(bool(old_row.get('model_sig')) and bool(old_row.get('model_rev')), 'real mesh fixture served')
         old_info = model3d.get_model3d_info('sample')
         check(old_row['motion'] == old_info['motion'], 'worldmap and model metadata parity')
@@ -154,10 +222,17 @@ def main():
         before = motion()
         registry.get_package('sample').body_slots[0].rig.params['version'] = 2
         check(motion()['rev'] != before['rev'], 'package declaration changes revision')
+        for connection in db._connections.values():
+            connection.close()
+        db._connections.clear()
         paths.init(root / 'b')
         db.init_schema()
         config.load(paths.get_config_path(), instance_path=root / 'instance/config.json')
         check(gain(bare) == 1, 'second world isolated')
+        check(gain(profile) == 1, 'world switch drops item snapshot')
+        for connection in db._connections.values():
+            connection.close()
+        db._connections.clear()
         paths.init(root / 'a')
         config.load(paths.get_config_path(), instance_path=root / 'instance/config.json')
         check(gain(bare) == .6, 'first world override persists')

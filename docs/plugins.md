@@ -654,7 +654,7 @@ Game-Admin → Setup → Extension motion lists loaded declarations from the adm
 `GET /admin/world-settings/extension-motion` endpoint and saves through the existing
 world-settings endpoint. Reset removes the override so future package defaults flow through.
 
-After world overrides, every distinct worn item whose `outfit_piece.covers` hits
+After world overrides, every distinct worn item whose occupied slots or `outfit_piece.covers` hit
 the body slot's `covered_by` contributes its `motion_damping` (0..1, default 1)
 to the gain product. Mirrored occupied slots count once; hidden layers still count.
 A partial cover contributes `1 - (1 - motion_damping)/2`; full coverage takes

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { Field } from '../../components/Field'
 import { EffectsEditor } from '../../components/EffectsEditor'
@@ -12,6 +12,21 @@ import {
   type Item,
   type Rarity,
 } from './itemsModel'
+
+function MotionDampingInput({ value, onCommit }: { value: number; onCommit: (value: number) => void }) {
+  const [text, setText] = useState(String(value))
+  useEffect(() => setText(String(value)), [value])
+  return <input className="ga-input" type="number" min={0} max={1} step="any"
+    value={text} onChange={e => setText(e.target.value)} onBlur={() => {
+      const parsed = Number(text)
+      if (text.trim() && Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
+        onCommit(parsed)
+        setText(String(parsed))
+      } else {
+        setText(String(value))
+      }
+    }} />
+}
 
 interface TagPickerProps {
   options: string[]
@@ -390,10 +405,8 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
       </Field>
 
       {isOutfit && <Field label={t('Motion damping')} hint={t('Dynamic motion multiplier: 0 stops motion, 1 leaves it unchanged.')}>
-        <input className="ga-input" type="number" min={0} max={1} step={0.05}
-          value={draft.motion_damping} onChange={e => {
-            if (e.target.value && e.target.validity.valid) onUpdate('motion_damping', Number(e.target.value))
-          }} />
+        <MotionDampingInput value={draft.motion_damping}
+          onCommit={value => onUpdate('motion_damping', value)} />
       </Field>}
       {isOutfit ? (
         <OutfitPieceFields

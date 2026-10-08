@@ -103,11 +103,13 @@ def motion_payload(character_name, profile=None):
     import math
     from app.core import config
     from app.core.body_slots import slots_for_character
-    from app.models.inventory import get_item
+    from app.core.motion_item_cache import item_snapshot
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
     declarations = rig_groups_for(character_name, profile)
+    if not declarations:
+        return {"rev": _revision({"declarations": []}), "groups": {}}
     world = config.get("extension_motion.groups", {}) or {}
     scale = profile.get("motion_gravity_scale", 1)
     try:
@@ -119,12 +121,14 @@ def motion_payload(character_name, profile=None):
         scale = 1.0
     equipment = profile.get("equipped_pieces") or {}
     pieces = {}
+    items = item_snapshot() if equipment else {}
     for iid in sorted(set(equipment.values())):
-        item = get_item(iid)
+        item = items.get(iid)
         if item and item.get("outfit_piece"):
             op = item["outfit_piece"]
             pieces[iid] = {key: op.get(key, 1 if key == "motion_damping" else [])
                            for key in ("motion_damping", "covers", "partially_covers")}
+            pieces[iid]["occupied_slots"] = sorted(slot for slot, worn in equipment.items() if worn == iid)
     coverage = {slot.rig.id: list(slot.covered_by) for slot in
                 slots_for_character(character_name, profile=profile) if slot.rig is not None}
     groups = {}
@@ -135,7 +139,7 @@ def motion_payload(character_name, profile=None):
         targets = set(coverage.get(group["id"], []))
         for piece in pieces.values():
             f = piece["motion_damping"]
-            if targets.intersection(piece["covers"]):
+            if targets.intersection(set(piece["covers"]) | set(piece["occupied_slots"])):
                 factor *= f
             elif targets.intersection(piece["partially_covers"]):
                 factor *= 1 - (1 - f) / 2

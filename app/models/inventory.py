@@ -128,6 +128,8 @@ def _save_shared_items(items: List[Dict[str, Any]]):
         json.dumps({"items": items, "last_updated": utc_now_iso()},
                     ensure_ascii=False, indent=2),
         encoding="utf-8")
+    from app.core.motion_item_cache import invalidate
+    invalidate()
 
 
 def list_shared_items() -> List[Dict[str, Any]]:
@@ -253,6 +255,8 @@ def _save_items(items: List[Dict[str, Any]]) -> bool:
         except Exception as e:
             logger.error("_save_items error for %s: %s", item_id, e)
             ok = False
+    from app.core.motion_item_cache import invalidate
+    invalidate()
     return ok
 
 
@@ -702,6 +706,8 @@ def delete_item(item_id: str) -> bool:
             # The row is still there: its files stay too.
             logger.error("delete_item DB error for %s: %s", item_id, e)
             return False
+        from app.core.motion_item_cache import invalidate
+        invalidate()
         _remove_item_media(get_storage_dir() / "items", item_id)
         logger.info("Item deleted: %s", item_id)
         return True
