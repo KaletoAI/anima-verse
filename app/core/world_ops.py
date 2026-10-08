@@ -196,10 +196,10 @@ def _place_payload(name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any
             "facing": p.get("facing"), "room_id": p["room_id"]}
 
 
-#: ``name -> (cheap change token, model signature)`` for
+#: ``name -> (cheap change token, model signature, selected path)`` for
 #: :func:`_model_signature`. Process-local and unbounded by design: it holds
 #: one short tuple per character of the world.
-_MODEL_SIG_CACHE: Dict[str, Tuple[str, str]] = {}
+_MODEL_SIG_CACHE = {}
 
 
 def _model_signature(name: str, profile: Dict[str, Any]) -> str:
@@ -224,7 +224,7 @@ def _model_signature(name: str, profile: Dict[str, Any]) -> str:
     character bound the worldmap loop was just brought down to
     (``scripts/smoke_worldmap_profile_loads.py``). So it runs only when a
     CHANGE TOKEN moved, and the token is built from what the loop already
-    holds plus one ``stat``:
+    holds plus candidate file metadata:
 
     * the worn outfit and the image-modifier trigger state — the inputs of
       ``model_refs.current_outfit_state``, read straight out of the profile
@@ -233,22 +233,37 @@ def _model_signature(name: str, profile: Dict[str, Any]) -> str:
       ``status_effects``). Deliberately a SUPERSET: a status flag that changes
       nothing about the appearance costs one needless re-derivation, never a
       missed model.
-    * the mtime of ``<character>/model3d`` — a generated or deleted mesh
-      lands there, and a character without that directory has no mesh store,
-      which is the ``""`` case above (and the whole derivation is skipped).
+    * ordered mesh and sidecar stat records (including fallback reference
+      sidecars): in-place writes can change nearest-model selection without
+      changing directory mtime. No mesh contents are read.
     * the storage directory, so a world switch cannot serve the previous
       world's answer for a character of the same name.
     """
     from app.models.character import get_character_dir
     try:
         model_dir = get_character_dir(name) / "model3d"
+        from app.core.model3d import MODEL_EXTS
         dir_mtime = model_dir.stat().st_mtime_ns
+        candidates = sorted(p for p in model_dir.iterdir() if p.suffix.lower() in MODEL_EXTS)
+        watched = set(candidates)
+        for candidate in candidates:
+            watched.add(candidate.with_suffix(".json"))
+            for kind in ("tpose", "tpose_animal"):
+                watched.add(model_dir.parent / "model_refs" / f"{kind}_{candidate.stem}.json")
+        records = []
+        for candidate in sorted(watched):
+            try:
+                stat = candidate.stat()
+                records.append((str(candidate), True, stat.st_size, stat.st_mtime_ns, stat.st_ino))
+            except FileNotFoundError:
+                records.append((str(candidate), False, 0, 0, 0))
     except (OSError, ValueError):
+        _MODEL_SIG_CACHE.pop(name, None)
         return ""   # no mesh store -> nothing to report, and nothing to poll
     try:
         import json
         from app.core.paths import get_storage_dir
-        token_parts = [str(get_storage_dir()), str(dir_mtime),
+        token_parts = [str(get_storage_dir()), str(dir_mtime), json.dumps(records),
                        json.dumps(profile.get("equipped_pieces") or {},
                                   sort_keys=True, default=str),
                        json.dumps(profile.get("equipped_items") or [],
@@ -271,7 +286,7 @@ def _model_signature(name: str, profile: Dict[str, Any]) -> str:
     except Exception as e:   # noqa: BLE001
         logger.debug("model signature for %s: %s", name, e)
         return ""
-    _MODEL_SIG_CACHE[name] = (token, sig)
+    _MODEL_SIG_CACHE[name] = (token, sig, path)
     return sig
 
 
@@ -754,6 +769,9 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # place and no route — and the figure whose row this is has already
         # passed all three visibility gates above.
         _model_sig = _model_signature(name, _prof)
+        from app.core.model3d import model_revision
+        from app.core.extension_rig import motion_payload
+        _model_rev = model_revision(_MODEL_SIG_CACHE[name][2]) if _model_sig else ""
         characters.append({
             "name": name,
             "location_id": loc_id,
@@ -794,6 +812,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             # one has nothing to poll, and an absent field says exactly that
             # (one fewer empty string per row per 3-second poll).
             **({"model_sig": _model_sig} if _model_sig else {}),
+            "model_rev": _model_rev,
+            "motion": motion_payload(name, profile=_prof),
         })
 
     events_by_location = {}

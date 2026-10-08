@@ -208,6 +208,13 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
     for bdef in meta.get("body_slots") or []:
         if not isinstance(bdef, dict) or not bdef.get("id"):
             continue
+        rig = None
+        if "rig" in bdef:
+            from app.plugins.registry import RigSpec
+            try:
+                rig = RigSpec.parse(bdef["rig"])
+            except (ValueError, TypeError, OverflowError) as exc:
+                logger.warning("Package %s slot %s: rig dropped: %s", pkg.id, bdef["id"], exc)
         pkg.body_slots.append(BodySlotSpec(
             id=str(bdef["id"]).strip(),
             package_id=pkg.id,
@@ -220,6 +227,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
             prompt={str(k): str(v) for k, v in (bdef.get("prompt") or {}).items()},
             face=bool(bdef.get("face", False)),
             back=bool(bdef.get("back", False)),
+            rig=rig,
         ))
     # piece_slots entries: plain string OR {id, label}
     for pdef in meta.get("piece_slots") or []:
@@ -314,6 +322,32 @@ def _collect_packages(base: Path, *, warn: bool = True) -> List[Package]:
                 logger.warning("Package '%s' inert — required package(s) missing: %s",
                                p.id, ", ".join(missing))
             found.pop(p.id, None)
+    from app.core.rig_contract import norm_bone_name
+    # Collect the COMPLETE declaration set before dropping anything: no owner
+    # wins by discovery order, including overlapping bone/group conflicts.
+    declarations = []
+    owners = {}
+    for pkg in [found[k] for k in sorted(found)]:
+        for slot in pkg.body_slots:
+            rig = slot.rig
+            if rig is None:
+                continue
+            index = len(declarations)
+            declarations.append((pkg.id, slot))
+            keys = [("bone", norm_bone_name(link["bone"]))
+                    for chain in rig.chains for link in chain]
+            keys.append(("group", rig.id))
+            for key in keys:
+                owners.setdefault(key, set()).add(index)
+    disabled = set()
+    for (kind, key), indices in sorted(owners.items()):
+        if len(indices) > 1:
+            disabled.update(indices)
+            names = [f"{declarations[i][0]}/{declarations[i][1].id}" for i in sorted(indices)]
+            logger.error("Conflicting extension %s %s: rigs disabled for ALL owners: %s",
+                         kind, key, ", ".join(names))
+    for index in disabled:
+        declarations[index][1].rig = None
     return [found[k] for k in sorted(found)]
 
 

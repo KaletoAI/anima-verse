@@ -1,3 +1,4 @@
+import type { MotionPayload } from "./types";
 import type {
   AtLocationChar, AuthUser, PosReport, TerrainPayload, WorldLocation, WorldMap,
 } from './types';
@@ -646,6 +647,8 @@ export async function ttsSpeak(text: string, characterName: string,
 }
 
 export interface ApiModel {
+  modelRev?: string;
+  motion?: MotionPayload;
   url: string;
   /** identity of this particular model (changes e.g. with the outfit) */
   signature?: string;
@@ -696,6 +699,8 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
     // Kombination das nächstliegende Modell servieren): wechselt auch dann,
     // wenn das exakte Mesh später fertig wird und den Nearest-Treffer ablöst.
     signature: m.signature ?? m.filename ?? data.signature,
+    modelRev: m.model_rev,
+    motion: data.motion,
     format: (m.format ?? 'glb') as 'glb' | 'fbx',
     rig: m.rig ?? data.rig ?? 'mixamo',
     textureUrl: m.texture_url ?? undefined,

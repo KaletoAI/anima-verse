@@ -240,6 +240,71 @@ Werte pro Charakter liegen im Profil (`body_slots: {<slot>: {<attr>: <wert>}}`).
 Fragmente mit fehlenden Attribut-Werten entfallen komplett (kein halb gerendertes
 `{size}`). Die Fragmente gehen auch mit Referenzbild mit (F3).
 
+#### Optional `rig` declaration (P0)
+
+A slot may carry one validated extension group. All identifiers and operation
+parameters come from the package. The core accepts any non-empty `op` string
+and stores `params` as an opaque mapping; P0 does not execute operations.
+
+```yaml
+body_slots:
+  - id: example_slot
+    attributes:
+      example_attribute: {type: select, options: [enabled, disabled]}
+    rig:
+      id: example_group
+      op: example_operation
+      chains:
+        - - {bone: ExampleBone1, parent: "<base Mixamo joint name>"}
+          - {bone: ExampleBone2, parent: ExampleBone1}
+      params: {example_parameter: 0.5}
+      applies_to:
+        example_profile_field: [enabled]
+        attributes.example_attribute: [enabled]
+      freq_hz: 2.2
+      zeta: 0.15
+      gravity: 0.35
+      gain: 1.0
+      max_deg: 25
+      squash: [0.6, 1.4]
+      rest_max_deg: 90
+```
+
+Replace the base-joint placeholder with a name from
+`shared/models/rig/joints.json` (the optional `mixamorig:` prefix is accepted).
+Each chain is non-empty and ordered parent first: a link's parent must be a
+base joint or an earlier full name in that same chain. Extension names must
+be non-empty and distinct after the same normalization as the base contract.
+Group IDs must also be unique across loaded declarations.
+
+`applies_to` is an AND of case-insensitive scalar comparisons against allowed
+value lists. Profile-field keys inspect the profile. `attributes.<key>` keys
+inspect `profile.body_slots[<this slot>][<key>]`; a bare declared attribute key
+also selects that slot value. Explicit `attributes.` keys avoid ambiguity.
+These conditions are available both on the slot and inside `rig`; the rig
+must additionally pass the package/template and slot applicability filters.
+An omitted condition map applies without further filtering. For both slot and
+rig conditions, YAML `null` in an allowed list matches a missing or explicitly
+null value only; it does not match `""` or the literal string `"none"`. Both
+operands use the same normalization; other scalars compare as trimmed lowercase
+strings.
+
+Every physics field is optional with the defaults shown above. All numbers
+must be finite: `freq_hz > 0`; `zeta >= 0`, `gravity >= 0`; `gain` in `[0,1]`;
+`max_deg` and `rest_max_deg` in `[0,180]`; `squash` is exactly two positive
+numbers satisfying `min <= 1 <= max`. `params` must be a mapping. A malformed
+rig is dropped with a warning, and its slot remains available. Duplicate
+normalized extension names or group IDs cause a load error naming all owners.
+Conflicts are detected over the complete declaration set before registration;
+**every involved rig is dropped**, independent of package order, while slots
+and packages remain available. Direct registry registration rejects conflicting packages
+with `ValueError` before mutating the registry.
+
+P0 resolves package defaults only. Removing the package removes its groups
+and restores strict base-joint validation without any operation-specific
+core change. World settings, equipment, character overrides and runtime state
+are reserved for later phases.
+
 ### State-Flags
 
 Der zentrale Flag-Lifecycle-Executor (`app/core/flag_lifecycle.py`) rendert für

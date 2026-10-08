@@ -1,3 +1,4 @@
+import type { MotionPayload } from "../types";
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
@@ -124,6 +125,7 @@ interface Manifest {
 export type FigureTier = 'full' | 'low';
 
 interface LoadedModel {
+  motion?: { payload: MotionPayload | undefined };
   name: string;
   template: THREE.Group;
   clips: THREE.AnimationClip[];
@@ -768,6 +770,8 @@ export class FigureLibrary {
   private apiModels = new Map<string, LoadedModel | null>();
   /** Signature of the loaded model per character (detects an outfit change) */
   private apiSignature = new Map<string, string>();
+  private apiRevision = new Map<string, string>();
+  private motionState = new Map<string, { payload: MotionPayload | undefined }>();
   private pending = new Set<string>();
   /** Wanted resolution tier per character (view state, default full). */
   private tierWanted = new Map<string, FigureTier>();
@@ -1013,12 +1017,19 @@ export class FigureLibrary {
    *  `serverSig` is the signature the WORLDMAP poll already carries for this
    *  character (`MapCharacter.model_sig`, § A11a) — the same string the model
    *  route reports. Handed in, this costs no request at all: an unchanged
-   *  signature returns straight away, and a changed one goes to the reload
-   *  without a confirming fetch. Left out (no such field), the signature is
+   *  signature and content revision return straight away; either changing reloads
+   *  without a confirming fetch. Motion is retained without a reload.
+   *  Left out (no such field), the signature is
    *  fetched as before. */
-  async refreshIfChanged(charName: string, serverSig?: string): Promise<boolean> {
+  async refreshIfChanged(charName: string, serverSig?: string, serverRev?: string,
+                         motion?: MotionPayload): Promise<boolean> {
+    let state = this.motionState.get(charName);
+    if (!state) {
+      state = { payload: motion };
+      this.motionState.set(charName, state);
+    } else if (motion !== undefined) state.payload = motion;
     const known = this.apiSignature.get(charName);
-    if (!known || this.pending.has(charName)) return false;
+    if (known === undefined || this.pending.has(charName)) return false;
     let signature = serverSig;
     if (signature === undefined) {
       let info: ApiModel | null;
@@ -1028,8 +1039,10 @@ export class FigureLibrary {
         return false;   // server not reachable right now -> next poll
       }
       signature = info?.signature ?? '';
+      serverRev = info?.modelRev;
+      state.payload = info?.motion;
     }
-    if (!signature || signature === known) return false;
+    if (signature === known && (serverRev === undefined || serverRev === this.apiRevision.get(charName))) return false;
     console.info(`[figures] ${charName}: model changed (${known} -> ${signature}) — reloading`);
     // The old mesh leaves the caches here, but NOT the GPU: a Figure built
     // from it is still on screen until the replacement arrives (see
@@ -1038,6 +1051,7 @@ export class FigureLibrary {
     this.retireModels(charName);
     this.apiModels.delete(charName);
     this.apiSignature.delete(charName);
+    this.apiRevision.delete(charName);
     this.tierCache.delete(charName);   // both tiers belong to the old mesh
     this.fetchCharacterModel(charName);
     return true;
@@ -1322,6 +1336,10 @@ export class FigureLibrary {
         const info = await getCharacterModel(charName);
         if (!info) {
           this.apiModels.set(charName, null);   // the server has none -> portrait
+          this.apiSignature.set(charName, "");
+          this.apiRevision.set(charName, "");
+          this.onModelReady?.(charName);
+          this.freeRetired(charName);
           return;
         }
         const tier = this.tierWanted.get(charName) ?? 'full';
@@ -1329,6 +1347,7 @@ export class FigureLibrary {
         this.cacheTier(charName, model);
         this.apiModels.set(charName, model);
         if (info.signature) this.apiSignature.set(charName, info.signature);
+        if (info.modelRev) this.apiRevision.set(charName, info.modelRev);
         console.info(`[figures] ${charName}: model from the server (${info.format}/${info.rig}/${tier}, ${model.clips.length} clips, ${(model.height * 100).toFixed(0)} cm)`);
         this.onModelReady?.(charName);
         // The replacement is live now — whoever holds figures rebuilds them in
@@ -1353,7 +1372,11 @@ export class FigureLibrary {
    *  `tier=low` asks for the distance edition — where it does not (yet) exist
    *  the server serves the full mesh under the same tier. */
   private async buildModel(name: string, info: ApiModel, tier: FigureTier = 'full'): Promise<LoadedModel> {
-    const url = tier === 'low' ? `${info.url}?tier=low` : info.url;
+    const query = new URLSearchParams();
+    if (tier === 'low') query.set('tier', 'low');
+    // Distinct content needs a distinct URL even if file stat ETags match.
+    if (info.modelRev) query.set('rev', info.modelRev);
+    const url = query.size ? `${info.url}${info.url.includes('?') ? '&' : '?'}${query}` : info.url;
     const gltf = await this.loadFile(url, info.format === 'fbx');
     const template = gltf.scene;
     if (info.textureUrl) {
@@ -1410,7 +1433,14 @@ export class FigureLibrary {
     // Legacy models keep the runtime measure until they are re-generated.
     const height = this.charHeight.get(name) ?? this.defaultHeight;
     const scale = info.normalized ? 1 : height / rawHeight;
+    let motion = this.motionState.get(name);
+    if (!motion) {
+      motion = { payload: info.motion };
+      this.motionState.set(name, motion);
+    }
+    if (motion.payload === undefined) motion.payload = info.motion;
     const model: LoadedModel = {
+      motion,
       name, template,
       clips: gltf.animations.filter((c) => c.tracks.length > 0),
       scale, height: rawHeight * scale, assignOnly: true, noClips: false, tier,
@@ -1545,6 +1575,8 @@ function findLegChains(inst: THREE.Object3D, box: THREE.Box3): LegChain[] {
 }
 
 export class Figure {
+  private motionState?: { payload: MotionPayload | undefined };
+  get motion(): MotionPayload | undefined { return this.motionState?.payload; }
   root = new THREE.Group();
   height: number;
   private mixer: THREE.AnimationMixer;
@@ -1716,6 +1748,7 @@ export class Figure {
   private readonly ghost = new SubmergedGhost(this.root);
 
   constructor(model: LoadedModel) {
+    this.motionState = model.motion;
     this.height = model.height;
     this.baseScale = model.scale;
     const inst = SkeletonUtils.clone(model.template);

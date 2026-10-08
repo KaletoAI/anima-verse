@@ -72,12 +72,24 @@ def _species_packages_for(profile: Dict[str, Any]) -> List[Any]:
     return out
 
 
+def normalize_condition_value(value):
+    """Missing and explicit null match null only; strings are case-insensitive."""
+    return None if value is None else str(value).strip().lower()
+
+
 def _slot_applies(spec, profile: Dict[str, Any]) -> bool:
     """Per-slot ``applies_to`` filter (profile-field conditions, e.g.
     gender) — case-insensitive string comparison."""
     for field_name, allowed in (spec.applies_to or {}).items():
-        val = str(profile.get(field_name, "") or "").strip().lower()
-        if val not in [str(a).strip().lower() for a in allowed]:
+        values = (profile.get("body_slots") or {}).get(spec.id) or {}
+        if field_name.startswith("attributes."):
+            value = values.get(field_name[len("attributes."):])
+        elif field_name in spec.attributes:
+            value = values.get(field_name)
+        else:
+            value = profile.get(field_name)
+        val = normalize_condition_value(value)
+        if val not in [normalize_condition_value(a) for a in allowed]:
             return False
     return True
 

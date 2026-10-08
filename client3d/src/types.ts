@@ -259,6 +259,8 @@ export interface MapCharacter {
    *  nothing to fetch. Absent = this character has no mesh store (or an
    *  older server) — then nothing is polled for it at all. */
   model_sig?: string;
+  model_rev?: string;
+  motion?: MotionPayload;
 }
 
 /** A pair interaction as the server states it (§ A8a): two characters play
@@ -781,4 +783,20 @@ export interface AuthUser {
   id: string;
   username: string;
   role: string;
+}
+
+/** Package defaults transported for future extension motion simulation. */
+export interface MotionPayload {
+  rev: string;
+  groups: Record<string, {
+    bones: string[];
+    freq_hz: number;
+    zeta: number;
+    gravity: number;
+    gain: number;
+    max_deg: number;
+    squash: [number, number];
+    rest_deg: number;
+    rest_max_deg: number;
+  }>;
 }

@@ -2092,7 +2092,7 @@ async function startApp(username: string, role: string) {
       // alone. Not awaited: the reload runs on its own, and no rebuild
       // happens here — the figure keeps its old mesh until `onModelReady`
       // reports the new one, or it would flicker through the download.
-      if (c.model_sig) void figures.refreshIfChanged(c.name, c.model_sig);
+      void figures.refreshIfChanged(c.name, c.model_sig ?? "", c.model_rev, c.motion);
     }
   }
 

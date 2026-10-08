@@ -10175,6 +10175,75 @@ fallen lassen), keine Panne — deshalb steht es hier und nicht im Code.
 
 ---
 
+
+### Extension rig contract (P0)
+
+A valid humanoid GLB contains every one of the 52 canonical base joint names
+in `shared/models/rig/joints.json`. Base names use the same normalization as
+`clipRetarget.normBoneName`: strip the leading `mixamorig` prefix and optional
+colon, remove colons, then lowercase. Counting 52 arbitrary names is
+insufficient. Duplicate normalized joint names are rejected. All skins are
+inspected; a shared joint across skins counts once, while repeated entries
+within a skin are invalid.
+
+Additional skin joints are permitted only through the applicable package
+`rig` declarations. Extension full names match exactly; each declared group
+must be present in full or absent, and each present link must have exactly
+one node parent in the skin rig matching its declaration. A base parent uses normalized
+identity; an extension parent uses its full declared name. Valid extended
+models still report `rig="mixamo"`. Upload, normalization, texture refinement
+and LOD validation all receive the character's declaration context. Generic
+and static model contracts are unchanged.
+
+Worldmap character rows carry these fields independently of scene recipes:
+
+```json
+{
+  "model_sig": "<selected outfit mesh signature>",
+  "model_rev": "<revision of selected full mesh and tier stat records>",
+  "motion": {
+    "rev": "<stable hash of resolved groups>",
+    "groups": {
+      "example_group": {
+        "bones": ["ExampleBone1", "ExampleBone2"],
+        "freq_hz": 2.2, "zeta": 0.15, "gravity": 0.35, "gain": 1.0,
+        "max_deg": 25, "squash": [0.6, 1.4],
+        "rest_deg": 0, "rest_max_deg": 90
+      }
+    }
+  }
+}
+```
+
+`model_rev` is an empty string without a selected mesh. It is calculated from
+small ordered stat records on each poll, outside the model-selection cache:
+tier name, presence, `st_size`, `st_mtime_ns`, and `st_ino`. Mesh bytes are never
+read for this revision. A tier appearing, disappearing, being rewritten in
+place (mtime changes), or being atomically replaced (inode changes) invalidates
+it even when the outfit signature is fixed. Upload and LOD publish complete
+files using a temporary file in the destination directory and `os.replace`.
+The selection cache watches candidate meshes and their model/reference sidecars
+with the same stat fields, and caches the selected path and signature together.
+The 3D client reloads on a change to either `model_sig` or `model_rev` and
+includes the revision in mesh request URLs to bypass stale stat-based ETags,
+and retains `motion` on each figure independently of mesh changes. P0 stores
+motion only; it has no solver or rendering effects. Admin `/model/meta`
+returns the same `motion` and `model_rev`; `/model3d` exposes `motion` at the
+root and `model_rev` in its model entry.
+
+Sidecars reserve `extension_rig: {fingerprint, groups, status, reason,
+per_tier}`. `groups` is the applicable group-ID list, `fingerprint` hashes
+resolved declarations, and `per_tier` is reserved for tier outcomes. Allowed
+status values are `none_applicable`, `not_found`, `failed`, `applied`.
+P0 initializes `none_applicable` without groups, otherwise `not_found` with a
+reason; it never writes `applied`. Legacy sidecars receive the reserved
+shape in model-meta responses without a read-path disk write.
+
+No motion field belongs to the scene-recipe payload or its fingerprint.
+P0 uses package defaults only and fixes `rest_deg` at zero. World settings,
+equipment damping, character overrides and state poses remain later phases.
+
+
 # Anhang — Änderungsverlauf
 
 Diese Tabelle ersetzt die Datums-Überschriften, die früher über den

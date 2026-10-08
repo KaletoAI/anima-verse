@@ -530,3 +530,23 @@ declaration.
 | `surface_bake` | Bakes the walkable-surface lattice of room and prop models |
 | `mesh_from_tpose` | Generates the character mesh of every stored outfit combination that has a T-pose render but no model |
 | `fallback_rerender` | Re-renders every image a fallback backend made (image meta `fallback_from`) EXPLICITLY on the backend its intended spec resolves to; while that spec resolves to nothing the step raises `CandidateBusy` and stays pending |
+
+## Extension rig declarations (P0)
+
+`app.core.extension_rig` provides these public readers:
+
+- `rig_groups_for(character_name, profile=None)` returns applicable declaration
+  dictionaries with resolved package physics defaults and ordered chains.
+- `extension_bone_names(character_name, profile=None)` returns the validation
+  context `{full_name: {parent, group}}` for `model_validate.validate_glb`.
+- `motion_payload(character_name, profile=None)` returns `{rev, groups}` with
+  stable resolved-content revision and `rest_deg=0`.
+- `extension_metadata(character_name, profile=None)` returns the reserved
+  sidecar shape `{fingerprint, groups, status, reason, per_tier}`. It does not
+  run an operation or claim `applied`.
+
+Pass an existing profile when available to avoid another DB read. These
+readers use package/template and slot/rig applicability conditions; they
+contain no concrete group, slot or extension joint identifiers. See
+[plugin rig declarations](plugins.md#optional-rig-declaration-p0) and
+[the model/payload contract](schnittstellen-3d.md#extension-rig-contract-p0).

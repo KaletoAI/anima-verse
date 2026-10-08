@@ -409,6 +409,8 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
     except Exception:
         signature = ""
     rig = required_rig(character_name)
+    from app.models.character import get_character_profile
+    profile = get_character_profile(character_name) or {}
     out: Dict[str, Any] = {
         "signature": signature,
         "rig": rig,
@@ -454,6 +456,8 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                 if meta.get("measured"):
                     info["measured"] = meta["measured"]
                 # Cached defect indicators (diagnose_model) — display only.
+                if isinstance(meta.get("extension_rig"), dict):
+                    info["extension_rig"] = meta["extension_rig"]
                 if meta.get("diagnosis"):
                     info["diagnosis"] = meta["diagnosis"]
                 # Normalised = the file already stands its real height on the
@@ -468,6 +472,9 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                 pass
         # Which resolutions exist for THIS file. "full" is always there (it is
         # the file itself); "low" only once it has been built.
+        from app.core.extension_rig import extension_metadata
+        info.setdefault("extension_rig", extension_metadata(character_name, profile=profile))
+        info["model_rev"] = model_revision(path)
         info["tiers"] = available_tiers(path)
         low = tier_variant(path, LOW_TIER)
         if low:
@@ -487,6 +494,8 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                 info["texture_url"] = f"/characters/{enc}/model3d/texture"
                 info["texture_size"] = tex.stat().st_size
         out["model"] = info
+    from app.core.extension_rig import motion_payload
+    out["motion"] = motion_payload(character_name, profile=profile)
     out["options"] = get_model3d_options(character_name)
     from app.blender import runner
     out["blender"] = runner.status()
@@ -560,6 +569,22 @@ def invalidate_models_for_item(character_name: str, item_id: str) -> set:
     return out
 
 
+def _publish_model_bytes(target: Path, contents: bytes) -> None:
+    """Publish a complete file by replacing from a unique same-directory stage."""
+    import os
+    import tempfile
+    staged = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".mesh-", suffix=".tmp",
+                                         delete=False) as stream:
+            staged = Path(stream.name)
+            stream.write(contents)
+        os.replace(staged, target)
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+
+
 def save_uploaded_model(character_name: str, original_filename: str,
                         contents: bytes, *, rig: str,
                         texture: Optional[bytes] = None) -> Dict[str, Any]:
@@ -572,9 +597,9 @@ def save_uploaded_model(character_name: str, original_filename: str,
     out_dir = get_model3d_dir(character_name)
     _purge_combination(out_dir, signature)
     target = out_dir / f"{signature}{ext}"
-    target.write_bytes(contents)
+    _publish_model_bytes(target, contents)
     if texture is not None:
-        target.with_suffix(".png").write_bytes(texture)
+        _publish_model_bytes(target.with_suffix(".png"), texture)
     meta = {
         "created_at": utc_now_iso(),
         "source": "upload",
@@ -596,6 +621,8 @@ def save_uploaded_model(character_name: str, original_filename: str,
     _auto_normalize(character_name, target, meta)
     _attach_measurement(meta, target)
     request_lod(character_name, target)
+    from app.core.extension_rig import extension_metadata
+    meta.setdefault("extension_rig", extension_metadata(character_name))
     target.with_suffix(".json").write_text(
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info("Model3D %s: Upload %s (%d bytes, Kombination %s)",
@@ -610,7 +637,7 @@ def _attach_measurement(meta: Dict[str, Any], path: Path) -> None:
     attach_measurement(meta, path)
 
 
-def _validator_for(rig: str):
+def _validator_for(rig: str, character_name: str):
     """The check a model of this rig must pass — the same one a fresh
     delivery faces, so a refinement can never lower the bar.
 
@@ -618,7 +645,11 @@ def _validator_for(rig: str):
     skeleton by definition, and a static model has none; holding either to the
     humanoid check would reject every refinement of it out of hand."""
     from app.core.model_validate import validate_glb, validate_static_glb
-    return validate_glb if rig == "mixamo" else validate_static_glb
+    from app.core.extension_rig import extension_bone_names
+    if rig == "mixamo":
+        context = extension_bone_names(character_name)
+        return lambda data: validate_glb(data, extension_names=context)
+    return validate_static_glb
 
 
 def _target_height_m(character_name: str) -> float:
@@ -649,7 +680,7 @@ def _auto_normalize(character_name: str, path: Path,
         return
     target = _target_height_m(character_name)
     res = refine.normalize(path, target,
-                           validator=_validator_for(meta.get("rig") or ""))
+                           validator=_validator_for(meta.get("rig") or "", character_name))
     data = res.get("data") or {}
     if not res.get("applied"):
         if res.get("error"):
@@ -682,7 +713,7 @@ def _auto_retexture(character_name: str, path: Path,
     from app.blender import refine
     if not refine.auto_retexture_enabled() or path.suffix.lower() != ".glb":
         return
-    res = refine.retexture(path, validator=_validator_for(meta.get("rig") or ""))
+    res = refine.retexture(path, validator=_validator_for(meta.get("rig") or "", character_name))
     data = res.get("data") or {}
     meta["refined"] = {
         "retexture": bool(res.get("applied")),
@@ -725,6 +756,8 @@ def measure_model(character_name: str, signature: Optional[str] = None, *,
     if not meta.get("measured"):
         from app.blender.refine import unavailable_reason
         return {"ok": False, "error": unavailable_reason() or "measurement failed"}
+    from app.core.extension_rig import extension_metadata
+    meta.setdefault("extension_rig", extension_metadata(character_name))
     try:
         meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
                              encoding="utf-8")
@@ -783,6 +816,8 @@ def diagnose_model(character_name: str, signature: Optional[str] = None, *,
         "suspect": all(flags.values()),
     }
     meta["diagnosis"] = diagnosis
+    from app.core.extension_rig import extension_metadata
+    meta.setdefault("extension_rig", extension_metadata(character_name))
     try:
         meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
                              encoding="utf-8")
@@ -813,7 +848,7 @@ def retexture_model(character_name: str,
         meta = {}
     if path.suffix.lower() != ".glb":
         return {"ok": False, "error": f"retexture handles GLB, not {path.suffix}"}
-    res = refine.retexture(path, validator=_validator_for(meta.get("rig") or ""))
+    res = refine.retexture(path, validator=_validator_for(meta.get("rig") or "", character_name))
     if not res.get("ok"):
         from app.blender.refine import unavailable_reason
         return {"ok": False,
@@ -827,6 +862,8 @@ def retexture_model(character_name: str,
     }
     if res.get("applied"):
         _attach_measurement(meta, path)
+    from app.core.extension_rig import extension_metadata
+    meta.setdefault("extension_rig", extension_metadata(character_name))
     try:
         meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
                              encoding="utf-8")
@@ -884,7 +921,7 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
                 if meta_path.exists() else {}
         except (OSError, ValueError):
             meta = {}
-        verdict = _validator_for(meta.get("rig") or "")(blob)
+        verdict = _validator_for(meta.get("rig") or "", character_name)(blob)
         if not verdict.get("ok"):
             return {"ok": False,
                     "error": "reduced mesh failed validation: "
@@ -899,7 +936,7 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
                              + "; ".join(frames.get("errors") or [])}
         target = out_dir / path.name
         try:
-            target.write_bytes(blob)
+            _publish_model_bytes(target, blob)
         except FileNotFoundError:
             # Deleted during the Blender run (up to 600 s).
             return {"ok": False, "error": "no_model"}
@@ -916,6 +953,8 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
         "signature": path.stem,
         "character": character_name,
     }
+    from app.core.extension_rig import extension_metadata
+    side["extension_rig"] = extension_metadata(character_name)
     target.with_suffix(".json").write_text(
         json.dumps(side, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info("Model3D %s: LOD %s (%s -> %s tris, %d bytes)", character_name,
@@ -938,6 +977,8 @@ def set_model3d_rig(character_name: str, rig: str) -> Optional[Dict[str, Any]]:
     except (OSError, ValueError):
         meta = {}
     meta["rig"] = rig
+    from app.core.extension_rig import extension_metadata
+    meta.setdefault("extension_rig", extension_metadata(character_name))
     meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     return meta
 
@@ -1180,6 +1221,8 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         # build costs under a second against the minutes this generation just
         # took.
         request_lod(character_name, path)
+        from app.core.extension_rig import extension_metadata
+        meta.setdefault("extension_rig", extension_metadata(character_name))
         path.with_suffix(".json").write_text(
             json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
         logger.info("Model3D %s: %s (%d bytes, Kombination %s)", character_name,
@@ -1254,7 +1297,7 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
             tex_staged = Path(res["texture_path"]) if res.get("texture_path") else None
             data = staged.read_bytes()
             if staged.suffix.lower() == ".glb":
-                check = _validator_for(rig)(data)
+                check = _validator_for(rig, character_name)(data)
             else:
                 check = validate_fbx(
                     data, tex_staged.read_bytes() if tex_staged else None)
@@ -1295,6 +1338,8 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
             _auto_normalize(character_name, path, meta)
             _attach_measurement(meta, path)
             request_lod(character_name, path)
+            from app.core.extension_rig import extension_metadata
+            meta.setdefault("extension_rig", extension_metadata(character_name))
             path.with_suffix(".json").write_text(
                 json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
             logger.info("Model3D %s: job %s fetched as %s (%d bytes, "
@@ -1391,3 +1436,25 @@ def delete_model3d(character_name: str, signature: Optional[str] = None) -> bool
                     companion.unlink()
     path.unlink()
     return True
+
+
+def model_revision(path: Optional[Path]) -> str:
+    """Revision of ordered tier stat records, with no mesh content reads.
+
+    In-place writers change mtime; atomic replacements also change inode.
+    Presence is explicit so creating/removing any tier invalidates the client.
+    """
+    import hashlib
+    if path is None:
+        return ""
+    records = []
+    found = False
+    for tier in MODEL_TIERS:
+        candidate = path if tier == FULL_TIER else path.parent / tier / path.name
+        try:
+            stat = candidate.stat()
+            records.append((tier, True, stat.st_size, stat.st_mtime_ns, stat.st_ino))
+            found = True
+        except OSError:
+            records.append((tier, False, 0, 0, 0))
+    return hashlib.sha256(json.dumps(records, separators=(",", ":")).encode()).hexdigest() if found else ""

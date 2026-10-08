@@ -1222,7 +1222,8 @@ def _resolve_character_model(character_name: str):
     from app.core.model3d import find_model3d_serving, find_texture, get_model3d_info
     path, _match = find_model3d_serving(character_name)
     if path:
-        info = get_model3d_info(character_name).get("model") or {}
+        status = get_model3d_info(character_name)
+        info = status.get("model") or {}
         meta = {"format": path.suffix.lstrip(".").lower(),
                 "rig": info.get("rig", "mixamo"),
                 "filename": path.name,
@@ -1230,7 +1231,10 @@ def _resolve_character_model(character_name: str):
                 "has_texture": bool(info.get("texture_url")),
                 "created_at": info.get("created_at", ""),
                 "backend": info.get("backend", ""),
-                "source": info.get("source", "generated")}
+                "source": info.get("source", "generated"),
+                "extension_rig": info.get("extension_rig"),
+                "motion": status["motion"],
+                "model_rev": info["model_rev"]}
         # FBX case only — a GLB embeds its textures; a stray image next to a
         # GLB is an auxiliary material map, never the basecolor.
         tex = (find_texture(character_name, path.stem)
@@ -1462,7 +1466,8 @@ async def upload_character_model3d(character_name: str, request: Request) -> Dic
             what="Model texture") if tex_file else None
 
         if filename.endswith(".glb"):
-            result = validate_glb(contents)
+            from app.core.extension_rig import extension_bone_names
+            result = validate_glb(contents, extension_names=extension_bone_names(character_name))
             texture = None  # a GLB carries its textures inside
         else:
             result = validate_fbx(contents, texture)

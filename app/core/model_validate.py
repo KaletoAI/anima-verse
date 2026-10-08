@@ -538,8 +538,12 @@ def _check_embedded_textures(info: Dict[str, Any], subject: str,
             warnings.append("embedded texture size could not be read")
 
 
-def validate_glb(data: bytes) -> Dict[str, Any]:
-    """Validates a humanoid GLB: 52-joint Mixamo rig + a real embedded texture.
+def validate_glb(data: bytes, extension_names=None) -> Dict[str, Any]:
+    """Validate canonical Mixamo base joints and declared optional groups.
+
+    ``extension_names`` maps full names to ``{parent, group}`` declarations
+    from extension_rig.extension_bone_names. Groups must be complete or absent;
+    their names are exact, while base identity follows normBoneName.
 
     Returns {"ok", "errors": [...], "warnings": [...], "joint_count", "rig",
     "material_names"}. The material names are not a criterion — they ride along
@@ -549,26 +553,95 @@ def validate_glb(data: bytes) -> Dict[str, Any]:
     warnings: List[str] = []
     try:
         info = parse_glb(data)
-    except (ValueError, KeyError, struct.error, json.JSONDecodeError) as e:
+    except (ValueError, KeyError, TypeError, IndexError, AttributeError, UnicodeDecodeError,
+            struct.error, json.JSONDecodeError) as e:
         return {"ok": False, "errors": [f"GLB unreadable: {e}"],
                 "warnings": [], "joint_count": 0, "rig": "generic",
                 "material_names": []}
 
-    joints = info["joints"]
-    count = info["joint_count"]
-    mixamo = sum(1 for j in joints if "mixamorig" in j.lower())
-    if count == 0:
-        errors.append("no skin/skeleton in the GLB — the model cannot be animated")
-    elif count != MIXAMO_JOINT_COUNT:
-        errors.append(
-            f"{count} joints instead of {MIXAMO_JOINT_COUNT} — not the Mixamo rig")
-    if count and not mixamo:
-        warnings.append("no 'mixamorig' joint names — a foreign rig with the "
-                        "same joint count will not match the animation clips")
+    # The humanoid contract covers all skins. Keep parse_glb's existing
+    # first-skin view unchanged for static/generic consumers.
+    nodes = info["gltf"].get("nodes", [])
+    skins = info["gltf"].get("skins", [])
+    structure_errors = []
+    if not isinstance(nodes, list) or any(not isinstance(n, dict) for n in nodes):
+        structure_errors.append("nodes must be a list of objects")
+    if not isinstance(skins, list):
+        structure_errors.append("skins must be a list of objects")
+    else:
+        for skin in skins:
+            if not isinstance(skin, dict) or not isinstance(skin.get("joints"), list):
+                structure_errors.append("skin must be an object with a joints list")
+    if isinstance(nodes, list):
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            children = node.get("children", [])
+            if not isinstance(children, list) or any(
+                    type(child) is not int or not 0 <= child < len(nodes) for child in children):
+                structure_errors.append("children must be a list of valid integer node indices")
+    if structure_errors:
+        return {"ok": False, "errors": structure_errors, "warnings": [],
+                "joint_count": 0, "rig": "generic", "material_names": info["material_names"]}
+    joint_indices = set()
+    joints = []
+    contract_errors = []
+    for skin in skins:
+        local = set()
+        for index in skin.get("joints") or []:
+            if type(index) is not int or not 0 <= index < len(nodes):
+                contract_errors.append("invalid skin joint index")
+                continue
+            if index not in joint_indices or index in local:
+                joints.append(str(nodes[index].get("name", "")))
+            joint_indices.add(index)
+            local.add(index)
+    count = len(joints)
+    from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
+    keys = [norm_bone_name(j) for j in joints]
+    present = set(keys)
+    if len(keys) != len(present):
+        contract_errors.append("duplicate joint names after normalization")
+    missing = BASE_JOINT_KEYS - present
+    if missing:
+        contract_errors.append("missing base joints: " + ", ".join(sorted(missing)))
+    declarations = extension_names or {}
+    if not isinstance(declarations, dict):
+        raise ValueError("extension_names must map full names to parent/group declarations")
+    extra = {j for j in joints if norm_bone_name(j) not in BASE_JOINT_KEYS}
+    foreign = extra - declarations.keys()
+    if foreign:
+        contract_errors.append("undeclared joints: " + ", ".join(sorted(foreign)))
+    groups = {}
+    for name, declaration in declarations.items():
+        groups.setdefault(declaration["group"], set()).add(name)
+    for group, names in groups.items():
+        if extra & names and not names <= extra:
+            contract_errors.append(f"partial extension group: {group}")
+    nodes = info["gltf"].get("nodes") or []
+    parents = {}
+    for index, node in enumerate(nodes):
+        for child in node.get("children") or []:
+            parents.setdefault(child, []).append(index)
+    for index in sorted(joint_indices):
+        name = str(nodes[index].get("name", ""))
+        if norm_bone_name(name) in BASE_JOINT_KEYS:
+            continue
+        declaration = declarations.get(name)
+        if declaration is None:
+            continue  # reported in the foreign-name check above
+        parent_indices = parents.get(index, [])
+        expected = declaration["parent"]
+        actual = str(nodes[parent_indices[0]].get("name", "")) if len(parent_indices) == 1 else ""
+        matches = (norm_bone_name(actual) == norm_bone_name(expected)
+                   if norm_bone_name(expected) in BASE_JOINT_KEYS else actual == expected)
+        if not matches or parent_indices[0] not in joint_indices:
+            contract_errors.append(f"wrong parent for {name}: expected {expected}, got {actual or 'none/ambiguous'}")
+    errors.extend(contract_errors)
 
     _check_embedded_textures(info, "humanoid model", errors, warnings)
 
-    rig = "mixamo" if (count == MIXAMO_JOINT_COUNT and mixamo) else "generic"
+    rig = "mixamo" if not contract_errors else "generic"
     return {"ok": not errors, "errors": errors, "warnings": warnings,
             "joint_count": count, "rig": rig,
             "material_names": info["material_names"]}

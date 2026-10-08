@@ -70,6 +70,88 @@ class FlagSpec:
 
 
 @dataclass
+class RigSpec:
+    """Validated declaration; operation parameters remain opaque in P0."""
+    id: str
+    op: str
+    chains: List[List[Dict[str, str]]]
+    params: Dict[str, Any] = field(default_factory=dict)
+    applies_to: Dict[str, List[Any]] = field(default_factory=dict)
+    freq_hz: float = 2.2
+    zeta: float = 0.15
+    gravity: float = 0.35
+    gain: float = 1.0
+    max_deg: float = 25.0
+    squash: List[float] = field(default_factory=lambda: [0.6, 1.4])
+    rest_max_deg: float = 90.0
+
+    @classmethod
+    def parse(cls, raw):
+        """Reject malformed chains, conditions and non-finite physics values."""
+        import math
+        from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
+        if not isinstance(raw, dict):
+            raise ValueError("rig must be a mapping")
+        for key in ("id", "op"):
+            if not isinstance(raw.get(key), str) or not raw[key].strip():
+                raise ValueError(f"rig.{key} must be a non-empty string")
+        params = raw.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError("rig.params must be a mapping")
+        conditions = raw.get("applies_to", {})
+        if not isinstance(conditions, dict) or any(
+                not isinstance(k, str) or not k or not isinstance(v, list) or not v
+                or any(not isinstance(x, (str, int, float, bool, type(None))) for x in v)
+                for k, v in conditions.items()):
+            raise ValueError("rig.applies_to must map fields to non-empty scalar lists")
+        chains = raw.get("chains")
+        if not isinstance(chains, list) or not chains:
+            raise ValueError("rig.chains must be a non-empty list")
+        seen = set()
+        result = []
+        for chain in chains:
+            if not isinstance(chain, list) or not chain:
+                raise ValueError("rig chain must be a non-empty list")
+            earlier = set()
+            clean = []
+            for link in chain:
+                if not isinstance(link, dict) or any(
+                        not isinstance(link.get(k), str) or not link[k].strip()
+                        for k in ("bone", "parent")):
+                    raise ValueError("rig link requires bone and parent strings")
+                bone, parent = link["bone"].strip(), link["parent"].strip()
+                key = norm_bone_name(bone)
+                if not key or key in seen or key in BASE_JOINT_KEYS:
+                    raise ValueError(f"duplicate or reserved bone: {bone}")
+                if norm_bone_name(parent) not in BASE_JOINT_KEYS and parent not in earlier:
+                    raise ValueError(f"parent must be a base joint or earlier chain link: {parent}")
+                clean.append({"bone": bone, "parent": parent})
+                earlier.add(bone)
+                seen.add(key)
+            result.append(clean)
+        spec = cls(raw["id"].strip(), raw["op"].strip(), result,
+                   dict(params), dict(conditions))
+        bounds = {"freq_hz": (0, None), "zeta": (0, None),
+                  "gravity": (0, None), "gain": (0, 1),
+                  "max_deg": (0, 180), "rest_max_deg": (0, 180)}
+        for key, (lo, hi) in bounds.items():
+            value = raw.get(key, getattr(spec, key))
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"rig.{key} must be numeric")
+            if not math.isfinite(value) or value < lo or (hi is not None and value > hi) or (key == "freq_hz" and value == 0):
+                raise ValueError(f"rig.{key} outside allowed range")
+            setattr(spec, key, float(value))
+        squash = raw.get("squash", spec.squash)
+        if not isinstance(squash, list) or len(squash) != 2 or any(
+                isinstance(v, bool) or not isinstance(v, (int, float))
+                or not math.isfinite(v) or v <= 0 for v in squash
+        ) or not squash[0] <= 1 <= squash[1]:
+            raise ValueError("rig.squash requires 0 < min <= 1 <= max")
+        spec.squash = list(squash)
+        return spec
+
+
+@dataclass
 class BodySlotSpec:
     """A body slot declared by a species package (plan-body-slots.md).
 
@@ -87,7 +169,8 @@ class BodySlotSpec:
     attributes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     prompt: Dict[str, str] = field(default_factory=dict)  # always | covered | exposed
     face: bool = False  # fragment also belongs into face/portrait prompts
-    back: bool = False  # anatomy is visible from BEHIND too (back-view renders)
+    back: bool = False  # Include fragments in rear-view renders.
+    rig: Optional[RigSpec] = None
 
 
 @dataclass
@@ -141,6 +224,22 @@ def clear_registry() -> None:
 
 def register_package(pkg: Package) -> None:
     global _generation
+    from app.core.rig_contract import norm_bone_name
+    owners = {}
+    group_ids = {}
+    for candidate in [p for p in packages() if p.id != pkg.id] + [pkg]:
+        for slot in candidate.body_slots:
+            if slot.rig is None:
+                continue
+            if slot.rig.id in group_ids:
+                raise ValueError(f"duplicate rig group {slot.rig.id}: {group_ids[slot.rig.id]} and {candidate.id}")
+            group_ids[slot.rig.id] = candidate.id
+            for chain in slot.rig.chains:
+                for link in chain:
+                    key = norm_bone_name(link["bone"])
+                    if key in owners:
+                        raise ValueError(f"duplicate extension bone {link['bone']}: packages {owners[key]} and {candidate.id}")
+                    owners[key] = candidate.id
     _packages[pkg.id] = pkg
     _generation += 1
 
