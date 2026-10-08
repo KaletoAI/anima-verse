@@ -9,10 +9,10 @@ import {
 } from './clipCoverage';
 import { clipGroundOffset, measureGroundOffsets } from './clipGround';
 import {
-  bindRelativeValues, hipsTrackMedian, normBoneName, restCorrections, restPoseOf,
+  createSecondaryMotion, bindRelativeValues, hipsTrackMedian, normBoneName, restCorrections, restPoseOf,
   rigHipsHeight, standingHipsRef,
 } from '@anima/scene-render';
-import type { RestCorrection, RestPose } from '@anima/scene-render';
+import type { SecondaryMotion, RestCorrection, RestPose } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
@@ -1577,6 +1577,20 @@ function findLegChains(inst: THREE.Object3D, box: THREE.Box3): LegChain[] {
 export class Figure {
   private motionState?: { payload: MotionPayload | undefined };
   get motion(): MotionPayload | undefined { return this.motionState?.payload; }
+  private secondary: SecondaryMotion;
+  private secondaryRev?: string;
+  private secondaryTime = performance.now();
+  private secondaryPosition = new THREE.Vector3();
+  private readonly secondaryNextPosition = new THREE.Vector3();
+  private secondaryPlaced = false;
+  private secondaryFar: boolean;
+
+  /** Explicit placement/LOD reset; a replacement Figure starts with fresh state. */
+  resetSecondaryMotion() {
+    this.secondary.reset();
+    this.secondaryPlaced = false;
+    this.secondaryTime = performance.now();
+  }
   root = new THREE.Group();
   height: number;
   private mixer: THREE.AnimationMixer;
@@ -1772,6 +1786,9 @@ export class Figure {
     this.groundY = inst.position.y;
     this.travelBase = { x: inst.position.x, z: inst.position.z };
     this.root.add(inst);
+    this.secondary = createSecondaryMotion(THREE, this.root, this.motion, model.template);
+    this.secondaryRev = this.motion?.rev;
+    this.secondaryFar = model.tier === 'low';
 
     this.mixer = new THREE.AnimationMixer(inst);
     // A bridge clip runs ONCE; when it ends, the state it was headed for
@@ -2241,6 +2258,7 @@ export class Figure {
    *  itself is retired). The ghost's materials, the mixer's bindings and the
    *  skeleton's bone texture are per figure, and those go here. */
   dispose() {
+    this.secondary.dispose();
     this.ghost.dispose();
     // The mixer's bindings hold the clone bone by bone; without this they keep
     // it — and through it the template — alive for as long as anything still
@@ -2359,7 +2377,7 @@ export class Figure {
   private legs: LegChain[] = [];
   private walkPhase = Math.random() * Math.PI * 2;
 
-  update(dt: number) {
+  update(dt: number, options: { frozen?: boolean; far?: boolean; realDelta?: number } = {}) {
     // Without clips: procedural animation — walking swings the detected leg
     // chains (a trot), standing breathes/bobs lightly, so the figure does not
     // look like a statue (UniRig animal rigs have no clips).
@@ -2463,5 +2481,20 @@ export class Figure {
       }
       this.applyHeight();
     }
+    // Final anchors now include mixer pose, bridge travel, turn and lift.
+    // The engine clamps its animation delta; secondary motion uses real time.
+    const now = performance.now();
+    const realDelta = options.realDelta ?? (now - this.secondaryTime) / 1000;
+    this.secondaryTime = now;
+    if (this.secondaryRev !== this.motion?.rev) {
+      this.secondary.configure(this.motion);
+      this.secondaryRev = this.motion?.rev;
+    }
+    const position = this.root.getWorldPosition(this.secondaryNextPosition);
+    // Safety net for owners that replace placement directly: >2 m is a jump.
+    if (this.secondaryPlaced && position.distanceTo(this.secondaryPosition) > 2) this.secondary.reset();
+    this.secondaryPosition.copy(position);
+    this.secondaryPlaced = true;
+    this.secondary.update(realDelta, { frozen: options.frozen, far: options.far ?? this.secondaryFar });
   }
 }

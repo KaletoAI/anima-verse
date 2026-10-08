@@ -1,4 +1,6 @@
+import { installSkinnedNormalCorrection } from '@anima/scene-render';
 import * as THREE from 'three';
+installSkinnedNormalCorrection(THREE);
 import * as api from './api';
 import { initDebug3d, initIsolation } from './debug3d';
 import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
@@ -5794,7 +5796,7 @@ async function startApp(username: string, role: string) {
         storey.visible = storey.userData.level === tile.levelFilter;
       }
     }
-    npcs.tick(dt, engine.dist);
+    npcs.tick(dt, engine.dist, (lastMap ?? firstMap).game_rate === 0);
     bob += dt * 2.2;
     for (const pin of pins.values()) {
       pin.position.y += Math.sin(bob) * 0.008;

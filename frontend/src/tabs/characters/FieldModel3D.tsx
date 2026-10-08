@@ -1,3 +1,4 @@
+import type { SecondaryMotionPayload } from '@anima/scene-render'
 /**
  * FieldModel3D — the character's 3D model for the current outfit. ONE model,
  * produced either way: GENERATE it from the T-pose render (mesh backend) or
@@ -111,6 +112,7 @@ interface MeshBackend {
 }
 
 interface Model3DStatus {
+  motion?: SecondaryMotionPayload
   signature?: string
   rig?: string
   has_input?: boolean
@@ -610,6 +612,7 @@ export function FieldModel3D({ character }: { character: string }) {
       {model ? (
         <>
           <Model3DViewer
+            motion={st.motion}
             url={viewerUrl}
             format={model.format || 'fbx'}
             clipUrl={mixamo ? clipUrl : ''}

@@ -10226,8 +10226,8 @@ The selection cache watches candidate meshes and their model/reference sidecars
 with the same stat fields, and caches the selected path and signature together.
 The 3D client reloads on a change to either `model_sig` or `model_rev` and
 includes the revision in mesh request URLs to bypass stale stat-based ETags,
-and retains `motion` on each figure independently of mesh changes. P0 stores
-motion only; it has no solver or rendering effects. Admin `/model/meta`
+and retains `motion` on each figure independently of mesh changes. P2 consumes
+motion through the shared secondary-motion solver. Admin `/model/meta`
 returns the same `motion` and `model_rev`; `/model3d` exposes `motion` at the
 root and `model_rev` in its model entry.
 
@@ -10285,8 +10285,84 @@ extension-bones Improvements queue expose retrofit. The character model panel
 shows status, reason, metrics and per-group enabled/flip controls.
 
 No motion field belongs to the scene-recipe payload or its fingerprint.
-Motion uses package defaults and fixes `rest_deg` at zero. World settings,
+Motion currently uses package defaults and fixes `rest_deg` at zero. World settings,
 equipment damping, motion overrides and state poses remain later phases.
+
+### P2 runtime contract: secondary motion
+
+Both `client3d/src/scene/figures.ts` and the admin `Model3DViewer.tsx` use
+`createSecondaryMotion` from `@anima/scene-render`, with their own injected
+Three namespace and instance state. The admin receives root-level `motion` from the `/characters/{n}/model3d`
+status response through `FieldModel3D`, and its English “Secondary motion” toggle defaults
+on. A changed `motion.rev` reconfigures parameters without reloading the mesh;
+particles on unchanged bones retain position and velocity. Missing or partial
+groups, or groups without a usable weighted centroid, are silently skipped.
+
+Units are metres and real seconds. Three's world is **Y-up**, with gravity
+`g = (0, -9.81, 0)`. Setup occurs in bind pose after the automatic up-axis fix,
+before mixer evaluation. It saves immutable local bind matrices and computes
+one centroid per driven bone over all skinned primitives: every positive skin
+weight contributes `weight * position`, mapped by `boneInverse * mesh.bindMatrix`
+into that bone's anchor frame. This target follows the bone head via
+`anchor = parent.matrixWorld * localBind`; joint-axis direction is never used
+as a substitute for geometry. Chains are applied parent-first. Each link keeps
+a pure orthonormal rotation frame independently of its directional scale.
+Child gravity inherits that pure parent rotation; child positions use the full
+deformed parent matrix.
+
+`g_rest` is world gravity expressed in the bind anchor's rotational frame.
+For `omega = 2*pi*freq_hz`, the world-space particle follows
+`a = omega²*(T-p) - 2*zeta*omega*(v-v_T) + gravity*(g-R_anchor*g_rest)`.
+The target velocity comes from consecutive final anchor targets. Integration
+uses substeps no longer than `1/240 s`, linearly interpolating the target
+inside each frame. Each substep solves the linear damped spring exactly
+(including critical and overdamped cases), avoiding explicit-integrator instability. Gaps greater than `0.25 s` reset `p=T, v=0`.
+Rendered displacement is `gain*(p-T)`; gain zero preserves the rest pose
+with exactly identity dynamic rotation and scale. Dynamic rotation about the
+head is clamped to `max_deg`, independently of the rest angle.
+
+The rest target rotates the bind centroid about the chain's lateral axis:
+model **+X in bind pose**, stored in each anchor's local frame, with the
+right-hand sign convention. `rest_deg` is independently clamped by
+`rest_max_deg`. Changes blend from the currently shown angle over **1.5 real
+seconds**, using smoothstep, including at far LOD.
+
+The length factor is clamped to `squash`; perpendicular scale is `1/sqrt(s)`.
+For normalized head-to-centroid direction `u`, the local scale matrix is
+`S = c*I + (s-c)*u*u^T`, `c=1/sqrt(s)`. This is a basis-conjugated diagonal
+scale with determinant one. The bone keeps its full local matrix with
+`matrixAutoUpdate=false`: decomposing it into TRS would lose the off-diagonal
+terms for imported joint axes. Both skinning and child transforms therefore
+receive the same directional deformation. Both consumers install the shared
+`installSkinnedNormalCorrection(THREE)` before material compilation: WebGL2
+uses `normalize(inverse(transpose(mat3(skinMatrix))) * objectNormal)` and
+forward-transforms and normalizes tangents. Rigid/uniform transforms retain
+the same normalized directions as stock. Empty/unmatched payloads skip setup;
+immutable centroids are weakly cached per template, while particle and scratch
+state belong to each instance. Disposal restores the captured
+matrix and update flag and releases CPU state; it frees no shared geometry,
+material, texture or skeleton resources.
+
+The client updates the solver **after** mixer evaluation and all root travel,
+turn and lift, then updates matrices. Its dynamics clock uses real elapsed
+time, including gaps hidden by the engine's animation-delta clamp. World-map
+`game_rate` transports the authoritative game seconds per real second from
+`game_speed_factor()`; zero freezes dynamics globally, and pair playback also
+honours its own zero rate. Rest-angle blending remains real time. Frozen
+particles retain their displacement while anchor placement changes.
+
+`Figure.resetSecondaryMotion()` resets teleport placement; the NPC placement
+paths call it on hard snaps, with a >2 m jump guard for direct placements.
+Model/tier swaps create a new solver. The low distance tier applies rest pose
+without dynamics; entering or leaving far LOD resets particles. The shared
+`reset()` API is also available to other owners for LOD/teleport changes.
+The admin uses its own frame delta and applies the solver after its mixer.
+
+Numeric acceptance: `node client3d/scripts/smoke_secondary_motion.mjs`
+(hand-derived equilibrium, length, volume, independent clamps, gain zero,
+frame partitions, freeze, gaps, resets, live rest blend, response-root motion
+extraction, toggle behavior, numeric consumer parity, oblique stretched chains,
+multi-mesh non-identity binds and analytic normal/tangent perpendicularity).
 
 
 # Anhang — Änderungsverlauf

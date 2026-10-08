@@ -52,6 +52,7 @@ Zeile nennt nur, was es gibt). Die §-Nummern verweisen auf
 | `verify.ts` | § B5a | BBox-vs-Spec-Diff mit ε 0,01 m — Rechnen statt Screenshots | `SpecVerifier`, `VERIFY_EPS` · Typen: `PrimitiveTarget`, `VerifyRow` |
 | `primitives.ts` | § B1 | Die Primitiv-Builder: Kontur→Extrusion, Box aus `from`/`to`/`base_y`, Extra-Box aus Zentrum+Größe, Platzhalter-Box — plus ihre Verify-Soll-Felder | `buildPlate`, `buildWall`, `buildExtra`, `buildPlaceholder`, `wallLength`, `plateTargets`, `wallTargets` |
 | `types.ts` | § B1 | `ScenePayload` und alles darin — EIN Typsatz für beide Renderer; `pickVariant` ist die eine Auflösungsregel der Modellstufen | `pickVariant`, `pickModelVariant` · Typen: `ScenePayload`, `ScenePlate`, `SceneWall`, `SceneExtra`, `SceneModelSpec`, `ModelTier`, `SceneMarker`, `SceneStyle`, `SceneOpening`, `SceneRoom`, `SceneFloor`, `SceneBoundaryOpening`, `SceneCorridor`, `SceneCutPlane`, `SceneDoorway`, `SceneProblem`, `SceneSlotValues`, `SceneStairs`, `SceneSurface` |
+| `secondaryMotion.ts` | P2 runtime contract | Bind-weight centroids and per-instance damped springs, relative gravity, rest blending, directional volume-preserving scale and resets; Three is injected | `createSecondaryMotion`, `stepSecondaryParticle` · Types: `MotionGroup`, `SecondaryMotionPayload`, `SecondaryMotion` |
 | `figure.ts` | § A3/§ A4/§ A8 | Wo eine Figur auf eine markierte Fläche trifft: Vertragsgröße 1,70 m, Hüft-Absenkung, Wurzel-y, der Standbezug der Clips (Ruhe-Hüfthöhe des Referenz-Rigs, Idle-Median nur als Rückfall) | `FIGURE_HEIGHT_M`, `anchorFigureBind`, `clipHipsDrop`, `figureRootY`, `hipsTrackMedian`, `rigHipsHeight`, `standingHipsRef` |
 | `placeGeometry.ts` | § C4 | Slots eines Platzes und die beiden Hälften eines Paar-Clips, für einen Renderer ohne komponiertes Payload | `markerSlots`, `pairYaw`, `rotateXZ`, `pairPoints` · Typen: `XZ` |
 | `materials.ts` | § A9 | Wie eine Oberflächen-ART gemalt wird (inkl. Wasser-Fließen und Himmel-Uniform) — beide Renderer zeigen denselben See | `surfaceMaterial`, `updateSurfaceMaterials`, `setSurfaceSky`, `surfaceTimeUniform`, `surfaceSkyUniform`, `surfaceWaveNormal`, `waterFlowFactor`, `WATER_FLOW_FACTOR_MIN`, `WATER_FLOW_SPEED_DEFAULT_M_S`, `WATER_FLOW_SPEED_MAX_M_S` · Typen: `SurfaceMaterialSpec`, `SurfaceMaterialOptions` |
@@ -114,3 +115,29 @@ und in beiden Apps vorhanden:
 an der Welt (Zahl der Locations, Modelle und Primitive) und sagt für sich
 nichts — sie taugt nur als Vergleich zwischen zwei Läufen über derselben,
 stillstehenden Welt.
+
+## Secondary motion
+
+Install `installSkinnedNormalCorrection(THREE)` once before compiling materials.
+It uses inverse-transpose skin normals and forward-transformed tangents on WebGL2.
+
+Create `createSecondaryMotion(THREE, root, motion, template)` in bind pose after the
+up-axis correction. Call `configure(motion)` on revision changes, then
+`update(realDelta, { frozen, far })` after final mixer/anchor placement.
+`reset()` handles teleports and LOD changes; `dispose()` restores owned bone
+matrix settings without freeing any template resources. Unchanged bones keep
+particle state through reconfiguration. Missing groups are skipped. Empty or unmatched
+payloads skip setup and frame work. An optional immutable model template keys a
+weak centroid cache shared by reconstructed instances; particles are never cached.
+Frame and integration scratch objects are reused.
+
+Metres/seconds, Y-up gravity `(0,-9.81,0)`. Targets are weighted bind-vertex
+centroids, never imported bone axes. Rest rotates around bind model +X expressed
+anchor-locally; changes blend over 1.5 real seconds. Directional squash uses
+`c I + (s-c) u u^T` in the bone frame, with `c=1/sqrt(s)`, retaining the full
+matrix for skinning. Child gravity uses a separate pure rotation frame; child
+positions retain full parent deformation. Far mode keeps rest and resets dynamics; freeze holds
+displacement. The complete equations and lifecycle are in the P2 runtime
+contract of `docs/schnittstellen-3d.md`.
+
+Run `node client3d/scripts/smoke_secondary_motion.mjs` from the repository root.

@@ -13,11 +13,11 @@ import type { MouseEvent as ReactMouseEvent } from 'react'
 import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D,
   Quaternion, Vector3 } from 'three'
 import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
-  bindRelativeClip, clipHipsDrop, disposeSlotMaterials, figureRootY,
+  installSkinnedNormalCorrection, createSecondaryMotion, bindRelativeClip, clipHipsDrop, disposeSlotMaterials, figureRootY,
   hipsTrackMedian, leafPivot, markerSlots, pairPoints, pairYaw,
   restCorrections, restPoseOf, rigHipsHeight,
   standingHipsRef } from '@anima/scene-render'
-import type { RestPose } from '@anima/scene-render'
+import type { SecondaryMotion, SecondaryMotionPayload, RestPose } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
@@ -68,6 +68,7 @@ export const loadTestFigure = (): Promise<Object3D | null> => {
         }
         // Neutral clay figure — placement and scale are judged, not a look.
         const THREE = await import('three')
+        installSkinnedNormalCorrection(THREE)
         const clay = new THREE.MeshStandardMaterial({
           color: 0x9aa4af, roughness: 0.85, metalness: 0,
         })
@@ -127,6 +128,7 @@ const donorRig = () => {
     _donorRigPromise = (async () => {
       try {
         const THREE = await import('three')
+        installSkinnedNormalCorrection(THREE)
         const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
         const rig = await new FBXLoader().loadAsync('/assets/animation-rig')
         return { rest: restPoseOf(THREE, rig), hipsY: rigHipsHeight(THREE, rig) }
@@ -245,7 +247,7 @@ export interface TilePlacement {
   figureHeightWorld?: number
 }
 
-export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', height = 320, rotation,
+export function Model3DViewer({ url, format, motion, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
   placement, onBounds, markers, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
@@ -253,7 +255,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox }:
-  { url: string; format: string; clipUrl?: string; textureUrl?: string; height?: number;
+  { url: string; format: string; motion?: SecondaryMotionPayload; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
     rotation?: { x?: number; y?: number; z?: number }
@@ -395,6 +397,11 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
      *  before a door is placed anywhere. Model mode only. */
     leafBbox?: LeafBbox | null }) {
   const { t } = useI18n()
+  const [secondaryOn, setSecondaryOn] = useState(true)
+  const secondaryOnRef = useRef(secondaryOn)
+  secondaryOnRef.current = secondaryOn
+  const motionRef = useRef(motion)
+  motionRef.current = motion
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
   // Triangle/vertex count of the loaded mesh — every preview shows it, so
@@ -651,6 +658,7 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
     ;(async () => {
       try {
         const THREE = await import('three')
+        installSkinnedNormalCorrection(THREE)
         const { OrbitControls } = await import('three/examples/jsm/controls/OrbitControls.js')
 
         const mount = mountRef.current
@@ -931,6 +939,9 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         // Animation clip (shared Mixamo FBX, "Without Skin" = keyframes only).
         // It drives the model's own skeleton by bone name, so model and clip
         // MUST come from the same rig — see shared/models/clips/README.md.
+        let secondary: SecondaryMotion | null = null
+        let secondaryRev = motionRef.current?.rev
+        let secondaryEnabled = secondaryOnRef.current
         let mixer: InstanceType<typeof THREE.AnimationMixer> | null = null
         if (clipUrl) {
           const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
@@ -994,11 +1005,15 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
           const corrections = restCorrections(THREE, await donorRest(), object)
           if (disposed) return
           const bound = bindRelativeClip(THREE, clip, corrections)
+          // Bind capture after the automatic up-axis fix, before frame zero.
+          secondary = createSecondaryMotion(THREE, object, secondaryEnabled ? motionRef.current : undefined, object)
           mixer = new THREE.AnimationMixer(object)
           mixer.clipAction(bound).play()
           mixer.update(0)  // apply frame 0 so the framing below fits the pose
           disposers.push(() => mixer?.stopAllAction())
         }
+        secondary ??= createSecondaryMotion(THREE, object, secondaryEnabled ? motionRef.current : undefined, object)
+        disposers.push(() => secondary?.dispose())
         const clock = new THREE.Clock()
         pivot.updateMatrixWorld(true)
 
@@ -1823,7 +1838,16 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
         let raf = 0
         const animate = () => {
           raf = requestAnimationFrame(animate)
-          if (mixer) mixer.update(clock.getDelta())
+          const realDelta = clock.getDelta()
+          if (mixer) mixer.update(realDelta)
+          if (secondaryRev !== motionRef.current?.rev || secondaryEnabled !== secondaryOnRef.current) {
+            secondaryEnabled = secondaryOnRef.current
+            secondaryRev = motionRef.current?.rev
+            secondary?.configure(secondaryEnabled ? motionRef.current : undefined)
+            if (!secondaryEnabled) secondary?.reset()
+          }
+          secondary?.update(realDelta)
+          object.updateMatrixWorld(true)
           controls.update()
           renderer.render(scene, camera)
         }
@@ -1928,12 +1952,18 @@ export function Model3DViewer({ url, format, clipUrl = '', textureUrl = '', heig
       ) : null}
       {/* THE VIEW CONTROLS — one column at the top right, so no button has to
           know how many of its neighbours happen to be shown. */}
-      {!loading && !error && (onFrontalChange || keepCamera
+      {!loading && !error && (motion || onFrontalChange || keepCamera
         || (leafBbox && hasLeaf)) ? (
         <div style={{
           position: 'absolute', right: 6, top: 6, display: 'flex',
           flexDirection: 'column', alignItems: 'flex-end', gap: 4,
         }}>
+          {motion ? (
+            <button type="button" className="ga-btn ga-btn-sm"
+              aria-pressed={secondaryOn} onClick={() => setSecondaryOn(on => !on)}>
+              {t('Secondary motion')}
+            </button>
+          ) : null}
           {/* The front view is a MODE the owner holds (§ B1): pressed, the
               model stands straight on and the orbit is locked — the state a
               ring may be drawn in. */}

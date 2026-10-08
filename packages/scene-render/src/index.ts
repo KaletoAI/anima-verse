@@ -146,3 +146,8 @@ export type {
   SceneBoundaryOpening, SceneCorridor, SceneCutPlane, SceneDoorway, SceneProblem,
   SceneSlotValues, SceneStairs, SceneSurface,
 } from './types'
+
+export { createSecondaryMotion, stepSecondaryParticle } from './secondaryMotion'
+export type { MotionGroup, SecondaryMotionPayload, SecondaryMotion } from './secondaryMotion'
+
+export { installSkinnedNormalCorrection } from './skinnedNormals'

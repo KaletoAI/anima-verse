@@ -356,6 +356,8 @@ export interface WorldMap {
    *  its hour from `hour_fraction` HERE (one source, no extra poll); nothing
    *  in the client derives a game hour itself. */
   game_time?: GameTimeInfo;
+  /** Game seconds per real second; zero freezes secondary dynamics. */
+  game_rate?: number;
   /** § A12; `null` when nothing is placed */
   world_bounds: WorldBounds | null;
   /** Signature of the painted terrain (areas + world type rows). When it

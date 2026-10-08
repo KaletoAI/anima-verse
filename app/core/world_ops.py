@@ -846,6 +846,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # (canonical stamp, calendar parts, hour_fraction for the sun, label).
         # Clients display it, they never derive a game hour themselves.
         "game_time": _now_game.to_dict(_lang),
+        "game_rate": _factor,
         "world_bounds": world_bounds,
         # Signature of the painted terrain (areas + world type rows), read
         # ONCE per payload: when it changes, clients refetch /play/terrain.

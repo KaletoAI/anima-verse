@@ -482,6 +482,7 @@ export class NpcManager {
     const npc = this.npcs.get(name);
     if (!npc) return;
     npc.root.position.copy(pos);
+    npc.figure?.resetSecondaryMotion();
     npc.target.copy(pos);
     npc.waypoints = [];
     npc.route = null;
@@ -796,6 +797,7 @@ export class NpcManager {
         this.npcs.set(st.char.name, npc);
         this.group.add(npc.root);
         npc.root.position.copy(st.pos); // first sync: no walk across the whole map
+        npc.figure?.resetSecondaryMotion();
         // The figure only arrived now, but the player has been steering since
         // before it existed — `setPlayerDriven` found nothing to write then.
         if (st.char.name === this.playerDriven) this.takeOver(npc);
@@ -869,6 +871,7 @@ export class NpcManager {
           if (npc.route.stamp !== st.route.stamp) {
             if (shouldSnap(st.route.progressM, npc.route.progressM)) {
               npc.route.progressM = st.route.progressM;
+              npc.figure?.resetSecondaryMotion();
             }
             npc.route.stamp = st.route.stamp;
           }
@@ -887,6 +890,7 @@ export class NpcManager {
         npc.waypoints = [];
         npc.ride = null;
         npc.root.position.copy(st.pos);
+        npc.figure?.resetSecondaryMotion();
         arrived = true;
       }
       // A new goal adopts the stations on the way to it (room exits). The A*
@@ -929,6 +933,7 @@ export class NpcManager {
         npc.waypoints = [];
         npc.ride = null;      // a placement, not a climb
         npc.root.position.copy(goal);
+        npc.figure?.resetSecondaryMotion();
       }
       npc.target.copy(goal);
       // …and at the SERVER's pace, which is the plain one. Only the walking
@@ -1224,7 +1229,7 @@ export class NpcManager {
    *  REAL seconds (E1): the game-speed factor only freezes it. Returns false
    *  when the half is not bound on this rig (or the figure has no rig) — then
    *  the ordinary placement runs, the clip falls back to the activity kind. */
-  private tickInteraction(npc: Npc, dt: number, camDist: number, labelVisible: boolean): boolean {
+  private tickInteraction(npc: Npc, dt: number, camDist: number, labelVisible: boolean, frozen: boolean): boolean {
     const it = npc.interaction!;
     if (!npc.figure || !this.figures) return false;
     // the GAME clock — unbounded, there is nothing to clamp it against
@@ -1253,7 +1258,7 @@ export class NpcManager {
       ? this.placeAt(npc.name, it.anchor.placeId, it.anchor.x, it.anchor.z) : undefined;
     npc.root.position.set(x, seat ? seat.slots[0].y : this.groundY(x, z), z);
     npc.figure.setYaw(it.anchor.yaw);
-    npc.figure.update(dt);
+    npc.figure.update(dt, { frozen: frozen || it.rate <= 0 });
     npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
     npc.label.visible = labelVisible;
     return true;
@@ -1281,7 +1286,7 @@ export class NpcManager {
     return moveClip(gm.anim, running, raw.scope);
   }
 
-  tick(dt: number, camDist: number) {
+  tick(dt: number, camDist: number, frozen = false) {
     const labelVisible = camDist < 55;
     const now = performance.now();
     for (const npc of this.npcs.values()) {
@@ -1294,7 +1299,7 @@ export class NpcManager {
     const spriteScale = THREE.MathUtils.clamp(camDist * 0.055, 1.7, 3.4);
     const faceTo = this.facingTargets();
     for (const npc of this.npcs.values()) {
-      if (npc.interaction && this.tickInteraction(npc, dt, camDist, labelVisible)) continue;
+      if (npc.interaction && this.tickInteraction(npc, dt, camDist, labelVisible, frozen)) continue;
       // Server journey (§ A11): walk along the route instead of npc.target.
       // ONE number carries the whole journey — the metres walked along the
       // polyline — and the point is re-derived from it by arc length, so a
@@ -1425,7 +1430,7 @@ export class NpcManager {
           // is the surface the body rests on.
           this.playLifting(npc, clip, travelling || !!groundIdle, sinkM,
             rootYBefore, goalPos.y);
-          npc.figure.update(dt);
+          npc.figure.update(dt, { frozen });
           npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
         } else if (npc.sprite) {
           npc.bobPhase += dt * 14;
@@ -1633,7 +1638,7 @@ export class NpcManager {
         this.playLifting(npc,
           moving ? moveClip(standGm.anim, !reckoning && dist > RUN_DISTANCE, standRaw.scope)
             : standingClip, moving || !!standIdle, standSink, rootYBefore, goalY);
-        npc.figure.update(dt);
+        npc.figure.update(dt, { frozen });
         // The ring grows with the camera distance so NPCs stay findable from afar
         npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
       } else if (npc.sprite) {
