@@ -1211,6 +1211,13 @@ def get_character_image(character_name: str, image_filename: str):
 
 
 def _resolve_character_model(character_name: str):
+    from app.core.keyed_lock import keyed_lock
+    from app.core.model3d import get_model3d_dir
+    with keyed_lock("model3d_publication", str(get_model3d_dir(character_name))):
+        return _resolve_character_model_snapshot(character_name)
+
+
+def _resolve_character_model_snapshot(character_name: str):
     """(path, meta, texture_path) of the character's current-outfit model —
     uploaded or generated, whichever is stored. (None, None, None) when there is
     none: a normal state, not an error. (The pre-per-outfit global upload store
@@ -1234,7 +1241,7 @@ def _resolve_character_model(character_name: str):
                 "source": info.get("source", "generated"),
                 "extension_rig": info.get("extension_rig"),
                 "motion": status["motion"],
-                "model_rev": info["model_rev"]}
+                "model_rev": info["model_rev"], "tiers": info["tiers"]}
         # FBX case only — a GLB embeds its textures; a stray image next to a
         # GLB is an auxiliary material map, never the basecolor.
         tex = (find_texture(character_name, path.stem)
@@ -1243,7 +1250,31 @@ def _resolve_character_model(character_name: str):
     return None, None, None
 
 
-# ETag/If-None-Match serving is shared: app.core.http_files.etag_file_response.
+def _model_asset_response(character_name: str, request: Request, *, tier: str = "", texture: bool = False):
+    """Capture final bytes and their ETag under the short publication lock.
+
+    FileResponse opens paths later, after the lock would have been released;
+    a bytes response keeps the selected publication stable for this request.
+    """
+    from fastapi.responses import Response
+    from app.core.keyed_lock import keyed_lock
+    from app.core.model3d import get_model3d_dir, find_model3d_serving_tier, find_texture
+    with keyed_lock("model3d_publication", str(get_model3d_dir(character_name))):
+        path, _, _ = find_model3d_serving_tier(character_name, tier)
+        if texture:
+            path = find_texture(character_name, path.stem) if path else None
+        if path is None:
+            return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+        stat = path.stat()
+        etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}-{stat.st_ino:x}"'
+        headers = {"ETag": etag, "Cache-Control": "no-cache"}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        contents = path.read_bytes()
+        media = ("image/jpeg" if path.suffix.lower() in (".jpg", ".jpeg") else "image/png") if texture else (
+            "model/gltf-binary" if path.suffix.lower() == ".glb" else "application/octet-stream")
+    return Response(contents, media_type=media, headers=headers)
+
 
 
 @router.get("/{character_name}/model/meta")
@@ -1271,8 +1302,6 @@ def get_character_model_meta(character_name: str) -> Dict[str, Any]:
     # Resolution tiers of THIS model, in fallback order. A client may request
     # any of them via ?tier= — an unbuilt one falls back to the full mesh, so
     # this list only says which ones actually save anything.
-    from app.core.model3d import available_tiers
-    meta["tiers"] = available_tiers(_path)
     return meta
 
 
@@ -1285,14 +1314,7 @@ def get_character_model_file(character_name: str, request: Request,
     ``tier=low`` asks for the reduced distance mesh; a tier that was never
     built falls back to the full one, so a client may always ask.
     """
-    from fastapi.responses import Response
-    from app.core.model3d import find_model3d_serving_tier
-    path, _, _served = find_model3d_serving_tier(character_name, tier)
-    if not path:
-        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    media_type = ("model/gltf-binary" if path.suffix.lower() == ".glb"
-                  else "application/octet-stream")
-    return etag_file_response(path, request, media_type)
+    return _model_asset_response(character_name, request, tier=tier)
 
 
 @router.get("/{character_name}/model/texture")
@@ -1300,14 +1322,7 @@ def get_character_model_texture_file(character_name: str, request: Request):
     """Serves the basecolor image of a generic/FBX model — PNG or JPEG, the
     gateway prefers JPEG since 2026-07-17 (a GLB embeds its textures and has
     none here). 404 when absent."""
-    from fastapi.responses import Response
-    from app.core.model3d import find_model3d_serving, find_texture
-    path, _ = find_model3d_serving(character_name)
-    tex = find_texture(character_name, path.stem) if path else None
-    if not tex:
-        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    media = "image/jpeg" if tex.suffix.lower() in (".jpg", ".jpeg") else "image/png"
-    return etag_file_response(tex, request, media)
+    return _model_asset_response(character_name, request, texture=True)
 
 
 # --- 3D reference renders (T-pose / default pose, app/core/model_refs.py) ---
@@ -1483,8 +1498,11 @@ async def upload_character_model3d(character_name: str, request: Request) -> Dic
         if rig not in MODEL_RIG_VALUES:
             raise HTTPException(status_code=400,
                                 detail="rig must be one of: " + "|".join(MODEL_RIG_VALUES))
-        meta = save_uploaded_model(character_name, file.filename, contents,
-                                   rig=rig, texture=texture)
+        import asyncio
+        meta = await asyncio.to_thread(save_uploaded_model, character_name, file.filename,
+                                       contents, rig=rig, texture=texture)
+        if meta.get("ok") is False:
+            raise HTTPException(status_code=409, detail=meta.get("error") or "Model publication conflict")
         return {"status": "success", **meta,
                 "warnings": result["warnings"],
                 "joint_count": result.get("joint_count", 0)}
@@ -1659,8 +1677,55 @@ def fetch_character_model3d_job(character_name: str, job: str = "",
                         detail=res.get("error") or f"job {job_id}: {status}")
 
 
+@router.post("/{character_name}/model3d/extension-rig")
+def rebuild_character_model3d_extension_rig(
+        character_name: str, signature: str = "", tier: str = "full",
+        force: bool = False,
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Rebuild the selected tier from its clean source.
+
+    Successful matching fingerprints are no-ops; force retries failed attempts.
+    """
+    from app.core.model3d import rebuild_extension_rig, get_model3d_info
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(404, "Character not found")
+    if tier not in ("full", "low"):
+        raise HTTPException(400, "tier must be full or low")
+    signature = signature or (get_model3d_info(character_name).get("model") or {}).get("signature", "")
+    if not signature:
+        raise HTTPException(404, "No model")
+    if any(char in signature for char in ("/", "\\", "\x00")) or signature in (".", ".."):
+        raise HTTPException(400, "Invalid model signature")
+    try:
+        return rebuild_extension_rig(character_name, signature, tier=tier, force=force)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/{character_name}/model3d/extension-rig/batch")
+def queue_character_extension_rigs(
+        character_name: str,
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Queue all stored models of this character in Improvements."""
+    from app.core.improvements import engine, registry, store
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(404, "Character not found")
+    improvement_type = registry.get("extension_rig_rebuild")
+    if improvement_type is None:
+        raise HTTPException(503, "Extension rig improvement unavailable")
+    try:
+        params = improvement_type.validate({"character": character_name})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    entry = store.create(improvement_type.id,
+                         f"Rebuild extension bones · {character_name}", params, "one_shot")
+    engine.scan(entry["id"])
+    return store.get(entry["id"]) or entry
+
+
 @router.post("/{character_name}/model3d/options")
-async def set_character_model3d_options(character_name: str, request: Request) -> Dict[str, Any]:
+async def set_character_model3d_options(character_name: str, request: Request,
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Per-character overrides for the mesh generation.
     Body: {"no_fingers": true|false|null} (null clears the override — the
     backend's configured default applies again) and/or
@@ -1680,9 +1745,9 @@ def _set_character_model3d_options_sync(character_name: str,
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
     if not isinstance(body, dict) or not (
-            "no_fingers" in body or "auto_generate" in body):
+            "no_fingers" in body or "auto_generate" in body or "extension_rig" in body):
         raise HTTPException(status_code=400,
-                            detail="no_fingers or auto_generate missing")
+                            detail="model options missing")
     updates = {}
     if "no_fingers" in body:
         nf = body["no_fingers"]
@@ -1692,7 +1757,20 @@ def _set_character_model3d_options_sync(character_name: str,
         updates["no_fingers"] = nf
     if "auto_generate" in body:
         updates["auto_generate"] = bool(body["auto_generate"])
-    return {"options": set_model3d_options(character_name, updates)}
+    if "extension_rig" in body:
+        overrides = body["extension_rig"]
+        if not isinstance(overrides, dict) or any(
+                not isinstance(group_id, str) or not group_id
+                or not isinstance(values, dict)
+                or any(key not in ("enabled", "flip") or not isinstance(value, bool)
+                       for key, value in values.items())
+                for group_id, values in overrides.items()):
+            raise HTTPException(400, "extension_rig must map group ids to enabled/flip booleans")
+        updates["extension_rig"] = overrides
+    try:
+        return {"options": set_model3d_options(character_name, updates)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @router.get("/{character_name}/model3d/file")
@@ -1704,14 +1782,7 @@ def get_character_model3d_file(character_name: str, request: Request,
 
     ``tier=low`` serves the reduced version of the SAME combination, falling
     back to the full mesh when none was built."""
-    from fastapi.responses import Response
-    from app.core.model3d import find_model3d_serving_tier
-    path, _, _served = find_model3d_serving_tier(character_name, tier)
-    if not path:
-        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    media_type = ("model/gltf-binary" if path.suffix.lower() == ".glb"
-                  else "application/octet-stream")
-    return etag_file_response(path, request, media_type)
+    return _model_asset_response(character_name, request, tier=tier)
 
 
 @router.get("/{character_name}/model3d/texture")
@@ -1719,13 +1790,7 @@ def get_character_model3d_texture(character_name: str, request: Request):
     """Serves the basecolor PNG of the generated mesh (generic/FBX case only —
     a GLB embeds its textures). Follows the same serving chain as the mesh
     route so file and texture always belong together. 404 when absent."""
-    from fastapi.responses import Response
-    from app.core.model3d import find_model3d_serving, find_texture
-    path, _ = find_model3d_serving(character_name)
-    tex = find_texture(character_name, path.stem) if path else None
-    if not tex:
-        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    return etag_file_response(tex, request, "image/png")
+    return _model_asset_response(character_name, request, texture=True)
 
 
 @router.delete("/{character_name}/model3d")

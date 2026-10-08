@@ -1,0 +1,642 @@
+"""Check extension operations and the real publication lifecycle.
+
+Usage: .venv/bin/python scripts/smoke_extension_rig_p1.py
+
+Hand-derived fixture values (metres, Blender front -Y/up +Z): torso front
+is y=-.10. Two radius-.05 spheres centred at (+/-.10,-.18,1.40)
+have apex (+/-.10,-.23,1.40). A .12 wall drop samples z=1.28,
+so each bone head is (+/-.08,-.06,1.41). The cylinder has radius .03,
+centre y=-.16, rings z=.80,.81,...,.98. The anchor z=.98 selects its
+UPPER end as attachment. A cut .15 along length .18 falls at z=.953:
+rings .80 through .95 remain connected; the attachment ring adds .96
+through .98. Near rings .95-.98 average z=.965; inset .02 gives root
+z=.985. Far rings .80-.82 average .81, so chain length=.175 and a
+.45 split gives first length=.07875. At cylinder vertex (x=.03,y=-.16,z=.91), t=(.985-.91)/.175=3/7.
+With declared ramp=1, w=smooth(3/7)=135/343. The two-link blend is
+smooth((3/7-.30)/.30)=135/343, hence Link1=w(1-w), Link2=w².
+Source weights: Hips=.20, Spine=.35, Spine1=.25, LeftUpLeg=.20.
+Transfer factor=2w moves .40w from LeftUpLeg to Hips before attenuation:
+Hips=(.20+.40w)(1-w); Spine=.35(1-w); Spine1=.25(1-w);
+LeftUpLeg=(.20-.40w)(1-w). Six positive influences precede reduction.
+The largest four are Link1, Hips, Spine, Link2; discard Spine1/LeftUpLeg
+and divide retained weights by their sum. At (.2,.1,1.1), outside both
+operation envelopes, the four original per-joint weights stay unchanged.
+At the pair apex (.1,-.23,1.4), envelope w=1 leaves only ExampleLeft=1.
+A second source assigns five equal .20 weights outside both envelopes.
+Its lowest four joint indices survive with .25 each (joint-index tie rule).
+All exported vertices have at most four influences and weights sum to 1; source
+base-joint frames remain unchanged. Repetition preserves bytes; changing
+only the test angle reconstructs the same weights from the clean prerig.
+The fused fixture adds surface connectivity to a lateral point x=.12,
+exceeding the declared leak radius .09, hence front-only fallback.
+All storage and clip/rig paths are temporary. Missing Blender is a skip.
+"""
+import copy
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.core import paths
+
+DECLARED_PARAMS = {'pair_protrusion': {'band_lower_bone': 'Spine1',
+                     'band_upper_bone': 'LeftArm',
+                     'band_lower_offset': 0.02,
+                     'band_upper_offset': -0.04,
+                     'lateral_min': 0.03,
+                     'lateral_max': 0.17,
+                     'wall_drop': 0.12,
+                     'wall_z_tolerance': 0.01,
+                     'wall_x_tolerance': 0.02,
+                     'wall_fallback_depth': 0.06,
+                     'head_x_scale': 0.8,
+                     'head_wall_depth': 0.04,
+                     'head_z_offset': 0.01,
+                     'radius_min': 0.06,
+                     'radius_max': 0.11,
+                     'radius_gain': 1.4,
+                     'radius_offset': 0.03,
+                     'radius_z_scale': 0.95,
+                     'side_margin': 0.005,
+                     'front_margin': 0.03,
+                     'depth_ramp': 0.04,
+                     'weight_min': 0.003,
+                     'test_rotation_deg': [-15, 0, 0],
+                     'test_scale': [1, 1.12, 1]},
+ 'appendage_chain': {'anchor_bone': 'Hips',
+                     'anchor_offset': [0, 0, -0.09],
+                     'search_z_min': -0.26,
+                     'search_z_max': 0.06,
+                     'reference_lateral_min': 0.09,
+                     'reference_lateral_max': 0.13,
+                     'slice_size': 0.01,
+                     'candidate_lateral_max': 0.1,
+                     'part_half_width': 0.06,
+                     'protrusion_threshold': 0.035,
+                     'axis_initial': [0, -0.5, -1],
+                     'axis_iterations': 50,
+                     'root_depth': 0.03,
+                     'root_wall_margin': 0.01,
+                     'chain_split': [0.45],
+                     'cut': 0.15,
+                     'weld_distance': 0.0005,
+                     'window_length_factor': 0.6,
+                     'window_margin': 0.08,
+                     'leak_t_limit': 1.6,
+                     'leak_radius_limit': 0.09,
+                     'ring_radius_percentile': 0.9,
+                     'ring_radius_scale': 1.15,
+                     'near_slice_margin': 0.05,
+                     'far_slice_fraction': 0.85,
+                     'attachment_inset': 0.02,
+                     'weight_ramp': 0.25,
+                     'fallback_half_width': 0.075,
+                     'fallback_z_margin': 0.04,
+                     'fallback_front_fraction': 0.3,
+                     'fallback_front_ramp': 0.02,
+                     'fallback_side_ramp': 0.025,
+                     'fallback_top_margin': 0.02,
+                     'fallback_top_ramp': 0.03,
+                     'blend_start': 0.3,
+                     'blend_width': 0.3,
+                     'reweight_factor': 2.0,
+                     'reweight_from': [],
+                     'weight_min': 0.003,
+                     'test_rotation_deg': [-35, 0, 0],
+                     'test_rotation_decay': 0.4,
+                     'test_scale': [1, 1, 1]}}
+for _params in DECLARED_PARAMS.values():
+    _params.update(up_from_bone='Hips', up_to_bone='Head', up_distance_min=.15,
+                   up_distance_max=2., lateral_positive_bone='LeftArm',
+                   lateral_negative_bone='RightArm', front_from_bone='LeftFoot',
+                   front_to_bone='LeftToeBase', front_distance_min=.0001)
+
+
+FIXTURE = r'''
+import bpy, json, math, sys
+from pathlib import Path
+args=json.loads(Path(sys.argv[sys.argv.index('--')+1]).read_text())
+p=args['params']
+bpy.ops.wm.read_factory_settings(use_empty=True)
+armdata=bpy.data.armatures.new('Rig')
+arm=bpy.data.objects.new('Rig',armdata)
+bpy.context.collection.objects.link(arm)
+bpy.context.view_layer.objects.active=arm
+arm.select_set(True)
+bpy.ops.object.mode_set(mode='EDIT')
+for i,name in enumerate(p['bones']):
+    b=armdata.edit_bones.new('mixamorig:'+name)
+    x,y,z=0,0,1.05
+    if name=='Head': z=1.7
+    elif name=='Spine1': z=1.2
+    elif name=='Spine2': z=1.35
+    elif name=='Spine': z=1.12
+    elif name=='LeftArm': x,z=.25,1.5
+    elif name=='RightArm': x,z=-.25,1.5
+    elif name.endswith('Foot'): x,y,z=(.1 if name.startswith('Left') else -.1),0,.1
+    elif name.endswith('ToeBase'): x,y,z=(.1 if name.startswith('Left') else -.1),-.12,.08
+    elif name!='Hips': x,z=(.2 if name.startswith('Left') else -.2),.5+i*.01
+    b.head=(x,y,z); b.tail=(x,y,z+.04)
+for b in armdata.edit_bones:
+    if b.name!='mixamorig:Hips': b.parent=armdata.edit_bones['mixamorig:Hips']
+bpy.ops.object.mode_set(mode='OBJECT')
+vertices=[]; faces=[]
+# Regular reference-box samples make the per-slice surface exact.
+for y in (-.1,.1):
+    off=len(vertices)
+    for iz in range(71):
+        for ix in range(41): vertices.append((-.2+ix*.01,y,.8+iz*.01))
+    for iz in range(70):
+        for ix in range(40):
+            a=off+iz*41+ix
+            faces.append((a,a+1,a+42,a+41))
+# Close the grid-backed box at its sides, top and bottom.
+layer=71*41
+for iz in range(70):
+    for ix in (0,40):
+        a=iz*41+ix; b=(iz+1)*41+ix
+        faces.append((a,b,b+layer,a+layer))
+for ix in range(40):
+    for iz in (0,70):
+        a=iz*41+ix; b=a+1
+        faces.append((a,b,b+layer,a+layer))
+for sign in (1,-1):
+    # UV sphere with exact equatorial -Y sample, .05 radius.
+    off=len(vertices)
+    for iz in range(17):
+        phi=math.pi*iz/16
+        for j in range(32):
+            theta=2*math.pi*j/32
+            vertices.append((sign*.1+.05*math.sin(phi)*math.cos(theta),-.18+.05*math.sin(phi)*math.sin(theta),1.4+.05*math.cos(phi)))
+    for iz in range(16):
+        for j in range(32):
+            a=off+iz*32+j; b=off+iz*32+(j+1)%32
+            faces.append((a,b,b+32,a+32))
+start=len(vertices)
+for iz in range(19):
+    for j in range(32):
+        a=2*math.pi*j/32
+        vertices.append((.03*math.cos(a),-.16+.03*math.sin(a),.8+iz*.01))
+for iz in range(18):
+    for j in range(32):
+        a=start+iz*32+j; b=start+iz*32+(j+1)%32
+        faces.append((a,b,b+32,a+32))
+# Cylinder attaches to the wall only at its upper ring.
+for j in range(32):
+    a=start+18*32+j; b=start+18*32+(j+1)%32
+    c=len(vertices); vertices.extend(((vertices[a][0],-.1,.98),(vertices[b][0],-.1,.98)))
+    faces.append((a,b,c+1,c))
+if p.get('fused'):
+    # Connect the lower portion to wide surface, surviving the attachment cut.
+    a=start+8*32
+    b=start+9*32
+    c=len(vertices); vertices.extend(((.12,-.1,.88),(.12,-.1,.89)))
+    faces.append((a,b,c+1,c))
+off=len(vertices); vertices.extend(((0,.23,0),(0,.23,1.7),(.001,.23,0))); faces.append((off,off+1,off+2))
+meshdata=bpy.data.meshes.new('Surface')
+meshdata.from_pydata(vertices,[],faces); meshdata.update()
+obj=bpy.data.objects.new('Surface',meshdata); bpy.context.collection.objects.link(obj)
+mod=obj.modifiers.new('Skin','ARMATURE'); mod.object=arm
+obj.parent=arm
+source_weights=[('Hips',.2),('Spine',.35),('Spine1',.25),('LeftUpLeg',.2)]
+if p.get('ties'): source_weights=[('Hips',.2),('Spine',.2),('Spine1',.2),('Spine2',.2),('LeftUpLeg',.2)]
+for name,weight in source_weights:
+    vg=obj.vertex_groups.new(name='mixamorig:'+name); vg.add(list(range(len(vertices))),weight,'REPLACE')
+mat=bpy.data.materials.new('Surface'); mat.use_nodes=True
+image=bpy.data.images.new('Colour',width=8,height=8)
+image.pixels=[.5,.6,.7,1]*64
+tex=mat.node_tree.nodes.new('ShaderNodeTexImage'); tex.image=image
+mat.node_tree.links.new(tex.outputs['Color'],mat.node_tree.nodes['Principled BSDF'].inputs['Base Color'])
+obj.data.materials.append(mat)
+out=Path(args['out_dir'])/'model.glb'
+bpy.ops.export_scene.gltf(filepath=str(out),export_format='GLB',export_yup=True,export_all_influences=True)
+Path(args['result']).write_text(json.dumps({'ok':True,'data':{},'outputs':{'model':str(out)}}))
+'''
+
+
+def check(condition, label):
+    assert condition, label
+    print('PASS', label)
+
+
+def close(actual, expected, epsilon=.002):
+    return all(abs(a-b) < epsilon for a,b in zip(actual,expected))
+
+
+def skin_weights(data):
+    """Read accessor data to verify actual exported normalisation."""
+    import struct
+    from app.core.model_validate import parse_glb
+    parsed=parse_glb(data)
+    doc=parsed['gltf']
+    # The parser exposes the BIN chunk separately.
+    offset=12
+    binary=b''
+    while offset<len(data):
+        length,kind=struct.unpack_from('<II',data,offset)
+        if kind==0x004E4942: binary=data[offset+8:offset+8+length]
+        offset+=8+length
+    rows=[]
+    for mesh in doc['meshes']:
+        for primitive in mesh['primitives']:
+            attributes=primitive['attributes']
+            packs=[]
+            for key,index in attributes.items():
+                if key.startswith('WEIGHTS_'):
+                    accessor=doc['accessors'][index]; view=doc['bufferViews'][accessor['bufferView']]
+                    formats={5126:('f',4),5121:('B',1),5123:('H',2)}
+                    fmt,size=formats[accessor['componentType']]
+                    stride=view.get('byteStride',size*4)
+                    start=view.get('byteOffset',0)+accessor.get('byteOffset',0)
+                    values=[struct.unpack_from('<'+fmt*4,binary,start+i*stride) for i in range(accessor['count'])]
+                    divisor=255 if accessor['componentType']==5121 else 65535 if accessor['componentType']==5123 else 1
+                    packs.append([sum(v)/divisor for v in values])
+            rows.extend(sum(pack[i] for pack in packs) for i in range(len(packs[0])))
+    return rows
+
+
+def exported_vertices(data):
+    """Decode positions and all weights by skin joint identity, never slot order."""
+    import struct
+    from app.core.model_validate import parse_glb
+    parsed = parse_glb(data); doc = parsed['gltf']; binary = parsed['bin']
+    def read(index):
+        accessor = doc['accessors'][index]; view = doc['bufferViews'][accessor['bufferView']]
+        fmt, size = {5126: ('f', 4), 5121: ('B', 1), 5123: ('H', 2)}[accessor['componentType']]
+        width = {'VEC3': 3, 'VEC4': 4}[accessor['type']]
+        stride = view.get('byteStride', size*width)
+        start = view.get('byteOffset', 0) + accessor.get('byteOffset', 0)
+        divisor = (255 if size == 1 else 65535) if accessor.get('normalized') else 1
+        return [tuple(v/divisor for v in struct.unpack_from('<'+fmt*width, binary, start+i*stride))
+                for i in range(accessor['count'])]
+    rows = []
+    for node in doc['nodes']:
+        if 'mesh' not in node or 'skin' not in node:
+            continue
+        names = [doc['nodes'][j]['name'] for j in doc['skins'][node['skin']]['joints']]
+        for primitive in doc['meshes'][node['mesh']]['primitives']:
+            attributes = primitive['attributes']; positions = read(attributes['POSITION'])
+            packs = [(read(index), read(attributes['WEIGHTS_'+key.split('_')[1]]))
+                     for key,index in attributes.items() if key.startswith('JOINTS_')]
+            for i, position in enumerate(positions):
+                weights = {}
+                for joints, values in packs:
+                    for joint,weight in zip(joints[i], values[i]):
+                        if weight > 1e-8:
+                            name = names[int(joint)]
+                            weights[name] = weights.get(name, 0) + weight
+                rows.append((position, weights))
+    return rows
+
+
+def assert_joint_weights(rows, position, expected, label):
+    matches = [weights for point,weights in rows if close(point, position, .0001)]
+    check(bool(matches) and all(set(weights) == set(expected) and
+          all(abs(weights[name]-value) < .002 for name,value in expected.items())
+          for weights in matches), label)
+
+
+def publication_checks(root, model3d):
+    """Pause real upload processing; concurrent readers must see old or final.
+
+    These bytes stand for processing milestones (not synthetic GLB geometry).
+    Only expensive processors are replaced, so persistence, staging, locking,
+    revision checks, route byte capture and cleanup are the production paths.
+    """
+    import asyncio
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from app.core.keyed_lock import keyed_lock
+    from app.routes.characters import _model_asset_response, upload_character_model3d
+    from app.core import outfit_cache_gc
+    directory=model3d.get_model3d_dir('demo')
+    signature='publication'; path=directory/(signature+'.glb')
+    path.write_bytes(b'old-final')
+    path.with_suffix('.json').write_text(json.dumps({'rig':'mixamo','marker':'old'}))
+    low=directory/'low'/path.name; low.parent.mkdir(exist_ok=True); low.write_bytes(b'old-low')
+    low.with_suffix('.json').write_text(json.dumps({'marker':'old-low'}))
+    old_revision=model3d.model_revision(path)
+    entered=threading.Event(); proceed=threading.Event()
+    def process(name, staged, meta):
+        staged.write_bytes(b'intermediate')
+        entered.set()
+        assert proceed.wait(10), 'reader did not release processing'
+        staged.write_bytes(b'final')
+        meta['marker']='final'
+    def low_processor(name, staged):
+        target=staged.parent/'low'/staged.name; target.parent.mkdir(exist_ok=True)
+        target.write_bytes(b'final-low')
+        model3d._publish_sidecar(target,{'marker':'final-low'})
+        return True
+    class Request:
+        headers={}
+    with patch.object(model3d,'current_outfit_state',return_value=({},[],signature)), \
+            patch.object(model3d,'_auto_retexture',side_effect=process), \
+            patch.object(model3d,'_auto_normalize'), patch.object(model3d,'_auto_extension_rig'), \
+            patch.object(model3d,'_attach_measurement'), patch.object(model3d,'request_lod',side_effect=low_processor):
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future=executor.submit(model3d.save_uploaded_model,'demo','mesh.glb',b'delivered',rig='mixamo')
+            assert entered.wait(10)
+            try:
+                response=_model_asset_response('demo',Request())
+                check(response.body==b'old-final' and path.read_bytes()==b'old-final','concurrent route reader cannot see delivered or intermediate bytes')
+                check(model3d.model_revision(path)==old_revision and json.loads(path.with_suffix('.json').read_text())['marker']=='old','processing leaves revision and metadata unchanged')
+                with keyed_lock('model3d',f'demo:{signature}'):
+                    check(not future.done(),'long processing leaves publication lock available')
+            finally:
+                proceed.set()
+            future.result(timeout=10)
+        check(path.read_bytes()==b'final' and low.read_bytes()==b'final-low' and json.loads(path.with_suffix('.json').read_text())['marker']=='final','full low and matching sidecars publish as final set')
+        check(model3d.model_revision(path)!=old_revision,'revision changes on final publication')
+        # A competing publisher wins; the older staging snapshot is discarded.
+        entered.clear(); proceed.clear()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future=executor.submit(model3d.save_uploaded_model,'demo','mesh.glb',b'delivered',rig='mixamo')
+            assert entered.wait(10)
+            try:
+                with keyed_lock('model3d_publication',str(directory)):
+                    model3d._publish_model_bytes(path,b'concurrent-final')
+            finally:
+                proceed.set()
+            result=future.result(timeout=10)
+        check(result.get('status')=='stale' and path.read_bytes()==b'concurrent-final','stale processor cannot overwrite competing publication')
+        # Both backend entry paths must keep their deliveries in the same stage.
+        from types import SimpleNamespace
+        ref=root/'reference.png'; ref.write_bytes(b'reference')
+        def deliver(output):
+            target=Path(output).with_suffix('.glb'); target.write_bytes(b'delivered')
+            return {'ok':True,'status':'stored','path':str(target),'rig':'mixamo'}
+        service=SimpleNamespace(
+            generate_mesh=lambda **kwargs:deliver(kwargs['output_path']),
+            fetch_mesh_job=lambda job,output,**kwargs:deliver(output))
+        queue=SimpleNamespace(track_start=lambda *args,**kwargs:'',track_finish=lambda *args,**kwargs:None)
+        with patch('app.imagegen.service.get_image_service',return_value=service), \
+                patch('app.core.task_queue.get_task_queue',return_value=queue), \
+                patch.object(model3d,'find_ref_image',return_value=ref), \
+                patch.object(model3d,'_validator_for',return_value=lambda blob:{'ok':True,'warnings':[]}):
+            for label,entry in (
+                    ('generation',lambda:model3d.generate_for_current_outfit('demo',force=True,signature=signature)),
+                    ('job retrieval',lambda:model3d.fetch_job_for_current_outfit('demo','example-job',force=True,signature=signature))):
+                entered.clear(); proceed.clear(); path.write_bytes(b'old-final')
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future=executor.submit(entry)
+                    assert entered.wait(10)
+                    try:
+                        check(_model_asset_response('demo',Request()).body==b'old-final',label+' stages backend delivery before processing')
+                    finally:
+                        proceed.set()
+                    outcome=future.result(timeout=10)
+                check((outcome.get('ok') or outcome.get('status')=='stored') and path.read_bytes()==b'final' and low.read_bytes()==b'final-low',label+' publishes processed full and low')
+        # All backup files count towards GC and signature deletion.
+        backups=[directory/'prerig'/path.name,directory/'low'/'prerig'/path.name]
+        for backup in backups:
+            backup.parent.mkdir(parents=True,exist_ok=True); backup.write_bytes(b'clean-source')
+        files=outfit_cache_gc._mesh_files('demo')[signature]
+        check(set(backups)<=set(files) and outfit_cache_gc._bytes_of(files)>=24,'GC accounts for full and low prerig bytes')
+        check(model3d.delete_model3d('demo',signature) and all(not p.exists() for p in backups),'signature deletion removes full and low prerig')
+    # The async HTTP adapter must allow a heartbeat while persistence blocks.
+    async def responsiveness():
+        upload_entered=threading.Event(); release=threading.Event(); beat=False
+        def persist(*args,**kwargs):
+            upload_entered.set(); assert release.wait(10); return {'rig':'mixamo'}
+        class Upload:
+            filename='fixture.glb'
+            remaining=b'fixture'
+            async def read(self,size):
+                data=self.remaining; self.remaining=b''; return data
+        class UploadRequest:
+            headers={}
+            async def form(self): return {'file':Upload()}
+        async def heartbeat():
+            nonlocal beat
+            for _ in range(100):
+                if upload_entered.is_set():
+                    beat=True; release.set(); return
+                await asyncio.sleep(.01)
+            release.set()
+        with patch.object(model3d,'save_uploaded_model',side_effect=persist), \
+                patch('app.core.model_validate.validate_glb',return_value={'ok':True,'rig':'mixamo','warnings':[]}):
+            await asyncio.gather(upload_character_model3d('demo',UploadRequest()),heartbeat())
+        check(beat,'async upload persistence does not stall event loop')
+    run_async(responsiveness())
+
+
+def run_async(coroutine):
+    """Keep executor completions observable in restricted smoke environments.
+
+    Some runners do not wake a blocked selector on a worker's self-pipe write;
+    a bounded selector wait also services completions without changing the app.
+    """
+    import asyncio
+    import selectors
+    class SmokeSelector(selectors.DefaultSelector):
+        def select(self, timeout=None):
+            return super().select(.05 if timeout is None else min(timeout, .05))
+    with asyncio.Runner(loop_factory=lambda: asyncio.SelectorEventLoop(SmokeSelector())) as runner:
+        return runner.run(coroutine)
+
+
+def main():
+    with tempfile.TemporaryDirectory(prefix='extension-p1-') as tmp:
+        root=Path(tmp)
+        paths.init(root/'world')
+        os.environ['ANIMATION_CLIPS_DIR']=str(root/'clips')
+        os.environ['ANIMATION_RIG_FILE']=str(root/'reference.fbx')
+        from app.blender import refine, runner
+        st=runner.status()
+        if not st['executable']:
+            print('SKIP extension rig P1: no Blender executable found')
+            return
+        from app.core import db, model3d
+        db.init_schema()
+        from app.core.model_validate import parse_glb, validate_glb
+        from app.core.rig_contract import BASE_JOINT_NAMES
+        from app.models.character import get_character_dir,save_character_profile
+        from app.plugins.loader import discover_packages
+        from app.plugins import registry
+        import yaml
+        groups=[{'id':'example_pair','op':'pair_protrusion','chains':[
+                    [{'bone':'ExampleLeft','parent':'mixamorig:Spine2'}],
+                    [{'bone':'ExampleRight','parent':'mixamorig:Spine2'}]],'params':copy.deepcopy(DECLARED_PARAMS['pair_protrusion'])},
+                {'id':'example_chain','op':'appendage_chain','chains':[[
+                    {'bone':'ExampleLink1','parent':'mixamorig:Hips'},
+                    {'bone':'ExampleLink2','parent':'ExampleLink1'}]],
+                 'params':{**DECLARED_PARAMS['appendage_chain'],'search_z_min':-.35,'anchor_offset':[0,0,-.07],'weight_ramp':1.,'reweight_from':['LeftUpLeg']}}]
+        package=root/'plugins'/'example'
+        package.mkdir(parents=True)
+        manifest={'name':'Example package','apply_to':'*','body_slots':[
+            {'id':g['id'],'rig':g} for g in groups]}
+        (package/'plugin.yaml').write_text(yaml.safe_dump(manifest))
+        discover_packages(root/'plugins',force=True)
+        check(save_character_profile('demo',{'template':'demo'},create_new=True),'isolated profile')
+        from app.core import extension_rig
+        with patch.object(extension_rig, 'rig_groups_for', return_value=[]), \
+                patch.object(extension_rig, 'resolved_extension_groups', return_value=[]), \
+                patch.object(Path, 'read_bytes', side_effect=AssertionError('unexpected mesh read')), \
+                patch.object(model3d, '_publish_model_bytes', side_effect=AssertionError('unexpected copy')):
+            fast = model3d._auto_extension_rig('demo', root/'absent.glb', {'rig':'mixamo'})
+        check(fast['ok'], 'no-rig fast path performs no read or copy')
+        fixtures=root/'fixtures'; fixtures.mkdir()
+        (fixtures/'fixture.py').write_text(FIXTURE)
+        with patch.object(runner,'SCRIPTS_DIR',fixtures):
+            normal=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES)},out_dir=root/'fixture',timeout_s=180)
+            ties=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES),'ties':True},out_dir=root/'ties',timeout_s=180)
+            fused=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES),'fused':True},out_dir=root/'fused',timeout_s=180)
+        check(normal['ok'] and fused['ok'],'synthetic GLBs built through runner')
+        tied=runner.run('extension_bones',inputs={'model':Path(ties['outputs']['model'])},params={'groups':groups},out_dir=root/'tied')
+        check(tied['data']['status']=='applied','five-influence source processed')
+        tie_doc=parse_glb(Path(ties['outputs']['model']).read_bytes())['gltf']
+        tie_names=[tie_doc['nodes'][j]['name'] for j in tie_doc['skins'][0]['joints']]
+        wanted={'mixamorig:'+name for name in ('Hips','Spine','Spine1','Spine2','LeftUpLeg')}
+        tie_expected={name:.25 for name in [n for n in tie_names if n in wanted][:4]}
+        tied_rows=exported_vertices(Path(tied['outputs']['model']).read_bytes())
+        assert_joint_weights(tied_rows,[.2,1.1,-.1],tie_expected,'whole-mesh equal-weight reduction ties by joint index')
+        normalized=runner.run('normalize',inputs={'model':Path(normal['outputs']['model'])},params={'target_height_m':1.7},out_dir=root/'normalized')
+        check(normalized['ok'],'fixture normalized before rig')
+        normal=normalized
+        source=Path(normal['outputs']['model']).read_bytes()
+        check(validate_glb(source)['ok'],'fixture has full base contract')
+        model_dir=get_character_dir('demo')/'model3d'; model_dir.mkdir()
+        full=model_dir/'example.glb'; full.write_bytes(source)
+        from app.core.extension_rig import extension_metadata
+        from app.core.improvements.base import Candidate
+        from app.core.improvements.types.extension_rig_rebuild import ExtensionRigRebuild
+        placeholder = extension_metadata('demo')
+        full.with_suffix('.json').write_text(json.dumps({'extension_rig':placeholder,'rig':'mixamo','pieces':{},'items':[],'blender':{'steps':['normalize']}}))
+        check(not ExtensionRigRebuild().is_done(Candidate('character:demo','demo'),{'character':'demo'}),'placeholder is pending in Improvements')
+        before_doc=parse_glb(source)['gltf']
+        before_frames={n['name']:{k:n.get(k) for k in ('translation','rotation','scale','matrix')} for n in before_doc['nodes'] if n.get('name','').startswith('mixamorig:')}
+        result=model3d.rebuild_extension_rig('demo','example')
+        meta=json.loads(full.with_suffix('.json').read_text())
+        state=meta['extension_rig']
+        check(state['status']=='applied' and state['attempted'] and state['attempted_at'],'placeholder fingerprint does not suppress first attempt')
+        metrics=state['metrics']
+        pair=metrics['example_pair']['placement']
+        check(close(pair[0]['tip'],[.1,-.23,1.4]) and close(pair[1]['tip'],[-.1,-.23,1.4]),'hand-derived mirrored apex positions')
+        check(close(pair[0]['head'],[.08,-.06,1.41]) and close(pair[1]['head'],[-.08,-.06,1.41]),'hand-derived wall bone heads')
+        chain=metrics['example_chain']
+        check(abs(chain['attachment'][2]-.98)<.002,'attachment is nearer declared anchor')
+        check(abs(chain['axis_length']-.175)<.004,'hand-derived chain length .175 m')
+        check(abs(chain['placement'][0]['head'][2]-.985)<.004,'hand-derived attachment inset')
+        check(not chain['leak'],'separate cylinder has no leak')
+        check(abs((chain['placement'][0]['tip'][2]-chain['placement'][0]['head'][2])+.07875)<.002,'hand-derived first segment .07875 m')
+        check(all(abs(w-1)<.0001 for w in skin_weights(full.read_bytes())),'exported weights normalised')
+        rows=exported_vertices(full.read_bytes())
+        check(all(len(weights)<=4 for _,weights in rows),'whole exported mesh has at most four influences')
+        w=135/343
+        expected={'ExampleLink1':w*(1-w),'ExampleLink2':w*w,
+                  'mixamorig:Hips':(.2+.4*w)*(1-w),'mixamorig:Spine':.35*(1-w)}
+        total=sum(expected.values()); expected={name:value/total for name,value in expected.items()}
+        assert_joint_weights(rows,[.03,.91,.16],expected,'hand-derived attenuation, transfer, chain split and top-four weights by joint')
+        assert_joint_weights(rows,[.2,1.1,-.1],{'mixamorig:Hips':.2,'mixamorig:Spine':.35,'mixamorig:Spine1':.25,'mixamorig:LeftUpLeg':.2},'unaffected mixed source weights by joint')
+        assert_joint_weights(rows,[.1,1.4,.23],{'ExampleLeft':1.},'pair apex weight by joint')
+        after_doc=parse_glb(full.read_bytes())['gltf']
+        after_frames={n['name']:{k:n.get(k) for k in ('translation','rotation','scale','matrix')} for n in after_doc['nodes'] if n.get('name','').startswith('mixamorig:')}
+        defaults={'translation':[0,0,0],'rotation':[0,0,0,1],'scale':[1,1,1],'matrix':[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}
+        frames_ok=set(before_frames)==set(after_frames) and all(close(before_frames[name][key] or defaults[key],after_frames[name][key] or defaults[key],1e-6) for name in before_frames for key in defaults)
+        check(frames_ok,'all 52 base joint frames unchanged within roundtrip precision')
+        original=full.read_bytes()
+        model3d.rebuild_extension_rig('demo','example')
+        check(full.read_bytes()==original,'same fingerprint is byte-identical no-op')
+        clean=model_dir/'prerig'/'example.glb'
+        check(clean.read_bytes()==source,'prerig retains clean source')
+        changed=registry.get_package('example').body_slots[0].rig
+        changed.params['test_rotation_deg']=[-10,0,0]
+        model3d.rebuild_extension_rig('demo','example')
+        check(full.read_bytes()==original,'declaration change rebuilds without double attenuation')
+        low=model_dir/'low'/'example.glb'
+        check(low.is_file(),'low rebuilt after full rig')
+        low_names={n.get('name') for n in parse_glb(low.read_bytes())['gltf']['nodes']}
+        check({'ExampleLeft','ExampleRight','ExampleLink1','ExampleLink2'}<=low_names,'low inherits extension bones')
+        low_measure=runner.run('extension_bones',inputs={'model':low},params={'groups':groups,'metrics_only':True},timeout_s=180)
+        check(low_measure['ok'] and not low_measure['outputs'],'low metrics measured without publication')
+        check(low_measure['data']['metrics']['example_pair']['verts_per_group']!=metrics['example_pair']['verts_per_group'],'low reports actual reduced vertex counts')
+        # An unchanged full still repairs an absent or stale distance tier.
+        low.unlink()
+        repair=model3d.rebuild_extension_rig('demo','example')
+        check(repair['ok'] and low.is_file() and full.read_bytes()==original,'full no-op repairs missing low')
+        low_meta=json.loads(low.with_suffix('.json').read_text())
+        low_meta['extension_rig']['fingerprint']='stale'
+        low.with_suffix('.json').write_text(json.dumps(low_meta))
+        repair=model3d.rebuild_extension_rig('demo','example')
+        check(repair['ok'] and json.loads(low.with_suffix('.json').read_text())['extension_rig']['fingerprint']!='stale','full no-op repairs stale low')
+        low_meta=json.loads(low.with_suffix('.json').read_text())
+        low_meta['extension_rig']['fingerprint']='stale'
+        low.with_suffix('.json').write_text(json.dumps(low_meta))
+        low_bytes=low.read_bytes()
+        with patch.object(model3d,'build_lod',return_value={'ok':False,'error':'synthetic LOD failure'}):
+            failed_lod=model3d.rebuild_extension_rig('demo','example')
+        check(not failed_lod['ok'] and 'synthetic LOD failure' in failed_lod['error'],'LOD failure propagates to rebuild result')
+        check(low.read_bytes()==low_bytes and full.read_bytes()==original,'LOD failure preserves complete full and low files')
+        check(json.loads(full.with_suffix('.json').read_text())['extension_rig']['per_tier']['low']['status']=='failed','LOD failure persists tier reason')
+        retry=model3d.rebuild_extension_rig('demo','example')
+        check(retry['ok'] and json.loads(full.with_suffix('.json').read_text())['extension_rig']['per_tier']['low']['status']!='failed','retry repairs failed low')
+        # Character flags persist through the real options API and fingerprint.
+        from app.core.extension_rig import extension_metadata
+        from app.core.improvements.base import Candidate
+        from app.core.improvements.types.extension_rig_rebuild import ExtensionRigRebuild
+        fingerprint=extension_metadata('demo')['fingerprint']
+        model3d.set_model3d_options('demo',{'extension_rig':{'example_chain':{'flip':True}}})
+        check(model3d.get_model3d_options('demo')['extension_rig']['example_chain']['flip'] and extension_metadata('demo')['fingerprint']!=fingerprint,'profile flip persists and changes fingerprint')
+        disabled={g['id']:{'enabled':False} for g in groups}
+        model3d.set_model3d_options('demo',{'extension_rig':disabled})
+        check(model3d.get_model3d_options('demo')['extension_rig']==disabled and extension_metadata('demo')['fingerprint']!=fingerprint,'disabled overrides persist and change fingerprint')
+        low_before=low.read_bytes()
+        with patch.object(model3d,'build_lod',return_value={'ok':False,'error':'disabled tier failure'}):
+            reset_failed=model3d.rebuild_extension_rig('demo','example')
+        reset_meta=json.loads(full.with_suffix('.json').read_text())['extension_rig']
+        check(not reset_failed['ok'] and full.read_bytes()==original and low.read_bytes()==low_before,'disable LOD failure preserves complete published full and low')
+        check(reset_meta['status']=='applied' and reset_meta['per_tier']['low']['status']=='failed','disable records failed low beside unchanged full')
+        improvement=ExtensionRigRebuild()
+        candidate=Candidate('character:demo','demo')
+        check(not improvement.is_done(candidate,{'character':'demo'}),'improvement remains pending after disable LOD failure')
+        reset_retry=model3d.rebuild_extension_rig('demo','example')
+        low_after_names={n.get('name') for n in parse_glb(low.read_bytes())['gltf']['nodes']}
+        check(reset_retry['ok'] and not {'ExampleLeft','ExampleRight','ExampleLink1','ExampleLink2'}&low_after_names,'disable retry removes extension bones from low')
+        check(improvement.is_done(candidate,{'character':'demo'}),'improvement completes after clean low recovery')
+        model3d.set_model3d_options('demo',{'extension_rig':{}})
+        restored=model3d.rebuild_extension_rig('demo','example')
+        check(restored['ok'] and full.read_bytes()==original and clean.read_bytes()==source,'restoring overrides reapplies from clean source without attenuation')
+        changed.params['lateral_min']=3
+        changed.params['lateral_max']=4
+        keep=full.read_bytes()
+        model3d.rebuild_extension_rig('demo','example')
+        check(full.read_bytes()==keep,'failed request keeps original bytes')
+        failed=json.loads(full.with_suffix('.json').read_text())['extension_rig']
+        check(failed['status'] in ('not_found','failed') and bool(failed['reason']),'failure reports reason')
+        # A valid operation rejected by the publication validator never replaces source.
+        rejected=root/'rejected.glb'; rejected.write_bytes(source)
+        gate=refine.apply_script(rejected,'extension_bones',{'groups':groups},require_smaller=False,validator=lambda _: {'ok':False,'errors':['synthetic gate rejection']})
+        check(not gate['applied'] and rejected.read_bytes()==source,'failed validation gate keeps original')
+        missing=copy.deepcopy(groups)
+        del missing[0]['params']['band_lower_bone']
+        absent=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},params={'groups':missing},out_dir=root/'missing')
+        check(absent['data']['status']=='failed' and 'missing required params' in absent['data']['reason'] and not absent['outputs'],'missing anchors fail with explicit reason')
+        invalid=copy.deepcopy(groups)
+        invalid[0]['params']['depth_ramp']=0
+        res=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},params={'groups':invalid},out_dir=root/'invalid',timeout_s=180)
+        check(res['ok'] and res['data']['status']=='failed' and not res['outputs'],'invalid declaration aborts whole request')
+        check(all(v.get('reason') for v in res['data']['groups'].values()),'abort carries reason for every group')
+        flipped=copy.deepcopy(groups[1]); flipped['flip']=True
+        res=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},params={'groups':[flipped]},out_dir=root/'flipped',timeout_s=180)
+        check(res['ok'] and abs(res['data']['metrics']['example_chain']['attachment'][2]-.8)<.002,'flip swaps attachment and tip')
+        # Run the same generic operation against a side-connected surface.
+        chain_group=copy.deepcopy(groups[1])
+        res=runner.run('extension_bones',inputs={'model':Path(fused['outputs']['model'])},params={'groups':[chain_group]},out_dir=root/'leak',timeout_s=180)
+        check(res['ok'] and res['data']['status']=='applied','leak fixture still produces valid chain')
+        check(res['data']['metrics']['example_chain']['leak'],'side-fused cylinder selects front-only fallback')
+        fresh=model_dir/'prepare.glb'; fresh.write_bytes(source)
+        fresh.with_suffix('.json').write_text(json.dumps({'rig':'mixamo'}))
+        with patch.object(refine,'normalize',return_value={'applied':False,'error':'synthetic preparation failure'}):
+            preparation=model3d.rebuild_extension_rig('demo','prepare')
+        check(not preparation['ok'] and 'synthetic preparation failure' in preparation['error'] and fresh.read_bytes()==source,'failed normalization keeps published bytes and reports reason')
+        check(not (model_dir/'prerig'/'prepare.glb').exists(),'failed preparation creates no prerig asset')
+        publication_checks(root,model3d)
+        print('PASS extension rig P1: all checks')
+
+
+if __name__=='__main__':
+    main()

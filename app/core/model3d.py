@@ -14,6 +14,8 @@ model". Switching back to a known outfit reuses whatever is stored.
 """
 
 import json
+import functools
+import inspect
 import re
 import shutil
 import threading
@@ -39,6 +41,127 @@ _lod_building: set = set()
 _char_locks: Dict[str, threading.Lock] = {}
 
 
+# A worker-local transaction redirects existing processing paths to a private
+# same-filesystem directory. Nested full/low operations share that transaction.
+_staging = threading.local()
+_publication_epochs: Dict[tuple, int] = {}
+
+
+def _signature_files(directory: Path, signature: str) -> Dict[Path, Path]:
+    """Only one signature's public files and private backups, never stages."""
+    folders = (Path('.'), Path('low'), Path('raw'), Path('prerig'),
+               Path('low/raw'), Path('low/prerig'))
+    return {relative / p.name: p for relative in folders
+            for p in (directory / relative).glob(f"{signature}.*") if p.is_file()}
+
+
+def _publication_token(directory: Path, signature: str):
+    records = []
+    for relative, path in sorted(_signature_files(directory, signature).items()):
+        stat = path.stat()
+        records.append((str(relative), stat.st_size, stat.st_mtime_ns, stat.st_ino))
+    return (_publication_epochs.get((str(directory), signature), 0), records)
+
+
+def _serial_model(function):
+    """Stage expensive processing; lock only snapshot checks and publication.
+
+    Readers take model3d_publication on the real directory. Meshes/textures/
+    backups replace first, tier sidecars next, full sidecar last. Unchanged
+    files retain their inode/mtime, so a no-op never changes model_rev.
+    """
+    @functools.wraps(function)
+    def wrapped(character_name, *args, **kwargs):
+        import os
+        import tempfile
+        from app.core.keyed_lock import keyed_lock
+        bound = inspect.signature(function).bind_partial(character_name, *args, **kwargs)
+        signature = bound.arguments.get("signature")
+        if not signature:
+            if function.__name__ in ("set_model3d_rig", "delete_model3d"):
+                exact = find_model3d(character_name)
+                signature = exact.stem if exact else None
+            elif function.__name__ in ("build_lod", "rebuild_extension_rig", "measure_model", "diagnose_model", "retexture_model"):
+                served = find_model3d_serving(character_name)[0]
+                signature = served.stem if served else None
+            signature = signature or current_outfit_state(character_name)[2]
+        if not isinstance(signature, str) or any(c in signature for c in ("/", "\\", "\0")) or signature in (".", ".."):
+            raise ValueError("Invalid model signature")
+        if "signature" in inspect.signature(function).parameters:
+            bound.arguments["signature"] = signature
+        def stale(reason):
+            if function.__name__ == "delete_model3d":
+                return False
+            return {"ok": False, "status": "stale", "error": reason}
+        active = getattr(_staging, "directories", {})
+        if character_name in active:
+            return function(*bound.args, **bound.kwargs)
+        directory = get_model3d_dir(character_name)
+        if not directory.is_dir():
+            return function(*bound.args, **bound.kwargs)
+        with keyed_lock("model3d_publication", str(directory)):
+            token = _publication_token(directory, signature)
+        with tempfile.TemporaryDirectory(prefix=".process-", dir=directory) as tmp:
+            stage = Path(tmp)
+            # Copy outside the lock. A racing mutation invalidates the token;
+            # it can never be overwritten with a stale snapshot.
+            try:
+                for relative, source in _signature_files(directory, signature).items():
+                    target = stage / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+            except FileNotFoundError:
+                return stale("Model changed while staging")
+            _staging.directories = {**active, character_name: stage}
+            try:
+                result = function(*bound.args, **bound.kwargs)
+            finally:
+                _staging.directories = active
+            staged_files = _signature_files(stage, signature)
+            # Prepare comparisons without holding a publication lock.
+            current_files = _signature_files(directory, signature)
+            replacements = []
+            try:
+                for relative, source in staged_files.items():
+                    current = current_files.get(relative)
+                    if current is None or source.read_bytes() != current.read_bytes():
+                        replacements.append(relative)
+            except FileNotFoundError:
+                return stale("Model changed during processing; result discarded")
+            with keyed_lock("model3d", f"{character_name}:{signature}"), \
+                    keyed_lock("model3d_publication", str(directory)):
+                if not directory.is_dir() or _publication_token(directory, signature) != token:
+                    return stale("Model changed during processing; result discarded")
+                for relative in current_files.keys() - staged_files.keys():
+                    current_files[relative].unlink(missing_ok=True)
+                # The full sidecar is the commit marker for lock-aware readers.
+                order = lambda r: (r.suffix == ".json", r.parent == Path('.'), str(r))
+                for relative in sorted(replacements, key=order):
+                    target = directory / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(stage / relative, target)
+                if replacements or current_files.keys() != staged_files.keys() or function.__name__ == "delete_model3d":
+                    key = (str(directory), signature)
+                    _publication_epochs[key] = _publication_epochs.get(key, 0) + 1
+                if isinstance(result, dict):
+                    if "path" in result:
+                        result["path"] = str(directory / Path(result["path"]).name)
+                    if "model_rev" in result:
+                        result["model_rev"] = model_revision(find_model3d(character_name, signature))
+            return result
+    return wrapped
+
+
+def _model_reader(function):
+    """Return one coherent publication snapshot, including tier metadata."""
+    @functools.wraps(function)
+    def wrapped(character_name, *args, **kwargs):
+        from app.core.keyed_lock import keyed_lock
+        with keyed_lock("model3d_publication", str(get_model3d_dir(character_name))):
+            return function(character_name, *args, **kwargs)
+    return wrapped
+
+
 def get_model3d_options(character_name: str) -> Dict[str, Any]:
     """Per-character overrides for the mesh generation (profile field
     ``model3d_opts``). A key that is absent/None means "use the backend's
@@ -52,7 +175,8 @@ def get_model3d_options(character_name: str) -> Dict[str, Any]:
     return {"no_fingers": None if nf is None else bool(nf),
             # Auto-generate the mesh on the CHEAPEST backend as soon as a
             # fresh T-pose render of a new outfit combination succeeds.
-            "auto_generate": bool(raw.get("auto_generate"))}
+            "auto_generate": bool(raw.get("auto_generate")),
+            "extension_rig": dict(raw.get("extension_rig") or {})}
 
 
 def set_model3d_options(character_name: str,
@@ -78,14 +202,30 @@ def set_model3d_options(character_name: str,
                 opts["auto_generate"] = True
             else:
                 opts.pop("auto_generate", None)
+        if "extension_rig" in updates:
+            overrides = updates["extension_rig"]
+            if not isinstance(overrides, dict):
+                raise ValueError("extension_rig must be a group override map")
+            cleaned = {}
+            for group_id, values in overrides.items():
+                if not isinstance(group_id, str) or not isinstance(values, dict):
+                    raise ValueError("invalid extension group override")
+                if set(values) - {"enabled", "flip"} or any(type(v) is not bool for v in values.values()):
+                    raise ValueError("extension overrides accept enabled and flip booleans only")
+                cleaned[group_id] = dict(values)
+            opts["extension_rig"] = cleaned
         profile["model3d_opts"] = opts
-        save_character_profile(character_name, profile)
+        if not save_character_profile(character_name, profile):
+            raise RuntimeError("Character profile could not be saved")
         return get_model3d_options(character_name)
 
 
 def get_model3d_dir(character_name: str) -> Path:
     """Directory of the generated meshes (see get_character_images_dir for the
     base-dir existence gate that avoids ghost dirs on read paths)."""
+    staged = getattr(_staging, "directories", {}).get(character_name)
+    if staged is not None:
+        return staged
     from app.models.character import get_character_dir
     base = get_character_dir(character_name)
     d = base / "model3d"
@@ -148,8 +288,7 @@ def find_model3d(character_name: str,
             return None
         from app.core.model_refs import neutral_signature
         candidates = list(dict.fromkeys([sig, neutral_signature(sig)]))
-    from app.models.character import get_character_dir
-    d = get_character_dir(character_name) / "model3d"
+    d = get_model3d_dir(character_name)
     for sig in candidates:
         for ext in MODEL_EXTS:
             p = d / f"{sig}{ext}"
@@ -199,6 +338,11 @@ def request_lod(character_name: str, model_path: Path) -> bool:
     """
     if not _auto_lod_enabled() or model_path.suffix.lower() != ".glb":
         return False
+    if character_name in getattr(_staging, "directories", {}):
+        result = build_lod(character_name, model_path.stem, ratio=_auto_lod_ratio())
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or "Low tier preparation failed")
+        return True
     key = str(model_path)
     with _lock:
         if key in _lod_building:
@@ -263,8 +407,7 @@ def find_model3d_serving(character_name: str) -> tuple:
     except Exception:
         return None, ""
     from app.core.model_refs import neutral_signature
-    from app.models.character import get_character_dir
-    d = get_character_dir(character_name) / "model3d"
+    d = get_model3d_dir(character_name)
     tried = []
     for s, match in ((sig, "exact"), (neutral_signature(sig), "neutral")):
         if s in tried:
@@ -396,6 +539,7 @@ def find_texture(character_name: str,
     return None
 
 
+@_model_reader
 def get_model3d_info(character_name: str) -> Dict[str, Any]:
     """Status of the mesh for the CURRENTLY worn outfit: cached file + meta,
     whether a T-pose input exists, and whether a generation is running.
@@ -484,6 +628,8 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                 low_meta = json.loads(low.with_suffix(".json").read_text(encoding="utf-8"))
                 info["low_tris"] = low_meta.get("tris")
                 info["low_ratio"] = low_meta.get("lod_ratio")
+                if low_meta.get("extension_rig"):
+                    info["extension_rig"].setdefault("per_tier", {}).setdefault(LOW_TIER, low_meta["extension_rig"])
             except (OSError, ValueError):
                 pass
         # FBX case only — a GLB embeds its textures; a stray image next to a
@@ -496,6 +642,8 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
         out["model"] = info
     from app.core.extension_rig import motion_payload
     out["motion"] = motion_payload(character_name, profile=profile)
+    from app.core.extension_rig import rig_groups_for
+    out["extension_groups"] = rig_groups_for(character_name, profile=profile)
     out["options"] = get_model3d_options(character_name)
     from app.blender import runner
     out["blender"] = runner.status()
@@ -505,12 +653,14 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
     return out
 
 
-def _purge_combination(out_dir: Path, signature: str) -> None:
+def _purge_combination(out_dir: Path, signature: str, *,
+                       keep_model: Optional[Path] = None) -> None:
     """Remove any stored model of this outfit combination (model + texture +
-    sidecar), whatever its format/source — the caller writes a fresh one."""
+    sidecar), whatever its format/source — the caller writes a fresh one.
+    ``keep_model`` preserves the publication target until atomic replacement."""
     keep = MODEL_EXTS + (".png", ".jpg", ".jpeg", ".json")
     for old in out_dir.glob(f"{signature}.*"):
-        if old.suffix.lower() in keep:
+        if old.suffix.lower() in keep and old not in (keep_model, keep_model.with_suffix(".json") if keep_model else None):
             old.unlink()
     # The reduced tiers of the same combination go with it — they are derived
     # from the file being replaced and would otherwise be served alongside a
@@ -526,8 +676,9 @@ def _purge_combination(out_dir: Path, signature: str) -> None:
     # (refine.apply_script backs up only the first time) — the incident of
     # 2026-08-06: a fresh bake's pristine copy was silently never kept.
     from app.blender.refine import RAW_DIR_NAME
-    for old in (out_dir / RAW_DIR_NAME).glob(f"{signature}.*"):
-        old.unlink()
+    for directory in (out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME):
+        for old in directory.glob(f"{signature}.*"):
+            old.unlink()
 
 
 def invalidate_models_for_item(character_name: str, item_id: str) -> set:
@@ -585,18 +736,205 @@ def _publish_model_bytes(target: Path, contents: bytes) -> None:
             staged.unlink(missing_ok=True)
 
 
+def _publish_sidecar(path: Path, meta: Dict[str, Any]) -> None:
+    """Sidecars use the same atomic publication as model bytes."""
+    _publish_model_bytes(path.with_suffix(".json"),
+                         json.dumps(meta, indent=2, ensure_ascii=False).encode("utf-8"))
+
+
+def _read_sidecar(path: Path) -> Dict[str, Any]:
+    try:
+        return json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _auto_extension_rig(character_name: str, path: Path,
+                        meta: Dict[str, Any], *, force: bool = False) -> Dict[str, Any]:
+    """Build declared extensions from a clean source; failed gates preserve bytes."""
+    import tempfile
+    from app.blender import refine
+    from app.core.extension_rig import (rig_groups_for, resolved_extension_groups,
+                                       extension_rig_fingerprint)
+    from app.core.model_validate import parse_glb, validate_glb
+    from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
+    from app.models.character import get_character_profile
+    profile = get_character_profile(character_name) or {}
+    declarations = rig_groups_for(character_name, profile=profile)
+    overrides = ((profile.get("model3d_opts") or {}).get("extension_rig") or {})
+    fingerprint = extension_rig_fingerprint(declarations, overrides)
+    previous = meta.get("extension_rig") or {}
+    if previous.get("attempted") and previous.get("status") in ("applied", "not_found", "none_applicable") and previous.get("fingerprint") == fingerprint and (not force or previous.get("status") == "applied"):
+        return {"ok": previous.get("status") != "failed", "applied": False, "noop": True, "extension_rig": previous}
+    groups = [g for g in resolved_extension_groups(character_name, profile=profile) if g["enabled"]]
+    state = {"fingerprint": fingerprint, "groups": [g["id"] for g in declarations],
+             "status": "not_found" if groups else "none_applicable",
+             "reason": "", "has_applied": previous.get("has_applied", previous.get("status") == "applied"), "attempted": True, "attempted_at": utc_now_iso(), "metrics": {}, "per_tier": {}}
+    meta["extension_rig"] = state
+    if path.suffix.lower() != ".glb" or meta.get("rig") != "mixamo":
+        state.update(status="none_applicable", reason="Extension bones require a humanoid GLB")
+        return {"ok": True, "applied": False, "extension_rig": state}
+    source = path.parent / "prerig" / path.name
+    if not groups and not state["has_applied"]:
+        # A failed later attempt can still leave a previously rigged mesh;
+        # its existing prerig source drives the removal path below.
+        return {"ok": True, "applied": False, "extension_rig": state}
+    if not source.exists():
+        # Never mistake a rigged asset for an unattenuated source.
+        try:
+            gltf = parse_glb(path.read_bytes())["gltf"]
+            nodes = gltf.get("nodes") or []
+            extra = any(norm_bone_name(nodes[j].get("name", "")) not in BASE_JOINT_KEYS
+                        for skin in gltf.get("skins", []) for j in skin.get("joints", []))
+        except (ValueError, KeyError, IndexError, TypeError):
+            extra = True
+        if extra:
+            state.update(status="failed", reason="Clean prerig source is missing for an extended or unreadable model")
+            return {"ok": False, "applied": False, "extension_rig": state, "error": state["reason"]}
+        source.parent.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".prepare-", dir=path.parent) as tmp:
+            prepared = Path(tmp) / path.name
+            shutil.copy2(path, prepared)
+            prepared_meta = dict(meta)
+            try:
+                _auto_normalize(character_name, prepared, prepared_meta, required=True)
+                verdict = validate_glb(prepared.read_bytes())
+                if not verdict.get("ok"):
+                    raise ValueError("; ".join(verdict.get("errors") or []))
+            except (ValueError, RuntimeError) as e:
+                state.update(status="failed", reason="Clean source preparation failed: " + str(e))
+                return {"ok": False, "applied": False, "extension_rig": state, "error": state["reason"]}
+            _publish_model_bytes(source, prepared.read_bytes())
+            _publish_sidecar(source, {"blender": prepared_meta.get("blender") or {}, "rig": "mixamo"})
+    source_meta = _read_sidecar(source)
+    source_meta.setdefault("rig", "mixamo")
+    try:
+        _auto_normalize(character_name, source, source_meta, required=True)
+        verdict = validate_glb(source.read_bytes())
+        if not verdict.get("ok"):
+            raise ValueError("; ".join(verdict.get("errors") or []))
+    except (ValueError, RuntimeError) as e:
+        state.update(status="failed", reason="Clean source preparation failed: " + str(e))
+        return {"ok": False, "applied": False, "extension_rig": state, "error": state["reason"]}
+    _publish_sidecar(source, source_meta)
+    if not groups:
+        changed = path.read_bytes() != source.read_bytes()
+        if changed:
+            _publish_model_bytes(path, source.read_bytes())
+        if changed:
+            meta["blender"] = source_meta.get("blender") or {}
+        state["has_applied"] = False
+        return {"ok": True, "applied": changed, "extension_rig": state}
+    with tempfile.TemporaryDirectory(prefix=".extension-", dir=path.parent) as tmp:
+        staged = Path(tmp) / path.name
+        shutil.copy2(source, staged)
+        result = refine.apply_script(staged, "extension_bones", {"groups": groups},
+                                     validator=_validator_for("mixamo", character_name),
+                                     require_smaller=False, keep_original=False,
+                                     base_joints_only=True)
+        data = result.get("data") or {}
+        state["metrics"] = data.get("metrics") or data.get("groups") or {}
+        state["reason"] = data.get("reason") or result.get("error") or ""
+        if result.get("applied"):
+            _publish_model_bytes(path, staged.read_bytes())
+            meta["blender"] = source_meta.get("blender") or {}
+            state.update(status="applied", has_applied=True, reason="")
+        else:
+            state["status"] = data.get("status") if data.get("status") in ("not_found", "failed") else "failed"
+        state["per_tier"][LOW_TIER if path.parent.name == LOW_TIER else FULL_TIER] = {
+            key: state[key] for key in ("fingerprint", "groups", "status", "reason", "metrics", "attempted", "attempted_at")}
+        return {"ok": state["status"] != "failed", "applied": bool(result.get("applied")),
+                "extension_rig": state, "error": state["reason"]}
+
+
+@_serial_model
+def rebuild_extension_rig(character_name: str, signature: Optional[str] = None, *,
+                          tier: str = FULL_TIER, force: bool = False) -> Dict[str, Any]:
+    """Rebuild a stored model from prerig and derive its distance tier anew."""
+    if tier not in MODEL_TIERS:
+        raise ValueError("Unknown model tier")
+    path = (find_model3d(character_name, signature) if signature
+            else find_model3d_serving(character_name)[0])
+    if path is None:
+        return {"ok": False, "error": "no_model"}
+    if tier == LOW_TIER:
+        low = tier_variant(path, LOW_TIER)
+        if low is None:
+            result = rebuild_extension_rig(character_name, path.stem, force=force)
+            return result
+        if _read_sidecar(low).get("source") == "lod":
+            return rebuild_extension_rig(character_name, path.stem, force=force)
+        path = low
+    meta = _read_sidecar(path)
+    meta.setdefault("rig", required_rig(character_name))
+    original_bytes = path.read_bytes()
+    original_meta = json.loads(json.dumps(meta))
+    result = _auto_extension_rig(character_name, path, meta, force=force)
+    if not result.get("noop"):
+        _publish_sidecar(path, meta)
+    if result.get("ok") and tier == FULL_TIER and (meta.get("extension_rig") or {}).get("status") in ("applied", "none_applicable"):
+        low = tier_variant(path, LOW_TIER)
+        low_meta = _read_sidecar(low) if low else {}
+        state = meta.get("extension_rig") or {}
+        low_state = low_meta.get("extension_rig") or {}
+        current_low = (low is not None and low_state.get("fingerprint") == state.get("fingerprint")
+                       and low_state.get("status") != "failed"
+                       and (state.get("per_tier", {}).get(LOW_TIER) or {}).get("status") != "failed")
+        if not current_low or result.get("applied"):
+            if low and low_meta.get("source") != "lod":
+                low_result = rebuild_extension_rig(character_name, path.stem, tier=LOW_TIER, force=force)
+            else:
+                low_result = build_lod(character_name, path.stem, ratio=_auto_lod_ratio())
+            result["low"] = low_result
+            if not low_result.get("ok"):
+                result["ok"] = False
+                result["error"] = low_result.get("error") or "Low tier rebuild failed"
+                # Keep the previous complete tier if the replacement fails.
+                _publish_model_bytes(path, original_bytes)
+                meta = original_meta
+                meta.setdefault("extension_rig", {}).setdefault("per_tier", {})[LOW_TIER] = {
+                    **low_state, "status": "failed", "reason": result["error"]}
+                _publish_sidecar(path, meta)
+                result["applied"] = False
+                result["extension_rig"] = meta.get("extension_rig") or {}
+            result["noop"] = False
+    result["model_rev"] = model_revision(path if tier == FULL_TIER else path.parent.parent / path.name)
+    return result
+
+
+def rebuild_character_extension_rigs(character_name: str) -> Dict[str, Any]:
+    """Rebuild every stored full model of one character for the Improvements queue."""
+    results = {path.stem: rebuild_extension_rig(character_name, path.stem, force=True)
+               for path in sorted(get_model3d_dir(character_name).glob("*.glb"))}
+    return {"ok": all(result.get("ok") for result in results.values()), "models": results}
+
+
 def save_uploaded_model(character_name: str, original_filename: str,
                         contents: bytes, *, rig: str,
-                        texture: Optional[bytes] = None) -> Dict[str, Any]:
+                        texture: Optional[bytes] = None,
+                        signature: Optional[str] = None) -> Dict[str, Any]:
+    """Process an upload in a worker, then publish one final signature."""
+    pieces, items, current = current_outfit_state(character_name)
+    return _save_uploaded_model(character_name, original_filename, contents,
+                                rig=rig, texture=texture,
+                                outfit=(pieces, items, signature or current),
+                                signature=signature or current)
+
+
+@_serial_model
+def _save_uploaded_model(character_name: str, original_filename: str,
+                         contents: bytes, *, rig: str,
+                         texture: Optional[bytes], outfit: tuple,
+                         signature: str) -> Dict[str, Any]:
     """Stores an uploaded model as the current outfit's model (replacing any
     generated or previously uploaded one). ``texture`` is the basecolor PNG
     that belongs to an FBX; a GLB embeds its textures. Validation is the
     caller's job (app/core/model_validate.py)."""
     ext = Path(original_filename.lower()).suffix
-    pieces, items, signature = current_outfit_state(character_name)
+    pieces, items, _ = outfit
     out_dir = get_model3d_dir(character_name)
-    _purge_combination(out_dir, signature)
     target = out_dir / f"{signature}{ext}"
+    _purge_combination(out_dir, signature, keep_model=target)
     _publish_model_bytes(target, contents)
     if texture is not None:
         _publish_model_bytes(target.with_suffix(".png"), texture)
@@ -619,12 +957,12 @@ def save_uploaded_model(character_name: str, original_filename: str,
     # served.
     _auto_retexture(character_name, target, meta)
     _auto_normalize(character_name, target, meta)
+    _auto_extension_rig(character_name, target, meta)
     _attach_measurement(meta, target)
-    request_lod(character_name, target)
     from app.core.extension_rig import extension_metadata
     meta.setdefault("extension_rig", extension_metadata(character_name))
-    target.with_suffix(".json").write_text(
-        json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    _publish_sidecar(target, meta)
+    request_lod(character_name, target)
     logger.info("Model3D %s: Upload %s (%d bytes, Kombination %s)",
                 character_name, target.name, len(contents), signature)
     return meta
@@ -662,7 +1000,7 @@ def _target_height_m(character_name: str) -> float:
 
 
 def _auto_normalize(character_name: str, path: Path,
-                    meta: Dict[str, Any]) -> None:
+                    meta: Dict[str, Any], *, required: bool = False) -> None:
     """Scales the fresh mesh to the character's height and grounds it, if
     switched on (plan-blender-veredelung.md § 2, decided 2026-08-06).
 
@@ -673,7 +1011,7 @@ def _auto_normalize(character_name: str, path: Path,
     the original whenever the export fails the delivery validation (§ 2.2).
     """
     from app.blender import refine, runner
-    if not refine.auto_normalize_enabled() or path.suffix.lower() != ".glb":
+    if (not required and not refine.auto_normalize_enabled()) or path.suffix.lower() != ".glb":
         return
     done = list((meta.get("blender") or {}).get("steps") or [])
     if "normalize" in done:
@@ -683,6 +1021,8 @@ def _auto_normalize(character_name: str, path: Path,
                            validator=_validator_for(meta.get("rig") or "", character_name))
     data = res.get("data") or {}
     if not res.get("applied"):
+        if required:
+            raise RuntimeError(res.get("error") or "Normalization produced no validated output")
         if res.get("error"):
             logger.info("Model3D %s: normalisation not applied (%s)",
                         character_name, res.get("error"))
@@ -726,6 +1066,7 @@ def _auto_retexture(character_name: str, path: Path,
                     character_name, res["error"])
 
 
+@_serial_model
 def measure_model(character_name: str, signature: Optional[str] = None, *,
                   force: bool = False) -> Dict[str, Any]:
     """Real geometry of a stored model — world-space size, triangles, bone
@@ -759,13 +1100,13 @@ def measure_model(character_name: str, signature: Optional[str] = None, *,
     from app.core.extension_rig import extension_metadata
     meta.setdefault("extension_rig", extension_metadata(character_name))
     try:
-        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
-                             encoding="utf-8")
+        _publish_sidecar(path, meta)
     except OSError as e:
         logger.warning("Model3D %s: Messung nicht gespeichert: %s", path.name, e)
     return {"ok": True, "cached": False, "measured": meta["measured"]}
 
 
+@_serial_model
 def diagnose_model(character_name: str, signature: Optional[str] = None, *,
                    force: bool = False) -> Dict[str, Any]:
     """Geometry-defect indicators of a stored model, cached in the sidecar.
@@ -819,13 +1160,13 @@ def diagnose_model(character_name: str, signature: Optional[str] = None, *,
     from app.core.extension_rig import extension_metadata
     meta.setdefault("extension_rig", extension_metadata(character_name))
     try:
-        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
-                             encoding="utf-8")
+        _publish_sidecar(path, meta)
     except OSError as e:
         logger.warning("Model3D %s: diagnosis not stored: %s", path.name, e)
     return {"ok": True, "cached": False, "diagnosis": diagnosis}
 
 
+@_serial_model
 def retexture_model(character_name: str,
                     signature: Optional[str] = None) -> Dict[str, Any]:
     """Re-encodes a stored model's textures and updates its sidecar.
@@ -865,8 +1206,7 @@ def retexture_model(character_name: str,
     from app.core.extension_rig import extension_metadata
     meta.setdefault("extension_rig", extension_metadata(character_name))
     try:
-        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False),
-                             encoding="utf-8")
+        _publish_sidecar(path, meta)
     except OSError as e:
         logger.warning("Model3D %s: Sidecar nicht geschrieben: %s", path.name, e)
     return {"ok": True, "applied": bool(res.get("applied")),
@@ -875,6 +1215,7 @@ def retexture_model(character_name: str,
             "size": path.stat().st_size}
 
 
+@_serial_model
 def build_lod(character_name: str, signature: Optional[str] = None, *,
               ratio: float = 0.25) -> Dict[str, Any]:
     """Builds the reduced (``low``) version of a stored mesh.
@@ -934,6 +1275,15 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
             return {"ok": False,
                     "error": "reduced mesh rewrote the rig frames: "
                              + "; ".join(frames.get("errors") or [])}
+        low_metrics = {}
+        if (meta.get("extension_rig") or {}).get("status") == "applied":
+            from app.core.extension_rig import resolved_extension_groups
+            measured = runner.run("extension_bones", inputs={"model": next(iter(res["outputs"].values()))},
+                                  params={"groups": resolved_extension_groups(character_name), "metrics_only": True})
+            if not measured.get("ok") or (measured.get("data") or {}).get("status") != "applied":
+                return {"ok": False, "error": measured.get("error") or
+                        (measured.get("data") or {}).get("reason") or "Low tier metrics failed"}
+            low_metrics = (measured.get("data") or {}).get("metrics") or {}
         target = out_dir / path.name
         try:
             _publish_model_bytes(target, blob)
@@ -954,9 +1304,17 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
         "character": character_name,
     }
     from app.core.extension_rig import extension_metadata
-    side["extension_rig"] = extension_metadata(character_name)
-    target.with_suffix(".json").write_text(
-        json.dumps(side, indent=2, ensure_ascii=False), encoding="utf-8")
+    side["extension_rig"] = dict(meta.get("extension_rig") or extension_metadata(character_name))
+    side["extension_rig"].pop("per_tier", None)
+    side["extension_rig"]["inherited"] = True
+    side["extension_rig"]["metrics"] = {
+        group_id: {**((meta.get("extension_rig") or {}).get("metrics") or {}).get(group_id, {}), **values}
+        for group_id, values in low_metrics.items()
+    } if low_metrics else side["extension_rig"].get("metrics", {})
+    _publish_sidecar(target, side)
+    if meta.get("extension_rig"):
+        meta["extension_rig"].setdefault("per_tier", {})[LOW_TIER] = side["extension_rig"]
+        _publish_sidecar(path, meta)
     logger.info("Model3D %s: LOD %s (%s -> %s tris, %d bytes)", character_name,
                 target.name, stage.get("tris_before"), stage.get("tris"),
                 target.stat().st_size)
@@ -966,9 +1324,11 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
             "size_before": path.stat().st_size}
 
 
-def set_model3d_rig(character_name: str, rig: str) -> Optional[Dict[str, Any]]:
-    """Updates the rig in the current outfit's model sidecar; None if none."""
-    path = find_model3d(character_name)
+@_serial_model
+def set_model3d_rig(character_name: str, rig: str, *,
+                    signature: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Updates the rig of a captured outfit model; None if none."""
+    path = find_model3d(character_name, signature)
     if not path:
         return None
     meta_path = path.with_suffix(".json")
@@ -979,7 +1339,7 @@ def set_model3d_rig(character_name: str, rig: str) -> Optional[Dict[str, Any]]:
     meta["rig"] = rig
     from app.core.extension_rig import extension_metadata
     meta.setdefault("extension_rig", extension_metadata(character_name))
-    meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    _publish_sidecar(path, meta)
     return meta
 
 
@@ -1077,6 +1437,7 @@ def _ref_manifest(ref_image: Path) -> Dict[str, Any]:
             "items": [str(i) for i in (items or []) if i]}
 
 
+@_serial_model
 def generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 backend_glob: str = "",
                                 prefer_cheapest: bool = False,
@@ -1155,10 +1516,12 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     # Per-character override; None = the backend's configured default. One
     # load — the meta block below reuses it (each load reads the profile).
     no_fingers = get_model3d_options(character_name).get("no_fingers")
+    import tempfile
+    staging = Path(tempfile.mkdtemp(prefix=".generate-", dir=out_dir))
     try:
         res = get_image_service().generate_mesh(
             source_image_path=str(src),
-            output_path=str(out_dir / f"{signature}.fbx"),
+            output_path=str(staging / f"{signature}.fbx"),
             backend_glob=backend_glob,
             character_name=character_name,
             mesh_name=character_name,
@@ -1173,17 +1536,15 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             logger.error("Model3D %s failed: %s", character_name, error)
             return {"ok": False, "error": error}
 
-        path = Path(res["path"])
-        # Drop a cached mesh of the same combination in another format (e.g. an
-        # old .fbx replaced by a .glb) — and its orphaned texture.
-        for old in out_dir.glob(f"{signature}.*"):
-            if old != path and old.suffix.lower() in MODEL_EXTS:
-                old.unlink()
-        if not res.get("texture_path"):
-            for ext in (".png", ".jpg", ".jpeg"):
-                stale_tex = path.with_suffix(ext)
-                if stale_tex.exists():
-                    stale_tex.unlink()
+        delivered = Path(res["path"])
+        blob = delivered.read_bytes()
+        texture_blob = Path(res["texture_path"]).read_bytes() if res.get("texture_path") else None
+        texture_suffix = Path(res["texture_path"]).suffix if res.get("texture_path") else ".png"
+        path = out_dir / f"{signature}{delivered.suffix.lower()}"
+        _purge_combination(out_dir, signature, keep_model=path)
+        _publish_model_bytes(path, blob)
+        if texture_blob is not None:
+            _publish_model_bytes(path.with_suffix(texture_suffix), texture_blob)
         meta = {
             "created_at": utc_now_iso(),
             "source": "generated",
@@ -1212,6 +1573,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         meta.update(_ref_manifest(src))
         _auto_retexture(character_name, path, meta)
         _auto_normalize(character_name, path, meta)
+        _auto_extension_rig(character_name, path, meta)
         # AFTER the re-encode and the normalisation: the numbers have to
         # describe the file that is actually served, not the one the backend
         # handed over.
@@ -1220,16 +1582,16 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         # the first viewer at range gets the full mesh for nothing, and the
         # build costs under a second against the minutes this generation just
         # took.
-        request_lod(character_name, path)
         from app.core.extension_rig import extension_metadata
         meta.setdefault("extension_rig", extension_metadata(character_name))
-        path.with_suffix(".json").write_text(
-            json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+        _publish_sidecar(path, meta)
+        request_lod(character_name, path)
         logger.info("Model3D %s: %s (%d bytes, Kombination %s)", character_name,
                     path.name, path.stat().st_size, signature)
         return {"ok": True, "cached": False, "path": str(path),
                 "filename": path.name}
     finally:
+        shutil.rmtree(staging, ignore_errors=True)
         if task_id:
             try:
                 get_task_queue().track_finish(task_id, error=error)
@@ -1249,9 +1611,11 @@ def normalize_job_id(raw: str) -> str:
     return job_id if _JOB_ID.match(job_id) else ""
 
 
+@_serial_model
 def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
                                  backend_glob: str = "",
-                                 force: bool = False) -> Dict[str, Any]:
+                                 force: bool = False,
+                                 signature: Optional[str] = None) -> Dict[str, Any]:
     """Collects a finished gateway mesh job by its id and stores it as the
     model of the currently worn combination — the way back to a mesh whose
     generation outlived our own poll (timeout, server restart) but finished
@@ -1283,7 +1647,7 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
     staging: Optional[Path] = None
     try:
         with _char_lock(character_name):
-            _, _, signature = current_outfit_state(character_name)
+            signature = signature or current_outfit_state(character_name)[2]
             rig = required_rig(character_name)
             out_dir = get_model3d_dir(character_name)
             staging = Path(tempfile.mkdtemp(prefix=".fetch-", dir=out_dir))
@@ -1308,12 +1672,13 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
                 return {"status": "invalid", "errors": check["errors"],
                         "warnings": check["warnings"]}
 
-            _purge_combination(out_dir, signature)
             path = out_dir / f"{signature}{staged.suffix.lower()}"
-            shutil.move(str(staged), path)
+            _purge_combination(out_dir, signature, keep_model=path)
+            _publish_model_bytes(path, data)
+            staged.unlink()
             if tex_staged:
-                shutil.move(str(tex_staged),
-                            path.with_suffix(tex_staged.suffix.lower()))
+                _publish_model_bytes(path.with_suffix(tex_staged.suffix.lower()), tex_staged.read_bytes())
+                tex_staged.unlink()
             meta: Dict[str, Any] = {
                 "created_at": utc_now_iso(),
                 "source": "generated",
@@ -1336,12 +1701,12 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
                 meta.update(_ref_manifest(src))
             _auto_retexture(character_name, path, meta)
             _auto_normalize(character_name, path, meta)
+            _auto_extension_rig(character_name, path, meta)
             _attach_measurement(meta, path)
-            request_lod(character_name, path)
             from app.core.extension_rig import extension_metadata
             meta.setdefault("extension_rig", extension_metadata(character_name))
-            path.with_suffix(".json").write_text(
-                json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+            _publish_sidecar(path, meta)
+            request_lod(character_name, path)
             logger.info("Model3D %s: job %s fetched as %s (%d bytes, "
                         "combination %s)", character_name, meta["job_id"], path.name,
                         path.stat().st_size, signature)
@@ -1419,26 +1784,27 @@ def maybe_auto_generate_for_outfit(character_name: str) -> bool:
     return started
 
 
+@_serial_model
 def delete_model3d(character_name: str, signature: Optional[str] = None) -> bool:
     """Deletes the cached mesh (+ sidecar + texture + reduced tiers); True if
     removed. A tier is derived from this file, so it never outlives it."""
     path = find_model3d(character_name, signature)
     if not path:
         return False
-    for companion in (path.with_suffix(".json"), path.with_suffix(".png")):
-        if companion.exists():
-            companion.unlink()
-    for tier in MODEL_TIERS:
-        variant = tier_variant(path, tier)
-        if variant and tier != FULL_TIER:
-            for companion in (variant.with_suffix(".json"), variant):
-                if companion.exists():
-                    companion.unlink()
-    path.unlink()
+    _purge_combination(path.parent, path.stem)
     return True
 
 
 def model_revision(path: Optional[Path]) -> str:
+    """Revision of a complete publication; never of processing stages."""
+    if path is None:
+        return ""
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("model3d_publication", str(path.parent)):
+        return _model_revision_unlocked(path)
+
+
+def _model_revision_unlocked(path: Optional[Path]) -> str:
     """Revision of ordered tier stat records, with no mesh content reads.
 
     In-place writers change mtime; atomic replacements also change inode.

@@ -531,7 +531,7 @@ declaration.
 | `mesh_from_tpose` | Generates the character mesh of every stored outfit combination that has a T-pose render but no model |
 | `fallback_rerender` | Re-renders every image a fallback backend made (image meta `fallback_from`) EXPLICITLY on the backend its intended spec resolves to; while that spec resolves to nothing the step raises `CandidateBusy` and stays pending |
 
-## Extension rig declarations (P0)
+## Extension rig declarations (P1)
 
 `app.core.extension_rig` provides these public readers:
 
@@ -539,14 +539,52 @@ declaration.
   dictionaries with resolved package physics defaults and ordered chains.
 - `extension_bone_names(character_name, profile=None)` returns the validation
   context `{full_name: {parent, group}}` for `model_validate.validate_glb`.
+- `resolved_extension_groups(character_name, profile=None)` returns applicable
+  groups with `enabled`/`flip` from model options, including disabled groups.
+- `extension_rig_fingerprint(groups, overrides=None)` hashes applicable
+  declarations and overrides with an explicit operation-schema version.
 - `motion_payload(character_name, profile=None)` returns `{rev, groups}` with
   stable resolved-content revision and `rest_deg=0`.
 - `extension_metadata(character_name, profile=None)` returns the reserved
-  sidecar shape `{fingerprint, groups, status, reason, per_tier}`. It does not
-  run an operation or claim `applied`.
+  sidecar shape `{fingerprint, groups, status, reason, metrics, per_tier}`. It does not
+  run an operation or claim `applied`; its `attempted` flag is false.
+
+`app.core.model3d` provides synchronous retrofit callables:
+
+- `rebuild_extension_rig(character_name, signature=None, *, tier="full", force=False)`
+  rebuilds one stored model/tier from its clean source, returning its extension
+  result. Omitted signature selects the currently served model (including outfit fallback). A matching
+  fingerprint is a no-op only for completed attempts (`attempted=true`); `force` retries unsuccessful attempts.
+  A missing or stale low tier is repaired independently of a current full tier.
+- `rebuild_character_extension_rigs(character_name)` processes every stored
+  model for a character and is the extension-bones Improvements worker entry.
+- `get_model3d_options(character_name)` and
+  `set_model3d_options(character_name, updates)` read/write the existing
+  `model3d_opts` block, including `extension_rig` boolean enabled/flip maps.
+  Profile read-modify-write is locked; invalid override shapes raise `ValueError`.
+- `set_model3d_rig(character_name, rig, *, signature=None)` updates the captured
+  model sidecar under the same publication lock; an explicit signature selects
+  a stored outfit model.
+
+`app.blender.refine.apply_script(..., base_joints_only=False)` and
+`app.core.model_validate.rig_frames_preserved(..., base_joints_only=False)` can restrict their
+frame-preservation gate to the canonical 52 base joints when an operation
+adds declared extension joints. Other refinement callers retain the complete
+joint gate. Rebuild HTTP routes require administrator access.
 
 Pass an existing profile when available to avoid another DB read. These
 readers use package/template and slot/rig applicability conditions; they
 contain no concrete group, slot or extension joint identifiers. See
-[plugin rig declarations](plugins.md#optional-rig-declaration-p0) and
-[the model/payload contract](schnittstellen-3d.md#extension-rig-contract-p0).
+[plugin rig declarations](plugins.md#optional-rig-declaration-p1) and
+[the model/payload contract](schnittstellen-3d.md#extension-rig-contract-p1).
+
+P1 processing uses a worker-local staging transaction for generation, uploads,
+job retrieval, retrofit and low derivation. Nested operations share one hidden
+same-filesystem stage. Publication checks the captured signature revision and
+replaces meshes/textures/backups, tier sidecars, then the full sidecar under
+short signature/directory locks. Readers capture metadata/revisions or response
+bytes under the directory lock. `save_uploaded_model(..., signature=None)` is
+blocking and the async upload adapter calls it through `asyncio.to_thread`.
+A stale result returns `ok=false`, `status="stale"` and an explanatory error.
+Rebuild preparation requires a normalized base-only clean source; operation
+parameters (including reference checks and poses) are all declaration-required.

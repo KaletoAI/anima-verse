@@ -60,7 +60,16 @@ interface Model3DDiagnosis {
   at?: string
 }
 
+interface ExtensionRigResult {
+  status?: 'none_applicable' | 'not_found' | 'failed' | 'applied'
+  reason?: string
+  metrics?: Record<string, unknown>
+  per_tier?: Record<string, ExtensionRigResult>
+}
+
 interface Model3DInfo {
+  model_rev?: string
+  extension_rig?: ExtensionRigResult
   filename?: string
   /** signature of the SERVED file (nearest match: another combination's) */
   signature?: string
@@ -106,7 +115,9 @@ interface Model3DStatus {
   rig?: string
   has_input?: boolean
   model?: Model3DInfo | null
-  options?: { no_fingers?: boolean | null; auto_generate?: boolean }
+  options?: { no_fingers?: boolean | null; auto_generate?: boolean;
+    extension_rig?: Record<string, { enabled?: boolean; flip?: boolean }> }
+  extension_groups?: { id: string; op: string }[]
   backends?: MeshBackend[]
   default?: string
   animation_set?: string
@@ -454,6 +465,43 @@ export function FieldModel3D({ character }: { character: string }) {
     }
   }, [enc, load, t, toast])
 
+  const rebuildExtensions = useCallback(async () => {
+    setBusy(true)
+    try {
+      const query = new URLSearchParams({ signature: st.model?.signature || '', tier: viewTier, force: 'true' })
+      const result = await apiPost<{ ok?: boolean; reason?: string; error?: string; status?: string; extension_rig?: ExtensionRigResult }>(
+        `/characters/${enc}/model3d/extension-rig?${query}`, {})
+      await load()
+      toast(`${t('Extension bones')}: ${result.reason || result.error || result.extension_rig?.reason || result.extension_rig?.status || result.status || t('Updated')}`,
+        result.ok === false ? 'error' : undefined)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally { setBusy(false) }
+  }, [enc, load, st.model?.signature, viewTier, t, toast])
+
+  const queueExtensions = useCallback(async () => {
+    setBusy(true)
+    try {
+      await apiPost(`/characters/${enc}/model3d/extension-rig/batch`, {})
+      toast(t('Queued in Improvements'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally { setBusy(false) }
+  }, [enc, t, toast])
+
+  const setExtensionOption = useCallback(async (id: string, key: 'enabled' | 'flip', value: boolean) => {
+    setBusy(true)
+    try {
+      const overrides = { ...st.options?.extension_rig,
+        [id]: { ...st.options?.extension_rig?.[id], [key]: value } }
+      const result = await apiPost<{ options: Model3DStatus['options'] }>(
+        `/characters/${enc}/model3d/options`, { extension_rig: overrides })
+      setSt((previous) => ({ ...previous, options: result.options }))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally { setBusy(false) }
+  }, [enc, st.options?.extension_rig, t, toast])
+
   const remove = useCallback(async () => {
     if (!confirmDelete) {
       setConfirmDelete(true)
@@ -504,7 +552,7 @@ export function FieldModel3D({ character }: { character: string }) {
   })()
   // Only a Mixamo rig can play the shared clips (humanoid characters).
   const mixamo = (model?.rig || st.rig) !== 'generic'
-  const bust = model?.created_at || st.signature || ''
+  const bust = model?.model_rev || model?.created_at || st.signature || ''
 
   // The character's set CHAIN, most specific first: explicit set, then the
   // derived one (animal / female / male). An explicit set may be incomplete —
@@ -555,6 +603,7 @@ export function FieldModel3D({ character }: { character: string }) {
       + (viewTier === 'low' ? '&tier=low' : '')
     : ''
   const hasLow = !!model?.tiers?.includes('low')
+  const extensionResult = model?.extension_rig?.per_tier?.[viewTier] || model?.extension_rig
 
   return (
     <div className="ga-form">
@@ -597,6 +646,23 @@ export function FieldModel3D({ character }: { character: string }) {
               ) : null}
             </div>
           ) : null}
+          <div className="ga-hint" aria-live="polite">
+            <strong>{t('Extension bones')} · {viewTier}: </strong>
+            {t(extensionResult?.status === 'applied' ? 'Applied'
+              : extensionResult?.status === 'failed' ? 'Failed'
+              : extensionResult?.status === 'not_found' ? 'Geometry not found'
+              : extensionResult?.status === 'none_applicable' ? 'No applicable groups'
+              : 'Not processed')}
+            {extensionResult?.reason ? ` · ${extensionResult.reason}` : ''}
+            {extensionResult?.metrics ? (
+              <details>
+                <summary>{t('Metrics')}</summary>
+                <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                  {JSON.stringify(extensionResult.metrics, null, 2)}
+                </pre>
+              </details>
+            ) : null}
+          </div>
           {/* The clips of THIS character's set (+ the setless fallbacks). */}
           {myClips.length ? (
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -769,6 +835,31 @@ export function FieldModel3D({ character }: { character: string }) {
           </div>
         </>
       ) : null}
+      {st.extension_groups?.length ? (
+        <fieldset className="ga-form">
+          <legend>{t('Extension bones')}</legend>
+          {st.extension_groups.map((group) => (
+            <div key={group.id} style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+              <span>{group.id}</span>
+              <label>
+                <input type="checkbox" disabled={pending}
+                  checked={st.options?.extension_rig?.[group.id]?.enabled !== false}
+                  onChange={(event) => setExtensionOption(group.id, 'enabled', event.target.checked)} />
+                {' '}{t('Enabled')}
+              </label>
+              {group.op === 'appendage_chain' ? (
+                <label>
+                  <input type="checkbox" disabled={pending}
+                    checked={st.options?.extension_rig?.[group.id]?.flip === true}
+                    onChange={(event) => setExtensionOption(group.id, 'flip', event.target.checked)} />
+                  {' '}{t('Flip direction')}
+                </label>
+              ) : null}
+            </div>
+          ))}
+          <span className="ga-hint">{t('Changes take effect when extension bones are rebuilt.')}</span>
+        </fieldset>
+      ) : null}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         <button
           type="button"
@@ -812,6 +903,12 @@ export function FieldModel3D({ character }: { character: string }) {
             {t('Download')}
           </a>
         ) : null}
+        {model?.format === 'glb' && mixamo ? (
+          <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}
+            onClick={rebuildExtensions}>{t('Rebuild extension bones')}</button>
+        ) : null}
+        <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}
+          onClick={queueExtensions}>{t('Rebuild extension bones for all models')}</button>
         {/* Reads the geometry with Blender — never writes the mesh, so it is
             offered for a nearest stand-in too. */}
         {model && canMeasure ? (

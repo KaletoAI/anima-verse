@@ -240,11 +240,12 @@ Werte pro Charakter liegen im Profil (`body_slots: {<slot>: {<attr>: <wert>}}`).
 Fragmente mit fehlenden Attribut-Werten entfallen komplett (kein halb gerendertes
 `{size}`). Die Fragmente gehen auch mit Referenzbild mit (F3).
 
-#### Optional `rig` declaration (P0)
+#### Optional `rig` declaration (P1)
 
 A slot may carry one validated extension group. All identifiers and operation
 parameters come from the package. The core accepts any non-empty `op` string
-and stores `params` as an opaque mapping; P0 does not execute operations.
+and stores `params` as a mapping. The mesh runner validates supported
+operations and parameters before changing geometry.
 
 ```yaml
 body_slots:
@@ -253,11 +254,12 @@ body_slots:
       example_attribute: {type: select, options: [enabled, disabled]}
     rig:
       id: example_group
-      op: example_operation
+      op: appendage_chain
       chains:
         - - {bone: ExampleBone1, parent: "<base Mixamo joint name>"}
           - {bone: ExampleBone2, parent: ExampleBone1}
-      params: {example_parameter: 0.5}
+      # Abbreviated: supply ALL operation and reference-frame params below.
+      params: {anchor_bone: "<base joint>", anchor_offset: [0, 0, -0.09], cut: 0.15}
       applies_to:
         example_profile_field: [enabled]
         attributes.example_attribute: [enabled]
@@ -300,10 +302,128 @@ Conflicts are detected over the complete declaration set before registration;
 and packages remain available. Direct registry registration rejects conflicting packages
 with `ValueError` before mutating the registry.
 
-P0 resolves package defaults only. Removing the package removes its groups
+Removing the package removes its groups
 and restores strict base-joint validation without any operation-specific
-core change. World settings, equipment, character overrides and runtime state
-are reserved for later phases.
+core change. Mesh overrides live in `profile.model3d_opts.extension_rig`:
+`{<group_id>: {enabled: bool, flip: bool}}`. Missing flags mean `enabled=true`,
+`flip=false`; flip swaps attachment and tip for an appendage chain. Overrides
+change the mesh fingerprint. World settings, equipment damping and runtime
+state remain later phases.
+
+#### Required mesh-operation parameters
+
+Both operations take all operation settings from `rig.params`. Core supplies
+no anchors, shape thresholds, offsets, split positions or test poses. Every
+parameter listed below is required; missing parameters produce step status
+`failed` with a `missing required params` reason and no mesh output. The slot
+loader validates the declaration shape; operation validation happens at execution.
+The values below are neutral fixture examples, not defaults. Distances are meters, fractions dimensionless and
+pose rotations degrees. Unknown keys, non-finite numbers, malformed vectors,
+invalid ranges and incompatible chain shapes fail the whole request before
+publication. Parent joints always come from `chains`, never a geometry heuristic.
+
+Both operations additionally require declaration-driven reference checks:
+`up_from_bone`, `up_to_bone`, `lateral_positive_bone`,
+`lateral_negative_bone`, `front_from_bone`, `front_to_bone` (base joint names),
+`up_distance_min`, `up_distance_max` (positive-Z separation bounds), and
+`front_distance_min` (minimum negative-Y separation). No concrete reference
+joint or size ratio is selected by core. Armature identity and metre scene
+units use only generic numerical tolerances. The executable neutral declarations
+in `scripts/smoke_extension_rig_p1.py` supply every parameter.
+
+`pair_protrusion` requires two one-link chains: first `+X`, second `-X`.
+It chooses each side's smallest-Y vertex within the declared height/lateral
+band. The reference wall lies `wall_drop` below that apex. The bone begins
+inside the wall and ends at the apex; weights have smooth elliptical lateral/
+vertical falloff and a front-only depth ramp.
+
+`pair_protrusion` declaration example values:
+
+| Parameter | Example declaration value |
+|---|---|
+| `band_lower_bone` | `"Spine1"` |
+| `band_upper_bone` | `"LeftArm"` |
+| `band_lower_offset` | `0.02` |
+| `band_upper_offset` | `-0.04` |
+| `lateral_min` | `0.03` |
+| `lateral_max` | `0.17` |
+| `wall_drop` | `0.12` |
+| `wall_z_tolerance` | `0.01` |
+| `wall_x_tolerance` | `0.02` |
+| `wall_fallback_depth` | `0.06` |
+| `head_x_scale` | `0.8` |
+| `head_wall_depth` | `0.04` |
+| `head_z_offset` | `0.01` |
+| `radius_min` | `0.06` |
+| `radius_max` | `0.11` |
+| `radius_gain` | `1.4` |
+| `radius_offset` | `0.03` |
+| `radius_z_scale` | `0.95` |
+| `side_margin` | `0.005` |
+| `front_margin` | `0.03` |
+| `depth_ramp` | `0.04` |
+| `weight_min` | `0.003` |
+| `test_rotation_deg` | `[-15, 0, 0]` |
+| `test_scale` | `[1, 1.12, 1]` |
+
+`appendage_chain` requires one chain with N links. Per-slice lateral front
+references lie beside the part, within the anchor-relative search window.
+Candidate vertices protrude beyond that reference; covariance power iteration
+finds the principal axis. The end nearest `anchor_bone.head + anchor_offset`
+is the attachment; the character's `flip` flag swaps it with the tip.
+Connectivity runs over position-welded vertices after the `cut` slab, so UV
+seams do not disconnect the part. An attachment ring and smooth ramp blend
+weights. A component beyond `leak_t_limit` or `leak_radius_limit` falls back to
+front-only weights. Declared `reweight_from` base joints (`[]` to disable transfer) move their affected
+shares to the chain's declared parent. `chain_split` contains N-1 increasing
+fractions. `chain_split` is required even for a single link (`[]`). Test pose measurements are reset before export.
+
+`appendage_chain` declaration example values:
+
+| Parameter | Example declaration value |
+|---|---|
+| `anchor_bone` | `"Hips"` |
+| `anchor_offset` | `[0, 0, -0.09]` |
+| `search_z_min` | `-0.26` |
+| `search_z_max` | `0.06` |
+| `reference_lateral_min` | `0.09` |
+| `reference_lateral_max` | `0.13` |
+| `slice_size` | `0.01` |
+| `candidate_lateral_max` | `0.1` |
+| `part_half_width` | `0.06` |
+| `protrusion_threshold` | `0.035` |
+| `axis_initial` | `[0, -0.5, -1]` |
+| `axis_iterations` | `50` |
+| `root_depth` | `0.03` |
+| `root_wall_margin` | `0.01` |
+| `chain_split` | `[0.45]` |
+| `cut` | `0.15` |
+| `weld_distance` | `0.0005` |
+| `window_length_factor` | `0.6` |
+| `window_margin` | `0.08` |
+| `leak_t_limit` | `1.6` |
+| `leak_radius_limit` | `0.09` |
+| `ring_radius_percentile` | `0.9` |
+| `ring_radius_scale` | `1.15` |
+| `near_slice_margin` | `0.05` |
+| `far_slice_fraction` | `0.85` |
+| `attachment_inset` | `0.02` |
+| `weight_ramp` | `0.25` |
+| `fallback_half_width` | `0.075` |
+| `fallback_z_margin` | `0.04` |
+| `fallback_front_fraction` | `0.3` |
+| `fallback_front_ramp` | `0.02` |
+| `fallback_side_ramp` | `0.025` |
+| `fallback_top_margin` | `0.02` |
+| `fallback_top_ramp` | `0.03` |
+| `blend_start` | `0.3` |
+| `blend_width` | `0.3` |
+| `reweight_factor` | `2.0` |
+| `reweight_from` | `[]` |
+| `weight_min` | `0.003` |
+| `test_rotation_deg` | `[-35, 0, 0]` |
+| `test_rotation_decay` | `0.4` |
+| `test_scale` | `[1, 1, 1]` |
 
 ### State-Flags
 
@@ -518,3 +638,8 @@ gehören nicht zu diesem SFW-Repo; ohne dieses Repo existieren sie schlicht nich
   (`docs/skill-core-api.md` → „Sperren").
 - **Lösch-Test** — Paketordner entfernen ⇒ Feature weg, Server startet ohne Reste,
   nichts anderes bricht (R7). Das ist die Definition von „fertig".
+
+Exported meshes use at most four deform influences per vertex across the entire
+mesh. Keep the four largest weights, breaking ties by skin joint index, then
+renormalize. Counts and posed edge-stretch metrics describe that final
+representation, matching the browser's `JOINTS_0`/`WEIGHTS_0` consumption.

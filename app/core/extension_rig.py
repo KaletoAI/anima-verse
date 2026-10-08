@@ -1,4 +1,4 @@
-"""Resolve package-declared extension groups; no motion simulation in P0."""
+"""Resolve package-declared extension groups and mesh-operation identity."""
 from dataclasses import asdict
 import hashlib
 import json
@@ -46,6 +46,30 @@ def extension_bone_names(character_name, profile=None):
             for chain in group["chains"] for link in chain}
 
 
+def extension_rig_fingerprint(groups, overrides=None):
+    """Versioned identity of applicable declarations and character overrides."""
+    return _revision({"version": 2, "groups": sorted(groups, key=lambda g: g["id"]),
+                      "overrides": overrides or {}})
+
+
+def resolved_extension_groups(character_name, profile=None):
+    """Return applicable groups with enabled/flip flags, including disabled ones.
+
+    Overrides live in the existing model options block. They affect mesh
+    operations only; package applicability and motion defaults stay independent.
+    """
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    overrides = (profile.get("model3d_opts") or {}).get("extension_rig") or {}
+    result = []
+    for group in rig_groups_for(character_name, profile):
+        override = overrides.get(group["id"]) or {}
+        result.append({**group, "enabled": override.get("enabled", True),
+                       "flip": override.get("flip", False)})
+    return result
+
+
 def motion_payload(character_name, profile=None):
     """Stable revision of the resolved motion content, independent of mesh."""
     groups = {}
@@ -61,8 +85,13 @@ def motion_payload(character_name, profile=None):
 
 def extension_metadata(character_name, profile=None):
     """Reserved sidecar state; P0 never claims an application succeeded."""
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
     groups = rig_groups_for(character_name, profile)
-    return {"fingerprint": _revision(groups), "groups": [g["id"] for g in groups],
+    overrides = (profile.get("model3d_opts") or {}).get("extension_rig") or {}
+    return {"fingerprint": extension_rig_fingerprint(groups, overrides),
+            "groups": [g["id"] for g in groups], "attempted": False,
             "status": "not_found" if groups else "none_applicable",
             "reason": "No extension operation has run" if groups else "",
-            "per_tier": {}}
+            "metrics": {}, "per_tier": {}}

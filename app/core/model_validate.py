@@ -455,7 +455,8 @@ def glb_bounds(data: bytes) -> Optional[Tuple[List[float], List[float]]]:
 
 
 def rig_frames_preserved(before: bytes, after: bytes,
-                         tol_deg: float = 5.0) -> Dict[str, Any]:
+                         tol_deg: float = 5.0, *,
+                         base_joints_only: bool = False) -> Dict[str, Any]:
     """Whether a refinement kept every skin joint's LOCAL ROTATION frame.
 
     ``{ok, errors}``. The invariant behind it: none of our mesh steps
@@ -494,6 +495,10 @@ def rig_frames_preserved(before: bytes, after: bytes,
         return {"ok": True, "errors": []}
     errors: List[str] = []
     for name, qb in b.items():
+        if base_joints_only:
+            from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
+            if norm_bone_name(name) not in BASE_JOINT_KEYS:
+                continue
         qa = a.get(name)
         if qa is None:
             errors.append(f"joint '{name}' disappeared")

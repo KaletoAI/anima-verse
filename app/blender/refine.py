@@ -63,7 +63,8 @@ def raw_backup_path(path: Path) -> Path:
 def apply_script(path: Path, script: str, params: Dict[str, Any], *,
                  validator: Optional[Callable[[bytes], Dict[str, Any]]] = None,
                  require_smaller: bool = True,
-                 keep_original: bool = True) -> Dict[str, Any]:
+                 keep_original: bool = True,
+                 base_joints_only: bool = False) -> Dict[str, Any]:
     """Runs a mesh-modifying script and swaps its result in ONLY if it earns it.
 
     Four gates, in order. The result must exist (a script that finds nothing to
@@ -120,7 +121,8 @@ def apply_script(path: Path, script: str, params: Dict[str, Any], *,
         # broken. Only a refinement that preserves them may swap in.
         if path.suffix.lower() == ".glb":
             from app.core.model_validate import rig_frames_preserved
-            frames = rig_frames_preserved(path.read_bytes(), blob)
+            frames = rig_frames_preserved(path.read_bytes(), blob,
+                                          base_joints_only=base_joints_only)
             if not frames.get("ok"):
                 out["error"] = ("refined model rewrote the rig frames: "
                                 + "; ".join(frames.get("errors") or []))
@@ -135,7 +137,14 @@ def apply_script(path: Path, script: str, params: Dict[str, Any], *,
             if not backup.exists():
                 backup.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, backup)
-        path.write_bytes(blob)
+        import os
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".refine-", delete=False) as stream:
+            staged = Path(stream.name)
+            stream.write(blob)
+        try:
+            os.replace(staged, path)
+        finally:
+            staged.unlink(missing_ok=True)
         out["applied"] = True
         logger.info("%s: %s angewandt (%d -> %d bytes)", path.name, script,
                     out["data"].get("before", {}).get("file_bytes", 0), len(blob))

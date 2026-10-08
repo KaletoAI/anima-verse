@@ -10176,7 +10176,7 @@ fallen lassen), keine Panne — deshalb steht es hier und nicht im Code.
 ---
 
 
-### Extension rig contract (P0)
+### Extension rig contract (P1)
 
 A valid humanoid GLB contains every one of the 52 canonical base joint names
 in `shared/models/rig/joints.json`. Base names use the same normalization as
@@ -10231,17 +10231,62 @@ motion only; it has no solver or rendering effects. Admin `/model/meta`
 returns the same `motion` and `model_rev`; `/model3d` exposes `motion` at the
 root and `model_rev` in its model entry.
 
-Sidecars reserve `extension_rig: {fingerprint, groups, status, reason,
-per_tier}`. `groups` is the applicable group-ID list, `fingerprint` hashes
-resolved declarations, and `per_tier` is reserved for tier outcomes. Allowed
-status values are `none_applicable`, `not_found`, `failed`, `applied`.
-P0 initializes `none_applicable` without groups, otherwise `not_found` with a
-reason; it never writes `applied`. Legacy sidecars receive the reserved
-shape in model-meta responses without a read-path disk write.
+Sidecars store `extension_rig: {fingerprint, groups, status, reason,
+attempted, attempted_at, has_applied, metrics, per_tier}`. Reserved metadata has
+`attempted=false`; it never suppresses the first real attempt. `has_applied`
+tracks whether rigged bytes remain after a failed later attempt, so disabling
+groups still restores the clean source. `groups` contains applicable group IDs. The fingerprint
+is a versioned hash of applicable declarations and character
+`model3d_opts.extension_rig` overrides, including enabled and flip flags.
+Statuses are `none_applicable`, `not_found`, `failed`, and `applied`. Reasons
+explain skipped or failed operations. Metrics report weighted vertices per
+group, edge-stretch percentiles at the declared test pose and the connectivity
+leak flag. `per_tier` records full/low outcomes for the admin model panel.
+Legacy sidecars receive the reserved shape in model-meta responses without a
+read-path disk write.
+
+Generation, upload and job retrieval normalize humanoid GLBs before extension
+operations. The clean normalized full source is `prerig/<signature>.glb`;
+like `raw/`, it is never a model-selection candidate. Changed fingerprints
+rebuild from this source to avoid repeated weight attenuation; matching
+fingerprints are a no-op only after a completed attempt (`attempted=true`,
+status `applied`, `not_found` or `none_applicable`). Requests are all-or-nothing: a failed group leaves
+model bytes unchanged with a reason for each group. Gates allow larger output,
+validate extension names and parents, preserve the 52 base-joint frames and
+check normalized weights. Existing weights are scaled by `1-w`. The whole
+export keeps the four largest deform weights (ties by skin joint index), then
+renormalizes; reported metrics use this final representation.
+Low is derived again from the rigged full and inherits its joints; manually
+uploaded low tiers run independently. Generation, retrofit and LOD publication
+process all expensive work in hidden `.process-*` directories on the same
+filesystem, including low preparation. Such directories, `prerig/` and
+`low/prerig/` are never selection/serving candidates. Only publication holds
+`keyed_lock("model3d", "<character>:<signature>")` and
+`keyed_lock("model3d_publication", "<model directory>")`; a snapshot token
+(including deletion epoch) rejects stale results. Files replace via `os.replace`:
+meshes/textures/backups first, tier sidecars next, full sidecar last. Model
+metadata, revision and byte-route readers use the directory publication lock;
+byte routes capture bytes before releasing it instead of opening paths later.
+The stat-based `model_rev` changes only for final published mesh/tier changes.
+Unchanged files retain inode/mtime. Separate HTTP requests may span revisions;
+clients continue to reload when the published revision changes.
+
+Uploads run persistence in `asyncio.to_thread`, so waiting for publication
+cannot block the event loop. Every rebuild validates a base-only source and
+requires normalization before creating prerig, even when automatic normalization
+is disabled. Each backup records its own normalization evidence in its sidecar.
+Preparation failure keeps published mesh bytes and reports its reason. With no
+enabled groups and no applied rig to remove, the operation returns before mesh
+reads or copies. Signature deletion and GC include both prerig directories.
+
+Operations require meters, front `-Y`, up `+Z`, and an identity armature;
+unmet prerequisites yield a skip reason. Admin-only rebuild routes and the
+extension-bones Improvements queue expose retrofit. The character model panel
+shows status, reason, metrics and per-group enabled/flip controls.
 
 No motion field belongs to the scene-recipe payload or its fingerprint.
-P0 uses package defaults only and fixes `rest_deg` at zero. World settings,
-equipment damping, character overrides and state poses remain later phases.
+Motion uses package defaults and fixes `rest_deg` at zero. World settings,
+equipment damping, motion overrides and state poses remain later phases.
 
 
 # Anhang — Änderungsverlauf

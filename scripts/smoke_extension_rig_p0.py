@@ -55,6 +55,21 @@ def glb(names, extra_parents=None, second_skin=None, outside_parent=False, mutat
     return struct.pack("<4sII", b"glTF", 2, 12 + len(chunks)) + chunks
 
 
+def run_async(coroutine):
+    """Keep executor completions observable in restricted smoke environments.
+
+    Some runners do not wake a blocked selector on a worker's self-pipe write;
+    a bounded selector wait also services completions without changing the app.
+    """
+    import asyncio
+    import selectors
+    class SmokeSelector(selectors.DefaultSelector):
+        def select(self, timeout=None):
+            return super().select(.05 if timeout is None else min(timeout, .05))
+    with asyncio.Runner(loop_factory=lambda: asyncio.SelectorEventLoop(SmokeSelector())) as runner:
+        return runner.run(coroutine)
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="extension-p0-") as tmp:
         root = Path(tmp)
@@ -324,8 +339,9 @@ def main():
                 return {"file": MemoryUpload()}
 
         with patch.object(model3d, "_auto_retexture"), patch.object(model3d, "_auto_normalize"), \
+                patch.object(model3d, "_auto_extension_rig"), \
                 patch.object(model3d, "_attach_measurement"), patch.object(model3d, "request_lod"):
-            uploaded = asyncio.run(upload_character_model3d("demo", UploadRequest()))
+            uploaded = run_async(upload_character_model3d("demo", UploadRequest()))
         check(uploaded["rig"] == "mixamo" and uploaded["extension_rig"]["status"] == "not_found",
               "upload context and reserved sidecar")
         uploaded_sidecar = model_dir / (uploaded["signature"] + ".json")
