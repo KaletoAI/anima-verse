@@ -267,6 +267,11 @@ body_slots:
       zeta: 0.15
       gravity: 0.35
       spill: 0.0
+      flatten: 0.0
+      sag_max_deg: 25 # Defaults to max_deg when omitted.
+      attribute_profiles:
+        example_attribute:
+          enabled: {freq_hz: 0.8, zeta: 1.2, gravity: 1.1}
       gain: 1.0
       max_deg: 25
       squash: [0.6, 1.4]
@@ -292,14 +297,25 @@ null value only; it does not match `""` or the literal string `"none"`. Both
 operands use the same normalization; other scalars compare as trimmed lowercase
 strings.
 
-`spill` defaults to 0 and redirects inward axial gravity outward for groups
-with at least two chains. With zero spill, paired groups still remove inward
-axial gravity. Single chains keep gravity unchanged at zero spill; positive
-spill only removes the inward component when there is no pair.
+`flatten` and `spill` default to 0. With inward axial gravity `c=a_g·u<0`,
+`flatten*c` remains axial and can shorten the lever, bounded by `squash`.
+The remainder is removed; `spill` redirects that remainder outward along `L`
+for groups with at least two chain roots. Single chains remove the remainder
+without redirecting it. Paired shortening compensates width only along `L`
+by `1/s`; single chains and stretches retain symmetric `1/sqrt(s)` compensation.
+
+`attribute_profiles` is optional: `{attribute_key: {value: {field: multiplier}}}`.
+Attribute keys must be declared on the same slot; values are string keys matched
+exactly against that character's stored slot value. Missing/unknown values are
+ignored. Allowed multiplier fields: `freq_hz`, `zeta`, `gravity`, `gain`,
+`max_deg`, `sag_max_deg`, `flatten`, `spill`. Multipliers must be finite and
+nonnegative (`freq_hz` strictly positive); they may exceed 1. After multiplication,
+unit-interval fields saturate at 1 and angle limits at 180. Multiple matching
+attribute profiles multiply in declaration order. Profiles never enter mesh identity.
 
 Every physics field is optional with the defaults shown above. All numbers
-must be finite: `freq_hz > 0`; `zeta >= 0`, `gravity >= 0`; `gain` and `spill` in `[0,1]`;
-`max_deg` and `rest_max_deg` in `[0,180]`; `squash` is exactly two positive
+must be finite: `freq_hz > 0`; `zeta >= 0`, `gravity >= 0`; `gain`, `flatten` and `spill` in `[0,1]`;
+`max_deg`, `sag_max_deg` and `rest_max_deg` in `[0,180]`; `squash` is exactly two positive
 numbers satisfying `min <= 1 <= max`. `params` must be a mapping. A malformed
 rig is dropped with a warning, and its slot remains available. Duplicate
 normalized extension names or group IDs cause a load error naming all owners.
@@ -661,16 +677,31 @@ representation, matching the browser's `JOINTS_0`/`WEIGHTS_0` consumption.
 
 Package body-slot `rig` declarations remain the base physics values. Core declares
 `extension_motion.groups` as a **world** setting: arbitrary package group IDs map
-to partial overrides of `freq_hz`, `zeta`, `gravity`, `spill`, `gain`, `max_deg`, `squash`,
-and `rest_max_deg`. Missing values inherit the package; no group IDs are named in core.
+to partial overrides of `freq_hz`, `zeta`, `gravity`, `spill`, `flatten`, `gain`,
+`max_deg`, `sag_max_deg`, `squash`, and `rest_max_deg`. Missing values inherit the package; no group IDs are named in core.
 Game-Admin → Setup → Extension motion lists loaded declarations from the admin-only
 `GET /admin/world-settings/extension-motion` endpoint and saves through the existing
 world-settings endpoint. Reset removes the override so future package defaults flow through.
 
-After world overrides, every distinct worn item whose occupied slots or `outfit_piece.covers` hit
+Effective order: package → world override → slot attribute-profile multipliers →
+absolute character overrides → clothing gain → state (P4 later). The character
+3D panel's Extension bones box edits numeric physics and Reset removes that
+character's group override. It sends `{extension_motion: {group_id: {field: value}}}`
+to admin-only `POST /characters/{name}/model3d/extension-motion`; profile storage
+is `model3d_opts.extension_motion`, validated and saved under
+`keyed_lock("character_profile", name)`. Fields and ranges match world overrides.
+The existing mesh-option route is independent.
+
+After character overrides, every distinct worn item whose occupied slots or `outfit_piece.covers` hit
 the body slot's `covered_by` contributes its `motion_damping` (0..1, default 1)
 to the gain product. Mirrored occupied slots count once; hidden layers still count.
 A partial cover contributes `1 - (1 - motion_damping)/2`; full coverage takes
 precedence for the same item. Free-text outfits without pieces contribute 1.
-The shared character template's `motion_gravity_scale` (0..3, default 1) multiplies
-gravity only. These settings do not alter the extension rig fingerprint or mesh.
+The shared character template's `motion_gravity_scale` (0..3, default 1) is transported separately as group `gravity_scale=m`:
+`a_g=gravity*(m*g-R_anchor*g_rest)`. Thus upright m=1 gives zero, m=2 adds sag,
+and m=.5 lifts. Static equilibrium `e=a_g/omega²` (after flatten/spill) is bounded
+by `sag_max_deg` (default: declared `max_deg`) and squash. The spring has no gravity
+term and swings around `T'=T+e`; its dynamic limit is `max_deg`, independent of sag.
+The dynamic angle stays linear below half the limit, then smoothly saturates with
+tanh; gain scales the saturated displacement, preserving static sag even at zero.
+These settings change `motion.rev`, never the extension rig fingerprint or mesh.

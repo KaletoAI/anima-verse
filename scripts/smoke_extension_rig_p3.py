@@ -5,7 +5,11 @@ Usage: .venv/bin/python scripts/smoke_extension_rig_p3.py
 Hand derivation (E4): occupied underwear_top with empty covers (.5) and
 outer full coverage (.8) multiply .5*.8=.4; mirrors
 count once and hidden layers still count. Partial .6 yields 1-(1-.6)/2=.8.
-No pieces gives factor 1. Package gravity .35 times character 2 gives .7.
+No pieces gives factor 1. Package gravity .35 stays .35 with character m=2;
+the solver subtracts baked gravity after multiplying current gravity by m.
+World gain .6, attribute gain multiplier .5 yield .3; frequency 2.2*2=4.4.
+Manual gain .9/frequency 3 replace those; clothing .3*.8 gives final .216.
+Physics-only declarations and profiles leave geometry fingerprints unchanged.
 World gain .6 replaces 1 for its group only. Revisions track inputs even
 when a zero gain masks a changed multiplier; identical reads stay stable.
 These checks catch omitted layers, visual filtering, duplicate mirrors,
@@ -43,11 +47,12 @@ def main():
         package = plugins / 'sample'
         package.mkdir(parents=True)
         rig = {'id': 'sample_group', 'op': 'pair_protrusion',
-               'chains': [[{'bone': 'SampleBone', 'parent': 'Hips'}]]}
+               'chains': [[{'bone': 'SampleBone', 'parent': 'Hips'}]],
+               'attribute_profiles': {'response': {'fast': {'freq_hz': 2, 'gravity': 3, 'gain': .5}}}}
         (package / 'plugin.yaml').write_text(yaml.safe_dump({
             'name': 'Sample', 'apply_to': '*', 'body_slots': [
-                {'id': 'sample_slot', 'covered_by': ['underwear_top', 'underwear_bottom'], 'rig': rig},
-                {'id': 'other_slot', 'rig': {**rig, 'id': 'other_group',
+                {'id': 'sample_slot', 'attributes': {'response': {'type': 'str'}}, 'covered_by': ['underwear_top', 'underwear_bottom'], 'rig': rig},
+                {'id': 'other_slot', 'attributes': {'response': {'type': 'str'}}, 'rig': {**rig, 'id': 'other_group',
                     'chains': [[{'bone': 'OtherBone', 'parent': 'Hips'}]]}}]}))
         discover_packages(plugins, force=True)
         from app.models import inventory
@@ -154,13 +159,13 @@ def main():
         changed['equipped_pieces'].pop('outer')
         check(motion(changed)['rev'] != baseline['rev'], 'equipment changes revision')
         changed['motion_gravity_scale'] = 2
-        check(motion(changed)['groups']['sample_group']['gravity'] == .7, 'character doubles gravity')
+        check(motion(changed)['groups']['sample_group']['gravity'] == .35 and motion(changed)['groups']['sample_group']['gravity_scale'] == 2, 'character multiplier stays separate')
         check(motion(changed)['rev'] != motion({**changed, 'motion_gravity_scale': 1})['rev'], 'character changes revision')
         inventory.update_item(a['id'], {'outfit_piece': {**a['outfit_piece'], 'motion_damping': .3}})
         check(inventory.get_item(a['id'])['outfit_piece']['motion_damping'] == .3, 'update keeps damping')
         check(motion()['rev'] != baseline['rev'], 'item damping changes revision')
         before = motion()
-        inventory.update_item(a['id'], {'outfit_piece': {**a['outfit_piece'], 'covers': ['underwear_bottom']}})
+        inventory.update_item(a['id'], {'outfit_piece': {**a['outfit_piece'], 'motion_damping': .3, 'covers': ['underwear_bottom']}})
         check(motion()['rev'] != before['rev'], 'item covers changes revision even equal output')
         from app.core import model3d, world_ops
         from app.models.character import set_character_pos
@@ -197,6 +202,70 @@ def main():
         bare = {'template': 'human-default'}
         check(gain(bare) == .6 and motion(bare)['groups']['other_group']['gain'] == 1, 'world override group only')
         check(motion(bare)['groups']['sample_group']['spill'] == .5, 'world spill override')
+        from app.core.extension_rig import extension_metadata, rig_groups_for, extension_rig_fingerprint
+        attributed = {**bare, 'body_slots': {'sample_slot': {'response': 'fast'}}}
+        profiled = motion(attributed)['groups']['sample_group']
+        check(profiled['freq_hz'] == 4.4 and abs(profiled['gravity'] - 1.05) < 1e-12
+              and profiled['gain'] == .3, 'attribute profiles multiply after world overrides')
+        unknown = {**bare, 'body_slots': {'sample_slot': {'response': 'unknown'}}}
+        check(motion(unknown)['groups'] == motion(bare)['groups'], 'unknown attribute value ignored')
+        declarations = rig_groups_for('sample', bare)
+        physics = copy.deepcopy(declarations)
+        physics[0].update(flatten=.7, sag_max_deg=50, attribute_profiles={'response': {'fast': {'gain': .2}}})
+        check(extension_rig_fingerprint(physics) == extension_rig_fingerprint(declarations),
+              'physics-only declaration keeps mesh fingerprint')
+        from app.routes.extension_motion import _set_extension_motion_sync
+        stored = get_character_profile('sample')
+        stored['body_slots'] = attributed['body_slots']
+        check(save_character_profile('sample', stored), 'attribute profile stored')
+        fp = extension_metadata('sample')['fingerprint']
+        rev = motion_payload('sample')['rev']
+        overrides = {'sample_group': {'freq_hz': 3, 'gain': .9, 'gravity': .2,
+                                      'flatten': .4, 'spill': .2, 'sag_max_deg': 60}}
+        from fastapi import FastAPI
+        from scripts.smoke_extension_rig_p1 import run_async
+        import httpx
+        from app.core.auth_dependency import require_admin
+        from app.routes.extension_motion import router
+        route_app = FastAPI()
+        route_app.include_router(router)
+        route_app.dependency_overrides[require_admin] = lambda: {'role': 'admin'}
+        async def post_motion():
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=route_app), base_url='http://test') as client:
+                return await client.post('/characters/sample/model3d/extension-motion',
+                                         json={'extension_motion': overrides})
+        posted = run_async(post_motion())
+        check(posted.status_code == 200, 'manual physics async HTTP route')
+        response = posted.json()
+        check(response['options']['extension_motion'] == overrides, 'manual physics route round trip')
+        effective = motion_payload('sample')['groups']['sample_group']
+        check(effective['freq_hz'] == 3 and effective['gravity'] == .2
+              and abs(effective['gain'] - .216) < 1e-12 and effective['flatten'] == .4
+              and effective['spill'] == .2 and effective['sag_max_deg'] == 60,
+              'manual override beats attribute profile; clothing applies last')
+        check(motion_payload('sample', apply_clothing=False)['groups']['sample_group']['gain'] == .9,
+              'editor reads gain before clothing damping')
+        check(motion_payload('sample')['rev'] != rev and extension_metadata('sample')['fingerprint'] == fp,
+              'character physics changes revision, not fingerprint')
+        masked = copy.deepcopy(get_character_profile('sample'))
+        masked['body_slots']['sample_slot']['response'] = 'unknown'
+        check(motion_payload('sample', masked)['groups'] == motion_payload('sample')['groups']
+              and motion_payload('sample', masked)['rev'] != motion_payload('sample')['rev'],
+              'revision tracks attribute changes masked by absolute overrides')
+        for bad in ({'gain': True}, {'flatten': -1}, {'flatten': 2}, {'sag_max_deg': 181},
+                    {'sag_max_deg': float('nan')}, {'unknown': 1}):
+            try:
+                _set_extension_motion_sync('sample', {'extension_motion': {'sample_group': bad}})
+            except HTTPException as exc:
+                check(exc.status_code == 400, 'manual physics validation')
+            else:
+                raise AssertionError('invalid manual physics accepted')
+        _set_extension_motion_sync('sample', {'extension_motion': {}})
+        restored = get_character_profile('sample')
+        restored.pop('body_slots', None)
+        check(save_character_profile('sample', restored), 'reset restores profile fixture')
+        check(model3d.get_model3d_options('sample')['extension_motion'] == {}, 'manual Reset removes overrides')
+
         spill_rev = motion(bare)['rev']
         config_admin.save_layer('world', {'extension_motion': {'groups': {'sample_group': {'gain': .6, 'spill': 0}}}})
         check(motion(bare)['rev'] != spill_rev, 'spill alone changes revision')
@@ -216,7 +285,7 @@ def main():
             check(True, 'instance write rejected')
         else:
             raise AssertionError('instance accepted world settings')
-        for bad in ({'spill': -0.1}, {'spill': 1.1}, {'spill': float('nan')}, {'freq_hz': 0}, {'gain': 2}, {'squash': [1.1, 2]}, {'gravity': float('nan')}):
+        for bad in ({'flatten': -0.1}, {'flatten': 1.1}, {'sag_max_deg': 181}, {'spill': -0.1}, {'spill': 1.1}, {'spill': float('nan')}, {'freq_hz': 0}, {'gain': 2}, {'squash': [1.1, 2]}, {'gravity': float('nan')}):
             try:
                 config_admin.save_layer('world', {'extension_motion': {'groups': {'sample_group': bad}}})
             except config_admin.LayerSaveError:

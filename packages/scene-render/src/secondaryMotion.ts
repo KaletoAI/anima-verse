@@ -10,12 +10,26 @@ export interface MotionGroup {
   freq_hz: number
   zeta: number
   spill: number
+  flatten: number
+  gravity_scale: number
+  sag_max_deg: number
   gravity: number
   gain: number
   max_deg: number
   squash: [number, number]
   rest_deg: number
   rest_max_deg: number
+}
+/** Package metadata profiles are multipliers; runtime groups are already resolved. */
+export type MotionAttributeProfiles = Record<string, Record<string, Partial<Pick<MotionGroup,
+  'freq_hz' | 'zeta' | 'gravity' | 'gain' | 'max_deg' | 'sag_max_deg' | 'flatten' | 'spill'>>>>
+export interface ExtensionRigDeclaration extends Omit<MotionGroup, 'bones' | 'gravity_scale' | 'rest_deg'> {
+  id: string
+  op: string
+  chains: { bone: string; parent: string }[][]
+  params: Record<string, unknown>
+  applies_to: Record<string, unknown[]>
+  attribute_profiles?: MotionAttributeProfiles
 }
 export interface SecondaryMotionPayload {
   rev: string
@@ -28,21 +42,18 @@ export interface SecondaryMotion {
   dispose(): void
 }
 
-/** Exact propagation of the spec equation for a linearly moving T and
- * constant gravity during one <=1/240 s substep. In relative coordinates,
- * x=p-T-gravityDelta*gravity/omega², w=v-v_T, the equation is homogeneous:
- * x'' + 2*zeta*omega*x' + omega²*x = 0. Handle all damping regimes explicitly
- * so large frequencies/damping do not destabilize an explicit integrator.
- * Inputs are never mutated.
+/** Exact propagation around a linearly moving static-equilibrium target.
+ * x=p-T', w=v-v_T' gives x''+2*zeta*omega*x'+omega²*x=0.
+ * Handle every damping regime without explicit-integrator instability.
+ * Inputs are never mutated; the caller has already resolved static gravity.
  */
 export function stepSecondaryParticle(
   p: Vector3, v: Vector3, target: Vector3, targetVelocity: Vector3,
-  gravityDelta: Vector3, params: MotionGroup, h: number,
-  output?: { p: Vector3; v: Vector3; equilibrium: Vector3; x: Vector3; w: Vector3 },
+  params: MotionGroup, h: number,
+  output?: { p: Vector3; v: Vector3; x: Vector3; w: Vector3 },
 ): { p: Vector3; v: Vector3 } {
   const omega = 2 * Math.PI * params.freq_hz
-  const equilibrium = (output?.equilibrium ?? gravityDelta.clone()).copy(gravityDelta).multiplyScalar(params.gravity / (omega * omega))
-  const x = (output?.x ?? p.clone()).copy(p).sub(target).sub(equilibrium)
+  const x = (output?.x ?? p.clone()).copy(p).sub(target)
   const w = (output?.w ?? v.clone()).copy(v).sub(targetVelocity)
   const alpha = params.zeta * omega
   let xx: number, xw: number, wx: number, ww: number
@@ -68,7 +79,7 @@ export function stepSecondaryParticle(
     ww = decay * (c - alpha * sh)
   }
   const result = output ?? { p: target.clone(), v: targetVelocity.clone() }
-  result.p.copy(target).addScaledVector(targetVelocity, h).add(equilibrium)
+  result.p.copy(target).addScaledVector(targetVelocity, h)
     .addScaledVector(x, xx).addScaledVector(w, xw)
   result.v.copy(targetVelocity).addScaledVector(x, wx).addScaledVector(w, ww)
   return result
@@ -99,6 +110,12 @@ interface Particle {
 }
 const centroidCache = new WeakMap<Object3D, Vector3[]>()
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x))
+/** Linear below half the limit, then C1 tanh saturation: monotonic and bounded. */
+export const softMotionAngle = (angle: number, limit: number) => {
+  if (limit <= 0) return 0
+  const knee = limit / 2
+  return angle <= knee ? angle : knee + knee * Math.tanh((angle - knee) / knee)
+}
 const restAngle = (g: MotionGroup) => clamp(g.rest_deg, -g.rest_max_deg, g.rest_max_deg) * Math.PI / 180
 
 /** Build once while the skeleton is in bind pose, after its up-axis correction.
@@ -230,10 +247,10 @@ export function createSecondaryMotion(
     for (const st of particles) { st.p = null; st.target = null; st.v.set(0, 0, 0) }
   }
   const anchor = new three.Matrix4(), inverseAnchor = new three.Matrix4(), scale = new three.Matrix4(), rotationMatrix = new three.Matrix4()
-  const anchorQ = new three.Quaternion(), restQ = new three.Quaternion(), dynamicQ = new three.Quaternion(), identityQ = new three.Quaternion()
+  const anchorQ = new three.Quaternion(), restQ = new three.Quaternion(), dynamicQ = new three.Quaternion(), identityQ = new three.Quaternion(), inverseRestQ = new three.Quaternion()
   const restVector = new three.Vector3(), target = new three.Vector3(), head = new three.Vector3(), vTarget = new three.Vector3(), deltaG = new three.Vector3(), t = new three.Vector3(), base = new three.Vector3(), rendered = new three.Vector3(), localRendered = new three.Vector3(), u = new three.Vector3(), temp = new three.Vector3()
-  const meanHead = new three.Vector3(), lateral = new three.Vector3(), rootFrame = new three.Matrix4()
-  const integration = { p: new three.Vector3(), v: new three.Vector3(), equilibrium: new three.Vector3(), x: new three.Vector3(), w: new three.Vector3() }
+  const meanHead = new three.Vector3(), lateral = new three.Vector3(), localLateral = new three.Vector3(), staticVector = new three.Vector3(), equilibrium = new three.Vector3(), rootFrame = new three.Matrix4()
+  const integration = { p: new three.Vector3(), v: new three.Vector3(), x: new three.Vector3(), w: new three.Vector3() }
   const driven = new Map<Bone, Particle>()
   const pureParent = (node: Object3D | null): Quaternion => {
     anchorQ.identity()
@@ -273,70 +290,88 @@ export function createSecondaryMotion(
         restVector.copy(b.centroid).applyQuaternion(restQ)
         target.copy(restVector).applyMatrix4(anchor)
         head.setFromMatrixPosition(anchor)
+        // Static gravity acts against the baked bind gravity, before dynamics.
+        u.copy(target).sub(head).normalize()
+        lateral.set(0, 0, 0)
+        if (st.roots.length >= 2) {
+          meanHead.set(0, 0, 0)
+          for (const link of st.roots) {
+            rootFrame.copy(link.local)
+            for (let n = link.bone.parent; n; n = n.parent) {
+              if (driven.has(n as Bone)) { rootFrame.premultiply(n.matrixWorld); break }
+              rootFrame.premultiply(n.matrix)
+            }
+            meanHead.add(temp.setFromMatrixPosition(rootFrame))
+          }
+          meanHead.divideScalar(st.roots.length)
+          lateral.copy(head).sub(meanHead)
+          lateral.addScaledVector(u, -lateral.dot(u)).normalize()
+        }
+        deltaG.copy(gravity).multiplyScalar(st.params.gravity_scale ?? 1)
+          .sub(temp.copy(b.gravityRest).applyQuaternion(anchorQ)).multiplyScalar(st.params.gravity)
+        const axial = deltaG.dot(u)
+        if (axial < 0) {
+          const removed = (1 - (st.params.flatten ?? 0)) * -axial
+          deltaG.addScaledVector(u, removed)
+          deltaG.addScaledVector(lateral, (st.params.spill ?? 0) * removed)
+        }
+        const omega = 2 * Math.PI * st.params.freq_hz
+        equilibrium.copy(deltaG).divideScalar(omega * omega)
+        staticVector.copy(target).sub(head).add(equilibrium)
+        // Static angle and length have their own limits, independent of swing.
+        dynamicQ.setFromUnitVectors(u, temp.copy(staticVector).normalize())
+        const sagLimit = (st.params.sag_max_deg ?? st.params.max_deg) * Math.PI / 180
+        const sagAngle = dynamicQ.angleTo(identityQ)
+        if (sagAngle > sagLimit) dynamicQ.slerp(identityQ, 1 - sagLimit / sagAngle)
+        const restLength = target.distanceTo(head)
+        const staticLength = restLength * clamp(staticVector.length() / restLength, st.params.squash[0], st.params.squash[1])
+        staticVector.copy(u).applyQuaternion(dynamicQ).multiplyScalar(staticLength)
+        target.copy(head).add(staticVector)
+        localLateral.copy(lateral).transformDirection(inverseAnchor.copy(anchor).invert())
+        // Express L before the rest rotation; scale is applied before that rotation.
+        localLateral.applyQuaternion(inverseRestQ.copy(restQ).invert())
+        temp.copy(b.centroid).normalize()
+        localLateral.addScaledVector(temp, -localLateral.dot(temp)).normalize()
         if (far || !st.p || !st.target || (!options.frozen && dt > 0.25)) {
           (st.p ??= new three.Vector3()).copy(target); st.v.set(0, 0, 0)
         } else if (options.frozen) {
-          // Preserve displacement while the owner moves the anchor or rest pose.
           st.p.add(temp.copy(target).sub(st.target))
         } else if (dt > 0) {
           vTarget.copy(target).sub(st.target).divideScalar(dt)
-          deltaG.copy(gravity).sub(temp.copy(b.gravityRest).applyQuaternion(anchorQ))
-          // Suppress inward axial gravity for pairs, optionally redirect it outward.
-          // Single chains retain their previous gravity when spill is zero.
-          const spill = st.params.spill ?? 0
-          if (st.roots.length >= 2 || spill > 0) {
-            u.copy(target).sub(head).normalize()
-            const axial = deltaG.dot(u)
-            if (axial < 0) {
-              deltaG.addScaledVector(u, -axial)
-              if (spill > 0 && st.roots.length >= 2) {
-                meanHead.set(0, 0, 0)
-                for (const link of st.roots) {
-                  rootFrame.copy(link.local)
-                  for (let n = link.bone.parent; n; n = n.parent) {
-                    if (driven.has(n as Bone)) { rootFrame.premultiply(n.matrixWorld); break }
-                    rootFrame.premultiply(n.matrix)
-                  }
-                  meanHead.add(temp.setFromMatrixPosition(rootFrame))
-                }
-                meanHead.divideScalar(st.roots.length)
-                lateral.copy(head).sub(meanHead)
-                lateral.addScaledVector(u, -lateral.dot(u)).normalize()
-                deltaG.addScaledVector(lateral, spill * -axial)
-              }
-            }
-          }
           const steps = Math.ceil(dt / (1 / 240))
           const h = dt / steps
           for (let i = 0; i < steps; i++) {
             t.copy(st.target).lerp(target, i / steps)
-            const result = stepSecondaryParticle(st.p, st.v, t, vTarget, deltaG, st.params, h, integration)
+            const result = stepSecondaryParticle(st.p, st.v, t, vTarget, st.params, h, integration)
             st.p.copy(result.p); st.v.copy(result.v)
           }
         }
         (st.target ??= new three.Vector3()).copy(target)
         base.copy(target).sub(head)
-        rendered.copy(base).addScaledVector(temp.copy(st.p!).sub(target), far ? 0 : st.params.gain)
-        localRendered.copy(rendered).add(head).applyMatrix4(inverseAnchor.copy(anchor).invert())
-        dynamicQ.identity()
-        if (!far && st.params.gain !== 0) dynamicQ.setFromUnitVectors(
-            temp.copy(restVector).normalize(), u.copy(localRendered).normalize())
-        const maxAngle = st.params.max_deg * Math.PI / 180
+        rendered.copy(base).add(temp.copy(st.p!).sub(target))
+        // Saturate the swing angle around the static target, not around bind T.
+        dynamicQ.setFromUnitVectors(temp.copy(base).normalize(), u.copy(rendered).normalize())
         const angle = dynamicQ.angleTo(identityQ)
-        if (angle > maxAngle) dynamicQ.slerp(identityQ, 1 - maxAngle / angle)
-        // Gain zero must be exact identity scale, even if squash excludes 1.
-        const s = far || st.params.gain === 0 ? 1
-          : clamp(localRendered.length() / restVector.length(), st.params.squash[0], st.params.squash[1])
+        const limited = softMotionAngle(angle, st.params.max_deg * Math.PI / 180)
+        if (angle > 0) dynamicQ.slerp(identityQ, 1 - limited / angle)
+        const renderedLength = rendered.length()
+        rendered.copy(base).applyQuaternion(dynamicQ).multiplyScalar(renderedLength / base.length())
+        rendered.sub(base).multiplyScalar(far ? 0 : st.params.gain).add(base)
+        localRendered.copy(rendered).add(head).applyMatrix4(inverseAnchor.copy(anchor).invert())
+        dynamicQ.setFromUnitVectors(temp.copy(restVector).normalize(), u.copy(localRendered).normalize())
+        const s = clamp(localRendered.length() / restVector.length(), st.params.squash[0], st.params.squash[1])
         const perpendicular = 1 / Math.sqrt(s)
         u.copy(b.centroid).normalize()
-        // B diag(s,1/sqrt(s),1/sqrt(s)) B^-1 = c I + (s-c) u u^T.
-        // Keep the full matrix (no TRS decomposition): arbitrary imported axes
-        // require off-diagonal terms. Skinning and child FK read this matrix.
         scale.identity()
         const e = scale.elements
-        const axis = u
+        // Paired shortening preserves volume only along L; the third axis stays 1.
+        // S=I+(s-1)uu^T+(1/s-1)LL^T, otherwise symmetric transverse scaling.
+        const pairedFlatten = s < 1 && st.roots.length >= 2 && localLateral.lengthSq() > 1e-12
         for (let row = 0; row < 3; row++) for (let col = 0; col < 3; col++) {
-          e[col * 4 + row] = (row === col ? perpendicular : 0) + (s - perpendicular) * axis.getComponent(row) * axis.getComponent(col)
+          e[col * 4 + row] = pairedFlatten
+            ? (row === col ? 1 : 0) + (s - 1) * u.getComponent(row) * u.getComponent(col)
+              + (1 / s - 1) * localLateral.getComponent(row) * localLateral.getComponent(col)
+            : (row === col ? perpendicular : 0) + (s - perpendicular) * u.getComponent(row) * u.getComponent(col)
         }
         b.bone.matrix.copy(b.local)
           .multiply(rotationMatrix.makeRotationFromQuaternion(dynamicQ.multiply(restQ)))

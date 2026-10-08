@@ -334,6 +334,20 @@ Example: `{"extension_motion":{"groups":{"example_group":{"gain":0.6}}}}`.
 Instance writes are rejected; foreign-scope instance-file values are ignored.
 Setup → Extension motion edits currently loaded group IDs and resets a group by
 removing its override. Numeric rules match declarations: frequency > 0; zeta and
-gravity ≥ 0; gain and spill 0..1 (spill default 0); dynamic/rest angle limits 0..180; squash requires
+gravity ≥ 0; gain, flatten and spill 0..1 (flatten/spill default 0);
+dynamic/static/rest angle limits 0..180 (`sag_max_deg` defaults to the declared `max_deg`); squash requires
 `0 < min <= 1 <= max`. Unknown physics fields are rejected. Stored overrides for
 a currently absent package are retained and have no effective group to modify.
+
+Package `rig.attribute_profiles` selects physics multipliers by the character's
+stored slot attribute values after world overrides. Unknown values are ignored;
+profile multipliers are finite and nonnegative (frequency strictly positive).
+Unit-interval results cap at 1; angle results cap at 180. Absolute character
+physics overrides in `model3d_opts.extension_motion` apply next, then clothing
+damping scales gain. The 3D panel's Extension bones numeric inputs and Reset edit
+these profile overrides via the admin-only character extension-motion endpoint,
+under the character profile lock. The editor shows values before clothing damping.
+`motion_gravity_scale` remains separate: `gravity*(m*g-R_anchor*g_rest)`;
+it scales current gravity against the baked rest gravity. Static sag uses its own
+limit, so gravity does not consume the dynamic angle range. Physics-only changes
+update `motion.rev`, with no mesh fingerprint/signature/revision change.

@@ -118,6 +118,7 @@ from app.routes import assist as assist_route
 from app.routes import prop_variants as prop_variants_route
 from app.routes import improvements as improvements_route
 from app.routes import npc as npc_route
+from app.routes import extension_motion as extension_motion_route
 from app.scheduler.scheduler_manager import SchedulerManager
 from app.core.dependencies import get_skill_manager
 from app.core.provider_manager import initialize_provider_manager
@@ -820,6 +821,7 @@ app.include_router(game_audio.router)
 app.include_router(poses_route.router)
 app.include_router(characters.router)
 app.include_router(npc_route.router)
+app.include_router(extension_motion_route.router)
 app.include_router(chat.router)
 app.include_router(scheduler.router, prefix="/scheduler", tags=["scheduler"])
 app.include_router(instagram.router, tags=["instagram"])

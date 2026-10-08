@@ -47,7 +47,9 @@ def extension_bone_names(character_name, profile=None):
 
 def extension_rig_fingerprint(groups, overrides=None):
     """Versioned identity of applicable declarations and character overrides."""
-    return _revision({"version": 2, "groups": sorted(groups, key=lambda g: g["id"]),
+    geometry = [{key: group[key] for key in ("id", "op", "chains", "params", "enabled", "flip") if key in group}
+                for group in groups]
+    return _revision({"version": 2, "groups": sorted(geometry, key=lambda g: g["id"]),
                       "overrides": overrides or {}})
 
 
@@ -69,7 +71,7 @@ def resolved_extension_groups(character_name, profile=None):
     return result
 
 
-MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "spill", "gain", "max_deg", "squash", "rest_max_deg")
+MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "spill", "flatten", "gain", "max_deg", "sag_max_deg", "squash", "rest_max_deg")
 
 
 def declared_motion_groups():
@@ -98,8 +100,8 @@ def validate_motion_overrides(section):
                        "chains": [[{"bone": "ValidationBone", "parent": "Hips"}]], **values})
 
 
-def motion_payload(character_name, profile=None):
-    """Package → world → worn-piece gain and character gravity; mesh-independent."""
+def motion_payload(character_name, profile=None, *, apply_clothing=True):
+    """Package → world → attribute multipliers → character → clothing; mesh-independent."""
     import math
     from app.core import config
     from app.core.body_slots import slots_for_character
@@ -119,7 +121,7 @@ def motion_payload(character_name, profile=None):
         scale = max(0.0, min(3.0, scale))
     except (TypeError, ValueError):
         scale = 1.0
-    equipment = profile.get("equipped_pieces") or {}
+    equipment = (profile.get("equipped_pieces") or {}) if apply_clothing else {}
     pieces = {}
     items = item_snapshot() if equipment else {}
     for iid in sorted(set(equipment.values())):
@@ -129,12 +131,27 @@ def motion_payload(character_name, profile=None):
             pieces[iid] = {key: op.get(key, 1 if key == "motion_damping" else [])
                            for key in ("motion_damping", "covers", "partially_covers")}
             pieces[iid]["occupied_slots"] = sorted(slot for slot, worn in equipment.items() if worn == iid)
+    slots = slots_for_character(character_name, profile=profile)
+    attributes = {slot.rig.id: ((profile.get("body_slots") or {}).get(slot.id) or {})
+                  for slot in slots if slot.rig is not None}
     coverage = {slot.rig.id: list(slot.covered_by) for slot in
-                slots_for_character(character_name, profile=profile) if slot.rig is not None}
+                slots if slot.rig is not None}
     groups = {}
     for group in declarations:
         values = {key: group[key] for key in MOTION_FIELDS}
         values.update(world.get(group["id"], {}))
+        for key, choices in group.get("attribute_profiles", {}).items():
+            selected = attributes.get(group["id"], {}).get(key)
+            if selected is None:
+                continue
+            for field, multiplier in choices.get(str(selected), {}).items():
+                values[field] *= multiplier
+        # Multipliers may exceed absolute limits; enforce the physics contract.
+        for key in ("gain", "flatten", "spill"):
+            values[key] = min(1.0, values[key])
+        for key in ("max_deg", "sag_max_deg"):
+            values[key] = min(180.0, values[key])
+        values.update(((profile.get("model3d_opts") or {}).get("extension_motion") or {}).get(group["id"], {}))
         factor = 1.0
         targets = set(coverage.get(group["id"], []))
         for piece in pieces.values():
@@ -144,13 +161,15 @@ def motion_payload(character_name, profile=None):
             elif targets.intersection(piece["partially_covers"]):
                 factor *= 1 - (1 - f) / 2
         values["gain"] *= factor
-        values["gravity"] *= scale
+        values["gravity_scale"] = scale
         groups[group["id"]] = {
             "bones": [link["bone"] for chain in group["chains"] for link in chain],
             **values, "rest_deg": 0,
         }
     inputs = {"declarations": declarations, "world": world, "equipment": equipment,
-              "pieces": pieces, "coverage": coverage, "gravity_scale": scale, "groups": groups}
+              "pieces": pieces, "coverage": coverage, "attributes": attributes,
+              "character": (profile.get("model3d_opts") or {}).get("extension_motion") or {},
+              "gravity_scale": scale, "groups": groups}
     return {"rev": _revision(inputs), "groups": groups}
 
 

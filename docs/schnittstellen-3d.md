@@ -10206,8 +10206,8 @@ Worldmap character rows carry these fields independently of scene recipes:
     "groups": {
       "example_group": {
         "bones": ["ExampleBone1", "ExampleBone2"],
-        "freq_hz": 2.2, "zeta": 0.15, "gravity": 0.35, "spill": 0.0, "gain": 1.0,
-        "max_deg": 25, "squash": [0.6, 1.4],
+        "freq_hz": 2.2, "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "spill": 0.0, "flatten": 0.0, "gain": 1.0,
+        "max_deg": 25, "sag_max_deg": 25, "squash": [0.6, 1.4],
         "rest_deg": 0, "rest_max_deg": 90
       }
     }
@@ -10236,8 +10236,9 @@ attempted, attempted_at, has_applied, metrics, per_tier}`. Reserved metadata has
 `attempted=false`; it never suppresses the first real attempt. `has_applied`
 tracks whether rigged bytes remain after a failed later attempt, so disabling
 groups still restores the clean source. `groups` contains applicable group IDs. The fingerprint
-is a versioned hash of applicable declarations and character
-`model3d_opts.extension_rig` overrides, including enabled and flip flags.
+is a versioned hash of applicable operation IDs, chains and parameters plus
+`model3d_opts.extension_rig` overrides, including enabled and flip flags. Physics
+fields and attribute profiles are excluded.
 Statuses are `none_applicable`, `not_found`, `failed`, and `applied`. Reasons
 explain skipped or failed operations. Metrics report weighted vertices per
 group, edge-stretch percentiles at the declared test pose and the connectivity
@@ -10286,7 +10287,7 @@ shows status, reason, metrics and per-group enabled/flip controls.
 
 No motion field belongs to the scene-recipe payload or its fingerprint.
 Motion currently uses package defaults and fixes `rest_deg` at zero. World settings,
-equipment damping, motion overrides and state poses remain later phases.
+equipment damping and motion overrides are resolved below; state poses remain P4.
 
 ### P2 runtime contract: secondary motion
 
@@ -10311,23 +10312,32 @@ Child gravity inherits that pure parent rotation; child positions use the full
 deformed parent matrix.
 
 `g_rest` is world gravity expressed in the bind anchor's rotational frame.
-For `omega = 2*pi*freq_hz`, the world-space particle follows
-`a = omega²*(T-p) - 2*zeta*omega*(v-v_T) + gravity*(g-R_anchor*g_rest)`.
-`spill` is finite, in [0,1], default 0. Let `a_g=gravity*(g-R_anchor*g_rest)`
-and `u=unit(T-head)`. For groups with at least two chains, an inward component
-`c=a_g·u < 0` becomes `a_g'=a_g-c*u+spill*abs(c)*L`. Here `L` is the unit
-vector from the mean of the group's chain-root heads to this link's head,
-projected perpendicular to `u`; a zero projection contributes zero. Roots
-are identified by parents outside the group's bones. Directions use world space.
-Single-chain groups keep `a_g` unchanged at spill 0; positive spill removes
-only the inward axial component. Upright `g-R_anchor*g_rest=0` stays unchanged.
-The target velocity comes from consecutive final anchor targets. Integration
-uses substeps no longer than `1/240 s`, linearly interpolating the target
-inside each frame. Each substep solves the linear damped spring exactly
-(including critical and overdamped cases), avoiding explicit-integrator instability. Gaps greater than `0.25 s` reset `p=T, v=0`.
-Rendered displacement is `gain*(p-T)`; gain zero preserves the rest pose
-with exactly identity dynamic rotation and scale. Dynamic rotation about the
-head is clamped to `max_deg`, independently of the rest angle.
+For `omega = 2*pi*freq_hz`, static acceleration is
+`a_g=gravity*(m*g-R_anchor*g_rest)`, with character `m=motion_gravity_scale`
+transported as `gravity_scale`, independently of group `gravity`.
+Upright m=1 gives zero; m=2 gives `gravity*g/omega²` sag; m=.5 gives lift.
+
+`flatten` and `spill` are finite in [0,1], default 0. For `u=unit(T-head)`
+and inward component `c=a_g·u<0`, use
+`a_g'=a_g-(1-flatten)*c*u+spill*(1-flatten)*abs(c)*L`.
+`L` is the unit vector from mean chain-root heads to the current link head,
+projected perpendicular to `u`. A zero projection contributes zero. Roots have
+parents outside the group. Single chains use `L=0`, still retaining only the
+`flatten` fraction of inward axial gravity. All directions are world-space.
+
+Resolve static `e=a_g'/omega²`, then limit the angle of `T+e-head` from
+`T-head` to `sag_max_deg` (default: declared `max_deg`) and its length to
+`squash`. The limited result defines `T'`. The spring runs WITHOUT gravity:
+`a=omega²*(T'-p)-2*zeta*omega*(v-v_T')`. Target velocity uses consecutive final
+static targets. Substeps <=1/240 s interpolate T' linearly; exact propagation
+handles critical and overdamped cases. Gaps >.25 s reset `p=T',v=0`.
+
+Limit dynamic deflection around T' separately: raw angle `alpha` is linear up
+to `h=max_deg/2`, then `alpha_soft=h+h*tanh((alpha-h)/h)`, or zero when the
+limit is zero. This C1 saturation is monotonic and bounded; it avoids a stuck
+hard boundary without clipping the spring's velocity or integration state.
+Apply gain AFTER this saturation: render `T'+gain*d_soft`. Static sag remains
+at gain zero and far LOD; it does not consume the dynamic angle range.
 
 The rest target rotates the bind centroid about the chain's lateral axis:
 model **+X in bind pose**, stored in each anchor's local frame, with the
@@ -10335,10 +10345,13 @@ right-hand sign convention. `rest_deg` is independently clamped by
 `rest_max_deg`. Changes blend from the currently shown angle over **1.5 real
 seconds**, using smoothstep, including at far LOD.
 
-The length factor is clamped to `squash`; perpendicular scale is `1/sqrt(s)`.
-For normalized head-to-centroid direction `u`, the local scale matrix is
-`S = c*I + (s-c)*u*u^T`, `c=1/sqrt(s)`. This is a basis-conjugated diagonal
-scale with determinant one. The bone keeps its full local matrix with
+The final length factor `s` is clamped to `squash`. For paired groups at
+`s<1`, volume compensation acts only along L: scale `1/s` along L, 1 along
+the third axis. In the bind lever basis this is
+`S=I+(s-1)*u*u^T+(1/s-1)*L*L^T` with orthonormal u,L.
+For single chains, stretches `s>=1`, or degenerate L, transverse scale stays
+symmetric: `S=c*I+(s-c)*u*u^T`, `c=1/sqrt(s)`. Both have determinant one.
+The bone keeps its full local matrix with
 `matrixAutoUpdate=false`: decomposing it into TRS would lose the off-diagonal
 terms for imported joint axes. Both skinning and child transforms therefore
 receive the same directional deformation. Both consumers install the shared
@@ -10481,15 +10494,44 @@ weiter") und ihren Löschlisten stehen in der Git-Historie: `81a9bb3c` (E1),
 ### Effective extension motion (P3)
 
 Worldmap character `motion` and `/characters/{name}/model3d` metadata return the
-same effective physics: package defaults → per-group world override → clothing
-gain product and character gravity scale. For two distinct covering pieces with
+same effective physics: package defaults → per-group world override → slot
+attribute-profile multipliers → absolute character override → clothing gain product
+→ state (P4 later). For two distinct covering pieces with
 `motion_damping` 0.5 and 0.8, gain is the package/world gain × 0.4. Partial 0.6
-contributes 0.8. A character scale of 2 doubles gravity, without changing frequency.
+contributes 0.8. Character scale m=2 doubles current gravity before subtracting baked gravity;
+it stays separate from group gravity and does not change frequency.
 
 `motion.rev` hashes declarations, world overrides, raw equipment assignments, worn
-item damping/coverage definitions, slot coverage and character scale, plus the
+item damping/coverage definitions, slot values/profiles, absolute character overrides,
+slot coverage and character scale, plus the
 effective groups. Repeated reads are stable; changes remain visible even when
 the effective result is masked by another multiplier. State pose composition
 is introduced in P4. `model_sig`/`model_rev` remain mesh identities: both renderers
 reconfigure the secondary solver on motion revision changes without reloading
 mesh geometry. No motion input enters the scene recipe fingerprint.
+
+Package `rig.attribute_profiles: {attribute_key: {value: {field: multiplier}}}`
+allows frequency, damping, gravity, gain, dynamic/static angle limits, flatten
+and spill multipliers. Keys must name attributes of the same slot; scalar string
+values select by exact match. Unknown/missing values contribute nothing. Values
+are finite and nonnegative; frequency is strictly positive. Unit-interval fields
+cap at 1 and angles at 180 after profiles. Profile physics is excluded from the
+extension mesh fingerprint, which contains only operation identity and parameters.
+
+Manual character values live in `model3d_opts.extension_motion` as absolute
+per-group physics overrides. The admin-only
+`POST /characters/{name}/model3d/extension-motion` accepts
+`{"extension_motion":{"example_group":{"freq_hz":3,"flatten":0.5}}}`;
+`{"extension_motion":{}}` resets all character overrides. Writes validate the
+same ranges as world physics and hold `keyed_lock("character_profile", name)`
+around profile read and save. `/characters/{name}/model3d` adds `motion_defaults`
+(the same resolved groups before clothing), used by numeric inputs in the
+Extension bones box. Saving physics reconfigures motion without a mesh reload.
+
+Hand-derived v2 acceptance is in `smoke_secondary_motion.mjs` and the P0/P3
+Python smokes: paired flatten .5/spill .5 has axial factor `1-.5*D`, lateral
+shift `.25*D`, and length `sqrt((1-.5*D)^2+(.25*D)^2)` for
+`D=9.81*sqrt(2)/(4*pi)^2`. Width is `1/s` only along L. Upright m=2 has
+`sag_y=-9.81/(4*pi)^2`, m=1 zero; a bent-forward body impulse has identical
+swing for gravity 0 and 3. Soft limits are monotonic/bounded, profile selection
+and override order are checked, and revisions change without mesh identity changes.

@@ -3,7 +3,11 @@
 Usage: .venv/bin/python scripts/smoke_extension_rig_p0.py
 
 P0 requires 52 base joints. A two-link group allows 54 or 52, never 53.
-Defaults: 2.2, 0.15, 0.35, 1.0, 25, [0.6,1.4], rest=0, rest_max=90.
+Spec defaults: f=2.2, zeta=.15, gravity=.35, m=1, gain=1, max_deg=25,
+squash=[.6,1.4], rest=0, rest_max=90, flatten=spill=0. The static limit
+inherits declared max_deg: omitted sag_max_deg with max_deg=42 yields 42.
+Changing flatten to .5 or sag_max_deg to 40 changes effective motion/rev,
+while mesh identity hashes only operation geometry and stays unchanged.
 Equal motion content gives equal motion rev; package deletion restores strict validation.
 An extension parent must be a skin joint, not just a same-named scene node.
 Slot and rig conditions are both AND filters. A tier's creation/deletion or
@@ -164,7 +168,7 @@ def main():
         slot.applies_to = {}
         motion = motion_payload("demo", profile)
         expected = {"bones": ["ExampleBone1", "ExampleBone2"], "freq_hz": 2.2,
-                    "zeta": 0.15, "gravity": 0.35, "spill": 0.0, "gain": 1.0, "max_deg": 25.0,
+                    "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "spill": 0.0, "flatten": 0.0, "sag_max_deg": 25.0, "gain": 1.0, "max_deg": 25.0,
                     "squash": [0.6, 1.4], "rest_deg": 0, "rest_max_deg": 90.0}
         check(motion["groups"] == {"example_group": expected}, "motion defaults")
         check(motion == motion_payload("demo", copy.deepcopy(profile)), "stable motion rev")
@@ -180,9 +184,24 @@ def main():
         check(spill_motion["groups"]["example_group"]["spill"] == .5 and spill_motion["rev"] != motion["rev"],
               "package spill changes payload and revision")
         slot.rig.spill = 0.0
+        fingerprint = extension_metadata("demo", profile)["fingerprint"]
+        for key, value in (("flatten", .5), ("sag_max_deg", 40)):
+            original = getattr(slot.rig, key)
+            setattr(slot.rig, key, value)
+            changed = motion_payload("demo", profile)
+            check(changed["groups"]["example_group"][key] == value and changed["rev"] != motion["rev"]
+                  and extension_metadata("demo", profile)["fingerprint"] == fingerprint,
+                  key + " changes motion revision without mesh fingerprint")
+            setattr(slot.rig, key, original)
         check(extension_metadata("demo", profile)["status"] == "not_found", "reserved status")
         for key, value in (("freq_hz", 0), ("gain", 1.1), ("spill", -0.1), ("spill", 1.1), ("spill", float("nan")), ("zeta", -1),
                            ("gravity", float("nan")), ("max_deg", 181),
+                           ("flatten", -.1), ("flatten", 1.1), ("flatten", True),
+                           ("sag_max_deg", -1), ("sag_max_deg", 181), ("sag_max_deg", float("nan")),
+                           ("attribute_profiles", []), ("attribute_profiles", {"a": {"v": {"gain": -1}}}),
+                           ("attribute_profiles", {"a": {"v": {"freq_hz": 0}}}),
+                           ("attribute_profiles", {"a": {"v": {"gain": True}}}),
+                           ("attribute_profiles", {"a": {"v": {"squash": 1}}}),
                            ("rest_max_deg", -1), ("squash", [1.2, 1.4]),
                            ("params", []), ("op", "")):
             malformed = {**rig, key: value}
@@ -193,6 +212,15 @@ def main():
             else:
                 raise AssertionError("accepted invalid " + key)
         check(True, "physics and declaration range validation")
+        check(RigSpec.parse({**rig, "max_deg": 42}).sag_max_deg == 42,
+              "static limit defaults to declared dynamic limit")
+        try:
+            RigSpec.parse({**rig, "attribute_profiles": {"undeclared": {"v": {"gain": .5}}}},
+                          attributes={"example_attribute": {"type": "str"}})
+        except ValueError:
+            check(True, "attribute profile keys validated against slot declarations")
+        else:
+            raise AssertionError("undeclared attribute profile accepted")
         malformed_manifest = copy.deepcopy(manifest)
         malformed_manifest["body_slots"][0]["rig"]["chains"][0][0]["parent"] = "ForeignBone"
         bad = plugins / "example_bad"

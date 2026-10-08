@@ -176,7 +176,8 @@ def get_model3d_options(character_name: str) -> Dict[str, Any]:
             # Auto-generate the mesh on the CHEAPEST backend as soon as a
             # fresh T-pose render of a new outfit combination succeeds.
             "auto_generate": bool(raw.get("auto_generate")),
-            "extension_rig": dict(raw.get("extension_rig") or {})}
+            "extension_rig": dict(raw.get("extension_rig") or {}),
+            "extension_motion": dict(raw.get("extension_motion") or {})}
 
 
 def set_model3d_options(character_name: str,
@@ -214,6 +215,11 @@ def set_model3d_options(character_name: str,
                     raise ValueError("extension overrides accept enabled and flip booleans only")
                 cleaned[group_id] = dict(values)
             opts["extension_rig"] = cleaned
+        if "extension_motion" in updates:
+            from app.core.extension_rig import validate_motion_overrides
+            overrides = updates["extension_motion"]
+            validate_motion_overrides({"groups": overrides})
+            opts["extension_motion"] = {key: dict(value) for key, value in overrides.items() if value}
         profile["model3d_opts"] = opts
         if not save_character_profile(character_name, profile):
             raise RuntimeError("Character profile could not be saved")
@@ -642,6 +648,7 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
         out["model"] = info
     from app.core.extension_rig import motion_payload
     out["motion"] = motion_payload(character_name, profile=profile)
+    out["motion_defaults"] = motion_payload(character_name, profile=profile, apply_clothing=False)["groups"]
     from app.core.extension_rig import rig_groups_for
     out["extension_groups"] = rig_groups_for(character_name, profile=profile)
     out["options"] = get_model3d_options(character_name)

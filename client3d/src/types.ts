@@ -787,7 +787,9 @@ export interface AuthUser {
   role: string;
 }
 
-/** Package defaults transported for future extension motion simulation. */
+export type { MotionAttributeProfiles, ExtensionRigDeclaration } from '@anima/scene-render';
+
+/** Fully resolved extension motion, independent of mesh identity. */
 export interface MotionPayload {
   rev: string;
   groups: Record<string, {
@@ -796,6 +798,9 @@ export interface MotionPayload {
     zeta: number;
     gravity: number;
     spill: number;
+    flatten: number;
+    sag_max_deg: number;
+    gravity_scale: number;
     gain: number;
     max_deg: number;
     squash: [number, number];

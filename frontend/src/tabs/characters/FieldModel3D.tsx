@@ -1,4 +1,4 @@
-import type { SecondaryMotionPayload } from '@anima/scene-render'
+import type { SecondaryMotionPayload, ExtensionRigDeclaration } from '@anima/scene-render'
 /**
  * FieldModel3D — the character's 3D model for the current outfit. ONE model,
  * produced either way: GENERATE it from the T-pose render (mesh backend) or
@@ -113,13 +113,15 @@ interface MeshBackend {
 
 interface Model3DStatus {
   motion?: SecondaryMotionPayload
+  motion_defaults?: SecondaryMotionPayload['groups']
   signature?: string
   rig?: string
   has_input?: boolean
   model?: Model3DInfo | null
   options?: { no_fingers?: boolean | null; auto_generate?: boolean;
-    extension_rig?: Record<string, { enabled?: boolean; flip?: boolean }> }
-  extension_groups?: { id: string; op: string }[]
+    extension_rig?: Record<string, { enabled?: boolean; flip?: boolean }>;
+    extension_motion?: Record<string, Record<string, number | number[]>> }
+  extension_groups?: ExtensionRigDeclaration[]
   backends?: MeshBackend[]
   default?: string
   animation_set?: string
@@ -504,6 +506,21 @@ export function FieldModel3D({ character }: { character: string }) {
     } finally { setBusy(false) }
   }, [enc, st.options?.extension_rig, t, toast])
 
+  const setExtensionMotion = useCallback(async (id: string, key?: string, value?: number | number[]) => {
+    setBusy(true)
+    try {
+      const overrides = structuredClone(st.options?.extension_motion ?? {})
+      if (key === undefined) delete overrides[id]
+      else overrides[id] = { ...overrides[id], [key]: value! }
+      const result = await apiPost<{ options: Model3DStatus['options'] }>(
+        `/characters/${enc}/model3d/extension-motion`, { extension_motion: overrides })
+      setSt(previous => ({ ...previous, options: result.options }))
+      await load()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally { setBusy(false) }
+  }, [enc, load, st.options?.extension_motion, t, toast])
+
   const remove = useCallback(async () => {
     if (!confirmDelete) {
       setConfirmDelete(true)
@@ -842,7 +859,7 @@ export function FieldModel3D({ character }: { character: string }) {
         <fieldset className="ga-form">
           <legend>{t('Extension bones')}</legend>
           {st.extension_groups.map((group) => (
-            <div key={group.id} style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <div key={group.id} style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
               <span>{group.id}</span>
               <label>
                 <input type="checkbox" disabled={pending}
@@ -858,9 +875,46 @@ export function FieldModel3D({ character }: { character: string }) {
                   {' '}{t('Flip direction')}
                 </label>
               ) : null}
+              {st.motion?.groups[group.id] ? <>
+                {Object.entries({ freq_hz: 'Frequency (Hz)', zeta: 'Damping ratio', gravity: 'Gravity',
+                  gain: 'Gain', max_deg: 'Maximum dynamic angle (degrees)',
+                  sag_max_deg: 'Maximum static angle (degrees)', flatten: 'Flatten', spill: 'Spill',
+                  rest_max_deg: 'Maximum rest angle (degrees)' }).map(([key, label]) => (
+                  <label key={key}>{t(label)}
+                    <input className="ga-input" type="number" step="any" min={key === 'freq_hz' ? 0.000001 : 0}
+                      max={['gain', 'flatten', 'spill'].includes(key) ? 1 : key.endsWith('deg') ? 180 : undefined}
+                      disabled={pending || busy}
+                      defaultValue={(st.options?.extension_motion?.[group.id]?.[key]
+                        ?? st.motion_defaults?.[group.id][key as keyof SecondaryMotionPayload['groups'][string]]) as number}
+                      key={`${key}:${st.motion?.rev}`}
+                      onBlur={event => {
+                        if (event.target.value && event.target.validity.valid
+                          && Number(event.target.value) !== Number(event.target.defaultValue))
+                          void setExtensionMotion(group.id, key, Number(event.target.value))
+                      }} />
+                  </label>
+                ))}
+                {[0, 1].map(index => <label key={index}>{t(index === 0 ? 'Squash minimum' : 'Squash maximum')}
+                  <input className="ga-input" type="number" step="any" min={index === 0 ? 0.000001 : 1}
+                    max={index === 0 ? 1 : undefined} disabled={pending || busy}
+                    key={`${index}:${st.motion?.rev}`}
+                    defaultValue={(st.options?.extension_motion?.[group.id]?.squash as number[]
+                      ?? st.motion_defaults![group.id].squash)[index]}
+                    onBlur={event => {
+                      if (!event.target.value || !event.target.validity.valid
+                        || Number(event.target.value) === Number(event.target.defaultValue)) return
+                      const squash = [...(st.options?.extension_motion?.[group.id]?.squash as number[]
+                        ?? st.motion_defaults![group.id].squash)]
+                      squash[index] = Number(event.target.value)
+                      void setExtensionMotion(group.id, 'squash', squash)
+                    }} />
+                </label>)}
+                <button className="ga-btn ga-btn-sm" type="button" disabled={pending || busy}
+                  onClick={() => void setExtensionMotion(group.id)}>{t('Reset')}</button>
+              </> : null}
             </div>
           ))}
-          <span className="ga-hint">{t('Changes take effect when extension bones are rebuilt.')}</span>
+          <span className="ga-hint">{t('Physics changes apply immediately. Enabled and flip changes require rebuilding extension bones.')}</span>
         </fieldset>
       ) : null}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>

@@ -212,7 +212,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
         if "rig" in bdef:
             from app.plugins.registry import RigSpec
             try:
-                rig = RigSpec.parse(bdef["rig"])
+                rig = RigSpec.parse(bdef["rig"], attributes=bdef.get("attributes") or {})
             except (ValueError, TypeError, OverflowError) as exc:
                 logger.warning("Package %s slot %s: rig dropped: %s", pkg.id, bdef["id"], exc)
         pkg.body_slots.append(BodySlotSpec(

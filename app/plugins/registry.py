@@ -81,13 +81,16 @@ class RigSpec:
     zeta: float = 0.15
     gravity: float = 0.35
     spill: float = 0.0
+    flatten: float = 0.0
+    sag_max_deg: float = 25.0
+    attribute_profiles: Dict[str, Dict[str, Dict[str, float]]] = field(default_factory=dict)
     gain: float = 1.0
     max_deg: float = 25.0
     squash: List[float] = field(default_factory=lambda: [0.6, 1.4])
     rest_max_deg: float = 90.0
 
     @classmethod
-    def parse(cls, raw):
+    def parse(cls, raw, attributes=None):
         """Reject malformed chains, conditions and non-finite physics values."""
         import math
         from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
@@ -133,7 +136,7 @@ class RigSpec:
         spec = cls(raw["id"].strip(), raw["op"].strip(), result,
                    dict(params), dict(conditions))
         bounds = {"freq_hz": (0, None), "zeta": (0, None),
-                  "gravity": (0, None), "spill": (0, 1), "gain": (0, 1),
+                  "gravity": (0, None), "spill": (0, 1), "flatten": (0, 1), "gain": (0, 1),
                   "max_deg": (0, 180), "rest_max_deg": (0, 180)}
         for key, (lo, hi) in bounds.items():
             value = raw.get(key, getattr(spec, key))
@@ -142,6 +145,27 @@ class RigSpec:
             if not math.isfinite(value) or value < lo or (hi is not None and value > hi) or (key == "freq_hz" and value == 0):
                 raise ValueError(f"rig.{key} outside allowed range")
             setattr(spec, key, float(value))
+        sag = raw.get("sag_max_deg", spec.max_deg)
+        if isinstance(sag, bool) or not isinstance(sag, (int, float)) or not math.isfinite(sag) or not 0 <= sag <= 180:
+            raise ValueError("rig.sag_max_deg outside allowed range")
+        spec.sag_max_deg = float(sag)
+        profiles = raw.get("attribute_profiles", {})
+        fields = {"freq_hz", "zeta", "gravity", "gain", "max_deg", "sag_max_deg", "flatten", "spill"}
+        if not isinstance(profiles, dict):
+            raise ValueError("rig.attribute_profiles must be a mapping")
+        for key, choices in profiles.items():
+            if not isinstance(key, str) or not key or (attributes is not None and key not in attributes):
+                raise ValueError("attribute profile must name a declared slot attribute")
+            if not isinstance(choices, dict):
+                raise ValueError("attribute profile values must be a mapping")
+            for value, multipliers in choices.items():
+                if not isinstance(value, str) or not value or not isinstance(multipliers, dict) or set(multipliers) - fields:
+                    raise ValueError("invalid attribute profile multipliers")
+                if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0
+                       or (f == "freq_hz" and v == 0) for f, v in multipliers.items()):
+                    raise ValueError("attribute profile multipliers must be finite and nonnegative")
+        spec.attribute_profiles = {key: {value: dict(row) for value, row in choices.items()}
+                                   for key, choices in profiles.items()}
         squash = raw.get("squash", spec.squash)
         if not isinstance(squash, list) or len(squash) != 2 or any(
                 isinstance(v, bool) or not isinstance(v, (int, float))
