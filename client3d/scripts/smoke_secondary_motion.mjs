@@ -6,6 +6,12 @@
  * At theta=90°, gravity=1: |deltaG|=9.81 sqrt(2)=13.87343505,
  * equilibrium offset=0.08785456 m. Centroid +Z tilted -90° about X points
  * up; equilibrium=(0,0.93787745,-0.06212255), length=0.93993263 < 1.
+ * Pair roots +/-0.2 X; bind lever (0,-q,q), q=sqrt(1/2), tilted -90 X
+ * becomes (0,q,q). DeltaG=(0,-9.81,-9.81), purely inward magnitude
+ * 9.81 sqrt(2). At spill 0 axial gravity disappears: length remains 1.
+ * At spill .5, equilibrium X offsets are +/-0.5*9.81*sqrt(2)/omega²
+ * = +/-0.04392728 m, with unchanged Y/Z. Upright deltaG=0.
+ * A single chain with positive spill removes axial gravity without redirecting.
  * Gain zero removes dynamics, retains rest. Clamps limit dynamic angle,
  * length and rest independently; perpendicular 1/sqrt(s) gives determinant 1.
  * Eight 1/240 steps equal four frames of two steps for a static anchor.
@@ -45,7 +51,7 @@ try {
   C.installSkinnedNormalCorrection(THREE);
   assert.match(THREE.ShaderChunk.skinnormal_vertex,/inverse\(transpose\(mat3\(skinMatrix\)\)\)/);
 
-  const defaults = { bones: ['extra'], freq_hz: 2, zeta: 1, gravity: 1, gain: 1, max_deg: 180, squash: [0.1,3], rest_deg: 0, rest_max_deg: 90 };
+  const defaults = { bones: ['extra'], freq_hz: 2, zeta: 1, gravity: 1, spill: 0, gain: 1, max_deg: 180, squash: [0.1,3], rest_deg: 0, rest_max_deg: 90 };
   const payload = (params={}) => ({ rev: JSON.stringify(params), groups: { test: { ...defaults, ...params } } });
   function fixture(params={}) {
     const root = new THREE.Group(), anchor = new THREE.Bone(), bone = new THREE.Bone();
@@ -68,6 +74,38 @@ try {
   f.anchor.rotation.x=-Math.PI/2; f.solver.reset(); settle(f);
   near(f.point().distanceTo(new THREE.Vector3(0,1,0)),0.08785456); near(f.point().length(),0.93993263); console.log('ok static tilt equilibrium and shortening');
   near(f.bone.matrix.determinant(),1); console.log('ok directional scale preserves volume');
+  // Roots +/-0.2 X; bind lever (0,-q,q), q=sqrt(1/2). After -90 X
+  // lever=(0,q,q), dG=(0,-9.81,-9.81), purely inward magnitude 9.81 sqrt(2).
+  // Equilibrium outward = spill*9.81*sqrt(2)/(4*pi)^2 (0.04392728 at .5).
+  function pairFixture(spill, paired=true) {
+    const root=new THREE.Group(), anchor=new THREE.Bone(); root.add(anchor);
+    const bones=[new THREE.Bone(),new THREE.Bone()];
+    bones.forEach((b,i)=>{b.name=`pair${i}`; b.position.x=i===0?-.2:.2; anchor.add(b);});
+    const q=Math.SQRT1_2, geometry=new THREE.BufferGeometry();
+    geometry.setAttribute('position',new THREE.Float32BufferAttribute([-.2,-q,q, .2,-q,q],3));
+    geometry.setAttribute('skinIndex',new THREE.Uint16BufferAttribute([1,0,0,0, 2,0,0,0],4));
+    geometry.setAttribute('skinWeight',new THREE.Float32BufferAttribute([1,0,0,0, 1,0,0,0],4));
+    const mesh=new THREE.SkinnedMesh(geometry,new THREE.MeshBasicMaterial()); root.add(mesh);
+    root.updateMatrixWorld(true); mesh.bind(new THREE.Skeleton([anchor,...bones]));
+    const solver=C.createSecondaryMotion(THREE,root,{rev:'pair',groups:{pair:{...defaults,spill,bones:paired?['pair0','pair1']:['pair0']}}});
+    const point=i=>new THREE.Vector3(i===0?-.2:.2,-q,q).applyMatrix4(mesh.skeleton.boneInverses[i+1]).applyMatrix4(bones[i].matrixWorld);
+    return {root,anchor,bones,solver,point};
+  }
+  for(const spill of [0,.5]) {
+    const pair=pairFixture(spill); settle(pair);
+    for(let i=0;i<2;i++) near(pair.point(i).x,i===0?-.2:.2);
+    pair.anchor.rotation.x=-Math.PI/2; pair.solver.reset(); settle(pair);
+    const outward=spill*9.81*Math.SQRT2/(4*Math.PI)**2;
+    for(let i=0;i<2;i++) {
+      near(pair.point(i).x,(i===0?-1:1)*(.2+outward));
+      near(pair.point(i).y,Math.SQRT1_2); near(pair.point(i).z,Math.SQRT1_2);
+      if(spill===0) near(pair.point(i).distanceTo(new THREE.Vector3(i===0?-.2:.2,0,0)),1);
+    }
+    pair.solver.dispose();
+  }
+  const single=pairFixture(.5,false); single.anchor.rotation.x=-Math.PI/2; settle(single);
+  near(single.point(0).y,Math.SQRT1_2); near(single.point(0).x,-.2);
+  console.log('ok spill pair equilibrium, no inward collapse, upright and single-chain behavior');
   f=fixture({gain:0,rest_deg:30}); settle(f); near(f.point().length(),1); near(f.point().z,Math.cos(Math.PI/6)); console.log('ok gain zero retains rest rotation');
   f=fixture({gravity:100,max_deg:5,squash:[0.95,1.05]}); f.anchor.rotation.x=-Math.PI/2; f.solver.reset(); settle(f);
   near(f.point().length(),1.05); near(f.point().angleTo(new THREE.Vector3(0,1,0)),5*Math.PI/180); console.log('ok dynamic angle and squash clamps');
@@ -128,6 +166,17 @@ try {
   chain.mesh.geometry.setAttribute('skinIndex',new THREE.Uint16BufferAttribute([1,0,0,0, 1,0,0,0, 2,0,0,0],4));
   chain.root.updateMatrixWorld(true); chain.mesh.bind(new THREE.Skeleton([chain.anchor,chain.bone,child]));
   const childBind=child.matrix.clone();
+  // Two links under one root remain a single chain: zero spill retains
+  // the original parent equilibrium (0,.93787745,-.06212255).
+  const singleChain=C.createSecondaryMotion(THREE,chain.root,{rev:'single-chain',groups:{
+    chain:{...defaults,bones:['extra','extra_child'],spill:0},
+  }});
+  chain.anchor.rotation.x=-Math.PI/2;
+  for(let i=0;i<600;i++) singleChain.update(1/120);
+  const chainCentre=new THREE.Vector3(0,0,1).applyMatrix4(chain.mesh.skeleton.boneInverses[1]).applyMatrix4(chain.bone.matrixWorld);
+  near(chainCentre.y,.93787745); near(chainCentre.z,-.06212255);
+  singleChain.dispose(); chain.anchor.rotation.x=0; chain.root.updateMatrixWorld(true);
+  console.log('ok multiple links under one root keep single-chain gravity at zero spill');
   // Child intentionally appears first in the payload: setup must order FK.
   const chainSolver=C.createSecondaryMotion(THREE,chain.root,{rev:'chain',groups:{
     child:{...defaults,bones:['extra_child'],gravity:0},

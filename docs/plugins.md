@@ -266,6 +266,7 @@ body_slots:
       freq_hz: 2.2
       zeta: 0.15
       gravity: 0.35
+      spill: 0.0
       gain: 1.0
       max_deg: 25
       squash: [0.6, 1.4]
@@ -291,8 +292,13 @@ null value only; it does not match `""` or the literal string `"none"`. Both
 operands use the same normalization; other scalars compare as trimmed lowercase
 strings.
 
+`spill` defaults to 0 and redirects inward axial gravity outward for groups
+with at least two chains. With zero spill, paired groups still remove inward
+axial gravity. Single chains keep gravity unchanged at zero spill; positive
+spill only removes the inward component when there is no pair.
+
 Every physics field is optional with the defaults shown above. All numbers
-must be finite: `freq_hz > 0`; `zeta >= 0`, `gravity >= 0`; `gain` in `[0,1]`;
+must be finite: `freq_hz > 0`; `zeta >= 0`, `gravity >= 0`; `gain` and `spill` in `[0,1]`;
 `max_deg` and `rest_max_deg` in `[0,180]`; `squash` is exactly two positive
 numbers satisfying `min <= 1 <= max`. `params` must be a mapping. A malformed
 rig is dropped with a warning, and its slot remains available. Duplicate
@@ -335,7 +341,12 @@ in `scripts/smoke_extension_rig_p1.py` supply every parameter.
 It chooses each side's smallest-Y vertex within the declared height/lateral
 band. The reference wall lies `wall_drop` below that apex. The bone begins
 inside the wall and ends at the apex; weights have smooth elliptical lateral/
-vertical falloff and a front-only depth ramp.
+vertical plateau and a front-only depth ramp. For normalized elliptical distance
+`d`, radial weight is `smooth((1-d/radius_scale)/(1-radius_plateau))`: full
+through `radius_plateau*R*radius_scale`, zero at `R*radius_scale`. Both parameters
+are required: `0 <= radius_plateau < 1`, `radius_scale > 0`. The depth ramp
+retains its declared `depth_ramp` length. Parameter changes alter the fingerprint
+and rebuild from the clean prerig.
 
 `pair_protrusion` declaration example values:
 
@@ -359,6 +370,8 @@ vertical falloff and a front-only depth ramp.
 | `radius_gain` | `1.4` |
 | `radius_offset` | `0.03` |
 | `radius_z_scale` | `0.95` |
+| `radius_plateau` | `0.6` |
+| `radius_scale` | `1.15` |
 | `side_margin` | `0.005` |
 | `front_margin` | `0.03` |
 | `depth_ramp` | `0.04` |
@@ -648,7 +661,7 @@ representation, matching the browser's `JOINTS_0`/`WEIGHTS_0` consumption.
 
 Package body-slot `rig` declarations remain the base physics values. Core declares
 `extension_motion.groups` as a **world** setting: arbitrary package group IDs map
-to partial overrides of `freq_hz`, `zeta`, `gravity`, `gain`, `max_deg`, `squash`,
+to partial overrides of `freq_hz`, `zeta`, `gravity`, `spill`, `gain`, `max_deg`, `squash`,
 and `rest_max_deg`. Missing values inherit the package; no group IDs are named in core.
 Game-Admin → Setup → Extension motion lists loaded declarations from the admin-only
 `GET /admin/world-settings/extension-motion` endpoint and saves through the existing

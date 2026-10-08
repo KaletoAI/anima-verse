@@ -164,7 +164,7 @@ def main():
         slot.applies_to = {}
         motion = motion_payload("demo", profile)
         expected = {"bones": ["ExampleBone1", "ExampleBone2"], "freq_hz": 2.2,
-                    "zeta": 0.15, "gravity": 0.35, "gain": 1.0, "max_deg": 25.0,
+                    "zeta": 0.15, "gravity": 0.35, "spill": 0.0, "gain": 1.0, "max_deg": 25.0,
                     "squash": [0.6, 1.4], "rest_deg": 0, "rest_max_deg": 90.0}
         check(motion["groups"] == {"example_group": expected}, "motion defaults")
         check(motion == motion_payload("demo", copy.deepcopy(profile)), "stable motion rev")
@@ -175,8 +175,13 @@ def main():
               changed_motion["groups"]["example_group"]["gain"] == 0.5,
               "package defaults change motion independently")
         slot.rig.gain = 1.0
+        slot.rig.spill = .5
+        spill_motion = motion_payload("demo", profile)
+        check(spill_motion["groups"]["example_group"]["spill"] == .5 and spill_motion["rev"] != motion["rev"],
+              "package spill changes payload and revision")
+        slot.rig.spill = 0.0
         check(extension_metadata("demo", profile)["status"] == "not_found", "reserved status")
-        for key, value in (("freq_hz", 0), ("gain", 1.1), ("zeta", -1),
+        for key, value in (("freq_hz", 0), ("gain", 1.1), ("spill", -0.1), ("spill", 1.1), ("spill", float("nan")), ("zeta", -1),
                            ("gravity", float("nan")), ("max_deg", 181),
                            ("rest_max_deg", -1), ("squash", [1.2, 1.4]),
                            ("params", []), ("op", "")):

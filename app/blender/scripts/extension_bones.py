@@ -34,6 +34,8 @@ PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'radius_gain': 'number',
                      'radius_offset': 'number',
                      'radius_z_scale': 'number',
+                     'radius_plateau': 'number',
+                     'radius_scale': 'number',
                      'side_margin': 'number',
                      'front_margin': 'number',
                      'depth_ramp': 'number',
@@ -144,7 +146,7 @@ def parameters(group):
                     raise ValueError(key + ' must contain finite numbers')
                 if kind == 'vector3' and len(value) != 3:
                     raise ValueError(key + ' must have three components')
-    positive = ('radius_min', 'radius_max', 'radius_z_scale', 'wall_z_tolerance',
+    positive = ('radius_scale', 'radius_min', 'radius_max', 'radius_z_scale', 'wall_z_tolerance',
                 'wall_x_tolerance', 'depth_ramp', 'slice_size', 'part_half_width',
                 'candidate_lateral_max', 'protrusion_threshold', 'weld_distance',
                 'weight_ramp', 'leak_radius_limit', 'fallback_half_width',
@@ -172,6 +174,8 @@ def parameters(group):
     if not 0 <= p['weight_min'] < 1:
         raise ValueError('weight_min must be in [0,1)')
     if op == 'pair_protrusion':
+        if not 0 <= p['radius_plateau'] < 1:
+            raise ValueError('radius_plateau must be in [0,1)')
         if not 0 <= p['lateral_min'] < p['lateral_max'] or p['radius_min'] > p['radius_max']:
             raise ValueError('invalid lateral or radius range')
     else:
@@ -224,7 +228,7 @@ def pair_plan(group, p, co, bones):
             if sign * c.x < p['side_margin'] or c.y > wall + p['front_margin']:
                 continue
             d = math.sqrt(((c.x-apex.x)/radius)**2 + ((c.z-apex.z)/(radius*p['radius_z_scale']))**2)
-            value = smooth(1-d) * smooth((wall+p['front_margin']-c.y)/p['depth_ramp'])
+            value = smooth((1-d/p['radius_scale'])/(1-p['radius_plateau'])) * smooth((wall+p['front_margin']-c.y)/p['depth_ramp'])
             if value > p['weight_min']:
                 w[i] = value
         if not w:

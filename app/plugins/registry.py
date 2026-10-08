@@ -80,6 +80,7 @@ class RigSpec:
     freq_hz: float = 2.2
     zeta: float = 0.15
     gravity: float = 0.35
+    spill: float = 0.0
     gain: float = 1.0
     max_deg: float = 25.0
     squash: List[float] = field(default_factory=lambda: [0.6, 1.4])
@@ -132,7 +133,7 @@ class RigSpec:
         spec = cls(raw["id"].strip(), raw["op"].strip(), result,
                    dict(params), dict(conditions))
         bounds = {"freq_hz": (0, None), "zeta": (0, None),
-                  "gravity": (0, None), "gain": (0, 1),
+                  "gravity": (0, None), "spill": (0, 1), "gain": (0, 1),
                   "max_deg": (0, 180), "rest_max_deg": (0, 180)}
         for key, (lo, hi) in bounds.items():
             value = raw.get(key, getattr(spec, key))

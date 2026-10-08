@@ -6,7 +6,7 @@ import { getAt, type Json } from './schemaValues'
 type Physics = Record<string, number | number[]>
 type Group = { id: string; defaults: Physics }
 const fields: Record<string, string> = {
-  freq_hz: 'Frequency (Hz)', zeta: 'Damping ratio', gravity: 'Gravity', gain: 'Gain',
+  freq_hz: 'Frequency (Hz)', zeta: 'Damping ratio', gravity: 'Gravity', spill: 'Spill', gain: 'Gain',
   max_deg: 'Maximum dynamic angle (degrees)', rest_max_deg: 'Maximum rest angle (degrees)',
 }
 
@@ -53,7 +53,7 @@ export function ExtensionMotion({ values, onChange }: {
         {Object.entries(fields).map(([key, label]) => <label key={key}>{t(label)}
           <input className="ga-input" type="number" step="any"
             min={0}
-            max={key === 'gain' ? 1 : key.endsWith('deg') ? 180 : undefined}
+            max={(key === 'gain' || key === 'spill') ? 1 : key.endsWith('deg') ? 180 : undefined}
             value={effective[key] as number}
             onChange={e => {
               if (e.target.value && e.target.validity.valid && (key !== 'freq_hz' || Number(e.target.value) > 0))

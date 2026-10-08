@@ -795,6 +795,7 @@ export interface MotionPayload {
     freq_hz: number;
     zeta: number;
     gravity: number;
+    spill: number;
     gain: number;
     max_deg: number;
     squash: [number, number];

@@ -9,6 +9,7 @@ export interface MotionGroup {
   bones: string[]
   freq_hz: number
   zeta: number
+  spill: number
   gravity: number
   gain: number
   max_deg: number
@@ -86,6 +87,7 @@ interface Bind {
 }
 interface Particle {
   bind: Bind
+  roots: Bind[]
   params: MotionGroup
   p: Vector3 | null
   v: Vector3
@@ -198,18 +200,21 @@ export function createSecondaryMotion(
       const chain = params.bones.map(name => byName.get(normBoneName(name)))
       // Absent/partial groups and vertices without influence are ordinary skips.
       if (chain.some(b => !b || b.centroid.lengthSq() < 1e-12)) continue
+      const members = new Set((chain as Bind[]).map(b => b.bone))
+      const roots = (chain as Bind[]).filter(b => !members.has(b.bone.parent as Bone))
       for (const bind of chain as Bind[]) {
         if (selected.has(bind.bone)) continue
         selected.add(bind.bone)
         const to = restAngle(params)
         const old = previous.get(bind.bone)
-        const particle: Particle = old ?? { bind, params, p: null, v: new three.Vector3(),
+        const particle: Particle = old ?? { bind, roots, params, p: null, v: new three.Vector3(),
           target: null, rest: to, restFrom: to, restTo: to, blend: 1.5 }
         if (particle.restTo !== to) {
           particle.restFrom = particle.rest
           particle.restTo = to
           particle.blend = 0
         }
+        particle.roots = roots
         particle.params = { ...params, bones: [...params.bones], squash: [...params.squash] }
         bind.bone.matrixAutoUpdate = false
         nextParticles.push(particle)
@@ -227,6 +232,7 @@ export function createSecondaryMotion(
   const anchor = new three.Matrix4(), inverseAnchor = new three.Matrix4(), scale = new three.Matrix4(), rotationMatrix = new three.Matrix4()
   const anchorQ = new three.Quaternion(), restQ = new three.Quaternion(), dynamicQ = new three.Quaternion(), identityQ = new three.Quaternion()
   const restVector = new three.Vector3(), target = new three.Vector3(), head = new three.Vector3(), vTarget = new three.Vector3(), deltaG = new three.Vector3(), t = new three.Vector3(), base = new three.Vector3(), rendered = new three.Vector3(), localRendered = new three.Vector3(), u = new three.Vector3(), temp = new three.Vector3()
+  const meanHead = new three.Vector3(), lateral = new three.Vector3(), rootFrame = new three.Matrix4()
   const integration = { p: new three.Vector3(), v: new three.Vector3(), equilibrium: new three.Vector3(), x: new three.Vector3(), w: new three.Vector3() }
   const driven = new Map<Bone, Particle>()
   const pureParent = (node: Object3D | null): Quaternion => {
@@ -275,6 +281,31 @@ export function createSecondaryMotion(
         } else if (dt > 0) {
           vTarget.copy(target).sub(st.target).divideScalar(dt)
           deltaG.copy(gravity).sub(temp.copy(b.gravityRest).applyQuaternion(anchorQ))
+          // Suppress inward axial gravity for pairs, optionally redirect it outward.
+          // Single chains retain their previous gravity when spill is zero.
+          const spill = st.params.spill ?? 0
+          if (st.roots.length >= 2 || spill > 0) {
+            u.copy(target).sub(head).normalize()
+            const axial = deltaG.dot(u)
+            if (axial < 0) {
+              deltaG.addScaledVector(u, -axial)
+              if (spill > 0 && st.roots.length >= 2) {
+                meanHead.set(0, 0, 0)
+                for (const link of st.roots) {
+                  rootFrame.copy(link.local)
+                  for (let n = link.bone.parent; n; n = n.parent) {
+                    if (driven.has(n as Bone)) { rootFrame.premultiply(n.matrixWorld); break }
+                    rootFrame.premultiply(n.matrix)
+                  }
+                  meanHead.add(temp.setFromMatrixPosition(rootFrame))
+                }
+                meanHead.divideScalar(st.roots.length)
+                lateral.copy(head).sub(meanHead)
+                lateral.addScaledVector(u, -lateral.dot(u)).normalize()
+                deltaG.addScaledVector(lateral, spill * -axial)
+              }
+            }
+          }
           const steps = Math.ceil(dt / (1 / 240))
           const h = dt / steps
           for (let i = 0; i < steps; i++) {

@@ -69,7 +69,7 @@ def resolved_extension_groups(character_name, profile=None):
     return result
 
 
-MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "gain", "max_deg", "squash", "rest_max_deg")
+MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "spill", "gain", "max_deg", "squash", "rest_max_deg")
 
 
 def declared_motion_groups():

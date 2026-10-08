@@ -10206,7 +10206,7 @@ Worldmap character rows carry these fields independently of scene recipes:
     "groups": {
       "example_group": {
         "bones": ["ExampleBone1", "ExampleBone2"],
-        "freq_hz": 2.2, "zeta": 0.15, "gravity": 0.35, "gain": 1.0,
+        "freq_hz": 2.2, "zeta": 0.15, "gravity": 0.35, "spill": 0.0, "gain": 1.0,
         "max_deg": 25, "squash": [0.6, 1.4],
         "rest_deg": 0, "rest_max_deg": 90
       }
@@ -10313,6 +10313,14 @@ deformed parent matrix.
 `g_rest` is world gravity expressed in the bind anchor's rotational frame.
 For `omega = 2*pi*freq_hz`, the world-space particle follows
 `a = omega²*(T-p) - 2*zeta*omega*(v-v_T) + gravity*(g-R_anchor*g_rest)`.
+`spill` is finite, in [0,1], default 0. Let `a_g=gravity*(g-R_anchor*g_rest)`
+and `u=unit(T-head)`. For groups with at least two chains, an inward component
+`c=a_g·u < 0` becomes `a_g'=a_g-c*u+spill*abs(c)*L`. Here `L` is the unit
+vector from the mean of the group's chain-root heads to this link's head,
+projected perpendicular to `u`; a zero projection contributes zero. Roots
+are identified by parents outside the group's bones. Directions use world space.
+Single-chain groups keep `a_g` unchanged at spill 0; positive spill removes
+only the inward axial component. Upright `g-R_anchor*g_rest=0` stays unchanged.
 The target velocity comes from consecutive final anchor targets. Integration
 uses substeps no longer than `1/240 s`, linearly interpolating the target
 inside each frame. Each substep solves the linear damped spring exactly

@@ -192,10 +192,15 @@ def main():
         check(next(g for g in declared if g['id'] == 'sample_group')['defaults']['gain'] == 1,
               'Setup read endpoint returns package defaults')
         values = config_admin.layer_part('world')
-        values['extension_motion'] = {'groups': {'sample_group': {'gain': .6}}}
+        values['extension_motion'] = {'groups': {'sample_group': {'gain': .6, 'spill': .5}}}
         config_admin.save_layer('world', values)
         bare = {'template': 'human-default'}
         check(gain(bare) == .6 and motion(bare)['groups']['other_group']['gain'] == 1, 'world override group only')
+        check(motion(bare)['groups']['sample_group']['spill'] == .5, 'world spill override')
+        spill_rev = motion(bare)['rev']
+        config_admin.save_layer('world', {'extension_motion': {'groups': {'sample_group': {'gain': .6, 'spill': 0}}}})
+        check(motion(bare)['rev'] != spill_rev, 'spill alone changes revision')
+        config_admin.save_layer('world', values)
         check(motion()['rev'] != before['rev'], 'world changes revision')
         new_row = world_row()
         new_info = model3d.get_model3d_info('sample')
@@ -211,7 +216,7 @@ def main():
             check(True, 'instance write rejected')
         else:
             raise AssertionError('instance accepted world settings')
-        for bad in ({'freq_hz': 0}, {'gain': 2}, {'squash': [1.1, 2]}, {'gravity': float('nan')}):
+        for bad in ({'spill': -0.1}, {'spill': 1.1}, {'spill': float('nan')}, {'freq_hz': 0}, {'gain': 2}, {'squash': [1.1, 2]}, {'gravity': float('nan')}):
             try:
                 config_admin.save_layer('world', {'extension_motion': {'groups': {'sample_group': bad}}})
             except config_admin.LayerSaveError:

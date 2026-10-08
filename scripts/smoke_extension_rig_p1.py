@@ -22,6 +22,10 @@ The largest four are Link1, Hips, Spine, Link2; discard Spine1/LeftUpLeg
 and divide retained weights by their sum. At (.2,.1,1.1), outside both
 operation envelopes, the four original per-joint weights stay unchanged.
 At the pair apex (.1,-.23,1.4), envelope w=1 leaves only ExampleLeft=1.
+Probe (.14,-.23,1.4): R=.11, scaled R=.1265, d=.04/.11; inside .6 plateau, w=1.
+Probe (.20,-.23,1.4): radial t=(1-.10/.1265)/.4=265/506;
+w=t*t*(3-2*t), depth factor=1. Retain the new joint and the three
+largest source influences (.35,.25,.20), divide by w+.8*(1-w).
 A second source assigns five equal .20 weights outside both envelopes.
 Its lowest four joint indices survive with .25 each (joint-index tie rule).
 All exported vertices have at most four influences and weights sum to 1; source
@@ -60,6 +64,8 @@ DECLARED_PARAMS = {'pair_protrusion': {'band_lower_bone': 'Spine1',
                      'radius_gain': 1.4,
                      'radius_offset': 0.03,
                      'radius_z_scale': 0.95,
+                     'radius_plateau': 0.6,
+                     'radius_scale': 1.15,
                      'side_margin': 0.005,
                      'front_margin': 0.03,
                      'depth_ramp': 0.04,
@@ -195,6 +201,7 @@ if p.get('fused'):
     b=start+9*32
     c=len(vertices); vertices.extend(((.12,-.1,.88),(.12,-.1,.89)))
     faces.append((a,b,c+1,c))
+off=len(vertices); vertices.extend(((.14,-.23,1.4),(.20,-.23,1.4),(.20,-.23,1.401))); faces.append((off,off+1,off+2))
 off=len(vertices); vertices.extend(((0,.23,0),(0,.23,1.7),(.001,.23,0))); faces.append((off,off+1,off+2))
 meshdata=bpy.data.meshes.new('Surface')
 meshdata.from_pydata(vertices,[],faces); meshdata.update()
@@ -533,6 +540,11 @@ def main():
         assert_joint_weights(rows,[.03,.91,.16],expected,'hand-derived attenuation, transfer, chain split and top-four weights by joint')
         assert_joint_weights(rows,[.2,1.1,-.1],{'mixamorig:Hips':.2,'mixamorig:Spine':.35,'mixamorig:Spine1':.25,'mixamorig:LeftUpLeg':.2},'unaffected mixed source weights by joint')
         assert_joint_weights(rows,[.1,1.4,.23],{'ExampleLeft':1.},'pair apex weight by joint')
+        assert_joint_weights(rows,[.14,1.4,.23],{'ExampleLeft':1.},'plateau full weight before reduction')
+        t=265/506; radial=t*t*(3-2*t)
+        ramp={'ExampleLeft':radial,'mixamorig:Spine':.35*(1-radial),'mixamorig:Spine1':.25*(1-radial),'mixamorig:Hips':.20*(1-radial)}
+        total=sum(ramp.values()); ramp={k:v/total for k,v in ramp.items()}
+        assert_joint_weights(rows,[.20,1.4,.23],ramp,'hand-derived radial ramp and reduction')
         after_doc=parse_glb(full.read_bytes())['gltf']
         after_frames={n['name']:{k:n.get(k) for k in ('translation','rotation','scale','matrix')} for n in after_doc['nodes'] if n.get('name','').startswith('mixamorig:')}
         defaults={'translation':[0,0,0],'rotation':[0,0,0,1],'scale':[1,1,1],'matrix':[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}
@@ -600,6 +612,14 @@ def main():
         model3d.set_model3d_options('demo',{'extension_rig':{}})
         restored=model3d.rebuild_extension_rig('demo','example')
         check(restored['ok'] and full.read_bytes()==original and clean.read_bytes()==source,'restoring overrides reapplies from clean source without attenuation')
+        fingerprint=json.loads(full.with_suffix('.json').read_text())['extension_rig']['fingerprint']
+        changed.params['radius_scale']=1.0
+        rebuilt=model3d.rebuild_extension_rig('demo','example')
+        check(rebuilt['ok'] and full.read_bytes()!=original and clean.read_bytes()==source,'radius scale rebuilds from clean prerig')
+        check(json.loads(full.with_suffix('.json').read_text())['extension_rig']['fingerprint']!=fingerprint,'radius parameter changes fingerprint')
+        changed.params['radius_scale']=1.15
+        rebuilt=model3d.rebuild_extension_rig('demo','example')
+        check(rebuilt['ok'] and full.read_bytes()==original,'restoring radius reconstructs original weights')
         changed.params['lateral_min']=3
         changed.params['lateral_max']=4
         keep=full.read_bytes()
@@ -611,15 +631,22 @@ def main():
         rejected=root/'rejected.glb'; rejected.write_bytes(source)
         gate=refine.apply_script(rejected,'extension_bones',{'groups':groups},require_smaller=False,validator=lambda _: {'ok':False,'errors':['synthetic gate rejection']})
         check(not gate['applied'] and rejected.read_bytes()==source,'failed validation gate keeps original')
-        missing=copy.deepcopy(groups)
-        del missing[0]['params']['band_lower_bone']
-        absent=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},params={'groups':missing},out_dir=root/'missing')
-        check(absent['data']['status']=='failed' and 'missing required params' in absent['data']['reason'] and not absent['outputs'],'missing anchors fail with explicit reason')
+        for key in ('band_lower_bone','radius_plateau'):
+            missing=copy.deepcopy(groups); del missing[0]['params'][key]
+            absent=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},params={'groups':missing},out_dir=root/('missing-'+key))
+            check(absent['data']['status']=='failed' and 'missing required params' in absent['data']['reason'] and key in absent['data']['reason'] and not absent['outputs'],'missing required '+key+' fails with explicit reason')
         invalid=copy.deepcopy(groups)
         invalid[0]['params']['depth_ramp']=0
         res=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},params={'groups':invalid},out_dir=root/'invalid',timeout_s=180)
         check(res['ok'] and res['data']['status']=='failed' and not res['outputs'],'invalid declaration aborts whole request')
         check(all(v.get('reason') for v in res['data']['groups'].values()),'abort carries reason for every group')
+        for key,value in (('radius_plateau',-0.1),('radius_plateau',1),('radius_scale',0)):
+            invalid=copy.deepcopy(groups); invalid[0]['params'][key]=value
+            res=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},params={'groups':invalid},out_dir=root/('invalid-'+key+str(value)),timeout_s=180)
+            check(res['data']['status']=='failed' and key in res['data']['reason'] and not res['outputs'],'range validation '+key+str(value))
+        missing=copy.deepcopy(groups); del missing[0]['params']['radius_scale']
+        res=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},params={'groups':missing},out_dir=root/'missing-scale',timeout_s=180)
+        check(res['data']['status']=='failed' and 'radius_scale' in res['data']['reason'],'missing required radius scale')
         flipped=copy.deepcopy(groups[1]); flipped['flip']=True
         res=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},params={'groups':[flipped]},out_dir=root/'flipped',timeout_s=180)
         check(res['ok'] and abs(res['data']['metrics']['example_chain']['attachment'][2]-.8)<.002,'flip swaps attachment and tip')
