@@ -14,6 +14,7 @@ export interface OutfitPieceMeta {
   outfit_types?: string[]
   slots?: string[]
   covers?: string[]
+  motion_damping?: number
   partially_covers?: string[]
 }
 
@@ -76,6 +77,7 @@ export interface DraftItem {
   outfit_types: string[]
   slots: string[]
   covers: string[]
+  motion_damping: number
   partially_covers: string[]
   effects: string
   apply_condition: string
@@ -202,6 +204,7 @@ export const EMPTY_DRAFT: DraftItem = {
   outfit_types: [],
   slots: [],
   covers: [],
+  motion_damping: 1,
   partially_covers: [],
   effects: '',
   apply_condition: '',
@@ -233,6 +236,7 @@ export function itemToDraft(it: Item): DraftItem {
     outfit_types: [...(op.outfit_types || [])],
     slots: [...(op.slots || [])],
     covers: [...(op.covers || [])],
+    motion_damping: op.motion_damping ?? 1,
     partially_covers: [...(op.partially_covers || [])],
     effects: effectsToText(it.effects),
     ...extractConditionFromEffects(it.effects),
@@ -263,6 +267,7 @@ export function draftToBody(d: DraftItem): Record<string, unknown> {
       outfit_types: d.outfit_types,
       slots: d.slots,
       covers: d.covers,
+      motion_damping: d.motion_damping,
       partially_covers: d.partially_covers,
     }
   }

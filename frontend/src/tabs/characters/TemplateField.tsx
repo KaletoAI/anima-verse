@@ -27,6 +27,9 @@ export interface TmplFieldDef {
   hint?: string
   hint_de?: string
   help?: string  // topic key for the context-sensitive help panel
+  min?: number
+  max?: number
+  step?: number
   default?: unknown
   store?: string
   source_file?: string
@@ -288,12 +291,16 @@ export function TemplateField({
       <input
         className="ga-input"
         type="number"
+        min={field.min}
+        max={field.max}
+        step={field.step ?? 'any'}
         value={local}
         placeholder={placeholder}
         disabled={disabled}
         onChange={(e) => setLocal(e.target.value)}
-        onBlur={() => {
-          if (local !== String(value ?? '')) onCommit(local)
+        onBlur={(e) => {
+          if (e.target.validity.valid && local !== String(value ?? '')) onCommit(local)
+          else setLocal(String(value ?? ''))
         }}
       />
     )

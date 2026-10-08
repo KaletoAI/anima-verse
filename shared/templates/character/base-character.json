@@ -127,6 +127,16 @@
       "row": 1,
       "fields": [
         {
+          "key": "motion_gravity_scale",
+          "type": "number",
+          "label": "Motion gravity scale",
+          "default": 1.0,
+          "min": 0,
+          "max": 3,
+          "step": 0.1,
+          "hint": "Gravity multiplier for extension motion (0..3; default 1)."
+        },
+        {
           "key": "animation_set",
           "type": "select",
           "source": "animation_sets",

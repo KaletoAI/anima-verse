@@ -326,3 +326,14 @@ Erledigt (2026-09-21, Teil der Config-Altlasten-Runde):
 - `skills.searx.url`: `plugins/searx/plugin.yaml` deklariert jetzt ein eigenes
   `config_schema` (Admin-Seite „Skills → SearX Web Search"), das Paket liest die Werte
   über `ctx.get_config`, und `env_prefix` samt Env-Lesern ist weg.
+
+### World extension motion
+
+`extension_motion.groups` is world-scoped, default `{}` (inherit package physics).
+Example: `{"extension_motion":{"groups":{"example_group":{"gain":0.6}}}}`.
+Instance writes are rejected; foreign-scope instance-file values are ignored.
+Setup → Extension motion edits currently loaded group IDs and resets a group by
+removing its override. Numeric rules match declarations: frequency > 0; zeta and
+gravity ≥ 0; gain 0..1; dynamic/rest angle limits 0..180; squash requires
+`0 < min <= 1 <= max`. Unknown physics fields are rejected. Stored overrides for
+a currently absent package are retained and have no effective group to modify.

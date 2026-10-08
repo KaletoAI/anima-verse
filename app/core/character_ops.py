@@ -1437,6 +1437,24 @@ def apply_profile_update(character_name: str, data: Dict[str, Any]) -> Dict[str,
                 and is_temporary_npc(character_name):
             fields.update(_lifetime_fields(profile, fields))
 
+        # Numeric bounds belong to the template, shared with its generic editor.
+        import math
+        from app.models.character_template import get_template
+        template = get_template(profile.get("template", "")) or {}
+        for section in template.get("sections", []):
+            for field in section.get("fields", []):
+                key = field.get("key")
+                if (key not in fields or field.get("type") != "number"
+                        or not any(bound in field for bound in ("min", "max"))):
+                    continue
+                value = fields[key]
+                if value == "":
+                    continue  # Empty fields retain template/default fallback semantics.
+                if (isinstance(value, bool) or not isinstance(value, (int, float))
+                        or not math.isfinite(value)
+                        or value < field.get("min", -math.inf)
+                        or value > field.get("max", math.inf)):
+                    raise HTTPException(status_code=400, detail=f"{key} outside allowed range")
         profile.update(fields)
         stored = save_character_profile(character_name, profile)
     if not stored:

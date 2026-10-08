@@ -40,6 +40,12 @@ def _payload() -> dict:
     }
 
 
+@router.get("/extension-motion")
+def get_extension_motion():
+    from app.core.extension_rig import declared_motion_groups
+    return {"groups": declared_motion_groups()}
+
+
 @router.get("")
 def get_world_settings():
     return _payload()

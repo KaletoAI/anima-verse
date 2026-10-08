@@ -437,6 +437,15 @@ def _validate_item_id(item_id: str) -> str:
     return item_id
 
 
+def _motion_damping(value):
+    """Validate the persisted dynamic motion multiplier."""
+    import math
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or not math.isfinite(value) or not 0 <= value <= 1):
+        raise ValueError("motion_damping must be a number in 0..1")
+    return float(value)
+
+
 def add_item(name: str,
     description: str = "",
     category: str = "tool",
@@ -523,6 +532,7 @@ def add_item(name: str,
                 f"outfit_piece needs non-empty 'slots' list (valid: {VALID_PIECE_SLOTS})")
         item["outfit_piece"] = {
             "slots": slots,
+            "motion_damping": _motion_damping(outfit_piece.get("motion_damping", 1)),
             "covers": [s for s in _clean_piece_slots(outfit_piece.get("covers")) if s not in slots],
             "partially_covers": [s for s in _clean_piece_slots(outfit_piece.get("partially_covers")) if s not in slots],
             # Closed vocabulary (app/core/outfit_coherence.py): unknown tags
@@ -613,6 +623,7 @@ def update_item(item_id: str,
                     f"outfit_piece needs non-empty 'slots' list (valid: {VALID_PIECE_SLOTS})")
             item["outfit_piece"] = {
                 "slots": slots,
+                "motion_damping": _motion_damping(op.get("motion_damping", 1)),
                 "covers": [s for s in _clean_piece_slots(op.get("covers")) if s not in slots],
                 "partially_covers": [s for s in _clean_piece_slots(op.get("partially_covers")) if s not in slots],
                 # Same closed vocabulary as on create — an edit must not be

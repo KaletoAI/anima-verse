@@ -53,6 +53,7 @@ SCENE_PROMPT_LEGACY_DEFAULTS = (
 # group with "world_group" (scripts/smoke_config_scope_views.py checks that
 # none is missing). "image_styles" is rendered by its own editor.
 WORLD_GROUPS = [
+    {"id": "extension_motion", "label": "Extension motion"},
     {"id": "gameplay", "label": "Gameplay"},
     {"id": "npcs", "label": "NPCs"},
     {"id": "story", "label": "Story & events"},
@@ -64,6 +65,10 @@ WORLD_GROUPS = [
 ]
 
 SECTIONS = {
+    "extension_motion": {
+        "label": "Extension motion", "scope": "world", "world_group": "extension_motion",
+        "fields": {"groups": {"type": "json_str", "label": "Group overrides", "default": {}}},
+    },
     "server": {
         "label": "Server",
         "icon": "⚙",

@@ -10469,3 +10469,19 @@ weiter") und ihren Löschlisten stehen in der Git-Historie: `81a9bb3c` (E1),
 `2f501d0e` (E2), `9062dbf9` (E3), `9e85bb18` (E4), `c9874527` (E5a),
 `9b7a424d` (E5b), `67f776d0` (Zonen-Wasser im Schwimmen).
 
+
+### Effective extension motion (P3)
+
+Worldmap character `motion` and `/characters/{name}/model3d` metadata return the
+same effective physics: package defaults → per-group world override → clothing
+gain product and character gravity scale. For two distinct covering pieces with
+`motion_damping` 0.5 and 0.8, gain is the package/world gain × 0.4. Partial 0.6
+contributes 0.8. A character scale of 2 doubles gravity, without changing frequency.
+
+`motion.rev` hashes declarations, world overrides, raw equipment assignments, worn
+item damping/coverage definitions, slot coverage and character scale, plus the
+effective groups. Repeated reads are stable; changes remain visible even when
+the effective result is masked by another multiplier. State pose composition
+is introduced in P4. `model_sig`/`model_rev` remain mesh identities: both renderers
+reconfigure the secondary solver on motion revision changes without reloading
+mesh geometry. No motion input enters the scene recipe fingerprint.

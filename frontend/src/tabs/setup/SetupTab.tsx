@@ -6,6 +6,7 @@ import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { WorldSettingsGroup, type WorldSettings } from './WorldSettingsGroup'
 import { UseCaseStyles } from './UseCaseStyles'
+import { ExtensionMotion } from './ExtensionMotion'
 import { deleteAt, getAt, originOf, setAt, type Json } from './schemaValues'
 
 /**
@@ -146,6 +147,7 @@ export function SetupTab() {
         </div>
       </div> : ws && selected === 'image_styles' ? <UseCaseStyles defaults={ws.use_case_defaults}
         values={values} overrides={overrides} onChange={change} onReset={reset} />
+        : ws && selected === 'extension_motion' ? <ExtensionMotion values={values} onChange={change} />
         : ws && group ? <WorldSettingsGroup group={group} schema={ws.schema} values={values}
           shipped={ws.shipped} overrides={overrides} onChange={change} onReset={reset} /> : null}
       </fieldset>

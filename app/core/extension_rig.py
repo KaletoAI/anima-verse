@@ -12,8 +12,7 @@ def _revision(value):
 def rig_groups_for(character_name, profile=None):
     """Applicable groups, with package physics defaults and ordered chains.
 
-    Future world, equipment, character and state layers belong after this
-    package-default resolution. P0 does not read those layers.
+    Effective motion layers are resolved separately by motion_payload.
     Conditions use profile fields or ``attributes.<key>`` for this slot.
     """
     from app.core.body_slots import normalize_condition_value, slots_for_character
@@ -70,17 +69,85 @@ def resolved_extension_groups(character_name, profile=None):
     return result
 
 
+MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "gain", "max_deg", "squash", "rest_max_deg")
+
+
+def declared_motion_groups():
+    """All loaded declarations, including character-inapplicable groups."""
+    from app.plugins import registry
+    return sorted([{"id": slot.rig.id,
+                    "defaults": {key: getattr(slot.rig, key) for key in MOTION_FIELDS}}
+                   for package in registry.packages() for slot in package.body_slots
+                   if slot.rig is not None], key=lambda group: group["id"])
+
+
+def validate_motion_overrides(section):
+    """Validate partial world overrides against the P0 physics contract."""
+    from app.plugins.registry import RigSpec
+    if not isinstance(section, dict) or set(section) - {"groups"}:
+        raise ValueError("extension_motion requires a groups object")
+    groups = section.get("groups", {})
+    if not isinstance(groups, dict):
+        raise ValueError("extension_motion.groups must be an object")
+    for group_id, values in groups.items():
+        if not isinstance(group_id, str) or not group_id or not isinstance(values, dict):
+            raise ValueError("motion group overrides must be objects with non-empty ids")
+        if set(values) - set(MOTION_FIELDS):
+            raise ValueError("unknown motion physics field")
+        RigSpec.parse({"id": group_id, "op": "validation",
+                       "chains": [[{"bone": "ValidationBone", "parent": "Hips"}]], **values})
+
+
 def motion_payload(character_name, profile=None):
-    """Stable revision of the resolved motion content, independent of mesh."""
+    """Package → world → worn-piece gain and character gravity; mesh-independent."""
+    import math
+    from app.core import config
+    from app.core.body_slots import slots_for_character
+    from app.models.inventory import get_item
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    declarations = rig_groups_for(character_name, profile)
+    world = config.get("extension_motion.groups", {}) or {}
+    scale = profile.get("motion_gravity_scale", 1)
+    try:
+        scale = float(scale)
+        if not math.isfinite(scale):
+            scale = 1.0
+        scale = max(0.0, min(3.0, scale))
+    except (TypeError, ValueError):
+        scale = 1.0
+    equipment = profile.get("equipped_pieces") or {}
+    pieces = {}
+    for iid in sorted(set(equipment.values())):
+        item = get_item(iid)
+        if item and item.get("outfit_piece"):
+            op = item["outfit_piece"]
+            pieces[iid] = {key: op.get(key, 1 if key == "motion_damping" else [])
+                           for key in ("motion_damping", "covers", "partially_covers")}
+    coverage = {slot.rig.id: list(slot.covered_by) for slot in
+                slots_for_character(character_name, profile=profile) if slot.rig is not None}
     groups = {}
-    for group in rig_groups_for(character_name, profile):
+    for group in declarations:
+        values = {key: group[key] for key in MOTION_FIELDS}
+        values.update(world.get(group["id"], {}))
+        factor = 1.0
+        targets = set(coverage.get(group["id"], []))
+        for piece in pieces.values():
+            f = piece["motion_damping"]
+            if targets.intersection(piece["covers"]):
+                factor *= f
+            elif targets.intersection(piece["partially_covers"]):
+                factor *= 1 - (1 - f) / 2
+        values["gain"] *= factor
+        values["gravity"] *= scale
         groups[group["id"]] = {
             "bones": [link["bone"] for chain in group["chains"] for link in chain],
-            **{key: group[key] for key in ("freq_hz", "zeta", "gravity", "gain",
-                                          "max_deg", "squash", "rest_max_deg")},
-            "rest_deg": 0,
+            **values, "rest_deg": 0,
         }
-    return {"rev": _revision(groups), "groups": groups}
+    inputs = {"declarations": declarations, "world": world, "equipment": equipment,
+              "pieces": pieces, "coverage": coverage, "gravity_scale": scale, "groups": groups}
+    return {"rev": _revision(inputs), "groups": groups}
 
 
 def extension_metadata(character_name, profile=None):

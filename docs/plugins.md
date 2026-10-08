@@ -643,3 +643,21 @@ Exported meshes use at most four deform influences per vertex across the entire
 mesh. Keep the four largest weights, breaking ties by skin joint index, then
 renormalize. Counts and posed edge-stretch metrics describe that final
 representation, matching the browser's `JOINTS_0`/`WEIGHTS_0` consumption.
+
+### Extension motion layers (P3)
+
+Package body-slot `rig` declarations remain the base physics values. Core declares
+`extension_motion.groups` as a **world** setting: arbitrary package group IDs map
+to partial overrides of `freq_hz`, `zeta`, `gravity`, `gain`, `max_deg`, `squash`,
+and `rest_max_deg`. Missing values inherit the package; no group IDs are named in core.
+Game-Admin → Setup → Extension motion lists loaded declarations from the admin-only
+`GET /admin/world-settings/extension-motion` endpoint and saves through the existing
+world-settings endpoint. Reset removes the override so future package defaults flow through.
+
+After world overrides, every distinct worn item whose `outfit_piece.covers` hits
+the body slot's `covered_by` contributes its `motion_damping` (0..1, default 1)
+to the gain product. Mirrored occupied slots count once; hidden layers still count.
+A partial cover contributes `1 - (1 - motion_damping)/2`; full coverage takes
+precedence for the same item. Free-text outfits without pieces contribute 1.
+The shared character template's `motion_gravity_scale` (0..3, default 1) multiplies
+gravity only. These settings do not alter the extension rig fingerprint or mesh.

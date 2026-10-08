@@ -454,6 +454,12 @@ def prepare_layer(scope: str, values: dict, resets=()) -> tuple[dict, dict]:
         _preserve_unsent_image_routing(merged, current)
     strip_materialized_item_defaults(merged, current, schema)
     apply_resets(merged, resets)
+    if "extension_motion" in merged:
+        from app.core.extension_rig import validate_motion_overrides
+        try:
+            validate_motion_overrides(merged["extension_motion"])
+        except ValueError as e:
+            raise LayerSaveError(str(e)) from e
     duplicates = duplicate_names(merged)
     if duplicates:
         raise LayerSaveError("; ".join(duplicates))

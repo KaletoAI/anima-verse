@@ -389,6 +389,12 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
         />
       </Field>
 
+      {isOutfit && <Field label={t('Motion damping')} hint={t('Dynamic motion multiplier: 0 stops motion, 1 leaves it unchanged.')}>
+        <input className="ga-input" type="number" min={0} max={1} step={0.05}
+          value={draft.motion_damping} onChange={e => {
+            if (e.target.value && e.target.validity.valid) onUpdate('motion_damping', Number(e.target.value))
+          }} />
+      </Field>}
       {isOutfit ? (
         <OutfitPieceFields
           outfitTypes={draft.outfit_types}
