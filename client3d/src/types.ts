@@ -803,6 +803,7 @@ export interface MotionPayload {
     gravity_scale: number;
     gain: number;
     max_deg: number;
+    axis_gain: [number, number, number];
     squash: [number, number];
     rest_deg: number;
     rest_max_deg: number;

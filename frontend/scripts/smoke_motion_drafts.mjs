@@ -68,3 +68,10 @@ assert.equal(validNumber('150',minimum,maximum),true)
 assert.equal(validNumber('181',minimum,maximum),false)
 assert.ok(stateSource.includes("t('Clamped per character to its maximum rest angle.')"))
 console.log('PASS state rest drafts accept -60/150, reject 181, and explain character clamp')
+
+const axisDefaults={...defaults,axis_gain:[1,1,1]};
+const axisDraft=editDraft(makeDraft(axisDefaults),'axis_gain_longitudinal','.15');
+assert.deepEqual(draftOverrides(axisDraft,axisDefaults,{gravity:.4}),{gravity:.4,axis_gain:[1,1,.15]});
+assert.deepEqual(draftOverrides(axisDraft,{...axisDefaults,axis_gain:[.5,1,1]},{}),{axis_gain:[.5,1,.15]});
+assert.deepEqual(draftOverrides(editDraft(makeDraft({...axisDefaults,axis_gain:[1,1,.15]}),'axis_gain_longitudinal','1'),axisDefaults,{axis_gain:[1,1,.15]}),{});
+console.log('PASS axis_gain draft preserves untouched current axes and removes default override');

@@ -10,6 +10,8 @@ export function makeDraft(values: Physics): MotionDraft {
   for (const [key, value] of Object.entries(values)) {
     if (key === 'squash' && Array.isArray(value)) {
       strings.squash_min = String(value[0]); strings.squash_max = String(value[1])
+    } else if (key === 'axis_gain' && Array.isArray(value)) {
+      for (const [i, axis] of ['lateral', 'vertical', 'longitudinal'].entries()) strings[`axis_gain_${axis}`] = String(value[i])
     } else if (typeof value === 'number') strings[key] = String(value)
   }
   return { baseline: strings, values: { ...strings } }
@@ -23,7 +25,7 @@ export function draftChanged(draft: MotionDraft) {
 export function draftOverrides(draft: MotionDraft, defaults: Physics, overrides: Physics): Physics {
   const next = { ...overrides }
   for (const key of Object.keys(draft.values)) {
-    if (key.startsWith('squash_') || draft.values[key] === draft.baseline[key]) continue
+    if (key.startsWith('squash_') || key.startsWith('axis_gain_') || draft.values[key] === draft.baseline[key]) continue
     const value = Number(draft.values[key])
     if (value === defaults[key]) delete next[key]
     else next[key] = value
@@ -34,6 +36,13 @@ export function draftOverrides(draft: MotionDraft, defaults: Physics, overrides:
       draft.values[key] === draft.baseline[key] ? current[index] : Number(draft.values[key]))
     if (JSON.stringify(value) === JSON.stringify(defaults.squash)) delete next.squash
     else next.squash = value
+  }
+  const axes = ['axis_gain_lateral', 'axis_gain_vertical', 'axis_gain_longitudinal']
+  if (axes.some(key => draft.values[key] !== draft.baseline[key])) {
+    const current = (overrides.axis_gain ?? defaults.axis_gain) as number[]
+    const value = axes.map((key, i) => draft.values[key] === draft.baseline[key] ? current[i] : Number(draft.values[key]))
+    if (JSON.stringify(value) === JSON.stringify(defaults.axis_gain)) delete next.axis_gain
+    else next.axis_gain = value
   }
   return next
 }

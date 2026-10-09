@@ -214,7 +214,7 @@ def main():
                     change(model3d_opts={'extension_motion': {'sample_group': {'rest_max_deg': limit}}})
                     resolved = extension_rig.motion_payload('sample', preview_states=['signed_rest'])['groups']['sample_group']
                     check(resolved['rest_deg'] == max(-limit, min(limit, angle)) and resolved['rest_max_deg'] == limit, 'signed rest and effective character limit reach payload')
-            for bad in (None, [], {'sample_group': {'rest_deg': 181}},
+            for bad in (None, [], {'sample_group': {'axis_gain': [1, 1, .2]}}, {'sample_group': {'rest_deg': 181}},
                         {'sample_group': {'rest_deg': -181}},
                         {'sample_group': {'rest_deg': float('nan')}},
                         {'sample_group': {'gain': -1}}, {'sample_group': {'gain': True}},

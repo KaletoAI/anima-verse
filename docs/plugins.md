@@ -274,6 +274,7 @@ body_slots:
           enabled: {freq_hz: 0.8, zeta: 1.2, gravity: 1.1}
       gain: 1.0
       max_deg: 25
+      axis_gain: [1, 1, 1]
       squash: [0.6, 1.4]
       rest_max_deg: 90
 ```
@@ -678,7 +679,7 @@ representation, matching the browser's `JOINTS_0`/`WEIGHTS_0` consumption.
 Package body-slot `rig` declarations remain the base physics values. Core declares
 `extension_motion.groups` as a **world** setting: arbitrary package group IDs map
 to partial overrides of `freq_hz`, `zeta`, `gravity`, `spill`, `flatten`, `gain`,
-`max_deg`, `sag_max_deg`, `squash`, and `rest_max_deg`. Missing values inherit the package; no group IDs are named in core.
+`max_deg`, `sag_max_deg`, `axis_gain`, `squash`, and `rest_max_deg`. Missing values inherit the package; no group IDs are named in core.
 Game-Admin → Setup → Extension motion lists loaded declarations from the admin-only
 `GET /admin/world-settings/extension-motion` endpoint and saves through the existing
 world-settings endpoint. Reset removes the override so future package defaults flow through.
@@ -704,6 +705,20 @@ by `sag_max_deg` (default: declared `max_deg`) and squash. The spring has no gra
 term and swings around `T'=T+e`; its dynamic limit is `max_deg`, independent of sag.
 The dynamic angle stays linear below half the limit, then smoothly saturates with
 tanh; gain scales the saturated displacement, preserving static sag even at zero.
+`axis_gain: [lateral, vertical, longitudinal]` defaults to `[1,1,1]`; each
+entry must be a finite number in [0,1] (booleans are rejected). It is supported
+only in package physics, world overrides and absolute character overrides, never
+in `attribute_profiles` multipliers or state `bone_pose`. Both editors expose
+all three gains. Static sag, flatten, spill and rest pose are unaffected.
+At each step decompose only `d=p-T'`: longitudinal along `u=unit(T'-head)`,
+vertical along projected bind-pose body up rotated with the anchor, and lateral
+as the remainder. For a vertical lever use projected bind body front instead;
+if bind geometry cannot define front, bind world +Z is the deterministic fallback.
+Filter the three components before the existing soft dynamic angle and gain.
+Only the filtered longitudinal component changes dynamic length; transverse
+motion rotates the static lever without stretching it. Final squash limits
+and volume compensation still apply.
+
 These settings change `motion.rev`, never the extension rig fingerprint or mesh.
 
 
@@ -711,7 +726,7 @@ These settings change `motion.rev`, never the extension rig fingerprint or mesh.
 
 The Setup motion editor, character overrides and state pose editor share preview hints:
 `live` covers `rest_deg` and `rest_max_deg` (visible immediately); `motion` covers
-`freq_hz` (`freq` in state poses), `zeta`, `gain` and `max_deg` (play a clip);
+`freq_hz` (`freq` in state poses), `zeta`, `gain`, `axis_gain` and `max_deg` (play a clip);
 `tilt` covers `gravity`, `sag_max_deg`, `flatten`, `spill` and `squash` (use Tilt,
 since the upright rest shape already carries gravity). Character `motion_gravity_scale`
 is visible upright when different from 1; otherwise use Tilt. Group enabled/flip and

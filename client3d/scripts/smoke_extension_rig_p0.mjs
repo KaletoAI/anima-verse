@@ -41,9 +41,14 @@ try {
   lib.motionState.set('demo', state);
   assert.equal(await lib.refreshIfChanged('demo', 'signature-a', 'revision-a'), false);
   assert.equal(reloads, 0);
-  const motion = { rev: 'motion-b', groups: {} };
+  const motion = { rev: 'motion-b', groups: {example: {
+    bones: ['ExampleBone'], freq_hz: 2.2, zeta: .15, gravity: .35, gravity_scale: 1,
+    gain: 1, axis_gain: [.5, 1, .15], flatten: 0, spill: 0,
+    max_deg: 25, sag_max_deg: 25, squash: [.6, 1.4], rest_deg: 0, rest_max_deg: 90,
+  }} };
   assert.equal(await lib.refreshIfChanged('demo', 'signature-a', 'revision-a', motion), false);
   assert.equal(figure.motion, motion);
+  assert.deepEqual(figure.motion.groups.example.axis_gain, [.5, 1, .15]);
   assert.equal(reloads, 0);
   assert.equal(await lib.refreshIfChanged('demo', 'signature-a', 'revision-b', motion), true);
   assert.equal(reloads, 1);

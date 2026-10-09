@@ -14,6 +14,7 @@ export interface MotionGroup {
   gravity_scale: number
   sag_max_deg: number
   gravity: number
+  axis_gain: [number, number, number]
   gain: number
   max_deg: number
   squash: [number, number]
@@ -93,6 +94,7 @@ interface Bind {
   centroid: Vector3
   centroidWorld: Vector3
   gravityRest: Vector3
+  bodyFront: Vector3
   head: Vector3
   parentHead: Vector3
   worldRotation: Quaternion
@@ -123,6 +125,7 @@ interface Particle {
   restTo: number
   blend: number
 }
+const DEFAULT_AXIS_GAIN: [number, number, number] = [1, 1, 1]
 const BLENDED_FIELDS = ['gravity', 'freq_hz', 'zeta', 'gain', 'flatten', 'spill'] as const
 /** Smooth numeric state changes over the same 1.5 seconds as the rest angle. */
 export function blendMotionParams(from: MotionGroup, to: MotionGroup, elapsed: number, output?: MotionGroup): MotionGroup {
@@ -193,7 +196,7 @@ export function createSecondaryMotion(
         let depth = 0
         for (let parent = bone.parent; parent; parent = parent.parent) depth++
         binds.set(bone, { bone, local: bone.matrix.clone(), centroid: new three.Vector3(), centroidWorld: new three.Vector3(),
-          gravityRest: gravity.clone().applyQuaternion(q),
+          gravityRest: gravity.clone().applyQuaternion(q), bodyFront: new three.Vector3(),
           head: bone.getWorldPosition(new three.Vector3()), parentHead: bone.parent!.getWorldPosition(new three.Vector3()), worldRotation: q.clone().invert(),
           lateral: new three.Vector3(), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), localRotation: bone.quaternion.clone() })
       }
@@ -260,6 +263,9 @@ export function createSecondaryMotion(
       }
       front.normalize()
       for (const b of chain as Bind[]) {
+        b.bodyFront.copy(front)
+        if (b.bodyFront.lengthSq() < 1e-10) b.bodyFront.set(0, 0, 1)
+        b.bodyFront.applyQuaternion(b.worldRotation.clone().invert())
         b.lateral.set(0, 0, 0)
         if (!roots.includes(b)) continue
         const child = (chain as Bind[]).find(c => c.bone.parent === b.bone)
@@ -315,6 +321,7 @@ export function createSecondaryMotion(
   const anchor = new three.Matrix4(), inverseAnchor = new three.Matrix4(), scale = new three.Matrix4(), rotationMatrix = new three.Matrix4()
   const anchorQ = new three.Quaternion(), restQ = new three.Quaternion(), dynamicQ = new three.Quaternion(), identityQ = new three.Quaternion(), inverseRestQ = new three.Quaternion()
   const restVector = new three.Vector3(), target = new three.Vector3(), head = new three.Vector3(), vTarget = new three.Vector3(), deltaG = new three.Vector3(), t = new three.Vector3(), base = new three.Vector3(), rendered = new three.Vector3(), localRendered = new three.Vector3(), u = new three.Vector3(), temp = new three.Vector3()
+  const bodyVertical = new three.Vector3(), dynamicDelta = new three.Vector3()
   const meanHead = new three.Vector3(), lateral = new three.Vector3(), localLateral = new three.Vector3(), staticVector = new three.Vector3(), equilibrium = new three.Vector3(), rootFrame = new three.Matrix4()
   const integration = { p: new three.Vector3(), v: new three.Vector3(), x: new three.Vector3(), w: new three.Vector3() }
   const driven = new Map<Bone, Particle>()
@@ -425,15 +432,39 @@ export function createSecondaryMotion(
         }
         (st.target ??= new three.Vector3()).copy(target)
         base.copy(target).sub(head)
-        rendered.copy(base).add(temp.copy(st.p!).sub(target))
+        // Filter only p-T' in the current rest lever frame. Bind body up
+        // follows the anchor, not the rest/sag rotation. Vertical levers use
+        // projected bind body front instead of the degenerate up projection.
+        u.copy(base).normalize()
+        bodyVertical.copy(b.gravityRest).multiplyScalar(-1 / 9.81).applyQuaternion(anchorQ)
+        bodyVertical.addScaledVector(u, -bodyVertical.dot(u))
+        if (bodyVertical.lengthSq() < 1e-10) {
+          bodyVertical.copy(b.bodyFront).applyQuaternion(anchorQ)
+          bodyVertical.addScaledVector(u, -bodyVertical.dot(u))
+        }
+        bodyVertical.normalize()
+        dynamicDelta.copy(st.p!).sub(target)
+        const gains = st.params.axis_gain ?? DEFAULT_AXIS_GAIN
+        const longitudinal = dynamicDelta.dot(u)
+        const vertical = dynamicDelta.dot(bodyVertical)
+        dynamicDelta.multiplyScalar(gains[0])
+          .addScaledVector(bodyVertical, (gains[1] - gains[0]) * vertical)
+          .addScaledVector(u, (gains[2] - gains[0]) * longitudinal)
+        rendered.copy(base).add(dynamicDelta)
+        // Compression cannot flip the lever and manufacture axial swing.
+        rendered.addScaledVector(u, Math.max(0, 1e-12 - base.length() - gains[2] * longitudinal))
         // Saturate the swing angle around the static target, not around bind T.
         dynamicQ.setFromUnitVectors(temp.copy(base).normalize(), u.copy(rendered).normalize())
         const angle = dynamicQ.angleTo(identityQ)
         const limited = softMotionAngle(angle, st.params.max_deg * Math.PI / 180)
         if (angle > 0) dynamicQ.slerp(identityQ, 1 - limited / angle)
-        const renderedLength = rendered.length()
+        // Only longitudinal dynamics change length; transverse displacement
+        // supplies direction. Static length/flatten remain untouched.
+        const renderedLength = Math.max(1e-12, base.length() + gains[2] * longitudinal)
         rendered.copy(base).applyQuaternion(dynamicQ).multiplyScalar(renderedLength / base.length())
-        rendered.sub(base).multiplyScalar(far ? 0 : st.params.gain).add(base)
+        const gain = far ? 0 : st.params.gain
+        rendered.sub(base).multiplyScalar(gain).add(base)
+        rendered.normalize().multiplyScalar(Math.max(1e-12, base.length() + gain * gains[2] * longitudinal))
         localRendered.copy(rendered).add(head).applyMatrix4(inverseAnchor.copy(anchor).invert())
         dynamicQ.setFromUnitVectors(temp.copy(restVector).normalize(), u.copy(localRendered).normalize())
         const s = clamp(localRendered.length() / restVector.length(), st.params.squash[0], st.params.squash[1])

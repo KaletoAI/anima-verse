@@ -10206,7 +10206,7 @@ Worldmap character rows carry these fields independently of scene recipes:
     "groups": {
       "example_group": {
         "bones": ["ExampleBone1", "ExampleBone2"],
-        "freq_hz": 2.2, "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "spill": 0.0, "flatten": 0.0, "gain": 1.0,
+        "freq_hz": 2.2, "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "spill": 0.0, "flatten": 0.0, "gain": 1.0, "axis_gain": [1, 1, 1],
         "max_deg": 25, "sag_max_deg": 25, "squash": [0.6, 1.4],
         "rest_deg": 0, "rest_max_deg": 90
       }
@@ -10331,6 +10331,25 @@ Resolve static `e=a_g'/omega²`, then limit the angle of `T+e-head` from
 `a=omega²*(T'-p)-2*zeta*omega*(v-v_T')`. Target velocity uses consecutive final
 static targets. Substeps <=1/240 s interpolate T' linearly; exact propagation
 handles critical and overdamped cases. Gaps >.25 s reset `p=T',v=0`.
+
+`axis_gain=[lateral,vertical,longitudinal]` is three finite numbers in [0,1],
+default [1,1,1]. Only package, world and absolute character physics may set it;
+`attribute_profiles` multipliers and state `bone_pose` do not accept this field.
+Decompose ONLY dynamic `d=p-T'` each step in the rest lever frame:
+`u=unit(T'-head)`, body up = bind-pose up rotated with the current anchor;
+`v=unit(body_up-u*(body_up·u))`. For a vertical lever use the projection of
+bind body front instead (if geometry has no horizontal front, use bind world
++Z). Store body directions in the bind anchor frame, so imported joint roll
+and current anchor rotations do not alter the gain semantics.
+`d_long=(d·u)*u`, `d_vertical=(d·v)*v`, `d_lateral=d-d_long-d_vertical`;
+`d_filtered=axis_gain[0]*d_lateral+axis_gain[1]*d_vertical+axis_gain[2]*d_long`.
+Static sag/flatten/spill/rest are never filtered. Apply the existing soft angle
+and gain to the filtered dynamic direction. Dynamic length before squash is
+`|T'-head|+gain*axis_gain[2]*(d·u)` (positive epsilon floor); transverse motion
+changes rotation only, including after gain interpolation. Thus a unit lever
+with axial critical-spring d=-.065778376882 has length changes -.065778376882
+and -.0131556753764 at longitudinal gains 1 and .2. A transverse displacement
+of the same magnitude gives identical atan(d) rotation for those two gains.
 
 Limit dynamic deflection around T' separately: raw angle `alpha` is linear up
 to `h=max_deg/2`, then `alpha_soft=h+h*tanh((alpha-h)/h)`, or zero when the

@@ -58,6 +58,14 @@ export function ExtensionMotion({ values, onChange }: {
             max={['gain', 'spill', 'flatten'].includes(key) ? 1 : key.endsWith('deg') ? 180 : undefined}
             onCommit={text => update(group.id, key, Number(text))} />
         </label>)}
+        {['Lateral gain', 'Vertical gain', 'Longitudinal gain'].map((label, index) => <label key={label}>{t(label)} <MotionPreviewHint field="axis_gain" />
+          <MotionNumberInput value={(effective.axis_gain as number[])[index]} min={0} max={1}
+            onCommit={text => {
+              const axisGain = [...effective.axis_gain as number[]]
+              axisGain[index] = Number(text)
+              update(group.id, 'axis_gain', axisGain)
+            }} />
+        </label>)}
         {[0, 1].map(index => <label key={index}>{t(index === 0 ? 'Squash minimum' : 'Squash maximum')} <MotionPreviewHint field="squash" />
           <MotionNumberInput value={(effective.squash as number[])[index]}
             min={index === 0 ? 0 : 1} positive={index === 0} max={index === 0 ? 1 : undefined}

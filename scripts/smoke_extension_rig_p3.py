@@ -197,21 +197,26 @@ def main():
         check(next(g for g in declared if g['id'] == 'sample_group')['defaults']['gain'] == 1,
               'Setup read endpoint returns package defaults')
         values = config_admin.layer_part('world')
-        values['extension_motion'] = {'groups': {'sample_group': {'gain': .6, 'spill': .5}}}
+        values['extension_motion'] = {'groups': {'sample_group': {'gain': .6, 'spill': .5, 'axis_gain': [.5, 1, .15]}}}
         config_admin.save_layer('world', values)
         bare = {'template': 'human-default'}
         check(gain(bare) == .6 and motion(bare)['groups']['other_group']['gain'] == 1, 'world override group only')
         check(motion(bare)['groups']['sample_group']['spill'] == .5, 'world spill override')
+        check(motion(bare)['groups']['sample_group']['axis_gain'] == [.5, 1, .15]
+              and motion(bare)['groups']['other_group']['axis_gain'] == [1, 1, 1],
+              'world axis_gain round trip and group isolation')
+        check(config_admin.layer_part('world')['extension_motion']['groups']['sample_group']['axis_gain'] == [.5, 1, .15],
+              'world axis_gain persisted')
         from app.core.extension_rig import extension_metadata, rig_groups_for, extension_rig_fingerprint
         attributed = {**bare, 'body_slots': {'sample_slot': {'response': 'fast'}}}
         profiled = motion(attributed)['groups']['sample_group']
         check(profiled['freq_hz'] == 4.4 and abs(profiled['gravity'] - 1.05) < 1e-12
-              and profiled['gain'] == .3, 'attribute profiles multiply after world overrides')
+              and profiled['gain'] == .3 and profiled['axis_gain'] == [.5, 1, .15], 'attribute profiles multiply after world overrides')
         unknown = {**bare, 'body_slots': {'sample_slot': {'response': 'unknown'}}}
         check(motion(unknown)['groups'] == motion(bare)['groups'], 'unknown attribute value ignored')
         declarations = rig_groups_for('sample', bare)
         physics = copy.deepcopy(declarations)
-        physics[0].update(flatten=.7, sag_max_deg=50, attribute_profiles={'response': {'fast': {'gain': .2}}})
+        physics[0].update(axis_gain=[.5, 1, .15], flatten=.7, sag_max_deg=50, attribute_profiles={'response': {'fast': {'gain': .2}}})
         check(extension_rig_fingerprint(physics) == extension_rig_fingerprint(declarations),
               'physics-only declaration keeps mesh fingerprint')
         from app.routes.extension_motion import _set_extension_motion_sync
@@ -221,7 +226,7 @@ def main():
         fp = extension_metadata('sample')['fingerprint']
         rev = motion_payload('sample')['rev']
         overrides = {'sample_group': {'freq_hz': 3, 'gain': .9, 'gravity': .2,
-                                      'flatten': .4, 'spill': .2, 'sag_max_deg': 60}}
+                                      'flatten': .4, 'spill': .2, 'sag_max_deg': 60, 'axis_gain': [.2, .8, .3]}}
         from fastapi import FastAPI
         from scripts.smoke_extension_rig_p1 import run_async
         import httpx
@@ -241,7 +246,8 @@ def main():
         effective = motion_payload('sample')['groups']['sample_group']
         check(effective['freq_hz'] == 3 and effective['gravity'] == .2
               and abs(effective['gain'] - .216) < 1e-12 and effective['flatten'] == .4
-              and effective['spill'] == .2 and effective['sag_max_deg'] == 60,
+              and effective['spill'] == .2 and effective['sag_max_deg'] == 60
+              and effective['axis_gain'] == [.2, .8, .3],
               'manual override beats attribute profile; clothing applies last')
         check(motion_payload('sample', apply_clothing=False)['groups']['sample_group']['gain'] == .9,
               'editor reads gain before clothing damping')
@@ -252,7 +258,7 @@ def main():
         check(motion_payload('sample', masked)['groups'] == motion_payload('sample')['groups']
               and motion_payload('sample', masked)['rev'] != motion_payload('sample')['rev'],
               'revision tracks attribute changes masked by absolute overrides')
-        for bad in ({'gain': True}, {'flatten': -1}, {'flatten': 2}, {'sag_max_deg': 181},
+        for bad in ({'axis_gain': [1, 1]}, {'axis_gain': [1, 1, -1]}, {'axis_gain': [False, 1, 1]}, {'gain': True}, {'flatten': -1}, {'flatten': 2}, {'sag_max_deg': 181},
                     {'sag_max_deg': float('nan')}, {'unknown': 1}):
             try:
                 _set_extension_motion_sync('sample', {'extension_motion': {'sample_group': bad}})
@@ -285,7 +291,7 @@ def main():
             check(True, 'instance write rejected')
         else:
             raise AssertionError('instance accepted world settings')
-        for bad in ({'flatten': -0.1}, {'flatten': 1.1}, {'sag_max_deg': 181}, {'spill': -0.1}, {'spill': 1.1}, {'spill': float('nan')}, {'freq_hz': 0}, {'gain': 2}, {'squash': [1.1, 2]}, {'gravity': float('nan')}):
+        for bad in ({'axis_gain': [1, 1]}, {'axis_gain': [1, True, 1]}, {'axis_gain': [1, 1, 1.1]}, {'axis_gain': [1, float('nan'), 1]}, {'flatten': -0.1}, {'flatten': 1.1}, {'sag_max_deg': 181}, {'spill': -0.1}, {'spill': 1.1}, {'spill': float('nan')}, {'freq_hz': 0}, {'gain': 2}, {'squash': [1.1, 2]}, {'gravity': float('nan')}):
             try:
                 config_admin.save_layer('world', {'extension_motion': {'groups': {'sample_group': bad}}})
             except config_admin.LayerSaveError:

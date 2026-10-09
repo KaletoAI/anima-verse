@@ -4,7 +4,7 @@ type Category = 'live' | 'motion' | 'tilt' | 'rebuild'
 type MotionField = Exclude<keyof SecondaryMotionPayload['groups'][string], 'bones'>
 export const motionFieldPreview = {
   rest_deg: 'live', rest_max_deg: 'live',
-  freq_hz: 'motion', freq: 'motion', zeta: 'motion', gain: 'motion', max_deg: 'motion',
+  freq_hz: 'motion', freq: 'motion', zeta: 'motion', gain: 'motion', axis_gain: 'motion', max_deg: 'motion',
   gravity: 'tilt', gravity_scale: 'tilt', motion_gravity_scale: 'tilt',
   sag_max_deg: 'tilt', flatten: 'tilt', spill: 'tilt', squash: 'tilt',
   enabled: 'rebuild', flip: 'rebuild', params: 'rebuild',

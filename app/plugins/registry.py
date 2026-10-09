@@ -84,6 +84,7 @@ class RigSpec:
     flatten: float = 0.0
     sag_max_deg: float = 25.0
     attribute_profiles: Dict[str, Dict[str, Dict[str, float]]] = field(default_factory=dict)
+    axis_gain: List[float] = field(default_factory=lambda: [1.0, 1.0, 1.0])
     gain: float = 1.0
     max_deg: float = 25.0
     squash: List[float] = field(default_factory=lambda: [0.6, 1.4])
@@ -166,6 +167,12 @@ class RigSpec:
                     raise ValueError("attribute profile multipliers must be finite and nonnegative")
         spec.attribute_profiles = {key: {value: dict(row) for value, row in choices.items()}
                                    for key, choices in profiles.items()}
+        axis_gain = raw.get("axis_gain", spec.axis_gain)
+        if not isinstance(axis_gain, list) or len(axis_gain) != 3 or any(
+                isinstance(v, bool) or not isinstance(v, (int, float))
+                or not math.isfinite(v) or not 0 <= v <= 1 for v in axis_gain):
+            raise ValueError("rig.axis_gain requires three finite gains in [0,1]")
+        spec.axis_gain = list(axis_gain)
         squash = raw.get("squash", spec.squash)
         if not isinstance(squash, list) or len(squash) != 2 or any(
                 isinstance(v, bool) or not isinstance(v, (int, float))

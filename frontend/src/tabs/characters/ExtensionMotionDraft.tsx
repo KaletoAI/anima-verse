@@ -7,6 +7,7 @@ const fields: Record<string, string> = {
   freq_hz: 'Frequency (Hz)', zeta: 'Damping ratio', gravity: 'Gravity', gain: 'Gain',
   max_deg: 'Maximum dynamic angle (degrees)', sag_max_deg: 'Maximum static angle (degrees)',
   flatten: 'Flatten', spill: 'Spill', rest_max_deg: 'Maximum rest angle (degrees)',
+  axis_gain_lateral: 'Lateral gain', axis_gain_vertical: 'Vertical gain', axis_gain_longitudinal: 'Longitudinal gain',
   squash_min: 'Squash minimum', squash_max: 'Squash maximum',
 }
 export function ExtensionMotionDraft({ defaults, overrides, disabled, onSave }: {
@@ -16,7 +17,7 @@ export function ExtensionMotionDraft({ defaults, overrides, disabled, onSave }: 
   const { t } = useI18n()
   const [draft, setDraft] = useState(() => makeDraft({ ...defaults, ...overrides }))
   const valid = (key: string) => validNumber(draft.values[key] ?? '', key === 'squash_max' ? 1 : 0,
-    ['gain', 'flatten', 'spill', 'squash_min'].includes(key) ? 1 : key.endsWith('deg') ? 180 : undefined,
+    (key.startsWith('axis_gain_') || ['gain', 'flatten', 'spill', 'squash_min'].includes(key)) ? 1 : key.endsWith('deg') ? 180 : undefined,
     key === 'freq_hz' || key === 'squash_min')
   const changed = draftChanged(draft)
   const allValid = Object.keys(fields).every(valid)
@@ -26,7 +27,7 @@ export function ExtensionMotionDraft({ defaults, overrides, disabled, onSave }: 
     if (await onSave(next)) setDraft(makeDraft({ ...defaults, ...next }))
   }
   return <>
-    {Object.entries(fields).map(([key, label]) => <label key={key}>{t(label)} <MotionPreviewHint field={key.startsWith('squash_') ? 'squash' : key} />
+    {Object.entries(fields).map(([key, label]) => <label key={key}>{t(label)} <MotionPreviewHint field={key.startsWith('axis_gain_') ? 'axis_gain' : key.startsWith('squash_') ? 'squash' : key} />
       <input className="ga-input" type="text" inputMode="decimal" disabled={disabled}
         value={draft.values[key] ?? ''} aria-invalid={!valid(key)}
         style={!valid(key) ? { borderColor: 'var(--ga-danger, #c44)' } : undefined}

@@ -23,7 +23,8 @@
  * This C1 function is strictly monotonic and bounded by max_deg. Gain is
  * applied AFTER saturation. A critical spring with body velocity V has
  * d=-V*t*exp(-omega*t), independent of gravity: at V=3,t=1/30,
- * d_x=-0.065778376882. Bent-forward gravity 0/3 must share this response.
+ * d_x=-0.065778376882. Bent-forward gravity 0/3 share this raw dynamic
+ * response; the rendered transverse swing preserves each static length.
  * Weighted centroid (.25*z1+.75*z3)=2.5; after -90 X it is (0,2.5-d,-d).
  * f=20 has 1/100 of the f=2 offset; damping does not change equilibrium.
  * Client centering subtracts 1 from Y after -90 X: equilibrium=(0,-d,-d).
@@ -42,7 +43,7 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 const dir = await mkdtemp(join(process.cwd(), 'client3d/scripts/.smoke-secondary-'));
 try {
-  const result = await build({ stdin: { contents: "export * from '@anima/scene-render'; export { Figure } from './client3d/src/scene/figures'", resolveDir: process.cwd(), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', write: false, external: ['three','three/*'] });
+  const result = await build({ stdin: { contents: "export * from '@anima/scene-render'; export { Figure, adaptExternalClips } from './client3d/src/scene/figures'", resolveDir: process.cwd(), loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', write: false, external: ['three','three/*'] });
   const file = join(dir, 'solver.mjs');
   await writeFile(file, result.outputFiles[0].text);
   const C = await import(file);
@@ -83,6 +84,60 @@ try {
     return {root,anchor,bone,mesh,solver,point};
   }
   const near=(actual,expected,eps=1e-5)=>assert.ok(Math.abs(actual-expected)<eps,`${actual} vs ${expected} ±${eps}`);
+  assert.equal(hints.motionFieldPreview.axis_gain,'motion');
+  // d=-3*t*exp(-4*pi*t)=-.065778376882 at t=1/30. Length=1+d_long;
+  // transverse rotation=atan(d_transverse), with no dynamic length change.
+  const displacement=-3/30*Math.exp(-4*Math.PI/30);
+  const impulse=(direction,axis_gain)=>{
+    const f=fixture({gravity:0,axis_gain}); f.solver.update(0);
+    f.root.position.copy(direction).multiplyScalar(.1);f.solver.update(1/30);
+    const tip=f.point();f.solver.dispose();return tip;
+  };
+  const full=impulse(new THREE.Vector3(0,0,1),[1,1,1]);
+  const reduced=impulse(new THREE.Vector3(0,0,1),[1,1,.2]);
+  near(full.length()-1,displacement,1e-10);near(reduced.length()-1,.2*displacement,1e-10);
+  const upFull=impulse(new THREE.Vector3(0,1,0),[1,1,1]);
+  const upReduced=impulse(new THREE.Vector3(0,1,0),[1,1,.2]);
+  near(upFull.distanceTo(upReduced),0,1e-10);near(upFull.length(),1,1e-10);
+  near(Math.atan2(upFull.y,upFull.z),Math.atan(displacement),1e-10);
+  const side=impulse(new THREE.Vector3(1,0,0),[.5,1,1]);
+  near(Math.atan2(side.x,side.z),Math.atan(.5*displacement),1e-10);near(side.length(),1,1e-10);
+  for(const params of [{gravity_scale:2},{rest_deg:45},{flatten:.5,spill:.5}]){
+    const a=fixture(params),b=fixture({...params,axis_gain:[0,0,0]});
+    a.anchor.rotation.x=b.anchor.rotation.x=-Math.PI/2;
+    a.solver.update(0);b.solver.update(0);near(a.point().distanceTo(b.point()),0,1e-10);
+    a.solver.dispose();b.solver.dispose();
+  }
+  console.log('axis_gain numbers',JSON.stringify({lengthFull:full.length()-1,lengthReduced:reduced.length()-1,verticalAngle:Math.atan2(upFull.y,upFull.z),lateralHalfAngle:Math.atan2(side.x,side.z)}));
+  // Rolled imported axes and a moved anchor: body up follows Rx(-90),
+  // hence world -Z is vertical for the resulting +Y lever.
+  for(const [lever,rotation,axis,expectedGain] of [
+    [[0,0,1],-Math.PI/2,[0,0,-1],.3],
+    [[0,1,0],0,[0,0,1],.3], // vertical lever uses body front +Z
+    [[0,1,0],0,[1,0,0],.5],
+  ]){
+    const f=fixture();f.solver.dispose();
+    f.mesh.geometry.setAttribute('position',new THREE.Float32BufferAttribute([...lever,...lever,...lever],3));
+    f.solver=C.createSecondaryMotion(THREE,f.root,payload({gravity:0,axis_gain:[.5,.3,.2]}));
+    f.anchor.rotation.x=rotation;f.solver.update(0);
+    const base=f.mesh.applyBoneTransform(2,new THREE.Vector3(...lever)).normalize();
+    f.root.position.set(...axis).multiplyScalar(.1);f.solver.update(1/30);
+    const tip=f.mesh.applyBoneTransform(2,new THREE.Vector3(...lever));
+    near(tip.length(),1,1e-10);
+    near(tip.angleTo(base),Math.atan(-displacement*expectedGain),1e-10);f.solver.dispose();
+  }
+  // Live field change filters the retained particle, without resetting it.
+  const liveAxis=fixture({gravity:0});liveAxis.solver.update(0);
+  liveAxis.root.position.z=.1;liveAxis.solver.update(1/30);
+  liveAxis.solver.configure(payload({gravity:0,axis_gain:[1,1,.2]}));liveAxis.solver.update(0);
+  near(liveAxis.point().length()-1,.2*displacement,1e-10);liveAxis.solver.dispose();
+  const strongAxial=fixture({gravity:0});strongAxial.solver.update(0);
+  // V=60 gives d=-1.31556753764: squash min=.1, pure compression has no swing.
+  strongAxial.root.position.z=2;strongAxial.solver.update(1/30);
+  near(strongAxial.point().z,.1,1e-10);near(strongAxial.point().x,0,1e-10);near(strongAxial.point().y,0,1e-10);
+  strongAxial.solver.dispose();
+  console.log('ok anchor-rotated body frame, vertical-lever front fallback and live axis reconfigure');
+  console.log('ok axial .2 ratio, identical vertical rotation, lateral .5, transverse length invariant, static unchanged');
   // Rx(-a)*(0,-1,0)=(0,-cos(a),sin(a)); Rx(-a)*(0,0,1)=(0,sin(a),cos(a)).
   for (const [lever, angle, limit, expected] of [
     [[0,-1,0],90,180,[0,0,1]], [[0,-1,0],-90,180,[0,0,-1]],
@@ -128,6 +183,78 @@ try {
     console.log('real Figure rest',JSON.stringify({yaw:yaw*180/Math.PI,requested:angle,measured,kink,front:delta.dot(front),up:delta.y}));
     near(actual.angleTo(before.clone().applyAxisAngle(axis,angle*Math.PI/180))*180/Math.PI,0,2);near(kink,0,2);assert.ok(angle>0?delta.dot(front)>0&&delta.y>0:delta.dot(front)<0);fig.dispose();
   }
+  }
+  const walkRigPath=process.env.SECONDARY_WALK_RIG_PATH;
+  const walkNames=(process.env.SECONDARY_WALK_BONES||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const walkClipPath=process.env.SECONDARY_WALK_CLIP;
+  if(!walkRigPath||!walkClipPath||!walkNames.length){
+    console.log('skip real Figure walk oracle: set SECONDARY_WALK_RIG_PATH, SECONDARY_WALK_BONES and SECONDARY_WALK_CLIP');
+  }else{
+    assert.equal(walkNames.length,2,'walk oracle requires exactly the two paired bones');
+    globalThis.self=globalThis;
+    const {GLTFLoader}=await import('three/addons/loaders/GLTFLoader.js');
+    const {FBXLoader}=await import('three/addons/loaders/FBXLoader.js');
+    const buffer=bytes=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);
+    const loader=new GLTFLoader();loader.register(()=>({name:'geometry_only',loadTexture:()=>Promise.resolve(null)}));
+    const rig=(await loader.parseAsync(buffer(await readFile(walkRigPath)), '')).scene;
+    const donor=new FBXLoader().parse(buffer(await readFile(walkClipPath)), '');
+    assert.ok(donor.animations.length,'walk FBX must contain an animation');
+    const clip=donor.animations[0].clone();clip.name='walk';
+    const clips=C.adaptExternalClips([clip],rig);
+    assert.equal(clips.length,1,'walk must adapt onto the real rig');
+    const results=[];
+    for(const axis_gain of [[1,1,1],[.5,1,.15]]){
+      const fig=new C.Figure({name:'walk-oracle',template:rig,clips,scale:1,height:1,
+        assignOnly:true,noClips:false,tier:'full',libraryFits:true,
+        motion:{payload:payload({bones:walkNames,axis_gain,freq_hz:2.2,zeta:.15,gravity:.35,
+          flatten:0,spill:0,sag_max_deg:25,max_deg:25,squash:[.6,1.4]})}});
+      try{
+        const bones=walkNames.map(name=>{let found;fig.root.traverse(o=>{
+          if(o.isBone&&C.normBoneName(o.name)===C.normBoneName(name))found=o;
+        });assert.ok(found,'missing requested paired bone');return found;});
+        assert.equal(bones[0].parent,bones[1].parent,'paired roots must share the body anchor');
+        const body=bones[0].parent;
+        // Weighted bind centroid is a reproducible tip proxy, independently
+        // derived from bind vertices. BODY = animated common parent frame.
+        const tips=bones.map(bone=>{
+          const sum=new THREE.Vector3();let total=0;
+          fig.root.traverse(m=>{if(!m.isSkinnedMesh)return;
+            const pos=m.geometry.getAttribute('position'),idx=m.geometry.getAttribute('skinIndex'),w=m.geometry.getAttribute('skinWeight');
+            const bi=m.skeleton.bones.indexOf(bone);if(bi<0)return;
+            const intoBone=m.skeleton.boneInverses[bi].clone().multiply(m.bindMatrix);
+            for(let i=0;i<pos.count;i++)for(let j=0;j<4;j++)if(idx.getComponent(i,j)===bi){
+              const weight=w.getComponent(i,j);if(weight<=0)continue;
+              sum.addScaledVector(new THREE.Vector3().fromBufferAttribute(pos,i).applyMatrix4(intoBone),weight);total+=weight;
+            }
+          });assert.ok(total>0,'requested bone must influence mesh');return sum.divideScalar(total);
+        });
+        fig.root.updateMatrixWorld(true);
+        const bindBodyQ=body.getWorldQuaternion(new THREE.Quaternion()).invert();
+        const up=new THREE.Vector3(0,1,0).applyQuaternion(bindBodyQ);
+        const front=new THREE.Vector3();
+        for(const bone of bones)front.add(bone.getWorldPosition(new THREE.Vector3()).sub(body.getWorldPosition(new THREE.Vector3())));
+        front.y=0;
+        if(front.lengthSq()<1e-10){for(let i=0;i<2;i++)front.add(tips[i].clone().applyMatrix4(bones[i].matrixWorld).sub(bones[i].getWorldPosition(new THREE.Vector3())));front.y=0;}
+        assert.ok(front.lengthSq()>1e-10,'pair must define body front');front.normalize().applyQuaternion(bindBodyQ);
+        const bounds=bones.map(()=>({vertical:[Infinity,-Infinity],forward:[Infinity,-Infinity]}));
+        fig.play('walk');const dt=1/120,cycle=clips[0].duration;
+        assert.ok(cycle>0);
+        for(let frame=0;frame<Math.ceil(8*cycle/dt);frame++){
+          fig.update(dt,{realDelta:dt});if(frame*dt<2*cycle)continue;
+          const bodyInverse=body.matrixWorld.clone().invert();
+          for(let i=0;i<2;i++){
+            const point=tips[i].clone().applyMatrix4(bones[i].matrixWorld).applyMatrix4(bodyInverse);
+            for(const [key,value] of [['vertical',point.dot(up)],['forward',point.dot(front)]]){
+              bounds[i][key][0]=Math.min(bounds[i][key][0],value);bounds[i][key][1]=Math.max(bounds[i][key][1],value);
+            }
+          }
+        }
+        const amplitudes=bounds.map((b,i)=>({bone:walkNames[i],vertical:b.vertical[1]-b.vertical[0],forward:b.forward[1]-b.forward[0]}));
+        console.log('real Figure walk BODY peak-to-peak (metres)',JSON.stringify({axis_gain,amplitudes}));
+        results.push(amplitudes);
+      }finally{fig.dispose();}
+    }
+    for(const value of results[1])assert.ok(value.vertical>value.forward,'filtered walk must bob more vertically than forward');
   }
   // At +45 rest a +Z lever is (0,q,q). The rotated baked gravity
   // is (0,-9.81*q,9.81*q), so T'=(0,q-d*(1-q),q-d*q).
@@ -253,6 +380,12 @@ try {
   }
   flatPair.solver.dispose();
   console.log('ok hand-derived flatten .5 / spill .5 length, lateral offset and one-axis width');
+  const axisFlat=pairFixture(.5,true,{flatten:.5,axis_gain:[0,0,0]});
+  axisFlat.anchor.rotation.x=-Math.PI/2;settle(axisFlat);
+  for(let i=0;i<2;i++)near(axisFlat.point(i).distanceTo(new THREE.Vector3(
+    (i===0?-1:1)*(.2+.25*D),Math.SQRT1_2*axialLength,Math.SQRT1_2*axialLength)),0,1e-7);
+  axisFlat.solver.dispose();
+  console.log('ok paired static flatten/spill unchanged with zero axis gains');
   const lift=fixture({gravity_scale:.5}); settle(lift);
   near(lift.point().y,.5*9.81/(4*Math.PI)**2);
   const still=fixture({gravity_scale:2,gain:0,max_deg:0}); settle(still);
@@ -272,13 +405,15 @@ try {
   console.log('ok soft limit hand-derived, monotonic and bounded');
   const swing0=fixture({gravity:0}), swing3=fixture({gravity:3});
   for(const swing of [swing0,swing3]) {swing.anchor.rotation.x=-Math.PI/4; settle(swing);}
+  const lengths=[swing0.point().length(),swing3.point().length()];
+  const inferredTransverse=(f,L)=>f.point().x*L/Math.sqrt(L*L-f.point().x*f.point().x);
   let peak0=0,peak3=0;
   for(let i=0;i<120;i++) {
     for(const swing of [swing0,swing3]) {swing.root.position.x=.1; swing.solver.update(1/30);}
     // Points are mesh-local, so d_x is the visible offset from the moved anchor.
-    near(swing0.point().x,swing3.point().x,1e-8);
-    if(i===0) near(swing0.point().x,-.065778376882,1e-9);
-    peak0=Math.max(peak0,Math.abs(swing0.point().x)); peak3=Math.max(peak3,Math.abs(swing3.point().x));
+    near(inferredTransverse(swing0,lengths[0]),inferredTransverse(swing3,lengths[1]),1e-8);
+    if(i===0) near(inferredTransverse(swing0,lengths[0]),-.065778376882,1e-9);
+    peak0=Math.max(peak0,Math.abs(inferredTransverse(swing0,lengths[0]))); peak3=Math.max(peak3,Math.abs(inferredTransverse(swing3,lengths[1])));
   }
   near(peak0,peak3,1e-8);
   console.log('ok same body impulse has identical swing for bent-forward gravity 0 and 3');
@@ -309,7 +444,7 @@ try {
   const movingA=fixture(),movingB=fixture(); movingA.solver.update(0); movingB.solver.update(0);
   movingA.root.position.x=0.1; movingA.solver.update(1/30);
   for(let i=1;i<=4;i++){movingB.root.position.x=i*0.025; movingB.solver.update(1/120);}
-  near(movingA.point().x,-0.065778376882,1e-9);
+  near(movingA.point().x,displacement/Math.sqrt(1+displacement**2),1e-9);
   near(movingA.point().distanceTo(movingB.point()),0,1e-8); console.log('ok moving-target frame partition and target velocity');
   f=fixture(); f.anchor.rotation.x=-Math.PI/2; settle(f);
   const held=f.point(); f.solver.configure(payload({gravity:0.5})); f.solver.update(0); near(f.point().distanceTo(held),0); console.log('ok live reconfigure retains particle state');
@@ -421,7 +556,7 @@ try {
   const renderEditor=new Function('h','Fragment','useState','useI18n','MotionPreviewHint',...Object.keys(helpers),editorCode.code+'; return ExtensionMotionDraft')(
     h,'fragment',useState,()=>({t:x=>x}),'preview-hint',...Object.values(helpers));
   const editorCalls=[];
-  const defaults={freq_hz:2,zeta:.7,gravity:1,gain:.9,max_deg:30,sag_max_deg:30,flatten:1,spill:0,rest_max_deg:45,squash:[.8,1.2]};
+  const defaults={axis_gain:[1,1,1],freq_hz:2,zeta:.7,gravity:1,gain:.9,max_deg:30,sag_max_deg:30,flatten:1,spill:0,rest_max_deg:45,squash:[.8,1.2]};
   const props={defaults,overrides:{},disabled:false,onSave:async value=>{editorCalls.push(value);return true}};
   const allNodes=node=>Array.isArray(node)?node.flatMap(allNodes):node?.children?[node,...node.children.flatMap(allNodes)]:[];
   const nodes=()=>allNodes(renderEditor(props));
@@ -434,6 +569,11 @@ try {
   input('Gain').props.onKeyDown({key:'Enter',preventDefault(){}});
   await Promise.resolve();
   assert.deepEqual(editorCalls.pop(),{gain:.8},'Enter sends exactly edited overrides');
+  input('Longitudinal gain').props.onChange({target:{value:'2'}});
+  assert.equal(input('Longitudinal gain').props['aria-invalid'],true);
+  input('Longitudinal gain').props.onChange({target:{value:'.15'}});
+  input('Longitudinal gain').props.onKeyDown({key:'Enter',preventDefault(){}});
+  await Promise.resolve();assert.deepEqual(editorCalls.pop(),{axis_gain:[1,1,.15]});
   input('Flatten').props.onChange({target:{value:'2'}});
   assert.equal(input('Flatten').props['aria-invalid'],true);
   assert.equal(nodes().find(node=>node.tag==='button'&&node.children[0]==='Save').props.disabled,true);

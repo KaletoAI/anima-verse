@@ -339,6 +339,15 @@ dynamic/static/rest angle limits 0..180 (`sag_max_deg` defaults to the declared 
 `0 < min <= 1 <= max`. Unknown physics fields are rejected. Stored overrides for
 a currently absent package are retained and have no effective group to modify.
 
+`axis_gain: [lateral, vertical, longitudinal]` defaults to `[1,1,1]`, with three
+finite entries in [0,1]. Package defaults, world Setup and absolute character
+physics overrides support it; attribute multipliers and state `bone_pose` do not.
+It filters only dynamic `p-T'` in the current rest lever frame, before dynamic
+soft angle/gain. Vertical follows projected bind body up rotated with the anchor;
+a vertical lever uses projected bind body front (bind world +Z if geometry
+cannot define front). Only longitudinal dynamics change length. Static sag,
+flatten, spill and rest pose retain their existing effect.
+
 Package `rig.attribute_profiles` selects physics multipliers by the character's
 stored slot attribute values after world overrides. Unknown values are ignored;
 profile multipliers are finite and nonnegative (frequency strictly positive).

@@ -169,7 +169,7 @@ def main():
         motion = motion_payload("demo", profile)
         expected = {"bones": ["ExampleBone1", "ExampleBone2"], "freq_hz": 2.2,
                     "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "spill": 0.0, "flatten": 0.0, "sag_max_deg": 25.0, "gain": 1.0, "max_deg": 25.0,
-                    "squash": [0.6, 1.4], "rest_deg": 0, "rest_max_deg": 90.0}
+                    "axis_gain": [1, 1, 1], "squash": [0.6, 1.4], "rest_deg": 0, "rest_max_deg": 90.0}
         check(motion["groups"] == {"example_group": expected}, "motion defaults")
         check(motion == motion_payload("demo", copy.deepcopy(profile)), "stable motion rev")
         check(motion["rev"] != motion_payload("demo", {})["rev"], "resolved content changes rev")
@@ -185,7 +185,7 @@ def main():
               "package spill changes payload and revision")
         slot.rig.spill = 0.0
         fingerprint = extension_metadata("demo", profile)["fingerprint"]
-        for key, value in (("flatten", .5), ("sag_max_deg", 40)):
+        for key, value in (("flatten", .5), ("sag_max_deg", 40), ("axis_gain", [.5, 1, .15])):
             original = getattr(slot.rig, key)
             setattr(slot.rig, key, value)
             changed = motion_payload("demo", profile)
@@ -194,6 +194,22 @@ def main():
                   key + " changes motion revision without mesh fingerprint")
             setattr(slot.rig, key, original)
         check(extension_metadata("demo", profile)["status"] == "not_found", "reserved status")
+        check(RigSpec.parse({**rig, "axis_gain": [0, .5, 1]}).axis_gain == [0, .5, 1],
+              "axis_gain inclusive bounds and package round trip")
+        for bad in (None, "1,1,1", [], [1, 1], [1, 1, 1, 1], [True, 1, 1],
+                    [0, -0.1, 1], [1.1, 1, 1], [float("nan"), 1, 1], [1, float("inf"), 1]):
+            try:
+                RigSpec.parse({**rig, "axis_gain": bad})
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("accepted invalid axis_gain")
+        try:
+            RigSpec.parse({**rig, "attribute_profiles": {"a": {"v": {"axis_gain": 1}}}})
+        except ValueError:
+            check(True, "axis_gain excluded from attribute multipliers")
+        else:
+            raise AssertionError("axis_gain accepted in attribute multipliers")
         for key, value in (("freq_hz", 0), ("gain", 1.1), ("spill", -0.1), ("spill", 1.1), ("spill", float("nan")), ("zeta", -1),
                            ("gravity", float("nan")), ("max_deg", 181),
                            ("flatten", -.1), ("flatten", 1.1), ("flatten", True),
