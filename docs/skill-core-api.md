@@ -347,6 +347,11 @@ Pakete rufen normalerweise nur `generate_from_input` mit `occasion`; wer selbst 
 Callback `render`, der mit dem aufgelösten Backend gerufen wird und Prompt/Stil/LoRAs/Referenzen für GENAU
 dieses Backend baut.
 
+Die Garderoben-Default-Pose (`model_refs`, Art `pose`) nutzt den Anlass `expression`:
+normaler Character Match (`outfit_imagegen.workflow`) und normale Charakter-LoRAs.
+Nur Mesh-Eingaben — T-Pose und zusätzliche Ansichten — nutzen `tpose`
+mit `tpose_workflow` (falls leer: `workflow`) und `tpose_loras` (falls leer: normale LoRAs).
+
 | Funktion | Semantik |
 |---|---|
 | `resolve_image_route(occasion, *, character='', has_ref=False, exclude=(), probe=False, pool=None) -> Route` | Löst die Kette eines Anlasses auf EIN Backend auf (`Route.backend`, `.position`, `.spec`, `.is_fallback`); leere Kette = billigstes passendes Backend; eine gesetzte Kette ohne nutzbaren Eintrag → `NoRouteError`, nie ein Rückfall auf „billigstes“. **Vor** dem Komponieren des Prompts rufen — Stil, Negativ, Referenz-Slots und LoRAs hängen am aufgelösten Backend |

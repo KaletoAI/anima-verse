@@ -801,10 +801,9 @@ def generate_model_ref_images(character_name: str,
                     override_width=_w, override_height=_h,
                     output_stem=refs_dir / f"{kind}_{signature}",
                     apply_state_modifiers=not _tpose,
-                    # Every model reference — the default-pose ref on the
-                    # "outfit" style included — is the "tpose" occasion of
-                    # the image routing (plan-image-routing.md § 1).
-                    occasion="tpose")
+                    # Wardrobe previews use the normal character match;
+                    # only mesh-input references use the T-pose match.
+                    occasion="tpose" if _tpose else "expression")
             if tpose_view in (None, "front"):
                 results[kind] = str(path) if path else None
             if path is None:

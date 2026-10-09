@@ -1067,8 +1067,8 @@ def generate_expression_image(character_name: str,
             # own LoRA ecosystem (e.g. a pose/turnaround LoRA), so this list
             # REPLACES the normal per-character one for those renders instead
             # of merging. Empty = the normal LoRAs apply. It follows the
-            # OCCASION like the backend does, so the default-pose ref (style
-            # "outfit", routed as "tpose" by model_refs) gets it too.
+            # OCCASION like the backend does; the default-pose wardrobe ref
+            # uses "expression" and keeps the normal character LoRAs.
             _tpose_loras = _char_override.get("tpose_loras")
             if (isinstance(_tpose_loras, list) and _tpose_loras
                     and _occasion == "tpose"):
