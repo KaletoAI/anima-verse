@@ -40,3 +40,37 @@ export function rateLimitPreviewTilt(current: { forward: number; sideways: numbe
   const fraction = distance > 0 ? Math.min(1, step / distance) : 0
   return { forward: current.forward + forward * fraction, sideways: current.sideways + sideways * fraction }
 }
+
+/** Apply unsaved toolbar multipliers without changing the polled status payload.
+ * Undo the saved multipliers at the raw layer before its clamps, then retain
+ * the resolved clothing/state factors from the server for the preview.
+ */
+export function previewMotionSliders(payload: SecondaryMotionPayload | undefined,
+  defaults: SecondaryMotionPayload['groups'] | undefined,
+  overrides: Record<string, Record<string, number | number[]>> | undefined,
+  drafts: Record<string, Record<string, number | number[]>>) {
+  if (!payload || !Object.keys(drafts).length) return payload
+  const groups = { ...payload.groups }
+  for (const [id, draft] of Object.entries(drafts)) {
+    const current = payload.groups[id], base = defaults?.[id]
+    if (!current || !base) continue
+    const saved = overrides?.[id] ?? {}
+    const next = { ...current }
+    const rules = {
+      gain: ['bounce', 1, 1], max_deg: ['bounce', 1, 180],
+      freq_hz: ['bounce', -0.5, 20], zeta: ['bounce', -0.5, 10],
+      gravity: ['weight', 1, 10], sag_max_deg: ['weight', 1, 180],
+      spill_max_deg: ['weight', 1, 180], flatten: ['weight', 1, 1],
+      stretch: ['weight', 1, 1], translate: ['weight', 1, 1],
+    } as const
+    for (const field of Object.keys(rules) as Array<keyof typeof rules>) {
+      const [slider, power, limit] = rules[field]
+      const raw = Number(saved[field] ?? base[field])
+      const before = Math.min(limit, raw * Number(saved[slider] ?? 1) ** power)
+      const after = Math.min(limit, raw * Number(draft[slider] ?? 1) ** power)
+      next[field] = before > 0 ? Math.min(limit, current[field] * after / before) : current[field]
+    }
+    groups[id] = next
+  }
+  return { ...payload, groups, rev: `${payload.rev}:toolbar:${JSON.stringify(drafts)}` }
+}

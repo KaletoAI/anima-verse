@@ -28,13 +28,7 @@ export function ExtensionMotionDraft({ defaults, overrides, disabled, onSave }: 
     const next = reset ? undefined : draftOverrides(draft, defaults, overrides)
     if (await onSave(next)) setDraft(makeDraft({ ...defaults, ...next }))
   }
-  return <>
-    {['bounce', 'weight'].map(key => <label key={key}>{t(key === 'bounce' ? 'Bounce' : 'Weight')} <MotionPreviewHint field={key} />
-      <input type="range" min={0.5} max={1.5} step={0.05} disabled={disabled}
-        value={draft.values[key]} onChange={event => setDraft(previous => editDraft(previous, key, event.target.value))} />
-      <span>{Number(draft.values[key]).toFixed(2)}</span>
-    </label>)}
-    <details><summary>{t('Advanced')}</summary>
+  return <details><summary>{t('Advanced')}</summary>
     {Object.entries(fields).map(([key, label]) => <label key={key}>{t(label)} <MotionPreviewHint field={key.startsWith('axis_gain_') ? 'axis_gain' : key.startsWith('squash_') ? 'squash' : key} />
       <input className="ga-input" type="text" inputMode="decimal" disabled={disabled}
         value={draft.values[key] ?? ''} aria-invalid={!valid(key)}
@@ -43,10 +37,41 @@ export function ExtensionMotionDraft({ defaults, overrides, disabled, onSave }: 
         onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void save() } }} />
       {!valid(key) && <span role="alert">{t('Enter a valid number within the allowed range.')}</span>}
     </label>)}
-    </details>
     {changed && <span className="ga-hint">{t('Unsaved changes')}</span>}
     <button type="button" className="ga-btn ga-btn-sm" disabled={disabled || !changed || !allValid} onClick={() => void save()}>{t('Save')}</button>
     <button type="button" className="ga-btn ga-btn-sm" disabled={disabled || !changed || !allValid} onClick={() => setDraft(makeDraft({ ...defaults, ...overrides }))}>{t('Revert')}</button>
     <button type="button" className="ga-btn ga-btn-sm" disabled={disabled} onClick={() => void save(true)}>{t('Reset')}</button>
+  </details>
+}
+
+/** Independent slider draft: saves only the two toolbar values. */
+export function ExtensionMotionSliders({ overrides, disabled, onPreview, onSave }: {
+  overrides: Physics; disabled: boolean
+  onPreview: (values: Physics) => void
+  onSave: (values: Physics) => Promise<boolean>
+}) {
+  const { t } = useI18n()
+  const [draft, setDraft] = useState(() => makeDraft({ bounce: overrides.bounce ?? 1, weight: overrides.weight ?? 1 }))
+  const changed = draftChanged(draft)
+  const current = changed ? draft : makeDraft({ bounce: overrides.bounce ?? 1, weight: overrides.weight ?? 1 })
+  const values = { bounce: Number(current.values.bounce), weight: Number(current.values.weight) }
+  const save = async () => {
+    if (disabled || !changed) return
+    if (await onSave(values)) setDraft(makeDraft(values))
+  }
+  return <>
+    {['bounce', 'weight'].map(key => <label key={key} className="ga-model3d-slider">
+      <span className="ga-hint">{t(key === 'bounce' ? 'Bounce' : 'Weight')} <MotionPreviewHint field={key} /> · {Number(current.values[key]).toFixed(2)}</span>
+      <input type="range" min={0.5} max={1.5} step={0.05} disabled={disabled}
+        value={current.values[key]} onChange={event => {
+          const next = editDraft(current, key, event.target.value)
+          setDraft(next)
+          onPreview({ bounce: Number(next.values.bounce), weight: Number(next.values.weight) })
+        }} />
+    </label>)}
+    <div className="ga-model3d-save">
+      <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={disabled || !changed} onClick={() => void save()}>{t('Save')}</button>
+      <span className="ga-tag" aria-live="polite">{t(changed ? 'Unsaved changes' : 'Saved')}</span>
+    </div>
   </>
 }

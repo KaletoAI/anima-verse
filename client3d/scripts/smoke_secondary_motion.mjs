@@ -59,7 +59,9 @@ try {
   assert.ok(tiltViewerSource.includes('applyPreviewTilt(previewRoot') && tiltViewerSource.indexOf('applyPreviewTilt(previewRoot') < tiltViewerSource.indexOf('secondary?.update(realDelta)'), 'tilt before solver');
 
   const fieldSource=await readFile('frontend/src/tabs/characters/FieldModel3D.tsx','utf8');
-  assert.match(fieldSource,/motion=\{st.motion\}/,'status root must reach viewer');
+  assert.match(tiltViewerSource,/ga-model3d-toolbar/);
+  assert.match(fieldSource,/motionToolbar=\{motionToolbar\}/);
+  assert.match(fieldSource,/motion=\{previewMotion\}/,'status root must reach viewer');
   assert.equal(typeof C.installSkinnedNormalCorrection,'function');
   C.installSkinnedNormalCorrection(THREE);
   assert.match(THREE.ShaderChunk.skinnormal_vertex,/inverse\(transpose\(mat3\(skinMatrix\)\)\)/);
@@ -777,7 +779,7 @@ try {
   const fieldJSX=fieldSource.match(/<Model3DViewer[\s\S]*?\/>/)[0];
   const compiledField=await transform(`return (${fieldJSX})`,{loader:'tsx',jsxFactory:'h'});
   const h=(tag,props,...children)=>({tag,props,children});
-  const viewerElement=new Function('h','Model3DViewer','st','model','viewerUrl','mixamo','clipUrl','bust',compiledField.code)(h,'Model3DViewer',response,response.model,response.model.url,false,'','revision');
+  const viewerElement=new Function('h','Model3DViewer','st','model','viewerUrl','mixamo','clipUrl','bust','previewMotion','motionToolbar',compiledField.code)(h,'Model3DViewer',response,response.model,response.model.url,false,'','revision',response.motion,null);
   const adminMotion=viewerElement.props.motion;
   assert.equal(adminMotion,response.motion);
   const viewerSource=await readFile('frontend/src/tabs/characters/Model3DViewer.tsx','utf8');
@@ -830,16 +832,7 @@ try {
   const nodes=()=>allNodes(renderEditor(props));
   const input=label=>nodes().find(node=>node.tag==='label'&&node.children[0]===label).children.find(node=>node?.tag==='input');
   assert.equal(nodes().find(node=>node.tag==='details').props?.open,undefined);
-  for(const label of ['Bounce','Weight']) {
-    const slider=input(label);assert.equal(slider.props.type,'range');assert.equal(slider.props.min,.5);assert.equal(slider.props.max,1.5);assert.equal(slider.props.step,.05);
-  }
-  input('Bounce').props.onChange({target:{value:'1.25'}});
-  input('Weight').props.onChange({target:{value:'.8'}});
-  nodes().find(node=>node.tag==='button'&&node.children[0]==='Save').props.onClick();
-  await Promise.resolve();assert.deepEqual(editorCalls.pop(),{bounce:1.25,weight:.8});
-  nodes().find(node=>node.tag==='button'&&node.children[0]==='Reset').props.onClick();
-  await Promise.resolve();assert.equal(editorCalls.pop(),undefined);
-  assert.equal(input('Bounce').props.value,'1');assert.equal(input('Weight').props.value,'1');
+  assert.equal(nodes().some(node=>node.tag==='input'&&node.props.type==='range'),false,'sliders moved out of Advanced');
   assert.equal(input('Gain').props.value,'0.9','editor starts with pre-clothing values');
   input('Gain').props.onChange({target:{value:'.8'}});
   props.defaults={...defaults,gain:.216};

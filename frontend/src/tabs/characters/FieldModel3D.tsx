@@ -1,4 +1,5 @@
-import { ExtensionMotionDraft } from './ExtensionMotionDraft'
+import { previewMotionSliders } from './motionFieldPreview'
+import { ExtensionMotionDraft, ExtensionMotionSliders } from './ExtensionMotionDraft'
 import type { Physics } from '../../lib/motionDraft'
 import { MotionPreviewHint } from './MotionPreviewHint'
 import type { SecondaryMotionPayload, ExtensionRigDeclaration } from '@anima/scene-render'
@@ -164,6 +165,7 @@ export function FieldModel3D({ character }: { character: string }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [clips, setClips] = useState<AnimationClip[]>([])
   const [clipUrl, setClipUrl] = useState('')
+  const [sliderPreview, setSliderPreview] = useState<{ context: string; groups: Record<string, Physics> }>({ context: '', groups: {} })
   const [previewState, setPreviewState] = useState('')
   const [previewFilters, setPreviewFilters] = useState<Array<{ id: string; label?: string; bone_pose?: Record<string, unknown> }>>([])
   const previewRef = useRef<HTMLDivElement>(null)
@@ -558,17 +560,23 @@ export function FieldModel3D({ character }: { character: string }) {
     } finally { setBusy(false) }
   }, [enc, st.options?.extension_rig, t, toast])
 
-  const setExtensionMotion = useCallback(async (id: string, values?: Physics) => {
+  const setExtensionMotion = useCallback(async (id: string, values?: Physics, slidersOnly = false) => {
     setBusy(true)
     try {
       const overrides = structuredClone(st.options?.extension_motion ?? {})
-      if (values === undefined || !Object.keys(values).length) delete overrides[id]
+      if (slidersOnly) overrides[id] = { ...overrides[id], bounce: Number(values?.bounce), weight: Number(values?.weight) }
+      else if (values === undefined || !Object.keys(values).length) delete overrides[id]
       else overrides[id] = values
       const result = await apiPost<{ options: Model3DStatus['options'] }>(
         `/characters/${enc}/model3d/extension-motion`, { extension_motion: overrides })
       setSt(previous => ({ ...previous, options: result.options }))
       toast(t('Saved'))
       await load()
+      if (slidersOnly) setSliderPreview(previous => {
+        const groups = { ...previous.groups }
+        delete groups[id]
+        return { ...previous, groups }
+      })
       return true
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
@@ -677,23 +685,31 @@ export function FieldModel3D({ character }: { character: string }) {
       + (viewTier === 'low' ? '&tier=low' : '')
     : ''
   const hasLow = !!model?.tiers?.includes('low')
+  const sliderContext = `${character}:${model?.signature || st.signature || ''}`
+  const previewMotion = useMemo(() => previewMotionSliders(st.motion, st.motion_defaults,
+    st.options?.extension_motion, sliderPreview.context === sliderContext ? sliderPreview.groups : {}),
+    [st.motion, st.motion_defaults, st.options?.extension_motion, sliderPreview, sliderContext])
+  const motionToolbar = st.extension_groups?.map(group => st.motion_defaults?.[group.id] ? (
+    <fieldset className="ga-fieldset" key={`${sliderContext}:${group.id}`}>
+      <legend>{group.id}</legend>
+      <ExtensionMotionSliders overrides={st.options?.extension_motion?.[group.id] ?? {}}
+        disabled={pending}
+        onPreview={values => setSliderPreview(previous => ({ context: sliderContext,
+          groups: { ...(previous.context === sliderContext ? previous.groups : {}), [group.id]: values } }))}
+        onSave={values => setExtensionMotion(group.id, values, true)} />
+    </fieldset>
+  ) : null)
   const extensionResult = model?.extension_rig?.per_tier?.[viewTier] || model?.extension_rig
 
   return (
     <div className="ga-form">
       {model ? (
         <>
-          <label>{t('Preview state')}
-            <select className="ga-input" value={previewState} onChange={event => setPreviewState(event.target.value)}>
-              <option value="">{t('Current (live)')}</option>
-              <option value="none">{t('None')}</option>
-              {previewFilters.map(row => <option key={row.id} value={row.id}>{row.label || row.id}</option>)}
-            </select>
-          </label>
           <div ref={previewRef}>
           <Model3DViewer
             previewTilt
-            motion={st.motion}
+            motion={previewMotion}
+            motionToolbar={motionToolbar}
             url={viewerUrl}
             format={model.format || 'fbx'}
             clipUrl={mixamo ? clipUrl : ''}
@@ -731,24 +747,8 @@ export function FieldModel3D({ character }: { character: string }) {
               ) : null}
             </div>
           ) : null}
-          <div className="ga-hint" aria-live="polite">
-            <strong>{t('Extension bones')} · {viewTier}: </strong>
-            {t(extensionResult?.status === 'applied' ? 'Applied'
-              : extensionResult?.status === 'failed' ? 'Failed'
-              : extensionResult?.status === 'not_found' ? 'Geometry not found'
-              : extensionResult?.status === 'none_applicable' ? 'No applicable groups'
-              : 'Not processed')}
-            {extensionResult?.reason ? ` · ${extensionResult.reason}` : ''}
-            {extensionResult?.metrics ? (
-              <details>
-                <summary>{t('Metrics')}</summary>
-                <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                  {JSON.stringify(extensionResult.metrics, null, 2)}
-                </pre>
-              </details>
-            ) : null}
-          </div>
           {/* The clips of THIS character's set (+ the setless fallbacks). */}
+          <div className="ga-model3d-controls">
           {myClips.length ? (
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>
@@ -778,6 +778,14 @@ export function FieldModel3D({ character }: { character: string }) {
                 : t('No animation clips — drop Mixamo FBX files ("Without Skin") into shared/models/clips/.')}
             </div>
           )}
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><span className="ga-hint">{t('Preview state')}</span>
+            <select className="ga-input" value={previewState} onChange={event => setPreviewState(event.target.value)}>
+              <option value="">{t('Current (live)')}</option>
+              <option value="none">{t('None')}</option>
+              {previewFilters.map(row => <option key={row.id} value={row.id}>{row.label || row.id}</option>)}
+            </select>
+          </label>
+          </div>
           {/* Mixamo clips need the Mixamo skeleton — a generic rig has none. */}
           {!mixamo ? (
             <div className="ga-hint">
@@ -812,7 +820,6 @@ export function FieldModel3D({ character }: { character: string }) {
                 {`${t('measured')}: ${t('h')} ${(measured.dims_m?.[2] ?? 0).toFixed(2)} m`}
                 {` · ${t('w')} ${(measured.dims_m?.[0] ?? 0).toFixed(2)} · ${t('d')} ${(measured.dims_m?.[1] ?? 0).toFixed(2)}`}
               </span>
-              {measured.tris ? ` · ${measured.tris.toLocaleString()} ${t('tris')}` : ''}
               {measured.bones
                 ? ` · ${measured.bones} ${t('bones')}${measured.mixamo_bones ? ' (mixamo)' : ''}`
                 : ''}
@@ -852,15 +859,6 @@ export function FieldModel3D({ character }: { character: string }) {
                 : ''}
             </div>
           ) : null}
-          {/* The distance mesh, once one exists — the client serves it at
-              range and the full model up close. */}
-          {model.tiers?.includes('low') ? (
-            <div className="ga-hint">
-              {`${t('distance mesh')}: ${model.low_tris?.toLocaleString() ?? '?'} ${t('tris')}`}
-              {model.low_size ? ` · ${(model.low_size / (1024 * 1024)).toFixed(1)} MB` : ''}
-              {model.low_ratio ? ` · ${Math.round(model.low_ratio * 100)} %` : ''}
-            </div>
-          ) : null}
           {/* Rig only means something for an UPLOAD — a generated model's
               skeleton is fixed by the backend alias. It decides whether the
               shared clips apply. (owned: the rig update writes the CURRENT
@@ -887,9 +885,6 @@ export function FieldModel3D({ character }: { character: string }) {
             : t('No 3D model for this outfit yet — upload one or generate it from the T-pose render.')}
         </div>
       )}
-      <div className="ga-hint">
-        {t('One model per outfit combination — upload a GLB/FBX or generate it from the T-pose render.')}
-      </div>
       <label className="ga-check-row"
         title={t('Once the T-pose render of a NEW outfit combination has succeeded, the mesh is generated automatically on the cheapest matching backend — the T-pose is always awaited first.')}>
         <input
@@ -923,6 +918,24 @@ export function FieldModel3D({ character }: { character: string }) {
       {st.extension_groups?.length ? (
         <fieldset className="ga-form">
           <legend>{t('Extension bones')}</legend>
+          <div className="ga-hint" aria-live="polite">
+            <strong>{t('Extension bones')} · {viewTier}: </strong>
+            {t(extensionResult?.status === 'applied' ? 'Applied'
+              : extensionResult?.status === 'failed' ? 'Failed'
+              : extensionResult?.status === 'not_found' ? 'Geometry not found'
+              : extensionResult?.status === 'none_applicable' ? 'No applicable groups'
+              : 'Not processed')}
+            {extensionResult?.reason ? ` · ${extensionResult.reason}` : ''}
+            {extensionResult?.metrics ? (
+              <details>
+                <summary>{t('Metrics')}</summary>
+                <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                  {JSON.stringify(extensionResult.metrics, null, 2)}
+                </pre>
+              </details>
+            ) : null}
+          </div>
+
           {st.extension_groups.map((group) => (
             <div key={group.id} style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
               <span>{group.id}</span>
@@ -948,6 +961,12 @@ export function FieldModel3D({ character }: { character: string }) {
                 onSave={values => setExtensionMotion(group.id, values)} /> : null}
             </div>
           ))}
+        {model?.format === 'glb' && mixamo ? (
+          <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}
+            onClick={rebuildExtensions}>{t('Rebuild extension bones')}</button>
+        ) : null}
+        <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}
+          onClick={queueExtensions}>{t('Rebuild extension bones for all models')}</button>
           <span className="ga-hint">{t('Physics changes apply immediately. Enabled and flip changes require rebuilding extension bones.')}</span>
         </fieldset>
       ) : null}
@@ -994,12 +1013,6 @@ export function FieldModel3D({ character }: { character: string }) {
             {t('Download')}
           </a>
         ) : null}
-        {model?.format === 'glb' && mixamo ? (
-          <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}
-            onClick={rebuildExtensions}>{t('Rebuild extension bones')}</button>
-        ) : null}
-        <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}
-          onClick={queueExtensions}>{t('Rebuild extension bones for all models')}</button>
         {/* Reads the geometry with Blender — never writes the mesh, so it is
             offered for a nearest stand-in too. */}
         {model && canMeasure ? (

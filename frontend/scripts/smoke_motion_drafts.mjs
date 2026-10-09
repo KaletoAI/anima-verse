@@ -111,3 +111,57 @@ for(const field of ['length','girth']) {
 console.log('PASS stretch/floor drafts; live state extent bounds; Tilt follows at 120 deg/s');
 
 assert.deepEqual(draftOverrides(editDraft(makeDraft(formDefaults),'spread','.2'),formDefaults,{}),{spread:.2});
+
+const fieldSource = readFileSync('frontend/src/tabs/characters/FieldModel3D.tsx', 'utf8')
+assert.match(fieldSource, /setExtensionMotion\(group.id, values, true\)/)
+assert.match(fieldSource, /if \(slidersOnly\) overrides\[id\] = \{ \.\.\.overrides\[id\], bounce: Number\(values\?\.bounce\), weight: Number\(values\?\.weight\) \}/)
+console.log('PASS toolbar save merges only Bounce/Weight into the selected group')
+
+// Execute the real save callback: the API replaces the map, so untouched values
+// must be included unchanged rather than omitted or reset.
+const saveSource = fieldSource.match(/const setExtensionMotion = useCallback\(async ([\s\S]*?)\n  }, \[enc/)[1] + '\n  }'
+const saveCode = ts.transpileModule('const save = async ' + saveSource, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText
+let sent
+const savedOverrides = { demo: { gravity: .4, axis_gain: [.2, .3, .4], bounce: .9 }, other: { gain: .6 } }
+const saveToolbar = new Function('st','enc','setBusy','apiPost','setSt','toast','t','load','setSliderPreview', saveCode + '; return save')(
+  { options: { extension_motion: savedOverrides } }, 'demo', () => {}, async (url, body) => { sent = { url, body }; return { options: body } },
+  () => {}, () => {}, x => x, async () => {}, () => {})
+assert.equal(await saveToolbar('demo', { bounce: 1.25, weight: .8, gain: .1 }, true), true)
+assert.equal(sent.url, '/characters/demo/model3d/extension-motion')
+assert.deepEqual(sent.body, { extension_motion: { demo: { gravity: .4, axis_gain: [.2,.3,.4], bounce: 1.25, weight: .8 }, other: { gain: .6 } } })
+assert.equal(savedOverrides.demo.bounce, .9)
+console.log('PASS toolbar request changes only selected group Bounce/Weight; raw and other groups preserved')
+
+const sliderSource = readFileSync('frontend/src/tabs/characters/ExtensionMotionDraft.tsx', 'utf8')
+const sliderCode = ts.transpileModule(sliderSource.replace(/^import .*$/gm, '').replace(/export /g, ''), {
+  compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2020 },
+}).outputText
+let sliderState
+const previewCalls = [], saveCalls = []
+const Slider = new Function('React','useState','useI18n','MotionPreviewHint','makeDraft','editDraft','draftChanged','draftOverrides','validNumber', sliderCode + '; return ExtensionMotionSliders')(
+  React, initial => { sliderState ??= initial(); return [sliderState, next => { sliderState = next }] }, () => ({t:x=>x}), 'hint',
+  makeDraft, editDraft, draftChanged, draftOverrides, validNumber)
+const sliderProps = { overrides: { bounce: .9, gravity: .4 }, disabled: false,
+  onPreview: value => previewCalls.push(value), onSave: async value => { saveCalls.push(value); sliderProps.overrides = value; return true } }
+const allNodes = node => Array.isArray(node) ? node.flatMap(allNodes) : node?.children ? [node, ...node.children.flatMap(allNodes)] : []
+const sliderNodes = () => allNodes(Slider(sliderProps))
+sliderNodes().filter(node => node.tag === 'input')[0].props.onChange({target:{value:'1.25'}})
+sliderNodes().filter(node => node.tag === 'input')[1].props.onChange({target:{value:'.8'}})
+assert.deepEqual(previewCalls.at(-1), {bounce:1.25,weight:.8})
+sliderProps.overrides = { bounce: 1, gravity: .7 }
+assert.equal(sliderNodes().filter(node => node.tag === 'input')[0].props.value,'1.25','poll preserves slider draft')
+assert.equal(saveCalls.length,0,'live changes do not persist')
+sliderNodes().find(node => node.tag === 'button').props.onClick()
+await Promise.resolve()
+assert.deepEqual(saveCalls, [{bounce:1.25,weight:.8}])
+assert.equal(sliderNodes().find(node => node.tag === 'button').props.disabled,true)
+console.log('PASS toolbar live preview, poll-safe draft, independent Save and saved state')
+
+const live = { rev: 'demo', groups: { demo: {gain:.2,max_deg:20,freq_hz:2,zeta:.7,gravity:.4,sag_max_deg:10,spill_max_deg:20,flatten:.4,stretch:.2,translate:.1}, other:{gain:.6} } }
+const livePreview = hintModule.exports.previewMotionSliders(live, live.groups, {}, {demo:{bounce:1.25,weight:.8}})
+assert.equal(livePreview.groups.demo.gain,.25)
+assert.ok(Math.abs(livePreview.groups.demo.gravity - .32) < 1e-12)
+assert.equal(livePreview.groups.other,live.groups.other)
+assert.equal(live.groups.demo.gain,.2)
+assert.notEqual(livePreview.rev,live.rev)
+console.log('PASS live slider multipliers reach motion revision without mutating polled payload')

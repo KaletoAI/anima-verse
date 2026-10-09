@@ -3264,3 +3264,14 @@ a.ga-btn {
   .ga-setup-styles { grid-template-columns: minmax(0, 1fr); }
   .ga-setup-style-list { max-height: 220px; }
 }
+
+/* Character motion workbench: canvas and a vertical side toolbar. */
+.ga-model3d-preview { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; min-width: 0; }
+.ga-model3d-canvas { flex: 1 1 280px; min-width: 0; }
+.ga-model3d-toolbar { flex: 0 1 200px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.ga-model3d-toolbar .ga-fieldset { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.ga-model3d-slider { display: flex; flex-direction: column; gap: 6px; font-size: 11px; }
+.ga-model3d-slider input { width: 100%; margin: 0; }
+.ga-model3d-save, .ga-model3d-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ga-model3d-controls > label { flex: 1 1 200px; min-width: 0; }
+.ga-model3d-controls .ga-input { min-width: 0; }

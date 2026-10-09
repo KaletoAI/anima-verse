@@ -10,7 +10,7 @@ import { applyPreviewTilt, rateLimitPreviewTilt } from './motionFieldPreview'
  * FBX), so the loader is picked by extension.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { MouseEvent as ReactMouseEvent } from 'react'
+import type { ReactNode, MouseEvent as ReactMouseEvent } from 'react'
 import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D,
   Quaternion, Vector3 } from 'three'
 import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
@@ -248,7 +248,7 @@ export interface TilePlacement {
   figureHeightWorld?: number
 }
 
-export function Model3DViewer({ url, format, motion, previewTilt = false, clipUrl = '', textureUrl = '', height = 320, rotation,
+export function Model3DViewer({ url, format, motion, motionToolbar, previewTilt = false, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
   placement, onBounds, markers, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
@@ -256,7 +256,7 @@ export function Model3DViewer({ url, format, motion, previewTilt = false, clipUr
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox }:
-  { url: string; format: string; motion?: SecondaryMotionPayload; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
+  { url: string; format: string; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
     rotation?: { x?: number; y?: number; z?: number }
@@ -1889,21 +1889,8 @@ export function Model3DViewer({ url, format, motion, previewTilt = false, clipUr
   }, [url, format, clipUrl, textureUrl, height])
 
   return (
-    <div>
-      {previewTilt ? <div className="ga-form-row">
-        <label>{t('Tilt forward/back')} {tiltForward}°
-          <input type="range" min={-90} max={90} value={tiltForward}
-            title={t('+90 = lying on the back')}
-            onChange={event => setTiltForward(Number(event.target.value))} />
-        </label>
-        <label>{t('Tilt sideways')} {tiltSideways}°
-          <input type="range" min={-90} max={90} value={tiltSideways}
-            onChange={event => setTiltSideways(Number(event.target.value))} />
-        </label>
-        <button type="button" className="ga-btn ga-btn-sm"
-          onClick={() => { setTiltForward(0); setTiltSideways(0) }}>{t('Reset tilt')}</button>
-      </div> : null}
-      <div style={{ position: 'relative' }}>
+    <div className={previewTilt ? 'ga-model3d-preview' : undefined}>
+      <div className={previewTilt ? 'ga-model3d-canvas' : undefined} style={{ position: 'relative' }}>
       <div
         ref={mountRef}
         style={{
@@ -2058,6 +2045,22 @@ export function Model3DViewer({ url, format, motion, previewTilt = false, clipUr
         </div>
       ) : null}
       </div>
+      {previewTilt ? <aside className="ga-model3d-toolbar">
+      <div className="ga-fieldset ga-model3d-tilt">
+        <label className="ga-model3d-slider">{t('Tilt forward/back')} {tiltForward}°
+          <input type="range" min={-90} max={90} value={tiltForward}
+            title={t('+90 = lying on the back')}
+            onChange={event => setTiltForward(Number(event.target.value))} />
+        </label>
+        <label className="ga-model3d-slider">{t('Tilt sideways')} {tiltSideways}°
+          <input type="range" min={-90} max={90} value={tiltSideways}
+            onChange={event => setTiltSideways(Number(event.target.value))} />
+        </label>
+        <button type="button" className="ga-btn ga-btn-sm"
+          onClick={() => { setTiltForward(0); setTiltSideways(0) }}>{t('Reset tilt')}</button>
+      </div>
+        {motionToolbar}
+      </aside> : null}
     </div>
   )
 }
