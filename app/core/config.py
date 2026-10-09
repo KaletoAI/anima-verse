@@ -688,17 +688,31 @@ def get_use_case_prompts(use_case: str, image_model: str = "",
     THE one place every style passes through, so no caller can leak a raw
     placeholder into a prompt; the default keeps the clause for every path
     that does not know the character's state.
+
+    Profile portraits are outfit-independent identity references: always keep
+    clothing out of frame, including with custom styles/instructions. Their
+    fabric slot stays empty regardless of the character's current outfit.
     """
     uc = (use_case or "").strip() or "character"
     family = image_model_to_family(image_model)
     fields = ("prompt_style", "prompt_negative", "prompt_instruction")
     builtin = (_DEFAULT_IMAGE_USE_CASES.get(uc, {}) or {}).get(family, {}) or {}
-    fabric = FABRIC_CLAUSE if clothed else ""
+    fabric = FABRIC_CLAUSE if clothed and uc != "profile" else ""
     out = {}
     for f in fields:
         override = get(f"image_generation.use_cases.{uc}.styles.{family}.{f}", "")
         text = (override or "").strip() or (builtin.get(f, "") or "")
         out[f] = text.replace("{fabric}", fabric)
+    if uc == "profile":
+        framing = "bare shoulders, no visible clothing, cropped above the chest"
+        out["prompt_style"] = f"{out['prompt_style']}, {framing}"
+        out["prompt_negative"] = (
+            f"{out['prompt_negative']}, clothing, shirt, blouse, jacket, collar, straps"
+        )
+        out["prompt_instruction"] = (
+            f"{out['prompt_instruction']} Keep the portrait outfit-independent: "
+            f"{framing}. Do not add an outfit or show the full body."
+        )
     return out
 
 

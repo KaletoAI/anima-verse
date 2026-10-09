@@ -123,7 +123,11 @@ a hosted OpenAI-compatible cloud) in the [README](../README.md#getting-started).
 6. **Set a profile image.** Either **generate** one (with an image backend configured and the Face
    Prompt filled — the portrait renders from the Face Prompt through the `profile` use case) or
    **upload** one in the character's **Gallery** and mark it as the **Profile image**. The profile
-   image becomes the reference for later generations so the face stays consistent.
+   image becomes the reference for later generations so the face stays consistent. Keep it
+   outfit-independent: head and shoulders only, bare shoulders, no visible clothing. Generated
+   portraits add this framing and exclude clothing even with custom profile styles; the
+   character's current outfit does not fill the profile style's `{fabric}` slot. For uploads,
+   choose the same clothing-free crop. Existing images are not changed automatically.
 
 7. **Take over the character as your avatar.** Open `/play`. With no avatar set and more than one
    playable character, the **Choose your avatar** screen appears; with exactly one it is picked
