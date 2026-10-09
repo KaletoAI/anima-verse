@@ -1119,16 +1119,15 @@ def _generate(kind: str, backend_glob: str, prompt: str, negative: str) -> Dict[
                      "auto_enhance": False,
                      "compose": {"use_case": "surface_texture",
                                  "settings_applied": True}}
-        from app.core.llm_queue import get_llm_queue, Priority
-        images = get_llm_queue().submit_gpu_task(
-            provider_name=backend.name,
-            task_type="surface_texture",
-            priority=Priority.IMAGE_GEN,
-            callable_fn=lambda: backend.generate(prompt, negative, params,
-                                                 log_meta=_log_meta),
-            agent_name="system",
-            label=f"Surface texture: {kind}",
-            gpu_type=backend.api_type)
+        # Through the service's ONE handoff — that is where the per-backend
+        # channel and the world's media master switch live.
+        from app.imagegen.service import get_image_service
+        images = get_image_service().run_on_backend_channel(
+            backend,
+            lambda: backend.generate(prompt, negative, params,
+                                     log_meta=_log_meta),
+            task_type="surface_texture", agent_name="system",
+            label=f"Surface texture: {kind}")
         if not images:
             error = "empty backend result"
             return {"ok": False, "error": error}
