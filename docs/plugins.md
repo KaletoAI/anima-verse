@@ -270,6 +270,8 @@ body_slots:
       flatten: 0.0
       translate: 0.0
       sag_max_deg: 25 # Defaults to max_deg when omitted.
+      spill_max_deg: 25 # Defaults to sag_max_deg when omitted.
+      head_sag: 1.0
       attribute_profiles:
         example_attribute:
           enabled: {freq_hz: 0.8, zeta: 1.2, gravity: 1.1}
@@ -304,11 +306,11 @@ For the unit world gravity `g_hat` and rest lever `u`, define
 `f_in=clamp(-g_hat.dot(u),0,1)`. Static length is the direct target
 `s=1-flatten*(1-squash_min)*f_in`, independent of gravity, character gravity
 scale and frequency (including zero frequency). Paired spill is the direct
-outward rotation `spill*sag_max_deg*f_in` degrees along the projected lateral
+outward rotation `spill*spill_max_deg*f_in` degrees along the projected lateral
 `L`; single chains have no spill. Remaining inward axial force is removed.
 Non-axial static sag still uses `gravity*(m*g-R_anchor*R_rest*g_rest)/omega²`
 and the static angle limit; upright m=1 has no additional sag, m=2 sags and
-m=.5 lifts. The combined static angle is capped by `sag_max_deg`.
+m=.5 lifts. The force-based static angle is capped by `sag_max_deg`; the subsequent spill target uses its independent limit.
 Paired shortening compensates volume only along L by `1/s`.
 
 `translate` applies that fraction of the perpendicular static and dynamic
@@ -332,14 +334,14 @@ these targets are independent of gravity and frequency.
 Attribute keys must be declared on the same slot; values are string keys matched
 exactly against that character's stored slot value. Missing/unknown values are
 ignored. Allowed multiplier fields: `freq_hz`, `zeta`, `gravity`, `gain`,
-`max_deg`, `sag_max_deg`, `flatten`, `spill`, `translate`. Multipliers must be finite and
+`max_deg`, `sag_max_deg`, `spill_max_deg`, `head_sag`, `flatten`, `spill`, `translate`. Multipliers must be finite and
 nonnegative (`freq_hz` strictly positive); they may exceed 1. After multiplication,
 unit-interval fields saturate at 1 and angle limits at 180. Multiple matching
 attribute profiles multiply in declaration order. Profiles never enter mesh identity.
 
 Every physics field is optional with the defaults shown above. All numbers
-must be finite: `freq_hz > 0`; `zeta >= 0`, `gravity >= 0`; `gain`, `flatten`, `spill` and `translate` in `[0,1]`;
-`max_deg`, `sag_max_deg` and `rest_max_deg` in `[0,180]`; `squash` is exactly two positive
+must be finite: `freq_hz > 0`; `zeta >= 0`, `gravity >= 0`; `gain`, `flatten`, `spill`, `translate` and `head_sag` in `[0,1]`;
+`max_deg`, `sag_max_deg`, `spill_max_deg` and `rest_max_deg` in `[0,180]`; `squash` is exactly two positive
 numbers satisfying `min <= 1 <= max`. `params` must be a mapping. A malformed
 rig is dropped with a warning, and its slot remains available. Duplicate
 normalized extension names or group IDs cause a load error naming all owners.
@@ -702,18 +704,18 @@ representation, matching the browser's `JOINTS_0`/`WEIGHTS_0` consumption.
 Package body-slot `rig` declarations remain the base physics values. Core declares
 `extension_motion.groups` as a **world** setting: arbitrary package group IDs map
 to partial overrides of `freq_hz`, `zeta`, `gravity`, `spill`, `flatten`, `translate`, `gain`,
-`max_deg`, `sag_max_deg`, `axis_gain`, `squash`, and `rest_max_deg`. Missing values inherit the package; no group IDs are named in core.
+`max_deg`, `sag_max_deg`, `spill_max_deg`, `head_sag`, `axis_gain`, `squash`, and `rest_max_deg`. Missing values inherit the package; no group IDs are named in core.
 Game-Admin → Setup → Extension motion lists loaded declarations from the admin-only
 `GET /admin/world-settings/extension-motion` endpoint and saves through the existing
 world-settings endpoint. Reset removes the override so future package defaults flow through.
 
 Effective order: package → world override → slot attribute-profile multipliers →
-absolute character overrides → clothing gain → state bone pose. The character
-3D panel's Extension bones box edits numeric physics and Reset removes that
+absolute character overrides → bounce/weight → clothing gain → state bone pose. The character
+3D panel's Extension bones box shows Bounce/Weight sliders and Advanced numeric physics and Reset removes that
 character's group override. It sends `{extension_motion: {group_id: {field: value}}}`
 to admin-only `POST /characters/{name}/model3d/extension-motion`; profile storage
 is `model3d_opts.extension_motion`, validated and saved under
-`keyed_lock("character_profile", name)`. Fields and ranges match world overrides.
+`keyed_lock("character_profile", name)`. Raw fields and ranges match world overrides; Bounce/Weight are character-only.
 The existing mesh-option route is independent.
 
 After character overrides, every distinct worn item whose occupied slots or `outfit_piece.covers` hit
@@ -749,8 +751,8 @@ These settings change `motion.rev`, never the extension rig fingerprint or mesh.
 
 The Setup motion editor, character overrides and state pose editor share preview hints:
 `live` covers `rest_deg` and `rest_max_deg` (visible immediately); `motion` covers
-`freq_hz` (`freq` in state poses), `zeta`, `gain`, `axis_gain` and `max_deg` (play a clip);
-`tilt` covers `gravity`, `sag_max_deg`, `flatten`, `spill`, `translate` and `squash` (use Tilt,
+`freq_hz` (`freq` in state poses), `zeta`, `gain`, `axis_gain`, `max_deg` and `bounce` (play a clip);
+`tilt` covers `weight`, `gravity`, `head_sag`, `spill_max_deg`, `sag_max_deg`, `flatten`, `spill`, `translate` and `squash` (use Tilt,
 since the upright rest shape already carries gravity). Character `motion_gravity_scale`
 is visible upright when different from 1; otherwise use Tilt. Group enabled/flip and
 mesh-operation parameters are `rebuild`: they take effect after Rebuild extension bones.
@@ -807,3 +809,36 @@ A character whose only mesh is such a fork has no usable model until a neutral
 model is available. Ordinary pose references use `<sig>-p<fp>` state identity;
 expressions retain their existing state fingerprint. Their image modifiers,
 as well as chat/profile/gallery image modifiers, continue to apply.
+
+
+### Extension motion calibration: spill, static pull and character sliders
+
+`spill_max_deg` is finite in [0,180], defaulting server-side to the group's
+`sag_max_deg` when omitted; every resolved payload carries a number. Lying paired
+spill is `spill*spill_max_deg*f_in` degrees, independent of the force sag limit.
+For sag 5, spill maximum 30, spill .5 and f_in=1, the outward target is 15 degrees.
+`head_sag` is finite in [0,1], default 1: **head/feet pull when the body is not upright**.
+After force sag limits, let d be the static force displacement and U the anchor's
+bind-pose body up in the current world frame. Replace only that displacement by
+`d + (head_sag-1)*(d·U)*U`. Flatten and spill are applied subsequently;
+front/back and lateral force components, rest pose and dynamics remain unchanged.
+Final length rendering preserves this post-limit static target even with squash [1,1].
+
+Per-character `model3d_opts.extension_motion[group]` stores `bounce` and `weight`
+next to raw overrides. Both are finite in [.5,1.5], default 1. Resolution order:
+package → world → attribute profile → raw character overrides → bounce/weight →
+clothing → state. The provisional mapping is a **calibration point**:
+bounce b multiplies gain (clamp 1) and max_deg by b, and freq_hz and zeta by
+`b^-0.5`; weight w multiplies gravity, sag_max_deg, spill_max_deg, flatten (clamp 1)
+and translate (clamp 1) by w. Angle limits remain capped at 180 degrees.
+For raw gain .6, max 20, frequency 4, zeta .5, gravity 2, sag 5, spill maximum 30,
+flatten .5 and translate .6, b=1.25/w=.8 yield .75, 25, 3.577708764,
+.4472135955, 1.6, 4, 24, .4 and .48 respectively before clothing/state.
+The client consumes these effective numbers without applying the sliders again.
+
+The character Extension bones editor shows Bounce and Weight sliders with
+range .5..1.5, step .05 and value labels. Raw fields are under collapsed Advanced;
+Save/Revert/Reset retain draft semantics. Bounce uses the motion preview hint;
+Weight, spill_max_deg and head_sag use Tilt. World overrides expose the two raw
+fields but do not accept character sliders. Motion changes leave mesh fingerprints
+unchanged. Editor defaults precede raw character overrides and sliders.

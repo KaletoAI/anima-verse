@@ -14,6 +14,8 @@ export interface MotionGroup {
   flatten: number
   gravity_scale: number
   sag_max_deg: number
+  spill_max_deg: number
+  head_sag: number
   gravity: number
   axis_gain: [number, number, number]
   gain: number
@@ -24,7 +26,7 @@ export interface MotionGroup {
 }
 /** Package metadata profiles are multipliers; runtime groups are already resolved. */
 export type MotionAttributeProfiles = Record<string, Record<string, Partial<Pick<MotionGroup,
-  'freq_hz' | 'zeta' | 'gravity' | 'gain' | 'max_deg' | 'sag_max_deg' | 'flatten' | 'spill' | 'translate'>>>>
+  'freq_hz' | 'zeta' | 'gravity' | 'gain' | 'max_deg' | 'sag_max_deg' | 'spill_max_deg' | 'head_sag' | 'flatten' | 'spill' | 'translate'>>>>
 export interface ExtensionRigDeclaration extends Omit<MotionGroup, 'bones' | 'gravity_scale' | 'rest_deg'> {
   id: string
   op: string
@@ -127,13 +129,16 @@ interface Particle {
   blend: number
 }
 const DEFAULT_AXIS_GAIN: [number, number, number] = [1, 1, 1]
-const BLENDED_FIELDS = ['gravity', 'freq_hz', 'zeta', 'gain', 'flatten', 'spill', 'translate'] as const
+const BLENDED_FIELDS = ['gravity', 'freq_hz', 'zeta', 'gain', 'flatten', 'spill', 'translate', 'head_sag'] as const
 /** Smooth numeric state changes over the same 1.5 seconds as the rest angle. */
 export function blendMotionParams(from: MotionGroup, to: MotionGroup, elapsed: number, output?: MotionGroup): MotionGroup {
   const t = Math.max(0, Math.min(1, elapsed / 1.5))
   const weight = t * t * (3 - 2 * t)
   const result = output ?? { ...to }
-  for (const field of BLENDED_FIELDS) result[field] = (from[field] ?? 0) + ((to[field] ?? 0) - (from[field] ?? 0)) * weight
+  for (const field of BLENDED_FIELDS) {
+    const fallback = field === 'head_sag' ? 1 : 0
+    result[field] = (from[field] ?? fallback) + ((to[field] ?? fallback) - (from[field] ?? fallback)) * weight
+  }
   return result
 }
 const centroidCache = new WeakMap<Object3D, Vector3[]>()
@@ -409,17 +414,18 @@ export function createSecondaryMotion(
         if (sagAngle > sagLimit) dynamicQ.slerp(identityQ, 1 - sagLimit / sagAngle)
         dynamicQ.slerp(identityQ, 1 - st.staticWeight)
         const staticLength = restLength * clamp(1 - (st.params.flatten ?? 0) * (1 - st.params.squash[0]) * inward, st.params.squash[0], st.params.squash[1])
-        staticVector.copy(u).applyQuaternion(dynamicQ)
+        // Scale only the bounded force displacement along bind body up.
+        staticVector.copy(u).applyQuaternion(dynamicQ).multiplyScalar(restLength).sub(originalLever)
+        bodyVertical.copy(b.gravityRest).multiplyScalar(-1 / 9.81).applyQuaternion(anchorQ).normalize()
+        staticVector.addScaledVector(bodyVertical, ((st.params.head_sag ?? 1) - 1) * staticVector.dot(bodyVertical))
+        staticVector.add(originalLever)
         // Direct paired outward target in radians, independent of force/frequency.
-        const spillAngle = (st.params.spill ?? 0) * sagLimit * inward
+        const spillAngle = (st.params.spill ?? 0) * (st.params.spill_max_deg ?? st.params.sag_max_deg ?? st.params.max_deg) * Math.PI / 180 * inward
         if (lateral.lengthSq() > 1e-12) {
           temp.copy(u).cross(lateral).normalize()
           staticVector.applyAxisAngle(temp, spillAngle)
         }
-        dynamicQ.setFromUnitVectors(u, staticVector.normalize())
-        const combinedAngle = dynamicQ.angleTo(identityQ)
-        if (combinedAngle > sagLimit) dynamicQ.slerp(identityQ, 1 - sagLimit / combinedAngle)
-        staticVector.copy(u).applyQuaternion(dynamicQ).multiplyScalar(staticLength)
+        staticVector.multiplyScalar(restLength > 1e-12 ? staticLength / restLength : 1)
         target.copy(head).add(staticVector)
         localLateral.copy(lateral).transformDirection(inverseAnchor.copy(anchor).invert())
         // Express L before the rest rotation; scale is applied before that rotation.
@@ -492,7 +498,10 @@ export function createSecondaryMotion(
         rendered.sub(headShift).normalize().multiplyScalar(totalLength)
         localRendered.copy(rendered).add(head).applyMatrix4(inverseAnchor.copy(anchor).invert())
         dynamicQ.setFromUnitVectors(temp.copy(restVector).normalize(), u.copy(localRendered).normalize())
-        const s = clamp(localRendered.length() / restVector.length(), st.params.squash[0], st.params.squash[1])
+        // head_sag acts after force/length limits. Preserve that static target
+        // even when it is shorter than squash_min; only dynamics hit the cap.
+        const staticRatio = temp.copy(target).applyMatrix4(inverseAnchor).length() / restVector.length()
+        const s = clamp(localRendered.length() / restVector.length(), Math.min(st.params.squash[0], staticRatio), st.params.squash[1])
         const perpendicular = 1 / Math.sqrt(s)
         u.copy(b.centroid).normalize()
         scale.identity()

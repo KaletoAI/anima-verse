@@ -218,7 +218,7 @@ def set_model3d_options(character_name: str,
         if "extension_motion" in updates:
             from app.core.extension_rig import validate_motion_overrides
             overrides = updates["extension_motion"]
-            validate_motion_overrides({"groups": overrides})
+            validate_motion_overrides({"groups": overrides}, character=True)
             opts["extension_motion"] = {key: dict(value) for key, value in overrides.items() if value}
         profile["model3d_opts"] = opts
         if not save_character_profile(character_name, profile):
@@ -645,7 +645,8 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         out["model"] = info
     from app.core.extension_rig import motion_payload
     out["motion"] = motion_payload(character_name, profile=profile, preview_states=preview_states)
-    out["motion_defaults"] = motion_payload(character_name, profile=profile, apply_clothing=False, apply_states=False)["groups"]
+    draft_profile = {**profile, "model3d_opts": {**(profile.get("model3d_opts") or {}), "extension_motion": {}}}
+    out["motion_defaults"] = motion_payload(character_name, profile=draft_profile, apply_clothing=False, apply_states=False)["groups"]
     from app.core.extension_rig import rig_groups_for
     out["extension_groups"] = rig_groups_for(character_name, profile=profile)
     out["options"] = get_model3d_options(character_name)

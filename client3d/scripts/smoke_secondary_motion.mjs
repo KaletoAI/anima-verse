@@ -8,7 +8,7 @@
  * Direct targets replace the old force-based flatten/spill expectations:
  * f_in=clamp(-g_hat.dot(u),0,1), s=1-flatten*(1-min)*f_in.
  * f_in=1, flatten=1, min=.5 gives s=.5 at 1.5 and 4 Hz;
- * f_in=.5 gives .75. Spill=.5 and sag_max=30 gives 15 degrees
+ * f_in=.5 gives .75. Spill=.5 and spill_max=30 (sag=5) gives 15 degrees
  * outward with opposite X signs. Paired width compensation is 1/s.
  * Remaining inward axial force is removed, transverse e=force/omega²
  * rotates the lever while preserving the direct target length.
@@ -441,7 +441,7 @@ try {
     return {root,anchor,bones,solver,point};
   }
   for(const freq_hz of [1.5,4]) {
-    const direct=pairFixture(.5,true,{freq_hz,gravity:0,flatten:1,squash:[.5,2],sag_max_deg:30});
+    const direct=pairFixture(.5,true,{freq_hz,gravity:0,flatten:1,squash:[.5,2],sag_max_deg:5,spill_max_deg:30});
     // Pair lever +Y after -135 X, so f_in=1 and spill=.5*30=15 deg.
     direct.anchor.rotation.x=-3*Math.PI/4;direct.solver.update(0);
     for(let i=0;i<2;i++) {
@@ -497,6 +497,37 @@ try {
     (i===0?-1:1)*(.2+lateralOffset),Math.SQRT1_2*axialLength,Math.SQRT1_2*axialLength)),0,1e-7);
   axisFlat.solver.dispose();
   console.log('ok paired static flatten/spill unchanged with zero axis gains');
+  // At -90 X, original lever is +Y and bounded force displacement is
+  // (0, 1/hypot(1,d)-1, -d/hypot(1,d)). Bind body up is -Z.
+  // head_sag=.3 changes only Z to -.3*d/hypot(1,d), preserving Y.
+  const headProbe=fixture({head_sag:.3,squash:[1,1]});headProbe.anchor.rotation.x=-Math.PI/2;headProbe.solver.update(0);
+  const headD=9.81/(4*Math.PI)**2;
+  near(headProbe.point().y,1/Math.hypot(1,headD),1e-10);
+  near(headProbe.point().z,-.3*headD/Math.hypot(1,headD),1e-10);
+  console.log('head_sag numbers',JSON.stringify({bodyUpBefore:-headD/Math.hypot(1,headD),bodyUpAfter:headProbe.point().z,otherComponent:headProbe.point().y}));
+  headProbe.solver.dispose();console.log('ok head_sag .3 scales only bind-up static displacement, even with squash [1,1]');
+  const headDynamic=fixture({gravity:0,head_sag:.3,translate:1,max_deg:30});headDynamic.solver.update(0);
+  headDynamic.root.position.y=.1;headDynamic.solver.update(1/30);
+  near(headDynamic.bone.getWorldPosition(new THREE.Vector3()).y,.1+dynamicD/Math.hypot(1,dynamicD),1e-10);
+  headDynamic.solver.dispose();
+  const headDirect=pairFixture(.5,true,{gravity:0,head_sag:.3,sag_max_deg:5,spill_max_deg:30,flatten:1,squash:[.5,2]});
+  headDirect.anchor.rotation.x=-3*Math.PI/4;headDirect.solver.update(0);
+  near(headDirect.point(0).y,.5*Math.cos(Math.PI/12));near(headDirect.point(0).x,-.2-.5*Math.sin(Math.PI/12));
+  headDirect.solver.dispose();console.log('ok head_sag leaves dynamics, flatten and spill unchanged');
+  // Server resolution is consumed once by the client. Hand derivation:
+  // b=1.25 -> f=4/sqrt(1.25), gain=.6*1.25=.75; w=.8 -> g=1.6.
+  // For upright gravity_scale=2, bounded d=g*9.81/(2*pi*f)^2.
+  // These are the same hand-derived effective numbers pinned in the Python P3 smoke.
+  const effectivePayload=payload({gain:.75,max_deg:25,freq_hz:4/Math.sqrt(1.25),
+    zeta:.5/Math.sqrt(1.25),gravity:1.6,gravity_scale:2,sag_max_deg:4,
+    spill_max_deg:24,head_sag:1,flatten:.4,translate:.48});
+  const effective=effectivePayload.groups.test;
+  for(const [key,value] of Object.entries({gain:.75,max_deg:25,freq_hz:4/Math.sqrt(1.25),zeta:.5/Math.sqrt(1.25),gravity:1.6,sag_max_deg:4,spill_max_deg:24,flatten:.4,translate:.48}))near(effective[key],value,1e-12);
+  const calibrated=fixture();calibrated.solver.configure(effectivePayload);
+  calibrated.solver.update(1.5,{far:true});
+  const calibratedD=1.6*9.81/(2*Math.PI*(4/Math.sqrt(1.25)))**2;
+  near(calibrated.bone.getWorldPosition(new THREE.Vector3()).y,-.48*calibratedD/Math.hypot(1,calibratedD),1e-10);
+  calibrated.solver.dispose();console.log('ok effective bounce/weight payload in client solver: applied exactly once');
   const lift=fixture({gravity_scale:.5}); settle(lift);
   near(lift.point().y,.5*9.81/(4*Math.PI)**2/Math.hypot(1,.5*9.81/(4*Math.PI)**2));
   const still=fixture({gravity_scale:2,gain:0,max_deg:0}); settle(still);
@@ -667,11 +698,22 @@ try {
   const renderEditor=new Function('h','Fragment','useState','useI18n','MotionPreviewHint',...Object.keys(helpers),editorCode.code+'; return ExtensionMotionDraft')(
     h,'fragment',useState,()=>({t:x=>x}),'preview-hint',...Object.values(helpers));
   const editorCalls=[];
-  const defaults={axis_gain:[1,1,1],freq_hz:2,zeta:.7,gravity:1,gain:.9,max_deg:30,sag_max_deg:30,flatten:1,spill:0,translate:0,rest_max_deg:45,squash:[.8,1.2]};
+  const defaults={axis_gain:[1,1,1],freq_hz:2,zeta:.7,gravity:1,gain:.9,max_deg:30,sag_max_deg:30,spill_max_deg:30,head_sag:1,flatten:1,spill:0,translate:0,rest_max_deg:45,squash:[.8,1.2]};
   const props={defaults,overrides:{},disabled:false,onSave:async value=>{editorCalls.push(value);return true}};
   const allNodes=node=>Array.isArray(node)?node.flatMap(allNodes):node?.children?[node,...node.children.flatMap(allNodes)]:[];
   const nodes=()=>allNodes(renderEditor(props));
   const input=label=>nodes().find(node=>node.tag==='label'&&node.children[0]===label).children.find(node=>node?.tag==='input');
+  assert.equal(nodes().find(node=>node.tag==='details').props?.open,undefined);
+  for(const label of ['Bounce','Weight']) {
+    const slider=input(label);assert.equal(slider.props.type,'range');assert.equal(slider.props.min,.5);assert.equal(slider.props.max,1.5);assert.equal(slider.props.step,.05);
+  }
+  input('Bounce').props.onChange({target:{value:'1.25'}});
+  input('Weight').props.onChange({target:{value:'.8'}});
+  nodes().find(node=>node.tag==='button'&&node.children[0]==='Save').props.onClick();
+  await Promise.resolve();assert.deepEqual(editorCalls.pop(),{bounce:1.25,weight:.8});
+  nodes().find(node=>node.tag==='button'&&node.children[0]==='Reset').props.onClick();
+  await Promise.resolve();assert.equal(editorCalls.pop(),undefined);
+  assert.equal(input('Bounce').props.value,'1');assert.equal(input('Weight').props.value,'1');
   assert.equal(input('Gain').props.value,'0.9','editor starts with pre-clothing values');
   input('Gain').props.onChange({target:{value:'.8'}});
   props.defaults={...defaults,gain:.216};

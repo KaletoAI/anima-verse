@@ -71,7 +71,7 @@ def resolved_extension_groups(character_name, profile=None):
     return result
 
 
-MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "spill", "flatten", "translate", "gain", "max_deg", "sag_max_deg", "squash", "axis_gain", "rest_max_deg")
+MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "spill", "flatten", "translate", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "squash", "axis_gain", "rest_max_deg")
 
 
 def declared_motion_groups():
@@ -83,8 +83,9 @@ def declared_motion_groups():
                    if slot.rig is not None], key=lambda group: group["id"])
 
 
-def validate_motion_overrides(section):
-    """Validate partial world overrides against the P0 physics contract."""
+def validate_motion_overrides(section, *, character=False):
+    """Validate partial physics overrides; sliders are character-only."""
+    import math
     from app.plugins.registry import RigSpec
     if not isinstance(section, dict) or set(section) - {"groups"}:
         raise ValueError("extension_motion requires a groups object")
@@ -94,14 +95,20 @@ def validate_motion_overrides(section):
     for group_id, values in groups.items():
         if not isinstance(group_id, str) or not group_id or not isinstance(values, dict):
             raise ValueError("motion group overrides must be objects with non-empty ids")
-        if set(values) - set(MOTION_FIELDS):
+        allowed = set(MOTION_FIELDS) | ({"bounce", "weight"} if character else set())
+        if set(values) - allowed:
             raise ValueError("unknown motion physics field")
+        for key in ("bounce", "weight"):
+            if key in values:
+                value = values[key]
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not .5 <= value <= 1.5:
+                    raise ValueError(f"{key} outside allowed range")
         RigSpec.parse({"id": group_id, "op": "validation",
                        "chains": [[{"bone": "ValidationBone", "parent": "Hips"}]], **values})
 
 
 def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_states=True, preview_states=None):
-    """Package → world → attribute multipliers → character → clothing → state; mesh-independent."""
+    """Package → world → attribute multipliers → raw character → bounce/weight → clothing → state; mesh-independent."""
     import math
     from app.core import config
     from app.core.body_slots import slots_for_character
@@ -156,11 +163,23 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             for field, multiplier in choices.get(str(selected), {}).items():
                 values[field] *= multiplier
         # Multipliers may exceed absolute limits; enforce the physics contract.
-        for key in ("gain", "flatten", "spill", "translate"):
+        for key in ("gain", "flatten", "spill", "translate", "head_sag"):
             values[key] = min(1.0, values[key])
-        for key in ("max_deg", "sag_max_deg"):
+        for key in ("max_deg", "sag_max_deg", "spill_max_deg"):
             values[key] = min(180.0, values[key])
-        values.update(((profile.get("model3d_opts") or {}).get("extension_motion") or {}).get(group["id"], {}))
+        overrides = ((profile.get("model3d_opts") or {}).get("extension_motion") or {}).get(group["id"], {})
+        values.update({key: value for key, value in overrides.items() if key in MOTION_FIELDS})
+        bounce, weight = overrides.get("bounce", 1), overrides.get("weight", 1)
+        for key in ("gain", "max_deg"):
+            values[key] *= bounce
+        for key in ("freq_hz", "zeta"):
+            values[key] *= bounce ** -.5
+        for key in ("gravity", "sag_max_deg", "spill_max_deg", "flatten", "translate"):
+            values[key] *= weight
+        for key in ("gain", "flatten", "translate"):
+            values[key] = min(1.0, values[key])
+        for key in ("max_deg", "sag_max_deg", "spill_max_deg"):
+            values[key] = min(180.0, values[key])
         factor = 1.0
         targets = set(coverage.get(group["id"], []))
         for piece in pieces.values():
@@ -187,7 +206,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
                     values[target] = 0 if multiplier == 0 else values[target] * multiplier
         # Clamp EFFECTIVE values after all layers; finite factors may overflow.
         for field, upper in {"freq_hz": 20, "zeta": 10, "gravity": 10,
-                             "gain": 1, "flatten": 1, "spill": 1, "translate": 1}.items():
+                             "gain": 1, "flatten": 1, "spill": 1, "translate": 1, "head_sag": 1}.items():
             values[field] = max(0.0, min(float(upper), values[field]))
         values["gravity_scale"] = scale
         groups[group["id"]] = {

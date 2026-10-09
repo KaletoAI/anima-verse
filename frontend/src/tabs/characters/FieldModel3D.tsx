@@ -123,7 +123,7 @@ interface Model3DStatus {
   model?: Model3DInfo | null
   options?: { no_fingers?: boolean | null; auto_generate?: boolean;
     extension_rig?: Record<string, { enabled?: boolean; flip?: boolean }>;
-    extension_motion?: Record<string, Record<string, number | number[]>> }
+    extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }> }
   extension_groups?: ExtensionRigDeclaration[]
   backends?: MeshBackend[]
   default?: string

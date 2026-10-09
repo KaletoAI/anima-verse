@@ -84,6 +84,8 @@ class RigSpec:
     flatten: float = 0.0
     translate: float = 0.0
     sag_max_deg: float = 25.0
+    spill_max_deg: float = 25.0
+    head_sag: float = 1.0
     attribute_profiles: Dict[str, Dict[str, Dict[str, float]]] = field(default_factory=dict)
     axis_gain: List[float] = field(default_factory=lambda: [1.0, 1.0, 1.0])
     gain: float = 1.0
@@ -138,7 +140,7 @@ class RigSpec:
         spec = cls(raw["id"].strip(), raw["op"].strip(), result,
                    dict(params), dict(conditions))
         bounds = {"freq_hz": (0, None), "zeta": (0, None),
-                  "gravity": (0, None), "spill": (0, 1), "translate": (0, 1), "flatten": (0, 1), "gain": (0, 1),
+                  "gravity": (0, None), "head_sag": (0, 1), "spill": (0, 1), "translate": (0, 1), "flatten": (0, 1), "gain": (0, 1),
                   "max_deg": (0, 180), "rest_max_deg": (0, 180)}
         for key, (lo, hi) in bounds.items():
             value = raw.get(key, getattr(spec, key))
@@ -151,8 +153,12 @@ class RigSpec:
         if isinstance(sag, bool) or not isinstance(sag, (int, float)) or not math.isfinite(sag) or not 0 <= sag <= 180:
             raise ValueError("rig.sag_max_deg outside allowed range")
         spec.sag_max_deg = float(sag)
+        spill_max = raw.get("spill_max_deg", spec.sag_max_deg)
+        if isinstance(spill_max, bool) or not isinstance(spill_max, (int, float)) or not math.isfinite(spill_max) or not 0 <= spill_max <= 180:
+            raise ValueError("rig.spill_max_deg outside allowed range")
+        spec.spill_max_deg = float(spill_max)
         profiles = raw.get("attribute_profiles", {})
-        fields = {"freq_hz", "zeta", "gravity", "gain", "max_deg", "sag_max_deg", "flatten", "spill", "translate"}
+        fields = {"freq_hz", "zeta", "gravity", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "flatten", "spill", "translate"}
         if not isinstance(profiles, dict):
             raise ValueError("rig.attribute_profiles must be a mapping")
         for key, choices in profiles.items():

@@ -7,7 +7,7 @@ export function validNumber(text: string, min: number, max?: number, positive = 
 }
 export function makeDraft(values: Physics): MotionDraft {
   const strings: Record<string, string> = {}
-  for (const [key, value] of Object.entries(values)) {
+  for (const [key, value] of Object.entries({ bounce: 1, weight: 1, ...values })) {
     if (key === 'squash' && Array.isArray(value)) {
       strings.squash_min = String(value[0]); strings.squash_max = String(value[1])
     } else if (key === 'axis_gain' && Array.isArray(value)) {
@@ -27,7 +27,7 @@ export function draftOverrides(draft: MotionDraft, defaults: Physics, overrides:
   for (const key of Object.keys(draft.values)) {
     if (key.startsWith('squash_') || key.startsWith('axis_gain_') || draft.values[key] === draft.baseline[key]) continue
     const value = Number(draft.values[key])
-    if (value === defaults[key]) delete next[key]
+    if (value === (defaults[key] ?? (['bounce', 'weight'].includes(key) ? 1 : undefined))) delete next[key]
     else next[key] = value
   }
   if (['squash_min', 'squash_max'].some(key => draft.values[key] !== draft.baseline[key])) {

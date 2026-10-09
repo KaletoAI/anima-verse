@@ -155,6 +155,39 @@ def main():
             check(gain(shared_profile) == .25, 'shared file reload invalidates snapshot')
         baseline = motion()
         check(motion() == baseline, 'stable reads')
+        # Raw values beat world/profile layers, then b=1.25 and w=.8:
+        # gain=.6*1.25=.75, max=20*1.25=25, freq=4/sqrt(1.25),
+        # zeta=.5/sqrt(1.25), gravity=2*.8=1.6, sag=5*.8=4,
+        # spill_max=30*.8=24, flatten=.5*.8=.4, translate=.6*.8=.48.
+        slider_profile = {**profile, 'body_slots': {'sample_slot': {'response': 'fast'}},
+            'model3d_opts': {'extension_motion': {'sample_group': {
+                'bounce': 1.25, 'weight': .8, 'gain': .6, 'max_deg': 20,
+                'freq_hz': 4, 'zeta': .5, 'gravity': 2, 'sag_max_deg': 5,
+                'spill_max_deg': 30, 'flatten': .5, 'translate': .6, 'head_sag': .3}}}}
+        effective = motion_payload('sample', slider_profile, apply_clothing=False, apply_states=False)['groups']['sample_group']
+        expected = {'gain': .75, 'max_deg': 25, 'freq_hz': 4 / 1.25 ** .5,
+                    'zeta': .5 / 1.25 ** .5, 'gravity': 1.6, 'sag_max_deg': 4,
+                    'spill_max_deg': 24, 'flatten': .4, 'translate': .48, 'head_sag': .3}
+        check(all(abs(effective[key] - value) < 1e-12 for key, value in expected.items()),
+              'raw then bounce/weight: ' + json.dumps(expected, sort_keys=True))
+        check(abs(motion(slider_profile)['groups']['sample_group']['gain'] - .75 * .4) < 1e-12,
+              'clothing follows bounce: .75*.4=.3')
+        from app.core.extension_rig import validate_motion_overrides
+        validate_motion_overrides({'groups': slider_profile['model3d_opts']['extension_motion']}, character=True)
+        for key, bad in [('bounce', .49), ('weight', 1.51), ('bounce', True), ('weight', float('nan')),
+                         ('spill_max_deg', 181), ('head_sag', 1.1)]:
+            try:
+                validate_motion_overrides({'groups': {'sample_group': {key: bad}}}, character=True)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError('invalid slider/new field accepted')
+        check(True, 'slider/new field validation rejects bounds, bool and NaN')
+        from app.plugins.registry import RigSpec
+        fallback = RigSpec.parse({'id': 'fallback', 'op': 'test', 'sag_max_deg': 5,
+                                  'chains': [[{'bone': 'FallbackBone', 'parent': 'Hips'}]]})
+        check(fallback.spill_max_deg == 5 and fallback.head_sag == 1, 'server defaults spill_max=sag and head_sag=1')
+
         changed = copy.deepcopy(profile)
         changed['equipped_pieces'].pop('outer')
         check(motion(changed)['rev'] != baseline['rev'], 'equipment changes revision')
@@ -217,7 +250,7 @@ def main():
         check(motion(unknown)['groups'] == motion(bare)['groups'], 'unknown attribute value ignored')
         declarations = rig_groups_for('sample', bare)
         physics = copy.deepcopy(declarations)
-        physics[0].update(axis_gain=[.5, 1, .15], flatten=.7, sag_max_deg=50, attribute_profiles={'response': {'fast': {'gain': .2}}})
+        physics[0].update(axis_gain=[.5, 1, .15], flatten=.7, sag_max_deg=50, spill_max_deg=30, head_sag=.3, attribute_profiles={'response': {'fast': {'gain': .2}}})
         check(extension_rig_fingerprint(physics) == extension_rig_fingerprint(declarations),
               'physics-only declaration keeps mesh fingerprint')
         from app.routes.extension_motion import _set_extension_motion_sync
@@ -259,8 +292,17 @@ def main():
         check(motion_payload('sample', masked)['groups'] == motion_payload('sample')['groups']
               and motion_payload('sample', masked)['rev'] != motion_payload('sample')['rev'],
               'revision tracks attribute changes masked by absolute overrides')
+        slider_overrides = slider_profile['model3d_opts']['extension_motion']
+        saved_sliders = _set_extension_motion_sync('sample', {'extension_motion': slider_overrides})
+        check(saved_sliders['options']['extension_motion'] == slider_overrides,
+              'HTTP slider/new field storage round trip')
+        check(extension_metadata('sample')['fingerprint'] == fp, 'sliders leave mesh fingerprint unchanged')
+        draft_defaults = model3d.get_model3d_info('sample')['motion_defaults']['sample_group']
+        check(abs(draft_defaults['gain'] - .3) < 1e-12 and draft_defaults['freq_hz'] == 4.4,
+              'editor defaults precede raw overrides and sliders')
+        _set_extension_motion_sync('sample', {'extension_motion': overrides})
         for bad in ({'translate': -1}, {'translate': 2}, {'translate': True}, {'translate': float('nan')}, {'axis_gain': [1, 1]}, {'axis_gain': [1, 1, -1]}, {'axis_gain': [False, 1, 1]}, {'gain': True}, {'flatten': -1}, {'flatten': 2}, {'sag_max_deg': 181},
-                    {'sag_max_deg': float('nan')}, {'unknown': 1}):
+                    {'sag_max_deg': float('nan')}, {'spill_max_deg': 181}, {'head_sag': -1}, {'bounce': .49}, {'weight': 1.51}, {'bounce': True}, {'unknown': 1}):
             try:
                 _set_extension_motion_sync('sample', {'extension_motion': {'sample_group': bad}})
             except HTTPException as exc:

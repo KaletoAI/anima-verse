@@ -10207,7 +10207,7 @@ Worldmap character rows carry these fields independently of scene recipes:
       "example_group": {
         "bones": ["ExampleBone1", "ExampleBone2"],
         "freq_hz": 2.2, "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "spill": 0.0, "flatten": 0.0, "translate": 0.0, "gain": 1.0, "axis_gain": [1, 1, 1],
-        "max_deg": 25, "sag_max_deg": 25, "squash": [0.6, 1.4],
+        "max_deg": 25, "sag_max_deg": 25, "spill_max_deg": 25, "head_sag": 1.0, "squash": [0.6, 1.4],
         "rest_deg": 0, "rest_max_deg": 90
       }
     }
@@ -10322,11 +10322,11 @@ For the unit world gravity `g_hat` and rest lever `u`, define
 `f_in=clamp(-g_hat.dot(u),0,1)`. Static length is the direct target
 `s=1-flatten*(1-squash_min)*f_in`, independent of gravity, character gravity
 scale and frequency (including zero frequency). Paired spill is the direct
-outward rotation `spill*sag_max_deg*f_in` degrees along the projected lateral
+outward rotation `spill*spill_max_deg*f_in` degrees along the projected lateral
 `L`; single chains have no spill. Remaining inward axial force is removed.
 Non-axial static sag still uses `gravity*(m*g-R_anchor*R_rest*g_rest)/omega²`
 and the static angle limit; upright m=1 has no additional sag, m=2 sags and
-m=.5 lifts. The combined static angle is capped by `sag_max_deg`.
+m=.5 lifts. The force-based static angle is capped by `sag_max_deg`; the subsequent spill target uses its independent limit.
 Paired shortening compensates volume only along L by `1/s`.
 
 `translate` applies that fraction of the perpendicular static and dynamic
@@ -10558,7 +10558,7 @@ contributes 0.8. Character scale m=2 doubles current gravity before subtracting 
 it stays separate from group gravity and does not change frequency.
 
 `motion.rev` hashes declarations, world overrides, raw equipment assignments, worn
-item damping/coverage definitions, slot values/profiles, absolute character overrides,
+item damping/coverage definitions, slot values/profiles, absolute character overrides and sliders,
 slot coverage and character scale, active state IDs and their sparse bone poses, plus the
 effective groups. Repeated reads are stable; changes remain visible even when
 the effective result is masked by another multiplier. `model_sig`/`model_rev` remain mesh identities: both renderers
@@ -10566,8 +10566,8 @@ reconfigure the secondary solver on motion revision changes without reloading
 mesh geometry. No motion input enters the scene recipe fingerprint.
 
 Package `rig.attribute_profiles: {attribute_key: {value: {field: multiplier}}}`
-allows frequency, damping, gravity, gain, dynamic/static angle limits, flatten
-spill and translate multipliers. Keys must name attributes of the same slot; scalar string
+allows frequency, damping, gravity, gain, dynamic/static/spill angle limits, head_sag,
+flatten, spill and translate multipliers. Keys must name attributes of the same slot; scalar string
 values select by exact match. Unknown/missing values contribute nothing. Values
 are finite and nonnegative; frequency is strictly positive. Unit-interval fields
 cap at 1 and angles at 180 after profiles. Profile physics is excluded from the
@@ -10580,12 +10580,12 @@ per-group physics overrides. The admin-only
 `{"extension_motion":{}}` resets all character overrides. Writes validate the
 same ranges as world physics and hold `keyed_lock("character_profile", name)`
 around profile read and save. `/characters/{name}/model3d` adds `motion_defaults`
-(the same resolved groups before clothing), used by numeric inputs in the
+(resolved package/world/attribute groups before character overrides, sliders, clothing and state), used by numeric inputs in the
 Extension bones box. Saving physics reconfigures motion without a mesh reload.
 
 Hand-derived v2 acceptance is in `smoke_secondary_motion.mjs` and the P0/P3
 Python smokes: f_in=1, flatten=1 and squash_min=.5 give length .5 at
-1.5 and 4 Hz; f_in=.5 gives .75. Spill=.5 and sag_max=30 give outward
+1.5 and 4 Hz; f_in=.5 gives .75. Spill=.5, sag_max=5 and spill_max=30 give outward
 15 degrees with opposite side signs. Width is 1/s only along L. Upright m=2
 has unit-lever sag direction (0,-d,1), d=9.81/(4*pi)^2; translate=1 moves
 its head by -d/sqrt(1+d²) without rotating it. A bent-forward body impulse
@@ -10623,3 +10623,36 @@ Effective motion values are clamped after all layers: `freq_hz` in [0,20],
 The static solver treats omega squared below 1e-12 as zero frequency.
 Entering or leaving zero frequency blends the bounded static angle and length
 over 1.5 seconds with smoothstep, rather than dividing by a vanishing frequency.
+
+
+### Extension motion calibration: spill, static pull and character sliders
+
+`spill_max_deg` is finite in [0,180], defaulting server-side to the group's
+`sag_max_deg` when omitted; every resolved payload carries a number. Lying paired
+spill is `spill*spill_max_deg*f_in` degrees, independent of the force sag limit.
+For sag 5, spill maximum 30, spill .5 and f_in=1, the outward target is 15 degrees.
+`head_sag` is finite in [0,1], default 1: **head/feet pull when the body is not upright**.
+After force sag limits, let d be the static force displacement and U the anchor's
+bind-pose body up in the current world frame. Replace only that displacement by
+`d + (head_sag-1)*(d·U)*U`. Flatten and spill are applied subsequently;
+front/back and lateral force components, rest pose and dynamics remain unchanged.
+Final length rendering preserves this post-limit static target even with squash [1,1].
+
+Per-character `model3d_opts.extension_motion[group]` stores `bounce` and `weight`
+next to raw overrides. Both are finite in [.5,1.5], default 1. Resolution order:
+package → world → attribute profile → raw character overrides → bounce/weight →
+clothing → state. The provisional mapping is a **calibration point**:
+bounce b multiplies gain (clamp 1) and max_deg by b, and freq_hz and zeta by
+`b^-0.5`; weight w multiplies gravity, sag_max_deg, spill_max_deg, flatten (clamp 1)
+and translate (clamp 1) by w. Angle limits remain capped at 180 degrees.
+For raw gain .6, max 20, frequency 4, zeta .5, gravity 2, sag 5, spill maximum 30,
+flatten .5 and translate .6, b=1.25/w=.8 yield .75, 25, 3.577708764,
+.4472135955, 1.6, 4, 24, .4 and .48 respectively before clothing/state.
+The client consumes these effective numbers without applying the sliders again.
+
+The character Extension bones editor shows Bounce and Weight sliders with
+range .5..1.5, step .05 and value labels. Raw fields are under collapsed Advanced;
+Save/Revert/Reset retain draft semantics. Bounce uses the motion preview hint;
+Weight, spill_max_deg and head_sag use Tilt. World overrides expose the two raw
+fields but do not accept character sliders. Motion changes leave mesh fingerprints
+unchanged. Editor defaults precede raw character overrides and sliders.

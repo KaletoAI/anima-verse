@@ -4,6 +4,7 @@ import { draftChanged, draftOverrides, editDraft, makeDraft, validNumber, type P
 import { MotionPreviewHint } from './MotionPreviewHint'
 
 const fields: Record<string, string> = {
+  spill_max_deg: 'Maximum spill angle (degrees)', head_sag: 'Head/feet pull when the body is not upright',
   freq_hz: 'Frequency (Hz)', zeta: 'Damping ratio', gravity: 'Gravity', gain: 'Gain',
   max_deg: 'Maximum dynamic angle (degrees)', sag_max_deg: 'Maximum static angle (degrees)',
   translate: 'Translation fraction', flatten: 'Flatten', spill: 'Spill', rest_max_deg: 'Maximum rest angle (degrees)',
@@ -17,16 +18,23 @@ export function ExtensionMotionDraft({ defaults, overrides, disabled, onSave }: 
   const { t } = useI18n()
   const [draft, setDraft] = useState(() => makeDraft({ ...defaults, ...overrides }))
   const valid = (key: string) => validNumber(draft.values[key] ?? '', key === 'squash_max' ? 1 : 0,
-    (key.startsWith('axis_gain_') || ['gain', 'flatten', 'spill', 'translate', 'squash_min'].includes(key)) ? 1 : key.endsWith('deg') ? 180 : undefined,
+    (key.startsWith('axis_gain_') || ['gain', 'flatten', 'spill', 'translate', 'head_sag', 'squash_min'].includes(key)) ? 1 : key.endsWith('deg') ? 180 : undefined,
     key === 'freq_hz' || key === 'squash_min')
   const changed = draftChanged(draft)
   const allValid = Object.keys(fields).every(valid)
+    && ['bounce', 'weight'].every(key => validNumber(draft.values[key], 0.5, 1.5))
   const save = async (reset = false) => {
     if (!reset && (!changed || !allValid || disabled)) return
     const next = reset ? undefined : draftOverrides(draft, defaults, overrides)
     if (await onSave(next)) setDraft(makeDraft({ ...defaults, ...next }))
   }
   return <>
+    {['bounce', 'weight'].map(key => <label key={key}>{t(key === 'bounce' ? 'Bounce' : 'Weight')} <MotionPreviewHint field={key} />
+      <input type="range" min={0.5} max={1.5} step={0.05} disabled={disabled}
+        value={draft.values[key]} onChange={event => setDraft(previous => editDraft(previous, key, event.target.value))} />
+      <span>{Number(draft.values[key]).toFixed(2)}</span>
+    </label>)}
+    <details><summary>{t('Advanced')}</summary>
     {Object.entries(fields).map(([key, label]) => <label key={key}>{t(label)} <MotionPreviewHint field={key.startsWith('axis_gain_') ? 'axis_gain' : key.startsWith('squash_') ? 'squash' : key} />
       <input className="ga-input" type="text" inputMode="decimal" disabled={disabled}
         value={draft.values[key] ?? ''} aria-invalid={!valid(key)}
@@ -35,6 +43,7 @@ export function ExtensionMotionDraft({ defaults, overrides, disabled, onSave }: 
         onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void save() } }} />
       {!valid(key) && <span role="alert">{t('Enter a valid number within the allowed range.')}</span>}
     </label>)}
+    </details>
     {changed && <span className="ga-hint">{t('Unsaved changes')}</span>}
     <button type="button" className="ga-btn ga-btn-sm" disabled={disabled || !changed || !allValid} onClick={() => void save()}>{t('Save')}</button>
     <button type="button" className="ga-btn ga-btn-sm" disabled={disabled || !changed || !allValid} onClick={() => setDraft(makeDraft({ ...defaults, ...overrides }))}>{t('Revert')}</button>

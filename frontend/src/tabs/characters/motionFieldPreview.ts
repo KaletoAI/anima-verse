@@ -3,6 +3,7 @@ import type { SecondaryMotionPayload } from '@anima/scene-render'
 type Category = 'live' | 'motion' | 'tilt' | 'rebuild'
 type MotionField = Exclude<keyof SecondaryMotionPayload['groups'][string], 'bones'>
 export const motionFieldPreview = {
+  bounce: 'motion', weight: 'tilt', spill_max_deg: 'tilt', head_sag: 'tilt',
   rest_deg: 'live', rest_max_deg: 'live',
   freq_hz: 'motion', freq: 'motion', zeta: 'motion', gain: 'motion', axis_gain: 'motion', max_deg: 'motion',
   gravity: 'tilt', gravity_scale: 'tilt', motion_gravity_scale: 'tilt',

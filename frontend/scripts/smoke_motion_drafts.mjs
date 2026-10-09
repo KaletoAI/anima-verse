@@ -80,3 +80,12 @@ const translationDefaults={...defaults,translate:0};
 assert.deepEqual(draftOverrides(editDraft(makeDraft(translationDefaults),'translate','.6'),translationDefaults,{}),{translate:.6});
 assert.equal(validNumber('1.1',0,1),false);
 console.log('PASS translate scalar draft sends .6 and rejects values above 1');
+
+// Slider defaults are 1; save preserves raw overrides, returning to 1 prunes.
+const sliders=makeDraft({gain:1});
+assert.equal(sliders.values.bounce,'1');
+const sliderEdit=editDraft(editDraft(sliders,'bounce','1.25'),'weight','.8');
+assert.deepEqual(draftOverrides(sliderEdit,{gain:1},{gravity:.4}),{gravity:.4,bounce:1.25,weight:.8});
+assert.equal(makeDraft(draftOverrides(sliderEdit,{gain:1},{})).values.weight,'0.8');
+assert.deepEqual(draftOverrides(editDraft(makeDraft({bounce:1.25}),'bounce','1'),{}, {bounce:1.25}),{});
+console.log('PASS Bounce/Weight draft round-trip and default pruning');
