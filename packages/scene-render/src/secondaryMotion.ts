@@ -104,6 +104,8 @@ interface Bind {
   bone: Bone
   local: Matrix4
   centroid: Vector3
+  /** Bone-local axis the extension scale acts along: towards the next chain joint, else the centroid. */
+  scaleAxis: Vector3
   centroidWorld: Vector3
   gravityRest: Vector3
   gravityProjection: number
@@ -227,7 +229,7 @@ export function createSecondaryMotion(
         const q = bone.getWorldQuaternion(new three.Quaternion()).invert()
         let depth = 0
         for (let parent = bone.parent; parent; parent = parent.parent) depth++
-        binds.set(bone, { bone, local: bone.matrix.clone(), centroid: new three.Vector3(), centroidWorld: new three.Vector3(),
+        binds.set(bone, { bone, local: bone.matrix.clone(), centroid: new three.Vector3(), scaleAxis: new three.Vector3(), centroidWorld: new three.Vector3(),
           gravityRest: gravity.clone().applyQuaternion(q), gravityProjection: 0, bodyFront: new three.Vector3(),
           head: bone.getWorldPosition(new three.Vector3()), parentHead: bone.parent!.getWorldPosition(new three.Vector3()), worldRotation: q.clone().invert(), pureWorld: new three.Matrix4(),
           lateral: new three.Vector3(), pairedLateral: new three.Vector3(), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), straightenRotation: new three.Quaternion(), localRotation: bone.quaternion.clone() })
@@ -282,6 +284,16 @@ export function createSecondaryMotion(
       if (chain.some(b => !b || b.centroid.lengthSq() < 1e-12)) continue
       const members = new Set((chain as Bind[]).map(b => b.bone))
       const roots = (chain as Bind[]).filter(b => !members.has(b.bone.parent as Bone))
+      // A link with a successor scales along the axis to that joint, so girth
+      // (perpendicular) never pushes the next link off its line; the last link
+      // uses its own centroid direction.
+      for (const b of chain as Bind[]) {
+        const child = (chain as Bind[]).find(c => c.bone.parent === b.bone)
+        if (child) b.scaleAxis.setFromMatrixPosition(child.local)
+        else b.scaleAxis.copy(b.centroid)
+        if (b.scaleAxis.lengthSq() < 1e-12) b.scaleAxis.copy(b.centroid)
+        b.scaleAxis.normalize()
+      }
       // Derive front once from immutable bind geometry, never a model axis.
       const meanRoot = new three.Vector3(), meanParent = new three.Vector3(), meanTarget = new three.Vector3()
       for (const b of roots) {
@@ -592,7 +604,7 @@ export function createSecondaryMotion(
         const s = clamp(localRendered.length() / restVector.length(), Math.min(st.params.squash[0], staticRatio), st.params.squash[1])
         const spread = st.params.spread ?? 0.5
         const perpendicular = s < 1 ? Math.min(SPREAD_CAP, 1 + spread * (1 / Math.sqrt(s) - 1)) : 1 / Math.sqrt(s)
-        u.copy(b.centroid).normalize()
+        u.copy(b.scaleAxis)
         scale.identity()
         const e = scale.elements
         // Gram-Schmidt gives the orthonormal frame (u, L, u cross L).
