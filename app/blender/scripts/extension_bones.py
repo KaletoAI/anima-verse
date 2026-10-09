@@ -72,6 +72,9 @@ PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'window_margin': 'number',
                      'leak_t_limit': 'number',
                      'leak_radius_limit': 'number',
+                     'segment_radius_factor': 'number',
+                     'segment_min_vertices': 'number',
+                     'contact_ramp': 'number',
                      'ring_radius_percentile': 'number',
                      'ring_radius_scale': 'number',
                      'near_slice_margin': 'number',
@@ -130,7 +133,7 @@ def parameters(group):
         if kind == 'number':
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise ValueError(key + ' must be finite numeric')
-            if key == 'axis_iterations' and int(value) != value:
+            if key in ('axis_iterations', 'segment_min_vertices') and int(value) != value:
                 raise ValueError(key + ' must be an integer')
         elif kind == 'bone':
             if not isinstance(value, str) or not value:
@@ -149,7 +152,7 @@ def parameters(group):
     positive = ('radius_scale', 'radius_min', 'radius_max', 'radius_z_scale', 'wall_z_tolerance',
                 'wall_x_tolerance', 'depth_ramp', 'slice_size', 'part_half_width',
                 'candidate_lateral_max', 'protrusion_threshold', 'weld_distance',
-                'weight_ramp', 'leak_radius_limit', 'fallback_half_width',
+                'weight_ramp', 'leak_radius_limit', 'segment_radius_factor', 'segment_min_vertices', 'contact_ramp', 'fallback_half_width',
                 'fallback_front_ramp', 'fallback_side_ramp', 'fallback_top_ramp',
                 'blend_width', 'window_length_factor', 'ring_radius_scale')
     for key in positive:
@@ -279,6 +282,7 @@ def appendage_plan(group, p, co, edges, bones):
     base, tip = sorted(ends, key=lambda e: (e-target).length)
     if group.get('flip', False):
         base, tip = tip, base
+    detected_tip = tip.copy()
     length = (tip-base).length
     if length < 1e-6:
         raise ValueError('degenerate part length')
@@ -288,19 +292,30 @@ def appendage_plan(group, p, co, edges, bones):
     def radial(c):
         delta = c-base
         return (delta-direction*delta.dot(direction)).length
+    # Half-width comes from the lateral extent of the axis candidate set.
+    half_width = (max(v.x for v in points)-min(v.x for v in points))/2
+    segment_radius = p['segment_radius_factor'] * half_width
+    if segment_radius <= 0:
+        raise ValueError('degenerate measured part half-width')
+    axial_window = p['window_length_factor'] + p['window_margin']/length
+    eligible = {i for i,c in enumerate(co)
+                if abs(t_of(c)-.5) < axial_window and radial(c) <= segment_radius}
     kd = KDTree(len(co))
     for i,c in enumerate(co):
         kd.insert(c,i)
     kd.balance()
     ids = list(range(len(co)))
-    # Union-find guarantees transitive welding even across multiple UV seams.
+    # Bound welding too, so out-of-bound seam vertices cannot bridge the flood.
+    # Union-find guarantees transitive welding across multiple UV seams.
     def find(i):
         while ids[i] != i:
             ids[i] = ids[ids[i]]
             i = ids[i]
         return i
-    for i,c in enumerate(co):
-        for _,j,_ in kd.find_range(c,p['weld_distance']):
+    for i in eligible:
+        for _,j,_ in kd.find_range(co[i],p['weld_distance']):
+            if j not in eligible:
+                continue
             a,b = find(i),find(j)
             ids[max(a,b)] = min(a,b)
     welded = [find(i) for i in range(len(co))]
@@ -310,8 +325,7 @@ def appendage_plan(group, p, co, edges, bones):
         if a != b:
             adj.setdefault(a,set()).add(b)
             adj.setdefault(b,set()).add(a)
-    mid = base.lerp(tip,.5)
-    win = {welded[i] for i,c in enumerate(co) if (c-mid).length < p['window_length_factor']*length+p['window_margin']}
+    win = {welded[i] for i in eligible}
     keep = {i for i in win if t_of(co[i]) >= p['cut']}
     seed = welded[min(range(len(co)),key=lambda i:(co[i]-tip).length)]
     if seed not in keep:
@@ -324,7 +338,12 @@ def appendage_plan(group, p, co, edges, bones):
                 stack.append(j)
     tmax = max(t_of(co[i]) for i in comp)
     rmax = max(radial(co[i]) for i in comp)
-    leak = tmax > p['leak_t_limit'] or rmax > p['leak_radius_limit']
+    leak_reasons = []
+    if len(comp) < p['segment_min_vertices']:
+        leak_reasons.append('bounded component has too few vertices')
+    if tmax > p['leak_t_limit']:
+        leak_reasons.append('bounded component exceeds leak_t_limit')
+    leak = bool(leak_reasons)
     root = Vector((base.x,max(base.y+p['root_depth'],front(base.z)+p['root_wall_margin']),base.z))
     part = set()
     if not leak:
@@ -355,9 +374,10 @@ def appendage_plan(group, p, co, edges, bones):
     for i,c in enumerate(co):
         t = (c-root).dot(dirv)/axis_length
         if not leak:
-            if welded[i] not in part:
+            if i not in eligible or welded[i] not in part:
                 continue
-            value = smooth(t/p['weight_ramp'])
+            affected.add(i)
+            value = smooth(t/p['weight_ramp']) * smooth((segment_radius-radial(c))/p['contact_ramp'])
         else:
             if abs(c.x-cx)>p['fallback_half_width'] or not bottom-p['fallback_z_margin'] < c.z < top+p['fallback_z_margin']:
                 continue
@@ -381,7 +401,16 @@ def appendage_plan(group, p, co, edges, bones):
                 weights[link['bone']][i] = share*value
     if any(not w for w in weights.values()):
         raise ValueError('empty chain weight region')
-    return links,weights,{'placement':[{'head':list(h),'tip':list(t)} for _,h,t,_ in links], 'attachment':list(base),'axis_length':axis_length,'leak':leak,'segment_t_max':tmax,'segment_radius_max':rmax},affected,p['reweight_from']
+    metrics = {
+        'placement': [{'head':list(h),'tip':list(t)} for _,h,t,_ in links],
+        'attachment':list(base), 'axis_length':axis_length,
+        'leak':leak, 'leak_reason':'; '.join(leak_reasons),
+        'segment_radius':segment_radius, 'measured_half_width':half_width,
+        'segment_axis_base':list(base), 'segment_axis_tip':list(detected_tip),
+        'part_vertex_count':len(affected), 'segment_t_max':tmax,
+        'segment_radius_max':rmax,
+    }
+    return links,weights,metrics,affected,p['reweight_from']
 
 
 def measure(arm, meshes, edges, plans):
@@ -409,6 +438,18 @@ def measure(arm, meshes, edges, plans):
         weighted={i for w in plan[1].values() for i in w}
         ratios=sorted((posed[a]-posed[b]).length/(rest[a]-rest[b]).length for a,b in edges if (a in weighted or b in weighted) and (rest[a]-rest[b]).length>1e-6)
         pct=lambda f: ratios[min(len(ratios)-1,int(f*len(ratios)))] if ratios else None
+        if g['op'] == 'appendage_chain':
+            sources = {bone_key(n) for n in p['reweight_from']}
+            captured = plan[3] if plan[2] else weighted
+            offset = 0
+            remaining = 0
+            for mesh in meshes:
+                for vertex in mesh.data.vertices:
+                    if offset+vertex.index in captured:
+                        remaining += sum(ge.weight for ge in vertex.groups
+                                         if bone_key(mesh.vertex_groups[ge.group].name) in sources) > .1
+                offset += len(mesh.data.vertices)
+            plan[2]['thigh_weight_in_part'] = remaining
         metrics[g['id']]={**plan[2], 'verts_per_group':{name:len(w) for name,w in plan[1].items()}, 'weighted_verts':len(weighted),'edge_stretch_p01_p50_p99_max':[pct(.01),pct(.5),pct(.99),pct(1)],'reason':''}
         for name,_,_,_ in plan[0]:
             arm.pose.bones[name].rotation_euler=(0,0,0)
@@ -532,13 +573,12 @@ def extension_bones(args):
         sources={bone_key(n) for n in plan[4]}
         for i in plan[3]:
             mesh,vi=owners[i]
-            factor=min(1,sum(w.get(i,0) for w in plan[1].values())*p['reweight_factor'])
             take=0
             for ge in list(mesh.data.vertices[vi].groups):
                 vg=mesh.vertex_groups[ge.group]
                 if bone_key(vg.name) in sources:
-                    amount=ge.weight*factor
-                    vg.add([vi],ge.weight-amount,'REPLACE')
+                    amount=ge.weight
+                    vg.remove([vi])
                     take+=amount
             if take:
                 vg=mesh.vertex_groups.get(parent_name) or mesh.vertex_groups.new(name=parent_name)

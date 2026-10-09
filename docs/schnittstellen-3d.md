@@ -10242,7 +10242,19 @@ fields and attribute profiles are excluded.
 Statuses are `none_applicable`, `not_found`, `failed`, and `applied`. Reasons
 explain skipped or failed operations. Metrics report weighted vertices per
 group, edge-stretch percentiles at the declared test pose and the connectivity
-leak flag. `per_tier` records full/low outcomes for the admin model panel.
+leak flag. Chain metrics additionally report `leak_reason` (empty when bounded
+segmentation is plausible), `measured_half_width`, `segment_radius` (metres),
+`segment_axis_base`/`segment_axis_tip` (the detected axis before placement refinement),
+`segment_radius_max`, `segment_t_max`, and `part_vertex_count` (captured original
+vertices, including vertices with zero extension weight). `thigh_weight_in_part`
+counts captured vertices whose summed remaining `reweight_from` weight exceeds
+0.1 after four-joint reduction; successful full transfer yields zero. In metrics-only runs (derived distance tiers),
+this count covers vertices retaining positive chain weights; geometric segmentation
+fields are unavailable because the existing rig is measured without re-segmentation. This name
+is a diagnostic contract; the operation accepts arbitrary declared source joints.
+`verts_per_group` counts positive final weights per link, and
+`edge_stretch_p01_p50_p99_max` reports posed/rest edge-length ratios at the declared
+test pose. `per_tier` records full/low outcomes for the admin model panel.
 Legacy sidecars receive the reserved shape in model-meta responses without a
 read-path disk write.
 

@@ -15,9 +15,9 @@ z=.985. Far rings .80-.82 average .81, so chain length=.175 and a
 With declared ramp=1, w=smooth(3/7)=135/343. The two-link blend is
 smooth((3/7-.30)/.30)=135/343, hence Link1=w(1-w), Link2=w².
 Source weights: Hips=.20, Spine=.35, Spine1=.25, LeftUpLeg=.20.
-Transfer factor=2w moves .40w from LeftUpLeg to Hips before attenuation:
-Hips=(.20+.40w)(1-w); Spine=.35(1-w); Spine1=.25(1-w);
-LeftUpLeg=(.20-.40w)(1-w). Six positive influences precede reduction.
+The entire .20 LeftUpLeg weight moves to Hips before attenuation:
+Hips=.40(1-w); Spine=.35(1-w); Spine1=.25(1-w);
+LeftUpLeg=0. Five positive influences precede reduction.
 The largest four are Link1, Hips, Spine, Link2; discard Spine1/LeftUpLeg
 and divide retained weights by their sum. At (.2,.1,1.1), outside both
 operation envelopes, the four original per-joint weights stay unchanged.
@@ -31,8 +31,17 @@ Its lowest four joint indices survive with .25 each (joint-index tie rule).
 All exported vertices have at most four influences and weights sum to 1; source
 base-joint frames remain unchanged. Repetition preserves bytes; changing
 only the test angle reconstructs the same weights from the clean prerig.
-The fused fixture adds surface connectivity to a lateral point x=.12,
-exceeding the declared leak radius .09, hence front-only fallback.
+The contact fixture joins the radius-.03 cylinder to a radius-.06 cylinder
+centred at x=.09,y=-.16 along z=.80-.98. The 19*32=608 part samples
+are all inside R_seg=1.35*.03=.0405. No sample beyond R_seg is captured.
+Every captured vertex loses all declared source-joint weights.
+A single-link radial-ramp probe declares protrusion_threshold=.02 so all
+angular samples enter the axis fit, centred at y=-.16. With contact_ramp=.021,
+the radius-.03 surface has (.0405-.03)/.021=.5, smooth(.5)=.5;
+the mean extension weight at the opposite (+/-.03,-.16,.91) probes is
+135/686 (opposite probes cancel first-order axis drift from exported seam
+multiplicity). The other three
+weights are .40,.35,.25 times (1-w).
 All storage and clip/rig paths are temporary. Missing Blender is a skip.
 """
 import copy
@@ -93,6 +102,9 @@ DECLARED_PARAMS = {'pair_protrusion': {'band_lower_bone': 'Spine1',
                      'window_margin': 0.08,
                      'leak_t_limit': 1.6,
                      'leak_radius_limit': 0.09,
+                     'segment_radius_factor': 1.35,
+                     'segment_min_vertices': 3,
+                     'contact_ramp': 0.01,
                      'ring_radius_percentile': 0.9,
                      'ring_radius_scale': 1.15,
                      'near_slice_margin': 0.05,
@@ -196,11 +208,16 @@ for j in range(32):
     c=len(vertices); vertices.extend(((vertices[a][0],-.1,.98),(vertices[b][0],-.1,.98)))
     faces.append((a,b,c+1,c))
 if p.get('fused'):
-    # Connect the lower portion to wide surface, surviving the attachment cut.
-    a=start+8*32
-    b=start+9*32
-    c=len(vertices); vertices.extend(((.12,-.1,.88),(.12,-.1,.89)))
-    faces.append((a,b,c+1,c))
+    # Tangent cylinder, welded along nineteen rings of contact at x=.03.
+    off=len(vertices)
+    for iz in range(19):
+        for j in range(32):
+            angle=2*math.pi*j/32
+            vertices.append((.09+.06*math.cos(angle),-.16+.06*math.sin(angle),.8+iz*.01))
+    for iz in range(18):
+        for j in range(32):
+            a=off+iz*32+j; b=off+iz*32+(j+1)%32
+            faces.append((a,b,b+32,a+32))
 off=len(vertices); vertices.extend(((.14,-.23,1.4),(.20,-.23,1.4),(.20,-.23,1.401))); faces.append((off,off+1,off+2))
 off=len(vertices); vertices.extend(((0,.23,0),(0,.23,1.7),(.001,.23,0))); faces.append((off,off+1,off+2))
 meshdata=bpy.data.meshes.new('Surface')
@@ -535,9 +552,31 @@ def main():
         check(all(len(weights)<=4 for _,weights in rows),'whole exported mesh has at most four influences')
         w=135/343
         expected={'ExampleLink1':w*(1-w),'ExampleLink2':w*w,
-                  'mixamorig:Hips':(.2+.4*w)*(1-w),'mixamorig:Spine':.35*(1-w)}
+                  'mixamorig:Hips':.4*(1-w),'mixamorig:Spine':.35*(1-w)}
         total=sum(expected.values()); expected={name:value/total for name,value in expected.items()}
         assert_joint_weights(rows,[.03,.91,.16],expected,'hand-derived attenuation, transfer, chain split and top-four weights by joint')
+        radial_group=copy.deepcopy(groups[1])
+        radial_group['chains'][0]=radial_group['chains'][0][:1]
+        radial_group['params'].update(chain_split=[],contact_ramp=.021,protrusion_threshold=.02,reweight_factor=0)
+        radial_result=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},
+                                 params={'groups':[radial_group]},out_dir=root/'radial-ramp',timeout_s=180)
+        radial_weight=135/686
+        ramp_rows=exported_vertices(Path(radial_result['outputs']['model']).read_bytes())
+        probes=[]
+        for x in (.03,-.03):
+            matches=[weights for point,weights in ramp_rows if close(point,[x,.91,.16],.0001)]
+            check(bool(matches) and all(.15<weights.get('ExampleLink1',0)<.25 and
+                  weights.get('mixamorig:LeftUpLeg',0)==0 for weights in matches),
+                  'radial probe has partial extension and zero source weight')
+            probes.append(matches[0])
+        averaged={name:sum(weights.get(name,0) for weights in probes)/2
+                  for name in set(probes[0])|set(probes[1])}
+        assert_joint_weights([([0,.91,.16],averaged)],
+                             [0,.91,.16],{'ExampleLink1':radial_weight,
+                             'mixamorig:Hips':.4*(1-radial_weight),
+                             'mixamorig:Spine':.35*(1-radial_weight),
+                             'mixamorig:Spine1':.25*(1-radial_weight)},
+                             'hand-derived smooth radial contact ramp with full source transfer')
         assert_joint_weights(rows,[.2,1.1,-.1],{'mixamorig:Hips':.2,'mixamorig:Spine':.35,'mixamorig:Spine1':.25,'mixamorig:LeftUpLeg':.2},'unaffected mixed source weights by joint')
         assert_joint_weights(rows,[.1,1.4,.23],{'ExampleLeft':1.},'pair apex weight by joint')
         assert_joint_weights(rows,[.14,1.4,.23],{'ExampleLeft':1.},'plateau full weight before reduction')
@@ -652,9 +691,59 @@ def main():
         check(res['ok'] and abs(res['data']['metrics']['example_chain']['attachment'][2]-.8)<.002,'flip swaps attachment and tip')
         # Run the same generic operation against a side-connected surface.
         chain_group=copy.deepcopy(groups[1])
+        chain_group['params'].update(reference_lateral_min=.16, reference_lateral_max=.19, candidate_lateral_max=.0301)
         res=runner.run('extension_bones',inputs={'model':Path(fused['outputs']['model'])},params={'groups':[chain_group]},out_dir=root/'leak',timeout_s=180)
         check(res['ok'] and res['data']['status']=='applied','leak fixture still produces valid chain')
-        check(res['data']['metrics']['example_chain']['leak'],'side-fused cylinder selects front-only fallback')
+        check(not res['data']['metrics']['example_chain']['leak'],'bounded side-contact cylinder has no leak')
+        contact=res['data']['metrics']['example_chain']
+        print('CONTACT METRICS',json.dumps(contact,sort_keys=True))
+        check(abs(contact['segment_radius']-.0405)<.0001,'hand-derived segment radius .0405')
+        check(contact['part_vertex_count']>=608,'all 608 cylinder samples captured')
+        check(contact['thigh_weight_in_part']==0,'contact part has no source-joint weight')
+        contact_rows=exported_vertices(Path(res['outputs']['model']).read_bytes())
+        def segment_radial(point):
+            # glTF is Y-up: convert to the operation's metre Z-up frame.
+            c=(point[0],-point[2],point[1])
+            base=contact['segment_axis_base']; tip=contact['segment_axis_tip']
+            axis=[tip[j]-base[j] for j in range(3)]
+            length=sum(v*v for v in axis)**.5
+            axis=[v/length for v in axis]
+            delta=[c[j]-base[j] for j in range(3)]
+            axial=sum(delta[j]*axis[j] for j in range(3))
+            return sum((delta[j]-axis[j]*axial)**2 for j in range(3))**.5
+        body_rows=[(point,weights) for point,weights in contact_rows
+                   if .7999<point[1]<.9801 and segment_radial(point)>.0406
+                   and abs(((point[0]-.09)**2+(point[2]-.16)**2)**.5-.06)<.0001]
+        check(bool(body_rows) and all(weights.get('mixamorig:LeftUpLeg',0)>.1 and
+              not any(name.startswith('ExampleLink') for name in weights) for _,weights in body_rows),
+              'contact cylinder vertices beyond radius stay unchanged')
+        for point,weights in body_rows:
+            assert all(abs(weights.get('mixamorig:'+name,0)-value)<.0001
+                       for name,value in [('Hips',.2),('Spine',.35),('Spine1',.25),('LeftUpLeg',.2)])
+        cylinder=[(point,weights) for point,weights in contact_rows if
+                  .7999<point[1]<.9801 and abs((point[0]**2+(point[2]-.16)**2)**.5-.03)<.0001]
+        unique={tuple(round(v,5) for v in point) for point,_ in cylinder}
+        check(len(unique)==608 and all(weights.get('mixamorig:LeftUpLeg',0)==0
+              for _,weights in cylinder),'exactly 608 unique part samples lose source weights')
+        fallback=copy.deepcopy(chain_group); fallback['params']['segment_min_vertices']=100000
+        fb=runner.run('extension_bones',inputs={'model':Path(fused['outputs']['model'])},
+                      params={'groups':[fallback]},out_dir=root/'fallback',timeout_s=180)
+        fm=fb['data']['metrics']['example_chain']
+        check(fm['leak'] and 'too few' in fm['leak_reason'] and fm['thigh_weight_in_part']==0,
+              'implausible bounded component falls back with reason and full transfer')
+        for key in ('segment_radius_factor','segment_min_vertices','contact_ramp'):
+            missing=copy.deepcopy(chain_group); del missing['params'][key]
+            bad=runner.run('extension_bones',inputs={'model':Path(fused['outputs']['model'])},
+                           params={'groups':[missing]},out_dir=root/('missing-'+key),timeout_s=180)
+            check(bad['data']['status']=='failed' and key in bad['data']['reason'],
+                  'new parameter is required: '+key)
+        for key,value in [('segment_radius_factor',0),('contact_ramp',0),
+                          ('segment_min_vertices',0),('segment_min_vertices',2.5)]:
+            invalid=copy.deepcopy(chain_group); invalid['params'][key]=value
+            bad=runner.run('extension_bones',inputs={'model':Path(fused['outputs']['model'])},
+                           params={'groups':[invalid]},out_dir=root/'invalid-new',timeout_s=180)
+            check(bad['data']['status']=='failed' and key in bad['data']['reason'],
+                  'new parameter range validation: '+key+'='+str(value))
         fresh=model_dir/'prepare.glb'; fresh.write_bytes(source)
         fresh.with_suffix('.json').write_text(json.dumps({'rig':'mixamo'}))
         with patch.object(refine,'normalize',return_value={'applied':False,'error':'synthetic preparation failure'}):

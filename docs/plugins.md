@@ -460,11 +460,22 @@ references lie beside the part, within the anchor-relative search window.
 Candidate vertices protrude beyond that reference; covariance power iteration
 finds the principal axis. The end nearest `anchor_bone.head + anchor_offset`
 is the attachment; the character's `flip` flag swaps it with the tip.
-Connectivity runs over position-welded vertices after the `cut` slab, so UV
-seams do not disconnect the part. An attachment ring and smooth ramp blend
-weights. A component beyond `leak_t_limit` or `leak_radius_limit` falls back to
-front-only weights. Declared `reweight_from` base joints (`[]` to disable transfer) move their affected
-shares to the chain's declared parent. `chain_split` contains N-1 increasing
+Connectivity runs over position-welded vertices after the `cut` slab, bounded
+by an axial window (`window_length_factor * length + window_margin` each side
+of the midpoint) and `segment_radius_factor * measured_half_width`. The measured
+half-width is half the lateral extent (max X minus min X), using the
+axis candidate set. An attachment ring obeys the same bounds. `contact_ramp`
+(metres) applies a smooth radial fade inside the outer segmentation boundary;
+all captured vertices remain part of the transfer region even at zero extension
+weight. Only a bounded component smaller than `segment_min_vertices` or beyond
+`leak_t_limit` uses front-only fallback; metrics retain `leak` and `leak_reason`.
+Declared `reweight_from` base joints (`[]` to disable transfer) move their entire
+weight to the chain's declared parent on every captured vertex, including fallback.
+Outside the captured part the operation preserves its existing weighting rules.
+Fingerprint version 3 rebuilds from prerig. The existing required declaration
+fields `leak_radius_limit` and `reweight_factor` remain validated but no longer
+control radius rejection or transfer: bounded segmentation and entire source-weight
+transfer supersede those rules. Add all three new required parameters. `chain_split` contains N-1 increasing
 fractions. `chain_split` is required even for a single link (`[]`). Test pose measurements are reset before export.
 
 `appendage_chain` declaration example values:
@@ -491,7 +502,10 @@ fractions. `chain_split` is required even for a single link (`[]`). Test pose me
 | `window_length_factor` | `0.6` |
 | `window_margin` | `0.08` |
 | `leak_t_limit` | `1.6` |
-| `leak_radius_limit` | `0.09` |
+| `leak_radius_limit` | `0.09` (superseded by bounded segmentation) |
+| `segment_radius_factor` | `1.35` |
+| `segment_min_vertices` | `3` (positive integer, welded vertices) |
+| `contact_ramp` | `0.01` (metres) |
 | `ring_radius_percentile` | `0.9` |
 | `ring_radius_scale` | `1.15` |
 | `near_slice_margin` | `0.05` |
@@ -507,7 +521,7 @@ fractions. `chain_split` is required even for a single link (`[]`). Test pose me
 | `fallback_top_ramp` | `0.03` |
 | `blend_start` | `0.3` |
 | `blend_width` | `0.3` |
-| `reweight_factor` | `2.0` |
+| `reweight_factor` | `2.0` (superseded by full transfer) |
 | `reweight_from` | `[]` |
 | `weight_min` | `0.003` |
 | `test_rotation_deg` | `[-35, 0, 0]` |
