@@ -178,7 +178,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             for field, multiplier in pose.items():
                 if field not in BONE_POSE_FIELDS:
                     continue
-                if not valid_bone_pose_number(multiplier):
+                if not valid_bone_pose_number(multiplier, signed=field == "rest_deg"):
                     continue
                 if field == "rest_deg":
                     rest = max(rest if rest is not None else multiplier, multiplier)
@@ -192,7 +192,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         values["gravity_scale"] = scale
         groups[group["id"]] = {
             "bones": [link["bone"] for chain in group["chains"] for link in chain],
-            **values, "rest_deg": min(rest or 0, values["rest_max_deg"]),
+            **values, "rest_deg": max(-values["rest_max_deg"], min(rest or 0, values["rest_max_deg"])),
         }
     inputs = {"declarations": declarations, "world": world, "equipment": equipment,
               "pieces": pieces, "coverage": coverage, "attributes": attributes,

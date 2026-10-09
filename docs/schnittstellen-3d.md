@@ -10340,8 +10340,12 @@ Apply gain AFTER this saturation: render `T'+gain*d_soft`. Static sag remains
 at gain zero and far LOD; it does not consume the dynamic angle range.
 
 The rest target rotates the bind centroid about the chain's lateral axis:
-model **+X in bind pose**, stored in each anchor's local frame, with the
-right-hand sign convention. `rest_deg` is independently clamped by
+model **-X in bind pose**, stored in each anchor's local frame, with the
+right-hand sign convention. Loaded models are Y-up and face +Z; client
+`faceTowards` uses yaw `atan2(dir.x, dir.z)` (zero faces +Z). Thus positive
+`rest_deg` swings a hanging -Y lever toward front +Z, then up +Y; a forward
++Z lever lifts toward +Y. Equivalently, the axis is `cross(down, front)`.
+Negative angles swing in the opposite direction. `rest_deg` is independently clamped by
 `rest_max_deg`. Changes blend from the currently shown angle over **1.5 real
 seconds**, using smoothstep, including at far LOD.
 
@@ -10547,7 +10551,10 @@ and override order are checked, and revisions change without mesh identity chang
 
 P4 state values are stored as `prompt_filters.bone_pose` JSON:
 `{group_id: {rest_deg?, gravity?, freq?, zeta?, gain?, flatten?, spill?}}`.
-Angles are absolute nonnegative degrees up to `rest_max_deg`; scalar fields
+Angles are absolute signed degrees in `[-180,180]`, independent of package
+limits. Runtime clamps both signs to the effective per-character `rest_max_deg`
+(package → world → attribute profile → character override), carried in the
+payload; scalar fields
 are finite nonnegative multipliers. `freq` multiplies frequency, not omega².
 Multiple enabled states triggered by an id-tag or evaluated expression compose
 by maximum present rest angle and product of present multipliers; absent is

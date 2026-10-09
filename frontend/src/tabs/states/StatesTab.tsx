@@ -514,9 +514,10 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
             <legend>{group.id}</legend>
             <div className="ga-form-row">
               {POSE_FIELDS.map(field => (
-                <Field key={field} label={poseLabels[field]} hint={<MotionPreviewHint field={field} />} compact>
+                <Field key={field} label={poseLabels[field]} hint={<>{field === 'rest_deg' && <span>{t('Clamped per character to its maximum rest angle.')} </span>}<MotionPreviewHint field={field} /></>} compact>
                   <MotionNumberInput value={draft.bone_pose[group.id]?.[field] ?? ''} optional
-                    max={field === 'rest_deg' ? group.defaults.rest_max_deg : undefined}
+                    min={field === 'rest_deg' ? -180 : 0}
+                    max={field === 'rest_deg' ? 180 : undefined}
                     onCommit={text => updatePose(group.id, field, text)} />
                 </Field>
               ))}

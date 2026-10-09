@@ -81,6 +81,21 @@ try {
     return {root,anchor,bone,mesh,solver,point};
   }
   const near=(actual,expected,eps=1e-5)=>assert.ok(Math.abs(actual-expected)<eps,`${actual} vs ${expected} ±${eps}`);
+  // Rx(-a)*(0,-1,0)=(0,-cos(a),sin(a)); Rx(-a)*(0,0,1)=(0,sin(a),cos(a)).
+  for (const [lever, angle, limit, expected] of [
+    [[0,-1,0],90,180,[0,0,1]], [[0,-1,0],-90,180,[0,0,-1]],
+    [[0,0,1],45,180,[0,Math.SQRT1_2,Math.SQRT1_2]],
+    [[0,-1,0],170,180,[0,-Math.cos(170*Math.PI/180),Math.sin(170*Math.PI/180)]],
+    [[0,-1,0],170,90,[0,0,1]],
+  ]) {
+    const f=fixture(); f.solver.dispose();
+    f.mesh.geometry.setAttribute('position',new THREE.Float32BufferAttribute([...lever,...lever,...lever],3));
+    f.solver=C.createSecondaryMotion(THREE,f.root,payload({gravity:0,gain:0,rest_deg:angle,rest_max_deg:limit}));
+    f.solver.update(0);
+    const actual=f.mesh.applyBoneTransform(2,new THREE.Vector3(...lever));
+    near(actual.distanceTo(new THREE.Vector3(...expected)),0); f.solver.dispose();
+  }
+  console.log('ok signed front/up rest convention and effective 170/180 versus 170/90 clamp');
   const tilted = fixture({ gain: 0 });
   hints.applyPreviewTilt(tilted.root, 90, 0);
   tilted.solver.update(0);
@@ -264,7 +279,7 @@ try {
   near(livePoint().y,-0.06212255); near(livePoint().z,-0.06212255); console.log('ok client runs solver after final root lean');
   holder.payload=payload({gravity:0,gain:0}); for(let i=0;i<600;i++) figure.update(0,{realDelta:1/120}); near(livePoint().length(),0); assert.equal(liveMesh.geometry,f.mesh.geometry); console.log('ok client live motion revision keeps mesh');
   holder.payload=payload({gravity:0,gain:0,rest_deg:30}); for(let i=0;i<180;i++) figure.update(0,{realDelta:1/120});
-  near(livePoint().y,Math.cos(Math.PI/6)-1); near(livePoint().z,0.5); console.log('ok client live rest blend');
+  near(livePoint().y,Math.cos(Math.PI/6)-1); near(livePoint().z,-0.5); console.log('ok client live rest blend');
   let disposed=0; f.mesh.geometry.addEventListener('dispose',()=>disposed++); figure.dispose(); assert.equal(disposed,0); console.log('ok client solver disposal preserves template geometry');
 
 
@@ -273,7 +288,7 @@ try {
   for(let i=0;i<200;i++) farFigure.update(0,{realDelta:1/120});
   let farMesh; farFigure.root.traverse(o=>{if(o.isSkinnedMesh) farMesh=o;});
   const farPoint=farMesh.applyBoneTransform(2,new THREE.Vector3(0,0,1)).applyMatrix4(farMesh.matrixWorld);
-  near(farPoint.y,Math.cos(Math.PI/6)-1); near(farPoint.z,0.5); farFigure.dispose(); console.log('ok client low tier retains rest without dynamics');
+  near(farPoint.y,Math.cos(Math.PI/6)-1); near(farPoint.z,-0.5); farFigure.dispose(); console.log('ok client low tier retains rest without dynamics');
   const chain=fixture(); chain.solver.dispose();
   const child=new THREE.Bone(); child.name='extra_child'; child.position.z=0.5; chain.bone.add(child);
   chain.mesh.geometry.setAttribute('position',new THREE.Float32BufferAttribute([-0.1,0,1, 0.1,0,1, 0.3,0,1.5],3));
@@ -464,5 +479,44 @@ try {
   for(let i=0;i<20;i++)active.update(1/30);
   assert.deepEqual(counts,{vectors:0,quaternions:0,matrices:0});active.dispose();
   console.log('ok template centroid cache, empty/unmatched setup skips and allocation-free frame/substep scratch');
+  // Optional local rig check: node ... <model.glb> <bone-name> ...
+  if (process.argv[2]) {
+    globalThis.self = globalThis;
+    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+    const loader = new GLTFLoader();
+    // Geometry-only measurement: texture decoding needs a browser, skinning does not.
+    loader.register(() => ({name:'smoke_geometry_only',loadTexture:() => Promise.resolve(null)}));
+    const bytes = await readFile(process.argv[2]);
+    const gltf = await loader.parseAsync(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),'');
+    const root=gltf.scene;
+    const size=new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3());
+    if(size.z>size.y*1.5) root.rotation.x=-Math.PI/2;
+    root.updateMatrixWorld(true);
+    const names=new Set(process.argv.slice(3).map(name=>THREE.PropertyBinding.sanitizeNodeName(name)));
+    let matched=0;root.traverse(o=>{if(o.isBone&&names.has(o.name))matched++;});
+    assert.equal(matched,names.size);assert.ok(matched>0);
+    const centroid=()=>{
+      const sum=new THREE.Vector3();let total=0;
+      root.updateMatrixWorld(true);
+      root.traverse(mesh=>{
+        if(!mesh.isSkinnedMesh)return;
+        const pos=mesh.geometry.getAttribute('position'),idx=mesh.geometry.getAttribute('skinIndex'),weights=mesh.geometry.getAttribute('skinWeight');
+        for(let i=0;i<pos.count;i++){
+          let weight=0;
+          for(let j=0;j<4;j++)if(names.has(mesh.skeleton.bones[idx.getComponent(i,j)]?.name))weight+=weights.getComponent(i,j);
+          if(weight<=0)continue;
+          const v=new THREE.Vector3().fromBufferAttribute(pos,i);
+          mesh.applyBoneTransform(i,v).applyMatrix4(mesh.matrixWorld);sum.addScaledVector(v,weight);total+=weight;
+        }
+      });
+      assert.ok(total>0);return sum.divideScalar(total);
+    };
+    const before=centroid();
+    const solver=C.createSecondaryMotion(THREE,root,payload({bones:[...names],gravity:0,gain:0,rest_deg:60,rest_max_deg:180}));
+    solver.update(0);const after=centroid(),delta=after.clone().sub(before);
+    assert.ok(delta.z>0&&delta.y>0,`front/up displacement ${delta.toArray()}`);
+    console.log('real rig weighted centroid (model units):',JSON.stringify({before:before.toArray(),after:after.toArray(),delta:delta.toArray()}));
+    solver.dispose();
+  }
   console.log('secondary motion: all checks passed');
 } finally {await rm(dir,{recursive:true,force:true});}

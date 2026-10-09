@@ -430,10 +430,10 @@ def apply_filters(character_name: str,
 BONE_POSE_FIELDS = ("rest_deg", "gravity", "freq", "zeta", "gain", "flatten", "spill")
 
 
-def valid_bone_pose_number(number):
-    """Finite nonnegative JSON number, excluding booleans and overflowing integers."""
+def valid_bone_pose_number(number, *, signed=False):
+    """Finite JSON number, optionally signed, excluding booleans and overflowing integers."""
     import math
-    if isinstance(number, bool) or not isinstance(number, (int, float)) or number < 0:
+    if isinstance(number, bool) or not isinstance(number, (int, float)) or (not signed and number < 0):
         return False
     try:
         return math.isfinite(number)
@@ -443,8 +443,6 @@ def valid_bone_pose_number(number):
 
 def validate_bone_pose(value):
     """Validate sparse state angles and multipliers; preserve unloaded groups for packs."""
-    from app.core.extension_rig import declared_motion_groups
-    limits = {g["id"]: g["defaults"]["rest_max_deg"] for g in declared_motion_groups()}
     if not isinstance(value, dict):
         raise ValueError("bone_pose must be an object")
     for gid, fields in value.items():
@@ -453,10 +451,10 @@ def validate_bone_pose(value):
         if set(fields) - set(BONE_POSE_FIELDS):
             raise ValueError("unknown bone_pose field")
         for key, number in fields.items():
-            if not valid_bone_pose_number(number):
-                raise ValueError(f"bone_pose.{gid}.{key} must be finite and non-negative")
-            if key == "rest_deg" and number > limits.get(gid, 180):
-                raise ValueError(f"bone_pose.{gid}.rest_deg exceeds rest_max_deg")
+            if not valid_bone_pose_number(number, signed=key == "rest_deg"):
+                raise ValueError(f"bone_pose.{gid}.{key} must be finite" if key == "rest_deg" else f"bone_pose.{gid}.{key} must be finite and non-negative")
+            if key == "rest_deg" and abs(number) > 180:
+                raise ValueError(f"bone_pose.{gid}.rest_deg must be within [-180, 180]")
     return value
 
 

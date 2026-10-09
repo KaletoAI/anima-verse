@@ -725,8 +725,12 @@ from the same extension-motion endpoint. For example:
 {"bone_pose":{"example_group":{"rest_deg":24,"gravity":0.5,"freq":0.8,"flatten":2,"spill":0}}}
 ```
 
-`rest_deg` is an absolute angle in degrees, from 0 to the declaration's
-`rest_max_deg` (also clamped to the effective world/character limit at runtime).
+`rest_deg` is an absolute signed angle in degrees in `[-180,180]`, independent
+of package defaults. Runtime clamps it to ± the effective `rest_max_deg`
+(package → world → attribute profile → character override). In the loaded
+Y-up model frame, front is +Z. Rotate about model -X, expressed in the anchor's
+bind frame: positive swings a hanging (-Y) chain toward +Z and then +Y;
+a forward (+Z) lever lifts toward +Y. Negative swings in the opposite direction.
 `gravity`, `freq`, `zeta`, `gain`, `flatten` and `spill` are finite, nonnegative
 multipliers; `freq` multiplies `freq_hz`, not its square. Values may exceed 1.
 Gain/flatten/spill results clamp to [0,1] after all active states. Missing keys

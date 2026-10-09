@@ -142,8 +142,8 @@ const restAngle = (g: MotionGroup) => clamp(g.rest_deg, -g.rest_max_deg, g.rest_
  * Centroids use ALL positive skin weights, aggregated over every skinned mesh.
  * bindMatrix maps each raw vertex into skeleton bind space; boneInverse maps
  * it into the bone's anchor frame. Imported joint axes are never geometry.
- * The lateral axis is model +X in the bind pose, expressed anchor-locally;
- * positive rest_deg follows the right-hand rule around that axis.
+ * The rest axis is model -X in the bind pose, expressed anchor-locally;
+ * positive rest_deg swings down (-Y) toward front (+Z), then up (+Y).
  * This owns only CPU state and each driven bone's matrixAutoUpdate setting.
  */
 export function createSecondaryMotion(
@@ -175,7 +175,7 @@ export function createSecondaryMotion(
   const gravity = new three.Vector3(0, -9.81, 0)
   const binds = new Map<Bone, Bind>()
   const sums = new Map<Bone, { sum: Vector3; weight: number }>()
-  const lateralWorld = new three.Vector3(1, 0, 0)
+  const lateralWorld = new three.Vector3(-1, 0, 0)
     .applyQuaternion(root.getWorldQuaternion(new three.Quaternion()))
   const cached = template && centroidCache.get(template)
   root.traverse(o => {

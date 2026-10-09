@@ -7,7 +7,7 @@ Clothing gain .5 precedes state gain 3, so min(1,.5*3)=1.
 Flatten .4*4=1.6 clamps to 1; spill .2*3=.6.
 Rest angles 12 and 24 compose to max=24. Missing gain preserves 1;
 explicit gain=0 yields 0. State flatten/spill/gain multiply then clamp at 1.
-The fixture rest limit 45 rejects 46. Legacy fork files: 6 folders x 3
+State angles accept [-180,180] independently of the fixture rest limit 45. Legacy fork files: 6 folders x 3
 files plus 4 T-pose views = 22 unreachable files, all must be removed.
 An active state changes motion only; mesh signatures stay outfit-only.
 Two unchanged polls require zero definition and profile reloads on the second.
@@ -208,7 +208,15 @@ def main():
             _prompt_filters_save_sync(None, {'id': 'unknown', 'bone_pose': {'unloaded_group': {'gain': 0}}})
             change(active_conditions=[{'name': 'unknown'}])
             check(set(motion()['groups']) == {'sample_group'} and values()['gain'] == 1, 'unloaded group ignored')
-            for bad in (None, [], {'sample_group': {'rest_deg': 46}},
+            for angle in (150, -60):
+                _prompt_filters_save_sync(None, {'id': 'signed_rest', 'bone_pose': {'sample_group': {'rest_deg': angle}}})
+                for limit in (180, 45):
+                    change(model3d_opts={'extension_motion': {'sample_group': {'rest_max_deg': limit}}})
+                    resolved = extension_rig.motion_payload('sample', preview_states=['signed_rest'])['groups']['sample_group']
+                    check(resolved['rest_deg'] == max(-limit, min(limit, angle)) and resolved['rest_max_deg'] == limit, 'signed rest and effective character limit reach payload')
+            for bad in (None, [], {'sample_group': {'rest_deg': 181}},
+                        {'sample_group': {'rest_deg': -181}},
+                        {'sample_group': {'rest_deg': float('nan')}},
                         {'sample_group': {'gain': -1}}, {'sample_group': {'gain': True}},
                         {'sample_group': {'gravity': float('nan')}},
                         {'sample_group': {'freq': float('inf')}}, {'sample_group': {'unknown': 1}},
