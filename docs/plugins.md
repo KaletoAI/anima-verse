@@ -268,6 +268,7 @@ body_slots:
       gravity: 0.35
       spill: 0.0
       flatten: 0.0
+      translate: 0.0
       sag_max_deg: 25 # Defaults to max_deg when omitted.
       attribute_profiles:
         example_attribute:
@@ -298,24 +299,46 @@ null value only; it does not match `""` or the literal string `"none"`. Both
 operands use the same normalization; other scalars compare as trimmed lowercase
 strings.
 
-`flatten` and `spill` default to 0. With inward axial gravity `c=a_g·u<0`,
-`flatten*c` remains axial and can shorten the lever, bounded by `squash`.
-The remainder is removed; `spill` redirects that remainder outward along `L`
-for groups with at least two chain roots. Single chains remove the remainder
-without redirecting it. Paired shortening compensates width only along `L`
-by `1/s`; single chains and stretches retain symmetric `1/sqrt(s)` compensation.
+`flatten`, `spill` and `translate` are finite in [0,1], default 0.
+For the unit world gravity `g_hat` and rest lever `u`, define
+`f_in=clamp(-g_hat.dot(u),0,1)`. Static length is the direct target
+`s=1-flatten*(1-squash_min)*f_in`, independent of gravity, character gravity
+scale and frequency (including zero frequency). Paired spill is the direct
+outward rotation `spill*sag_max_deg*f_in` degrees along the projected lateral
+`L`; single chains have no spill. Remaining inward axial force is removed.
+Non-axial static sag still uses `gravity*(m*g-R_anchor*R_rest*g_rest)/omega²`
+and the static angle limit; upright m=1 has no additional sag, m=2 sags and
+m=.5 lifts. The combined static angle is capped by `sag_max_deg`.
+Paired shortening compensates volume only along L by `1/s`.
+
+`translate` applies that fraction of the perpendicular static and dynamic
+rendered displacement to the bone head; the remainder supplies rotation.
+Both components are projected perpendicular to the original rest lever, so
+uncapped translate=1 leaves its direction unchanged even with combined sag
+and bounce. Longitudinal behaviour means the rendered length scalar is preserved.
+Dynamic axis gains, soft angle limits and gain are applied before this split.
+Each translated component is capped before multiplying by `translate`:
+static <= rest lever length * sin(sag_max_deg), dynamic <= static lever length
+* sin(max_deg), with angles in radians for sine. Longitudinal displacement and
+length scaling are unchanged by the split. Weighted borders blend into the
+anchor. Supported layers are package defaults/attribute profiles, world overrides
+and absolute character overrides; state `bone_pose` has no translate multiplier.
+The mesh fingerprint excludes all physics fields. Preview category is `tilt`
+for flatten/spill/translate: Tilt exposes posture targets and static translation;
+play a clip for translate's bounce. Flatten/spill hints explicitly state that
+these targets are independent of gravity and frequency.
 
 `attribute_profiles` is optional: `{attribute_key: {value: {field: multiplier}}}`.
 Attribute keys must be declared on the same slot; values are string keys matched
 exactly against that character's stored slot value. Missing/unknown values are
 ignored. Allowed multiplier fields: `freq_hz`, `zeta`, `gravity`, `gain`,
-`max_deg`, `sag_max_deg`, `flatten`, `spill`. Multipliers must be finite and
+`max_deg`, `sag_max_deg`, `flatten`, `spill`, `translate`. Multipliers must be finite and
 nonnegative (`freq_hz` strictly positive); they may exceed 1. After multiplication,
 unit-interval fields saturate at 1 and angle limits at 180. Multiple matching
 attribute profiles multiply in declaration order. Profiles never enter mesh identity.
 
 Every physics field is optional with the defaults shown above. All numbers
-must be finite: `freq_hz > 0`; `zeta >= 0`, `gravity >= 0`; `gain`, `flatten` and `spill` in `[0,1]`;
+must be finite: `freq_hz > 0`; `zeta >= 0`, `gravity >= 0`; `gain`, `flatten`, `spill` and `translate` in `[0,1]`;
 `max_deg`, `sag_max_deg` and `rest_max_deg` in `[0,180]`; `squash` is exactly two positive
 numbers satisfying `min <= 1 <= max`. `params` must be a mapping. A malformed
 rig is dropped with a warning, and its slot remains available. Duplicate
@@ -678,7 +701,7 @@ representation, matching the browser's `JOINTS_0`/`WEIGHTS_0` consumption.
 
 Package body-slot `rig` declarations remain the base physics values. Core declares
 `extension_motion.groups` as a **world** setting: arbitrary package group IDs map
-to partial overrides of `freq_hz`, `zeta`, `gravity`, `spill`, `flatten`, `gain`,
+to partial overrides of `freq_hz`, `zeta`, `gravity`, `spill`, `flatten`, `translate`, `gain`,
 `max_deg`, `sag_max_deg`, `axis_gain`, `squash`, and `rest_max_deg`. Missing values inherit the package; no group IDs are named in core.
 Game-Admin → Setup → Extension motion lists loaded declarations from the admin-only
 `GET /admin/world-settings/extension-motion` endpoint and saves through the existing
@@ -700,8 +723,8 @@ A partial cover contributes `1 - (1 - motion_damping)/2`; full coverage takes
 precedence for the same item. Free-text outfits without pieces contribute 1.
 The shared character template's `motion_gravity_scale` (0..3, default 1) is transported separately as group `gravity_scale=m`:
 `a_g=gravity*(m*g-R_anchor*g_rest)`. Thus upright m=1 gives zero, m=2 adds sag,
-and m=.5 lifts. Static equilibrium `e=a_g/omega²` (after flatten/spill) is bounded
-by `sag_max_deg` (default: declared `max_deg`) and squash. The spring has no gravity
+and m=.5 lifts. Static equilibrium `e=a_g/omega²` (after removing inward axial force) is bounded
+by `sag_max_deg` (default: declared `max_deg`); flatten supplies the direct length target. The spring has no gravity
 term and swings around `T'=T+e`; its dynamic limit is `max_deg`, independent of sag.
 The dynamic angle stays linear below half the limit, then smoothly saturates with
 tanh; gain scales the saturated displacement, preserving static sag even at zero.
@@ -727,7 +750,7 @@ These settings change `motion.rev`, never the extension rig fingerprint or mesh.
 The Setup motion editor, character overrides and state pose editor share preview hints:
 `live` covers `rest_deg` and `rest_max_deg` (visible immediately); `motion` covers
 `freq_hz` (`freq` in state poses), `zeta`, `gain`, `axis_gain` and `max_deg` (play a clip);
-`tilt` covers `gravity`, `sag_max_deg`, `flatten`, `spill` and `squash` (use Tilt,
+`tilt` covers `gravity`, `sag_max_deg`, `flatten`, `spill`, `translate` and `squash` (use Tilt,
 since the upright rest shape already carries gravity). Character `motion_gravity_scale`
 is visible upright when different from 1; otherwise use Tilt. Group enabled/flip and
 mesh-operation parameters are `rebuild`: they take effect after Rebuild extension bones.

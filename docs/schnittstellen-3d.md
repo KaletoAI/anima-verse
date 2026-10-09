@@ -10206,7 +10206,7 @@ Worldmap character rows carry these fields independently of scene recipes:
     "groups": {
       "example_group": {
         "bones": ["ExampleBone1", "ExampleBone2"],
-        "freq_hz": 2.2, "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "spill": 0.0, "flatten": 0.0, "gain": 1.0, "axis_gain": [1, 1, 1],
+        "freq_hz": 2.2, "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "spill": 0.0, "flatten": 0.0, "translate": 0.0, "gain": 1.0, "axis_gain": [1, 1, 1],
         "max_deg": 25, "sag_max_deg": 25, "squash": [0.6, 1.4],
         "rest_deg": 0, "rest_max_deg": 90
       }
@@ -10317,17 +10317,36 @@ For `omega = 2*pi*freq_hz`, static acceleration is
 transported as `gravity_scale`, independently of group `gravity`.
 Upright with zero rest and m=1 gives zero; m=2 gives `gravity*g/omega²` sag; m=.5 gives lift.
 
-`flatten` and `spill` are finite in [0,1], default 0. For `u=unit(T-head)`
-and inward component `c=a_g·u<0`, use
-`a_g'=a_g-(1-flatten)*c*u+spill*(1-flatten)*abs(c)*L`.
-`L` is the unit vector from mean chain-root heads to the current link head,
-projected perpendicular to `u`. A zero projection contributes zero. Roots have
-parents outside the group. Single chains use `L=0`, still retaining only the
-`flatten` fraction of inward axial gravity. All directions are world-space.
+`flatten`, `spill` and `translate` are finite in [0,1], default 0.
+For the unit world gravity `g_hat` and rest lever `u`, define
+`f_in=clamp(-g_hat.dot(u),0,1)`. Static length is the direct target
+`s=1-flatten*(1-squash_min)*f_in`, independent of gravity, character gravity
+scale and frequency (including zero frequency). Paired spill is the direct
+outward rotation `spill*sag_max_deg*f_in` degrees along the projected lateral
+`L`; single chains have no spill. Remaining inward axial force is removed.
+Non-axial static sag still uses `gravity*(m*g-R_anchor*R_rest*g_rest)/omega²`
+and the static angle limit; upright m=1 has no additional sag, m=2 sags and
+m=.5 lifts. The combined static angle is capped by `sag_max_deg`.
+Paired shortening compensates volume only along L by `1/s`.
 
-Resolve static `e=a_g'/omega²`, then limit the angle of `T+e-head` from
-`T-head` to `sag_max_deg` (default: declared `max_deg`) and its length to
-`squash`. The limited result defines `T'`. The spring runs WITHOUT gravity:
+`translate` applies that fraction of the perpendicular static and dynamic
+rendered displacement to the bone head; the remainder supplies rotation.
+Both components are projected perpendicular to the original rest lever, so
+uncapped translate=1 leaves its direction unchanged even with combined sag
+and bounce. Longitudinal behaviour means the rendered length scalar is preserved.
+Dynamic axis gains, soft angle limits and gain are applied before this split.
+Each translated component is capped before multiplying by `translate`:
+static <= rest lever length * sin(sag_max_deg), dynamic <= static lever length
+* sin(max_deg), with angles in radians for sine. Longitudinal displacement and
+length scaling are unchanged by the split. Weighted borders blend into the
+anchor. Supported layers are package defaults/attribute profiles, world overrides
+and absolute character overrides; state `bone_pose` has no translate multiplier.
+The mesh fingerprint excludes all physics fields. Preview category is `tilt`
+for flatten/spill/translate: Tilt exposes posture targets and static translation;
+play a clip for translate's bounce. Flatten/spill hints explicitly state that
+these targets are independent of gravity and frequency.
+
+The bounded static direction and direct length define `T'`. The spring runs WITHOUT gravity:
 `a=omega²*(T'-p)-2*zeta*omega*(v-v_T')`. Target velocity uses consecutive final
 static targets. Substeps <=1/240 s interpolate T' linearly; exact propagation
 handles critical and overdamped cases. Gaps >.25 s reset `p=T',v=0`.
@@ -10548,7 +10567,7 @@ mesh geometry. No motion input enters the scene recipe fingerprint.
 
 Package `rig.attribute_profiles: {attribute_key: {value: {field: multiplier}}}`
 allows frequency, damping, gravity, gain, dynamic/static angle limits, flatten
-and spill multipliers. Keys must name attributes of the same slot; scalar string
+spill and translate multipliers. Keys must name attributes of the same slot; scalar string
 values select by exact match. Unknown/missing values contribute nothing. Values
 are finite and nonnegative; frequency is strictly positive. Unit-interval fields
 cap at 1 and angles at 180 after profiles. Profile physics is excluded from the
@@ -10565,11 +10584,12 @@ around profile read and save. `/characters/{name}/model3d` adds `motion_defaults
 Extension bones box. Saving physics reconfigures motion without a mesh reload.
 
 Hand-derived v2 acceptance is in `smoke_secondary_motion.mjs` and the P0/P3
-Python smokes: paired flatten .5/spill .5 has axial factor `1-.5*D`, lateral
-shift `.25*D`, and length `sqrt((1-.5*D)^2+(.25*D)^2)` for
-`D=9.81*sqrt(2)/(4*pi)^2`. Width is `1/s` only along L. Upright m=2 has
-`sag_y=-9.81/(4*pi)^2`, m=1 zero; a bent-forward body impulse has identical
-swing for gravity 0 and 3. Soft limits are monotonic/bounded, profile selection
+Python smokes: f_in=1, flatten=1 and squash_min=.5 give length .5 at
+1.5 and 4 Hz; f_in=.5 gives .75. Spill=.5 and sag_max=30 give outward
+15 degrees with opposite side signs. Width is 1/s only along L. Upright m=2
+has unit-lever sag direction (0,-d,1), d=9.81/(4*pi)^2; translate=1 moves
+its head by -d/sqrt(1+d²) without rotating it. A bent-forward body impulse
+has identical swing for gravity 0 and 3. Soft limits are monotonic/bounded, profile selection
 and override order are checked, and revisions change without mesh identity changes.
 
 
@@ -10599,7 +10619,7 @@ retain state identity and image modifiers. State transitions change only
 `motion.rev`, never mesh identity or the scene-recipe fingerprint.
 
 Effective motion values are clamped after all layers: `freq_hz` in [0,20],
-`zeta` in [0,10], `gravity` in [0,10], and `gain`/`flatten`/`spill` in [0,1].
+`zeta` in [0,10], `gravity` in [0,10], and `gain`/`flatten`/`spill`/`translate` in [0,1].
 The static solver treats omega squared below 1e-12 as zero frequency.
 Entering or leaving zero frequency blends the bounded static angle and length
 over 1.5 seconds with smoothstep, rather than dividing by a vanishing frequency.

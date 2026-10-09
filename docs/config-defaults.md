@@ -334,7 +334,7 @@ Example: `{"extension_motion":{"groups":{"example_group":{"gain":0.6}}}}`.
 Instance writes are rejected; foreign-scope instance-file values are ignored.
 Setup → Extension motion edits currently loaded group IDs and resets a group by
 removing its override. Numeric rules match declarations: frequency > 0; zeta and
-gravity ≥ 0; gain, flatten and spill 0..1 (flatten/spill default 0);
+gravity ≥ 0; gain, flatten, spill and translate 0..1 (flatten/spill/translate default 0);
 dynamic/static/rest angle limits 0..180 (`sag_max_deg` defaults to the declared `max_deg`); squash requires
 `0 < min <= 1 <= max`. Unknown physics fields are rejected. Stored overrides for
 a currently absent package are retained and have no effective group to modify.
@@ -347,6 +347,35 @@ soft angle/gain. Vertical follows projected bind body up rotated with the anchor
 a vertical lever uses projected bind body front (bind world +Z if geometry
 cannot define front). Only longitudinal dynamics change length. Static sag,
 flatten, spill and rest pose retain their existing effect.
+
+`flatten`, `spill` and `translate` are finite in [0,1], default 0.
+For the unit world gravity `g_hat` and rest lever `u`, define
+`f_in=clamp(-g_hat.dot(u),0,1)`. Static length is the direct target
+`s=1-flatten*(1-squash_min)*f_in`, independent of gravity, character gravity
+scale and frequency (including zero frequency). Paired spill is the direct
+outward rotation `spill*sag_max_deg*f_in` degrees along the projected lateral
+`L`; single chains have no spill. Remaining inward axial force is removed.
+Non-axial static sag still uses `gravity*(m*g-R_anchor*R_rest*g_rest)/omega²`
+and the static angle limit; upright m=1 has no additional sag, m=2 sags and
+m=.5 lifts. The combined static angle is capped by `sag_max_deg`.
+Paired shortening compensates volume only along L by `1/s`.
+
+`translate` applies that fraction of the perpendicular static and dynamic
+rendered displacement to the bone head; the remainder supplies rotation.
+Both components are projected perpendicular to the original rest lever, so
+uncapped translate=1 leaves its direction unchanged even with combined sag
+and bounce. Longitudinal behaviour means the rendered length scalar is preserved.
+Dynamic axis gains, soft angle limits and gain are applied before this split.
+Each translated component is capped before multiplying by `translate`:
+static <= rest lever length * sin(sag_max_deg), dynamic <= static lever length
+* sin(max_deg), with angles in radians for sine. Longitudinal displacement and
+length scaling are unchanged by the split. Weighted borders blend into the
+anchor. Supported layers are package defaults/attribute profiles, world overrides
+and absolute character overrides; state `bone_pose` has no translate multiplier.
+The mesh fingerprint excludes all physics fields. Preview category is `tilt`
+for flatten/spill/translate: Tilt exposes posture targets and static translation;
+play a clip for translate's bounce. Flatten/spill hints explicitly state that
+these targets are independent of gravity and frequency.
 
 Package `rig.attribute_profiles` selects physics multipliers by the character's
 stored slot attribute values after world overrides. Unknown values are ignored;

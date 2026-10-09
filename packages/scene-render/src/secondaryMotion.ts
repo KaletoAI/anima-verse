@@ -10,6 +10,7 @@ export interface MotionGroup {
   freq_hz: number
   zeta: number
   spill: number
+  translate: number
   flatten: number
   gravity_scale: number
   sag_max_deg: number
@@ -23,7 +24,7 @@ export interface MotionGroup {
 }
 /** Package metadata profiles are multipliers; runtime groups are already resolved. */
 export type MotionAttributeProfiles = Record<string, Record<string, Partial<Pick<MotionGroup,
-  'freq_hz' | 'zeta' | 'gravity' | 'gain' | 'max_deg' | 'sag_max_deg' | 'flatten' | 'spill'>>>>
+  'freq_hz' | 'zeta' | 'gravity' | 'gain' | 'max_deg' | 'sag_max_deg' | 'flatten' | 'spill' | 'translate'>>>>
 export interface ExtensionRigDeclaration extends Omit<MotionGroup, 'bones' | 'gravity_scale' | 'rest_deg'> {
   id: string
   op: string
@@ -126,13 +127,13 @@ interface Particle {
   blend: number
 }
 const DEFAULT_AXIS_GAIN: [number, number, number] = [1, 1, 1]
-const BLENDED_FIELDS = ['gravity', 'freq_hz', 'zeta', 'gain', 'flatten', 'spill'] as const
+const BLENDED_FIELDS = ['gravity', 'freq_hz', 'zeta', 'gain', 'flatten', 'spill', 'translate'] as const
 /** Smooth numeric state changes over the same 1.5 seconds as the rest angle. */
 export function blendMotionParams(from: MotionGroup, to: MotionGroup, elapsed: number, output?: MotionGroup): MotionGroup {
   const t = Math.max(0, Math.min(1, elapsed / 1.5))
   const weight = t * t * (3 - 2 * t)
   const result = output ?? { ...to }
-  for (const field of BLENDED_FIELDS) result[field] = from[field] + (to[field] - from[field]) * weight
+  for (const field of BLENDED_FIELDS) result[field] = (from[field] ?? 0) + ((to[field] ?? 0) - (from[field] ?? 0)) * weight
   return result
 }
 const centroidCache = new WeakMap<Object3D, Vector3[]>()
@@ -322,6 +323,8 @@ export function createSecondaryMotion(
   const anchorQ = new three.Quaternion(), restQ = new three.Quaternion(), dynamicQ = new three.Quaternion(), identityQ = new three.Quaternion(), inverseRestQ = new three.Quaternion()
   const restVector = new three.Vector3(), target = new three.Vector3(), head = new three.Vector3(), vTarget = new three.Vector3(), deltaG = new three.Vector3(), t = new three.Vector3(), base = new three.Vector3(), rendered = new three.Vector3(), localRendered = new three.Vector3(), u = new three.Vector3(), temp = new three.Vector3()
   const bodyVertical = new three.Vector3(), dynamicDelta = new three.Vector3()
+  const headShift = new three.Vector3(), shiftPart = new three.Vector3(), originalLever = new three.Vector3()
+  const translationMatrix = new three.Matrix4()
   const meanHead = new three.Vector3(), lateral = new three.Vector3(), localLateral = new three.Vector3(), staticVector = new three.Vector3(), equilibrium = new three.Vector3(), rootFrame = new three.Matrix4()
   const integration = { p: new three.Vector3(), v: new three.Vector3(), x: new three.Vector3(), w: new three.Vector3() }
   const driven = new Map<Bone, Particle>()
@@ -385,12 +388,9 @@ export function createSecondaryMotion(
         }
         deltaG.copy(gravity).multiplyScalar(st.params.gravity_scale ?? 1)
           .sub(temp.copy(b.gravityRest).applyQuaternion(restQ).applyQuaternion(anchorQ)).multiplyScalar(st.params.gravity)
+        const inward = clamp(-gravity.dot(u) / 9.81, 0, 1)
         const axial = deltaG.dot(u)
-        if (axial < 0) {
-          const removed = (1 - (st.params.flatten ?? 0)) * -axial
-          deltaG.addScaledVector(u, removed)
-          deltaG.addScaledVector(lateral, (st.params.spill ?? 0) * removed)
-        }
+        if (axial < 0) deltaG.addScaledVector(u, -axial)
         // When crossing zero, blend the bounded static result rather than
         // dividing by an interpolated frequency that approaches zero.
         const staticT = clamp(st.paramsBlend / 1.5, 0, 1)
@@ -399,16 +399,26 @@ export function createSecondaryMotion(
         st.staticWeight = st.staticWeightFrom + (st.staticWeightTo - st.staticWeightFrom) * staticBlend
         const omegaSquared = (2 * Math.PI * st.staticFrequency) ** 2
         equilibrium.copy(deltaG).multiplyScalar(omegaSquared >= 1e-12 ? 1 / omegaSquared : 0)
-        staticVector.copy(target).sub(head).add(equilibrium)
+        originalLever.copy(target).sub(head)
+        const restLength = originalLever.length()
+        staticVector.copy(originalLever).add(equilibrium)
         // Static angle and length have their own limits, independent of swing.
         dynamicQ.setFromUnitVectors(u, temp.copy(staticVector).normalize())
         const sagLimit = (st.params.sag_max_deg ?? st.params.max_deg) * Math.PI / 180
         const sagAngle = dynamicQ.angleTo(identityQ)
         if (sagAngle > sagLimit) dynamicQ.slerp(identityQ, 1 - sagLimit / sagAngle)
-        const restLength = target.distanceTo(head)
-        let staticLength = restLength * clamp(staticVector.length() / restLength, st.params.squash[0], st.params.squash[1])
         dynamicQ.slerp(identityQ, 1 - st.staticWeight)
-        staticLength = restLength + (staticLength - restLength) * st.staticWeight
+        const staticLength = restLength * clamp(1 - (st.params.flatten ?? 0) * (1 - st.params.squash[0]) * inward, st.params.squash[0], st.params.squash[1])
+        staticVector.copy(u).applyQuaternion(dynamicQ)
+        // Direct paired outward target in radians, independent of force/frequency.
+        const spillAngle = (st.params.spill ?? 0) * sagLimit * inward
+        if (lateral.lengthSq() > 1e-12) {
+          temp.copy(u).cross(lateral).normalize()
+          staticVector.applyAxisAngle(temp, spillAngle)
+        }
+        dynamicQ.setFromUnitVectors(u, staticVector.normalize())
+        const combinedAngle = dynamicQ.angleTo(identityQ)
+        if (combinedAngle > sagLimit) dynamicQ.slerp(identityQ, 1 - sagLimit / combinedAngle)
         staticVector.copy(u).applyQuaternion(dynamicQ).multiplyScalar(staticLength)
         target.copy(head).add(staticVector)
         localLateral.copy(lateral).transformDirection(inverseAnchor.copy(anchor).invert())
@@ -465,6 +475,21 @@ export function createSecondaryMotion(
         const gain = far ? 0 : st.params.gain
         rendered.sub(base).multiplyScalar(gain).add(base)
         rendered.normalize().multiplyScalar(Math.max(1e-12, base.length() + gain * gains[2] * longitudinal))
+        // Split bounded transverse static and dynamic offsets; axial length is unchanged.
+        const translate = st.params.translate ?? 0
+        headShift.copy(base).sub(originalLever)
+        temp.copy(originalLever).normalize()
+        headShift.addScaledVector(temp, -headShift.dot(temp))
+        headShift.clampLength(0, restLength * Math.max(0, Math.sin(sagLimit)))
+        shiftPart.copy(rendered).sub(base)
+        // Use the same rest lever projection for both components so full
+        // translation leaves no residual rotation when neither cap is active.
+        temp.copy(originalLever).normalize()
+        shiftPart.addScaledVector(temp, -shiftPart.dot(temp))
+        shiftPart.clampLength(0, base.length() * Math.max(0, Math.sin(st.params.max_deg * Math.PI / 180)))
+        headShift.add(shiftPart).multiplyScalar(translate)
+        const totalLength = rendered.length()
+        rendered.sub(headShift).normalize().multiplyScalar(totalLength)
         localRendered.copy(rendered).add(head).applyMatrix4(inverseAnchor.copy(anchor).invert())
         dynamicQ.setFromUnitVectors(temp.copy(restVector).normalize(), u.copy(localRendered).normalize())
         const s = clamp(localRendered.length() / restVector.length(), st.params.squash[0], st.params.squash[1])
@@ -481,13 +506,16 @@ export function createSecondaryMotion(
               + (1 / s - 1) * localLateral.getComponent(row) * localLateral.getComponent(col)
             : (row === col ? perpendicular : 0) + (s - perpendicular) * u.getComponent(row) * u.getComponent(col)
         }
+        shiftPart.copy(head).add(headShift).applyMatrix4(inverseAnchor)
+        translationMatrix.makeTranslation(shiftPart.x, shiftPart.y, shiftPart.z)
         b.bone.matrix.copy(b.local)
+          .multiply(translationMatrix)
           .multiply(rotationMatrix.makeRotationFromQuaternion(dynamicQ.multiply(restQ)))
           .multiply(scale)
         b.rotation.copy(anchorQ).multiply(dynamicQ)
         driven.set(b.bone, st)
         b.bone.matrixWorldNeedsUpdate = true
-        b.bone.matrixWorld.copy(anchor).multiply(rotationMatrix).multiply(scale)
+        b.bone.matrixWorld.copy(anchor).multiply(translationMatrix).multiply(rotationMatrix).multiply(scale)
       }
       // Publish all non-driven descendants once after the chain is complete.
       root.updateMatrixWorld(true)

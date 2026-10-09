@@ -71,7 +71,7 @@ def resolved_extension_groups(character_name, profile=None):
     return result
 
 
-MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "spill", "flatten", "gain", "max_deg", "sag_max_deg", "squash", "axis_gain", "rest_max_deg")
+MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "spill", "flatten", "translate", "gain", "max_deg", "sag_max_deg", "squash", "axis_gain", "rest_max_deg")
 
 
 def declared_motion_groups():
@@ -156,7 +156,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             for field, multiplier in choices.get(str(selected), {}).items():
                 values[field] *= multiplier
         # Multipliers may exceed absolute limits; enforce the physics contract.
-        for key in ("gain", "flatten", "spill"):
+        for key in ("gain", "flatten", "spill", "translate"):
             values[key] = min(1.0, values[key])
         for key in ("max_deg", "sag_max_deg"):
             values[key] = min(180.0, values[key])
@@ -187,7 +187,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
                     values[target] = 0 if multiplier == 0 else values[target] * multiplier
         # Clamp EFFECTIVE values after all layers; finite factors may overflow.
         for field, upper in {"freq_hz": 20, "zeta": 10, "gravity": 10,
-                             "gain": 1, "flatten": 1, "spill": 1}.items():
+                             "gain": 1, "flatten": 1, "spill": 1, "translate": 1}.items():
             values[field] = max(0.0, min(float(upper), values[field]))
         values["gravity_scale"] = scale
         groups[group["id"]] = {

@@ -6,7 +6,7 @@ export const motionFieldPreview = {
   rest_deg: 'live', rest_max_deg: 'live',
   freq_hz: 'motion', freq: 'motion', zeta: 'motion', gain: 'motion', axis_gain: 'motion', max_deg: 'motion',
   gravity: 'tilt', gravity_scale: 'tilt', motion_gravity_scale: 'tilt',
-  sag_max_deg: 'tilt', flatten: 'tilt', spill: 'tilt', squash: 'tilt',
+  sag_max_deg: 'tilt', translate: 'tilt', flatten: 'tilt', spill: 'tilt', squash: 'tilt',
   enabled: 'rebuild', flip: 'rebuild', params: 'rebuild',
 } satisfies Record<MotionField, Category> & Record<string, Category>
 
@@ -19,7 +19,10 @@ export function previewHint(field: string, t: (text: string) => string) {
     tilt: t('Visible in the preview with Tilt; upright the rest shape already carries gravity.'),
     rebuild: t('Takes effect after Rebuild extension bones.'),
   }
-  return { category, hint: field === 'gravity_scale' || field === 'motion_gravity_scale'
+  return { category, hint: field === 'flatten' || field === 'spill'
+    ? t('Use Tilt: direct posture targets, independent of gravity and frequency.')
+    : field === 'translate' ? t('Use Tilt or gravity scale for sag; play a clip for bounce. Moves the whole weighted group.')
+    : field === 'gravity_scale' || field === 'motion_gravity_scale'
     ? t('Visible upright when not 1; otherwise use Tilt.') : hints[category] }
 }
 

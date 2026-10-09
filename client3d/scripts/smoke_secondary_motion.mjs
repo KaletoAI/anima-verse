@@ -5,18 +5,17 @@
  * omega²=(4*pi)²=157.9136704. With m=2 upright a_g=(0,-9.81,0)
  * gives e_y=-9.81/omega²=-0.06212255072; m=1 gives 0 and m=.5 gives
  * +0.03106127536. Group gravity scales both baked and current gravity.
- * The single-chain probes explicitly use flatten=1: at -90 X,
- * e=(0,-d,-d), d=9.81/omega². A unit +Z lever becomes +Y, so the
- * centroid is (0,1-d,-d), length=sqrt((1-d)²+d²)=0.93993263.
- * Pair bind lever (0,-q,q), q=1/sqrt(2), becomes (0,q,q) at -90 X.
- * a_g=(0,-9.81,-9.81)=-9.81*sqrt(2)*u. Let D=9.81*sqrt(2)/omega².
- * flatten=.5 retains -.5*D*u; spill=.5 redirects .25*D*L. Thus the
- * centroid is (+/-[.2+.25*D],q*(1-.5*D),q*(1-.5*D)), and length
- * s=sqrt((1-.5*D)²+(.25*D)²). Volume compensation is 1/s along L,
- * 1 along the orthogonal third axis: determinant s*(1/s)*1=1.
- * flatten=0 removes inward acceleration even for a single chain;
- * without paired roots its removed part contributes no lateral offset.
- * Static T'=T+e is independent of gain and dynamic max_deg. Resets, far
+ * Direct targets replace the old force-based flatten/spill expectations:
+ * f_in=clamp(-g_hat.dot(u),0,1), s=1-flatten*(1-min)*f_in.
+ * f_in=1, flatten=1, min=.5 gives s=.5 at 1.5 and 4 Hz;
+ * f_in=.5 gives .75. Spill=.5 and sag_max=30 gives 15 degrees
+ * outward with opposite X signs. Paired width compensation is 1/s.
+ * Remaining inward axial force is removed, transverse e=force/omega²
+ * rotates the lever while preserving the direct target length.
+ * Translate=1 moves the head by sin(atan(d))*lever_length for a unit
+ * horizontal lever and d=9.81/(4*pi)^2; translate=0 keeps its head fixed.
+ * Static T' uses the bounded sag direction and direct length target,
+ * independently of gain and dynamic max_deg. Resets, far
  * LOD and gain zero retain T'. Rest rotation blends over 1.5 real seconds.
  * Static sag_max_deg and squash bound T'; dynamic angles are linear up to
  * max_deg/2, then max_deg/2*(1+tanh((angle-max_deg/2)/(max_deg/2))).
@@ -25,9 +24,9 @@
  * d=-V*t*exp(-omega*t), independent of gravity: at V=3,t=1/30,
  * d_x=-0.065778376882. Bent-forward gravity 0/3 share this raw dynamic
  * response; the rendered transverse swing preserves each static length.
- * Weighted centroid (.25*z1+.75*z3)=2.5; after -90 X it is (0,2.5-d,-d).
+ * Weighted centroid (.25*z1+.75*z3)=2.5; after -90 X direction=(0,2.5,-d), length=2.5.
  * f=20 has 1/100 of the f=2 offset; damping does not change equilibrium.
- * Client centering subtracts 1 from Y after -90 X: equilibrium=(0,-d,-d).
+ * Client centering subtracts 1 from Y after -90 X.
  * P4: numeric fields use smoothstep(t/1.5), so at .75 s gravity 1→.4
  * becomes .7, gain 1→0 becomes .5, frequency 2→0 becomes 1.
  * At zero frequency there is no static spring equilibrium: e=0; propagation
@@ -64,7 +63,7 @@ try {
   C.installSkinnedNormalCorrection(THREE);
   assert.match(THREE.ShaderChunk.skinnormal_vertex,/inverse\(transpose\(mat3\(skinMatrix\)\)\)/);
 
-  const defaults = { bones: ['extra'], freq_hz: 2, zeta: 1, gravity: 1, gravity_scale: 1, flatten: 1, sag_max_deg: 180, spill: 0, gain: 1, max_deg: 180, squash: [0.1,3], rest_deg: 0, rest_max_deg: 90 };
+  const defaults = { bones: ['extra'], freq_hz: 2, zeta: 1, gravity: 1, gravity_scale: 1, translate: 0, flatten: 0, sag_max_deg: 180, spill: 0, gain: 1, max_deg: 180, squash: [0.1,3], rest_deg: 0, rest_max_deg: 90 };
   const payload = (params={}) => ({ rev: JSON.stringify(params), groups: { test: { ...defaults, ...params } } });
   function fixture(params={}) {
     const root = new THREE.Group(), anchor = new THREE.Bone(), bone = new THREE.Bone();
@@ -84,6 +83,55 @@ try {
     return {root,anchor,bone,mesh,solver,point};
   }
   const near=(actual,expected,eps=1e-5)=>assert.ok(Math.abs(actual-expected)<eps,`${actual} vs ${expected} ±${eps}`);
+  // f_in=1 at -90 X, .5 at -30 X: 1-flatten*(1-min)*f_in.
+  for (const freq_hz of [0,1.5,4]) for (const [angle,length] of [[-90,.5],[-30,.75]]) {
+    const probe=fixture({freq_hz,flatten:1,squash:[.5,2],gravity:0});
+    probe.anchor.rotation.x=angle*Math.PI/180;probe.solver.update(0);
+    near(probe.point().length(),length);probe.solver.dispose();
+  }
+  console.log('ok direct flatten targets: .5 at 1.5/4 Hz; .75 at f_in=.5');
+  for(const translate of [0,.6,1]) {
+    const probe=fixture({gravity_scale:2,translate,sag_max_deg:30,max_deg:30});probe.solver.update(0);
+    const d=9.81/(4*Math.PI)**2, distance=d/Math.hypot(1,d);
+    const head=probe.bone.getWorldPosition(new THREE.Vector3());
+    near(head.y,-translate*distance,1e-10);
+    if(translate===1)near(probe.point().clone().sub(head).angleTo(new THREE.Vector3(0,0,1)),0,1e-10);
+    else if(translate===0)near(Math.atan2(probe.point().y,probe.point().z),-Math.atan(d),1e-10);
+    console.log('translate static metres',JSON.stringify({translate,headY:head.y,derived:-translate*distance}));probe.solver.dispose();
+  }
+  // Dynamic critical response d=-3*t*exp(-4*pi*t). After limits/gain,
+  // the unit lever's transverse displacement is d/hypot(1,d).
+  const moving=fixture({gravity:0,translate:1,max_deg:30});moving.solver.update(0);
+  moving.root.position.y=.1;moving.solver.update(1/30);
+  const dynamicD=-.1*Math.exp(-4*Math.PI/30), movingHead=moving.bone.getWorldPosition(new THREE.Vector3());
+  near(movingHead.y,.1+dynamicD/Math.hypot(1,dynamicD),1e-10);
+  near(moving.point().z,1,1e-10);moving.solver.dispose();
+  // Combined sag and transverse impulse must share the rest lever projection.
+  // At translate=1 both transverse components leave rotation zero; axial
+  // length still follows 1+d.dot(staticUnit), independently of the split.
+  const combined=fixture({gravity_scale:2,translate:1,sag_max_deg:30,max_deg:30});combined.solver.update(0);
+  combined.root.position.y=.1;combined.solver.update(1/30);
+  const combinedHead=combined.bone.getWorldPosition(new THREE.Vector3());
+  const combinedLever=combined.point().clone().sub(combinedHead.clone().sub(combined.root.position));
+  near(combinedLever.angleTo(new THREE.Vector3(0,0,1)),0,1e-10);
+  combined.solver.dispose();
+  for(const direction of [new THREE.Vector3(0,1,0),new THREE.Vector3(0,0,1)]) {
+    const lengths=[];
+    for(const translate of [0,1]) {
+      const probe=fixture({gravity_scale:2,translate,sag_max_deg:30,max_deg:30});probe.solver.update(0);
+      probe.root.position.copy(direction).multiplyScalar(.1);probe.solver.update(1/30);
+      const localHead=probe.bone.getWorldPosition(new THREE.Vector3()).sub(probe.root.position);
+      lengths.push(probe.point().sub(localHead).length());probe.solver.dispose();
+    }
+    near(lengths[0],lengths[1],1e-10);
+  }
+  // A saturated force has angle 30 degrees, unit lever, so translated
+  // head magnitude cannot exceed sin(30)=.5; gain=0 keeps the static term.
+  const capped=fixture({gravity_scale:3,gravity:100,translate:1,sag_max_deg:30,gain:0});capped.solver.update(0);
+  near(capped.bone.getWorldPosition(new THREE.Vector3()).length(),.5,1e-10);capped.solver.dispose();
+
+
+
   assert.equal(hints.motionFieldPreview.axis_gain,'motion');
   // d=-3*t*exp(-4*pi*t)=-.065778376882 at t=1/30. Length=1+d_long;
   // transverse rotation=atan(d_transverse), with no dynamic length change.
@@ -187,8 +235,8 @@ try {
   const walkRigPath=process.env.SECONDARY_WALK_RIG_PATH;
   const walkNames=(process.env.SECONDARY_WALK_BONES||'').split(',').map(s=>s.trim()).filter(Boolean);
   const walkClipPath=process.env.SECONDARY_WALK_CLIP;
-  if(!walkRigPath||!walkClipPath||!walkNames.length){
-    console.log('skip real Figure walk oracle: set SECONDARY_WALK_RIG_PATH, SECONDARY_WALK_BONES and SECONDARY_WALK_CLIP');
+  if(!walkRigPath||!walkNames.length){
+    console.log('skip real static/walk oracle: set SECONDARY_WALK_RIG_PATH and SECONDARY_WALK_BONES; walk also needs SECONDARY_WALK_CLIP');
   }else{
     assert.equal(walkNames.length,2,'walk oracle requires exactly the two paired bones');
     globalThis.self=globalThis;
@@ -197,6 +245,52 @@ try {
     const buffer=bytes=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);
     const loader=new GLTFLoader();loader.register(()=>({name:'geometry_only',loadTexture:()=>Promise.resolve(null)}));
     const rig=(await loader.parseAsync(buffer(await readFile(walkRigPath)), '')).scene;
+    // Real path uses only command-line environment inputs. Measure actual
+    // skinned vertices, including the weighted border and the upper subset.
+    const measureStatic=(translate,lying=false,active=true)=>{
+      const params={bones:walkNames,freq_hz:2.2,zeta:.15,gravity:active ? .35 : 0,
+        gravity_scale:2,translate,flatten:lying&&active?1:0,spill:0,
+        sag_max_deg:30,max_deg:30,squash:[.5,1.4],gain:0};
+      const fig=new C.Figure({name:'static-oracle',template:rig,clips:[new THREE.AnimationClip('idle',1,[])],scale:1,height:1,
+        assignOnly:true,noClips:false,tier:'full',libraryFits:true,motion:{payload:payload(params)}});
+      try{
+        fig.faceTowards(new THREE.Vector3(0,0,1),true);fig.update(0,{realDelta:0});
+        const bones=walkNames.map(name=>{let b;fig.root.traverse(o=>{if(o.isBone&&C.normBoneName(o.name)===C.normBoneName(name))b=o;});assert.ok(b);return b;});
+        const samples=[];fig.root.traverse(m=>{if(!m.isSkinnedMesh)return;
+          const pos=m.geometry.getAttribute('position'),idx=m.geometry.getAttribute('skinIndex'),w=m.geometry.getAttribute('skinWeight');
+          for(let i=0;i<pos.count;i++)for(let side=0;side<2;side++){
+            let weight=0;for(let j=0;j<4;j++)if(m.skeleton.bones[idx.getComponent(i,j)]===bones[side])weight+=w.getComponent(i,j);
+            if(weight>0)samples.push({m,i,side,weight,upper:new THREE.Vector3().fromBufferAttribute(pos,i).applyMatrix4(m.matrixWorld).y>bones[side].getWorldPosition(new THREE.Vector3()).y});
+          }
+        });
+        if(lying){fig.setLean(-90,0);fig.update(0,{realDelta:0});}
+        const heads=bones.map(b=>b.getWorldPosition(new THREE.Vector3()));
+        const totals=bones.map(()=>({sum:new THREE.Vector3(),weight:0}));
+        for(const a of samples){const bi=a.m.skeleton.bones.indexOf(bones[a.side]);const p=new THREE.Vector3().fromBufferAttribute(a.m.geometry.getAttribute('position'),a.i).applyMatrix4(a.m.bindMatrix).applyMatrix4(a.m.skeleton.boneInverses[bi]);totals[a.side].sum.addScaledVector(p,a.weight);totals[a.side].weight+=a.weight;}
+        const axes=totals.map((a,i)=>a.sum.divideScalar(a.weight).applyMatrix4(bones[i].matrixWorld).sub(heads[i]).normalize());
+        let total=0,sum=0,upperTotal=0,upperSum=0;const extents=bones.map(()=>[Infinity,-Infinity]), allExtents=bones.map(()=>[Infinity,-Infinity]);
+        for(const a of samples){const p=a.m.applyBoneTransform(a.i,new THREE.Vector3().fromBufferAttribute(a.m.geometry.getAttribute('position'),a.i)).applyMatrix4(a.m.matrixWorld);total+=a.weight;sum+=a.weight*p.y;if(a.upper){upperTotal+=a.weight;upperSum+=a.weight*p.y;}
+          const along=p.clone().sub(heads[a.side]).dot(axes[a.side]);
+          allExtents[a.side][0]=Math.min(allExtents[a.side][0],along);allExtents[a.side][1]=Math.max(allExtents[a.side][1],along);
+          // Core weights >= .9 exclude the deliberately blended border.
+          if(a.weight>=.9){const t=p.clone().sub(heads[a.side]).dot(axes[a.side]);extents[a.side][0]=Math.min(extents[a.side][0],t);extents[a.side][1]=Math.max(extents[a.side][1],t);}
+        }
+        assert.ok(upperTotal>0,'real rig must have weighted vertices above the head');
+        for(const extent of extents)assert.ok(Number.isFinite(extent[0])&&extent[1]>extent[0],'height oracle requires a core with weights >= .9');
+        return {centroidY:sum/total,upperY:upperSum/upperTotal,heights:extents.map(e=>e[1]-e[0]),allHeights:allExtents.map(e=>e[1]-e[0])};
+      }finally{fig.dispose();}
+    };
+    const baseline=measureStatic(0,false,false), rotation=measureStatic(0), translated=measureStatic(.6);
+    const movement=value=>({centroidDown:value.centroidY-baseline.centroidY,upperDown:value.upperY-baseline.upperY});
+    console.log('real static standing metres',JSON.stringify({translate0:movement(rotation),translate06:movement(translated)}));
+    assert.ok(translated.centroidY<baseline.centroidY&&translated.upperY<baseline.upperY,'whole group and upper subset must move down');
+    assert.ok(translated.upperY<rotation.upperY,'translation lowers upper subset relative to rotation');
+    const lyingBase=measureStatic(0,true,false),lyingFlat=measureStatic(0,true,true);
+    const ratios=lyingFlat.heights.map((h,i)=>h/lyingBase.heights[i]);
+    console.log('real static lying core (weights >= .9) lever extents metres',JSON.stringify({before:lyingBase.heights,after:lyingFlat.heights,ratios}));
+    console.log('real static lying full border lever extents metres',JSON.stringify({before:lyingBase.allHeights,after:lyingFlat.allHeights,ratios:lyingFlat.allHeights.map((h,i)=>h/lyingBase.allHeights[i])}));
+    for(const ratio of ratios)near(ratio,.5,.08);
+    if(!walkClipPath){console.log('skip real walk oracle: set SECONDARY_WALK_CLIP');}else{
     const donor=new FBXLoader().parse(buffer(await readFile(walkClipPath)), '');
     assert.ok(donor.animations.length,'walk FBX must contain an animation');
     const clip=donor.animations[0].clone();clip.name='walk';
@@ -255,23 +349,27 @@ try {
       }finally{fig.dispose();}
     }
     for(const value of results[1])assert.ok(value.vertical>value.forward,'filtered walk must bob more vertically than forward');
+    }
   }
-  // At +45 rest a +Z lever is (0,q,q). The rotated baked gravity
-  // is (0,-9.81*q,9.81*q), so T'=(0,q-d*(1-q),q-d*q).
+  // At +45 rest a +Z lever is (0,q,q). Remove the inward axial
+  // projection of the rotated gravity difference before normalizing.
   // Static sag remains around rotated rest even at max_deg=0 and gain=0.
   const restSag=fixture({rest_deg:45,gain:0,max_deg:0});restSag.solver.update(0);
   const restD=9.81/(4*Math.PI)**2;
-  near(restSag.point().y,Math.SQRT1_2-restD*(1-Math.SQRT1_2));
-  near(restSag.point().z,Math.SQRT1_2-restD*Math.SQRT1_2);restSag.solver.dispose();
+  const restU=new THREE.Vector3(0,Math.SQRT1_2,Math.SQRT1_2);
+  const restForce=new THREE.Vector3(0,-restD*(1-Math.SQRT1_2),-restD*Math.SQRT1_2);
+  restForce.addScaledVector(restU,-restForce.dot(restU));
+  const restExpected=restU.clone().add(restForce).normalize();
+  near(restSag.point().distanceTo(restExpected),0);restSag.solver.dispose();
   console.log('ok static sag uses rotated rest independently of dynamic max_deg');
-  const tilted = fixture({ gain: 0 });
+  const tilted = fixture({ gain: 0, flatten:1, squash:[.5,3] });
   hints.applyPreviewTilt(tilted.root, 90, 0);
   tilted.solver.update(0);
   const tiltD = 9.81 / (4 * Math.PI) ** 2;
-  near(tilted.point().length(), Math.sqrt((1 - tiltD) ** 2 + tiltD ** 2));
+  near(tilted.point().length(), .5);
   assert.ok(tilted.point().length() < 1, 'lying Tilt with flatten shortens');
   tilted.solver.dispose();
-  console.log('ok preview hints cover payload fields; Tilt before solver shortens to 0.93993263');
+  console.log('ok preview hints cover payload fields; Tilt before solver shortens to 0.5');
   // A unit lever with squash=[1,1], sag limit pi/2 and no dynamics:
   // smoothstep derivative <=1.5/1.5=1 per second, so a bounded arc
   // transition moves <=(pi/2)/120 per 120 Hz frame (plus numeric tolerance).
@@ -312,7 +410,7 @@ try {
   const settle=f=>{for(let i=0;i<600;i++) f.solver.update(1/120);};
   const blended=C.blendMotionParams(defaults,{...defaults,gravity:.4,gain:0,freq_hz:0,flatten:.2,spill:.8,zeta:0},.75);
   near(blended.gravity,.7); near(blended.gain,.5); near(blended.freq_hz,1);
-  near(blended.flatten,.6); near(blended.spill,.4); near(blended.zeta,.5);
+  near(blended.flatten,.1); near(blended.spill,.4); near(blended.zeta,.5);
   near(C.blendMotionParams(defaults,{...defaults,gain:0},1.5).gain,0);
   console.log('ok P4 multipliers blend at hand-derived midpoint and endpoint');
   const zero=C.stepSecondaryParticle(new THREE.Vector3(1,0,0),new THREE.Vector3(2,0,0),new THREE.Vector3(),new THREE.Vector3(),{...defaults,freq_hz:0,zeta:5},.25);
@@ -320,14 +418,14 @@ try {
   const noSpring=fixture({freq_hz:0,zeta:5}); noSpring.anchor.rotation.x=-Math.PI/2; settle(noSpring);
   near(noSpring.point().distanceTo(new THREE.Vector3(0,1,0)),0);
   console.log('ok P4 explicit zero frequency stays finite');
-  let probe=fixture({gravity_scale:2}); settle(probe); near(probe.point().y,-9.81/(4*Math.PI)**2); console.log('ok upright m=2 sag');
+  let probe=fixture({gravity_scale:2}); settle(probe); near(probe.point().y,-9.81/(4*Math.PI)**2/Math.hypot(1,9.81/(4*Math.PI)**2)); console.log('ok upright m=2 sag');
   let f=fixture(); settle(f); near(f.point().distanceTo(new THREE.Vector3(0,0,1)),0); console.log('ok upright: zero displacement');
   f.anchor.rotation.x=-Math.PI/2; f.solver.reset(); settle(f);
-  near(f.point().distanceTo(new THREE.Vector3(0,1,0)),0.08785456); near(f.point().length(),0.93993263); console.log('ok static tilt equilibrium and shortening');
+  near(f.point().distanceTo(new THREE.Vector3(0,1,-9.81/(4*Math.PI)**2).normalize()),0); near(f.point().length(),1); console.log('ok static tilt equilibrium preserves direct target length');
   near(f.bone.matrix.determinant(),1); console.log('ok directional scale preserves volume');
   // Roots +/-0.2 X; bind lever (0,-q,q), q=sqrt(1/2). After -90 X
   // lever=(0,q,q), dG=(0,-9.81,-9.81), purely inward magnitude 9.81 sqrt(2).
-  // Equilibrium outward = spill*9.81*sqrt(2)/(4*pi)^2 (0.04392728 at .5).
+  // f_in=q, so the direct outward angle is spill*180*q degrees.
   function pairFixture(spill, paired=true, params={}) {
     const root=new THREE.Group(), anchor=new THREE.Bone(); root.add(anchor);
     const bones=[new THREE.Bone(),new THREE.Bone()];
@@ -342,6 +440,17 @@ try {
     const point=i=>new THREE.Vector3(i===0?-.2:.2,-q,q).applyMatrix4(mesh.skeleton.boneInverses[i+1]).applyMatrix4(bones[i].matrixWorld);
     return {root,anchor,bones,solver,point};
   }
+  for(const freq_hz of [1.5,4]) {
+    const direct=pairFixture(.5,true,{freq_hz,gravity:0,flatten:1,squash:[.5,2],sag_max_deg:30});
+    // Pair lever +Y after -135 X, so f_in=1 and spill=.5*30=15 deg.
+    direct.anchor.rotation.x=-3*Math.PI/4;direct.solver.update(0);
+    for(let i=0;i<2;i++) {
+      near(direct.point(i).y,.5*Math.cos(Math.PI/12));
+      near(direct.point(i).x,(i===0?-1:1)*(.2+.5*Math.sin(Math.PI/12)));
+    }
+    console.log('direct pair targets',JSON.stringify({freq_hz,length:.5,outwardDegrees:15,offset:.5*Math.sin(Math.PI/12)}));
+    direct.solver.dispose();
+  }
   // Paired mean attachment is zero: mean centroid selects +Z front.
   // Each lever (0,-q,q) rotates about its own -X axis: at 60 degrees
   // y=sin(15 degrees), z=cos(15 degrees); max_deg=0 cannot limit rest.
@@ -353,10 +462,11 @@ try {
     const pair=pairFixture(spill); settle(pair);
     for(let i=0;i<2;i++) near(pair.point(i).x,i===0?-.2:.2);
     pair.anchor.rotation.x=-Math.PI/2; pair.solver.reset(); settle(pair);
-    const outward=spill*9.81*Math.SQRT2/(4*Math.PI)**2;
+    const spillRadians=spill*Math.PI*Math.SQRT1_2;
+    const outward=Math.sin(spillRadians);
     for(let i=0;i<2;i++) {
       near(pair.point(i).x,(i===0?-1:1)*(.2+outward));
-      near(pair.point(i).y,Math.SQRT1_2); near(pair.point(i).z,Math.SQRT1_2);
+      near(pair.point(i).y,Math.SQRT1_2*Math.cos(spillRadians)); near(pair.point(i).z,Math.SQRT1_2*Math.cos(spillRadians));
       if(spill===0) near(pair.point(i).distanceTo(new THREE.Vector3(i===0?-.2:.2,0,0)),1);
     }
     pair.solver.dispose();
@@ -366,10 +476,11 @@ try {
   console.log('ok spill pair equilibrium, no inward collapse, upright and single-chain behavior');
   const flatPair=pairFixture(.5,true,{flatten:.5});
   flatPair.anchor.rotation.x=-Math.PI/2; settle(flatPair);
-  const D=9.81*Math.SQRT2/(4*Math.PI)**2, axialLength=1-.5*D;
-  const flatLength=Math.hypot(axialLength,.25*D);
+  const flatLength=1-.5*.9*Math.SQRT1_2;
+  const spillRadians=.5*Math.PI*Math.SQRT1_2;
+  const axialLength=flatLength*Math.cos(spillRadians), lateralOffset=flatLength*Math.sin(spillRadians);
   for(let i=0;i<2;i++) {
-    near(flatPair.point(i).x,(i===0?-1:1)*(.2+.25*D));
+    near(flatPair.point(i).x,(i===0?-1:1)*(.2+lateralOffset));
     near(flatPair.point(i).y,Math.SQRT1_2*axialLength);
     near(flatPair.point(i).z,Math.SQRT1_2*axialLength);
     const M=new THREE.Matrix3().setFromMatrix4(flatPair.bones[i].matrix);
@@ -383,15 +494,15 @@ try {
   const axisFlat=pairFixture(.5,true,{flatten:.5,axis_gain:[0,0,0]});
   axisFlat.anchor.rotation.x=-Math.PI/2;settle(axisFlat);
   for(let i=0;i<2;i++)near(axisFlat.point(i).distanceTo(new THREE.Vector3(
-    (i===0?-1:1)*(.2+.25*D),Math.SQRT1_2*axialLength,Math.SQRT1_2*axialLength)),0,1e-7);
+    (i===0?-1:1)*(.2+lateralOffset),Math.SQRT1_2*axialLength,Math.SQRT1_2*axialLength)),0,1e-7);
   axisFlat.solver.dispose();
   console.log('ok paired static flatten/spill unchanged with zero axis gains');
   const lift=fixture({gravity_scale:.5}); settle(lift);
-  near(lift.point().y,.5*9.81/(4*Math.PI)**2);
+  near(lift.point().y,.5*9.81/(4*Math.PI)**2/Math.hypot(1,.5*9.81/(4*Math.PI)**2));
   const still=fixture({gravity_scale:2,gain:0,max_deg:0}); settle(still);
-  near(still.point().y,-9.81/(4*Math.PI)**2);
+  near(still.point().y,-9.81/(4*Math.PI)**2/Math.hypot(1,9.81/(4*Math.PI)**2));
   const defaultSingle=fixture({flatten:0}); defaultSingle.anchor.rotation.x=-Math.PI/2; settle(defaultSingle);
-  near(defaultSingle.point().y,1); near(defaultSingle.point().z,-9.81/(4*Math.PI)**2);
+  near(defaultSingle.point().distanceTo(new THREE.Vector3(0,1,-9.81/(4*Math.PI)**2).normalize()),0);
   console.log('ok m=.5 lift, static sag independent of gain/max_deg, default single flatten');
   const limit=Math.PI/18;
   let previous=-1;
@@ -420,16 +531,16 @@ try {
 
   f=fixture({gravity:0,gain:0,rest_deg:30}); settle(f); near(f.point().length(),1); near(f.point().z,Math.cos(Math.PI/6)); console.log('ok gain zero retains rest rotation');
   f=fixture({gravity:100,max_deg:5,sag_max_deg:5,squash:[0.95,1.05]}); f.anchor.rotation.x=-Math.PI/2; f.solver.reset(); settle(f);
-  near(f.point().length(),1.05); near(f.point().angleTo(new THREE.Vector3(0,1,0)),5*Math.PI/180); console.log('ok dynamic angle and squash clamps');
+  near(f.point().length(),1); near(f.point().angleTo(new THREE.Vector3(0,1,0)),5*Math.PI/180); console.log('ok dynamic angle and squash clamps');
   f=fixture({gravity:0,gain:0,rest_deg:80,rest_max_deg:20,max_deg:0}); settle(f); near(f.point().z,Math.cos(Math.PI/9)); console.log('ok independent rest clamp');
-  f=fixture({freq_hz:20,zeta:5}); f.anchor.rotation.x=-Math.PI/2; f.solver.reset(); settle(f); near(f.point().distanceTo(new THREE.Vector3(0,1,0)),0.0008785456,1e-6); console.log('ok overdamped spring remains stable');
+  f=fixture({freq_hz:20,zeta:5}); f.anchor.rotation.x=-Math.PI/2; f.solver.reset(); settle(f); near(f.point().distanceTo(new THREE.Vector3(0,1,0)),9.81/(40*Math.PI)**2,1e-6); console.log('ok overdamped spring remains stable');
   const a=fixture(),b=fixture(); for(const x of [a,b]) {x.anchor.rotation.x=-Math.PI/2; x.solver.reset(); x.solver.update(0);}
   a.solver.update(1/30); for(let i=0;i<4;i++) b.solver.update(1/120); near(a.point().distanceTo(b.point()),0,1e-8); console.log('ok frame partition');
-  a.solver.update(0.251); near(a.point().distanceTo(new THREE.Vector3(0,1-9.81/(4*Math.PI)**2,-9.81/(4*Math.PI)**2)),0); console.log('ok gap resets');
+  a.solver.update(0.251); near(a.point().distanceTo(new THREE.Vector3(0,1,-9.81/(4*Math.PI)**2).normalize()),0); console.log('ok gap resets');
   a.solver.update(1/30); const before=a.point(); a.solver.update(1,{frozen:true}); near(a.point().distanceTo(before),0); console.log('ok frozen dynamics');
   a.root.position.x=0.4; a.solver.update(0.1,{frozen:true}); near(a.bone.matrix.elements[12],0);
   const frozenWorld=a.point().applyMatrix4(a.mesh.matrixWorld); near(frozenWorld.x,0.4); near(frozenWorld.y,before.y); console.log('ok freeze transports displacement with anchor');
-  a.solver.update(1/30,{far:true}); near(a.point().distanceTo(new THREE.Vector3(0,1-9.81/(4*Math.PI)**2,-9.81/(4*Math.PI)**2)),0); console.log('ok far LOD reset');
+  a.solver.update(1/30,{far:true}); near(a.point().distanceTo(new THREE.Vector3(0,1,-9.81/(4*Math.PI)**2).normalize()),0); console.log('ok far LOD reset');
   f=fixture(); f.solver.configure(payload({gravity:0,rest_deg:30,gain:0})); f.solver.update(0.2); assert.ok(f.point().z>Math.cos(Math.PI/6)); for(let i=0;i<7;i++) f.solver.update(0.2); near(f.point().z,Math.cos(Math.PI/6)); console.log('ok live 1.5 s rest blend');
   f=fixture({gravity:0,gain:0,rest_deg:80}); f.solver.update(0); f.solver.configure(payload({gravity:0,gain:0,rest_deg:80,rest_max_deg:20})); f.solver.update(0); near(f.point().z,Math.cos(Math.PI/9)); console.log('ok reduced rest limit clamps during blend');
   f.solver.dispose(); assert.equal(f.bone.matrixAutoUpdate,true); console.log('ok ownership restored');
@@ -440,7 +551,7 @@ try {
   f.solver=C.createSecondaryMotion(THREE,f.root,payload());
   f.anchor.rotation.x=-Math.PI/2; settle(f);
   const weightedCentre=new THREE.Vector3(0,0,2.5).applyMatrix4(f.mesh.skeleton.boneInverses[1]).applyMatrix4(f.bone.matrixWorld);
-  near(weightedCentre.y,2.43787745); near(weightedCentre.z,-0.06212255); console.log('ok centroid uses positive skin weights');
+  near(weightedCentre.distanceTo(new THREE.Vector3(0,2.5,-9.81/(4*Math.PI)**2).normalize().multiplyScalar(2.5)),0); console.log('ok centroid uses positive skin weights');
   const movingA=fixture(),movingB=fixture(); movingA.solver.update(0); movingB.solver.update(0);
   movingA.root.position.x=0.1; movingA.solver.update(1/30);
   for(let i=1;i<=4;i++){movingB.root.position.x=i*0.025; movingB.solver.update(1/120);}
@@ -448,7 +559,7 @@ try {
   near(movingA.point().distanceTo(movingB.point()),0,1e-8); console.log('ok moving-target frame partition and target velocity');
   f=fixture(); f.anchor.rotation.x=-Math.PI/2; settle(f);
   const held=f.point(); f.solver.configure(payload({gravity:0.5})); f.solver.update(0); near(f.point().distanceTo(held),0); console.log('ok live reconfigure retains particle state');
-  for(let i=0;i<6;i++) f.solver.update(.25,{far:true}); f.solver.reset(); f.solver.update(0); near(f.point().distanceTo(new THREE.Vector3(0,1-.5*9.81/(4*Math.PI)**2,-.5*9.81/(4*Math.PI)**2)),0); console.log('ok explicit teleport reset');
+  for(let i=0;i<6;i++) f.solver.update(.25,{far:true}); f.solver.reset(); f.solver.update(0); near(f.point().distanceTo(new THREE.Vector3(0,1,-.5*9.81/(4*Math.PI)**2).normalize()),0); console.log('ok explicit teleport reset');
   f.solver.configure({rev:'absent',groups:{test:{...defaults,bones:['absent']}}}); assert.equal(f.bone.matrixAutoUpdate,true); f.solver.update(1/30); console.log('ok absent group skipped and bind restored');
   f=fixture(); f.solver.dispose();
   const clip=new THREE.AnimationClip('idle',1,[new THREE.QuaternionKeyframeTrack('extra.quaternion',[0,1],[0,0,Math.sin(0.35),Math.cos(0.35),0,0,Math.sin(0.35),Math.cos(0.35)])]);
@@ -459,7 +570,7 @@ try {
   for(let i=0;i<600;i++) figure.update(0,{realDelta:1/120});
   let liveMesh; figure.root.traverse(o=>{if(o.isSkinnedMesh) liveMesh=o;});
   const livePoint=()=>liveMesh.applyBoneTransform(2,new THREE.Vector3(0,0,1)).applyMatrix4(liveMesh.matrixWorld);
-  near(livePoint().y,-0.06212255); near(livePoint().z,-0.06212255); console.log('ok client runs solver after final root lean');
+  near(livePoint().y,1/Math.hypot(1,9.81/(4*Math.PI)**2)-1); near(livePoint().z,-9.81/(4*Math.PI)**2/Math.hypot(1,9.81/(4*Math.PI)**2)); console.log('ok client runs solver after final root lean');
   holder.payload=payload({gravity:0,gain:0}); for(let i=0;i<600;i++) figure.update(0,{realDelta:1/120}); near(livePoint().length(),0); assert.equal(liveMesh.geometry,f.mesh.geometry); console.log('ok client live motion revision keeps mesh');
   holder.payload=payload({gravity:0,gain:0,rest_deg:30}); for(let i=0;i<180;i++) figure.update(0,{realDelta:1/120});
   near(livePoint().y,Math.cos(Math.PI/6)-1); near(livePoint().z,-0.5); console.log('ok client live rest blend');
@@ -478,17 +589,17 @@ try {
   chain.mesh.geometry.setAttribute('skinIndex',new THREE.Uint16BufferAttribute([1,0,0,0, 1,0,0,0, 2,0,0,0],4));
   chain.root.updateMatrixWorld(true); chain.mesh.bind(new THREE.Skeleton([chain.anchor,chain.bone,child]));
   const childBind=child.matrix.clone();
-  // Two links under one root remain a single chain: flatten=1 retains
-  // the original parent equilibrium (0,.93787745,-.06212255).
+  // Two links under one root remain a single chain: no lateral spill;
+  // inward force removed and the transverse sag retains unit length.
   const singleChain=C.createSecondaryMotion(THREE,chain.root,{rev:'single-chain',groups:{
     chain:{...defaults,bones:['extra','extra_child'],spill:0},
   }});
   chain.anchor.rotation.x=-Math.PI/2;
   for(let i=0;i<600;i++) singleChain.update(1/120);
   const chainCentre=new THREE.Vector3(0,0,1).applyMatrix4(chain.mesh.skeleton.boneInverses[1]).applyMatrix4(chain.bone.matrixWorld);
-  near(chainCentre.y,.93787745); near(chainCentre.z,-.06212255);
+  near(chainCentre.distanceTo(new THREE.Vector3(0,1,-9.81/(4*Math.PI)**2).normalize()),0);
   singleChain.dispose(); chain.anchor.rotation.x=0; chain.root.updateMatrixWorld(true);
-  console.log('ok multiple links under one root keep explicitly retained single-chain axial gravity');
+  console.log('ok multiple links under one root keep single-chain transverse sag');
   // Child intentionally appears first in the payload: setup must order FK.
   const chainSolver=C.createSecondaryMotion(THREE,chain.root,{rev:'chain',groups:{
     child:{...defaults,bones:['extra_child'],gravity:0},
@@ -539,8 +650,8 @@ try {
   for(const tier of ['low','full']) {
     const rebuilt=new C.Figure({...model,template:newSkeleton.root,tier,motion:{payload:payload()}});
     rebuilt.faceTowards(new THREE.Vector3(0,0,1),true);rebuilt.setLean(-90,0);
-    rebuilt.update(0,{realDelta:0});near(renderedPoint(rebuilt.root).length(),Math.SQRT2*9.81/(4*Math.PI)**2);
-    if(tier==='low'){for(let i=0;i<20;i++)rebuilt.update(0,{realDelta:1/120});near(renderedPoint(rebuilt.root).length(),Math.SQRT2*9.81/(4*Math.PI)**2);}
+    rebuilt.update(0,{realDelta:0});near(renderedPoint(rebuilt.root).length(),Math.sqrt(2-2/Math.hypot(1,9.81/(4*Math.PI)**2)));
+    if(tier==='low'){for(let i=0;i<20;i++)rebuilt.update(0,{realDelta:1/120});near(renderedPoint(rebuilt.root).length(),Math.sqrt(2-2/Math.hypot(1,9.81/(4*Math.PI)**2)));}
     rebuilt.dispose();
   }
   console.log('ok model3d root prop, extended-model toggle, numeric admin/client parity and toggle off');
@@ -556,7 +667,7 @@ try {
   const renderEditor=new Function('h','Fragment','useState','useI18n','MotionPreviewHint',...Object.keys(helpers),editorCode.code+'; return ExtensionMotionDraft')(
     h,'fragment',useState,()=>({t:x=>x}),'preview-hint',...Object.values(helpers));
   const editorCalls=[];
-  const defaults={axis_gain:[1,1,1],freq_hz:2,zeta:.7,gravity:1,gain:.9,max_deg:30,sag_max_deg:30,flatten:1,spill:0,rest_max_deg:45,squash:[.8,1.2]};
+  const defaults={axis_gain:[1,1,1],freq_hz:2,zeta:.7,gravity:1,gain:.9,max_deg:30,sag_max_deg:30,flatten:1,spill:0,translate:0,rest_max_deg:45,squash:[.8,1.2]};
   const props={defaults,overrides:{},disabled:false,onSave:async value=>{editorCalls.push(value);return true}};
   const allNodes=node=>Array.isArray(node)?node.flatMap(allNodes):node?.children?[node,...node.children.flatMap(allNodes)]:[];
   const nodes=()=>allNodes(renderEditor(props));
@@ -574,6 +685,9 @@ try {
   input('Longitudinal gain').props.onChange({target:{value:'.15'}});
   input('Longitudinal gain').props.onKeyDown({key:'Enter',preventDefault(){}});
   await Promise.resolve();assert.deepEqual(editorCalls.pop(),{axis_gain:[1,1,.15]});
+  input('Translation fraction').props.onChange({target:{value:'.6'}});
+  input('Translation fraction').props.onKeyDown({key:'Enter',preventDefault(){}});
+  await Promise.resolve();assert.equal(editorCalls.pop().translate,.6);
   input('Flatten').props.onChange({target:{value:'2'}});
   assert.equal(input('Flatten').props['aria-invalid'],true);
   assert.equal(nodes().find(node=>node.tag==='button'&&node.children[0]==='Save').props.disabled,true);
@@ -601,10 +715,11 @@ try {
   console.log('ok GLSL mirrored inverse-transpose, tangent perpendicularity, rigid/uniform parity and one-time installation');
 
   // Oblique parent c=(1,0,1), root Rx(-90). Let d=9.81/omega².
-  // Parent unconstrained local equilibrium=(1,d,1-d); Q maps c to it.
+  // Removing the inward axial force gives direction (1+d/2,d,1-d/2).
   // Forced length 1.4 gives D=Q*[a I+(1.4-a)uu^T], a=1/sqrt(1.4).
   // Child T=Rx(-90)*D*(offset+c_child); pure R=Rx(-90)*Q.
-  // Child equilibrium=T+[g-R*g]/omega², independent of parent's shear.
+  // Child direction includes projected [g-R*g]/omega²; length remains its
+  // direct target, independent of parent shear in the gravity rotation.
   const cr=new THREE.Group(), ca=new THREE.Bone(), cp=new THREE.Bone(), cc=new THREE.Bone();
   cr.add(ca); ca.add(cp); cp.add(cc); cp.name='extra'; cc.name='extra_child'; cc.position.set(.2,0,.5);
   const cg=new THREE.BufferGeometry();
@@ -615,12 +730,16 @@ try {
   const cs=C.createSecondaryMotion(THREE,cr,{rev:'oblique-chain',groups:{child:{...defaults,bones:['extra_child']},parent:{...defaults,squash:[1.4,1.4]}}});
   ca.rotation.x=-Math.PI/2;for(let i=0;i<1800;i++)cs.update(1/120);
   const d=9.81/(4*Math.PI)**2;
-  const pq=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1,0,1).normalize(),new THREE.Vector3(1,d,1-d).normalize());
+  const pq=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1,0,1).normalize(),new THREE.Vector3(1+d/2,d,1-d/2).normalize());
   const rq=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0),-Math.PI/2);
   const axis=new THREE.Vector3(1,0,1).normalize(), transverse=1/Math.sqrt(1.4);
   const scaleVector=v=>v.clone().multiplyScalar(transverse).addScaledVector(axis,(1.4-transverse)*v.dot(axis));
   const expected=scaleVector(new THREE.Vector3(1.2,0,2)).applyQuaternion(pq).applyQuaternion(rq);
-  expected.add(new THREE.Vector3(0,-9.81,0).sub(new THREE.Vector3(0,-9.81,0).applyQuaternion(rq.clone().multiply(pq))).multiplyScalar(1/(4*Math.PI)**2));
+  const childHead=scaleVector(new THREE.Vector3(.2,0,.5)).applyQuaternion(pq).applyQuaternion(rq);
+  const childLever=expected.clone().sub(childHead), childU=childLever.clone().normalize();
+  const childForce=new THREE.Vector3(0,-9.81,0).sub(new THREE.Vector3(0,-9.81,0).applyQuaternion(rq.clone().multiply(pq)));
+  if(childForce.dot(childU)<0)childForce.addScaledVector(childU,-childForce.dot(childU));
+  expected.copy(childLever).addScaledVector(childForce,1/(4*Math.PI)**2).normalize().multiplyScalar(childLever.length()).add(childHead);
   const actual=cm.applyBoneTransform(1,new THREE.Vector3(1.2,0,2));near(actual.distanceTo(expected),0,2e-5);
   console.log('ok hand-derived oblique stretched chain with parent dynamics and child gravity');
 
@@ -633,13 +752,13 @@ try {
   other.bind(multi.mesh.skeleton,new THREE.Matrix4().makeTranslation(2,0,0));
   multi.solver=C.createSecondaryMotion(THREE,multi.root,payload());multi.anchor.rotation.x=-Math.PI/2;settle(multi);
   const multiCentre=new THREE.Vector3(0,0,2).applyMatrix4(multi.bone.matrixWorld);
-  near(multiCentre.y,2-d);near(multiCentre.z,-d);
+  near(multiCentre.distanceTo(new THREE.Vector3(0,2,-d).normalize().multiplyScalar(2)),0);
   console.log('ok multi-mesh centroid and non-identity bind matrix');
 
   const replacement=fixture();replacement.anchor.rotation.x=-Math.PI/2;replacement.solver.update(0);
-  near(replacement.point().distanceTo(new THREE.Vector3(0,1-9.81/(4*Math.PI)**2,-9.81/(4*Math.PI)**2)),0);
-  replacement.solver.update(1/120,{far:true});near(replacement.point().distanceTo(new THREE.Vector3(0,1-9.81/(4*Math.PI)**2,-9.81/(4*Math.PI)**2)),0);
-  replacement.solver.update(0,{far:false});near(replacement.point().distanceTo(new THREE.Vector3(0,1-9.81/(4*Math.PI)**2,-9.81/(4*Math.PI)**2)),0);
+  near(replacement.point().distanceTo(new THREE.Vector3(0,1,-9.81/(4*Math.PI)**2).normalize()),0);
+  replacement.solver.update(1/120,{far:true});near(replacement.point().distanceTo(new THREE.Vector3(0,1,-9.81/(4*Math.PI)**2).normalize()),0);
+  replacement.solver.update(0,{far:false});near(replacement.point().distanceTo(new THREE.Vector3(0,1,-9.81/(4*Math.PI)**2).normalize()),0);
   cs.dispose();assert.equal(cc.matrixAutoUpdate,true);
   console.log('ok skeleton replacement and tier transition start with fresh particles');
   const cacheFixture=fixture();cacheFixture.solver.dispose();

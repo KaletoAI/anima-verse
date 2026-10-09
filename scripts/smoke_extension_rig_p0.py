@@ -168,7 +168,7 @@ def main():
         slot.applies_to = {}
         motion = motion_payload("demo", profile)
         expected = {"bones": ["ExampleBone1", "ExampleBone2"], "freq_hz": 2.2,
-                    "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "spill": 0.0, "flatten": 0.0, "sag_max_deg": 25.0, "gain": 1.0, "max_deg": 25.0,
+                    "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "spill": 0.0, "flatten": 0.0, "translate": 0.0, "sag_max_deg": 25.0, "gain": 1.0, "max_deg": 25.0,
                     "axis_gain": [1, 1, 1], "squash": [0.6, 1.4], "rest_deg": 0, "rest_max_deg": 90.0}
         check(motion["groups"] == {"example_group": expected}, "motion defaults")
         check(motion == motion_payload("demo", copy.deepcopy(profile)), "stable motion rev")
@@ -185,7 +185,7 @@ def main():
               "package spill changes payload and revision")
         slot.rig.spill = 0.0
         fingerprint = extension_metadata("demo", profile)["fingerprint"]
-        for key, value in (("flatten", .5), ("sag_max_deg", 40), ("axis_gain", [.5, 1, .15])):
+        for key, value in (("translate", .6), ("flatten", .5), ("sag_max_deg", 40), ("axis_gain", [.5, 1, .15])):
             original = getattr(slot.rig, key)
             setattr(slot.rig, key, value)
             changed = motion_payload("demo", profile)
@@ -212,7 +212,7 @@ def main():
             raise AssertionError("axis_gain accepted in attribute multipliers")
         for key, value in (("freq_hz", 0), ("gain", 1.1), ("spill", -0.1), ("spill", 1.1), ("spill", float("nan")), ("zeta", -1),
                            ("gravity", float("nan")), ("max_deg", 181),
-                           ("flatten", -.1), ("flatten", 1.1), ("flatten", True),
+                           ("translate", -.1), ("translate", 1.1), ("translate", True), ("translate", float("nan")), ("flatten", -.1), ("flatten", 1.1), ("flatten", True),
                            ("sag_max_deg", -1), ("sag_max_deg", 181), ("sag_max_deg", float("nan")),
                            ("attribute_profiles", []), ("attribute_profiles", {"a": {"v": {"gain": -1}}}),
                            ("attribute_profiles", {"a": {"v": {"freq_hz": 0}}}),

@@ -75,3 +75,8 @@ assert.deepEqual(draftOverrides(axisDraft,axisDefaults,{gravity:.4}),{gravity:.4
 assert.deepEqual(draftOverrides(axisDraft,{...axisDefaults,axis_gain:[.5,1,1]},{}),{axis_gain:[.5,1,.15]});
 assert.deepEqual(draftOverrides(editDraft(makeDraft({...axisDefaults,axis_gain:[1,1,.15]}),'axis_gain_longitudinal','1'),axisDefaults,{axis_gain:[1,1,.15]}),{});
 console.log('PASS axis_gain draft preserves untouched current axes and removes default override');
+
+const translationDefaults={...defaults,translate:0};
+assert.deepEqual(draftOverrides(editDraft(makeDraft(translationDefaults),'translate','.6'),translationDefaults,{}),{translate:.6});
+assert.equal(validNumber('1.1',0,1),false);
+console.log('PASS translate scalar draft sends .6 and rejects values above 1');
