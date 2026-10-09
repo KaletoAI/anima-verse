@@ -91,7 +91,11 @@ interface Bind {
   bone: Bone
   local: Matrix4
   centroid: Vector3
+  centroidWorld: Vector3
   gravityRest: Vector3
+  head: Vector3
+  parentHead: Vector3
+  worldRotation: Quaternion
   lateral: Vector3
   auto: boolean
   depth: number
@@ -142,8 +146,7 @@ const restAngle = (g: MotionGroup) => clamp(g.rest_deg, -g.rest_max_deg, g.rest_
  * Centroids use ALL positive skin weights, aggregated over every skinned mesh.
  * bindMatrix maps each raw vertex into skeleton bind space; boneInverse maps
  * it into the bone's anchor frame. Imported joint axes are never geometry.
- * The rest axis is model -X in the bind pose, expressed anchor-locally;
- * positive rest_deg swings down (-Y) toward front (+Z), then up (+Y).
+ * Rest axes follow bind-pose attachment geometry; only chain roots rotate.
  * This owns only CPU state and each driven bone's matrixAutoUpdate setting.
  */
 export function createSecondaryMotion(
@@ -175,8 +178,7 @@ export function createSecondaryMotion(
   const gravity = new three.Vector3(0, -9.81, 0)
   const binds = new Map<Bone, Bind>()
   const sums = new Map<Bone, { sum: Vector3; weight: number }>()
-  const lateralWorld = new three.Vector3(-1, 0, 0)
-    .applyQuaternion(root.getWorldQuaternion(new three.Quaternion()))
+  const bindUp = new three.Vector3(0, 1, 0)
   const cached = template && centroidCache.get(template)
   root.traverse(o => {
     const mesh = o as SkinnedMesh
@@ -190,9 +192,10 @@ export function createSecondaryMotion(
         const q = bone.getWorldQuaternion(new three.Quaternion()).invert()
         let depth = 0
         for (let parent = bone.parent; parent; parent = parent.parent) depth++
-        binds.set(bone, { bone, local: bone.matrix.clone(), centroid: new three.Vector3(),
+        binds.set(bone, { bone, local: bone.matrix.clone(), centroid: new three.Vector3(), centroidWorld: new three.Vector3(),
           gravityRest: gravity.clone().applyQuaternion(q),
-          lateral: lateralWorld.clone().applyQuaternion(q), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), localRotation: bone.quaternion.clone() })
+          head: bone.getWorldPosition(new three.Vector3()), parentHead: bone.parent!.getWorldPosition(new three.Vector3()), worldRotation: q.clone().invert(),
+          lateral: new three.Vector3(), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), localRotation: bone.quaternion.clone() })
       }
     })
     // One pass over four influences per vertex, not one pass per skeleton bone.
@@ -219,6 +222,7 @@ export function createSecondaryMotion(
   }
   if (cached) [...binds.values()].forEach((b, i) => b.centroid.copy(cached[i]))
   else if (template) centroidCache.set(template, [...binds.values()].map(b => b.centroid.clone()))
+  for (const b of binds.values()) b.centroidWorld.copy(b.centroid).applyMatrix4(b.bone.matrixWorld)
   const byName = new Map([...binds.values()].map(b => [normBoneName(b.bone.name), b]))
   let particles: Particle[] = []
   let far = false
@@ -239,6 +243,32 @@ export function createSecondaryMotion(
       if (chain.some(b => !b || b.centroid.lengthSq() < 1e-12)) continue
       const members = new Set((chain as Bind[]).map(b => b.bone))
       const roots = (chain as Bind[]).filter(b => !members.has(b.bone.parent as Bone))
+      // Derive front once from immutable bind geometry, never a model axis.
+      const meanRoot = new three.Vector3(), meanParent = new three.Vector3(), meanTarget = new three.Vector3()
+      for (const b of roots) {
+        meanRoot.add(b.head)
+        meanParent.add(b.parentHead)
+      }
+      meanRoot.divideScalar(roots.length); meanParent.divideScalar(roots.length)
+      for (const b of chain as Bind[]) meanTarget.add(b.centroidWorld)
+      meanTarget.divideScalar(chain.length)
+      const front = meanRoot.clone().sub(meanParent)
+      front.addScaledVector(bindUp, -front.dot(bindUp))
+      if (front.lengthSq() < 1e-10) {
+        front.copy(meanTarget).sub(meanRoot)
+        front.addScaledVector(bindUp, -front.dot(bindUp))
+      }
+      front.normalize()
+      for (const b of chain as Bind[]) {
+        b.lateral.set(0, 0, 0)
+        if (!roots.includes(b)) continue
+        const child = (chain as Bind[]).find(c => c.bone.parent === b.bone)
+        const lever = child ? child.head.clone().sub(b.head) : b.centroidWorld.clone().sub(b.head)
+        lever.normalize()
+        const toward = front.clone().addScaledVector(lever, -front.dot(lever))
+        if (toward.lengthSq() < 1e-10) toward.copy(bindUp).addScaledVector(lever, -bindUp.dot(lever))
+        b.lateral.crossVectors(lever, toward).normalize().applyQuaternion(b.worldRotation.clone().invert())
+      }
       for (const bind of chain as Bind[]) {
         if (selected.has(bind.bone)) continue
         selected.add(bind.bone)
@@ -324,7 +354,8 @@ export function createSecondaryMotion(
         const fraction = st.blend / 1.5
         const limit = st.params.rest_max_deg * Math.PI / 180
         st.rest = clamp(st.restFrom + (st.restTo - st.restFrom) * fraction * fraction * (3 - 2 * fraction), -limit, limit)
-        restQ.setFromAxisAngle(b.lateral, st.rest)
+        if (st.roots.includes(b) && b.lateral.lengthSq() > 1e-12) restQ.setFromAxisAngle(b.lateral, st.rest)
+        else restQ.identity()
         restVector.copy(b.centroid).applyQuaternion(restQ)
         target.copy(restVector).applyMatrix4(anchor)
         head.setFromMatrixPosition(anchor)
@@ -346,7 +377,7 @@ export function createSecondaryMotion(
           lateral.addScaledVector(u, -lateral.dot(u)).normalize()
         }
         deltaG.copy(gravity).multiplyScalar(st.params.gravity_scale ?? 1)
-          .sub(temp.copy(b.gravityRest).applyQuaternion(anchorQ)).multiplyScalar(st.params.gravity)
+          .sub(temp.copy(b.gravityRest).applyQuaternion(restQ).applyQuaternion(anchorQ)).multiplyScalar(st.params.gravity)
         const axial = deltaG.dot(u)
         if (axial < 0) {
           const removed = (1 - (st.params.flatten ?? 0)) * -axial

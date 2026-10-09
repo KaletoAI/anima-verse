@@ -68,6 +68,8 @@ try {
   function fixture(params={}) {
     const root = new THREE.Group(), anchor = new THREE.Bone(), bone = new THREE.Bone();
     root.add(anchor); bone.name='extra'; anchor.add(bone);
+    // Attachment points forward while the driven head remains at the origin.
+    const mount=new THREE.Bone(); mount.position.z=-1; anchor.add(mount); mount.add(bone); bone.position.z=1;
     // Rolled frame: the weighted centroid still points along world +Z.
     bone.rotation.z=0.7;
     const geometry = new THREE.BufferGeometry();
@@ -96,6 +98,45 @@ try {
     near(actual.distanceTo(new THREE.Vector3(...expected)),0); f.solver.dispose();
   }
   console.log('ok signed front/up rest convention and effective 170/180 versus 170/90 clamp');
+  // Real Figure oracle: bind link rotated toward horizontal attachment offset.
+  // Rest 30/60/90 must survive max_deg=35; child local rotation stays bind.
+  // Optional real-model oracle (needs a rigged GLB outside the repo):
+  //   SECONDARY_RIG_PATH=<file.glb> SECONDARY_RIG_BONES=<root bone>,<child bone>
+  const realRigPath=process.env.SECONDARY_RIG_PATH||'';
+  const realRigBones=(process.env.SECONDARY_RIG_BONES||'').split(',').map(s=>s.trim()).filter(Boolean);
+  if(!realRigPath||realRigBones.length<2){console.log('skip real Figure rest oracle: set SECONDARY_RIG_PATH and SECONDARY_RIG_BONES');}
+  else {
+  globalThis.self=globalThis;
+  const {GLTFLoader}=await import('three/addons/loaders/GLTFLoader.js');
+  const loader=new GLTFLoader();loader.register(()=>({name:'geometry_only',loadTexture:()=>Promise.resolve(null)}));
+  const path=realRigPath;
+  const bytes=await readFile(path),rig=(await loader.parseAsync(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),'')).scene;
+  const names=realRigBones;
+  for(const yaw of [0,Math.PI])for(const angle of [30,60,90,-45]){
+    const params={bones:names,gravity:0,gain:1,max_deg:35,rest_max_deg:180,squash:[1,1]};
+    const holder={payload:payload({...params,rest_deg:0})};
+    const fig=new C.Figure({name:'rig-smoke',template:rig,clips:[],scale:1,height:1,assignOnly:true,noClips:true,tier:'full',libraryFits:true,motion:holder});
+    fig.faceTowards(new THREE.Vector3(Math.sin(yaw),0,Math.cos(yaw)),true);fig.update(0,{realDelta:0});
+    const bones=names.map(name=>{let b;fig.root.traverse(o=>{if(o.isBone&&o.name===THREE.PropertyBinding.sanitizeNodeName(name))b=o;});assert.ok(b);return b;});
+    const [r,c]=bones,head=o=>o.getWorldPosition(new THREE.Vector3()),direction=()=>head(c).sub(head(r)).normalize();
+    const centroid=()=>{const sum=new THREE.Vector3();let total=0;fig.root.updateMatrixWorld(true);fig.root.traverse(m=>{if(!m.isSkinnedMesh)return;const pos=m.geometry.getAttribute('position'),idx=m.geometry.getAttribute('skinIndex'),w=m.geometry.getAttribute('skinWeight');for(let i=0;i<pos.count;i++){let weight=0;for(let j=0;j<4;j++)if(bones.includes(m.skeleton.bones[idx.getComponent(i,j)]))weight+=w.getComponent(i,j);if(weight>0){sum.addScaledVector(m.applyBoneTransform(i,new THREE.Vector3().fromBufferAttribute(pos,i)).applyMatrix4(m.matrixWorld),weight);total+=weight;}}});return sum.divideScalar(total);};
+    const front=head(r).sub(head(r.parent));front.y=0;front.normalize();
+    const before=direction(),centre=centroid(),local=new THREE.Quaternion().setFromRotationMatrix(c.matrix).normalize(),axis=before.clone().cross(front).normalize();
+    holder.payload=payload({...params,rest_deg:angle});for(let i=0;i<720;i++)fig.update(0,{realDelta:1/120});
+    const actual=direction(),delta=centroid().sub(centre),measured=Math.atan2(actual.dot(axis.clone().cross(before)),actual.dot(before))*180/Math.PI;
+    const kink=new THREE.Quaternion().setFromRotationMatrix(c.matrix).normalize().angleTo(local)*180/Math.PI;
+    console.log('real Figure rest',JSON.stringify({yaw:yaw*180/Math.PI,requested:angle,measured,kink,front:delta.dot(front),up:delta.y}));
+    near(actual.angleTo(before.clone().applyAxisAngle(axis,angle*Math.PI/180))*180/Math.PI,0,2);near(kink,0,2);assert.ok(angle>0?delta.dot(front)>0&&delta.y>0:delta.dot(front)<0);fig.dispose();
+  }
+  }
+  // At +45 rest a +Z lever is (0,q,q). The rotated baked gravity
+  // is (0,-9.81*q,9.81*q), so T'=(0,q-d*(1-q),q-d*q).
+  // Static sag remains around rotated rest even at max_deg=0 and gain=0.
+  const restSag=fixture({rest_deg:45,gain:0,max_deg:0});restSag.solver.update(0);
+  const restD=9.81/(4*Math.PI)**2;
+  near(restSag.point().y,Math.SQRT1_2-restD*(1-Math.SQRT1_2));
+  near(restSag.point().z,Math.SQRT1_2-restD*Math.SQRT1_2);restSag.solver.dispose();
+  console.log('ok static sag uses rotated rest independently of dynamic max_deg');
   const tilted = fixture({ gain: 0 });
   hints.applyPreviewTilt(tilted.root, 90, 0);
   tilted.solver.update(0);
@@ -174,6 +215,13 @@ try {
     const point=i=>new THREE.Vector3(i===0?-.2:.2,-q,q).applyMatrix4(mesh.skeleton.boneInverses[i+1]).applyMatrix4(bones[i].matrixWorld);
     return {root,anchor,bones,solver,point};
   }
+  // Paired mean attachment is zero: mean centroid selects +Z front.
+  // Each lever (0,-q,q) rotates about its own -X axis: at 60 degrees
+  // y=sin(15 degrees), z=cos(15 degrees); max_deg=0 cannot limit rest.
+  const restPair=pairFixture(0,true,{gravity:0,gain:1,max_deg:0,rest_deg:60,squash:[1,1]});
+  restPair.solver.update(0);
+  for(let i=0;i<2;i++){near(restPair.point(i).x,i===0?-.2:.2);near(restPair.point(i).y,Math.sin(Math.PI/12));near(restPair.point(i).z,Math.cos(Math.PI/12));}
+  restPair.solver.dispose();console.log('ok paired centroid-derived front and independent root rest axes');
   for(const spill of [0,.5]) {
     const pair=pairFixture(spill); settle(pair);
     for(let i=0;i<2;i++) near(pair.point(i).x,i===0?-.2:.2);
@@ -479,44 +527,5 @@ try {
   for(let i=0;i<20;i++)active.update(1/30);
   assert.deepEqual(counts,{vectors:0,quaternions:0,matrices:0});active.dispose();
   console.log('ok template centroid cache, empty/unmatched setup skips and allocation-free frame/substep scratch');
-  // Optional local rig check: node ... <model.glb> <bone-name> ...
-  if (process.argv[2]) {
-    globalThis.self = globalThis;
-    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
-    const loader = new GLTFLoader();
-    // Geometry-only measurement: texture decoding needs a browser, skinning does not.
-    loader.register(() => ({name:'smoke_geometry_only',loadTexture:() => Promise.resolve(null)}));
-    const bytes = await readFile(process.argv[2]);
-    const gltf = await loader.parseAsync(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength),'');
-    const root=gltf.scene;
-    const size=new THREE.Box3().setFromObject(root).getSize(new THREE.Vector3());
-    if(size.z>size.y*1.5) root.rotation.x=-Math.PI/2;
-    root.updateMatrixWorld(true);
-    const names=new Set(process.argv.slice(3).map(name=>THREE.PropertyBinding.sanitizeNodeName(name)));
-    let matched=0;root.traverse(o=>{if(o.isBone&&names.has(o.name))matched++;});
-    assert.equal(matched,names.size);assert.ok(matched>0);
-    const centroid=()=>{
-      const sum=new THREE.Vector3();let total=0;
-      root.updateMatrixWorld(true);
-      root.traverse(mesh=>{
-        if(!mesh.isSkinnedMesh)return;
-        const pos=mesh.geometry.getAttribute('position'),idx=mesh.geometry.getAttribute('skinIndex'),weights=mesh.geometry.getAttribute('skinWeight');
-        for(let i=0;i<pos.count;i++){
-          let weight=0;
-          for(let j=0;j<4;j++)if(names.has(mesh.skeleton.bones[idx.getComponent(i,j)]?.name))weight+=weights.getComponent(i,j);
-          if(weight<=0)continue;
-          const v=new THREE.Vector3().fromBufferAttribute(pos,i);
-          mesh.applyBoneTransform(i,v).applyMatrix4(mesh.matrixWorld);sum.addScaledVector(v,weight);total+=weight;
-        }
-      });
-      assert.ok(total>0);return sum.divideScalar(total);
-    };
-    const before=centroid();
-    const solver=C.createSecondaryMotion(THREE,root,payload({bones:[...names],gravity:0,gain:0,rest_deg:60,rest_max_deg:180}));
-    solver.update(0);const after=centroid(),delta=after.clone().sub(before);
-    assert.ok(delta.z>0&&delta.y>0,`front/up displacement ${delta.toArray()}`);
-    console.log('real rig weighted centroid (model units):',JSON.stringify({before:before.toArray(),after:after.toArray(),delta:delta.toArray()}));
-    solver.dispose();
-  }
   console.log('secondary motion: all checks passed');
 } finally {await rm(dir,{recursive:true,force:true});}

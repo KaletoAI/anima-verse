@@ -10313,9 +10313,9 @@ deformed parent matrix.
 
 `g_rest` is world gravity expressed in the bind anchor's rotational frame.
 For `omega = 2*pi*freq_hz`, static acceleration is
-`a_g=gravity*(m*g-R_anchor*g_rest)`, with character `m=motion_gravity_scale`
+`a_g=gravity*(m*g-R_anchor*R_rest*g_rest)`, with character `m=motion_gravity_scale`
 transported as `gravity_scale`, independently of group `gravity`.
-Upright m=1 gives zero; m=2 gives `gravity*g/omega²` sag; m=.5 gives lift.
+Upright with zero rest and m=1 gives zero; m=2 gives `gravity*g/omega²` sag; m=.5 gives lift.
 
 `flatten` and `spill` are finite in [0,1], default 0. For `u=unit(T-head)`
 and inward component `c=a_g·u<0`, use
@@ -10339,15 +10339,20 @@ hard boundary without clipping the spring's velocity or integration state.
 Apply gain AFTER this saturation: render `T'+gain*d_soft`. Static sag remains
 at gain zero and far LOD; it does not consume the dynamic angle range.
 
-The rest target rotates the bind centroid about the chain's lateral axis:
-model **-X in bind pose**, stored in each anchor's local frame, with the
-right-hand sign convention. Loaded models are Y-up and face +Z; client
-`faceTowards` uses yaw `atan2(dir.x, dir.z)` (zero faces +Z). Thus positive
-`rest_deg` swings a hanging -Y lever toward front +Z, then up +Y; a forward
-+Z lever lifts toward +Y. Equivalently, the axis is `cross(down, front)`.
-Negative angles swing in the opposite direction. `rest_deg` is independently clamped by
-`rest_max_deg`. Changes blend from the currently shown angle over **1.5 real
-seconds**, using smoothstep, including at far LOD.
+Front is derived generically from the bind pose: take the horizontal component
+of (mean chain-root head minus mean declared-parent joint head). If that vector
+is meaningfully zero, use the horizontal component of (mean target centroid
+minus mean chain-root head), as for paired groups. Up is bind-pose world/model
+up. For each root lever u, project front perpendicular to u to obtain front';
+the axis is normalize(cross(u, front')), signed so positive rotation moves u
+toward front. For a lever parallel to front, use up instead, so positive lifts.
+Store each axis in its own root anchor frame; no fixed model axis is assumed.
+The rest angle rotates the WHOLE chain rigidly at its ROOT link. Children
+inherit it and receive no extra rest rotation. Compute T' and static sag around
+this rotated rest. max_deg and soft saturation limit ONLY dynamic deviation
+from T'; rest is limited only by the effective rest_max_deg. Paired groups
+rotate each chain root about its own derived axis. Negative angles move in the
+opposite direction. Changes blend over 1.5 real seconds with smoothstep.
 
 The final length factor `s` is clamped to `squash`. For paired groups at
 `s<1`, volume compensation acts only along L: scale `1/s` along L, 1 along

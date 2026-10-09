@@ -727,10 +727,21 @@ from the same extension-motion endpoint. For example:
 
 `rest_deg` is an absolute signed angle in degrees in `[-180,180]`, independent
 of package defaults. Runtime clamps it to ± the effective `rest_max_deg`
-(package → world → attribute profile → character override). In the loaded
-Y-up model frame, front is +Z. Rotate about model -X, expressed in the anchor's
-bind frame: positive swings a hanging (-Y) chain toward +Z and then +Y;
-a forward (+Z) lever lifts toward +Y. Negative swings in the opposite direction.
+(package → world → attribute profile → character override).
+Front is derived generically from the bind pose: take the horizontal component
+of (mean chain-root head minus mean declared-parent joint head). If that vector
+is meaningfully zero, use the horizontal component of (mean target centroid
+minus mean chain-root head), as for paired groups. Up is bind-pose world/model
+up. For each root lever u, project front perpendicular to u to obtain front';
+the axis is normalize(cross(u, front')), signed so positive rotation moves u
+toward front. For a lever parallel to front, use up instead, so positive lifts.
+Store each axis in its own root anchor frame; no fixed model axis is assumed.
+The rest angle rotates the WHOLE chain rigidly at its ROOT link. Children
+inherit it and receive no extra rest rotation. Compute T' and static sag around
+this rotated rest. max_deg and soft saturation limit ONLY dynamic deviation
+from T'; rest is limited only by the effective rest_max_deg. Paired groups
+rotate each chain root about its own derived axis. Negative angles move in the
+opposite direction. Changes blend over 1.5 real seconds with smoothstep.
 `gravity`, `freq`, `zeta`, `gain`, `flatten` and `spill` are finite, nonnegative
 multipliers; `freq` multiplies `freq_hz`, not its square. Values may exceed 1.
 Gain/flatten/spill results clamp to [0,1] after all active states. Missing keys
