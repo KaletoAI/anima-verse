@@ -12,6 +12,11 @@ export interface MotionGroup {
   spill: number
   translate: number
   flatten: number
+  stretch: number
+  spread: number
+  flatten_floor: number
+  length: number
+  girth: number
   gravity_scale: number
   sag_max_deg: number
   spill_max_deg: number
@@ -26,8 +31,9 @@ export interface MotionGroup {
 }
 /** Package metadata profiles are multipliers; runtime groups are already resolved. */
 export type MotionAttributeProfiles = Record<string, Record<string, Partial<Pick<MotionGroup,
-  'freq_hz' | 'zeta' | 'gravity' | 'gain' | 'max_deg' | 'sag_max_deg' | 'spill_max_deg' | 'head_sag' | 'flatten' | 'spill' | 'translate'>>>>
-export interface ExtensionRigDeclaration extends Omit<MotionGroup, 'bones' | 'gravity_scale' | 'rest_deg'> {
+  'freq_hz' | 'zeta' | 'gravity' | 'gain' | 'max_deg' | 'sag_max_deg' | 'spill_max_deg' | 'head_sag' | 'flatten' | 'stretch' | 'spread' | 'flatten_floor' | 'spill' | 'translate'>>>>
+export interface ExtensionRigDeclaration extends Omit<MotionGroup, 'bones' | 'gravity_scale' | 'rest_deg' | 'length' | 'girth' | 'flatten_floor'> {
+  flatten_floor: number | null
   id: string
   op: string
   chains: { bone: string; parent: string }[][]
@@ -97,11 +103,13 @@ interface Bind {
   centroid: Vector3
   centroidWorld: Vector3
   gravityRest: Vector3
+  gravityProjection: number
   bodyFront: Vector3
   head: Vector3
   parentHead: Vector3
   worldRotation: Quaternion
   lateral: Vector3
+  pairedLateral: Vector3
   auto: boolean
   depth: number
   rotation: Quaternion
@@ -127,16 +135,19 @@ interface Particle {
   restFrom: number
   restTo: number
   blend: number
+  anchorRotation: Quaternion | null
 }
+/** Maximum transverse compensation: strong flattening must not inflate the mesh. */
+const SPREAD_CAP = 1.6
 const DEFAULT_AXIS_GAIN: [number, number, number] = [1, 1, 1]
-const BLENDED_FIELDS = ['gravity', 'freq_hz', 'zeta', 'gain', 'flatten', 'spill', 'translate', 'head_sag'] as const
+const BLENDED_FIELDS = ['gravity', 'freq_hz', 'zeta', 'gain', 'flatten', 'stretch', 'spread', 'flatten_floor', 'spill', 'translate', 'head_sag', 'length', 'girth'] as const
 /** Smooth numeric state changes over the same 1.5 seconds as the rest angle. */
 export function blendMotionParams(from: MotionGroup, to: MotionGroup, elapsed: number, output?: MotionGroup): MotionGroup {
   const t = Math.max(0, Math.min(1, elapsed / 1.5))
   const weight = t * t * (3 - 2 * t)
   const result = output ?? { ...to }
   for (const field of BLENDED_FIELDS) {
-    const fallback = field === 'head_sag' ? 1 : 0
+    const fallback = (field === 'head_sag' || field === 'length' || field === 'girth') ? 1 : field === 'flatten_floor' ? to.squash[0] : field === 'spread' ? 0.5 : 0
     result[field] = (from[field] ?? fallback) + ((to[field] ?? fallback) - (from[field] ?? fallback)) * weight
   }
   return result
@@ -202,9 +213,9 @@ export function createSecondaryMotion(
         let depth = 0
         for (let parent = bone.parent; parent; parent = parent.parent) depth++
         binds.set(bone, { bone, local: bone.matrix.clone(), centroid: new three.Vector3(), centroidWorld: new three.Vector3(),
-          gravityRest: gravity.clone().applyQuaternion(q), bodyFront: new three.Vector3(),
+          gravityRest: gravity.clone().applyQuaternion(q), gravityProjection: 0, bodyFront: new three.Vector3(),
           head: bone.getWorldPosition(new three.Vector3()), parentHead: bone.parent!.getWorldPosition(new three.Vector3()), worldRotation: q.clone().invert(),
-          lateral: new three.Vector3(), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), localRotation: bone.quaternion.clone() })
+          lateral: new three.Vector3(), pairedLateral: new three.Vector3(), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), localRotation: bone.quaternion.clone() })
       }
     })
     // One pass over four influences per vertex, not one pass per skeleton bone.
@@ -231,7 +242,11 @@ export function createSecondaryMotion(
   }
   if (cached) [...binds.values()].forEach((b, i) => b.centroid.copy(cached[i]))
   else if (template) centroidCache.set(template, [...binds.values()].map(b => b.centroid.clone()))
-  for (const b of binds.values()) b.centroidWorld.copy(b.centroid).applyMatrix4(b.bone.matrixWorld)
+  for (const b of binds.values()) {
+    b.centroidWorld.copy(b.centroid).applyMatrix4(b.bone.matrixWorld)
+    // Capture the actual bind lever, including non-uniform model scale.
+    b.gravityProjection = gravity.dot(b.centroidWorld.clone().sub(b.head).normalize()) / 9.81
+  }
   const byName = new Map([...binds.values()].map(b => [normBoneName(b.bone.name), b]))
   let particles: Particle[] = []
   let far = false
@@ -272,6 +287,15 @@ export function createSecondaryMotion(
         b.bodyFront.copy(front)
         if (b.bodyFront.lengthSq() < 1e-10) b.bodyFront.set(0, 0, 1)
         b.bodyFront.applyQuaternion(b.worldRotation.clone().invert())
+        // Each link uses its chain root's horizontal bind-pose side direction.
+        let chainRoot = b
+        for (let n = b.bone.parent; n && members.has(n as Bone); n = n.parent) chainRoot = binds.get(n as Bone)!
+        b.pairedLateral.set(0, 0, 0)
+        if (roots.length >= 2) {
+          b.pairedLateral.copy(chainRoot.head).sub(meanRoot)
+          b.pairedLateral.addScaledVector(bindUp, -b.pairedLateral.dot(bindUp)).normalize()
+          b.pairedLateral.applyQuaternion(b.worldRotation.clone().invert())
+        }
         b.lateral.set(0, 0, 0)
         if (!roots.includes(b)) continue
         const child = (chain as Bind[]).find(c => c.bone.parent === b.bone)
@@ -287,7 +311,7 @@ export function createSecondaryMotion(
         const to = restAngle(params)
         const old = previous.get(bind.bone)
         const particle: Particle = old ?? { bind, roots, params, paramsFrom: params, paramsTo: params, paramsBlend: 1.5, p: null, v: new three.Vector3(),
-          target: null, rest: to, restFrom: to, restTo: to, blend: 1.5,
+          target: null, anchorRotation: null, rest: to, restFrom: to, restTo: to, blend: 1.5,
           staticFrequency: params.freq_hz, staticFrequencyFrom: params.freq_hz, staticFrequencyTo: params.freq_hz,
           staticWeight: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
           staticWeightFrom: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
@@ -322,15 +346,16 @@ export function createSecondaryMotion(
     particles = nextParticles.sort((a, b) => a.bind.depth - b.bind.depth)
   }
   const reset = () => {
-    for (const st of particles) { st.p = null; st.target = null; st.v.set(0, 0, 0) }
+    for (const st of particles) { st.p = null; st.target = null; st.anchorRotation = null; st.v.set(0, 0, 0) }
   }
   const anchor = new three.Matrix4(), inverseAnchor = new three.Matrix4(), scale = new three.Matrix4(), rotationMatrix = new three.Matrix4()
-  const anchorQ = new three.Quaternion(), restQ = new three.Quaternion(), dynamicQ = new three.Quaternion(), identityQ = new three.Quaternion(), inverseRestQ = new three.Quaternion()
+  const anchorQ = new three.Quaternion(), restQ = new three.Quaternion(), dynamicQ = new three.Quaternion(), identityQ = new three.Quaternion()
   const restVector = new three.Vector3(), target = new three.Vector3(), head = new three.Vector3(), vTarget = new three.Vector3(), deltaG = new three.Vector3(), t = new three.Vector3(), base = new three.Vector3(), rendered = new three.Vector3(), localRendered = new three.Vector3(), u = new three.Vector3(), temp = new three.Vector3()
-  const bodyVertical = new three.Vector3(), dynamicDelta = new three.Vector3()
+  const bodyVertical = new three.Vector3(), dynamicDelta = new three.Vector3(), previousDeviation = new three.Vector3(), nextDeviation = new three.Vector3()
   const headShift = new three.Vector3(), shiftPart = new three.Vector3(), originalLever = new three.Vector3()
   const translationMatrix = new three.Matrix4()
-  const meanHead = new three.Vector3(), lateral = new three.Vector3(), localLateral = new three.Vector3(), staticVector = new three.Vector3(), equilibrium = new three.Vector3(), rootFrame = new three.Matrix4()
+  const lateral = new three.Vector3(), localLateral = new three.Vector3(), staticVector = new three.Vector3(), equilibrium = new three.Vector3()
+  const frameQ = new three.Quaternion(), frontLocal = new three.Vector3()
   const integration = { p: new three.Vector3(), v: new three.Vector3(), x: new three.Vector3(), w: new three.Vector3() }
   const driven = new Map<Bone, Particle>()
   const pureParent = (node: Object3D | null): Quaternion => {
@@ -378,22 +403,15 @@ export function createSecondaryMotion(
         u.copy(target).sub(head).normalize()
         lateral.set(0, 0, 0)
         if (st.roots.length >= 2) {
-          meanHead.set(0, 0, 0)
-          for (const link of st.roots) {
-            rootFrame.copy(link.local)
-            for (let n = link.bone.parent; n; n = n.parent) {
-              if (driven.has(n as Bone)) { rootFrame.premultiply(n.matrixWorld); break }
-              rootFrame.premultiply(n.matrix)
-            }
-            meanHead.add(temp.setFromMatrixPosition(rootFrame))
-          }
-          meanHead.divideScalar(st.roots.length)
-          lateral.copy(head).sub(meanHead)
+          lateral.copy(b.pairedLateral).applyQuaternion(anchorQ)
           lateral.addScaledVector(u, -lateral.dot(u)).normalize()
         }
         deltaG.copy(gravity).multiplyScalar(st.params.gravity_scale ?? 1)
           .sub(temp.copy(b.gravityRest).applyQuaternion(restQ).applyQuaternion(anchorQ)).multiplyScalar(st.params.gravity)
-        const inward = clamp(-gravity.dot(u) / 9.81, 0, 1)
+        const bindProjection = b.gravityProjection
+        const projection = gravity.dot(u) / 9.81
+        const inward = clamp(-projection - Math.max(0, -bindProjection), 0, 1)
+        const outward = clamp(projection - Math.max(0, bindProjection), 0, 1)
         const axial = deltaG.dot(u)
         if (axial < 0) deltaG.addScaledVector(u, -axial)
         // When crossing zero, blend the bounded static result rather than
@@ -413,7 +431,8 @@ export function createSecondaryMotion(
         const sagAngle = dynamicQ.angleTo(identityQ)
         if (sagAngle > sagLimit) dynamicQ.slerp(identityQ, 1 - sagLimit / sagAngle)
         dynamicQ.slerp(identityQ, 1 - st.staticWeight)
-        const staticLength = restLength * clamp(1 - (st.params.flatten ?? 0) * (1 - st.params.squash[0]) * inward, st.params.squash[0], st.params.squash[1])
+        const staticLength = Math.max(1e-12, restLength * (1 - (st.params.flatten ?? 0) * (1 - (st.params.flatten_floor ?? st.params.squash[0])) * inward
+          + (st.params.stretch ?? 0) * (st.params.squash[1] - 1) * outward))
         // Scale only the bounded force displacement along bind body up.
         staticVector.copy(u).applyQuaternion(dynamicQ).multiplyScalar(restLength).sub(originalLever)
         bodyVertical.copy(b.gravityRest).multiplyScalar(-1 / 9.81).applyQuaternion(anchorQ).normalize()
@@ -427,11 +446,8 @@ export function createSecondaryMotion(
         }
         staticVector.multiplyScalar(restLength > 1e-12 ? staticLength / restLength : 1)
         target.copy(head).add(staticVector)
-        localLateral.copy(lateral).transformDirection(inverseAnchor.copy(anchor).invert())
-        // Express L before the rest rotation; scale is applied before that rotation.
-        localLateral.applyQuaternion(inverseRestQ.copy(restQ).invert())
-        temp.copy(b.centroid).normalize()
-        localLateral.addScaledVector(temp, -localLateral.dot(temp)).normalize()
+        const extremeAnchor = dt > 0 && st.anchorRotation !== null
+          && st.anchorRotation.angleTo(anchorQ) / dt > 2 * Math.PI
         if (far || !st.p || !st.target || (!options.frozen && dt > 0.25)) {
           (st.p ??= new three.Vector3()).copy(target); st.v.set(0, 0, 0)
         } else if (options.frozen) {
@@ -442,10 +458,27 @@ export function createSecondaryMotion(
           const h = dt / steps
           for (let i = 0; i < steps; i++) {
             t.copy(st.target).lerp(target, i / steps)
+            previousDeviation.copy(st.p).sub(t)
             const result = stepSecondaryParticle(st.p, st.v, t, vTarget, st.params, h, integration)
+            if (extremeAnchor) {
+              // Cap each deviation increment and its total displacement during
+              // extreme anchor turns. Carry the bounded target velocity on hit
+              // so stored momentum cannot inject another burst on the next step.
+              const budget = staticVector.length() * Math.sin(Math.min(Math.PI / 2, st.params.max_deg * Math.PI / 180))
+              nextDeviation.copy(result.p).sub(t).addScaledVector(vTarget, -h)
+              temp.copy(nextDeviation).sub(previousDeviation).clampLength(0, budget * Math.min(1, h * 120))
+              nextDeviation.copy(previousDeviation).add(temp).clampLength(0, budget)
+              temp.copy(t).addScaledVector(vTarget, h).add(nextDeviation)
+              if (temp.distanceToSquared(result.p) > 1e-20) result.v.copy(vTarget)
+              result.p.copy(temp)
+            }
+            if (!Number.isFinite(result.p.lengthSq()) || !Number.isFinite(result.v.lengthSq())) {
+              result.p.copy(t).addScaledVector(vTarget, h); result.v.set(0, 0, 0)
+            }
             st.p.copy(result.p); st.v.copy(result.v)
           }
         }
+        (st.anchorRotation ??= new three.Quaternion()).copy(anchorQ);
         (st.target ??= new three.Vector3()).copy(target)
         base.copy(target).sub(head)
         // Filter only p-T' in the current rest lever frame. Bind body up
@@ -502,18 +535,38 @@ export function createSecondaryMotion(
         // even when it is shorter than squash_min; only dynamics hit the cap.
         const staticRatio = temp.copy(target).applyMatrix4(inverseAnchor).length() / restVector.length()
         const s = clamp(localRendered.length() / restVector.length(), Math.min(st.params.squash[0], staticRatio), st.params.squash[1])
-        const perpendicular = 1 / Math.sqrt(s)
+        const spread = st.params.spread ?? 0.5
+        const perpendicular = s < 1 ? Math.min(SPREAD_CAP, 1 + spread * (1 / Math.sqrt(s) - 1)) : 1 / Math.sqrt(s)
         u.copy(b.centroid).normalize()
         scale.identity()
         const e = scale.elements
-        // Paired shortening preserves volume only along L; the third axis stays 1.
-        // S=I+(s-1)uu^T+(1/s-1)LL^T, otherwise symmetric transverse scaling.
+        // Gram-Schmidt gives the orthonormal frame (u, L, u cross L).
+        // Its spectral scale has no shear; the third paired axis stays 1.
+        const pairedWidth = Math.min(SPREAD_CAP, 1 + spread * (1 / s - 1))
+        // Paired flattening presses along the BODY FRONT (where gravity acts
+        // when lying) and widens along the body lateral axis, not along the
+        // oblique lever: an outward-pointing lever would otherwise tilt the
+        // width axis into the height. Both axes are expressed in the frame the
+        // scale acts in (bind bone frame rotated by dynamic·rest), and the
+        // frame (front, L, front×L) is orthonormal, so the scale has no shear.
+        frameQ.copy(dynamicQ).multiply(restQ).invert()
+        frontLocal.copy(b.bodyFront).applyQuaternion(frameQ).normalize()
+        localLateral.copy(lateral).transformDirection(inverseAnchor.copy(anchor).invert()).applyQuaternion(frameQ)
+        localLateral.addScaledVector(frontLocal, -localLateral.dot(frontLocal))
+        if (localLateral.lengthSq() > 1e-12) localLateral.normalize(); else localLateral.set(0, 0, 0)
         const pairedFlatten = s < 1 && st.roots.length >= 2 && localLateral.lengthSq() > 1e-12
         for (let row = 0; row < 3; row++) for (let col = 0; col < 3; col++) {
           e[col * 4 + row] = pairedFlatten
-            ? (row === col ? 1 : 0) + (s - 1) * u.getComponent(row) * u.getComponent(col)
-              + (1 / s - 1) * localLateral.getComponent(row) * localLateral.getComponent(col)
+            ? (row === col ? 1 : 0) + (s - 1) * frontLocal.getComponent(row) * frontLocal.getComponent(col)
+              + (pairedWidth - 1) * localLateral.getComponent(row) * localLateral.getComponent(col)
             : (row === col ? perpendicular : 0) + (s - perpendicular) * u.getComponent(row) * u.getComponent(col)
+        }
+        // State extent is applied after static/dynamic scaling, in the same
+        // immutable lever frame; it does not alter volume compensation.
+        const stateLength = st.params.length ?? 1, stateGirth = st.params.girth ?? 1
+        for (let row = 0; row < 3; row++) for (let col = 0; col < 3; col++) {
+          e[col * 4 + row] = stateGirth * e[col * 4 + row]
+            + (stateLength - stateGirth) * s * u.getComponent(row) * u.getComponent(col)
         }
         shiftPart.copy(head).add(headShift).applyMatrix4(inverseAnchor)
         translationMatrix.makeTranslation(shiftPart.x, shiftPart.y, shiftPart.z)

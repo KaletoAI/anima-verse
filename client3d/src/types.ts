@@ -799,6 +799,11 @@ export interface MotionPayload {
     gravity: number;
     spill: number;
     flatten: number;
+    stretch: number;
+    spread: number;
+    flatten_floor: number;
+    length: number;
+    girth: number;
     translate: number;
     sag_max_deg: number;
     spill_max_deg: number;

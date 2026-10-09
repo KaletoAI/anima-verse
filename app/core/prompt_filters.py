@@ -427,7 +427,7 @@ def apply_filters(character_name: str,
     return ctx
 
 
-BONE_POSE_FIELDS = ("rest_deg", "gravity", "freq", "zeta", "gain", "flatten", "spill")
+BONE_POSE_FIELDS = ("rest_deg", "gravity", "freq", "zeta", "gain", "flatten", "spill", "length", "girth")
 
 
 def valid_bone_pose_number(number, *, signed=False):
@@ -453,6 +453,8 @@ def validate_bone_pose(value):
         for key, number in fields.items():
             if not valid_bone_pose_number(number, signed=key == "rest_deg"):
                 raise ValueError(f"bone_pose.{gid}.{key} must be finite" if key == "rest_deg" else f"bone_pose.{gid}.{key} must be finite and non-negative")
+            if key in ("length", "girth") and not .5 <= number <= 2:
+                raise ValueError(f"bone_pose.{gid}.{key} must be within [0.5, 2.0]")
             if key == "rest_deg" and abs(number) > 180:
                 raise ValueError(f"bone_pose.{gid}.rest_deg must be within [-180, 180]")
     return value

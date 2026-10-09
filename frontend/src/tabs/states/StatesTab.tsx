@@ -11,7 +11,7 @@ import { ListPane } from '../../components/ListPane'
 import { IconPicker } from '../../components/IconPicker'
 import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 
-const POSE_FIELDS = ['rest_deg', 'gravity', 'freq', 'zeta', 'gain', 'flatten', 'spill'] as const
+const POSE_FIELDS = ['rest_deg', 'gravity', 'freq', 'zeta', 'gain', 'flatten', 'spill', 'length', 'girth'] as const
 type PoseField = typeof POSE_FIELDS[number]
 type BonePose = Record<string, Partial<Record<PoseField, number>>>
 interface MotionGroup { id: string; defaults: { rest_max_deg: number } }
@@ -383,6 +383,7 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
   const poseLabels: Record<PoseField, string> = {
     rest_deg: t('Rest angle (degrees)'), gravity: t('Gravity multiplier'),
     freq: t('Frequency multiplier'), zeta: t('Damping multiplier'),
+    length: t('Length multiplier'), girth: t('Girth multiplier'),
     gain: t('Gain multiplier'), flatten: t('Flatten multiplier'), spill: t('Spill multiplier'),
   }
   const selectedBlocks = useMemo(() => new Set(draft.drop_blocks), [draft.drop_blocks])
@@ -516,8 +517,8 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
               {POSE_FIELDS.map(field => (
                 <Field key={field} label={poseLabels[field]} hint={<>{field === 'rest_deg' && <span>{t('Clamped per character to its maximum rest angle.')} </span>}<MotionPreviewHint field={field} /></>} compact>
                   <MotionNumberInput value={draft.bone_pose[group.id]?.[field] ?? ''} optional
-                    min={field === 'rest_deg' ? -180 : 0}
-                    max={field === 'rest_deg' ? 180 : undefined}
+                    min={field === 'rest_deg' ? -180 : ['length', 'girth'].includes(field) ? .5 : 0}
+                    max={field === 'rest_deg' ? 180 : ['length', 'girth'].includes(field) ? 2 : undefined}
                     onCommit={text => updatePose(group.id, field, text)} />
                 </Field>
               ))}

@@ -71,14 +71,14 @@ def resolved_extension_groups(character_name, profile=None):
     return result
 
 
-MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "spill", "flatten", "translate", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "squash", "axis_gain", "rest_max_deg")
+MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "spill", "flatten", "stretch", "spread", "flatten_floor", "translate", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "squash", "axis_gain", "rest_max_deg")
 
 
 def declared_motion_groups():
     """All loaded declarations, including character-inapplicable groups."""
     from app.plugins import registry
     return sorted([{"id": slot.rig.id,
-                    "defaults": {key: getattr(slot.rig, key) for key in MOTION_FIELDS}}
+                    "defaults": {key: (slot.rig.squash[0] if key == "flatten_floor" and slot.rig.flatten_floor is None else getattr(slot.rig, key)) for key in MOTION_FIELDS}}
                    for package in registry.packages() for slot in package.body_slots
                    if slot.rig is not None], key=lambda group: group["id"])
 
@@ -156,27 +156,35 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
     for group in declarations:
         values = {key: group[key] for key in MOTION_FIELDS}
         values.update(world.get(group["id"], {}))
+        inherited_floor = values["flatten_floor"] is None
+        if inherited_floor:
+            values["flatten_floor"] = values["squash"][0]
+        floor_multiplier = 1.0
         for key, choices in group.get("attribute_profiles", {}).items():
             selected = attributes.get(group["id"], {}).get(key)
             if selected is None:
                 continue
             for field, multiplier in choices.get(str(selected), {}).items():
                 values[field] *= multiplier
+                if field == "flatten_floor":
+                    floor_multiplier *= multiplier
         # Multipliers may exceed absolute limits; enforce the physics contract.
-        for key in ("gain", "flatten", "spill", "translate", "head_sag"):
+        for key in ("gain", "flatten", "stretch", "spread", "flatten_floor", "spill", "translate", "head_sag"):
             values[key] = min(1.0, values[key])
         for key in ("max_deg", "sag_max_deg", "spill_max_deg"):
             values[key] = min(180.0, values[key])
         overrides = ((profile.get("model3d_opts") or {}).get("extension_motion") or {}).get(group["id"], {})
         values.update({key: value for key, value in overrides.items() if key in MOTION_FIELDS})
+        if inherited_floor and "flatten_floor" not in overrides:
+            values["flatten_floor"] = min(1.0, values["squash"][0] * floor_multiplier)
         bounce, weight = overrides.get("bounce", 1), overrides.get("weight", 1)
         for key in ("gain", "max_deg"):
             values[key] *= bounce
         for key in ("freq_hz", "zeta"):
             values[key] *= bounce ** -.5
-        for key in ("gravity", "sag_max_deg", "spill_max_deg", "flatten", "translate"):
+        for key in ("gravity", "sag_max_deg", "spill_max_deg", "flatten", "stretch", "translate"):
             values[key] *= weight
-        for key in ("gain", "flatten", "translate"):
+        for key in ("gain", "flatten", "stretch", "translate"):
             values[key] = min(1.0, values[key])
         for key in ("max_deg", "sag_max_deg", "spill_max_deg"):
             values[key] = min(180.0, values[key])
@@ -189,6 +197,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             elif targets.intersection(piece["partially_covers"]):
                 factor *= 1 - (1 - f) / 2
         values["gain"] *= factor
+        values.update(length=1.0, girth=1.0)
         rest = None
         for state in states:
             pose = state["bone_pose"].get(group["id"], {})
@@ -199,6 +208,8 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
                     continue
                 if not valid_bone_pose_number(multiplier, signed=field == "rest_deg"):
                     continue
+                if field in ("length", "girth") and not .5 <= multiplier <= 2:
+                    continue
                 if field == "rest_deg":
                     rest = max(rest if rest is not None else multiplier, multiplier)
                 else:
@@ -206,7 +217,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
                     values[target] = 0 if multiplier == 0 else values[target] * multiplier
         # Clamp EFFECTIVE values after all layers; finite factors may overflow.
         for field, upper in {"freq_hz": 20, "zeta": 10, "gravity": 10,
-                             "gain": 1, "flatten": 1, "spill": 1, "translate": 1, "head_sag": 1}.items():
+                             "gain": 1, "flatten": 1, "stretch": 1, "spread": 1, "flatten_floor": 1, "spill": 1, "translate": 1, "head_sag": 1}.items():
             values[field] = max(0.0, min(float(upper), values[field]))
         values["gravity_scale"] = scale
         groups[group["id"]] = {

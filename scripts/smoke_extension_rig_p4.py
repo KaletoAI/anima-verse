@@ -47,8 +47,8 @@ def main():
             'chains': [[{'bone': 'SampleBone', 'parent': 'Hips'}]],
             'flatten': .4, 'spill': .2, 'zeta': .7, 'rest_max_deg': 45}))
         filters = [
-            {'id': 'first', 'bone_pose': {'sample_group': {'rest_deg': 12, 'gravity': .5, 'freq': 2, 'zeta': .5}}},
-            {'id': 'second', 'condition': 'sample>0', 'bone_pose': {'sample_group': {'rest_deg': 24, 'gravity': .8, 'freq': .5, 'zeta': 2}}},
+            {'id': 'first', 'bone_pose': {'sample_group': {'rest_deg': 12, 'gravity': .5, 'freq': 2, 'zeta': .5, 'length': 1.5, 'girth': .8}}},
+            {'id': 'second', 'condition': 'sample>0', 'bone_pose': {'sample_group': {'rest_deg': 24, 'gravity': .8, 'freq': .5, 'zeta': 2, 'length': .5, 'girth': 1.5}}},
         ]
         shared = root / 'shared-filters.json'
         shared.write_text('{"filters": []}')
@@ -80,6 +80,8 @@ def main():
                 sr.reset_mock(); wr.reset_mock()
                 extension_rig.motion_payload('sample', profile=held)
                 check(sr.call_count == wr.call_count == 0, 'unchanged second poll: zero definition/profile reloads')
+            combined = extension_rig.motion_payload('sample', preview_states=['first','second'])['groups']['sample_group']
+            check(abs(combined['length']-.75)<1e-12 and abs(combined['girth']-1.2)<1e-12, 'state extent multiplies: 1.5*.5=.75, .8*1.5=1.2')
             check(motion()['rev'] == motion()['rev'], 'unchanged consecutive motion polls have stable revision')
             poll_base = extension_rig.motion_payload('sample', profile=held)
             held['active_conditions'] = [{'name': 'first'}]
@@ -214,7 +216,7 @@ def main():
                     change(model3d_opts={'extension_motion': {'sample_group': {'rest_max_deg': limit}}})
                     resolved = extension_rig.motion_payload('sample', preview_states=['signed_rest'])['groups']['sample_group']
                     check(resolved['rest_deg'] == max(-limit, min(limit, angle)) and resolved['rest_max_deg'] == limit, 'signed rest and effective character limit reach payload')
-            for bad in (None, [], {'sample_group': {'axis_gain': [1, 1, .2]}}, {'sample_group': {'rest_deg': 181}},
+            for bad in (None, [], {'sample_group': {'length': .49}}, {'sample_group': {'girth': 2.01}}, {'sample_group': {'length': True}}, {'sample_group': {'axis_gain': [1, 1, .2]}}, {'sample_group': {'rest_deg': 181}},
                         {'sample_group': {'rest_deg': -181}},
                         {'sample_group': {'rest_deg': float('nan')}},
                         {'sample_group': {'gain': -1}}, {'sample_group': {'gain': True}},

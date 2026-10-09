@@ -1,4 +1,4 @@
-import { applyPreviewTilt } from './motionFieldPreview'
+import { applyPreviewTilt, rateLimitPreviewTilt } from './motionFieldPreview'
 /**
  * Model3DViewer — interactive preview of a generated character mesh.
  *
@@ -297,7 +297,7 @@ export function Model3DViewer({ url, format, motion, previewTilt = false, clipUr
     figureHeight?: number
     /** Put the STANDING 1.70 m reference beside the model, on the model's own
      *  ground plane, plus a one-metre ground grid under both (model mode
-     *  only, needs `figureHeight` > 0). "Kein Maß ohne Maßstab": a mesh alone
+     *  only, needs `figureHeight` > 0). "No measurement without a scale": a mesh alone
      *  says nothing about its size — a stool and a gate look identical when
      *  both fill the frame. The figure never scales; the declared dims scale
      *  it, so a wrong Width/Depth/Height is visible instead of invisible. */
@@ -1843,6 +1843,7 @@ export function Model3DViewer({ url, format, motion, previewTilt = false, clipUr
         setLoading(false)
 
         let raf = 0
+        let displayedTilt = { forward: 0, sideways: 0 }
         const animate = () => {
           raf = requestAnimationFrame(animate)
           const realDelta = clock.getDelta()
@@ -1853,7 +1854,8 @@ export function Model3DViewer({ url, format, motion, previewTilt = false, clipUr
             secondary?.configure(secondaryEnabled ? motionRef.current : undefined)
             if (!secondaryEnabled) secondary?.reset()
           }
-          applyPreviewTilt(previewRoot, tiltRef.current.forward, tiltRef.current.sideways)
+          displayedTilt = rateLimitPreviewTilt(displayedTilt, tiltRef.current, realDelta)
+          applyPreviewTilt(previewRoot, displayedTilt.forward, displayedTilt.sideways)
           previewRoot.updateMatrixWorld(true)
           secondary?.update(realDelta)
           object.updateMatrixWorld(true)

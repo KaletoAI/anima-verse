@@ -68,7 +68,7 @@ SECTIONS = {
     "extension_motion": {
         "label": "Extension motion", "scope": "world", "world_group": "extension_motion",
         "fields": {"groups": {"type": "json_str", "label": "Group overrides", "default": {},
-                             "description": "Partial group physics overrides, including spill, flatten and translate (0..1, default 0)."}},
+                             "description": "Partial group physics overrides: spill, flatten, stretch and translate (0..1, default 0); flatten_floor (0..1, default squash minimum); spread (0..1, default 0.5, transverse compensation capped at 1.6)."}},
     },
     "server": {
         "label": "Server",

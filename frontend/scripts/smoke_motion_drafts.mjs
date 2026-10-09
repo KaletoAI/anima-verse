@@ -89,3 +89,25 @@ assert.deepEqual(draftOverrides(sliderEdit,{gain:1},{gravity:.4}),{gravity:.4,bo
 assert.equal(makeDraft(draftOverrides(sliderEdit,{gain:1},{})).values.weight,'0.8');
 assert.deepEqual(draftOverrides(editDraft(makeDraft({bounce:1.25}),'bounce','1'),{}, {bounce:1.25}),{});
 console.log('PASS Bounce/Weight draft round-trip and default pruning');
+
+const formDefaults={...defaults,stretch:0,spread:.5,flatten_floor:.6};
+assert.deepEqual(draftOverrides(editDraft(editDraft(makeDraft(formDefaults),'stretch','1'),'flatten_floor','.15'),formDefaults,{}),{stretch:1,flatten_floor:.15});
+const hintCode=ts.transpileModule(readFileSync('frontend/src/tabs/characters/motionFieldPreview.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
+const hintModule={exports:{}};new Function('exports',hintCode)(hintModule.exports);
+const {rateLimitPreviewTilt,motionFieldPreview}=hintModule.exports;
+assert.equal(motionFieldPreview.spread,'tilt');assert.equal(motionFieldPreview.stretch,'tilt');assert.equal(motionFieldPreview.flatten_floor,'tilt');
+assert.equal(motionFieldPreview.length,'live');assert.equal(motionFieldPreview.girth,'live');
+const diagonal=rateLimitPreviewTilt({forward:0,sideways:0},{forward:90,sideways:-90},.1);
+assert.ok(Math.abs(diagonal.forward-12/Math.SQRT2)<1e-12);
+assert.ok(Math.abs(diagonal.sideways+12/Math.SQRT2)<1e-12);
+assert.deepEqual(rateLimitPreviewTilt({forward:0,sideways:0},{forward:90,sideways:0},.1),{forward:12,sideways:0});
+assert.deepEqual(rateLimitPreviewTilt({forward:89,sideways:-89},{forward:90,sideways:-90},.1),{forward:90,sideways:-90});
+assert.equal(rateLimitPreviewTilt({forward:0,sideways:0},{forward:90,sideways:0},NaN).forward,0);
+for(const field of ['length','girth']) {
+  const lo=new Function('field','return '+stateSource.match(/min=\{(field === 'rest_deg'[^}]+)\}/)[1])(field);
+  const hi=new Function('field','return '+stateSource.match(/max=\{(field === 'rest_deg'[^}]+)\}/)[1])(field);
+  assert.equal(lo,.5);assert.equal(hi,2);
+}
+console.log('PASS stretch/floor drafts; live state extent bounds; Tilt follows at 120 deg/s');
+
+assert.deepEqual(draftOverrides(editDraft(makeDraft(formDefaults),'spread','.2'),formDefaults,{}),{spread:.2});

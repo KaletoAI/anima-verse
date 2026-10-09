@@ -10206,7 +10206,7 @@ Worldmap character rows carry these fields independently of scene recipes:
     "groups": {
       "example_group": {
         "bones": ["ExampleBone1", "ExampleBone2"],
-        "freq_hz": 2.2, "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "spill": 0.0, "flatten": 0.0, "translate": 0.0, "gain": 1.0, "axis_gain": [1, 1, 1],
+        "freq_hz": 2.2, "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "spill": 0.0, "flatten": 0.0, "stretch": 0.0, "spread": 0.5, "flatten_floor": 0.6, "length": 1.0, "girth": 1.0, "translate": 0.0, "gain": 1.0, "axis_gain": [1, 1, 1],
         "max_deg": 25, "sag_max_deg": 25, "spill_max_deg": 25, "head_sag": 1.0, "squash": [0.6, 1.4],
         "rest_deg": 0, "rest_max_deg": 90
       }
@@ -10317,17 +10317,48 @@ For `omega = 2*pi*freq_hz`, static acceleration is
 transported as `gravity_scale`, independently of group `gravity`.
 Upright with zero rest and m=1 gives zero; m=2 gives `gravity*g/omega²` sag; m=.5 gives lift.
 
-`flatten`, `spill` and `translate` are finite in [0,1], default 0.
-For the unit world gravity `g_hat` and rest lever `u`, define
-`f_in=clamp(-g_hat.dot(u),0,1)`. Static length is the direct target
-`s=1-flatten*(1-squash_min)*f_in`, independent of gravity, character gravity
-scale and frequency (including zero frequency). Paired spill is the direct
+`flatten`, `stretch`, `spill` and `translate` are finite in [0,1], default 0.
+`flatten_floor` is finite in [0,1]; omission inherits effective `squash_min`
+server-side, before attribute multipliers (an absolute character floor overrides them).
+For unit world gravity `g_hat`, current rest lever `u` and immutable bind lever
+`u_bind` under upright gravity, define
+`f_in=clamp(-g_hat.dot(u)-max(0,-g_hat.dot(u_bind)),0,1)` and
+`f_out=clamp(g_hat.dot(u)-max(0,g_hat.dot(u_bind)),0,1)`.
+Upright in the bind posture gives exactly zero for either target, including
+an upward 15-degree bind lever. Static length is the direct target
+`s=1-flatten*(1-flatten_floor)*f_in+stretch*(squash_max-1)*f_out`,
+independent of gravity, character gravity scale and frequency (including zero).
+Outward stretch narrows both perpendicular axes by `1/sqrt(s)`; stretch=1,
+squash_max=1.45 and f_out=1 give length 1.45 and transverse .8304547985.
+Flatten=1, floor=.15 and f_in=1 give length .15 even with squash_min=.6.
+Zero floor uses a positive numerical epsilon to keep transforms finite. Paired spill is the direct
 outward rotation `spill*spill_max_deg*f_in` degrees along the projected lateral
-`L`; single chains have no spill. Remaining inward axial force is removed.
+`L`; single chains have no spill. For paired groups, define `L_bind` once
+from this chain-root head minus the mean of the group's chain-root heads
+in the bind pose: remove its bind-pose body-up component and normalize.
+At runtime rotate `L_bind` with the anchor rotation, then project it
+perpendicular to the current lever `u` and normalize (Gram-Schmidt).
+Use this outward `L` for the spill rotation. Paired FLATTENING does not act
+along the oblique lever: it presses along the BODY FRONT (bind-pose body front,
+rotated with the anchor; where gravity presses when lying) and widens along the
+body lateral axis, both expressed in the frame the bone scale acts in. The frame
+(front, L ⟂ front, front × L) is orthonormal, so the scale has no shear; the
+third axis keeps factor 1. Width = min(1.6, 1 + spread·(1/s − 1)). (An outward-
+pointing lever would otherwise tilt the width axis into the height: measured on
+a real rig the lying height grew with a lower floor.) Single chains keep the
+symmetric lever-frame compensation. Degenerate L uses the symmetric fallback.
+Remaining inward axial force is removed.
 Non-axial static sag still uses `gravity*(m*g-R_anchor*R_rest*g_rest)/omega²`
 and the static angle limit; upright m=1 has no additional sag, m=2 sags and
 m=.5 lifts. The force-based static angle is capped by `sag_max_deg`; the subsequent spill target uses its independent limit.
-Paired shortening compensates volume only along L by `1/s`.
+`spread` is finite in [0,1], default 0.5. For shortening (`s<1`), paired
+transverse compensation along L is `c=min(spread_cap,1+spread*(1/s-1))`;
+the third axis stays 1. Single chains use symmetric transverse compensation
+`c=min(spread_cap,1+spread*(1/sqrt(s)-1))`. The documented constant
+`spread_cap=1.6` bounds mesh widening, deliberately relaxing volume conservation.
+At spread=.5, s=.15 gives c=1.6 and s=.8 gives paired c=1.125.
+The scale is diagonal in the orthonormal bone frame `(u,L,u cross L)`;
+L is projected perpendicular to u and normalized, so it introduces no shear.
 
 `translate` applies that fraction of the perpendicular static and dynamic
 rendered displacement to the bone head; the remainder supplies rotation.
@@ -10342,7 +10373,7 @@ length scaling are unchanged by the split. Weighted borders blend into the
 anchor. Supported layers are package defaults/attribute profiles, world overrides
 and absolute character overrides; state `bone_pose` has no translate multiplier.
 The mesh fingerprint excludes all physics fields. Preview category is `tilt`
-for flatten/spill/translate: Tilt exposes posture targets and static translation;
+for flatten/stretch/spread/flatten_floor/spill/translate: Tilt exposes posture targets and static translation;
 play a clip for translate's bounce. Flatten/spill hints explicitly state that
 these targets are independent of gravity and frequency.
 
@@ -10373,7 +10404,8 @@ of the same magnitude gives identical atan(d) rotation for those two gains.
 Limit dynamic deflection around T' separately: raw angle `alpha` is linear up
 to `h=max_deg/2`, then `alpha_soft=h+h*tanh((alpha-h)/h)`, or zero when the
 limit is zero. This C1 saturation is monotonic and bounded; it avoids a stuck
-hard boundary without clipping the spring's velocity or integration state.
+hard boundary during normal anchor motion. Extreme anchor turns additionally
+cap particle deviation and velocity as documented below.
 Apply gain AFTER this saturation: render `T'+gain*d_soft`. Static sag remains
 at gain zero and far LOD; it does not consume the dynamic angle range.
 
@@ -10392,12 +10424,13 @@ from T'; rest is limited only by the effective rest_max_deg. Paired groups
 rotate each chain root about its own derived axis. Negative angles move in the
 opposite direction. Changes blend over 1.5 real seconds with smoothstep.
 
-The final length factor `s` is clamped to `squash`. For paired groups at
-`s<1`, volume compensation acts only along L: scale `1/s` along L, 1 along
+Dynamic length is bounded by `squash`, while a shorter static target
+from flatten_floor or the post-limit static pull is preserved. For paired groups at
+`s<1`, bounded compensation acts only along L: scale `c=min(1.6,1+spread*(1/s-1))` along L, 1 along
 the third axis. In the bind lever basis this is
-`S=I+(s-1)*u*u^T+(1/s-1)*L*L^T` with orthonormal u,L.
+`S=I+(s-1)*u*u^T+(c-1)*L*L^T` with orthonormal u,L.
 For single chains, stretches `s>=1`, or degenerate L, transverse scale stays
-symmetric: `S=c*I+(s-c)*u*u^T`, `c=1/sqrt(s)`. Both have determinant one.
+symmetric: `S=c*I+(s-c)*u*u^T`, `c=min(1.6,1+spread*(1/sqrt(s)-1))` for shortening; outward stretch uses `c=1/sqrt(s)`. Bounded shortening need not have determinant one.
 The bone keeps its full local matrix with
 `matrixAutoUpdate=false`: decomposing it into TRS would lose the off-diagonal
 terms for imported joint axes. Both skinning and child transforms therefore
@@ -10567,7 +10600,7 @@ mesh geometry. No motion input enters the scene recipe fingerprint.
 
 Package `rig.attribute_profiles: {attribute_key: {value: {field: multiplier}}}`
 allows frequency, damping, gravity, gain, dynamic/static/spill angle limits, head_sag,
-flatten, spill and translate multipliers. Keys must name attributes of the same slot; scalar string
+flatten, stretch, spread, flatten_floor, spill and translate multipliers. Keys must name attributes of the same slot; scalar string
 values select by exact match. Unknown/missing values contribute nothing. Values
 are finite and nonnegative; frequency is strictly positive. Unit-interval fields
 cap at 1 and angles at 180 after profiles. Profile physics is excluded from the
@@ -10586,7 +10619,7 @@ Extension bones box. Saving physics reconfigures motion without a mesh reload.
 Hand-derived v2 acceptance is in `smoke_secondary_motion.mjs` and the P0/P3
 Python smokes: f_in=1, flatten=1 and squash_min=.5 give length .5 at
 1.5 and 4 Hz; f_in=.5 gives .75. Spill=.5, sag_max=5 and spill_max=30 give outward
-15 degrees with opposite side signs. Width is 1/s only along L. Upright m=2
+15 degrees with opposite side signs. Width is min(1.6,1+spread*(1/s-1)) only along L. Upright m=2
 has unit-lever sag direction (0,-d,1), d=9.81/(4*pi)^2; translate=1 moves
 its head by -d/sqrt(1+d²) without rotating it. A bent-forward body impulse
 has identical swing for gravity 0 and 3. Soft limits are monotonic/bounded, profile selection
@@ -10594,7 +10627,7 @@ and override order are checked, and revisions change without mesh identity chang
 
 
 P4 state values are stored as `prompt_filters.bone_pose` JSON:
-`{group_id: {rest_deg?, gravity?, freq?, zeta?, gain?, flatten?, spill?}}`.
+`{group_id: {rest_deg?, gravity?, freq?, zeta?, gain?, flatten?, spill?, length?, girth?}}`.
 Angles are absolute signed degrees in `[-180,180]`, independent of package
 limits. Runtime clamps both signs to the effective per-character `rest_max_deg`
 (package → world → attribute profile → character override), carried in the
@@ -10605,7 +10638,7 @@ by maximum present rest angle and product of present multipliers; absent is
 not zero. Gain/flatten/spill clamp to [0,1] after state composition. Unknown
 groups are ignored. Tag/condition changes and expiry are evaluated on every
 motion poll, including states whose changes are masked in effective output.
-The payload shape stays unchanged: it carries resolved absolute physics values.
+The payload carries resolved absolute physics values and composed length/girth products.
 Both renderers interpolate rest angles and scalar changes with smoothstep over
 1.5 real seconds. At frequency zero the static offset is zero and the spring
 propagates ballistically, avoiding division by zero.
@@ -10619,7 +10652,7 @@ retain state identity and image modifiers. State transitions change only
 `motion.rev`, never mesh identity or the scene-recipe fingerprint.
 
 Effective motion values are clamped after all layers: `freq_hz` in [0,20],
-`zeta` in [0,10], `gravity` in [0,10], and `gain`/`flatten`/`spill`/`translate` in [0,1].
+`zeta` in [0,10], `gravity` in [0,10], and `gain`/`flatten`/`stretch`/`spread`/`flatten_floor`/`spill`/`translate` in [0,1].
 The static solver treats omega squared below 1e-12 as zero frequency.
 Entering or leaving zero frequency blends the bounded static angle and length
 over 1.5 seconds with smoothstep, rather than dividing by a vanishing frequency.
@@ -10631,7 +10664,7 @@ over 1.5 seconds with smoothstep, rather than dividing by a vanishing frequency.
 `sag_max_deg` when omitted; every resolved payload carries a number. Lying paired
 spill is `spill*spill_max_deg*f_in` degrees, independent of the force sag limit.
 For sag 5, spill maximum 30, spill .5 and f_in=1, the outward target is 15 degrees.
-`head_sag` is finite in [0,1], default 1: **head/feet pull when the body is not upright**.
+`head_sag` is finite in [0,1], default 1: **vertical static pull when not upright**.
 After force sag limits, let d be the static force displacement and U the anchor's
 bind-pose body up in the current world frame. Replace only that displacement by
 `d + (head_sag-1)*(d·U)*U`. Flatten and spill are applied subsequently;
@@ -10643,7 +10676,7 @@ next to raw overrides. Both are finite in [.5,1.5], default 1. Resolution order:
 package → world → attribute profile → raw character overrides → bounce/weight →
 clothing → state. The provisional mapping is a **calibration point**:
 bounce b multiplies gain (clamp 1) and max_deg by b, and freq_hz and zeta by
-`b^-0.5`; weight w multiplies gravity, sag_max_deg, spill_max_deg, flatten (clamp 1)
+`b^-0.5`; weight w multiplies gravity, sag_max_deg, spill_max_deg, flatten and stretch (both clamp 1)
 and translate (clamp 1) by w. Angle limits remain capped at 180 degrees.
 For raw gain .6, max 20, frequency 4, zeta .5, gravity 2, sag 5, spill maximum 30,
 flatten .5 and translate .6, b=1.25/w=.8 yield .75, 25, 3.577708764,
@@ -10653,6 +10686,34 @@ The client consumes these effective numbers without applying the sliders again.
 The character Extension bones editor shows Bounce and Weight sliders with
 range .5..1.5, step .05 and value labels. Raw fields are under collapsed Advanced;
 Save/Revert/Reset retain draft semantics. Bounce uses the motion preview hint;
-Weight, spill_max_deg and head_sag use Tilt. World overrides expose the two raw
+Weight, spill_max_deg, head_sag, stretch, spread and flatten_floor use Tilt. World overrides expose the raw
 fields but do not accept character sliders. Motion changes leave mesh fingerprints
 unchanged. Editor defaults precede raw character overrides and sliders.
+
+### Bind-relative calibration and state extent
+
+Setup and character Advanced expose `stretch`, `spread` and `flatten_floor` with Tilt
+hints. Attribute profiles may multiply both fields. Weight additionally maps
+`stretch -> min(1,stretch*w)` (and `flatten -> min(1,flatten*w)`).
+The admin Tilt follows its sliders at at most 120 degrees per real second,
+including simultaneous forward/sideways movement.
+
+For anchor turns faster than 360 degrees/s, every spring substep bounds both
+the dynamic deviation increment and its magnitude. With static lever length r,
+`B=r*sin(min(pi/2,max_deg*pi/180))`: increment <= `B*min(1,120*h)`,
+magnitude <= B. On a cap hit velocity follows the target; non-finite spring
+results reset to the current substep target. The existing soft angular limit
+still bounds rendered deviation around the static target. A one-frame 90-degree
+jump stays within `max_deg*1.05`; normal motion retains exact propagation.
+Gaps, reset and LOD transitions clear anchor history with particle history.
+
+State `bone_pose[group]` additionally accepts optional `length` and `girth`,
+each finite in [.5,2], default multiplier 1. Active states multiply these fields
+(e.g. length 1.5*.5=.75, girth .8*1.5=1.2), preserving sparse storage and
+ZIP import/export. Effective products blend with smoothstep over 1.5 real
+seconds, including interrupted transitions and far LOD, like `rest_deg`.
+They scale the immutable lever and both perpendicular directions respectively
+on top of the static/dynamic deformation; they do not change volume compensation.
+State editor hints are `live`. Resolved payloads always include numeric
+`stretch`, `spread`, `flatten_floor`, `length` and `girth`; all five affect only motion
+revision, leaving mesh fingerprints unchanged.

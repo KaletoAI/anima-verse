@@ -82,6 +82,9 @@ class RigSpec:
     gravity: float = 0.35
     spill: float = 0.0
     flatten: float = 0.0
+    stretch: float = 0.0
+    spread: float = 0.5
+    flatten_floor: float | None = None
     translate: float = 0.0
     sag_max_deg: float = 25.0
     spill_max_deg: float = 25.0
@@ -140,7 +143,7 @@ class RigSpec:
         spec = cls(raw["id"].strip(), raw["op"].strip(), result,
                    dict(params), dict(conditions))
         bounds = {"freq_hz": (0, None), "zeta": (0, None),
-                  "gravity": (0, None), "head_sag": (0, 1), "spill": (0, 1), "translate": (0, 1), "flatten": (0, 1), "gain": (0, 1),
+                  "gravity": (0, None), "head_sag": (0, 1), "spill": (0, 1), "translate": (0, 1), "flatten": (0, 1), "stretch": (0, 1), "spread": (0, 1), "gain": (0, 1),
                   "max_deg": (0, 180), "rest_max_deg": (0, 180)}
         for key, (lo, hi) in bounds.items():
             value = raw.get(key, getattr(spec, key))
@@ -158,7 +161,7 @@ class RigSpec:
             raise ValueError("rig.spill_max_deg outside allowed range")
         spec.spill_max_deg = float(spill_max)
         profiles = raw.get("attribute_profiles", {})
-        fields = {"freq_hz", "zeta", "gravity", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "flatten", "spill", "translate"}
+        fields = {"freq_hz", "zeta", "gravity", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "flatten", "stretch", "spread", "flatten_floor", "spill", "translate"}
         if not isinstance(profiles, dict):
             raise ValueError("rig.attribute_profiles must be a mapping")
         for key, choices in profiles.items():
@@ -187,6 +190,11 @@ class RigSpec:
         ) or not squash[0] <= 1 <= squash[1]:
             raise ValueError("rig.squash requires 0 < min <= 1 <= max")
         spec.squash = list(squash)
+        if "flatten_floor" in raw:
+            floor = raw["flatten_floor"]
+            if isinstance(floor, bool) or not isinstance(floor, (int, float)) or not math.isfinite(floor) or not 0 <= floor <= 1:
+                raise ValueError("rig.flatten_floor outside allowed range")
+            spec.flatten_floor = float(floor)
         return spec
 
 

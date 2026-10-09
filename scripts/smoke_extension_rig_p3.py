@@ -155,6 +155,18 @@ def main():
             check(gain(shared_profile) == .25, 'shared file reload invalidates snapshot')
         baseline = motion()
         check(motion() == baseline, 'stable reads')
+        # Omitted floor inherits effective squash_min; attribute .5 scales .6 to .3.
+        from app.plugins.registry import RigSpec
+        from dataclasses import asdict
+        from unittest.mock import patch
+        from app.core import extension_rig
+        profiled = asdict(RigSpec.parse({**rig, 'stretch': .4, 'spread': .4,
+            'attribute_profiles': {'response': {'fast': {'flatten_floor': .5, 'stretch': 2, 'spread': 2}}}}))
+        with patch.object(extension_rig, 'rig_groups_for', return_value=[profiled]):
+            resolved = motion_payload('sample', {**profile, 'body_slots': {'sample_slot': {'response': 'fast'}}}, apply_clothing=False, apply_states=False)['groups']['sample_group']
+            check(abs(resolved['flatten_floor']-.3)<1e-12 and abs(resolved['stretch']-.8)<1e-12 and abs(resolved['spread']-.8)<1e-12, 'attribute floor .6*.5=.3, stretch .4*2=.8')
+            resolved = motion_payload('sample', {**profile, 'model3d_opts': {'extension_motion': {'sample_group': {'squash': [.2,1.45]}}}}, apply_clothing=False, apply_states=False)['groups']['sample_group']
+            check(resolved['flatten_floor']==.2, 'omitted floor follows effective squash_min server-side')
         # Raw values beat world/profile layers, then b=1.25 and w=.8:
         # gain=.6*1.25=.75, max=20*1.25=25, freq=4/sqrt(1.25),
         # zeta=.5/sqrt(1.25), gravity=2*.8=1.6, sag=5*.8=4,
@@ -163,11 +175,11 @@ def main():
             'model3d_opts': {'extension_motion': {'sample_group': {
                 'bounce': 1.25, 'weight': .8, 'gain': .6, 'max_deg': 20,
                 'freq_hz': 4, 'zeta': .5, 'gravity': 2, 'sag_max_deg': 5,
-                'spill_max_deg': 30, 'flatten': .5, 'translate': .6, 'head_sag': .3}}}}
+                'spill_max_deg': 30, 'spread': .3, 'stretch': .5, 'flatten_floor': .15, 'flatten': .5, 'translate': .6, 'head_sag': .3}}}}
         effective = motion_payload('sample', slider_profile, apply_clothing=False, apply_states=False)['groups']['sample_group']
         expected = {'gain': .75, 'max_deg': 25, 'freq_hz': 4 / 1.25 ** .5,
                     'zeta': .5 / 1.25 ** .5, 'gravity': 1.6, 'sag_max_deg': 4,
-                    'spill_max_deg': 24, 'flatten': .4, 'translate': .48, 'head_sag': .3}
+                    'spill_max_deg': 24, 'spread': .3, 'stretch': .4, 'flatten_floor': .15, 'flatten': .4, 'translate': .48, 'head_sag': .3}
         check(all(abs(effective[key] - value) < 1e-12 for key, value in expected.items()),
               'raw then bounce/weight: ' + json.dumps(expected, sort_keys=True))
         check(abs(motion(slider_profile)['groups']['sample_group']['gain'] - .75 * .4) < 1e-12,
@@ -175,7 +187,7 @@ def main():
         from app.core.extension_rig import validate_motion_overrides
         validate_motion_overrides({'groups': slider_profile['model3d_opts']['extension_motion']}, character=True)
         for key, bad in [('bounce', .49), ('weight', 1.51), ('bounce', True), ('weight', float('nan')),
-                         ('spill_max_deg', 181), ('head_sag', 1.1)]:
+                         ('spill_max_deg', 181), ('head_sag', 1.1), ('stretch', 1.1), ('stretch', True), ('spread', -.1), ('spread', 1.1), ('spread', True), ('spread', float('nan')), ('flatten_floor', -.1), ('flatten_floor', float('nan'))]:
             try:
                 validate_motion_overrides({'groups': {'sample_group': {key: bad}}}, character=True)
             except ValueError:

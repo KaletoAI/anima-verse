@@ -4,10 +4,10 @@ import { draftChanged, draftOverrides, editDraft, makeDraft, validNumber, type P
 import { MotionPreviewHint } from './MotionPreviewHint'
 
 const fields: Record<string, string> = {
-  spill_max_deg: 'Maximum spill angle (degrees)', head_sag: 'Head/feet pull when the body is not upright',
+  spill_max_deg: 'Maximum spill angle (degrees)', head_sag: 'Vertical static pull when not upright',
   freq_hz: 'Frequency (Hz)', zeta: 'Damping ratio', gravity: 'Gravity', gain: 'Gain',
   max_deg: 'Maximum dynamic angle (degrees)', sag_max_deg: 'Maximum static angle (degrees)',
-  translate: 'Translation fraction', flatten: 'Flatten', spill: 'Spill', rest_max_deg: 'Maximum rest angle (degrees)',
+  translate: 'Translation fraction', flatten: 'Flatten', stretch: 'Stretch', spread: 'Spread', flatten_floor: 'Flatten floor', spill: 'Spill', rest_max_deg: 'Maximum rest angle (degrees)',
   axis_gain_lateral: 'Lateral gain', axis_gain_vertical: 'Vertical gain', axis_gain_longitudinal: 'Longitudinal gain',
   squash_min: 'Squash minimum', squash_max: 'Squash maximum',
 }
@@ -18,7 +18,7 @@ export function ExtensionMotionDraft({ defaults, overrides, disabled, onSave }: 
   const { t } = useI18n()
   const [draft, setDraft] = useState(() => makeDraft({ ...defaults, ...overrides }))
   const valid = (key: string) => validNumber(draft.values[key] ?? '', key === 'squash_max' ? 1 : 0,
-    (key.startsWith('axis_gain_') || ['gain', 'flatten', 'spill', 'translate', 'head_sag', 'squash_min'].includes(key)) ? 1 : key.endsWith('deg') ? 180 : undefined,
+    (key.startsWith('axis_gain_') || ['gain', 'flatten', 'stretch', 'spread', 'flatten_floor', 'spill', 'translate', 'head_sag', 'squash_min'].includes(key)) ? 1 : key.endsWith('deg') ? 180 : undefined,
     key === 'freq_hz' || key === 'squash_min')
   const changed = draftChanged(draft)
   const allValid = Object.keys(fields).every(valid)
