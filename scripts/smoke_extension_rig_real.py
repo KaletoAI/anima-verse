@@ -3,7 +3,7 @@
 Usage: RUN_EXTENSION_RIG_REAL=1 .venv/bin/python scripts/smoke_extension_rig_real.py
        --model SOURCE.glb --declaration MANIFEST.yaml --group GROUP_ID [--normalize --target-height-m METRES]
 
-The declaration is read unchanged. Version-5 example parameters are injected
+The declaration is read unchanged. Version-6 example parameters are injected
 into an in-memory copy; obsolete blend fields are removed there. All other
 declaration values are preserved. Use --normalize
 only for a raw source that has not already been normalized.
@@ -43,7 +43,10 @@ def main():
     group['params'].update(segment_radius_factor=1.35, contact_ramp=.01,
                            segment_min_vertices=3, segment_radius_percentile=.95,
                            segment_radius_margin=1.2, segment_radius_growth_max=1.5,
-                           segment_passes=3, centerline_slab=.08, link_blend=.06)
+                           segment_passes=3, base_slice_size=.01, base_radius_margin=1.8,
+                           base_growth_max=1.8, base_extension_max=.35, base_history_slices=5,
+                           attachment_ring_max=.01, weld_normal_min=.5,
+                           centerline_slab=.08, link_blend=.06)
     group['params'].pop('blend_start', None)
     group['params'].pop('blend_width', None)
     source_hash = hashlib.sha256(args.model.read_bytes()).hexdigest()
@@ -70,7 +73,9 @@ def main():
         if not result['ok'] or result['data'].get('status') != 'applied':
             raise RuntimeError(json.dumps(result))
         print(json.dumps(result['data']['metrics'][args.group], indent=2, sort_keys=True))
-        for key in ('thigh_weight_in_part', 'uncaptured_in_part', 'captured_beyond_radius'):
+        for key in ('thigh_weight_in_part', 'uncaptured_in_part',
+                    'captured_outside_base_tube', 'partial_outside_attachment_ring',
+                    'captured_beyond_tube_radius', 'weighted_outside_part'):
             assert result['data']['metrics'][args.group][key] == 0, key
     assert hashlib.sha256(args.model.read_bytes()).hexdigest() == source_hash
     assert hashlib.sha256(args.declaration.read_bytes()).hexdigest() == declaration_hash

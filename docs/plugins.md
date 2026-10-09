@@ -479,7 +479,33 @@ and radius. A symmetric vertex-set difference below 1% of the previous original
 vertex count stops iteration. Radius growth above `segment_radius_growth_max`
 times the preceding radius, or a component exceeding `leak_t_limit`, retains the
 previous set, axis and radius and reports the reason. A refined component below
-`segment_min_vertices` also retains the previous pass. After refinement, internal
+`segment_min_vertices` also retains the previous pass. After refinement, the
+attachment grows backward through edge-connected, position-welded surface slices
+of thickness `base_slice_size` metres. The acceptance tube uses the median of
+the original protrusion candidate slices' centred radial p95 values, multiplied by
+`base_radius_margin`; it never uses `segment_radius` or inflates as growth proceeds.
+Each accepted slice's centroid supplies the next slice's centre. Its radial p95
+and connected position count are compared to `base_growth_max` times the running
+median of the latest `base_history_slices` measured part and accepted growth slices.
+The first rejected slice is excluded, and growth also stops at
+`base_extension_max` of the original detected length. The positive attachment
+ring is recovered with the same connected tube before crossing t=0. This allows an attachment
+behind the lateral front reference without admitting neighbouring side surfaces
+outside the tube. Original source-joint weights do not veto an in-tube vertex:
+the part itself may originally be weighted entirely to those joints.
+Position welding additionally requires world-space normal dot product at least
+`weld_normal_min`. Facing contact surfaces therefore remain separate even within
+`weld_distance`; positional deduplication for geometry statistics does not join
+their connectivity. Coincident seam copies within the `1e-6` metre float tolerance
+also weld when their normals are perpendicular or aligned and a coincident
+boundary edge supplies seam evidence; an isolated contact point does not.
+Opposing normals
+remain excluded. This retains sharp end caps. The bounded component with most original candidate support
+is selected; nearest-tip distance breaks ties. This avoids selecting an isolated
+sharp end face after the normal guard separates its UV copies.
+The root is the new attachment station minus `attachment_inset` along the fitted
+axis. The declared splits and attachment weight ramp span this extended length.
+Without backward growth, the existing attachment placement is preserved. Internal
 joints sample welded part vertices in slabs of total
 width `centerline_slab * length` around each declared axial fraction, where this
 length is the root-to-far-slice extent projected onto the refined axis. Their
@@ -488,20 +514,51 @@ point (including inset), and the tip is the far-slice centre. Bones follow this
 polyline. Each vertex uses its nearest polyline segment to interpolate axial
 `chain_split` coordinates. Linear blends span `split ± link_blend`; outside
 these zones a vertex belongs to one link. The attachment `weight_ramp` acts only
-over `0 <= t < weight_ramp` of the centreline, on link 1 only. `weight_ramp + link_blend` must
+over `0 <= t < weight_ramp` of the centreline, on link 1 only, shortened to at
+most `attachment_ring_max` metres of physical polyline distance from the root.
+`weight_ramp + link_blend` must
 be strictly less than the first split (or 1 for a single link), and internal
 blend zones must not overlap. Each link must have core vertices (weight > 0.9);
 metrics report `core_verts_per_link` and `bind_bend_deg` at every internal joint.
 An attachment ring obeys the same bounds, with a `1e-6` tolerance in normalized
-axial distance at the attachment plane for float roundtrips. `contact_ramp`
-(metres) applies a smooth radial fade inside the outer segmentation boundary;
-all captured vertices remain part of the transfer region even at zero extension
+axial distance at the attachment plane for float roundtrips. After placement,
+the measured tube radius bounds distance to the measured slice-centroid polyline
+over the full part, rather than to the coarser bone polyline. The full connected
+surface inside this tube is recovered, including the contact side omitted by
+protrusion candidates. Original-axis bounds preserve the attachment stop, and
+negative slices additionally retain their tracked centroid radius bounds.
+The centroid line extends to both declared axial endpoints, so end rings do not
+lose radial clearance through clamped endpoint distance.
+Only the connected component supported by the detected tip remains. All retained surface
+vertices outside the physical attachment ring have total chain weight 1.
+`link_blend` divides that total between neighbouring links without reducing it.
+`contact_ramp` remains required and validated but no longer attenuates a retained
+tube surface. Connectivity and hard tube membership separate adjacent surfaces;
+no radial fade is applied inside the tube. All captured vertices remain part of
+the transfer region even at zero extension
 weight. Only a bounded component smaller than `segment_min_vertices` or beyond
 `leak_t_limit` uses front-only fallback; metrics retain `leak` and `leak_reason`.
 Declared `reweight_from` base joints (`[]` to disable transfer) move their entire
 weight to the chain's declared parent on every captured vertex, including fallback.
 Outside the captured part the operation preserves its existing weighting rules.
-Fingerprint version 5 rebuilds from prerig. `link_blend` replaces the old
+Metrics `base_extension_t` (negative original-axis fraction), `base_stop_reason`,
+`stem_vertices_captured` (original vertices, including seams), and
+`base_slice_table` describe growth. Each row reports `t`, welded `count`,
+`p95_radius` in metres, `tube_radius`, `tube_centre`, `accepted`, and, for an
+accepted slice, `accepted_count` and its tracked `centre`. A rejected row is
+included for diagnosis. `captured_outside_base_tube` must be zero;
+`captured_beyond_radius` diagnoses the original straight segmentation beyond
+`cut`; a curved measured tube can leave that cylinder. The actual tube bound
+is checked by `captured_beyond_tube_radius`, which must be zero.
+`partial_weight_vertices` counts total chain weights in (0.1,0.9), while
+`partial_outside_attachment_ring` must be zero. `tube_radius` and
+`captured_tube_distance_max` report metres of nearest-centroid-polyline distance;
+`tube_centerline` records those measured slice centres in world-space metres.
+`captured_beyond_tube_radius` and `weighted_outside_part` must be zero.
+`uncaptured_in_part` checks retained connected surface vertices outside the
+attachment ring; a point merely inside the old straight cylinder is not assumed
+to belong to the part.
+Fingerprint version 6 rebuilds from prerig. `link_blend` replaces the old
 2-link `blend_start`/`blend_width` parameters; remove those from declarations.
 The existing required declaration
 fields `leak_radius_limit` and `reweight_factor` remain validated but no longer
@@ -530,6 +587,7 @@ fractions. `chain_split` is required even for a single link (`[]`). Test pose me
 | `chain_split` | `[0.33, 0.66]` (three links) |
 | `cut` | `0.15` |
 | `weld_distance` | `0.0005` |
+| `weld_normal_min` | `0.5` (normal dot product, in [-1,1]) |
 | `window_length_factor` | `0.6` |
 | `window_margin` | `0.08` |
 | `leak_t_limit` | `1.6` |
@@ -540,7 +598,13 @@ fractions. `chain_split` is required even for a single link (`[]`). Test pose me
 | `segment_radius_growth_max` | `1.5` (positive, relative to preceding radius) |
 | `segment_passes` | `3` (positive integer; refinement passes after pass 0) |
 | `segment_min_vertices` | `3` (positive integer, welded vertices) |
-| `contact_ramp` | `0.01` (metres) |
+| `base_slice_size` | `0.01` (positive, metres) |
+| `base_radius_margin` | `1.8` (at least 1, relative to measured part cross-section) |
+| `base_growth_max` | `1.8` (greater than 1, connected count or radial growth ratio) |
+| `base_extension_max` | `0.35` (positive fraction of original detected length) |
+| `base_history_slices` | `5` (positive integer, running median window) |
+| `attachment_ring_max` | `0.01` (positive, metres; limits the attachment transition) |
+| `contact_ramp` | `0.01` (validated, superseded by tube membership) |
 | `ring_radius_percentile` | `0.9` |
 | `ring_radius_scale` | `1.15` |
 | `near_slice_margin` | `0.05` |

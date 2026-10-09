@@ -5,6 +5,7 @@ segmentation, reference-frame checks and test poses are required group params. P
 A failed group returns no output for the entire request.
 """
 import math
+import statistics
 import sys
 from pathlib import Path
 
@@ -79,6 +80,13 @@ PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'segment_passes': 'number',
                      'segment_min_vertices': 'number',
                      'contact_ramp': 'number',
+                     'base_slice_size': 'number',
+                     'base_radius_margin': 'number',
+                     'base_growth_max': 'number',
+                     'base_extension_max': 'number',
+                     'base_history_slices': 'number',
+                     'attachment_ring_max': 'number',
+                     'weld_normal_min': 'number',
                      'ring_radius_percentile': 'number',
                      'ring_radius_scale': 'number',
                      'near_slice_margin': 'number',
@@ -137,7 +145,7 @@ def parameters(group):
         if kind == 'number':
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise ValueError(key + ' must be finite numeric')
-            if key in ('axis_iterations', 'segment_min_vertices', 'segment_passes') and int(value) != value:
+            if key in ('axis_iterations', 'segment_min_vertices', 'segment_passes', 'base_history_slices') and int(value) != value:
                 raise ValueError(key + ' must be an integer')
         elif kind == 'bone':
             if not isinstance(value, str) or not value:
@@ -158,6 +166,7 @@ def parameters(group):
                 'candidate_lateral_max', 'protrusion_threshold', 'weld_distance',
                 'weight_ramp', 'leak_radius_limit', 'segment_radius_factor', 'segment_min_vertices', 'segment_passes', 'segment_radius_margin', 'segment_radius_growth_max', 'contact_ramp', 'fallback_half_width',
                 'fallback_front_ramp', 'fallback_side_ramp', 'fallback_top_ramp',
+                'base_slice_size', 'base_radius_margin', 'base_growth_max', 'base_extension_max', 'base_history_slices', 'attachment_ring_max',
                 'link_blend', 'centerline_slab', 'window_length_factor', 'ring_radius_scale')
     for key in positive:
         if key in p and p[key] <= 0:
@@ -188,6 +197,10 @@ def parameters(group):
     else:
         if p['search_z_min'] >= p['search_z_max'] or not 0 <= p['reference_lateral_min'] < p['reference_lateral_max']:
             raise ValueError('invalid search or reference range')
+        if p['base_radius_margin'] < 1 or p['base_growth_max'] <= 1:
+            raise ValueError('base_radius_margin must be at least 1 and base_growth_max must exceed 1')
+        if not -1 <= p['weld_normal_min'] <= 1:
+            raise ValueError('weld_normal_min must be in [-1,1]')
         for key in ('cut', 'segment_radius_percentile', 'ring_radius_percentile', 'far_slice_fraction', 'centerline_slab', 'link_blend'):
             if not 0 < p[key] < 1:
                 raise ValueError(key + ' must be in (0,1)')
@@ -249,7 +262,146 @@ def pair_plan(group, p, co, bones):
     return links, weights, {'placement': placements, 'leak': False}, set(), []
 
 
-def appendage_plan(group, p, co, edges, bones):
+def unique_positions(indices, co):
+    """Deduplicate geometry statistics without merging contact connectivity."""
+    return list({tuple(co[i]):i for i in sorted(indices)}.values())
+
+
+def surface_weld_allowed(i, j, distance, co, normals, adjacency, p):
+    dot = normals[i].dot(normals[j])
+    if dot >= p['weld_normal_min']:
+        return True
+    if distance > 1e-6 or dot < -1e-6:
+        return False
+    # A sharp seam has a coincident boundary edge, not just a contact point.
+    return any((co[a]-co[b]).length <= 1e-6
+               for a in adjacency.get(i,()) for b in adjacency.get(j,()))
+
+
+def grow_attachment(co, edges, part, base, direction, length, p, normals, reference=None):
+    """Follow connected surface slices until their cross-section widens into a wall.
+
+    Measure one position per seam. The acceptance radius stays tied to measured
+    part slices, so successive growth cannot inflate the tube into a wall.
+    """
+    step = p['base_slice_size']/length
+    axial = [(c-base).dot(direction)/length for c in co]
+    kd = KDTree(len(co))
+    for i,c in enumerate(co):
+        kd.insert(c,i)
+    kd.balance()
+    ids = list(range(len(co)))
+    source_adjacency = {}
+    for a,b in edges:
+        source_adjacency.setdefault(a,set()).add(b)
+        source_adjacency.setdefault(b,set()).add(a)
+    def find(i):
+        while ids[i] != i:
+            ids[i] = ids[ids[i]]
+            i = ids[i]
+        return i
+    for i in range(len(co)):
+        for _,j,distance in kd.find_range(co[i],p['weld_distance']):
+            if not surface_weld_allowed(i,j,distance,co,normals,source_adjacency,p):
+                continue
+            a,b = find(i),find(j)
+            ids[max(a,b)] = min(a,b)
+    welded = [find(i) for i in range(len(co))]
+    adj = {}
+    for a,b in edges:
+        a,b = welded[a],welded[b]
+        adj.setdefault(a,set()).add(b)
+        adj.setdefault(b,set()).add(a)
+    accepted = {welded[i] for i in part}
+    def section(samples):
+        samples = unique_positions(samples,co)
+        centre = sum((co[i] for i in samples),Vector())/len(samples)
+        radii = sorted((co[i]-centre-direction*(co[i]-centre).dot(direction)).length for i in samples)
+        return centre, radii[int(.95*(len(radii)-1))]
+    radii, counts = [], []
+    reference = accepted if reference is None else {welded[i] for i in reference} & accepted
+    for k in range(max(1,int(1./step))):
+        samples = [i for i in reference if k*step <= axial[i] < (k+1)*step]
+        if len(samples) >= 3:
+            _,r = section(samples)
+            radii.append(r)
+            counts.append(sum(k*step <= axial[i] < (k+1)*step for i in accepted))
+    if not radii:
+        return part, None, [], 0., 'no reference slices', []
+    reference_radius = statistics.median(radii)
+    seed = [i for i in accepted if p['cut'] <= axial[i] < p['cut']+step]
+    centre,_ = section(seed or list(accepted))
+    centres, table = [], []
+    extension = 0.
+    reason = 'base_extension_max reached'
+    representatives = set(welded)
+    first_slice = -int(math.ceil(p['cut']/step))
+    for k in range(first_slice, int(math.ceil(p['base_extension_max']/step))):
+        low = max(-p['base_extension_max'], -(k+1)*step)
+        high = -k*step
+        tube = reference_radius*p['base_radius_margin']
+        predicted = centre+direction*((low+high)/2*length-(centre-base).dot(direction))
+        candidates = {i for i in representatives if low <= axial[i] < high
+                      and (co[i]-predicted-direction*(co[i]-predicted).dot(direction)).length <= tube}
+        reached = set()
+        stack = list(accepted)
+        while stack:
+            for j in adj.get(stack.pop(),()):
+                if j in candidates and j not in reached:
+                    reached.add(j); stack.append(j)
+        if not reached:
+            table.append({'t':low, 'count':0, 'p95_radius':None,
+                          'tube_radius':tube, 'tube_centre':None, 'accepted':False})
+            reason = 'no connected slice'
+            break
+        measured, r95 = section(reached)
+        row = {'t':low, 'count':len(reached), 'p95_radius':r95,
+               'tube_radius':tube, 'tube_centre':list(measured), 'accepted':False}
+        table.append(row)
+        if low < 0 and r95 > p['base_growth_max']*statistics.median(radii[-int(p['base_history_slices']):]):
+            reason = 'radial growth limit'
+            break
+        if low < 0 and len(reached) > p['base_growth_max']*statistics.median(counts[-int(p['base_history_slices']):]):
+            reason = 'connected count growth limit'
+            break
+        inside = {i for i in reached if (co[i]-measured-direction*(co[i]-measured).dot(direction)).length <= tube}
+        kept = set(); stack = list(accepted)
+        while stack:
+            for j in adj.get(stack.pop(),()):
+                if j in inside and j not in kept:
+                    kept.add(j); stack.append(j)
+        if not kept:
+            reason = 'no connected tube slice'
+            break
+        centre,_ = section(kept)
+        row.update(accepted=True, accepted_count=len(kept), centre=list(centre))
+        accepted.update(kept)
+        if low < 0:
+            centres.append(centre)
+            radii.append(r95); counts.append(len(reached)); extension = low
+    if not centres:
+        return part, None, centres, extension, reason, table
+    return accepted, welded, centres, extension, reason, table
+
+
+def polyline_station(c, joints, boundaries):
+    """Return declared fraction, physical distance from root, and line distance."""
+    nearest = None
+    distance_from_root = 0.
+    for j,(head,tail) in enumerate(zip(joints,joints[1:])):
+        delta = tail-head
+        if delta.length_squared < 1e-12:
+            raise ValueError('centerline segment has zero length')
+        local = max(0.,min(1.,(c-head).dot(delta)/delta.length_squared))
+        distance = (c-head-delta*local).length_squared
+        if nearest is None or distance < nearest[0]:
+            nearest = (distance,boundaries[j]+local*(boundaries[j+1]-boundaries[j]),
+                       distance_from_root+local*delta.length)
+        distance_from_root += delta.length
+    return nearest[1], nearest[2], math.sqrt(nearest[0])
+
+
+def appendage_plan(group, p, co, edges, bones, normals):
     chains = group['chains']
     if len(chains) != 1 or not chains[0]:
         raise ValueError('appendage_chain requires one nonempty chain')
@@ -311,6 +463,11 @@ def appendage_plan(group, p, co, edges, bones):
         kd.insert(c,i)
     kd.balance()
 
+    source_adjacency = {}
+    for a,b in edges:
+        source_adjacency.setdefault(a,set()).add(b)
+        source_adjacency.setdefault(b,set()).add(a)
+
     def flood():
         eligible = {i for i,c in enumerate(co)
                     if abs(t_of(c)-.5) < axial_window and radial(c) <= segment_radius}
@@ -322,8 +479,8 @@ def appendage_plan(group, p, co, edges, bones):
                 i = ids[i]
             return i
         for i in eligible:
-            for _,j,_ in kd.find_range(co[i],p['weld_distance']):
-                if j in eligible:
+            for _,j,distance in kd.find_range(co[i],p['weld_distance']):
+                if j in eligible and surface_weld_allowed(i,j,distance,co,normals,source_adjacency,p):
                     a,b = find(i),find(j)
                     ids[max(a,b)] = min(a,b)
         welded = [find(i) for i in range(len(co))]
@@ -335,15 +492,26 @@ def appendage_plan(group, p, co, edges, bones):
                 adj.setdefault(b,set()).add(a)
         win = {welded[i] for i in eligible}
         keep = {i for i in win if t_of(co[i]) >= p['cut']}
-        seed = welded[min(range(len(co)),key=lambda i:(co[i]-detected_tip).length)]
-        if seed not in keep:
-            raise ValueError('tip is outside segmented window')
-        comp, stack = {seed},[seed]
-        while stack:
-            for j in adj.get(stack.pop(),()):
-                if j in keep and j not in comp:
-                    comp.add(j)
-                    stack.append(j)
+        support = {welded[i] for i in cand if i in eligible and welded[i] in keep
+                   and abs(co[i].x-cx) < p['part_half_width']}
+        if not support:
+            raise ValueError('axis candidates are outside segmented window')
+        # A sharp end face can be disconnected by the contact-normal guard.
+        # Choose the component supported by the detected surface, rather than
+        # an arbitrary UV copy of the closest end position.
+        pending = set(support)
+        choices = []
+        while pending:
+            seed = min(pending)
+            component,stack = {seed},[seed]
+            while stack:
+                for j in adj.get(stack.pop(),()):
+                    if j in keep and j not in component:
+                        component.add(j); stack.append(j)
+            pending.difference_update(component)
+            choices.append((len(component & support),
+                            -min((co[i]-detected_tip).length for i in component),component))
+        comp = max(choices,key=lambda row:row[:2])[2]
         captured = {i for i in eligible if welded[i] in comp}
         return eligible,welded,win,comp,captured
 
@@ -359,7 +527,7 @@ def appendage_plan(group, p, co, edges, bones):
         previous = (base.copy(), direction.copy(), detected_tip.copy(), segment_radius,
                     eligible,welded,win,comp,captured)
         # One sample per welded position avoids UV seam multiplicity bias.
-        samples = [co[i] for i in sorted(comp)]
+        samples = [co[i] for i in unique_positions(comp,co)]
         centre = sum(samples,Vector())/len(samples)
         covariance = [[sum((v[a]-centre[a])*(v[b]-centre[b]) for v in samples)/len(samples)
                        for b in range(3)] for a in range(3)]
@@ -416,18 +584,33 @@ def appendage_plan(group, p, co, edges, bones):
     leak = bool(leak_reasons)
     root = Vector((base.x,max(base.y+p['root_depth'],front(base.z)+p['root_wall_margin']),base.z))
     part = set()
+    extension_t, growth_reason, slice_table = 0., 'component rejected', []
+    growth_centres = []
+    attachment_station = base.copy()
     if not leak:
         radii = sorted(radial(co[i]) for i in comp)
         r = radii[min(len(radii)-1,int(p['ring_radius_percentile']*len(radii)))]
         # Metre-scale float roundtrips may put the attachment plane just below zero.
         ring = {i for i in win if -1e-6 <= t_of(co[i]) < p['cut'] and radial(co[i]) <= r*p['ring_radius_scale']}
         part = comp|ring
-        near = [co[i] for i in part if t_of(co[i]) < p['cut']+p['near_slice_margin']] or [co[i] for i in part]
-        far = [co[i] for i in part if t_of(co[i]) > p['far_slice_fraction']*tmax] or [co[i] for i in part]
+        part, grown_welded, growth_centres, extension_t, growth_reason, slice_table = grow_attachment(
+            co, edges, part, base, direction, length, p, normals,
+            {i for i in cand if abs(co[i].x-cx) < p['part_half_width']})
+        if growth_centres:
+            welded = grown_welded
+            eligible.update(i for i in range(len(co)) if welded[i] in part)
+        geometry = unique_positions(part,co)
+        near = [co[i] for i in geometry if t_of(co[i]) < p['cut']+p['near_slice_margin']] or [co[i] for i in geometry]
+        far = [co[i] for i in geometry if t_of(co[i]) > p['far_slice_fraction']*tmax] or [co[i] for i in geometry]
         base_c,tip_c = sum(near,Vector())/len(near),sum(far,Vector())/len(far)
+        if growth_centres:
+            base_c = growth_centres[-1]
         if (base_c-tip_c).length < 1e-6:
             raise ValueError('segmented centre line is degenerate')
         root_station = base_c+(base_c-tip_c).normalized()*p['attachment_inset']
+        if growth_centres:
+            attachment_station = base_c+direction*(extension_t*length-(base_c-base).dot(direction))
+            root_station = attachment_station-direction*p['attachment_inset']
         root = root_station
         tip = tip_c
     axis_length = (tip-root).length if leak else (tip-root).dot(direction)
@@ -441,7 +624,7 @@ def appendage_plan(group, p, co, edges, bones):
     for fraction in splits:
         station = root.lerp(tip,fraction) if leak else root+direction*(fraction*axis_length)
         if not leak:
-            samples = [co[i] for i in part
+            samples = [co[i] for i in geometry
                        if abs((co[i]-station).dot(direction)) <= p['centerline_slab']*axis_length/2]
             if not samples:
                 raise ValueError('empty centerline slab at joint '+str(fraction))
@@ -450,29 +633,70 @@ def appendage_plan(group, p, co, edges, bones):
         joints.append(station)
     joints.append(tip)
     links = [(link['bone'],joints[i],joints[i+1],link['parent']) for i,link in enumerate(chain)]
-    def centerline_t(c):
-        # Nearest segment determines the axial station; split fractions remain
-        # the declared coordinates even when curved segments differ in length.
-        nearest = None
-        for j,(head,tail) in enumerate(zip(joints,joints[1:])):
-            delta = tail-head
-            if delta.length_squared < 1e-12:
-                raise ValueError('centerline segment has zero length')
-            local = max(0.,min(1.,(c-head).dot(delta)/delta.length_squared))
-            distance = (c-head-delta*local).length_squared
-            if nearest is None or distance < nearest[0]:
-                nearest = (distance,boundaries[j]+local*(boundaries[j+1]-boundaries[j]))
-        return nearest[1]
+    tube_radius = None
+    tube_centres = []
+    if not leak:
+        if not slice_table:
+            raise ValueError('no measured tube cross-section')
+        tube_radius = slice_table[0]['tube_radius']
+        step = p['base_slice_size']/length
+        for k in range(math.floor(extension_t/step), math.ceil(tmax/step)):
+            samples = [co[i] for i in geometry if k*step <= t_of(co[i]) < (k+1)*step]
+            if samples:
+                tube_centres.append(sum(samples,Vector())/len(samples))
+        if len(tube_centres) < 2:
+            raise ValueError('insufficient tube centreline slices')
+        endpoint = tube_centres[0]+direction*(extension_t*length-(tube_centres[0]-base).dot(direction))
+        if (endpoint-tube_centres[0]).length > 1e-6:
+            tube_centres.insert(0,endpoint)
+        endpoint = tube_centres[-1]+direction*(tmax*length-(tube_centres[-1]-base).dot(direction))
+        if (endpoint-tube_centres[-1]).length > 1e-6:
+            tube_centres.append(endpoint)
+        tube_boundaries = [i/(len(tube_centres)-1) for i in range(len(tube_centres))]
+        def inside_growth_slice(c):
+            t = t_of(c)
+            if t >= 0:
+                return True
+            high = math.ceil(p['cut']/step)*step
+            for row in slice_table:
+                if row['accepted'] and row['t'] <= t < high:
+                    delta = c-Vector(row['centre'])
+                    return (delta-direction*delta.dot(direction)).length <= tube_radius
+                high = row['t']
+            return False
+        # Complete the connected surface, including the contact side omitted by
+        # protrusion candidates. Axial bounds preserve the attachment stop.
+        inside = {welded[i] for i in range(len(co))
+                  if extension_t-1e-6 <= t_of(co[i]) <= tmax+1e-6
+                  and inside_growth_slice(co[i])
+                  and polyline_station(co[i],tube_centres,tube_boundaries)[2] <= tube_radius}
+        adjacency = {}
+        for a,b in edges:
+            a,b = welded[a],welded[b]
+            adjacency.setdefault(a,set()).add(b)
+            adjacency.setdefault(b,set()).add(a)
+        seeds = inside & part
+        seed = min(seeds,key=lambda i:(co[i]-tip).length) if seeds else None
+        part,stack = ({seed},[seed]) if seed is not None else (set(),[])
+        while stack:
+            for j in adjacency.get(stack.pop(),()):
+                if j in inside and j not in part:
+                    part.add(j); stack.append(j)
+        eligible.update(i for i in range(len(co)) if welded[i] in part)
     weights = {link['bone']: {} for link in chain}
     top,bottom = max(v.z for v in points),min(v.z for v in points)
     affected = set()
     for i,c in enumerate(co):
-        t = centerline_t(c)
+        t,station,distance = polyline_station(c,joints,boundaries)
         if not leak:
-            if i not in eligible or welded[i] not in part:
+            if (i not in eligible or welded[i] not in part
+                    or not inside_growth_slice(c)
+                    or polyline_station(c,tube_centres,tube_boundaries)[2] > tube_radius):
                 continue
             affected.add(i)
-            value = smooth(t/p['weight_ramp']) * smooth((segment_radius-radial(c))/p['contact_ramp'])
+            # Membership separates neighbouring tissue. Every surface point
+            # outside the physical attachment ring has full total chain weight.
+            value = smooth(max(t/p['weight_ramp'],station/p['attachment_ring_max']))
         else:
             if abs(c.x-cx)>p['fallback_half_width'] or not bottom-p['fallback_z_margin'] < c.z < top+p['fallback_z_margin']:
                 continue
@@ -495,8 +719,13 @@ def appendage_plan(group, p, co, edges, bones):
     if any(not any(value > .9 for value in w.values()) for w in weights.values()):
         raise ValueError('chain link has no core vertices (weight > 0.9)')
     metrics = {
+        'base_extension_t':extension_t, 'base_stop_reason':growth_reason,
+        'base_slice_table':slice_table,
+        'stem_vertices_captured':sum(t_of(co[i]) < 0 for i in affected),
+        'tube_radius':tube_radius, 'tube_centerline':[list(c) for c in tube_centres],
+        'attachment_ring_max':p['attachment_ring_max'],
         'placement': [{'head':list(h),'tip':list(t)} for _,h,t,_ in links],
-        'attachment':list(base), 'axis_length':axis_length,
+        'attachment':list(attachment_station), 'axis_length':axis_length,
         'leak':leak, 'leak_reason':'; '.join(leak_reasons),
         'segment_radius':segment_radius, 'measured_half_width':half_width,
         'segment_pass_history':history, 'segment_passes':len(history)-1,
@@ -554,7 +783,7 @@ def measure(arm, meshes, edges, plans):
                 base = Vector(m['segment_axis_base'])
                 axis = (Vector(m['segment_axis_tip'])-base).normalized()
                 offset = 0
-                uncaptured = beyond = 0
+                uncaptured = beyond = outside_base = 0
                 for mesh in meshes:
                     for vertex in mesh.data.vertices:
                         delta = mesh.matrix_world@vertex.co-base
@@ -564,10 +793,49 @@ def measure(arm, meshes, edges, plans):
                         index = offset+vertex.index
                         uncaptured += (m['segment_cut_t'] <= t <= m['segment_t_max']
                                        and radial <= .9*m['segment_radius'] and index not in weighted)
-                        beyond += index in captured and radial > 1.05*m['segment_radius']
+                        beyond += index in captured and t >= m['segment_cut_t'] and radial > 1.05*m['segment_radius']
+                        if index in captured and t < -1e-6:
+                            rows = m.get('base_slice_table', [])
+                            high = math.ceil(p['cut']*m['segment_axis_length']/p['base_slice_size'])*p['base_slice_size']/m['segment_axis_length']
+                            inside = False
+                            for row in rows:
+                                if row['accepted'] and row['t'] <= t < high:
+                                    delta_tube = mesh.matrix_world@vertex.co-Vector(row['tube_centre'])
+                                    inside = (delta_tube-axis*delta_tube.dot(axis)).length <= row['tube_radius']+1e-6
+                                    break
+                                high = row['t']
+                            outside_base += not inside
                     offset += len(mesh.data.vertices)
                 m['uncaptured_in_part'] = uncaptured
                 m['captured_beyond_radius'] = beyond
+                m['captured_outside_base_tube'] = outside_base
+                joints = [Vector(m['placement'][0]['head'])]+[Vector(row['tip']) for row in m['placement']]
+                boundaries = [0]+p['chain_split']+[1]
+                tube_centres = [Vector(c) for c in m['tube_centerline']]
+                tube_boundaries = [i/(len(tube_centres)-1) for i in range(len(tube_centres))] if tube_centres else []
+                offset = 0
+                partial = outside_ring = beyond_tube = missing = outside_weighted = 0
+                maximum_distance = 0.
+                for mesh in meshes:
+                    for vertex in mesh.data.vertices:
+                        index = offset+vertex.index
+                        _,station,distance = polyline_station(mesh.matrix_world@vertex.co,joints,boundaries)
+                        if tube_centres:
+                            distance = polyline_station(mesh.matrix_world@vertex.co,tube_centres,tube_boundaries)[2]
+                        value = sum(w.get(index,0.) for w in plan[1].values())
+                        is_partial = .1 < value < .9
+                        partial += is_partial
+                        outside_ring += is_partial and station > p['attachment_ring_max']+1e-6
+                        outside_weighted += index not in captured and value > .1
+                        if index in captured:
+                            maximum_distance = max(maximum_distance,distance)
+                            if m['tube_radius'] is not None:
+                                beyond_tube += distance > m['tube_radius']+1e-6
+                            missing += station > p['attachment_ring_max']+1e-6 and value < .9
+                    offset += len(mesh.data.vertices)
+                m.update(partial_weight_vertices=partial, partial_outside_attachment_ring=outside_ring,
+                         captured_beyond_tube_radius=beyond_tube, captured_tube_distance_max=maximum_distance,
+                         weighted_outside_part=outside_weighted, uncaptured_in_part=missing)
 
         metrics[g['id']]={**plan[2], 'verts_per_group':{name:len(w) for name,w in plan[1].items()}, 'weighted_verts':len(weighted),'edge_stretch_p01_p50_p99_max':[pct(.01),pct(.5),pct(.99),pct(1)],'reason':''}
         for name,_,_,_ in plan[0]:
@@ -602,10 +870,12 @@ def extension_bones(args):
             weight=sum(ge.weight for ge in v.groups if mesh.vertex_groups[ge.group].name in deform_names)
             if weight <= 1e-8:
                 return skip('Skinned vertices require nonzero deform weights',status='failed')
-    co,edges,owners = [],[],[]
+    co,edges,owners,normals = [],[],[],[]
     for mesh in meshes:
         offset = len(co)
         co.extend(mesh.matrix_world@v.co for v in mesh.data.vertices)
+        normal_matrix = mesh.matrix_world.to_3x3().inverted().transposed()
+        normals.extend((normal_matrix@v.normal).normalized() for v in mesh.data.vertices)
         owners.extend((mesh,v.index) for v in mesh.data.vertices)
         edges.extend((e.vertices[0]+offset,e.vertices[1]+offset) for e in mesh.data.edges)
     if args['params'].get('metrics_only',False):
@@ -652,7 +922,7 @@ def extension_bones(args):
             except (ValueError, KeyError, TypeError) as e:
                 malformed = True
                 raise ValueError(str(e)) from e
-            plan = pair_plan(g,p,co,bones) if g['op']=='pair_protrusion' else appendage_plan(g,p,co,edges,bones)
+            plan = pair_plan(g,p,co,bones) if g['op']=='pair_protrusion' else appendage_plan(g,p,co,edges,bones,normals)
             for name,h,t,parent in plan[0]:
                 if name in names or bone_key(name) in bones:
                     raise ValueError('bone already exists: '+name)
