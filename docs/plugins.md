@@ -479,8 +479,19 @@ and radius. A symmetric vertex-set difference below 1% of the previous original
 vertex count stops iteration. Radius growth above `segment_radius_growth_max`
 times the preceding radius, or a component exceeding `leak_t_limit`, retains the
 previous set, axis and radius and reports the reason. A refined component below
-`segment_min_vertices` also retains the previous pass. The chain lies on the
-refined axis, with the existing attachment inset and far-slice tip station.
+`segment_min_vertices` also retains the previous pass. After refinement, internal
+joints sample welded part vertices in slabs of total
+width `centerline_slab * length` around each declared axial fraction, where this
+length is the root-to-far-slice extent projected onto the refined axis. Their
+cross-section centroids retain the axial station; the root stays at the attachment
+point (including inset), and the tip is the far-slice centre. Bones follow this
+polyline. Each vertex uses its nearest polyline segment to interpolate axial
+`chain_split` coordinates. Linear blends span `split ± link_blend`; outside
+these zones a vertex belongs to one link. The attachment `weight_ramp` acts only
+over `0 <= t < weight_ramp` of the centreline, on link 1 only. `weight_ramp + link_blend` must
+be strictly less than the first split (or 1 for a single link), and internal
+blend zones must not overlap. Each link must have core vertices (weight > 0.9);
+metrics report `core_verts_per_link` and `bind_bend_deg` at every internal joint.
 An attachment ring obeys the same bounds, with a `1e-6` tolerance in normalized
 axial distance at the attachment plane for float roundtrips. `contact_ramp`
 (metres) applies a smooth radial fade inside the outer segmentation boundary;
@@ -490,7 +501,9 @@ weight. Only a bounded component smaller than `segment_min_vertices` or beyond
 Declared `reweight_from` base joints (`[]` to disable transfer) move their entire
 weight to the chain's declared parent on every captured vertex, including fallback.
 Outside the captured part the operation preserves its existing weighting rules.
-Fingerprint version 4 rebuilds from prerig. The existing required declaration
+Fingerprint version 5 rebuilds from prerig. `link_blend` replaces the old
+2-link `blend_start`/`blend_width` parameters; remove those from declarations.
+The existing required declaration
 fields `leak_radius_limit` and `reweight_factor` remain validated but no longer
 control radius rejection or transfer: bounded segmentation and entire source-weight
 transfer supersede those rules. All segmentation and refinement parameters are required. `chain_split` contains N-1 increasing
@@ -514,7 +527,7 @@ fractions. `chain_split` is required even for a single link (`[]`). Test pose me
 | `axis_iterations` | `50` |
 | `root_depth` | `0.03` |
 | `root_wall_margin` | `0.01` |
-| `chain_split` | `[0.45]` |
+| `chain_split` | `[0.33, 0.66]` (three links) |
 | `cut` | `0.15` |
 | `weld_distance` | `0.0005` |
 | `window_length_factor` | `0.6` |
@@ -541,8 +554,8 @@ fractions. `chain_split` is required even for a single link (`[]`). Test pose me
 | `fallback_side_ramp` | `0.025` |
 | `fallback_top_margin` | `0.02` |
 | `fallback_top_ramp` | `0.03` |
-| `blend_start` | `0.3` |
-| `blend_width` | `0.3` |
+| `centerline_slab` | `0.08` (total slab width as axial-length fraction) |
+| `link_blend` | `0.06` (half-width in centreline fraction) |
 | `reweight_factor` | `2.0` (superseded by full transfer) |
 | `reweight_from` | `[]` |
 | `weight_min` | `0.003` |

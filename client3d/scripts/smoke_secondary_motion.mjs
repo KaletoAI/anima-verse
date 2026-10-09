@@ -1041,5 +1041,37 @@ try {
     chain.dispose();
   }
   console.log('ok chain girth/length scale each link once (no compounding), also with a rest angle');
+  // Radius .36 / arc30: three equal chords have directions -10,0,10 degrees,
+  // hence bind bends10. Pure core rings of radius .006 must all double at girth2.
+  // Exercise Figure, the real client path, with rest90 and straighten60.
+  {
+    const root=new THREE.Group(), anchor=new THREE.Bone();root.add(anchor);
+    const points=[-15,-5,5,15].map(a=>new THREE.Vector3(0,-.36*Math.sin(a*Math.PI/180),.36*Math.cos(a*Math.PI/180)));
+    const bones=[0,1,2].map(i=>{const b=new THREE.Bone();b.name=`arc_${i}`;return b;});
+    anchor.add(bones[0]);bones[0].position.copy(points[0]);
+    for(let i=1;i<3;i++){bones[i-1].add(bones[i]);bones[i].position.copy(points[i]).sub(points[i-1]);}
+    const positions=[],indices=[],weights=[];
+    for(let i=0;i<3;i++){
+      const mid=points[i].clone().add(points[i+1]).multiplyScalar(.5);
+      for(const x of [-.006,.006]){positions.push(x,mid.y,mid.z);indices.push(i+1,0,0,0);weights.push(1,0,0,0);}
+    }
+    const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
+    geometry.setAttribute('skinIndex',new THREE.Uint16BufferAttribute(indices,4));geometry.setAttribute('skinWeight',new THREE.Float32BufferAttribute(weights,4));
+    const mesh=new THREE.SkinnedMesh(geometry,new THREE.MeshBasicMaterial());root.add(mesh);root.updateMatrixWorld(true);mesh.bind(new THREE.Skeleton([anchor,...bones]));
+    const figure=new C.Figure({...model,template:root,clips:[new THREE.AnimationClip('idle',1,[])],motion:{payload:payload({bones:bones.map(b=>b.name),gravity:0,gain:0,rest_deg:90,rest_max_deg:180,straighten_deg:60,girth:2,length:1,flatten:0,stretch:0,squash:[1,1]})}});
+    for(let i=0;i<400;i++)figure.update(0,{realDelta:1/120});
+    let rendered;figure.root.traverse(o=>{if(o.isSkinnedMesh)rendered=o;});
+    const vertex=i=>rendered.applyBoneTransform(i,new THREE.Vector3().fromBufferAttribute(geometry.getAttribute('position'),i)).applyMatrix4(rendered.matrixWorld);
+    const directions=[];
+    for(let i=0;i<3;i++){
+      near(vertex(2*i).distanceTo(vertex(2*i+1)),.024,1e-6);
+      const b=rendered.skeleton.bones[i+1];
+      directions.push(points[i+1].clone().applyMatrix4(rendered.skeleton.boneInverses[i+1]).applyMatrix4(b.matrixWorld).sub(b.getWorldPosition(new THREE.Vector3())).normalize());
+    }
+    const bends=directions.slice(1).map((v,i)=>v.angleTo(directions[i])*180/Math.PI);
+    assert.ok(bends.every(a=>a<1));
+    console.log('ok client Figure curved 3-link rest90/straighten60 bends',JSON.stringify(bends),'core widths .012 -> .024 m on all links');
+    figure.dispose();
+  }
   console.log('secondary motion: all checks passed');
 } finally {await rm(dir,{recursive:true,force:true});}

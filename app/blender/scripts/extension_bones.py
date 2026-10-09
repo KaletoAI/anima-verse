@@ -92,8 +92,8 @@ PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'fallback_side_ramp': 'number',
                      'fallback_top_margin': 'number',
                      'fallback_top_ramp': 'number',
-                     'blend_start': 'number',
-                     'blend_width': 'number',
+                     'centerline_slab': 'number',
+                     'link_blend': 'number',
                      'reweight_factor': 'number',
                      'reweight_from': 'bones',
                      'weight_min': 'number',
@@ -158,7 +158,7 @@ def parameters(group):
                 'candidate_lateral_max', 'protrusion_threshold', 'weld_distance',
                 'weight_ramp', 'leak_radius_limit', 'segment_radius_factor', 'segment_min_vertices', 'segment_passes', 'segment_radius_margin', 'segment_radius_growth_max', 'contact_ramp', 'fallback_half_width',
                 'fallback_front_ramp', 'fallback_side_ramp', 'fallback_top_ramp',
-                'blend_width', 'window_length_factor', 'ring_radius_scale')
+                'link_blend', 'centerline_slab', 'window_length_factor', 'ring_radius_scale')
     for key in positive:
         if key in p and p[key] <= 0:
             raise ValueError(key + ' must be positive')
@@ -188,7 +188,7 @@ def parameters(group):
     else:
         if p['search_z_min'] >= p['search_z_max'] or not 0 <= p['reference_lateral_min'] < p['reference_lateral_max']:
             raise ValueError('invalid search or reference range')
-        for key in ('cut', 'segment_radius_percentile', 'ring_radius_percentile', 'far_slice_fraction', 'blend_start'):
+        for key in ('cut', 'segment_radius_percentile', 'ring_radius_percentile', 'far_slice_fraction', 'centerline_slab', 'link_blend'):
             if not 0 < p[key] < 1:
                 raise ValueError(key + ' must be in (0,1)')
         if not 1 <= p['axis_iterations'] <= 1000 or Vector(p['axis_initial']).length < 1e-8:
@@ -196,6 +196,10 @@ def parameters(group):
         splits = p['chain_split']
         if splits != sorted(set(splits)) or any(not 0 < v < 1 for v in splits):
             raise ValueError('chain_split must be strictly increasing inside (0,1)')
+        if p['weight_ramp'] + p['link_blend'] >= (splits[0] if splits else 1):
+            raise ValueError('weight_ramp + link_blend must be less than first split')
+        if any(b-a <= 2*p['link_blend'] for a,b in zip(splits,splits[1:])):
+            raise ValueError('link_blend zones must not overlap')
     return p
 
 
@@ -424,23 +428,46 @@ def appendage_plan(group, p, co, edges, bones):
         if (base_c-tip_c).length < 1e-6:
             raise ValueError('segmented centre line is degenerate')
         root_station = base_c+(base_c-tip_c).normalized()*p['attachment_inset']
-        root = base+direction*(root_station-base).dot(direction)
-        tip = base+direction*(tip_c-base).dot(direction)
-    delta = tip-root
-    axis_length = delta.length
+        root = root_station
+        tip = tip_c
+    axis_length = (tip-root).length if leak else (tip-root).dot(direction)
     if axis_length < 1e-6:
         raise ValueError('chain length is zero')
-    dirv = delta/axis_length
     splits = p['chain_split']
     if len(splits) != len(chain)-1:
         raise ValueError('chain_split must have one entry per internal chain joint')
     boundaries = [0]+splits+[1]
-    links = [(link['bone'],root.lerp(tip,boundaries[i]),root.lerp(tip,boundaries[i+1]),link['parent']) for i,link in enumerate(chain)]
+    joints = [root]
+    for fraction in splits:
+        station = root.lerp(tip,fraction) if leak else root+direction*(fraction*axis_length)
+        if not leak:
+            samples = [co[i] for i in part
+                       if abs((co[i]-station).dot(direction)) <= p['centerline_slab']*axis_length/2]
+            if not samples:
+                raise ValueError('empty centerline slab at joint '+str(fraction))
+            centre = sum(samples,Vector())/len(samples)
+            station += centre-station-direction*(centre-station).dot(direction)
+        joints.append(station)
+    joints.append(tip)
+    links = [(link['bone'],joints[i],joints[i+1],link['parent']) for i,link in enumerate(chain)]
+    def centerline_t(c):
+        # Nearest segment determines the axial station; split fractions remain
+        # the declared coordinates even when curved segments differ in length.
+        nearest = None
+        for j,(head,tail) in enumerate(zip(joints,joints[1:])):
+            delta = tail-head
+            if delta.length_squared < 1e-12:
+                raise ValueError('centerline segment has zero length')
+            local = max(0.,min(1.,(c-head).dot(delta)/delta.length_squared))
+            distance = (c-head-delta*local).length_squared
+            if nearest is None or distance < nearest[0]:
+                nearest = (distance,boundaries[j]+local*(boundaries[j+1]-boundaries[j]))
+        return nearest[1]
     weights = {link['bone']: {} for link in chain}
     top,bottom = max(v.z for v in points),min(v.z for v in points)
     affected = set()
     for i,c in enumerate(co):
-        t = (c-root).dot(dirv)/axis_length
+        t = centerline_t(c)
         if not leak:
             if i not in eligible or welded[i] not in part:
                 continue
@@ -453,22 +480,20 @@ def appendage_plan(group, p, co, edges, bones):
         if value <= p['weight_min']:
             continue
         affected.add(i)
-        # Two-link crossover uses the declared blend interval.
-        if len(chain)==2:
-            blend = smooth((t-p['blend_start'])/p['blend_width'])
-            shares = [1-blend,blend]
-        else:
-            position = max(0,min(len(chain)-1,t*len(chain)-.5))
-            a = int(position)
-            shares = [0.]*len(chain)
-            shares[a] = 1-(position-a)
-            if a+1 < len(chain):
-                shares[a+1] = position-a
+        shares = [0.]*len(chain)
+        index = sum(t >= split for split in splits)
+        shares[index] = 1.
+        for j,split in enumerate(splits):
+            if abs(t-split) <= p['link_blend']:
+                blend = (t-split+p['link_blend'])/(2*p['link_blend'])
+                shares = [0.]*len(chain)
+                shares[j],shares[j+1] = 1-blend,blend
+                break
         for link,share in zip(chain,shares):
             if share*value > 0:
                 weights[link['bone']][i] = share*value
-    if any(not w for w in weights.values()):
-        raise ValueError('empty chain weight region')
+    if any(not any(value > .9 for value in w.values()) for w in weights.values()):
+        raise ValueError('chain link has no core vertices (weight > 0.9)')
     metrics = {
         'placement': [{'head':list(h),'tip':list(t)} for _,h,t,_ in links],
         'attachment':list(base), 'axis_length':axis_length,
@@ -510,8 +535,11 @@ def measure(arm, meshes, edges, plans):
         ratios=sorted((posed[a]-posed[b]).length/(rest[a]-rest[b]).length for a,b in edges if (a in weighted or b in weighted) and (rest[a]-rest[b]).length>1e-6)
         pct=lambda f: ratios[min(len(ratios)-1,int(f*len(ratios)))] if ratios else None
         if g['op'] == 'appendage_chain':
-            sources = {bone_key(n) for n in p['reweight_from']}
             captured = plan[3] if plan[2] else weighted
+            plan[2]['core_verts_per_link'] = {name:sum(v > .9 for v in w.values()) for name,w in plan[1].items()}
+            directions = [(tail-head).normalized() for _,head,tail,_ in plan[0]]
+            plan[2]['bind_bend_deg'] = [math.degrees(a.angle(b)) for a,b in zip(directions,directions[1:])]
+            sources = {bone_key(n) for n in p['reweight_from']}
             offset = 0
             remaining = 0
             for mesh in meshes:
@@ -701,9 +729,11 @@ def extension_bones(args):
             if vg.name in final_weights:
                 final_weights[vg.name][i]=w/total
     # Counts and posed geometry must describe the representation we export.
-    for _,_,plan in plans:
+    for g,_,plan in plans:
         for name in plan[1]:
             plan[1][name]=final_weights[name]
+        if g['op'] == 'appendage_chain' and any(not any(v > .9 for v in w.values()) for w in plan[1].values()):
+            return skip('chain link has no exported core vertices (weight > 0.9)',status='failed')
     metrics=measure(arm,meshes,edges,plans)
     output=Path(args['out_dir'])/'model.glb'
     bpy.ops.export_scene.gltf(filepath=str(output),export_format='GLB',export_apply=False,export_yup=True,export_skins=True,export_animations=True,export_morph=True,export_all_influences=False)

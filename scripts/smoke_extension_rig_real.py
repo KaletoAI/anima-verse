@@ -3,8 +3,9 @@
 Usage: RUN_EXTENSION_RIG_REAL=1 .venv/bin/python scripts/smoke_extension_rig_real.py
        --model SOURCE.glb --declaration MANIFEST.yaml --group GROUP_ID [--normalize --target-height-m METRES]
 
-The declaration is read unchanged. Version-4 example parameters are injected
-into an in-memory copy; all other declaration values are preserved. Use --normalize
+The declaration is read unchanged. Version-5 example parameters are injected
+into an in-memory copy; obsolete blend fields are removed there. All other
+declaration values are preserved. Use --normalize
 only for a raw source that has not already been normalized.
 """
 import argparse
@@ -42,7 +43,9 @@ def main():
     group['params'].update(segment_radius_factor=1.35, contact_ramp=.01,
                            segment_min_vertices=3, segment_radius_percentile=.95,
                            segment_radius_margin=1.2, segment_radius_growth_max=1.5,
-                           segment_passes=3)
+                           segment_passes=3, centerline_slab=.08, link_blend=.06)
+    group['params'].pop('blend_start', None)
+    group['params'].pop('blend_width', None)
     source_hash = hashlib.sha256(args.model.read_bytes()).hexdigest()
     declaration_hash = hashlib.sha256(args.declaration.read_bytes()).hexdigest()
     with tempfile.TemporaryDirectory(prefix='extension-real-') as tmp:

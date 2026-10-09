@@ -12,14 +12,13 @@ rings .80 through .95 remain connected; the attachment ring adds .96
 through .98. Near rings .95-.98 average z=.965; inset .02 gives root
 z=.985. Far rings .80-.82 average .81, so chain length=.175 and a
 .45 split gives first length=.07875. At cylinder vertex (x=.03,y=-.16,z=.91), t=(.985-.91)/.175=3/7.
-With declared ramp=1, w=smooth(3/7)=135/343. The two-link blend is
-smooth((3/7-.30)/.30)=135/343, hence Link1=w(1-w), Link2=w².
+With ramp=.25, w=1 at t=3/7. The linear joint blend is
+(3/7-(.45-.06))/.12, hence Link1=1-blend, Link2=blend.
 Source weights: Hips=.20, Spine=.35, Spine1=.25, LeftUpLeg=.20.
 The entire .20 LeftUpLeg weight moves to Hips before attenuation:
 Hips=.40(1-w); Spine=.35(1-w); Spine1=.25(1-w);
-LeftUpLeg=0. Five positive influences precede reduction.
-The largest four are Link1, Hips, Spine, Link2; discard Spine1/LeftUpLeg
-and divide retained weights by their sum. At (.2,.1,1.1), outside both
+LeftUpLeg=0. This interior blend probe has only the two extension influences.
+The separate radial probe verifies partial attenuation with four influences. At (.2,.1,1.1), outside both
 operation envelopes, the four original per-joint weights stay unchanged.
 At the pair apex (.1,-.23,1.4), envelope w=1 leaves only ExampleLeft=1.
 Probe (.14,-.23,1.4): R=.11, scaled R=.1265, d=.04/.11; inside .6 plateau, w=1.
@@ -36,10 +35,10 @@ centred at x=.09,y=-.16 along z=.80-.98. The 19*32=608 part samples
 are all inside pass-0 R=1.35*.03=.0405. No sample beyond the final R is captured.
 Every captured vertex loses all declared source-joint weights.
 A single-link radial-ramp probe declares protrusion_threshold=.02 so all
-angular samples enter the axis fit, centred at y=-.16. With contact_ramp=.021,
-the radius-.03 surface has (.0405-.03)/.021=.5, smooth(.5)=.5;
+angular samples enter the axis fit, centred at y=-.16. With contact_ramp=.011,
+the radius-.03 surface has (.0405-.03)/.011=21/22, smooth(21/22)=1323/1331;
 the mean extension weight at the opposite (+/-.03,-.16,.91) probes is
-135/686 (opposite probes cancel first-order axis drift from exported seam
+1323/1331 (opposite probes cancel first-order axis drift from exported seam
 multiplicity). The other three
 weights are .40,.35,.25 times (1-w).
 The offset fixture adds a 2 mm front bulge: for theta_j=2*pi*j/32,
@@ -64,6 +63,17 @@ bounded selection implies captured_beyond_radius=0 and full transfer implies
 thigh_weight_in_part=0. The old unrefined axis misses the back by .05166010>R0.
 The older exact attenuation probes explicitly keep margin=1.35 (R=.0405),
 while refinement fixtures use the documented margin=1.2.
+The curved tube has radius .006 around a circular centreline of R=.36 and
+angle30 degrees: C(theta)=(0,-.20+.36*(cos(theta)-cos15),.89-.36*sin(theta)),
+theta=-15..15. Nineteen equally spaced angle rings include -15,-5,5,15.
+Splits=(1-sin5/sin15)/2 and its complement select those inner joints.
+Equal 10-degree arc segments give chord directions differing by10 degrees.
+Slab averaging may differ from C by at most2 mm; bends must stay within1 degree.
+The attachment ramp ends at centreline t=.2, before split-link_blend=.27163.
+First-ring weights are zero, second-ring weights are partial on link1 only;
+interior cores on all three links are fully weighted outside the blend zones.
+The offset coverage fixture uses contact_ramp=.005, below its minimum radial
+clearance .03756308-.03136543=.00619765, to retain full-weight cores.
 All storage and clip/rig paths are temporary. Missing Blender is a skip.
 """
 import copy
@@ -144,8 +154,8 @@ DECLARED_PARAMS = {'pair_protrusion': {'band_lower_bone': 'Spine1',
                      'fallback_side_ramp': 0.025,
                      'fallback_top_margin': 0.02,
                      'fallback_top_ramp': 0.03,
-                     'blend_start': 0.3,
-                     'blend_width': 0.3,
+                     'centerline_slab': 0.08,
+                     'link_blend': 0.06,
                      'reweight_factor': 2.0,
                      'reweight_from': [],
                      'weight_min': 0.003,
@@ -223,13 +233,17 @@ start=len(vertices)
 for iz in range(19):
     for j in range(32):
         a=2*math.pi*j/32
-        vertices.append((.03*math.cos(a),-.16+.03*math.sin(a)-(.002*max(0,-math.sin(a)) if p.get('bulged') else 0),.8+iz*.01))
+        if p.get('curved'):
+            theta=math.radians(-15+30*iz/18)
+            vertices.append((.006*math.cos(a),-.20+.36*(math.cos(theta)-math.cos(math.radians(15)))+.006*math.sin(a),.89-.36*math.sin(theta)))
+        else:
+            vertices.append((.03*math.cos(a),-.16+.03*math.sin(a)-(.002*max(0,-math.sin(a)) if p.get('bulged') else 0),.8+iz*.01))
 for iz in range(18):
     for j in range(32):
         a=start+iz*32+j; b=start+iz*32+(j+1)%32
         faces.append((a,b,b+32,a+32))
 # Cylinder attaches to the wall only at its upper ring.
-for j in range(32):
+for j in range(0 if p.get('curved') else 32):
     a=start+18*32+j; b=start+18*32+(j+1)%32
     c=len(vertices); vertices.extend(((vertices[a][0],-.1,.98),(vertices[b][0],-.1,.98)))
     faces.append((a,b,c+1,c))
@@ -515,7 +529,7 @@ def main():
                 {'id':'example_chain','op':'appendage_chain','chains':[[
                     {'bone':'ExampleLink1','parent':'mixamorig:Hips'},
                     {'bone':'ExampleLink2','parent':'ExampleLink1'}]],
-                 'params':{**DECLARED_PARAMS['appendage_chain'],'segment_radius_margin':1.35,'search_z_min':-.35,'anchor_offset':[0,0,-.07],'weight_ramp':1.,'reweight_from':['LeftUpLeg']}}]
+                 'params':{**DECLARED_PARAMS['appendage_chain'],'segment_radius_margin':1.35,'search_z_min':-.35,'anchor_offset':[0,0,-.07],'weight_ramp':.25,'reweight_from':['LeftUpLeg']}}]
         package=root/'plugins'/'example'
         package.mkdir(parents=True)
         manifest={'name':'Example package','apply_to':['demo'],'body_slots':[
@@ -538,6 +552,59 @@ def main():
             bulged=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES),'fused':True,'bulged':True},out_dir=root/'bulged',timeout_s=180)
             fused=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES),'fused':True},out_dir=root/'fused',timeout_s=180)
         check(normal['ok'] and fused['ok'],'synthetic GLBs built through runner')
+        with patch.object(runner,'SCRIPTS_DIR',fixtures):
+            curved=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES),'curved':True},out_dir=root/'curved',timeout_s=180)
+        arc_group=copy.deepcopy(groups[1])
+        arc_group['chains'][0].append({'bone':'ExampleLink3','parent':'ExampleLink2'})
+        import math
+        split=(1-math.sin(math.radians(5))/math.sin(math.radians(15)))/2
+        arc_group['params'].update(chain_split=[split,1-split],cut=.001,near_slice_margin=.001,
+                                  far_slice_fraction=.999,attachment_inset=0,segment_radius_factor=4,
+                                  segment_radius_margin=3,contact_ramp=.001,weight_ramp=.2,ring_radius_scale=3)
+        arc=runner.run('extension_bones',inputs={'model':Path(curved['outputs']['model'])},
+                       params={'groups':[arc_group]},out_dir=root/'arc-rig',timeout_s=180)
+        check(arc['data']['status']=='applied','curved three-link fixture applied: '+str(arc['data']))
+        am=arc['data']['metrics']['example_chain']
+        # R=.36, theta=-15,-5,5,15: chord bends are 10 degrees.
+        # Axial fractions use sin(theta); each slab is .08 of axial length.
+        expected_arc=[[0,-.20+.36*(math.cos(math.radians(a))-math.cos(math.radians(15))),
+                       .89-.36*math.sin(math.radians(a))] for a in (-15,-5,5,15)]
+        joints=[am['placement'][0]['head']]+[v['tip'] for v in am['placement']]
+        check(all(close(a,b) for a,b in zip(joints,expected_arc)),'analytic arc centreline joints within 2 mm')
+        check(all(abs(a-10)<1 for a in am['bind_bend_deg']),'analytic arc bind bends within 1 degree')
+        check(all(n>0 for n in am['core_verts_per_link'].values()),'every curved link has core vertices')
+        print('ARC METRICS',json.dumps(am,sort_keys=True))
+        arc_rows=exported_vertices(Path(arc['outputs']['model']).read_bytes())
+        for angle,name in [(0,'ExampleLink2'),(10,'ExampleLink3')]:
+            point=[.006,.89-.36*math.sin(math.radians(angle)),.20-.36*(math.cos(math.radians(angle))-math.cos(math.radians(15)))]
+            assert_joint_weights(arc_rows,point,{name:1.},'arc interior has no attachment attenuation')
+        def arc_weights(angle):
+            point=[.006,.89-.36*math.sin(math.radians(angle)),.20-.36*(math.cos(math.radians(angle))-math.cos(math.radians(15)))]
+            matches=[w for c,w in arc_rows if close(c,point,.0001)]
+            check(bool(matches),'arc ring probe present')
+            return matches[0]
+        root_weights=arc_weights(-15)
+        check(root_weights.get('ExampleLink1',0)<.01 and not any(root_weights.get(n,0) for n in ('ExampleLink2','ExampleLink3')),'attachment start only ramps link1')
+        ramp_weights=arc_weights(-15+30/18)
+        check(.01<ramp_weights.get('ExampleLink1',0)<.9 and not any(ramp_weights.get(n,0) for n in ('ExampleLink2','ExampleLink3')),'first fraction is partial on link1 only')
+        assert_joint_weights(arc_rows,[.006,.89-.36*math.sin(math.radians(-15+4*30/18)),.20-.36*(math.cos(math.radians(-15+4*30/18))-math.cos(math.radians(15)))],{'ExampleLink1':1.},'first link retains full core after ramp')
+        for angle in (-5,5):
+            w=arc_weights(angle)
+            pair=('ExampleLink1','ExampleLink2') if angle<0 else ('ExampleLink2','ExampleLink3')
+            check(all(abs(w.get(n,0)-.5)<.02 for n in pair),'joint-centred linear blend shares one half')
+        soft=copy.deepcopy(arc_group)
+        soft['params']['contact_ramp']=1.
+        no_core=runner.run('extension_bones',inputs={'model':Path(curved['outputs']['model'])},params={'groups':[soft]},out_dir=root/'no-core')
+        check(no_core['data']['status']!='applied' and 'no core vertices' in no_core['data']['reason'] and not no_core['outputs'],'link without core rejects output with reason')
+        overlap=copy.deepcopy(arc_group)
+        overlap['params']['chain_split']=[.4,.5]
+        overlapping=runner.run('extension_bones',inputs={'model':Path(curved['outputs']['model'])},params={'groups':[overlap]},out_dir=root/'overlap')
+        check(overlapping['data']['status']=='failed' and 'must not overlap' in overlapping['data']['reason'],'overlapping joint blend zones fail validation')
+        bad=copy.deepcopy(arc_group)
+        bad['params']['weight_ramp']=split-.06
+        rejected=runner.run('extension_bones',inputs={'model':Path(curved['outputs']['model'])},params={'groups':[bad]},out_dir=root/'bad-ramp')
+        check(rejected['data']['status']=='failed' and 'weight_ramp + link_blend' in rejected['data']['reason'],'ramp consuming first core fails validation')
+
         tied=runner.run('extension_bones',inputs={'model':Path(ties['outputs']['model'])},params={'groups':groups},out_dir=root/'tied')
         check(tied['data']['status']=='applied','five-influence source processed')
         tie_doc=parse_glb(Path(ties['outputs']['model']).read_bytes())['gltf']
@@ -585,22 +652,21 @@ def main():
         check(all(abs(w-1)<.0001 for w in skin_weights(full.read_bytes())),'exported weights normalised')
         rows=exported_vertices(full.read_bytes())
         check(all(len(weights)<=4 for _,weights in rows),'whole exported mesh has at most four influences')
-        w=135/343
-        expected={'ExampleLink1':w*(1-w),'ExampleLink2':w*w,
-                  'mixamorig:Hips':.4*(1-w),'mixamorig:Spine':.35*(1-w)}
+        blend=(3/7-(.45-.06))/.12
+        expected={'ExampleLink1':1-blend,'ExampleLink2':blend}
         total=sum(expected.values()); expected={name:value/total for name,value in expected.items()}
         assert_joint_weights(rows,[.03,.91,.16],expected,'hand-derived attenuation, transfer, chain split and top-four weights by joint')
         radial_group=copy.deepcopy(groups[1])
         radial_group['chains'][0]=radial_group['chains'][0][:1]
-        radial_group['params'].update(chain_split=[],segment_radius_margin=1.35,contact_ramp=.021,protrusion_threshold=.02,reweight_factor=0)
+        radial_group['params'].update(chain_split=[],segment_radius_margin=1.35,contact_ramp=.011,protrusion_threshold=.02,reweight_factor=0)
         radial_result=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},
                                  params={'groups':[radial_group]},out_dir=root/'radial-ramp',timeout_s=180)
-        radial_weight=135/686
+        radial_weight=(21/22)**2*(3-2*21/22)
         ramp_rows=exported_vertices(Path(radial_result['outputs']['model']).read_bytes())
         probes=[]
         for x in (.03,-.03):
             matches=[weights for point,weights in ramp_rows if close(point,[x,.91,.16],.0001)]
-            check(bool(matches) and all(.15<weights.get('ExampleLink1',0)<.25 and
+            check(bool(matches) and all(.9<weights.get('ExampleLink1',0)<1 and
                   weights.get('mixamorig:LeftUpLeg',0)==0 for weights in matches),
                   'radial probe has partial extension and zero source weight')
             probes.append(matches[0])
@@ -767,9 +833,10 @@ def main():
         check(len(unique)==608 and all(weights.get('mixamorig:LeftUpLeg',0)==0
               for _,weights in cylinder),'exactly 608 unique part samples lose source weights')
         offset_group=copy.deepcopy(chain_group)
-        offset_group['params'].update(protrusion_threshold=.061,segment_radius_margin=1.2,weight_ramp=.25)
+        offset_group['params'].update(protrusion_threshold=.061,segment_radius_margin=1.2,weight_ramp=.25,contact_ramp=.005)
         offset_result=runner.run('extension_bones',inputs={'model':Path(bulged['outputs']['model'])},
                                  params={'groups':[offset_group]},out_dir=root/'offset',timeout_s=180)
+        check(offset_result['data']['status']=='applied','offset fixture applied: '+str(offset_result['data']))
         offset_metrics=offset_result['data']['metrics']['example_chain']
         print('REFINED METRICS',json.dumps(offset_metrics,sort_keys=True))
         check(all((end[0]**2+(end[1]+.16)**2)**.5<.002
@@ -808,7 +875,7 @@ def main():
               'implausible bounded component falls back with reason and full transfer')
         for key in ('segment_radius_factor','segment_min_vertices','contact_ramp',
                     'segment_radius_percentile','segment_radius_margin',
-                    'segment_radius_growth_max','segment_passes'):
+                    'segment_radius_growth_max','segment_passes','centerline_slab','link_blend'):
             missing=copy.deepcopy(chain_group); del missing['params'][key]
             bad=runner.run('extension_bones',inputs={'model':Path(fused['outputs']['model'])},
                            params={'groups':[missing]},out_dir=root/('missing-'+key),timeout_s=180)
@@ -818,7 +885,8 @@ def main():
                           ('segment_min_vertices',0),('segment_min_vertices',2.5),
                           ('segment_radius_percentile',0),('segment_radius_percentile',1),
                           ('segment_radius_margin',0),('segment_radius_growth_max',0),
-                          ('segment_passes',0),('segment_passes',1.5)]:
+                          ('segment_passes',0),('segment_passes',1.5),
+                          ('centerline_slab',0),('centerline_slab',1),('link_blend',0),('link_blend',1)]:
             invalid=copy.deepcopy(chain_group); invalid['params'][key]=value
             bad=runner.run('extension_bones',inputs={'model':Path(fused['outputs']['model'])},
                            params={'groups':[invalid]},out_dir=root/'invalid-new',timeout_s=180)
