@@ -1,3 +1,5 @@
+import { ExtensionMotionDraft } from './ExtensionMotionDraft'
+import type { Physics } from '../../lib/motionDraft'
 import { MotionPreviewHint } from './MotionPreviewHint'
 import type { SecondaryMotionPayload, ExtensionRigDeclaration } from '@anima/scene-render'
 /**
@@ -556,18 +558,21 @@ export function FieldModel3D({ character }: { character: string }) {
     } finally { setBusy(false) }
   }, [enc, st.options?.extension_rig, t, toast])
 
-  const setExtensionMotion = useCallback(async (id: string, key?: string, value?: number | number[]) => {
+  const setExtensionMotion = useCallback(async (id: string, values?: Physics) => {
     setBusy(true)
     try {
       const overrides = structuredClone(st.options?.extension_motion ?? {})
-      if (key === undefined) delete overrides[id]
-      else overrides[id] = { ...overrides[id], [key]: value! }
+      if (values === undefined || !Object.keys(values).length) delete overrides[id]
+      else overrides[id] = values
       const result = await apiPost<{ options: Model3DStatus['options'] }>(
         `/characters/${enc}/model3d/extension-motion`, { extension_motion: overrides })
       setSt(previous => ({ ...previous, options: result.options }))
+      toast(t('Saved'))
       await load()
+      return true
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
+      return false
     } finally { setBusy(false) }
   }, [enc, load, st.options?.extension_motion, t, toast])
 
@@ -935,43 +940,12 @@ export function FieldModel3D({ character }: { character: string }) {
                   {' '}{t('Flip direction')} <MotionPreviewHint field="flip" />
                 </label>
               ) : null}
-              {st.motion?.groups[group.id] ? <>
-                {Object.entries({ freq_hz: 'Frequency (Hz)', zeta: 'Damping ratio', gravity: 'Gravity',
-                  gain: 'Gain', max_deg: 'Maximum dynamic angle (degrees)',
-                  sag_max_deg: 'Maximum static angle (degrees)', flatten: 'Flatten', spill: 'Spill',
-                  rest_max_deg: 'Maximum rest angle (degrees)' }).map(([key, label]) => (
-                  <label key={key}>{t(label)} <MotionPreviewHint field={key} />
-                    <input className="ga-input" type="number" step="any" min={key === 'freq_hz' ? 0.000001 : 0}
-                      max={['gain', 'flatten', 'spill'].includes(key) ? 1 : key.endsWith('deg') ? 180 : undefined}
-                      disabled={pending || busy}
-                      defaultValue={(st.options?.extension_motion?.[group.id]?.[key]
-                        ?? st.motion_defaults?.[group.id][key as keyof SecondaryMotionPayload['groups'][string]]) as number}
-                      key={`${key}:${st.motion?.rev}`}
-                      onBlur={event => {
-                        if (event.target.value && event.target.validity.valid
-                          && Number(event.target.value) !== Number(event.target.defaultValue))
-                          void setExtensionMotion(group.id, key, Number(event.target.value))
-                      }} />
-                  </label>
-                ))}
-                {[0, 1].map(index => <label key={index}>{t(index === 0 ? 'Squash minimum' : 'Squash maximum')} <MotionPreviewHint field="squash" />
-                  <input className="ga-input" type="number" step="any" min={index === 0 ? 0.000001 : 1}
-                    max={index === 0 ? 1 : undefined} disabled={pending || busy}
-                    key={`${index}:${st.motion?.rev}`}
-                    defaultValue={(st.options?.extension_motion?.[group.id]?.squash as number[]
-                      ?? st.motion_defaults![group.id].squash)[index]}
-                    onBlur={event => {
-                      if (!event.target.value || !event.target.validity.valid
-                        || Number(event.target.value) === Number(event.target.defaultValue)) return
-                      const squash = [...(st.options?.extension_motion?.[group.id]?.squash as number[]
-                        ?? st.motion_defaults![group.id].squash)]
-                      squash[index] = Number(event.target.value)
-                      void setExtensionMotion(group.id, 'squash', squash)
-                    }} />
-                </label>)}
-                <button className="ga-btn ga-btn-sm" type="button" disabled={pending || busy}
-                  onClick={() => void setExtensionMotion(group.id)}>{t('Reset')}</button>
-              </> : null}
+              {st.motion_defaults?.[group.id] ? <ExtensionMotionDraft
+                key={`${character}:${st.model?.signature || st.signature || ''}:${group.id}`}
+                defaults={st.motion_defaults[group.id] as unknown as Physics}
+                overrides={st.options?.extension_motion?.[group.id] ?? {}}
+                disabled={pending || busy}
+                onSave={values => setExtensionMotion(group.id, values)} /> : null}
             </div>
           ))}
           <span className="ga-hint">{t('Physics changes apply immediately. Enabled and flip changes require rebuilding extension bones.')}</span>

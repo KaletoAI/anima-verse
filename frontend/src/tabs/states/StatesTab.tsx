@@ -1,3 +1,4 @@
+import { MotionNumberInput } from '../characters/MotionNumberInput'
 import { MotionPreviewHint } from '../characters/MotionPreviewHint'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -337,7 +338,7 @@ export function StatesTab() {
                   : t('This world entry replaces the shared state of the same id. "Reset to shared" removes the world entry, and the shared state applies again.')}
               </p>
             ) : null}
-            <DraftForm
+            <DraftForm key={draft.originalId}
               draft={draft}
               blockKeys={data.block_keys || []}
               onUpdate={updateDraft}
@@ -514,11 +515,9 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
             <div className="ga-form-row">
               {POSE_FIELDS.map(field => (
                 <Field key={field} label={poseLabels[field]} hint={<MotionPreviewHint field={field} />} compact>
-                  <input type="number" className="ga-input" min={0}
-                    max={field === 'rest_deg' ? group.defaults.rest_max_deg : undefined} step="any"
-                    value={draft.bone_pose[group.id]?.[field] ?? ''}
-                    placeholder={t('Unchanged')}
-                    onChange={event => updatePose(group.id, field, event.target.value)} />
+                  <MotionNumberInput value={draft.bone_pose[group.id]?.[field] ?? ''} optional
+                    max={field === 'rest_deg' ? group.defaults.rest_max_deg : undefined}
+                    onCommit={text => updatePose(group.id, field, text)} />
                 </Field>
               ))}
             </div>

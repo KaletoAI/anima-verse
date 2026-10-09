@@ -1,3 +1,4 @@
+import { MotionNumberInput } from '../characters/MotionNumberInput'
 import { MotionPreviewHint } from '../characters/MotionPreviewHint'
 import { useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -45,6 +46,7 @@ export function ExtensionMotion({ values, onChange }: {
   if (error) return <div role="alert">{t('Failed to load')}: {error}</div>
   if (!loaded) return <div>{t('Loading…')}</div>
   return <div className="ga-form">
+    <p className="ga-hint">{t('Changes are saved with Save at the top.')}</p>
     <p>{t('Package defaults apply unless overridden in this world.')}</p>
     {!groups.length && <p>{t('No extension motion groups are loaded.')}</p>}
     {groups.map(group => {
@@ -52,22 +54,16 @@ export function ExtensionMotion({ values, onChange }: {
       return <fieldset key={group.id}>
         <legend>{group.id}</legend>
         {Object.entries(fields).map(([key, label]) => <label key={key}>{t(label)} <MotionPreviewHint field={key} />
-          <input className="ga-input" type="number" step="any"
-            min={0}
-            max={(key === 'gain' || key === 'spill' || key === 'flatten') ? 1 : key.endsWith('deg') ? 180 : undefined}
-            value={effective[key] as number}
-            onChange={e => {
-              if (e.target.value && e.target.validity.valid && (key !== 'freq_hz' || Number(e.target.value) > 0))
-                update(group.id, key, Number(e.target.value))
-            }} />
+          <MotionNumberInput value={effective[key] as number} positive={key === 'freq_hz'}
+            max={['gain', 'spill', 'flatten'].includes(key) ? 1 : key.endsWith('deg') ? 180 : undefined}
+            onCommit={text => update(group.id, key, Number(text))} />
         </label>)}
         {[0, 1].map(index => <label key={index}>{t(index === 0 ? 'Squash minimum' : 'Squash maximum')} <MotionPreviewHint field="squash" />
-          <input className="ga-input" type="number" step="any" min={index === 0 ? 0.000001 : 1}
-            max={index === 0 ? 1 : undefined} value={(effective.squash as number[])[index]}
-            onChange={e => {
-              if (!e.target.value || !e.target.validity.valid) return
+          <MotionNumberInput value={(effective.squash as number[])[index]}
+            min={index === 0 ? 0 : 1} positive={index === 0} max={index === 0 ? 1 : undefined}
+            onCommit={text => {
               const squash = [...effective.squash as number[]]
-              squash[index] = Number(e.target.value)
+              squash[index] = Number(text)
               update(group.id, 'squash', squash)
             }} />
         </label>)}

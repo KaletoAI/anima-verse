@@ -346,28 +346,40 @@ try {
     rebuilt.dispose();
   }
   console.log('ok model3d root prop, extended-model toggle, numeric admin/client parity and toggle off');
-  // Execute the actual new editor JSX: pre-clothing .9 must not display .216.
-  const editorJSX=fieldSource.match(/\{st.motion\?\.groups\[group.id\] \? <>[\s\S]*?<\/> : null\}/)[0].slice(1,-1);
-  const compiledEditor=await transform(`return (${editorJSX})`,{loader:'tsx',jsxFactory:'h',jsxFragment:'Fragment'});
+  {
+  // Execute the group editor with a persistent local state slot across polls.
+  const helperSource=await readFile('frontend/src/lib/motionDraft.ts','utf8');
+  const helperCode=await transform(helperSource.replace(/export /g,''),{loader:'ts'});
+  const helpers=new Function(helperCode.code+'; return {makeDraft, editDraft, draftChanged, draftOverrides, validNumber}')();
+  const editorSource=await readFile('frontend/src/tabs/characters/ExtensionMotionDraft.tsx','utf8');
+  const editorCode=await transform(editorSource.replace(/^import .*$/gm,'').replace(/export /g,''),{loader:'tsx',jsxFactory:'h',jsxFragment:'Fragment'});
+  let editorState;
+  const useState=initial=>{editorState ??= initial();return [editorState,next=>{editorState=typeof next==='function'?next(editorState):next}];};
+  const renderEditor=new Function('h','Fragment','useState','useI18n','MotionPreviewHint',...Object.keys(helpers),editorCode.code+'; return ExtensionMotionDraft')(
+    h,'fragment',useState,()=>({t:x=>x}),'preview-hint',...Object.values(helpers));
   const editorCalls=[];
-  const editorStatus={motion:payload({gain:.216}),motion_defaults:payload({gain:.9}).groups,options:{extension_motion:{}}};
-  const editor=new Function('h','st','group','pending','busy','t','setExtensionMotion','Fragment','MotionPreviewHint',compiledEditor.code)(
-    h,editorStatus,{id:'test'},false,false,x=>x,(...args)=>editorCalls.push(args),'fragment', 'preview-hint');
+  const defaults={freq_hz:2,zeta:.7,gravity:1,gain:.9,max_deg:30,sag_max_deg:30,flatten:1,spill:0,rest_max_deg:45,squash:[.8,1.2]};
+  const props={defaults,overrides:{},disabled:false,onSave:async value=>{editorCalls.push(value);return true}};
   const allNodes=node=>Array.isArray(node)?node.flatMap(allNodes):node?.children?[node,...node.children.flatMap(allNodes)]:[];
-  const nodes=allNodes(editor);
-  const gainInput=nodes.find(node=>node.tag==='label'&&node.children[0]==='Gain').children.find(node=>node?.tag==='input');
-  assert.equal(gainInput.props.defaultValue,.9);
-  gainInput.props.onBlur({target:{value:'.9',defaultValue:'.9',validity:{valid:true}}});
-  assert.equal(editorCalls.length,0,'focus/blur must not create an override');
-  gainInput.props.onBlur({target:{value:'.8',defaultValue:'.9',validity:{valid:true}}});
-  assert.deepEqual(editorCalls.pop(),['test','gain',.8]);
-  const flattenInput=nodes.find(node=>node.tag==='label'&&node.children[0]==='Flatten').children.find(node=>node?.tag==='input');
-  assert.equal(flattenInput.props.max,1);
-  flattenInput.props.onBlur({target:{value:'2',defaultValue:'1',validity:{valid:false}}});
-  assert.equal(editorCalls.length,0);
-  nodes.find(node=>node.tag==='button').props.onClick();
-  assert.deepEqual(editorCalls.pop(),['test']);
-  console.log('ok character numeric editor uses pre-clothing values, saves changes, validates and resets');
+  const nodes=()=>allNodes(renderEditor(props));
+  const input=label=>nodes().find(node=>node.tag==='label'&&node.children[0]===label).children.find(node=>node?.tag==='input');
+  assert.equal(input('Gain').props.value,'0.9','editor starts with pre-clothing values');
+  input('Gain').props.onChange({target:{value:'.8'}});
+  props.defaults={...defaults,gain:.216};
+  assert.equal(input('Gain').props.value,'.8','poll must preserve pending draft');
+  assert.equal(editorCalls.length,0,'typing does not save');
+  input('Gain').props.onKeyDown({key:'Enter',preventDefault(){}});
+  await Promise.resolve();
+  assert.deepEqual(editorCalls.pop(),{gain:.8},'Enter sends exactly edited overrides');
+  input('Flatten').props.onChange({target:{value:'2'}});
+  assert.equal(input('Flatten').props['aria-invalid'],true);
+  assert.equal(nodes().find(node=>node.tag==='button'&&node.children[0]==='Save').props.disabled,true);
+  nodes().find(node=>node.tag==='button'&&node.children[0]==='Reset').props.onClick();
+  await Promise.resolve();
+  assert.equal(editorCalls.pop(),undefined,'Reset deletes overrides');
+  assert.match(fieldSource,/key=\{`\$\{character\}:\$\{st.model\?\.signature/);
+  console.log('ok character draft survives polling, Enter saves edited overrides, validates and resets');
+  }
 
 
   // n=(1,0,1)/sqrt(2), t=(1,0,-1)/sqrt(2). Stock dot is (2-.25)/2=.875.

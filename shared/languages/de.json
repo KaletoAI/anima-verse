@@ -8,6 +8,8 @@
     }
   },
   "translations": {
+    "Changes are saved with Save at the top.": "Änderungen werden mit Save oben gespeichert.",
+    "Enter a valid number within the allowed range.": "Gib eine gültige Zahl im erlaubten Bereich ein.",
     "No boundary — this location covers no ground yet": "Keine Boundary — dieser Ort bedeckt noch keinen Grund",
     "no boundary": "keine Boundary",
     "Seed missing boundaries ({n})": "Fehlende Boundaries anlegen ({n})",

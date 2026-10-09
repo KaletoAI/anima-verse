@@ -1,0 +1,59 @@
+/** Usage: node frontend/scripts/smoke_motion_drafts.mjs
+ * Hand expectations: gain .5 is the sole scalar edit; two edited squash
+ * endpoints produce [.7, 1.3], preserving an existing gravity override.
+ */
+import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
+const require = createRequire(import.meta.url)
+const ts = require('typescript')
+const source = readFileSync('frontend/src/lib/motionDraft.ts', 'utf8')
+const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
+const result = { exports: {} }
+new Function('exports', compiled)(result.exports)
+const { makeDraft, editDraft, draftOverrides, validNumber, draftChanged } = result.exports
+const defaults = { gain: 1, freq_hz: 2, squash: [.8, 1.2] }
+const initial = makeDraft(defaults)
+const edited = editDraft(initial, 'gain', '.5')
+const polled = makeDraft({ ...defaults, gain: .9 })
+assert.equal(edited.values.gain, '.5')
+assert.equal(draftChanged(edited), true)
+assert.notDeepEqual(edited, polled)
+assert.deepEqual(draftOverrides(edited, defaults, { gravity: .4 }), { gravity: .4, gain: .5 })
+const squash = editDraft(editDraft(initial, 'squash_min', '.7'), 'squash_max', '1.3')
+assert.deepEqual(draftOverrides(squash, defaults, {}), { squash: [.7, 1.3] })
+for (const value of ['', '-', '1e', 'Infinity', '-1']) assert.equal(validNumber(value, 0), false)
+assert.equal(validNumber('0', 0, undefined, true), false)
+assert.equal(validNumber('.5', 0, 1), true)
+assert.deepEqual(draftOverrides(editDraft(initial, 'squash_min', '.7'), { ...defaults, squash: [.8, 1.4] }, {}), { squash: [.7, 1.4] })
+
+// Execute the shared Setup/State input with a persistent local state slot.
+const inputSource = readFileSync('frontend/src/tabs/characters/MotionNumberInput.tsx', 'utf8')
+const inputCode = ts.transpileModule(inputSource.replace(/^import .*$/gm, '').replace(/export /g, ''), {
+  compilerOptions: { jsx: ts.JsxEmit.React, target: ts.ScriptTarget.ES2020 },
+}).outputText
+let editing
+let value = .7
+const commits = []
+const useState = initial => {
+  if (editing === undefined) editing = initial
+  return [editing, next => { editing = next }]
+}
+const React = { createElement: (tag, props, ...children) => ({ tag, props, children }), Fragment: 'fragment' }
+const Component = new Function('React', 'useState', 'useI18n', 'validNumber', inputCode + '; return MotionNumberInput')(
+  React, useState, () => ({ t: text => text }), validNumber)
+const render = (optional = false) => Component({ value, optional, onCommit: text => { commits.push(text); value = text === '' ? '' : Number(text) } }).children[0]
+render().props.onChange({ target: { value: '-' } })
+assert.equal(render().props.value, '-')
+assert.equal(render().props['aria-invalid'], true)
+render().props.onBlur()
+assert.equal(commits.length, 0)
+assert.equal(render().props.value, '0.7')
+render().props.onChange({ target: { value: '.4' } })
+render().props.onKeyDown({ key: 'Enter', preventDefault() {} })
+assert.equal(commits.pop(), '.4')
+assert.equal(render().props.value, '0.4')
+render(true).props.onChange({ target: { value: '' } })
+render(true).props.onBlur()
+assert.equal(commits.pop(), '')
+console.log('PASS draft survives poll; exact overrides and current untouched squash endpoint; invalid blur reverts; Enter/blank commit')

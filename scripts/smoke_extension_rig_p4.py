@@ -80,6 +80,7 @@ def main():
                 sr.reset_mock(); wr.reset_mock()
                 extension_rig.motion_payload('sample', profile=held)
                 check(sr.call_count == wr.call_count == 0, 'unchanged second poll: zero definition/profile reloads')
+            check(motion()['rev'] == motion()['rev'], 'unchanged consecutive motion polls have stable revision')
             poll_base = extension_rig.motion_payload('sample', profile=held)
             held['active_conditions'] = [{'name': 'first'}]
             with patch('app.models.character.get_character_profile', side_effect=AssertionError('profile reload')):
