@@ -105,7 +105,7 @@
         "ein nickerchen machen",
         "eingeschlafen"
       ],
-      "animation": "laying",
+      "animation": "sleeping-side",
       "group": "lie",
       "solo": true
     },
@@ -901,7 +901,7 @@
         "sitting at the counter",
         "am tisch sitzen"
       ],
-      "animation": "sit",
+      "animation": "sitting-at-the-table",
       "solo": true,
       "group": "seat"
     }

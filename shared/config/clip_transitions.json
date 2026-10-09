@@ -5,6 +5,48 @@
       "to": "mob1-walk",
       "kind": "mob1-stand-relaxed-to-walk",
       "accel": 1.0
+    },
+    {
+      "from": "sleeping-side",
+      "to": "mob1-stand-relaxed-idle-v2",
+      "kind": "get-up-bed",
+      "accel": 0.0
+    },
+    {
+      "from": "sleeping-side",
+      "to": "mob1-walk",
+      "kind": "get-up-bed",
+      "accel": 0.0
+    },
+    {
+      "from": "sitting-in-chair",
+      "to": "*",
+      "kind": "get-up-chair",
+      "accel": 0.0
+    },
+    {
+      "from": "sitting-at-the-table",
+      "to": "*",
+      "kind": "get-up-chair",
+      "accel": 0.0
+    },
+    {
+      "from": "crouching-mission",
+      "to": "*",
+      "kind": "crouching-mission-climax",
+      "accel": 0.0
+    },
+    {
+      "from": "crouching-mast",
+      "to": "*",
+      "kind": "crouching-mission-climax",
+      "accel": 0.0
+    },
+    {
+      "from": "laying",
+      "to": "mob1-stand-relaxed-idle-v2",
+      "kind": "get-up-bed",
+      "accel": 0.0
     }
   ]
 }

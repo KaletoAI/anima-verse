@@ -1,0 +1,44 @@
+{
+  "kind": "sitting-at-the-table",
+  "pair": false,
+  "roles": [],
+  "fps": 30,
+  "source_fps": 30.0,
+  "frames": 302,
+  "duration_s": 10.067,
+  "loop": true,
+  "speed": 1.0,
+  "geometry": {
+    "floor_shift_cm": -2.81,
+    "hips_scale": [
+      1.316
+    ],
+    "rig_floor_shift_cm": -5.68,
+    "rig_floor_min_cm": -1.81,
+    "root_motion": {
+      "mode": "strip",
+      "travel_m": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "source": {
+    "format": "fbx",
+    "bone_map": "meshy-biped",
+    "files": [
+      "Meshy_AI_default_biped/Meshy_AI_default_biped_Animation_01a08820-d846-775a-b312-dea5c4ffbeda_without_skin.fbx"
+    ],
+    "takes": [
+      null
+    ],
+    "fingers": false,
+    "rotation_mode": "positional",
+    "offset_b_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "rest_file": ""
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "kind": "leaning",
+  "pair": false,
+  "roles": [],
+  "fps": 30,
+  "source_fps": 30.000028610256777,
+  "frames": 120,
+  "duration_s": 4.0,
+  "loop": true,
+  "speed": 1.0,
+  "geometry": {
+    "floor_shift_cm": -6.57,
+    "hips_scale": [
+      1.316
+    ],
+    "rig_floor_shift_cm": -3.41,
+    "rig_floor_min_cm": -0.24,
+    "root_motion": {
+      "mode": "strip",
+      "travel_m": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "source": {
+    "format": "fbx",
+    "bone_map": "meshy-biped",
+    "files": [
+      "Meshy_AI_Animation_01a08818-676d-77ea-b87e-b30e0abc861c_withSkin.fbx"
+    ],
+    "takes": [
+      0
+    ],
+    "fingers": false,
+    "rotation_mode": "positional",
+    "offset_b_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "rest_file": ""
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "kind": "sleeping-back",
+  "pair": false,
+  "roles": [],
+  "fps": 30,
+  "source_fps": 120.0,
+  "frames": 45,
+  "duration_s": 1.5,
+  "loop": true,
+  "speed": 1.0,
+  "geometry": {
+    "floor_shift_cm": 1.53,
+    "loop": {
+      "min_s": 1.5,
+      "cut_frames": [
+        0,
+        45
+      ],
+      "cut_s": [
+        0.0,
+        1.5
+      ],
+      "seam_distance": null,
+      "blend_frames": 8
+    },
+    "hips_scale": [
+      1.1697
+    ],
+    "rig_floor_shift_cm": 8.02,
+    "rig_floor_min_cm": -0.12,
+    "yaw_deg": 180.0,
+    "root_motion": {
+      "mode": "strip",
+      "travel_m": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "source": {
+    "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
+    "takes": [
+      "113_08"
+    ],
+    "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
+  }
+}

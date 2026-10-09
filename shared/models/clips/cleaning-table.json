@@ -1,0 +1,41 @@
+{
+  "kind": "cleaning-table",
+  "pair": false,
+  "roles": [],
+  "fps": 30,
+  "source_fps": 30.0,
+  "frames": 92,
+  "duration_s": 3.067,
+  "loop": true,
+  "speed": 1.0,
+  "geometry": {
+    "floor_shift_cm": -2.93,
+    "hips_scale": [
+      1.4145
+    ],
+    "rig_floor_shift_cm": -2.79,
+    "rig_floor_min_cm": -0.3,
+    "root_motion": {
+      "mode": "strip",
+      "travel_m": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "source": {
+    "format": "fbx",
+    "bone_map": "meshy-biped",
+    "files": [
+      "Meshy_AI_The_Young_Adventurer_biped/Meshy_AI_The_Young_Adventurer_biped_Animation_01a07305-80b7-75ee-950d-190823f36adb_without_skin.fbx"
+    ],
+    "fingers": false,
+    "rotation_mode": "positional",
+    "offset_b_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "rest_file": ""
+  }
+}
