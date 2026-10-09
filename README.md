@@ -217,6 +217,10 @@ stops acting autonomously).
   admin's floor-plan preview decides geometry. The payload contract is `docs/schnittstellen-3d.md`.
 - **Character models:** one mesh per outfit combination, generated from a dedicated T-pose reference
   render; humanoids come back as one rigged GLB, non-humanoids as FBX plus texture.
+  In Game-Admin → Characters → 3D, each T-pose view has a **Regenerate** button that replaces
+  only that image, even with Auto off. Back/left/right reuse the existing front reference;
+  generate the front first if it is missing. The general Generate button still renders the
+  front together with all enabled extra views.
 - **Location and prop models** are generated from gallery images, with front/back/left/right views
   feeding multi-view mesh aliases.
 - **Animations:** shared clip library under `shared/models/clips/` organised into sets, retargeted
@@ -687,6 +691,8 @@ imports anything that opens a database, and a tool meant for a real world gets `
 ---
 
 ## Documentation
+
+- **[`docs/admin-ui-guide.md`](docs/admin-ui-guide.md)** — layout, components and visual checks for new admin UI.
 
 - **[`docs/getting-started-new-world.md`](docs/getting-started-new-world.md)** — full step-by-step
   walk-through for setting up a fresh world from zero.

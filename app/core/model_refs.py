@@ -666,7 +666,8 @@ def generate_model_ref_images(character_name: str,
                               force: bool = False, *,
                               pieces: Optional[Dict[str, str]] = None,
                               items: Optional[list] = None,
-                              signature: Optional[str] = None
+                              signature: Optional[str] = None,
+                              tpose_view: Optional[str] = None
                               ) -> Dict[str, Optional[str]]:
     """Render the reference images sequentially (the image queue serializes
     per backend anyway). Blocking — call from a worker thread.
@@ -690,10 +691,16 @@ def generate_model_ref_images(character_name: str,
     They ride along with the front render — the kind counts as cached only
     once every enabled view exists too, and an already rendered front image
     is then reused instead of being generated again. A failing view is
-    logged and skipped; only the front render is essential."""
+    logged and skipped; only the front render is essential.
+
+    ``tpose_view`` selects exactly front/back/left/right for a manual render.
+    An extra view reuses the cached front even with ``force=True``; it never
+    regenerates another view. Without a cached front it raises ValueError."""
     from app.core.expression_regen import generate_expression_image
     from app.core.expression_pose_maps import default_pose_prompt
 
+    if tpose_view is not None and tpose_view not in ("front", *TPOSE_VIEWS):
+        raise ValueError("Unknown T-pose view")
     override = (pieces, items, signature)
     if any(o is not None for o in override) and any(o is None for o in override):
         raise ValueError(
@@ -722,6 +729,11 @@ def generate_model_ref_images(character_name: str,
     # skip: it decides whether the extra views count into it.
     humanoid = is_humanoid(character_name)
     views = enabled_tpose_views(character_name)
+    if tpose_view is not None:
+        views = () if tpose_view == "front" else (tpose_view,)
+        if tpose_view != "front" and (
+                not humanoid or not find_ref_image(character_name, "tpose", signature)):
+            raise ValueError("An extra T-pose view requires an existing humanoid front render")
     if not force:
         cached = tuple(k for k in kinds
                        if find_ref_image(character_name, k, signature)
@@ -758,7 +770,8 @@ def generate_model_ref_images(character_name: str,
             # "tpose" that may be an extra view alone, and then the existing
             # front render is reused instead of burning a second GPU run.
             path: Optional[Path] = (
-                None if force else find_ref_image(character_name, kind, signature))
+                None if force and tpose_view in (None, "front")
+                else find_ref_image(character_name, kind, signature))
             if path is None:
                 path = generate_expression_image(
                     character_name, mood="", pose_key="",
@@ -779,7 +792,8 @@ def generate_model_ref_images(character_name: str,
                     # "outfit" style included — is the "tpose" occasion of
                     # the image routing (plan-image-routing.md § 1).
                     occasion="tpose")
-            results[kind] = str(path) if path else None
+            if tpose_view in (None, "front"):
+                results[kind] = str(path) if path else None
             if path is None:
                 logger.warning("Model ref %s for %s (%s): render failed",
                                kind, character_name, signature)
@@ -844,7 +858,8 @@ def _kind_lock(key: tuple) -> threading.Lock:
         return _char_locks.setdefault(key, threading.Lock())
 
 
-def _run_generation(character_name: str, kind: str, force: bool = False) -> None:
+def _run_generation(character_name: str, kind: str, force: bool = False,
+                    tpose_view: Optional[str] = None) -> None:
     # Serial per (character, kind); the equipped state is read at run time,
     # so the latest outfit always wins.
     from app.core.timeutils import utc_now
@@ -853,7 +868,8 @@ def _run_generation(character_name: str, kind: str, force: bool = False) -> None
         _running[key] = utc_now()
     try:
         with _kind_lock(key):
-            generate_model_ref_images(character_name, kinds=(kind,), force=force)
+            generate_model_ref_images(character_name, kinds=(kind,), force=force,
+                                      tpose_view=tpose_view)
     except Exception as e:
         logger.error("Model ref render for %s (%s) failed: %s",
                      character_name, kind, e)
@@ -873,13 +889,14 @@ def _run_generation(character_name: str, kind: str, force: bool = False) -> None
                          character_name, e)
 
 
-def _fire_kinds(character_name: str, kinds: tuple, force: bool = False) -> None:
+def _fire_kinds(character_name: str, kinds: tuple, force: bool = False,
+                tpose_view: Optional[str] = None) -> None:
     """One worker thread per kind: the images generate independently — with
     several backends they run in parallel; the same backend serializes in the
     provider queue."""
     for kind in kinds:
         threading.Thread(target=_run_generation,
-                         args=[character_name, kind, force],
+                         args=[character_name, kind, force, tpose_view],
                          daemon=True).start()
 
 
@@ -937,12 +954,14 @@ def schedule_outfit_render(character_name: str) -> None:
             timer.start()
 
 
-def trigger_now(character_name: str, kinds: Optional[tuple] = None) -> None:
+def trigger_now(character_name: str, kinds: Optional[tuple] = None, *,
+                tpose_view: Optional[str] = None) -> None:
     """Manual trigger (UI button): fires the render immediately — no debounce,
     force=True so a fresh render replaces the cached one of the current
     combination. ``kinds`` narrows to specific images (each tab passes its
     own, so wardrobe and 3D generate independently); None = the per-image
-    auto toggles decide, like the automatic trigger."""
+    auto toggles decide, like the automatic trigger. ``tpose_view`` narrows
+    the T-pose pass to one view while retaining its lock and status lane."""
     auto = get_auto_kinds(character_name)
     auto_kinds = tuple(k for k in REF_KINDS if auto.get(k))
     if kinds is None:
@@ -954,4 +973,7 @@ def trigger_now(character_name: str, kinds: Optional[tuple] = None) -> None:
     # An armed debounce timer would re-render the same kind right after the
     # manual run — the manual run supersedes it, for exactly these kinds.
     _cancel_timers(character_name, kinds)
-    _fire_kinds(character_name, kinds, force=True)
+    if tpose_view is None:
+        _fire_kinds(character_name, kinds, force=True)
+    else:
+        _fire_kinds(character_name, kinds, force=True, tpose_view=tpose_view)

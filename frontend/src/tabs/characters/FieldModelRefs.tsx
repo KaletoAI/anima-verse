@@ -264,14 +264,14 @@ export function FieldModelRefs({
     return stopPoll
   }, [startPoll, stopPoll, refreshKey])
 
-  const generate = useCallback(async () => {
+  const generate = useCallback(async (view?: 'front' | typeof VIEW_ORDER[number]) => {
     if (busy) return
     setBusy(true)
     try {
-      // Only this tab's checked kinds — wardrobe (pose) and 3D tab (tpose)
-      // fire independent renders.
-      const wanted = kindList.filter((k) => info.auto?.[k] !== false)
-      await apiPost(`/characters/${enc}/model-refs/generate`, { kinds: wanted })
+      // An explicit view ignores the auto toggles and replaces only that
+      // image. The general Generate button still fires this tab's checked kinds.
+      const wanted = view ? ['tpose'] : kindList.filter((k) => info.auto?.[k] !== false)
+      await apiPost(`/characters/${enc}/model-refs/generate`, { kinds: wanted, view })
       toast(t('Generating…'))
       // A beat for the worker thread to register as running before the first
       // status read — an idle read here would clear `busy` too early.
@@ -387,10 +387,21 @@ export function FieldModelRefs({
               {ri?.created_at ? (
                 <div className="ga-hint">{formatDateTime(ri.created_at, clockSettings())}</div>
               ) : null}
+              {kind === 'tpose' ? (
+                <button
+                  type="button"
+                  className="ga-btn ga-btn-sm"
+                  disabled={blocked}
+                  onClick={() => generate('front')}
+                  aria-label={`${t('Regenerate')} · ${t('Front view')}`}
+                >
+                  {t('Regenerate')} · {t('Front view')}
+                </button>
+              ) : null}
               {kind === 'tpose' &&
               VIEW_ORDER.some((v) => info.views?.[v]?.enabled) ? (
-                // Extra T-pose views (multi-view img2mesh input). Rendered as
-                // part of the T-pose pass — no own buttons, just visibility.
+                // Extra T-pose views share the T-pose status lane, but each
+                // can be regenerated without replacing the other images.
                 <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                   {VIEW_ORDER.filter((v) => info.views?.[v]?.enabled).map(
                     (view) => {
@@ -410,6 +421,15 @@ export function FieldModelRefs({
                           ) : (
                             <div className="ga-hint">{t('No render yet')}</div>
                           )}
+                          <button
+                            type="button"
+                            className="ga-btn ga-btn-sm"
+                            disabled={blocked || !info.tpose}
+                            onClick={() => generate(view)}
+                            aria-label={`${t('Regenerate')} · ${viewLabel(view)}`}
+                          >
+                            {t('Regenerate')}
+                          </button>
                         </div>
                       )
                     },
@@ -430,7 +450,7 @@ export function FieldModelRefs({
           type="button"
           className="ga-btn ga-btn-sm"
           disabled={blocked || !anyAuto}
-          onClick={generate}
+          onClick={() => generate()}
         >
           {showGenerating ? t('Generating…') : t('Generate')}
         </button>

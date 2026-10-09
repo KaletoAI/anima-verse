@@ -1345,8 +1345,12 @@ async def generate_character_model_refs(character_name: str,
     """Manually fires the reference render (debounce skipped). Body
     ``{"kinds": ["pose"]}`` narrows to specific images — each tab sends its
     own kind, so wardrobe (pose) and 3D (tpose) generate independently.
-    Without kinds the per-image auto toggles decide."""
-    from app.core.model_refs import REF_KINDS, trigger_now
+    Without kinds the per-image auto toggles decide. ``view`` selects exactly
+    one T-pose view (front/back/left/right), leaving other renders untouched."""
+    from app.core.model_refs import (
+        REF_KINDS, TPOSE_VIEWS, current_outfit_state, find_ref_image,
+        is_humanoid, trigger_now,
+    )
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
     try:
@@ -1354,6 +1358,19 @@ async def generate_character_model_refs(character_name: str,
     except Exception:
         body = {}
     kinds = body.get("kinds") if isinstance(body, dict) else None
+    view = body.get("view") if isinstance(body, dict) else None
+    if view is not None:
+        if view not in ("front", *TPOSE_VIEWS):
+            raise HTTPException(status_code=422, detail="Unknown T-pose view")
+        if kinds is not None and kinds != ["tpose"]:
+            raise HTTPException(status_code=422, detail="view requires kinds ['tpose']")
+        kinds = ["tpose"]
+        if view != "front":
+            _, _, signature = current_outfit_state(character_name)
+            if not is_humanoid(character_name) or not find_ref_image(
+                    character_name, "tpose", signature):
+                raise HTTPException(status_code=409,
+                                    detail="Generate the front T-pose render first")
     if kinds is not None:
         if not isinstance(kinds, list):
             raise HTTPException(status_code=422, detail="kinds must be a list")
@@ -1361,7 +1378,7 @@ async def generate_character_model_refs(character_name: str,
         if not kinds:
             raise HTTPException(status_code=422,
                                 detail=f"kinds must contain one of {list(REF_KINDS)}")
-    trigger_now(character_name, kinds=kinds)
+    trigger_now(character_name, kinds=kinds, tpose_view=view)
     return {"status": "generating"}
 
 
