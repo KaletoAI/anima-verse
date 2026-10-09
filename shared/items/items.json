@@ -74,11 +74,11 @@
       "id": "item_f85cb432",
       "name": "Business Shirt",
       "category": "outfit_piece",
-      "prompt_fragment": "business shirt",
+      "prompt_fragment": "white business shirt",
       "created_at": "2026-04-15T15:28:07.108416",
       "description": "",
       "image": "1776454661.png",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -91,6 +91,9 @@
         "uses": null
       },
       "outfit_piece": {
+        "slots": [
+          "top"
+        ],
         "covers": [
           "underwear_top"
         ],
@@ -98,20 +101,19 @@
         "outfit_types": [
           "business"
         ],
-        "slots": [
-          "top"
-        ]
-      }
+        "lora": {}
+      },
+      "image_prompt": ""
     },
     {
       "id": "item_19f8855b",
       "name": "Business Skirt",
       "category": "outfit_piece",
-      "prompt_fragment": "business Skirt",
+      "prompt_fragment": "business skirt",
       "created_at": "2026-04-17T14:09:11.237569",
       "description": "",
       "image": "1776457104.png",
-      "rarity": "generic",
+      "rarity": "common",
       "stackable": false,
       "max_stack": 1,
       "transferable": true,
@@ -124,13 +126,19 @@
         "uses": null
       },
       "outfit_piece": {
-        "covers": [],
-        "partially_covers": [],
-        "outfit_types": [],
         "slots": [
           "bottom"
-        ]
-      }
+        ],
+        "covers": [
+          "underwear_bottom"
+        ],
+        "partially_covers": [],
+        "outfit_types": [
+          "business"
+        ],
+        "lora": {}
+      },
+      "image_prompt": ""
     },
     {
       "id": "item_fcc885b2",
@@ -1393,5 +1401,5 @@
       }
     }
   ],
-  "last_updated": "2026-08-09T21:26:08+00:00"
+  "last_updated": "2026-10-08T20:31:54+00:00"
 }
