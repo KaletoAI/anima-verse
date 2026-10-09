@@ -10707,6 +10707,11 @@ still bounds rendered deviation around the static target. A one-frame 90-degree
 jump stays within `max_deg*1.05`; normal motion retains exact propagation.
 Gaps, reset and LOD transitions clear anchor history with particle history.
 
+Scale is never inherited between driven bones: a child link (same or another
+group) takes its frame from the parent's frame WITHOUT the parent's extension
+scale, while its head position follows the fully deformed parent. So girth,
+length, flatten/stretch and dynamic squash act once per link — a lengthened
+parent carries the child outward, but the child is not widened twice.
 State `bone_pose[group]` additionally accepts optional `length` and `girth`,
 each finite in [.5,2], default multiplier 1. Active states multiply these fields
 (e.g. length 1.5*.5=.75, girth .8*1.5=1.2), preserving sparse storage and

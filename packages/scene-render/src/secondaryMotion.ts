@@ -108,6 +108,8 @@ interface Bind {
   head: Vector3
   parentHead: Vector3
   worldRotation: Quaternion
+  /** World matrix of the bone WITHOUT its own extension scale (set each update). */
+  pureWorld: Matrix4
   lateral: Vector3
   pairedLateral: Vector3
   auto: boolean
@@ -214,7 +216,7 @@ export function createSecondaryMotion(
         for (let parent = bone.parent; parent; parent = parent.parent) depth++
         binds.set(bone, { bone, local: bone.matrix.clone(), centroid: new three.Vector3(), centroidWorld: new three.Vector3(),
           gravityRest: gravity.clone().applyQuaternion(q), gravityProjection: 0, bodyFront: new three.Vector3(),
-          head: bone.getWorldPosition(new three.Vector3()), parentHead: bone.parent!.getWorldPosition(new three.Vector3()), worldRotation: q.clone().invert(),
+          head: bone.getWorldPosition(new three.Vector3()), parentHead: bone.parent!.getWorldPosition(new three.Vector3()), worldRotation: q.clone().invert(), pureWorld: new three.Matrix4(),
           lateral: new three.Vector3(), pairedLateral: new three.Vector3(), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), localRotation: bone.quaternion.clone() })
       }
     })
@@ -348,7 +350,7 @@ export function createSecondaryMotion(
   const reset = () => {
     for (const st of particles) { st.p = null; st.target = null; st.anchorRotation = null; st.v.set(0, 0, 0) }
   }
-  const anchor = new three.Matrix4(), inverseAnchor = new three.Matrix4(), scale = new three.Matrix4(), rotationMatrix = new three.Matrix4()
+  const anchor = new three.Matrix4(), anchorFull = new three.Matrix4(), inverseAnchor = new three.Matrix4(), scale = new three.Matrix4(), rotationMatrix = new three.Matrix4()
   const anchorQ = new three.Quaternion(), restQ = new three.Quaternion(), dynamicQ = new three.Quaternion(), identityQ = new three.Quaternion()
   const restVector = new three.Vector3(), target = new three.Vector3(), head = new three.Vector3(), vTarget = new three.Vector3(), deltaG = new three.Vector3(), t = new three.Vector3(), base = new three.Vector3(), rendered = new three.Vector3(), localRendered = new three.Vector3(), u = new three.Vector3(), temp = new three.Vector3()
   const bodyVertical = new three.Vector3(), dynamicDelta = new three.Vector3(), previousDeviation = new three.Vector3(), nextDeviation = new three.Vector3()
@@ -381,11 +383,18 @@ export function createSecondaryMotion(
       for (const st of particles) {
         const b = st.bind
         anchor.copy(b.local)
-        // Reuse the current driven ancestor world matrix without traversing its subtree.
+        anchorFull.copy(b.local)
+        // A driven ancestor contributes its frame WITHOUT its own extension
+        // scale (otherwise girth/length/squash compound down a chain), while
+        // the position follows the fully deformed ancestor so a lengthened
+        // parent still carries its child outward.
+        let drivenAncestor = false
         for (let n = b.bone.parent; n; n = n.parent) {
-          if (driven.has(n as Bone)) { anchor.premultiply(n.matrixWorld); break }
-          anchor.premultiply(n.matrix)
+          const ancestor = driven.get(n as Bone)
+          if (ancestor) { anchor.premultiply(ancestor.bind.pureWorld); anchorFull.premultiply(n.matrixWorld); drivenAncestor = true; break }
+          anchor.premultiply(n.matrix); anchorFull.premultiply(n.matrix)
         }
+        if (drivenAncestor) anchor.setPosition(temp.setFromMatrixPosition(anchorFull))
         pureParent(b.bone.parent).multiply(b.localRotation)
         st.paramsBlend = Math.min(1.5, st.paramsBlend + dt)
         st.params = blendMotionParams(st.paramsFrom, st.paramsTo, st.paramsBlend, st.params)
@@ -577,7 +586,13 @@ export function createSecondaryMotion(
         b.rotation.copy(anchorQ).multiply(dynamicQ)
         driven.set(b.bone, st)
         b.bone.matrixWorldNeedsUpdate = true
-        b.bone.matrixWorld.copy(anchor).multiply(translationMatrix).multiply(rotationMatrix).multiply(scale)
+        b.pureWorld.copy(anchor).multiply(translationMatrix).multiply(rotationMatrix)
+        b.bone.matrixWorld.copy(b.pureWorld).multiply(scale)
+        // Keep the local matrix consistent with that world matrix, so a later
+        // updateMatrixWorld (parent.matrixWorld x matrix) does not re-apply the
+        // parent's scale: parentFull = anchorFull x local^-1, hence
+        // matrix = local x anchorFull^-1 x world.
+        if (drivenAncestor) b.bone.matrix.copy(b.local).multiply(inverseAnchor.copy(anchorFull).invert()).multiply(b.bone.matrixWorld)
       }
       // Publish all non-driven descendants once after the chain is complete.
       root.updateMatrixWorld(true)

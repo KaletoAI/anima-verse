@@ -902,9 +902,12 @@ try {
   const rq=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0),-Math.PI/2);
   const axis=new THREE.Vector3(1,0,1).normalize(), transverse=1/Math.sqrt(1.4);
   const scaleVector=v=>v.clone().multiplyScalar(transverse).addScaledVector(axis,(1.4-transverse)*v.dot(axis));
-  const expected=scaleVector(new THREE.Vector3(1.2,0,2)).applyQuaternion(pq).applyQuaternion(rq);
+  // The child HEAD follows the stretched parent; the child's own region keeps
+  // only its own scale (no compounding): lever = bind (1,0,1.5), rotated by the
+  // parent's pure rotation.
   const childHead=scaleVector(new THREE.Vector3(.2,0,.5)).applyQuaternion(pq).applyQuaternion(rq);
-  const childLever=expected.clone().sub(childHead), childU=childLever.clone().normalize();
+  const childLever=new THREE.Vector3(1,0,1.5).applyQuaternion(pq).applyQuaternion(rq), childU=childLever.clone().normalize();
+  const expected=new THREE.Vector3();
   const childForce=new THREE.Vector3(0,-9.81,0).sub(new THREE.Vector3(0,-9.81,0).applyQuaternion(rq.clone().multiply(pq)));
   if(childForce.dot(childU)<0)childForce.addScaledVector(childU,-childForce.dot(childU));
   expected.copy(childLever).addScaledVector(childForce,1/(4*Math.PI)**2).normalize().multiplyScalar(childLever.length()).add(childHead);
@@ -954,5 +957,28 @@ try {
   for(let i=0;i<20;i++)active.update(1/30);
   assert.deepEqual(counts,{vectors:0,quaternions:0,matrices:0});active.dispose();
   console.log('ok template centroid cache, empty/unmatched setup skips and allocation-free frame/substep scratch');
+  // Chain extent must not compound: a two-link chain hanging -Y with ring
+  // vertices of radius .1 at link1 y=-.5 and link2 y=-1.5. girth g and
+  // length l scale each link once: half-width .1*g on BOTH links, distances
+  // .5*l and 1.5*l from the root (child head follows the lengthened parent).
+  for (const [girth,length,rest] of [[2,1,0],[1,1.5,0],[2,1.5,0],[2,1.5,60]]) {
+    const croot=new THREE.Group(), canchor=new THREE.Bone(); croot.add(canchor);
+    const l1=new THREE.Bone(), l2=new THREE.Bone(); l1.name='c1'; l2.name='c2'; canchor.add(l1); l1.add(l2); l2.position.set(0,-1,0);
+    const ring=[0.1,-0.5,0, -0.1,-0.5,0, 0,-0.5,0.1, 0,-0.5,-0.1, 0.1,-1.5,0, -0.1,-1.5,0, 0,-1.5,0.1, 0,-1.5,-0.1];
+    const cg=new THREE.BufferGeometry(); cg.setAttribute('position',new THREE.Float32BufferAttribute(ring,3));
+    cg.setAttribute('skinIndex',new THREE.Uint16BufferAttribute([1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,2,0,0,0,2,0,0,0,2,0,0,0,2,0,0,0],4));
+    cg.setAttribute('skinWeight',new THREE.Float32BufferAttribute(Array.from({length:8},()=>[1,0,0,0]).flat(),4));
+    const cm=new THREE.SkinnedMesh(cg,new THREE.MeshBasicMaterial()); croot.add(cm); croot.updateMatrixWorld(true); cm.bind(new THREE.Skeleton([canchor,l1,l2]));
+    const chain=C.createSecondaryMotion(THREE,croot,{rev:'chain',groups:{chain:{...defaults,bones:['c1','c2'],gravity:0,gain:0,flatten:0,stretch:0,squash:[.5,2],rest_max_deg:90,rest_deg:rest,length,girth}}});
+    for(let i=0;i<400;i++)chain.update(1/120);
+    croot.updateMatrixWorld(true);
+    const v=i=>cm.applyBoneTransform(i,new THREE.Vector3().fromBufferAttribute(cg.getAttribute('position'),i)).applyMatrix4(cm.matrixWorld);
+    for(const [a,b,dist] of [[0,1,.5],[4,5,1.5]]){
+      near(v(a).distanceTo(v(b))/2,.1*girth,1e-6);
+      near(v(a).add(v(b)).multiplyScalar(.5).length(),dist*length,1e-6);
+    }
+    chain.dispose();
+  }
+  console.log('ok chain girth/length scale each link once (no compounding), also with a rest angle');
   console.log('secondary motion: all checks passed');
 } finally {await rm(dir,{recursive:true,force:true});}
