@@ -16,11 +16,11 @@ export function WorldSettingsGroup({ group, schema, ...props }: {
   group: WorldGroup
   schema: Record<string, SchemaNodeDef>
 } & Omit<SchemaProps, 'node' | 'path'>) {
-  return <div className="ga-form">
+  return <div className="ga-setup-sections">
     {group.sections.map(key => {
       const node = schema[key]
-      return <section key={key}>
-        {!node.is_array && <h2>{node.label}</h2>}
+      return <section className="ga-form" key={key}>
+        {!node.is_array && <h2 className="ga-setup-heading">{node.label}</h2>}
         {node.description && <p className="ga-form-hint">{node.description}</p>}
         <SchemaNode {...props} node={node} path={key} />
       </section>

@@ -47,8 +47,8 @@ export type SchemaProps = {
 export function Origin({ path, overrides, onReset }: Pick<SchemaProps, 'path' | 'overrides' | 'onReset'>) {
   const { t } = useI18n()
   const world = originOf(path, overrides) === 'world'
-  return <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
-    <span className="ga-badge">{world ? t('World') : t('Default')}</span>
+  return <span className="ga-setup-origin">
+    <span className={`ga-tag${world ? ' ga-tag-admin' : ''}`}>{world ? t('World') : t('Default')}</span>
     {world && <button type="button" className="ga-btn ga-btn-sm" onClick={() => onReset(path)}>{t('Reset to default')}</button>}
   </span>
 }
@@ -88,7 +88,7 @@ export function SchemaField({ field, fieldKey, revision, refresh, ...props }: Sc
     const sibling = getAt(props.values, `${props.path}.${key}`) ?? props.node.fields?.[key]?.default
     return Array.isArray(expected) ? expected.includes(sibling ?? null) : sibling === expected
   })) return null
-  if (field.type === 'group_header') return <h3>{field.label}</h3>
+  if (field.type === 'group_header') return <h3 className="ga-setup-heading">{field.label}</h3>
   if (field.type === 'note') return <p className="ga-form-hint">{field.text ?? field.description}</p>
   if (field.type === 'image_preview') return <ImagePreview field={field} revision={revision} />
   const run = async () => {
@@ -136,12 +136,12 @@ export function SchemaField({ field, fieldKey, revision, refresh, ...props }: Sc
       value={String(value ?? '')} placeholder={scalarDefault} onChange={event => change(numeric
         ? event.target.value === '' ? undefined : Number(event.target.value) : event.target.value)} />
   }
-  return <Field label={field.label ?? fieldKey} hint={hint}>
-    {!props.inListItem && <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+  return <div className="ga-setup-field"><Field label={field.label ?? fieldKey} hint={hint}>
+    {!props.inListItem && <div className="ga-setup-field-meta">
       <Origin path={path} overrides={props.overrides} onReset={props.onReset} />
     </div>}
     {control}
-  </Field>
+  </Field></div>
 }
 
 export function SchemaList(props: SchemaProps) {
@@ -154,10 +154,10 @@ export function SchemaList(props: SchemaProps) {
     ;[next[index], next[index + delta]] = [next[index + delta], next[index]]
     update(next)
   }
-  return <div>
-    <h3>{props.node.label} {!props.inListItem && <Origin {...props} />}</h3>
-    {items.map((item, index) => <div className="ga-form" key={index} style={{ border: '1px solid var(--border)', padding: 12, marginBottom: 12 }}>
-      <h4>{String(getAt(item, props.node.item_label_field ?? 'name') ?? index + 1)}</h4>
+  return <div className="ga-setup-fields">
+    <div className="ga-setup-section-head"><h3 className="ga-setup-heading">{props.node.label}</h3>{!props.inListItem && <Origin {...props} />}</div>
+    {items.map((item, index) => <div className="ga-fieldset ga-setup-fields" key={index}>
+      <h4 className="ga-setup-heading">{String(getAt(item, props.node.item_label_field ?? 'name') ?? index + 1)}</h4>
       <div className="ga-form-row">
         <button type="button" className="ga-btn ga-btn-sm" disabled={index === 0} onClick={() => move(index, -1)}>{t('Move up')}</button>
         <button type="button" className="ga-btn ga-btn-sm" disabled={index === items.length - 1} onClick={() => move(index, 1)}>{t('Move down')}</button>
@@ -183,11 +183,11 @@ export function SchemaNode(props: SchemaProps) {
     }
     return next
   })
-  return <div className="ga-form">
+  return <div className="ga-setup-fields">
     {Object.entries(props.node.fields ?? {}).map(([key, field]) => <SchemaField {...props} key={key} field={field} fieldKey={key}
       revision={revisions[field.url ?? ''] ?? 0} refresh={refresh} />)}
-    {Object.entries(props.node.subsections ?? {}).map(([key, node]) => <section key={key} style={{ border: '1px solid var(--border)', padding: 12 }}>
-      <h3>{node.label}</h3>{node.description && <p className="ga-form-hint">{node.description}</p>}
+    {Object.entries(props.node.subsections ?? {}).map(([key, node]) => <section key={key} className="ga-fieldset ga-setup-fields">
+      <h3 className="ga-setup-heading">{node.label}</h3>{node.description && <p className="ga-form-hint">{node.description}</p>}
       <SchemaNode {...props} node={node} path={`${props.path}.${key}`} />
     </section>)}
   </div>

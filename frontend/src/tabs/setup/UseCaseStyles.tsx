@@ -30,12 +30,12 @@ export function UseCaseStyles({ defaults, values, overrides, onChange, onReset }
   useEffect(() => { void loadCache() }, [loadCache])
   const change = (path: string, value: Json) => onChange(path, setAt(values, path, value))
   const path = `image_generation.use_cases.${current}`
-  return <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-    <nav style={{ minWidth: 160 }} aria-label={t('Image styles')}>
-      {cases.map(uc => <div key={uc}><button type="button" className={`ga-btn${uc === current ? ' ga-btn-primary' : ''}`}
-        onClick={() => setSelected(uc)}>{uc}</button></div>)}
+  return <div className="ga-setup-styles">
+    <nav className="ga-list ga-setup-style-list" aria-label={t('Image styles')}>
+      {cases.map(uc => <button key={uc} type="button" aria-pressed={uc === current} className={`ga-list-row${uc === current ? ' is-active' : ''}`}
+        onClick={() => setSelected(uc)}>{uc}</button>)}
     </nav>
-    <div className="ga-form" style={{ flex: 1, minWidth: 250 }}>
+    <div className="ga-form ga-setup-style-detail">
       <div className="ga-form-row">
         <button type="button" className="ga-btn ga-btn-sm" disabled={clearing} onClick={async () => {
           setClearing(true)
@@ -43,25 +43,25 @@ export function UseCaseStyles({ defaults, values, overrides, onChange, onReset }
           catch (error) { toast(t('Error') + ': ' + (error as Error).message, 'error') }
           finally { setClearing(false) }
         }}>{t('Clear compose cache')}</button>
-        {cacheSize !== null && <span>{cacheSize} {t('cached prompts')}</span>}
+        {cacheSize !== null && <span className="ga-form-hint">{cacheSize} {t('cached prompts')}</span>}
       </div>
       {current && <>
-        <h3>{current} <Origin path={path} overrides={overrides} onReset={onReset} /></h3>
+        <div className="ga-setup-section-head"><h3 className="ga-setup-heading">{current}</h3><Origin path={path} overrides={overrides} onReset={onReset} /></div>
         <Field label={t('Compose via LLM (opt-in)')}>
           <input type="checkbox" aria-label={t('Compose via LLM (opt-in)')} checked={Boolean(getAt(values, `${path}.llm_compose`))}
             onChange={event => change(`${path}.llm_compose`, event.target.checked)} />
         </Field>
-        {defaults.families.map(family => <section key={family}>
-          <h4>{family}</h4>
+        {defaults.families.map(family => <section key={family} className="ga-fieldset ga-setup-fields">
+          <h4 className="ga-fieldset-title">{family}</h4>
           {(['prompt_style', 'prompt_negative', 'prompt_instruction'] as const).map(key => {
             const fieldPath = `${path}.styles.${family}.${key}`
             const value = String(getAt(values, fieldPath) ?? '')
             const placeholder = defaults.defaults[current]?.[family]?.[key] ?? ''
-            return <Field key={key} label={key === 'prompt_style' ? t('Style') : key === 'prompt_negative' ? t('Negative') : t('Instruction')}>
+            return <div className="ga-setup-field" key={key}><Field label={key === 'prompt_style' ? t('Style') : key === 'prompt_negative' ? t('Negative') : t('Instruction')}>
               <textarea className="ga-textarea" rows={3} value={value} placeholder={placeholder}
                 onChange={event => change(fieldPath, event.target.value)} />
               {!value && placeholder && <button type="button" className="ga-btn ga-btn-sm" onClick={() => change(fieldPath, placeholder)}>{t('Copy default')}</button>}
-            </Field>
+            </Field></div>
           })}
         </section>)}
       </>}

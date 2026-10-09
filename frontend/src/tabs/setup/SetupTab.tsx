@@ -106,7 +106,7 @@ export function SetupTab() {
   const group = ws?.groups.find(group => group.id === selected)
 
   return (
-    <div className="ga-page-scroll">
+    <div className="ga-page-scroll ga-setup">
       <DetailToolbar
         title={dirty ? t('Setup (unsaved)') : t('Setup')}
         onSave={save}
@@ -114,17 +114,17 @@ export function SetupTab() {
         disabled={saving}
         cancelLabel={t('Revert')}
       />
-      <nav className="ga-subtabs" role="tablist">
+      <nav className="ga-subtabs" aria-label={t('Setup')}>
         {[{ id: 'world_setup', label: t('World setup') }, ...(ws?.groups ?? [])].map(sub =>
-          <button type="button" key={sub.id} role="tab" aria-selected={selected === sub.id}
+          <button type="button" key={sub.id} aria-pressed={selected === sub.id}
             className={`ga-btn ga-btn-sm${selected === sub.id ? ' ga-btn-primary' : ''}`}
             onClick={() => {
               setActiveSub(sub.id)
               try { localStorage.setItem('ga-setup-subtab', sub.id) } catch { /* Storage can be disabled. */ }
             }}>{sub.label}</button>)}
       </nav>
-      <fieldset disabled={saving} style={{ border: 0, padding: 0, margin: 0 }}>
-      {selected === 'world_setup' ? <div className="ga-form" style={{ maxWidth: 1100 }}>
+      <fieldset disabled={saving} className="ga-setup-content">
+      {selected === 'world_setup' ? <div className="ga-form">
         <Field
           label={t('World setup')}
           hint={t(

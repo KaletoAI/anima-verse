@@ -1,5 +1,6 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+:root { color-scheme: dark; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0d1117; color: #c9d1d9; display: flex; height: 100vh; overflow: hidden; }
 
 /* ── Sidebar ── */
@@ -276,3 +277,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .list-origin { margin-bottom: 12px; }
 .providers-hint { margin: 8px 24px; color: #d29922; font-size: 12px; }
 #shipped-pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Form controls also appear outside .field (routing, dialogs and toolbars). */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="button"]):not([type="submit"]):not([type="reset"]),
+select, textarea {
+    background: #0d1117; color: #c9d1d9; border: 1px solid #30363d;
+    padding: 6px 10px; border-radius: 6px; font: inherit; font-size: 13px;
+    min-width: 0;
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 2px solid #58a6ff; outline-offset: 2px;
+}
+input[type="checkbox"], input[type="radio"] { accent-color: #58a6ff; }
+input::placeholder, textarea::placeholder { color: #6e7681; opacity: 1; }

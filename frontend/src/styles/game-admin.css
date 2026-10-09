@@ -3240,3 +3240,27 @@ a.ga-btn {
    row reveals the magnifier on its thumbnail when the ROW is hovered, not only
    the 28px thumb itself. */
 .ga-list-row:hover .lb-zoom-corner { opacity: 1; }
+
+/* Setup follows the existing form, fieldset and list/detail rhythm. */
+.ga-setup { color-scheme: dark; }
+.ga-setup-content { border: 0; padding: 0; margin: 0; min-width: 0; }
+.ga-setup-sections, .ga-setup-fields { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.ga-setup-heading { margin: 0; font-size: 13px; font-weight: 600; color: var(--text, #c9d1d9); }
+.ga-setup-section-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.ga-setup-origin { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 11px; }
+.ga-setup-field .ga-field-control { flex-wrap: wrap; justify-content: flex-start; }
+/* Metadata owns a separate row, so it never consumes the input's width. */
+.ga-setup-field-meta { flex: 0 0 100%; }
+.ga-setup-field .ga-field-caption { white-space: normal; overflow: visible; line-height: 1.4; }
+.ga-setup-field .ga-input, .ga-setup-field .ga-textarea { flex: 0 0 100%; }
+.ga-setup .ga-input:focus-visible, .ga-setup .ga-textarea:focus-visible,
+.ga-setup button:focus-visible { outline: 2px solid var(--primary, #58a6ff); outline-offset: 2px; }
+.ga-setup .ga-form-hint { font-size: 11px; line-height: 1.5; color: var(--text-muted, #8b949e); }
+.ga-setup input[type="checkbox"] { accent-color: var(--primary, #58a6ff); }
+.ga-setup-styles { display: grid; grid-template-columns: minmax(180px, 18%) minmax(0, 1fr); gap: 14px; align-items: start; }
+.ga-setup-style-list { flex: none; }
+.ga-setup-style-detail { min-width: 0; }
+@media (max-width: 700px) {
+  .ga-setup-styles { grid-template-columns: minmax(0, 1fr); }
+  .ga-setup-style-list { max-height: 220px; }
+}
