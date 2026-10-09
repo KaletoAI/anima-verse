@@ -10208,7 +10208,7 @@ Worldmap character rows carry these fields independently of scene recipes:
         "bones": ["ExampleBone1", "ExampleBone2"],
         "freq_hz": 2.2, "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "spill": 0.0, "flatten": 0.0, "stretch": 0.0, "spread": 0.5, "flatten_floor": 0.6, "length": 1.0, "girth": 1.0, "translate": 0.0, "gain": 1.0, "axis_gain": [1, 1, 1],
         "max_deg": 25, "sag_max_deg": 25, "spill_max_deg": 25, "head_sag": 1.0, "squash": [0.6, 1.4],
-        "rest_deg": 0, "rest_max_deg": 90
+        "rest_deg": 0, "rest_max_deg": 90, "straighten_deg": 0, "freetext_clothing_gain": 1
       }
     }
   }
@@ -10442,8 +10442,9 @@ up. For each root lever u, project front perpendicular to u to obtain front';
 the axis is normalize(cross(u, front')), signed so positive rotation moves u
 toward front. For a lever parallel to front, use up instead, so positive lifts.
 Store each axis in its own root anchor frame; no fixed model axis is assumed.
-The rest angle rotates the WHOLE chain rigidly at its ROOT link. Children
-inherit it and receive no extra rest rotation. Compute T' and static sag around
+The rest angle rotates the chain at its ROOT link. Children inherit that
+rotation; optional `straighten_deg` removes their relative bind bends as
+described below. With its default 0, the chain rotates rigidly. Compute T' and static sag around
 this rotated rest. max_deg and soft saturation limit ONLY dynamic deviation
 from T'; rest is limited only by the effective rest_max_deg. Paired groups
 rotate each chain root about its own derived axis. Negative angles move in the
@@ -10747,3 +10748,49 @@ on top of the static/dynamic deformation; they do not change volume compensation
 State editor hints are `live`. Resolved payloads always include numeric
 `stretch`, `spread`, `flatten_floor`, `length` and `girth`; all five affect only motion
 revision, leaving mesh fingerprints unchanged.
+
+### Independent rig templates and rest-angle straightening
+
+A slot's `rig.templates` optionally selects templates independently of package
+`apply_to`: a non-empty name list, `"*"`, or `{feature: humanoid}` uses the same
+selector semantics. When present, it replaces the slot/package applicability
+for this rig only. `rig.applies_to` remains the condition map and still filters
+profile fields and stored slot attributes (case-insensitive AND conditions).
+Without `rig.templates`, existing package and slot applicability remains.
+This never activates the owning slot's prompt fragments, attribute editor,
+coverage, silhouette or clothing topology on additional templates. Motion
+attribute profiles and item coverage are taken only from active slots.
+`rig.apply_to` is rejected to keep template selectors and conditions unambiguous.
+
+```yaml
+rig:
+  # Add these keys to an existing declaration with id/op/chains/params.
+  templates: [example-template]
+  applies_to: {gender: [female]}
+  straighten_deg: 60
+  freetext_clothing_gain: 0.25
+```
+
+`straighten_deg` is finite in [0,180], default 0 (off). For each non-root
+chain link, reduce the bind relative bend by `smoothstep(clamp(abs(rest_effective)
+/ straighten_deg,0,1))`, using the same 1.5-second rest transition. At zero rest,
+bends remain unchanged. At or above the threshold every link points along its
+parent. With two 20-degree joints, rest 90/threshold 60 leaves 0 degrees; rest
+30 leaves 10 degrees per joint; threshold 0 leaves 20 degrees. Negative rest
+uses the same absolute fraction. Changing the threshold (including enabling,
+disabling and interrupted transitions) blends the derived straightening amount
+over 1.5 seconds, so a threshold passing through zero cannot cause a snap. Rest rotation is still root-only; bind front
+and pureWorld scale isolation remain unchanged. Paired one-link groups have
+no non-root links and are unaffected. Straightening is geometric, independent
+of imported bone axes, and uses the next head or terminal weighted centroid.
+
+Both `straighten_deg` and `freetext_clothing_gain` are package physics defaults,
+world `extension_motion.groups` overrides and character Advanced overrides
+in `model3d_opts.extension_motion`. Both are included in effective motion payloads
+and `motion.rev`, excluded from mesh fingerprints and state `bone_pose`. Preview
+hints are `live` for straightening and `motion` for free-text clothing gain.
+Non-empty free text without resolved item pieces supplies clothing factor k
+from `freetext_clothing_gain`; blank text supplies k=1. Item pieces override
+this fallback. Temporary NPCs use the same normalize → extension → LOD pipeline,
+rebuild route and Improvements batch; the 3D panel shows Extension bones whenever
+resolved groups exist, independently of inventory/outfit-system features.

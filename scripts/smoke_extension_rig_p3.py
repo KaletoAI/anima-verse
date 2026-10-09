@@ -5,7 +5,8 @@ Usage: .venv/bin/python scripts/smoke_extension_rig_p3.py
 Hand derivation (E4): occupied underwear_top with empty covers (.5) and
 outer full coverage (.8) multiply .5*.8=.4; mirrors
 count once and hidden layers still count. Partial .6 yields 1-(1-.6)/2=.8.
-No pieces gives factor 1. Package gravity .35 stays .35 with character m=2;
+No pieces and blank text gives factor1; nonblank text with declared free-text
+gain .25 gives factor.25, while item pieces still give their product. Package gravity .35 stays .35 with character m=2;
 the solver subtracts baked gravity after multiplying current gravity by m.
 World gain .6, attribute gain multiplier .5 yield .3; frequency 2.2*2=4.4.
 Manual gain .9/frequency 3 replace those; clothing .3*.8 gives final .216.
@@ -108,6 +109,17 @@ def main():
         c = item('p3_c', ['legs'], .6, True)
         check(gain({**profile, 'equipped_pieces': {'legs': c['id']}}) == .8, 'partial cover .6 gives .8')
         check(gain({'template': 'human-default', 'outfit_description': 'plain outfit'}) == 1, 'free text no damping')
+        # With no pieces, nonblank text contributes k=.25; absent/blank text k=1.
+        registry.get_package('sample').body_slots[0].rig.freetext_clothing_gain = .25
+        bare_text = {'template': 'human-default', 'equipped_pieces': {}}
+        for field in ('outfit_description', 'outfit_worn'):
+            check(gain({**bare_text, field: 'plain outfit'}) == .25, 'free text gain ' + field)
+            check(gain({**bare_text, field: '  '}) == 1, 'blank free text ' + field)
+        check(gain({**profile, 'outfit_description': 'plain outfit'}) == .4, 'pieces take precedence over free text')
+        check(motion_payload('sample', {**bare_text, 'outfit_worn': 'plain outfit'}, apply_clothing=False)['groups']['sample_group']['gain'] == 1,
+              'editor bypasses free text clothing')
+        check(gain({**bare_text, 'outfit_worn': 'plain outfit', 'equipped_pieces': {'top': 'missing'}}) == .25, 'missing item is not a worn piece')
+        registry.get_package('sample').body_slots[0].rig.freetext_clothing_gain = 1
         from app.models.character import save_character_profile, get_character_profile
         from app.core.character_ops import apply_profile_update
         from fastapi import HTTPException
@@ -242,10 +254,11 @@ def main():
         check(next(g for g in declared if g['id'] == 'sample_group')['defaults']['gain'] == 1,
               'Setup read endpoint returns package defaults')
         values = config_admin.layer_part('world')
-        values['extension_motion'] = {'groups': {'sample_group': {'gain': .6, 'spill': .5, 'translate': .6, 'axis_gain': [.5, 1, .15]}}}
+        values['extension_motion'] = {'groups': {'sample_group': {'gain': .6, 'spill': .5, 'translate': .6, 'axis_gain': [.5, 1, .15], 'straighten_deg': 60, 'freetext_clothing_gain': .25}}}
         config_admin.save_layer('world', values)
         bare = {'template': 'human-default'}
         check(gain(bare) == .6 and motion(bare)['groups']['other_group']['gain'] == 1, 'world override group only')
+        check(motion(bare)['groups']['sample_group']['straighten_deg'] == 60 and gain({**bare, 'outfit_worn': 'plain outfit'}) == .15, 'world straightening/free text overrides')
         check(motion(bare)['groups']['sample_group']['spill'] == .5, 'world spill override')
         check(motion(bare)['groups']['sample_group']['translate'] == .6, 'world translation override')
         check(motion(bare)['groups']['sample_group']['axis_gain'] == [.5, 1, .15]
@@ -272,7 +285,7 @@ def main():
         fp = extension_metadata('sample')['fingerprint']
         rev = motion_payload('sample')['rev']
         overrides = {'sample_group': {'freq_hz': 3, 'gain': .9, 'gravity': .2,
-                                      'flatten': .4, 'spill': .2, 'translate': .3, 'sag_max_deg': 60, 'axis_gain': [.2, .8, .3]}}
+                                      'flatten': .4, 'spill': .2, 'translate': .3, 'sag_max_deg': 60, 'axis_gain': [.2, .8, .3], 'straighten_deg': 30, 'freetext_clothing_gain': .5}}
         from fastapi import FastAPI
         from scripts.smoke_extension_rig_p1 import run_async
         import httpx
@@ -290,6 +303,7 @@ def main():
         response = posted.json()
         check(response['options']['extension_motion'] == overrides, 'manual physics route round trip')
         effective = motion_payload('sample')['groups']['sample_group']
+        check(effective['straighten_deg'] == 30 and effective['freetext_clothing_gain'] == .5, 'character new fields round trip')
         check(effective['freq_hz'] == 3 and effective['gravity'] == .2
               and abs(effective['gain'] - .216) < 1e-12 and effective['flatten'] == .4
               and effective['translate'] == .3 and effective['spill'] == .2 and effective['sag_max_deg'] == 60

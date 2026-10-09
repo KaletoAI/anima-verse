@@ -815,5 +815,7 @@ export interface MotionPayload {
     squash: [number, number];
     rest_deg: number;
     rest_max_deg: number;
+    straighten_deg: number;
+    freetext_clothing_gain: number;
   }>;
 }

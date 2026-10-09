@@ -13,6 +13,10 @@ const result = { exports: {} }
 new Function('exports', compiled)(result.exports)
 const { makeDraft, editDraft, draftOverrides, validNumber, draftChanged } = result.exports
 const defaults = { gain: 1, freq_hz: 2, squash: [.8, 1.2] }
+const newDefaults = {straighten_deg:0,freetext_clothing_gain:1}
+const newDraft = editDraft(editDraft(makeDraft(newDefaults), 'straighten_deg', '60'), 'freetext_clothing_gain', '.25')
+assert.deepEqual(draftOverrides(newDraft,newDefaults,{}),{straighten_deg:60,freetext_clothing_gain:.25})
+assert.equal(validNumber('181',0,180),false);assert.equal(validNumber('1.1',0,1),false)
 const initial = makeDraft(defaults)
 const edited = editDraft(initial, 'gain', '.5')
 const polled = makeDraft({ ...defaults, gain: .9 })

@@ -518,11 +518,11 @@ def main():
                  'params':{**DECLARED_PARAMS['appendage_chain'],'segment_radius_margin':1.35,'search_z_min':-.35,'anchor_offset':[0,0,-.07],'weight_ramp':1.,'reweight_from':['LeftUpLeg']}}]
         package=root/'plugins'/'example'
         package.mkdir(parents=True)
-        manifest={'name':'Example package','apply_to':'*','body_slots':[
-            {'id':g['id'],'rig':g} for g in groups]}
+        manifest={'name':'Example package','apply_to':['demo'],'body_slots':[
+            {'id':g['id'],'rig':{**g, 'templates':['npc-temporary']}} for g in groups]}
         (package/'plugin.yaml').write_text(yaml.safe_dump(manifest))
         discover_packages(root/'plugins',force=True)
-        check(save_character_profile('demo',{'template':'demo'},create_new=True),'isolated profile')
+        check(save_character_profile('demo',{'template':'npc-temporary','outfit_worn':'plain outfit'},create_new=True),'isolated profile')
         from app.core import extension_rig
         with patch.object(extension_rig, 'rig_groups_for', return_value=[]), \
                 patch.object(extension_rig, 'resolved_extension_groups', return_value=[]), \
@@ -559,9 +559,16 @@ def main():
         placeholder = extension_metadata('demo')
         full.with_suffix('.json').write_text(json.dumps({'extension_rig':placeholder,'rig':'mixamo','pieces':{},'items':[],'blender':{'steps':['normalize']}}))
         check(not ExtensionRigRebuild().is_done(Candidate('character:demo','demo'),{'character':'demo'}),'placeholder is pending in Improvements')
+        from app.core.model_refs import is_humanoid
+        info = model3d.get_model3d_info('demo')
+        check(is_humanoid('demo') and len(info['extension_groups']) == 2,
+              'temporary NPC resolves humanoid pipeline and Extension bones panel groups')
+        from app.core.body_slots import slots_for_character
+        check(not slots_for_character('demo'), 'temporary NPC pipeline does not activate package slots')
         before_doc=parse_glb(source)['gltf']
         before_frames={n['name']:{k:n.get(k) for k in ('translation','rotation','scale','matrix')} for n in before_doc['nodes'] if n.get('name','').startswith('mixamorig:')}
-        result=model3d.rebuild_extension_rig('demo','example')
+        from app.routes.characters import rebuild_character_model3d_extension_rig
+        result=rebuild_character_model3d_extension_rig('demo', signature='example', tier='full', force=False)
         meta=json.loads(full.with_suffix('.json').read_text())
         state=meta['extension_rig']
         check(state['status']=='applied' and state['attempted'] and state['attempted_at'],'placeholder fingerprint does not suppress first attempt')
@@ -676,6 +683,12 @@ def main():
         low_after_names={n.get('name') for n in parse_glb(low.read_bytes())['gltf']['nodes']}
         check(reset_retry['ok'] and not {'ExampleLeft','ExampleRight','ExampleLink1','ExampleLink2'}&low_after_names,'disable retry removes extension bones from low')
         check(improvement.is_done(candidate,{'character':'demo'}),'improvement completes after clean low recovery')
+        from app.routes.characters import queue_character_extension_rigs
+        queued = queue_character_extension_rigs('demo')
+        check(queued['params']['character'] == 'demo', 'temporary NPC Improvements batch route accepts character')
+        check(improvement.validate({'character': 'demo'}) == {'character': 'demo'},
+              'temporary NPC Improvements validation is template-independent')
+
         model3d.set_model3d_options('demo',{'extension_rig':{}})
         restored=model3d.rebuild_extension_rig('demo','example')
         check(restored['ok'] and full.read_bytes()==original and clean.read_bytes()==source,'restoring overrides reapplies from clean source without attenuation')
@@ -818,6 +831,27 @@ def main():
         check(not preparation['ok'] and 'synthetic preparation failure' in preparation['error'] and fresh.read_bytes()==source,'failed normalization keeps published bytes and reports reason')
         check(not (model_dir/'prerig'/'prepare.glb').exists(),'failed preparation creates no prerig asset')
         publication_checks(root,model3d)
+        # Restore the declaration mutated by the earlier failed-detection check.
+        changed.params = copy.deepcopy(groups[0]['params'])
+        # Exercise the production upload pipeline for the temporary NPC too.
+        order = []
+        original_normalize, original_extension = model3d._auto_normalize, model3d._auto_extension_rig
+        def normalize_upload(*args, **kwargs):
+            if not kwargs.get('required'):
+                order.append('normalize')
+            return original_normalize(*args, **kwargs)
+        def extend_upload(*args, **kwargs):
+            check(order == ['normalize'] and 'normalize' in args[2].get('blender', {}).get('steps', []),
+                  'temporary NPC extension runs after normalize')
+            order.append('extension')
+            return original_extension(*args, **kwargs)
+        with patch.object(model3d, '_auto_retexture'), patch.object(model3d, '_attach_measurement'), \
+                patch.object(model3d, 'request_lod'), \
+                patch.object(model3d, '_auto_normalize', side_effect=normalize_upload), \
+                patch.object(model3d, '_auto_extension_rig', side_effect=extend_upload):
+            uploaded = model3d.save_uploaded_model('demo', 'pipeline.glb', source, rig='mixamo')
+        check(order == ['normalize', 'extension'] and uploaded['extension_rig']['status'] == 'applied',
+              'temporary NPC production upload publishes applicable extension rig')
         print('PASS extension rig P1: all checks')
 
 

@@ -2390,6 +2390,8 @@
     "Over the catalog host's per-file limit ({mb} MB) — the publish will be refused.": "Über dem Dateilimit des Katalog-Hosts ({mb} MB) — der Publish wird abgelehnt.",
     "Translation fraction": "Translationsanteil",
     "Use Tilt: direct posture targets, independent of gravity and frequency.": "Tilt verwenden: direkte Lageziele, unabhängig von Gravitation und Frequenz.",
-    "Use Tilt or gravity scale for sag; play a clip for bounce. Moves the whole weighted group.": "Tilt oder Gravitationsfaktor für Absenkung verwenden; einen Clip für Bewegung abspielen. Verschiebt die gesamte gewichtete Gruppe."
+    "Use Tilt or gravity scale for sag; play a clip for bounce. Moves the whole weighted group.": "Tilt oder Gravitationsfaktor für Absenkung verwenden; einen Clip für Bewegung abspielen. Verschiebt die gesamte gewichtete Gruppe.",
+    "Straightening rest angle (degrees, 0 = off)": "Ruhewinkel für die Streckung (Grad, 0 = aus)",
+    "Free-text clothing gain": "Bewegungsfaktor für Freitext-Kleidung"
   }
 }

@@ -196,7 +196,7 @@ def prompt_fragments(character_name: str,
     ``back: true`` (a render seen from behind); the general fragments are
     unaffected — they describe the whole person, not one side of it.
     """
-    specs = slots_for_character(character_name)
+    specs = slots_for_character(character_name, profile=profile)
     if face_only:
         specs = [s for s in specs if getattr(s, "face", False)]
     if not specs:

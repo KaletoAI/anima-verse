@@ -18,6 +18,14 @@
  * Static T' uses the bounded sag direction and direct length target,
  * independently of gain and dynamic max_deg. Resets, far
  * LOD and gain zero retain T'. Rest rotation blends over 1.5 real seconds.
+ * Straightening: three unit links have bind directions 0,20,40 degrees.
+ * At rest 90/threshold60, smoothstep(1)=1 leaves joint bends0 and root90.
+ * At rest30/threshold60, smoothstep(.5)=.5 leaves both joints10 degrees.
+ * Threshold0 or rest0 retains20 degrees; signed rest uses its absolute value.
+ * Rest 0→60 at .75s is30, hence joints10; after1.5s joints0. Fixed rest90
+ * threshold off→60 at .75s also leaves10; interrupted disable halfway leaves
+ * 15 at its midpoint, then20. Simultaneous rest+90→-90 crosses0 at .75s,
+ * where threshold60→0 must leave both joints20 (zero-rest invariant).
  * Static sag_max_deg and squash bound T'; dynamic angles are linear up to
  * max_deg/2, then max_deg/2*(1+tanh((angle-max_deg/2)/(max_deg/2))).
  * This C1 function is strictly monotonic and bounded by max_deg. Gain is
@@ -253,6 +261,56 @@ try {
     near(actual.distanceTo(new THREE.Vector3(...expected)),0); f.solver.dispose();
   }
   console.log('ok signed front/up rest convention and effective 170/180 versus 170/90 clamp');
+  // Three unit links: bind directions are 0,20,40 degrees from downward.
+  // smoothstep(.5)=.5, so rest 30 / threshold 60 leaves 10 degrees per joint.
+  function bentChain(rest, threshold) {
+    const root=new THREE.Group(), mount=new THREE.Bone();mount.position.z=-1;root.add(mount);
+    const links=[0,1,2].map(i=>{const b=new THREE.Bone();b.name=`bend_${i}`;return b;});
+    mount.add(links[0]);links[0].position.z=1;
+    for(let i=1;i<3;i++){links[i-1].add(links[i]);links[i].position.y=-1;links[i].rotation.x=-20*Math.PI/180;}
+    root.updateMatrixWorld(true);
+    const tips=links.map(b=>new THREE.Vector3(0,-1,0).applyMatrix4(b.matrixWorld));
+    const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(tips.flatMap(v=>v.toArray()),3));
+    geo.setAttribute('skinIndex',new THREE.Uint16BufferAttribute([1,0,0,0,2,0,0,0,3,0,0,0],4));
+    geo.setAttribute('skinWeight',new THREE.Float32BufferAttribute([1,0,0,0,1,0,0,0,1,0,0,0],4));
+    const mesh=new THREE.SkinnedMesh(geo,new THREE.MeshBasicMaterial());root.add(mesh);mesh.bind(new THREE.Skeleton([mount,...links]));
+    const make=(r,t)=>payload({bones:links.map(b=>b.name),gravity:0,gain:0,rest_deg:r,rest_max_deg:180,straighten_deg:t,squash:[1,1]});
+    const solver=C.createSecondaryMotion(THREE,root,make(rest,threshold));
+    const directions=()=>links.map((b,i)=>mesh.applyBoneTransform(i,tips[i].clone()).sub(b.getWorldPosition(new THREE.Vector3())).normalize());
+    solver.update(0);return {solver,directions,make};
+  }
+  for(const [rest,threshold,bend] of [[90,60,0],[30,60,10],[90,0,20],[0,60,20],[-90,60,0]]){
+    const f=bentChain(rest,threshold),dirs=f.directions();
+    near(Math.atan2(dirs[0].z,-dirs[0].y)*180/Math.PI,rest,.5);
+    for(let i=1;i<3;i++)near(dirs[i].angleTo(dirs[i-1])*180/Math.PI,bend,.5);
+    f.solver.dispose();
+  }
+  const blendChain=bentChain(0,60);blendChain.solver.configure(blendChain.make(60,60));
+  for(let i=0;i<90;i++)blendChain.solver.update(1/120);
+  const mid=blendChain.directions();near(Math.atan2(mid[0].z,-mid[0].y)*180/Math.PI,30,.5);
+  for(let i=1;i<3;i++)near(mid[i].angleTo(mid[i-1])*180/Math.PI,10,.5);
+  for(let i=0;i<90;i++)blendChain.solver.update(1/120);
+  const end=blendChain.directions();for(let i=1;i<3;i++)near(end[i].angleTo(end[i-1])*180/Math.PI,0,.5);
+  blendChain.solver.dispose();
+  // At fixed rest 90, enabling/disabling also blends the derived amount.
+  const enable=bentChain(90,0);enable.solver.configure(enable.make(90,60));enable.solver.update(0);
+  for(let i=1;i<3;i++)near(enable.directions()[i].angleTo(enable.directions()[i-1])*180/Math.PI,20,.5);
+  for(let i=0;i<90;i++)enable.solver.update(1/120);
+  for(let i=1;i<3;i++)near(enable.directions()[i].angleTo(enable.directions()[i-1])*180/Math.PI,10,.5);
+  enable.solver.configure(enable.make(90,0));enable.solver.update(0);
+  for(let i=1;i<3;i++)near(enable.directions()[i].angleTo(enable.directions()[i-1])*180/Math.PI,10,.5);
+  for(let i=0;i<90;i++)enable.solver.update(1/120);
+  for(let i=1;i<3;i++)near(enable.directions()[i].angleTo(enable.directions()[i-1])*180/Math.PI,15,.5);
+  for(let i=0;i<90;i++)enable.solver.update(1/120);
+  for(let i=1;i<3;i++)near(enable.directions()[i].angleTo(enable.directions()[i-1])*180/Math.PI,20,.5);
+  enable.solver.dispose();
+  const crossZero=bentChain(90,60);crossZero.solver.configure(crossZero.make(-90,0));
+  for(let i=0;i<90;i++)crossZero.solver.update(1/120);
+  near(Math.atan2(crossZero.directions()[0].z,-crossZero.directions()[0].y)*180/Math.PI,0,.5);
+  for(let i=1;i<3;i++)near(crossZero.directions()[i].angleTo(crossZero.directions()[i-1])*180/Math.PI,20,.5);
+  crossZero.solver.dispose();
+  assert.equal(hints.motionFieldPreview.straighten_deg,'live');assert.equal(hints.motionFieldPreview.freetext_clothing_gain,'motion');
+  console.log('ok straightening: rest/root 90, joints 0; rest 30, joints 10; off/zero joints 20; signed rest and 1.5s blend');
   // Real Figure oracle: bind link rotated toward horizontal attachment offset.
   // Rest 30/60/90 must survive max_deg=35; child local rotation stays bind.
   // Optional real-model oracle (needs a rigged GLB outside the repo):
@@ -276,12 +334,22 @@ try {
     const [r,c]=bones,head=o=>o.getWorldPosition(new THREE.Vector3()),direction=()=>head(c).sub(head(r)).normalize();
     const centroid=()=>{const sum=new THREE.Vector3();let total=0;fig.root.updateMatrixWorld(true);fig.root.traverse(m=>{if(!m.isSkinnedMesh)return;const pos=m.geometry.getAttribute('position'),idx=m.geometry.getAttribute('skinIndex'),w=m.geometry.getAttribute('skinWeight');for(let i=0;i<pos.count;i++){let weight=0;for(let j=0;j<4;j++)if(bones.includes(m.skeleton.bones[idx.getComponent(i,j)]))weight+=w.getComponent(i,j);if(weight>0){sum.addScaledVector(m.applyBoneTransform(i,new THREE.Vector3().fromBufferAttribute(pos,i)).applyMatrix4(m.matrixWorld),weight);total+=weight;}}});return sum.divideScalar(total);};
     const front=head(r).sub(head(r.parent));front.y=0;front.normalize();
+    const childCentre=new THREE.Vector3();let childWeight=0;
+    fig.root.traverse(m=>{if(!m.isSkinnedMesh)return;const pos=m.geometry.getAttribute('position'),idx=m.geometry.getAttribute('skinIndex'),w=m.geometry.getAttribute('skinWeight');for(let i=0;i<pos.count;i++)for(let j=0;j<4;j++)if(m.skeleton.bones[idx.getComponent(i,j)]===c&&w.getComponent(i,j)>0){const value=w.getComponent(i,j);childCentre.addScaledVector(new THREE.Vector3().fromBufferAttribute(pos,i).applyMatrix4(m.bindMatrix).applyMatrix4(m.skeleton.boneInverses[idx.getComponent(i,j)]),value);childWeight+=value;}});
+    assert.ok(childWeight>0,'real child has weighted geometry');childCentre.divideScalar(childWeight);
+    const childDirection=()=>childCentre.clone().transformDirection(c.matrixWorld);
+    const bindBend=direction().angleTo(childDirection())*180/Math.PI;
     const before=direction(),centre=centroid(),local=new THREE.Quaternion().setFromRotationMatrix(c.matrix).normalize(),axis=before.clone().cross(front).normalize();
     holder.payload=payload({...params,rest_deg:angle});for(let i=0;i<720;i++)fig.update(0,{realDelta:1/120});
     const actual=direction(),delta=centroid().sub(centre),measured=Math.atan2(actual.dot(axis.clone().cross(before)),actual.dot(before))*180/Math.PI;
     const kink=new THREE.Quaternion().setFromRotationMatrix(c.matrix).normalize().angleTo(local)*180/Math.PI;
     console.log('real Figure rest',JSON.stringify({yaw:yaw*180/Math.PI,requested:angle,measured,kink,front:delta.dot(front),up:delta.y}));
-    near(actual.angleTo(before.clone().applyAxisAngle(axis,angle*Math.PI/180))*180/Math.PI,0,2);near(kink,0,2);assert.ok(angle>0?delta.dot(front)>0&&delta.y>0:delta.dot(front)<0);fig.dispose();
+    near(actual.angleTo(before.clone().applyAxisAngle(axis,angle*Math.PI/180))*180/Math.PI,0,2);near(kink,0,2);assert.ok(angle>0?delta.dot(front)>0&&delta.y>0:delta.dot(front)<0);
+    holder.payload=payload({...params,rest_deg:angle,straighten_deg:60});for(let i=0;i<180;i++)fig.update(0,{realDelta:1/120});
+    const f=Math.min(Math.abs(angle)/60,1),expectedBend=bindBend*(1-f*f*(3-2*f));
+    near(direction().angleTo(childDirection())*180/Math.PI,expectedBend,.5);
+    near(direction().angleTo(before.clone().applyAxisAngle(axis,angle*Math.PI/180))*180/Math.PI,0,.5);
+    console.log('real Figure straighten',JSON.stringify({rest:angle,bindBend,expectedBend,actualBend:direction().angleTo(childDirection())*180/Math.PI}));fig.dispose();
   }
   }
   const walkRigPath=process.env.SECONDARY_WALK_RIG_PATH;
@@ -826,7 +894,7 @@ try {
   const renderEditor=new Function('h','Fragment','useState','useI18n','MotionPreviewHint',...Object.keys(helpers),editorCode.code+'; return ExtensionMotionDraft')(
     h,'fragment',useState,()=>({t:x=>x}),'preview-hint',...Object.values(helpers));
   const editorCalls=[];
-  const defaults={stretch:0,spread:.5,flatten_floor:.8,axis_gain:[1,1,1],freq_hz:2,zeta:.7,gravity:1,gain:.9,max_deg:30,sag_max_deg:30,spill_max_deg:30,head_sag:1,flatten:1,spill:0,translate:0,rest_max_deg:45,squash:[.8,1.2]};
+  const defaults={straighten_deg:0,freetext_clothing_gain:1,stretch:0,spread:.5,flatten_floor:.8,axis_gain:[1,1,1],freq_hz:2,zeta:.7,gravity:1,gain:.9,max_deg:30,sag_max_deg:30,spill_max_deg:30,head_sag:1,flatten:1,spill:0,translate:0,rest_max_deg:45,squash:[.8,1.2]};
   const props={defaults,overrides:{},disabled:false,onSave:async value=>{editorCalls.push(value);return true}};
   const allNodes=node=>Array.isArray(node)?node.flatMap(allNodes):node?.children?[node,...node.children.flatMap(allNodes)]:[];
   const nodes=()=>allNodes(renderEditor(props));

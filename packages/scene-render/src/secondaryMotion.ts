@@ -28,6 +28,8 @@ export interface MotionGroup {
   squash: [number, number]
   rest_deg: number
   rest_max_deg: number
+  straighten_deg: number
+  freetext_clothing_gain: number
 }
 /** Package metadata profiles are multipliers; runtime groups are already resolved. */
 export type MotionAttributeProfiles = Record<string, Record<string, Partial<Pick<MotionGroup,
@@ -38,6 +40,7 @@ export interface ExtensionRigDeclaration extends Omit<MotionGroup, 'bones' | 'gr
   op: string
   chains: { bone: string; parent: string }[][]
   params: Record<string, unknown>
+  templates?: string[] | "*" | { feature: string } | null
   applies_to: Record<string, unknown[]>
   attribute_profiles?: MotionAttributeProfiles
 }
@@ -115,6 +118,7 @@ interface Bind {
   auto: boolean
   depth: number
   rotation: Quaternion
+  straightenRotation: Quaternion
   localRotation: Quaternion
 }
 interface Particle {
@@ -137,6 +141,11 @@ interface Particle {
   restFrom: number
   restTo: number
   blend: number
+  straighten: number
+  straightenFrom: number
+  straightenRestFrom: number
+  straightenBlend: number
+  straightenThreshold: number
   anchorRotation: Quaternion | null
 }
 /** Maximum transverse compensation: strong flattening must not inflate the mesh. */
@@ -161,6 +170,10 @@ export const softMotionAngle = (angle: number, limit: number) => {
   if (limit <= 0) return 0
   const knee = limit / 2
   return angle <= knee ? angle : knee + knee * Math.tanh((angle - knee) / knee)
+}
+const straighteningFraction = (rest: number, threshold: number) => {
+  const f = threshold > 0 ? clamp(Math.abs(rest) * 180 / Math.PI / threshold, 0, 1) : 0
+  return f * f * (3 - 2 * f)
 }
 const restAngle = (g: MotionGroup) => clamp(g.rest_deg, -g.rest_max_deg, g.rest_max_deg) * Math.PI / 180
 
@@ -217,7 +230,7 @@ export function createSecondaryMotion(
         binds.set(bone, { bone, local: bone.matrix.clone(), centroid: new three.Vector3(), centroidWorld: new three.Vector3(),
           gravityRest: gravity.clone().applyQuaternion(q), gravityProjection: 0, bodyFront: new three.Vector3(),
           head: bone.getWorldPosition(new three.Vector3()), parentHead: bone.parent!.getWorldPosition(new three.Vector3()), worldRotation: q.clone().invert(), pureWorld: new three.Matrix4(),
-          lateral: new three.Vector3(), pairedLateral: new three.Vector3(), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), localRotation: bone.quaternion.clone() })
+          lateral: new three.Vector3(), pairedLateral: new three.Vector3(), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), straightenRotation: new three.Quaternion(), localRotation: bone.quaternion.clone() })
       }
     })
     // One pass over four influences per vertex, not one pass per skeleton bone.
@@ -298,6 +311,18 @@ export function createSecondaryMotion(
           b.pairedLateral.addScaledVector(bindUp, -b.pairedLateral.dot(bindUp)).normalize()
           b.pairedLateral.applyQuaternion(b.worldRotation.clone().invert())
         }
+        b.straightenRotation.identity()
+        if (!roots.includes(b)) {
+          const parent = binds.get(b.bone.parent as Bone)!
+          const child = (chain as Bind[]).find(c => c.bone.parent === b.bone)
+          const ownLever = child ? child.head.clone().sub(b.head) : b.centroidWorld.clone().sub(b.head)
+          const parentLever = b.head.clone().sub(parent.head)
+          if (ownLever.lengthSq() > 1e-12 && parentLever.lengthSq() > 1e-12) {
+            const inverseBind = b.worldRotation.clone().invert()
+            b.straightenRotation.setFromUnitVectors(ownLever.normalize().applyQuaternion(inverseBind),
+              parentLever.normalize().applyQuaternion(inverseBind))
+          }
+        }
         b.lateral.set(0, 0, 0)
         if (!roots.includes(b)) continue
         const child = (chain as Bind[]).find(c => c.bone.parent === b.bone)
@@ -314,6 +339,9 @@ export function createSecondaryMotion(
         const old = previous.get(bind.bone)
         const particle: Particle = old ?? { bind, roots, params, paramsFrom: params, paramsTo: params, paramsBlend: 1.5, p: null, v: new three.Vector3(),
           target: null, anchorRotation: null, rest: to, restFrom: to, restTo: to, blend: 1.5,
+          straighten: straighteningFraction(to, params.straighten_deg ?? 0),
+          straightenFrom: straighteningFraction(to, params.straighten_deg ?? 0), straightenRestFrom: Math.abs(to),
+          straightenBlend: 1.5, straightenThreshold: params.straighten_deg ?? 0,
           staticFrequency: params.freq_hz, staticFrequencyFrom: params.freq_hz, staticFrequencyTo: params.freq_hz,
           staticWeight: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
           staticWeightFrom: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
@@ -322,6 +350,12 @@ export function createSecondaryMotion(
           particle.restFrom = particle.rest
           particle.restTo = to
           particle.blend = 0
+        }
+        if (particle.straightenThreshold !== (params.straighten_deg ?? 0)) {
+          particle.straightenFrom = particle.straighten
+          particle.straightenRestFrom = Math.abs(particle.rest)
+          particle.straightenThreshold = params.straighten_deg ?? 0
+          particle.straightenBlend = 0
         }
         particle.roots = roots
         if (BLENDED_FIELDS.some(field => particle.paramsTo[field] !== params[field])) {
@@ -403,8 +437,20 @@ export function createSecondaryMotion(
         const fraction = st.blend / 1.5
         const limit = st.params.rest_max_deg * Math.PI / 180
         st.rest = clamp(st.restFrom + (st.restTo - st.restFrom) * fraction * fraction * (3 - 2 * fraction), -limit, limit)
+        // Blend the derived amount: interpolating a threshold through zero
+        // would snap raised chains fully straight on their first frame.
+        st.straightenBlend = Math.min(1.5, st.straightenBlend + dt)
+        const straightT = st.straightenBlend / 1.5
+        const straightWeight = straightT * straightT * (3 - 2 * straightT)
+        const straightTarget = straighteningFraction(st.rest, st.straightenThreshold)
+        // The carried amount must also vanish smoothly when a simultaneous
+        // rest transition passes through zero, including signed changes.
+        const carried = st.straightenFrom * straighteningFraction(st.rest, st.straightenRestFrom * 180 / Math.PI)
+        st.straighten = carried + (straightTarget - carried) * straightWeight
         if (st.roots.includes(b) && b.lateral.lengthSq() > 1e-12) restQ.setFromAxisAngle(b.lateral, st.rest)
-        else restQ.identity()
+        else {
+          restQ.identity().slerp(b.straightenRotation, st.straighten)
+        }
         restVector.copy(b.centroid).applyQuaternion(restQ)
         target.copy(restVector).applyMatrix4(anchor)
         head.setFromMatrixPosition(anchor)

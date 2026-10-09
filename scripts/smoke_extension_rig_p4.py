@@ -221,7 +221,7 @@ def main():
                         {'sample_group': {'rest_deg': float('nan')}},
                         {'sample_group': {'gain': -1}}, {'sample_group': {'gain': True}},
                         {'sample_group': {'gravity': float('nan')}},
-                        {'sample_group': {'freq': float('inf')}}, {'sample_group': {'unknown': 1}},
+                        {'sample_group': {'freq': float('inf')}}, {'sample_group': {'unknown': 1}}, {'sample_group': {'straighten_deg': 60}}, {'sample_group': {'freetext_clothing_gain': .5}},
                         {'sample_group': {'gain': 10**500}}):
                 try:
                     _prompt_filters_save_sync(None, {'id': 'invalid', 'bone_pose': bad})

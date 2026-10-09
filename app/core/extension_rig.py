@@ -19,10 +19,20 @@ def rig_groups_for(character_name, profile=None):
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
+    from app.plugins.registry import packages
+    from app.models.character_template import fragment_applies, get_template
+    template_name = (profile.get("template") or "").strip()
+    template = (get_template(template_name) or {}) if template_name else {}
+    active_slots = {id(slot) for slot in slots_for_character(character_name, profile=profile)}
     groups = []
-    for slot in slots_for_character(character_name, profile=profile):
+    for slot in (slot for package in packages() for slot in package.body_slots):
         rig = slot.rig
         if rig is None:
+            continue
+        if rig.templates is None:
+            if id(slot) not in active_slots:
+                continue
+        elif not template_name or not fragment_applies({"apply_to": rig.templates}, template_name, template):
             continue
         values = (profile.get("body_slots") or {}).get(slot.id) or {}
         matches = True
@@ -71,7 +81,7 @@ def resolved_extension_groups(character_name, profile=None):
     return result
 
 
-MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "spill", "flatten", "stretch", "spread", "flatten_floor", "translate", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "squash", "axis_gain", "rest_max_deg")
+MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "spill", "flatten", "stretch", "spread", "flatten_floor", "translate", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "squash", "axis_gain", "rest_max_deg", "straighten_deg", "freetext_clothing_gain")
 
 
 def declared_motion_groups():
@@ -188,7 +198,9 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             values[key] = min(1.0, values[key])
         for key in ("max_deg", "sag_max_deg", "spill_max_deg"):
             values[key] = min(180.0, values[key])
-        factor = 1.0
+        free_text = any(isinstance(profile.get(key), str) and profile[key].strip()
+                        for key in ("outfit_description", "outfit_worn"))
+        factor = values["freetext_clothing_gain"] if apply_clothing and not pieces and free_text else 1.0
         targets = set(coverage.get(group["id"], []))
         for piece in pieces.values():
             f = piece["motion_damping"]

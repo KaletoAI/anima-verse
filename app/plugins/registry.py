@@ -95,6 +95,9 @@ class RigSpec:
     max_deg: float = 25.0
     squash: List[float] = field(default_factory=lambda: [0.6, 1.4])
     rest_max_deg: float = 90.0
+    straighten_deg: float = 0.0
+    freetext_clothing_gain: float = 1.0
+    templates: Any = None
 
     @classmethod
     def parse(cls, raw, attributes=None):
@@ -115,6 +118,16 @@ class RigSpec:
                 or any(not isinstance(x, (str, int, float, bool, type(None))) for x in v)
                 for k, v in conditions.items()):
             raise ValueError("rig.applies_to must map fields to non-empty scalar lists")
+        if "apply_to" in raw:
+            raise ValueError("use rig.templates for template selection and rig.applies_to for conditions")
+        templates = raw.get("templates")
+        if "templates" in raw and not (
+                templates == "*"
+                or (isinstance(templates, list) and templates
+                    and all(isinstance(v, str) and v.strip() for v in templates))
+                or (isinstance(templates, dict) and set(templates) == {"feature"}
+                    and isinstance(templates["feature"], str) and templates["feature"].strip())):
+            raise ValueError("rig.templates requires template names, * or a feature selector")
         chains = raw.get("chains")
         if not isinstance(chains, list) or not chains:
             raise ValueError("rig.chains must be a non-empty list")
@@ -142,9 +155,11 @@ class RigSpec:
             result.append(clean)
         spec = cls(raw["id"].strip(), raw["op"].strip(), result,
                    dict(params), dict(conditions))
+        spec.templates = templates
         bounds = {"freq_hz": (0, None), "zeta": (0, None),
                   "gravity": (0, None), "head_sag": (0, 1), "spill": (0, 1), "translate": (0, 1), "flatten": (0, 1), "stretch": (0, 1), "spread": (0, 1), "gain": (0, 1),
-                  "max_deg": (0, 180), "rest_max_deg": (0, 180)}
+                  "max_deg": (0, 180), "rest_max_deg": (0, 180),
+                  "straighten_deg": (0, 180), "freetext_clothing_gain": (0, 1)}
         for key, (lo, hi) in bounds.items():
             value = raw.get(key, getattr(spec, key))
             if isinstance(value, bool) or not isinstance(value, (int, float)):

@@ -283,6 +283,8 @@ body_slots:
       axis_gain: [1, 1, 1]
       squash: [0.6, 1.4]
       rest_max_deg: 90
+      straighten_deg: 0 # Off; positive values remove bends as rest increases.
+      freetext_clothing_gain: 1 # Clothing factor without resolved item pieces.
 ```
 
 Replace the base-joint placeholder with a name from
@@ -297,7 +299,8 @@ value lists. Profile-field keys inspect the profile. `attributes.<key>` keys
 inspect `profile.body_slots[<this slot>][<key>]`; a bare declared attribute key
 also selects that slot value. Explicit `attributes.` keys avoid ambiguity.
 These conditions are available both on the slot and inside `rig`; the rig
-must additionally pass the package/template and slot applicability filters.
+must additionally pass the package/template and slot applicability filters
+unless its own `rig.templates` selector replaces those filters.
 An omitted condition map applies without further filtering. For both slot and
 rig conditions, YAML `null` in an allowed list matches a missing or explicitly
 null value only; it does not match `""` or the literal string `"none"`. Both
@@ -375,7 +378,8 @@ attribute profiles multiply in declaration order. Profiles never enter mesh iden
 
 Every physics field is optional with the defaults shown above. All numbers
 must be finite: `freq_hz > 0`; `zeta >= 0`, `gravity >= 0`; `gain`, `flatten`, `stretch`, `spread`, `flatten_floor`, `spill`, `translate` and `head_sag` in `[0,1]`;
-`max_deg`, `sag_max_deg`, `spill_max_deg` and `rest_max_deg` in `[0,180]`; `squash` is exactly two positive
+`max_deg`, `sag_max_deg`, `spill_max_deg`, `rest_max_deg` and `straighten_deg` in `[0,180]`;
+`freetext_clothing_gain` in `[0,1]`; `squash` is exactly two positive
 numbers satisfying `min <= 1 <= max`. `params` must be a mapping. A malformed
 rig is dropped with a warning, and its slot remains available. Duplicate
 normalized extension names or group IDs cause a load error naming all owners.
@@ -770,7 +774,7 @@ representation, matching the browser's `JOINTS_0`/`WEIGHTS_0` consumption.
 Package body-slot `rig` declarations remain the base physics values. Core declares
 `extension_motion.groups` as a **world** setting: arbitrary package group IDs map
 to partial overrides of `freq_hz`, `zeta`, `gravity`, `spill`, `flatten`, `stretch`, `spread`, `flatten_floor`, `translate`, `gain`,
-`max_deg`, `sag_max_deg`, `spill_max_deg`, `head_sag`, `axis_gain`, `squash`, and `rest_max_deg`. Missing values inherit the package; no group IDs are named in core.
+`max_deg`, `sag_max_deg`, `spill_max_deg`, `head_sag`, `axis_gain`, `squash`, `rest_max_deg`, `straighten_deg` and `freetext_clothing_gain`. Missing values inherit the package; no group IDs are named in core.
 Game-Admin → Setup → Extension motion lists loaded declarations from the admin-only
 `GET /admin/world-settings/extension-motion` endpoint and saves through the existing
 world-settings endpoint. Reset removes the override so future package defaults flow through.
@@ -788,7 +792,9 @@ After character overrides, every distinct worn item whose occupied slots or `out
 the body slot's `covered_by` contributes its `motion_damping` (0..1, default 1)
 to the gain product. Mirrored occupied slots count once; hidden layers still count.
 A partial cover contributes `1 - (1 - motion_damping)/2`; full coverage takes
-precedence for the same item. Free-text outfits without pieces contribute 1.
+precedence for the same item. Without any resolved outfit pieces, non-empty `outfit_description` or `outfit_worn`
+contributes the group's `freetext_clothing_gain` (0..1, default 1). Empty or whitespace-only
+text contributes 1; worn pieces take precedence. `apply_clothing=False` bypasses both factors.
 The shared character template's `motion_gravity_scale` (0..3, default 1) is transported separately as group `gravity_scale=m`:
 `a_g=gravity*(m*g-R_anchor*g_rest)`. Thus upright m=1 gives zero, m=2 adds sag,
 and m=.5 lifts. Static equilibrium `e=a_g/omega²` (after removing inward axial force) is bounded
@@ -842,8 +848,9 @@ up. For each root lever u, project front perpendicular to u to obtain front';
 the axis is normalize(cross(u, front')), signed so positive rotation moves u
 toward front. For a lever parallel to front, use up instead, so positive lifts.
 Store each axis in its own root anchor frame; no fixed model axis is assumed.
-The rest angle rotates the WHOLE chain rigidly at its ROOT link. Children
-inherit it and receive no extra rest rotation. Compute T' and static sag around
+The rest angle rotates the chain at its ROOT link. Children inherit that
+rotation; optional `straighten_deg` removes their relative bind bends as
+described below. With its default 0, the chain rotates rigidly. Compute T' and static sag around
 this rotated rest. max_deg and soft saturation limit ONLY dynamic deviation
 from T'; rest is limited only by the effective rest_max_deg. Paired groups
 rotate each chain root about its own derived axis. Negative angles move in the
@@ -936,3 +943,49 @@ on top of the static/dynamic deformation; they do not change volume compensation
 State editor hints are `live`. Resolved payloads always include numeric
 `stretch`, `spread`, `flatten_floor`, `length` and `girth`; all five affect only motion
 revision, leaving mesh fingerprints unchanged.
+
+### Independent rig templates and rest-angle straightening
+
+A slot's `rig.templates` optionally selects templates independently of package
+`apply_to`: a non-empty name list, `"*"`, or `{feature: humanoid}` uses the same
+selector semantics. When present, it replaces the slot/package applicability
+for this rig only. `rig.applies_to` remains the condition map and still filters
+profile fields and stored slot attributes (case-insensitive AND conditions).
+Without `rig.templates`, existing package and slot applicability remains.
+This never activates the owning slot's prompt fragments, attribute editor,
+coverage, silhouette or clothing topology on additional templates. Motion
+attribute profiles and item coverage are taken only from active slots.
+`rig.apply_to` is rejected to keep template selectors and conditions unambiguous.
+
+```yaml
+rig:
+  # Add these keys to an existing declaration with id/op/chains/params.
+  templates: [example-template]
+  applies_to: {gender: [female]}
+  straighten_deg: 60
+  freetext_clothing_gain: 0.25
+```
+
+`straighten_deg` is finite in [0,180], default 0 (off). For each non-root
+chain link, reduce the bind relative bend by `smoothstep(clamp(abs(rest_effective)
+/ straighten_deg,0,1))`, using the same 1.5-second rest transition. At zero rest,
+bends remain unchanged. At or above the threshold every link points along its
+parent. With two 20-degree joints, rest 90/threshold 60 leaves 0 degrees; rest
+30 leaves 10 degrees per joint; threshold 0 leaves 20 degrees. Negative rest
+uses the same absolute fraction. Changing the threshold (including enabling,
+disabling and interrupted transitions) blends the derived straightening amount
+over 1.5 seconds, so a threshold passing through zero cannot cause a snap. Rest rotation is still root-only; bind front
+and pureWorld scale isolation remain unchanged. Paired one-link groups have
+no non-root links and are unaffected. Straightening is geometric, independent
+of imported bone axes, and uses the next head or terminal weighted centroid.
+
+Both `straighten_deg` and `freetext_clothing_gain` are package physics defaults,
+world `extension_motion.groups` overrides and character Advanced overrides
+in `model3d_opts.extension_motion`. Both are included in effective motion payloads
+and `motion.rev`, excluded from mesh fingerprints and state `bone_pose`. Preview
+hints are `live` for straightening and `motion` for free-text clothing gain.
+Non-empty free text without resolved item pieces supplies clothing factor k
+from `freetext_clothing_gain`; blank text supplies k=1. Item pieces override
+this fallback. Temporary NPCs use the same normalize → extension → LOD pipeline,
+rebuild route and Improvements batch; the 3D panel shows Extension bones whenever
+resolved groups exist, independently of inventory/outfit-system features.

@@ -10,7 +10,8 @@ Changing flatten to .5 or sag_max_deg to 40 changes effective motion/rev,
 while mesh identity hashes only operation geometry and stays unchanged.
 Equal motion content gives equal motion rev; package deletion restores strict validation.
 An extension parent must be a skin joint, not just a same-named scene node.
-Slot and rig conditions are both AND filters. A tier's creation/deletion or
+Slot and rig conditions are both AND filters without rig.templates; an explicit
+rig selector replaces package/slot applicability without activating prompt content. A tier's creation/deletion or
 same-size atomic replacement changes model_rev; polls never read mesh bytes.
 """
 import copy
@@ -103,6 +104,7 @@ def main():
                               "attributes.example_attribute": ["enabled"]}}
         manifest = {"name": "Example package", "apply_to": "*", "body_slots": [
             {"id": "example_slot", "attributes": {"example_attribute": {"type": "str"}},
+             "prompt": {"always": "example fixture marker"}, "covered_by": ["example_cover"],
              "rig": rig}]}
         plugins = root / "plugins"
         package = plugins / "example_a"
@@ -166,10 +168,35 @@ def main():
                       "null differs from literal string")
             target.applies_to = saved_conditions
         slot.applies_to = {}
+        # Rig template selection must not activate its owner's prompt or coverage.
+        from app.core.body_slots import slots_for_character, prompt_fragments
+        pkg = registry.get_package("example_a")
+        saved_selector = pkg.apply_to
+        pkg.apply_to = ["demo"]
+        slot.rig.templates = ["npc-temporary"]
+        saved_conditions = slot.rig.applies_to
+        slot.rig.applies_to = {"gender": ["female"]}
+        npc = {"template": "npc-temporary", "gender": "female"}
+        check(len(rig_groups_for("demo", npc)) == 1, "rig template bypasses package selector")
+        check(slots_for_character("demo", profile=npc) == [], "rig selector leaves slot attributes and coverage inactive")
+        check(prompt_fragments("demo", profile=npc) == {"general": [], "exposed": []},
+              "rig selector leaves slot prompts inactive")
+        from app.routes.characters import get_body_slots
+        check(save_character_profile("sample", npc, create_new=True), "rig-only NPC profile")
+        check(get_body_slots("sample")["slots"] == [], "body slots coverage API stays empty for rig-only NPC")
+        check(prompt_fragments("sample") == {"general": [], "exposed": []}, "stored NPC prompt isolation")
+        check(rig_groups_for("demo", {**npc, "gender": "male"}) == [], "rig gender condition still filters")
+        slot.rig.templates = {"feature": "humanoid"}
+        check(len(rig_groups_for("demo", npc)) == 1, "rig feature template selector")
+        slot.rig.templates = "*"
+        check(len(rig_groups_for("demo", npc)) == 1, "rig wildcard template selector")
+        slot.rig.templates = None
+        slot.rig.applies_to = saved_conditions
+        pkg.apply_to = saved_selector
         motion = motion_payload("demo", profile)
         expected = {"bones": ["ExampleBone1", "ExampleBone2"], "freq_hz": 2.2,
                     "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "stretch": 0.0, "spread": 0.5, "flatten_floor": .6, "length": 1.0, "girth": 1.0, "spill": 0.0, "flatten": 0.0, "translate": 0.0, "sag_max_deg": 25.0, "spill_max_deg": 25.0, "head_sag": 1.0, "gain": 1.0, "max_deg": 25.0,
-                    "axis_gain": [1, 1, 1], "squash": [0.6, 1.4], "rest_deg": 0, "rest_max_deg": 90.0}
+                    "axis_gain": [1, 1, 1], "squash": [0.6, 1.4], "rest_deg": 0, "rest_max_deg": 90.0, "straighten_deg": 0.0, "freetext_clothing_gain": 1.0}
         check(motion["groups"] == {"example_group": expected}, "motion defaults")
         check(motion == motion_payload("demo", copy.deepcopy(profile)), "stable motion rev")
         check(motion["rev"] != motion_payload("demo", {})["rev"], "resolved content changes rev")
@@ -185,7 +212,7 @@ def main():
               "package spill changes payload and revision")
         slot.rig.spill = 0.0
         fingerprint = extension_metadata("demo", profile)["fingerprint"]
-        for key, value in (("spread", .2), ("stretch", .8), ("flatten_floor", .15), ("translate", .6), ("flatten", .5), ("sag_max_deg", 40), ("axis_gain", [.5, 1, .15])):
+        for key, value in (("straighten_deg", 60), ("freetext_clothing_gain", .25), ("spread", .2), ("stretch", .8), ("flatten_floor", .15), ("translate", .6), ("flatten", .5), ("sag_max_deg", 40), ("axis_gain", [.5, 1, .15])):
             original = getattr(slot.rig, key)
             setattr(slot.rig, key, value)
             changed = motion_payload("demo", profile)
@@ -210,7 +237,13 @@ def main():
             check(True, "axis_gain excluded from attribute multipliers")
         else:
             raise AssertionError("axis_gain accepted in attribute multipliers")
-        for key, value in (("freq_hz", 0), ("gain", 1.1), ("spill", -0.1), ("spill", 1.1), ("spill", float("nan")), ("zeta", -1),
+        for key, value in (("templates", None), ("templates", []), ("templates", "demo"),
+                           ("templates", {"feature": True}), ("templates", [1]),
+                           ("templates", {"feature": "humanoid", "extra": 1}), ("apply_to", "*"),
+                           ("straighten_deg", -1), ("straighten_deg", 181), ("straighten_deg", True),
+                           ("straighten_deg", float("nan")), ("freetext_clothing_gain", -.1),
+                           ("freetext_clothing_gain", 1.1), ("freetext_clothing_gain", True),
+                           ("freetext_clothing_gain", float("inf")), ("freq_hz", 0), ("gain", 1.1), ("spill", -0.1), ("spill", 1.1), ("spill", float("nan")), ("zeta", -1),
                            ("gravity", float("nan")), ("max_deg", 181),
                            ("translate", -.1), ("translate", 1.1), ("translate", True), ("translate", float("nan")), ("flatten", -.1), ("flatten", 1.1), ("flatten", True),
                            ("sag_max_deg", -1), ("sag_max_deg", 181), ("sag_max_deg", float("nan")),
