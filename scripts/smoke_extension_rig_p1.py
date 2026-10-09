@@ -33,7 +33,7 @@ base-joint frames remain unchanged. Repetition preserves bytes; changing
 only the test angle reconstructs the same weights from the clean prerig.
 The contact fixture joins the radius-.03 cylinder to a radius-.06 cylinder
 centred at x=.09,y=-.16 along z=.80-.98. The 19*32=608 part samples
-are all inside R_seg=1.35*.03=.0405. No sample beyond R_seg is captured.
+are all inside pass-0 R=1.35*.03=.0405. No sample beyond the final R is captured.
 Every captured vertex loses all declared source-joint weights.
 A single-link radial-ramp probe declares protrusion_threshold=.02 so all
 angular samples enter the axis fit, centred at y=-.16. With contact_ramp=.021,
@@ -42,6 +42,28 @@ the mean extension weight at the opposite (+/-.03,-.16,.91) probes is
 135/686 (opposite probes cancel first-order axis drift from exported seam
 multiplicity). The other three
 weights are .40,.35,.25 times (1-w).
+The offset fixture adds a 2 mm front bulge: for theta_j=2*pi*j/32,
+x=.03*cos(theta_j), y=-.16+.03*sin(theta_j)-.002*max(0,-sin(theta_j)).
+The reference is -.10 and threshold .061 selects the 15 negative-sine samples.
+Their mean offset is -.032*sum(sin(pi*j/16),j=1..15)/15=-.02166010 m;
+half-width=.03*cos(pi/16), hence R0=.03972180. On each ring C0 contains
+17 angular positions. With q=.95 and margin=1.2, the next centroid offsets,
+radii and angular counts (ordinary finite sums and interpolated sorted distances)
+are (-.01911185,.04268464,21), (-.01382072,.04503358,32), and
+(-.00063457,.03756308,32). Every ring has the same cross-section, so PCA
+is vertical and both axis ends lie only .635 mm from (x=0,y=-.16), below 2 mm.
+The touching radius-.06 cylinder uses eight angular positions here: only its
+contact at x=.03 lies inside these radii; its next samples have radial distance
+sqrt((.09-.06/sqrt(2))**2+(.06/sqrt(2))**2)>.063 m. Welding merges
+that contact with the part, so it does not bias the centroid. All 19*32=608
+part positions, including the back y=-.13, must carry positive extension weights
+with the declared .25 axial ramp, while all other contact-cylinder positions
+retain their source weights. Inside the cut window, 0.9*R_final=.03380677
+exceeds the largest part radial distance .03136543, hence uncaptured_in_part=0;
+bounded selection implies captured_beyond_radius=0 and full transfer implies
+thigh_weight_in_part=0. The old unrefined axis misses the back by .05166010>R0.
+The older exact attenuation probes explicitly keep margin=1.35 (R=.0405),
+while refinement fixtures use the documented margin=1.2.
 All storage and clip/rig paths are temporary. Missing Blender is a skip.
 """
 import copy
@@ -103,6 +125,10 @@ DECLARED_PARAMS = {'pair_protrusion': {'band_lower_bone': 'Spine1',
                      'leak_t_limit': 1.6,
                      'leak_radius_limit': 0.09,
                      'segment_radius_factor': 1.35,
+                     'segment_radius_percentile': .95,
+                     'segment_radius_margin': 1.2,
+                     'segment_radius_growth_max': 1.5,
+                     'segment_passes': 3,
                      'segment_min_vertices': 3,
                      'contact_ramp': 0.01,
                      'ring_radius_percentile': 0.9,
@@ -197,7 +223,7 @@ start=len(vertices)
 for iz in range(19):
     for j in range(32):
         a=2*math.pi*j/32
-        vertices.append((.03*math.cos(a),-.16+.03*math.sin(a),.8+iz*.01))
+        vertices.append((.03*math.cos(a),-.16+.03*math.sin(a)-(.002*max(0,-math.sin(a)) if p.get('bulged') else 0),.8+iz*.01))
 for iz in range(18):
     for j in range(32):
         a=start+iz*32+j; b=start+iz*32+(j+1)%32
@@ -208,16 +234,17 @@ for j in range(32):
     c=len(vertices); vertices.extend(((vertices[a][0],-.1,.98),(vertices[b][0],-.1,.98)))
     faces.append((a,b,c+1,c))
 if p.get('fused'):
-    # Tangent cylinder, welded along nineteen rings of contact at x=.03.
+    # Tangent contact; coarse samples in the offset fixture isolate the centre proof.
+    count=8 if p.get('bulged') else 32
     off=len(vertices)
     for iz in range(19):
-        for j in range(32):
-            angle=2*math.pi*j/32
+        for j in range(count):
+            angle=2*math.pi*j/count
             vertices.append((.09+.06*math.cos(angle),-.16+.06*math.sin(angle),.8+iz*.01))
     for iz in range(18):
-        for j in range(32):
-            a=off+iz*32+j; b=off+iz*32+(j+1)%32
-            faces.append((a,b,b+32,a+32))
+        for j in range(count):
+            a=off+iz*count+j; b=off+iz*count+(j+1)%count
+            faces.append((a,b,b+count,a+count))
 off=len(vertices); vertices.extend(((.14,-.23,1.4),(.20,-.23,1.4),(.20,-.23,1.401))); faces.append((off,off+1,off+2))
 off=len(vertices); vertices.extend(((0,.23,0),(0,.23,1.7),(.001,.23,0))); faces.append((off,off+1,off+2))
 meshdata=bpy.data.meshes.new('Surface')
@@ -488,7 +515,7 @@ def main():
                 {'id':'example_chain','op':'appendage_chain','chains':[[
                     {'bone':'ExampleLink1','parent':'mixamorig:Hips'},
                     {'bone':'ExampleLink2','parent':'ExampleLink1'}]],
-                 'params':{**DECLARED_PARAMS['appendage_chain'],'search_z_min':-.35,'anchor_offset':[0,0,-.07],'weight_ramp':1.,'reweight_from':['LeftUpLeg']}}]
+                 'params':{**DECLARED_PARAMS['appendage_chain'],'segment_radius_margin':1.35,'search_z_min':-.35,'anchor_offset':[0,0,-.07],'weight_ramp':1.,'reweight_from':['LeftUpLeg']}}]
         package=root/'plugins'/'example'
         package.mkdir(parents=True)
         manifest={'name':'Example package','apply_to':'*','body_slots':[
@@ -508,6 +535,7 @@ def main():
         with patch.object(runner,'SCRIPTS_DIR',fixtures):
             normal=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES)},out_dir=root/'fixture',timeout_s=180)
             ties=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES),'ties':True},out_dir=root/'ties',timeout_s=180)
+            bulged=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES),'fused':True,'bulged':True},out_dir=root/'bulged',timeout_s=180)
             fused=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES),'fused':True},out_dir=root/'fused',timeout_s=180)
         check(normal['ok'] and fused['ok'],'synthetic GLBs built through runner')
         tied=runner.run('extension_bones',inputs={'model':Path(ties['outputs']['model'])},params={'groups':groups},out_dir=root/'tied')
@@ -557,7 +585,7 @@ def main():
         assert_joint_weights(rows,[.03,.91,.16],expected,'hand-derived attenuation, transfer, chain split and top-four weights by joint')
         radial_group=copy.deepcopy(groups[1])
         radial_group['chains'][0]=radial_group['chains'][0][:1]
-        radial_group['params'].update(chain_split=[],contact_ramp=.021,protrusion_threshold=.02,reweight_factor=0)
+        radial_group['params'].update(chain_split=[],segment_radius_margin=1.35,contact_ramp=.021,protrusion_threshold=.02,reweight_factor=0)
         radial_result=runner.run('extension_bones',inputs={'model':Path(normal['outputs']['model'])},
                                  params={'groups':[radial_group]},out_dir=root/'radial-ramp',timeout_s=180)
         radial_weight=135/686
@@ -691,13 +719,13 @@ def main():
         check(res['ok'] and abs(res['data']['metrics']['example_chain']['attachment'][2]-.8)<.002,'flip swaps attachment and tip')
         # Run the same generic operation against a side-connected surface.
         chain_group=copy.deepcopy(groups[1])
-        chain_group['params'].update(reference_lateral_min=.16, reference_lateral_max=.19, candidate_lateral_max=.0301)
+        chain_group['params'].update(segment_radius_margin=1.2,reference_lateral_min=.16, reference_lateral_max=.19, candidate_lateral_max=.0301)
         res=runner.run('extension_bones',inputs={'model':Path(fused['outputs']['model'])},params={'groups':[chain_group]},out_dir=root/'leak',timeout_s=180)
         check(res['ok'] and res['data']['status']=='applied','leak fixture still produces valid chain')
         check(not res['data']['metrics']['example_chain']['leak'],'bounded side-contact cylinder has no leak')
         contact=res['data']['metrics']['example_chain']
         print('CONTACT METRICS',json.dumps(contact,sort_keys=True))
-        check(abs(contact['segment_radius']-.0405)<.0001,'hand-derived segment radius .0405')
+        check(abs(contact['segment_pass_history'][0]['radius']-.0405)<.0001,'hand-derived pass-0 segment radius .0405')
         check(contact['part_vertex_count']>=608,'all 608 cylinder samples captured')
         check(contact['thigh_weight_in_part']==0,'contact part has no source-joint weight')
         contact_rows=exported_vertices(Path(res['outputs']['model']).read_bytes())
@@ -712,7 +740,7 @@ def main():
             axial=sum(delta[j]*axis[j] for j in range(3))
             return sum((delta[j]-axis[j]*axial)**2 for j in range(3))**.5
         body_rows=[(point,weights) for point,weights in contact_rows
-                   if .7999<point[1]<.9801 and segment_radial(point)>.0406
+                   if .7999<point[1]<.9801 and segment_radial(point)>contact['segment_radius']*1.05
                    and abs(((point[0]-.09)**2+(point[2]-.16)**2)**.5-.06)<.0001]
         check(bool(body_rows) and all(weights.get('mixamorig:LeftUpLeg',0)>.1 and
               not any(name.startswith('ExampleLink') for name in weights) for _,weights in body_rows),
@@ -725,20 +753,59 @@ def main():
         unique={tuple(round(v,5) for v in point) for point,_ in cylinder}
         check(len(unique)==608 and all(weights.get('mixamorig:LeftUpLeg',0)==0
               for _,weights in cylinder),'exactly 608 unique part samples lose source weights')
+        offset_group=copy.deepcopy(chain_group)
+        offset_group['params'].update(protrusion_threshold=.061,segment_radius_margin=1.2,weight_ramp=.25)
+        offset_result=runner.run('extension_bones',inputs={'model':Path(bulged['outputs']['model'])},
+                                 params={'groups':[offset_group]},out_dir=root/'offset',timeout_s=180)
+        offset_metrics=offset_result['data']['metrics']['example_chain']
+        print('REFINED METRICS',json.dumps(offset_metrics,sort_keys=True))
+        check(all((end[0]**2+(end[1]+.16)**2)**.5<.002
+                  for end in (offset_metrics['segment_axis_base'],offset_metrics['segment_axis_tip'])),
+              'front-offset axis returns within 2 mm of cylinder centre')
+        offset_rows=exported_vertices(Path(offset_result['outputs']['model']).read_bytes())
+        samples=[(point,weights) for point,weights in offset_rows if .7999<point[1]<.9801 and abs(point[0])<=.03001 and .1279<=point[2]<=.1921]
+        check(len({tuple(round(v,5) for v in point) for point,_ in samples})==608
+              and all(any(name.startswith('ExampleLink') for name in weights)
+              for _,weights in samples),'full bulged cylinder including back carries extension weights')
+        outside=[weights for point,weights in offset_rows if .7999<point[1]<.9801
+                 and point[0]>.0301 and abs(((point[0]-.09)**2+(point[2]-.16)**2)**.5-.06)<.0001]
+        check(bool(outside) and all(weights.get('mixamorig:LeftUpLeg',0)>.1
+              and not any(name.startswith('ExampleLink') for name in weights) for weights in outside),
+              'offset fixture contact-cylinder samples beyond final radius remain unchanged')
+        check(all(abs(row['radius']-expected)<.0001 for row,expected in
+              zip(offset_metrics['segment_pass_history'],[.03972180,.04268464,.04503358,.03756308]))
+              and len(offset_metrics['segment_pass_history'])==4,
+              'hand-derived radii for pass 0 and three refinement passes')
+        check(offset_metrics['uncaptured_in_part']==0 and offset_metrics['captured_beyond_radius']==0
+              and offset_metrics['thigh_weight_in_part']==0,'refined coverage and transfer metrics are zero')
+        guard=copy.deepcopy(offset_group)
+        guard['params'].update(segment_radius_margin=2.,segment_radius_growth_max=1.01)
+        guarded=runner.run('extension_bones',inputs={'model':Path(bulged['outputs']['model'])},
+                           params={'groups':[guard]},out_dir=root/'growth-guard',timeout_s=180)
+        gm=guarded['data']['metrics']['example_chain']
+        check(gm['segment_passes']==0 and 'growth_max' in gm['segment_stop_reason']
+              and gm['segment_radius']==gm['segment_pass_history'][0]['radius']
+              and gm['segment_axis_base']==gm['segment_pass_history'][0]['axis_base'],
+              'growth guard retains the entire previous segmentation state')
         fallback=copy.deepcopy(chain_group); fallback['params']['segment_min_vertices']=100000
         fb=runner.run('extension_bones',inputs={'model':Path(fused['outputs']['model'])},
                       params={'groups':[fallback]},out_dir=root/'fallback',timeout_s=180)
         fm=fb['data']['metrics']['example_chain']
         check(fm['leak'] and 'too few' in fm['leak_reason'] and fm['thigh_weight_in_part']==0,
               'implausible bounded component falls back with reason and full transfer')
-        for key in ('segment_radius_factor','segment_min_vertices','contact_ramp'):
+        for key in ('segment_radius_factor','segment_min_vertices','contact_ramp',
+                    'segment_radius_percentile','segment_radius_margin',
+                    'segment_radius_growth_max','segment_passes'):
             missing=copy.deepcopy(chain_group); del missing['params'][key]
             bad=runner.run('extension_bones',inputs={'model':Path(fused['outputs']['model'])},
                            params={'groups':[missing]},out_dir=root/('missing-'+key),timeout_s=180)
             check(bad['data']['status']=='failed' and key in bad['data']['reason'],
                   'new parameter is required: '+key)
         for key,value in [('segment_radius_factor',0),('contact_ramp',0),
-                          ('segment_min_vertices',0),('segment_min_vertices',2.5)]:
+                          ('segment_min_vertices',0),('segment_min_vertices',2.5),
+                          ('segment_radius_percentile',0),('segment_radius_percentile',1),
+                          ('segment_radius_margin',0),('segment_radius_growth_max',0),
+                          ('segment_passes',0),('segment_passes',1.5)]:
             invalid=copy.deepcopy(chain_group); invalid['params'][key]=value
             bad=runner.run('extension_bones',inputs={'model':Path(fused['outputs']['model'])},
                            params={'groups':[invalid]},out_dir=root/'invalid-new',timeout_s=180)

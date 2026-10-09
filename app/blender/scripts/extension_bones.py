@@ -73,6 +73,10 @@ PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'leak_t_limit': 'number',
                      'leak_radius_limit': 'number',
                      'segment_radius_factor': 'number',
+                     'segment_radius_percentile': 'number',
+                     'segment_radius_margin': 'number',
+                     'segment_radius_growth_max': 'number',
+                     'segment_passes': 'number',
                      'segment_min_vertices': 'number',
                      'contact_ramp': 'number',
                      'ring_radius_percentile': 'number',
@@ -133,7 +137,7 @@ def parameters(group):
         if kind == 'number':
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise ValueError(key + ' must be finite numeric')
-            if key in ('axis_iterations', 'segment_min_vertices') and int(value) != value:
+            if key in ('axis_iterations', 'segment_min_vertices', 'segment_passes') and int(value) != value:
                 raise ValueError(key + ' must be an integer')
         elif kind == 'bone':
             if not isinstance(value, str) or not value:
@@ -152,7 +156,7 @@ def parameters(group):
     positive = ('radius_scale', 'radius_min', 'radius_max', 'radius_z_scale', 'wall_z_tolerance',
                 'wall_x_tolerance', 'depth_ramp', 'slice_size', 'part_half_width',
                 'candidate_lateral_max', 'protrusion_threshold', 'weld_distance',
-                'weight_ramp', 'leak_radius_limit', 'segment_radius_factor', 'segment_min_vertices', 'contact_ramp', 'fallback_half_width',
+                'weight_ramp', 'leak_radius_limit', 'segment_radius_factor', 'segment_min_vertices', 'segment_passes', 'segment_radius_margin', 'segment_radius_growth_max', 'contact_ramp', 'fallback_half_width',
                 'fallback_front_ramp', 'fallback_side_ramp', 'fallback_top_ramp',
                 'blend_width', 'window_length_factor', 'ring_radius_scale')
     for key in positive:
@@ -184,7 +188,7 @@ def parameters(group):
     else:
         if p['search_z_min'] >= p['search_z_max'] or not 0 <= p['reference_lateral_min'] < p['reference_lateral_max']:
             raise ValueError('invalid search or reference range')
-        for key in ('cut', 'ring_radius_percentile', 'far_slice_fraction', 'blend_start'):
+        for key in ('cut', 'segment_radius_percentile', 'ring_radius_percentile', 'far_slice_fraction', 'blend_start'):
             if not 0 < p[key] < 1:
                 raise ValueError(key + ' must be in (0,1)')
         if not 1 <= p['axis_iterations'] <= 1000 or Vector(p['axis_initial']).length < 1e-8:
@@ -298,46 +302,108 @@ def appendage_plan(group, p, co, edges, bones):
     if segment_radius <= 0:
         raise ValueError('degenerate measured part half-width')
     axial_window = p['window_length_factor'] + p['window_margin']/length
-    eligible = {i for i,c in enumerate(co)
-                if abs(t_of(c)-.5) < axial_window and radial(c) <= segment_radius}
     kd = KDTree(len(co))
     for i,c in enumerate(co):
         kd.insert(c,i)
     kd.balance()
-    ids = list(range(len(co)))
-    # Bound welding too, so out-of-bound seam vertices cannot bridge the flood.
-    # Union-find guarantees transitive welding across multiple UV seams.
-    def find(i):
-        while ids[i] != i:
-            ids[i] = ids[ids[i]]
-            i = ids[i]
-        return i
-    for i in eligible:
-        for _,j,_ in kd.find_range(co[i],p['weld_distance']):
-            if j not in eligible:
-                continue
-            a,b = find(i),find(j)
-            ids[max(a,b)] = min(a,b)
-    welded = [find(i) for i in range(len(co))]
-    adj = {}
-    for a,b in edges:
-        a,b = welded[a],welded[b]
-        if a != b:
-            adj.setdefault(a,set()).add(b)
-            adj.setdefault(b,set()).add(a)
-    win = {welded[i] for i in eligible}
-    keep = {i for i in win if t_of(co[i]) >= p['cut']}
-    seed = welded[min(range(len(co)),key=lambda i:(co[i]-tip).length)]
-    if seed not in keep:
-        raise ValueError('tip is outside segmented window')
-    comp, stack = {seed},[seed]
-    while stack:
-        for j in adj.get(stack.pop(),()):
-            if j in keep and j not in comp:
-                comp.add(j)
-                stack.append(j)
-    tmax = max(t_of(co[i]) for i in comp)
-    rmax = max(radial(co[i]) for i in comp)
+
+    def flood():
+        eligible = {i for i,c in enumerate(co)
+                    if abs(t_of(c)-.5) < axial_window and radial(c) <= segment_radius}
+        ids = list(range(len(co)))
+        # Rebuild bounded seam welding for each axis; an excluded seam cannot bridge.
+        def find(i):
+            while ids[i] != i:
+                ids[i] = ids[ids[i]]
+                i = ids[i]
+            return i
+        for i in eligible:
+            for _,j,_ in kd.find_range(co[i],p['weld_distance']):
+                if j in eligible:
+                    a,b = find(i),find(j)
+                    ids[max(a,b)] = min(a,b)
+        welded = [find(i) for i in range(len(co))]
+        adj = {}
+        for a,b in edges:
+            a,b = welded[a],welded[b]
+            if a != b:
+                adj.setdefault(a,set()).add(b)
+                adj.setdefault(b,set()).add(a)
+        win = {welded[i] for i in eligible}
+        keep = {i for i in win if t_of(co[i]) >= p['cut']}
+        seed = welded[min(range(len(co)),key=lambda i:(co[i]-detected_tip).length)]
+        if seed not in keep:
+            raise ValueError('tip is outside segmented window')
+        comp, stack = {seed},[seed]
+        while stack:
+            for j in adj.get(stack.pop(),()):
+                if j in keep and j not in comp:
+                    comp.add(j)
+                    stack.append(j)
+        captured = {i for i in eligible if welded[i] in comp}
+        return eligible,welded,win,comp,captured
+
+    eligible,welded,win,comp,captured = flood()
+    initial_base = base.copy()
+    history = [{'pass':0, 'radius':segment_radius, 'vertices':len(captured),
+                'axis_base':list(base), 'axis_tip':list(detected_tip), 'axis_shift':0.}]
+    refinement_reason = 'segment_passes reached'
+    for iteration in range(1, int(p['segment_passes'])+1):
+        if len(comp) < p['segment_min_vertices'] or max(t_of(co[i]) for i in captured) > p['leak_t_limit']:
+            refinement_reason = 'initial component rejected'
+            break
+        previous = (base.copy(), direction.copy(), detected_tip.copy(), segment_radius,
+                    eligible,welded,win,comp,captured)
+        # One sample per welded position avoids UV seam multiplicity bias.
+        samples = [co[i] for i in sorted(comp)]
+        centre = sum(samples,Vector())/len(samples)
+        covariance = [[sum((v[a]-centre[a])*(v[b]-centre[b]) for v in samples)/len(samples)
+                       for b in range(3)] for a in range(3)]
+        new_direction = direction.copy()
+        for _ in range(int(p['axis_iterations'])):
+            v = Vector([sum(covariance[a][b]*new_direction[b] for b in range(3)) for a in range(3)])
+            if v.length < 1e-10:
+                raise ValueError('degenerate refined principal axis')
+            new_direction = v.normalized()
+        if new_direction.dot(direction) < 0:
+            new_direction.negate()
+        # Keep the attachment station and length; only project onto the new axis.
+        # Re-fitting truncated axial endpoints would move the cut on every pass.
+        base = centre+new_direction*(previous[0]-centre).dot(new_direction)
+        direction = new_direction
+        detected_tip = base+direction*length
+        radii = sorted(radial(v) for v in samples)
+        rank = p['segment_radius_percentile']*(len(radii)-1)
+        lower = int(rank)
+        measured = radii[lower]+(radii[min(lower+1,len(radii)-1)]-radii[lower])*(rank-lower)
+        segment_radius = measured*p['segment_radius_margin']
+        reason = ''
+        if segment_radius > previous[3]*p['segment_radius_growth_max']:
+            reason = 'segment_radius_growth_max exceeded'
+        else:
+            try:
+                eligible,welded,win,comp,captured = flood()
+            except ValueError as exc:
+                reason = str(exc)
+            if not reason:
+                if max(t_of(co[i]) for i in captured) > p['leak_t_limit']:
+                    reason = 'refined component exceeds leak_t_limit'
+                elif len(comp) < p['segment_min_vertices']:
+                    reason = 'refined component has too few vertices'
+        if reason:
+            base,direction,detected_tip,segment_radius,eligible,welded,win,comp,captured = previous
+            refinement_reason = reason+'; previous pass retained'
+            break
+        change = len(captured ^ previous[8])/max(1,len(previous[8]))
+        shift = (base-initial_base).length
+        history.append({'pass':iteration, 'radius':segment_radius, 'vertices':len(captured),
+                        'axis_base':list(base), 'axis_tip':list(detected_tip),
+                        'axis_shift':shift, 'vertex_change_fraction':change})
+        if change < .01:
+            refinement_reason = 'vertex set changed less than 1%'
+            break
+    tmax = max(t_of(co[i]) for i in captured)
+    rmax = max(radial(co[i]) for i in captured)
     leak_reasons = []
     if len(comp) < p['segment_min_vertices']:
         leak_reasons.append('bounded component has too few vertices')
@@ -349,15 +415,17 @@ def appendage_plan(group, p, co, edges, bones):
     if not leak:
         radii = sorted(radial(co[i]) for i in comp)
         r = radii[min(len(radii)-1,int(p['ring_radius_percentile']*len(radii)))]
-        ring = {i for i in win if 0 <= t_of(co[i]) < p['cut'] and radial(co[i]) <= r*p['ring_radius_scale']}
+        # Metre-scale float roundtrips may put the attachment plane just below zero.
+        ring = {i for i in win if -1e-6 <= t_of(co[i]) < p['cut'] and radial(co[i]) <= r*p['ring_radius_scale']}
         part = comp|ring
         near = [co[i] for i in part if t_of(co[i]) < p['cut']+p['near_slice_margin']] or [co[i] for i in part]
         far = [co[i] for i in part if t_of(co[i]) > p['far_slice_fraction']*tmax] or [co[i] for i in part]
         base_c,tip_c = sum(near,Vector())/len(near),sum(far,Vector())/len(far)
         if (base_c-tip_c).length < 1e-6:
             raise ValueError('segmented centre line is degenerate')
-        root = base_c+(base_c-tip_c).normalized()*p['attachment_inset']
-        tip = tip_c
+        root_station = base_c+(base_c-tip_c).normalized()*p['attachment_inset']
+        root = base+direction*(root_station-base).dot(direction)
+        tip = base+direction*(tip_c-base).dot(direction)
     delta = tip-root
     axis_length = delta.length
     if axis_length < 1e-6:
@@ -406,6 +474,9 @@ def appendage_plan(group, p, co, edges, bones):
         'attachment':list(base), 'axis_length':axis_length,
         'leak':leak, 'leak_reason':'; '.join(leak_reasons),
         'segment_radius':segment_radius, 'measured_half_width':half_width,
+        'segment_pass_history':history, 'segment_passes':len(history)-1,
+        'segment_stop_reason':refinement_reason, 'segment_axis_shift':(base-initial_base).length,
+        'segment_cut_t':p['cut'], 'segment_axis_length':length,
         'segment_axis_base':list(base), 'segment_axis_tip':list(detected_tip),
         'part_vertex_count':len(affected), 'segment_t_max':tmax,
         'segment_radius_max':rmax,
@@ -450,6 +521,26 @@ def measure(arm, meshes, edges, plans):
                                          if bone_key(mesh.vertex_groups[ge.group].name) in sources) > .1
                 offset += len(mesh.data.vertices)
             plan[2]['thigh_weight_in_part'] = remaining
+            if 'segment_axis_base' in plan[2]:
+                m = plan[2]
+                base = Vector(m['segment_axis_base'])
+                axis = (Vector(m['segment_axis_tip'])-base).normalized()
+                offset = 0
+                uncaptured = beyond = 0
+                for mesh in meshes:
+                    for vertex in mesh.data.vertices:
+                        delta = mesh.matrix_world@vertex.co-base
+                        axial = delta.dot(axis)
+                        radial = (delta-axis*axial).length
+                        t = axial/m['segment_axis_length']
+                        index = offset+vertex.index
+                        uncaptured += (m['segment_cut_t'] <= t <= m['segment_t_max']
+                                       and radial <= .9*m['segment_radius'] and index not in weighted)
+                        beyond += index in captured and radial > 1.05*m['segment_radius']
+                    offset += len(mesh.data.vertices)
+                m['uncaptured_in_part'] = uncaptured
+                m['captured_beyond_radius'] = beyond
+
         metrics[g['id']]={**plan[2], 'verts_per_group':{name:len(w) for name,w in plan[1].items()}, 'weighted_verts':len(weighted),'edge_stretch_p01_p50_p99_max':[pct(.01),pct(.5),pct(.99),pct(1)],'reason':''}
         for name,_,_,_ in plan[0]:
             arm.pose.bones[name].rotation_euler=(0,0,0)

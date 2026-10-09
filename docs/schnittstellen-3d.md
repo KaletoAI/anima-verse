@@ -10244,9 +10244,22 @@ explain skipped or failed operations. Metrics report weighted vertices per
 group, edge-stretch percentiles at the declared test pose and the connectivity
 leak flag. Chain metrics additionally report `leak_reason` (empty when bounded
 segmentation is plausible), `measured_half_width`, `segment_radius` (metres),
-`segment_axis_base`/`segment_axis_tip` (the detected axis before placement refinement),
+`segment_axis_base`/`segment_axis_tip` (the final refined segmentation axis),
 `segment_radius_max`, `segment_t_max`, and `part_vertex_count` (captured original
-vertices, including vertices with zero extension weight). `thigh_weight_in_part`
+vertices, including vertices with zero extension weight). `segment_pass_history`
+contains pass 0 and every accepted refinement pass, with `pass`, `radius` (metres),
+`vertices` (original component vertices), `axis_base`, `axis_tip`, and `axis_shift`
+(metres from the initial attachment station); refinement entries additionally have
+`vertex_change_fraction`. `segment_passes` counts accepted refinement passes,
+`segment_stop_reason` explains convergence, budget or a rejected pass, and
+`segment_axis_shift` is the final shift. `segment_axis_length` is the fixed initial
+axial length and `segment_cut_t` the declared dimensionless cut.
+`uncaptured_in_part` counts original vertices within 0.9 times the final radius
+and the inclusive axial interval [`segment_cut_t`, `segment_t_max`] that have no
+positive final extension weight after four-joint reduction; this should be near
+zero. `captured_beyond_radius` counts captured original vertices farther than
+1.05 times the final radius, and must be zero for bounded segmentation (front-only
+fallback is explicitly marked by `leak`). `thigh_weight_in_part`
 counts captured vertices whose summed remaining `reweight_from` weight exceeds
 0.1 after four-joint reduction; successful full transfer yields zero. In metrics-only runs (derived distance tiers),
 this count covers vertices retaining positive chain weights; geometric segmentation

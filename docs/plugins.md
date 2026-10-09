@@ -464,7 +464,21 @@ Connectivity runs over position-welded vertices after the `cut` slab, bounded
 by an axial window (`window_length_factor * length + window_margin` each side
 of the midpoint) and `segment_radius_factor * measured_half_width`. The measured
 half-width is half the lateral extent (max X minus min X), using the
-axis candidate set. An attachment ring obeys the same bounds. `contact_ramp`
+axis candidate set. Pass 0 uses these candidate bounds. Each of up to `segment_passes` refinement
+passes fits a principal axis through the bounded component centroid (one sample
+per welded position), keeping its attachment-to-tip orientation and attachment
+station. The initial axial length is held fixed so the cut does not drift as the
+component excludes the attachment slab. The new radius is the linearly interpolated
+`segment_radius_percentile` of radial distances to this axis, multiplied by
+`segment_radius_margin`. Bounded welding and flood are repeated with the new axis
+and radius. A symmetric vertex-set difference below 1% of the previous original
+vertex count stops iteration. Radius growth above `segment_radius_growth_max`
+times the preceding radius, or a component exceeding `leak_t_limit`, retains the
+previous set, axis and radius and reports the reason. A refined component below
+`segment_min_vertices` also retains the previous pass. The chain lies on the
+refined axis, with the existing attachment inset and far-slice tip station.
+An attachment ring obeys the same bounds, with a `1e-6` tolerance in normalized
+axial distance at the attachment plane for float roundtrips. `contact_ramp`
 (metres) applies a smooth radial fade inside the outer segmentation boundary;
 all captured vertices remain part of the transfer region even at zero extension
 weight. Only a bounded component smaller than `segment_min_vertices` or beyond
@@ -472,10 +486,10 @@ weight. Only a bounded component smaller than `segment_min_vertices` or beyond
 Declared `reweight_from` base joints (`[]` to disable transfer) move their entire
 weight to the chain's declared parent on every captured vertex, including fallback.
 Outside the captured part the operation preserves its existing weighting rules.
-Fingerprint version 3 rebuilds from prerig. The existing required declaration
+Fingerprint version 4 rebuilds from prerig. The existing required declaration
 fields `leak_radius_limit` and `reweight_factor` remain validated but no longer
 control radius rejection or transfer: bounded segmentation and entire source-weight
-transfer supersede those rules. Add all three new required parameters. `chain_split` contains N-1 increasing
+transfer supersede those rules. All segmentation and refinement parameters are required. `chain_split` contains N-1 increasing
 fractions. `chain_split` is required even for a single link (`[]`). Test pose measurements are reset before export.
 
 `appendage_chain` declaration example values:
@@ -504,6 +518,10 @@ fractions. `chain_split` is required even for a single link (`[]`). Test pose me
 | `leak_t_limit` | `1.6` |
 | `leak_radius_limit` | `0.09` (superseded by bounded segmentation) |
 | `segment_radius_factor` | `1.35` |
+| `segment_radius_percentile` | `0.95` (strictly between 0 and 1) |
+| `segment_radius_margin` | `1.2` (positive) |
+| `segment_radius_growth_max` | `1.5` (positive, relative to preceding radius) |
+| `segment_passes` | `3` (positive integer; refinement passes after pass 0) |
 | `segment_min_vertices` | `3` (positive integer, welded vertices) |
 | `contact_ramp` | `0.01` (metres) |
 | `ring_radius_percentile` | `0.9` |
