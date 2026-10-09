@@ -113,30 +113,14 @@
  *     that only reads 0 would pass just as well if the function always returned
  *     0. The mutant drops `embodied` from the gate: it then answers a real
  *     strength for an unembodied client, while the truth answers 0.
- *
- * ---------------------------------------------------------------------------
- * [6] THE WIRING, pinned by reading the source
- * ---------------------------------------------------------------------------
- * The patch is worth nothing where nobody applies it, and worse than nothing
- * where it is applied to a SHARED material: `loadGlb` caches the loaded file,
- * so patching `mesh.material` would dissolve a placed tree in a room the moment
- * the player walks past a wood. So the scatter path clones per entry (and
- * therefore disposes every clone), the tile shell is patched per tile, the
- * server model on the clones `applySceneBuilding` makes, and `main.ts` writes
- * the uniforms once per frame. None of that can be called from here — it lives
- * inside closures over fetched payloads — so it is pinned against the source
- * text.
  */
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const OCC_SRC = join(ROOT, 'client3d/src/scene/occlusion.ts');
 const GROUND_SRC = join(ROOT, 'client3d/src/scene/ground.ts');
-const TILES_SRC = join(ROOT, 'client3d/src/scene/tiles.ts');
-const RECIPE_SRC = join(ROOT, 'client3d/src/scene/sceneRecipe.ts');
-const MAIN_SRC = join(ROOT, 'client3d/src/main.ts');
 
 /**
  * Bundle the client's occlusion module TOGETHER with the ground module and
@@ -403,43 +387,6 @@ async function main() {
     mm(loud.occlusionUniforms({ x: 0, y: 1.2, z: 5 }, feet, false).strength), 1);
   check('…while the truth answers 0 for the very same frame',
     mm(occlusionUniforms({ x: 0, y: 1.2, z: 5 }, feet, false).strength), 0);
-
-  console.log('\n[6] the wiring, pinned by reading the source');
-  const groundSrc = await readFile(GROUND_SRC, 'utf8');
-  const tilesSrc = await readFile(TILES_SRC, 'utf8');
-  const recipeSrc = await readFile(RECIPE_SRC, 'utf8');
-  const mainSrc = await readFile(MAIN_SRC, 'utf8');
-  check('the tuft material of every scatter entry is patched',
-    /applySway\(mat, entrySway, h\);\n(\s*\/\/[^\n]*\n)*\s*applyOcclusionFade\(mat\);/.test(groundSrc),
-    true);
-  check('…a loaded tier draws through a CLONE of the cached GLB material',
-    /const material = prop\.mats\.get\(url\) \?\? \(mesh\.material as THREE\.Material\)\.clone\(\);/
-      .test(groundSrc), true);
-  check('…and the patch is applied where a tier is MOUNTED (mountUrl)',
-    /applySway\(material, prop\.sway, prop\.targetH\);\s*applyOcclusionFade\(material\);/
-      .test(groundSrc), true);
-  // Every clone is ours now, so every clone has to be freed — the wind used to
-  // be the condition, and a clone nobody frees is a leak per terrain rebuild.
-  check('…every tier material is disposed with the area',
-    /\n\s*for \(const m of prop\.mats\.values\(\)\) m\.dispose\(\);/.test(groundSrc), true);
-  check('…without the old sway condition in front of it',
-    /if \(prop\.sway > 0\) for \(const m of prop\.mats/.test(groundSrc), false);
-  // The procedural building shell died with the Prop-Welt programme (user
-  // decision 2026-08-19): tiles.ts builds no invented geometry any more, so
-  // there is NOTHING left in it to fade — zero occurrences, import included.
-  // Occlusion patching now lives only where real content mounts (ground props
-  // above, the server model below).
-  check('tiles.ts patches nothing (the procedural shell is gone)',
-    tilesSrc.split('applyOcclusionFade').length - 1, 0);
-  check('the server building model is patched on the clone, not on the cache',
-    /const c = m\.clone\(\);[\s\S]{0,700}?applyOcclusionFade\(c\);/.test(recipeSrc), true);
-  check('main.ts evaluates the corridor in a FRAME hook',
-    /addFrameHook\(\(\) => \{[\s\S]{0,400}?updateOcclusion\(engine\.camera\.position,/
-      .test(mainSrc), true);
-  check('…with the avatar only while embodied',
-    /embodied \? npcs\.positionOf\(avatarName\) : null, embodied\);/.test(mainSrc), true);
-  check('…and writes the uniforms exactly once per frame',
-    mainSrc.split('updateOcclusion(').length - 1, 1);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

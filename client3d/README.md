@@ -26,6 +26,15 @@ Recherche-Protokolle aus dem Juli 2026.
   blanke Linksziehen** (`engine.orbitOnDrag`) — die Kamera hängt dort an der
   Figur, ein Pan-Ziehen wäre wirkungslos; ein Klick bis 4 px Bewegung bleibt
   ein Klick und damit der Geh-Befehl.
+- **Ich-Perspektive:** beim Steuern des Avatars weit genug heranzoomen.
+  Die Kamera wechselt nach 180 ms anhaltender Nähe bei ≤ 1,2 m virtueller
+  Zoomdistanz auf Augenhöhe; der eigene Avatar samt Labels wird ausgeblendet.
+  Herauszoomen ab ≥ 1,8 m wechselt ebenfalls nach 180 ms zurück. Der Bereich
+  dazwischen hält die Perspektive stabil. Mausdrehen, Q/E und Bewegung bleiben
+  verfügbar; Esc verlässt die Avatar-Steuerung wie bisher.
+- **Keine Auswahl-/Identitätsringe:** Characters und Avatar haben keine
+  Bodenringe mehr. Auswahl und Infotafeln bleiben erhalten; Gehziele und freie
+  Sitzplätze behalten ihre eigenen Markierungen.
 - **3D-Locations:** prozedurale Gebäude per Stil-Heuristik (Café, Haus, Hochhaus,
   Generisch), Terrain-Kacheln (Wald mit Bäumen, Straßen) — Boden- und
   Wandtexturen kommen, wenn vorhanden, vom Backend
@@ -105,13 +114,14 @@ gediffrt (ε = 0,01 m). Ergebnis je Location in der Konsole und in
 `window.__sceneVerify`. **0 Abweichungen ist die Aussage**; die absolute Zahl
 geprüfter Werte hängt an der Welt und sagt für sich nichts.
 
-Dazu kommen die **55 Smoke-Skripte** unter `scripts/`. Sie laufen ohne Browser
+Dazu kommen die **Smoke-Skripte** unter `scripts/`. Sie laufen ohne Browser
 und ohne Server auf reinem Node, weil sie die Module mit esbuild übersetzen und
 pure Rechnungen prüfen:
 
 ```bash
 node client3d/scripts/smoke_walk_math.mjs      # eines davon
 for f in client3d/scripts/smoke_*.mjs; do node "$f" || break; done
+node client3d/scripts/smoke_first_person.mjs   # Verzögerung und Zoom-Hysterese
 ```
 
 Jede erwartete Zahl darin ist im Kopf der Datei **von Hand aus dem Vertrag

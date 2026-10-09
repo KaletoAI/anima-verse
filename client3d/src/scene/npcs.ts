@@ -63,10 +63,9 @@ export interface GroundMove {
    *  on the bed. `walk.wadeGate` is the one place that applies it. */
   swimFrom: number;
 }
-/** Selection marker (E3-T1): the gold of the client's chrome (top bar, info panel). */
-const SELECT_COLOR = 0xf2d98c;
-/** Walk-target marker (E3-T4): the same gold, but a thin flat ring on the
- *  ground — it marks a place, not a figure. */
+/** Gold walk-target marker, matching the client's chrome. */
+const WALK_TARGET_COLOR = 0xf2d98c;
+/** Thin flat ring marking a walk destination, not a selected figure. */
 const WALK_TARGET_RADIUS = 0.55;
 
 function ringColor(name: string): string {
@@ -135,7 +134,6 @@ interface Npc {
   animation?: string;
   root: THREE.Group;
   figure: Figure | null;
-  ring: THREE.Mesh | null;
   sprite: THREE.Sprite | null;
   label: CSS2DObject;
   labelName: HTMLSpanElement;
@@ -276,9 +274,8 @@ export class NpcManager {
   group = new THREE.Group();
   private npcs = new Map<string, Npc>();
   private avatarName = '';
-  /** name of the picked figure (E3-T1) — the ring follows this, not the mesh */
-  private selected: string | null = null;
-  private selectRing: THREE.Mesh | null = null;
+  /** The camera's own figure is neither drawn nor picked in first person. */
+  private firstPersonName: string | null = null;
   /** figure the PLAYER steers (E3-T3); its placement comes from main.ts */
   private playerDriven: string | null = null;
   /** ground ring at the click target of a running walk (E3-T4) */
@@ -356,7 +353,8 @@ export class NpcManager {
    *  `npc.root` hierarchy, so a sprite counts as well as a rigged figure.
    *  Hidden figures (other storey) are excluded — they are not clickable. */
   characterAt(raycaster: THREE.Raycaster): string | null {
-    const roots = [...this.npcs.values()].filter((n) => n.root.visible).map((n) => n.root);
+    const roots = [...this.npcs.values()]
+      .filter((n) => n.root.visible && n.name !== this.firstPersonName).map((n) => n.root);
     for (const hit of raycaster.intersectObjects(roots, true)) {
       let o: THREE.Object3D | null = hit.object;
       while (o) {
@@ -662,54 +660,16 @@ export class NpcManager {
       const ring = new THREE.Mesh(
         new THREE.RingGeometry(WALK_TARGET_RADIUS * 0.72, WALK_TARGET_RADIUS, 32),
         new THREE.MeshBasicMaterial({
-          color: SELECT_COLOR, transparent: true, opacity: 0.8, depthWrite: false,
+          color: WALK_TARGET_COLOR, transparent: true, opacity: 0.8, depthWrite: false,
         })
       );
       ring.rotation.x = -Math.PI / 2;
-      // Same lesson as the selection marker: a marker must never be its own
-      // hit area, or the next click lands on it instead of on the ground.
+      // A marker must never catch a click intended for the ground beneath it.
       ring.raycast = () => {};
       this.group.add(ring);
       this.walkTargetRing = ring;
     }
     this.walkTargetRing.position.set(pos.x, pos.y + 0.06, pos.z);
-  }
-
-  /** Mark a figure as selected; null clears the marker (E3-T1). */
-  setSelected(name: string | null) {
-    this.selected = name;
-    this.syncSelectRing();
-  }
-
-  /** Keep the marker on the selected figure across rebuilds/removals: the ring
-   *  hangs in `npc.root`, and that group is thrown away whenever the model is
-   *  reloaded or the character leaves the map. */
-  private syncSelectRing() {
-    const npc = this.selected ? this.npcs.get(this.selected) : undefined;
-    if (this.selectRing && this.selectRing.parent === (npc?.root ?? null)) return;
-    if (this.selectRing) {
-      this.selectRing.removeFromParent();
-      this.selectRing.geometry.dispose();
-      (this.selectRing.material as THREE.Material).dispose();
-      this.selectRing = null;
-    }
-    if (!npc) return;
-    // Own mesh, deliberately NOT the identity ring: that one carries the
-    // per-character colour and only exists for rigged figures.
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.85, 1.05, 40),
-      new THREE.MeshBasicMaterial({
-        color: SELECT_COLOR, transparent: true, opacity: 0.95, depthWrite: false,
-      })
-    );
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.y = 0.12;   // above the identity ring (0.09) and the sprite blob (0.08)
-    // The marker must not be its own hit area: it hangs in `npc.root`, which
-    // `characterAt` raycasts, so a click just BESIDE the figure would land on
-    // the ring and re-select instead of clearing the selection.
-    ring.raycast = () => {};
-    npc.root.add(ring);
-    this.selectRing = ring;
   }
 
   /** Pick the distance tier per figure (view state): full inside `near`,
@@ -1011,7 +971,6 @@ export class NpcManager {
         this.npcs.delete(name);
       }
     }
-    this.syncSelectRing();   // re-attach after rebuilds, drop when the figure left
   }
 
   private createNpc(st: NpcState): Npc {
@@ -1020,23 +979,10 @@ export class NpcManager {
     root.userData.charName = st.char.name;   // figure picking (E3-T1)
     const figure = this.figures?.instantiate(st.char.name) ?? null;
     let sprite: THREE.Sprite | null = null;
-    let ring: THREE.Mesh | null = null;
     let labelY: number;
 
     if (figure) {
       root.add(figure.root);
-      // farbiger Bodenring als Wiedererkennung (gold = eigener Avatar)
-      ring = new THREE.Mesh(
-        new THREE.RingGeometry(0.55, 0.7, 28),
-        new THREE.MeshBasicMaterial({
-          color: isAvatar ? 0xe8b83a : new THREE.Color(ringColor(st.char.name)),
-          transparent: true,
-          opacity: 0.85,
-        })
-      );
-      ring.rotation.x = -Math.PI / 2;
-      ring.position.y = 0.09;
-      root.add(ring);
       labelY = figure.height + 0.45;
     } else {
       const tex = makePortraitTexture(st.char.name, st.char.avatar_url, isAvatar);
@@ -1073,7 +1019,7 @@ export class NpcManager {
     root.add(label);
 
     return {
-      name: st.char.name, root, figure, ring, sprite, label,
+      name: st.char.name, root, figure, sprite, label,
       labelName: nameEl, labelActivity: actEl,
       labelBubble: bubbleEl, bubbleUntil: 0,
       target: st.pos.clone(), settle: null, pace: 1, face: st.face ?? null, waypoints: [], route: null,
@@ -1229,7 +1175,7 @@ export class NpcManager {
    *  REAL seconds (E1): the game-speed factor only freezes it. Returns false
    *  when the half is not bound on this rig (or the figure has no rig) — then
    *  the ordinary placement runs, the clip falls back to the activity kind. */
-  private tickInteraction(npc: Npc, dt: number, camDist: number, labelVisible: boolean, frozen: boolean): boolean {
+  private tickInteraction(npc: Npc, dt: number, labelVisible: boolean, frozen: boolean): boolean {
     const it = npc.interaction!;
     if (!npc.figure || !this.figures) return false;
     // the GAME clock — unbounded, there is nothing to clamp it against
@@ -1259,7 +1205,6 @@ export class NpcManager {
     npc.root.position.set(x, seat ? seat.slots[0].y : this.groundY(x, z), z);
     npc.figure.setYaw(it.anchor.yaw);
     npc.figure.update(dt, { frozen: frozen || it.rate <= 0 });
-    npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
     npc.label.visible = labelVisible;
     return true;
   }
@@ -1286,8 +1231,8 @@ export class NpcManager {
     return moveClip(gm.anim, running, raw.scope);
   }
 
-  tick(dt: number, camDist: number, frozen = false) {
-    const labelVisible = camDist < 55;
+  tick(dt: number, camDist: number, frozen = false, firstPersonName: string | null = null) {
+    this.firstPersonName = firstPersonName;
     const now = performance.now();
     for (const npc of this.npcs.values()) {
       if (npc.bubbleUntil && now >= npc.bubbleUntil) {
@@ -1299,7 +1244,10 @@ export class NpcManager {
     const spriteScale = THREE.MathUtils.clamp(camDist * 0.055, 1.7, 3.4);
     const faceTo = this.facingTargets();
     for (const npc of this.npcs.values()) {
-      if (npc.interaction && this.tickInteraction(npc, dt, camDist, labelVisible, frozen)) continue;
+      const visible = npc.name !== firstPersonName;
+      for (const child of npc.root.children) child.visible = visible;
+      const labelVisible = visible && camDist < 55;
+      if (npc.interaction && this.tickInteraction(npc, dt, labelVisible, frozen)) continue;
       // Server journey (§ A11): walk along the route instead of npc.target.
       // ONE number carries the whole journey — the metres walked along the
       // polyline — and the point is re-derived from it by arc length, so a
@@ -1431,7 +1379,6 @@ export class NpcManager {
           this.playLifting(npc, clip, travelling || !!groundIdle, sinkM,
             rootYBefore, goalPos.y);
           npc.figure.update(dt, { frozen });
-          npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
         } else if (npc.sprite) {
           npc.bobPhase += dt * 14;
           npc.sprite.position.y = 0.15 + Math.abs(Math.sin(npc.bobPhase)) * 0.35;
@@ -1639,8 +1586,6 @@ export class NpcManager {
           moving ? moveClip(standGm.anim, !reckoning && dist > RUN_DISTANCE, standRaw.scope)
             : standingClip, moving || !!standIdle, standSink, rootYBefore, goalY);
         npc.figure.update(dt, { frozen });
-        // The ring grows with the camera distance so NPCs stay findable from afar
-        npc.ring?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
       } else if (npc.sprite) {
         if (moving) {
           npc.bobPhase += dt * 14;
@@ -1652,8 +1597,5 @@ export class NpcManager {
       }
       npc.label.visible = labelVisible;
     }
-    // Same rule as the identity ring: grow with the camera distance so the
-    // selection stays findable in the far view (sprite figures included).
-    this.selectRing?.scale.setScalar(THREE.MathUtils.clamp(camDist * 0.022, 1, 2.6));
   }
 }

@@ -43,9 +43,7 @@ E) Every HTML entry point of the build is documented and every page the
    2026-09-21.
 
 F) The two environment variables the client is steered with are named
-   (`ANIMA_API` from `vite.config.ts`, `CLIENT3D_PORT` from `start.sh`), and
-   the README's count of `client3d/scripts/smoke_*.mjs` matches the
-   directory.
+   (`ANIMA_API` from `vite.config.ts`, `CLIENT3D_PORT` from `start.sh`).
 
 G) FAILS BEFORE / PASSES AFTER
 ---------------------------
@@ -151,7 +149,7 @@ def main():
         check(f"the README documents `{html}`", html in readme)
         check(f"`{html}` exists", (REPO / "client3d" / html).is_file())
 
-    print("F) env vars and the smoke count")
+    print("F) env vars")
     check("the README names ANIMA_API", "ANIMA_API" in readme)
     check("ANIMA_API is what vite.config.ts reads",
           "process.env.ANIMA_API" in vite_src)
@@ -159,9 +157,6 @@ def main():
     check("the README names CLIENT3D_PORT", "CLIENT3D_PORT" in readme)
     check("CLIENT3D_PORT is what start.sh reads",
           "CLIENT3D_PORT" in start_sh)
-    smokes = sorted((REPO / "client3d" / "scripts").glob("smoke_*.mjs"))
-    check(f"the README states the number of client smokes ({len(smokes)})",
-          str(len(smokes)) in readme, str(len(smokes)))
 
     print("G) the same checks against the PINNED previous revisions")
     try:

@@ -25,19 +25,13 @@
  * at which an open detail view closes (`CLOSE_CAM_DIST` in main.ts), so an
  * open interior can never close under an embodied avatar.
  *
- * ZOOMING IN aims at the EYES, not at the figure's root (2026-09-02). The
- * camera used to follow `positionOf`, which is the root — and a root sits at
- * the feet, so the centre of the picture was the ankles at every distance and
- * the head left the frame below ~3 m: the closer one zoomed, the more of the
- * shot was the ground the avatar stands on. Three numbers together make the
- * close view a look at what the avatar looks at, and all three live in
- * `scene/cameraFraming.ts` with their derivations:
- * - the aim point is `npcs.eyeOf` (0.94 · height, 1.60 m on a 1.70 m figure),
- * - `EMBODY_MIN_DIST` (2 m) keeps the camera out of the head,
- * - `EMBODY_NEAR_PITCH_DEG` (8° instead of 18°) flattens the near end, which
- *   is what puts the horizon inside the frame ahead of the avatar.
- * At the floor that is a camera 2.04 m up and 1.95 m behind the head, looking
- * 12.8° down: head in the centre, horizon 12.8° above it, half-frame 22.5°.
+ * ZOOMING IN aims at the EYES, not at the figure's root. The eye point is
+ * `npcs.eyeOf` (0.94 · height, 1.60 m on a 1.70 m figure). Third person keeps
+ * a 2 m stand-off from it, with the near pitch flattened to 8°. Zooming
+ * further in requests first person rather than pushing through the head:
+ * the engine places the lens at the eyes and the view hides the avatar.
+ * The switch waits 180 ms, entering at <= 1.2 m and leaving at >= 1.8 m.
+ * These are virtual zoom distances; the first-person lens stays at the eyes.
  */
 import type * as THREE from 'three';
 import type { Engine } from '../scene/engine';

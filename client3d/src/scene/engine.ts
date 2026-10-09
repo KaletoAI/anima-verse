@@ -4,14 +4,15 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { setSurfaceSky, updateSurfaceMaterials } from '@anima/scene-render';
 import { setFogVeilSky } from './fogVeil';
 import {
-  basePitchDeg, MAX_DIST, MIN_DIST, OVERVIEW_NEAR_PITCH_DEG,
+  basePitchDeg, FirstPersonZoom, MAX_DIST, MIN_DIST, OVERVIEW_NEAR_PITCH_DEG,
+  THIRD_PERSON_MIN_DIST,
 } from './cameraFraming';
 import { SHADOW_HALF_M, SHADOW_MAP_PX, snapShadowCentre } from './shadowSnap';
 import { type ScreenBox, viewShiftFor } from './viewShift';
 
 /** The framing arithmetic lives in `scene/cameraFraming.ts` — pure numbers, so
  *  the distances and the pitch curve can be checked without a GL context
- *  (`scripts/smoke_embodied_camera.mjs`). Re-exported here because `MIN_DIST`
+ *  (`scripts/smoke_first_person.mjs`). Re-exported here because `MIN_DIST`
  *  is a fact about this camera and `main.ts` frames the world with it. */
 export { MIN_DIST } from './cameraFraming';
 
@@ -87,6 +88,11 @@ export class Engine {
   yaw = Math.PI / 4;
   targetYaw = Math.PI / 4;
 
+  private firstPersonZoom = new FirstPersonZoom();
+  /** First person is available only while following the controlled avatar. */
+  get firstPerson(): boolean {
+    return this.follow !== null && this.firstPersonZoom.active;
+  }
   private keys = new Set<string>();
   private dragging = false;
   private orbiting = false;              // right mouse button: free orbit
@@ -159,12 +165,9 @@ export class Engine {
    *  deliberate camera move by the app and stays free, which is what lets the
    *  mode fly back out to the overview while leaving. */
   zoomCap: number | null = null;
-  /** Floor of the USER's zoom-in, in metres; `null` = the engine's own
-   *  `MIN_DIST`. The embodied mode sets it (`EMBODY_MIN_DIST`): the camera
-   *  aims at the avatar's EYES there, and 0.8 m from the eyes is inside the
-   *  head. Unlike `zoomCap` this one also binds `flyTo` — a fly that lands
-   *  inside the head is exactly what the floor exists to prevent, and no
-   *  caller has a reason to want it. */
+  /** Floor of the USER's zoom-in, in metres; `null` = `MIN_DIST`. This
+   *  clamps requested zoom and flyTo, not the third-person lens stand-off.
+   *  Following a figure permits first person at the closest zoom. */
   zoomFloor: number | null = null;
   /** Pitch at the near end of the zoom, in degrees — see
    *  `cameraFraming.basePitchDeg`. The embodied mode flattens it
@@ -407,7 +410,7 @@ export class Engine {
       const factor = Math.exp(e.deltaY * 0.0012);
       const before = this.targetDist;
       this.targetDist = this.clampZoom(before * factor);
-      if (this.targetDist < before) {
+      if (this.targetDist < before && !this.follow) {
         // Pull the target towards the cursor by exactly the fraction of the
         // distance that was just given up. `before` is a clamped distance and
         // therefore ≥ MIN_DIST > 0, so the ratio can never divide by zero; at
@@ -441,7 +444,7 @@ export class Engine {
       this.dragStart.copy(p);
       el.setPointerCapture(e.pointerId);
     });
-    // Middle-Click-Autoscroll des Browsers unterbinden
+    // Prevent the browser's middle-click autoscroll.
     el.addEventListener('mousedown', (e) => {
       if (e.button === 1) e.preventDefault();
     });
@@ -459,7 +462,9 @@ export class Engine {
             > ORBIT_DRAG_PX) this.moved = true;
         this.orbitLast = { x: e.clientX, y: e.clientY };
         this.targetYaw -= dx * 0.005;
-        this.pitchOffset = THREE.MathUtils.clamp(this.pitchOffset + dy * 0.25, -35, 35);
+        const pitchLimit = this.firstPerson ? 85 : 35;
+        this.pitchOffset = THREE.MathUtils.clamp(
+          this.pitchOffset + dy * 0.25, -pitchLimit, pitchLimit);
         this.flyT = 1;
         return;
       }
@@ -606,25 +611,30 @@ export class Engine {
     this.dist = THREE.MathUtils.lerp(this.dist, this.targetDist, 1 - Math.exp(-8 * dt));
     this.yaw = THREE.MathUtils.lerp(this.yaw, this.targetYaw, 1 - Math.exp(-8 * dt));
 
-    // Pitch: shallow up close, steep when far out (62°) — the curve and both
-    // near ends live in `cameraFraming.basePitchDeg` (18° overview, 8° while
-    // embodied). The right mouse button shifts the angle on top of that; the
-    // 8° floor of the clamp is what keeps the camera from lying down flat on
-    // the ground plane in the OVERVIEW, where the target sits at ground level
-    // and a horizontal view would look straight through the terrain. It is
-    // never the binding limit for the embodied near end, whose base pitch at
-    // the zoom floor is 12.84°.
-    const basePitch = basePitchDeg(this.dist, this.nearPitchDeg);
+    // Require the eased zoom to reach the entry threshold too: one large
+    // inward scroll must not teleport a distant camera straight to the eyes.
+    const zoomDistance = this.firstPersonZoom.active ? this.targetDist
+      : Math.max(this.dist - 1e-6, this.targetDist);
+    const firstPerson = this.firstPersonZoom.update(zoomDistance, !!followAt, dt);
+    const orbitDist = followAt ? Math.max(this.dist, THIRD_PERSON_MIN_DIST) : this.dist;
+    const basePitch = firstPerson ? 0 : basePitchDeg(orbitDist, this.nearPitchDeg);
     const pitch = THREE.MathUtils.degToRad(
-      THREE.MathUtils.clamp(basePitch + this.pitchOffset, 8, 85));
-
+      THREE.MathUtils.clamp(basePitch + this.pitchOffset, firstPerson ? -85 : 8, 85));
     const off = SCRATCH.off.set(
       Math.sin(this.yaw) * Math.cos(pitch),
       Math.sin(pitch),
       Math.cos(this.yaw) * Math.cos(pitch)
-    ).multiplyScalar(this.dist);
-    this.camera.position.copy(this.target).add(off);
-    this.camera.lookAt(this.target);
+    );
+    if (firstPerson && followAt) {
+      // Place the lens at the actual eyes, without the chase lag behind a
+      // walking avatar. Keep the orbit's view direction, now looking ahead.
+      this.target.copy(followAt);
+      this.camera.position.copy(followAt);
+      this.camera.lookAt(off.negate().add(followAt));
+    } else {
+      this.camera.position.copy(this.target).add(off.multiplyScalar(orbitDist));
+      this.camera.lookAt(this.target);
+    }
     this.applyViewShift(dt);
 
     // The sun follows the map section so the shadow map can stay small — but it

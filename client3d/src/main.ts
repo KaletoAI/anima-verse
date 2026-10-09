@@ -208,8 +208,8 @@ const DEFAULT_MAX_SLOPE_DEG = 40;
 // A door is a GAP in the wall segments (§ B1) — the server emits no door
 // geometry, and a hole between two wall pieces does not read as a way through.
 // So the game layer lays a flat threshold into each gap. This is an OVERLAY,
-// exactly like the event pins and the selection ring: nothing here touches the
-// recipe, the diorama or any shared render code, and `game/doors.ts` (pure
+// exactly like the event pins and walk-target markers: nothing here touches
+// the recipe, the diorama or any shared render code, and `game/doors.ts` (pure
 // maths, hand-checked in client3d/scripts/smoke_walk_math.mjs) says WHERE the gaps are.
 //
 // One unit quad for every marker of every tile: a threshold differs only in
@@ -523,11 +523,11 @@ async function startApp(username: string, role: string) {
   let showAll = isAdmin && localStorage.getItem(SHOW_ALL_KEY) === '1';
   const engine = new Engine(app);
   setModelEnvironment(engine.modelEnv);
-  (window as unknown as { __engine: Engine }).__engine = engine;   // Debug-Hook (Tageszeit testen)
-  (window as unknown as { __THREE: typeof THREE }).__THREE = THREE; // Debug-Hook (Szene vermessen)
+  (window as unknown as { __engine: Engine }).__engine = engine;   // debug hook: game-hour lighting
+  (window as unknown as { __THREE: typeof THREE }).__THREE = THREE; // debug hook: scene measurements
   const figures = new FigureLibrary();
-  // figures.load() wirft nie (Manifest/Clips fangen selbst) und darf NICHT
-  // wiederholt werden — ein zweiter Lauf würde die Modelle doppelt einhängen.
+  // figures.load() never throws (manifest/clips catch their own errors) and
+  // must not be repeated — another run would attach every model twice.
   const figuresReady = figures.load();
   const [allLocs, firstMap, surfaces] = await retryBoot('world data', () => Promise.all([
     api.getLocations(),
@@ -537,8 +537,8 @@ async function startApp(username: string, role: string) {
   reportBootStage('world');
   await figuresReady;
   reportBootStage('figures');
-  setSurfaceTextures(surfaces);   // globale Terrain-Texturen (AV3D-13)
-  setPropLoadFocus(engine.target);   // GLB-Queue: Modelle nahe der Kamera zuerst
+  setSurfaceTextures(surfaces);   // global terrain textures (AV3D-13)
+  setPropLoadFocus(engine.target);   // GLB queue: models nearest the camera first
   // The far scatter billboards are baked with the app's OWN renderer — one
   // WebGL context, and the offscreen passes borrow it between frames
   // (`scene/impostors.ts`). A second renderer would mean a second context and
@@ -811,13 +811,11 @@ async function startApp(username: string, role: string) {
   // with the plane it belongs to, because the metre world's ground is a base
   // plane PLUS the painted areas and every one of them would roof the cellar.
 
-  // Szenen-Rezept (Vertrag Teil B): der Server liefert die komplette Szene
-  // einer Location als fertige Primitive + Platzierungs-Specs. Wo es eins
-  // gibt, baut der Client NICHTS selbst mehr (kein Grundriss, keine
-  // Öffnungs-Aufteilung, keine eigenen Konstanten/Farben) — 404 = Legacy-Fall,
-  // dann bleibt der prozedurale Pfad unverändert.
-  // Vor dem ersten Kachelbau holen, damit jede Kachel gleich im richtigen
-  // Modus entsteht.
+  // Scene recipe (contract part B): the server supplies the complete scene
+  // as finished primitives and placement specs. When available, the client
+  // derives no geometry, opening splits, constants or colours of its own.
+  // A 404 keeps the procedural path. Fetch before building the first tiles,
+  // so each tile starts in the correct mode.
   const scenes = new SceneLibrary();
   await scenes.prime(placeable.map((l) => l.id));
   reportBootStage('scenes');
@@ -1585,10 +1583,9 @@ async function startApp(username: string, role: string) {
 
   let firstSweep = true;
   const requestServerModels = () => {
-    // Szenen-Rezepte: neue Locations holen + Signaturen nachfassen. EINE
-    // Signatur deckt map3d, alle Raum-Layouts, die Modell-Metas und die
-    // Prop-Sidecars ab (§ B1) — mehr gibt es nicht zu pollen. Beim ersten
-    // Durchlauf entfällt der Sweep, prime() hat gerade geholt.
+    // Fetch new scene recipes and refresh signatures. ONE signature covers
+    // map3d, room layouts, model metadata and prop sidecars (§ B1).
+    // Skip the first sweep because prime() just fetched those scenes.
     for (const locId of tiles.keys()) scenes.request(locId);
     if (!firstSweep) void scenes.sweep();
     firstSweep = false;
@@ -1596,8 +1593,8 @@ async function startApp(username: string, role: string) {
   requestServerModels();
   setInterval(requestServerModels, 60_000);
 
-  // Layout-Live-Refresh: Grundrisse/Marker/Meta-Justierungen/Terrain aus dem
-  // Admin erscheinen ohne Browser-Reload — Kachel wird bei Änderung neu gebaut
+  // Live layout refresh: admin floor plans, markers, model adjustments and
+  // terrain changes rebuild the tile without a browser reload.
   const sigOf = (l: Partial<WorldLocation>) => JSON.stringify([
     l.map3d, l.entry_room, l.terrain || '', l.surface_kind || '',
     (l.rooms ?? []).map((r) => [r.id, r.name, r.layout]),
@@ -1682,16 +1679,16 @@ async function startApp(username: string, role: string) {
     const tile = buildTile(loc);
     tile.fade = old.fade;
     tile.fadeTarget = old.fadeTarget;
-    tile.levelFilter = old.levelFilter;   // gewählte Etage über den Rebuild halten
+    tile.levelFilter = old.levelFilter;   // preserve the selected storey across rebuilds
     tiles.set(loc.id, tile);
     engine.scene.add(tile.group);
     const scene = scenes.get(loc.id);
     if (scene) void mountWithDoors(tile, scene);
     engine.setPickables([...tiles.values()].map((t) => t.group));
   }
-  // Szenen-Signatur bewegt sich (Layout, map3d, Modell-Meta, Prop-Sidecar) →
-  // Kachel neu bauen. Wird eine Szene zu 404 (Layout gelöscht), bleibt genau
-  // die prozedurale Kachel übrig — es gibt dann nichts mehr aufzuklappen.
+  // A changed scene signature (layout, map3d, model metadata, prop sidecar)
+  // rebuilds the tile. A 404 (deleted layout) leaves only the procedural
+  // tile, with no interior to reveal.
   /** Blocking wall lines per location and storey, for the avatar's collision
    *  (game/collide.ts). The payload is TILE-LOCAL, so the cached segments are
    *  world lines derived from the tile's centre AND its turn — which means it
@@ -1749,7 +1746,7 @@ async function startApp(username: string, role: string) {
   // `undefined` — and E4 walks the free plane: the avatar takes the straight
   // line and slides (`game/walk.slideBlocked`), NPCs follow the server's own
   // metre polyline (§ A11). A pathfinder over the free plane is E5+ work
-  // ("Client-A* fürs Klick-Laufen: nach Bedarf"), and it would have to be one
+  // (\"Client A* for click-to-walk: as needed\"), and it would have to be one
   // the server's position gate can follow — not this one.
   engine.target.copy(center);
   engine.dist = engine.targetDist = fitDistance(firstMap.world_bounds);
@@ -1804,13 +1801,12 @@ async function startApp(username: string, role: string) {
   panel.onCloseView = () => closeOpenLocation();
 
   // --- Figure selection (E3-T1) --------------------------------------------
-  // Figure picking runs before the tile pick: a hit figure gets the ring and
-  // the plaque (React reads the bus), a miss clears the selection and lets the
-  // click fall through to the tile's info panel.
+  // Figure picking runs before the tile pick: a hit figure gets the plaque
+  // (React reads the bus), a miss clears the selection and lets the click
+  // fall through to the tile's info panel.
   engine.pickFigure = (x, y) => {
     const ray = engine.raycasterAt(x, y);
     const name = npcs.characterAt(ray);
-    npcs.setSelected(name);
     if (!name) {
       setGameState({ selected: null });
       // No figure under the pointer: a free place takes the click and opens
@@ -1879,11 +1875,6 @@ async function startApp(username: string, role: string) {
     p.y += 0.85;
     engine.flyTo(p, THREE.MathUtils.clamp(ZOOM_TO_BASE_DIST, MIN_DIST, ZOOM_TO_MAX_DIST));
   };
-  // The marker follows the BUS, not the click: closing the plaque happens on
-  // the React side without a gameAction, and the ring has to go with it.
-  subscribeGameState(() => {
-    npcs.setSelected(getGameState().selected?.char.name ?? null);
-  });
 
   // --- Embodied mode (E3-T2) -----------------------------------------------
   // Everything the mode needs is the avatar's live position: enter/leave are
@@ -2077,7 +2068,7 @@ async function startApp(username: string, role: string) {
    *  wall one cannot even see. */
   const hiddenChars = new Set<string>();
 
-  // AV3D-8: room_id kommt direkt mit der Worldmap; dazu die Clip-Set-Kette
+  // AV3D-8: room_id and the clip-set chain come directly from the worldmap.
   function takeRoomsFrom(map: WorldMap) {
     for (const c of map.characters) {
       // An empty room_id is the location's GROUND, not a missing answer — it
@@ -2086,7 +2077,7 @@ async function startApp(username: string, role: string) {
       roomOf.set(c.name, c.room_id ?? '');
       figures.setCharacterSets(c.name, c.animation_sets);
       figures.setCharacterHeight(c.name, c.height_cm);
-      // MODELLWECHSEL (§ A11a): the served mesh's signature rides in this
+      // MODEL SWAP (§ A11a): the served mesh's signature rides in this
       // very payload, exactly as `terrain_sig` does for the ground — so the
       // check is a string compare inside the poll that runs anyway, and the
       // model route is asked only when it really moved. A row without the
@@ -2100,13 +2091,12 @@ async function startApp(username: string, role: string) {
 
   /** Keep the plaque on the fresh worldmap snapshot (activity, mood, travel
    *  target change while it is open). A character that vanished from the map
-   *  drops the selection including its marker. */
+   *  drops the selection. */
   function refreshSelection(map: WorldMap) {
     const sel = getGameState().selected;
     if (!sel) return;
     const char = map.characters.find((c) => c.name === sel.char.name) ?? null;
     if (!char) {
-      npcs.setSelected(null);
       setGameState({ selected: null });
       return;
     }
@@ -2240,11 +2230,9 @@ async function startApp(username: string, role: string) {
   updatePins(firstMap);
   setInterval(pollWorldMap, WORLDMAP_POLL_MS);
 
-  // Outfit-/Modellwechsel: der Server kann pro Charakter ein anderes Modell
-  // ausliefern (ein Modell je Outfit). DIE WORLDMAP LIEFERT DIE SIGNATUR
-  // (§ A11a, `MapCharacter.model_sig`) — der eigene 20-s-Timer, der dafür pro
-  // Charakter einen `/model3d`-Request abgesetzt hat, ist damit ersatzlos
-  // entfallen; der Vergleich steckt in `takeRoomsFrom`.
+  // Outfit/model swaps: the server may supply a different model per outfit.
+  // The worldmap supplies its signature (§ A11a, MapCharacter.model_sig).
+  // takeRoomsFrom compares it instead of polling /model3d per character.
 
   // Windows glow at night — and the soundtrack changes with the same factor.
   /** Installed further down by the soundtrack driver (E4-T5), which needs the
@@ -2273,7 +2261,7 @@ async function startApp(username: string, role: string) {
   takeGameHour();
   setInterval(takeGameHour, 60_000);
 
-  // Fallback für Backends ohne room_id im Worldmap-Payload (Prä-AV3D-8)
+  // Fallback for backends without room_id in the worldmap (pre-AV3D-8).
   async function pollRooms() {
     const zoomed = [...tiles.values()].filter((t) => t.fadeTarget === 1 && t.loc.rooms.length);
     for (const tile of zoomed) {
@@ -2297,7 +2285,7 @@ async function startApp(username: string, role: string) {
    *  absolute 2.6 m, because it is a huddle of people and not a property line. */
   function slotOffset(tile: Tile, index: number, count: number): { x: number; z: number } {
     if (tile.isBuilding) {
-      // vor dem Gebäude aufreihen (Südseite)
+      // Line up in front of the building (south side).
       return { x: (index - (count - 1) / 2) * 2.3, z: tile.width * 0.36 };
     }
     const angle = (index / Math.max(count, 1)) * Math.PI * 2;
@@ -2510,8 +2498,8 @@ async function startApp(username: string, role: string) {
         } else {
           const slot = slotOffset(tile, i, chars.length);
           pos = tileToWorld(tile, slot.x, slot.z);
-          // Eingebackene Bodenhaut des Gebäude-Meshes: auf die Oberfläche
-          // stellen statt bei y=0 darin zu versinken (Befund Kira).
+          // Stand on the building mesh's baked ground skin instead of
+          // sinking into it at y=0.
           pos.setY(tileGroundY(tile, pos));
         }
         // Door routing: a real room change walks through the DOOR, not through
@@ -2605,7 +2593,7 @@ async function startApp(username: string, role: string) {
         if (targetTile && c.movement_target_id !== locId && !face) {
           face = targetTile.center.clone().sub(pos).setY(0);
         }
-        // Etagen-Umschalter: Figuren auf nicht gewählten Etagen ausblenden
+        // Storey switch: hide figures on storeys other than the selected one.
         const wrongStorey = !!inRoom && tile.fade > 0.5
           && !tile.alwaysVisibleRooms.has(inRoom)
           && (tile.roomLevels.get(inRoom) ?? 0) !== tile.levelFilter;
@@ -3805,13 +3793,12 @@ async function startApp(username: string, role: string) {
   // the camera is the engine's, the avatar's chest is the figure's position
   // plus the constant in the module.
   //
-  // Not embodied (or no figure on the map yet) means strength 0, and the
-  // shader's own guard then discards nothing at all — an overview client draws
-  // exactly the picture it drew before this existed.
+  // Overview and first person need no corridor cleared to a visible avatar.
+  // With strength 0 the shader's guard discards nothing.
   engine.addFrameHook(() => {
-    const embodied = getGameState().mode === 'embodied';
+    const thirdPerson = getGameState().mode === 'embodied' && !engine.firstPerson;
     updateOcclusion(engine.camera.position,
-                    embodied ? npcs.positionOf(avatarName) : null, embodied);
+                    thirdPerson ? npcs.positionOf(avatarName) : null, thirdPerson);
   });
 
   // The DOOR PROPS of every mounted scene, eased every frame (v5) — see
@@ -5731,8 +5718,8 @@ async function startApp(username: string, role: string) {
       terrainGround.setHole([minX, minZ, maxX, maxZ]);
     }
 
-    // Verdecker Richtung Kamera: bei offener Innenansicht Nachbar-Kacheln
-    // ausblenden, die zwischen Kamera und der Kachel liegen (XZ-Korridor)
+    // In an open interior view, hide neighbouring tiles between the camera
+    // and the revealed tile (XZ corridor).
     const cam = engine.camera.position;
     for (const tile of tiles.values()) {
       let hide = false;
@@ -5750,10 +5737,9 @@ async function startApp(username: string, role: string) {
       applyTileOcclusion(tile, hide, dt);
     }
 
-    // Raum-Sichtbarkeit: allein die gewählte Etage entscheidet. Der frühere
-    // „Raum-Fokus" (Nachbarräume ausblenden, sobald einer das Bild füllt)
-    // ist gestrichen — er hing am wandernden Kamera-Zielpunkt und ließ
-    // Räume samt Diorama und Props winkelabhängig verschwinden.
+    // Room visibility depends only on the selected storey. Camera-based
+    // room focus was removed: its moving target made rooms, dioramas and
+    // props disappear depending on the viewing angle.
     for (const tile of tiles.values()) {
       if (tile.roomGroups.size) applyRoomVisibility(tile);
     }
@@ -5796,7 +5782,8 @@ async function startApp(username: string, role: string) {
         storey.visible = storey.userData.level === tile.levelFilter;
       }
     }
-    npcs.tick(dt, engine.dist, (lastMap ?? firstMap).game_rate === 0);
+    npcs.tick(dt, engine.dist, (lastMap ?? firstMap).game_rate === 0,
+      engine.firstPerson ? avatarName : null);
     bob += dt * 2.2;
     for (const pin of pins.values()) {
       pin.position.y += Math.sin(bob) * 0.008;

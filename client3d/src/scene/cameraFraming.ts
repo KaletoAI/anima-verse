@@ -42,12 +42,40 @@ export const FAR_PITCH_DEG = 62;
  *  the avatar is actually in shot. At 18° it sits at 21.9°, on the very edge. */
 export const EMBODY_NEAR_PITCH_DEG = 8;
 
-/** Closest the camera may get while embodied, in metres. The engine's own
- *  `MIN_DIST` is the lens; this is the rule of the game: aiming at the eyes
- *  means 0.8 m would put the camera inside the avatar's head. 2 m leaves it
- *  ~1.95 m behind and 0.34 m above the crown of a 1.70 m figure — the closest
- *  over-the-shoulder shot that still shows a head rather than a scalp. */
-export const EMBODY_MIN_DIST = 2.0;
+/** Minimum requested zoom while embodied. Below the third-person stand-off,
+ *  the zoom selects first person instead of pushing the lens into the head. */
+export const EMBODY_MIN_DIST = MIN_DIST;
+/** Keep the third-person lens outside the head until the delayed switch. */
+export const THIRD_PERSON_MIN_DIST = 2;
+
+/**
+ * Perspective hysteresis in requested orbit metres. A 0.6 m band and 180 ms
+ * of continuous input beyond a threshold reject small or fleeting wheel
+ * reversals. Owned by the engine; no timers or per-frame allocations.
+ */
+export class FirstPersonZoom {
+  active = false;
+  private pendingSeconds = 0;
+
+  update(distance: number, enabled: boolean, dt: number): boolean {
+    if (!enabled) {
+      this.active = false;
+      this.pendingSeconds = 0;
+      return false;
+    }
+    const switching = this.active ? distance >= 1.8 : distance <= 1.2;
+    if (!switching) {
+      this.pendingSeconds = 0;
+      return this.active;
+    }
+    this.pendingSeconds += dt;
+    if (this.pendingSeconds >= 0.18 - 1e-9) {
+      this.active = !this.active;
+      this.pendingSeconds = 0;
+    }
+    return this.active;
+  }
+}
 
 /** Where the eyes sit, as a fraction of standing height. 0.94 is the
  *  anthropometric standard (eye height ≈ 0.936–0.94 of stature) and puts a
