@@ -543,7 +543,7 @@ def find_texture(character_name: str,
 
 
 @_model_reader
-def get_model3d_info(character_name: str) -> Dict[str, Any]:
+def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, Any]:
     """Status of the mesh for the CURRENTLY worn outfit: cached file + meta,
     whether a T-pose input exists, and whether a generation is running.
 
@@ -644,7 +644,7 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                 info["texture_size"] = tex.stat().st_size
         out["model"] = info
     from app.core.extension_rig import motion_payload
-    out["motion"] = motion_payload(character_name, profile=profile)
+    out["motion"] = motion_payload(character_name, profile=profile, preview_states=preview_states)
     out["motion_defaults"] = motion_payload(character_name, profile=profile, apply_clothing=False, apply_states=False)["groups"]
     from app.core.extension_rig import rig_groups_for
     out["extension_groups"] = rig_groups_for(character_name, profile=profile)

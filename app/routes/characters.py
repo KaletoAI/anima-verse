@@ -1450,13 +1450,17 @@ def get_character_model_ref_image(character_name: str, kind: str, request: Reque
 # --- Generated 3D model (img2mesh from the T-pose render, per outfit) ---
 
 @router.get("/{character_name}/model3d")
-def get_character_model3d(character_name: str) -> Dict[str, Any]:
+def get_character_model3d(character_name: str, request: Request, preview_states: Optional[str] = None) -> Dict[str, Any]:
     """Status of the generated mesh for the CURRENT outfit combination
     ({signature, has_input, model, pending}) + the character's animation set
     (explicit or derived), so the preview can offer the matching clips."""
     from app.core.animation_sets import derive_set, resolve_sets
     from app.core.model3d import get_model3d_info
-    info = get_model3d_info(character_name)
+    selected = None
+    if preview_states is not None:
+        require_admin(request)
+        selected = [] if preview_states == "none" else [value.strip() for value in preview_states.split(",") if value.strip()]
+    info = get_model3d_info(character_name, preview_states=selected)
     chain = resolve_sets(character_name)
     info["animation_set"] = chain[0] if chain else ""
     info["animation_sets"] = chain          # explicit first, then derived

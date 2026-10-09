@@ -109,6 +109,28 @@ def main():
             change(active_conditions=[{'name': 'first'}, {'name': 'second'}])
             result = motion()
             check(values()['rest_deg'] == 24, 'maximum of present rest angles')
+            stored_preview = get_character_profile('sample')
+            forced = extension_rig.motion_payload('sample', preview_states=['first'])
+            check(forced['groups']['sample_group']['rest_deg'] == 12, 'preview replaces active states')
+            check(extension_rig.motion_payload('sample', preview_states=[])['groups']['sample_group']['rest_deg'] == 0, 'none preview has no state')
+            check(get_character_profile('sample') == stored_preview and motion() == result, 'preview never persists')
+            from app.routes.characters import get_character_model3d
+            from starlette.requests import Request
+            request = Request({'type': 'http', 'headers': []})
+            with patch('app.core.auth_dependency.get_current_user', return_value={'role': 'player'}):
+                check(get_character_model3d('sample', request)['motion'] == result, 'current live read needs no preview admin check')
+                for selection in ('first', 'none', ''):
+                    try:
+                        get_character_model3d('sample', request, selection)
+                    except HTTPException as exc:
+                        check(exc.status_code == 403, 'non-admin preview rejected before reading data')
+                    else:
+                        raise AssertionError('player preview accepted')
+            with patch('app.core.auth_dependency.get_current_user', return_value={'role': 'admin'}):
+                check(get_character_model3d('sample', request, 'first')['motion']['groups']['sample_group']['rest_deg'] == 12, 'admin route selects preview state')
+                check(get_character_model3d('sample', request, 'none')['motion']['groups']['sample_group']['rest_deg'] == 0, 'admin route none has no state')
+                check(get_character_model3d('sample', request, 'first,second')['motion'] == result, 'comma list composes preview states')
+            check(get_character_profile('sample') == stored_preview and motion() == result, 'route preview never persists')
             check(abs(values()['gravity'] - .14) < 1e-12, 'gravity .35 x .5 x .8')
             check(values()['freq_hz'] == 2.2 and values()['zeta'] == .7, 'frequency and damping products')
             check(result['rev'] != base['rev'], 'tag on changes revision')

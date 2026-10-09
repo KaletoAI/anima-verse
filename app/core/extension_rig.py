@@ -100,7 +100,7 @@ def validate_motion_overrides(section):
                        "chains": [[{"bone": "ValidationBone", "parent": "Hips"}]], **values})
 
 
-def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_states=True):
+def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_states=True, preview_states=None):
     """Package → world → attribute multipliers → character → clothing → state; mesh-independent."""
     import math
     from app.core import config
@@ -137,7 +137,14 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
     coverage = {slot.rig.id: list(slot.covered_by) for slot in
                 slots if slot.rig is not None}
     from app.core.prompt_filters import BONE_POSE_FIELDS, collect_bone_poses, valid_bone_pose_number
-    states = collect_bone_poses(character_name, profile.get("current_location", ""), profile=profile) if apply_states else []
+    if preview_states is not None:
+        from app.core.prompt_filters import load_filters
+        selected = set(preview_states)
+        states = sorted([{"id": row["id"], "bone_pose": row.get("bone_pose") or {}}
+                         for row in load_filters() if row["id"] in selected],
+                        key=lambda row: row["id"])
+    else:
+        states = collect_bone_poses(character_name, profile.get("current_location", ""), profile=profile) if apply_states else []
     groups = {}
     for group in declarations:
         values = {key: group[key] for key in MOTION_FIELDS}

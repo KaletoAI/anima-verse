@@ -1,3 +1,4 @@
+import { MotionPreviewHint } from '../characters/MotionPreviewHint'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
@@ -512,7 +513,7 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
             <legend>{group.id}</legend>
             <div className="ga-form-row">
               {POSE_FIELDS.map(field => (
-                <Field key={field} label={poseLabels[field]} compact>
+                <Field key={field} label={poseLabels[field]} hint={<MotionPreviewHint field={field} />} compact>
                   <input type="number" className="ga-input" min={0}
                     max={field === 'rest_deg' ? group.defaults.rest_max_deg : undefined} step="any"
                     value={draft.bone_pose[group.id]?.[field] ?? ''}

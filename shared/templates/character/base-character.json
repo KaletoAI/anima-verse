@@ -134,7 +134,7 @@
           "min": 0,
           "max": 3,
           "step": 0.1,
-          "hint": "Gravity multiplier for extension motion (0..3; default 1)."
+          "hint": "Gravity multiplier for extension motion (0..3; default 1). Visible upright when not 1; otherwise use Tilt."
         },
         {
           "key": "animation_set",

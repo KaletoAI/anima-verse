@@ -1,3 +1,4 @@
+import { MotionPreviewHint } from './MotionPreviewHint'
 import type { SecondaryMotionPayload, ExtensionRigDeclaration } from '@anima/scene-render'
 /**
  * FieldModel3D — the character's 3D model for the current outfit. ONE model,
@@ -161,6 +162,22 @@ export function FieldModel3D({ character }: { character: string }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [clips, setClips] = useState<AnimationClip[]>([])
   const [clipUrl, setClipUrl] = useState('')
+  const [previewState, setPreviewState] = useState('')
+  const [previewFilters, setPreviewFilters] = useState<Array<{ id: string; label?: string; bone_pose?: Record<string, unknown> }>>([])
+  const previewRef = useRef<HTMLDivElement>(null)
+  const previewRequestRef = useRef(0)
+  const previewContextRef = useRef('')
+  previewContextRef.current = `${enc}:${previewState}`
+  const previewStateRef = useRef(previewState)
+  previewStateRef.current = previewState
+  useEffect(() => {
+    let cancelled = false
+    apiGet<{ filters?: typeof previewFilters }>('/admin/prompt-filters/data')
+      .then(data => { if (!cancelled) setPreviewFilters((data.filters || []).filter(row => Object.keys(row.bone_pose || {}).length > 0)) })
+      .catch(() => { if (!cancelled) setPreviewFilters([]) })
+    return () => { cancelled = true }
+  }, [])
+
   const [dialogOpen, setDialogOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
   const [pendingFbx, setPendingFbx] = useState<File | null>(null)
@@ -179,12 +196,15 @@ export function FieldModel3D({ character }: { character: string }) {
 
   const load = useCallback(async () => {
     if (!character) return
+    const context = previewContextRef.current
+    const selected = previewStateRef.current
     try {
-      const d = await apiGet<Model3DStatus>(`/characters/${enc}/model3d`)
+      const d = await apiGet<Model3DStatus>(`/characters/${enc}/model3d${selected ? `?preview_states=${encodeURIComponent(selected)}` : ''}`)
+      if (context !== previewContextRef.current) return
       setSt(d)
       return d
     } catch {
-      setSt({})
+      if (context === previewContextRef.current) setSt({})
     }
   }, [character, enc])
 
@@ -220,6 +240,36 @@ export function FieldModel3D({ character }: { character: string }) {
       if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [load, startPoll])
+
+  useEffect(() => {
+    let cancelled = false
+    let visible = false
+    let pending = false
+    const context = `${enc}:${previewState}`
+    const refresh = async () => {
+      if (cancelled || pending || !visible || document.visibilityState !== 'visible') return
+      pending = true
+      const token = ++previewRequestRef.current
+      try {
+        const data = await apiGet<Model3DStatus>(`/characters/${enc}/model3d${previewState ? `?preview_states=${encodeURIComponent(previewState)}` : ''}`)
+        if (!cancelled && context === previewContextRef.current && token === previewRequestRef.current) setSt(old => ({ ...old, motion: data.motion }))
+      } catch { /* Keep the last successful preview during temporary request failures. */ }
+      finally { pending = false }
+    }
+    const observer = new IntersectionObserver(entries => {
+      visible = entries.some(entry => entry.isIntersecting)
+      if (visible) void refresh()
+    })
+    if (previewRef.current) observer.observe(previewRef.current)
+    const timer = previewState === '' ? setInterval(() => void refresh(), 5000) : undefined
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      cancelled = true
+      observer.disconnect()
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [enc, previewState, st.model?.url])
 
   // Shared animation clips (world-independent, same rig as the models).
   useEffect(() => {
@@ -628,13 +678,23 @@ export function FieldModel3D({ character }: { character: string }) {
     <div className="ga-form">
       {model ? (
         <>
+          <label>{t('Preview state')}
+            <select className="ga-input" value={previewState} onChange={event => setPreviewState(event.target.value)}>
+              <option value="">{t('Current (live)')}</option>
+              <option value="none">{t('None')}</option>
+              {previewFilters.map(row => <option key={row.id} value={row.id}>{row.label || row.id}</option>)}
+            </select>
+          </label>
+          <div ref={previewRef}>
           <Model3DViewer
+            previewTilt
             motion={st.motion}
             url={viewerUrl}
             format={model.format || 'fbx'}
             clipUrl={mixamo ? clipUrl : ''}
             textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
           />
+          </div>
           {/* Shown whenever Blender is around, not only once a distance mesh
               exists: asking for one that is missing is what makes the server
               build it. The button says so, and a reload has it. */}
@@ -865,14 +925,14 @@ export function FieldModel3D({ character }: { character: string }) {
                 <input type="checkbox" disabled={pending}
                   checked={st.options?.extension_rig?.[group.id]?.enabled !== false}
                   onChange={(event) => setExtensionOption(group.id, 'enabled', event.target.checked)} />
-                {' '}{t('Enabled')}
+                {' '}{t('Enabled')} <MotionPreviewHint field="enabled" />
               </label>
               {group.op === 'appendage_chain' ? (
                 <label>
                   <input type="checkbox" disabled={pending}
                     checked={st.options?.extension_rig?.[group.id]?.flip === true}
                     onChange={(event) => setExtensionOption(group.id, 'flip', event.target.checked)} />
-                  {' '}{t('Flip direction')}
+                  {' '}{t('Flip direction')} <MotionPreviewHint field="flip" />
                 </label>
               ) : null}
               {st.motion?.groups[group.id] ? <>
@@ -880,7 +940,7 @@ export function FieldModel3D({ character }: { character: string }) {
                   gain: 'Gain', max_deg: 'Maximum dynamic angle (degrees)',
                   sag_max_deg: 'Maximum static angle (degrees)', flatten: 'Flatten', spill: 'Spill',
                   rest_max_deg: 'Maximum rest angle (degrees)' }).map(([key, label]) => (
-                  <label key={key}>{t(label)}
+                  <label key={key}>{t(label)} <MotionPreviewHint field={key} />
                     <input className="ga-input" type="number" step="any" min={key === 'freq_hz' ? 0.000001 : 0}
                       max={['gain', 'flatten', 'spill'].includes(key) ? 1 : key.endsWith('deg') ? 180 : undefined}
                       disabled={pending || busy}
@@ -894,7 +954,7 @@ export function FieldModel3D({ character }: { character: string }) {
                       }} />
                   </label>
                 ))}
-                {[0, 1].map(index => <label key={index}>{t(index === 0 ? 'Squash minimum' : 'Squash maximum')}
+                {[0, 1].map(index => <label key={index}>{t(index === 0 ? 'Squash minimum' : 'Squash maximum')} <MotionPreviewHint field="squash" />
                   <input className="ga-input" type="number" step="any" min={index === 0 ? 0.000001 : 1}
                     max={index === 0 ? 1 : undefined} disabled={pending || busy}
                     key={`${index}:${st.motion?.rev}`}

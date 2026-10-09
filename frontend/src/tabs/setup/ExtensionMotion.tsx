@@ -1,3 +1,4 @@
+import { MotionPreviewHint } from '../characters/MotionPreviewHint'
 import { useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
@@ -50,7 +51,7 @@ export function ExtensionMotion({ values, onChange }: {
       const effective = { ...group.defaults, ...overrides[group.id] }
       return <fieldset key={group.id}>
         <legend>{group.id}</legend>
-        {Object.entries(fields).map(([key, label]) => <label key={key}>{t(label)}
+        {Object.entries(fields).map(([key, label]) => <label key={key}>{t(label)} <MotionPreviewHint field={key} />
           <input className="ga-input" type="number" step="any"
             min={0}
             max={(key === 'gain' || key === 'spill' || key === 'flatten') ? 1 : key.endsWith('deg') ? 180 : undefined}
@@ -60,7 +61,7 @@ export function ExtensionMotion({ values, onChange }: {
                 update(group.id, key, Number(e.target.value))
             }} />
         </label>)}
-        {[0, 1].map(index => <label key={index}>{t(index === 0 ? 'Squash minimum' : 'Squash maximum')}
+        {[0, 1].map(index => <label key={index}>{t(index === 0 ? 'Squash minimum' : 'Squash maximum')} <MotionPreviewHint field="squash" />
           <input className="ga-input" type="number" step="any" min={index === 0 ? 0.000001 : 1}
             max={index === 0 ? 1 : undefined} value={(effective.squash as number[])[index]}
             onChange={e => {

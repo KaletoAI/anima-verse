@@ -1,3 +1,4 @@
+import { applyPreviewTilt } from './motionFieldPreview'
 /**
  * Model3DViewer — interactive preview of a generated character mesh.
  *
@@ -247,7 +248,7 @@ export interface TilePlacement {
   figureHeightWorld?: number
 }
 
-export function Model3DViewer({ url, format, motion, clipUrl = '', textureUrl = '', height = 320, rotation,
+export function Model3DViewer({ url, format, motion, previewTilt = false, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
   placement, onBounds, markers, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
@@ -255,7 +256,7 @@ export function Model3DViewer({ url, format, motion, clipUrl = '', textureUrl = 
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox }:
-  { url: string; format: string; motion?: SecondaryMotionPayload; clipUrl?: string; textureUrl?: string; height?: number;
+  { url: string; format: string; motion?: SecondaryMotionPayload; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
     rotation?: { x?: number; y?: number; z?: number }
@@ -400,6 +401,10 @@ export function Model3DViewer({ url, format, motion, clipUrl = '', textureUrl = 
   const [secondaryOn, setSecondaryOn] = useState(true)
   const secondaryOnRef = useRef(secondaryOn)
   secondaryOnRef.current = secondaryOn
+  const [tiltForward, setTiltForward] = useState(0)
+  const [tiltSideways, setTiltSideways] = useState(0)
+  const tiltRef = useRef({ forward: 0, sideways: 0 })
+  tiltRef.current = { forward: previewTilt ? tiltForward : 0, sideways: previewTilt ? tiltSideways : 0 }
   const motionRef = useRef(motion)
   motionRef.current = motion
   const mountRef = useRef<HTMLDivElement>(null)
@@ -915,7 +920,9 @@ export function Model3DViewer({ url, format, motion, clipUrl = '', textureUrl = 
         // fights the placement. Identity transform in normal mode.
         const place = new THREE.Group()
         place.add(orient)
-        scene.add(place)
+        const previewRoot = new THREE.Group()
+        previewRoot.add(place)
+        scene.add(previewRoot)
         const _r = rotationRef.current
         // 'YXZ' like place() in @anima/scene-render: yaw outermost, tilt and
         // roll in the already-turned frame. The preview must not disagree with
@@ -1846,6 +1853,8 @@ export function Model3DViewer({ url, format, motion, clipUrl = '', textureUrl = 
             secondary?.configure(secondaryEnabled ? motionRef.current : undefined)
             if (!secondaryEnabled) secondary?.reset()
           }
+          applyPreviewTilt(previewRoot, tiltRef.current.forward, tiltRef.current.sideways)
+          previewRoot.updateMatrixWorld(true)
           secondary?.update(realDelta)
           object.updateMatrixWorld(true)
           controls.update()
@@ -1878,7 +1887,21 @@ export function Model3DViewer({ url, format, motion, clipUrl = '', textureUrl = 
   }, [url, format, clipUrl, textureUrl, height])
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div>
+      {previewTilt ? <div className="ga-form-row">
+        <label>{t('Tilt forward/back')} {tiltForward}°
+          <input type="range" min={-90} max={90} value={tiltForward}
+            title={t('+90 = lying on the back')}
+            onChange={event => setTiltForward(Number(event.target.value))} />
+        </label>
+        <label>{t('Tilt sideways')} {tiltSideways}°
+          <input type="range" min={-90} max={90} value={tiltSideways}
+            onChange={event => setTiltSideways(Number(event.target.value))} />
+        </label>
+        <button type="button" className="ga-btn ga-btn-sm"
+          onClick={() => { setTiltForward(0); setTiltSideways(0) }}>{t('Reset tilt')}</button>
+      </div> : null}
+      <div style={{ position: 'relative' }}>
       <div
         ref={mountRef}
         style={{
@@ -2032,6 +2055,7 @@ export function Model3DViewer({ url, format, motion, clipUrl = '', textureUrl = 
           {error ? `${t('Error')}: ${error}` : t('Loading…')}
         </div>
       ) : null}
+      </div>
     </div>
   )
 }

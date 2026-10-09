@@ -47,6 +47,16 @@ try {
   await writeFile(file, result.outputFiles[0].text);
   const C = await import(file);
   assert.equal(typeof C.createSecondaryMotion, 'function', 'shared solver must exist');
+  const hintsBuild = await build({ entryPoints: ['frontend/src/tabs/characters/motionFieldPreview.ts'], bundle: true, platform: 'node', format: 'esm', write: false });
+  const hintsFile = join(dir, 'hints.mjs');
+  await writeFile(hintsFile, hintsBuild.outputFiles[0].text);
+  const hints = await import(hintsFile);
+  const motionType = await readFile('packages/scene-render/src/secondaryMotion.ts', 'utf8');
+  const fields = [...motionType.match(/interface MotionGroup \{([\s\S]*?)\}/)[1].matchAll(/^  (\w+):/gm)].map(match => match[1]).filter(field => field !== 'bones');
+  for (const field of fields) assert.ok(hints.motionFieldPreview[field], `missing preview category: ${field}`);
+  const tiltViewerSource = await readFile('frontend/src/tabs/characters/Model3DViewer.tsx', 'utf8');
+  assert.ok(tiltViewerSource.includes('applyPreviewTilt(previewRoot') && tiltViewerSource.indexOf('applyPreviewTilt(previewRoot') < tiltViewerSource.indexOf('secondary?.update(realDelta)'), 'tilt before solver');
+
   const fieldSource=await readFile('frontend/src/tabs/characters/FieldModel3D.tsx','utf8');
   assert.match(fieldSource,/motion=\{st.motion\}/,'status root must reach viewer');
   assert.equal(typeof C.installSkinnedNormalCorrection,'function');
@@ -71,6 +81,14 @@ try {
     return {root,anchor,bone,mesh,solver,point};
   }
   const near=(actual,expected,eps=1e-5)=>assert.ok(Math.abs(actual-expected)<eps,`${actual} vs ${expected} ±${eps}`);
+  const tilted = fixture({ gain: 0 });
+  hints.applyPreviewTilt(tilted.root, 90, 0);
+  tilted.solver.update(0);
+  const tiltD = 9.81 / (4 * Math.PI) ** 2;
+  near(tilted.point().length(), Math.sqrt((1 - tiltD) ** 2 + tiltD ** 2));
+  assert.ok(tilted.point().length() < 1, 'lying Tilt with flatten shortens');
+  tilted.solver.dispose();
+  console.log('ok preview hints cover payload fields; Tilt before solver shortens to 0.93993263');
   // A unit lever with squash=[1,1], sag limit pi/2 and no dynamics:
   // smoothstep derivative <=1.5/1.5=1 per second, so a bounded arc
   // transition moves <=(pi/2)/120 per 120 Hz frame (plus numeric tolerance).
@@ -333,8 +351,8 @@ try {
   const compiledEditor=await transform(`return (${editorJSX})`,{loader:'tsx',jsxFactory:'h',jsxFragment:'Fragment'});
   const editorCalls=[];
   const editorStatus={motion:payload({gain:.216}),motion_defaults:payload({gain:.9}).groups,options:{extension_motion:{}}};
-  const editor=new Function('h','st','group','pending','busy','t','setExtensionMotion','Fragment',compiledEditor.code)(
-    h,editorStatus,{id:'test'},false,false,x=>x,(...args)=>editorCalls.push(args),'fragment');
+  const editor=new Function('h','st','group','pending','busy','t','setExtensionMotion','Fragment','MotionPreviewHint',compiledEditor.code)(
+    h,editorStatus,{id:'test'},false,false,x=>x,(...args)=>editorCalls.push(args),'fragment', 'preview-hint');
   const allNodes=node=>Array.isArray(node)?node.flatMap(allNodes):node?.children?[node,...node.children.flatMap(allNodes)]:[];
   const nodes=allNodes(editor);
   const gainInput=nodes.find(node=>node.tag==='label'&&node.children[0]==='Gain').children.find(node=>node?.tag==='input');

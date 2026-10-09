@@ -709,6 +709,14 @@ These settings change `motion.rev`, never the extension rig fingerprint or mesh.
 
 ### State bone pose and neutral mesh inputs (P4)
 
+The Setup motion editor, character overrides and state pose editor share preview hints:
+`live` covers `rest_deg` and `rest_max_deg` (visible immediately); `motion` covers
+`freq_hz` (`freq` in state poses), `zeta`, `gain` and `max_deg` (play a clip);
+`tilt` covers `gravity`, `sag_max_deg`, `flatten`, `spill` and `squash` (use Tilt,
+since the upright rest shape already carries gravity). Character `motion_gravity_scale`
+is visible upright when different from 1; otherwise use Tilt. Group enabled/flip and
+mesh-operation parameters are `rebuild`: they take effect after Rebuild extension bones.
+
 States in `prompt_filters` may carry `bone_pose`, a JSON mapping from loaded
 rig group IDs to sparse values. Game-Admin → States lists the declared groups
 from the same extension-motion endpoint. For example:

@@ -10493,6 +10493,15 @@ weiter") und ihren Löschlisten stehen in der Git-Historie: `81a9bb3c` (E1),
 
 ### Effective extension motion (P3–P4)
 
+The admin `GET /characters/{name}/model3d` accepts optional `preview_states`:
+a comma-separated list of filter ids replaces the active states for this response;
+`none` removes all state contributions. Supplying the parameter requires admin access,
+including an empty value. It never changes stored conditions or model identity.
+Without the parameter, the visible admin preview refreshes motion every five seconds
+through live reconfiguration, without reloading the mesh. Preview-only Tilt controls
+rotate the figure root before the solver step; +90 forward/back means lying on the back.
+
+
 Worldmap character `motion` and `/characters/{name}/model3d` metadata return the
 same effective physics: package defaults → per-group world override → slot
 attribute-profile multipliers → absolute character override → clothing gain product
