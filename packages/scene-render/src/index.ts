@@ -147,7 +147,7 @@ export type {
   SceneSlotValues, SceneStairs, SceneSurface,
 } from './types'
 
-export { createSecondaryMotion, stepSecondaryParticle, softMotionAngle } from './secondaryMotion'
+export { createSecondaryMotion, stepSecondaryParticle, softMotionAngle, blendMotionParams } from './secondaryMotion'
 export type { MotionGroup, MotionAttributeProfiles, ExtensionRigDeclaration, SecondaryMotionPayload, SecondaryMotion } from './secondaryMotion'
 
 export { installSkinnedNormalCorrection } from './skinnedNormals'

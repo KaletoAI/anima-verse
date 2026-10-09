@@ -9,6 +9,11 @@ import { ListPane } from '../../components/ListPane'
 import { IconPicker } from '../../components/IconPicker'
 import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 
+const POSE_FIELDS = ['rest_deg', 'gravity', 'freq', 'zeta', 'gain', 'flatten', 'spill'] as const
+type PoseField = typeof POSE_FIELDS[number]
+type BonePose = Record<string, Partial<Record<PoseField, number>>>
+interface MotionGroup { id: string; defaults: { rest_max_deg: number } }
+
 interface PromptFilter {
   id: string
   label?: string
@@ -17,6 +22,7 @@ interface PromptFilter {
   drop_blocks?: string[]
   prompt_modifier?: string
   image_modifier?: string
+  bone_pose?: BonePose
   enabled?: boolean
   source?: string
   warnings?: string[]
@@ -46,6 +52,7 @@ const EMPTY_DRAFT: DraftState = {
   drop_blocks: [],
   prompt_modifier: '',
   image_modifier: '',
+  bone_pose: {},
   enabled: true,
   originalId: '',
   source: '',
@@ -62,6 +69,7 @@ function asDraft(f: PromptFilter): DraftState {
     drop_blocks: [...(f.drop_blocks || [])],
     prompt_modifier: f.prompt_modifier || '',
     image_modifier: f.image_modifier || '',
+    bone_pose: structuredClone(f.bone_pose || {}),
     enabled: f.enabled !== false,
     originalId: f.id,
     source: f.source || '',
@@ -152,6 +160,7 @@ export function StatesTab() {
         drop_blocks: draft.drop_blocks,
         prompt_modifier: draft.prompt_modifier,
         image_modifier: draft.image_modifier,
+        bone_pose: draft.bone_pose,
         enabled: draft.enabled,
       })
       toast(t('Saved'))
@@ -351,10 +360,32 @@ interface DraftFormProps {
 
 function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps) {
   const { t } = useI18n()
+  const [groups, setGroups] = useState<MotionGroup[]>([])
+  const [groupsError, setGroupsError] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    apiGet<{ groups: MotionGroup[] }>('/admin/world-settings/extension-motion')
+      .then(data => { if (!cancelled) setGroups(data.groups) })
+      .catch(() => { if (!cancelled) setGroupsError(true) })
+    return () => { cancelled = true }
+  }, [])
+  const updatePose = (id: string, field: PoseField, text: string) => {
+    const pose = structuredClone(draft.bone_pose)
+    const values = pose[id] || {}
+    if (text === '') delete values[field]
+    else values[field] = Number(text)
+    if (Object.keys(values).length) pose[id] = values
+    else delete pose[id]
+    onUpdate('bone_pose', pose)
+  }
+  const poseLabels: Record<PoseField, string> = {
+    rest_deg: t('Rest angle (degrees)'), gravity: t('Gravity multiplier'),
+    freq: t('Frequency multiplier'), zeta: t('Damping multiplier'),
+    gain: t('Gain multiplier'), flatten: t('Flatten multiplier'), spill: t('Spill multiplier'),
+  }
   const selectedBlocks = useMemo(() => new Set(draft.drop_blocks), [draft.drop_blocks])
 
-  // Live-Validierung der Condition über den Server — EXAKT dieselbe Funktion wie
-  // die Laufzeit-Prüfung (validate_condition_references), kein eigener Regex.
+  // Live condition validation uses the same server function as runtime checks.
   const [condWarnings, setCondWarnings] = useState<string[]>([])
   useEffect(() => {
     const cond = (draft.condition || '').trim()
@@ -462,7 +493,7 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
       <Field
         label={t('Image modifier')}
         help="image_modifier"
-        hint={t("One directive per line. Plain text is appended to the person description; 'A -> B' replaces a matching fragment (e.g. neat hair -> messy tousled hair). Applies to every image type while the state is active.")}
+        hint={t("One directive per line. Plain text is appended to the person description; 'A -> B' replaces a matching fragment (e.g. neat hair -> messy tousled hair). Applies to ordinary images while the state is active. Mesh input images remain neutral.")}
       >
         <textarea
           className="ga-textarea"
@@ -471,6 +502,27 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
           placeholder="flushed cheeks, glassy eyes"
           onChange={(e) => onUpdate('image_modifier', e.target.value)}
         />
+      </Field>
+
+      <Field label={t('Bone pose')}
+        hint={t('Rest angle is absolute in degrees. Other values are multipliers. Blank leaves the value unchanged; zero is explicit. Active states use the largest rest angle and multiply the other values.')}>
+        {groupsError ? <p>{t('Failed to load motion groups')}</p> : groups.length === 0 ? <p>{t('No motion groups loaded')}</p> : null}
+        {groups.map(group => (
+          <fieldset key={group.id}>
+            <legend>{group.id}</legend>
+            <div className="ga-form-row">
+              {POSE_FIELDS.map(field => (
+                <Field key={field} label={poseLabels[field]} compact>
+                  <input type="number" className="ga-input" min={0}
+                    max={field === 'rest_deg' ? group.defaults.rest_max_deg : undefined} step="any"
+                    value={draft.bone_pose[group.id]?.[field] ?? ''}
+                    placeholder={t('Unchanged')}
+                    onChange={event => updatePose(group.id, field, event.target.value)} />
+                </Field>
+              ))}
+            </div>
+          </fieldset>
+        ))}
       </Field>
 
     </div>

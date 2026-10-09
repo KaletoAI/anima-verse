@@ -330,7 +330,7 @@ core change. Mesh overrides live in `profile.model3d_opts.extension_rig`:
 `{<group_id>: {enabled: bool, flip: bool}}`. Missing flags mean `enabled=true`,
 `flip=false`; flip swaps attachment and tip for an appendage chain. Overrides
 change the mesh fingerprint. World settings, equipment damping and runtime
-state remain later phases.
+state compose independently through `motion` (see below).
 
 #### Required mesh-operation parameters
 
@@ -684,7 +684,7 @@ Game-Admin → Setup → Extension motion lists loaded declarations from the adm
 world-settings endpoint. Reset removes the override so future package defaults flow through.
 
 Effective order: package → world override → slot attribute-profile multipliers →
-absolute character overrides → clothing gain → state (P4 later). The character
+absolute character overrides → clothing gain → state bone pose. The character
 3D panel's Extension bones box edits numeric physics and Reset removes that
 character's group override. It sends `{extension_motion: {group_id: {field: value}}}`
 to admin-only `POST /characters/{name}/model3d/extension-motion`; profile storage
@@ -705,3 +705,44 @@ term and swings around `T'=T+e`; its dynamic limit is `max_deg`, independent of 
 The dynamic angle stays linear below half the limit, then smoothly saturates with
 tanh; gain scales the saturated displacement, preserving static sag even at zero.
 These settings change `motion.rev`, never the extension rig fingerprint or mesh.
+
+
+### State bone pose and neutral mesh inputs (P4)
+
+States in `prompt_filters` may carry `bone_pose`, a JSON mapping from loaded
+rig group IDs to sparse values. Game-Admin → States lists the declared groups
+from the same extension-motion endpoint. For example:
+
+```json
+{"bone_pose":{"example_group":{"rest_deg":24,"gravity":0.5,"freq":0.8,"flatten":2,"spill":0}}}
+```
+
+`rest_deg` is an absolute angle in degrees, from 0 to the declaration's
+`rest_max_deg` (also clamped to the effective world/character limit at runtime).
+`gravity`, `freq`, `zeta`, `gain`, `flatten` and `spill` are finite, nonnegative
+multipliers; `freq` multiplies `freq_hz`, not its square. Values may exceed 1.
+Gain/flatten/spill results clamp to [0,1] after all active states. Missing keys
+leave values unchanged; explicit zero is retained. Multiple active states use
+the maximum present rest angle and the product of each multiplier. Group IDs
+from absent packages remain serializable and are ignored by motion resolution.
+
+The enabled/tag/evaluated-expression rule is identical to image modifiers.
+Tag and expression transitions, including tag expiry, change `motion.rev`;
+the 3D clients smoothly blend the rest angle and scalar fields over 1.5 real
+seconds. Frequency zero disables the spring and its static equilibrium offset;
+particle propagation remains finite. States never change the mesh fingerprint,
+`model_sig` or `model_rev`. State values apply after clothing gain.
+
+World saves, moves between shared and world storage, and states ZIP
+export/import preserve `bone_pose`. Marketplace `states` installation and
+plugin `on_load` code using `content_io.import_states_from_zip` use the same
+validated import path; there is no separate state field whitelist for plugins.
+
+All T-pose views and animal mesh-input renders use neutral outfit signatures
+and `apply_state_modifiers=False`. Generation, uploads, finished-job retrieval,
+Improvements and model selection reject retired `<sig>-s<fp>` forks. Cache GC
+removes these files and their tiers, textures, raw and prerig derivatives.
+A character whose only mesh is such a fork has no usable model until a neutral
+model is available. Ordinary pose references use `<sig>-p<fp>` state identity;
+expressions retain their existing state fingerprint. Their image modifiers,
+as well as chat/profile/gallery image modifiers, continue to apply.

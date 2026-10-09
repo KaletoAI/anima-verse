@@ -27,6 +27,10 @@
  * Weighted centroid (.25*z1+.75*z3)=2.5; after -90 X it is (0,2.5-d,-d).
  * f=20 has 1/100 of the f=2 offset; damping does not change equilibrium.
  * Client centering subtracts 1 from Y after -90 X: equilibrium=(0,-d,-d).
+ * P4: numeric fields use smoothstep(t/1.5), so at .75 s gravity 1→.4
+ * becomes .7, gain 1→0 becomes .5, frequency 2→0 becomes 1.
+ * At zero frequency there is no static spring equilibrium: e=0; propagation
+ * is ballistic p(t)=p(0)+v*t, including overdamped parameter values.
  * Both renderers share the solver; matrices preserve volume, inverse-transpose
  * normals, immutable bind transforms, chain FK, and instance ownership.
  */
@@ -67,7 +71,54 @@ try {
     return {root,anchor,bone,mesh,solver,point};
   }
   const near=(actual,expected,eps=1e-5)=>assert.ok(Math.abs(actual-expected)<eps,`${actual} vs ${expected} ±${eps}`);
+  // A unit lever with squash=[1,1], sag limit pi/2 and no dynamics:
+  // smoothstep derivative <=1.5/1.5=1 per second, so a bounded arc
+  // transition moves <=(pi/2)/120 per 120 Hz frame (plus numeric tolerance).
+  for (const [from,to] of [[2,0],[0,2]]) {
+    const probe=fixture({freq_hz:from,gain:0,squash:[1,1],sag_max_deg:90});
+    probe.anchor.rotation.x=-Math.PI/2;probe.solver.update(0);
+    probe.solver.configure(payload({freq_hz:to,gain:0,squash:[1,1],sag_max_deg:90}));
+    let last=probe.point(), jump=0;
+    for(let i=0;i<181;i++) {
+      probe.solver.update(1/120,{far:true});
+      const point=probe.point();jump=Math.max(jump,point.distanceTo(last));last=point;
+      assert.ok(point.toArray().every(Number.isFinite));
+    }
+    assert.ok(jump <= Math.PI/240+1e-5, `zero-frequency transition jump ${jump}`);
+    probe.solver.dispose();
+  }
+  const interrupted=fixture({gain:0,squash:[1,1],sag_max_deg:90});
+  interrupted.anchor.rotation.x=-Math.PI/2;interrupted.solver.update(0);
+  interrupted.solver.configure(payload({freq_hz:0,gain:0,squash:[1,1],sag_max_deg:90}));
+  for(let i=0;i<90;i++)interrupted.solver.update(1/120,{far:true});
+  const interruptedPoint=interrupted.point();
+  interrupted.solver.configure(payload({freq_hz:0,gravity:.8,gain:0,squash:[1,1],sag_max_deg:90}));
+  interrupted.solver.update(0,{far:true});
+  near(interrupted.point().distanceTo(interruptedPoint),0);
+  interrupted.solver.configure(payload({freq_hz:2,gain:0,squash:[1,1],sag_max_deg:90}));
+  interrupted.solver.update(0,{far:true});
+  near(interrupted.point().distanceTo(interruptedPoint),0);
+  interrupted.solver.dispose();
+  console.log('ok interrupted zero-frequency blends preserve the current static offset');
+  for (const freq_hz of [1e-200,0,20]) {
+    const probe=fixture({freq_hz,zeta:10,gravity:10});
+    probe.anchor.rotation.x=-Math.PI/2;
+    for(let i=0;i<240;i++)probe.solver.update(1/120);
+    assert.ok(probe.point().toArray().every(Number.isFinite),'tiny denominator stays finite');
+    probe.solver.dispose();
+  }
+  console.log('ok finite extremes and bounded zero-frequency transition (pi/240 per frame)');
   const settle=f=>{for(let i=0;i<600;i++) f.solver.update(1/120);};
+  const blended=C.blendMotionParams(defaults,{...defaults,gravity:.4,gain:0,freq_hz:0,flatten:.2,spill:.8,zeta:0},.75);
+  near(blended.gravity,.7); near(blended.gain,.5); near(blended.freq_hz,1);
+  near(blended.flatten,.6); near(blended.spill,.4); near(blended.zeta,.5);
+  near(C.blendMotionParams(defaults,{...defaults,gain:0},1.5).gain,0);
+  console.log('ok P4 multipliers blend at hand-derived midpoint and endpoint');
+  const zero=C.stepSecondaryParticle(new THREE.Vector3(1,0,0),new THREE.Vector3(2,0,0),new THREE.Vector3(),new THREE.Vector3(),{...defaults,freq_hz:0,zeta:5},.25);
+  near(zero.p.x,1.5); near(zero.v.x,2);
+  const noSpring=fixture({freq_hz:0,zeta:5}); noSpring.anchor.rotation.x=-Math.PI/2; settle(noSpring);
+  near(noSpring.point().distanceTo(new THREE.Vector3(0,1,0)),0);
+  console.log('ok P4 explicit zero frequency stays finite');
   let probe=fixture({gravity_scale:2}); settle(probe); near(probe.point().y,-9.81/(4*Math.PI)**2); console.log('ok upright m=2 sag');
   let f=fixture(); settle(f); near(f.point().distanceTo(new THREE.Vector3(0,0,1)),0); console.log('ok upright: zero displacement');
   f.anchor.rotation.x=-Math.PI/2; f.solver.reset(); settle(f);
@@ -181,7 +232,7 @@ try {
   near(movingA.point().distanceTo(movingB.point()),0,1e-8); console.log('ok moving-target frame partition and target velocity');
   f=fixture(); f.anchor.rotation.x=-Math.PI/2; settle(f);
   const held=f.point(); f.solver.configure(payload({gravity:0.5})); f.solver.update(0); near(f.point().distanceTo(held),0); console.log('ok live reconfigure retains particle state');
-  f.solver.reset(); f.solver.update(0); near(f.point().distanceTo(new THREE.Vector3(0,1-.5*9.81/(4*Math.PI)**2,-.5*9.81/(4*Math.PI)**2)),0); console.log('ok explicit teleport reset');
+  for(let i=0;i<6;i++) f.solver.update(.25,{far:true}); f.solver.reset(); f.solver.update(0); near(f.point().distanceTo(new THREE.Vector3(0,1-.5*9.81/(4*Math.PI)**2,-.5*9.81/(4*Math.PI)**2)),0); console.log('ok explicit teleport reset');
   f.solver.configure({rev:'absent',groups:{test:{...defaults,bones:['absent']}}}); assert.equal(f.bone.matrixAutoUpdate,true); f.solver.update(1/30); console.log('ok absent group skipped and bind restored');
   f=fixture(); f.solver.dispose();
   const clip=new THREE.AnimationClip('idle',1,[new THREE.QuaternionKeyframeTrack('extra.quaternion',[0,1],[0,0,Math.sin(0.35),Math.cos(0.35),0,0,Math.sin(0.35),Math.cos(0.35)])]);
@@ -193,7 +244,7 @@ try {
   let liveMesh; figure.root.traverse(o=>{if(o.isSkinnedMesh) liveMesh=o;});
   const livePoint=()=>liveMesh.applyBoneTransform(2,new THREE.Vector3(0,0,1)).applyMatrix4(liveMesh.matrixWorld);
   near(livePoint().y,-0.06212255); near(livePoint().z,-0.06212255); console.log('ok client runs solver after final root lean');
-  holder.payload=payload({gravity:0,gain:0}); figure.update(0,{realDelta:0}); near(livePoint().length(),0); assert.equal(liveMesh.geometry,f.mesh.geometry); console.log('ok client live motion revision keeps mesh');
+  holder.payload=payload({gravity:0,gain:0}); for(let i=0;i<600;i++) figure.update(0,{realDelta:1/120}); near(livePoint().length(),0); assert.equal(liveMesh.geometry,f.mesh.geometry); console.log('ok client live motion revision keeps mesh');
   holder.payload=payload({gravity:0,gain:0,rest_deg:30}); for(let i=0;i<180;i++) figure.update(0,{realDelta:1/120});
   near(livePoint().y,Math.cos(Math.PI/6)-1); near(livePoint().z,0.5); console.log('ok client live rest blend');
   let disposed=0; f.mesh.geometry.addEventListener('dispose',()=>disposed++); figure.dispose(); assert.equal(disposed,0); console.log('ok client solver disposal preserves template geometry');

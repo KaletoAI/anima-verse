@@ -249,7 +249,7 @@ def _prompt_filter_block_keys() -> List[str]:
 # Fields of a prompt filter that a world row can silently hide when it
 # overrides a shared entry (the overlay replaces by id, it does not merge).
 _MASKABLE_FILTER_FIELDS = ("icon", "label", "condition", "drop_blocks",
-                           "prompt_modifier", "image_modifier")
+                           "prompt_modifier", "image_modifier", "bone_pose")
 
 
 @router.get("/prompt-filters/data")
@@ -374,7 +374,7 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
     },
     "image_modifier": {
         "title": "Image modifier",
-        "intro": "One directive per line — applied to the person description in EVERY image type (scene, character, profile/expression) while the state is active:",
+        "intro": "One directive per line — applied to ordinary scene, character, pose and profile/expression images while the state is active. Mesh-input images remain neutral:",
         "items": [
             {"code": "flushed cheeks, glassy eyes", "text": "Plain text: appended to the description"},
             {"code": "neat hair -> messy tousled hair", "text": "Replacement: rewrites a matching fragment of the description (case-insensitive; '→' works too). Works on body-slot fragments as well"},
@@ -549,7 +549,7 @@ async def prompt_filters_save(request: Request, user=Depends(require_admin)):
     """Upsert a filter in the world prompt_filters table.
 
     Body: {id, condition, label, drop_blocks: [...], prompt_modifier,
-           icon, image_modifier, enabled}.
+           icon, image_modifier, bone_pose, enabled}.
     An id also present in shared/prompt_filters/filters.json creates an
     override; otherwise this creates a new world-only filter.
     """
@@ -572,6 +572,11 @@ def _prompt_filters_save_sync(user, body: Any):
     prompt_modifier = (body.get("prompt_modifier") or "").strip()
     icon = (body.get("icon") or "").strip()
     image_modifier = (body.get("image_modifier") or "").strip()
+    from app.core.prompt_filters import validate_bone_pose
+    try:
+        bone_pose = validate_bone_pose(body.get("bone_pose", {}))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     enabled = bool(body.get("enabled", True))
 
     if not fid:
@@ -588,8 +593,8 @@ def _prompt_filters_save_sync(user, body: Any):
         conn.execute("""
             INSERT INTO prompt_filters (id, condition, label, drop_blocks,
                                         prompt_modifier, enabled, meta,
-                                        icon, image_modifier)
-            VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)
+                                        icon, image_modifier, bone_pose)
+            VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 condition=excluded.condition,
                 label=excluded.label,
@@ -597,11 +602,14 @@ def _prompt_filters_save_sync(user, body: Any):
                 prompt_modifier=excluded.prompt_modifier,
                 enabled=excluded.enabled,
                 icon=excluded.icon,
-                image_modifier=excluded.image_modifier
+                image_modifier=excluded.image_modifier,
+                bone_pose=excluded.bone_pose
         """, (fid, condition, label,
               _json.dumps(drop_blocks, ensure_ascii=False),
               prompt_modifier, 1 if enabled else 0,
-              icon, image_modifier))
+              icon, image_modifier, _json.dumps(bone_pose, ensure_ascii=False)))
+    from app.core.prompt_filters import invalidate_filter_snapshot
+    invalidate_filter_snapshot()
     return {"status": "ok", "id": fid}
 
 
@@ -618,6 +626,8 @@ def prompt_filters_delete(filter_id: str, user=Depends(require_admin)):
     # read-write window would be undone by it (or undo it).
     with _prompt_filters_txn(), transaction() as conn:
         conn.execute("DELETE FROM prompt_filters WHERE id=?", (filter_id,))
+    from app.core.prompt_filters import invalidate_filter_snapshot
+    invalidate_filter_snapshot()
     return {"status": "ok", "id": filter_id}
 
 
@@ -671,6 +681,11 @@ def _prompt_filters_move_sync(filter_id: str, user, body: Any):
 
         # Stripping internal-only keys keeps both stores tidy.
         clean = {k: v for k, v in src.items() if k not in ("source", "_origin", "meta")}
+        from app.core.prompt_filters import validate_bone_pose
+        try:
+            clean["bone_pose"] = validate_bone_pose(clean.get("bone_pose", {}))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         if target == "shared":
             try:
@@ -689,6 +704,8 @@ def _prompt_filters_move_sync(filter_id: str, user, body: Any):
             _write_shared_filters(filters)
             with transaction() as conn:
                 conn.execute("DELETE FROM prompt_filters WHERE id=?", (filter_id,))
+            from app.core.prompt_filters import invalidate_filter_snapshot
+            invalidate_filter_snapshot()
             return {"status": "ok", "id": filter_id, "target": "shared"}
 
         # target == "world": upsert the resolved filter into the world overlay.
@@ -698,8 +715,8 @@ def _prompt_filters_move_sync(filter_id: str, user, body: Any):
                 """
                 INSERT INTO prompt_filters (id, condition, label, drop_blocks,
                                             prompt_modifier, enabled, meta,
-                                            icon, image_modifier)
-                VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)
+                                            icon, image_modifier, bone_pose)
+                VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     condition=excluded.condition,
                     label=excluded.label,
@@ -707,7 +724,8 @@ def _prompt_filters_move_sync(filter_id: str, user, body: Any):
                     prompt_modifier=excluded.prompt_modifier,
                     enabled=excluded.enabled,
                     icon=excluded.icon,
-                    image_modifier=excluded.image_modifier
+                    image_modifier=excluded.image_modifier,
+                    bone_pose=excluded.bone_pose
                 """,
                 (
                     filter_id,
@@ -718,8 +736,11 @@ def _prompt_filters_move_sync(filter_id: str, user, body: Any):
                     1 if clean.get("enabled", True) else 0,
                     (clean.get("icon") or "").strip(),
                     (clean.get("image_modifier") or "").strip(),
+                    _json.dumps(clean.get("bone_pose") or {}, ensure_ascii=False),
                 ),
             )
+    from app.core.prompt_filters import invalidate_filter_snapshot
+    invalidate_filter_snapshot()
     return {"status": "ok", "id": filter_id, "target": "world"}
 
 

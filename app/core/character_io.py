@@ -97,6 +97,13 @@ def _dump_table(conn, table: str, where_sql: str, params: Tuple) -> List[Dict[st
     return [_row_to_dict(r, cols) for r in rows]
 
 
+def _retired_model_file(rel: str) -> bool:
+    """Reject retired state forks and companions at both pack boundaries."""
+    from app.core.model_refs import is_state_fork
+    path = Path(rel)
+    return path.parts[0] in {"model3d", "model_refs"} and is_state_fork(path.name)
+
+
 def _safe_relpath(rel: str) -> Optional[str]:
     """Reject absolute / traversal paths; return normalized POSIX rel or None."""
     if not rel or rel.endswith("/"):
@@ -170,7 +177,7 @@ def export_character_to_zip(
                 if not fp.is_file():
                     continue
                 rel = fp.relative_to(char_dir).as_posix()
-                if Path(rel).name in _FILE_EXCLUDE_NAMES:
+                if Path(rel).name in _FILE_EXCLUDE_NAMES or _retired_model_file(rel):
                     continue
                 # Apply scope flags also to FS — chats/stories were never in FS
                 # in the new architecture, but legacy dirs may still have them.
@@ -407,7 +414,7 @@ def import_character_from_zip(
         safe_rel = _safe_relpath(rel)
         if not safe_rel:
             continue
-        if safe_rel in skip_files:
+        if _retired_model_file(safe_rel) or safe_rel in skip_files:
             files_skipped.append(safe_rel)
             continue
         target = char_dir / safe_rel

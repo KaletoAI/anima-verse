@@ -55,8 +55,8 @@ MAX_REACHABLE_COMBOS = 5_000_000
 REF_PREFIXES = ("tpose_animal_", "tpose_back_", "tpose_left_", "tpose_right_",
                 "tpose_", "pose_")
 #: The shape of a mesh cache key: ``model_refs.outfit_signature`` (md5[:12])
-#: plus the optional state suffix ``STATE_SIG_SEP`` + ``state_fingerprint``
-#: (md5[:8]). Only a stem of this shape is ever handed to the purger, whose
+#: or a retired -s fork (accepted only for deletion). Only a stem of this
+#: shape is ever handed to the purger, whose
 #: argument goes into a glob.
 _MESH_SIG_RE = re.compile(r"[0-9a-f]{12}(-s[0-9a-f]{8})?")
 
@@ -148,11 +148,11 @@ def _entry_valid(signature: str, manifest: Optional[Dict[str, Any]],
     """The rule of this module, for one cache entry. ``reachable`` is called
     only for an entry without a manifest (it may enumerate millions).
 
-    State variants (``<base>-s<fp>``, model_refs.STATE_SIG_SEP) are judged
-    by their outfit base: the state fingerprint is not reconstructible from
-    the manifest, and a variant is worth keeping exactly as long as its
-    outfit combination is."""
-    from app.core.model_refs import neutral_signature
+    Retired -s forks are always unreachable. Ordinary pose-state references
+    (-p) are judged by their outfit base, independently of mesh inputs."""
+    from app.core.model_refs import is_state_fork, neutral_signature
+    if is_state_fork(signature):
+        return False
     base = neutral_signature(signature)
     if manifest is not None:
         used = set(manifest["pieces"].values()) | set(manifest["items"])

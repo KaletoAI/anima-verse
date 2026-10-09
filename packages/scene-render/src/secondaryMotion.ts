@@ -57,7 +57,9 @@ export function stepSecondaryParticle(
   const w = (output?.w ?? v.clone()).copy(v).sub(targetVelocity)
   const alpha = params.zeta * omega
   let xx: number, xw: number, wx: number, ww: number
-  if (params.zeta > 1) {
+  if (omega * omega < 1e-12) {
+    xx = ww = 1; xw = h; wx = 0
+  } else if (params.zeta > 1) {
     const z = params.zeta + Math.sqrt(params.zeta * params.zeta - 1)
     // Rationalized slow root avoids cancellation for large damping.
     const slow = -omega / z
@@ -100,6 +102,15 @@ interface Particle {
   bind: Bind
   roots: Bind[]
   params: MotionGroup
+  paramsFrom: MotionGroup
+  paramsTo: MotionGroup
+  paramsBlend: number
+  staticFrequency: number
+  staticFrequencyFrom: number
+  staticFrequencyTo: number
+  staticWeight: number
+  staticWeightFrom: number
+  staticWeightTo: number
   p: Vector3 | null
   v: Vector3
   target: Vector3 | null
@@ -107,6 +118,15 @@ interface Particle {
   restFrom: number
   restTo: number
   blend: number
+}
+const BLENDED_FIELDS = ['gravity', 'freq_hz', 'zeta', 'gain', 'flatten', 'spill'] as const
+/** Smooth numeric state changes over the same 1.5 seconds as the rest angle. */
+export function blendMotionParams(from: MotionGroup, to: MotionGroup, elapsed: number, output?: MotionGroup): MotionGroup {
+  const t = Math.max(0, Math.min(1, elapsed / 1.5))
+  const weight = t * t * (3 - 2 * t)
+  const result = output ?? { ...to }
+  for (const field of BLENDED_FIELDS) result[field] = from[field] + (to[field] - from[field]) * weight
+  return result
 }
 const centroidCache = new WeakMap<Object3D, Vector3[]>()
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x))
@@ -224,15 +244,31 @@ export function createSecondaryMotion(
         selected.add(bind.bone)
         const to = restAngle(params)
         const old = previous.get(bind.bone)
-        const particle: Particle = old ?? { bind, roots, params, p: null, v: new three.Vector3(),
-          target: null, rest: to, restFrom: to, restTo: to, blend: 1.5 }
+        const particle: Particle = old ?? { bind, roots, params, paramsFrom: params, paramsTo: params, paramsBlend: 1.5, p: null, v: new three.Vector3(),
+          target: null, rest: to, restFrom: to, restTo: to, blend: 1.5,
+          staticFrequency: params.freq_hz, staticFrequencyFrom: params.freq_hz, staticFrequencyTo: params.freq_hz,
+          staticWeight: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
+          staticWeightFrom: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
+          staticWeightTo: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1 }
         if (particle.restTo !== to) {
           particle.restFrom = particle.rest
           particle.restTo = to
           particle.blend = 0
         }
         particle.roots = roots
-        particle.params = { ...params, bones: [...params.bones], squash: [...params.squash] }
+        if (BLENDED_FIELDS.some(field => particle.paramsTo[field] !== params[field])) {
+          particle.paramsFrom = { ...particle.params }
+          // Preserve an interrupted static transition's frequency and weight.
+          const zero = (2 * Math.PI * params.freq_hz) ** 2 < 1e-12
+          particle.staticFrequencyTo = zero ? particle.staticFrequency : params.freq_hz
+          particle.staticFrequencyFrom = particle.staticWeight === 0
+            ? particle.staticFrequencyTo : particle.staticFrequency
+          particle.staticWeightFrom = particle.staticWeight
+          particle.staticWeightTo = zero ? 0 : 1
+          particle.paramsBlend = 0
+        }
+        particle.paramsTo = { ...params, bones: [...params.bones], squash: [...params.squash] }
+        particle.params = blendMotionParams(particle.paramsFrom, particle.paramsTo, particle.paramsBlend)
         bind.bone.matrixAutoUpdate = false
         nextParticles.push(particle)
       }
@@ -281,6 +317,8 @@ export function createSecondaryMotion(
           anchor.premultiply(n.matrix)
         }
         pureParent(b.bone.parent).multiply(b.localRotation)
+        st.paramsBlend = Math.min(1.5, st.paramsBlend + dt)
+        st.params = blendMotionParams(st.paramsFrom, st.paramsTo, st.paramsBlend, st.params)
         // Rest blending is real time, including far LOD. Freeze stops dynamics.
         st.blend = Math.min(1.5, st.blend + dt)
         const fraction = st.blend / 1.5
@@ -315,8 +353,14 @@ export function createSecondaryMotion(
           deltaG.addScaledVector(u, removed)
           deltaG.addScaledVector(lateral, (st.params.spill ?? 0) * removed)
         }
-        const omega = 2 * Math.PI * st.params.freq_hz
-        equilibrium.copy(deltaG).divideScalar(omega * omega)
+        // When crossing zero, blend the bounded static result rather than
+        // dividing by an interpolated frequency that approaches zero.
+        const staticT = clamp(st.paramsBlend / 1.5, 0, 1)
+        const staticBlend = staticT * staticT * (3 - 2 * staticT)
+        st.staticFrequency = st.staticFrequencyFrom + (st.staticFrequencyTo - st.staticFrequencyFrom) * staticBlend
+        st.staticWeight = st.staticWeightFrom + (st.staticWeightTo - st.staticWeightFrom) * staticBlend
+        const omegaSquared = (2 * Math.PI * st.staticFrequency) ** 2
+        equilibrium.copy(deltaG).multiplyScalar(omegaSquared >= 1e-12 ? 1 / omegaSquared : 0)
         staticVector.copy(target).sub(head).add(equilibrium)
         // Static angle and length have their own limits, independent of swing.
         dynamicQ.setFromUnitVectors(u, temp.copy(staticVector).normalize())
@@ -324,7 +368,9 @@ export function createSecondaryMotion(
         const sagAngle = dynamicQ.angleTo(identityQ)
         if (sagAngle > sagLimit) dynamicQ.slerp(identityQ, 1 - sagLimit / sagAngle)
         const restLength = target.distanceTo(head)
-        const staticLength = restLength * clamp(staticVector.length() / restLength, st.params.squash[0], st.params.squash[1])
+        let staticLength = restLength * clamp(staticVector.length() / restLength, st.params.squash[0], st.params.squash[1])
+        dynamicQ.slerp(identityQ, 1 - st.staticWeight)
+        staticLength = restLength + (staticLength - restLength) * st.staticWeight
         staticVector.copy(u).applyQuaternion(dynamicQ).multiplyScalar(staticLength)
         target.copy(head).add(staticVector)
         localLateral.copy(lateral).transformDirection(inverseAnchor.copy(anchor).invert())

@@ -100,8 +100,8 @@ def validate_motion_overrides(section):
                        "chains": [[{"bone": "ValidationBone", "parent": "Hips"}]], **values})
 
 
-def motion_payload(character_name, profile=None, *, apply_clothing=True):
-    """Package → world → attribute multipliers → character → clothing; mesh-independent."""
+def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_states=True):
+    """Package → world → attribute multipliers → character → clothing → state; mesh-independent."""
     import math
     from app.core import config
     from app.core.body_slots import slots_for_character
@@ -136,6 +136,8 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True):
                   for slot in slots if slot.rig is not None}
     coverage = {slot.rig.id: list(slot.covered_by) for slot in
                 slots if slot.rig is not None}
+    from app.core.prompt_filters import BONE_POSE_FIELDS, collect_bone_poses, valid_bone_pose_number
+    states = collect_bone_poses(character_name, profile.get("current_location", ""), profile=profile) if apply_states else []
     groups = {}
     for group in declarations:
         values = {key: group[key] for key in MOTION_FIELDS}
@@ -161,15 +163,34 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True):
             elif targets.intersection(piece["partially_covers"]):
                 factor *= 1 - (1 - f) / 2
         values["gain"] *= factor
+        rest = None
+        for state in states:
+            pose = state["bone_pose"].get(group["id"], {})
+            if not isinstance(pose, dict):
+                continue
+            for field, multiplier in pose.items():
+                if field not in BONE_POSE_FIELDS:
+                    continue
+                if not valid_bone_pose_number(multiplier):
+                    continue
+                if field == "rest_deg":
+                    rest = max(rest if rest is not None else multiplier, multiplier)
+                else:
+                    target = "freq_hz" if field == "freq" else field
+                    values[target] = 0 if multiplier == 0 else values[target] * multiplier
+        # Clamp EFFECTIVE values after all layers; finite factors may overflow.
+        for field, upper in {"freq_hz": 20, "zeta": 10, "gravity": 10,
+                             "gain": 1, "flatten": 1, "spill": 1}.items():
+            values[field] = max(0.0, min(float(upper), values[field]))
         values["gravity_scale"] = scale
         groups[group["id"]] = {
             "bones": [link["bone"] for chain in group["chains"] for link in chain],
-            **values, "rest_deg": 0,
+            **values, "rest_deg": min(rest or 0, values["rest_max_deg"]),
         }
     inputs = {"declarations": declarations, "world": world, "equipment": equipment,
               "pieces": pieces, "coverage": coverage, "attributes": attributes,
               "character": (profile.get("model3d_opts") or {}).get("extension_motion") or {},
-              "gravity_scale": scale, "groups": groups}
+              "gravity_scale": scale, "states": states, "groups": groups}
     return {"rev": _revision(inputs), "groups": groups}
 
 

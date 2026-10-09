@@ -18,8 +18,9 @@ class ExtensionRigRebuild(ImprovementType):
 
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
         from app.core.model3d import get_model3d_dir
+        from app.core.model_refs import is_state_fork
         name = params["character"]
-        if not any(get_model3d_dir(name).glob("*.glb")):
+        if not any(not is_state_fork(path.stem) for path in get_model3d_dir(name).glob("*.glb")):
             return []
         candidate = Candidate(f"character:{name}", name)
         return [] if self.is_done(candidate, params) else [candidate]
@@ -38,7 +39,10 @@ class ExtensionRigRebuild(ImprovementType):
             except (OSError, ValueError):
                 return {}
 
+        from app.core.model_refs import is_state_fork
         for path in get_model3d_dir(name).glob("*.glb"):
+            if is_state_fork(path.stem):
+                continue
             meta = read_meta(path)
             state = meta.get("extension_rig") or {}
             if not state.get("attempted") or state.get("fingerprint") != fingerprint or state.get("status") not in (

@@ -79,6 +79,9 @@ def generate_character_model(name: str, backend: str,
     on the combination — that is what ``model3d`` itself locks on, and two
     meshes of one character must not be generated at once anyway.
     """
+    from app.core.model_refs import is_state_fork
+    if is_state_fork(signature):
+        raise RuntimeError("State fork mesh candidates are retired")
     from app.core import model3d
     with model3d._lock:
         if name in model3d._generating:

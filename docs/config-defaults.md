@@ -344,9 +344,10 @@ stored slot attribute values after world overrides. Unknown values are ignored;
 profile multipliers are finite and nonnegative (frequency strictly positive).
 Unit-interval results cap at 1; angle results cap at 180. Absolute character
 physics overrides in `model3d_opts.extension_motion` apply next, then clothing
-damping scales gain. The 3D panel's Extension bones numeric inputs and Reset edit
+damping scales gain, then active state `bone_pose` multipliers apply (rest angle
+uses the maximum present value). The 3D panel's Extension bones numeric inputs and Reset edit
 these profile overrides via the admin-only character extension-motion endpoint,
-under the character profile lock. The editor shows values before clothing damping.
+under the character profile lock. The editor shows values before clothing damping and state composition.
 `motion_gravity_scale` remains separate: `gravity*(m*g-R_anchor*g_rest)`;
 it scales current gravity against the baked rest gravity. Static sag uses its own
 limit, so gravity does not consume the dynamic angle range. Physics-only changes

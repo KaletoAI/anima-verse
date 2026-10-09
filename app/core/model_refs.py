@@ -384,16 +384,11 @@ def checked_reference_override(character_name: str, raw: str) -> str:
     return ""
 
 
-#: Separator between the outfit part and the state part of a signature.
-#: md5 hex is [0-9a-f] only, so the dash is unambiguous.
-STATE_SIG_SEP = "-s"
-
-
 def state_fingerprint(character_name: str) -> str:
     """8-hex fingerprint of the triggered image-modifier state, "" when no
     ``image_modifier`` directive is active.
 
-    Folded into the outfit signature so a reference render taken while a
+    Used by ordinary pose references and expressions so a render taken while a
     state rewrites the appearance ("neat hair -> messy tousled hair") never
     claims the neutral cache entry — and the neutral render survives the
     state. Directives are sorted, so trigger order does not matter."""
@@ -411,7 +406,7 @@ def state_fingerprint(character_name: str) -> str:
 
 def neutral_signature(signature: str) -> str:
     """Outfit-only base of a signature (state suffix stripped, if any)."""
-    return (signature or "").split(STATE_SIG_SEP, 1)[0]
+    return (signature or "").split("-s", 1)[0].split("-p", 1)[0]
 
 
 def outfit_signature_raw(equipped_pieces: Optional[Dict[str, str]],
@@ -475,18 +470,23 @@ def current_outfit_state(character_name: str) -> tuple:
     the per-outfit mesh store (app/core/model3d.py) keys on the same
     signature.
 
-    With active image-modifier states the signature carries a state suffix
-    (``<base>-s<fp>``); the neutral state keeps the bare base hash, so
-    existing cache entries and the outfit batch's pre-warmed (always
-    neutral) combinations stay valid."""
+    Mesh inputs always use this outfit-only signature."""
     from app.models.inventory import get_equipped_pieces, get_equipped_items
     pieces = get_equipped_pieces(character_name)
     items = get_equipped_items(character_name)
     sig = outfit_signature(pieces, items, character_name)
-    state = state_fingerprint(character_name)
-    if state:
-        sig = f"{sig}{STATE_SIG_SEP}{state}"
     return pieces, items, sig
+
+
+def pose_reference_signature(character_name: str, signature: str) -> str:
+    """Ordinary pose references retain state identity, separate from mesh inputs."""
+    fp = state_fingerprint(character_name)
+    return f"{neutral_signature(signature)}-p{fp}" if fp else neutral_signature(signature)
+
+
+def is_state_fork(signature: str) -> bool:
+    """Retired mesh/T-pose fork; read only for rejection and garbage collection."""
+    return "-s" in (signature or "")
 
 
 def find_ref_image(character_name: str, kind: str,
@@ -501,13 +501,15 @@ def find_ref_image(character_name: str, kind: str,
     state variant it is about to produce."""
     if kind not in REF_KINDS and kind not in VIEW_KINDS:
         return None
+    if kind != "pose" and (is_state_fork(signature) or "-p" in (signature or "")):
+        return None
     candidates = [signature]
     if signature is None:
         try:
             _, _, sig = current_outfit_state(character_name)
         except Exception:
             return None
-        candidates = list(dict.fromkeys([sig, neutral_signature(sig)]))
+        candidates = [pose_reference_signature(character_name, sig), sig] if kind == "pose" else [sig]
     from app.models.character import get_character_dir
     refs_dir = get_character_dir(character_name) / "model_refs"
     for sig in candidates:
@@ -541,7 +543,7 @@ def invalidate_refs_for_item(character_name: str, item_id: str) -> Set[str]:
     actively, because the signature cannot notice it and the cache GC judges
     them valid (their pieces still exist and still re-sign to the same hash).
 
-    Returns the signatures purged — state variants (``<base>-s<fp>``) count
+    Returns the signatures purged — ordinary pose state variants count
     as their own entry, exactly as they are stored.
     """
     out: Set[str] = set()
@@ -614,7 +616,7 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
         signature = ""
     out: Dict[str, Any] = {"signature": signature}
     for kind in REF_KINDS:
-        path = find_ref_image(character_name, kind, signature) if signature else None
+        path = find_ref_image(character_name, kind) if signature else None
         out[kind] = _ref_info(path)
     views: Dict[str, Any] = {}
     if is_humanoid(character_name):
@@ -706,11 +708,7 @@ def generate_model_ref_images(character_name: str,
         raise ValueError(
             "generate_model_ref_images: pieces, items and signature must be "
             "given together (or none of them)")
-    # Pre-warm runs (explicit signature) render the NEUTRAL look — their
-    # signature carries no state fingerprint, so the image must not either.
-    # Worn-state runs apply the modifiers; current_outfit_state keys them
-    # into the matching state-suffixed cache entry.
-    prewarm = signature is not None
+    # Mesh inputs remain neutral; ordinary pose references retain state identity.
 
     if kinds is None:
         auto = get_auto_kinds(character_name)
@@ -722,6 +720,10 @@ def generate_model_ref_images(character_name: str,
 
     if signature is None:
         pieces, items, signature = current_outfit_state(character_name)
+    if is_state_fork(signature) or "-p" in signature:
+        raise ValueError("Mesh-input signatures must be neutral outfit signatures")
+    neutral = signature
+    signatures = {"tpose": signature, "pose": signature}
     # Non-humanoid characters get their own mesh-input pose (a T-pose makes no
     # sense on four legs) and their own framing use case. Their default-pose
     # ref carries NO human pose template either — the empty override lets the
@@ -736,7 +738,7 @@ def generate_model_ref_images(character_name: str,
             raise ValueError("An extra T-pose view requires an existing humanoid front render")
     if not force:
         cached = tuple(k for k in kinds
-                       if find_ref_image(character_name, k, signature)
+                       if k != "pose" and find_ref_image(character_name, k, signatures[k])
                        and (k != "tpose"
                             or all(find_ref_image(character_name,
                                                   f"tpose_{v}", signature)
@@ -755,11 +757,22 @@ def generate_model_ref_images(character_name: str,
     }
     results: Dict[str, Optional[str]] = {}
 
+    from contextlib import ExitStack
+    from app.core.prompt_filters import image_modifier_snapshot
+    modifier_scope = ExitStack()
+
     # No own task tracking here: the image service tracks every render as its
     # own queue task already — a wrapper would show a SECOND header task for
     # one image. Progress for the UI comes from the per-kind running stamp.
     try:
         for kind in kinds:
+            modifier_scope.close()
+            if kind == "pose":
+                modifier_scope.enter_context(image_modifier_snapshot(character_name))
+            signature = (pose_reference_signature(character_name, neutral)
+                         if kind == "pose" else neutral)
+            if kind == "pose" and not force and find_ref_image(character_name, kind, signature):
+                continue
             # T-pose: the pose leads the prompt (prompt_prefix) instead of
             # trailing a long outfit description — trailing pose text gets
             # too little weight and the render drifts into an A-pose. The
@@ -787,7 +800,7 @@ def generate_model_ref_images(character_name: str,
                     # outstretched hands off at the edges.
                     override_width=_w, override_height=_h,
                     output_stem=refs_dir / f"{kind}_{signature}",
-                    apply_state_modifiers=not prewarm,
+                    apply_state_modifiers=not _tpose,
                     # Every model reference — the default-pose ref on the
                     # "outfit" style included — is the "tpose" occasion of
                     # the image routing (plan-image-routing.md § 1).
@@ -822,7 +835,7 @@ def generate_model_ref_images(character_name: str,
                             image_use_case=TPOSE_VIEW_USE_CASES[view],
                             override_width=_w, override_height=_h,
                             output_stem=refs_dir / f"{view_kind}_{signature}",
-                            apply_state_modifiers=not prewarm,
+                            apply_state_modifiers=False,
                             occasion="tpose",
                             # Seen from behind, the species package decides
                             # which exposed anatomy still shows (body slot
@@ -848,6 +861,7 @@ def generate_model_ref_images(character_name: str,
                             "Model ref %s for %s (%s): render failed",
                             view_kind, character_name, signature)
     finally:
+        modifier_scope.close()
         logger.info("Model refs for %s (%s): %s", character_name, signature,
                     {k: bool(v) for k, v in results.items()})
     return results

@@ -1,16 +1,11 @@
-"""Standalone check: image-modifier state is part of the outfit cache key.
+"""Standalone check: neutral mesh inputs and stateful ordinary image cache keys.
 
 Run: ./.venv/bin/python scripts/test_state_signature.py
 No server — throwaway world in a temp dir, image modifiers stubbed.
 
-Contract (user decision 2026-07-29): reference renders and meshes are keyed
-by outfit AND active image-modifier state (``<base>-s<fp>``), so a render
-taken while e.g. "neat hair -> messy tousled hair" is triggered never claims
-the neutral cache entry. Neutral state keeps the historic bare signature
-(existing caches + outfit-batch pre-warm stay valid). Serving falls back to
-the neutral entry while a state variant is unrendered; explicit-signature
-lookups (generation skip-checks) stay exact. The cache GC judges state
-variants by their outfit base.
+Contract P4/E3: states never change mesh/T-pose outfit signatures. Ordinary
+pose references and expression keys retain state identity. Existing mesh forks
+are unreachable, even when they are the only cached model.
 """
 import sys
 import tempfile
@@ -29,8 +24,9 @@ def check(name: str, cond: bool):
 
 def main() -> None:
     tmp = tempfile.mkdtemp(prefix="anima_state_sig_check_")
-    from app.core import paths, db
+    from app.core import paths
     paths.init(tmp)
+    from app.core import db
     db.init_schema()
 
     from app.core import prompt_filters
@@ -49,18 +45,18 @@ def main() -> None:
         # -- signature composition ------------------------------------------
         stub_modifiers(([], []))
         _, _, neutral = model_refs.current_outfit_state(CHAR)
-        check("neutral signature has no suffix", model_refs.STATE_SIG_SEP not in neutral)
+        check("neutral signature has no suffix", "-s" not in neutral)
         check("neutral_signature passthrough", model_refs.neutral_signature(neutral) == neutral)
 
         stub_modifiers(([("neat hair", "messy tousled hair")], []))
         _, _, stated = model_refs.current_outfit_state(CHAR)
-        check("state signature = base + suffix",
-              stated.startswith(neutral + model_refs.STATE_SIG_SEP) and len(stated) > len(neutral))
-        check("neutral_signature strips suffix", model_refs.neutral_signature(stated) == neutral)
-
-        stub_modifiers(([("neat hair", "messy tousled hair")], ["sweaty skin"]))
-        _, _, stated2 = model_refs.current_outfit_state(CHAR)
-        check("different state, different suffix", stated2 != stated and stated2.startswith(neutral))
+        check("mesh signature stays neutral", stated == neutral)
+        stated_pose = model_refs.pose_reference_signature(CHAR, neutral)
+        check("pose references retain state identity", stated_pose != neutral)
+        check("neutral_signature strips pose suffix", model_refs.neutral_signature(stated_pose) == neutral)
+        stub_modifiers(([("neat hair", "messy tousled hair")], ["bright colors"]))
+        check("changed state keeps mesh signature", model_refs.current_outfit_state(CHAR)[2] == neutral)
+        check("changed state changes pose signature", model_refs.pose_reference_signature(CHAR, neutral) != stated_pose)
 
         # Same directives in another trigger order → same fingerprint.
         stub_modifiers(([], ["sweaty skin", "messy tousled hair"]))
@@ -84,16 +80,16 @@ def main() -> None:
         check("mesh serving falls back to neutral",
               mesh is not None and mesh.name == f"{neutral}.glb")
         check("explicit state signature stays exact (ref)",
-              model_refs.find_ref_image(CHAR, "pose", stated) is None)
+              model_refs.find_ref_image(CHAR, "pose", stated_pose) is None)
         check("explicit state signature stays exact (mesh)",
-              find_model3d(CHAR, stated) is None)
+              find_model3d(CHAR, neutral + "-sdeadbeef") is None)
 
-        (char_dir / "model_refs" / f"pose_{stated}.png").write_bytes(b"x")
-        (char_dir / "model3d" / f"{stated}.glb").write_bytes(b"x")
+        (char_dir / "model_refs" / f"pose_{stated_pose}.png").write_bytes(b"x")
+        (char_dir / "model3d" / f"{neutral}-sdeadbeef.glb").write_bytes(b"x")
         check("rendered state variant wins over neutral (ref)",
-              model_refs.find_ref_image(CHAR, "pose").name == f"pose_{stated}.png")
-        check("rendered state variant wins over neutral (mesh)",
-              find_model3d(CHAR).name == f"{stated}.glb")
+              model_refs.find_ref_image(CHAR, "pose").name == f"pose_{stated_pose}.png")
+        check("mesh ignores rendered state fork",
+              find_model3d(CHAR).name == f"{neutral}.glb")
 
         # -- expression variant cache ---------------------------------------
         from app.core.expression_regen import _cache_key
@@ -115,8 +111,8 @@ def main() -> None:
               key_state2 not in (key_neutral, key_state))
 
         # -- cache GC --------------------------------------------------------
-        check("GC: reachable base keeps state variant",
-              _entry_valid(f"{neutral}-sdeadbeef", None, set(), lambda: {neutral}))
+        check("GC: reachable base drops retired state variant",
+              not _entry_valid(f"{neutral}-sdeadbeef", None, set(), lambda: {neutral}))
         check("GC: unreachable base drops state variant",
               not _entry_valid("f00dfeedf00d-sdeadbeef", None, set(),
                                lambda: {neutral}))

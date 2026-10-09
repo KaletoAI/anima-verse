@@ -23,7 +23,7 @@ from app.core.improvements.base import Candidate, ImprovementType, ParamField
 from app.core.improvements.types import subjects
 
 #: Separates the character from the outfit signature in a candidate key.  A
-#: signature is hex (plus the ``-s`` state fork), so it never contains one —
+#: signature is hex, so it never contains one —
 #: the key is split from the RIGHT, which leaves a character name carrying a
 #: colon intact.
 KEY_SEP = ":"
@@ -36,16 +36,8 @@ def split_key(key: str) -> tuple:
 
 
 def _short_signature(signature: str) -> str:
-    """Readable stub of a signature for the candidate label.
-
-    The full key is 12 hex (plus a state fork of 8 more) and a list of them is
-    unreadable; eight characters identify one combination well enough to be
-    recognised in the step log, and the state fork stays visible — otherwise
-    the two entries of one outfit would read identically.
-    """
-    from app.core.model_refs import STATE_SIG_SEP
-    base, sep, state = signature.partition(STATE_SIG_SEP)
-    return f"{base[:8]}{STATE_SIG_SEP}{state[:4]}" if sep else base[:8]
+    """Readable prefix of a neutral outfit signature for the candidate label."""
+    return signature[:8]
 
 
 class MeshFromTpose(ImprovementType):
@@ -87,12 +79,14 @@ class MeshFromTpose(ImprovementType):
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         name, signature = split_key(candidate.key)
-        return subjects.character_model_exists(name, signature)
+        from app.core.model_refs import is_state_fork
+        return is_state_fork(signature) or subjects.character_model_exists(name, signature)
 
     def apply(self, candidate: Candidate, params: Dict[str, Any],
               task_id: str) -> None:
         name, signature = split_key(candidate.key)
-        if not signature:
+        from app.core.model_refs import is_state_fork
+        if not signature or is_state_fork(signature):
             raise RuntimeError(f"{candidate.key}: not an outfit combination")
         try:
             subjects.generate_character_model(name, params["backend"],

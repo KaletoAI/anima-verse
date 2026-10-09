@@ -3312,7 +3312,7 @@ damit KEINEN Leser mehr — weder `path` noch `progress_cells`.
 ## A11a. `model_sig` — die Modell-Signatur reist im Worldmap-Poll
 
 Ein Charakter hat **ein Mesh je Outfit-Kombination** (`app/core/model3d.py`).
-Wechselt die Kleidung, ein Zustands-Modifikator oder wird ein Mesh neu
+Wechselt die Kleidung oder wird ein Mesh neu
 erzeugt, liefert `GET /characters/<name>/model3d` eine andere Datei — und ein
 laufender Client muss das mitbekommen.
 
@@ -3323,7 +3323,7 @@ alle 20 s, in 99 % der Fälle mit der Antwort „unverändert".
 **Jetzt** trägt jede Charakter-Zeile des Worldmap-Payloads das Feld
 **`model_sig`** — genau dieselbe Zeichenkette, die die Modell-Route als
 `model.signature` meldet (der Dateistamm des Meshs, das die Auslieferungskette
-*exakt → neutral → nächstliegende Kombination* wählt). Das ist dasselbe
+*exakt → nächstliegende neutrale Outfit-Kombination* wählt). Das ist dasselbe
 Muster, mit dem `terrain_sig` und `height_sig` (§ A16) den Boden aktuell
 halten, eine Ebene tiefer:
 
@@ -10491,22 +10491,21 @@ weiter") und ihren Löschlisten stehen in der Git-Historie: `81a9bb3c` (E1),
 `9b7a424d` (E5b), `67f776d0` (Zonen-Wasser im Schwimmen).
 
 
-### Effective extension motion (P3)
+### Effective extension motion (P3–P4)
 
 Worldmap character `motion` and `/characters/{name}/model3d` metadata return the
 same effective physics: package defaults → per-group world override → slot
 attribute-profile multipliers → absolute character override → clothing gain product
-→ state (P4 later). For two distinct covering pieces with
+→ state bone pose. For two distinct covering pieces with
 `motion_damping` 0.5 and 0.8, gain is the package/world gain × 0.4. Partial 0.6
 contributes 0.8. Character scale m=2 doubles current gravity before subtracting baked gravity;
 it stays separate from group gravity and does not change frequency.
 
 `motion.rev` hashes declarations, world overrides, raw equipment assignments, worn
 item damping/coverage definitions, slot values/profiles, absolute character overrides,
-slot coverage and character scale, plus the
+slot coverage and character scale, active state IDs and their sparse bone poses, plus the
 effective groups. Repeated reads are stable; changes remain visible even when
-the effective result is masked by another multiplier. State pose composition
-is introduced in P4. `model_sig`/`model_rev` remain mesh identities: both renderers
+the effective result is masked by another multiplier. `model_sig`/`model_rev` remain mesh identities: both renderers
 reconfigure the secondary solver on motion revision changes without reloading
 mesh geometry. No motion input enters the scene recipe fingerprint.
 
@@ -10535,3 +10534,32 @@ shift `.25*D`, and length `sqrt((1-.5*D)^2+(.25*D)^2)` for
 `sag_y=-9.81/(4*pi)^2`, m=1 zero; a bent-forward body impulse has identical
 swing for gravity 0 and 3. Soft limits are monotonic/bounded, profile selection
 and override order are checked, and revisions change without mesh identity changes.
+
+
+P4 state values are stored as `prompt_filters.bone_pose` JSON:
+`{group_id: {rest_deg?, gravity?, freq?, zeta?, gain?, flatten?, spill?}}`.
+Angles are absolute nonnegative degrees up to `rest_max_deg`; scalar fields
+are finite nonnegative multipliers. `freq` multiplies frequency, not omega².
+Multiple enabled states triggered by an id-tag or evaluated expression compose
+by maximum present rest angle and product of present multipliers; absent is
+not zero. Gain/flatten/spill clamp to [0,1] after state composition. Unknown
+groups are ignored. Tag/condition changes and expiry are evaluated on every
+motion poll, including states whose changes are masked in effective output.
+The payload shape stays unchanged: it carries resolved absolute physics values.
+Both renderers interpolate rest angles and scalar changes with smoothstep over
+1.5 real seconds. At frequency zero the static offset is zero and the spring
+propagates ballistically, avoiding division by zero.
+
+T-poses (front/back/side, all tiers, animals) and meshes always use neutral
+outfit signatures and exclude state image modifiers. Existing `-s<fp>` mesh
+and T-pose forks are unreachable and removed by outfit-cache GC, including
+derivatives. Exact, nearest and tier serving never select a fork; a fork-only
+cache returns no model. Ordinary pose refs (`-p<fp>`) and expression variants
+retain state identity and image modifiers. State transitions change only
+`motion.rev`, never mesh identity or the scene-recipe fingerprint.
+
+Effective motion values are clamped after all layers: `freq_hz` in [0,20],
+`zeta` in [0,10], `gravity` in [0,10], and `gain`/`flatten`/`spill` in [0,1].
+The static solver treats omega squared below 1e-12 as zero frequency.
+Entering or leaving zero frequency blends the bounded static angle and length
+over 1.5 seconds with smoothstep, rather than dividing by a vanishing frequency.

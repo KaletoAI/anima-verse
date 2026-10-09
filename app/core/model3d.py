@@ -264,6 +264,9 @@ def tier_variant(model_path: Path, tier: str) -> Optional[Path]:
     Same file name, one directory down — the signature is what ties the two
     together, so a tier can never drift onto another outfit's model.
     """
+    from app.core.model_refs import is_state_fork
+    if is_state_fork(model_path.stem) or "-p" in model_path.stem:
+        return None
     if tier in ("", FULL_TIER):
         return model_path if model_path.exists() else None
     candidate = model_path.parent / tier / model_path.name
@@ -282,18 +285,18 @@ def find_model3d(character_name: str,
     """Path of the cached mesh for the given outfit combination (default: the
     currently worn one), or None.
 
-    ``signature=None`` = serving semantics: exact (outfit + state) match
-    first, then the neutral entry of the same outfit — an active state must
-    not make the character's model vanish while its variant is unrendered.
-    An explicit signature is matched exactly (generation paths)."""
+    States do not enter mesh identity. Explicit signatures are matched exactly;
+    retired state forks are rejected."""
+    from app.core.model_refs import is_state_fork
+    if is_state_fork(signature) or "-p" in (signature or ""):
+        return None
     candidates = [signature]
     if signature is None:
         try:
             _, _, sig = current_outfit_state(character_name)
         except Exception:
             return None
-        from app.core.model_refs import neutral_signature
-        candidates = list(dict.fromkeys([sig, neutral_signature(sig)]))
+        candidates = [sig]
     d = get_model3d_dir(character_name)
     for sig in candidates:
         for ext in MODEL_EXTS:
@@ -400,7 +403,7 @@ def find_model3d_serving_tier(character_name: str, tier: str = FULL_TIER) -> tup
 def find_model3d_serving(character_name: str) -> tuple:
     """(path, match) of the mesh to SERVE for the worn outfit — the serving
     chain behind the byte/meta routes. ``match`` is how it was found:
-    ``"exact"`` / ``"neutral"`` (state variant unrendered) / ``"nearest"``
+    ``"exact"`` / ``"nearest"``
     (no entry for this combination — the stored mesh whose recorded piece
     combination is closest to the worn one, so a fresh outfit never degrades
     the character to a placeholder figure). (None, "") without any match.
@@ -412,31 +415,25 @@ def find_model3d_serving(character_name: str) -> tuple:
         pieces, items, sig = current_outfit_state(character_name)
     except Exception:
         return None, ""
-    from app.core.model_refs import neutral_signature
     d = get_model3d_dir(character_name)
-    tried = []
-    for s, match in ((sig, "exact"), (neutral_signature(sig), "neutral")):
-        if s in tried:
-            continue
-        tried.append(s)
-        for ext in MODEL_EXTS:
-            p = d / f"{s}{ext}"
-            if p.exists():
-                return p, match
+    for ext in MODEL_EXTS:
+        p = d / f"{sig}{ext}"
+        if p.exists():
+            return p, "exact"
     best = None
     if d.is_dir():
-        from app.core.model_refs import STATE_SIG_SEP
+        from app.core.model_refs import is_state_fork
         from app.core.outfit_match import outfit_similarity
         for p in d.iterdir():
-            if p.suffix.lower() not in MODEL_EXTS:
+            if p.suffix.lower() not in MODEL_EXTS or is_state_fork(p.stem) or "-p" in p.stem:
                 continue
             manifest = _stored_manifest(character_name, p.stem)
             if manifest is None:
                 continue
             score = outfit_similarity(pieces, items,
                                       manifest["pieces"], manifest["items"])
-            # Ties: prefer the neutral (state-free) entry, then the newest.
-            key = (score, STATE_SIG_SEP not in p.stem, p.stat().st_mtime)
+            # Ties: prefer the newest neutral outfit entry.
+            key = (score, p.stat().st_mtime)
             if best is None or key > best[0]:
                 best = (key, p)
     if best is not None:
@@ -568,8 +565,8 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
                           if signature else None),
         "model": None,
     }
-    # Serving semantics (like the file route): exact state variant first,
-    # neutral fallback, then the nearest stored combination — meta and
+    # Serving semantics (like the file route): exact outfit first,
+    # then the nearest stored neutral combination — meta and
     # served file must agree.
     path, match = find_model3d_serving(character_name) if signature else (None, "")
     if path:
@@ -648,7 +645,7 @@ def get_model3d_info(character_name: str) -> Dict[str, Any]:
         out["model"] = info
     from app.core.extension_rig import motion_payload
     out["motion"] = motion_payload(character_name, profile=profile)
-    out["motion_defaults"] = motion_payload(character_name, profile=profile, apply_clothing=False)["groups"]
+    out["motion_defaults"] = motion_payload(character_name, profile=profile, apply_clothing=False, apply_states=False)["groups"]
     from app.core.extension_rig import rig_groups_for
     out["extension_groups"] = rig_groups_for(character_name, profile=profile)
     out["options"] = get_model3d_options(character_name)
@@ -911,8 +908,10 @@ def rebuild_extension_rig(character_name: str, signature: Optional[str] = None, 
 
 def rebuild_character_extension_rigs(character_name: str) -> Dict[str, Any]:
     """Rebuild every stored full model of one character for the Improvements queue."""
+    from app.core.model_refs import is_state_fork
     results = {path.stem: rebuild_extension_rig(character_name, path.stem, force=True)
-               for path in sorted(get_model3d_dir(character_name).glob("*.glb"))}
+               for path in sorted(get_model3d_dir(character_name).glob("*.glb"))
+               if not is_state_fork(path.stem)}
     return {"ok": all(result.get("ok") for result in results.values()), "models": results}
 
 
@@ -921,6 +920,9 @@ def save_uploaded_model(character_name: str, original_filename: str,
                         texture: Optional[bytes] = None,
                         signature: Optional[str] = None) -> Dict[str, Any]:
     """Process an upload in a worker, then publish one final signature."""
+    from app.core.model_refs import is_state_fork
+    if is_state_fork(signature) or "-p" in (signature or ""):
+        raise ValueError("State fork mesh signatures are retired")
     pieces, items, current = current_outfit_state(character_name)
     return _save_uploaded_model(character_name, original_filename, contents,
                                 rig=rig, texture=texture,
@@ -937,6 +939,9 @@ def _save_uploaded_model(character_name: str, original_filename: str,
     generated or previously uploaded one). ``texture`` is the basecolor PNG
     that belongs to an FBX; a GLB embeds its textures. Validation is the
     caller's job (app/core/model_validate.py)."""
+    from app.core.model_refs import is_state_fork
+    if is_state_fork(signature) or "-p" in signature:
+        raise ValueError("State fork mesh signatures are retired")
     ext = Path(original_filename.lower()).suffix
     pieces, items, _ = outfit
     out_dir = get_model3d_dir(character_name)
@@ -1468,6 +1473,9 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
 
     rig = required_rig(character_name)
 
+    from app.core.model_refs import is_state_fork
+    if is_state_fork(signature) or "-p" in (signature or ""):
+        return {"ok": False, "error": "state_fork_retired"}
     if signature is None:
         _, _, signature = current_outfit_state(character_name)
     if not force:
@@ -1646,6 +1654,9 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
     from app.core.model_validate import validate_fbx
     from app.imagegen.service import get_image_service
 
+    from app.core.model_refs import is_state_fork
+    if is_state_fork(signature) or "-p" in (signature or ""):
+        return {"status": "invalid", "error": "state_fork_retired"}
     with _lock:
         if character_name in _generating:
             return {"status": "busy",

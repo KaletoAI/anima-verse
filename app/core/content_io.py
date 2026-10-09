@@ -1382,12 +1382,14 @@ def _upsert_prompt_filter(conn, entry: Dict[str, Any]) -> None:
     if not isinstance(drops, list):
         drops = []
     meta = entry.get("meta") or {}
+    from app.core.prompt_filters import validate_bone_pose
+    bone_pose = validate_bone_pose(entry.get("bone_pose", {}))
     conn.execute(
         """
         INSERT INTO prompt_filters (id, condition, label, drop_blocks,
                                     prompt_modifier, enabled, meta,
-                                    icon, image_modifier)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    icon, image_modifier, bone_pose)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             condition=excluded.condition,
             label=excluded.label,
@@ -1396,7 +1398,8 @@ def _upsert_prompt_filter(conn, entry: Dict[str, Any]) -> None:
             enabled=excluded.enabled,
             meta=excluded.meta,
             icon=excluded.icon,
-            image_modifier=excluded.image_modifier
+            image_modifier=excluded.image_modifier,
+            bone_pose=excluded.bone_pose
         """,
         (
             (entry.get("id") or "").strip(),
@@ -1408,6 +1411,7 @@ def _upsert_prompt_filter(conn, entry: Dict[str, Any]) -> None:
             json.dumps(meta, ensure_ascii=False),
             (entry.get("icon") or "").strip(),
             (entry.get("image_modifier") or "").strip(),
+            json.dumps(bone_pose, ensure_ascii=False),
         ),
     )
 
@@ -1448,6 +1452,8 @@ def import_states_from_zip(
                 continue
             _upsert_prompt_filter(conn, entry)
             count += 1
+    from app.core.prompt_filters import invalidate_filter_snapshot
+    invalidate_filter_snapshot()
     logger.info("States import: %d filter(s) (replace_all=%s)", count, replace_all)
     return {
         "status": "success",

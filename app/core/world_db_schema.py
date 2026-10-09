@@ -112,7 +112,8 @@ SCHEMA_STATEMENTS = [
         enabled         INTEGER NOT NULL DEFAULT 1,
         meta            TEXT DEFAULT '{}',
         icon            TEXT DEFAULT '',
-        image_modifier  TEXT DEFAULT ''
+        image_modifier  TEXT DEFAULT '',
+        bone_pose       TEXT DEFAULT '{}'
     )""",
     # Per-world LLM template overrides (plan-instanz-config I6): the override
     # replaces the whole template of that Jinja name; base_hash is the sha256
@@ -963,6 +964,7 @@ ALTER_MIGRATIONS = [
     # prompt of active conditions.
     ("prompt_filters", "icon", "TEXT DEFAULT ''"),
     ("prompt_filters", "image_modifier", "TEXT DEFAULT ''"),
+    ("prompt_filters", "bone_pose", "TEXT DEFAULT '{}'"),
     # summaries: partner column for character-vs-character daily summaries
     # (one summary per (character, partner) per day instead of one per day).
     # The UNIQUE-constraint change runs separately in db.py (table rebuild).

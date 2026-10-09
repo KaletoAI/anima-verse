@@ -212,12 +212,9 @@ def _combo_label(pieces: Dict[str, str],
 # ── Caches: what already exists ─────────────────────────────────────────
 
 #: What a stored signature looks like: the 12-hex outfit key
-#: (``model_refs.outfit_signature``), optionally forked by the 8-hex
-#: image-modifier state (``model_refs.STATE_SIG_SEP``). Public because both
-#: scans below read file names apart with it — and because the reference
-#: directory holds file names of the SAME prefix that are not signatures at
-#: all (see :func:`ref_signatures`).
-SIGNATURE_RE = re.compile(r"^[0-9a-f]{12}(?:-s[0-9a-f]{8})?$")
+#: (``model_refs.outfit_signature``). Retired state forks are never enumerated.
+#: Reference view names of the same prefix are not signatures either.
+SIGNATURE_RE = re.compile(r"^[0-9a-f]{12}$")
 
 
 def mesh_signatures(character_name: str) -> set:
@@ -231,7 +228,7 @@ def mesh_signatures(character_name: str) -> set:
     if not d.exists():
         return out
     for p in d.iterdir():
-        if p.is_file() and p.suffix.lower() in MODEL_EXTS:
+        if p.is_file() and p.suffix.lower() in MODEL_EXTS and SIGNATURE_RE.fullmatch(p.stem):
             out.add(p.stem)
     return out
 
