@@ -1377,7 +1377,10 @@ def part_f_mesh():
     char_dir.mkdir(parents=True, exist_ok=True)
     patch(model3d, "required_rig", lambda name: "mixamo")
     patch(model3d, "find_ref_image", lambda name, kind, sig=None: tmp / "src.png")
-    patch(model3d, "get_model3d_dir", lambda name: char_dir)
+    # Keep the store's staging redirect (model3d._serial_model): processing
+    # writes into a per-run stage, publication moves the result into char_dir.
+    patch(model3d, "get_model3d_dir",
+          lambda name: getattr(model3d._staging, "directories", {}).get(name) or char_dir)
     patch(model3d, "get_model3d_options", lambda name: {})
     patch(model3d, "_ref_manifest", lambda src: {})
     for fn in ("_auto_retexture", "_auto_normalize"):
