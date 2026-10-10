@@ -192,7 +192,7 @@ class OpenAIMeshBackend(ImageBackend):
             os.environ.get(f"{env_prefix}REMOVE_BACKGROUND", "true")).strip().lower() \
             not in ("0", "false", "no", "off")
         self.no_fingers = str(
-            os.environ.get(f"{env_prefix}NO_FINGERS", "true")).strip().lower() \
+            os.environ.get(f"{env_prefix}NO_FINGERS", "false")).strip().lower() \
             not in ("0", "false", "no", "off")
         # 0 = not configured -> no detail param is sent and the ALIAS default
         # applies (Triposplat has no face param at all; its num_gaussians

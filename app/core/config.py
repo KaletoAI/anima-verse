@@ -1386,7 +1386,8 @@ def _migrate_mesh_rig_split(config: dict) -> bool:
             name = alias
             while any(b.get("name") == name for b in entries):
                 name += "-rig"
-            entries.append({**{k: source.get(k, "") for k in ("api_url", "api_key", "api_type")},
+            entries.append({**{k: source.get(k, "") for k in ("api_url", "api_key", "api_type") if k in source},
+                            **{k: source[k] for k in ("no_fingers", "timeout", "poll_interval", "max_wait", "max_queue_wait") if k in source},
                             "name": name, "model": alias, "category": "mesh2rig",
                             "mesh_rig": rig, "enabled": True, "cost": 0})
         changed = True
