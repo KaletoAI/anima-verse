@@ -540,7 +540,32 @@ weight. Only a bounded component smaller than `segment_min_vertices` or beyond
 `leak_t_limit` uses front-only fallback; metrics retain `leak` and `leak_reason`.
 Declared `reweight_from` base joints (`[]` to disable transfer) move their entire
 weight to the chain's declared parent on every captured vertex, including fallback.
-Outside the captured part the operation preserves its existing weighting rules.
+Outside the captured part, optional contact following spreads the motion across
+adjacent tissue without changing mesh topology. A contact face shares a retained
+tube vertex (total chain weight >= 0.9) outside `attachment_ring_max` with a
+non-tube vertex. Its eligible non-tube vertices form the d=0 boundary. A
+multi-source shortest edge-path search extends up to `contact_follow_distance`
+metres; no position welding or face diagonals participate. The chain weight is
+`contact_follow_weight * smoothstep(1 - d / contact_follow_distance)`; zero
+weight disables following. Link shares come from the nearest full-weight tube
+vertex, so internal link blends remain aligned. Ring-zone points and points
+above the original-axis growth stop are hard exclusions and cannot bridge paths.
+All followers also require nearest-tube-vertex distance <= the declared distance.
+Points with original weight > 0.5 on `reweight_from` qualify only within this
+contact edge-path zone; distant source-joint surfaces keep chain weight zero.
+Original bones are preserved in descending weight order in the remaining slots
+of the four-influence budget, normalized to the exact remainder `1 - w`.
+Overlapping groups preserve their combined extension total; the largest
+extension shares occupy at most three slots when an original remainder exists,
+or four when the combined extension weight is one. Retained extension shares
+are proportionally normalized to that total.
+Follow vertices never undergo the captured-part source-to-parent transfer.
+Tube weights are unchanged. `contact_faces_outside_ring`,
+`contact_tissue_vertices_weighted`, `contact_follow_weight_max` and
+`contact_follow_weight_mean` report the boundary and actual exported weights.
+The opt-in real smoke compares max and p99 stretch over the same complete
+contact neighbourhood at 70 degrees, checks topology and tube weights, and
+reports `far_chain_weight_max` (must be zero) and `above_stop_weighted`.
 Metrics `base_extension_t` (negative original-axis fraction), `base_stop_reason`,
 `stem_vertices_captured` (original vertices, including seams), and
 `base_slice_table` describe growth. Each row reports `t`, welded `count`,
@@ -550,15 +575,17 @@ included for diagnosis. `captured_outside_base_tube` must be zero;
 `captured_beyond_radius` diagnoses the original straight segmentation beyond
 `cut`; a curved measured tube can leave that cylinder. The actual tube bound
 is checked by `captured_beyond_tube_radius`, which must be zero.
-`partial_weight_vertices` counts total chain weights in (0.1,0.9), while
-`partial_outside_attachment_ring` must be zero. `tube_radius` and
+`partial_weight_vertices` counts tube chain weights in (0.1,0.9), while
+`partial_outside_attachment_ring` also counts tube vertices only and must be zero.
+`tube_radius` and
 `captured_tube_distance_max` report metres of nearest-centroid-polyline distance;
 `tube_centerline` records those measured slice centres in world-space metres.
-`captured_beyond_tube_radius` and `weighted_outside_part` must be zero.
+`captured_beyond_tube_radius` and `weighted_outside_part` (excluding declared
+contact followers) must be zero.
 `uncaptured_in_part` checks retained connected surface vertices outside the
 attachment ring; a point merely inside the old straight cylinder is not assumed
 to belong to the part.
-Fingerprint version 6 rebuilds from prerig. `link_blend` replaces the old
+Fingerprint version 7 rebuilds from prerig. `link_blend` replaces the old
 2-link `blend_start`/`blend_width` parameters; remove those from declarations.
 The existing required declaration
 fields `leak_radius_limit` and `reweight_factor` remain validated but no longer
@@ -604,6 +631,8 @@ fractions. `chain_split` is required even for a single link (`[]`). Test pose me
 | `base_extension_max` | `0.35` (positive fraction of original detected length) |
 | `base_history_slices` | `5` (positive integer, running median window) |
 | `attachment_ring_max` | `0.01` (positive, metres; limits the attachment transition) |
+| `contact_follow_distance` | `0.025` (positive, metres, shortest source edge path) |
+| `contact_follow_weight` | `0.6` (in [0,1); `0` disables) |
 | `contact_ramp` | `0.01` (validated, superseded by tube membership) |
 | `ring_radius_percentile` | `0.9` |
 | `ring_radius_scale` | `1.15` |

@@ -5,6 +5,7 @@ segmentation, reference-frame checks and test poses are required group params. P
 A failed group returns no output for the entire request.
 """
 import math
+import heapq
 import statistics
 import sys
 from pathlib import Path
@@ -80,6 +81,8 @@ PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'segment_passes': 'number',
                      'segment_min_vertices': 'number',
                      'contact_ramp': 'number',
+                     'contact_follow_distance': 'number',
+                     'contact_follow_weight': 'number',
                      'base_slice_size': 'number',
                      'base_radius_margin': 'number',
                      'base_growth_max': 'number',
@@ -167,7 +170,7 @@ def parameters(group):
                 'weight_ramp', 'leak_radius_limit', 'segment_radius_factor', 'segment_min_vertices', 'segment_passes', 'segment_radius_margin', 'segment_radius_growth_max', 'contact_ramp', 'fallback_half_width',
                 'fallback_front_ramp', 'fallback_side_ramp', 'fallback_top_ramp',
                 'base_slice_size', 'base_radius_margin', 'base_growth_max', 'base_extension_max', 'base_history_slices', 'attachment_ring_max',
-                'link_blend', 'centerline_slab', 'window_length_factor', 'ring_radius_scale')
+                'contact_follow_distance', 'link_blend', 'centerline_slab', 'window_length_factor', 'ring_radius_scale')
     for key in positive:
         if key in p and p[key] <= 0:
             raise ValueError(key + ' must be positive')
@@ -195,6 +198,8 @@ def parameters(group):
         if not 0 <= p['lateral_min'] < p['lateral_max'] or p['radius_min'] > p['radius_max']:
             raise ValueError('invalid lateral or radius range')
     else:
+        if not 0 <= p['contact_follow_weight'] < 1:
+            raise ValueError('contact_follow_weight must be in [0,1)')
         if p['search_z_min'] >= p['search_z_max'] or not 0 <= p['reference_lateral_min'] < p['reference_lateral_max']:
             raise ValueError('invalid search or reference range')
         if p['base_radius_margin'] < 1 or p['base_growth_max'] <= 1:
@@ -738,6 +743,91 @@ def appendage_plan(group, p, co, edges, bones, normals):
     return links,weights,metrics,affected,p['reweight_from']
 
 
+def contact_follow_weights(p, co, edges, faces, plan):
+    """Shared-face boundary is d=0; propagate only along eligible source edges.
+
+    The nearest-tube distance guard applies to every follower, including points
+    dominated by declared source joints. Such points qualify only within the
+    edge-path contact zone; distant source-joint surfaces cannot receive weight.
+    Tube weights and transfer membership are never changed.
+    """
+    weights, m, tube = plan[1], plan[2], plan[3]
+    follow = {name:{} for name in weights}
+    if m['leak'] or not tube:
+        return follow, 0
+    joints = [Vector(m['placement'][0]['head'])]+[Vector(row['tip']) for row in m['placement']]
+    boundaries = [0]+p['chain_split']+[1]
+    full = {i for i in tube if sum(w.get(i,0.) for w in weights.values()) >= .9}
+    outside = {i for i in full if polyline_station(co[i],joints,boundaries)[1] > p['attachment_ring_max']}
+    contacts = [face for face in faces if any(i in outside for i in face) and any(i not in tube for i in face)]
+    if not p['contact_follow_weight'] or not contacts:
+        return follow, len(contacts)
+    kd = KDTree(len(full))
+    for i in sorted(full):
+        kd.insert(co[i],i)
+    kd.balance()
+    base = Vector(m['segment_axis_base'])
+    axis = (Vector(m['segment_axis_tip'])-base).normalized()
+    limit = p['contact_follow_distance']
+    nearest = {}
+    def eligible(i):
+        if i in tube:
+            return False
+        if i not in nearest:
+            _,source,distance = kd.find(co[i])
+            station = polyline_station(co[i],joints,boundaries)[1]
+            axial = (co[i]-base).dot(axis)/m['segment_axis_length']
+            nearest[i] = source if (distance <= limit and station > p['attachment_ring_max']
+                                    and axial >= m['base_extension_t']-1e-6) else None
+        return nearest[i] is not None
+    adjacency = {}
+    for a,b in edges:
+        adjacency.setdefault(a,[]).append(b)
+        adjacency.setdefault(b,[]).append(a)
+    distances = {i:0. for face in contacts for i in face if eligible(i)}
+    queue = [(0.,i) for i in distances]
+    heapq.heapify(queue)
+    while queue:
+        d,i = heapq.heappop(queue)
+        if d != distances[i]:
+            continue
+        for j in adjacency.get(i,()):
+            if not eligible(j):
+                continue
+            candidate = d+(co[i]-co[j]).length
+            if candidate < limit and candidate < distances.get(j,float('inf')):
+                distances[j] = candidate
+                heapq.heappush(queue,(candidate,j))
+    for i,d in distances.items():
+        value = p['contact_follow_weight']*smooth(1-d/limit)
+        source = nearest[i]
+        total = sum(w.get(source,0.) for w in weights.values())
+        for name,w in weights.items():
+            share = w.get(source,0.)/total
+            if share*value > 0:
+                follow[name][i] = share*value
+    return follow, len(contacts)
+
+
+def contact_follow_entries(entries, extension_names):
+    """Fit overlapping extension shares plus the original remainder into four slots."""
+    extension = [(vg,w) for vg,w in entries if vg.name in extension_names]
+    original = [(vg,w) for vg,w in entries if vg.name not in extension_names]
+    chain_total = min(1.,sum(w for _,w in extension))
+    if not original and chain_total >= 1-1e-6:
+        chain_total = 1.
+    extension = extension[:3 if chain_total < 1 else 4]
+    retained_total = sum(w for _,w in extension)
+    kept = [(vg,w/retained_total*chain_total) for vg,w in extension]
+    if chain_total < 1:
+        original = original[:4-len(extension)]
+        original_total = sum(w for _,w in original)
+        if not original_total:
+            raise ValueError('contact follower requires original bone weights')
+        kept.extend((vg,w/original_total*(1-chain_total)) for vg,w in original)
+    return kept
+
+
 def measure(arm, meshes, edges, plans):
     def evaluated():
         out=[]
@@ -824,9 +914,9 @@ def measure(arm, meshes, edges, plans):
                             distance = polyline_station(mesh.matrix_world@vertex.co,tube_centres,tube_boundaries)[2]
                         value = sum(w.get(index,0.) for w in plan[1].values())
                         is_partial = .1 < value < .9
-                        partial += is_partial
-                        outside_ring += is_partial and station > p['attachment_ring_max']+1e-6
-                        outside_weighted += index not in captured and value > .1
+                        partial += is_partial and index in captured
+                        outside_ring += index in captured and is_partial and station > p['attachment_ring_max']+1e-6
+                        outside_weighted += index not in captured and index not in (plan[5] if len(plan)>5 else set()) and value > .1
                         if index in captured:
                             maximum_distance = max(maximum_distance,distance)
                             if m['tube_radius'] is not None:
@@ -837,6 +927,11 @@ def measure(arm, meshes, edges, plans):
                          captured_beyond_tube_radius=beyond_tube, captured_tube_distance_max=maximum_distance,
                          weighted_outside_part=outside_weighted, uncaptured_in_part=missing)
 
+        if len(plan)>5:
+            values = [sum(w.get(i,0.) for w in plan[1].values()) for i in plan[5]]
+            plan[2].update(contact_tissue_vertices_weighted=sum(v>0 for v in values),
+                           contact_follow_weight_max=max(values,default=0.),
+                           contact_follow_weight_mean=statistics.mean(values) if values else 0.)
         metrics[g['id']]={**plan[2], 'verts_per_group':{name:len(w) for name,w in plan[1].items()}, 'weighted_verts':len(weighted),'edge_stretch_p01_p50_p99_max':[pct(.01),pct(.5),pct(.99),pct(1)],'reason':''}
         for name,_,_,_ in plan[0]:
             arm.pose.bones[name].rotation_euler=(0,0,0)
@@ -870,7 +965,7 @@ def extension_bones(args):
             weight=sum(ge.weight for ge in v.groups if mesh.vertex_groups[ge.group].name in deform_names)
             if weight <= 1e-8:
                 return skip('Skinned vertices require nonzero deform weights',status='failed')
-    co,edges,owners,normals = [],[],[],[]
+    co,edges,owners,normals,faces = [],[],[],[],[]
     for mesh in meshes:
         offset = len(co)
         co.extend(mesh.matrix_world@v.co for v in mesh.data.vertices)
@@ -878,6 +973,7 @@ def extension_bones(args):
         normals.extend((normal_matrix@v.normal).normalized() for v in mesh.data.vertices)
         owners.extend((mesh,v.index) for v in mesh.data.vertices)
         edges.extend((e.vertices[0]+offset,e.vertices[1]+offset) for e in mesh.data.edges)
+        faces.extend(tuple(i+offset for i in face.vertices) for face in mesh.data.polygons)
     if args['params'].get('metrics_only',False):
         plans=[]
         for g in enabled:
@@ -923,6 +1019,13 @@ def extension_bones(args):
                 malformed = True
                 raise ValueError(str(e)) from e
             plan = pair_plan(g,p,co,bones) if g['op']=='pair_protrusion' else appendage_plan(g,p,co,edges,bones,normals)
+            if g['op']=='appendage_chain':
+                follow,count = contact_follow_weights(p,co,edges,faces,plan)
+                followers = {i for w in follow.values() for i in w}
+                plan = (*plan,followers)
+                plan[2]['contact_faces_outside_ring'] = count
+                for name,w in follow.items():
+                    plan[1][name].update(w)
             for name,h,t,parent in plan[0]:
                 if name in names or bone_key(name) in bones:
                     raise ValueError('bone already exists: '+name)
@@ -948,6 +1051,7 @@ def extension_bones(args):
             b.roll=0
     bpy.ops.object.mode_set(mode='OBJECT')
     totals,allweights={},{}
+    followers = set().union(*(plan[5] for g,p,plan in plans if len(plan)>5))
     for g,p,plan in plans:
         for name,w in plan[1].items():
             allweights[name]=w
@@ -990,10 +1094,17 @@ def extension_bones(args):
         entries=[(mesh.vertex_groups[ge.group],ge.weight) for ge in vertex.groups
                  if mesh.vertex_groups[ge.group].name in joint_index and ge.weight>0]
         entries.sort(key=lambda entry:(-entry[1],joint_index[entry[0].name]))
-        kept=entries[:4]
+        if i in followers:
+            kept = contact_follow_entries(entries,allweights)
+            kept_names = {vg.name for vg,_ in kept}
+            for vg,_ in entries:
+                if vg.name not in kept_names:
+                    vg.remove([vi])
+        else:
+            kept=entries[:4]
+            for vg,_ in entries[4:]:
+                vg.remove([vi])
         total=sum(w for _,w in kept)
-        for vg,_ in entries[4:]:
-            vg.remove([vi])
         for vg,w in kept:
             vg.add([vi],w/total,'REPLACE')
             if vg.name in final_weights:

@@ -144,6 +144,8 @@ DECLARED_PARAMS = {'pair_protrusion': {'band_lower_bone': 'Spine1',
                      'segment_passes': 3,
                      'segment_min_vertices': 3,
                      'contact_ramp': 0.01,
+                     'contact_follow_distance': .025,
+                     'contact_follow_weight': 0.,
                      'base_slice_size': .01,
                      'base_radius_margin': 1.6,
                      'base_growth_max': 1.8,
@@ -257,6 +259,17 @@ for j in range(0 if p.get('curved') else 32):
     a=start+18*32+j; b=start+18*32+(j+1)%32
     c=len(vertices); vertices.extend(((vertices[a][0],-.1,.98),(vertices[b][0],-.1,.98)))
     faces.append((a,b,c+1,c))
+if p.get('shared_blob'):
+    # Shared faces fuse the tube's x=.03 side to a strip at x=.06.
+    # D=.1; boundary x=.06 gives d=0, x=.11 gives d=D/2, x=.16 d=D.
+    # The .05 outward edges keep the nearest-tube guard satisfied at D/2.
+    a=start+11*32; b=start+12*32
+    off=len(vertices)
+    for x in (.06,.11,.16,.21):
+        vertices.extend(((x,-.16,.91),(x,-.16,.92)))
+    faces.append((a,b,off+1,off))
+    for k in range(3):
+        c=off+2*k; faces.append((c,c+1,c+3,c+2))
 if p.get('fused'):
     # Tangent contact; coarse samples in the offset fixture isolate the centre proof.
     count=8 if p.get('bulged') else 32
@@ -291,6 +304,7 @@ obj=bpy.data.objects.new('Surface',meshdata); bpy.context.collection.objects.lin
 mod=obj.modifiers.new('Skin','ARMATURE'); mod.object=arm
 obj.parent=arm
 source_weights=[('Hips',.2),('Spine',.35),('Spine1',.25),('LeftUpLeg',.2)]
+if p.get('shared_blob'): source_weights=[('Hips',.08),('Spine',.2),('Spine1',.12),('LeftUpLeg',.6)]
 if p.get('ties'): source_weights=[('Hips',.2),('Spine',.2),('Spine1',.2),('Spine2',.2),('LeftUpLeg',.2)]
 for name,weight in source_weights:
     vg=obj.vertex_groups.new(name='mixamorig:'+name); vg.add(list(range(len(vertices))),weight,'REPLACE')
@@ -303,6 +317,58 @@ obj.data.materials.append(mat)
 out=Path(args['out_dir'])/'model.glb'
 bpy.ops.export_scene.gltf(filepath=str(out),export_format='GLB',export_yup=True,export_all_influences=True)
 Path(args['result']).write_text(json.dumps({'ok':True,'data':{},'outputs':{'model':str(out)}}))
+'''
+
+
+# Hand values for the shared-face strip below: D=.1, w0=.6.
+# Seed, D/2, D and beyond give .6,.3,0,0; original .6 source-joint
+# weight qualifies locally and remains present after the four-slot truncation.
+FOLLOW_FIXTURE = r'''
+import json, sys, types
+from pathlib import Path
+from mathutils import Vector
+args=json.loads(Path(sys.argv[sys.argv.index('--')+1]).read_text())
+source=Path(args['params']['scripts'])/'extension_bones.py'
+m=types.ModuleType('operation'); m.__file__=str(source)
+exec(compile(source.read_text().replace('_common.main(extension_bones)', ''),str(source),'exec'),m.__dict__)
+# Shared quad joins tube 0,1 to blob 2,3. Boundary d=0, then D/2 edges.
+# smoothstep(1,.5,0)=(1,.5,0), so .6*(1,.5,0)=(.6,.3,0).
+D=.025
+co=[Vector(c) for c in [(0,0,.2),(0,.001,.2),(0,0,.2),(0,.001,.2),
+                       (D/2,0,.2),(D,0,.2),(1.5*D,0,.2),(0,0,.005),(0,0,-.01)]]
+edges=[(0,1),(1,3),(3,2),(2,0),(2,4),(4,5),(5,6),(2,7),(2,8)]
+faces=[(0,1,3,2)]
+p={'contact_follow_distance':D,'contact_follow_weight':.6,'attachment_ring_max':.01,'chain_split':[]}
+weights={'Link':{0:1.,1:1.}}
+metrics={'placement':[{'head':[0,0,0],'tip':[0,0,.3]}],
+         'segment_axis_base':[0,0,0],'segment_axis_tip':[0,0,.3],
+         'segment_axis_length':.3,'base_extension_t':0.,'leak':False}
+plan=([('Link',co[0],co[1],'Base')],weights,metrics,{0,1},[])
+follow,count=m.contact_follow_weights(p,co,edges,faces,plan)
+assert count==1, count
+for i,expected in [(2,.6),(3,.6),(4,.3),(5,0),(6,0),(7,0),(8,0)]:
+    actual=sum(w.get(i,0) for w in follow.values())
+    assert abs(actual-expected)<1e-7,(i,actual,expected)
+assert weights=={'Link':{0:1.,1:1.}}, weights
+p['contact_follow_weight']=0
+assert not any(m.contact_follow_weights(p,co,edges,faces,plan)[0].values())
+# Multiple groups may overlap: preserve the combined chain total, cap slots,
+# and keep the largest original remainder. Four .2 extensions total .8;
+# three retained shares are .8/3, leaving one original influence of .2.
+import bpy
+obj=bpy.data.objects.new('Budget',bpy.data.meshes.new('Budget'))
+ext=[obj.vertex_groups.new(name='E'+str(i)) for i in range(5)]
+original=[obj.vertex_groups.new(name='O'+str(i)) for i in range(2)]
+entries=[(vg,.2) for vg in ext[:4]]+[(original[0],.12),(original[1],.08)]
+kept=m.contact_follow_entries(entries,{vg.name for vg in ext})
+assert len(kept)==4 and abs(sum(w for _,w in kept)-1)<1e-7
+assert kept[-1][0]==original[0] and abs(kept[-1][1]-.2)<1e-7
+assert all(abs(w-.8/3)<1e-7 for _,w in kept[:3])
+# Fully overlapping envelopes have no original remainder; five .2 shares
+# are truncated to four normalized .25 shares, without an exception.
+kept=m.contact_follow_entries([(vg,.2) for vg in ext],{vg.name for vg in ext})
+assert len(kept)==4 and all(abs(w-.25)<1e-7 for _,w in kept)
+Path(args['result']).write_text(json.dumps({'ok':True,'data':{'follow':'0.6, 0.3, 0; ring/stop/beyond excluded'},'outputs':{}}))
 '''
 
 
@@ -629,8 +695,11 @@ def main():
         fixtures=root/'fixtures'; fixtures.mkdir()
         (fixtures/'fixture.py').write_text(FIXTURE)
         (fixtures/'growth.py').write_text(GROWTH_FIXTURE)
+        (fixtures/'follow.py').write_text(FOLLOW_FIXTURE)
         operation_scripts=runner.SCRIPTS_DIR
         with patch.object(runner,'SCRIPTS_DIR',fixtures):
+            follow=runner.run('follow',params={'scripts':str(operation_scripts)},out_dir=root/'follow',timeout_s=180)
+            check(follow['ok'],'shared-face follow: hand weights .6/.3/0, tube unchanged: '+str(follow))
             growth=runner.run('growth',params={'scripts':str(operation_scripts)},out_dir=root/'growth',timeout_s=180)
             check(growth['ok'],'hidden tube captures seven rings, stops at wall, excludes side cylinders: '+str(growth['data']))
             normal=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES)},out_dir=root/'fixture',timeout_s=180)
@@ -640,6 +709,34 @@ def main():
             resting=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES),'under_contact':True},out_dir=root/'resting',timeout_s=180)
             exact=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES),'under_contact':True,'exact_contact':True},out_dir=root/'exact',timeout_s=180)
         check(normal['ok'] and fused['ok'],'synthetic GLBs built through runner')
+        with patch.object(runner,'SCRIPTS_DIR',fixtures):
+            shared=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES),'shared_blob':True},out_dir=root/'shared',timeout_s=180)
+        shared_group=copy.deepcopy(groups[1])
+        shared_group['params'].update(contact_follow_distance=.1,contact_follow_weight=.6)
+        shared_result=runner.run('extension_bones',inputs={'model':Path(shared['outputs']['model'])},
+                                 params={'groups':[shared_group]},out_dir=root/'shared-rig',timeout_s=180)
+        check(shared_result['ok'] and shared_result['data']['status']=='applied','shared-face tube/blob operation applies')
+        rows=exported_vertices(Path(shared_result['outputs']['model']).read_bytes())
+        for x,expected in ((.06,.6),(.11,.3),(.16,0),(.21,0)):
+            probes=[w for point,w in rows if close(point,[x,.91,.16],.0001)]
+            check(bool(probes),'shared-face probe exists: '+str(x))
+            for w in probes:
+                actual=sum(v for n,v in w.items() if n.startswith('ExampleLink'))
+                check(abs(actual-expected)<1e-5,'exported shared-face follow '+str((x,actual,expected)))
+                check(len(w)<=4 and abs(sum(w.values())-1)<1e-6,'follow preserves four normalized influences')
+                if expected:
+                    original={n:v for n,v in w.items() if not n.startswith('ExampleLink')}
+                    check('mixamorig:LeftUpLeg' in original and 'mixamorig:Spine' in original,
+                          'follow retains largest original bones, including dominant source joint')
+        baseline_shared=copy.deepcopy(shared_group); baseline_shared['params']['contact_follow_weight']=0
+        unchanged=runner.run('extension_bones',inputs={'model':Path(shared['outputs']['model'])},
+                             params={'groups':[baseline_shared]},out_dir=root/'shared-baseline',timeout_s=180)
+        tube_before=[(point,w) for point,w in exported_vertices(Path(unchanged['outputs']['model']).read_bytes())
+                     if sum(v for n,v in w.items() if n.startswith('ExampleLink'))>=.9]
+        for point,w in tube_before:
+            matches=[aw for ap,aw in rows if close(point,ap,1e-7)]
+            assert matches and any(all(abs(aw.get(n,0)-v)<1e-6 for n,v in w.items()) for aw in matches)
+        check(True,'shared-face tube weights unchanged')
         contact_group=copy.deepcopy(groups[1])
         contact_group['params'].update(contact_ramp=.08,protrusion_threshold=.02)
         contact_result=runner.run('extension_bones',inputs={'model':Path(resting['outputs']['model'])},
@@ -994,7 +1091,7 @@ def main():
                     'segment_radius_percentile','segment_radius_margin',
                     'segment_radius_growth_max','segment_passes','centerline_slab','link_blend',
                     'base_slice_size','base_radius_margin','base_growth_max','base_extension_max','base_history_slices',
-                    'attachment_ring_max','weld_normal_min'):
+                    'attachment_ring_max','weld_normal_min','contact_follow_distance','contact_follow_weight'):
             missing=copy.deepcopy(chain_group); del missing['params'][key]
             bad=runner.run('extension_bones',inputs={'model':Path(fused['outputs']['model'])},
                            params={'groups':[missing]},out_dir=root/('missing-'+key),timeout_s=180)
@@ -1008,6 +1105,7 @@ def main():
                           ('base_slice_size',0),('base_radius_margin',.9),
                           ('base_growth_max',1),('base_extension_max',0),
                           ('base_history_slices',0),('base_history_slices',1.5),
+                          ('contact_follow_distance',0),('contact_follow_weight',-.1),('contact_follow_weight',1),
                           ('attachment_ring_max',0),('weld_normal_min',-1.1),('weld_normal_min',1.1),
                           ('centerline_slab',0),('centerline_slab',1),('link_blend',0),('link_blend',1)]:
             invalid=copy.deepcopy(chain_group); invalid['params'][key]=value
