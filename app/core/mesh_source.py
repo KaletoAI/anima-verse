@@ -67,7 +67,11 @@ def validate_source(raw: bytes) -> dict:
     """Apply contract none and reject skins on the reproducible source."""
     from app.core.model_validate import validate_static_glb
     verdict = validate_static_glb(raw)
-    if verdict.get("ok") and parse_glb(raw)["gltf"].get("skins"):
+    try:
+        skinned = bool(parse_glb(raw)["gltf"].get("skins"))
+    except (ValueError, KeyError, IndexError, TypeError):
+        return verdict
+    if skinned:
         verdict["ok"] = False
-        verdict["errors"].append("source mesh must be unrigged (no skins)")
+        verdict["errors"].append("source mesh must be unrigged (no skins); combined mesh+rig aliases are not supported")
     return verdict

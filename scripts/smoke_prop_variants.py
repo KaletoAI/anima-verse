@@ -219,7 +219,6 @@ class FakeMeshBackend:
     face_num = 20000
     face_num_max = 40000
     supports_lod_stages = True
-    mesh_rig = "none"
 
 
 class FakeBackend:
@@ -266,7 +265,7 @@ class FakeService:
         return {"ok": True, "path": output_path, "format": "glb",
                 "rig": "none", "backend": "fake-mesh"}
 
-    def list_mesh_backends(self, rig: str = ""):
+    def list_mesh_backends(self):
         return [FakeMeshBackend()]
 
     def list_shrink_backends(self):
@@ -281,7 +280,7 @@ def install_fakes() -> None:
     image_service.get_image_service = lambda: FakeService()
     routing.run_routed = lambda occasion, render, **kw: (render(FakeBackend()), None)
     llm_queue.get_llm_queue = lambda: FakeQueue()
-    model3d.list_mesh_backends = lambda rig: {"default": "fake-mesh",
+    model3d.list_mesh_backends = lambda occasion="": {"default": "fake-mesh",
                                               "backends": []}
 
 

@@ -1692,7 +1692,7 @@ def rerig_character_model3d(
         selected = require_explicit_backend(pick, media="mesh")
         occasion = {"mixamo": "rig_humanoid", "generic": "rig_creature"}.get(required_rig(character_name))
         if not occasion or not backend_fits(occasion, describe_backend(selected)):
-            raise HTTPException(400, "Selected backend has the wrong category or rig — no automatic fallback")
+            raise HTTPException(400, "Selected backend has the wrong category — no automatic fallback")
         pick = selected.name
     return trigger_rerig(character_name, signature, backend_glob=pick)
 

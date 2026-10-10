@@ -18,9 +18,10 @@ Per occasion:
                       (img2img is preferred when a reference is slotted);
                       "img2mesh": an unrigged image-to-mesh backend;
                       "mesh2rig": a standalone mesh-to-rig backend.
-  rig                 mesh only — "mixamo" | "generic" | "none". A chain entry
-                      only resolves to a backend of this rig, so a fallback
-                      stays in the rig (a wrong-rig mesh binds unusably).
+  rig                 Required delivery rig, never a backend property.
+                      Rig occasions require a configured mesh2rig chain; an
+                      empty rig chain raises NoRouteError, never a cheapest pick.
+                      Configure it in /admin/settings → Media Generation → Routing.
   character_scoped    True: the character's own backend match
                       (profile.outfit_imagegen.<char_spec_field>) is
                       position 0 in front of the occasion chain.
@@ -126,7 +127,7 @@ def occasion_ids() -> List[str]:
 
 def backend_fits(occasion_id: str, kind: Dict[str, Any]) -> bool:
     """Whether a backend of this KIND may serve the occasion at all —
-    media, category, rig and reference-slot budget; nothing about its
+    media, category and reference-slot budget; nothing about its
     current availability. ``kind`` is a plain dict (``routing.describe_backend``
     for a live backend, ``routing.describe_config_backend`` for a config
     entry), so the save validator and the admin page share this rule."""
@@ -135,9 +136,7 @@ def backend_fits(occasion_id: str, kind: Dict[str, Any]) -> bool:
         return False
     category = str(kind.get("category") or "").lower()
     if occ["media"] == "mesh":
-        if category != occ["category"]:
-            return False
-        return (str(kind.get("rig") or "mixamo").lower() or "mixamo") == occ["rig"]
+        return category == occ["category"]
     if category == "inpaint":
         return False
     if occ.get("needs_ref_slot") and int(kind.get("ref_slot_count") or 0) < 1:
@@ -147,7 +146,7 @@ def backend_fits(occasion_id: str, kind: Dict[str, Any]) -> bool:
 
 def mesh_occasion_for_rig(rig: str, *, building: bool = False) -> str:
     """The mesh occasion a generation of this rig runs on. An empty rig is
-    "mixamo" (the backend default); a rig the catalog does not know raises
+    "mixamo" (the character default); a rig the catalog does not know raises
     ``UnknownOccasionError`` — guessing a humanoid chain for it would mesh
     with a skeleton nobody asked for."""
     rig = (rig or "mixamo").strip().lower() or "mixamo"

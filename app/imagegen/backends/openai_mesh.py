@@ -1,7 +1,7 @@
 """LLM-gateway image-to-mesh backend (gateway generations/jobs API).
 
 3D counterpart of ``OpenAIVideoBackend``: the gateway hosts an image-to-3D
-workflow under a generation alias (e.g. ``Trellis2-Object-Low``). Same async
+workflow under a generation alias (e.g. ``Trellis2-Low``). Same async
 API, but input IMAGES instead of a prompt, plus alias-specific params. Per the
 client spec (``llm-gateway/docs/mesh-client-spec.md``, 2026-08-03) and the alias
 schema (``GET /v1/generations/{alias}/schema``, which always wins):
@@ -64,7 +64,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import unquote, urlparse
 
 import requests
@@ -175,17 +175,6 @@ class OpenAIMeshBackend(ImageBackend):
             os.environ.get(f"{env_prefix}MAX_QUEUE_WAIT", "0") or 0) or (self.max_wait * 4)
         self.mesh_endpoint = (os.environ.get(f"{env_prefix}MESH_ENDPOINT", "")
                               or "/v1/generations").strip().rstrip("/")
-        # Which skeleton the alias produces — decides what may use it and which
-        # of the delivered files must be STORED:
-        #   mixamo  -> humanoid 52-bone rig, ONE glb (textures embedded)
-        #   generic -> no standard skeleton, fbx + its basecolor image as an
-        #              inseparable pair
-        #   none    -> unrigged, ONE glb (textures embedded); static props /
-        #              building models and character source meshes
-        # Blank / whitespace-only = "mixamo", the same reading as
-        # routing.describe_config_backend (one rule for config + live).
-        self.mesh_rig = (os.environ.get(f"{env_prefix}MESH_RIG", "")
-                         or "").strip().lower() or "mixamo"
         # Alias params (schema: input_remove_background / input_face_num /
         # input_no_fingers)
         self.remove_background = str(
@@ -219,6 +208,11 @@ class OpenAIMeshBackend(ImageBackend):
         self._tls = threading.local()
 
     # -- result metadata ----------------------------------------------------
+    @property
+    def last_result_rig(self) -> Optional[str]:
+        """The hub job's rig field, captured on the generating worker thread."""
+        return getattr(self._tls, "result_rig", None)
+
     @property
     def last_result_files(self) -> List[Dict[str, str]]:
         """Gateway metadata of the last downloaded results (thread-local), in
@@ -572,6 +566,7 @@ class OpenAIMeshBackend(ImageBackend):
     def _generate(self, prompt: str, negative_prompt: str,
                   params: Dict[str, Any]) -> List[bytes]:
         self._tls.result_files = []
+        self._tls.result_rig = None
         self._tls.input_sha256s = []
         # mesh→mesh (shrink) or img2mesh — mutually exclusive: a run either
         # carries a source MESH in `files` or an input IMAGE in `images`.
@@ -710,8 +705,9 @@ class OpenAIMeshBackend(ImageBackend):
                 "kind": str(res.get("kind") or ""),
             })
         self._tls.result_files = files
+        self._tls.result_rig = str(sd.get("rig") or "") if "rig" in sd else None
         logger.info("%s: Mesh fertig (%.1fs, rig=%s, %d Datei(en): %s)",
-                    self.name, running_s, sd.get("rig") or self.mesh_rig,
+                    self.name, running_s, sd.get("rig") or "undeclared",
                     len(blobs),
                     ", ".join(f"{f['name']} [{f['kind'] or '?'}, {len(b)}B]"
                               for f, b in zip(files, blobs)))
@@ -736,6 +732,7 @@ class OpenAIMeshBackend(ImageBackend):
         it could not be read or downloaded.
         """
         self._tls.result_files = []
+        self._tls.result_rig = None
         self._tls.input_sha256s = []
         out: Dict[str, Any] = {"status": "error", "job_id": job_id}
         try:
@@ -778,7 +775,7 @@ class OpenAIMeshBackend(ImageBackend):
         status = str(sd.get("status") or "").lower()
         out.update({"status": status, "progress": sd.get("progress"),
                     "elapsed_s": sd.get("elapsed_s"),
-                    "rig": str(sd.get("rig") or "").strip().lower(),
+                    "rig": str(sd.get("rig") or "").strip().lower() if "rig" in sd else None,
                     "model": str(sd.get("model") or "").strip()})
         if status in ("failed", "error"):
             out["status"] = "failed"

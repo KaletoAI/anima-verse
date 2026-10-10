@@ -7,7 +7,8 @@ the first entry that names a backend that fits the occasion, is enabled, is
 not switched off for the character and is available right now wins; inside
 one glob the cheapest (``BackendPool.pick_lowest_cost``). An EMPTY chain takes
 the cheapest available backend of the occasion's kind (position None, no
-fallback); a configured chain with nothing usable raises ``NoRouteError`` —
+fallback), except rig occasions, which require a configured mesh2rig chain
+and raise NoRouteError when empty; a configured chain with nothing usable raises ``NoRouteError`` —
 never a silent slide onto the cheapest (possibly paid) backend.
 
 The INTENDED entry (``intended_entry``) is the first chain entry that is not
@@ -68,6 +69,8 @@ class NoRouteError(RuntimeError):
         if self.chain:
             detail = ", ".join(f"{row['spec']} ({STATUS_TEXT.get(row['status'], row['status'])})"
                                for row in self.chain)
+        elif get_occasion(occasion)["category"] == "mesh2rig":
+            detail = "rig chain is empty; configure it in /admin/settings → Media Generation → Routing"
         else:
             detail = "no backend of this kind is available"
         super().__init__(f"no backend available for {occasion}: {detail}")
@@ -115,8 +118,6 @@ def describe_backend(b: Any) -> Dict[str, Any]:
         "name": b.name,
         "media": media,
         "category": (getattr(b, "category", "") or "").lower(),
-        "rig": ((getattr(b, "mesh_rig", "") or "mixamo").lower()
-                if media == "mesh" else ""),
         "ref_slot_count": int(getattr(b, "ref_slot_count", 0) or 0),
         "image_family": getattr(b, "image_family", "") or "",
         "enabled": bool(getattr(b, "instance_enabled", True)),
@@ -125,12 +126,10 @@ def describe_backend(b: Any) -> Dict[str, Any]:
 
 
 def describe_config_backend(entry: Dict[str, Any]) -> Dict[str, Any]:
-    """Kind of a CONFIG backend entry (save validator, config migration,
-    mesh seed — the entry may not be instantiated yet). ``category`` and
-    ``mesh_rig`` are trimmed + lower-cased like the live backend reads them
-    (``ImageBackend.category``, ``OpenAIMeshBackend.mesh_rig``): a stray
-    space in the admin field must not turn a "none" rig into a rig no mesh
-    occasion knows. A blank rig is "mixamo" (the backend default)."""
+    """Kind of a config backend; category is normalized like the live backend.
+
+    The rig is a delivery property, so it does not participate in matching.
+    """
     from app.imagegen.registry import BACKEND_REGISTRY
     cls = BACKEND_REGISTRY.get(str(entry.get("api_type") or "").strip().lower())
     media = getattr(cls, "MEDIA_TYPE", "image") if cls else "image"
@@ -139,12 +138,10 @@ def describe_config_backend(entry: Dict[str, Any]) -> Dict[str, Any]:
     if cls:
         # The same rule the live instance applies (ImageBackend.__init__).
         ref = cls.config_ref_slot_count(category, ref)
-    rig = str(entry.get("mesh_rig") or "").strip().lower() or "mixamo"
     return {
         "name": str(entry.get("name") or ""),
         "media": media,
         "category": category,
-        "rig": rig if media == "mesh" else "",
         "ref_slot_count": int(ref or 0),
         "enabled": entry.get("enabled", True) is not False,
     }
@@ -303,6 +300,8 @@ def _cheapest_no_rotation(live: List[Any]) -> Any:
 
 def _empty_chain_pick(occasion: str, backends: List[Any], switches: Dict[str, Any],
                       exclude: set, has_ref: bool, pool: Any, rotate: bool) -> Any:
+    if get_occasion(occasion)["category"] == "mesh2rig":
+        return None
     live = [b for b in backends
             if backend_fits(occasion, describe_backend(b))
             and getattr(b, "instance_enabled", True) and _allowed(b, switches)
@@ -410,7 +409,8 @@ def _explain_one(row: Dict[str, Any], character: str, backends: List[Any],
         b = _empty_chain_pick(oid, backends, switches, set(), has_ref, p, rotate=False)
         via = "cheapest" if b else "none"
         resolved = b.name if b else None
-        reason = ("empty chain — cheapest available backend of this kind" if b
+        reason = (str(NoRouteError(oid, [])) if row["category"] == "mesh2rig"
+                  else "empty chain — cheapest available backend of this kind" if b
                   else "empty chain — no backend of this kind is available")
     elif resolved is None:
         via = "none"
@@ -481,7 +481,8 @@ def run_routed(occasion: str, render: Callable[[Any], Any], *,
                pool: Any = None) -> Tuple[Any, Route]:
     """Resolve the occasion's chain and run ``render(backend)``; when the
     render FAILS on that backend (``BackendFailedError`` — raised only after
-    ``run_on_backend`` cooled the backend down), resolve again without it and
+    ``run_on_backend`` cooled the backend down, or a delivery rig mismatch
+    was detected after the runner without cooldown), resolve again without it and
     run ``render`` again with the next backend. ``render`` builds everything
     backend-dependent itself (style x family, negative folding, reference
     slots, LoRA filter, model name, rig), so a re-run never reuses a prompt

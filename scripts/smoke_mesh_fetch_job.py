@@ -100,9 +100,8 @@ def _fake_get(url, headers=None, timeout=None):
 openai_mesh.requests.get = _fake_get
 
 
-def mk_backend(name: str, api_url: str, rig: str = "mixamo") -> OpenAIMeshBackend:
+def mk_backend(name: str, api_url: str) -> OpenAIMeshBackend:
     prefix = "SMOKE_FETCH_"
-    os.environ[f"{prefix}MESH_RIG"] = rig
     b = OpenAIMeshBackend(name=name, api_url=api_url, cost=1,
                           env_prefix=prefix, model=name)
     b._alias_param_names = set()
@@ -182,7 +181,7 @@ print("\n(c) service.fetch_mesh_job")
 GW2 = "http://gw2.invalid"
 b_twin = mk_backend("Trellis2-Humanoid-High", GW)       # same gateway as b
 b_other = mk_backend("Other-Humanoid", GW2)
-b_generic = mk_backend("Trellis2-Generic-Low", GW, rig="generic")
+b_generic = mk_backend("Trellis2-Generic-Low", GW)
 
 
 class _Pool:
@@ -192,7 +191,7 @@ class _Pool:
     def __init__(self, meshes):
         self.meshes = meshes
 
-    def list_mesh_backends(self, rig=""):
+    def list_mesh_backends(self):
         return list(self.meshes)
 
     def list_available_backends(self, media="image", **_kw):

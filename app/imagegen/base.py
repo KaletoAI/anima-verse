@@ -82,7 +82,9 @@ class BackendFailedError(RuntimeError):
     Raised by ``selection.BackendPool.run_on_backend`` in exactly the two
     branches that put the backend into cooldown (an exception outside the
     busy/4xx/config classes, and an empty result). It is the ONE signal the
-    image routing re-runs an occasion on (``routing.run_routed``) — the
+    image routing re-runs an occasion on (``routing.run_routed``). A rig
+    delivery mismatch also raises it after the runner, without cooldown,
+    because the mismatch is a routing configuration mistake — the
     backend's ``available`` flag is never read as a signal. ``str()`` keeps
     the backend's own words: "<name>: <cause>" — and exactly ONCE: backends
     already prefix their messages with "<name>: ", so a cause that starts

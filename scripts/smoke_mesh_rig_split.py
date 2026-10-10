@@ -2,9 +2,9 @@
 """Check the two-stage mesh contract without a hub.
 
 Hand-derived expectations from plan-mesh-rig-trennung P1/P2: two character
-mesh occasions accept only img2mesh/none; two rig occasions accept only
-mesh2rig of the requested rig. Migration disables one chain entry and seeds
-two rig entries, preserving credentials; a second pass changes nothing.
+occasions accept any img2mesh; rig occasions accept any mesh2rig but require
+a configured chain. Migration seeds both rig chains in cost order, drops old
+declarations and preserves enabled flags; a second pass changes nothing.
 A first source must be durable before the rig starts; a failed replacement
 keeps every byte of the old pair. Two busy rig runs produce two failed task
 records, no fallback and no cooldown. A 64 MiB + 1 byte source is refused
@@ -31,21 +31,42 @@ from app.core import paths
 paths.init(os.environ['STORAGE_DIR'])
 paths.init_instance(Path(_tmp.name) / 'instance')
 from app.imagegen.occasions import backend_fits
-for occasion in ('mesh_humanoid', 'mesh_creature'):
-    assert backend_fits(occasion, {'media': 'mesh', 'category': 'img2mesh', 'rig': 'none'})
-    assert not backend_fits(occasion, {'media': 'mesh', 'category': 'mesh2rig', 'rig': 'none'})
-for occasion, rig in (('rig_humanoid', 'mixamo'), ('rig_creature', 'generic')):
-    assert backend_fits(occasion, {'media': 'mesh', 'category': 'mesh2rig', 'rig': rig})
-    assert not backend_fits(occasion, {'media': 'mesh', 'category': 'img2mesh', 'rig': rig})
-    assert not backend_fits(occasion, {'media': 'mesh', 'category': 'mesh2rig', 'rig': 'none'})
+for occasion in ('mesh_humanoid', 'mesh_creature', 'mesh_object', 'mesh_building'):
+    assert backend_fits(occasion, {'media': 'mesh', 'category': 'img2mesh'})
+    assert not backend_fits(occasion, {'media': 'mesh', 'category': 'mesh2rig'})
+for occasion in ('rig_humanoid', 'rig_creature'):
+    assert backend_fits(occasion, {'media': 'mesh', 'category': 'mesh2rig'})
+    assert not backend_fits(occasion, {'media': 'mesh', 'category': 'img2mesh'})
 from app.core.config import _migrate_mesh_rig_split
-cfg = {'image_generation': {'backends': [{'name': 'old', 'category': 'img2mesh', 'mesh_rig': 'mixamo', 'api_type': 'openai_mesh', 'api_url': 'http://fake', 'api_key': 'test-key'}]}}
+cfg = {'image_generation': {'backends': [
+    {'name': 'disabled', 'api_type': 'openai_mesh', 'category': 'img2mesh', 'mesh_rig': 'mixamo', 'enabled': False},
+    {'name': 'Trellis2-Low', 'api_type': 'openai_mesh', 'category': 'img2mesh', 'enabled': True},
+    {'name': 'mia-high', 'api_type': 'openai_mesh', 'category': 'mesh2rig', 'mesh_rig': 'mixamo', 'cost': 2},
+    {'name': 'mia-low', 'api_type': 'openai_mesh', 'category': 'mesh2rig', 'mesh_rig': 'mixamo', 'cost': 1},
+    {'name': 'unirig', 'api_type': 'openai_mesh', 'category': 'mesh2rig', 'mesh_rig': 'generic'},
+    {'name': 'off', 'api_type': 'openai_mesh', 'category': 'mesh2rig', 'mesh_rig': 'generic', 'enabled': False},
+]}}
 assert _migrate_mesh_rig_split(cfg)
 entries = cfg['image_generation']['backends']
-assert len(entries) == 3 and entries[0]['enabled'] is False
-assert {(b['model'], b['mesh_rig']) for b in entries[1:]} == {('mesh-mia', 'mixamo'), ('mesh-rig-unirig', 'generic')}
-assert all(b['api_url'] == 'http://fake' and b['api_key'] == 'test-key' for b in entries[1:])
+assert len(entries) == 6 and entries[0]['enabled'] is False and entries[1]['enabled'] is True
+assert all('mesh_rig' not in b for b in entries)
+assert cfg['image_generation']['routing'] == {'rig_humanoid': ['mia-low', 'mia-high'], 'rig_creature': ['unirig']}
 assert not _migrate_mesh_rig_split(cfg)
+fresh = {'image_generation': {'backends': [{'name': 'Trellis2-Low', 'api_type': 'openai_mesh', 'category': 'img2mesh', 'enabled': True}]}}
+assert not _migrate_mesh_rig_split(fresh)
+assert fresh['image_generation']['backends'][0]['enabled'] is True
+existing = {'image_generation': {'routing': {'rig_humanoid': ['custom']}, 'backends': [{'name': 'mia', 'category': 'mesh2rig', 'api_type': 'openai_mesh', 'mesh_rig': 'mixamo'}]}}
+assert _migrate_mesh_rig_split(existing)
+assert existing['image_generation']['routing']['rig_humanoid'] == ['custom']
+# Malformed stored roots remain visible for admin repair, never crash load.
+for raw in (['old'], 'old', '', False):
+    malformed = {'image_generation': {'routing': raw, 'backends': [{'name': 'mia', 'api_type': 'openai_mesh', 'category': 'mesh2rig', 'mesh_rig': 'mixamo'}]}}
+    assert _migrate_mesh_rig_split(malformed)
+    assert malformed['image_generation']['routing'] == raw
+    assert not _migrate_mesh_rig_split(malformed)
+null_root = {'image_generation': {'routing': None, 'backends': [{'name': 'mia', 'api_type': 'openai_mesh', 'category': 'mesh2rig', 'mesh_rig': 'mixamo'}]}}
+assert _migrate_mesh_rig_split(null_root)
+assert null_root['image_generation']['routing'] == {'rig_humanoid': ['mia']}
 print('PASS category separation and idempotent migration')
 
 # The fake pool keeps routing and runner behavior real; only GPU submission
@@ -102,7 +123,7 @@ class Fake(ImageBackend):
     def __init__(self, name, category, rig, cost=0, failure=None):
         super().__init__(name, 'http://fake', cost, 'fake', 'RIG_SPLIT_FAKE_')
         self.MEDIA_TYPE = 'mesh'
-        self.category, self.mesh_rig = category, rig
+        self.category, self.delivered_rig = category, rig
         self.instance_enabled = True
         self._available = True
         self.calls = []
@@ -128,7 +149,7 @@ class Fake(ImageBackend):
             assert base64.b64decode(payload['input_mesh_path'].split(',', 1)[1]) == fixture_glb()
             assert OpenAIMeshBackend.build_alias_params(self, params) == {'input_no_fingers': self.no_fingers}
             assert 'no_fingers' not in params
-            if self.mesh_rig == 'generic':
+            if self.delivered_rig == 'generic':
                 self._meta.files = [{'name': 'test_articulationxl.fbx', 'kind': 'file', 'mime': 'application/octet-stream'}]
                 return [b'Kaydara FBX Binary\x00' + b'fixture']
             self._meta.files = [{'name': 'test_rigged.glb', 'kind': 'file', 'mime': 'application/octet-stream'}]
@@ -157,9 +178,18 @@ high = Fake('rig-high', 'mesh2rig', 'mixamo', 2)
 low = Fake('rig-low', 'mesh2rig', 'mixamo', 1)
 creature = Fake('creature', 'mesh2rig', 'generic')
 svc = service(mesh, high, low, creature)
-for occasion, expected in (('rig_humanoid', low), ('rig_creature', creature), ('mesh_humanoid', mesh), ('mesh_creature', mesh)):
+for occasion in ('rig_humanoid', 'rig_creature'):
+    try:
+        routing.resolve_image_route(occasion, pool=svc.pool)
+        raise AssertionError('empty rig chain must fail')
+    except routing.NoRouteError as exc:
+        assert occasion in str(exc) and '/admin/settings → Media Generation → Routing' in str(exc)
+    overview = routing.explain_occasion(occasion, pool=svc.pool)
+    assert overview['resolved'] is None and overview['via'] == 'none'
+rules.update(rig_humanoid=['rig-low'], rig_creature=['creature'])
+for occasion, expected in (('rig_humanoid', low), ('rig_creature', creature), ('mesh_humanoid', mesh), ('mesh_creature', mesh), ('mesh_object', mesh), ('mesh_building', mesh)):
     assert routing.resolve_image_route(occasion, pool=svc.pool).backend is expected
-rules['rig_humanoid'] = ['mesh', 'creature']
+rules['rig_humanoid'] = ['mesh']
 try:
     routing.resolve_image_route('rig_humanoid', pool=svc.pool)
     raise AssertionError('configured wrong-kind chain must fail')
@@ -182,7 +212,7 @@ try:
     raise AssertionError('busy must propagate')
 except BackendBusyError:
     pass
-print('PASS rig routing cheapest, NoRouteError, failed fallback, busy propagation')
+print('PASS explicit rig chains, NoRouteError, failed fallback, busy propagation')
 
 root = Path(_tmp.name) / 'models'
 root.mkdir()
@@ -205,6 +235,53 @@ def channel(backend, gen_fn, **kwargs):
             worker.inside = False
     return executor.submit(run).result(timeout=5)
 
+
+# Hand-derived delivery checks: the wrong FBX is a healthy response, so it
+# skips to the next chain entry without a cooldown or publishing wrong bytes.
+(root/'unrigged').mkdir()
+delivery_source = root/'unrigged/delivery.glb'
+delivery_source.write_bytes(fixture_glb())
+high.delivered_rig = 'generic'
+with patch.object(svc, 'run_on_backend_channel', side_effect=channel):
+    result = svc.generate_rig(str(delivery_source), str(root/'delivery.glb'), 'mixamo')
+    assert result['ok'] and result['backend'] == 'rig-low'
+    assert result['fallback_from']['intended_spec'] == 'rig-high'
+    assert not high.in_cooldown() and high.available
+    assert len(high.calls) == len(low.calls) == 1
+    result = svc.generate_rig(str(delivery_source), str(root/'wrong.glb'), 'mixamo', backend_glob='rig-high')
+    assert not result['ok'] and "delivered rig 'generic'" in result['error']
+    assert not (root/'wrong.glb').exists() and not high.in_cooldown()
+    assert len(low.calls) == 1, 'explicit mismatch has no fallback'
+    # Job rig overrides detectable bytes, including an unknown nonempty value.
+    with patch.object(Fake, 'last_result_rig', property(lambda self: 'generic' if self is low else None), create=True):
+        result = svc.generate_rig(str(delivery_source), str(root/'declared-wrong.glb'), 'mixamo', backend_glob='rig-low')
+        assert not result['ok'] and not low.in_cooldown()
+    with patch.object(Fake, 'last_result_rig', property(lambda self: ''), create=True):
+        result = svc.generate_rig(str(delivery_source), str(root/'blank-rig.glb'), 'mixamo', backend_glob='rig-low')
+        assert not result['ok'] and not low.in_cooldown(), 'a present blank rig must not be inferred'
+from app.imagegen.service import _delivered_mesh_rig
+assert _delivered_mesh_rig([{'name': 'source.glb', 'blob': fixture_glb()}]) == 'none'
+assert _delivered_mesh_rig([{'name': 'source.glb', 'blob': fixture_glb()}, {'name': 'test_rigged.glb', 'blob': fixture_glb(True)}]) == 'mixamo'
+assert _delivered_mesh_rig([{'name': 'test_articulationxl_00001_.fbx', 'blob': b'FBX'}]) == 'generic'
+assert _delivered_mesh_rig([{'name': 'rigged.glb', 'blob': fixture_glb(True)}]) == 'mixamo'
+assert _delivered_mesh_rig([{'name': 'rigged.glb', 'blob': fixture_glb(True)}], '') == ''
+assert _delivered_mesh_rig([{'name': 'rigged.glb', 'blob': fixture_glb(True)}], 'generic') == 'generic'
+assert _delivered_mesh_rig([{'name': 'source.glb', 'blob': fixture_glb()}], 'unknown-rig') == 'unknown-rig'
+from app.core.mesh_source import validate_source
+assert 'combined mesh+rig aliases are not supported' in '; '.join(validate_source(fixture_glb(True))['errors'])
+# Even when the main artifact is unrigged, a skinned sibling or LOD proves
+# this is an unsupported combined delivery; no output is published.
+for extra_name in ('extra_rigged.glb', 'source_2000.glb'):
+    mixed = [{'name': 'source_00001_.glb', 'kind': 'model', 'blob': fixture_glb()},
+             {'name': extra_name, 'kind': 'model', 'blob': fixture_glb(True)}]
+    verdict = svc._store_mesh_files(mixed, 'none', str(root/'combined.glb'), 'mesh')
+    assert not verdict['ok'] and 'combined mesh+rig aliases are not supported' in verdict['error']
+    assert not (root/'combined.glb').exists()
+high.delivered_rig = 'mixamo'
+high.calls.clear()
+low.calls.clear()
+events.clear()
+print('PASS delivered rig mismatch retries without cooldown, explicit mismatch fails, job rig takes precedence')
 
 # Real orchestration and publication; Blender postprocessing is outside this
 # check and is covered by the existing model/LOD smokes.
@@ -245,7 +322,7 @@ with ExitStack() as stack:
     assert events == [('start', 'mesh'), ('end', 'mesh'), ('start', 'rig-low'), ('end', 'rig-low'), ('start', 'mesh'), ('end', 'mesh'), ('start', 'creature'), ('end', 'creature')]
     before = len(low.calls)
     with patch('app.imagegen.service.media_generation_enabled', return_value=False):
-        for fn in (lambda: svc.generate_mesh(str(src), str(root/'disabled.glb'), rig='none'),
+        for fn in (lambda: svc.generate_mesh(str(src), str(root/'disabled.glb')),
                    lambda: svc.generate_rig(str(root/'unrigged/mixamo.glb'), str(root/'disabled-rig.glb'), 'mixamo')):
             try:
                 fn()
@@ -355,19 +432,21 @@ model3d._purge_combination(char_models, 'mixamo')
 assert not list((char_models/'unrigged').glob('mixamo.*'))
 print('PASS actual character/Marketplace export-import and GC collection/purge')
 
-# Two boots copy secrets into the instance secret layer, never config.json.
+# Two boot migrations drop the declaration while preserving secret layers.
 inst = Path(_tmp.name)/'boot-instance'
 world_cfg = Path(_tmp.name)/'boot-world/config.json'
 inst.mkdir()
 world_cfg.parent.mkdir()
 world_cfg.write_text('{}')
-(inst/'config.json').write_text(json.dumps({'image_generation': {'backends': [{'name': 'chain', 'api_type': 'openai_mesh', 'category': 'img2mesh', 'mesh_rig': 'generic', 'api_url': 'http://fake', 'model': 'combined'}]}}))
-(inst/'secrets.json').write_text(json.dumps({'image_generation': {'backends': {'chain': {'api_key': 'test-secret'}}}}))
+(inst/'config.json').write_text(json.dumps({'image_generation': {'backends': [{'name': 'rigger', 'api_type': 'openai_mesh', 'category': 'mesh2rig', 'mesh_rig': 'generic', 'api_url': 'http://fake', 'model': 'mesh-rig-unirig'}]}}))
+(inst/'secrets.json').write_text(json.dumps({'image_generation': {'backends': {'rigger': {'api_key': 'test-secret'}}}}))
 assert config.migrate_file(world_cfg, instance_path=inst/'config.json')
 public = json.loads((inst/'config.json').read_text())
 secret_text = (inst/'secrets.json').read_text()
 assert 'test-secret' not in (inst/'config.json').read_text()
-assert len(public['image_generation']['backends']) == 3
+assert len(public['image_generation']['backends']) == 1
+assert 'mesh_rig' not in public['image_generation']['backends'][0]
+assert public['image_generation']['routing']['rig_creature'] == ['rigger']
 config.load(world_cfg, instance_path=inst/'config.json')
 assert all(b['api_key'] == 'test-secret' for b in config.get('image_generation.backends'))
 assert not config.migrate_file(world_cfg, instance_path=inst/'config.json')

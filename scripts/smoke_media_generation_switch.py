@@ -339,7 +339,6 @@ def part_entry_points():
     video.MEDIA_TYPE = "video"
     mesh = _Stub("M_STUB")
     mesh.MEDIA_TYPE = "mesh"
-    mesh.mesh_rig = "mixamo"
     mesh.category = "img2mesh"
     svc._pool = BackendPool([video, mesh], agent_instances_provider=lambda _n: {})
 
@@ -350,7 +349,7 @@ def part_entry_points():
         exc = raises(lambda: svc.generate_video("/tmp/none.png", "walk",
                                                 "/tmp/out.mp4"))
         exc2 = raises(lambda: svc.generate_mesh("/tmp/none.png",
-                                                "/tmp/out.glb", rig="mixamo"))
+                                                "/tmp/out.glb"))
     finally:
         pm_mod.get_provider_manager = orig_pm
     check("generate_video raises MediaGenerationDisabled",

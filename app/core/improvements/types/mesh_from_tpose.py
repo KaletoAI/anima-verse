@@ -53,20 +53,14 @@ class MeshFromTpose(ImprovementType):
         ``validate`` both go through this property, so the offered list and the
         accepted list can never drift apart."""
         return [ParamField("backend", "Generate with", "mesh_backend",
-                           subjects.mesh_backend_options(
-                               subjects.CHARACTER_MESH_RIGS))]
+                           subjects.mesh_backend_options())]
 
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
         """The difference IS the contract's "not yet done" filter: a signature
         that has a mesh is subtracted, which is the same disk question
         :meth:`is_done` asks — so no separate pass over it is needed."""
         out: List[Candidate] = []
-        backend = params.get("backend", "")
         for name in subjects.characters():
-            # A character whose rig the chosen backend does not deliver is no
-            # subject of this entry — the explicit pick would only fail.
-            if not subjects.character_fits_backend(name, backend):
-                continue
             # Two directory reads per character, no stat per combination —
             # a character can carry hundreds of stored combinations.
             missing = (subjects.character_tpose_signatures(name)

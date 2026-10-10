@@ -885,31 +885,24 @@ _MESH_GATEWAY_URL = "http://192.168.8.10:4000"
 # `input_face_num` as a rough guide only (5000 requested measured as ~38000
 # triangles, mesh-client-spec § 3.4) — a low variant needs a PREDICTABLE
 # target size, which `mesh-shrink` hits.
-_DEFAULT_SHRINK_BACKEND = ("mesh-shrink", "none", 1, 5000, 0, 0)
+_DEFAULT_SHRINK_BACKEND = ("mesh-shrink", "mesh2mesh", 1, 5000, 0, 0)
 
 _DEFAULT_MESH_BACKENDS = [
-    # (name, rig, cost, face_num, face_num_max, max_concurrent)
-    ("Trellis2-Humanoid-Low", "mixamo", 1, 20000, 0, 0),
-    ("Trellis2-Humanoid-High", "mixamo", 2, 20000, 0, 0),
-    ("Trellis2-Generic-Low", "generic", 1, 20000, 0, 0),
-    ("Trellis2-Generic-High", "generic", 2, 20000, 0, 0),
-    ("Trellis2-Object-Low", "none", 1, 20000, 0, 0),
-    ("Pixal3D-Humanoid", "mixamo", 3, 50000, 0, 2),
-    ("Pixal3D-Generic", "generic", 3, 50000, 0, 0),
-    ("Pixal3D-Object", "none", 5, 50000, 0, 0),
-    # Splat pipeline: no face param at all (input_num_gaussians, default
-    # 10000) — face_num stays 0 so nothing is sent.
-    ("Triposplat-Object", "none", 1, 0, 0, 0),
-    ("Hunyuan3D-Humanoid", "mixamo", 2, 40000, 40000, 0),
-    ("Hunyuan3D-Generic", "generic", 2, 40000, 40000, 0),
-    ("Hunyuan3D-Object", "none", 2, 40000, 40000, 0),
+    # (alias, category, cost, face_num, face_num_max, max_concurrent)
+    ("Trellis2-Low", "img2mesh", 1, 20000, 0, 0),
+    ("Trellis2-High", "img2mesh", 2, 20000, 0, 0),
+    ("Pixal3D", "img2mesh", 3, 50000, 0, 2),
+    ("Triposplat", "img2mesh", 1, 0, 0, 0),
+    ("Hunyuan3D", "img2mesh", 2, 40000, 40000, 0),
+    ("mesh-mia", "mesh2rig", 0, 0, 0, 0),
+    ("mesh-rig-unirig", "mesh2rig", 0, 0, 0, 0),
 ]
 
 
 def _default_mesh_backend_entries() -> list:
-    """The seed list as config dicts (img2mesh aliases + the mesh→mesh one)."""
+    """The seed list as config dicts (img2mesh, mesh2rig and mesh2mesh)."""
     out = []
-    for name, rig, cost, faces, faces_max, concurrent in (
+    for name, category, cost, faces, faces_max, concurrent in (
             [*_DEFAULT_MESH_BACKENDS, _DEFAULT_SHRINK_BACKEND]):
         entry = {
             "name": name,
@@ -918,13 +911,11 @@ def _default_mesh_backend_entries() -> list:
             "api_url": _MESH_GATEWAY_URL,
             "api_key": "",
             "model": name,
-            "category": ("mesh2mesh" if name == _DEFAULT_SHRINK_BACKEND[0]
-                         else "img2mesh"),
+            "category": category,
             "cost": cost,
             "timeout": 3600,
             "poll_interval": 2,
             "max_concurrent": concurrent,
-            "mesh_rig": rig,
             "remove_background": True,
             "no_fingers": False,
         }
@@ -1304,25 +1295,17 @@ def _legacy_route_spec(value: Any) -> str:
 
 
 def _mesh_routing_occasions(glob: str, backends: Any) -> list:
-    """The mesh occasions an old mesh default belongs to — by the rig of the
-    img2mesh backends it matches (a mesh2mesh reduction alias never counts)."""
+    """A matching img2mesh backend serves all four mesh occasions."""
     import fnmatch
-    from app.imagegen.occasions import MESH_OCCASIONS_BY_RIG
     from app.imagegen.routing import describe_config_backend
-    rigs = set()
     for b in backends or []:
         if not isinstance(b, dict):
             continue
         kind = describe_config_backend(b)
-        if kind["media"] != "mesh" or kind["category"] != "img2mesh":
-            continue
-        if fnmatch.fnmatch(kind["name"].lower(), glob.lower()):
-            rigs.add(kind["rig"])
-    out: list = []
-    for rig in ("mixamo", "generic", "none"):
-        if rig in rigs:
-            out.extend(MESH_OCCASIONS_BY_RIG[rig])
-    return out
+        if (kind["media"] == "mesh" and kind["category"] == "img2mesh"
+                and fnmatch.fnmatch(kind["name"].lower(), glob.lower())):
+            return ["mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building"]
+    return []
 
 
 def _migrate_image_routing(config: dict) -> bool:
@@ -1366,31 +1349,39 @@ def _migrate_image_routing(config: dict) -> bool:
 
 
 def _migrate_mesh_rig_split(config: dict) -> bool:
-    """Disable combined mesh/rig aliases and seed standalone riggers once."""
+    """Seed empty rig chains from old declarations, then drop the field once.
+
+    Never enable or disable entries: previously disabled combined aliases stay
+    disabled, and fresh img2mesh aliases are unrigged by definition.
+    """
     ig = config.get("image_generation") or {}
     entries = ig.get("backends")
     if not isinstance(entries, list):
         return False
     changed = False
-    source = None
+    routing = ig.get("routing")
+    for occasion, rig in (("rig_humanoid", "mixamo"), ("rig_creature", "generic")):
+        # Preserve malformed stored roots for the admin repair surface.
+        if routing is not None and not isinstance(routing, dict):
+            continue
+        if (routing or {}).get(occasion):
+            continue
+        eligible = [b for b in entries if isinstance(b, dict)
+                    and str(b.get("api_type") or "").strip().lower() == "openai_mesh"
+                    and str(b.get("category") or "").strip().lower() == "mesh2rig"
+                    and b.get("enabled", True) is not False
+                    and str(b.get("mesh_rig") or "").strip().lower() == rig
+                    and b.get("name")]
+        if eligible:
+            if routing is None:
+                routing = ig["routing"] = {}
+            routing[occasion] = [b["name"] for b in sorted(
+                eligible, key=lambda b: float(b.get("cost") or 0))]
+            changed = True
     for entry in entries:
-        if (str(entry.get("category") or "").strip().lower() == "img2mesh"
-                and (str(entry.get("mesh_rig") or "").strip().lower() or "mixamo") != "none"):
-            source = source or entry
-            if entry.get("enabled", True) is not False:
-                entry["enabled"] = False
-                logger.info("Mesh/rig split: disabled combined backend %s", entry.get("name"))
-                changed = True
-    if source and not any(str(b.get("category") or "").strip().lower() == "mesh2rig" for b in entries):
-        for alias, rig in (("mesh-mia", "mixamo"), ("mesh-rig-unirig", "generic")):
-            name = alias
-            while any(b.get("name") == name for b in entries):
-                name += "-rig"
-            entries.append({**{k: source.get(k, "") for k in ("api_url", "api_key", "api_type") if k in source},
-                            **{k: source[k] for k in ("no_fingers", "timeout", "poll_interval", "max_wait", "max_queue_wait") if k in source},
-                            "name": name, "model": alias, "category": "mesh2rig",
-                            "mesh_rig": rig, "enabled": True, "cost": 0})
-        changed = True
+        if isinstance(entry, dict) and "mesh_rig" in entry:
+            del entry["mesh_rig"]
+            changed = True
     return changed
 
 
@@ -2299,7 +2290,7 @@ def _flatten_to_env(config: dict) -> None:
                      # CivitAI (civitai / civitai_video)
                      "denoise_strength", "allow_mature_content",
                      # Mesh backend (openai_mesh, img2mesh)
-                     "mesh_endpoint", "mesh_rig", "remove_background",
+                     "mesh_endpoint", "remove_background",
                      "face_num", "face_num_max", "no_fingers", "mesh_steps"]:
             val = be.get(key, "")
             # extra_params can be a dict (JSON editor) — bridge as JSON string.

@@ -29,7 +29,7 @@ clone. Every function takes an optional ``room_id``; empty = building.
 The source image is a gallery image of the location (an
 ``image_type="building-<view>"`` render — for rooms one assigned to the room,
 picked by the caller); generation goes through
-``service.generate_mesh(rig="none")`` on the backend queue channel, as a
+``service.generate_mesh()`` on the backend queue channel, as a
 background job with a pending flag — the same busy/serialization contract as
 the character mesh.
 
@@ -464,7 +464,7 @@ def get_building_info(location_id: str, room_id: str = "") -> Dict[str, Any]:
         # missing one instead of the store inventing a placeholder).
         "tiers": sorted(_gallery(owner, room_id).tiers()) if owner else [],
     }
-    out.update(list_mesh_backends("none", occasion="mesh_building"))
+    out.update(list_mesh_backends(occasion="mesh_building"))
     # mesh→mesh aliases (the "Create low variant" action on a stored file) —
     # a separate list: they consume a MESH, so they must never show up in the
     # normal generate dialog.
@@ -1313,7 +1313,6 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
             output_path=str(gallery.new_path()),
             backend_glob=backend_glob,
             mesh_name=_stem(room_id) if room_id else owner,
-            rig="none",
             face_num=face_num,
             texture_size=texture_size,
             lod_faces=lod_faces,

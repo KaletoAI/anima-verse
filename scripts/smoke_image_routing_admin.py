@@ -19,7 +19,7 @@ Expected, by hand:
  V1 {"photo": ["Flux2*"], "rig_humanoid": ["Mesh-H*"]} -> ("", [])
  V2 {"mesh_low": ["x"]} -> error "Image routing: unknown occasion 'mesh_low'."
  V3 {"mesh_object": ["Mesh-H*"]} -> error mentions "wrong kind" and "Mesh-H1"
-    (rig mixamo, the occasion needs rig none)
+    (mesh2rig cannot serve img2mesh)
  V4 {"location": ["Qwen Inpaint"]} -> wrong kind (inpaint)
  V5 {"timevariant": ["Flat"]} -> wrong kind (no reference slot)
  V6 {"photo": ["Nope*"]} -> ("", ["Image routing: 'Nope*' for 'photo' matches no backend."])
@@ -28,7 +28,7 @@ Expected, by hand:
  V9 no routing key at all -> ("", [])
  V10 {"video": ["Vid"]} -> ("", []); {"photo": ["Vid"]} -> wrong kind
  V11 describe_config_backend(openai_mesh without mesh_rig) -> media "mesh",
-     rig "mixamo"; (openai_video) -> media "video", ref_slot_count 1
+     no rig property; (openai_video) -> media "video", ref_slot_count 1
      (OpenAIVideoBackend.DEFAULT_REF_SLOT_COUNT)
  R1 settings_image_routing_occasions() -> 21 rows
  R2 settings_image_routing_effective(character="x") hands the character to
@@ -119,7 +119,7 @@ BACKENDS = [
     {"name": "Flux2 A", "api_type": "openai_diffusion", "category": "img2img", "ref_slot_count": 1},
     {"name": "Qwen Inpaint", "api_type": "openai_diffusion", "category": "inpaint"},
     {"name": "Flat", "api_type": "openai_diffusion", "category": "txt2img", "ref_slot_count": 0},
-    {"name": "Mesh-H1", "api_type": "openai_mesh", "category": "mesh2rig", "mesh_rig": "mixamo"},
+    {"name": "Mesh-H1", "api_type": "openai_mesh", "category": "mesh2rig"},
     {"name": "Vid", "api_type": "openai_video", "category": "txt2img"},
 ]
 
@@ -146,7 +146,7 @@ check("V9 no routing key", v(None, with_key=False), ("", []))
 check("V10 video ok", v({"video": ["Vid"]}), ("", []))
 check("V10 video on photo", "wrong kind" in v({"photo": ["Vid"]})[0], True)
 k = routing.describe_config_backend({"name": "M", "api_type": "openai_mesh"})
-check("V11 mesh kind", (k["media"], k["rig"]), ("mesh", "mixamo"))
+check("V11 mesh kind", (k["media"], k.get("rig")), ("mesh", None))
 k = routing.describe_config_backend({"name": "V", "api_type": "openai_video"})
 check("V11 video kind", (k["media"], k["ref_slot_count"]), ("video", 1))
 
@@ -232,7 +232,7 @@ check("S4 message", resp.get("message") if isinstance(resp, dict) else resp,
 
 # ── fix round 1: an invalid STORED chain never locks the save ──────────
 F_BACKENDS = copy.deepcopy(BACKENDS) + [
-    {"name": "Mesh-O1", "api_type": "openai_mesh", "category": "img2mesh", "mesh_rig": "none"}]
+    {"name": "Mesh-O1", "api_type": "openai_mesh", "category": "img2mesh"}]
 F_ROUTING = {"mesh_low": ["x"], "mesh_object": ["Mesh-H*"], "photo": ["Flux2*"]}
 STORED = {"image_generation": {"backends": copy.deepcopy(F_BACKENDS),
                                "routing": copy.deepcopy(F_ROUTING)}}

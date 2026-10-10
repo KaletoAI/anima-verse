@@ -51,7 +51,7 @@ EXPECTATIONS, DERIVED BY HAND
     "Qwen A", first_position 1), @2 Flux* -> Flux Cheap (the switch restricts
     EVERY entry, Flux Big is gone from the glob too). position 2,
     is_fallback True.
- 4. mesh_object rules ["Mesh-H", "Shrink", "Mesh-O"]: wrong_kind (rig),
+ 4. mesh_object rules ["Mesh-H", "Shrink", "Mesh-O"]: ok (img2mesh),
     wrong_kind (mesh2mesh), ok -> Mesh-O position 3. Both skips are
     configuration -> intended "Mesh-O", first_position 3, is_fallback False,
     route_meta without "fallback_from".
@@ -190,13 +190,11 @@ def check(label, got, expected):
 
 class Fake(ImageBackend):
     def __init__(self, name, media="image", category="txt2img", cost=0,
-                 ref=1, rig="", enabled=True):
+                 ref=1, enabled=True):
         super().__init__(name, "http://localhost", float(cost), "fake", "FAKE_ROUTING_")
         self.MEDIA_TYPE = media
         self.category = category
         self.ref_slot_count = ref
-        if rig:
-            self.mesh_rig = rig
         self.instance_enabled = enabled
         self._available = True
         self.probes = 0
@@ -218,9 +216,9 @@ B = {b.name: b for b in [
     Fake("Ref0", category="txt2img", cost=2, ref=0),
     Fake("Off", category="txt2img", cost=0, enabled=False),
     Fake("Vid", media="video", category="txt2img"),
-    Fake("Mesh-H", media="mesh", category="img2mesh", rig="mixamo"),
-    Fake("Mesh-O", media="mesh", category="img2mesh", rig="none", cost=1),
-    Fake("Shrink", media="mesh", category="mesh2mesh", rig="none"),
+    Fake("Mesh-H", media="mesh", category="img2mesh"),
+    Fake("Mesh-O", media="mesh", category="img2mesh", cost=1),
+    Fake("Shrink", media="mesh", category="mesh2mesh"),
 ]}
 B["Qwen A"].mark_unhealthy("smoke", 300)
 POOL = BackendPool(list(B.values()), agent_instances_provider=lambda n: {})
@@ -267,10 +265,10 @@ SWITCHES["value"] = {}
 
 RULES = {"mesh_object": ["Mesh-H", "Shrink", "Mesh-O"]}
 r4 = route("mesh_object")
-check("4 rig/category filter", (r4.backend.name, r4.position, statuses(r4)),
-      ("Mesh-O", 3, ["wrong_kind", "wrong_kind", "ok"]))
+check("4 category filter", (r4.backend.name, r4.position, statuses(r4)),
+      ("Mesh-H", 1, ["ok", "wrong_kind", "ok"]))
 check("4 wrong kinds are configuration",
-      (r4.intended_spec, r4.first_position, r4.is_fallback), ("Mesh-O", 3, False))
+      (r4.intended_spec, r4.first_position, r4.is_fallback), ("Mesh-H", 1, False))
 check("4 no fallback_from", "fallback_from" in routing.route_meta(r4), False)
 
 RULES = {"location": ["Inpaint X"]}

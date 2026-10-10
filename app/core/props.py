@@ -5861,7 +5861,7 @@ def variant_delete_blocked(prop_id: str, variant: Any) -> bool:
 # steps, both on the backend queue channel like every render: a txt2img
 # product-shot render (use case ``prop``) becomes the VARIANT's source image
 # (source.png for the base stem, source-v<n>.png beyond it), then
-# ``service.generate_mesh(rig="none")`` turns it into model.glb (NEVER a
+# ``service.generate_mesh()`` turns it into model.glb (NEVER a
 # mesh-backend fallback — the existing rule). Runs on a worker thread with the
 # per-job double-start guard (prop_id|variant|mesh backend|view).
 
@@ -6261,7 +6261,6 @@ def _generate(prop_id: str, prompt: str, negative: str,
             output_path=str(g.new_path()),
             backend_glob=mesh_backend_glob,
             mesh_name=prop_id,
-            rig="none",
             face_num=face_num,
             texture_size=texture_size,
             view_images=view_paths or None,

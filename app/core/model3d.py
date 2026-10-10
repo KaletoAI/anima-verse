@@ -3,7 +3,7 @@
 There is ONE model per outfit combination, produced in one of two ways:
 
 * GENERATED: the T-pose reference render (``app/core/model_refs.py``) is sent
-  to an img2mesh/none backend; its unrigged GLB is retained before a
+  to an img2mesh backend; its unrigged GLB is retained before a
   separate mesh2rig job produces the rigged model.
 * UPLOADED: the user drops a GLB (or FBX+PNG) in the Game-Admin 3D tab.
 
@@ -521,22 +521,17 @@ def required_rig(character_name: str) -> str:
     return "mixamo" if is_humanoid(character_name) else "generic"
 
 
-def list_mesh_backends(rig: str = "", occasion: str = "") -> Dict[str, Any]:
-    """Available mesh backends (optionally only those producing ``rig``) + the
-    ``default`` the generate dialog preselects, so it can offer a choice (Low
-    vs High).
+def list_mesh_backends(occasion: str = "") -> Dict[str, Any]:
+    """Available img2mesh choices and the supplied occasion's routed default.
 
-    ``default`` is what the mesh OCCASION's chain resolves to right now
-    (image routing, ``explain_occasion``): ``occasion`` when given (a building
-    passes "mesh_building"), else the occasion of ``rig``
-    (``mesh_occasion_for_rig``). A rig-less call has no occasion and no
-    default; a resolved backend that is not in ``backends`` is not
-    preselected."""
+    All img2mesh backends produce unrigged sources. With no occasion supplied,
+    no default is preselected.
+    """
     from app.imagegen.service import get_image_service
     out = []
     try:
         svc = get_image_service()
-        for b in svc.list_mesh_backends("none"):
+        for b in svc.list_mesh_backends():
             out.append({
                 "name": b.name,
                 "model": getattr(b, "model", ""),
@@ -550,35 +545,32 @@ def list_mesh_backends(rig: str = "", occasion: str = "") -> Dict[str, Any]:
                 # name — the dialog offers the stage control only where it
                 # actually reaches something.
                 "lod_stages": bool(getattr(b, "supports_lod_stages", False)),
-                "rig": getattr(b, "mesh_rig", "mixamo"),
             })
     except Exception as e:
         logger.debug("Listing mesh backends failed: %s", e)
     # The dialogs preselect what the occasion's chain resolves to right now
-    # (image routing); a rig-less call has no occasion and no default.
+    # (image routing); a call without an occasion has no default.
     default = ""
     try:
-        occ = occasion or (mesh_occasion_for_rig(rig) if rig else "")
+        occ = occasion
         if occ:
             from app.imagegen.routing import explain_occasion
             default = str(explain_occasion(occ).get("resolved") or "")
     except Exception as e:
-        logger.debug("Mesh default for rig=%r occasion=%r not resolved: %s",
-                     rig, occasion, e)
+        logger.debug("Mesh default for occasion=%r not resolved: %s", occasion, e)
         default = ""
     if default and not any(b["name"] == default for b in out):
         default = ""
     return {"backends": out, "default": default}
 
 
-def list_rig_backends(rig: str) -> List[Dict[str, Any]]:
-    """Offer enabled mesh2rig backends of the character's required rig."""
+def list_rig_backends() -> List[Dict[str, Any]]:
+    """Offer all enabled mesh2rig backends for an explicit pick."""
     from app.imagegen.service import get_image_service
     return [{"name": b.name, "model": getattr(b, "model", "")}
             for b in get_image_service().pool.backends
             if getattr(b, "MEDIA_TYPE", "image") == "mesh"
             and getattr(b, "category", "") == "mesh2rig"
-            and getattr(b, "mesh_rig", "") == rig
             and b.instance_enabled]
 
 
@@ -601,7 +593,6 @@ def list_shrink_backends() -> Dict[str, Any]:
                 # Same field as in list_mesh_backends so the dialog reads ONE
                 # shape; a reduction alias never bakes stages of its own.
                 "lod_stages": bool(getattr(b, "supports_lod_stages", False)),
-                "rig": getattr(b, "mesh_rig", "none"),
             })
     except Exception as e:
         logger.debug("Shrink-Backends listen fehlgeschlagen: %s", e)
@@ -732,8 +723,8 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
     out["options"] = get_model3d_options(character_name)
     from app.blender import runner
     out["blender"] = runner.status()
-    out.update(list_mesh_backends(rig))
-    out["rig_backends"] = list_rig_backends(rig)
+    out.update(list_mesh_backends(occasion=mesh_occasion_for_rig(rig)))
+    out["rig_backends"] = list_rig_backends()
     with _lock:
         out["pending"] = character_name in _generating
         out["rerig_result"] = _rerig_results.get(character_name)
@@ -1575,9 +1566,9 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         # The auto-mesh hook keeps its rule (user decision 2026-07-18): the
         # cheapest AVAILABLE unrigged img2mesh backend — explicit, no
         # chain. Every other call without a glob is routed.
-        cheapest = get_image_service().list_mesh_backends("none")
+        cheapest = get_image_service().list_mesh_backends()
         if not cheapest:
-            return {"ok": False, "error": f"no {rig} mesh backend available"}
+            return {"ok": False, "error": "no img2mesh backend available"}
         backend_glob = cheapest[0].name
 
     src = find_ref_image(character_name, "tpose", signature)
@@ -1623,7 +1614,6 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             backend_glob=backend_glob,
             character_name=character_name,
             mesh_name=character_name,
-            rig="none",
             face_num=face_num,
             texture_size=texture_size,
             view_images=view_images or None,

@@ -870,13 +870,13 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 | `layout_sig` | `str` (10) | **optionaler Schlüssel** — nur wenn mindestens ein Raum ein Layout hat ODER `map3d` nicht leer ist (AV3D-2⁺). Die Signatur deckt **beides** ab: die Raum-Layouts **und** die szenenformenden `map3d`-Metadaten des Ortes (gezeichnete `boundary`, Grenz-Durchgänge, `rotation`, `plan_width_m`, `storey_height_m`, `floors` …). Ändert sich eines von beiden, holt der Client die Szene neu — ein gezeichnetes Tor erreicht so auch einen laufenden Client (E5 B11) |
 
 **Wurzelfelder des Payloads — die vollständige Liste:** `avatar` · `current_location_id` · `locations` ·
-`characters` · `events_by_location` · `game_time` · `world_bounds` ·
+`characters` · `events_by_location` · `game_time` · `game_rate` · `world_bounds` ·
 `terrain_sig` · `height_sig` · `explored_sig` · `world_props` ·
 `world_props_sig` · `fogged` · `max_step_height_m` · `max_slope_deg` ·
 `backdrop` (**optionaler Schlüssel** — nur wenn die Fernkulisse eingeschaltet
 ist, § A17).
 
-Fünfzehn feste Schlüssel plus `backdrop`. Gebaut werden sie in
+Sechzehn feste Schlüssel plus `backdrop`. Gebaut werden sie in
 `world_ops.build_worldmap_payload`; wer die Liste ändert, ändert
 `scripts/smoke_docs_schnittstellen_3d.py` mit, das sie gegen ein hier
 gebautes Payload hält.
@@ -892,6 +892,7 @@ gebautes Payload hält.
 | `height_sig` | `str` (10) | Signatur über **alles, was die fünf Backstufen von `h_final` lesen** (§ A16.1): die autorierten Höhenflächen, das Mikro-Relief der gemalten **Flächen** (`relief_inputs` — relief-freies Malen zählt nicht mit), die Wasser-Polygone samt ihren effektiven Zahlen (`water_basis`: Spiegel, beide Profil-Enden, Fließrichtung, aufgelöste Tiefe/Rampe — W1; ~~`zone_water_basis`~~ ist gelöscht) und die **Platzierungen der GEBAUTEN Orte** (ein verschobener Ort verschiebt sein Plateau; ein Ort, der einen Raum schließt oder öffnet, tritt in `placed_footprints()` ein oder aus — `level_ground` ist aus der Signatur verschwunden, § A16.4). Ändert sie sich, holt der Client `GET /play/heightfield` neu **und verwirft Kachel-Index samt aller geladenen Kacheln** (§ A16.5) — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
 | `game_time` | `{…}` | Die **Spieluhr** zu genau diesem Payload — derselbe Zeitpunkt, auf den alle Reisen unten gerechnet wurden. Fertig aufgeschlüsselt: `canonical` (`"Y0002-D109T14:00:00"`), `total_seconds`, `year`, `day_of_year`, `season`, `season_name`, `day_of_season`, `hour`, `minute`, `second`, `hour_fraction` (Sonnenstand), `weekday`/`weekday_name` (`null`/`""`, wenn die Welt keine Wochen kennt), `label`, `date_label`, `time` (HH:MM), `label_display`/`time_display` (dasselbe mit der Uhrzeit im **eingestellten Anzeigeformat**, `server.time_format`: `24h` `14:23` · `24h_seconds` · `12h` `2:23 PM` · `12h_seconds` — **Clients zeigen diese beiden**; `label`/`time` bleiben 24h, weil Prompts und Logs sie lesen), `is_night`, `day_bucket`, `atmosphere` (`{season, temperature, weather, note, label}` — Temperatur/Wetter gehören der **Season**, nicht der Welt; `label` z. B. `"freezing, snow — often fog in the morning"`). **Nie gefoggt** — die Tageszeit sieht jeder. Der Client RENDERT daraus, er rechnet nichts: es gibt keine Weltzeitzone und kein reales Datum mehr, aus dem sich eine Spielstunde ableiten ließe |
+| `game_rate` | `float` | Effective game seconds per real second, read from the world clock; clients use this factor for motion timing between polls. |
 | `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 9) |
 | `max_slope_deg` | `float` | Welt-Einstellung `game.max_slope_deg` (Default 40; geklemmt auf [10; 89]). Steilste Steigung, die eine Figur erklimmt — dasselbe Gate |
 | `backdrop` | `{"height_m","seed","arcs"} \| fehlt` | Die **Fernkulisse** (§ A17) — reine Optik. Fehlt der Schlüssel, ist sie aus (oder der Server ist älter); beides ist für den Client derselbe Zustand |
@@ -952,11 +953,13 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
 `room_id`, `activity`, `activity_animation`, `animation_set`,
 `animation_sets`, `mood`, `movement_target_id`, `movement_target_name`,
 `travel`, `interaction` (§ A8a), `place` (§ A8a), `avatar_url`,
-**`model_sig`** (§ A11a, nur wenn vorhanden).
+**`model_sig`** (§ A11a, nur wenn vorhanden), `model_rev`, `motion`.
 
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `model_sig` | `str` (optional) | Änderungs-Kennung des 3D-**Meshs**, das der Server für diese Figur ausliefern würde — dieselbe Zeichenkette, die `GET /characters/<name>/model3d` als `model.signature` meldet. **Fehlt**, wenn der Charakter gar keinen Mesh-Speicher hat. Siehe **§ A11a** |
+| `model_rev` | `str` | Revision of the served model and its sidecar, or empty when no model exists. A changed revision invalidates the character model even when its outfit signature stays the same, including after re-rigging. |
+| `motion` | `object` | Resolved per-character secondary-motion configuration: groups, attribute profiles and extension declarations used by the shared renderer. |
 | `pos` | `{"x": float, "z": float} \| null` | Freier Meterpunkt. **Die Wahrheit**; `location_id` wird daraus abgeleitet (Punkt im Fußabdruck). Gilt auch IN einem Raum (s. u.). `null` = der Charakter hat keinen Punkt (nie gesetzt, oder seine Location ist selbst unplatziert) — erst dann fällt ein Client auf den Location-Mittelpunkt zurück |
 | `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `eta_game`, `eta_hhmm`, `eta_label`, `starts_in_s`, `speed_m_s_real`, `pace_m_s_real`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11 — dort sind auch alle Zahlen des Blocks `null`) bleibt `pos` die Position |
 

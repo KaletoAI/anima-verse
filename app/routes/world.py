@@ -1940,7 +1940,7 @@ def props_admin() -> Dict[str, Any]:
     from app.core.model3d import list_mesh_backends
     from app.imagegen.service import get_image_service
     svc = get_image_service()
-    mesh = list_mesh_backends("none")
+    mesh = list_mesh_backends(occasion="mesh_object")
     image_backends = []
     try:
         for b in svc.list_available_backends(media="image"):
@@ -2891,11 +2891,10 @@ def get_location_background(
 
 @router.post("/locations/{location_name}/background/upload")
 async def upload_location_background(location_name: str, request: Request) -> Dict[str, Any]:
-    """Lädt ein Hintergrundbild für einen Ort (optional Raum) hoch.
+    """Upload a location background, optionally assigned to a room.
 
-    Multipart: file (Bild) + optional room_id. Speichert in die Galerie des
-    Orts, registriert es als Background und mappt es ggf. auf den Raum —
-    derselbe Speicher-/Registrierpfad wie die Generierung.
+    Multipart: image file plus optional room_id. Store in the location gallery,
+    register the background and assign the room using the generation store path.
     """
     guard_content_length(request, what="Background image")
     form = await request.form()

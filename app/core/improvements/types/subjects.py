@@ -68,9 +68,8 @@ def generate_character_model(name: str, backend: str,
     ``backend`` empty = routed: the mesh occasion chain of the character's
     rig (image routing).  A named ``backend`` is an explicit pick:
     ``generate_for_current_outfit`` hands it to ``service.generate_mesh``
-    together with the character's REQUIRED rig, and a backend whose
-    ``mesh_rig`` does not match is an ERROR there (no silent re-pick — a
-    wrong-rig mesh binds unusably, and a swap would hide the wrong choice).
+    for an unrigged source, followed by the configured rig occasion. The rig
+    delivery must match the character's required rig.
 
     Takes over ``model3d``'s own double-start guard: the producer is called
     directly (not through ``trigger_generation``, which is the thread
@@ -758,50 +757,19 @@ def image_backend_options() -> List[Dict[str, str]]:
 # ---------------------------------------------------------------------------
 
 #: The rigs a CHARACTER mesh can be bound to (``model3d.required_rig``):
-#: humanoids need the Mixamo 52-bone rig, everything else the generic one.
-#: A prop backend ("none") produces neither and can never mesh a character.
-CHARACTER_MESH_RIGS = ("mixamo", "generic")
-
-
-def mesh_backend_options(rigs: Tuple[str, ...] = ()) -> List[Dict[str, str]]:
-    """The mesh backends the admin form offers, in ``ParamField.options``
-    shape, labelled ``"<name> (<rig>)"``.
-
-    ``rigs`` narrows the list to the rig kinds a subject can actually be bound
-    to — pass :data:`CHARACTER_MESH_RIGS` for character meshes, so a prop-only
-    backend is not offered for a job that could never use it.  The rig is IN
-    the label because it decides whether a pick works: ``generate_mesh``
-    refuses a backend whose rig does not match the character's.
-
-    Read live on every call — the backend list is admin config and changes
-    while the server runs, so a schema that froze it at import would keep
-    offering backends that are gone.
-    """
+def mesh_backend_options() -> List[Dict[str, str]]:
+    """Offer every live img2mesh backend, read afresh for each admin form."""
     from app.core import model3d
-    out: List[Dict[str, str]] = []
-    for b in model3d.list_mesh_backends()["backends"]:
-        rig = str(b.get("rig") or "")
-        if rigs and rig not in rigs:
-            continue
-        out.append({"value": b["name"], "label": f"{b['name']} ({rig})"})
-    return out
+    return [{"value": b["name"], "label": b["name"]}
+            for b in model3d.list_mesh_backends()["backends"]]
 
 
-#: The rigs a subject KIND's mesh must have: a character is bound to one of
-#: :data:`CHARACTER_MESH_RIGS` (which one: ``model3d.required_rig``), buildings
-#: and props are unrigged.
-SUBJECT_MESH_RIGS = {"character": CHARACTER_MESH_RIGS,
-                     "location": ("none",), "prop": ("none",)}
+def is_img2mesh_backend(name: str) -> bool:
+    """Whether the explicit target is a configured image-to-mesh backend.
 
-
-def mesh_backend_rig(name: str) -> str:
-    """The rig the img2mesh backend ``name`` delivers, read from its CONFIG
-    entry (``image_generation.backends``) — ``""`` when no such img2mesh
-    backend is configured.
-
-    Configuration, never live availability: candidate scans filter by it, and
-    the engine closes a candidate that drops off the list as done — an offline
-    backend must not make its subjects vanish for good."""
+    Configuration only: offline backends must not make candidates disappear.
+    All img2mesh backends can supply any character, building or prop source.
+    """
     from app.core import config
     from app.imagegen.routing import describe_config_backend
     name = str(name or "").strip()
@@ -809,23 +777,8 @@ def mesh_backend_rig(name: str) -> str:
         if not isinstance(entry, dict) or str(entry.get("name") or "").strip() != name:
             continue
         kind = describe_config_backend(entry)
-        if kind["media"] == "mesh" and kind["category"] != "mesh2mesh":
-            return kind["rig"] or "mixamo"
-    return ""
-
-
-def character_fits_backend(name: str, backend: str) -> bool:
-    """Whether ``backend`` can mesh character ``name`` at all: its configured
-    rig (``mesh_backend_rig``) is the one the character needs
-    (``model3d.required_rig``). An explicit wrong-rig pick is an error in
-    ``generate_mesh``, so such a character is no candidate for that backend —
-    a candidate that can only fail would burn its attempts and be skipped.
-    A backend that is not configured (renamed, removed) cannot be judged: it
-    keeps every character (its runs fail loudly as an unavailable pick,
-    instead of silently closing every candidate as done)."""
-    from app.core import model3d
-    rig = mesh_backend_rig(backend)
-    return not rig or model3d.required_rig(name) == rig
+        return kind["media"] == "mesh" and kind["category"] == "img2mesh"
+    return False
 
 
 def default_mesh_backend(occasion: str, character: str = "") -> str:

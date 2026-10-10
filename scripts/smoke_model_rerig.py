@@ -75,7 +75,7 @@ class Fake(ImageBackend):
     def __init__(self, name, category, rig, cost=0, failure=None):
         super().__init__(name, 'http://fake', cost, 'fake', 'RIG_SPLIT_FAKE_')
         self.MEDIA_TYPE = 'mesh'
-        self.category, self.mesh_rig = category, rig
+        self.category, self.delivered_rig = category, rig
         self.instance_enabled = True
         self._available = True
         self.calls = []
@@ -101,7 +101,7 @@ class Fake(ImageBackend):
             assert base64.b64decode(payload['input_mesh_path'].split(',', 1)[1]) == fixture_glb()
             assert OpenAIMeshBackend.build_alias_params(self, params) == {'input_no_fingers': self.no_fingers}
             assert 'no_fingers' not in params
-            if self.mesh_rig == 'generic':
+            if self.delivered_rig == 'generic':
                 self._meta.files = [{'name': 'test_articulationxl.fbx', 'kind': 'file', 'mime': 'application/octet-stream'}]
                 return [b'Kaydara FBX Binary\x00' + b'fixture']
             self._meta.files = [{'name': 'test_rigged.glb', 'kind': 'file', 'mime': 'application/octet-stream'}]
@@ -241,7 +241,7 @@ with ExitStack() as stack:
         assert info['model']['has_unrigged_source'] is True
         assert info['model']['mesh_backend'] == 'mesh-original'
         assert info['model']['rig_backend'] == 'rigger'
-        assert {b['name'] for b in info['rig_backends']} == {'rigger', 'backup'}
+        assert {b['name'] for b in info['rig_backends']} == {'rigger', 'backup', 'creature'}
         (root/'unrigged/mixamo.glb').unlink()
         info=model3d.get_model3d_info('demo')
         assert info['model']['has_unrigged_source'] is False
@@ -338,7 +338,10 @@ async def route_checks():
                 assert model3d._rerig_results['demo']['error'] == 'rig failed'
             with patch('app.imagegen.service.get_image_service', return_value=svc):
                 creature._available=True
-                assert (await client.post(url+'?backend=creature', headers={'x-role':'admin'})).status_code == 400
+                assert (await client.post(url+'?backend=mesh', headers={'x-role':'admin'})).status_code == 400
+                assert (await client.post(url+'?backend=creature', headers={'x-role':'admin'})).status_code == 200
+                while 'demo' in model3d._generating:
+                    await asyncio.sleep(0.01)
                 creature._available=False
                 assert (await client.post(url+'?backend=creature', headers={'x-role':'admin'})).status_code == 503
     print('PASS real admin-only route, tracked nonblocking task, source and explicit backend preflight')

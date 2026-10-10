@@ -42,18 +42,9 @@ class ModelReplace(ImprovementType):
         out = super().validate(params)
         if out["source_backend"] == out["target_backend"]:
             raise ValueError("source and target backend must differ")
-        # The target is an EXPLICIT pick, and a wrong-rig pick is an error in
-        # generate_mesh: a target that can never mesh this subject kind would
-        # only produce failed steps. Judged from the configuration.
-        rig = subjects.mesh_backend_rig(out["target_backend"])
-        allowed = subjects.SUBJECT_MESH_RIGS.get(out["subject"], ())
-        if not rig:
+        if not subjects.is_img2mesh_backend(out["target_backend"]):
             raise ValueError(f"target backend '{out['target_backend']}' is not a "
-                             f"configured mesh backend")
-        if rig not in allowed:
-            raise ValueError(f"target backend '{out['target_backend']}' delivers rig "
-                             f"'{rig}', {out['subject']} models need "
-                             f"{' or '.join(repr(r) for r in allowed)}")
+                             "configured mesh backend")
         return out
 
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
@@ -61,12 +52,7 @@ class ModelReplace(ImprovementType):
         source = params["source_backend"]
         out: List[Candidate] = []
         if subject == "character":
-            target = params["target_backend"]
             for name in subjects.characters():
-                # Only the characters whose rig the target delivers: the
-                # others would fail on every attempt (explicit wrong rig).
-                if not subjects.character_fits_backend(name, target):
-                    continue
                 model = subjects.character_model(name)
                 if model and model.get("backend") == source:
                     out.append(Candidate(f"character:{name}", name))

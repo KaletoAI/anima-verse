@@ -107,6 +107,38 @@ _MESH_MIME_SUFFIX = {
 }
 
 
+def _delivered_mesh_rig(files: List[Dict[str, Any]], declared: Optional[str] = None) -> str:
+    """Read the hub job rig, otherwise detect from the delivered artifacts.
+
+    Mixamo requires one skin carrying the entire base joint set. Names in
+    other skins or unattached nodes cannot declare a Mixamo delivery.
+    """
+    if declared is not None:
+        return str(declared).strip().lower()
+    from app.core.model_validate import parse_glb
+    from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
+    unrigged = False
+    for artifact in files:
+        suffix = _mesh_file_suffix(artifact)
+        if suffix == ".fbx" and _MESH_TOKEN_RIGGED_FBX in _mesh_file_stem(artifact):
+            return "generic"
+        if suffix != ".glb":
+            continue
+        try:
+            doc = parse_glb(artifact["blob"])["gltf"]
+            skins = doc.get("skins") or []
+            nodes = doc.get("nodes") or []
+            for skin in skins:
+                joints = {norm_bone_name(nodes[i].get("name") or "") for i in skin.get("joints", [])}
+                if BASE_JOINT_KEYS <= joints:
+                    return "mixamo"
+            if not skins:
+                unrigged = True
+        except (ValueError, KeyError, IndexError, TypeError):
+            continue
+    return "none" if unrigged else ""
+
+
 def _mesh_file_kind(f: Dict[str, str]) -> str:
     """"model" / "image" / "" for one delivered file — ``kind`` from the job
     view, the mime as the second opinion."""
@@ -665,18 +697,10 @@ class ImageService:
             logger.error("generate_video: write failed: %s", e)
             return False
 
-    def list_mesh_backends(self, rig: str = "") -> List[ImageBackend]:
-        """Available unrigged img2mesh backends, optionally narrowed to rig none.
-
-        mesh→mesh backends are NOT in here: they consume a mesh, not an image,
-        so a normal generation must never land on one."""
-        out = [b for b in self.list_available_backends(media="mesh")
-               if getattr(b, "category", "") == "img2mesh"
-               and getattr(b, "mesh_rig", "mixamo") == "none"]
-        if rig:
-            out = [b for b in out
-                   if (getattr(b, "mesh_rig", "mixamo") or "mixamo") == rig]
-        return out
+    def list_mesh_backends(self) -> List[ImageBackend]:
+        """Available img2mesh backends; all produce unrigged source meshes."""
+        return [b for b in self.list_available_backends(media="mesh")
+                if getattr(b, "category", "") == "img2mesh"]
 
     def list_shrink_backends(self) -> List[ImageBackend]:
         """Available mesh→mesh backends (``category == "mesh2mesh"``) — the
@@ -688,7 +712,6 @@ class ImageService:
     def generate_mesh(self, source_image_path: str, output_path: str,
                       backend_glob: str = "", character_name: str = "",
                       mesh_name: str = "", face_num=None, texture_size=None,
-                      rig: str = "",
                       view_images: Optional[Dict[str, str]] = None,
                       lod_faces=None, occasion: str = "") -> Dict[str, Any]:
         """Generates a 3D model from one or more views via a MEDIA_TYPE=="mesh"
@@ -701,8 +724,8 @@ class ImageService:
         schema declares, so an alias with a single ``input_image`` slot gets
         the front view only, a multi-view alias every view we hold.
 
-        ``rig`` must be "none" (or blank). Characters select mesh_humanoid
-        or mesh_creature explicitly and submit their rig in a second job.
+        Characters select mesh_humanoid or mesh_creature explicitly and
+        submit their required rig in a second job.
         Combined image-to-rig aliases are rejected.
 
         An explicit ``backend_glob`` never falls back and must fit the
@@ -727,8 +750,6 @@ class ImageService:
         it ran behind the intended chain entry) ``fallback_from``
         (``routing.route_meta``); ``{"ok": False, "error"}`` on a failure.
         """
-        if rig and rig != "none":
-            return {"ok": False, "error": "img2mesh produces only an unrigged source (rig none); use generate_rig for the rig stage"}
         # Keyed by VIEW, not by slot name: the backend does the slot mapping
         # from the alias schema.
         refs: Dict[str, str] = {"front": source_image_path}
@@ -759,7 +780,6 @@ class ImageService:
         if texture_size:
             params["texture_size"] = int(texture_size)
 
-        from app.imagegen.occasions import mesh_occasion_for_rig
         from app.imagegen.routing import NoRouteError, route_meta, run_routed
         primary = None
         if backend_glob.strip():
@@ -774,16 +794,9 @@ class ImageService:
                 return {"ok": False, "error": f"mesh backend '{backend_glob}' unavailable"}
             from app.imagegen.occasions import backend_fits
             from app.imagegen.routing import describe_backend
-            occ = occasion or mesh_occasion_for_rig(rig or "none")
+            occ = occasion or "mesh_object"
             if not backend_fits(occ, describe_backend(primary)):
-                return {"ok": False, "error": f"mesh backend '{primary.name}' has the wrong category or rig"}
-            _prig = (getattr(primary, "mesh_rig", "mixamo") or "mixamo")
-            if rig and _prig != rig:
-                # An explicit pick is never re-picked — a wrong-rig mesh binds
-                # unusably, and a silent swap hides the wrong choice.
-                return {"ok": False,
-                        "error": f"mesh backend '{primary.name}' delivers rig "
-                                 f"'{_prig}', '{rig}' is needed"}
+                return {"ok": False, "error": f"mesh backend '{primary.name}' has the wrong category"}
 
         def _render(b):
             def _op(bb):
@@ -811,7 +824,7 @@ class ImageService:
             if primary is not None:
                 (result, used), route = _render(primary), None
             else:
-                occ = occasion or mesh_occasion_for_rig(rig or "mixamo")
+                occ = occasion or "mesh_object"
                 (result, used), route = run_routed(occ, _render, character=character_name,
                                                    pool=self.pool)
         except (MediaGenerationDisabled, BackendBusyError, NoRouteError):
@@ -822,8 +835,7 @@ class ImageService:
             return {"ok": False, "error": str(e)}
         files: List[Dict[str, Any]] = [dict(f, blob=b) for f, b
                                        in zip(result["files"], result["blobs"])]
-        used_rig = (getattr(used, "mesh_rig", "mixamo") or "mixamo")
-        out = self._store_mesh_files(files, used_rig, output_path, getattr(used, "name", ""))
+        out = self._store_mesh_files(files, "none", output_path, getattr(used, "name", ""))
         # Retain the mesh-stage basecolor when provided: a standalone generic
         # rigger returns only FBX, so its texture must come from this stage.
         if out.get("ok") and occasion in ("mesh_humanoid", "mesh_creature"):
@@ -867,20 +879,35 @@ class ImageService:
             if not primary:
                 return {"ok": False, "error": f"rig backend '{backend_glob}' unavailable"}
             if not backend_fits(occasion, describe_backend(primary)):
-                return {"ok": False, "error": f"rig backend '{primary.name}' has the wrong category or rig"}
+                return {"ok": False, "error": f"rig backend '{primary.name}' has the wrong category"}
 
         def render(b):
             def op(bb):
                 def generate():
                     blobs = bb.generate("", "", params, log_meta={"agent_name": character_name, "media": "mesh"})
-                    return {"blobs": blobs, "files": list(getattr(bb, "last_result_files", []) or [])} if blobs else []
+                    return {"blobs": blobs, "files": list(getattr(bb, "last_result_files", []) or []),
+                            "rig": getattr(bb, "last_result_rig", None)} if blobs else []
                 return self.run_on_backend_channel(bb, generate, task_type="mesh_generation", agent_name=character_name)
-            return self.run_on_backend(b, op, character_name=character_name)
+            result, used = self.run_on_backend(b, op, character_name=character_name)
+            files = [dict(f, blob=blob) for f, blob in zip(result["files"], result["blobs"])]
+            delivered = _delivered_mesh_rig(files, result.get("rig"))
+            if delivered != rig:
+                error = ValueError(f"delivered rig '{delivered or 'unknown'}', '{rig}' required for {occasion}; check the rig chain in /admin/settings → Media Generation → Routing")
+                # Validate AFTER the runner: a configuration mismatch must never
+                # put a healthy rigger on cooldown. run_routed logs one line.
+                if primary is not None:
+                    logger.warning("Rig backend %s: %s", used.name, error)
+                    return {"error": str(error)}, used
+                from app.imagegen.base import BackendFailedError
+                raise BackendFailedError(used, error)
+            return result, used
 
         if primary is not None:
             (result, used), route = render(primary), None
         else:
             (result, used), route = run_routed(occasion, render, character=character_name, pool=self.pool)
+        if result.get("error"):
+            return {"ok": False, "error": result["error"]}
         files = [dict(f, blob=b) for f, b in zip(result["files"], result["blobs"])]
         if texture is not None:
             files.append({"name": "source_basecolor.png", "mime": "image/png", "kind": "image", "blob": texture})
@@ -927,6 +954,24 @@ class ImageService:
             logger.warning("generate_mesh: %s is gone, result discarded",
                            out.parent)
             return {"ok": False, "error": _TARGET_GONE}
+        if used_rig == "none":
+            from app.core.mesh_source import validate_source
+            from app.core.model_validate import parse_glb
+            # A combined alias can deliver its source before its rig or LODs.
+            # Refuse skins anywhere in the delivery, never silently discard
+            # the skinned file and publish only its unrigged sibling.
+            for artifact in files:
+                if _mesh_file_suffix(artifact) != ".glb":
+                    continue
+                try:
+                    skinned = bool(parse_glb(artifact["blob"])["gltf"].get("skins"))
+                except (ValueError, KeyError, IndexError, TypeError):
+                    continue
+                if skinned:
+                    return {"ok": False, "error": "source mesh must be unrigged (no skins); combined mesh+rig aliases are not supported"}
+            verdict = validate_source(model["blob"])
+            if not verdict.get("ok"):
+                return {"ok": False, "error": "; ".join(verdict.get("errors") or ["invalid unrigged source"])}
         try:
             out.write_bytes(model["blob"])
             if texture is not None:
@@ -964,8 +1009,8 @@ class ImageService:
         finished on the gateway.
 
         ``backend_glob`` names the mesh backend whose gateway knows the job;
-        empty = every available img2mesh backend is asked in turn (the
-        rig-matching ones first, each gateway once). ``rig`` is what the caller
+        empty = every available mesh backend is asked in cost order, each
+        gateway once. ``rig`` is what the caller
         needs: a job that reports another skeleton is refused, because a
         wrong-rig mesh binds unusably.
 
@@ -988,10 +1033,7 @@ class ImageService:
                         "error": f"mesh backend '{backend_glob}' unavailable"}
             candidates = [b]
         else:
-            meshes = self.list_mesh_backends()
-            candidates = sorted(
-                meshes, key=lambda b: 0 if (getattr(b, "mesh_rig", "mixamo")
-                                            or "mixamo") == rig else 1)
+            candidates = self.list_available_backends(media="mesh")
         # Each gateway is asked once — several aliases usually share one.
         seen = set()
         tried: List[ImageBackend] = []
@@ -1016,7 +1058,7 @@ class ImageService:
             res.pop("files", None)
             return res
 
-        # The job view names the alias it ran on — label and rig come from
+        # The job view names the alias it ran on — label comes from
         # THAT backend when we have it configured, not from whichever
         # sibling alias on the same gateway happened to answer.
         alias = str(res.get("model") or "")
@@ -1024,16 +1066,13 @@ class ImageService:
             if alias and getattr(b, "model", "") == alias:
                 used = b
                 break
-        used_rig = res.get("rig") or ""
-        if used_rig not in ("mixamo", "generic", "none"):
-            used_rig = (getattr(used, "mesh_rig", "mixamo") or "mixamo")
-        if rig and used_rig != rig:
-            return {"status": "rig_mismatch",
-                    "error": (f"job {job_id} delivered a '{used_rig}' mesh, "
-                              f"'{rig}' is needed here")}
         files: List[Dict[str, Any]] = [dict(f, blob=b) for f, b
-                                       in zip(res.get("files") or [],
-                                              res.get("blobs") or [])]
+                                       in zip(res.get("files") or [], res.get("blobs") or [])]
+        used_rig = _delivered_mesh_rig(files, res.get("rig"))
+        if used_rig not in ("mixamo", "generic", "none") or (rig and used_rig != rig):
+            return {"status": "rig_mismatch",
+                    "error": (f"job {job_id} delivered a '{used_rig or 'unknown'}' mesh, "
+                              f"'{rig}' is needed here")}
         stored = self._store_mesh_files(files, used_rig, output_path,
                                         getattr(used, "name", ""))
         if not stored.get("ok"):

@@ -192,8 +192,8 @@ def part_a():
           [i for i in expected_ids if occ.get_occasion(i).get("needs_ref_slot")],
           ["timevariant"])
 
-    def k(media_, cat, rig="", ref=1):
-        return {"media": media_, "category": cat, "rig": rig, "ref_slot_count": ref}
+    def k(media_, cat, ref=1):
+        return {"media": media_, "category": cat, "ref_slot_count": ref}
 
     fits = occ.backend_fits
     check("A8 photo img2img", fits("photo", k("image", "img2img")), True)
@@ -202,11 +202,11 @@ def part_a():
     check("A8 video video", fits("video", k("video", "txt2img")), True)
     check("A8 timevariant ref 0", fits("timevariant", k("image", "img2img", ref=0)), False)
     check("A8 timevariant ref 1", fits("timevariant", k("image", "img2img", ref=1)), True)
-    check("A8 mesh_object none", fits("mesh_object", k("mesh", "img2mesh", "none")), True)
-    check("A8 mesh_object mesh2mesh", fits("mesh_object", k("mesh", "mesh2mesh", "none")), False)
-    check("A8 mesh_object mixamo", fits("mesh_object", k("mesh", "img2mesh", "mixamo")), False)
-    check("A8 mesh_humanoid empty rig", fits("mesh_humanoid", k("mesh", "img2mesh", "")), False)
-    check("A8 mesh_creature generic", fits("mesh_creature", k("mesh", "img2mesh", "generic")), False)
+    check("A8 mesh_object none", fits("mesh_object", k("mesh", "img2mesh")), True)
+    check("A8 mesh_object mesh2mesh", fits("mesh_object", k("mesh", "mesh2mesh")), False)
+    check("A8 mesh_object img2mesh", fits("mesh_object", k("mesh", "img2mesh")), True)
+    check("A8 mesh_humanoid img2mesh", fits("mesh_humanoid", k("mesh", "img2mesh")), True)
+    check("A8 mesh_creature img2mesh", fits("mesh_creature", k("mesh", "img2mesh")), True)
 
     check("A9 mixamo", occ.mesh_occasion_for_rig("mixamo"), "mesh_humanoid")
     check("A9 generic", occ.mesh_occasion_for_rig("generic"), "mesh_creature")

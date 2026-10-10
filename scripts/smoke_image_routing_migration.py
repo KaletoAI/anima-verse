@@ -6,8 +6,8 @@ Usage:  ./.venv/bin/python scripts/smoke_image_routing_migration.py
 Spec: development_instructions/plan-image-routing.md § 2 + review notes
 ("Konfiguration + Migration"): the chains come from the old per-occasion
 default fields, empty/duplicate entries dropped, a pattern that matches no
-backend is kept (the overview marks it), the mesh default goes to the mesh
-occasion(s) of the rig its backend has. Pure dict work — no server, no world.
+backend is kept (the overview marks it), the mesh default goes to
+all four mesh occasions of any matching img2mesh backend. Pure dict work — no server, no world.
 
 PART A — SEED
 Mapping (§ 2, with the review's frame/photo correction):
@@ -20,9 +20,8 @@ Mapping (§ 2, with the review's frame/photo correction):
   photo       <- [story_engine.imagegen_default]
   frame       <- [messaging_frame.target]
   instagram   <- [skills.instagram.imagegen_default]
-  mesh        -> rig of the matched img2mesh backend: mixamo -> mesh_humanoid,
-                 generic -> mesh_creature, none -> mesh_object AND mesh_building;
-                 matches no img2mesh backend -> dropped (warning)
+  mesh        -> all four mesh occasions if any img2mesh matches;
+                 mesh2mesh/mesh2rig never count, no match -> dropped
   empty chains are not written; `routing` itself is always written (marker).
 
 A1 fixture A = the demo world's values (worlds/demo/config.json, 2026-09-29):
@@ -39,8 +38,7 @@ A2 fixture B = a real world's values (2026-09-29, world name withheld):
     "tpose": ["Qwen2.1*T*"], "location": ["Flux2*"],
     "timevariant": ["Qwen 2511"], "prop": ["Flux2*Normal"],
     "scene_view": ["Qwen BL", "Flux2*"], "event": ["Flux*", "Qwen BL", "Flux2*"],
-    "frame": ["Flux2*"], "mesh_object": ["Trellis2-Object-Low"],
-    "mesh_building": ["Trellis2-Object-Low"]}
+    "frame": ["Flux2*"], plus all four mesh occasions ["Trellis2-Object-Low"]}
 A3 fixture C = legacy prefixes (the migration normalises them itself):
    outfit/expression/location "workflow:Z-Image*", event "workflow:",
    story "backend:CivitAI-General", instagram "workflow:Qwen*",
@@ -49,9 +47,8 @@ A3 fixture C = legacy prefixes (the migration normalises them itself):
     "scene_view": ["Z-Image*"], "event": ["Z-Image*"],
     "photo": ["CivitAI-General"], "instagram": ["Qwen*"], "frame": ["Z-Image"]}
 A4 mesh "Nope*" matches no img2mesh backend -> no mesh key at all.
-A5 mesh "Mesh*" over {Mesh-Humanoid mixamo, Mesh-Creature generic,
-   Mesh-Shrink mesh2mesh none} -> mesh_humanoid AND mesh_creature
-   ["Mesh*"]; the mesh2mesh alias does not make it an object chain.
+A5 mesh "Mesh*" over two img2mesh entries and one mesh2mesh entry seeds
+   all four mesh occasions with ["Mesh*"]. The mesh2mesh alias does not count.
 A6 returns True on the first run, False on the second, dict unchanged.
 A7 an existing routing (even {}) is never touched (still {}); it returns
    True only because the old field next to it is removed (Part B).
@@ -86,34 +83,11 @@ B5 the shipped demo config at commit 1a393855 (read from git, never worlds/) hol
 B6 the admin schema declares none of the removed fields, and the
    instagram plugin.yaml has no imagegen_default.
 
-PART C — one kind source for config entries (Task 18a, from the Task 17
-review): `routing.describe_config_backend` trims + lower-cases `category`
-and `mesh_rig` like the live backend does (`ImageBackend.category`,
-`OpenAIMeshBackend.mesh_rig` = strip().lower(), blank = "mixamo").
-C1 {"api_type": "openai_mesh", "mesh_rig": "None ", "category": " IMG2MESH "}
-   -> rig "none", category "img2mesh"; mesh_rig "  " -> rig "mixamo".
-C2 mesh default "Obj*" over {Obj-A: rig "none ", img2mesh} -> routing
-   {"mesh_object": ["Obj*"], "mesh_building": ["Obj*"]} (before: rig
-   "none " is no rig the catalog knows -> the default was dropped).
-   Mesh default "Obj*" over {Obj-H: rig "mixamo", Obj-Shrink: rig "none",
-   category "mesh2mesh "} -> {"mesh_humanoid": ["Obj*"]} only (before: the
-   shrink alias with a trailing space counted as img2mesh and added the
-   object + building chains).
-C3 `_seed_default_mesh_backends` never appends to an existing list: a
-   config whose only backend has api_type " OpenAI_Mesh " -> False, nothing
-   appended. Since the instance-config layers (2026-10-03) the seed hangs on
-   a MISSING ``image_generation.backends`` key only — a pruned instance file
-   stores the shipped list as "absent", and any list in the file is the
-   admin's — so a config with only an IMAGE backend is now left alone too
-   (False, 1 entry; it used to get the catalog appended), a config without
-   the key gets the 12 + 1 catalog entries (True, 13), and an emptied list
-   stays empty (False, 0).
-C4 (fix round 1) the live mesh backend reads its rig like C1: an
-   OpenAIMeshBackend with MESH_RIG "  " has mesh_rig "mixamo" (was "" —
-   blank after the strip), MESH_RIG " None " -> "none".
-Fails on commit 4eb1856e (before Task 18a): C1 (untrimmed), both C2 cases
-and the first C3 case (the api_type comparison seeds a second catalog).
-Fails on commit d0452bc6 (before fix round 1): C4 (mesh_rig "" for "  ").
+C) Configuration kinds: categories are trimmed and lowercased, and neither
+config descriptors nor live mesh backends expose a rig property. A matching
+img2mesh default seeds all four mesh occasions; mesh2mesh never counts.
+Missing backend lists seed eight current aliases without rig declarations;
+explicit lists (including empty lists) are retained.
 """
 import ast
 import copy
@@ -141,9 +115,9 @@ def check(label, got, expected):
         FAILS.append(label)
 
 
-def mesh(name, rig, category="img2mesh"):
+def mesh(name, category="img2mesh"):
     return {"name": name, "api_type": "openai_mesh", "category": category,
-            "mesh_rig": rig, "enabled": True}
+            "enabled": True}
 
 
 def img(name, category="img2img"):
@@ -170,9 +144,9 @@ FIXTURE_B = {"image_generation": {
     "scene_imagegen_default": "Qwen BL",
     "mesh_imagegen_default": "Trellis2-Object-Low",
     "timevariant_imagegen_default": "Qwen 2511",
-    "backends": [mesh("Trellis2-Humanoid-Low", "mixamo"),
-                 mesh("Trellis2-Object-Low", "none"),
-                 mesh("mesh-shrink", "none", "mesh2mesh"),
+    "backends": [mesh("Trellis2-Humanoid-Low"),
+                 mesh("Trellis2-Object-Low"),
+                 mesh("mesh-shrink", "mesh2mesh"),
                  img("Qwen2.1 Turbo"), img("Qwen BL"), img("Flux2-9B Normal"),
                  img("Flux1-Dev Inpaint", "inpaint")]},
     "random_events": {"event_imagegen_default": "Flux*"},
@@ -214,8 +188,7 @@ def part_a():
            "timevariant": ["Qwen 2511"], "prop": ["Flux2*Normal"],
            "scene_view": ["Qwen BL", "Flux2*"],
            "event": ["Flux*", "Qwen BL", "Flux2*"], "frame": ["Flux2*"],
-           "mesh_object": ["Trellis2-Object-Low"],
-           "mesh_building": ["Trellis2-Object-Low"]})
+           **{o: ["Trellis2-Object-Low"] for o in ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building")}})
 
     _ch, cfg = seeded(FIXTURE_C)
     check("A3 legacy prefixes", cfg["image_generation"]["routing"],
@@ -230,11 +203,11 @@ def part_a():
           sorted(k for k in d["image_generation"]["routing"] if k.startswith("mesh_")), [])
 
     e = {"image_generation": {"mesh_imagegen_default": "Mesh*", "backends": [
-        mesh("Mesh-Humanoid", "mixamo"), mesh("Mesh-Creature", "generic"),
-        mesh("Mesh-Shrink", "none", "mesh2mesh")]}}
+        mesh("Mesh-Humanoid"), mesh("Mesh-Creature"),
+        mesh("Mesh-Shrink", "mesh2mesh")]}}
     cfgmod._migrate_image_routing(e)
     check("A5 mesh rigs", e["image_generation"]["routing"],
-          {"mesh_humanoid": ["Mesh*"], "mesh_creature": ["Mesh*"]})
+          {o: ["Mesh*"] for o in ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building")})
 
     f = {"image_generation": {"routing": {}, "outfit_imagegen_default": "X"}}
     check("A7 existing routing: only the old field removed", cfgmod._migrate_image_routing(f), True)
@@ -323,19 +296,19 @@ def part_c():
     from app.imagegen.routing import describe_config_backend
     k = describe_config_backend({"name": "M", "api_type": "openai_mesh",
                                  "mesh_rig": "None ", "category": " IMG2MESH "})
-    check("C1 trimmed", (k["media"], k["rig"], k["category"]), ("mesh", "none", "img2mesh"))
+    check("C1 trimmed", (k["media"], "rig" in k, k["category"]), ("mesh", False, "img2mesh"))
     k = describe_config_backend({"name": "M", "api_type": "openai_mesh", "mesh_rig": "  "})
-    check("C1 blank rig", k["rig"], "mixamo")
+    check("C1 no rig property", "rig" in k, False)
     c = {"image_generation": {"mesh_imagegen_default": "Obj*", "backends": [
-        mesh("Obj-A", "none ")]}}
+        mesh("Obj-A")]}}
     cfgmod._migrate_image_routing(c)
     check("C2 rig with a trailing space migrates", c["image_generation"]["routing"],
-          {"mesh_object": ["Obj*"], "mesh_building": ["Obj*"]})
+          {o: ["Obj*"] for o in ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building")})
     c = {"image_generation": {"mesh_imagegen_default": "Obj*", "backends": [
-        mesh("Obj-H", "mixamo"), mesh("Obj-Shrink", "none", "mesh2mesh ")]}}
+        mesh("Obj-H"), mesh("Obj-Shrink", "mesh2mesh ")]}}
     cfgmod._migrate_image_routing(c)
     check("C2 mesh2mesh with a trailing space never counts", c["image_generation"]["routing"],
-          {"mesh_humanoid": ["Obj*"]})
+          {o: ["Obj*"] for o in ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building")})
     c = {"image_generation": {"backends": [
         {"name": "Mx", "api_type": " OpenAI_Mesh ", "enabled": True}]}}
     check("C3 mesh recognised by kind", (cfgmod._seed_default_mesh_backends(c),
@@ -346,19 +319,15 @@ def part_c():
           (False, 1))
     c = {"image_generation": {}}
     check("C3 missing list seeded", (cfgmod._seed_default_mesh_backends(c),
-                                     len(c["image_generation"]["backends"])), (True, 13))
+                                     len(c["image_generation"]["backends"])), (True, 8))
     c = {"image_generation": {"backends": []}}
     check("C3 emptied list stays empty", (cfgmod._seed_default_mesh_backends(c),
                                           c["image_generation"]["backends"]), (False, []))
 
     from app.imagegen.backends.openai_mesh import OpenAIMeshBackend
-    rigs = []
-    for raw in ("  ", " None "):
-        os.environ["SMOKE_RIG_MESH_RIG"] = raw
-        rigs.append(OpenAIMeshBackend(name="R", api_url="http://mesh.invalid", cost=1,
-                                      env_prefix="SMOKE_RIG_", model="R").mesh_rig)
-    del os.environ["SMOKE_RIG_MESH_RIG"]
-    check("C4 live rig reading", rigs, ["mixamo", "none"])
+    backend = OpenAIMeshBackend(name="R", api_url="http://mesh.invalid", cost=1,
+                                env_prefix="SMOKE_RIG_", model="R")
+    check("C4 no backend rig property", hasattr(backend, "mesh_rig"), False)
 
 
 if __name__ == "__main__":

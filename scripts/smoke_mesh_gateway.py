@@ -24,7 +24,7 @@ currently prints:
   § 2 rule 1 — artifacts are matched by TOKEN substring in the delivered name
          (_basecolor / _metallic / _articulationxl) plus kind/mime, never by
          position or extension.
-  § 3.2 LOD — Hunyuan3D-Object bakes extra stages in the SAME job:
+  § 3.2 LOD — Hunyuan3D bakes extra stages in the SAME job:
          ``input_lod_faces`` is a comma-separated list of target triangle
          counts sent as a STRING, each stage comes back self-contained. The
          MAIN result ends on ``_00001_.glb``, a stage on ``_<digits>.glb``
@@ -104,7 +104,7 @@ def check(label: str, ok: bool, detail: str = "") -> None:
         FAILURES.append(label)
 
 
-def backend(alias: str, *, rig: str = "mixamo", face_num: str = "",
+def backend(alias: str, *, face_num: str = "",
             face_num_max: str = "", mesh_steps: str = "",
             declared=None) -> OpenAIMeshBackend:
     """A backend as the config bridge would build it, with a hand-written
@@ -113,7 +113,6 @@ def backend(alias: str, *, rig: str = "mixamo", face_num: str = "",
     for k in list(os.environ):
         if k.startswith(prefix):
             del os.environ[k]
-    os.environ[f"{prefix}MESH_RIG"] = rig
     os.environ[f"{prefix}FACE_NUM"] = face_num
     os.environ[f"{prefix}FACE_NUM_MAX"] = face_num_max
     os.environ[f"{prefix}MESH_STEPS"] = mesh_steps
@@ -129,7 +128,7 @@ print("\n(a) alias declaring input_face_num / input_texture_resolution / "
       "input_no_fingers")
 FULL = ["input_name", "input_remove_background", "input_face_num",
         "input_texture_resolution", "input_no_fingers"]
-b = backend("Trellis2-Humanoid-Low", face_num="20000", declared=FULL)
+b = backend("Trellis2-Low", face_num="20000", declared=FULL)
 p = b.build_alias_params({"mesh_name": "Held", "texture_size": 1024})
 check("input_name = the mesh name", p.get("input_name") == "Held", str(p))
 check("input_remove_background sent", p.get("input_remove_background") is True)
@@ -143,10 +142,10 @@ check("no input_num_gaussians on a face alias", "input_num_gaussians" not in p)
 # input_name must never go out empty (§ 3.2: empty inherits workflow leftovers)
 p2 = b.build_alias_params({})
 check("empty mesh_name falls back to the alias",
-      p2.get("input_name") == "Trellis2-Humanoid-Low", str(p2.get("input_name")))
+      p2.get("input_name") == "Trellis2-Low", str(p2.get("input_name")))
 
 # § 3.1: no_fingers is NOT humanoid-only any more
-b_gen = backend("Trellis2-Generic-Low", rig="generic", face_num="20000",
+b_gen = backend("Trellis2-Low", face_num="20000",
                 declared=FULL)
 p3 = b_gen.build_alias_params({"mesh_name": "Wolf"})
 check("input_no_fingers also on a generic alias (§ 3.1)",
@@ -162,7 +161,7 @@ check("input_no_fingers also on a generic alias (§ 3.1)",
 print("\n(a2) input_steps (multi-view alias)")
 MV = ["input_name", "input_remove_background", "input_face_num",
       "input_steps", "input_no_fingers"]
-b = backend("Trellis2-Humanoid-Multiview", face_num="100000", mesh_steps="50",
+b = backend("Trellis2-Multiview", face_num="100000", mesh_steps="50",
             declared=MV)
 p = b.build_alias_params({"mesh_name": "Held"})
 check("input_steps = 50 when configured and declared",
@@ -170,14 +169,14 @@ check("input_steps = 50 when configured and declared",
 check("no input_texture_resolution where undeclared (multi-view bakes 4096)",
       "input_texture_resolution" not in
       b.build_alias_params({"mesh_name": "Held", "texture_size": 2048}))
-b = backend("Trellis2-Humanoid-Multiview", face_num="100000", declared=MV)
+b = backend("Trellis2-Multiview", face_num="100000", declared=MV)
 check("nothing configured -> no input_steps (alias default 35 stands)",
       "input_steps" not in b.build_alias_params({"mesh_name": "Held"}))
-b = backend("Trellis2-Humanoid-Low", face_num="20000", mesh_steps="50",
+b = backend("Trellis2-Low", face_num="20000", mesh_steps="50",
             declared=FULL)
 check("single-view alias declares no input_steps -> dropped",
       "input_steps" not in b.build_alias_params({"mesh_name": "Held"}))
-b = backend("Trellis2-Humanoid-Multiview", face_num="100000", mesh_steps="50",
+b = backend("Trellis2-Multiview", face_num="100000", mesh_steps="50",
             declared=None)
 check("unreadable schema -> sent blind (§ 1: unknown names are ignored)",
       b.build_alias_params({"mesh_name": "Held"}).get("input_steps") == 50)
@@ -186,7 +185,7 @@ check("unreadable schema -> sent blind (§ 1: unknown names are ignored)",
 print("\n(b) Triposplat-style schema (input_num_gaussians, no face param)")
 SPLAT = ["input_name", "input_remove_background", "input_num_gaussians",
          "input_texture_resolution"]
-b = backend("Triposplat-Object", rig="none", face_num="", declared=SPLAT)
+b = backend("Triposplat", face_num="", declared=SPLAT)
 p = b.build_alias_params({"mesh_name": "Vase", "texture_size": 512})
 check("nothing configured -> NO detail param (alias default 10000 stands)",
       "input_num_gaussians" not in p and "input_face_num" not in p, str(p))
@@ -198,7 +197,7 @@ check("per-run face value goes out as input_num_gaussians",
 
 # --- (c) unreadable schema ------------------------------------------------
 print("\n(c) no schema (GET /schema unreachable)")
-b = backend("Hunyuan3D-Object", rig="none", face_num="40000", declared=None)
+b = backend("Hunyuan3D", face_num="40000", declared=None)
 p = b.build_alias_params({"mesh_name": "Fass", "texture_size": 1024})
 check("input_face_num sent blind", p.get("input_face_num") == 40000, str(p))
 check("input_no_fingers sent blind", p.get("input_no_fingers") is True)
@@ -217,7 +216,7 @@ check("per-run 100000 is clamped to 40000",
       b.build_alias_params({"face_num": 100000}).get("input_face_num") == 40000)
 check("per-run 12000 stays 12000",
       b.build_alias_params({"face_num": 12000}).get("input_face_num") == 12000)
-b_free = backend("Trellis2-Object-Low", rig="none", face_num="20000",
+b_free = backend("Trellis2-Low", face_num="20000",
                  declared=FULL)
 check("no cap configured -> no clamp",
       b_free.build_alias_params({"face_num": 100000}).get("input_face_num")
@@ -284,7 +283,7 @@ check("no model file at all -> (None, None, [])",
 print("\n(f) mesh-shrink (mesh->mesh): params and the files payload")
 SHRINK = ["input_mesh_path", "input_name", "input_face_num",
           "input_texture_resolution", "input_no_fingers"]
-b = backend("mesh-shrink", rig="none", face_num="5000", declared=SHRINK)
+b = backend("mesh-shrink", face_num="5000", declared=SHRINK)
 p = b.build_alias_params({"mesh_name": "prop_lo", "texture_size": 1024})
 check("input_name = the mesh name", p.get("input_name") == "prop_lo", str(p))
 check("input_face_num = the alias default 5000", p.get("input_face_num") == 5000)
@@ -505,7 +504,7 @@ check("busy stays busy (no cooldown, re-raised)",
 
 # --- (j) input-hash guard --------------------------------------------------
 print("\n(j) input sha256 guard (gateway input_images[])")
-b = backend("mesh-shrink", rig="none", face_num="5000",
+b = backend("mesh-shrink", face_num="5000",
             declared=["input_mesh_path", "input_name", "input_face_num"])
 with tempfile.TemporaryDirectory() as tmp:
     mesh = Path(tmp) / "model_1754000003.glb"
@@ -543,12 +542,12 @@ with tempfile.TemporaryDirectory() as tmp:
 # --- (k) LOD stages of ONE job (§ 3.2) ------------------------------------
 print("\n(k) LOD stages: params, name-based splitting, unique input_name")
 
-# The Hunyuan3D-Object schema — the ONLY family that declares the stage param
+# The Hunyuan3D schema — the ONLY family that declares the stage param
 # today. Which alias that is comes from the schema, never from its name.
 HUNYUAN_OBJECT = ["input_name", "input_remove_background", "input_face_num",
                   "input_texture_resolution", "input_no_fingers",
                   LOD_FACES_PARAM]
-b = backend("Hunyuan3D-Object", rig="none", face_num="40000",
+b = backend("Hunyuan3D", face_num="40000",
             face_num_max="40000", declared=HUNYUAN_OBJECT)
 p = b.build_alias_params({"mesh_name": "chair-rab12cd", "lod_faces": 5000})
 check("input_lod_faces goes out as a STRING (contract type)",
@@ -567,7 +566,7 @@ check("junk and duplicates are dropped",
 # An alias whose schema does NOT declare the param must never be asked for
 # stages — it would silently ignore them and we would wait for files that
 # never come.
-b_plain = backend("Trellis2-Object-Low", rig="none", face_num="20000",
+b_plain = backend("Trellis2-Low", face_num="20000",
                   declared=FULL)
 check("an alias without the param never receives it",
       LOD_FACES_PARAM not in b_plain.build_alias_params(
@@ -577,7 +576,7 @@ check("and it is NOT offered as LOD-capable",
 # § 1: with an UNREADABLE schema the input_* names go out blind (the gateway
 # ignores unknown ones) — but a backend whose capability is unknown is never
 # ADVERTISED as capable, or the admin gets a control that reaches nothing.
-b_blind = backend("Hunyuan3D-Object", rig="none", declared=None)
+b_blind = backend("Hunyuan3D", declared=None)
 check("unreadable schema: the param may go out blind",
       b_blind.build_alias_params({"mesh_name": "c", "lod_faces": 5000})
       .get(LOD_FACES_PARAM) == "5000")
@@ -590,7 +589,7 @@ def glb_file(name: str) -> dict:
     return f(name, "model/gltf-binary", "file")
 
 
-# A realistic Hunyuan3D-Object delivery for "8000,4000,2000": the main result
+# A realistic Hunyuan3D delivery for "8000,4000,2000": the main result
 # plus one self-contained GLB per stage, plus the two maps. § 3.2: the response
 # is sorted ALPHABETICALLY by file name, never by the requested order.
 NAME = "chair_9f21-rab12cd"
@@ -764,6 +763,29 @@ try:
               got is True, str(got))
 finally:
     openai_mesh.submit_job = _orig_submit
+
+
+# Hand-derived metadata contract: a job declares generic, then no field,
+# then blank/null. Only absence is None; a previous job must never leak into
+# the next one, and the thread-local field is read on the generating worker.
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
+from unittest.mock import patch
+print("\n(o) delivered rig metadata on the worker")
+rig_jobs = iter([{'rig': 'generic'}, {}, {'rig': ''}, {'rig': None}])
+metadata_backend = backend('Trellis2-Low', declared=FULL)
+def poll_metadata(_backend, _job_id, **kwargs):
+    job = {**next(rig_jobs), 'results': [{'name': 'result_rigged.glb'}]}
+    return kwargs['on_done'](job, 0)
+def run_metadata():
+    blobs = metadata_backend._generate('', '', {'source_image_path': 'http://img.invalid/front.png'})
+    return blobs, metadata_backend.last_result_rig
+with patch.object(openai_mesh, 'submit_job', return_value='metadata-job'), patch.object(openai_mesh, 'poll_job', side_effect=poll_metadata), patch.object(openai_mesh.requests, 'get', return_value=SimpleNamespace(status_code=200, content=b'result' * 100, headers={})), ThreadPoolExecutor(max_workers=1) as executor:
+    results = [executor.submit(run_metadata).result(timeout=5) for _ in range(4)]
+check("job rig preserved, absence clears it, blank/null remain present",
+      results == [([b'result' * 100], 'generic'), ([b'result' * 100], None), ([b'result' * 100], ''), ([b'result' * 100], '')], str([rig for _blobs, rig in results]))
+check("worker metadata is never read from the caller thread",
+      metadata_backend.last_result_rig is None)
 
 
 print()

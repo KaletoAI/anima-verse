@@ -273,43 +273,19 @@ rig (`backend_fits`: a wrong-rig backend is `wrong_kind`, a CONFIGURATION
 skip — it never marks and is never asked). `_store_mesh_files` is replaced
 by a recorder that writes the delivered bytes to "<output>.glb" and hands
 back ONE LOD stage (faces 500), so the callers' sidecars can be read.
-Pool 1: "MHum" (cost 0, rig mixamo), "MDead" (cost 0, rig none, fails with
-HTTP 500), "MOk" (cost 2, rig none).
-F-M1 generate_mesh(rig "none", occasion "mesh_object"), rules mesh_object
-   ["MHum","MDead","MOk"]: MHum is wrong_kind (config skip), so the intended
-   entry is MDead at position 2 (binding review note B1); MDead fails at
-   runtime and cools down, the re-run skips it (cooldown) and lands on MOk
-   at position 3 -> (ok, backend, routing.position,
-   fallback_from.intended_spec) == (True, "MOk", 3, "MDead"),
-   fallback_from.position == 2 (the INTENDED position, not the used one),
-   routing {"occasion": "mesh_object", "position": 3, "spec": "MOk"};
-   MHum asked 0 times, MDead 1, MOk 1.
-F-M2 explicit "MHum" with rig "none" -> ok False, the error names the rig
-   ("'mixamo', 'none' is needed"); nothing rendered (MHum 0 calls).
-   BEHAVIOUR CHANGE: the old code silently re-picked the cheapest rig-none
-   backend — an explicit pick is now never re-picked.
-F-M3 explicit "MOk", rig "none" -> ok, backend "MOk", and neither "routing"
-   nor "fallback_from" in the result (an explicit pick writes neither).
-F-M4 explicit "MDead" (cooling since F-M1) -> ok False, error "mesh backend
-   'MDead' unavailable"; MOk's calls unchanged (never routed elsewhere).
-F-M5 no occasion: rig "none", rules mesh_object ["MOk"] -> routing occasion
-   "mesh_object" (mesh_occasion_for_rig("none")); rig "" (= mixamo), rules
-   mesh_humanoid ["MHum"] -> backend "MHum", routing occasion
-   "mesh_humanoid".
-F-M6 the dialogs' default (plan F5), pool 1 with MDead still cooling:
-   rules mesh_object ["MOk"] -> model3d.list_mesh_backends("none")
-   ["default"] == "MOk"; with occasion "mesh_building" and NO building chain
-   -> the empty chain's pick, the cheapest AVAILABLE rig-none mesh backend:
-   "MOk" (MDead, cost 0, cools). subjects.default_mesh_backend of both
-   occasions says the same ("MOk"). A rig-less call has no occasion ->
-   default "". Rules mesh_object ["MHum"] (wrong kind only) -> nothing
-   resolves -> default "" and subjects.default_mesh_backend("mesh_object")
-   == "".
-F-M7 a re-run stays in the rig. Pool 2: "HDead" (cost 0, mixamo, dead),
-   "MOk" (cost 2, none). Rules mesh_humanoid ["HDead","MOk"], rig "mixamo":
-   HDead fails, MOk is wrong_kind -> nothing usable -> ok False with the
-   NoRouteError text ("no backend available for mesh_humanoid"); MOk asked
-   0 times.
+Pool 1: MHum (cost 0), MDead (cost 0, fails HTTP 500), MOk (cost 2).
+All three are img2mesh and can serve all four mesh occasions.
+F-M1 mesh_object chain [MDead, MOk]: MDead fails and cools, MOk succeeds at
+   position 2 with fallback_from.intended_spec MDead, intended position 1.
+F-M2 explicit MHum succeeds once; there is no backend rig filter.
+F-M3 explicit MOk succeeds without routing or fallback metadata.
+F-M4 explicit cooling MDead fails unavailable; MOk is not asked.
+F-M5 no occasion defaults to mesh_object, resolved by its configured chain.
+F-M6 mesh_object [MOk] preselects MOk. Empty mesh_building chooses MHum,
+   the cheapest available img2mesh; no occasion means no preselection.
+   mesh_object [MHum] resolves MHum in both dialog and improvement defaults.
+F-M7 mesh_humanoid [HDead, MOk] retries MOk after HDead fails and stores an
+   unrigged source (rig none); rigging remains a separate stage.
 F-M8 character generation now uses two jobs (plan-mesh-rig-trennung P2).
    Valid fixtures, both stage sidecars, single-slot sequencing and failed
    replacement preservation are checked in smoke_mesh_rig_split.py.
@@ -1104,20 +1080,24 @@ def part_e():
 
 class FakeMedia(FakeBackend):
     """A video / mesh backend of the fake pool (plan Task 16): MEDIA_TYPE
-    and category set, ``mesh_rig`` for a mesh backend."""
+    and category set; rigs are delivery properties."""
 
-    def __init__(self, name, cost, media, rig="", dead=False):
+    def __init__(self, name, cost, media, dead=False):
         super().__init__(name, cost, "", dead=dead)
         self.MEDIA_TYPE = media
         self.category = "img2mesh" if media == "mesh" else "txt2img"
-        if rig:
-            self.mesh_rig = rig
 
     def generate(self, prompt, negative_prompt, params, log_meta=None):
         self.calls.append({"params": dict(params)})
         if self.dead:
             raise RuntimeError(f"{self.name}: HTTP 500: gone")
         self.last_result_files = [{"name": f"{self.name}.glb"}]
+        if self.MEDIA_TYPE == "mesh":
+            import json, struct
+            doc = json.dumps({'asset': {'version': '2.0'}, 'meshes': [{'primitives': []}],
+                              'images': [{'uri': 'data:image/png;base64,AA=='}]}).encode()
+            doc += b' ' * (-len(doc) % 4)
+            return [b'glTF' + struct.pack('<II', 2, len(doc) + 20) + struct.pack('<II', len(doc), 0x4e4f534a) + doc]
         return [b"mp4-or-glb"]
 
 
@@ -1290,71 +1270,68 @@ def part_f_mesh():
     (tmp / "src.png").write_bytes(png_bytes())
     service_mod.ImageService._store_mesh_files = staticmethod(_fake_store_mesh)
 
-    mh = FakeMedia("MHum", 0, "mesh", rig="mixamo")
-    md = FakeMedia("MDead", 0, "mesh", rig="none", dead=True)
-    mo = FakeMedia("MOk", 2, "mesh", rig="none")
+    mh = FakeMedia("MHum", 0, "mesh")
+    md = FakeMedia("MDead", 0, "mesh",  dead=True)
+    mo = FakeMedia("MOk", 2, "mesh")
     svc = install_pool(mh, md, mo)
-    set_routing({"mesh_object": ["MHum", "MDead", "MOk"]})
-    res = svc.generate_mesh(str(tmp / "src.png"), str(tmp / "m.glb"), rig="none",
+    set_routing({"mesh_object": ["MDead", "MOk"]})
+    res = svc.generate_mesh(str(tmp / "src.png"), str(tmp / "m.glb"),
                             occasion="mesh_object")
     check("F-M1 routed mesh", (res.get("ok"), res.get("backend"),
                                (res.get("routing") or {}).get("position"),
                                (res.get("fallback_from") or {}).get("intended_spec")),
-          (True, "MOk", 3, "MDead"))
+          (True, "MOk", 2, "MDead"))
     check("F-M1 meta", (res.get("routing"), res.get("fallback_from")),
-          ({"occasion": "mesh_object", "position": 3, "spec": "MOk"},
-           {"occasion": "mesh_object", "intended_spec": "MDead", "position": 2}))
+          ({"occasion": "mesh_object", "position": 2, "spec": "MOk"},
+           {"occasion": "mesh_object", "intended_spec": "MDead", "position": 1}))
     check("F-M1 calls (MHum, MDead, MOk)", (len(mh.calls), len(md.calls), len(mo.calls)),
           (0, 1, 1))
 
     res = svc.generate_mesh(str(tmp / "src.png"), str(tmp / "m2.glb"),
-                            backend_glob="MHum", rig="none")
-    check("F-M2 explicit wrong rig", (res.get("ok"), "wrong category or rig"
-                                      in str(res.get("error"))), (False, True))
-    check("F-M2 nothing rendered", len(mh.calls), 0)
+                            backend_glob="MHum")
+    check("F-M2 any img2mesh explicit pick", (res.get("ok"), res.get("backend")), (True, "MHum"))
+    check("F-M2 selected backend rendered", len(mh.calls), 1)
 
     res = svc.generate_mesh(str(tmp / "src.png"), str(tmp / "m3.glb"),
-                            backend_glob="MOk", rig="none")
+                            backend_glob="MOk")
     check("F-M3 explicit: no routing meta", (res.get("ok"), res.get("backend"),
                                              "routing" in res, "fallback_from" in res),
           (True, "MOk", False, False))
 
     n = len(mo.calls)
     res = svc.generate_mesh(str(tmp / "src.png"), str(tmp / "m4.glb"),
-                            backend_glob="MDead", rig="none")
+                            backend_glob="MDead")
     check("F-M4 explicit cooling", (res.get("ok"), res.get("error")),
           (False, "mesh backend 'MDead' unavailable"))
     check("F-M4 MOk not asked", len(mo.calls) - n, 0)
 
     set_routing({"mesh_object": ["MOk"], "mesh_humanoid": ["MOk"]})
-    res = svc.generate_mesh(str(tmp / "src.png"), str(tmp / "m5.glb"), rig="none")
-    check("F-M5 rig none -> mesh_object", (res.get("routing") or {}).get("occasion"),
+    res = svc.generate_mesh(str(tmp / "src.png"), str(tmp / "m5.glb"))
+    check("F-M5 default -> mesh_object", (res.get("routing") or {}).get("occasion"),
           "mesh_object")
     res = svc.generate_mesh(str(tmp / "src.png"), str(tmp / "m6.glb"))
-    check("F-M5 no rig -> mesh_humanoid", (res.get("backend"),
+    check("F-M5 default -> mesh_object", (res.get("backend"),
                                            (res.get("routing") or {}).get("occasion")),
-          ("MOk", "mesh_humanoid"))
+          ("MOk", "mesh_object"))
 
     set_routing({"mesh_object": ["MOk"]})
-    check("F-M6 object default", model3d.list_mesh_backends("none")["default"], "MOk")
+    check("F-M6 object default", model3d.list_mesh_backends(occasion="mesh_object")["default"], "MOk")
     check("F-M6 building default (empty chain = cheapest available)",
-          model3d.list_mesh_backends("none", occasion="mesh_building")["default"], "MOk")
+          model3d.list_mesh_backends(occasion="mesh_building")["default"], "MHum")
     check("F-M6 subjects agree", (subjects.default_mesh_backend("mesh_object"),
                                   subjects.default_mesh_backend("mesh_building")),
-          ("MOk", "MOk"))
-    check("F-M6 rig-less: no default", model3d.list_mesh_backends()["default"], "")
+          ("MOk", "MHum"))
+    check("F-M6 no occasion: no default", model3d.list_mesh_backends()["default"], "")
     set_routing({"mesh_object": ["MHum"]})
-    check("F-M6 nothing resolves", (model3d.list_mesh_backends("none")["default"],
+    check("F-M6 any img2mesh resolves", (model3d.list_mesh_backends(occasion="mesh_object")["default"],
                                     subjects.default_mesh_backend("mesh_object")),
-          ("", ""))
+          ("MHum", "MHum"))
 
-    hd, mo = FakeMedia("HDead", 0, "mesh", rig="mixamo", dead=True), FakeMedia("MOk", 2, "mesh", rig="none")
+    hd, mo = FakeMedia("HDead", 0, "mesh",  dead=True), FakeMedia("MOk", 2, "mesh")
     svc = install_pool(hd, mo)
     set_routing({"mesh_humanoid": ["HDead", "MOk"]})
-    res = svc.generate_mesh(str(tmp / "src.png"), str(tmp / "m7.glb"), rig="mixamo")
-    check("F-M7 stays in the rig", (res.get("ok"),
-                                    "only an unrigged source" in str(res.get("error")),
-                                    len(mo.calls)), (False, True, 0))
+    res = svc.generate_mesh(str(tmp / "src.png"), str(tmp / "m7.glb"), occasion="mesh_humanoid")
+    check("F-M7 humanoid uses unrigged source with fallback", (res.get("ok"), res.get("rig"), len(mo.calls)), (True, "none", 1))
 
     # Character two-stage generation, rig routing and sidecar publication are
     # verified with valid GLB/FBX fixtures in smoke_mesh_rig_split.py.
@@ -1372,7 +1349,7 @@ def part_f_mesh():
     (gal / "front.png").write_bytes(png_bytes())
     patch(location_model3d, "request_low_tier", lambda *a, **k: None)
     try:
-        bd, bo = FakeMedia("BDead", 0, "mesh", rig="none", dead=True), FakeMedia("BOk", 1, "mesh", rig="none")
+        bd, bo = FakeMedia("BDead", 0, "mesh",  dead=True), FakeMedia("BOk", 1, "mesh")
         install_pool(bd, bo)
         set_routing({"mesh_building": ["BDead", "BOk"]})
         r = location_model3d._generate(loc, "front.png", "")
@@ -1402,7 +1379,7 @@ def part_f_mesh():
         patch(props, fn, lambda *a, **k: None)
     patch(props, "_extract_bbox", lambda *a, **k: None)
     try:
-        bd, bo = FakeMedia("BDead", 0, "mesh", rig="none", dead=True), FakeMedia("BOk", 1, "mesh", rig="none")
+        bd, bo = FakeMedia("BDead", 0, "mesh",  dead=True), FakeMedia("BOk", 1, "mesh")
         install_pool(bd, bo)
         set_routing({"mesh_object": ["BDead", "BOk"]})
         r = props._generate(pid, "", "", "", "", mesh_only=True)
@@ -1700,7 +1677,7 @@ def part_h():
 
         # -- H5/H6 prop routes --------------------------------------------
         from app.core import props
-        mdead = FakeMedia("MDead", 0, "mesh", rig="none", dead=True)
+        mdead = FakeMedia("MDead", 0, "mesh",  dead=True)
         mdead.mark_unhealthy("smoke", 300)
         install_pool(gw, cloud, mdead)
         pid = props.create_prop(name="Barrel", description="an oak barrel")["id"]

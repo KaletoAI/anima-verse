@@ -119,7 +119,7 @@ function irFits(occ, b) {
     const cat = String(b.category || '').toLowerCase();
     if (occ.media === 'mesh') {
         if (cat !== occ.category) return false;
-        return (String(b.rig || 'mixamo').toLowerCase() || 'mixamo') === occ.rig;
+        return true;
     }
     if (cat === 'inpaint') return false;
     if (occ.needs_ref_slot && (Number(b.ref_slot_count) || 0) < 1) return false;
@@ -185,7 +185,7 @@ const IR_TEXT = {
     rulesTitle: 'Routing', overviewTitle: 'Routing overview',
     rulesIntro: 'One chain per render occasion. A render uses the FIRST entry that names a usable '
               + 'backend right now; a failure re-runs the whole occasion on the next entry. An empty '
-              + 'chain uses the cheapest available backend of the right kind; a chain whose entries '
+              + 'chain uses the cheapest available backend of the right kind, except rig occasions: configure their mesh2rig chains explicitly. A chain whose entries '
               + 'are all unusable fails instead of falling back to the cheapest.',
     position0: 'Position 0: the character\'s own backend match (Characters → Image) comes before this chain.',
     emptyChain: 'empty — cheapest available backend of this kind',
@@ -414,7 +414,7 @@ function irChainHtml(o, chain) {
     const dl = 'ir-dl-' + o.id;
     const notes = irEntryNotes(chain);
     let html = '<datalist id="' + irEsc(dl) + '">' + fitting.map(n => '<option value="' + irEsc(n) + '">').join('') + '</datalist>';
-    if (!chain.length) html += '<div class="desc rt-muted">' + irEsc(IR_TEXT.emptyChain) + '</div>';
+    if (!chain.length) html += '<div class="desc rt-muted">' + irEsc(o.category === 'mesh2rig' ? 'empty rig chain — configure a mesh2rig backend here' : IR_TEXT.emptyChain) + '</div>';
     chain.forEach((spec, i) => {
         html += '<div class="rt-chain-row">';
         html += '<span class="rt-muted" style="min-width:20px;">' + (i + 1) + '.</span>';

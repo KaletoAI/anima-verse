@@ -28,9 +28,9 @@
  *     Qwen Inpaint, Flat]; 'Mesh-[!H]' -> [Mesh-O]; 'a.b' over [axb] -> []
  *     (a dot is literal, fnmatch semantics).
  *  6. irVerdict: photo/'Qwen Inpaint' wrong_kind; timevariant/'Flat'
- *     wrong_kind; timevariant/'Flux*' ok; mesh_object/'Mesh-*' ok (Mesh-O);
- *     mesh_object/'Mesh-H' wrong_kind (rig); mesh_object/'Shrink' wrong_kind
- *     (mesh2mesh); video/'Vid' ok; photo/'Nope' no_match.
+ *     wrong_kind; timevariant/'Flux*' ok. Any img2mesh fits all four mesh
+ *     occasions. mesh2mesh is excluded; mesh2rig fits either rig occasion,
+ *     since their configured chains declare the chosen rigger.
  *  7. Loading never rewrites a stored chain (the save refuses an EDITED invalid
  *     chain but only warns about an unchanged one, so a load-time dedupe or
  *     drop would turn a warning into HTTP 400). irSurvey is read-only:
@@ -94,15 +94,15 @@ const B = [
   { name: 'Flux Cheap', media: 'image', category: 'img2img', ref_slot_count: 1 },
   { name: 'Qwen Inpaint', media: 'image', category: 'inpaint', ref_slot_count: 1 },
   { name: 'Flat', media: 'image', category: 'txt2img', ref_slot_count: 0 },
-  { name: 'Mesh-H', media: 'mesh', category: 'img2mesh', rig: 'mixamo' },
-  { name: 'Mesh-O', media: 'mesh', category: 'img2mesh', rig: 'none' },
-  { name: 'Shrink', media: 'mesh', category: 'mesh2mesh', rig: 'none' },
+  { name: 'Mesh-H', media: 'mesh', category: 'img2mesh' },
+  { name: 'Mesh-O', media: 'mesh', category: 'img2mesh' },
+  { name: 'Shrink', media: 'mesh', category: 'mesh2mesh' },
   { name: 'Vid', media: 'video', category: 'txt2img' },
 ];
 const O = {
   photo: { id: 'photo', media: 'image', category: 'render', rig: '', needs_ref_slot: false },
   timevariant: { id: 'timevariant', media: 'image', category: 'render', rig: '', needs_ref_slot: true },
-  mesh_object: { id: 'mesh_object', media: 'mesh', category: 'img2mesh', rig: 'none', needs_ref_slot: false },
+  mesh_object: { id: 'mesh_object', media: 'mesh', category: 'img2mesh', needs_ref_slot: false },
   video: { id: 'video', media: 'video', category: 'render', rig: '', needs_ref_slot: false },
 };
 
@@ -127,21 +127,24 @@ check(sb.irVerdict(O.photo, 'Qwen Inpaint', B) === 'wrong_kind', '6. inpaint');
 check(sb.irVerdict(O.timevariant, 'Flat', B) === 'wrong_kind', '6. no ref slot');
 check(sb.irVerdict(O.timevariant, 'Flux*', B) === 'ok', '6. ref slot ok');
 check(sb.irVerdict(O.mesh_object, 'Mesh-*', B) === 'ok', '6. rig none found');
-check(sb.irVerdict(O.mesh_object, 'Mesh-H', B) === 'wrong_kind', '6. wrong rig');
+check(sb.irVerdict(O.mesh_object, 'Mesh-H', B) === 'ok', '6. any img2mesh fits');
 check(sb.irVerdict(O.mesh_object, 'Shrink', B) === 'wrong_kind', '6. mesh2mesh');
 check(sb.irVerdict(O.video, 'Vid', B) === 'ok', '6. video');
 check(sb.irVerdict(O.photo, 'Nope', B) === 'no_match', '6. no match');
-// P1/P2: rig occasions require mesh2rig and their own rig; character mesh
+// Rig occasions require mesh2rig from their configured chain; character mesh
 // occasions require img2mesh/none. Both directions must refuse a wrong category.
-const rigOcc = { media: 'mesh', category: 'mesh2rig', rig: 'mixamo' };
-const creatureOcc = { media: 'mesh', category: 'mesh2rig', rig: 'generic' };
-const meshOcc = { media: 'mesh', category: 'img2mesh', rig: 'none' };
-const mia = { media: 'mesh', category: 'mesh2rig', rig: 'mixamo' };
+for (const id of ['mesh_humanoid', 'mesh_creature', 'mesh_object', 'mesh_building']) {
+  check(sb.irFits({ id, media: 'mesh', category: 'img2mesh' }, { media: 'mesh', category: 'img2mesh' }), `13. one img2mesh serves ${id}`);
+}
+const rigOcc = { media: 'mesh', category: 'mesh2rig' };
+const creatureOcc = { media: 'mesh', category: 'mesh2rig' };
+const meshOcc = { media: 'mesh', category: 'img2mesh' };
+const mia = { media: 'mesh', category: 'mesh2rig' };
 check(sb.irFits(rigOcc, mia), '13. humanoid rig fits');
-check(!sb.irFits(creatureOcc, mia), '13. wrong rig refused');
+check(sb.irFits(creatureOcc, mia), '13. rig chain declares the rigger');
 check(!sb.irFits(meshOcc, mia), '13. mesh2rig refused by img2mesh');
 check(!sb.irFits(rigOcc, { ...mia, category: 'img2mesh' }), '13. img2mesh refused by mesh2rig');
-check(sb.irFits(meshOcc, { media: 'mesh', category: 'img2mesh', rig: 'none' }), '13. character source mesh fits');
+check(sb.irFits(meshOcc, { media: 'mesh', category: 'img2mesh' }), '13. character source mesh fits');
 
 const S = { photo: ['Flux*', ' ', 'flux*', 'Qwen*'], mesh_low: ['x'], item: [], video: 'Vid', timevariant: ['Flux*', 3] };
 const S0 = JSON.parse(JSON.stringify(S));

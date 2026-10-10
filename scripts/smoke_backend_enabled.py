@@ -33,27 +33,12 @@ and only the two with BOTH sides on may select:
 ``list_available_backends(character)`` must answer the same way [2], since the
 admin lists and the engine must not disagree about what exists.
 
-Mesh [3]: aliases ``MeshA`` (rig "mixamo", available), ``MeshB`` (rig "mixamo",
-NOT available) and ``MeshGen`` (rig "generic", available).
-
-  [3a] glob "MeshB", rig "mixamo" -> ok=False, error names MeshB; the runner is
-       never entered (no silent render on MeshA).
-  [3b] glob "MeshGen", rig "mixamo" -> the alias CAN be resolved but delivers
-       the wrong rig -> ok=False, the error names the needed rig, nothing
-       rendered. BEHAVIOUR CHANGE (image routing, plan Task 16b; binding
-       decision "explicit = no fallback"): this case used to re-pick MeshA;
-       an explicit pick is now never re-picked. Fails on commit 4893221f
-       (used == ["MeshA"]).
-  [3c] glob "" (caller named nothing), rig "mixamo" -> routed on the
-       "mesh_humanoid" occasion; the throwaway config has no chain for it,
-       so the empty chain picks the cheapest AVAILABLE backend of the
-       occasion's kind: MeshA (MeshB is unavailable, MeshGen is rig
-       generic = wrong kind) — as before.
-
-Before the fix [3a] silently rendered on MeshA (``meshes[0]``) and [1e]/[2e]
-selected a globally disabled backend; verified by re-running this script
-against ``git show HEAD:app/imagegen/service.py`` + ``…/selection.py``, where
-exactly [1e], [2e] and the two [3a] lines fail and everything else passes.
+Mesh [3]: MeshA (cost 2, available), MeshB (cost 1, offline), MeshGen
+(cost 1, available) are all img2mesh. An explicit unavailable MeshB fails
+without rendering; an explicit MeshGen runs and its empty delivery fails
+storage. No explicit pick falls back. Empty mesh routing chooses MeshGen
+by cost. Rig identity is checked only on mesh2rig delivery in the rig split
+smoke, never used to filter the mesh backend inventory.
 """
 import sys
 from pathlib import Path
@@ -76,14 +61,13 @@ def check(label, got, expected):
 
 class _Fake(ImageBackend):
     def __init__(self, name, *, enabled=True, available=True,
-                 media="image", rig="", cost=1.0):
+                 media="image", cost=1.0):
         super().__init__(name, "http://localhost", cost, "fake", "FAKE_")
         self.MEDIA_TYPE = media
         self.instance_enabled = enabled
         self._available = available
         self.available = available
-        if rig:
-            self.mesh_rig = rig
+        if media == "mesh":
             self.category = "img2mesh"
 
     def check_availability(self) -> bool:
@@ -121,9 +105,9 @@ for label, global_on, override, expected in TABLE:
 
 # --------------------------------------------------------------------------
 print("[3] generate_mesh never falls back from an explicit pick")
-mesh_a = _Fake("MeshA", media="mesh", rig="mixamo", cost=2.0)
-mesh_b = _Fake("MeshB", media="mesh", rig="mixamo", available=False, cost=1.0)
-mesh_gen = _Fake("MeshGen", media="mesh", rig="generic", cost=1.0)
+mesh_a = _Fake("MeshA", media="mesh", cost=2.0)
+mesh_b = _Fake("MeshB", media="mesh", available=False, cost=1.0)
+mesh_gen = _Fake("MeshGen", media="mesh", cost=1.0)
 
 svc = ImageService.__new__(ImageService)
 svc._pool = BackendPool([mesh_a, mesh_b, mesh_gen], lambda _n: {})
@@ -141,7 +125,7 @@ svc.run_on_backend = _fake_runner
 
 used.clear()
 res = svc.generate_mesh("/tmp/none.png", "/tmp/out.glb",
-                        backend_glob="MeshB", rig="mixamo")
+                        backend_glob="MeshB")
 check("3a explicit unavailable: ok", res.get("ok"), False)
 check("3a explicit unavailable: error names it",
       "MeshB" in str(res.get("error")), True)
@@ -149,15 +133,14 @@ check("3a explicit unavailable: nothing rendered", used, [])
 
 used.clear()
 res = svc.generate_mesh("/tmp/none.png", "/tmp/out.glb",
-                        backend_glob="MeshGen", rig="mixamo")
-check("3b explicit wrong rig: ok", res.get("ok"), False)
-check("3b explicit wrong rig: error names the rig",
-      "'mixamo' is needed" in str(res.get("error")), True)
-check("3b explicit wrong rig: nothing rendered", used, [])
+                        backend_glob="MeshGen")
+check("3b explicit img2mesh: ok", res.get("ok"), False)
+check("3b img2mesh delivery checked", res.get("error"), "no model file delivered")
+check("3b any img2mesh can be explicitly selected", used, ["MeshGen"])
 
 used.clear()
-svc.generate_mesh("/tmp/none.png", "/tmp/out.glb", backend_glob="", rig="mixamo")
-check("3c no glob picks by cost", used, ["MeshA"])
+svc.generate_mesh("/tmp/none.png", "/tmp/out.glb", backend_glob="")
+check("3c no glob picks by cost", used, ["MeshGen"])
 
 print()
 if FAILED:

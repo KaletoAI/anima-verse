@@ -241,28 +241,13 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
      to a neighbouring combination — and the pair drops off the list while the
      other two stay.
 
- 29. (Task 16b fix round 1) An explicit wrong-rig mesh backend is an ERROR in
-     `generate_mesh`, so a character whose rig (`model3d.required_rig`,
-     patched: demo_a / demo_b / demo_d generic, everyone else mixamo) the
-     chosen backend does not deliver is NO candidate — it could only fail
-     and burn its attempts.  The backend's rig comes from its CONFIG entry
-     (`subjects.mesh_backend_rig` over `image_generation.backends`: hy
-     mixamo, tr generic, px / pz none, an unknown name ""), never from live
-     availability: the engine closes a candidate that drops off as done, so
-     an offline backend must not make subjects vanish.  mesh_from_tpose on
-     "hy" therefore keeps demo_c's two combinations and drops demo_d's
-     render; on "tr" only demo_d's; "tr" removed from the live inventory
-     changes nothing; an unconfigured "gone" cannot be judged and drops
-     nobody (demo_c's two + demo_d's one).
- 30. model_replace (character) filters the same way on the TARGET: demo_d
-     (generic) with a model by "hy" is a candidate for hy -> tr; with
-     demo_c's model made by "tr", tr -> hy yields only demo_c — the generic
-     demo_a / demo_b, also made by "tr", are no subjects of a mixamo target.
- 31. model_replace.validate refuses a target whose rig does not fit the
-     subject kind (character: mixamo or generic; location / prop: none) and
-     a target that is not a configured mesh backend, each with a message
-     naming both sides; "pz" for a prop validates to itself.  The building
-     case of 12 therefore replaces "px" by "pz".
+ 29. Every img2mesh target serves every character's unrigged source, including
+     both humanoids and creatures. Backend lists contain no rig declaration.
+     A target going offline or disappearing must not remove candidates.
+ 30. model_replace selects characters solely by the stored source backend;
+     both character kinds can regenerate with any img2mesh target.
+ 31. model_replace.validate accepts img2mesh targets for characters, locations
+     and props and rejects a target that is not configured as img2mesh.
      The fill_missing route check of case 6 carries the character
      (explain_occasion is asked ("mesh_creature", "demo_b")), so that
      character's backend switches apply to the check as they do to the
@@ -533,14 +518,10 @@ world_ops.generate_gallery_image_core = fake_gallery_generate
 # The backend INVENTORY, not an asset reader: without configured mesh
 # backends `list_mesh_backends` answers {"backends": [], "default": ""} and
 # every "which backend is the default" expectation would be vacuous.
-# The rig travels with every entry (`list_mesh_backends` reads it off the
-# alias): it decides which subjects a backend can mesh at all — "none" is a
-# prop backend and binds no character.
-MESH_INVENTORY = [{"name": "hy", "rig": "mixamo"},
-                  {"name": "tr", "rig": "generic"},
-                  {"name": "px", "rig": "none"}]
-model3d.list_mesh_backends = lambda rig="", occasion="": {
-    "backends": [b for b in MESH_INVENTORY if not rig or b["rig"] == rig],
+# Every img2mesh entry is unrigged and can supply any subject.
+MESH_INVENTORY = [{"name": n} for n in ("hy", "tr", "px")]
+model3d.list_mesh_backends = lambda occasion="": {
+    "backends": list(MESH_INVENTORY),
     "default": ""}
 model3d.required_rig = lambda name: RIGS.get(name, "mixamo")
 
@@ -552,15 +533,14 @@ def fake_explain_occasion(occasion, character="", pool=None):
 
 routing.explain_occasion = fake_explain_occasion
 # The CONFIGURED mesh backends (`image_generation.backends`) — what
-# `subjects.mesh_backend_rig` reads. "pz" is a second rig-none backend, a
-# legal model_replace target for buildings and props.
+# `subjects.is_img2mesh_backend` reads. Every configured img2mesh is a legal
+# model_replace target for characters, buildings and props.
 _cfg = config.get_all()
 _ig = dict(_cfg.get("image_generation") or {})
 _ig["backends"] = list(_ig.get("backends") or []) + [
-    {"name": n, "api_type": "openai_mesh", "category": "img2mesh", "mesh_rig": r,
+    {"name": n, "api_type": "openai_mesh", "category": "img2mesh",
      "api_url": "http://mesh.invalid", "enabled": True}
-    for n, r in (("hy", "mixamo"), ("tr", "generic"), ("px", "none"),
-                 ("pz", "none"))]
+    for n in ("hy", "tr", "px", "pz")]
 _cfg["image_generation"] = _ig
 config.save(_cfg)
 
@@ -628,9 +608,9 @@ def candidates(improvement_type, params):
 
 # ── [1] the parameter contract ──────────────────────────────────────────────
 print("[1] model_replace parameters")
-check("all six types are registered",
+check("all seven types are registered",
       sorted(t.id for t in registry.list_types()),
-      ["fallback_rerender", "fill_missing", "image_rerender", "mesh_from_tpose",
+      ["extension_rig_rebuild", "fallback_rerender", "fill_missing", "image_rerender", "mesh_from_tpose",
        "model_replace", "surface_bake"])
 check("a complete set validates to itself",
       MODEL_REPLACE.validate({"subject": "character", "source_backend": "hy",
@@ -659,18 +639,10 @@ check("scanning for a backend nothing was made by finds nothing",
       candidates(MODEL_REPLACE, {"subject": "character",
                                  "source_backend": "tr",
                                  "target_backend": "hy"}), [])
-# demo_a is mixamo for this one check: "hy" (mixamo) must be able to mesh it,
-# or the rig filter (case 30) drops it before is_done is ever asked and the
-# check proves nothing about the is_done filter.
-RIGS["demo_a"] = "mixamo"
-check("(precondition) 'hy' can mesh demo_a, so only is_done can drop it",
-      subjects.character_fits_backend("demo_a", "hy"), True)
 check("a STORED equal-backend set yields no work either (is_done filter)",
       [(c.key, c.label) for c in MODEL_REPLACE.find_candidates(
           {"subject": "character", "source_backend": "hy",
            "target_backend": "hy"})], [])
-RIGS["demo_a"] = "generic"
-
 # ── [3] apply generates with the TARGET backend ─────────────────────────────
 print("[3] model_replace apply")
 MESH_CALLS.clear()
@@ -1118,21 +1090,19 @@ def backend_options():
             for f in MESH_FROM_TPOSE.params_schema]
 
 
-check("one field, offering the rigging backends with their rig in the label — "
-      "the prop backend 'px' (rig none) can never bind a character mesh",
+check("one field offers every img2mesh backend without rig declarations",
       backend_options(),
       [("backend", "mesh_backend",
-        [{"value": "hy", "label": "hy (mixamo)"},
-         {"value": "tr", "label": "tr (generic)"}], True)])
-MESH_INVENTORY.append({"name": "zz", "rig": "mixamo"})
+        [{"value": n, "label": n} for n in ("hy", "tr", "px")], True)])
+MESH_INVENTORY.append({"name": "zz"})
 check("the list is read live, so a backend configured while the server runs "
       "is offered without a restart",
-      [o["value"] for o in backend_options()[0][2]], ["hy", "tr", "zz"])
+      [o["value"] for o in backend_options()[0][2]], ["hy", "tr", "px", "zz"])
 MESH_INVENTORY.pop()
 check("a picked backend validates to itself",
       MESH_FROM_TPOSE.validate({"backend": "hy"}), {"backend": "hy"})
 check_raises("a backend outside the offered list is refused", ValueError,
-             lambda: MESH_FROM_TPOSE.validate({"backend": "px"}),
+             lambda: MESH_FROM_TPOSE.validate({"backend": "gone"}),
              "invalid value for 'backend'")
 check_raises("and so is no backend at all", ValueError,
              lambda: MESH_FROM_TPOSE.validate({}),
@@ -1148,7 +1118,7 @@ C = make_character("demo_c")
 REFS = get_character_dir(C) / "model_refs"
 REFS.mkdir(parents=True, exist_ok=True)
 SIG_A = "0123456789ab"
-SIG_STATE = f"{SIG_A}{model_refs.STATE_SIG_SEP}0f0f0f0f"
+SIG_STATE = f"{SIG_A}-s0f0f0f0f"
 SIG_B = "fedcba987654"
 for _sig in (SIG_A, SIG_STATE, SIG_B):
     (REFS / f"tpose_{_sig}.png").write_bytes(b"\x89PNG fake")
@@ -1157,115 +1127,90 @@ for _sig in (SIG_A, SIG_STATE, SIG_B):
 (REFS / f"tpose_back_{SIG_A}.png").write_bytes(b"\x89PNG fake")
 check("the view render is not mistaken for a combination",
       sorted(subjects.character_tpose_signatures(C)),
-      [SIG_A, SIG_STATE, SIG_B])
+      [SIG_A, SIG_B])
 check("every render without a mesh is one candidate, keyed "
       "<character>:<signature> and labelled with the short signature",
       candidates(MESH_FROM_TPOSE, FROM_TPOSE),
       [(f"demo_c:{SIG_A}", "demo_c · 01234567"),
-       (f"demo_c:{SIG_STATE}", "demo_c · 01234567-s0f0f"),
        (f"demo_c:{SIG_B}", "demo_c · fedcba98")])
 
 # ── [18] apply meshes exactly that combination ─────────────────────────────
 print("[18] mesh_from_tpose apply")
 MESH_CALLS.clear()
-CAND_S = MESH_FROM_TPOSE.find_candidates(
+CAND_B = MESH_FROM_TPOSE.find_candidates(
     MESH_FROM_TPOSE.validate(FROM_TPOSE))[1]
 check("is_done is False while that signature has no mesh",
-      MESH_FROM_TPOSE.is_done(CAND_S, MESH_FROM_TPOSE.validate(FROM_TPOSE)),
+      MESH_FROM_TPOSE.is_done(CAND_B, MESH_FROM_TPOSE.validate(FROM_TPOSE)),
       False)
-MESH_FROM_TPOSE.apply(CAND_S, MESH_FROM_TPOSE.validate(FROM_TPOSE), "task-20")
+MESH_FROM_TPOSE.apply(CAND_B, MESH_FROM_TPOSE.validate(FROM_TPOSE), "task-20")
 check("the producer ran once for THAT signature, unforced (the model is "
       "missing) and on the chosen backend", MESH_CALLS,
       [{"name": "demo_c", "force": False, "backend_glob": "hy",
-        "signature": SIG_STATE}])
+        "signature": SIG_B}])
 check("is_done reads the mesh of that exact signature back",
-      MESH_FROM_TPOSE.is_done(CAND_S, MESH_FROM_TPOSE.validate(FROM_TPOSE)),
+      MESH_FROM_TPOSE.is_done(CAND_B, MESH_FROM_TPOSE.validate(FROM_TPOSE)),
       True)
-check("only that pair dropped off — the neutral entry of the same outfit is "
-      "its own combination and stays",
+check("only the generated outfit dropped off — the other combination stays",
       candidates(MESH_FROM_TPOSE, FROM_TPOSE),
-      [(f"demo_c:{SIG_A}", "demo_c · 01234567"),
-       (f"demo_c:{SIG_B}", "demo_c · fedcba98")])
+      [(f"demo_c:{SIG_A}", "demo_c · 01234567")])
 MESH_CALLS.clear()
 MESH_RESULT["value"] = {"ok": False, "error": "no_tpose_input"}
 check_raises("a producer failure names the candidate — the step log is a list "
              "of combinations, and the bare error says nothing about which",
              RuntimeError,
              lambda: MESH_FROM_TPOSE.apply(
-                 CAND_S, MESH_FROM_TPOSE.validate(FROM_TPOSE), "task-21"),
-             f"demo_c:{SIG_STATE}: no_tpose_input")
+                 CAND_B, MESH_FROM_TPOSE.validate(FROM_TPOSE), "task-21"),
+             f"demo_c:{SIG_B}: no_tpose_input")
 MESH_RESULT["value"] = None
 with model3d._lock:
     model3d._generating.add("demo_c")
 check_raises("a character already being meshed is LOAD, not a defect",
              CandidateBusy,
              lambda: MESH_FROM_TPOSE.apply(
-                 CAND_S, MESH_FROM_TPOSE.validate(FROM_TPOSE), "task-22"),
+                 CAND_B, MESH_FROM_TPOSE.validate(FROM_TPOSE), "task-22"),
              "demo_c: model generation already running")
 with model3d._lock:
     model3d._generating.discard("demo_c")
 
-# ── [19] a subject the target's rig cannot mesh is no candidate ─────────────
-print("[19] rig-aware candidates and targets")
+# ── [19] all img2mesh targets serve all subject kinds ─────────────
+print("[19] unrigged mesh candidates and targets")
 D = make_character("demo_d")                       # RIGS: generic
 REFS_D = get_character_dir(D) / "model_refs"
 REFS_D.mkdir(parents=True, exist_ok=True)
 SIG_D = "d0d0d0d0d0d0"
 (REFS_D / f"tpose_{SIG_D}.png").write_bytes(b"\x89PNG fake")
-check("subjects.mesh_backend_rig reads the configured rig",
-      [subjects.mesh_backend_rig(n) for n in ("hy", "tr", "px", "gone")],
-      ["mixamo", "generic", "none", ""])
-check("mesh_from_tpose on 'hy' (mixamo): the generic demo_d is no candidate",
-      candidates(MESH_FROM_TPOSE, FROM_TPOSE),
-      [(f"demo_c:{SIG_A}", "demo_c · 01234567"),
-       (f"demo_c:{SIG_B}", "demo_c · fedcba98")])
-check("mesh_from_tpose on 'tr' (generic): only demo_d",
-      candidates(MESH_FROM_TPOSE, {"backend": "tr"}),
-      [(f"demo_d:{SIG_D}", "demo_d · d0d0d0d0")])
+check("configured img2mesh targets have no rig filter",
+      [subjects.is_img2mesh_backend(n) for n in ("hy", "tr", "px", "gone")],
+      [True, True, True, False])
+expected = [(f"demo_c:{SIG_A}", "demo_c · 01234567"),
+            (f"demo_d:{SIG_D}", "demo_d · d0d0d0d0")]
+for backend in ('hy', 'tr', 'px'):
+    check(f"every img2mesh target serves all characters: {backend}",
+          candidates(MESH_FROM_TPOSE, {"backend": backend}), expected)
 _saved_inv = list(MESH_INVENTORY)
 MESH_INVENTORY[:] = [b for b in MESH_INVENTORY if b["name"] != "tr"]
-check("the rig comes from the CONFIG: 'tr' offline (gone from the live "
-      "inventory) still keeps demo_d",
-      [(c.key, c.label) for c in MESH_FROM_TPOSE.find_candidates({"backend": "tr"})],
-      [(f"demo_d:{SIG_D}", "demo_d · d0d0d0d0")])
+check("offline target keeps every candidate",
+      [(c.key, c.label) for c in MESH_FROM_TPOSE.find_candidates({"backend": "tr"})], expected)
 MESH_INVENTORY[:] = _saved_inv
-check("a backend that is not configured cannot be judged: nobody is dropped",
-      [c.key for c in MESH_FROM_TPOSE.find_candidates({"backend": "gone"})],
-      [f"demo_c:{SIG_A}", f"demo_c:{SIG_B}", f"demo_d:{SIG_D}"])
+check("unconfigured target keeps candidates for explicit failure",
+      [(c.key, c.label) for c in MESH_FROM_TPOSE.find_candidates({"backend": "gone"})], expected)
 write_mesh_sidecar(D, "hy")
-check("model_replace hy -> tr: the generic demo_d (model by hy) is a candidate",
-      candidates(MODEL_REPLACE, {"subject": "character", "source_backend": "hy",
-                                 "target_backend": "tr"}),
+check("model_replace hy -> tr selects the model by source",
+      candidates(MODEL_REPLACE, {"subject": "character", "source_backend": "hy", "target_backend": "tr"}),
       [("character:demo_d", "demo_d")])
 write_mesh_sidecar(C, "tr")
-check("model_replace tr -> hy: only the mixamo demo_c; the generic demo_a / "
-      "demo_b (models by tr) are no subjects of a mixamo target",
-      candidates(MODEL_REPLACE, {"subject": "character", "source_backend": "tr",
-                                 "target_backend": "hy"}),
-      [("character:demo_c", "demo_c")])
-check_raises("a character target of rig none is refused", ValueError,
-             lambda: MODEL_REPLACE.validate({"subject": "character",
-                                             "source_backend": "hy",
-                                             "target_backend": "px"}),
-             "target backend 'px' delivers rig 'none', character models need "
-             "'mixamo' or 'generic'")
-check_raises("a location target of rig mixamo is refused", ValueError,
-             lambda: MODEL_REPLACE.validate({"subject": "location",
-                                             "source_backend": "px",
-                                             "target_backend": "hy"}),
-             "target backend 'hy' delivers rig 'mixamo', location models need "
-             "'none'")
-check_raises("a prop target of rig generic is refused", ValueError,
-             lambda: MODEL_REPLACE.validate({"subject": "prop",
-                                             "source_backend": "px",
-                                             "target_backend": "tr"}),
-             "target backend 'tr' delivers rig 'generic', prop models need 'none'")
+check("model_replace tr -> hy includes both character kinds",
+      candidates(MODEL_REPLACE, {"subject": "character", "source_backend": "tr", "target_backend": "hy"}),
+      [("character:demo_a", "demo_a"), ("character:demo_b", "demo_b"), ("character:demo_c", "demo_c")])
+for subject, source, target in (('character', 'hy', 'px'), ('location', 'px', 'hy'), ('prop', 'px', 'tr')):
+    params = {'subject': subject, 'source_backend': source, 'target_backend': target}
+    check(f"img2mesh target validates for {subject}", MODEL_REPLACE.validate(params), params)
 check_raises("an unconfigured target is refused", ValueError,
              lambda: MODEL_REPLACE.validate({"subject": "prop",
                                              "source_backend": "px",
                                              "target_backend": "gone"}),
              "target backend 'gone' is not a configured mesh backend")
-check("a rig-none target validates for a prop",
+check("an img2mesh target validates for a prop",
       MODEL_REPLACE.validate({"subject": "prop", "source_backend": "px",
                               "target_backend": "pz"}),
       {"subject": "prop", "source_backend": "px", "target_backend": "pz"})
