@@ -4,7 +4,7 @@ The core records an invitation and emits ``interaction.invited`` — it must
 not know that the answer is given by a tool called InteractWith (R1). This
 module is where that knowledge lives:
 
-* the hook nudges an NPC invitee to answer in its own turn, phrased with
+* the hook queues a direct answer from an NPC invitee, phrased with
   THIS package's verb name;
 * the ``pair_verb_name`` provider lets the core (and other packages) name
   the verb in a message without importing it. Without this package the
@@ -35,12 +35,12 @@ def pair_verb_name() -> str:
 def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
                 pose_key: str = "", **_kwargs) -> None:
     """An invitation was recorded. A player answers it in the UI; an ordinary
-    NPC is given a turn with a hint that names the verb and the arguments —
-    consent is a tool call, never a keyword match on its prose.
+    NPC answers through the respond lane, not an autonomous thought that
+    an active conversation or world freeze could suppress.
 
-    A TEMPORARY NPC has no thought turns (``thoughts_enabled`` is off, so
-    ``bump`` refuses it) and no will system to consult: it says yes at once,
-    and the engine's own state check decides whether the pair can start
+    A TEMPORARY NPC has no will system to consult: it says yes at once,
+    without an LLM answer turn. The engine's own state check decides
+    whether the pair can start
     (asleep, travelling, occupied -> ``cannot``). A ``cannot`` that leaves the
     question OPEN is closed here: the engine keeps "not yet" questions alive
     for a second answer, and a temporary NPC never gives one.
@@ -79,8 +79,10 @@ def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
         return
     try:
         from app.core.agent_loop import get_agent_loop
-        get_agent_loop().bump(
-            invitee,
+        get_agent_loop().bump_respond(
+            invitee, speaker=inviter,
+            content=f"{inviter} asks you to {pose_key} together.",
+            on_demand=True,
             hint=(f"{inviter} asks you to {pose_key} together. Decide in "
                   f"character whether you want to. To agree, call "
                   f"{VERB_NAME} with partner={inviter}, action={pose_key}; "

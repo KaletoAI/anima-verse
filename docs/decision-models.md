@@ -89,6 +89,14 @@ to `timeout_s` in the periodic-jobs thread, one after the other. A decline the m
 one narrator line into the invitee's room (the counterpart of `start_interaction`'s line for a pair
 that starts), so the room — and a temporary-NPC inviter that never reads the row back — hears it.
 
+Without a decision-model answer, the `interact` hook queues an explicit
+`bump_respond(..., on_demand=True)` turn. Its invitation hint reaches the
+chat/tool path even during an active conversation; it is not subject to
+autonomous thought HOT-skip or chime substitution. This requested answer
+may run during world freeze. Ordinary room reactions and autonomous thoughts
+remain frozen; queue pause and world sleep still block all queued answers.
+Acceptance remains an `InteractWith` call, never a match on reply prose.
+
 ## Adding a point (core or plugin)
 
 1. `register_point("my_point", label=..., description=..., origin="<package>")` — a plugin in its

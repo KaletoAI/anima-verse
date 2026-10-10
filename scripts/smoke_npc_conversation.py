@@ -211,7 +211,7 @@ class FakeLoop:
         self.dispatches.append(kwargs)
         return {"obligatory": list(kwargs.get("addressees") or []), "chime": []}
 
-    def bump(self, name, **kwargs):
+    def bump_respond(self, name, **kwargs):
         self.bumps.append((name, kwargs))
         return True
 

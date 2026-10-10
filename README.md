@@ -178,8 +178,9 @@ stops acting autonomously).
   timezones — a settable clock with a tick factor that drives day/night, schedules, cron jobs, flag
   lifetimes, journeys and every timestamp the game world sees.
 - **World freeze** pauses the autonomous simulation (agent loop, ticks, scheduler) while keeping the
-  task queue and on-demand LLM tools live; **sleep mode** puts every NPC to bed without stopping the
-  clock.
+  task queue and on-demand LLM tools live. Explicit pair invitations still receive a direct
+  accept/decline answer; the game clock and clip progression remain frozen.
+  **Sleep mode** puts every NPC to bed without stopping the clock.
 
 ### Image, video and 3D generation
 - One pool, three media types. Image backends: **Stable Diffusion WebUI (A1111/Forge)**, **CivitAI**,

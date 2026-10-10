@@ -230,6 +230,8 @@ os.environ["ANIMATION_CLIPS_DIR"] = scratch("agent-loop-lanes-clips-")
 from app.core import paths  # noqa: E402
 
 paths.init(scratch("agent-loop-lanes-storage-"))
+from app.core import db  # noqa: E402
+db.init_schema()
 
 from app.core import agent_loop as al  # noqa: E402
 from app.core.llm_lanes import (  # noqa: E402

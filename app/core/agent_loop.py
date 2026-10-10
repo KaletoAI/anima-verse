@@ -422,7 +422,8 @@ class AgentLoop:
     def bump_respond(self, character_name: str, speaker: str,
                      content: str, volume: str = "normal",
                      obligatory: bool = True, hint: str = "",
-                     winding_down: bool = False) -> bool:
+                     winding_down: bool = False,
+                     on_demand: bool = False) -> bool:
         """Phase 3: character should react to a room utterance of the speaker.
 
         Unlike ``bump`` (thoughts/perception) this triggers a VISIBLE chat
@@ -433,6 +434,10 @@ class AgentLoop:
         ``obligatory`` True = addressed → mandatory answer. False = merely
         present → opportunity (chime-in): the turn may stay silent via SKIP.
         A pending mandatory answer is never downgraded by an opportunity.
+
+        ``on_demand`` marks an explicit tool/UI request, such as a pair
+        invitation. It may answer during world freeze, but never during
+        queue pause or world sleep. Ordinary room reactions stay frozen.
         """
         if not character_name:
             return False
@@ -440,12 +445,14 @@ class AgentLoop:
             logger.debug("AgentLoop.bump_respond skipped: %s ineligible", character_name)
             return False
         existing = self._respond_to.get(character_name)
-        if existing and existing.get("obligatory") and not obligatory:
-            return True  # obligation beats opportunity
+        if existing and (
+                (existing.get("obligatory") and not obligatory)
+                or (existing.get("on_demand") and not on_demand)):
+            return True  # ordinary reactions cannot replace an explicit request
         self._respond_to[character_name] = {
             "speaker": speaker, "content": content,
             "volume": volume, "obligatory": obligatory,
-            "hint": hint, "winding_down": winding_down,
+            "hint": hint, "winding_down": winding_down, "on_demand": on_demand,
         }
         # Mandatory answers go to the FRONT (the lane pops FIFO) so they
         # never starve behind chime opportunities — otherwise the scene can
@@ -1040,7 +1047,7 @@ class AgentLoop:
                        if pool == pool_key)
         return min(free, manager.lane_capacity(pool_key) - starting) >= 1
 
-    def _sync_respond_reservations(self) -> None:
+    def _sync_respond_reservations(self, on_demand_only: bool = False) -> None:
         """Hold the pool of every reply that is waiting for a lane — and let
         go of every other one (plan-cache-lanes.md § 6 P5, item 13).
 
@@ -1091,6 +1098,8 @@ class AgentLoop:
         manager = get_lane_manager()
         want: Dict[str, str] = {}
         for name in self._respond_queue:
+            if on_demand_only and not self._respond_to.get(name, {}).get("on_demand"):
+                continue
             if self._respond_wait_reason.get(name) != "no_lane":
                 continue
             pool_key = self._respond_resolved.get(name)
@@ -1177,7 +1186,7 @@ class AgentLoop:
             get_lane_manager().release_reservation(
                 pool_key, cache_key_for(_RESPOND_TASK_TYPE, name))
 
-    def _pop_next_respond(self) -> Optional[tuple]:
+    def _pop_next_respond(self, on_demand_only: bool = False) -> Optional[tuple]:
         """Pop the first queued respond that may start right now. Returns
         (name, payload, pool_key) or None.
 
@@ -1215,6 +1224,9 @@ class AgentLoop:
         release (``_hand_over_respond_reservation``).
         """
         for name in list(self._respond_queue):
+            if on_demand_only and not self._respond_to.get(name, {}).get("on_demand"):
+                self._respond_wait_reason[name] = "frozen"
+                continue
             if name in self._respond_active:
                 self._respond_wait_reason[name] = "active"
                 continue  # never two turns for the same character at once
@@ -1239,9 +1251,9 @@ class AgentLoop:
             if not payload:
                 continue
             self._hand_over_respond_reservation(name, pool_key)
-            self._sync_respond_reservations()
+            self._sync_respond_reservations(on_demand_only)
             return name, payload, pool_key
-        self._sync_respond_reservations()
+        self._sync_respond_reservations(on_demand_only)
         return None
 
     async def _respond_dispatcher(self) -> None:
@@ -1249,9 +1261,9 @@ class AgentLoop:
         for every FREE CACHE LANE of the responder's LLM entry — no global
         turn lock, no min_turn_gap, and no separate parallelism knob: how many
         replies may run at once is what ``max_concurrent`` of that entry says
-        (plan-cache-lanes.md § 6 P3). Honors the shared pause switch (admin
-        pause, world freeze, world sleep) and keeps the queue when the chat
-        LLM is unreachable."""
+        (plan-cache-lanes.md § 6 P3). Queue pause and world sleep block all
+        replies; world freeze admits only explicit on-demand answers.
+        Keeps the queue when the chat LLM is unreachable."""
         try:
             await asyncio.sleep(_BOOT_GRACE_SECONDS)
         except asyncio.CancelledError:
@@ -1265,7 +1277,10 @@ class AgentLoop:
                     self._release_respond_reservations()
                     await asyncio.sleep(1)
                     continue
-                if _is_paused():
+                on_demand_only = _is_paused()
+                if on_demand_only and (
+                        not any(p.get("on_demand") for p in self._respond_to.values())
+                        or _is_reaction_paused()):
                     self._release_respond_reservations()
                     await asyncio.sleep(_IDLE_SLEEP_SECONDS)
                     continue
@@ -1273,7 +1288,7 @@ class AgentLoop:
                     self._release_respond_reservations()
                     await asyncio.sleep(_IDLE_SLEEP_SECONDS)
                     continue
-                nxt = self._pop_next_respond()
+                nxt = self._pop_next_respond(on_demand_only)
                 if not nxt:
                     # Either nobody is startable or every entry is busy — the
                     # short nap is what makes the second case a wait for a
@@ -1802,7 +1817,7 @@ class AgentLoop:
                 # Activity stat tick: the RUNNING activity influences status
                 # values over time (gym drains stamina, resting restores) —
                 # cheap interval gate here, LLM round in a background thread
-                # (plan-activity-stat-effects.md Baustein 2).
+                # (plan-activity-stat-effects.md component 2).
                 try:
                     from app.core.stat_effects import maybe_activity_tick
                     maybe_activity_tick(character_name)
@@ -2082,14 +2097,21 @@ class AgentLoop:
 # ---------------------------------------------------------------------------
 
 def _is_paused() -> bool:
-    """Global pause indicator. Mirrors the existing world-pause toggle so
-    Admin/World-Dev pause buttons stop the AgentLoop too — PLUS the persistent
-    world freeze (autonomous simulation frozen) and the world sleep mode (all
-    NPCs asleep -> no NPC LLM turns; the periodic jobs / memory consolidation
-    keep running separately)."""
+    """Pause autonomous turns and ordinary room reactions."""
     try:
-        from app.models.world import is_world_frozen, is_world_sleeping
-        if is_world_frozen() or is_world_sleeping():
+        from app.models.world import is_world_frozen
+        if is_world_frozen():
+            return True
+    except Exception:
+        pass
+    return _is_reaction_paused()
+
+
+def _is_reaction_paused() -> bool:
+    """Queue pause and world sleep block even explicitly requested answers."""
+    try:
+        from app.models.world import is_world_sleeping
+        if is_world_sleeping():
             return True
     except Exception:
         pass

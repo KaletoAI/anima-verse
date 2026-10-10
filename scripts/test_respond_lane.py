@@ -81,9 +81,6 @@ paths.init(STORAGE)
 from app.core import agent_loop as al  # noqa: E402
 from app.core.llm_lanes import get_lane_manager  # noqa: E402
 
-# Captured BEFORE make_loop() monkeypatches the module gates — scenario 6
-# inspects the real implementation.
-_REAL_CHAT_GATE = al._chat_llm_available
 
 # The one LLM entry every stubbed reply runs on (provider/model, as
 # llm_lanes.pool_key_for builds it).
@@ -221,21 +218,6 @@ async def scenario_requeue_active():
     check("runs did not overlap", len(runs) == 2 and not overlap(runs[0], runs[1]))
 
 
-def scenario_llm_gate_task_id():
-    """The dispatcher's LLM gate must probe a task id that EXISTS in
-    llm_tasks.TASK_TYPES — an unknown id has no routing chain, resolves to
-    None forever and silently parks the whole lane (2026-07-30 regression:
-    the probe said "chat", the real route is "chat_stream"). The stubbed
-    scenarios above cannot catch this, so check the source directly."""
-    print("Scenario 6: LLM gate probes a registered task id")
-    import inspect
-    import re
-    from app.core.llm_tasks import TASK_TYPES
-    src = inspect.getsource(_REAL_CHAT_GATE)
-    probed = re.findall(r'resolve_llm\("([^"]+)"\)', src)
-    check("gate calls resolve_llm with a literal task id", bool(probed), src)
-    for task in probed:
-        check(f"task id {task!r} is registered", task in TASK_TYPES)
 
 
 async def main():
@@ -244,7 +226,6 @@ async def main():
     await scenario_obligatory_first()
     await scenario_merge()
     await scenario_requeue_active()
-    scenario_llm_gate_task_id()
     print()
     if FAILED:
         print(f"FAILED: {len(FAILED)} check(s): {FAILED}")

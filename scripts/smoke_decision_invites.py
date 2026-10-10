@@ -6,8 +6,8 @@ Usage:  ./.venv/bin/python scripts/smoke_decision_invites.py
 Section A — ``pair_invite`` (package ``interact``): an ORDINARY NPC invited
 to a pair activity. With the point active the decision model may settle the
 invitation at once (``resolve_invite``); with no confident answer, or the
-point inactive, the NPC is woken exactly as before (``bump`` with the hint
-that names ``InteractWith ... answer=no``).
+point inactive, the NPC gets a direct answer turn (``bump_respond`` with the
+hint that names ``InteractWith ... answer=no``).
 
 Everything the hook reaches is stubbed at module level, so no LLM, no
 network, no decision endpoint, no world data: ``decision.is_active`` /
@@ -15,7 +15,7 @@ network, no decision endpoint, no world data: ``decision.is_active`` /
 ``decision_points.invite_state`` returns ``{"situation": "stub"}`` (A8 tests
 the real one with its own inputs stubbed), ``interaction_engine.resolve_invite``
 returns the status each case picks, and the agent loop is a FakeLoop that
-records ``bump``. Storage is a throwaway dir initialised before any app import.
+records requested turns. Storage is a throwaway dir initialised before any app import.
 
 EXPECTATIONS, DERIVED BY HAND (Halvard invites Kira to "shaking hands").
 A0  importing the package's on_load module registers point "pair_invite"
@@ -157,6 +157,10 @@ def _events(kind):
 
 class FakeLoop:
     def bump(self, name, **kwargs):
+        EVENTS.append(("bump", (name, kwargs.get("hint", ""))))
+        return True
+
+    def bump_respond(self, name, **kwargs):
         EVENTS.append(("bump", (name, kwargs.get("hint", ""))))
         return True
 

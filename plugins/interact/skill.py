@@ -9,7 +9,7 @@ is marked ``solo: false`` AND whose ``animation`` is a complete pair clip
 
 A pair is ASKED, never imposed: the call records an invitation and the clip
 starts only on the answer. The avatar answers through the player UI
-(``/play/interact/respond``); an NPC is bumped and answers by calling this
+(``/play/interact/respond``); an NPC gets a direct answer turn and calls this
 same verb back, which the counter-invitation brake reads as consent — the
 same shape the party's invite/join uses, and never a keyword match on prose.
 
