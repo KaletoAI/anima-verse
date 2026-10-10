@@ -147,15 +147,17 @@ try {
   const baselineBuild=await build({stdin:{contents:baselineSource,resolveDir:join(process.cwd(),'packages/scene-render/src'),loader:'ts'},bundle:true,platform:'node',format:'esm',write:false,external:['three']});
   const baselineFile=join(dir,'baseline.mjs');await writeFile(baselineFile,baselineBuild.outputFiles[0].text);
   const baseline=await import(baselineFile);
-  function restChain(lean,forward,rest,straighten,api=C) {
+  function restChain(lean,forward,rest,straighten,api=C,offset=[0,0,.1],siblings=[]) {
     const root=new THREE.Group(),anchor=new THREE.Bone();root.add(anchor);
+    for(const position of siblings) { const sibling=new THREE.Bone();sibling.position.fromArray(position);anchor.add(sibling); }
+    const mount=new THREE.Vector3().fromArray(offset);
     const a=lean*Math.PI/180,t=forward*Math.PI/180;
     const lever=new THREE.Vector3(Math.sin(a),-Math.cos(a)*Math.cos(t),Math.cos(a)*Math.sin(t));
     const bones=[],positions=[],indices=[],weights=[];
     for(let i=0;i<3;i++) {
       const b=new THREE.Bone();b.name=`rest_link_${i}`;(i?bones[i-1]:anchor).add(b);
-      b.position.copy(i?lever:new THREE.Vector3(0,0,.1));bones.push(b);
-      positions.push(...lever.clone().multiplyScalar(i+.5).add(new THREE.Vector3(0,0,.1)).toArray());
+      b.position.copy(i?lever:mount);bones.push(b);
+      positions.push(...lever.clone().multiplyScalar(i+.5).add(mount).toArray());
       indices.push(i+1,0,0,0);weights.push(1,0,0,0);
     }
     const geometry=new THREE.BufferGeometry();
@@ -188,6 +190,42 @@ try {
     const v=measured.directions[0];
     console.log(`ok lean rest=${rest} straighten=${straighten}: direction ${JSON.stringify(v.toArray())}, lateral ${Math.asin(v.x)*180/Math.PI}, elevation ${Math.asin(v.y)*180/Math.PI}`);
   }
+  // Hand derivation: X right, Y up, Z front, gravity 0. Widest pair
+  // spans .20 along X; max parent distance=.10, gate=.025. Y cross X
+  // is -Z, signed against (.03,0,.07) gives +Z. Centering removes the
+  // 25-degree lean; R(-X,120)(0,-1,0)=(0,.5,sqrt(3)/2), hence
+  // lateral 0 and elevation 30. Rest 0 retains the bind lever.
+  // Old yaw atan2(.03,.07)=23.19859051; centering in that yawed plane
+  // retains the projected lever's elevation before the 120-degree raise.
+  // Its forward tilt t=atan(tan(25)*sin(yaw)); after raising,
+  // x=sin(yaw)*sin(120+t), giving lateral +17.4544069429 degrees.
+  // No siblings or vertical siblings have zero horizontal separation;
+  // midline yaw=0 and paired groups retain the original front exactly.
+  const frontSource=(await promisify(execFile)('git',['show','8aea07a0:packages/scene-render/src/secondaryMotion.ts'],{encoding:'utf8'})).stdout;
+  const frontBuild=await build({stdin:{contents:frontSource,resolveDir:join(process.cwd(),'packages/scene-render/src'),loader:'ts'},bundle:true,platform:'node',format:'esm',write:false,external:['three']});
+  const frontFile=join(dir,'front-baseline.mjs');await writeFile(frontFile,frontBuild.outputFiles[0].text);
+  const frontBaseline=await import(frontFile);
+  const siblings=[[.10,-.05,0],[-.10,-.05,0],[0,.10,0]],offset=[.03,-.05,.07];
+  const offCenter=(api,rest=120,other=siblings,mount=offset)=>restChain(25,0,rest,60,api,mount,other);
+  const oldDirection=offCenter(frontBaseline).directions[0];
+  console.log('ok old-code off-midline proof 8aea07a0 lateral',Math.asin(oldDirection.x)*180/Math.PI,'yaw',Math.atan2(oldDirection.x,oldDirection.z)*180/Math.PI);
+  near(Math.asin(oldDirection.x)*180/Math.PI,17.4544069429,.00001);
+  near(Math.atan2(oldDirection.x,oldDirection.z)*180/Math.PI,23.19859051,.00001);
+  const corrected=offCenter(C),v=corrected.directions[0];
+  for(const direction of corrected.directions) {
+    near(Math.asin(direction.x)*180/Math.PI,0,.05);near(Math.asin(direction.y)*180/Math.PI,30,.05);
+    near(direction.distanceTo(new THREE.Vector3(0,.5,Math.sqrt(3)/2)),0,1e-9);
+  }
+  console.log('ok off-midline direction',v.toArray(),'lateral',Math.asin(v.x)*180/Math.PI,'elevation',Math.asin(v.y)*180/Math.PI);
+  matrixParity(offCenter(C,0),offCenter(frontBaseline,0));
+  near(offCenter(C,0).directions[0].distanceTo(new THREE.Vector3(Math.sin(25*Math.PI/180),-Math.cos(25*Math.PI/180),0)),0,1e-9);
+  for(const [label,other] of [['absent',[]],['vertical',[[0,.1,0],[0,-.1,0]]]]) {
+    const current=offCenter(C,120,other),old=offCenter(frontBaseline,120,other);matrixParity(current,old);
+    console.log('ok front fallback',label,'max matrix delta',Math.max(...current.matrices.flatMap((m,i)=>m.map((x,j)=>Math.abs(x-old.matrices[i][j])))));
+  }
+  matrixParity(offCenter(C,120,siblings,[0,-.05,.07]),offCenter(frontBaseline,120,siblings,[0,-.05,.07]));
+  for(const n of [1,3])matrixParity(straightSag(n,.6,C,true),straightSag(n,.6,frontBaseline,true));
+  console.log('ok midline and paired front parity within 1e-9; rest 0 bind unchanged');
   const theta=Math.atan((.6*9.81/(4*Math.PI)**2)/.15)*180/Math.PI;
   for(const [n,gravity,parts,denominator,total] of [[3,.6,[9,4,1],14,theta],[6,.6,[36,25,16,9,4,1],91,theta],[3,100,[9,4,1],14,25]]) {
     const measured=straightSag(n,gravity);

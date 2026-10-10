@@ -949,8 +949,19 @@ of package defaults. Runtime clamps it to ± the effective `rest_max_deg`
 Front is derived generically from the bind pose: take the horizontal component
 of (mean chain-root head minus mean declared-parent joint head). If that vector
 is meaningfully zero, use the horizontal component of (mean target centroid
-minus mean chain-root head), as for paired groups. Up is bind-pose world/model
-up. For groups with exactly one root, define the body lateral axis X as
+minus mean chain-root head). Up is bind-pose world/model up. Only for groups
+with exactly one root, inspect the root parent's direct Bone children, excluding
+the root and every Bone declared in any extension group of the payload. Choose
+the pair with the widest horizontal separation. Use it only when its separation
+is greater than 1e-4 bind world units and at least 0.25 times the largest
+horizontal distance from the parent head to any candidate head. Set front to
+normalize(up cross normalize(horizontal(head_a - head_b))), choosing its sign
+to have a positive dot product with the original front. If the absolute dot
+product is below 1e-6, or no pair qualifies, retain the original front. The root
+may sit off the midline, so this pair supplies front independently of its lateral
+offset. Paired and multi-root groups retain the original front. All group front
+consumers use this corrected direction. For groups with exactly one root, define
+the body lateral axis X as
 normalize(front cross up), signed to match the existing lever cross projected
 front for a sagittal lever. The root lever L points to the child head, or to
 its weighted centroid when there is no child. Project L into the sagittal

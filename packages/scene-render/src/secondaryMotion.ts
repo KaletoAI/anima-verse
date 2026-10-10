@@ -272,6 +272,8 @@ export function createSecondaryMotion(
     // Capture the actual bind lever, including non-uniform model scale.
     b.gravityProjection = gravity.dot(b.centroidWorld.clone().sub(b.head).normalize()) / 9.81
   }
+  const bindHeads = new Map<Bone, Vector3>()
+  root.traverse(o => { if ((o as Bone).isBone) bindHeads.set(o as Bone, o.getWorldPosition(new three.Vector3())) })
   const byName = new Map([...binds.values()].map(b => [normBoneName(b.bone.name), b]))
   let particles: Particle[] = []
   let far = false
@@ -285,6 +287,8 @@ export function createSecondaryMotion(
     if (disposed) return
     const previous = new Map(particles.map(p => [p.bind.bone, p]))
     const selected = new Set<Bone>()
+    const extensionNames = new Set(Object.values(next?.groups ?? {}).flatMap(group =>
+      group.bones.map(normBoneName)))
     const nextParticles: Particle[] = []
     for (const params of Object.values(next?.groups ?? {})) {
       const chain = params.bones.map(name => byName.get(normBoneName(name)))
@@ -318,6 +322,30 @@ export function createSecondaryMotion(
         front.addScaledVector(bindUp, -front.dot(bindUp))
       }
       front.normalize()
+      if (roots.length === 1) {
+        // The root may sit off the midline, so front comes from the widest
+        // symmetric pair of the parent's other children, not the root offset.
+        const parent = roots[0].bone.parent!
+        const candidates = parent.children.filter(o => (o as Bone).isBone &&
+          o !== roots[0].bone && !extensionNames.has(normBoneName(o.name))) as Bone[]
+        const horizontal = (v: Vector3) => v.addScaledVector(bindUp, -v.dot(bindUp))
+        let maxDistance = 0, maxSeparation = 0
+        const widest = new three.Vector3()
+        for (let i = 0; i < candidates.length; i++) {
+          const head = bindHeads.get(candidates[i])!
+          maxDistance = Math.max(maxDistance, horizontal(head.clone().sub(roots[0].parentHead)).length())
+          for (let j = 0; j < i; j++) {
+            const separation = horizontal(head.clone().sub(bindHeads.get(candidates[j])!))
+            const length = separation.length()
+            if (length > maxSeparation) { maxSeparation = length; widest.copy(separation) }
+          }
+        }
+        if (maxSeparation > 1e-4 && maxSeparation >= .25 * maxDistance) {
+          const corrected = bindUp.clone().cross(widest.normalize()).normalize()
+          const alignment = corrected.dot(front)
+          if (Math.abs(alignment) >= 1e-6) front.copy(alignment > 0 ? corrected : corrected.negate())
+        }
+      }
       for (const b of chain as Bind[]) {
         b.bodyFront.copy(front)
         if (b.bodyFront.lengthSq() < 1e-10) b.bodyFront.set(0, 0, 1)
