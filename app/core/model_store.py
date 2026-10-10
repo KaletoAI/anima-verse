@@ -119,16 +119,24 @@ def export_files(directory: Path, stems: Iterable[str],
     the "newest file" fallback of a stem without an entry, nothing for the
     ``__none__`` sentinel) with its :func:`companion_files`, plus the
     ``selection.json`` itself, unchanged. The gallery history — files no tier
-    resolves to — and backup folders such as ``raw/`` stay behind. A store
+    resolves to — and backup folders such as ``raw/`` stay behind. Reproducible sources
+    in ``unrigged/<stem>.glb`` (+ sidecar and creature PNG) travel with the
+    combination even when its rig stage is unfinished. A store
     with extra per-file companions (the prop store's areas and LOD parents)
     adds those on top. ``exts`` must be the extensions the store's own
     readers build their galleries with — the "newest file" fallback picks from
     exactly those."""
     d = Path(directory)
+    stems = list(stems)
     out: Dict[Path, None] = {}
     for stem in dict.fromkeys(s for s in stems if s):
         for model in ModelGallery(d, stem, exts).tiers().values():
             for f in companion_files(model):
+                out[f] = None
+    # Character source meshes travel with the resolved combination.
+    for stem in dict.fromkeys(s for s in stems if s):
+        for f in (d / "unrigged").glob(f"{stem}.*"):
+            if f.is_file() and f.suffix.lower() in (".glb", ".json", ".png"):
                 out[f] = None
     sel = d / SEL_FILE
     if sel.exists():

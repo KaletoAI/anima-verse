@@ -79,7 +79,7 @@ B3 the env bridge (`_flatten_to_env`, AST) sets none of PROFILE_, OUTFIT_,
    EVENT_IMAGEGEN_DEFAULT, STORY_ENGINE_IMAGEGEN_DEFAULT.
 B4 LEGACY_SPEC_FIELDS and _rewrite_legacy_workflow_specs are gone (every
    field they covered is removed).
-B5 the TRACKED demo config (worlds/demo/config.json) holds no routing and
+B5 the shipped demo config at commit 1a393855 (read from git, never worlds/) holds no routing and
    none of the old keys: since the instance-config split the chains are
    instance scope, and scripts/migrate_instance_config.py moved the demo's
    A1 chains out of the world file.
@@ -118,6 +118,7 @@ Fails on commit d0452bc6 (before fix round 1): C4 (mesh_rig "" for "  ").
 import ast
 import copy
 import inspect
+import subprocess
 import os
 import sys
 import tempfile
@@ -297,8 +298,9 @@ def part_b():
                                      hasattr(cfgmod, "_rewrite_legacy_workflow_specs")),
           (False, False))
 
-    demo = _json.loads((Path(__file__).resolve().parent.parent / "worlds" / "demo"
-                        / "config.json").read_text(encoding="utf-8"))
+    # Read the pinned shipped fixture, never the active world tree.
+    demo = _json.loads(subprocess.check_output(
+        ["git", "show", "1a393855:worlds/demo/config.json"], text=True))
     check("B5 demo has no routing (instance scope)",
           "routing" in (demo.get("image_generation") or {}), False)
     check("B5 demo old keys", [k for k in OLD_KEYS if _has(demo, k)], [])

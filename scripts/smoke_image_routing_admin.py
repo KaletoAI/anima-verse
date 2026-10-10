@@ -12,11 +12,11 @@ Backends of the fixture config (image_generation.backends):
   Flux2 A        openai_diffusion img2img ref_slot_count 1
   Qwen Inpaint   openai_diffusion inpaint
   Flat           openai_diffusion txt2img ref_slot_count 0
-  Mesh-H1        openai_mesh img2mesh mixamo
+  Mesh-H1        openai_mesh mesh2rig mixamo
   Vid            openai_video
 
 Expected, by hand:
- V1 {"photo": ["Flux2*"], "mesh_humanoid": ["Mesh-H*"]} -> ("", [])
+ V1 {"photo": ["Flux2*"], "rig_humanoid": ["Mesh-H*"]} -> ("", [])
  V2 {"mesh_low": ["x"]} -> error "Image routing: unknown occasion 'mesh_low'."
  V3 {"mesh_object": ["Mesh-H*"]} -> error mentions "wrong kind" and "Mesh-H1"
     (rig mixamo, the occasion needs rig none)
@@ -30,7 +30,7 @@ Expected, by hand:
  V11 describe_config_backend(openai_mesh without mesh_rig) -> media "mesh",
      rig "mixamo"; (openai_video) -> media "video", ref_slot_count 1
      (OpenAIVideoBackend.DEFAULT_REF_SLOT_COUNT)
- R1 settings_image_routing_occasions() -> 19 rows
+ R1 settings_image_routing_occasions() -> 21 rows
  R2 settings_image_routing_effective(character="x") hands the character to
     explain_image_routing (patched) and returns its result plus
     "media_generation_enabled" = base.media_generation_enabled() (patched to
@@ -119,7 +119,7 @@ BACKENDS = [
     {"name": "Flux2 A", "api_type": "openai_diffusion", "category": "img2img", "ref_slot_count": 1},
     {"name": "Qwen Inpaint", "api_type": "openai_diffusion", "category": "inpaint"},
     {"name": "Flat", "api_type": "openai_diffusion", "category": "txt2img", "ref_slot_count": 0},
-    {"name": "Mesh-H1", "api_type": "openai_mesh", "category": "img2mesh", "mesh_rig": "mixamo"},
+    {"name": "Mesh-H1", "api_type": "openai_mesh", "category": "mesh2rig", "mesh_rig": "mixamo"},
     {"name": "Vid", "api_type": "openai_video", "category": "txt2img"},
 ]
 
@@ -131,7 +131,7 @@ def v(routing_value, with_key=True):
     return adm._validate_image_routing(ig)
 
 
-check("V1 valid", v({"photo": ["Flux2*"], "mesh_humanoid": ["Mesh-H*"]}), ("", []))
+check("V1 valid", v({"photo": ["Flux2*"], "rig_humanoid": ["Mesh-H*"]}), ("", []))
 check("V2 unknown occasion", v({"mesh_low": ["x"]})[0],
       "Image routing: unknown occasion 'mesh_low'.")
 e3 = v({"mesh_object": ["Mesh-H*"]})[0]
@@ -150,7 +150,7 @@ check("V11 mesh kind", (k["media"], k["rig"]), ("mesh", "mixamo"))
 k = routing.describe_config_backend({"name": "V", "api_type": "openai_video"})
 check("V11 video kind", (k["media"], k["ref_slot_count"]), ("video", 1))
 
-check("R1 occasions", len(adm.settings_image_routing_occasions(user=None)["occasions"]), 19)
+check("R1 occasions", len(adm.settings_image_routing_occasions(user=None)["occasions"]), 21)
 SEEN = {}
 
 

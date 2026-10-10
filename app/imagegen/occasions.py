@@ -16,8 +16,8 @@ Per occasion:
   media               "image" | "video" | "mesh" — the backend MEDIA_TYPE.
   category            "render": every image/video backend except inpaint
                       (img2img is preferred when a reference is slotted);
-                      "img2mesh": a mesh backend that is not a mesh2mesh
-                      reduction alias.
+                      "img2mesh": an unrigged image-to-mesh backend;
+                      "mesh2rig": a standalone mesh-to-rig backend.
   rig                 mesh only — "mixamo" | "generic" | "none". A chain entry
                       only resolves to a backend of this rig, so a fallback
                       stays in the rig (a wrong-rig mesh binds unusably).
@@ -93,9 +93,11 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
               "covers": "Animate dialog, Instagram animate, video skill",
               **_WORLD},
     "mesh_humanoid": _mesh("3D mesh — humanoid", "Character mesh (humanoid)",
-                           "mixamo"),
+                           "none"),
     "mesh_creature": _mesh("3D mesh — creature", "Character mesh (non-humanoid)",
-                           "generic"),
+                           "none"),
+    "rig_humanoid": {**_mesh("3D rig — humanoid", "Character rig (humanoid)", "mixamo"), "category": "mesh2rig"},
+    "rig_creature": {**_mesh("3D rig — creature", "Character rig (non-humanoid)", "generic"), "category": "mesh2rig"},
     "mesh_object": _mesh("3D mesh — object", "Prop mesh", "none"),
     "mesh_building": _mesh("3D mesh — building", "Building/room mesh", "none"),
 }
@@ -133,7 +135,7 @@ def backend_fits(occasion_id: str, kind: Dict[str, Any]) -> bool:
         return False
     category = str(kind.get("category") or "").lower()
     if occ["media"] == "mesh":
-        if category == "mesh2mesh":
+        if category != occ["category"]:
             return False
         return (str(kind.get("rig") or "mixamo").lower() or "mixamo") == occ["rig"]
     if category == "inpaint":

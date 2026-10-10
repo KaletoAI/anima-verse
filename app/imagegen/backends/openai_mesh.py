@@ -1,7 +1,7 @@
 """LLM-gateway image-to-mesh backend (gateway generations/jobs API).
 
 3D counterpart of ``OpenAIVideoBackend``: the gateway hosts an image-to-3D
-workflow under a generation alias (e.g. ``Trellis2-Humanoid-Low``). Same async
+workflow under a generation alias (e.g. ``Trellis2-Object-Low``). Same async
 API, but input IMAGES instead of a prompt, plus alias-specific params. Per the
 client spec (``llm-gateway/docs/mesh-client-spec.md``, 2026-08-03) and the alias
 schema (``GET /v1/generations/{alias}/schema``, which always wins):
@@ -44,7 +44,9 @@ the gateway (the alias default applies), so a stale name reaches nothing. Only
 params the alias declares are sent — except when the schema is unreadable, then
 the ``input_*`` names go out blind (worst case they are ignored).
 
-``input_name`` decides the delivered FILE NAMES and is therefore always set;
+``input_name`` decides the delivered FILE NAMES for mesh generation; standalone
+riggers receive only ``files.input_mesh_path`` and ``input_no_fingers``. For
+img2mesh it is always set;
 leaving it empty makes the workflow inherit leftovers from a previous run. It
 must also be UNIQUE per job (§ 3.2): a run's LOD stages live under that name on
 the backend, so a later run with the same name hands the older stages out with
@@ -179,7 +181,7 @@ class OpenAIMeshBackend(ImageBackend):
         #   generic -> no standard skeleton, fbx + its basecolor image as an
         #              inseparable pair
         #   none    -> unrigged, ONE glb (textures embedded); static props /
-        #              building models — never matched to a character
+        #              building models and character source meshes
         # Blank / whitespace-only = "mixamo", the same reading as
         # routing.describe_config_backend (one rule for config + live).
         self.mesh_rig = (os.environ.get(f"{env_prefix}MESH_RIG", "")
@@ -504,6 +506,8 @@ class OpenAIMeshBackend(ImageBackend):
 
         Public so the param mapping can be checked without a gateway
         (scripts/smoke_mesh_gateway.py)."""
+        if self.category == "mesh2rig":
+            return {"input_no_fingers": bool(params.get("no_fingers", self.no_fingers))}
         # input_name is ALWAYS set: it decides the delivered file names, and an
         # empty one makes the workflow reuse leftovers of a previous run. The
         # alias is the fallback so the files stay attributable.
@@ -639,7 +643,7 @@ class OpenAIMeshBackend(ImageBackend):
         logger.info("%s: starting mesh job (alias=%s, faces=%s, lod=%s, "
                     "name='%s', input=%s images=%d cut_out=%s "
                     "remove_background=%s sha256=%s)", self.name,
-                    payload["model"], faces, lod, alias_params["input_name"],
+                    payload["model"], faces, lod, alias_params.get("input_name", "-"),
                     "mesh" if input_files else "image", n_inputs,
                     inputs_cut_out,
                     alias_params.get("input_remove_background", "-"),

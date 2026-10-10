@@ -118,7 +118,7 @@ function irFits(occ, b) {
     if ((b.media || 'image') !== occ.media) return false;
     const cat = String(b.category || '').toLowerCase();
     if (occ.media === 'mesh') {
-        if (cat === 'mesh2mesh') return false;
+        if (cat !== occ.category) return false;
         return (String(b.rig || 'mixamo').toLowerCase() || 'mixamo') === occ.rig;
     }
     if (cat === 'inpaint') return false;

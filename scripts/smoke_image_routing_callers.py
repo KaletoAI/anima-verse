@@ -310,18 +310,9 @@ F-M7 a re-run stays in the rig. Pool 2: "HDead" (cost 0, mixamo, dead),
    HDead fails, MOk is wrong_kind -> nothing usable -> ok False with the
    NoRouteError text ("no backend available for mesh_humanoid"); MOk asked
    0 times.
-F-M8 the character mesh (model3d.generate_for_current_outfit, signature
-   "sig1", rig patched to mixamo, the post-processing steps stubbed). Pool
-   3: "HDead" (cost 0, mixamo, dead), "HOk" (cost 1, mixamo). Rules
-   mesh_humanoid ["HDead","HOk"].
-   a) no glob -> ok; the sidecar: backend "HOk", routing {"occasion":
-      "mesh_humanoid", "position": 2, "spec": "HOk"}, fallback_from
-      {"occasion": "mesh_humanoid", "intended_spec": "HDead", "position": 1}.
-   b) the auto-mesh hook (prefer_cheapest, coordinator decision 3), fresh
-      pool 3: the cheapest AVAILABLE mixamo backend is HDead (cost 0) — an
-      explicit pick, no chain: it fails -> ok False, HOk NOT asked (0 calls).
-      Again (HDead now cools) -> the cheapest available is HOk -> ok, the
-      sidecar has backend "HOk" and NO "routing" / "fallback_from".
+F-M8 character generation now uses two jobs (plan-mesh-rig-trennung P2).
+   Valid fixtures, both stage sidecars, single-slot sequencing and failed
+   replacement preservation are checked in smoke_mesh_rig_split.py.
 F-M9 the building mesh (location_model3d._generate, backend "", the local
    low-tier build stubbed). Pool 4: "BDead" (cost 0, none, dead), "BOk"
    (cost 1, none); rules mesh_building ["BDead","BOk"] -> ok; the model's
@@ -1318,7 +1309,7 @@ def part_f_mesh():
 
     res = svc.generate_mesh(str(tmp / "src.png"), str(tmp / "m2.glb"),
                             backend_glob="MHum", rig="none")
-    check("F-M2 explicit wrong rig", (res.get("ok"), "'mixamo', 'none' is needed"
+    check("F-M2 explicit wrong rig", (res.get("ok"), "wrong category or rig"
                                       in str(res.get("error"))), (False, True))
     check("F-M2 nothing rendered", len(mh.calls), 0)
 
@@ -1335,14 +1326,14 @@ def part_f_mesh():
           (False, "mesh backend 'MDead' unavailable"))
     check("F-M4 MOk not asked", len(mo.calls) - n, 0)
 
-    set_routing({"mesh_object": ["MOk"], "mesh_humanoid": ["MHum"]})
+    set_routing({"mesh_object": ["MOk"], "mesh_humanoid": ["MOk"]})
     res = svc.generate_mesh(str(tmp / "src.png"), str(tmp / "m5.glb"), rig="none")
     check("F-M5 rig none -> mesh_object", (res.get("routing") or {}).get("occasion"),
           "mesh_object")
     res = svc.generate_mesh(str(tmp / "src.png"), str(tmp / "m6.glb"))
     check("F-M5 no rig -> mesh_humanoid", (res.get("backend"),
                                            (res.get("routing") or {}).get("occasion")),
-          ("MHum", "mesh_humanoid"))
+          ("MOk", "mesh_humanoid"))
 
     set_routing({"mesh_object": ["MOk"]})
     check("F-M6 object default", model3d.list_mesh_backends("none")["default"], "MOk")
@@ -1362,59 +1353,17 @@ def part_f_mesh():
     set_routing({"mesh_humanoid": ["HDead", "MOk"]})
     res = svc.generate_mesh(str(tmp / "src.png"), str(tmp / "m7.glb"), rig="mixamo")
     check("F-M7 stays in the rig", (res.get("ok"),
-                                    "no backend available for mesh_humanoid" in str(res.get("error")),
+                                    "only an unrigged source" in str(res.get("error")),
                                     len(mo.calls)), (False, True, 0))
 
-    # -- F-M8: the character mesh ----------------------------------------
+    # Character two-stage generation, rig routing and sidecar publication are
+    # verified with valid GLB/FBX fixtures in smoke_mesh_rig_split.py.
+    # The former one-job character tests contradict decision 5.1 and were
+    # replaced, rather than preserving that removed path with a test shim.
     patched = {}
-
     def patch(mod, name, value):
         patched[(mod, name)] = getattr(mod, name)
         setattr(mod, name, value)
-    char_dir = tmp / "m3d-char"
-    # What get_model3d_dir does for an existing character; the mesh store
-    # never creates the directory itself.
-    char_dir.mkdir(parents=True, exist_ok=True)
-    patch(model3d, "required_rig", lambda name: "mixamo")
-    patch(model3d, "find_ref_image", lambda name, kind, sig=None: tmp / "src.png")
-    # Keep the store's staging redirect (model3d._serial_model): processing
-    # writes into a per-run stage, publication moves the result into char_dir.
-    patch(model3d, "get_model3d_dir",
-          lambda name: getattr(model3d._staging, "directories", {}).get(name) or char_dir)
-    patch(model3d, "get_model3d_options", lambda name: {})
-    patch(model3d, "_ref_manifest", lambda src: {})
-    for fn in ("_auto_retexture", "_auto_normalize"):
-        patch(model3d, fn, lambda *a, **k: None)
-    patch(model3d, "_attach_measurement", lambda meta, path: None)
-    patch(model3d, "request_lod", lambda *a, **k: False)
-    patch(model_refs, "enabled_tpose_views", lambda name: [])
-    try:
-        hd, ho = FakeMedia("HDead", 0, "mesh", rig="mixamo", dead=True), FakeMedia("HOk", 1, "mesh", rig="mixamo")
-        install_pool(hd, ho)
-        set_routing({"mesh_humanoid": ["HDead", "HOk"]})
-        r = model3d.generate_for_current_outfit("Mara", force=True, signature="sig1")
-        meta = read_model_sidecar(Path(r.get("path") or tmp / "none.glb"))
-        check("F-M8a routed character mesh", (r.get("ok"), meta.get("backend"),
-                                              meta.get("routing"), meta.get("fallback_from")),
-              (True, "HOk", {"occasion": "mesh_humanoid", "position": 2, "spec": "HOk"},
-               {"occasion": "mesh_humanoid", "intended_spec": "HDead", "position": 1}))
-
-        hd, ho = FakeMedia("HDead", 0, "mesh", rig="mixamo", dead=True), FakeMedia("HOk", 1, "mesh", rig="mixamo")
-        install_pool(hd, ho)
-        r = model3d.generate_for_current_outfit("Mara", force=True, signature="sig1",
-                                                prefer_cheapest=True)
-        check("F-M8b auto hook: cheapest, explicit, no chain",
-              (r.get("ok"), len(hd.calls), len(ho.calls)), (False, 1, 0))
-        r = model3d.generate_for_current_outfit("Mara", force=True, signature="sig1",
-                                                prefer_cheapest=True)
-        meta = read_model_sidecar(Path(r.get("path") or tmp / "none.glb"))
-        check("F-M8b auto hook on the next cheapest: no routing meta",
-              (r.get("ok"), meta.get("backend"), "routing" in meta, "fallback_from" in meta),
-              (True, "HOk", False, False))
-    finally:
-        for (mod, name), orig in patched.items():
-            setattr(mod, name, orig)
-        patched.clear()
 
     # -- F-M9: the building mesh -----------------------------------------
     loc = world.add_location("Tower", "A lone tower.")["id"]

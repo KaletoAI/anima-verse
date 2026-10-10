@@ -1314,7 +1314,7 @@ def _mesh_routing_occasions(glob: str, backends: Any) -> list:
         if not isinstance(b, dict):
             continue
         kind = describe_config_backend(b)
-        if kind["media"] != "mesh" or kind["category"] == "mesh2mesh":
+        if kind["media"] != "mesh" or kind["category"] != "img2mesh":
             continue
         if fnmatch.fnmatch(kind["name"].lower(), glob.lower()):
             rigs.add(kind["rig"])
@@ -1365,6 +1365,34 @@ def _migrate_image_routing(config: dict) -> bool:
     return changed
 
 
+def _migrate_mesh_rig_split(config: dict) -> bool:
+    """Disable combined mesh/rig aliases and seed standalone riggers once."""
+    ig = config.get("image_generation") or {}
+    entries = ig.get("backends")
+    if not isinstance(entries, list):
+        return False
+    changed = False
+    source = None
+    for entry in entries:
+        if (str(entry.get("category") or "").strip().lower() == "img2mesh"
+                and (str(entry.get("mesh_rig") or "").strip().lower() or "mixamo") != "none"):
+            source = source or entry
+            if entry.get("enabled", True) is not False:
+                entry["enabled"] = False
+                logger.info("Mesh/rig split: disabled combined backend %s", entry.get("name"))
+                changed = True
+    if source and not any(str(b.get("category") or "").strip().lower() == "mesh2rig" for b in entries):
+        for alias, rig in (("mesh-mia", "mixamo"), ("mesh-rig-unirig", "generic")):
+            name = alias
+            while any(b.get("name") == name for b in entries):
+                name += "-rig"
+            entries.append({**{k: source.get(k, "") for k in ("api_url", "api_key", "api_type")},
+                            "name": name, "model": alias, "category": "mesh2rig",
+                            "mesh_rig": rig, "enabled": True, "cost": 0})
+        changed = True
+    return changed
+
+
 def _apply_file_migrations(config: dict) -> bool:
     """Runs every load-time normalisation over ``config``, IN MEMORY.
 
@@ -1402,6 +1430,8 @@ def _apply_file_migrations(config: dict) -> bool:
     if _seed_default_providers(config):
         changed = True
     if _migrate_backend_categories(config):
+        changed = True
+    if _migrate_mesh_rig_split(config):
         changed = True
     if _migrate_lora_triggers(config):
         changed = True

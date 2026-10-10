@@ -131,6 +131,18 @@ check(sb.irVerdict(O.mesh_object, 'Mesh-H', B) === 'wrong_kind', '6. wrong rig')
 check(sb.irVerdict(O.mesh_object, 'Shrink', B) === 'wrong_kind', '6. mesh2mesh');
 check(sb.irVerdict(O.video, 'Vid', B) === 'ok', '6. video');
 check(sb.irVerdict(O.photo, 'Nope', B) === 'no_match', '6. no match');
+// P1/P2: rig occasions require mesh2rig and their own rig; character mesh
+// occasions require img2mesh/none. Both directions must refuse a wrong category.
+const rigOcc = { media: 'mesh', category: 'mesh2rig', rig: 'mixamo' };
+const creatureOcc = { media: 'mesh', category: 'mesh2rig', rig: 'generic' };
+const meshOcc = { media: 'mesh', category: 'img2mesh', rig: 'none' };
+const mia = { media: 'mesh', category: 'mesh2rig', rig: 'mixamo' };
+check(sb.irFits(rigOcc, mia), '13. humanoid rig fits');
+check(!sb.irFits(creatureOcc, mia), '13. wrong rig refused');
+check(!sb.irFits(meshOcc, mia), '13. mesh2rig refused by img2mesh');
+check(!sb.irFits(rigOcc, { ...mia, category: 'img2mesh' }), '13. img2mesh refused by mesh2rig');
+check(sb.irFits(meshOcc, { media: 'mesh', category: 'img2mesh', rig: 'none' }), '13. character source mesh fits');
+
 const S = { photo: ['Flux*', ' ', 'flux*', 'Qwen*'], mesh_low: ['x'], item: [], video: 'Vid', timevariant: ['Flux*', 3] };
 const S0 = JSON.parse(JSON.stringify(S));
 const sv = sb.irSurvey(S, new Set(['photo', 'item', 'video', 'timevariant']));

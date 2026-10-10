@@ -1,4 +1,4 @@
-"""Image Generation Skill - Multi-Instance Dispatcher mit Kosten-basierter Auswahl"""
+"""Image generation service with cost-based backend selection"""
 import base64
 import functools
 import json
@@ -62,9 +62,8 @@ def _name_once(name: str, text: str) -> str:
 
 
 def _log_image_failure(lv: dict, error_msg: str) -> None:
-    """Schreibt eine fehlgeschlagene Bildgenerierung ins Image-Log (Errors-only
-    im Viewer sichtbar). ``lv`` = locals() der Aufrufstelle — Variablen werden
-    defensiv via .get() gelesen, da je nach Abbruchstelle nicht alle gesetzt sind."""
+    """Write a failed image generation to the image log. ``lv`` contains
+    caller locals; optional values are read defensively with .get()."""
     try:
         _bk = lv.get("backend")
         log_image_prompt(
@@ -114,6 +113,8 @@ def _mesh_file_kind(f: Dict[str, str]) -> str:
     kind = str(f.get("kind") or "").strip().lower()
     if kind in ("model", "image"):
         return kind
+    if kind == "file" and Path(str(f.get("name") or "")).suffix.lower() in (".glb", ".fbx", ".gltf"):
+        return "model"
     mime = str(f.get("mime") or "").strip().lower()
     if mime.startswith("image/"):
         return "image"
@@ -340,10 +341,8 @@ class ImageService:
         # Last used enhanced_prompt (for callers like Instagram)
         self.last_enhanced_prompt: str = ""
 
-        # Thread-lokaler Slot fuer last_image_meta — notwendig damit parallele
-        # Aufrufer (z.B. Expression-Regen fuer mehrere Characters gleichzeitig)
-        # nicht die Meta-Daten des anderen ueberschreiben. Die instance-Variante
-        # self.last_image_meta bleibt als Backward-Compat bestehen.
+        # Thread-local metadata prevents concurrent character renders from
+        # overwriting one another's result metadata.
         import threading as _th
         self._meta_tls = _th.local()
 
@@ -358,7 +357,7 @@ class ImageService:
             self.enabled = False
             return
 
-        # Pruefe Verfuegbarkeit aller enabled Instanzen
+        # Check availability of every enabled instance.
         available_count = 0
         enabled_backends = [b for b in self.backends if b.instance_enabled]
         logger.info("Pruefe %d von %d Instanz(en)...", len(enabled_backends), len(self.backends))
@@ -372,10 +371,8 @@ class ImageService:
         else:
             logger.info("%d/%d Instanz(en) verfuegbar", available_count, len(self.backends))
 
-        # ImageGen nutzt ein eigenes per-Instanz Config-System (_get_instance_config)
-        # statt der generischen BaseSkill._defaults. Daher keine _defaults fuer
-        # get_config_fields() — die Konfiguration geschieht ueber die instanzbasierte
-        # Config in storage/users/{user}/characters/{char}/skills/imagegen.json
+        # Character overrides use _get_instance_config rather than the
+        # generic defaults exposed by get_config_fields().
         self._defaults = {}
 
     @property
@@ -395,10 +392,9 @@ class ImageService:
         return self._ensure_agent_config(name).get("instances", {})
 
     def get_config_fields(self) -> Dict[str, Dict[str, Any]]:
-        """Top-level Config-Felder fuer den Character-Editor.
+        """Top-level fields for the character editor.
 
-        Post-Processing laeuft extern (Pull-Modell), daher hier keine Felder.
-        """
+        Postprocessing runs separately, so this service declares no fields."""
         return {}
 
     # Upper bound of the SKILL_IMAGEGEN_{N}_* scan — shared with the provider
@@ -407,7 +403,7 @@ class ImageService:
     MAX_INSTANCES = MAX_IMAGE_BACKENDS
 
     def _load_instances(self) -> List[ImageBackend]:
-        """Scannt die SKILL_IMAGEGEN_{N}_*-Bloecke und erstellt die Backends."""
+        """Build backends from the SKILL_IMAGEGEN_{N}_ config bridge."""
         instances = []
 
         try:
@@ -479,7 +475,7 @@ class ImageService:
         return self._pool._select_backend()
 
     def _ensure_agent_config(self, character_name: str) -> Dict[str, Any]:
-        """Erstellt automatisch eine per-Agent Skill-Config mit .env-Defaults, falls noch keine existiert."""
+        """Create per-character skill settings from backend defaults when absent."""
         agent_config = get_character_skill_config(character_name, self.SKILL_ID)
 
         if agent_config and "instances" in agent_config:
@@ -498,7 +494,7 @@ class ImageService:
                 save_character_skill_config(character_name, self.SKILL_ID, agent_config)
             return agent_config
 
-        # Keine Config vorhanden - erstelle mit Defaults aller Backends
+        # Create missing settings for every backend.
         agent_config = {
             "instances": {}
         }
@@ -670,13 +666,13 @@ class ImageService:
             return False
 
     def list_mesh_backends(self, rig: str = "") -> List[ImageBackend]:
-        """Available img2mesh backends, optionally narrowed to a rig kind
-        ("mixamo" = humanoid GLB, "generic" = fbx + texture).
+        """Available unrigged img2mesh backends, optionally narrowed to rig none.
 
         mesh→mesh backends are NOT in here: they consume a mesh, not an image,
         so a normal generation must never land on one."""
         out = [b for b in self.list_available_backends(media="mesh")
-               if getattr(b, "category", "") != MESH2MESH_CATEGORY]
+               if getattr(b, "category", "") == "img2mesh"
+               and getattr(b, "mesh_rig", "mixamo") == "none"]
         if rig:
             out = [b for b in out
                    if (getattr(b, "mesh_rig", "mixamo") or "mixamo") == rig]
@@ -705,25 +701,18 @@ class ImageService:
         schema declares, so an alias with a single ``input_image`` slot gets
         the front view only, a multi-view alias every view we hold.
 
-        ``rig`` ("mixamo" for humanoids, "generic" for other characters,
-        "none" for props/buildings) is what the caller needs: a humanoid must
-        not be meshed by a generic alias and vice versa.
+        ``rig`` must be "none" (or blank). Characters select mesh_humanoid
+        or mesh_creature explicitly and submit their rig in a second job.
+        Combined image-to-rig aliases are rejected.
 
-        Backend: ``backend_glob`` (explicit — exactly that alias, never
-        another one; an alias whose rig is not ``rig`` is an error, not a
-        silent re-pick, because a wrong-rig mesh binds unusably) → otherwise
-        the chain of ``occasion`` (image routing; empty = the mesh occasion of
-        ``rig``, ``mesh_occasion_for_rig``). Every entry of a mesh chain only
-        resolves to backends of the occasion's rig, so a render that fails on
-        one entry is re-run on the next one WITHIN the rig
-        (``routing.run_routed``) — the "no fallback between mesh backends"
-        rule was about the wrong rig, never about a same-rig chain.
+        An explicit ``backend_glob`` never falls back and must fit the
+        occasion. Otherwise the central occasion resolver picks the backend
+        before rendering; only BackendFailedError retries its configured chain.
+        BackendBusyError and NoRouteError propagate unchanged.
 
-        A job returns up to THREE files (model + basecolor + metallic map); the
-        rig decides which of them must be stored (see ``_split_mesh_files``).
-        The model file keeps our stem with the gateway's suffix; the texture is
-        stored next to it, keeping ITS delivered extension (.png or .jpg — the
-        gateway re-encodes per file, not per job).
+        The main GLB is retained. Character mesh occasions also retain a
+        delivered basecolor as PNG for the standalone generic rig stage.
+        Embedded basecolor extraction is handled by generate_rig when needed.
 
         ``lod_faces`` (one target triangle count or several) additionally asks
         for reduced STAGES of the same model, baked from the same views in the
@@ -738,6 +727,8 @@ class ImageService:
         it ran behind the intended chain entry) ``fallback_from``
         (``routing.route_meta``); ``{"ok": False, "error"}`` on a failure.
         """
+        if rig and rig != "none":
+            return {"ok": False, "error": "img2mesh produces only an unrigged source (rig none); use generate_rig for the rig stage"}
         # Keyed by VIEW, not by slot name: the backend does the slot mapping
         # from the alias schema.
         refs: Dict[str, str] = {"front": source_image_path}
@@ -772,7 +763,7 @@ class ImageService:
             params["no_fingers"] = bool(no_fingers)
 
         from app.imagegen.occasions import mesh_occasion_for_rig
-        from app.imagegen.routing import route_meta, run_routed
+        from app.imagegen.routing import NoRouteError, route_meta, run_routed
         primary = None
         if backend_glob.strip():
             primary = self._wait_for_explicit_backend(backend_glob, media="mesh")
@@ -784,6 +775,11 @@ class ImageService:
                 logger.warning("generate_mesh: backend '%s' unavailable — no "
                                "automatic fallback", backend_glob)
                 return {"ok": False, "error": f"mesh backend '{backend_glob}' unavailable"}
+            from app.imagegen.occasions import backend_fits
+            from app.imagegen.routing import describe_backend
+            occ = occasion or mesh_occasion_for_rig(rig or "none")
+            if not backend_fits(occ, describe_backend(primary)):
+                return {"ok": False, "error": f"mesh backend '{primary.name}' has the wrong category or rig"}
             _prig = (getattr(primary, "mesh_rig", "mixamo") or "mixamo")
             if rig and _prig != rig:
                 # An explicit pick is never re-picked — a wrong-rig mesh binds
@@ -821,7 +817,7 @@ class ImageService:
                 occ = occasion or mesh_occasion_for_rig(rig or "mixamo")
                 (result, used), route = run_routed(occ, _render, character=character_name,
                                                    pool=self.pool)
-        except MediaGenerationDisabled:
+        except (MediaGenerationDisabled, BackendBusyError, NoRouteError):
             # Master switch, not a failed generation — see generate_video.
             raise
         except Exception as e:
@@ -831,6 +827,69 @@ class ImageService:
                                        in zip(result["files"], result["blobs"])]
         used_rig = (getattr(used, "mesh_rig", "mixamo") or "mixamo")
         out = self._store_mesh_files(files, used_rig, output_path, getattr(used, "name", ""))
+        # Retain the mesh-stage basecolor when provided: a standalone generic
+        # rigger returns only FBX, so its texture must come from this stage.
+        if out.get("ok") and occasion in ("mesh_humanoid", "mesh_creature"):
+            _, texture, _ = _split_mesh_files(files, "generic")
+            if texture is not None:
+                from app.core.mesh_source import png_basecolor
+                tex_path = Path(out["path"]).with_suffix(".png")
+                tex_path.write_bytes(png_basecolor(texture["blob"]))
+                out["texture_path"] = str(tex_path)
+        if out.get("ok"):
+            out.update(route_meta(route))
+        return out
+
+    def generate_rig(self, mesh_path: str, output_path: str, rig: str,
+                     backend_glob: str = "", character_name: str = "",
+                     no_fingers=None, basecolor_path: str = "") -> Dict[str, Any]:
+        """Run a standalone rigger after the caller's mesh channel job ended."""
+        from app.imagegen.occasions import backend_fits
+        from app.imagegen.routing import describe_backend, route_meta, run_routed
+        from app.core.mesh_source import source_basecolor, fbx_basecolor, validate_source
+        occasion = {"mixamo": "rig_humanoid", "generic": "rig_creature"}.get(rig)
+        if not occasion:
+            raise ValueError(f"unsupported rig '{rig}'")
+        source = Path(mesh_path)
+        size = source.stat().st_size
+        if size > MESH_UPLOAD_MAX_BYTES:
+            return {"ok": False, "error": "source mesh exceeds the 64 MB upload limit (HTTP 413); no rig job submitted"}
+        verdict = validate_source(source.read_bytes())
+        if not verdict.get("ok"):
+            return {"ok": False, "error": "; ".join(verdict.get("errors") or ["invalid unrigged source"])}
+        texture = None
+        if rig == "generic":
+            try:
+                texture = fbx_basecolor(source_basecolor(source, basecolor_path))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+        params = {"source_model_path": str(source)}
+        if no_fingers is not None:
+            params["no_fingers"] = bool(no_fingers)
+        primary = None
+        if backend_glob.strip():
+            primary = self._wait_for_explicit_backend(backend_glob, media="mesh")
+            if not primary:
+                return {"ok": False, "error": f"rig backend '{backend_glob}' unavailable"}
+            if not backend_fits(occasion, describe_backend(primary)):
+                return {"ok": False, "error": f"rig backend '{primary.name}' has the wrong category or rig"}
+
+        def render(b):
+            def op(bb):
+                def generate():
+                    blobs = bb.generate("", "", params, log_meta={"agent_name": character_name, "media": "mesh"})
+                    return {"blobs": blobs, "files": list(getattr(bb, "last_result_files", []) or [])} if blobs else []
+                return self.run_on_backend_channel(bb, generate, task_type="mesh_generation", agent_name=character_name)
+            return self.run_on_backend(b, op, character_name=character_name)
+
+        if primary is not None:
+            (result, used), route = render(primary), None
+        else:
+            (result, used), route = run_routed(occasion, render, character=character_name, pool=self.pool)
+        files = [dict(f, blob=b) for f, b in zip(result["files"], result["blobs"])]
+        if texture is not None:
+            files.append({"name": "source_basecolor.png", "mime": "image/png", "kind": "image", "blob": texture})
+        out = self._store_mesh_files(files, rig, output_path, used.name)
         if out.get("ok"):
             out.update(route_meta(route))
         return out
@@ -1108,12 +1167,8 @@ class ImageService:
                 "backend": getattr(used, "name", "")}
 
     def _get_backend_defaults(self, backend: ImageBackend) -> Dict[str, Any]:
-        """Holt die Instanz-spezifischen Defaults (nur agent-level Overrides).
-
-        Technische Backend-Parameter (guidance_scale, num_inference_steps, checkpoint,
-        sampling_method, schedule_type, sampler, scheduler) kommen direkt vom Backend/.env
-        und werden NICHT in die per-Agent Config geschrieben.
-        """
+        """Read instance defaults for character overrides. Technical generation
+        parameters stay on the backend and are not copied into character settings."""
         defaults = {
             "enabled": backend.instance_enabled,
         }
@@ -1121,24 +1176,11 @@ class ImageService:
             defaults["width"] = backend.width
         if hasattr(backend, 'height'):
             defaults["height"] = backend.height
-        # workflow_file ist ein technischer Backend-Parameter und wird
-        # NICHT in die per-Agent Config geschrieben (kommt direkt vom Backend/.env)
+        # workflow_file is a technical backend parameter, not a character override.
         return defaults
 
     def _get_instance_config(self, character_name: str, backend: ImageBackend) -> Dict[str, Any]:
-        """
-        Laedt per-Agent per-Instanz Config.
-
-        JSON-Format:
-        {
-            "instances": {
-                "LocalSD": {"prompt_prefix": "...", "negative_prompt": "...", ...},
-                "NanoBanana": {"prompt_prefix": "", ...}
-            }
-        }
-
-        Merge-Logik: Agent-Instance-Override > Backend .env Default > leer
-        """
+        """Load character settings for one backend instance."""
         backend_defaults = self._get_backend_defaults(backend)
 
         if not character_name or not self.SKILL_ID:
@@ -1146,7 +1188,7 @@ class ImageService:
 
         agent_config = get_character_skill_config(character_name, self.SKILL_ID)
 
-        # Migration: Falls altes flaches Format, konvertiere zu per-Instanz
+        # Migrate flat settings to per-instance settings.
         if agent_config and "instances" not in agent_config:
             logger.info("Migriere %s Config zu per-Instanz Format...", character_name)
             agent_config = self._migrate_flat_config(agent_config)
@@ -1155,14 +1197,14 @@ class ImageService:
 
         if agent_config and "instances" in agent_config:
             migrated = False
-            # Backend-Defaults fuer Vergleich laden (Name → Defaults)
+            # Load backend defaults for comparison (name to defaults).
             backend_defaults_map = {b.name: self._get_backend_defaults(b) for b in self.backends}
             for inst_name, inst_cfg in agent_config["instances"].items():
                 # workflow_file ist technischer Backend-Param, gehoert nicht in per-Agent Config
                 if "workflow_file" in inst_cfg:
                     del inst_cfg["workflow_file"]
                     migrated = True
-                # Werte entfernen die dem Backend-Default (.env) entsprechen
+                # Remove values equal to the backend default.
                 defaults = backend_defaults_map.get(inst_name, {})
                 for key in list(inst_cfg.keys()):
                     if key in defaults and inst_cfg[key] == defaults[key]:
@@ -1190,7 +1232,7 @@ class ImageService:
                             result[key] = str(val).strip()
                 return result
         else:
-            # Erstelle per-Agent Config mit allen Instanzen beim ersten Aufruf
+            # Create per-character settings for all instances on first access.
             new_config = self._build_initial_config()
             save_character_skill_config(character_name, self.SKILL_ID, new_config)
             logger.info("Per-Agent Config erstellt fuer %s: %s.json", character_name, self.SKILL_ID)
@@ -1198,11 +1240,8 @@ class ImageService:
         return backend_defaults
 
     def _build_initial_config(self) -> Dict[str, Any]:
-        """Erstellt initiale per-Agent Config mit allen Backend-Instanzen.
-
-        Speichert nur leere Dicts pro Instanz — Defaults kommen aus .env/Backend.
-        Nur echte Overrides (die vom Default abweichen) sollen hier gespeichert werden.
-        """
+        """Create empty character overrides for every backend instance.
+        Defaults remain on the backend; only differing overrides are stored."""
         instances = {}
         for backend in self.backends:
             instances[backend.name] = {}
@@ -1210,7 +1249,7 @@ class ImageService:
         return config
 
     def _migrate_flat_config(self, old_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Migriert altes flaches Format zu per-Instanz Format."""
+        """Migrate flat character settings to per-instance settings."""
         instances = {}
         for backend in self.backends:
             backend_defaults = self._get_backend_defaults(backend)
@@ -1225,7 +1264,7 @@ class ImageService:
 
     @staticmethod
     def _detect_media_extension(data: bytes) -> str:
-        """Erkennt den Medien-Typ anhand der Magic Bytes."""
+        """Identify the media type from its magic bytes."""
         if len(data) >= 12:
             if data[:4] == b'\x89PNG':
                 return '.png'
@@ -1255,7 +1294,7 @@ class ImageService:
         return None
 
     def _generate_image_analysis(self, image_path: str, character_name: str) -> Optional[str]:
-        """Objektive Bildanalyse via Vision-LLM - sachliche Beschreibung des Bildinhalts."""
+        """Describe the image objectively through the vision LLM."""
         from app.core.llm_client import LLMClient
 
         if not os.path.exists(image_path):
@@ -1320,26 +1359,20 @@ class ImageService:
 
     def _generate_comment(self, character_name: str, rp_context: str = "",
                           photographer_subjects: Optional[List[str]] = None) -> Optional[str]:
-        """Erzeugt eine kurze Situations-Beschreibung als Galerie-Caption.
-
-        Beschreibt, welche Situation zum Foto gefuehrt hat (aus dem RP-Kontext),
-        statt einer emotionalen Reaktion auf das Bild.
-
-        Args:
-            rp_context: Die Chat-Antwort, die das Bild ausgeloest hat.
-            photographer_subjects: Liste der abgebildeten Personen (nur in Photographer mode).
-        """
+        """Create a short gallery caption describing the situation that led to
+        the photo from its conversation context. ``rp_context`` is the triggering
+        chat reply; ``photographer_subjects`` lists the depicted subjects."""
         if not rp_context or len(rp_context.strip()) < 15:
             logger.debug("Kein RP-Kontext fuer Situations-Kommentar vorhanden")
             return None
 
-        # Aktions-Teile extrahieren (Text zwischen *...*), Dialog verwerfen
+        # Extract actions between *...* and discard dialogue.
         action_chunks = re.findall(r'\*([^*]+)\*', rp_context)
         if action_chunks:
             clean = " ".join(action_chunks)
         else:
             clean = rp_context
-        # Meta-Text und Markdown entfernen
+        # Remove metadata and Markdown.
         clean = re.sub(r'"[^"]*"', '', clean)
         clean = re.sub(r'\([^)]*\)', '', clean)
         clean = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', clean)
@@ -1354,7 +1387,7 @@ class ImageService:
 
             vcfg = self._get_vision_llm_config(character_name)
             if not vcfg:
-                # Fallback: gekuerzten Rohtext verwenden
+                # Use the shortened raw text if extraction fails.
                 return clean[:200]
 
             llm = LLMClient(
@@ -1411,17 +1444,15 @@ class ImageService:
         except Exception as e:
             logger.error("Situations-Kommentar fehlgeschlagen: %s", e)
             logger.debug("Traceback:", exc_info=True)
-            # Fallback: gekuerzten Rohtext verwenden
+            # Use the shortened raw text if extraction fails.
             return clean[:200] if clean else None
 
     # _detect_mentioned_appearances() wurde durch PromptBuilder.detect_persons() ersetzt.
 
     def _extract_rp_scene_context(
         self, rp_text: str, character_name: str) -> str:
-        """Extrahiert die Pose aus der Character-Antwort via Vision-LLM.
-
-        Gibt den Pose-String zurueck (fuer den Enhanced Prompt).
-        """
+        """Extract the pose from a character reply through the vision LLM
+        and return its text for the enhanced prompt."""
         from app.models.character import is_outfit_locked
 
         # Outfit-Lock spart den kompletten Pose-Call (Pose ist an Agent-Call gekoppelt).
@@ -1487,7 +1518,7 @@ class ImageService:
 
         pose = ""
 
-        # Character-Antwort → Pose (fuer Bild-Prompt).
+        # Extract a pose from the character reply for the image prompt.
         if clean_rp and len(clean_rp) >= 15:
             vcfg_agent = self._get_vision_llm_config(character_name)
             if vcfg_agent:

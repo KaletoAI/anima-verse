@@ -3,8 +3,8 @@
 There is ONE model per outfit combination, produced in one of two ways:
 
 * GENERATED: the T-pose reference render (``app/core/model_refs.py``) is sent
-  to a MEDIA_TYPE=="mesh" backend (gateway alias, e.g. Trellis2-Low), which
-  returns a rigged model file.
+  to an img2mesh/none backend; its unrigged GLB is retained before a
+  separate mesh2rig job produces the rigged model.
 * UPLOADED: the user drops a GLB (or FBX+PNG) in the Game-Admin 3D tab.
 
 Both write ``characters/<name>/model3d/<signature>.<ext>`` (+ a ``.png``
@@ -49,10 +49,40 @@ _publication_epochs: Dict[tuple, int] = {}
 
 def _signature_files(directory: Path, signature: str) -> Dict[Path, Path]:
     """Only one signature's public files and private backups, never stages."""
-    folders = (Path('.'), Path('low'), Path('raw'), Path('prerig'),
+    folders = (Path('.'), Path('low'), Path('raw'), Path('prerig'), Path('unrigged'),
                Path('low/raw'), Path('low/prerig'))
     return {relative / p.name: p for relative in folders
             for p in (directory / relative).glob(f"{signature}.*") if p.is_file()}
+
+
+def _checkpoint_source(character_name: str, signature: str, source: Path) -> None:
+    """Persist a first-generation source before rigging; preserve an old pair.
+
+    A replacement is published with its successful rig, so a failed rebuild
+    never assigns a new source to the currently served model.
+    """
+    from app.core.keyed_lock import keyed_lock
+    publication = getattr(_staging, "source_publications", {}).get(character_name)
+    if not publication:
+        return
+    directory = publication["directory"]
+    with keyed_lock("model3d", f"{character_name}:{signature}"), \
+            keyed_lock("model3d_publication", str(directory)):
+        if not directory.is_dir() or _publication_token(directory, signature) != publication["token"]:
+            raise RuntimeError("Model changed before source publication")
+        if any((directory / f"{signature}{ext}").exists() for ext in MODEL_EXTS):
+            return
+        destination = directory / "unrigged"
+        destination.mkdir(parents=True, exist_ok=True)
+        files = list(source.parent.glob(f"{signature}.*"))
+        for old in destination.glob(f"{signature}.*"):
+            if not any(p.name == old.name for p in files):
+                old.unlink()
+        for path in sorted(files, key=lambda p: p.suffix == ".json"):
+            _publish_model_bytes(destination / path.name, path.read_bytes())
+        key = (str(directory), signature)
+        _publication_epochs[key] = _publication_epochs.get(key, 0) + 1
+        publication["token"] = _publication_token(directory, signature)
 
 
 def _publication_token(directory: Path, signature: str):
@@ -113,10 +143,28 @@ def _serial_model(function):
             except FileNotFoundError:
                 return stale("Model changed while staging")
             _staging.directories = {**active, character_name: stage}
+            publications = getattr(_staging, "source_publications", {})
+            publication = {"directory": directory, "signature": signature, "token": token}
+            _staging.source_publications = {**publications, character_name: publication}
+            generation_error = None
             try:
                 result = function(*bound.args, **bound.kwargs)
+            except Exception as exc:
+                if function.__name__ != "generate_for_current_outfit":
+                    raise
+                generation_error = exc
+                result = {"ok": False, "error": str(exc)}
             finally:
                 _staging.directories = active
+                _staging.source_publications = publications
+            token = publication["token"]
+            # A failed replacement keeps the existing model/source pair. A
+            # first generation may retain its validated source for later work.
+            if function.__name__ == "generate_for_current_outfit" and not result.get("ok"):
+                if any((directory / f"{signature}{ext}").exists() for ext in MODEL_EXTS):
+                    if generation_error is not None:
+                        raise generation_error
+                    return result
             staged_files = _signature_files(stage, signature)
             # Prepare comparisons without holding a publication lock.
             current_files = _signature_files(directory, signature)
@@ -148,6 +196,8 @@ def _serial_model(function):
                         result["path"] = str(directory / Path(result["path"]).name)
                     if "model_rev" in result:
                         result["model_rev"] = model_revision(find_model3d(character_name, signature))
+            if generation_error is not None:
+                raise generation_error
             return result
     return wrapped
 
@@ -466,7 +516,7 @@ def list_mesh_backends(rig: str = "", occasion: str = "") -> Dict[str, Any]:
     out = []
     try:
         svc = get_image_service()
-        for b in svc.list_mesh_backends(rig):
+        for b in svc.list_mesh_backends("none"):
             out.append({
                 "name": b.name,
                 "model": getattr(b, "model", ""),
@@ -681,7 +731,7 @@ def _purge_combination(out_dir: Path, signature: str, *,
     # (refine.apply_script backs up only the first time) — the incident of
     # 2026-08-06: a fresh bake's pristine copy was silently never kept.
     from app.blender.refine import RAW_DIR_NAME
-    for directory in (out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME):
+    for directory in (out_dir / "unrigged", out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME):
         for old in directory.glob(f"{signature}.*"):
             old.unlink()
 
@@ -1462,7 +1512,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
 
     Backend: ``backend_glob`` (explicit) → the mesh occasion's chain of the
     image routing (``mesh_occasion_for_rig`` of the character's rig);
-    ``prefer_cheapest`` = cheapest available of the rig (auto hook).
+    ``prefer_cheapest`` = cheapest available unrigged img2mesh (auto hook).
     Cached per combination — an existing mesh is kept unless ``force``.
     ``signature`` None = the worn combination; set = that combination drives
     the cache check, the T-pose input and the target file (the outfit batch
@@ -1488,9 +1538,9 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
 
     if not backend_glob and prefer_cheapest:
         # The auto-mesh hook keeps its rule (user decision 2026-07-18): the
-        # cheapest AVAILABLE backend of the character's rig — explicit, no
+        # cheapest AVAILABLE unrigged img2mesh backend — explicit, no
         # chain. Every other call without a glob is routed.
-        cheapest = get_image_service().list_mesh_backends(rig)
+        cheapest = get_image_service().list_mesh_backends("none")
         if not cheapest:
             return {"ok": False, "error": f"no {rig} mesh backend available"}
         backend_glob = cheapest[0].name
@@ -1537,19 +1587,61 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     try:
         res = get_image_service().generate_mesh(
             source_image_path=str(src),
-            output_path=str(staging / f"{signature}.fbx"),
+            output_path=str(staging / f"{signature}.glb"),
             backend_glob=backend_glob,
             character_name=character_name,
             mesh_name=character_name,
-            rig=rig,
+            rig="none",
             face_num=face_num,
             texture_size=texture_size,
-            no_fingers=no_fingers,
             view_images=view_images or None,
             occasion=mesh_occasion_for_rig(rig))
         if not res.get("ok"):
             error = str(res.get("error") or "generation failed")
             logger.error("Model3D %s failed: %s", character_name, error)
+            return {"ok": False, "error": error}
+
+        mesh_res = res
+        from app.core.model_validate import validate_glb, validate_fbx
+        from app.core.mesh_source import validate_source
+        source_mesh = Path(mesh_res["path"])
+        check = validate_source(source_mesh.read_bytes())
+        if not check.get("ok"):
+            error = "; ".join(check.get("errors") or ["invalid unrigged source"])
+            return {"ok": False, "error": error}
+        source_target = out_dir / "unrigged" / f"{signature}.glb"
+        source_target.parent.mkdir(parents=True, exist_ok=True)
+        source_texture = None
+        if rig == "generic":
+            from app.core.mesh_source import source_basecolor
+            try:
+                source_texture = source_basecolor(source_mesh, mesh_res.get("texture_path") or "")
+            except ValueError as exc:
+                error = str(exc)
+                return {"ok": False, "error": error}
+        _publish_model_bytes(source_target, source_mesh.read_bytes())
+        if source_texture is not None:
+            _publish_model_bytes(source_target.with_suffix(".png"), source_texture)
+        source_meta = {"created_at": utc_now_iso(), "rig": "none", "signature": signature,
+                       "mesh_backend": mesh_res.get("backend", ""),
+                       "mesh_route_meta": {k: mesh_res[k] for k in ("routing", "fallback_from") if k in mesh_res},
+                       "source_image": src.name,
+                       "view_images": {v: Path(p).name for v, p in view_images.items()}, **_ref_manifest(src)}
+        _publish_sidecar(source_target, source_meta)
+        _checkpoint_source(character_name, signature, source_target)
+        # Sequential caller-thread submission: the mesh slot has been released.
+        res = get_image_service().generate_rig(
+            mesh_path=str(source_target), output_path=str(staging / f"{signature}-rig.glb"),
+            rig=rig, character_name=character_name, no_fingers=no_fingers,
+            basecolor_path=str(source_target.with_suffix(".png")) if source_texture is not None else "")
+        if not res.get("ok"):
+            error = str(res.get("error") or "rig generation failed")
+            return {"ok": False, "error": error}
+        texture_blob = Path(res["texture_path"]).read_bytes() if res.get("texture_path") else None
+        check = (validate_glb(Path(res["path"]).read_bytes()) if rig == "mixamo"
+                 else validate_fbx(Path(res["path"]).read_bytes(), texture_blob))
+        if not check.get("ok"):
+            error = "; ".join(check.get("errors") or ["invalid rigged result"])
             return {"ok": False, "error": error}
 
         delivered = Path(res["path"])
@@ -1558,12 +1650,27 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         texture_suffix = Path(res["texture_path"]).suffix if res.get("texture_path") else ".png"
         path = out_dir / f"{signature}{delivered.suffix.lower()}"
         _purge_combination(out_dir, signature, keep_model=path)
+        source_target = out_dir / "unrigged" / f"{signature}.glb"
+        _publish_model_bytes(source_target, source_mesh.read_bytes())
+        if rig == "generic":
+            _publish_model_bytes(source_target.with_suffix(".png"), source_texture)
+        stage_meta = {"mesh_backend": mesh_res.get("backend", ""),
+                      "rig_backend": res.get("backend", ""),
+                      "mesh_route_meta": {k: mesh_res[k] for k in ("routing", "fallback_from") if k in mesh_res},
+                      "rig_route_meta": {k: res[k] for k in ("routing", "fallback_from") if k in res}}
+        _publish_sidecar(source_target, {"created_at": utc_now_iso(), "rig": "none",
+                          "source_image": src.name, "view_images": {v: Path(p).name for v, p in view_images.items()},
+                          "signature": signature, **stage_meta, **_ref_manifest(src)})
+        (out_dir / "raw").mkdir(parents=True, exist_ok=True)
+        _publish_model_bytes(out_dir / "raw" / path.name, blob)
         _publish_model_bytes(path, blob)
         if texture_blob is not None:
             _publish_model_bytes(path.with_suffix(texture_suffix), texture_blob)
+            _publish_model_bytes((out_dir / "raw" / path.name).with_suffix(texture_suffix), texture_blob)
         meta = {
             "created_at": utc_now_iso(),
             "source": "generated",
+            **stage_meta,
             "backend": res.get("backend", ""),
             "format": res.get("format", path.suffix.lstrip(".").lower()),
             "rig": res.get("rig", rig),
@@ -1606,6 +1713,9 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
                     path.name, path.stat().st_size, signature)
         return {"ok": True, "cached": False, "path": str(path),
                 "filename": path.name}
+    except Exception as exc:
+        error = str(exc)
+        raise
     finally:
         shutil.rmtree(staging, ignore_errors=True)
         if task_id:
