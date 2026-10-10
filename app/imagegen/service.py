@@ -688,7 +688,7 @@ class ImageService:
     def generate_mesh(self, source_image_path: str, output_path: str,
                       backend_glob: str = "", character_name: str = "",
                       mesh_name: str = "", face_num=None, texture_size=None,
-                      no_fingers=None, rig: str = "",
+                      rig: str = "",
                       view_images: Optional[Dict[str, str]] = None,
                       lod_faces=None, occasion: str = "") -> Dict[str, Any]:
         """Generates a 3D model from one or more views via a MEDIA_TYPE=="mesh"
@@ -758,9 +758,6 @@ class ImageService:
         # chains expose it.
         if texture_size:
             params["texture_size"] = int(texture_size)
-        # None = keep the backend's configured default (per-character override).
-        if no_fingers is not None:
-            params["no_fingers"] = bool(no_fingers)
 
         from app.imagegen.occasions import mesh_occasion_for_rig
         from app.imagegen.routing import NoRouteError, route_meta, run_routed
@@ -842,7 +839,7 @@ class ImageService:
 
     def generate_rig(self, mesh_path: str, output_path: str, rig: str,
                      backend_glob: str = "", character_name: str = "",
-                     no_fingers=None, basecolor_path: str = "") -> Dict[str, Any]:
+                     basecolor_path: str = "") -> Dict[str, Any]:
         """Run a standalone rigger after the caller's mesh channel job ended."""
         from app.imagegen.occasions import backend_fits
         from app.imagegen.routing import describe_backend, route_meta, run_routed
@@ -864,8 +861,6 @@ class ImageService:
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
         params = {"source_model_path": str(source)}
-        if no_fingers is not None:
-            params["no_fingers"] = bool(no_fingers)
         primary = None
         if backend_glob.strip():
             primary = self._wait_for_explicit_backend(backend_glob, media="mesh")

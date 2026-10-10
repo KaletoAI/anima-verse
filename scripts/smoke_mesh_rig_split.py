@@ -15,7 +15,7 @@ FBX needs a V-corrected PNG (top blue), while the retained source stays top
 red. Both actual character ZIP import and model_store export retain GLB,
 sidecar and creature PNG; GC/purge removes the combination's source too.
 Two boot migrations put copied API keys in secrets.json only, and the second
-boot writes nothing. Rig requests contain only input_no_fingers in params
+boot writes nothing. Rig requests contain only the backend's configured input_no_fingers in params
 and a data-URI GLB in files.input_mesh_path, including with no alias schema.
 Usage: ./.venv/bin/python scripts/smoke_mesh_rig_split.py
 """
@@ -126,7 +126,8 @@ class Fake(ImageBackend):
             payload = OpenAIMeshBackend.build_input_files(self, params)
             assert set(payload) == {'input_mesh_path'}
             assert base64.b64decode(payload['input_mesh_path'].split(',', 1)[1]) == fixture_glb()
-            assert OpenAIMeshBackend.build_alias_params(self, params) == {'input_no_fingers': False}
+            assert OpenAIMeshBackend.build_alias_params(self, params) == {'input_no_fingers': self.no_fingers}
+            assert 'no_fingers' not in params
             if self.mesh_rig == 'generic':
                 self._meta.files = [{'name': 'test_articulationxl.fbx', 'kind': 'file', 'mime': 'application/octet-stream'}]
                 return [b'Kaydara FBX Binary\x00' + b'fixture']
@@ -280,7 +281,7 @@ with ExitStack() as stack:
     high.failure = RuntimeError('rig backend failed')
     before = len(low.calls)
     try:
-        svc.generate_rig(str(root/'unrigged/mixamo.glb'), str(root/'explicit.glb'), 'mixamo', backend_glob='rig-high', no_fingers=False)
+        svc.generate_rig(str(root/'unrigged/mixamo.glb'), str(root/'explicit.glb'), 'mixamo', backend_glob='rig-high')
         raise AssertionError('explicit failure must propagate without fallback')
     except BackendFailedError:
         pass
@@ -322,7 +323,8 @@ input_path.write_bytes(fixture_glb())
 payloads = []
 with patch.object(openai_mesh, 'submit_job', side_effect=lambda b, url, payload, kind: payloads.append(payload) or 'job1'), \
         patch.object(openai_mesh, 'poll_job', return_value=[fixture_glb(True)]):
-    assert backend._generate('', '', {'source_model_path': str(input_path), 'no_fingers': False})
+    backend.no_fingers = False
+    assert backend._generate('', '', {'source_model_path': str(input_path)})
 assert len(payloads) == 1 and payloads[0]['params'] == {'input_no_fingers': False}
 assert 'images' not in payloads[0] and set(payloads[0]['files']) == {'input_mesh_path'}
 print('PASS actual rig request builder and job-start path without input_name')

@@ -98,7 +98,6 @@ interface Model3DInfo {
   source_filename?: string
   /** what the rig stage was asked for when this model was generated; absent
    *  for uploads. The measurement says what it actually delivered. */
-  no_fingers?: boolean
   measured?: Model3DMeasured
   diagnosis?: Model3DDiagnosis
   /** Resolutions that exist for this file: always 'full', plus 'low' once a
@@ -127,7 +126,7 @@ interface Model3DStatus {
   rig?: string
   has_input?: boolean
   model?: Model3DInfo | null
-  options?: { no_fingers?: boolean | null; auto_generate?: boolean;
+  options?: { auto_generate?: boolean;
     extension_rig?: Record<string, { enabled?: boolean; flip?: boolean }>;
     extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }> }
   extension_groups?: ExtensionRigDeclaration[]
@@ -191,7 +190,6 @@ export function FieldModel3D({ character }: { character: string }) {
 
   const [rerigOpen, setRerigOpen] = useState(false)
   const [rerigBackend, setRerigBackend] = useState('')
-  const [rerigNoFingers, setRerigNoFingers] = useState<boolean | null>(null)
   const rerigTaskRef = useRef('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
@@ -344,7 +342,6 @@ export function FieldModel3D({ character }: { character: string }) {
     if (busy || st.pending) return
     const context = previewContextRef.current
     const q = new URLSearchParams({ signature: st.model?.signature || '' })
-    if (rerigNoFingers !== null) q.set('no_fingers', String(rerigNoFingers))
     if (rerigBackend) q.set('backend', rerigBackend)
     setBusy(true)
     try {
@@ -398,25 +395,6 @@ export function FieldModel3D({ character }: { character: string }) {
       }
     },
     [busy, enc, jobBackend, jobId, load, t, toast],
-  )
-
-  // Per-character override of the alias param "no fingers".
-  // '' = backend default (never materialized), '1' = on, '0' = off.
-  const setNoFingers = useCallback(
-    async (raw: string) => {
-      const value = raw === '' ? null : raw === '1'
-      setSt((prev) => ({ ...prev, options: { ...(prev.options || {}), no_fingers: value } }))
-      try {
-        const d = await apiPost<{ options: Model3DStatus['options'] }>(
-          `/characters/${enc}/model3d/options`, { no_fingers: value })
-        setSt((prev) => ({ ...prev, options: d.options }))
-        toast(t('Saved'))
-      } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
-        load()
-      }
-    },
-    [enc, load, t, toast],
   )
 
   // Opt-in: generate the mesh automatically (cheapest backend) once a new
@@ -649,26 +627,21 @@ export function FieldModel3D({ character }: { character: string }) {
   // Finger verdict from the measurement: bones alone say nothing (the Mixamo
   // rig always carries its 30), so it is the WEIGHTED finger bones that
   // decide. A measurement from before this field asks for a re-measure.
-  const fingers = ((): { label: string; mismatch: boolean } => {
+  const fingers = ((): { label: string } => {
     if (!measured || typeof measured.finger_bones !== 'number') {
-      return { label: t('fingers: measure again to see'), mismatch: false }
+      return { label: t('fingers: measure again to see') }
     }
-    const requested = model?.no_fingers === undefined
-      ? ''
-      : ` (${model.no_fingers ? t('generated with "No fingers"') : t('generated with fingers')})`
     if (measured.finger_bones === 0) {
-      return { label: `${t('no finger bones')}${requested}`, mismatch: model?.no_fingers === false }
+      return { label: `${t('no finger bones')}` }
     }
     const weighted = measured.finger_bones_weighted ?? 0
     if (weighted === 0) {
       return {
-        label: `${t('fingers not rigged — bones without mesh, the hand moves as one block')}${requested}`,
-        mismatch: model?.no_fingers === false,
+        label: `${t('fingers not rigged — bones without mesh, the hand moves as one block')}`,
       }
     }
     return {
-      label: `${t('fingers rigged')} (${weighted}/${measured.finger_bones} ${t('finger bones drive mesh')})${requested}`,
-      mismatch: model?.no_fingers === true,
+      label: `${t('fingers rigged')} (${weighted}/${measured.finger_bones} ${t('finger bones drive mesh')})`,
     }
   })()
   // Only a Mixamo rig can play the shared clips (humanoid characters).
@@ -864,11 +837,9 @@ export function FieldModel3D({ character }: { character: string }) {
                 : ''}
               {/* Are the fingers rigged? Not a bone count — the Mixamo rig
                   always ships its finger bones — but whether those bones own
-                  vertices. Coloured when the file contradicts what the rig
-                  stage was asked for. */}
+                  vertices. */}
               {measured.bones ? (
                 <span
-                  style={fingers.mismatch ? { color: 'var(--ga-warn, #c77d0a)' } : undefined}
                   title={t('Finger bones that own at least one vertex with weight ≥ 0.5. A "No fingers" bake keeps the bones but skins the whole hand to the hand bone.')}
                 >
                   {` · ${fingers.label}`}
@@ -933,27 +904,6 @@ export function FieldModel3D({ character }: { character: string }) {
         />
         <span>{t('Auto-generate 3D model (cheapest backend)')}</span>
       </label>
-      {/* "no fingers" is a humanoid-alias param — the generic ones don't take it. */}
-      {mixamo ? (
-        <>
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('No fingers')}</span>
-            <select
-              className="ga-input"
-              value={st.options?.no_fingers == null ? '' : st.options.no_fingers ? '1' : '0'}
-              disabled={pending}
-              onChange={(e) => setNoFingers(e.target.value)}
-            >
-              <option value="">{t('— backend default —')}</option>
-              <option value="1">{t('On (no separate fingers)')}</option>
-              <option value="0">{t('Off (model the fingers)')}</option>
-            </select>
-          </label>
-          <div className="ga-hint">
-            {t('Overrides the mesh backend setting for this character. Takes effect on the next generation — use Regenerate for the current outfit.')}
-          </div>
-        </>
-      ) : null}
       {st.extension_groups?.length ? (
         <fieldset className="ga-form">
           <legend>{t('Extension bones')}</legend>
@@ -1028,10 +978,6 @@ export function FieldModel3D({ character }: { character: string }) {
                   {(st.rig_backends || []).map(b => <option key={b.name} value={b.name}>{b.name}{b.model ? ` · ${b.model}` : ''}</option>)}
                 </select>
               </label>
-              <label><input type="checkbox" checked={rerigNoFingers === null} disabled={busy}
-                onChange={e => setRerigNoFingers(e.target.checked ? null : false)} /> {t('Use character setting (or backend default)')}</label>
-              <label><input type="checkbox" checked={rerigNoFingers === true} disabled={busy || rerigNoFingers === null}
-                onChange={e => setRerigNoFingers(e.target.checked)} /> {t('No individual fingers')}</label>
             </div>
             <div className="ga-modal-footer">
               <button type="button" className="ga-btn" disabled={busy} onClick={() => setRerigOpen(false)}>{t('Cancel')}</button>
@@ -1043,7 +989,7 @@ export function FieldModel3D({ character }: { character: string }) {
         <button type="button" className="ga-btn ga-btn-sm"
           disabled={pending || !model?.has_unrigged_source}
           title={!model?.has_unrigged_source ? t('No retained unrigged mesh source. Generate a new model to enable re-rigging.') : undefined}
-          onClick={() => { setRerigBackend(''); setRerigNoFingers(st.options?.no_fingers ?? null); setRerigOpen(true) }}>
+          onClick={() => { setRerigBackend(''); setRerigOpen(true) }}>
           {t('Re-rig from mesh')}
         </button>
         {model && !model.has_unrigged_source ? <span className="ga-hint">{t('No retained unrigged mesh source. Generate a new model to enable re-rigging.')}</span> : null}

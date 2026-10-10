@@ -1670,7 +1670,6 @@ def generate_character_model3d(character_name: str, force: bool = False,
 @router.post("/{character_name}/model3d/rerig")
 def rerig_character_model3d(
         character_name: str, signature: str = "", backend: str = "",
-        no_fingers: Optional[bool] = None,
         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Start a tracked rig-only rebuild of the served or selected source."""
     from app.core.model3d import (find_model3d_serving, get_model3d_dir,
@@ -1695,7 +1694,7 @@ def rerig_character_model3d(
         if not occasion or not backend_fits(occasion, describe_backend(selected)):
             raise HTTPException(400, "Selected backend has the wrong category or rig — no automatic fallback")
         pick = selected.name
-    return trigger_rerig(character_name, signature, backend_glob=pick, no_fingers=no_fingers)
+    return trigger_rerig(character_name, signature, backend_glob=pick)
 
 
 @router.post("/{character_name}/model3d/fetch-job")
@@ -1784,9 +1783,7 @@ def queue_character_extension_rigs(
 async def set_character_model3d_options(character_name: str, request: Request,
         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Per-character overrides for the mesh generation.
-    Body: {"no_fingers": true|false|null} (null clears the override — the
-    backend's configured default applies again) and/or
-    {"auto_generate": true|false} (generate the mesh automatically on the
+    Body: {"auto_generate": true|false} (generate the mesh automatically on the
     cheapest backend once a new combination's T-pose render succeeded)."""
     import asyncio
     body = await request.json()
@@ -1802,16 +1799,10 @@ def _set_character_model3d_options_sync(character_name: str,
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
     if not isinstance(body, dict) or not (
-            "no_fingers" in body or "auto_generate" in body or "extension_rig" in body):
+            "auto_generate" in body or "extension_rig" in body):
         raise HTTPException(status_code=400,
                             detail="model options missing")
     updates = {}
-    if "no_fingers" in body:
-        nf = body["no_fingers"]
-        if nf is not None and not isinstance(nf, bool):
-            raise HTTPException(status_code=400,
-                                detail="no_fingers must be bool or null")
-        updates["no_fingers"] = nf
     if "auto_generate" in body:
         updates["auto_generate"] = bool(body["auto_generate"])
     if "extension_rig" in body:

@@ -3,11 +3,12 @@
 
 Hand-derived expectations: one rig job and zero mesh jobs replace raw,
 normalized prerig and served bytes; source GLB/PNG/JSON remain byte-identical.
-An explicit failing rigger cannot call the routed backup. False/True overrides
-reach input_no_fingers unchanged. Missing sources submit nothing. Failure at
+An explicit failing rigger cannot call the routed backup. The backend's
+configured no_fingers reaches input_no_fingers unchanged. Missing sources
+submit nothing. Failure at
 rig, normalization, extensions, low rebuild or publication preserves every
 byte of the served/source pair. Default signature selects the served model;
-null fingers retain backend defaults; stale snapshots never overwrite a writer.
+character finger settings are ignored; stale snapshots never overwrite a writer.
 Generic source is red on top, blue below; its served PNG must be blue on top
 (the hub FBX V correction). A pre-existing low tier is rebuilt at its old ratio.
 A player POST returns 403, an admin starts a tracked background task.
@@ -15,6 +16,7 @@ Usage: ./.venv/bin/python scripts/smoke_model_rerig.py
 """
 import os
 import sys
+import inspect
 import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -97,7 +99,8 @@ class Fake(ImageBackend):
             payload = OpenAIMeshBackend.build_input_files(self, params)
             assert set(payload) == {'input_mesh_path'}
             assert base64.b64decode(payload['input_mesh_path'].split(',', 1)[1]) == fixture_glb()
-            assert OpenAIMeshBackend.build_alias_params(self, params) == {'input_no_fingers': params.get('no_fingers', True)}
+            assert OpenAIMeshBackend.build_alias_params(self, params) == {'input_no_fingers': self.no_fingers}
+            assert 'no_fingers' not in params
             if self.mesh_rig == 'generic':
                 self._meta.files = [{'name': 'test_articulationxl.fbx', 'kind': 'file', 'mime': 'application/octet-stream'}]
                 return [b'Kaydara FBX Binary\x00' + b'fixture']
@@ -160,12 +163,15 @@ def lod(name, signature=None, ratio=0.25):
     (target/'low'/f'{signature}.glb').write_bytes((target/f'{signature}.glb').read_bytes()+b'low')
     return {'ok': True}
 
+with patch('app.models.character.get_character_profile', return_value={'model3d_opts': {'no_fingers': True, 'auto_generate': True}}):
+    assert model3d.get_model3d_options('demo') == {'auto_generate': True, 'extension_rig': {}, 'extension_motion': {}}
+
 real_normalize=model3d._auto_normalize
 with ExitStack() as stack:
     stack.enter_context(patch('app.imagegen.service.get_image_service', return_value=svc))
     stack.enter_context(patch.object(svc, 'run_on_backend_channel', side_effect=lambda b, fn, **kw: fn()))
     stack.enter_context(patch.object(model3d, 'get_model3d_dir', side_effect=lambda n: getattr(model3d._staging, 'directories', {}).get(n) or root))
-    stack.enter_context(patch.object(model3d, 'get_model3d_options', return_value={'no_fingers': True}))
+    stack.enter_context(patch.object(model3d, 'get_model3d_options', return_value={'no_fingers': False}))
     stack.enter_context(patch.object(model3d, 'required_rig', return_value='mixamo'))
     stack.enter_context(patch.object(model3d, '_auto_retexture', return_value=None))
     stack.enter_context(patch.object(model3d, '_auto_normalize', side_effect=normalize))
@@ -174,7 +180,7 @@ with ExitStack() as stack:
     stack.enter_context(patch.object(model3d, 'build_lod', side_effect=lod))
     seed('mixamo')
     before=snapshot('mixamo')
-    result=model3d.rerig_model('demo', signature='mixamo', backend_glob='rigger', no_fingers=True)
+    result=model3d.rerig_model('demo', signature='mixamo', backend_glob='rigger')
     assert result['ok'], result
     assert (root/'raw/mixamo.glb').read_bytes() == fixture_glb(True)
     assert (root/'prerig/mixamo.glb').read_bytes() == fixture_glb(True)+b'normalized'
@@ -184,7 +190,7 @@ with ExitStack() as stack:
         if p.parts[0] == 'unrigged': assert (root/p).read_bytes() == value
     meta=json.loads((root/'mixamo.json').read_text())
     assert meta['mesh_backend'] == 'mesh-original' and meta['mesh_route_meta'] == {'original': True}
-    assert meta['rig_backend'] == 'rigger' and meta['no_fingers'] is True
+    assert meta['rig_backend'] == 'rigger' and 'no_fingers' not in meta
     assert not mesh.calls
     for failure in ('rig', 'normalize', 'extension', 'low', 'publication'):
         if failure == 'publication': seed('mixamo')
@@ -220,12 +226,13 @@ with ExitStack() as stack:
         assert snapshot('mixamo') == before, failure
     assert len(rigger.calls) == 6, 'extension and low failure must actually run the rig'
     assert not backup.calls and not mesh.calls
+    rigger.no_fingers = False
     with patch.object(model3d, '_auto_normalize'), patch.object(model3d, '_auto_extension_rig', return_value={'ok': True}), patch.object(model3d, 'build_lod', side_effect=lod):
-        assert model3d.rerig_model('demo', signature='mixamo', no_fingers=False)['ok']
-    assert rigger.calls[-1]['no_fingers'] is False
+        assert model3d.rerig_model('demo', signature='mixamo')['ok']
+    assert 'no_fingers' not in rigger.calls[-1]
     # Default means SERVED signature, which can differ from current outfit;
     # absent no_fingers preserves the backend default instead of forcing false.
-    with patch.object(model3d, 'get_model3d_options', return_value={'no_fingers': None}), patch.object(model3d, 'find_model3d_serving', return_value=(root/'mixamo.glb', 'nearest')), patch.object(model3d, 'current_outfit_state', return_value=({}, {}, 'missing')):
+    with patch.object(model3d, 'get_model3d_options', return_value={'no_fingers': False}), patch.object(model3d, 'find_model3d_serving', return_value=(root/'mixamo.glb', 'nearest')), patch.object(model3d, 'current_outfit_state', return_value=({}, {}, 'missing')):
         result=model3d.rerig_model('demo')
         assert result['ok'] and result['filename'] == 'mixamo.glb'
         assert 'no_fingers' not in rigger.calls[-1]
@@ -300,6 +307,9 @@ def track_finish(*args, **kw):
 async def route_checks():
     with patch.object(auth_dependency, '_get_session_user', side_effect=lambda r: {'id':'test', 'username':'demo', 'role':r.headers.get('x-role', 'user'), 'allowed_characters':['demo']}), patch.object(model3d, 'rerig_model', side_effect=worker), patch.object(queue, 'track_finish', side_effect=track_finish), patch.object(model3d, 'find_model3d_serving', return_value=(char_root/'mixamo.glb','exact')):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            from app.routes.characters import rerig_character_model3d
+            assert 'no_fingers' not in inspect.signature(rerig_character_model3d).parameters
+            assert 'no_fingers' not in inspect.signature(model3d.trigger_rerig).parameters
             url='/characters/demo/model3d/rerig'
             assert (await client.post(url, headers={'x-role':'user'})).status_code == 403
             assert not started.is_set()

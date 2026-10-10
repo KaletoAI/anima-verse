@@ -243,16 +243,13 @@ def _model_reader(function):
 
 
 def get_model3d_options(character_name: str) -> Dict[str, Any]:
-    """Per-character overrides for the mesh generation (profile field
-    ``model3d_opts``). A key that is absent/None means "use the backend's
-    configured default" — the default is never materialized here."""
+    """Read supported per-character model options from ``model3d_opts``."""
     from app.models.character import get_character_profile
     try:
         raw = (get_character_profile(character_name) or {}).get("model3d_opts") or {}
     except Exception:
         raw = {}
-    nf = raw.get("no_fingers")
-    return {"no_fingers": None if nf is None else bool(nf),
+    return {
             # Auto-generate the mesh on the CHEAPEST backend as soon as a
             # fresh T-pose render of a new outfit combination succeeds.
             "auto_generate": bool(raw.get("auto_generate")),
@@ -262,8 +259,7 @@ def get_model3d_options(character_name: str) -> Dict[str, Any]:
 
 def set_model3d_options(character_name: str,
                         updates: Dict[str, Any]) -> Dict[str, Any]:
-    """Merges mesh-generation overrides into the character profile.
-    ``no_fingers=None`` clears the override (back to the backend default)."""
+    """Merge supported model options into the character profile."""
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
     # Read AND write under the per-character profile lock (DATA-3). The
@@ -272,12 +268,6 @@ def set_model3d_options(character_name: str,
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
         opts = dict(profile.get("model3d_opts") or {})
-        if "no_fingers" in updates:
-            nf = updates["no_fingers"]
-            if nf is None:
-                opts.pop("no_fingers", None)
-            else:
-                opts["no_fingers"] = bool(nf)
         if "auto_generate" in updates:
             if updates["auto_generate"]:
                 opts["auto_generate"] = True
@@ -687,11 +677,6 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
                     info[key] = meta.get(key, "" if key.endswith("backend") else {})
                 info["source_filename"] = meta.get("source_filename", "")
                 info["face_num"] = meta.get("face_num")
-                # What the rig stage was ASKED for (a generated model records
-                # it; an upload has no such wish). Whether the fingers really
-                # drive mesh is the measurement's answer, not this one.
-                if meta.get("no_fingers") is not None:
-                    info["no_fingers"] = bool(meta["no_fingers"])
                 # Measured geometry, if this model has been through Blender.
                 # Read from the sidecar only — the info route is polled, and
                 # measuring costs a subprocess.
@@ -1629,9 +1614,6 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         pass
 
     error = ""
-    # Per-character override; None = the backend's configured default. One
-    # load — the meta block below reuses it (each load reads the profile).
-    no_fingers = get_model3d_options(character_name).get("no_fingers")
     import tempfile
     staging = Path(tempfile.mkdtemp(prefix=".generate-", dir=out_dir))
     try:
@@ -1682,7 +1664,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         # Sequential caller-thread submission: the mesh slot has been released.
         res = get_image_service().generate_rig(
             mesh_path=str(source_target), output_path=str(staging / f"{signature}-rig.glb"),
-            rig=rig, character_name=character_name, no_fingers=no_fingers,
+            rig=rig, character_name=character_name,
             basecolor_path=str(source_target.with_suffix(".png")) if source_texture is not None else "")
         if not res.get("ok"):
             error = str(res.get("error") or "rig generation failed")
@@ -1729,7 +1711,6 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             "source_image": src.name,
             "signature": signature,
             "character": character_name,
-            "no_fingers": no_fingers,
         }
         for _rk in ("routing", "fallback_from"):
             if res.get(_rk):
@@ -1777,7 +1758,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
 
 @_serial_model
 def rerig_model(character_name: str, signature: Optional[str] = None, *,
-                backend_glob: str = "", no_fingers: Optional[bool] = None) -> Dict[str, Any]:
+                backend_glob: str = "") -> Dict[str, Any]:
     """Rig the retained source only; publish the entire chain on success."""
     import tempfile
     from app.imagegen.service import get_image_service
@@ -1788,8 +1769,6 @@ def rerig_model(character_name: str, signature: Optional[str] = None, *,
     if not source.is_file():
         return {"ok": False, "error": "No retained unrigged mesh source. Generate a new model to enable re-rigging."}
     rig = required_rig(character_name)
-    if no_fingers is None:
-        no_fingers = get_model3d_options(character_name).get("no_fingers")
     previous = _read_sidecar(path) if path else _read_sidecar(source)
     low = tier_variant(path, LOW_TIER) if path else None
     low_meta = _read_sidecar(low) if low else {}
@@ -1797,7 +1776,6 @@ def rerig_model(character_name: str, signature: Optional[str] = None, *,
         res = get_image_service().generate_rig(
             mesh_path=str(source), output_path=str(Path(tmp) / f"{signature}.glb"),
             rig=rig, character_name=character_name, backend_glob=backend_glob,
-            no_fingers=no_fingers,
             basecolor_path=str(source.with_suffix(".png")) if rig == "generic" else "")
         if not res.get("ok"):
             return {"ok": False, "error": res.get("error") or "Rig generation failed"}
@@ -1824,7 +1802,7 @@ def rerig_model(character_name: str, signature: Optional[str] = None, *,
                     character=character_name, rig=rig, format=path.suffix.lstrip("."),
                     backend=res.get("backend", ""), rig_backend=res.get("backend", ""),
                     rig_route_meta={k: res[k] for k in ("routing", "fallback_from") if k in res},
-                    has_texture=texture is not None, no_fingers=no_fingers,
+                    has_texture=texture is not None,
                     source_filename=res.get("filename", ""))
         for key in ("routing", "fallback_from"):
             if key in res:
@@ -1845,8 +1823,7 @@ def rerig_model(character_name: str, signature: Optional[str] = None, *,
         return {"ok": True, "path": str(path), "filename": path.name}
 
 
-def trigger_rerig(character_name: str, signature: str, *, backend_glob: str = "",
-                  no_fingers: Optional[bool] = None) -> Dict[str, Any]:
+def trigger_rerig(character_name: str, signature: str, *, backend_glob: str = "") -> Dict[str, Any]:
     """Track a caller-thread orchestration job, outside GPU workers."""
     from app.core.task_queue import get_task_queue
     with _lock:
@@ -1867,7 +1844,7 @@ def trigger_rerig(character_name: str, signature: str, *, backend_glob: str = ""
         result = {"ok": False, "error": "Re-rig failed"}
         try:
             with _char_lock(character_name):
-                result = rerig_model(character_name, signature, backend_glob=backend_glob, no_fingers=no_fingers)
+                result = rerig_model(character_name, signature, backend_glob=backend_glob)
         except Exception as exc:
             result = {"ok": False, "error": str(exc)}
             logger.exception("Re-rig failed for %s", character_name)
