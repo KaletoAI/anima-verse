@@ -16,6 +16,7 @@ import type { SecondaryMotionPayload, ExtensionRigDeclaration } from '@anima/sce
  * DELETE .../model3d.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -87,6 +88,10 @@ interface Model3DInfo {
   texture_url?: string
   created_at?: string
   backend?: string
+  mesh_backend?: string
+  rig_backend?: string
+  has_unrigged_source?: boolean
+  unrigged_source_reason?: string
   /** gateway job id when the model was collected afterwards by that id */
   job_id?: string
   source?: string
@@ -126,6 +131,8 @@ interface Model3DStatus {
     extension_rig?: Record<string, { enabled?: boolean; flip?: boolean }>;
     extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }> }
   extension_groups?: ExtensionRigDeclaration[]
+  rig_backends?: MeshBackend[]
+  rerig_result?: { task_id: string; ok: boolean; error?: string }
   backends?: MeshBackend[]
   default?: string
   animation_set?: string
@@ -182,6 +189,10 @@ export function FieldModel3D({ character }: { character: string }) {
     return () => { cancelled = true }
   }, [])
 
+  const [rerigOpen, setRerigOpen] = useState(false)
+  const [rerigBackend, setRerigBackend] = useState('')
+  const [rerigNoFingers, setRerigNoFingers] = useState<boolean | null>(null)
+  const rerigTaskRef = useRef('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
   const [pendingFbx, setPendingFbx] = useState<File | null>(null)
@@ -219,15 +230,22 @@ export function FieldModel3D({ character }: { character: string }) {
     pollRef.current = setInterval(async () => {
       n += 1
       const d = await load()
+      if (d && !d.pending && rerigTaskRef.current && d.rerig_result?.task_id === rerigTaskRef.current) {
+        toast(d.rerig_result.ok ? t('Re-rig completed') : `${t('Re-rig failed')}: ${d.rerig_result.error || t('Error')}`,
+          d.rerig_result.ok ? undefined : 'error')
+        rerigTaskRef.current = ''
+      }
       if (!d?.pending || n >= 200) {
         if (pollRef.current) clearInterval(pollRef.current)
         setBusy(false)
       }
     }, 5000)
-  }, [load])
+  }, [load, t, toast])
 
   useEffect(() => {
     setConfirmDelete(false)
+    setRerigOpen(false)
+    rerigTaskRef.current = ''
     setJobOpen(false)
     setJobId('')
     setJobErrors([])
@@ -321,6 +339,27 @@ export function FieldModel3D({ character }: { character: string }) {
     },
     [busy, enc, startPoll, t, toast],
   )
+
+  const rerig = async () => {
+    if (busy || st.pending) return
+    const context = previewContextRef.current
+    const q = new URLSearchParams({ signature: st.model?.signature || '' })
+    if (rerigNoFingers !== null) q.set('no_fingers', String(rerigNoFingers))
+    if (rerigBackend) q.set('backend', rerigBackend)
+    setBusy(true)
+    try {
+      const result = await apiPost<{ task_id?: string }>(`/characters/${enc}/model3d/rerig?${q}`, {})
+      if (context !== previewContextRef.current) return
+      setRerigOpen(false)
+      rerigTaskRef.current = result.task_id || ''
+      toast(t('Re-rigging…'))
+      startPoll()
+    } catch (e) {
+      if (context !== previewContextRef.current) return
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      setBusy(false)
+    }
+  }
 
   // Collects a finished gateway job as the current outfit's model. A job that
   // is still queued/running changes nothing and only reports its progress.
@@ -970,7 +1009,44 @@ export function FieldModel3D({ character }: { character: string }) {
           <span className="ga-hint">{t('Physics changes apply immediately. Enabled and flip changes require rebuilding extension bones.')}</span>
         </fieldset>
       ) : null}
+      {!st.pending && st.rerig_result ? <div className="ga-hint" role="status">
+        {st.rerig_result.ok ? t('Re-rig completed') : `${t('Re-rig failed')}: ${st.rerig_result.error || t('Error')}`}
+      </div> : null}
+      {model ? <div className="ga-hint">
+        {t('Mesh backend')}: {model.mesh_backend || t('Unknown')} · {t('Rig backend')}: {model.rig_backend || t('Unknown')}
+      </div> : null}
+      {rerigOpen ? createPortal(
+        <div className="ga-modal-backdrop" onClick={() => { if (!busy) setRerigOpen(false) }}>
+          <div className="ga-modal" role="dialog" aria-modal="true" aria-label={t('Re-rig from mesh')}
+            style={{ maxWidth: 460 }} onClick={e => e.stopPropagation()}>
+            <div className="ga-modal-header">{t('Re-rig from mesh')}</div>
+            <div className="ga-modal-body ga-form">
+              <p className="ga-hint">{t('Reuses the retained mesh and rebuilds the rig, extension bones and existing low tier.')}</p>
+              <label>{t('Rigger')}
+                <select value={rerigBackend} disabled={busy} onChange={e => setRerigBackend(e.target.value)}>
+                  <option value="">{t('Auto (routing)')}</option>
+                  {(st.rig_backends || []).map(b => <option key={b.name} value={b.name}>{b.name}{b.model ? ` · ${b.model}` : ''}</option>)}
+                </select>
+              </label>
+              <label><input type="checkbox" checked={rerigNoFingers === null} disabled={busy}
+                onChange={e => setRerigNoFingers(e.target.checked ? null : false)} /> {t('Use character setting (or backend default)')}</label>
+              <label><input type="checkbox" checked={rerigNoFingers === true} disabled={busy || rerigNoFingers === null}
+                onChange={e => setRerigNoFingers(e.target.checked)} /> {t('No individual fingers')}</label>
+            </div>
+            <div className="ga-modal-footer">
+              <button type="button" className="ga-btn" disabled={busy} onClick={() => setRerigOpen(false)}>{t('Cancel')}</button>
+              <button type="button" className="ga-btn ga-btn-primary" disabled={pending} onClick={rerig}>{t('Re-rig from mesh')}</button>
+            </div>
+          </div>
+        </div>, document.body) : null}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <button type="button" className="ga-btn ga-btn-sm"
+          disabled={pending || !model?.has_unrigged_source}
+          title={!model?.has_unrigged_source ? t('No retained unrigged mesh source. Generate a new model to enable re-rigging.') : undefined}
+          onClick={() => { setRerigBackend(''); setRerigNoFingers(st.options?.no_fingers ?? null); setRerigOpen(true) }}>
+          {t('Re-rig from mesh')}
+        </button>
+        {model && !model.has_unrigged_source ? <span className="ga-hint">{t('No retained unrigged mesh source. Generate a new model to enable re-rigging.')}</span> : null}
         <button
           type="button"
           className="ga-btn ga-btn-sm"

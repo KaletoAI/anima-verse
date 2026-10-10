@@ -1009,7 +1009,7 @@ def _resolve_tokens_route_sync(character_name: str,
 @router.get("/{character_name}/belongings")
 def get_belongings_route(character_name: str) -> Dict[str, Any]:
     """Inventar + Outfit (Paper-Doll) eines Characters — gleiche Form wie
-    /play/belongings, für den Game-Admin-Garderoben-Tab."""
+    /play/belongings, for the Game-Admin wardrobe tab."""
     from app.routes.play import build_belongings
     return build_belongings(character_name)
 
@@ -1238,6 +1238,11 @@ def _resolve_character_model_snapshot(character_name: str):
                 "has_texture": bool(info.get("texture_url")),
                 "created_at": info.get("created_at", ""),
                 "backend": info.get("backend", ""),
+                "mesh_backend": info.get("mesh_backend", ""),
+                "rig_backend": info.get("rig_backend", ""),
+                "mesh_route_meta": info.get("mesh_route_meta", {}),
+                "rig_route_meta": info.get("rig_route_meta", {}),
+                "has_unrigged_source": info.get("has_unrigged_source", False),
                 "source": info.get("source", "generated"),
                 "extension_rig": info.get("extension_rig"),
                 "motion": status["motion"],
@@ -1660,6 +1665,37 @@ def generate_character_model3d(character_name: str, force: bool = False,
                               texture_size=texture_size or None):
         return {"status": "already_running"}
     return {"status": "generating"}
+
+
+@router.post("/{character_name}/model3d/rerig")
+def rerig_character_model3d(
+        character_name: str, signature: str = "", backend: str = "",
+        no_fingers: Optional[bool] = None,
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Start a tracked rig-only rebuild of the served or selected source."""
+    from app.core.model3d import (find_model3d_serving, get_model3d_dir,
+                                  required_rig, trigger_rerig)
+    from app.imagegen.occasions import backend_fits
+    from app.imagegen.routing import describe_backend
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(404, "Character not found")
+    if not signature:
+        served = find_model3d_serving(character_name)[0]
+        signature = served.stem if served else ""
+    if not signature:
+        raise HTTPException(409, "No retained unrigged mesh source. Generate a new model to enable re-rigging.")
+    if any(c in signature for c in ("/", "\\", "\x00")) or signature in (".", ".."):
+        raise HTTPException(400, "Invalid model signature")
+    if not (get_model3d_dir(character_name) / "unrigged" / f"{signature}.glb").is_file():
+        raise HTTPException(409, "No retained unrigged mesh source. Generate a new model to enable re-rigging.")
+    pick = (backend or "").strip()
+    if pick:
+        selected = require_explicit_backend(pick, media="mesh")
+        occasion = {"mixamo": "rig_humanoid", "generic": "rig_creature"}.get(required_rig(character_name))
+        if not occasion or not backend_fits(occasion, describe_backend(selected)):
+            raise HTTPException(400, "Selected backend has the wrong category or rig — no automatic fallback")
+        pick = selected.name
+    return trigger_rerig(character_name, signature, backend_glob=pick, no_fingers=no_fingers)
 
 
 @router.post("/{character_name}/model3d/fetch-job")

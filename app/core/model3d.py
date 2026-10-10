@@ -35,6 +35,7 @@ MODEL_EXTS = (".fbx", ".glb", ".gltf", ".obj", ".ply", ".vrm")
 
 _lock = threading.Lock()
 _generating: set = set()
+_rerig_results: Dict[str, Dict[str, Any]] = {}
 # Distance meshes currently being built in the background, keyed by file path
 # — one build per file, however many clients ask for it at once.
 _lod_building: set = set()
@@ -111,7 +112,7 @@ def _serial_model(function):
             if function.__name__ in ("set_model3d_rig", "delete_model3d"):
                 exact = find_model3d(character_name)
                 signature = exact.stem if exact else None
-            elif function.__name__ in ("build_lod", "rebuild_extension_rig", "measure_model", "diagnose_model", "retexture_model"):
+            elif function.__name__ in ("build_lod", "rebuild_extension_rig", "measure_model", "diagnose_model", "retexture_model", "rerig_model"):
                 served = find_model3d_serving(character_name)[0]
                 signature = served.stem if served else None
             signature = signature or current_outfit_state(character_name)[2]
@@ -165,6 +166,8 @@ def _serial_model(function):
                     if generation_error is not None:
                         raise generation_error
                     return result
+            if function.__name__ == "rerig_model" and not result.get("ok"):
+                return result
             staged_files = _signature_files(stage, signature)
             # Prepare comparisons without holding a publication lock.
             current_files = _signature_files(directory, signature)
@@ -176,18 +179,45 @@ def _serial_model(function):
                         replacements.append(relative)
             except FileNotFoundError:
                 return stale("Model changed during processing; result discarded")
+            # Re-rig promises failure atomicity even if a late publication
+            # rename fails. Prepare rollback files outside the reader lock.
+            rollback = stage / ".rollback" if function.__name__ == "rerig_model" else None
+            if rollback is not None:
+                try:
+                    for relative in set(replacements) | (current_files.keys() - staged_files.keys()):
+                        source = current_files.get(relative)
+                        if source is None:
+                            continue
+                        target = rollback / relative
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(source, target)
+                except FileNotFoundError:
+                    return stale("Model changed while preparing publication")
             with keyed_lock("model3d", f"{character_name}:{signature}"), \
                     keyed_lock("model3d_publication", str(directory)):
                 if not directory.is_dir() or _publication_token(directory, signature) != token:
                     return stale("Model changed during processing; result discarded")
-                for relative in current_files.keys() - staged_files.keys():
-                    current_files[relative].unlink(missing_ok=True)
-                # The full sidecar is the commit marker for lock-aware readers.
-                order = lambda r: (r.suffix == ".json", r.parent == Path('.'), str(r))
-                for relative in sorted(replacements, key=order):
-                    target = directory / relative
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(stage / relative, target)
+                changed = []
+                try:
+                    for relative in current_files.keys() - staged_files.keys():
+                        current_files[relative].unlink(missing_ok=True)
+                        changed.append(relative)
+                    # Full sidecar last: the commit marker for lock-aware readers.
+                    order = lambda r: (r.suffix == ".json", r.parent == Path('.'), str(r))
+                    for relative in sorted(replacements, key=order):
+                        target = directory / relative
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(stage / relative, target)
+                        changed.append(relative)
+                except Exception:
+                    if rollback is not None:
+                        for relative in reversed(changed):
+                            target = directory / relative
+                            if relative in current_files:
+                                os.replace(rollback / relative, target)
+                            else:
+                                target.unlink(missing_ok=True)
+                    raise
                 if replacements or current_files.keys() != staged_files.keys() or function.__name__ == "delete_model3d":
                     key = (str(directory), signature)
                     _publication_epochs[key] = _publication_epochs.get(key, 0) + 1
@@ -551,6 +581,17 @@ def list_mesh_backends(rig: str = "", occasion: str = "") -> Dict[str, Any]:
     return {"backends": out, "default": default}
 
 
+def list_rig_backends(rig: str) -> List[Dict[str, Any]]:
+    """Offer enabled mesh2rig backends of the character's required rig."""
+    from app.imagegen.service import get_image_service
+    return [{"name": b.name, "model": getattr(b, "model", "")}
+            for b in get_image_service().pool.backends
+            if getattr(b, "MEDIA_TYPE", "image") == "mesh"
+            and getattr(b, "category", "") == "mesh2rig"
+            and getattr(b, "mesh_rig", "") == rig
+            and b.instance_enabled]
+
+
 def list_shrink_backends() -> Dict[str, Any]:
     """Available mesh→mesh backends (``category`` mesh2mesh) for the "Create
     low variant" dialog: ``{"backends": [...]}`` in the same entry shape as
@@ -632,6 +673,8 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
                                 "rig": rig,
                                 "size": path.stat().st_size,
                                 "url": f"/characters/{enc}/model3d/file"}
+        info["has_unrigged_source"] = (path.parent / "unrigged" / f"{path.stem}.glb").is_file()
+        info["unrigged_source_reason"] = "" if info["has_unrigged_source"] else "No retained unrigged mesh source. Generate a new model to enable re-rigging."
         info["source"] = "generated"  # default for legacy sidecars
         meta_path = path.with_suffix(".json")
         if meta_path.exists():
@@ -640,6 +683,8 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
                 info["source"] = meta.get("source", "generated")
                 info["created_at"] = meta.get("created_at", "")
                 info["backend"] = meta.get("backend", "")
+                for key in ("mesh_backend", "rig_backend", "mesh_route_meta", "rig_route_meta"):
+                    info[key] = meta.get(key, "" if key.endswith("backend") else {})
                 info["source_filename"] = meta.get("source_filename", "")
                 info["face_num"] = meta.get("face_num")
                 # What the rig stage was ASKED for (a generated model records
@@ -703,13 +748,15 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
     from app.blender import runner
     out["blender"] = runner.status()
     out.update(list_mesh_backends(rig))
+    out["rig_backends"] = list_rig_backends(rig)
     with _lock:
         out["pending"] = character_name in _generating
+        out["rerig_result"] = _rerig_results.get(character_name)
     return out
 
 
 def _purge_combination(out_dir: Path, signature: str, *,
-                       keep_model: Optional[Path] = None) -> None:
+                       keep_model: Optional[Path] = None, preserve_unrigged: bool = False) -> None:
     """Remove any stored model of this outfit combination (model + texture +
     sidecar), whatever its format/source — the caller writes a fresh one.
     ``keep_model`` preserves the publication target until atomic replacement."""
@@ -732,6 +779,8 @@ def _purge_combination(out_dir: Path, signature: str, *,
     # 2026-08-06: a fresh bake's pristine copy was silently never kept.
     from app.blender.refine import RAW_DIR_NAME
     for directory in (out_dir / "unrigged", out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME):
+        if preserve_unrigged and directory.name == "unrigged":
+            continue
         for old in directory.glob(f"{signature}.*"):
             old.unlink()
 
@@ -1063,7 +1112,8 @@ def _target_height_m(character_name: str) -> float:
 
 
 def _auto_normalize(character_name: str, path: Path,
-                    meta: Dict[str, Any], *, required: bool = False) -> None:
+                    meta: Dict[str, Any], *, required: bool = False,
+                    fail_on_error: bool = False) -> None:
     """Scales the fresh mesh to the character's height and grounds it, if
     switched on (plan-blender-veredelung.md § 2, decided 2026-08-06).
 
@@ -1084,7 +1134,7 @@ def _auto_normalize(character_name: str, path: Path,
                            validator=_validator_for(meta.get("rig") or "", character_name))
     data = res.get("data") or {}
     if not res.get("applied"):
-        if required:
+        if required or fail_on_error:
             raise RuntimeError(res.get("error") or "Normalization produced no validated output")
         if res.get("error"):
             logger.info("Model3D %s: normalisation not applied (%s)",
@@ -1723,6 +1773,115 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
                 get_task_queue().track_finish(task_id, error=error)
             except Exception:
                 pass
+
+
+@_serial_model
+def rerig_model(character_name: str, signature: Optional[str] = None, *,
+                backend_glob: str = "", no_fingers: Optional[bool] = None) -> Dict[str, Any]:
+    """Rig the retained source only; publish the entire chain on success."""
+    import tempfile
+    from app.imagegen.service import get_image_service
+    from app.core.model_validate import validate_glb, validate_fbx
+    path = find_model3d(character_name, signature)
+    out_dir = get_model3d_dir(character_name)
+    source = out_dir / "unrigged" / f"{signature}.glb"
+    if not source.is_file():
+        return {"ok": False, "error": "No retained unrigged mesh source. Generate a new model to enable re-rigging."}
+    rig = required_rig(character_name)
+    if no_fingers is None:
+        no_fingers = get_model3d_options(character_name).get("no_fingers")
+    previous = _read_sidecar(path) if path else _read_sidecar(source)
+    low = tier_variant(path, LOW_TIER) if path else None
+    low_meta = _read_sidecar(low) if low else {}
+    with tempfile.TemporaryDirectory(prefix=".rerig-", dir=out_dir) as tmp:
+        res = get_image_service().generate_rig(
+            mesh_path=str(source), output_path=str(Path(tmp) / f"{signature}.glb"),
+            rig=rig, character_name=character_name, backend_glob=backend_glob,
+            no_fingers=no_fingers,
+            basecolor_path=str(source.with_suffix(".png")) if rig == "generic" else "")
+        if not res.get("ok"):
+            return {"ok": False, "error": res.get("error") or "Rig generation failed"}
+        delivered = Path(res["path"])
+        blob = delivered.read_bytes()
+        texture = Path(res["texture_path"]).read_bytes() if res.get("texture_path") else None
+        check = validate_glb(blob) if rig == "mixamo" else validate_fbx(blob, texture)
+        if not check.get("ok"):
+            return {"ok": False, "error": "; ".join(check.get("errors") or ["Invalid rigged result"])}
+        path = out_dir / f"{signature}{delivered.suffix.lower()}"
+        _purge_combination(out_dir, signature, keep_model=path, preserve_unrigged=True)
+        _publish_model_bytes(path, blob)
+        (out_dir / "raw").mkdir(exist_ok=True)
+        _publish_model_bytes(out_dir / "raw" / path.name, blob)
+        if texture is not None:
+            _publish_model_bytes(path.with_suffix(".png"), texture)
+            _publish_model_bytes((out_dir / "raw" / path.name).with_suffix(".png"), texture)
+        meta = {k: v for k, v in previous.items() if k in (
+            "mesh_backend", "mesh_route_meta", "source_image", "view_images", "pieces", "items")}
+        source_meta = _read_sidecar(source)
+        for key in ("mesh_backend", "mesh_route_meta"):
+            meta.setdefault(key, source_meta.get(key, "" if key.endswith("backend") else {}))
+        meta.update(created_at=utc_now_iso(), source="generated", signature=signature,
+                    character=character_name, rig=rig, format=path.suffix.lstrip("."),
+                    backend=res.get("backend", ""), rig_backend=res.get("backend", ""),
+                    rig_route_meta={k: res[k] for k in ("routing", "fallback_from") if k in res},
+                    has_texture=texture is not None, no_fingers=no_fingers,
+                    source_filename=res.get("filename", ""))
+        for key in ("routing", "fallback_from"):
+            if key in res:
+                meta[key] = res[key]
+        _auto_retexture(character_name, path, meta)
+        _auto_normalize(character_name, path, meta, fail_on_error=True)
+        extension = _auto_extension_rig(character_name, path, meta)
+        if not extension.get("ok"):
+            return {"ok": False, "error": extension.get("error") or "Extension bones failed"}
+        _attach_measurement(meta, path)
+        _publish_sidecar(path, meta)
+        if low:
+            result = build_lod(character_name, signature, ratio=low_meta.get("lod_ratio") or _auto_lod_ratio())
+            if not result.get("ok"):
+                return {"ok": False, "error": result.get("error") or "Low tier rebuild failed"}
+        else:
+            request_lod(character_name, path)
+        return {"ok": True, "path": str(path), "filename": path.name}
+
+
+def trigger_rerig(character_name: str, signature: str, *, backend_glob: str = "",
+                  no_fingers: Optional[bool] = None) -> Dict[str, Any]:
+    """Track a caller-thread orchestration job, outside GPU workers."""
+    from app.core.task_queue import get_task_queue
+    with _lock:
+        if character_name in _generating:
+            return {"status": "already_running"}
+        _generating.add(character_name)
+    try:
+        queue = get_task_queue()
+        task_id = queue.track_start("model3d_rerig", f"Re-rig: {character_name}",
+                                    agent_name=character_name, start_running=True)
+    except Exception:
+        with _lock:
+            _generating.discard(character_name)
+        raise
+    with _lock:
+        _rerig_results.pop(character_name, None)
+    def run():
+        result = {"ok": False, "error": "Re-rig failed"}
+        try:
+            with _char_lock(character_name):
+                result = rerig_model(character_name, signature, backend_glob=backend_glob, no_fingers=no_fingers)
+        except Exception as exc:
+            result = {"ok": False, "error": str(exc)}
+            logger.exception("Re-rig failed for %s", character_name)
+        finally:
+            try:
+                queue.track_finish(task_id, error="" if result.get("ok") else result.get("error") or "Re-rig failed")
+            finally:
+                with _lock:
+                    _rerig_results[character_name] = {"ok": bool(result.get("ok")),
+                                                       "error": result.get("error", ""),
+                                                       "task_id": task_id}
+                    _generating.discard(character_name)
+    threading.Thread(target=run, daemon=True).start()
+    return {"status": "generating", "task_id": task_id}
 
 
 # A gateway job id as the admin may paste it — "Job 466a4e41b73d" straight out
