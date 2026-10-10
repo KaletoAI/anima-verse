@@ -1,5 +1,4 @@
 {
-  "Clamped per character to its maximum rest angle.": "Pro Charakter auf dessen maximalen Ruhewinkel begrenzt.",
   "_meta": {
     "label": "Deutsch",
     "language": "de",
@@ -700,11 +699,9 @@
     "Nothing was imported.": "Es wurde nichts importiert.",
     "nowhere": "nirgendwo",
     "Off": "Aus",
-    "Off (model the fingers)": "Aus (Finger modellieren)",
     "ok": "ok",
     "Older": "Älter",
     "On": "An",
-    "On (no separate fingers)": "An (keine einzelnen Finger)",
     "On match, the selected blocks are removed from the thought prompt, the modifier appears under effects_block, the icon shows in the character header and the image modifier is appended to the image prompt.": "Bei Match werden gewählte Blöcke aus dem Thought-Prompt entfernt, der Modifier-Text erscheint unter effects_block, das Icon im Character-Header und der Image-Modifier wird an den Bild-Prompt angehängt.",
     "On the road to": "Unterwegs nach",
     "On your way to": "Auf dem Weg nach",
@@ -736,7 +733,6 @@
     "Output size (px)": "Ausgabegröße (px)",
     "Yard": "Außenbereich",
     "Overrides the location decency for this room. Empty = inherit.": "Überschreibt die Sittlichkeit des Orts für diesen Raum. Leer = erben.",
-    "Overrides the mesh backend setting for this character. Takes effect on the next generation — use Regenerate for the current outfit.": "Überschreibt die Einstellung des Mesh-Backends für diesen Charakter. Wirkt bei der nächsten Generierung — für das aktuelle Outfit „Neu generieren“ nutzen.",
     "Overwrite": "Überschreiben",
     "overwrite": "überschreiben",
     "Owner": "Besitzer",
@@ -1896,7 +1892,6 @@
     "Portraits": "Porträts",
     "Portrait count: {n}": "Porträt-Anzahl: {n}",
     "fingers: measure again to see": "Finger: erneut messen, um es zu sehen",
-    "generated with fingers": "generiert mit Fingern",
     "no finger bones": "keine Fingerknochen",
     "fingers not rigged — bones without mesh, the hand moves as one block": "Finger nicht geriggt — Knochen ohne Mesh, die Hand bewegt sich als Block",
     "fingers rigged": "Finger geriggt",
@@ -2411,6 +2406,16 @@
     "Travelling": "Unterwegs",
     "Blocked": "Blockiert",
     "Arrived": "Angekommen",
-    "Cancelled": "Abgebrochen"
+    "Cancelled": "Abgebrochen",
+    "Re-rig from mesh": "Aus Mesh neu riggen",
+    "Rigger": "Rigging-Backend",
+    "Re-rigging…": "Rig wird neu erstellt…",
+    "Re-rig completed": "Rig erfolgreich neu erstellt",
+    "Re-rig failed": "Erneutes Rigging fehlgeschlagen",
+    "Rig backend": "Rig-Backend",
+    "Unknown": "Unbekannt",
+    "No retained unrigged mesh source. Generate a new model to enable re-rigging.": "Keine gespeicherte ungeriggte Mesh-Quelle. Erzeuge ein neues Modell, um erneutes Rigging zu ermöglichen.",
+    "Reuses the retained mesh and rebuilds the rig, extension bones and existing low tier.": "Verwendet das gespeicherte Mesh und erstellt Rig, Zusatz-Bones und eine vorhandene Low-Stufe neu.",
+    "Clamped per character to its maximum rest angle.": "Pro Charakter auf dessen maximalen Ruhewinkel begrenzt."
   }
 }
