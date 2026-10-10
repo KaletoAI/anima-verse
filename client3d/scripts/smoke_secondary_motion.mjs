@@ -135,6 +135,59 @@ try {
     const total=directions.at(-1).angleTo(unsagged)*180/Math.PI;
     const matrices=bones.map(b=>[...b.matrixWorld.elements]);solver.dispose();return {bends,total,matrices};
   }
+  // Hand derivation: X right, Y up, F=+Z. F cross U=-X matches
+  // (-Y) cross F; positive rest therefore raises toward +Z.
+  // L=(sin(a),-cos(a),0), C=Rz(-a). Slerp f leaves b=a*(1-f).
+  // R(-X,r) gives (sin(b),-cos(b)*cos(r),cos(b)*sin(r)).
+  // a=25: r120/f1 gives (0,.5,.8660254); r30/f.5 gives
+  // (.2164396,-.8454971,.4881480); r120/f0 gives (.4226183,.4531539,.7848856).
+  // Lateral=asin(x), elevation=asin(y). Old tilted-plane rotation gives
+  // x=sin(25)*cos(120), measured lateral=-12.19908169 degrees.
+  const baselineSource=(await promisify(execFile)('git',['show','7f165a87:packages/scene-render/src/secondaryMotion.ts'],{encoding:'utf8'})).stdout;
+  const baselineBuild=await build({stdin:{contents:baselineSource,resolveDir:join(process.cwd(),'packages/scene-render/src'),loader:'ts'},bundle:true,platform:'node',format:'esm',write:false,external:['three']});
+  const baselineFile=join(dir,'baseline.mjs');await writeFile(baselineFile,baselineBuild.outputFiles[0].text);
+  const baseline=await import(baselineFile);
+  function restChain(lean,forward,rest,straighten,api=C) {
+    const root=new THREE.Group(),anchor=new THREE.Bone();root.add(anchor);
+    const a=lean*Math.PI/180,t=forward*Math.PI/180;
+    const lever=new THREE.Vector3(Math.sin(a),-Math.cos(a)*Math.cos(t),Math.cos(a)*Math.sin(t));
+    const bones=[],positions=[],indices=[],weights=[];
+    for(let i=0;i<3;i++) {
+      const b=new THREE.Bone();b.name=`rest_link_${i}`;(i?bones[i-1]:anchor).add(b);
+      b.position.copy(i?lever:new THREE.Vector3(0,0,.1));bones.push(b);
+      positions.push(...lever.clone().multiplyScalar(i+.5).add(new THREE.Vector3(0,0,.1)).toArray());
+      indices.push(i+1,0,0,0);weights.push(1,0,0,0);
+    }
+    const geometry=new THREE.BufferGeometry();
+    // Double precision keeps the centroid collinear for matrix parity at 1e-9.
+    geometry.setAttribute('position',new THREE.BufferAttribute(new Float64Array(positions),3));
+    geometry.setAttribute('skinIndex',new THREE.Uint16BufferAttribute(indices,4));geometry.setAttribute('skinWeight',new THREE.Float32BufferAttribute(weights,4));
+    const mesh=new THREE.SkinnedMesh(geometry,new THREE.MeshBasicMaterial());root.add(mesh);root.updateMatrixWorld(true);mesh.bind(new THREE.Skeleton([anchor,...bones]));
+    const solver=api.createSecondaryMotion(THREE,root,payload({bones:bones.map(b=>b.name),gravity:0,gain:0,rest_deg:rest,rest_max_deg:180,straighten_deg:straighten,squash:[1,1]}));
+    solver.update(0);
+    const directions=bones.map(b=>lever.clone().transformDirection(b.matrixWorld));
+    const matrices=bones.map(b=>[...b.matrixWorld.elements]);solver.dispose();return {directions,matrices};
+  }
+  const matrixParity=(a,b)=>a.matrices.forEach((m,i)=>m.forEach((v,j)=>near(v,b.matrices[i][j],1e-9)));
+  for(const forward of [0,20])for(const rest of [30,90,120])for(const straighten of [0,60])
+    matrixParity(restChain(0,forward,rest,straighten),restChain(0,forward,rest,straighten,baseline));
+  matrixParity(straightSag(3,.6,C,true),straightSag(3,.6,baseline,true));
+  console.log('ok sagittal axis sign and paired rest matrix parity with 7f165a87 within 1e-9');
+  const oldLateral=Math.asin(restChain(25,0,120,0,baseline).directions[0].x)*180/Math.PI;
+  near(oldLateral,-12.19908169,.00001);assert.ok(oldLateral<0);
+  console.log('ok old-code lean proof 7f165a87 lateral',oldLateral);
+  for(const [rest,straighten,b] of [[120,60,0],[30,60,12.5],[120,0,25]]) {
+    const beta=b*Math.PI/180,r=rest*Math.PI/180;
+    const expected=new THREE.Vector3(Math.sin(beta),-Math.cos(beta)*Math.cos(r),Math.cos(beta)*Math.sin(r));
+    const measured=restChain(25,0,rest,straighten);
+    for(const direction of measured.directions) {
+      near(Math.asin(direction.x)*180/Math.PI,b,.05);
+      near(Math.asin(direction.y)*180/Math.PI,Math.asin(expected.y)*180/Math.PI,.05);
+      near(direction.distanceTo(expected),0,1e-9);
+    }
+    const v=measured.directions[0];
+    console.log(`ok lean rest=${rest} straighten=${straighten}: direction ${JSON.stringify(v.toArray())}, lateral ${Math.asin(v.x)*180/Math.PI}, elevation ${Math.asin(v.y)*180/Math.PI}`);
+  }
   const theta=Math.atan((.6*9.81/(4*Math.PI)**2)/.15)*180/Math.PI;
   for(const [n,gravity,parts,denominator,total] of [[3,.6,[9,4,1],14,theta],[6,.6,[36,25,16,9,4,1],91,theta],[3,100,[9,4,1],14,25]]) {
     const measured=straightSag(n,gravity);

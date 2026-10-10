@@ -117,6 +117,8 @@ interface Bind {
   /** World matrix of the bone WITHOUT its own extension scale (set each update). */
   pureWorld: Matrix4
   lateral: Vector3
+  singleLateral: Vector3
+  centeringRotation: Quaternion
   pairedLateral: Vector3
   auto: boolean
   depth: number
@@ -235,7 +237,7 @@ export function createSecondaryMotion(
         binds.set(bone, { bone, local: bone.matrix.clone(), centroid: new three.Vector3(), mass: 0, scaleAxis: new three.Vector3(), centroidWorld: new three.Vector3(),
           gravityRest: gravity.clone().applyQuaternion(q), gravityProjection: 0, bodyFront: new three.Vector3(),
           head: bone.getWorldPosition(new three.Vector3()), parentHead: bone.parent!.getWorldPosition(new three.Vector3()), worldRotation: q.clone().invert(), pureWorld: new three.Matrix4(),
-          lateral: new three.Vector3(), pairedLateral: new three.Vector3(), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), straightenRotation: new three.Quaternion(), localRotation: bone.quaternion.clone() })
+          singleLateral: new three.Vector3(), centeringRotation: new three.Quaternion(), lateral: new three.Vector3(), pairedLateral: new three.Vector3(), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), straightenRotation: new three.Quaternion(), localRotation: bone.quaternion.clone() })
       }
     })
     // One pass over four influences per vertex, not one pass per skeleton bone.
@@ -349,6 +351,19 @@ export function createSecondaryMotion(
         const toward = front.clone().addScaledVector(lever, -front.dot(lever))
         if (toward.lengthSq() < 1e-10) toward.copy(bindUp).addScaledVector(lever, -bindUp.dot(lever))
         b.lateral.crossVectors(lever, toward).normalize().applyQuaternion(b.worldRotation.clone().invert())
+        if (roots.length === 1) {
+          const inverseBind = b.worldRotation.clone().invert()
+          const axis = front.clone().cross(bindUp).normalize()
+          // Match the existing positive raise direction in the sagittal plane.
+          if (axis.dot(lever.clone().cross(toward)) < 0) axis.negate()
+          const sagittal = lever.clone().addScaledVector(axis, -lever.dot(axis))
+          b.singleLateral.copy(axis).applyQuaternion(inverseBind)
+          b.centeringRotation.identity()
+          if (sagittal.lengthSq() > 1e-12) {
+            b.centeringRotation.setFromUnitVectors(lever.clone().applyQuaternion(inverseBind),
+              sagittal.normalize().applyQuaternion(inverseBind))
+          }
+        }
       }
       for (const bind of chain as Bind[]) {
         if (selected.has(bind.bone)) continue
@@ -423,6 +438,7 @@ export function createSecondaryMotion(
   const lateral = new three.Vector3(), localLateral = new three.Vector3(), staticVector = new three.Vector3(), equilibrium = new three.Vector3()
   const frameQ = new three.Quaternion(), frontLocal = new three.Vector3()
   const integration = { p: new three.Vector3(), v: new three.Vector3(), x: new three.Vector3(), w: new three.Vector3() }
+  const centeringQ = new three.Quaternion()
   const chainCentre = new three.Vector3(), chainForce = new three.Vector3()
   const driven = new Map<Bone, Particle>()
   const pureParent = (node: Object3D | null): Quaternion => {
@@ -480,7 +496,11 @@ export function createSecondaryMotion(
         }
         if (drivenAncestor) anchor.setPosition(temp.setFromMatrixPosition(anchorFull))
         pureParent(b.bone.parent).multiply(b.localRotation)
-        if (st.roots.includes(b) && b.lateral.lengthSq() > 1e-12) restQ.setFromAxisAngle(b.lateral, st.rest)
+        if (st.roots.length === 1 && st.roots[0] === b && b.singleLateral.lengthSq() > 1e-12) {
+          centeringQ.identity().slerp(b.centeringRotation, st.straighten)
+          restQ.setFromAxisAngle(b.singleLateral, st.rest).multiply(centeringQ)
+        }
+        else if (st.roots.includes(b) && b.lateral.lengthSq() > 1e-12) restQ.setFromAxisAngle(b.lateral, st.rest)
         else {
           restQ.identity().slerp(b.straightenRotation, st.straighten)
         }

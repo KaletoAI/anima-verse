@@ -10438,10 +10438,21 @@ Front is derived generically from the bind pose: take the horizontal component
 of (mean chain-root head minus mean declared-parent joint head). If that vector
 is meaningfully zero, use the horizontal component of (mean target centroid
 minus mean chain-root head), as for paired groups. Up is bind-pose world/model
-up. For each root lever u, project front perpendicular to u to obtain front';
-the axis is normalize(cross(u, front')), signed so positive rotation moves u
-toward front. For a lever parallel to front, use up instead, so positive lifts.
-Store each axis in its own root anchor frame; no fixed model axis is assumed.
+up. For groups with exactly one root, define the body lateral axis X as
+normalize(front cross up), signed to match the existing lever cross projected
+front for a sagittal lever. The root lever L points to the child head, or to
+its weighted centroid when there is no child. Project L into the sagittal
+plane: L_s = L - dot(L, X) X. Let C rotate unit(L) onto unit(L_s), or be
+identity when L_s is effectively zero. Store X and C in the root bone-local
+frame using the inverse bind world rotation. Each frame uses
+restQ = R(X_local, rest) * slerp(identity, C_local, f), where f is the root's
+existing blended smoothstep straightening fraction (zero when straighten_deg
+is zero). Centering acts first: rest zero preserves the natural hanging lean;
+straightening fades that lean proportionally, while disabled straightening
+preserves its lateral component through the raise. Paired and multi-root
+groups retain their existing per-root axis: project front perpendicular to
+the lever u, then normalize(u cross projected_front); use up for a lever
+parallel to front. Store that axis in the root anchor frame.
 The rest angle rotates the chain at its ROOT link. Children inherit that
 rotation; optional `straighten_deg` removes their relative bind bends as
 described below. With its default 0, the chain rotates rigidly. Compute T' and static sag around
