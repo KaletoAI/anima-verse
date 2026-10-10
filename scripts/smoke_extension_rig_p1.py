@@ -382,10 +382,10 @@ module=types.ModuleType('operation'); module.__file__=str(source)
 exec(compile(source.read_text().replace('_common.main(extension_bones)', ''),str(source),'exec'),module.__dict__)
 # Hand-derived: 32 positions per ring, radius .03; seven hidden rings
 # occupy .98 < z < 1.05. Their centres move backward .006 m per ring.
-# A wall at z=1.055 adds annuli .032,.034,...,.12: at least 3 rings
-# fit the .0375 acceptance radius, so count >=96 >1.8*32 rejects it.
+# A wall at z=1.055 adds annuli .032,.034,...,.12. Its plane cut
+# loses the separate radius-.03 closed ring, so growth stops before the wall.
 # Side cylinders at x=+/- .10, radius .02 cannot enter that tube.
-co=[]; edges=[]; normals=[]
+co=[]; edges=[]; normals=[]; faces=[]
 def ring(x,y,z,r,n=32):
     start=len(co)
     for j in range(n):
@@ -396,6 +396,7 @@ def ring(x,y,z,r,n=32):
     return list(range(start,start+n))
 def join(a,b):
     edges.extend(zip(a,b))
+    faces.extend((a[j],a[(j+1)%len(a)],b[(j+1)%len(b)],b[j]) for j in range(len(a)))
 part=set(); hidden=set(); previous=None
 for k in range(26):
     y=-.16+.006*max(0,k-18)
@@ -418,11 +419,11 @@ for sign in (-1,1):
     edges.append((previous[0],min(wall,key=lambda i:(co[i]-co[previous[0]]).length)))
 p={'base_slice_size':.01,'base_radius_margin':1.25,'base_growth_max':1.8,
    'base_extension_max':.6,'base_history_slices':5,'cut':.15,'weld_distance':.0001,'weld_normal_min':0.}
-result,welded,centres,t,reason,table=module.grow_attachment(co,edges,part,Vector((0,-.16,.98)),Vector((0,0,-1)),.18,p,normals)
+result,welded,centres,t,reason,table=module.grow_attachment(co,edges,part,Vector((0,-.16,.98)),Vector((0,0,-1)),.18,p,normals,faces)
 assert hidden <= result, ('hidden stem missing',len(hidden-result),table)
 assert not result & (side|wall), ('side or wall captured',table)
 assert abs(t+7/18)<=.01/.18+1e-6, (t,table)
-assert reason=='connected count growth limit', (reason,table)
+assert reason=='closed section leaves tube band', (reason,table)
 assert abs(centres[-1].y+.118)<1e-6, centres[-1]
 assert any(co[i].y>=-.12 for i in hidden), 'stem must continue behind the threshold'
 Path(args['result']).write_text(json.dumps({'ok':True,'data':{'t':t,'reason':reason,'hidden':len(hidden),'slice_table':table},'outputs':{}}))
@@ -512,12 +513,17 @@ def assert_joint_weights(rows, position, expected, label):
           for weights in matches), label)
 
 
-def publication_checks(root, model3d):
+def publication_checks(root, model3d, rigged_source):
     """Pause real upload processing; concurrent readers must see old or final.
 
     These bytes stand for processing milestones (not synthetic GLB geometry).
     Only expensive processors are replaced, so persistence, staging, locking,
     revision checks, route byte capture and cleanup are the production paths.
+    Generation has two deliveries: an unskinned GLB followed by a valid rigged
+    GLB. Removing skins from the fixture yields zero source skins; keeping the
+    original yields all required joints. Invalid sentinel bytes cannot reach
+    processing through these two validation gates. Sentinels still represent
+    the later processing milestones, whose byte visibility is under test.
     """
     import asyncio
     import threading
@@ -579,11 +585,22 @@ def publication_checks(root, model3d):
         # Both backend entry paths must keep their deliveries in the same stage.
         from types import SimpleNamespace
         ref=root/'reference.png'; ref.write_bytes(b'reference')
-        def deliver(output):
-            target=Path(output).with_suffix('.glb'); target.write_bytes(b'delivered')
+        import struct
+        from app.core.model_validate import parse_glb
+        parsed=parse_glb(rigged_source)
+        document=parsed['gltf']; document.pop('skins',None)
+        for node in document.get('nodes',[]):
+            node.pop('skin',None)
+        raw=json.dumps(document).encode(); raw+=b' '*(-len(raw)%4)
+        binary=parsed['bin']; binary+=b'\0'*(-len(binary)%4)
+        chunks=struct.pack('<II',len(raw),0x4e4f534a)+raw+struct.pack('<II',len(binary),0x004e4942)+binary
+        unrigged_source=b'glTF'+struct.pack('<II',2,12+len(chunks))+chunks
+        def deliver(output, payload=b'delivered'):
+            target=Path(output).with_suffix('.glb'); target.write_bytes(payload)
             return {'ok':True,'status':'stored','path':str(target),'rig':'mixamo'}
         service=SimpleNamespace(
-            generate_mesh=lambda **kwargs:deliver(kwargs['output_path']),
+            generate_mesh=lambda **kwargs:deliver(kwargs['output_path'],unrigged_source),
+            generate_rig=lambda **kwargs:deliver(kwargs['output_path'],rigged_source),
             fetch_mesh_job=lambda job,output,**kwargs:deliver(output))
         queue=SimpleNamespace(track_start=lambda *args,**kwargs:'',track_finish=lambda *args,**kwargs:None)
         with patch('app.imagegen.service.get_image_service',return_value=service), \
@@ -596,7 +613,8 @@ def publication_checks(root, model3d):
                 entered.clear(); proceed.clear(); path.write_bytes(b'old-final')
                 with ThreadPoolExecutor(max_workers=1) as executor:
                     future=executor.submit(entry)
-                    assert entered.wait(10)
+                    if not entered.wait(10):
+                        raise AssertionError((label,'processing not entered',future.result(timeout=1)))
                     try:
                         check(_model_asset_response('demo',Request()).body==b'old-final',label+' stages backend delivery before processing')
                     finally:
@@ -1119,7 +1137,7 @@ def main():
             preparation=model3d.rebuild_extension_rig('demo','prepare')
         check(not preparation['ok'] and 'synthetic preparation failure' in preparation['error'] and fresh.read_bytes()==source,'failed normalization keeps published bytes and reports reason')
         check(not (model_dir/'prerig'/'prepare.glb').exists(),'failed preparation creates no prerig asset')
-        publication_checks(root,model3d)
+        publication_checks(root,model3d,source)
         # Restore the declaration mutated by the earlier failed-detection check.
         changed.params = copy.deepcopy(groups[0]['params'])
         # Exercise the production upload pipeline for the temporary NPC too.
