@@ -340,7 +340,7 @@ symmetric lever-frame compensation. Degenerate L uses the symmetric fallback.
 Remaining inward axial force is removed.
 Non-axial static sag still uses `gravity*(m*g-R_anchor*R_rest*g_rest)/omega²`
 and the static angle limit; upright m=1 has no additional sag, m=2 sags and
-m=.5 lifts. The force-based static angle is capped by `sag_max_deg`; the subsequent spill target uses its independent limit.
+m=.5 lifts. The force-based static angle is capped by `sag_max_deg`; for chains it bounds the whole chain's static droop; the subsequent spill target uses its independent limit.
 `spread` is finite in [0,1], default 0.5. For shortening (`s<1`), paired
 transverse compensation along L is `c=min(spread_cap,1+spread*(1/s-1))`;
 the third axis stays 1. Single chains use symmetric transverse compensation

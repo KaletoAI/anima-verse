@@ -81,6 +81,7 @@ def resolved_extension_groups(character_name, profile=None):
     return result
 
 
+# sag_max_deg bounds the whole chain static droop for each root chain.
 MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "spill", "flatten", "stretch", "spread", "flatten_floor", "translate", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "squash", "axis_gain", "rest_max_deg", "straighten_deg", "freetext_clothing_gain")
 
 

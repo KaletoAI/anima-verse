@@ -44,6 +44,8 @@
  * normals, immutable bind transforms, chain FK, and instance ownership.
  */
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import * as THREE from 'three';
 import { build, transform } from 'esbuild';
 import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
@@ -96,6 +98,62 @@ try {
     return {root,anchor,bone,mesh,solver,point};
   }
   const near=(actual,expected,eps=1e-5)=>assert.ok(Math.abs(actual-expected)<eps,`${actual} vs ${expected} ±${eps}`);
+  // Hand derivation: equal masses at midpoints give distal moment
+  // m*g*l*(n-j)^2/2; multiplying by equal spans gives squared counts.
+  // Total length 0.3 m puts C at 0.15 m. gravity=.6, f=2 gives
+  // theta=atan((.6*9.81/(4*pi)^2)/.15)=13.954797... degrees.
+  // Three links split 9:4:1; six half-length links split 36:25:16:9:4:1.
+  // gravity=100 caps the SAME total at 25 degrees, preserving that split.
+  const oldSource=(await promisify(execFile)('git',['show','187c5e2f:packages/scene-render/src/secondaryMotion.ts'],{encoding:'utf8'})).stdout;
+  const oldBuild=await build({stdin:{contents:oldSource,resolveDir:join(process.cwd(),'packages/scene-render/src'),loader:'ts'},bundle:true,platform:'node',format:'esm',write:false,external:['three']});
+  const oldFile=join(dir,'old-solver.mjs');await writeFile(oldFile,oldBuild.outputFiles[0].text);
+  const oldSolver=await import(oldFile);
+  function straightSag(n,gravity=.6,api=C,paired=false) {
+    const root=new THREE.Group(),anchor=new THREE.Bone();root.add(anchor);
+    const bones=[],positions=[],indices=[],weights=[];
+    const length=.3/n;
+    for(let side=0;side<(paired?2:1);side++) {
+      let parent=anchor;
+      for(let i=0;i<n;i++) {
+        const bone=new THREE.Bone();bone.name=`link_${side}_${i}`;
+        bone.position.set(i===0&&paired?(side? .2:-.2):0,i===0?0:-length,i===0?.1:0);
+        parent.add(bone);parent=bone;bones.push(bone);
+        positions.push(paired?(side?.2:-.2):0,-length*(i+.5),.1);
+        indices.push(bones.length,0,0,0);weights.push(1,0,0,0);
+      }
+    }
+    const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
+    geometry.setAttribute('skinIndex',new THREE.Uint16BufferAttribute(indices,4));geometry.setAttribute('skinWeight',new THREE.Float32BufferAttribute(weights,4));
+    const mesh=new THREE.SkinnedMesh(geometry,new THREE.MeshBasicMaterial());root.add(mesh);root.updateMatrixWorld(true);mesh.bind(new THREE.Skeleton([anchor,...bones]));
+    const solver=api.createSecondaryMotion(THREE,root,payload({bones:bones.map(b=>b.name),rest_deg:90,gravity,gain:0,straighten_deg:0,flatten:0,stretch:0,spill:0,translate:0,head_sag:1,sag_max_deg:25,squash:[1,1]}));
+    solver.update(0);root.updateMatrixWorld(true);
+    const heads=bones.slice(0,n).map(b=>b.getWorldPosition(new THREE.Vector3()));
+    heads.push(new THREE.Vector3(0,-length,0).applyMatrix4(bones[n-1].matrixWorld));
+    const directions=heads.slice(1).map((h,i)=>h.clone().sub(heads[i]).normalize());
+    const unsagged=new THREE.Vector3(0,0,1);
+    const bends=directions.map((v,i)=>v.angleTo(i?directions[i-1]:unsagged)*180/Math.PI);
+    const total=directions.at(-1).angleTo(unsagged)*180/Math.PI;
+    const matrices=bones.map(b=>[...b.matrixWorld.elements]);solver.dispose();return {bends,total,matrices};
+  }
+  const theta=Math.atan((.6*9.81/(4*Math.PI)**2)/.15)*180/Math.PI;
+  for(const [n,gravity,parts,denominator,total] of [[3,.6,[9,4,1],14,theta],[6,.6,[36,25,16,9,4,1],91,theta],[3,100,[9,4,1],14,25]]) {
+    const measured=straightSag(n,gravity);
+    measured.bends.forEach((a,i)=>{near(a,total*parts[i]/denominator,.05);if(i)assert.ok(a<measured.bends[i-1]);});
+    near(measured.total,total,.05);
+    console.log(`ok chain sag n=${n} gravity=${gravity}: bends ${JSON.stringify(measured.bends)}, total ${measured.total}`);
+  }
+  // Pinned old solver measures 25/25/25 degrees: the tip bend equals the root.
+  const oldSag=straightSag(3,.6,oldSolver);
+  assert.ok(oldSag.bends[2]>=oldSag.bends[0]);
+  console.log('ok old-solver proof 187c5e2f bends',JSON.stringify(oldSag.bends));
+  for(const paired of [false,true]) {
+    const current=straightSag(1,2,C,paired),old=straightSag(1,2,oldSolver,paired);
+    current.matrices.forEach((matrix,i)=>matrix.forEach((value,j)=>near(value,old.matrices[i][j],1e-9)));
+  }
+  const pairedChain=straightSag(3,.6,C,true);
+  pairedChain.bends.forEach((bend,i)=>near(bend,theta*[9,4,1][i]/14,.05));
+  console.log('ok paired group separates root chains');
+  console.log('ok loaded single-link and paired single-link matrices match 187c5e2f');
   // Bind lever +15: upright f_in=sin(15)-sin(15)=0, so length=1.
   const bindTilted=fixture({gravity:0,flatten:1,spill:1,stretch:1},15);
   bindTilted.solver.update(0);near(bindTilted.point().length(),1);
@@ -824,7 +882,21 @@ try {
   chain.anchor.rotation.x=-Math.PI/2;
   for(let i=0;i<600;i++) singleChain.update(1/120);
   const chainCentre=new THREE.Vector3(0,0,1).applyMatrix4(chain.mesh.skeleton.boneInverses[1]).applyMatrix4(chain.bone.matrixWorld);
-  near(chainCentre.distanceTo(new THREE.Vector3(0,1,-9.81/(4*Math.PI)**2).normalize()),0);
+  // Hand derivation for the existing unequal-mass, oblique two-link case:
+  // masses 2:1; unsagged heads (0,0,0),(0,.5,0), centres
+  // (0,1,0),(.3,1.5,0). Both raw forces (0,-g,-g); removing
+  // negative axial parts leaves f0=(0,0,-g), f1=(.3*g/1.09,-.09*g/1.09,-g).
+  // C=(.1,7/6,0); spans .5 and 2*sqrt(1.09). The root rotates
+  // its unit lever about tau0 by theta*|tau0|*.5 / sum(moment*span).
+  const f0=new THREE.Vector3(0,0,-9.81),f1=new THREE.Vector3(.3*9.81/1.09,-.09*9.81/1.09,-9.81);
+  const c0=new THREE.Vector3(0,1,0),c1=new THREE.Vector3(.3,1.5,0);
+  const tau0=c0.clone().cross(f0).multiplyScalar(2).add(c1.clone().cross(f1));
+  const tau1=new THREE.Vector3(.3,1,0).cross(f1);
+  const centreLever=new THREE.Vector3(.1,7/6,0);
+  const chainAngle=centreLever.angleTo(centreLever.clone().add(f0.clone().multiplyScalar(2).add(f1).divideScalar(3*(4*Math.PI)**2)));
+  const rootShare=tau0.length()*.5/(tau0.length()*.5+tau1.length()*2*Math.sqrt(1.09));
+  const expectedChainCentre=c0.clone().applyAxisAngle(tau0.normalize(),chainAngle*rootShare);
+  near(chainCentre.distanceTo(expectedChainCentre),0);
   singleChain.dispose(); chain.anchor.rotation.x=0; chain.root.updateMatrixWorld(true);
   console.log('ok multiple links under one root keep single-chain transverse sag');
   // Child intentionally appears first in the payload: setup must order FK.

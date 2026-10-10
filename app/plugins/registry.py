@@ -86,7 +86,7 @@ class RigSpec:
     spread: float = 0.5
     flatten_floor: float | None = None
     translate: float = 0.0
-    sag_max_deg: float = 25.0
+    sag_max_deg: float = 25.0    # For chains, bounds the whole chain static droop.
     spill_max_deg: float = 25.0
     head_sag: float = 1.0
     attribute_profiles: Dict[str, Dict[str, Dict[str, float]]] = field(default_factory=dict)

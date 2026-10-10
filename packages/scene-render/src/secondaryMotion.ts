@@ -104,6 +104,7 @@ interface Bind {
   bone: Bone
   local: Matrix4
   centroid: Vector3
+  mass: number
   /** Bone-local axis the extension scale acts along: towards the next chain joint, else the centroid. */
   scaleAxis: Vector3
   centroidWorld: Vector3
@@ -126,6 +127,8 @@ interface Bind {
 interface Particle {
   bind: Bind
   roots: Bind[]
+  chain?: Particle[]
+  sag?: { frame: Matrix4; rotation: Quaternion; head: Vector3; centre: Vector3; force: Vector3; torque: Vector3; weight: number; q: Quaternion }
   params: MotionGroup
   paramsFrom: MotionGroup
   paramsTo: MotionGroup
@@ -165,7 +168,7 @@ export function blendMotionParams(from: MotionGroup, to: MotionGroup, elapsed: n
   }
   return result
 }
-const centroidCache = new WeakMap<Object3D, Vector3[]>()
+const centroidCache = new WeakMap<Object3D, { centroid: Vector3; mass: number }[]>()
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x))
 /** Linear below half the limit, then C1 tanh saturation: monotonic and bounded. */
 export const softMotionAngle = (angle: number, limit: number) => {
@@ -229,7 +232,7 @@ export function createSecondaryMotion(
         const q = bone.getWorldQuaternion(new three.Quaternion()).invert()
         let depth = 0
         for (let parent = bone.parent; parent; parent = parent.parent) depth++
-        binds.set(bone, { bone, local: bone.matrix.clone(), centroid: new three.Vector3(), scaleAxis: new three.Vector3(), centroidWorld: new three.Vector3(),
+        binds.set(bone, { bone, local: bone.matrix.clone(), centroid: new three.Vector3(), mass: 0, scaleAxis: new three.Vector3(), centroidWorld: new three.Vector3(),
           gravityRest: gravity.clone().applyQuaternion(q), gravityProjection: 0, bodyFront: new three.Vector3(),
           head: bone.getWorldPosition(new three.Vector3()), parentHead: bone.parent!.getWorldPosition(new three.Vector3()), worldRotation: q.clone().invert(), pureWorld: new three.Matrix4(),
           lateral: new three.Vector3(), pairedLateral: new three.Vector3(), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), straightenRotation: new three.Quaternion(), localRotation: bone.quaternion.clone() })
@@ -255,10 +258,13 @@ export function createSecondaryMotion(
     }
   })
   for (const [bone, acc] of sums) {
-    if (acc.weight > 0) binds.get(bone)!.centroid.copy(acc.sum).divideScalar(acc.weight)
+    if (acc.weight > 0) {
+      binds.get(bone)!.centroid.copy(acc.sum).divideScalar(acc.weight)
+      binds.get(bone)!.mass = acc.weight
+    }
   }
-  if (cached) [...binds.values()].forEach((b, i) => b.centroid.copy(cached[i]))
-  else if (template) centroidCache.set(template, [...binds.values()].map(b => b.centroid.clone()))
+  if (cached) [...binds.values()].forEach((b, i) => { b.centroid.copy(cached[i].centroid); b.mass = cached[i].mass })
+  else if (template) centroidCache.set(template, [...binds.values()].map(b => ({ centroid: b.centroid.clone(), mass: b.mass })))
   for (const b of binds.values()) {
     b.centroidWorld.copy(b.centroid).applyMatrix4(b.bone.matrixWorld)
     // Capture the actual bind lever, including non-uniform model scale.
@@ -387,6 +393,18 @@ export function createSecondaryMotion(
         nextParticles.push(particle)
       }
     }
+    for (const rootParticle of nextParticles.filter(p => p.roots.includes(p.bind))) {
+      const chain = nextParticles.filter(p => {
+        if (p.roots !== rootParticle.roots) return false
+        for (let n: Object3D | null = p.bind.bone; n; n = n.parent) if (n === rootParticle.bind.bone) return true
+        return false
+      }).sort((a, b) => a.bind.depth - b.bind.depth)
+      for (const st of chain) {
+        st.chain = chain
+        if (chain.length >= 2) st.sag ??= { frame: new three.Matrix4(), rotation: new three.Quaternion(),
+          head: new three.Vector3(), centre: new three.Vector3(), force: new three.Vector3(), torque: new three.Vector3(), weight: 0, q: new three.Quaternion() }
+      }
+    }
     for (const old of particles) if (!selected.has(old.bind.bone)) {
       restore(old.bind)
       old.bind.bone.updateWorldMatrix(false, true)
@@ -405,6 +423,7 @@ export function createSecondaryMotion(
   const lateral = new three.Vector3(), localLateral = new three.Vector3(), staticVector = new three.Vector3(), equilibrium = new three.Vector3()
   const frameQ = new three.Quaternion(), frontLocal = new three.Vector3()
   const integration = { p: new three.Vector3(), v: new three.Vector3(), x: new three.Vector3(), w: new three.Vector3() }
+  const chainCentre = new three.Vector3(), chainForce = new three.Vector3()
   const driven = new Map<Bone, Particle>()
   const pureParent = (node: Object3D | null): Quaternion => {
     anchorQ.identity()
@@ -427,21 +446,6 @@ export function createSecondaryMotion(
       root.updateMatrixWorld(true)
       driven.clear()
       for (const st of particles) {
-        const b = st.bind
-        anchor.copy(b.local)
-        anchorFull.copy(b.local)
-        // A driven ancestor contributes its frame WITHOUT its own extension
-        // scale (otherwise girth/length/squash compound down a chain), while
-        // the position follows the fully deformed ancestor so a lengthened
-        // parent still carries its child outward.
-        let drivenAncestor = false
-        for (let n = b.bone.parent; n; n = n.parent) {
-          const ancestor = driven.get(n as Bone)
-          if (ancestor) { anchor.premultiply(ancestor.bind.pureWorld); anchorFull.premultiply(n.matrixWorld); drivenAncestor = true; break }
-          anchor.premultiply(n.matrix); anchorFull.premultiply(n.matrix)
-        }
-        if (drivenAncestor) anchor.setPosition(temp.setFromMatrixPosition(anchorFull))
-        pureParent(b.bone.parent).multiply(b.localRotation)
         st.paramsBlend = Math.min(1.5, st.paramsBlend + dt)
         st.params = blendMotionParams(st.paramsFrom, st.paramsTo, st.paramsBlend, st.params)
         // Rest blending is real time, including far LOD. Freeze stops dynamics.
@@ -459,9 +463,78 @@ export function createSecondaryMotion(
         // rest transition passes through zero, including signed changes.
         const carried = st.straightenFrom * straighteningFraction(st.rest, st.straightenRestFrom * 180 / Math.PI)
         st.straighten = carried + (straightTarget - carried) * straightWeight
+      }
+      for (const st of particles) {
+        const b = st.bind
+        anchor.copy(b.local)
+        anchorFull.copy(b.local)
+        // A driven ancestor contributes its frame WITHOUT its own extension
+        // scale (otherwise girth/length/squash compound down a chain), while
+        // the position follows the fully deformed ancestor so a lengthened
+        // parent still carries its child outward.
+        let drivenAncestor = false
+        for (let n = b.bone.parent; n; n = n.parent) {
+          const ancestor = driven.get(n as Bone)
+          if (ancestor) { anchor.premultiply(ancestor.bind.pureWorld); anchorFull.premultiply(n.matrixWorld); drivenAncestor = true; break }
+          anchor.premultiply(n.matrix); anchorFull.premultiply(n.matrix)
+        }
+        if (drivenAncestor) anchor.setPosition(temp.setFromMatrixPosition(anchorFull))
+        pureParent(b.bone.parent).multiply(b.localRotation)
         if (st.roots.includes(b) && b.lateral.lengthSq() > 1e-12) restQ.setFromAxisAngle(b.lateral, st.rest)
         else {
           restQ.identity().slerp(b.straightenRotation, st.straighten)
+        }
+        if (st.chain && st.chain.length >= 2 && st.chain[0] === st) {
+          const chain = st.chain
+          let mass = 0
+          const centre = chainCentre.set(0, 0, 0), force = chainForce.set(0, 0, 0)
+          for (const link of chain) {
+            const data = link.sag!, bind = link.bind
+            const parent = chain.find(p => p.bind.bone === bind.bone.parent)
+            if (parent) {
+              data.frame.copy(parent.sag!.frame).multiply(bind.local)
+              data.rotation.copy(parent.sag!.rotation).multiply(bind.localRotation)
+            } else { data.frame.copy(anchor); data.rotation.copy(anchorQ) }
+            if (link === st) data.q.copy(restQ)
+            else data.q.identity().slerp(bind.straightenRotation, link.straighten)
+            data.head.setFromMatrixPosition(data.frame)
+            data.centre.copy(bind.centroid).applyQuaternion(data.q).applyMatrix4(data.frame)
+            u.copy(data.centre).sub(data.head).normalize()
+            data.force.copy(gravity).multiplyScalar(link.params.gravity_scale ?? 1)
+              .sub(temp.copy(bind.gravityRest).applyQuaternion(data.q).applyQuaternion(data.rotation)).multiplyScalar(link.params.gravity)
+            const axial = data.force.dot(u)
+            if (axial < 0) data.force.addScaledVector(u, -axial)
+            centre.addScaledVector(data.centre, bind.mass); force.addScaledVector(data.force, bind.mass); mass += bind.mass
+            rotationMatrix.makeRotationFromQuaternion(data.q)
+            data.frame.multiply(rotationMatrix); data.rotation.multiply(data.q)
+          }
+          originalLever.copy(centre).divideScalar(mass).sub(head.setFromMatrixPosition(anchor))
+          const staticT = clamp(st.paramsBlend / 1.5, 0, 1)
+          const staticBlend = staticT * staticT * (3 - 2 * staticT)
+          const frequency = st.staticFrequencyFrom + (st.staticFrequencyTo - st.staticFrequencyFrom) * staticBlend
+          const omegaSquared = (2 * Math.PI * frequency) ** 2
+          equilibrium.copy(force).divideScalar(mass).multiplyScalar(omegaSquared >= 1e-12 ? 1 / omegaSquared : 0)
+          const total = Math.min(originalLever.angleTo(temp.copy(originalLever).add(equilibrium)),
+            (st.params.sag_max_deg ?? st.params.max_deg) * Math.PI / 180)
+          let sum = 0
+          // Torques are evaluated on the unsagged configuration (small-angle
+          // approximation); this keeps total droop independent of link count
+          // and puts the largest bend at the root.
+          for (let j = 0; j < chain.length; j++) {
+            const data = chain[j].sag!
+            data.torque.set(0, 0, 0)
+            for (let i = j; i < chain.length; i++) {
+              const distal = chain[i]
+              data.torque.addScaledVector(temp.copy(distal.sag!.centre).sub(data.head).cross(distal.sag!.force), distal.bind.mass)
+            }
+            const span = j + 1 < chain.length ? data.head.distanceTo(chain[j + 1].sag!.head) : 2 * data.centre.distanceTo(data.head)
+            data.weight = data.torque.length() * span; sum += data.weight
+          }
+          for (const link of chain) {
+            const data = link.sag!
+            data.q.identity()
+            if (sum > 1e-12) data.q.setFromAxisAngle(data.torque.normalize(), total * data.weight / sum)
+          }
         }
         restVector.copy(b.centroid).applyQuaternion(restQ)
         target.copy(restVector).applyMatrix4(anchor)
@@ -493,10 +566,13 @@ export function createSecondaryMotion(
         const restLength = originalLever.length()
         staticVector.copy(originalLever).add(equilibrium)
         // Static angle and length have their own limits, independent of swing.
-        dynamicQ.setFromUnitVectors(u, temp.copy(staticVector).normalize())
         const sagLimit = (st.params.sag_max_deg ?? st.params.max_deg) * Math.PI / 180
-        const sagAngle = dynamicQ.angleTo(identityQ)
-        if (sagAngle > sagLimit) dynamicQ.slerp(identityQ, 1 - sagLimit / sagAngle)
+        if (st.chain && st.chain.length >= 2) dynamicQ.copy(st.sag!.q)
+        else {
+          dynamicQ.setFromUnitVectors(u, temp.copy(staticVector).normalize())
+          const sagAngle = dynamicQ.angleTo(identityQ)
+          if (sagAngle > sagLimit) dynamicQ.slerp(identityQ, 1 - sagLimit / sagAngle)
+        }
         dynamicQ.slerp(identityQ, 1 - st.staticWeight)
         const staticLength = Math.max(1e-12, restLength * (1 - (st.params.flatten ?? 0) * (1 - (st.params.flatten_floor ?? st.params.squash[0])) * inward
           + (st.params.stretch ?? 0) * (st.params.squash[1] - 1) * outward))

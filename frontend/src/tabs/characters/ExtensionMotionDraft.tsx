@@ -7,7 +7,7 @@ const fields: Record<string, string> = {
   straighten_deg: 'Straightening rest angle (degrees, 0 = off)', freetext_clothing_gain: 'Free-text clothing gain',
   spill_max_deg: 'Maximum spill angle (degrees)', head_sag: 'Vertical static pull when not upright',
   freq_hz: 'Frequency (Hz)', zeta: 'Damping ratio', gravity: 'Gravity', gain: 'Gain',
-  max_deg: 'Maximum dynamic angle (degrees)', sag_max_deg: 'Maximum static angle (degrees)',
+  max_deg: 'Maximum dynamic angle (degrees)', sag_max_deg: 'Maximum static angle (degrees); for chains, bounds the whole chain static droop',
   translate: 'Translation fraction', flatten: 'Flatten', stretch: 'Stretch', spread: 'Spread', flatten_floor: 'Flatten floor', spill: 'Spill', rest_max_deg: 'Maximum rest angle (degrees)',
   axis_gain_lateral: 'Lateral gain', axis_gain_vertical: 'Vertical gain', axis_gain_longitudinal: 'Longitudinal gain',
   squash_min: 'Squash minimum', squash_max: 'Squash maximum',
