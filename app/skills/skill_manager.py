@@ -1,4 +1,4 @@
-"""Skill Manager - Lädt und verwaltet alle verfügbaren Skills"""
+"""Load installed skills and expose each character's active tools."""
 import os
 from typing import List, Dict, Any
 
@@ -13,15 +13,9 @@ from .video_generation_skill import VideoGenerationSkill
 
 
 class SkillManager:
-    """
-    Verwaltet alle verfügbaren Skills und stellt sie als Tools bereit.
+    """Expose installed skills with runtime character configuration."""
 
-    Alle Skills laden ihre Defaults aus .env.
-    Per-Agent Overrides werden zur Laufzeit in execute() angewendet.
-    """
-
-    # Registry aller verfügbaren Skill-Klassen
-    # (Plugins aus plugins/ werden automatisch geladen, siehe load_skills)
+    # Remaining built-ins; packages load through the manifest loader.
     SKILL_REGISTRY = {
         'describe_room': DescribeRoomSkill,
         'outfit_change': OutfitChangeSkill,
@@ -34,8 +28,8 @@ class SkillManager:
         self.tools = []
 
     def _load_skill(self, skill_id: str, skill_class) -> bool:
-        """Lädt einen einzelnen Skill aus .env. Gibt True zurück bei Erfolg."""
-        # Skills mit ALWAYS_LOAD werden immer geladen (Aktivierung per Character)
+        """Load a remaining built-in; return whether it was enabled."""
+        # ALWAYS_LOAD controls loading, not per-character activation.
         if not getattr(skill_class, 'ALWAYS_LOAD', False):
             env_prefix = f"SKILL_{skill_id.upper()}_"
             enabled_key = f"{env_prefix}ENABLED"
@@ -57,7 +51,7 @@ class SkillManager:
         return False
 
     def _load_plugins(self) -> int:
-        """Laedt alle Plugins aus dem plugins/ Verzeichnis."""
+        """Load installed packages from the plugin registry."""
         from app.plugins.loader import load_all_plugins
         loaded = 0
         for skill_id, skill in load_all_plugins().items():
@@ -69,11 +63,11 @@ class SkillManager:
         return loaded
 
     def load_skills(self) -> None:
-        """Lädt alle aktivierten Skills aus Umgebungsvariablen und Plugins."""
+        """Load enabled remaining built-ins and installed packages."""
         # 1. Built-in Skills
         for skill_id, skill_class in self.SKILL_REGISTRY.items():
             self._load_skill(skill_id, skill_class)
-        # 2. Plugins aus plugins/ Verzeichnis
+        # Installed packages.
         self._load_plugins()
 
     def reload_skills(self) -> Dict[str, Any]:
@@ -84,7 +78,7 @@ class SkillManager:
             reset_image_service()
         except Exception:
             pass
-        """Lädt alle Skills neu ohne Server-Neustart."""
+        """Reload skills without restarting the server."""
         logger.info("=" * 80)
         logger.info("SKILLS NEU LADEN")
         logger.info("=" * 80)
@@ -105,7 +99,7 @@ class SkillManager:
                 errors.append(error_msg)
                 logger.error(error_msg)
 
-        # Plugins aus plugins/ Verzeichnis
+        # Installed packages.
         try:
             loaded_count += self._load_plugins()
         except Exception as e:
@@ -127,12 +121,9 @@ class SkillManager:
 
     def _get_agent_skills(self, character_name: str,
                           check_limits: bool = True) -> List:
-        """Filtert Skills auf die fuer diesen Agent aktivierten.
+        """Filter visible skills by character overrides and package defaults.
 
-        Prueft per-Agent Skill-Config (enabled-Flag).
-        Skills ohne SKILL_ID oder ohne per-Agent Config gelten als aktiv.
-        Prueft Laufzeit-Limits (z.B. Tageslimit fuer Outfit-Generierung)
-        nur wenn check_limits=True (proaktive Aufrufe).
+        Proactive calls also apply runtime limits; chat calls skip those limits.
         """
         if not character_name:
             return self.skills
@@ -157,12 +148,13 @@ class SkillManager:
             if agent_config and "enabled" in agent_config:
                 if not bool(agent_config["enabled"]):
                     continue
-            elif getattr(skill, 'ALWAYS_LOAD', False):
-                # ALWAYS_LOAD Skills sind standardmaessig deaktiviert
-                continue
+            else:
+                default_enabled = getattr(skill, "default_enabled_for", None)
+                if not (default_enabled(character_name) if default_enabled
+                        else not getattr(skill, "ALWAYS_LOAD", False)):
+                    continue
 
-            # Laufzeit-Limits pruefen (Skill wird dem LLM nicht angeboten)
-            # Bei User-Chat-Anfragen (check_limits=False) wird das Limit uebersprungen
+            # Runtime limits apply only to proactive calls, not user chat.
             if check_limits and hasattr(skill, 'is_limit_reached') and skill.is_limit_reached(character_name):
                 logger.info("Skill '%s' fuer %s ausgeblendet: Limit erreicht", skill.name, character_name)
                 continue
@@ -172,19 +164,19 @@ class SkillManager:
 
     def get_agent_tools(self, character_name: str,
                         check_limits: bool = True) -> List[ToolSpec]:
-        """Gibt nur die Tools zurueck, die fuer diesen Agent aktiv sind."""
+        """Return the character's currently active tool specifications."""
         agent_skills = self._get_agent_skills(character_name, check_limits=check_limits)
         return [s.as_tool(character_name=character_name) for s in agent_skills]
 
     def get_skill(self, skill_id: str):
-        """Gibt eine Skill-Instanz anhand der SKILL_ID zurueck (oder None)."""
+        """Find a loaded skill by its stable id."""
         for skill in self.skills:
             if getattr(skill, 'SKILL_ID', '') == skill_id:
                 return skill
         return None
 
     def get_skill_by_name(self, name: str):
-        """Gibt eine Skill-Instanz anhand des Tool-Namens zurueck (case-insensitive)."""
+        """Find a loaded skill by its case-insensitive tool name."""
         name_lower = name.lower()
         for skill in self.skills:
             if getattr(skill, 'name', '').lower() == name_lower:

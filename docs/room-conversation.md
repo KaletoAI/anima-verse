@@ -52,6 +52,18 @@ a bystander is the **player-controlled avatar**.
   when there is nobody left after the avatar and the addressees are removed. Then the
   world itself answers through the storyteller fallback instead.
 
+## Destination-bound invitations
+
+An NPC may propose a typed shared-trip action alongside its actual invitation line.
+The existing intent stores destination, leader, proposed companion and pair/party
+scope before the line is recorded; no consent request runs before that write succeeds.
+The companion answers via `join_party` with the exact `invite_id`, or an avatar uses
+the destination/group invitation in the player UI. Reply prose alone is not consent.
+Temporary NPCs get a targeted chat/tool response, not autonomous thoughts.
+The trip completes only after every agreed member arrives. A consumed reply that
+produces no explicit answer is eligible to be requested again on the next world check.
+
+
 ## The round budget on top
 
 The per-line selection is not the only limiter. The room has an energy budget per

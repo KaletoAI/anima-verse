@@ -11,7 +11,6 @@ front of it are the same ones ``POST /play/travel`` and the arrival ticker
 apply — leave rules, access rules, ``accessible_when`` — because a movement
 path that skips one of them is a hole in every rule the world has.
 """
-import random
 from typing import Any, Dict
 
 from app.plugins.base import PluginSkill
@@ -22,8 +21,6 @@ from app.core.log import get_logger
 logger = get_logger("set_location")
 
 from app.models.character import (
-    save_character_current_location,
-    set_pose_intent,
     save_character_current_room,
     get_character_current_location,
     get_character_config,
@@ -206,211 +203,61 @@ class SetLocationSkill(PluginSkill):
         location_name = matched_location["name"]
         location_id = matched_location.get("id", location_name)
 
-        # Leave check: may the character leave its current location/room at
-        # all? Applies to pinning/confine rules (action="leave").
-        # Cross-location: room AND location scope. Same-location: room scope
-        # only (the location is not left). The target room is matched up
-        # front so confine SETS (several room_ids in one rule) can allow free
-        # movement within the set.
-        from app.models.rules import check_leave, check_access
-        cur_loc_for_leave = get_character_current_location(character_name) or ""
-        is_same_loc = bool(cur_loc_for_leave) and cur_loc_for_leave == location_id
-        target_room_preview = ""
-        if requested_second:
-            _peek = get_room_by_name(matched_location, requested_second)
-            if _peek:
-                target_room_preview = _peek.get("id", "")
-        if cur_loc_for_leave:
-            leave_ok, leave_reason = check_leave(
-                character_name,
-                room_only=is_same_loc,
-                target_location_id=location_id,
-                target_room_id=target_room_preview)
-            if not leave_ok:
-                logger.info("Leave blocked: %s wants %s -> %s: %s",
-                            character_name, cur_loc_for_leave, location_id, leave_reason)
-                try:
-                    from app.models.character import record_access_denied
-                    from app.models.world import get_location_name as _gln
-                    cur_name = _gln(cur_loc_for_leave) or cur_loc_for_leave
-                    record_access_denied(character_name, cur_loc_for_leave,
-                                          cur_name, leave_reason, action="leave")
-                except Exception:
-                    logger.debug("record_access_denied(leave) failed", exc_info=True)
-                _trigger_access_denied_thought(character_name, location_name, leave_reason)
-                return leave_reason
-
-        # Restrictions check: may the character enter this place?
-        from app.core.danger_system import check_location_access
-        allowed, deny_reason = check_location_access(character_name, matched_location)
-        if not allowed:
-            logger.info("Location access denied: %s -> %s: %s", character_name, location_name, deny_reason)
-            return deny_reason
-
-        # Rules engine: the block rules
-        rules_ok, rules_reason = check_access(character_name, location_id)
-        if not rules_ok:
-            logger.info("Rule blocks access: %s -> %s: %s", character_name, location_name, rules_reason)
-            try:
-                from app.models.character import record_access_denied
-                record_access_denied(character_name, location_id, location_name, rules_reason)
-            except Exception:
-                logger.debug("record_access_denied failed", exc_info=True)
-            _trigger_access_denied_thought(character_name, location_name, rules_reason)
-            return rules_reason
-
-        # ``accessible_when`` — the field the world map greys a place out with,
-        # and NO rule row backs it. Its enforcement points are FOUR: the travel
-        # route (``POST /play/travel``), the free-walker gate
-        # (``POST /play/pos``), the arrival ticker
-        # (``travel_engine._arrival_gate``) and this skill; all four ask the
-        # very same reader, ``world_ops.conditions_pass``, so a condition can
-        # never mean one thing for the avatar and another for an NPC. Checked
-        # BEFORE the journey starts: a character must not set off for a place it
-        # may not enter — the ticker would only turn it away at the door.
-        from app.core.world_ops import conditions_pass
-        if not conditions_pass(matched_location.get("accessible_when") or [],
-                               character_name, location_id):
-            from app.core.i18n import t as _t
-            from app.models.character import get_character_language
-            cond_reason = _t("This place is not accessible to you.",
-                             get_character_language(character_name) or "de")
-            logger.info("accessible_when blocks access: %s -> %s",
-                        character_name, location_name)
-            try:
-                from app.models.character import record_access_denied
-                record_access_denied(character_name, location_id,
-                                     location_name, cond_reason)
-            except Exception:
-                logger.debug("record_access_denied failed", exc_info=True)
-            _trigger_access_denied_thought(character_name, location_name,
-                                           cond_reason)
-            return cond_reason
-
+        # Resolve free-text input here, but share every movement gate and
+        # authoritative write with structured consent-bound travel.
         rooms = get_location_rooms(matched_location)
-
-        # Determine room and (free) pose. There is no activity library any
-        # more — an optional pose part is free text, and the room only points
-        # a direction through activity_hint (the LLM decides). Resolved BEFORE
-        # the journey branch: a room the character may not enter refuses the
-        # move up front (no journey to a door it will be turned away from),
-        # and an accepted room rides on the journey to its arrival.
-        matched_room = None
-        pose = ""
-
-        if requested_second:
-            # 1. Try the second part as a room name
-            matched_room = get_room_by_name(matched_location, requested_second)
-
-            if matched_room:
-                # Rules check for the room
-                room_rules_ok, room_rules_reason = check_access(character_name, location_id, room_id=matched_room.get("id", ""))
-                if not room_rules_ok:
-                    room_label = matched_room.get("name", "")
-                    logger.info("Rule blocks the room: %s -> %s: %s",
-                               character_name, room_label, room_rules_reason)
-                    try:
-                        from app.models.character import record_access_denied
-                        record_access_denied(character_name, location_id,
-                            f"{location_name} / {room_label}" if room_label else location_name,
-                            room_rules_reason)
-                    except Exception:
-                        logger.debug("record_access_denied failed", exc_info=True)
-                    _trigger_access_denied_thought(character_name,
-                        f"{location_name} / {room_label}" if room_label else location_name,
-                        room_rules_reason)
-                    return room_rules_reason
-                # Third part = the free pose in that room
-                if requested_third:
-                    pose = requested_third
-            else:
-                # 2. The second part is no room → read it as a free pose
-                pose = requested_second
-
-        # Journey mode: a cross-location move starts a timed journey
-        # (start_journey; the travel ticker advances it as game time
-        # passes). Same-location moves (room change only) stay instant.
-        current_loc_id_now = get_character_current_location(character_name) or ""
-        is_cross_location = bool(current_loc_id_now and current_loc_id_now != location_id)
-        # Journeys apply to NPCs only — the player avatar still moves
-        # instantly here; timed avatar travel runs over the /play route
-        # (Seamless World, E3 Task 5).
-        from app.models.account import is_player_controlled as _is_player
-        if is_cross_location and not _is_player(character_name):
-            from app.core.travel_engine import start_journey, journey_state
+        matched_room = get_room_by_name(matched_location, requested_second) if requested_second else None
+        pose = (requested_third or "") if matched_room else (requested_second or "")
+        from app.models.world import get_arrival_room_id
+        room_id = (matched_room or {}).get("id") or get_arrival_room_id(matched_location)
+        matched_room = next((r for r in rooms if r.get("id") == room_id), {"id": room_id, "name": ""})
+        room_name = matched_room.get("name", "")
+        from app.core.movement_authority import move_character
+        from app.core.party_engine import party_followers
+        from app.models.account import is_player_controlled
+        timed = bool(get_character_current_location(character_name)) and not is_player_controlled(character_name)
+        outcome = move_character(character_name, location_id, room_id, pose,
+                                 participants=[character_name, *party_followers(character_name)], timed=timed)
+        if outcome["status"] == "blocked":
+            reason = outcome["reason"]
+            if reason in {"no_route", "unknown_target", "unplaced_target", "write_failed"}:
+                from app.models.character import record_state_change
+                record_state_change(character_name, "travel_failed", location_name,
+                                    metadata={"location_id": location_id, "reason": reason})
+                if reason == "no_route":
+                    return (f"There is no passable route to {location_name} from here "
+                            "— water, cliffs or walls block every way. You have to find another approach.")
+                return f"You do not know the way to {location_name} (yet)."
+            gate = outcome.get("gate")
+            if gate in {"danger", "persistence"}:
+                return reason
+            from app.models.character import record_access_denied
+            from app.models.world import get_location_name
+            blocked_character = outcome.get("blocked_character", character_name)
+            denied_location, denied_label = location_id, location_name
+            if gate == "leave":
+                denied_location = get_character_current_location(blocked_character)
+                denied_label = get_location_name(denied_location) or denied_location
+            elif gate == "room" and room_name:
+                denied_label = f"{location_name} / {room_name}"
+            record_access_denied(blocked_character, denied_location, denied_label, reason,
+                                 action="leave" if gate == "leave" else "enter")
+            _trigger_access_denied_thought(blocked_character, location_name, reason)
+            return reason
+        if outcome["status"] == "travelling":
+            from app.core.travel_engine import journey_state
             from app.core.game_time import GameTime
             from app.core.timeutils import game_time
-            j, reason = start_journey(
-                character_name, location_id,
-                target_room=(matched_room or {}).get("id", ""),
-                target_pose=pose)
-            if j is None:
-                logger.info("No journey %s -> %s for %s: %s",
-                            current_loc_id_now, location_id, character_name,
-                            reason)
-                # Diary entry: a failed travel attempt. The REASON is
-                # recorded verbatim, the TEXT is not: a character cannot
-                # tell "I have never been told about this place" from "the
-                # place stands on no map at all", so both read alike.
-                try:
-                    from app.models.character import record_state_change
-                    record_state_change(character_name, "travel_failed",
-                        location_name,
-                        metadata={"location_id": location_id,
-                                  "reason": reason})
-                except Exception:
-                    logger.debug("travel_failed record failed", exc_info=True)
-                if reason == "no_route":
-                    return (f"There is no passable route to {location_name} "
-                            f"from here — water, cliffs or walls block every "
-                            f"way. You have to find another approach.")
-                return (f"You do not know the way to {location_name} (yet). "
-                        f"You have to be led there first or discover a place "
-                        f"nearby.")
+            j = outcome["journey"]
             now = game_time()
             st = journey_state(j["waypoints"], j["started_at_game"], now)
             eta = GameTime.parse(st["eta_game"])
-            logger.info("Journey: %s -> %s (%.0f m, ETA %s)",
-                        character_name, location_name, st["total_m"],
-                        st["eta_game"])
-            # The world has one clock — HH:MM for an arrival today, the full
-            # calendar label once the road runs past midnight.
-            eta_text = (eta.time_hhmm() if eta.day_index == now.day_index
-                        else eta.label())
-            room_part = (f", room: {matched_room.get('name')}"
-                         if matched_room and matched_room.get("name") else "")
+            eta_text = eta.time_hhmm() if eta.day_index == now.day_index else eta.label()
+            room_part = f", room: {room_name}" if room_name else ""
             return (f"You set off for {location_name}{room_part} "
-                    f"({st['total_m']:.0f} m of road). Estimated arrival: "
-                    f"{eta_text}. The journey continues automatically.")
-
-        # No room named: land where every arrival lands — the declared entry
-        # room, or the location's ground (plan-grundflaeche.md § 6). Never a
-        # random first room.
-        if not matched_room:
-            from app.models.world import get_arrival_room_id
-            _arrival_id = get_arrival_room_id(matched_location)
-            matched_room = next(
-                (r for r in rooms if r.get("id") == _arrival_id),
-                {"id": _arrival_id, "name": ""})
-
-        room_id = matched_room.get("id", "") if matched_room else ""
-        room_name = matched_room.get("name", "") if matched_room else ""
-
-        # Write the state: the location ID, never the name
-        save_character_current_location(character_name, location_id)
-        save_character_current_room(character_name, room_id)
-        if pose:
-            # An arrival pose is something the character strikes on its own;
-            # a two-person one has no partner here and is simply dropped.
-            from app.core.pose_catalog import PairPoseWithoutPartner
-            try:
-                set_pose_intent(character_name, pose)
-            except PairPoseWithoutPartner as e:
-                logger.info("SetLocation [%s]: arrival pose '%s' is the "
-                            "two-person pose '%s' — not set", character_name,
-                            pose, e)
-                pose = ""
-
+                    f"({st['total_m']:.0f} m of road). Estimated arrival: {eta_text}. "
+                    "The journey continues automatically.")
+        pose = outcome.get("pose", pose)
         # Avatar follow: a LOCATION change is no longer taken over (the
         # avatar stays where the user put it). Only a ROOM change follows,
         # and only when the avatar is already at the same location.

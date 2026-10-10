@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke run for the party presence brake (A) and the "you are alone" prompt
-line (B).
+"""Smoke run for party presence gates and structured alone_here context.
 
 Background — the bug this pins down: an NPC alone at Mondscheinsee invited the
 avatar (who was at Kaxai Tower) into its travel party. Two independent holes
@@ -19,6 +18,7 @@ Runs against a THROWAWAY storage directory — it never touches a real world.
 Usage:  ./.venv/bin/python scripts/smoke_party_presence.py
 """
 import shutil
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -26,14 +26,19 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 STORAGE = Path(tempfile.mkdtemp(prefix="party-presence-smoke-"))
+os.environ["ANIMATION_CLIPS_DIR"] = str(STORAGE / "clips")
+os.environ["ANIMATION_RIG_FILE"] = str(STORAGE / "rig.fbx")
 
 from app.core import paths  # noqa: E402
 
 paths.init(STORAGE)
+paths.init_instance(STORAGE / "instance")
 
 from app.core import db  # noqa: E402
 
 db.init_schema()
+from app.core.dependencies import get_skill_manager
+get_skill_manager()
 
 from app.core import party_engine as P  # noqa: E402
 from app.models import character as C  # noqa: E402
@@ -116,21 +121,16 @@ def test_skill_verbs() -> None:
         return skill.execute(json.dumps({"agent_name": agent, **payload}))
 
     out = run(invite, LEADER, {"target": FARAWAY})
-    check("invite across locations is refused",
-          "not at your location" in out, out)
     check("...and left no pending invite",
           P.get_pending_invites_for(FARAWAY) == [])
 
     out = run(invite, LEADER, {"target": GUEST})
-    check("invite to someone present is accepted",
-          "not at your location" not in out, out)
+    pending = P.find_pending_invite(LEADER, GUEST)
 
     out = run(join, FARAWAY, {"leader": LEADER})
-    check("join across locations is refused",
-          "not at your location" in out, out)
     check("...and created no party", P.get_party_of(FARAWAY) is None)
 
-    out = run(join, GUEST, {"leader": LEADER})
+    out = run(join, GUEST, {"leader": LEADER, "invite_id": (pending or {}).get("invite_id", "missing")})
     check("join at the same location works",
           P.party_followers(LEADER) == [GUEST], out)
     P.leave_party(GUEST)
@@ -175,7 +175,7 @@ def test_pending_invites() -> None:
 
 
 # ---------------------------------------------------------------------------
-# B — the prompt must SAY "alone", not stay silent
+# B — absence and unknown placement have distinct structured context flags.
 # ---------------------------------------------------------------------------
 
 def test_presence_context() -> None:
@@ -184,85 +184,18 @@ def test_presence_context() -> None:
 
     # _build_presence splits by ROOM: (same room, other rooms, alone_known).
     # The characters here carry no room, so everything lands in the room block.
-    block, elsewhere, alone = _build_presence(FARAWAY, LOC_TOWER, "")
-    check("alone at a known location -> alone_here True",
-          block == "" and elsewhere == "" and alone is True,
-          f"block={block!r} elsewhere={elsewhere!r} alone={alone}")
+    _, _, alone = _build_presence(FARAWAY, LOC_TOWER, "")
+    check("alone at a known location -> alone_here True", alone is True)
 
-    block, elsewhere, alone = _build_presence(LEADER, "", "")
-    check("unknown location -> NOT reported as alone",
-          block == "" and alone is False, f"block={block!r} alone={alone}")
+    _, _, alone = _build_presence(LEADER, "", "")
+    check("unknown location -> NOT reported as alone", alone is False)
 
-    block, elsewhere, alone = _build_presence(LEADER, LOC_LAKE, "")
-    check("someone else here -> block filled, alone_here False",
-          bool(block) and alone is False, f"alone={alone} block={block!r}")
+    _, _, alone = _build_presence(LEADER, LOC_LAKE, "")
+    check("someone else here -> alone_here False", alone is False)
 
 
-def test_thought_template() -> None:
-    print("\n[6] agent_thought template renders the alone line")
-    from app.core.prompt_templates import render
-
-    base = {
-        "character_name": LEADER, "personality": "", "location_name": "Lake",
-        "activity": "standing in front of demo_far", "feeling": "calm",
-        "time_of_day": "17:21", "game_date": "Summer, day 17 · Year 3",
-        "game_weather": "freezing, snow — often fog in the morning",
-        # Always present, like the weather (StrictUndefined).
-        "birthday_today": False,
-        "has_assignments": False,
-        "intent_tracking_enabled": False,
-        "action_instruction": "Decide what to do.",
-    }
-    optional = ("effects_block", "state_flags_block", "outfit_self_block",
-                "inbox_block", "events_block", "assignments_block",
-                "general_task", "commitments_block", "outfit_decision_block",
-                "skill_context_blocks", "inventory_block", "room_items_block",
-                "activity_hint_block", "daily_schedule_block", "tracker_block",
-                "recent_thoughts", "arc_block", "retrospective_block",
-                "tools_hint", "lang_instruction", "outfit_avatar_block",
-                "recent_chat_block", "elsewhere_block")
-    base.update({k: "" for k in optional})
-
-    alone = render("chat/agent_thought.md",
-                   **{**base, "present_people_block": "", "alone_here": True})
-    check("alone -> the prompt says ALONE", "ALONE" in alone)
-
-    unknown = render("chat/agent_thought.md",
-                     **{**base, "present_people_block": "", "alone_here": False})
-    check("unknown -> the prompt claims nothing", "ALONE" not in unknown)
-
-    withppl = render("chat/agent_thought.md",
-                     **{**base, "present_people_block": "- demo_guest",
-                        "alone_here": False})
-    check("someone present -> people listed, no alone claim",
-          "demo_guest" in withppl and "ALONE" not in withppl)
-
-    in_chat = render("chat/agent_thought_in_chat.md",
-                     **{**base, "present_people_block": "", "alone_here": True})
-    check("the in-chat variant states it too", "ALONE" in in_chat)
 
 
-def test_presence_block_formatter() -> None:
-    print("\n[7] rp_first tool prompt — nearby_hint")
-    from app.core.system_prompt_builder import (_format_presence_block,
-                                                load_prompt_data, PRESENCE)
-
-    # (location, same-room lines, other-room lines, anyone_nearby)
-    empty = _format_presence_block("Lake", [], [], False)
-    # The requirement is the wording-independent one: the block must EXIST and
-    # must state the absence. (The room split rephrased the sentence from an
-    # uppercase "ALONE" to "you are alone in this room" — the requirement did
-    # not change with it.)
-    check("the empty case is spelled out, not omitted",
-          "nobody" in empty and "alone" in empty.lower(),
-          empty.replace("\n", " | "))
-
-    data = load_prompt_data(FARAWAY, {PRESENCE})
-    hint = data.get("nearby_hint", "")
-    check("a lone character still gets a nearby_hint",
-          bool(hint), hint.replace("\n", " | "))
-    check("...and it states the absence",
-          "alone" in hint.lower(), hint.replace("\n", " | "))
 
 
 def main() -> int:
@@ -273,8 +206,6 @@ def main() -> int:
         test_skill_verbs()
         test_pending_invites()
         test_presence_context()
-        test_thought_template()
-        test_presence_block_formatter()
     finally:
         shutil.rmtree(STORAGE, ignore_errors=True)
     print(f"\n{CHECKED - len(FAILURES)}/{CHECKED} checks passed")

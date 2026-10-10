@@ -419,11 +419,25 @@ class AgentLoop:
                     f" (perception={perception_template})" if perception_template else "")
         return True
 
+    @staticmethod
+    def _finish_respond_request(character_name: str, respond: Dict[str, Any], outcome: str) -> None:
+        request_id = respond.get("request_id")
+        if request_id:
+            from app.core.hooks import emit
+            kwargs = {"character_name": character_name,
+                      "request_id": request_id, "outcome": outcome}
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                emit("respond_finished", **kwargs)
+            else:
+                loop.create_task(asyncio.to_thread(emit, "respond_finished", **kwargs))
+
     def bump_respond(self, character_name: str, speaker: str,
                      content: str, volume: str = "normal",
                      obligatory: bool = True, hint: str = "",
                      winding_down: bool = False,
-                     on_demand: bool = False) -> bool:
+                     on_demand: bool = False, request_id: str = "") -> bool:
         """Phase 3: character should react to a room utterance of the speaker.
 
         Unlike ``bump`` (thoughts/perception) this triggers a VISIBLE chat
@@ -438,6 +452,7 @@ class AgentLoop:
         ``on_demand`` marks an explicit tool/UI request, such as a pair
         invitation. It may answer during world freeze, but never during
         queue pause or world sleep. Ordinary room reactions stay frozen.
+        ``request_id`` correlates an optional completion/drop event to its caller.
         """
         if not character_name:
             return False
@@ -449,10 +464,13 @@ class AgentLoop:
                 (existing.get("obligatory") and not obligatory)
                 or (existing.get("on_demand") and not on_demand)):
             return True  # ordinary reactions cannot replace an explicit request
+        if existing and existing.get("request_id") != request_id:
+            self._finish_respond_request(character_name, existing, "superseded")
         self._respond_to[character_name] = {
             "speaker": speaker, "content": content,
             "volume": volume, "obligatory": obligatory,
             "hint": hint, "winding_down": winding_down, "on_demand": on_demand,
+            "request_id": request_id,
         }
         # Mandatory answers go to the FRONT (the lane pops FIFO) so they
         # never starve behind chime opportunities — otherwise the scene can
@@ -1232,7 +1250,8 @@ class AgentLoop:
                 continue  # never two turns for the same character at once
             if not _is_respond_eligible(name):
                 self._respond_queue.remove(name)
-                self._respond_to.pop(name, None)
+                dropped = self._respond_to.pop(name, {})
+                self._finish_respond_request(name, dropped, "ineligible")
                 self._respond_resolved.pop(name, None)
                 self._respond_wait_reason.pop(name, None)
                 logger.debug("respond lane: %s became ineligible — dropped", name)
@@ -1299,6 +1318,10 @@ class AgentLoop:
                 self._respond_pools[name] = pool_key
                 self._respond_active[name] = asyncio.create_task(
                     self._respond_worker(name, payload))
+                if payload.get("request_id"):
+                    self._respond_active[name].add_done_callback(
+                        lambda task, _name=name, _payload=payload: self._finish_respond_request(
+                            _name, _payload, "cancelled" if task.cancelled() else "completed"))
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -2118,7 +2141,7 @@ def _is_reaction_paused() -> bool:
     try:
         from app.core.task_queue import get_task_queue
         tq = get_task_queue()
-        return bool(tq and tq._is_paused("default"))
+        return bool(tq and tq.is_paused("default"))
     except Exception:
         return False
 

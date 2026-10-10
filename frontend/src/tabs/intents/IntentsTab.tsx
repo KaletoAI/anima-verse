@@ -7,7 +7,7 @@ import { loadCharacters, loadLocations, type CharacterRef, type LocationRef } fr
 import { clockSettings, formatGameTime, useClockSettings } from '../../lib/clockFormat'
 
 /**
- * Game-Admin "Intents" tab — the unified "Vorhaben & Aufgaben" store
+ * Game-Admin "Intents" tab — the unified plans and tasks store
  * (plan-intents-unified.md). Replaces the legacy assignments panel:
  * human-set tasks and character-owned intents live in one place. Admins
  * create, edit (PATCH), complete and delete here; characters create their own
@@ -27,6 +27,8 @@ interface Intent {
   location_id?: string
   outfit_hint?: string
   expires_at?: string
+  action?: { type?: string; destination?: { location_id: string; room_id?: string }; scope?: 'pair' | 'party' }
+  meta?: { travel?: { phase?: string; reason?: string; expected_members?: string[]; destination_label?: string } }
 }
 
 type TriggerKind = 'standing' | 'now' | 'at_location' | 'at_time'
@@ -43,6 +45,10 @@ interface FormState {
   runInMin: number // at_time: game minutes from now; 0 = keep runDate (edit only)
   outfitHint: string
   durationMin: number // 0 = never expires
+  actionKind: 'plan' | 'travel_together'
+  destinationId: string
+  destinationRoomId: string
+  scope: 'pair' | 'party'
 }
 
 const INITIAL_FORM: FormState = {
@@ -57,6 +63,10 @@ const INITIAL_FORM: FormState = {
   runInMin: 0,
   outfitHint: '',
   durationMin: 0,
+  actionKind: 'plan',
+  destinationId: '',
+  destinationRoomId: '',
+  scope: 'pair',
 }
 
 const DURATION_OPTIONS: Array<{ value: number; label: string }> = [
@@ -94,6 +104,16 @@ const PRIORITY_LABELS: Record<number, string> = {
   5: 'Idle',
 }
 
+const TRIP_PHASE_LABELS: Record<string, string> = {
+  waiting_consent: 'Waiting for consent',
+  ready: 'Ready to travel',
+  starting: 'Starting',
+  travelling: 'Travelling',
+  blocked: 'Blocked',
+  arrived: 'Arrived',
+  cancelled: 'Cancelled',
+}
+
 const POLL_INTERVAL_MS = 15_000
 
 function triggerSummary(it: Intent, locName: (id: string) => string): string {
@@ -113,6 +133,7 @@ export function IntentsTab() {
   const [intents, setIntents] = useState<Intent[] | null>(null)
   const [characters, setCharacters] = useState<CharacterRef[]>([])
   const [locations, setLocations] = useState<LocationRef[]>([])
+  const [actionTypes, setActionTypes] = useState<string[]>([])
   const [showAll, setShowAll] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
@@ -142,6 +163,8 @@ export function IntentsTab() {
   useEffect(() => {
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
     loadLocations().then(setLocations).catch(() => setLocations([]))
+    apiGet<string[]>('/intents/action-types').then(setActionTypes)
+      .catch((e) => setError((e as Error).message))
   }, [])
 
   useEffect(() => {
@@ -177,6 +200,10 @@ export function IntentsTab() {
         // expires_at is absolute; we cannot reverse it to a preset, so keep the
         // existing expiry untouched on edit unless the admin picks a new duration.
         durationMin: 0,
+        actionKind: 'plan',
+        destinationId: '',
+        destinationRoomId: '',
+        scope: 'pair',
       })
       setEditingId(it.id)
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
@@ -193,6 +220,10 @@ export function IntentsTab() {
       }
       if (!form.owner.trim()) {
         toast(t('Pick an owner'), 'error')
+        return
+      }
+      if (form.actionKind === 'travel_together' && (!form.destinationId || form.participants.length !== 1)) {
+        toast(t('Pick a destination and exactly one companion'), 'error')
         return
       }
       const trigger: Record<string, unknown> = { kind: form.triggerKind }
@@ -220,7 +251,9 @@ export function IntentsTab() {
       )
       const participants: Record<string, { role?: string; progress?: unknown[] }> = {}
       for (const n of names) {
-        participants[n] = editParticipants[n] || { role: '', progress: [] }
+        participants[n] = form.actionKind === 'travel_together'
+          ? { role: n === form.owner.trim() ? 'leader' : 'follower', progress: [] }
+          : editParticipants[n] || { role: '', progress: [] }
       }
       const payload: Record<string, unknown> = {
         title: form.title.trim(),
@@ -241,6 +274,15 @@ export function IntentsTab() {
         payload.duration_minutes = form.durationMin
       } else if (!editingId) {
         payload.expires_at = ''
+      }
+      if (!editingId && form.actionKind === 'travel_together') {
+        payload.action = {
+          type: 'travel_together',
+          destination: { location_id: form.destinationId, ...(form.destinationRoomId ? { room_id: form.destinationRoomId } : {}) },
+          scope: form.scope,
+        }
+        payload.trigger = { kind: 'standing' }
+        payload.target_count = 0
       }
       setSubmitting(true)
       try {
@@ -273,6 +315,15 @@ export function IntentsTab() {
     },
     [reload, t, toast],
   )
+
+  const handleCancel = useCallback(async (id: string) => {
+    try {
+      await apiPatch(`/intents/${encodeURIComponent(id)}`, { status: 'cancelled' })
+      await reload()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    }
+  }, [reload, t, toast])
 
   // The click arms the in-app question, the dialog at the end deletes.
   const [pendingDelete, setPendingDelete] = useState<{ id: string; title: string } | null>(null)
@@ -355,6 +406,15 @@ export function IntentsTab() {
                           {it.description}
                         </div>
                       ) : null}
+                      {it.action?.type ? (
+                        <div className="ga-sched-muted" style={{ fontSize: 12 }}>
+                          {t('Shared trip')}: {locName(it.action.destination?.location_id || '')}
+                          {it.action.destination?.room_id ? ` / ${locations.find((l) => l.id === it.action?.destination?.location_id)?.rooms?.find((r) => r.id === it.action?.destination?.room_id)?.name || it.action.destination.room_id}` : ''}
+                          <div>{t('Scope')}: {it.action.scope === 'party' ? t('Entire party') : t('Pair only')}</div>
+                          <div>{t('Trip phase')}: {t(TRIP_PHASE_LABELS[it.meta?.travel?.phase || ''] || it.meta?.travel?.phase || '—')}{it.meta?.travel?.reason ? ` — ${it.meta.travel.reason}` : ''}</div>
+                          <div>{t('Participants')}: {(it.meta?.travel?.expected_members || parts).join(', ')}</div>
+                        </div>
+                      ) : null}
                     </td>
                     <td>
                       <span className="ga-tag ga-tag-char">{owner}</span>
@@ -374,14 +434,15 @@ export function IntentsTab() {
                     </td>
                     <td className={active ? 'ga-status-ok' : 'ga-status-paused'}>{t(it.status)}</td>
                     <td className="ga-or-actions-col">
-                      <button className="ga-btn ga-btn-sm" onClick={() => handleEdit(it)}>
+                      <button className="ga-btn ga-btn-sm" disabled={!!it.action?.type} onClick={() => handleEdit(it)}>
                         {t('Edit')}
                       </button>{' '}
-                      {active ? (
+                      {active && !it.action?.type ? (
                         <button className="ga-btn ga-btn-sm" onClick={() => handleComplete(it.id)}>
                           {t('Complete')}
                         </button>
                       ) : null}{' '}
+                      {active ? <button className="ga-btn ga-btn-sm ga-btn-danger" onClick={() => handleCancel(it.id)}>{t('Cancel intent')}</button> : null}{' '}
                       <button
                         className="ga-btn ga-btn-sm ga-btn-danger"
                         onClick={() => handleDelete(it.id, it.title)}
@@ -400,6 +461,42 @@ export function IntentsTab() {
       <section className="ga-sched-section">
         <h3>{editingId ? t('Edit intent') : t('Create intent')}</h3>
         <form className="ga-sched-form" onSubmit={handleSubmit}>
+          <div className="ga-sched-form-row">
+            <div className="ga-sched-field">
+              <label>{t('Plan type')}</label>
+              <select className="ga-input" value={form.actionKind} disabled={!!editingId}
+                onChange={(e) => setForm((f) => ({ ...f, actionKind: e.target.value as FormState['actionKind'], triggerKind: 'standing', participants: [] }))}>
+                <option value="plan">{t('Ordinary plan')}</option>
+                {actionTypes.includes('travel_together') ? <option value="travel_together">{t('Shared trip')}</option> : null}
+              </select>
+            </div>
+            {form.actionKind === 'travel_together' ? <>
+              <div className="ga-sched-field">
+                <label>{t('Destination')}</label>
+                <select className="ga-input" required value={form.destinationId}
+                  onChange={(e) => setForm((f) => ({ ...f, destinationId: e.target.value, destinationRoomId: '' }))}>
+                  <option value="">{t('— pick location —')}</option>
+                  {locations.map((l) => <option key={l.id} value={l.id}>{l.name || l.id}</option>)}
+                </select>
+              </div>
+              <div className="ga-sched-field">
+                <label>{t('Destination room (optional)')}</label>
+                <select className="ga-input" value={form.destinationRoomId}
+                  onChange={(e) => setForm((f) => ({ ...f, destinationRoomId: e.target.value }))}>
+                  <option value="">{t('Default arrival room')}</option>
+                  {(locations.find((l) => l.id === form.destinationId)?.rooms || []).map((r) => <option key={r.id} value={r.id}>{r.name || r.id}</option>)}
+                </select>
+              </div>
+              <div className="ga-sched-field">
+                <label>{t('Scope')}</label>
+                <select className="ga-input" value={form.scope} onChange={(e) => setForm((f) => ({ ...f, scope: e.target.value as FormState['scope'] }))}>
+                  <option value="pair">{t('Pair only')}</option>
+                  <option value="party">{t('Entire party')}</option>
+                </select>
+              </div>
+              <p className="ga-sched-muted">{t('The owner leads. Pick one new companion; consent is required. Entire party explicitly includes existing members. Pair only never removes existing members. Cancel and create a new trip to change its destination or group.')}</p>
+            </> : null}
+          </div>
           <div className="ga-sched-form-row">
             <div className="ga-sched-field" style={{ flex: 1, minWidth: 220 }}>
               <label>{t('Title')}</label>
@@ -445,6 +542,7 @@ export function IntentsTab() {
               <label>{t('Trigger')}</label>
               <select
                 className="ga-input"
+                disabled={form.actionKind === 'travel_together'}
                 value={form.triggerKind}
                 onChange={(e) => setForm((f) => ({ ...f, triggerKind: e.target.value as TriggerKind }))}
               >
@@ -529,12 +627,12 @@ export function IntentsTab() {
               />
             </div>
             <div className="ga-sched-field" style={{ minWidth: 220 }}>
-              <label>{t('Additional participants (optional)')}</label>
+              <label>{form.actionKind === 'travel_together' ? t('Companion') : t('Additional participants (optional)')}</label>
               <select
                 className="ga-input"
-                multiple
+                multiple={form.actionKind === 'plan'}
                 size={3}
-                value={form.participants}
+                value={form.actionKind === 'plan' ? form.participants : form.participants[0] || ''}
                 onChange={(e) =>
                   setForm((f) => ({
                     ...f,
@@ -542,6 +640,7 @@ export function IntentsTab() {
                   }))
                 }
               >
+                {form.actionKind === 'travel_together' ? <option value="">{t('— pick character —')}</option> : null}
                 {characters
                   .filter((c) => c.name !== form.owner)
                   .map((c) => (

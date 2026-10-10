@@ -30,9 +30,8 @@ _sessions: Dict[str, Dict[str, Any]] = {}
 def _load_schema(schema_name: str, **kwargs) -> str:
     """Loads a schema definition file and fills in placeholders.
 
-    Schemas verwenden `{key}`-Notation (einfache Klammern) — wie in den .md-
-    Dateien sichtbar. KEIN .format() weil die Schemas auch JSON-Beispiele mit
-    geschweiften Klammern enthalten, die als Literal stehen bleiben muessen.
+    Schemas use literal `{key}` placeholders. Do not use .format(): their
+    JSON examples contain braces that must remain literal.
     """
     path = _get_schemas_dir() / f"{schema_name}.md"
     if not path.exists():
@@ -131,16 +130,15 @@ def _format_generable_fields_for_templates(selected_template: str = "") -> str:
 
 
 def _format_existing_outfit_types() -> str:
-    """Deprecated: outfit_types wurden durch Decency + style_hint ersetzt
-    (Variante A). World Dev vergibt keine outfit_types mehr."""
+    """Deprecated: decency and style_hint replaced outfit_types.
+    World Dev no longer assigns outfit_types."""
     return ""
 
 
 def _format_context_locations(location_ids: list) -> str:
     """Formats selected locations as detailed context for the LLM.
 
-    Liefert nur die Bullet-Body-Zeilen (kein eigener Header) — der Header
-    kommt aus dem Schema-Template (`## Bestehende Orte`).
+    Return bullet body lines only; the schema template supplies the header.
     """
     if not location_ids:
         return ""
@@ -175,8 +173,7 @@ def _format_context_locations(location_ids: list) -> str:
 def _format_context_characters(character_names: list) -> str:
     """Formats selected characters as detailed context for the LLM.
 
-    Liefert nur die Bullet-Body-Zeilen (kein eigener Header) — der Header
-    kommt aus dem Schema-Template (`## Bestehende Characters`).
+    Return bullet body lines only; the schema template supplies the header.
     """
     if not character_names:
         return ""
@@ -213,7 +210,7 @@ def _format_context_characters(character_names: list) -> str:
                 if not md_path.exists():
                     continue
                 content = md_path.read_text(encoding="utf-8").strip()
-                # Headings entfernen fuer kompakten Kontext, max 300 Zeichen
+                # Remove headings for compact context, capped at 300 characters.
                 clean = "\n".join(l for l in content.splitlines() if not l.startswith("#")).strip()
                 if clean:
                     lines.append(f"- **{key}**: {clean[:300]}{'...' if len(clean) > 300 else ''}")
@@ -656,22 +653,21 @@ def _extract_layout_json(text: str) -> Dict[str, Any] | None:
     return _extract_json_block(text, "layout")
 
 
-# Sub-Block-Extraktoren fuer granulare Updates (LLM muss nicht das gesamte
-# Character-JSON neu generieren wenn nur ein Outfit / eine Soul-Section /
-# einzelne Profil-Felder geaendert werden sollen).
+# Extract granular updates without regenerating the whole character JSON
+# for a single outfit, soul section or subset of profile fields.
 
 def _extract_outfit_json(text: str) -> Dict[str, Any] | None:
-    """```json:outfit ... ``` — einzelnes Outfit anhaengen/aktualisieren.
+    """```json:outfit ... ``` — append or update one outfit.
 
-    Erwartet: {"character_name": "...", "outfit": {name, pieces, ...}}
+    Expected: {"character_name": "...", "outfit": {name, pieces, ...}}
     """
     return _extract_json_block(text, "outfit")
 
 
 def _extract_soul_json(text: str) -> Dict[str, Any] | None:
-    """```json:soul ... ``` — eine Soul-MD-Section ueberschreiben.
+    """```json:soul ... ``` — replace one soul Markdown section.
 
-    Erwartet: {"character_name": "...", "section": "personality|tasks|...", "content": "..."}
+    Expected: {"character_name": "...", "section": "personality|tasks|...", "content": "..."}
     """
     return _extract_json_block(text, "soul")
 
@@ -777,9 +773,8 @@ async def world_dev_chat(request: Request):
         session = _sessions[session_id]
     else:
         session_id = f"wd-{uuid.uuid4().hex[:8]}"
-        # Build system prompt from schema. Nur die in der GUI ausgewaehlten
-        # Orte/Characters wandern in den Prompt — vollstaendige Listen wuerden
-        # den Prompt unnoetig aufblaehen.
+        # Build the schema prompt with only GUI-selected locations and
+        # characters; complete lists would unnecessarily inflate context.
         try:
             existing_locations = _format_context_locations(context_location_ids) \
                 or "Keine Orte ausgewaehlt — der Benutzer hat keine als Kontext markiert."
@@ -849,8 +844,8 @@ async def world_dev_chat(request: Request):
         except FileNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
 
-        # (Selected-Context wird oben direkt in {existing_locations} /
-        # {existing_characters} eingespielt — kein zusaetzlicher Append noetig.)
+        # Selected context is already inserted in {existing_locations} and
+        # {existing_characters}; no separate append is needed.
 
         # If editing an existing element, inject its data into system prompt
         edit_context = ""
@@ -960,8 +955,8 @@ async def world_dev_chat(request: Request):
         _pm = get_provider_manager()
         _prov_obj = _pm.get_provider(provider) if provider else _pm.find_provider_for_model(model)
         if _prov_obj:
-            # list_models() macht ggf. einen sync HTTP-Call (Cache-Miss) →
-            # Threadpool, damit der Event-Loop nicht 10s blockiert.
+            # A list_models cache miss may perform synchronous HTTP;
+            # use the thread pool instead of blocking the event loop.
             _models = await _asyncio.to_thread(_prov_obj.list_models)
             for _m in _models:
                 if _m["name"] == model:
@@ -1673,14 +1668,12 @@ def _apply_character_internal(char_data: Dict[str, Any],
             config[key] = str(char_data[key])
             config_changed = True
 
-    # allowed_locations abgeschafft — wird ignoriert wenn der LLM es trotzdem
-    # im JSON schickt (Backwards-Compat, keine Warnung).
+    # Ignore the removed allowed_locations field if the LLM still emits it.
     char_data.pop("allowed_locations", None)
 
-    # known_locations bei Neu-Erstellung explizit als leere Liste setzen.
-    # Ohne das Feld greift im SetLocation-Skill der Legacy-Bypass und der
-    # Char darf zu beliebigen Orten teleportieren — frische World-Dev-Chars
-    # sollen nirgends hin koennen, bis sie platziert oder gefuehrt werden.
+    # New characters explicitly start with empty known_locations. Otherwise
+    # SetLocation's legacy missing-field bypass permits arbitrary travel
+    # before the character is placed or guided.
     if _is_new and "known_locations" not in config:
         config["known_locations"] = []
         config_changed = True
@@ -1726,7 +1719,7 @@ def _apply_character_data_sync(data: Any):
 
 
 # ---------------------------------------------------------------------------
-# Granulare Apply-Routes — kleinere Updates ohne komplettes Character-JSON
+# Granular apply routes: update without regenerating complete character JSON.
 # ---------------------------------------------------------------------------
 
 def _selected_template_note(character_template: str) -> str:
@@ -1755,7 +1748,7 @@ def _template_has_wardrobe(template_name: str) -> bool:
 
 
 def _apply_one_outfit(char_name: str, outfit: Dict[str, Any]) -> Dict[str, Any]:
-    """Legt EIN Outfit an (Pieces-Format mit Dedupe oder Freitext-Fallback).
+    """Create one outfit using deduplicated pieces or a free-text fallback.
 
     Returns: {name, pieces_created, pieces_reused}
     """
@@ -1770,8 +1763,8 @@ def _apply_one_outfit(char_name: str, outfit: Dict[str, Any]) -> Dict[str, Any]:
         created = reused = 0
         for p in raw_pieces:
             # Schema: {slots: [...], name, prompt_fragment, outfit_types, covers, partially_covers}.
-            # Falls der Caller noch den alten "slot"+"additional_slots"-Stil schickt, werten wir
-            # das nicht aus — das schlaegt in add_item() mit "needs non-empty 'slots' list" fehl.
+            # Do not interpret legacy slot/additional_slots input;
+            # add_item rejects it with "needs non-empty 'slots' list".
             slots = [str(s or "").strip().lower() for s in (p.get("slots") or []) if s]
             slots = [s for s in slots if s in VALID_PIECE_SLOTS]
             name = (p.get("name") or "").strip()
@@ -1826,7 +1819,7 @@ def _apply_one_outfit(char_name: str, outfit: Dict[str, Any]) -> Dict[str, Any]:
 
 @router.post("/apply-outfit")
 async def apply_outfit_data(request: Request):
-    """Granulares Apply: ein einzelnes Outfit anhaengen / aktualisieren.
+    """Granular apply: append or update one outfit.
 
     Body: {character_name, outfit: {name, pieces, locations?, activities?, excluded_locations?}}
     """
@@ -1857,7 +1850,7 @@ def _apply_outfit_data_sync(data: Any):
 
 @router.post("/apply-soul")
 async def apply_soul_data(request: Request):
-    """Granulares Apply: eine einzelne Soul-MD-Section ueberschreiben.
+    """Granular apply: replace one soul Markdown section.
 
     Body: {character_name, section: "personality"|"tasks"|..., content: "..."}
     """
@@ -1896,10 +1889,10 @@ def _apply_soul_data_sync(data: Any):
 
 @router.post("/apply-profile-patch")
 async def apply_profile_patch_data(request: Request):
-    """Granulares Apply: Subset von Profil-Feldern updaten.
+    """Granular apply: update a subset of profile fields.
 
     Body: {character_name, fields: {key: value, ...}}
-    Soul-Felder (source_file) werden ignoriert — die laufen ueber /apply-soul.
+    Soul fields (source_file) are handled by /apply-soul and ignored here.
     """
     import asyncio
     data = await request.json()
@@ -1971,8 +1964,8 @@ def _cleanup_session_sync(data: Any):
 def _get_pause_state() -> Dict[str, bool]:
     """Returns the current pause state of all subsystems.
 
-    Ersetzt llm_queue.paused: statt globaler LLM-Pause nutzen wir das
-    Runtime-Preset "world_dev" im llm_task_state (disabled Tasks).
+    Uses the llm_task_state "world_dev" runtime preset (disabled tasks),
+    not the removed global llm_queue pause.
     """
     from app.core.task_queue import get_task_queue
     from app.routes.scheduler import get_scheduler_manager
@@ -1981,7 +1974,7 @@ def _get_pause_state() -> Dict[str, bool]:
     task_queue = get_task_queue()
     scheduler_mgr = get_scheduler_manager()
 
-    queue_paused = task_queue._is_paused("default") if task_queue else False
+    queue_paused = task_queue.is_paused("default") if task_queue else False
     llm_paused = bool(runtime_disabled_tasks())
     scheduler_paused = False
     if scheduler_mgr and hasattr(scheduler_mgr, '_global_paused'):
@@ -2002,8 +1995,8 @@ def _get_pause_state() -> Dict[str, bool]:
 async def pause_all():
     """Pauses all LLM and background activities (except World Dev Chat).
 
-    Ersetzt llm_queue.pause durch Runtime-Preset "world_dev" (Task-Disable).
-    Chat/Story bleiben aktiv — nur Hintergrund-Tasks werden deaktiviert.
+    The llm_task_state "world_dev" preset disables background tasks,
+    while chat/story remain active.
     """
     from app.core.task_queue import get_task_queue
     from app.routes.scheduler import get_scheduler_manager
@@ -2066,13 +2059,12 @@ async def trigger_thought(character_name: str,
     fast: bool = False,
     tool_whitelist: str = "",
     suppress_notification: bool = False):
-    """Forciert einen Gedanken-Tick fuer einen bestimmten Character.
+    """Force a thought tick for one character.
 
-    Umgeht Idle-Check, Cooldown, Probability. Nuetzlich zum Debuggen /
-    Antreten ohne auf den 60s-Loop zu warten.
+    Bypass idle checks, cooldown and probability for immediate debugging.
 
-    Call: POST /world-dev/trigger-thought?user_id=XYZ&character_name=Kira
-    Optional: context_hint, fast, tool_whitelist (kommasepariert), suppress_notification
+    Call: POST /world-dev/trigger-thought?user_id=demo&character_name=Demo
+    Optional: context_hint, fast, tool_whitelist (comma-separated), suppress_notification
     """
     from app.core.thoughts import get_thought_runner
     tl = get_thought_runner()

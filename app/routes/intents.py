@@ -10,13 +10,22 @@ from typing import Any, Dict, List, Optional
 from app.core.game_time import GameDuration
 from app.core.log import get_logger
 from app.core.timeutils import game_time
+from app.core.hooks import get_provider
+from app.core.keyed_lock import keyed_lock
 from app.models.intents import (
     create_intent, get_intent, list_intents, update_intent,
-    delete_intent, complete_intent, apply_trigger_on_create)
+    delete_intent, apply_trigger_on_create)
 
 logger = get_logger("intents_route")
 
 router = APIRouter(prefix="/intents", tags=["intents"])
+
+
+@router.get("/action-types")
+def action_types_route() -> List[str]:
+    """Executable intent actions registered by the installed packages."""
+    provider = get_provider("intent_action_types")
+    return provider() if provider else []
 
 
 @router.get("")
@@ -83,6 +92,26 @@ def _apply_game_time_fields(data: Dict[str, Any]) -> None:
         data["trigger"] = trig
 
 
+def _validate_payload(data: Dict[str, Any]) -> None:
+    """Reject malformed structured fields and client-owned runtime state."""
+    for field in ("action", "meta", "participants", "trigger"):
+        if field in data and not isinstance(data[field], dict):
+            raise HTTPException(status_code=400, detail=f"{field} must be an object")
+    if "travel" in data.get("meta", {}):
+        raise HTTPException(status_code=400, detail="meta.travel is server-owned")
+    for field in ("title", "description", "owner", "location_id", "outfit_hint", "expires_at"):
+        if field in data and not isinstance(data[field], str):
+            raise HTTPException(status_code=400, detail=f"{field} must be a string")
+    for name, participant in data.get("participants", {}).items():
+        if not isinstance(name, str) or not name.strip() or not isinstance(participant, dict):
+            raise HTTPException(status_code=400, detail="participants must map character names to objects")
+    if "status" in data and data["status"] not in ("active", "done", "cancelled", "expired"):
+        raise HTTPException(status_code=400, detail="Unknown intent status")
+    for field in ("priority", "target_count"):
+        if field in data and (isinstance(data[field], bool) or not isinstance(data[field], int)):
+            raise HTTPException(status_code=400, detail=f"{field} must be an integer")
+
+
 @router.post("")
 async def create_route(request: Request) -> Dict[str, Any]:
     """Create an intent.
@@ -103,6 +132,9 @@ async def create_route(request: Request) -> Dict[str, Any]:
 
 def _create_route_sync(data: Any) -> Dict[str, Any]:
     """The blocking body of ``create_route`` — runs in the threadpool."""
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Intent payload must be an object")
+    _validate_payload(data)
     # An intent's deadline is a WORLD deadline ("finish this within two
     # hours" means two in-world hours), so it is a canonical GameTime — the
     # same shape intent_engine._schedule_intent and the migration produce.
@@ -118,6 +150,19 @@ def _create_route_sync(data: Any) -> Dict[str, Any]:
     if owner and not participants:
         participants = {owner: {"role": "", "progress": []}}
 
+    action = data.get("action") or {}
+    if action:
+        if data.get("target_count", 0) != 0:
+            raise HTTPException(status_code=400, detail="Executable intents cannot use counted completion")
+        validator = get_provider("intent_action_validate")
+        if validator is None:
+            raise HTTPException(status_code=400, detail="Unknown executable intent action")
+        try:
+            action = validator(owner, participants, action)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not isinstance(action, dict) or not action:
+            raise HTTPException(status_code=400, detail="Unknown executable intent action")
     location_id = (data.get("location_id") or "").strip()
     trigger = data.get("trigger")
     if not isinstance(trigger, dict):
@@ -138,7 +183,9 @@ def _create_route_sync(data: Any) -> Dict[str, Any]:
         location_id=location_id,
         outfit_hint=(data.get("outfit_hint") or "").strip(),
         target_count=data.get("target_count", 0),
-        expires_at=expires_at)
+        expires_at=expires_at, action=action, meta=data.get("meta") or {})
+    if not it:
+        raise HTTPException(status_code=500, detail="Intent creation failed")
     apply_trigger_on_create(it)
     return it
 
@@ -156,12 +203,37 @@ def _patch_route_sync(intent_id: str, data: Any) -> Dict[str, Any]:
     Accepts the same relative ``duration_minutes`` / ``trigger.run_in_minutes``
     as the create route; without them the stored stamps stay as they are.
     """
-    if isinstance(data, dict):
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Intent payload must be an object")
+    _validate_payload(data)
+    with keyed_lock("intent_execution", intent_id):
+        intent = get_intent(intent_id)
+        if not intent:
+            raise HTTPException(status_code=404, detail="Intent not found")
+        validator = get_provider("intent_action_change_validate")
+        try:
+            if validator is not None:
+                data = validator(intent, data)
+            elif intent.get("action") and (any(
+                    key in data for key in ("action", "participants", "owner", "trigger", "location_id", "meta", "target_count"))
+                    or ("status" in data and data["status"] != "cancelled")):
+                raise ValueError("Executable intent cannot be changed without its action provider")
+            if data.get("action") and not intent.get("action"):
+                action_validator = get_provider("intent_action_validate")
+                if action_validator is None:
+                    raise ValueError("Unknown executable intent action")
+                data["action"] = action_validator(
+                    data.get("owner", intent["owner"]),
+                    data.get("participants", intent["participants"]), data["action"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         _apply_game_time_fields(data)
-    result = update_intent(intent_id, **data)
-    if not result:
-        raise HTTPException(status_code=404, detail="Intent not found")
-    return result
+        if "meta" in data:
+            data["meta"] = {**(intent.get("meta") or {}), **data["meta"]}
+        result = update_intent(intent_id, **data)
+        if not result:
+            raise HTTPException(status_code=500, detail="Intent update failed")
+        return result
 
 
 @router.delete("/{intent_id}")
@@ -173,6 +245,5 @@ def delete_route(intent_id: str) -> Dict[str, str]:
 
 @router.post("/{intent_id}/complete")
 def complete_route(intent_id: str) -> Dict[str, str]:
-    if not complete_intent(intent_id):
-        raise HTTPException(status_code=404, detail="Intent not found")
+    _patch_route_sync(intent_id, {"status": "done"})
     return {"status": "done"}

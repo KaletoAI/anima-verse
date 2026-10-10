@@ -20,6 +20,7 @@ Runs against a THROWAWAY storage directory — it never touches a real world.
 Usage:  ./.venv/bin/python scripts/smoke_party_roles.py
 """
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -28,6 +29,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 STORAGE = Path(tempfile.mkdtemp(prefix="party-roles-smoke-"))
+os.environ["ANIMATION_CLIPS_DIR"] = str(STORAGE / "clips")
+os.environ["ANIMATION_RIG_FILE"] = str(STORAGE / "rig.fbx")
 
 from app.core import paths  # noqa: E402
 
@@ -41,6 +44,10 @@ from app.core import party_engine as P  # noqa: E402
 from app.models import character as C  # noqa: E402
 from app.plugins.context import PluginContext  # noqa: E402
 from plugins.party.skill import PartySkill  # noqa: E402
+from app.core.prompt_templates import register_package_template_dirs
+
+register_package_template_dirs([
+    Path(__file__).resolve().parents[1] / "plugins/party/templates/llm"])
 
 FAILURES = []
 CHECKED = 0

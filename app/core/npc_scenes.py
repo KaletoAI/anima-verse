@@ -64,7 +64,7 @@ def _free(name: str) -> bool:
     from app.models.character import (get_character_profile,
                                       get_character_status,
                                       is_character_sleeping)
-    if get_character_status(name):
+    if get_character_status(name) or not npc_actions.action_available(name):
         return False
     profile = get_character_profile(name) or {}
     if is_character_sleeping(name) or profile.get("journey"):
@@ -271,6 +271,11 @@ def run_scene_for(location_id: str, room_id: str, names: List[str], *,
                               max_tokens=_MAX_ANSWER_TOKENS)
     if answer is None:
         logger.info("npc_scene(%s/%s): no usable answer", location_id, room_id)
+        return None
+    from app.models.character import get_character_current_location, get_character_current_room
+    if any(not _free(name) or get_character_current_location(name) != location_id
+           or get_character_current_room(name) != room_id for name in names):
+        logger.info("npc_scene(%s/%s): participants changed during the turn — discarded", location_id, room_id)
         return None
     return _apply(location_id, room_id, names, answer, variables["pair_keys"])
 

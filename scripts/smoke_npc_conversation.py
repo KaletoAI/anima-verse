@@ -89,6 +89,7 @@ os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="npcconv-clips-")
 
 from app.core import paths  # noqa: E402
 paths.init(STORAGE)
+paths.init_instance(STORAGE / "instance")
 from app.core import config, db  # noqa: E402
 config.load(STORAGE / "config.json")
 db.init_schema()

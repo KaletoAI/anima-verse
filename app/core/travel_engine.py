@@ -605,7 +605,8 @@ def _exit_delay(exit_s: float, factor: float) -> int:
 
 
 def start_journey(character_name: str, target_id: str,
-                  target_room: str = "", target_pose: str = ""
+                  target_room: str = "", target_pose: str = "",
+                  journey_id: str = "", execution_ref: str = ""
                   ) -> Tuple[Dict[str, Any] | None, str]:
     """Begin a timed journey to ``target_id``.
 
@@ -690,6 +691,11 @@ def start_journey(character_name: str, target_id: str,
     journey = {"target": target_id, "waypoints": waypoints,
                "started_at_game": starts.canonical(), "speed_m_s": speed,
                "entry_edge": entry_edge}
+    if journey_id:
+        # Persist the caller's claim in the SAME write as the journey itself.
+        journey["journey_id"] = journey_id
+    if execution_ref:
+        journey["execution_ref"] = execution_ref
     if (target_room or "").strip():
         journey["target_room"] = target_room.strip()
     if (target_pose or "").strip():
@@ -708,13 +714,14 @@ def start_journey(character_name: str, target_id: str,
     # writes the whole profile_json blob, so a stale read would revert what a
     # concurrent writer (an equip route, the seat assignment) just stored.
     # ``end_interaction`` runs BEFORE the lock on purpose — it writes both
-    # partners' profiles itself, and a keyed_lock is not re-entrant.
+    # partners' profiles itself; profile locks must follow their sorted order.
     from app.core.keyed_lock import keyed_lock
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name)
         profile["journey"] = journey
         profile["movement_target"] = target_id
-        save_character_profile(character_name, profile)
+        if not save_character_profile(character_name, profile):
+            return None, "write_failed"
 
     st = journey_state(waypoints, journey["started_at_game"], game_time())
     try:
@@ -828,10 +835,28 @@ def start_journey_to_point(character_name: str, x: float,
     return journey, "ok"
 
 
-def cancel_journey(character_name: str) -> None:
-    """Drop journey + movement target — the character stays where they are."""
-    from app.models.character import clear_movement_target
-    clear_movement_target(character_name)   # clears journey too (see character.py)
+def cancel_journey(character_name: str, *, journey_id: Optional[str] = None,
+                   execution_ref: Optional[str] = None) -> None:
+    """Drop the journey, optionally only if both ownership selectors match."""
+    if journey_id is not None or execution_ref is not None:
+        from app.core.keyed_lock import keyed_lock
+        from app.models.character import get_character_profile, save_character_profile
+        with keyed_lock("character_profile", character_name):
+            profile = get_character_profile(character_name) or {}
+            journey = profile.get("journey")
+            if not isinstance(journey, dict):
+                return
+            if journey_id is not None and journey.get("journey_id") != journey_id:
+                return
+            if execution_ref is not None and journey.get("execution_ref") != execution_ref:
+                return
+            profile.pop("journey", None)
+            profile["movement_target"] = ""
+            if not save_character_profile(character_name, profile):
+                return
+    else:
+        from app.models.character import clear_movement_target
+        clear_movement_target(character_name)
     try:
         from app.core.state_events import publish as _publish_state
         _publish_state("travel_cancelled", character_name)
@@ -1314,6 +1339,13 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
                                  entry_room)
 
     ok, reason = _arrival_gate(name, target_id, target, entry_room)
+    if ok and journey.get("execution_ref"):
+        from app.core.hooks import get_provider
+        validate = get_provider("journey_arrival_validate")
+        if validate is None:
+            ok, reason = False, "The journey's execution capability is unavailable."
+        else:
+            ok, reason = validate(name, journey, entry_room)
     if not ok:
         # Blocked at the door: the journey ends on the last point of its route
         # that does not lie in the refused location (see _standoff_point).
@@ -1529,50 +1561,41 @@ def advance_all_journeys() -> None:
             })
             if not j:
                 continue
-            st = journey_state(j["waypoints"], j["started_at_game"], now)
-            # '' for a POINT journey (E3-0) — it has no location target, and
-            # every comparison below has to read that as "no target place",
-            # never as "the wilderness is the target".
-            target_id = j.get("target") or ""
-            current_id = (entry["current_location"] or "").strip()
-            # Leave re-check — ONLY while the character still stands in the
-            # location it set off from. A leave rule forbids stepping OUT of a
-            # place; once the point has left that footprint (current_location
-            # '', the wilderness that a journey spends most of its time in)
-            # there is nothing left to leave, and asking again would strand
-            # travellers halfway across the map whenever a rule flips.
-            if current_id and current_id != target_id \
-                    and not _leave_still_allowed(name):
+            from contextlib import nullcontext
+            from app.core.hooks import get_provider
+            execution = get_provider("journey_execution_context") if j.get("execution_ref") else None
+            if j.get("execution_ref") and execution is None:
+                # An unavailable execution owner must not leave clients
+                # deriving movement forever from an orphaned live journey.
+                cancel_journey(name, journey_id=j.get("journey_id"),
+                               execution_ref=j["execution_ref"])
                 continue
-            # Before the branch, so the ARRIVAL tick is covered too: a
-            # follower that joined mid-journey must not walk on afterwards.
-            # ``active_names`` is the tick's own answer to "who has a
-            # journey?" — a follower that is not in it needs no profile load
-            # to prove it has none.
-            _cancel_follower_journeys(name, active_names)
-            if not st["arrived"]:
-                # …and only a journey that HAS a target place can cross into
-                # it early. For a point journey the derived location out in
-                # the open is '' — the same value its `target` carries — so
-                # an unguarded test would settle it on every single tick.
-                if target_id and current_id != target_id:
-                    at = location_at_point(st["pos"][0], st["pos"][1],
-                                           locations)
-                    if ((at.get("id") or "") if at else "") == target_id:
-                        _settle_arrival(name, j, st)   # early, but gated
-                        continue
-                written = set_character_pos(name, st["pos"][0], st["pos"][1],
-                                            preserve_movement_target=True)
-                # The location AFTER the write: it is what the leader's own
-                # point just derived, and the formation is not allowed to put
-                # a follower anywhere else. ``set_character_pos`` returns it,
-                # so no second profile load is needed to read it back.
-                _move_party_followers(
-                    name, (written.get("location_id") or "").strip(),
-                    st["pos"], j["waypoints"], st["seg"],
-                    locations=locations)
-                continue
-            _settle_arrival(name, j, st)
+            with execution(name, j) if execution else nullcontext(True) as allowed:
+                if not allowed:
+                    continue
+                st = journey_state(j["waypoints"], j["started_at_game"], now)
+                # Point journeys have no named destination.
+                target_id = j.get("target") or ""
+                current_id = (entry["current_location"] or "").strip()
+                # Leave rules apply only while still standing in a footprint,
+                # never strand a walker after leaving the departure location.
+                if current_id and current_id != target_id \
+                        and not _leave_still_allowed(name):
+                    continue
+                _cancel_follower_journeys(name, active_names)
+                if not st["arrived"]:
+                    if target_id and current_id != target_id:
+                        at = location_at_point(st["pos"][0], st["pos"][1], locations)
+                        if ((at.get("id") or "") if at else "") == target_id:
+                            _settle_arrival(name, j, st)
+                            continue
+                    written = set_character_pos(name, st["pos"][0], st["pos"][1],
+                                                preserve_movement_target=True)
+                    _move_party_followers(
+                        name, (written.get("location_id") or "").strip(),
+                        st["pos"], j["waypoints"], st["seg"], locations=locations)
+                    continue
+                _settle_arrival(name, j, st)
         except Exception as e:
             logger.warning("advance journey failed for %s: %s", name, e)
     _note_positions(names, locations)

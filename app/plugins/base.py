@@ -1,8 +1,4 @@
-"""PluginSkill - Basisklasse fuer Plugin-basierte Skills.
-
-Erbt von BaseSkill fuer volle Kompatibilitaet mit dem SkillManager,
-erhaelt aber zusaetzlich einen PluginContext fuer Service-Zugriff.
-"""
+"""PluginSkill extends BaseSkill with a public package service context."""
 from typing import Any, Dict
 
 from app.skills.base import BaseSkill
@@ -10,14 +6,15 @@ from app.plugins.context import PluginContext
 
 
 class PluginSkill(BaseSkill):
-    """Basisklasse fuer Skills die als Plugin geladen werden.
+    """Package skill configured by its manifest and character overrides.
 
-    Unterschied zu BaseSkill:
-    - Erhaelt einen PluginContext mit Service-Zugriff (HTTP, Logging, Env)
-    - Plugins sollen NICHT direkt aus app.* importieren
-    - Konfiguration erfolgt ueber plugin.yaml + Umgebungsvariablen
+    Packages use PluginContext services or the documented public core API.
     """
 
     def __init__(self, config: Dict[str, Any], ctx: PluginContext):
         super().__init__(config)
         self.ctx = ctx
+
+    def default_enabled_for(self, character_name: str) -> bool:
+        """Activation without a character override; explicit settings take precedence."""
+        return not self.ALWAYS_LOAD

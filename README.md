@@ -143,6 +143,11 @@ stops acting autonomously).
   due: `standing` (shown in the prompt until done), `now`, at a game time (`in:2h`) or on arriving at a
   place. Managed in the Game-Admin **Intents** tab; the marker grammar lives in one template fragment
   (`shared/templates/llm/chat/intent_markers.md`) that both prompts that teach it share.
+  A **Travel together** intent adds an explicit destination and companion, with pair or whole-party
+  scope. It waits for a real Join/Decline answer, then moves the agreed group and completes only
+  after everyone arrives. The Intents tab shows its phase and blocking reason; player invitations
+  show the destination and participants. Temporary NPCs answer through the chat/tool response lane,
+  without enabling autonomous thoughts. Free-text plans do not become movement commands by inference.
 
 ### Characters, avatars & world
 - Template-driven character editor (no hardcoded field lists) — appearance, the markdown "soul",

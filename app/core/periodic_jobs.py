@@ -21,6 +21,7 @@ Sub-tasks that run per tick (each with its own sub-frequency):
                                   GAME clock, at least one game day apart)
     - chat_retention            — daily (SYSTEM-time storage hygiene: summarized
                                   chat rows past memory.chat_retention_days)
+    - package_tick              — registered package continuations (world tick)
 
 The tick interval is configurable in Game Admin → Settings → Server, range
 10s-3600s. Jobs cannot be disabled individually — if you do not want them,
@@ -40,17 +41,16 @@ from app.core.log import get_logger
 logger = get_logger("periodic_jobs")
 
 
-# Default-Tick-Intervall wenn config-Wert fehlt oder ungueltig.
+# Default tick interval when configuration is missing or invalid.
 _DEFAULT_TICK_SECONDS = 60
-# Untere/obere Grenzen — schuetzt vor versehentlich kaputter Config (z.B.
-# 0s wuerde den Loop sofort spammen).
+# Lower/upper bounds guard against broken configuration (a zero interval
+# would continuously run the loop).
 _MIN_TICK_SECONDS = 10
 _MAX_TICK_SECONDS = 3600
 
 
 def _is_paused() -> bool:
-    """Mirrors AgentLoop pause source — task_queue 'default' pause flag —
-    PLUS der persistente World-Freeze (autonome Simulation eingefroren)."""
+    """Mirror the default task queue's pause flag and persisted world freeze."""
     try:
         from app.models.world import is_world_frozen
         if is_world_frozen():
@@ -60,14 +60,14 @@ def _is_paused() -> bool:
     try:
         from app.core.task_queue import get_task_queue
         tq = get_task_queue()
-        return bool(tq and tq._is_paused("default"))
+        return bool(tq and tq.is_paused("default"))
     except Exception:
         return False
 
 
 def _get_tick_interval() -> int:
-    """Liest ``server.world_admin_tick_interval_seconds`` aus der Config,
-    geclamped auf [_MIN_TICK_SECONDS, _MAX_TICK_SECONDS]."""
+    """Read ``server.world_admin_tick_interval_seconds`` from config,
+    clamped to [_MIN_TICK_SECONDS, _MAX_TICK_SECONDS]."""
     try:
         from app.core import config as _cfg
         val = int(_cfg.get("server.world_admin_tick_interval_seconds")
@@ -78,13 +78,19 @@ def _get_tick_interval() -> int:
 
 
 # ---------------------------------------------------------------------------
-# Sub-Task Implementierungen — laufen synchron im Threadpool, weil sie
-# DB/Disk-IO machen und das Event-Loop sonst blockieren wuerden.
+# Sub-tasks run synchronously in the threadpool: their DB/disk I/O must not
+# block the event loop.
 # ---------------------------------------------------------------------------
+
+def _sub_plugin_tick():
+    """Resume registered package work within the normal world-pause gates."""
+    from app.core.hooks import emit
+    emit("world_tick")
+
 
 def _sub_status_tick():
     """Apply hourly stat decay to all characters. Internal 1h gating in
-    apply_hourly_status_tick — billig auch jede Minute aufzurufen.
+    apply_hourly_status_tick — inexpensive to call every minute.
 
     ONE profile read per character per pass (SIM-7): the hourly tick gates on
     its RAM stamp before touching storage at all, and the condition sweep only
@@ -97,9 +103,8 @@ def _sub_status_tick():
         for name in list_available_characters():
             try:
                 apply_hourly_status_tick(name)
-                # Abklingzeit: abgelaufene Conditions (duration_hours) jede Minute
-                # entfernen — NICHT am 1h-Gate des Status-Ticks haengen, sonst
-                # klingen Effekte bis zu eine Stunde zu spaet ab.
+                # Remove expired conditions every minute, independently of
+                # the hourly status gate; otherwise they expire up to an hour late.
                 cleanup_expired_conditions(
                     name, profile=get_character_profile(name))
             except Exception as e:
@@ -120,10 +125,10 @@ def _sub_flag_lifecycle():
 
 
 def _sub_force_rules():
-    """Force-Rules pro Char pruefen — z.B. Wake-Rule (stamina>X +
-    activity:sleeping → activity=""). Vorher nur 1x/h im hourly tick;
-    jetzt jeden Welt-Admin-Tick — Reaktion auf Schwellwert-Wechsel
-    innerhalb Minuten statt Stunden."""
+    """Check each character's force rules on every world-admin tick.
+
+    Threshold changes take effect within minutes instead of waiting for
+    the hourly status tick."""
     try:
         from app.models.rules import (
             check_force_rules, resolve_force_destination)
@@ -148,7 +153,7 @@ def _sub_force_rules():
         for name in list_available_characters():
             try:
                 if is_player_controlled(name):
-                    continue  # Avatar nicht zwingen
+                    continue  # Never force a player-controlled avatar.
                 force = check_force_rules(name)
                 if not force:
                     continue
@@ -168,15 +173,15 @@ def _sub_force_rules():
                 _before_act = (get_effective_activity(
                     name, profile=_before_prof) or "").strip().lower()
 
-                # Offmap-Sentinel: nicht als echte Location speichern. Wenn
-                # home=__offmap__ → Char vom Grid nehmen via enter_offmap_sleep.
+                # Never save the off-map sentinel as a real location.
+                # home=__offmap__ takes the character off the grid.
                 if dest_loc == OFFMAP_SLEEP_SENTINEL:
-                    if _before_loc:  # nur wechseln wenn der Char gerade auf der Karte ist
+                    if _before_loc:  # Only detach a character still on the map.
                         try:
                             enter_offmap_sleep(name)
                         except Exception:
                             pass
-                    dest_loc = ""  # kein weiterer save_character_current_location
+                    dest_loc = ""  # Do not write another current location.
                     dest_room = ""
 
                 if dest_loc:
@@ -184,10 +189,9 @@ def _sub_force_rules():
                 if dest_room:
                     save_character_current_room(name, dest_room)
 
-                # B1: orthogonale State-Flags sind die Autoritaet (z.B.
-                # is_sleeping false zum Wecken, true fuer einen Schlafzauber).
-                # Das fruehere set_activity (sleeping/"") ist durch set_flags
-                # ersetzt. Beim Aufwecken zusaetzlich vom Off-Map zurueckholen.
+                # State flags are authoritative (is_sleeping wakes/sleeps).
+                # They replace the old activity-based sleeping state.
+                # Waking also restores a character from off-map sleep.
                 _flags_changed = False
                 _set_flags = force.get("set_flags") or {}
                 if _set_flags:
@@ -227,9 +231,8 @@ def _sub_force_rules():
                             except Exception:
                                 pass
 
-                # Nur loggen + ins Tagebuch wenn sich was geaendert hat.
-                # Frischer Read (die Schreiber oben haben den Zustand geaendert),
-                # aber wieder nur EINER fuer alle drei Felder.
+                # Record only actual changes. The setters above changed the
+                # state, so read a fresh profile once for all three fields.
                 _after_prof = get_character_profile(name)
                 _after_loc = (get_character_current_location(
                     name, profile=_after_prof) or "").strip()
@@ -259,7 +262,7 @@ def _sub_force_rules():
 
 
 def _sub_assignment_expiry():
-    # Intents (plan-intents-unified.md): überfällige Intents auf 'expired' setzen.
+    # Unified intents: expire overdue plans.
     try:
         from app.models.intents import expire_overdue
         expire_overdue()
@@ -324,10 +327,10 @@ def _sub_relationship_decay():
 
 
 def _sub_variant_prune():
-    """LRU-Eviction stale Expression-Variants pro Character.
+    """LRU-evict stale expression variants per character.
 
-    Cap kommt aus ``server.variants_max_per_character`` (Default 30). Variants
-    mit aktuellstem ``last_used_at`` ueberleben.
+    ``server.variants_max_per_character`` caps the count (default 30).
+    Variants with the most recent ``last_used_at`` survive.
     """
     try:
         from app.core.expression_regen import prune_variants_all
@@ -361,8 +364,8 @@ def _sub_chat_retention():
 
 
 def _sub_reap_orphaned_avatars():
-    """Avatar-only Characters von Usern ohne gueltige Session offmap setzen
-    (Session-Timeout ohne Logout). Siehe plan-avatar-only-presence.md."""
+    """Remove avatar-only characters whose users have no valid session.
+    Covers session timeout without logout; see plan-avatar-only-presence.md."""
     try:
         from app.models.account import reap_orphaned_avatars
         reaped = reap_orphaned_avatars()
@@ -373,9 +376,9 @@ def _sub_reap_orphaned_avatars():
 
 
 def _sub_day_consolidation():
-    """Tages-Konsolidierung: pro Character prüfen, ob ein Wach-Block zu schließen
-    ist (Hauptschlaf erkannt oder Stau-Fallback) → Szenen → 1 Tages-Eintrag.
-    (plan-history-consolidation-cleanup.md, Phase 2)
+    """Close a character's awake block after main sleep or a backlog fallback.
+
+    Fold its scenes into one daily entry (history-consolidation plan, phase 2).
     """
     try:
         from app.core import day_consolidation as dc
@@ -394,7 +397,7 @@ def _sub_day_consolidation():
             except Exception as e:
                 logger.debug("day_consolidation(%s) error: %s", name, e)
         if total:
-            logger.info("day_consolidation: %d Szenen in Tages-Einträge eingeklappt", total)
+            logger.info("day_consolidation: %d scenes folded into daily entries", total)
     except Exception as e:
         logger.debug("day_consolidation sub error: %s", e)
 
@@ -509,6 +512,7 @@ _SUB_TASKS: List[tuple] = [
     (_sub_flag_lifecycle,            60,                    "flag_lifecycle"),
     (_sub_force_rules,               0,                     "force_rules"),
     (_sub_assignment_expiry,         60,                    "assignment_expiry"),
+    (_sub_plugin_tick,               30,                    "package_tick"),
     # 60s tick — the generator gates itself to one roll per GAME hour
     # (random_events._LAST_GENERATE_GAME), so events keep pace with the
     # game-clock factor instead of rolling once per REAL hour.
@@ -550,10 +554,9 @@ _last_run: Dict[str, float] = {}  # label -> unix-ts of last successful run
 
 
 async def _world_admin_tick_loop():
-    """Eine asyncio-Task fuer alle Welt-Admin-Aktionen. Ruft Sub-Tasks
-    sequenziell, jeder mit eigener Sub-Frequenz."""
-    # Initial-Delay: vermeidet dass alle Sub-Tasks beim ersten Tick gemeinsam
-    # feuern (CPU-Spike). Default 30s damit der Server zuerst hochkommt.
+    """Run world-admin sub-tasks sequentially at their own frequencies."""
+    # Delay the first sweep by 30s so startup does not trigger every task at
+    # once and cause a CPU spike.
     try:
         await asyncio.sleep(30)
     except asyncio.CancelledError:
@@ -589,7 +592,7 @@ async def _world_admin_tick_loop():
 
 
 def start() -> None:
-    """Startet den zentralen World-Admin-Tick als asyncio-Task."""
+    """Start the central world-admin tick as an asyncio task."""
     global _tick_task
     if _tick_task is not None and not _tick_task.done():
         return

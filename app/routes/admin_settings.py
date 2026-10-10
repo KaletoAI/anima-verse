@@ -137,7 +137,7 @@ def llm_stats_data(
     agents_cur = conn.execute(agents_sql, [from_str, to_str])
     agents_list = [r[0] for r in agents_cur.fetchall()]
 
-    # Aggregation in Python — flexibel + p90 ohne Window-Functions.
+    # Aggregate in Python for flexibility and p90 without window functions.
     buckets: Dict[tuple, Dict[str, list]] = {}
     for r in raw_rows:
         task, model, provider, agent, in_tok, out_tok, max_tok, dur = r
@@ -1710,7 +1710,7 @@ async def agent_loop_pause(user=Depends(require_admin)):
     """Pause the AgentLoop (and the task_queue 'default' it shares).
 
     The pause is persistent — survives restart because it lives in the
-    world DB via ``task_queue._is_paused``.
+    world DB via ``TaskQueue.is_paused``.
     """
     from app.core.task_queue import get_task_queue
     tq = get_task_queue()

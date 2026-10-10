@@ -95,7 +95,7 @@ export interface SceneData {
   speaker_expr_versions?: Record<string, string>
   follow_suggestions?: Array<{ character: string; room_id: string; room_name: string }>
   party?: { role: 'leader' | 'follower'; leader: string; members: string[] } | null
-  party_invites?: Array<{ invite_id: string; inviter: string }>
+  party_invites?: Array<{ invite_id: string; inviter: string; intent_id?: string; destination_label?: string; participants?: string[] }>
   /** Pair interactions (app/core/interaction_engine.py). A shared action is
    *  ASKED, never imposed, so the banner has three states: questions waiting
    *  for the avatar, the question it is waiting on itself, and the pair it is
@@ -646,6 +646,8 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
               <span key={inv.invite_id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em' }}>
                 <span style={{ fontStyle: 'italic', color: '#78aaff' }}>
                   👥 {inv.inviter} {t('invites you to travel together.')}
+                  {inv.destination_label ? <span> {t('Destination')}: {inv.destination_label}.</span> : null}
+                  {inv.participants?.length ? <span> {t('Participants')}: {inv.participants.join(', ')}.</span> : null}
                 </span>
                 <button onClick={() => handlePartyRespond(inv.invite_id, true)}
                   className="player-chip player-chip-follow">

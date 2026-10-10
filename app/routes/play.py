@@ -137,11 +137,9 @@ def _bg_id(location_id: str, room: str) -> str:
 
 @router.get("/play", include_in_schema=False)
 def play_page():
-    # Shell wird BEWUSST ohne Auth ausgeliefert: das ist nur das statische
-    # React-Bundle (kein Secret). Die SPA gated sich selbst client-seitig ueber
-    # <AuthGate> (zeigt das Login-Formular bei fehlender Session). Eine
-    # Server-Auth-Dependency hier wuerde 401-JSON zurueckgeben, bevor die SPA
-    # laedt -> kein Login-Dialog. Alle Daten-Endpoints (/play/*) bleiben gegated.
+    # Serve the static shell without auth; it contains no secrets.
+    # The SPA's AuthGate shows login when needed. Server auth here would
+    # return 401 JSON before the SPA loads. All data routes remain gated.
     if not _SHELL.is_file():
         return HTMLResponse(
             "<h1>Player UI build missing</h1>"
@@ -328,8 +326,9 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     party = _party_block(avatar)
     try:
         from app.core.party_engine import get_pending_invites_for
-        party_invites = [{"invite_id": i["invite_id"], "inviter": i["inviter"]}
-                         for i in get_pending_invites_for(avatar)]
+        party_invites = [{key: i[key] for key in
+                          ("invite_id", "inviter", "intent_id", "destination_label", "participants")
+                          if key in i} for i in get_pending_invites_for(avatar)]
     except Exception:
         party_invites = []
 
@@ -1757,7 +1756,7 @@ def _play_scene_preview_sync(_, data: Any):
 
 
 def _party_block(avatar: str):
-    """Party-Status des Avatars fuer die UI (None = in keiner Party)."""
+    """The avatar's party status for the UI (None when outside a party)."""
     try:
         from app.core.party_engine import get_party_of
         p = get_party_of(avatar)
@@ -1770,7 +1769,7 @@ def _party_block(avatar: str):
 
 @router.post("/play/party/respond")
 async def play_party_respond(request: Request, user=Depends(get_current_user)):
-    """Avatar beantwortet eine Party-Einladung (Ja/Nein) aus dem Chat-Fenster."""
+    """The avatar explicitly accepts or declines a party invitation."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_play_party_respond_sync, user, body)
@@ -1784,11 +1783,13 @@ def _play_party_respond_sync(user, body: Any):
     if not avatar:
         raise HTTPException(status_code=400, detail="no active avatar")
     invite_id = str(body.get("invite_id") or "").strip() if isinstance(body, dict) else ""
-    accept = bool(body.get("accept")) if isinstance(body, dict) else False
+    accept = body.get("accept") if isinstance(body, dict) else None
+    if not isinstance(accept, bool):
+        raise HTTPException(status_code=400, detail="accept must be a boolean")
     if not invite_id:
         raise HTTPException(status_code=400, detail="invite_id required")
     inv = get_invite(invite_id)
-    # Nur eigene Einladungen beantworten (kein Fremd-Resolve).
+    # Only the invitation's own recipient may answer it.
     if not inv or inv.get("invitee") != avatar:
         raise HTTPException(status_code=404, detail="invite not found")
     res = resolve_pending_invite(invite_id, accept)
@@ -1797,7 +1798,7 @@ def _play_party_respond_sync(user, body: Any):
 
 @router.post("/play/party/leave")
 def play_party_leave(user=Depends(get_current_user)):
-    """Avatar verlaesst seine Party (Follower steigt aus, Leader = Aufloesung)."""
+    """Leave the avatar's party; a leader leaving disbands it."""
     from app.models.account import get_active_character
     from app.core.party_engine import leave_party, clear_invites_for
     avatar = (get_active_character() or "").strip()
@@ -1980,8 +1981,8 @@ async def _storyteller_fallback(actor: str, text: str, location_id: str,
     storyteller steps in and narrates the surroundings/consequence. The narration
     lands as a storyteller perception in the stream (appears in the next /play/scene).
 
-    Lautstärke = Reichweite: schreien narriert ortsweit (scope=location), sonst
-    nur den aktuellen Raum (scope=here) — konsistent mit der Utterance-Hörweite.
+    Volume determines reach: shouting narrates location-wide (scope=location),
+    otherwise in the current room (scope=here), matching utterance hearing.
     """
     try:
         from app.core.act_engine import perform_act
@@ -2038,12 +2039,10 @@ async def _storyteller_after_silence(actor: str, text: str, location_id: str,
 
 @router.post("/play/say")
 async def play_say(request: Request, user=Depends(get_current_user)):
-    """Der Avatar äußert etwas in seinen aktuellen Raum.
+    """Record the avatar's room utterance immediately.
 
-    Phase 3: Avatar-Äußerung wird sofort aufgezeichnet; adressierte Charaktere
-    werden im Agent-Loop ge-bumpt und antworten ASYNCHRON (zustands-bewusst,
-    als Raum-Utterance). Der POST blockiert nicht mehr auf die LLM-Antwort —
-    die Antworten erscheinen im nächsten /play/scene-Poll.
+    Addressed characters answer asynchronously through the AgentLoop.
+    The POST does not wait for their LLM calls; replies appear on scene polls.
     """
     from app.core.perception import VOLUME_NORMAL, record_utterance
     from app.models.account import get_active_character
@@ -2095,12 +2094,10 @@ async def play_say(request: Request, user=Depends(get_current_user)):
         logger.info("play_say: out-of-reach addressees dropped: %s", _dropped)
     addressees = [a for a in addressees if a in present and a != avatar]
 
-    # 0) Bild-Anhang auflösen + (nur dann) synchron analysieren. Die Beschreibung
-    #    muss VOR dem Fan-Out feststehen, damit die wahrnehmenden Agents das Bild
-    #    „sehen". Die sichtbare Avatar-Zeile bleibt sauber (nur der Text); das Bild
-    #    reist als Thumbnail über perception_meta mit, die Beschreibung nur in die
-    #    Reaktions-Wahrnehmung (wie im alten /chat: Bild im UI, Beschreibung im
-    #    Prompt). Nur bei tatsächlichem Bild blockiert der POST.
+    # Analyze an attached image before fan-out so listeners see its description.
+    # Keep the visible utterance text clean: the thumbnail travels in
+    # perception_meta, and only reaction context contains the description.
+    # Only an actual image attachment makes this POST wait for analysis.
     import asyncio
     img_display_url = ""
     img_block = ""
@@ -2126,10 +2123,8 @@ async def play_say(request: Request, user=Depends(get_current_user)):
             logger.info("play_say: Bild-Anhang nicht auflösbar (id=%s url=%s)", image_id, image_url)
             img_display_url = ""
 
-    # 1) Spell-Cast-Detection (wie der alte Chat-Pfad): wirkt die Äußerung einen
-    #    Zauber auf das (erste) adressierte Ziel? Wenn ja, führt detect_and_cast
-    #    den Cast sofort aus (Effekt-Item ans Ziel etc.) und liefert einen Hint,
-    #    den das Ziel beim Antworten narrativ verarbeitet.
+    # Detect a spell directed at the first addressee, execute its effects and
+    # give the target a narrative hint for its response.
     import asyncio
     spell = None
     # Spell detection has NO model routed while the avatar carries spell items:
@@ -2157,19 +2152,16 @@ async def play_say(request: Request, user=Depends(get_current_user)):
         except Exception as e:  # noqa: BLE001
             logger.debug("play_say spell detect failed: %s", e)
 
-    # 1b) Spell-Cast (Port der alten chat.py-Logik): die ROHEN Zauberworte werden
-    #     NICHT gezeigt — `chat_substitute` (narrative Beschreibung des Wirkens)
-    #     ersetzt sie, damit das Ziel auf die WIRKUNG reagiert, nicht auf die
-    #     Worte (sonst „Was bedeutet das?"). Der `hint` (success_/fail_text) wird
-    #     made visible as a storyteller result line AND passed to the target when it reacts
-    #     mitgegeben. Die komplette Mechanik (Effekte, Anchor-Teleport, Item,
-    #     Modus, cast_activity) lief bereits in detect_and_cast→execute_cast.
+    # Replace raw spell words with chat_substitute so the target reacts to the
+    # effect rather than the incantation. Show the result as a storyteller line
+    # and pass its hint to the target. detect_and_cast already applied effects,
+    # teleport anchors, items, mode and cast_activity.
     _is_spell = bool(spell and spell.get("hint"))
     say_content = ((spell.get("chat_substitute") or "").strip() or content) if _is_spell else content
 
-    # 2) Avatar-Äußerung in den Stream (bei Spell: Narration statt Beschwörung).
-    #    Bei Bild-Anhang reist die Display-URL als perception_meta mit, damit die
-    #    Scene-Zeile ein Thumbnail zeigt — der sichtbare Text bleibt unverändert.
+    # Record the avatar utterance, or the spell's narrative substitute.
+    # Carry an image URL in perception_meta for the scene thumbnail;
+    # the visible text remains unchanged.
     _pmeta = {"image_url": img_display_url} if img_display_url else None
     uid = record_utterance(speaker=avatar, content=say_content, volume=volume,
                            addressees=addressees, source="play",
@@ -2186,19 +2178,16 @@ async def play_say(request: Request, user=Depends(get_current_user)):
                              location_id=loc, room_id=room, source="spell",
                              anchor=avatar)
 
-    # 3) Reaktionen über den Loop verteilen: Adressierte → Pflicht-Antwort,
-    #    übrige Anwesende → Chime. Bei Spell reagiert das Ziel auf die WIRKUNG
-    #    (Inhalt = chat_substitute + hint), nicht auf die rohen Zauberworte.
-    #    Party-Einladung (Flow 1): KEINE Sonderbehandlung mehr — lädt der Avatar
-    #    einen NPC per Natural Speech ein ("komm mit …"), antwortet der NPC ganz
-    #    normal und ruft bei Zustimmung in seinem Turn das JoinParty-Skill auf.
+    # Dispatch addressed mandatory replies and optional bystander chimes.
+    # Spell targets react to chat_substitute plus the effect hint, not raw
+    # incantations. An ordinary spoken party invitation is answered through
+    # the normal NPC turn with a JoinParty tool call on explicit acceptance.
     reactions = {"obligatory": [], "chime": []}
     try:
         from app.core.agent_loop import get_agent_loop
         hints = {spell_target: spell["hint"]} if (_is_spell and spell_target) else None
-        # Den Agents die Bildbeschreibung mitgeben (vor den Text gestellt), damit
-        # sie auf das gezeigte Bild reagieren — die aufgezeichnete Zeile bleibt
-        # davon unberührt (clean text + Thumbnail).
+        # Prepend the image description for agent reactions while preserving
+        # the recorded clean text and thumbnail.
         _react_content = f"{img_block}\n\n{say_content}".strip() if img_block else say_content
         reactions = get_agent_loop().dispatch_room_reactions(
             speaker=avatar, content=_react_content, volume=volume,
@@ -2207,9 +2196,8 @@ async def play_say(request: Request, user=Depends(get_current_user)):
     except Exception as e:  # noqa: BLE001
         logger.warning("play_say dispatch_room_reactions failed: %s", e)
 
-    # 4) Storyteller-Fallback (Option 3): klinkt sich NIEMAND ein (kein anwesender
-    #    Character — z.B. allein mit einem Bären), reagiert die Welt. Hintergrund,
-    #    blockiert den POST nicht. Lautstärke → Scope (schreien = ortsweit).
+    # If no character answers, the storyteller reacts in the background
+    # without blocking POST. Shouting uses location-wide scope.
     #    A wind-down closer counts as a speaker too: the dispatcher hands the
     #    room to ONE character for a farewell beat, so the immediate fallback
     #    must not narrate over it — that case goes through the delayed check.
@@ -2250,8 +2238,8 @@ async def play_say(request: Request, user=Depends(get_current_user)):
 
 @router.get("/play/self")
 def play_self(user=Depends(get_current_user)):
-    """Eigener Zustand des Avatars (B Tier 1): Mood, Activity, Status-Bars,
-    Conditions, aktuelles Outfit + Auswahl-Listen für die Steuerung. Ein Call."""
+    """Avatar state (B tier 1): mood, activity, stat bars, conditions,
+    current outfit and control options in one call."""
     from app.models.account import get_active_character
     empty = {"avatar": "", "mood": "", "activity": "", "status_effects": {},
              "bar_meta": {}, "conditions": [], "outfit": "", "profile_image": "",
@@ -2391,8 +2379,8 @@ def _require_present_target(avatar: str, raw_target) -> str:
 
 @router.get("/play/others")
 def play_others(user=Depends(get_current_user)):
-    """Zustand ALLER anwesenden anderen Charaktere (wie /play/self, je Character).
-    Für das Others-Panel — read-only."""
+    """Read-only state of every other present character, as in /play/self,
+    for the Others panel."""
     from app.models.account import get_active_character
     out = {"avatar": "", "characters": []}
     avatar = (get_active_character() or "").strip()
@@ -2412,7 +2400,7 @@ def play_others(user=Depends(get_current_user)):
             logger.debug("play_others relations failed: %s", e)
             for blk in out["characters"]:
                 blk.setdefault("relation", None)
-        # Party-Hervorhebung: markiere Anwesende, die zur Party des Avatars gehoeren.
+        # Highlight present members of the avatar's party.
         try:
             from app.core.party_engine import get_party_of
             p = get_party_of(avatar)
@@ -2437,8 +2425,8 @@ def play_story_arcs(user=Depends(get_current_user)):
 
 @router.get("/play/notices")
 def play_notices(user=Depends(get_current_user)):
-    """Banner-relevante Hinweise für den Avatar (B Tier 1): kritische Events am
-    Ort, aktive Bewegungs-Sperre (Block/Force), ungelesene Notifications."""
+    """Avatar banner hints (B tier 1): critical local events, active
+    movement restrictions and unread notifications."""
     from app.models.account import get_active_character
     out = {"avatar": "", "events": [], "leave_blocked": None,
            "force_warning": None, "notifications": [], "unread_count": 0,
@@ -2448,8 +2436,8 @@ def play_notices(user=Depends(get_current_user)):
         return out
     out["avatar"] = avatar
     out["party"] = _party_block(avatar)
-    # Aktive Force-Regel (z.B. "Erschöpfung: Bin erschöpft, gehe schlafen") —
-    # fuer den Avatar NICHT automatisch ausgefuehrt, nur als Hinweis + Apply.
+    # An active force rule is a hint with an Apply action for the avatar,
+    # never an automatically executed command.
     try:
         from app.models.rules import check_force_rules, resolve_force_destination
         force = check_force_rules(avatar)
@@ -2494,8 +2482,8 @@ def play_notices(user=Depends(get_current_user)):
         from app.models.notifications import get_notifications, get_unread_count
         items = get_notifications(limit=10, unread_only=True,
                                   character_whitelist=[avatar]) or []
-        # _row_to_notification liefert content/type/character (NICHT body/kind/
-        # title) — sonst bleiben die Banner-Zeilen leer.
+        # _row_to_notification supplies content/type/character, not
+        # body/kind/title; the wrong fields leave banners empty.
         out["notifications"] = [{"id": n.get("id"), "kind": n.get("type", ""),
                                  "body": n.get("content", "")}
                                 for n in items]
@@ -2568,10 +2556,9 @@ _SLOT_LABELS = {"head": "Head", "neck": "Neck", "outer": "Coat & jacket",
 
 
 def build_belongings(character_name: str) -> dict:
-    """Inventar + Outfit (Paper-Doll) eines Characters — Single-Source für das
-    Avatar-Panel (/play) UND den Game-Admin-Garderoben-Tab.
-    Liefert die getragenen Pieces pro Slot (für die Figur) und die volle
-    Item-Liste mit Filter-Attributen (Kategorie/Slot/Outfit-Typ/Spell)."""
+    """Character inventory and outfit: one source for the avatar panel and
+    Game-Admin wardrobe. Return equipped pieces by slot and the full item
+    list with category, slot, outfit type and spell filter attributes."""
     avatar = (character_name or "").strip()
     out = {"avatar": "", "slot_order": _SLOT_ORDER, "slot_labels": _SLOT_LABELS,
            "equipped": {}, "items": [], "outfit_sets": [], "max_slots": 0,
@@ -2709,9 +2696,8 @@ def play_belongings(user=Depends(get_current_user)):
 
 @router.post("/play/equip")
 async def play_equip(request: Request, user=Depends(get_current_user)):
-    """Zieht EIN Outfit-Piece an — merged mit dem Rest (nur die Slots dieses
-    Pieces, inkl. Multi-Slot), verdrängt nur Konflikte. NICHT das ganze Outfit
-    ersetzen (dafür ist apply-outfit-set)."""
+    """Equip one piece, replacing only conflicts in its slots, including
+    multi-slot pieces. Whole-set replacement belongs to apply-outfit-set."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_play_equip_sync, user, body)
@@ -2748,7 +2734,7 @@ def _play_equip_sync(user, body: Any):
 
 @router.post("/play/unequip")
 async def play_unequip(request: Request, user=Depends(get_current_user)):
-    """Legt das Piece eines Slots ab (inkl. aller Mirror-Slots des Pieces)."""
+    """Unequip a slot's piece, including every mirrored slot of that piece."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_play_unequip_sync, user, body)
@@ -2788,7 +2774,7 @@ def _play_unequip_sync(user, body: Any):
 
 @router.post("/play/use-item")
 async def play_use_item(request: Request, user=Depends(get_current_user)):
-    """Benutzt/konsumiert ein Item."""
+    """Use or consume an item."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_play_use_item_sync, user, body)
@@ -3047,10 +3033,10 @@ def play_item_detail(item_id: str, user=Depends(get_current_user)):
 
 
 def _build_gallery_payload(character: str) -> dict:
-    """Baut die Galerie-Nutzlast (Bilder + Meta) fuer einen Character.
+    """Build character gallery images and metadata.
 
-    Gleiche Form wie ``/play/gallery`` (images[], profile_image). Kein Zugriffs-
-    Check hier — der gehoert in die aufrufende Route."""
+    Match /play/gallery (images[], profile_image). Access checks belong to
+    the calling route."""
     out = {"character": character, "images": [], "profile_image": ""}
     if not character:
         return out
@@ -3101,8 +3087,8 @@ def play_gallery(user=Depends(get_current_user)):
 
 @router.get("/play/galleries")
 def play_galleries(user=Depends(get_current_user)):
-    """Liste der Galerien, die der aktive Avatar durchstoebern darf
-    (eigene zuerst, danach freigegebene fremde)."""
+    """List galleries the active avatar may browse: its own first,
+    then galleries shared with it."""
     from app.models.account import get_active_character
     from app.models.character import (
         list_available_characters, can_view_gallery, get_character_profile_image,
@@ -3127,8 +3113,8 @@ def play_galleries(user=Depends(get_current_user)):
 
 @router.get("/play/gallery/{character}")
 def play_gallery_of(character: str, user=Depends(get_current_user)):
-    """Galerie eines bestimmten Characters — nur wenn der aktive Avatar in
-    dessen Freigabeliste steht (oder es die eigene Galerie ist)."""
+    """Read a gallery only when it belongs to the active avatar or
+    its sharing list includes that avatar."""
     from app.models.account import get_active_character
     from app.models.character import can_view_gallery
     avatar = (get_active_character() or "").strip()
@@ -3141,10 +3127,9 @@ def play_gallery_of(character: str, user=Depends(get_current_user)):
 
 @router.delete("/play/gallery/{character}/image/{filename}")
 def play_gallery_delete_image(character: str, filename: str, user=Depends(get_current_user)):
-    """Loescht ein Bild aus der Galerie des EIGENEN aktiven Avatars.
+    """Delete an image only from the active avatar's own gallery.
 
-    IDOR-Schutz: nur die eigene Galerie ist loeschbar — sonst koennte jeder
-    eingeloggte User fremde Character-Bilder loeschen."""
+    Reject access to another character's gallery to prevent IDOR."""
     from app.models.account import get_active_character
     from app.models.character import delete_character_image
 
@@ -3482,9 +3467,8 @@ def get_heightfield_stats_route(keys: str = "", user=Depends(get_current_user)):
 
 @router.get("/play/scenes")
 def play_scenes(user=Depends(get_current_user), limit: int = 5):
-    """„Was bisher geschah" — zuletzt konsolidierte Szenen, an denen der Avatar
-    beteiligt war (Zeit · Ort/Raum · Mit-Teilnehmer · Summary). Recap-Leiste im
-    Chat, neueste zuerst."""
+    """Recent consolidated scenes involving the avatar, newest first:
+    time, location/room, fellow participants and summary for the chat recap."""
     from app.models.account import get_active_character
     from app.models import scene_store
     from app.models.world import get_location_by_id
@@ -3701,7 +3685,7 @@ def _play_places_sync() -> Dict[str, Any]:
 
 @router.post("/play/self/outfit")
 async def play_set_outfit(request: Request, user=Depends(get_current_user)):
-    """Avatar zieht ein gespeichertes Outfit-Set an (reused apply_equipped_pieces)."""
+    """Equip a saved avatar outfit set through apply_equipped_pieces."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_play_set_outfit_sync, user, body)
@@ -3753,8 +3737,8 @@ def _play_set_outfit_sync(user, body: Any):
 
 @router.get("/play/layout")
 def play_get_layout(user=Depends(get_current_user)):
-    """Gespeichertes UI-Layout des Users (react-grid-layout breakpoint-map) oder
-    None, wenn noch keins gespeichert wurde."""
+    """Return the user's react-grid-layout breakpoint map,
+    or None when no layout has been saved."""
     from app.models.account import _current_user_settings
     us = _current_user_settings() or {}
     return {"layout": us.get("play_layout")}
@@ -3762,7 +3746,7 @@ def play_get_layout(user=Depends(get_current_user)):
 
 @router.put("/play/layout")
 async def play_put_layout(request: Request, user=Depends(get_current_user)):
-    """Persistiert das UI-Layout im User-Profil (folgt dem User über Geräte)."""
+    """Persist the UI layout in the user profile across devices."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_play_put_layout_sync, user, body)
@@ -3805,8 +3789,8 @@ def play_get_figures(bg: str = "", user=Depends(get_current_user)):
         names.append(avatar)
     for name in names:
         nroom = get_character_current_room(name) or ""
-        # Exakter Eintrag fuer das aktuelle Bild — sonst die letzte Platzierung
-        # fuer (Character, Raum) erben (neues Expression-Bild ohne eigene Pos).
+        # Prefer this image's exact placement; otherwise inherit the last
+        # character/room placement for a new expression image.
         p = (get_scene_position(name, nroom, _expr_version(name), bg)
              or get_last_scene_position(name, nroom, bg))
         if p:
@@ -3862,7 +3846,7 @@ def play_list_layouts(user=Depends(get_current_user)):
 
 @router.put("/play/layouts")
 async def play_save_layout(request: Request, user=Depends(get_current_user)):
-    """Speichert das aktuelle Layout unter einem Namen."""
+    """Save the current layout under a name."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_play_save_layout_sync, user, body)

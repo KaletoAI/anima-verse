@@ -15,6 +15,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from app.core.db import get_connection, transaction
+from app.core.hooks import emit, get_provider
 from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
 from app.core.game_time import GameDuration, GameTime
@@ -58,6 +59,12 @@ def _row_to_intent(r) -> Dict[str, Any]:
     return d
 
 
+def is_managed_intent(intent: Dict[str, Any]) -> bool:
+    """Whether a package owns this action's execution instead of thought turns."""
+    provider = get_provider("intent_action_managed")
+    return bool(provider and provider(intent))
+
+
 def create_intent(*, owner: str, title: str, description: str = "",
                   source: str = "character",
                   participants: Optional[Dict[str, Any]] = None,
@@ -78,7 +85,8 @@ def create_intent(*, owner: str, title: str, description: str = "",
     m = meta if isinstance(meta, dict) else {}
     prio = max(1, min(5, int(priority or 3)))
     try:
-        with transaction() as conn:
+        with keyed_lock("intent_execution", iid), transaction() as conn:
+            previous = get_intent(iid)
             conn.execute(
                 "INSERT INTO intents (id, source, owner, participants, title, "
                 "description, trigger, action, priority, status, location_id, "
@@ -102,6 +110,13 @@ def create_intent(*, owner: str, title: str, description: str = "",
                         iid, owner, title, src, trig.get("kind", "standing"))
     except Exception as e:
         logger.error("create_intent failed: %s", e)
+        return {}
+    intent = get_intent(iid)
+    if intent:
+        if previous:
+            emit("intent_changed", intent=intent, previous=previous)
+        else:
+            emit("intent_created", intent=intent)
     return get_intent(iid) or {}
 
 
@@ -138,29 +153,38 @@ def list_intents(owner: str = "", status: str = "", source: str = "") -> List[Di
 
 
 def update_intent(intent_id: str, **changes) -> Optional[Dict[str, Any]]:
-    if not get_intent(intent_id):
-        return None
-    allowed = {"source", "owner", "participants", "title", "description",
-               "trigger", "action", "priority", "status", "location_id",
-               "target_count", "outfit_hint", "expires_at", "meta"}
-    sets, params = [], []
-    for k, v in changes.items():
-        if k not in allowed:
-            continue
-        if k in _JSON_FIELDS:
-            v = json.dumps(v if isinstance(v, (dict, list)) else {}, ensure_ascii=False)
-        sets.append(f"{k}=?")
-        params.append(v)
-    if not sets:
-        return get_intent(intent_id)
-    sets.append("updated_at=?")
-    params.append(utc_now_iso())
-    params.append(intent_id)
-    try:
-        with transaction() as conn:
-            conn.execute(f"UPDATE intents SET {', '.join(sets)} WHERE id=?", params)
-    except Exception as e:
-        logger.error("update_intent failed: %s", e)
+    with keyed_lock("intent_execution", intent_id):
+        previous = get_intent(intent_id)
+        if not previous:
+            return None
+        allowed = {"source", "owner", "participants", "title", "description",
+                   "trigger", "action", "priority", "status", "location_id",
+                   "target_count", "outfit_hint", "expires_at", "meta"}
+        sets, params = [], []
+        for k, v in changes.items():
+            if k not in allowed:
+                continue
+            if k in _JSON_FIELDS:
+                v = json.dumps(v if isinstance(v, (dict, list)) else {}, ensure_ascii=False)
+            sets.append(f"{k}=?")
+            params.append(v)
+        if not sets:
+            return previous
+        sets.append("updated_at=?")
+        params.append(utc_now_iso())
+        params.append(intent_id)
+        try:
+            with transaction() as conn:
+                written = conn.execute(
+                    f"UPDATE intents SET {', '.join(sets)} WHERE id=?", params).rowcount
+            if not written:
+                return None
+        except Exception as e:
+            logger.error("update_intent failed: %s", e)
+            return None
+        intent = get_intent(intent_id)
+    if intent:
+        emit("intent_changed", intent=intent, previous=previous)
     return get_intent(intent_id)
 
 
@@ -169,16 +193,29 @@ def cancel_intent(intent_id: str) -> bool:
 
 
 def complete_intent(intent_id: str) -> bool:
-    return update_intent(intent_id, status="done") is not None
+    with keyed_lock("intent_execution", intent_id):
+        intent = get_intent(intent_id)
+        if not intent:
+            return False
+        allowed = get_provider("intent_completion_allowed")
+        if allowed and not allowed(intent):
+            return False
+        return update_intent(intent_id, status="done") is not None
 
 
 def delete_intent(intent_id: str) -> bool:
-    try:
-        with transaction() as conn:
-            conn.execute("DELETE FROM intents WHERE id=?", (intent_id,))
-        return True
-    except Exception:
-        return False
+    with keyed_lock("intent_execution", intent_id):
+        previous = get_intent(intent_id)
+        if not previous:
+            return False
+        try:
+            with transaction() as conn:
+                removed = conn.execute("DELETE FROM intents WHERE id=?", (intent_id,)).rowcount
+        except Exception:
+            return False
+    if removed:
+        emit("intent_deleted", intent=previous)
+    return bool(removed)
 
 
 def add_progress(intent_id: str, character: str, note: str) -> Optional[Dict[str, Any]]:
@@ -210,7 +247,7 @@ def auto_track_progress(character_name: str, tool_type: str,
     if count <= 0:
         return None
     counted = [it for it in list_intents(owner=character_name, status="active")
-               if int(it.get("target_count") or 0) > 0]
+               if int(it.get("target_count") or 0) > 0 and not is_managed_intent(it)]
     if not counted:
         return None
 
@@ -249,7 +286,7 @@ def expire_overdue() -> int:
 
     ``expires_at`` is a canonical GAME-time stamp (an at_time trigger's
     ``run_date`` plus grace, a character's own plan's lifetime from
-    ``_marker_expiry``, or an admin's ``duration_minutes``) — compare against
+    ``default_intent_expiry``, or an admin's ``duration_minutes``) — compare against
     the game clock.
     """
     now = game_time()
@@ -260,15 +297,15 @@ def expire_overdue() -> int:
             continue
         try:
             if GameTime.parse(exp) <= now:
-                update_intent(it["id"], status="expired")
-                n += 1
+                if update_intent(it["id"], status="expired"):
+                    n += 1
         except Exception:
             pass
     return n
 
 
 # ====================================================================
-# Engine (Phase 2): Prompt-Block · Character-Marker · Trigger-Anwendung
+# Engine (Phase 2): prompt block, character marker and trigger application.
 # ====================================================================
 
 PRIORITY_LABELS = {1: "URGENT", 2: "HIGH", 3: "NORMAL", 4: "LOW", 5: "BACKGROUND"}
@@ -342,7 +379,7 @@ def build_open_intents_brief(character_name: str, max_entries: int = 12) -> str:
 
 
 def _parse_duration_to_seconds(s: str) -> int:
-    """'2h' / '30m' / '1d' / '90' → Sekunden (0 bei ungültig)."""
+    """'2h' / '30m' / '1d' / '90' to seconds; invalid input returns zero."""
     s = (s or "").strip().lower()
     m = _re.match(r"^(\d+)\s*([smhd]?)$", s)
     if not m:
@@ -448,8 +485,8 @@ def _self_intent_ttl_days() -> int:
         return _DEFAULT_SELF_TTL_DAYS
 
 
-def _marker_expiry(trigger: Dict[str, Any], source: str) -> str:
-    """The canonical GAME-time ``expires_at`` a marker-created intent gets.
+def default_intent_expiry(trigger: Dict[str, Any], source: str) -> str:
+    """The canonical GAME-time deadline for a newly proposed intent.
 
     at_time (any source): run_date + one game hour of grace. A character's own
     plan (``source="character"``): now -> +1 game hour, standing/at_location ->
@@ -549,7 +586,7 @@ def parse_and_apply_intent_markers(character_name: str,
                 participants={character_name: {"role": "", "progress": []}},
                 trigger=trig, priority=prio,
                 location_id=trig.get("location_id", "") if trig.get("kind") == "at_location" else "",
-                expires_at=_marker_expiry(trig, source))
+                expires_at=default_intent_expiry(trig, source))
         apply_trigger_on_create(it)
         if it:
             created.append(it)
@@ -557,7 +594,7 @@ def parse_and_apply_intent_markers(character_name: str,
 
 
 def strip_intent_markers(text: str) -> str:
-    """Entfernt die [INTENT*]-Marker aus dem Text (vor dem Speichern in History)."""
+    """Remove [INTENT*] markers before the text is saved in chat history."""
     t = _MARK_NEW.sub("", text or "")
     t = _MARK_DONE.sub("", t)
     t = _MARK_PROG.sub("", t)
@@ -565,11 +602,11 @@ def strip_intent_markers(text: str) -> str:
 
 
 def apply_trigger_on_create(intent: Dict[str, Any]) -> None:
-    """Wendet den Trigger eines frisch erzeugten Intents an:
-      now      → Owner sofort bumpen (mit Hint)
-      at_time  → Scheduler-Job, der den Owner zur Zeit bumpt
-      at_location/standing → passiv (room_entry-Hook bzw. Prompt-Block)."""
-    if not intent:
+    """Apply a new intent's trigger:
+      now      → bump the owner immediately with a hint
+      at_time  → schedule a job to bump the owner at that game time
+      at_location/standing → passive (room-entry hook or prompt block)."""
+    if not intent or is_managed_intent(intent):
         return
     trig = intent.get("trigger") or {}
     kind = trig.get("kind", "standing")
@@ -603,14 +640,17 @@ def _intent_hint(intent: Dict[str, Any]) -> str:
 
 
 def fire_location_intents(character_name: str, location_id: str) -> int:
-    """``at_location``-Trigger: betritt der Character einen Ort, die passenden
-    aktiven Intents anstoßen (Owner bumpen mit Hint). Gibt Anzahl zurück."""
+    """Bump the owner of active ``at_location`` plans matching this arrival.
+
+    Return the number of matching intents."""
     if not (character_name and location_id):
         return 0
     n = 0
     try:
         from app.core.agent_loop import get_agent_loop
         for it in list_intents(owner=character_name, status="active"):
+            if is_managed_intent(it):
+                continue
             trig = it.get("trigger") or {}
             if trig.get("kind") == "at_location" and trig.get("location_id") == location_id:
                 get_agent_loop().bump(character_name, hint=_intent_hint(it))

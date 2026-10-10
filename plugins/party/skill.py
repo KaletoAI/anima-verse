@@ -3,10 +3,11 @@ enter/leave): PartySkill with verb='invite'|'join'|'leave'.
 
   invite_to_party (verb='invite'): the character invites someone present.
     - Target = avatar -> pending invite (question in the chat window, UI decides).
-    - Target = NPC    -> the invitee is bumped and decides on its own via
-      JoinParty in its own turn (no keyword matching). With the decision
-      point ``party_join`` active, a confident decision model settles the
-      invitation at once instead (register.py, docs/decision-models.md).
+    - Target = ordinary NPC -> an agent turn obtains consent.
+      A destination-bound trip requests a direct chat/tool answer, including
+      temporary NPCs, without enabling thoughts or matching prose keywords.
+      With the decision point ``party_join`` active, a confident decision settles
+      an eligible invitation at once (register.py, docs/decision-models.md).
     Every invitation is recorded in ``party_invites`` — it is the direction
     record of the party: an invitation answered with a counter-invitation is
     turned into a JOIN, so whoever asked first stays the leader.
@@ -23,7 +24,7 @@ whitelist in skill_manager). The party engine (app.core.party_engine) stays
 core (R5 — leader-move drag hook in models/character, the /play route calls
 the engine's leave_party directly, movement-skill visibility).
 
-See development_instructions/plan-party-system.md.
+See development_instructions/done/plan-party-system.md.
 """
 from typing import Any, Dict
 
@@ -82,6 +83,18 @@ class PartySkill(PluginSkill):
         # name/description/action_hint come from templates/llm/skills/<id>.md
         self._defaults = {"enabled": True}
 
+    def default_enabled_for(self, character_name: str) -> bool:
+        """Offer consent/membership verbs without changing character settings."""
+        from app.core.party_engine import get_party_of, get_pending_invites_for
+        if self._verb == "leave":
+            return get_party_of(character_name) is not None
+        if self._verb == "join":
+            from app.models.intents import get_intent
+            return any(inv.get("intent_id") and
+                       (get_intent(inv["intent_id"]) or {}).get("status") == "active"
+                       for inv in get_pending_invites_for(character_name))
+        return False
+
     def visible_for(self, character_name: str) -> bool:
         """Party-role visibility: followers cannot invite (they are dragged
         along); join only outside a party; leave only inside one."""
@@ -99,13 +112,11 @@ class PartySkill(PluginSkill):
         return True
 
     def thought_context_block(self, character_name: str) -> str:
-        """The party section — emitted by the LEAVE verb only.
-
-        All three verbs live in this one class, so a naive block would reach
-        the prompt up to three times. ``leave`` is the verb whose visibility
-        is exactly "this character is in a party" (see visible_for above),
-        which makes it the one place the section belongs.
-        """
+        """Emit the live managed plan or ordinary party state exactly once."""
+        from plugins.party.trip_intents import trip_context
+        trip = trip_context(character_name, self._verb)
+        if trip:
+            return trip
         if self._verb != "leave":
             return ""
         from plugins.party.blocks import party_section
@@ -137,12 +148,41 @@ class PartySkill(PluginSkill):
             return "Who exactly to invite? (no valid target)"
         if P.is_party_follower(character_name):
             return f"{character_name} is part of a party and cannot invite anyone."
+        incoming = P.find_pending_invite(target, character_name)
+        if incoming and (data.get("destination") or data.get("intent_id")):
+            if not incoming.get("intent_id"):
+                return "Answer the ordinary invitation before proposing a destination-bound trip."
+            from app.models.intents import get_intent
+            from app.models.world import get_arrival_room_id, get_location_by_id
+            proposed = get_intent(incoming["intent_id"]) or {}
+            action = proposed.get("action") or {}
+            if data.get("intent_id") != incoming["intent_id"]:
+                return "A shared-trip counter-proposal requires the exact intent reference."
+            if data.get("scope") and data["scope"] != action.get("scope"):
+                return "The counter-proposal differs from the agreed participant scope."
+            if data.get("destination"):
+                destination = data["destination"]
+                location = get_location_by_id(destination.get("location_id", "")) or {}
+                normalized = {"location_id": destination.get("location_id", ""),
+                              "room_id": destination.get("room_id") or get_arrival_room_id(location)}
+                if normalized != action.get("destination"):
+                    return "The counter-proposal differs from the destination awaiting your answer."
+            return self._join(character_name, {**data, "leader": target,
+                                                "invite_id": incoming["invite_id"]})
         if not P.same_location(character_name, target):
             # The tool description says "present at your current location" —
             # this is the enforcement. An RP turn that hallucinates someone
             # into the scene must not reach them across the map.
             return (f"{target} is not at your location. "
                     f"You can only invite someone who is here with you.")
+        if data.get("destination") or data.get("intent_id"):
+            from plugins.party.trip_intents import propose_trip
+            intent = propose_trip(character_name, target, data.get("destination") or {},
+                                  data.get("scope", "pair"),
+                                  intent_id=str(data.get("intent_id") or ""))
+            travel = (intent.get("meta") or {}).get("travel") or {}
+            return (f"Shared trip {intent['id']}: {travel.get('phase', 'waiting_consent')}"
+                    f" — {travel.get('reason', '')}")
         # Role-inversion brake: the OTHER one has already invited us. Both
         # sides describe the same shared trip ("come along" / "fine, let's
         # go"), so a tool LLM readily answers an invitation with a counter-
@@ -158,188 +198,68 @@ class PartySkill(PluginSkill):
             return self._join(character_name, {**data, "leader": target})
         if P.get_party_of(target) is not None:
             return f"{target} is already in a party."
+        from app.models.character import is_temporary_npc
+        from app.models.account import is_player_controlled
+        _is_avatar = is_player_controlled(target)
+        if not _is_avatar and is_temporary_npc(target):
+            return "A temporary NPC needs a destination-bound trip, not a standing party invitation."
         # The invitation is recorded for EVERY target, avatar or NPC: it is
         # what the brake above reads when the invitee answers with an invite
         # of its own.
         invite_id = P.create_pending_invite(character_name, target)
-        try:
-            from app.models.account import is_player_controlled
-            _is_avatar = is_player_controlled(target)
-        except Exception:
-            _is_avatar = False
+        if not invite_id:
+            return "The party invitation could not be saved."
         if _is_avatar:
             # An avatar cannot decide via LLM -> the pending invite is the UI
             # question.
             return (f"{character_name} invited {target} to the party "
                     f"— waiting for their answer.")
-        # NPC target: a configured decision model may settle it at once.
-        settled = self._decide_join(invite_id, character_name, target)
-        if settled:
-            return settled
-        # NO keyword classification. The invitee decides on its own via the
-        # JoinParty tool in its own turn — we only bump it (with a hint) so it
-        # reacts soon.
-        try:
-            from app.core.agent_loop import get_agent_loop
-            get_agent_loop().bump(
-                target,
-                hint=(f"{character_name} invites you to come along with the "
-                      f"group. Decide in character whether to accept — if yes, "
-                      f"call JoinParty with leader={character_name}; to "
-                      f"refuse, call it with leader={character_name}, "
-                      f"answer=no."))
-        except Exception as _be:
-            self.ctx.logger.debug("invite bump failed: %s", _be)
-        return f"{character_name} invites {target} to come along."
+        from plugins.party.trip_intents import request_consent
+        request_consent(invite_id)
+        invitation = P.get_invite(invite_id) or {}
+        return (f"{character_name} invites {target} to come along "
+                f"— {invitation.get('status', 'pending')}.")
 
-    def _decide_join(self, invite_id: str, inviter: str, invitee: str) -> str:
-        """Ask the decision model of PARTY_JOIN whether the NPC joins.
-
-        Returns the verb's result sentence when the invitation is settled
-        (the NPC must NOT be woken), ``""`` for the usual path (the bump):
-        point inactive, a temporary-NPC invitee, no confident answer, or an
-        accept whose join failed.
-        A decline does not bump the inviter — it is the one running this
-        verb, the sentence is its tool result — and the room hears it as
-        one narrator line. Never raises.
-        """
-        try:
-            from app.core import decision, decision_points
-            from app.core import party_engine as P
-            from app.models.character import is_temporary_npc
-            if not invite_id or not decision.is_active(PARTY_JOIN):
-                return ""
-            # A temporary NPC is never a follower: it has no thought turns to
-            # answer or to leave a party with, and a party would drag it off
-            # its slot and suppress its roaming. It keeps the usual path.
-            if is_temporary_npc(invitee):
-                return ""
-            offer = "to come along with the group"
-            party = P.get_party_of(inviter)
-            members = list((party or {}).get("members") or [])
-            if members:
-                offer += f" (the group: {', '.join(members)})"
-            d = decision.decide(PARTY_JOIN,
-                                decision_points.invite_state(invitee, inviter, offer),
-                                decision_points.invite_questions(invitee, inviter),
-                                key=invite_id)
-            ans = d.answers.get("answer") if d else None
-            if ans is None:
-                return ""
-            if ans.value == "accept":
-                # mark_taken FIRST: _join records an outcome for the open
-                # invitation, and while the prediction is still open that
-                # would count the decider's OWN action as agreement with the
-                # usual path. Once taken, the entry counts as "taken" only
-                # (decision_log._count checks taken first), so _join's
-                # record_outcome no longer counts. A join that then fails
-                # stays "taken" — the NPC is woken and answers itself.
-                decision.mark_taken(PARTY_JOIN, invite_id)
-                self._join(invitee, {"leader": inviter})
-                if (P.get_party_of(invitee) or {}).get("leader") == inviter:
-                    self.ctx.logger.info(
-                        "party invite %s: decision model — %s joins %s",
-                        invite_id, invitee, inviter)
-                    return (f"{inviter} invites {invitee} to come along — "
-                            f"{invitee} agrees and joins.")
-                self.ctx.logger.info(
-                    "party invite %s: decision model said accept, but %s could "
-                    "not join %s — waking the NPC instead", invite_id, invitee,
-                    inviter)
-                return ""
-            if ans.value == "decline":
-                P.resolve_pending_invite(invite_id, False)
-                decision.mark_taken(PARTY_JOIN, invite_id)
-                self._narrate_decline(inviter, invitee)
-                self.ctx.logger.info(
-                    "party invite %s: decision model — %s declines %s",
-                    invite_id, invitee, inviter)
-                return (f"{inviter} invites {invitee} to come along — "
-                        f"{invitee} declines.")
-        except Exception as e:
-            self.ctx.logger.debug("party_join decision failed for %s: %s",
-                                  invitee, e)
-        return ""
-
-    def _narrate_decline(self, inviter: str, invitee: str) -> None:
-        """One narrator line in the invitee's room for a decline the decision
-        model settled — the counterpart of the join's own narrator line.
-        Without it the refusal happens in no one's perception stream. Never
-        raises."""
-        try:
-            from app.core.i18n import t
-            from app.core.perception import (STORYTELLER_SPEAKER, VOLUME_NORMAL,
-                                             record_utterance)
-            from app.models.character import (get_character_current_location,
-                                              get_character_current_room,
-                                              get_character_language)
-            lang = get_character_language(invitee) or "de"
-            record_utterance(
-                speaker=STORYTELLER_SPEAKER,
-                content=t("{invitee} does not want to come along with {inviter}.",
-                          lang).format(invitee=invitee, inviter=inviter),
-                volume=VOLUME_NORMAL,
-                location_id=get_character_current_location(invitee) or "",
-                room_id=get_character_current_room(invitee) or "",
-                source="party", anchor=invitee)
-        except Exception as e:
-            self.ctx.logger.debug("party decline narration failed for %s: %s",
-                                  invitee, e)
 
     def _join(self, character_name: str, data: Dict[str, Any]) -> str:
         from app.core import party_engine as P
         leader = _resolve_target(data)
         if not leader or leader == character_name:
             return "Whose party to join? (no valid target)"
+        reference = data.get("invite_id")
+        if reference:
+            invitation = P.get_invite(reference) if isinstance(reference, str) else None
+            if not invitation or invitation["inviter"] != leader or invitation["invitee"] != character_name:
+                return "This invitation does not belong to this answer."
+        else:
+            invitation = P.find_pending_invite(leader, character_name)
+            if invitation and invitation.get("intent_id"):
+                return "A shared trip requires the exact invite_id from its proposal."
+        if invitation:
+            accepted = not _is_refusal(data)
+            result = P.resolve_pending_invite(invitation["invite_id"], accepted)
+            if invitation["status"] == "pending" and result["status"] in {"accepted", "declined"}:
+                _record_answer(invitation["invite_id"], result["status"] == "accepted")
+            if result["status"] == "accepted":
+                if invitation["status"] == "pending":
+                    from plugins.party.trip_intents import _narrate_answer
+                    _narrate_answer(invitation, True)
+                return f"{character_name} joins {leader}'s party."
+            if result["status"] == "declined":
+                return f"{character_name} turns down {leader}'s invitation. Say why in character."
+            return f"The invitation could not be answered: {result['status']}."
         if _is_refusal(data):
-            # The explicit "no": a character that does not want to must be
-            # able to SAY so, or the invitation stands open until it ages out.
-            inv = P.find_pending_invite(leader, character_name)
-            if not inv:
-                return f"{leader} has not invited {character_name}."
-            _record_answer(inv["invite_id"], False)
-            P.resolve_pending_invite(inv["invite_id"], False)
-            return (f"{character_name} turns down {leader}'s invitation. "
-                    f"Say why in character.")
+            return f"{leader} has not invited {character_name}."
+        # An ordinary join without a recorded proposal keeps its existing
+        # meaning. A managed trip always reaches the linked resolver above.
         if P.is_in_party(character_name):
             return f"{character_name} is already in a party."
-        if not P.same_location(character_name, leader):
-            return (f"{leader} is not at your location — you cannot join "
-                    f"their party from here.")
         pid = P.add_to_party(leader, character_name)
         if not pid:
-            return (f"{character_name} cannot join {leader}'s party "
-                    f"(already in a party / invalid).")
-        try:
-            inv = P.find_pending_invite(leader, character_name)
-            if inv:
-                _record_answer(inv["invite_id"], True)
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            P.clear_invites_for(character_name)
-        except Exception:
-            pass
-        # Make the join visible in the room (narrator line); the character's own
-        # RP reply runs separately via the reply turn.
-        try:
-            from app.models.character import (get_character_current_location,
-                                              get_character_current_room)
-            from app.core.perception import (record_utterance, VOLUME_NORMAL,
-                                             STORYTELLER_SPEAKER)
-            _loc = get_character_current_location(character_name) or ""
-            _room = get_character_current_room(character_name) or ""
-            # Narrator line — STORYTELLER_SPEAKER is the core narrator-speaker
-            # sentinel (filtered out of participant lists everywhere). The
-            # anchor lends it the joiner's point: parties form on the road just
-            # as often as in a room, and out there a pointless speaker is heard
-            # by nobody.
-            record_utterance(speaker=STORYTELLER_SPEAKER,
-                             content=f"{character_name} joins {leader}'s party.",
-                             volume=VOLUME_NORMAL, location_id=_loc, room_id=_room,
-                             source="party", anchor=character_name)
-        except Exception as _re:
-            self.ctx.logger.debug("join_party record failed: %s", _re)
+            return f"{character_name} cannot join {leader}'s party (not present / membership conflict)."
+        P.clear_invites_for(character_name)
+        from plugins.party.trip_intents import _narrate_answer
+        _narrate_answer({"inviter": leader, "invitee": character_name}, True)
         return f"{character_name} joins {leader}'s party."
 
     def _leave(self, character_name: str, data: Dict[str, Any]) -> str:

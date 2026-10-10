@@ -128,7 +128,7 @@ class TaskQueue:
         with self._connect() as conn:
             for stmt in _SCHEMA_STMTS:
                 conn.execute(stmt)
-            # Migrations — neue Spalten fuer tracked tasks
+            # Migrations: additional columns for tracked tasks.
             for col, typedef in [
                 ("label", "TEXT DEFAULT ''"),
                 ("provider", "TEXT DEFAULT ''"),
@@ -137,29 +137,27 @@ class TaskQueue:
                 try:
                     conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {typedef}")
                 except sqlite3.OperationalError:
-                    pass  # Spalte existiert bereits
+                    pass  # Column already exists.
             conn.commit()
         logger.info("DB initialisiert: %s", self._db_path)
 
     def _reset_stale_running(self) -> None:
-        """On startup: stale Tasks aufräumen.
+        """Recover stale tasks on startup.
 
-        Queued tasks (running) → pending (haben Handler, werden erneut verarbeitet).
-        Tracked tasks (running ODER pending) → interrupted: extern gesteuert
-        (GPU/Bild/TTS), kein Retry möglich. Auch PENDING-tracked muss aufgeräumt
-        werden — ein extern getriggerter Task, der vor dem Neustart nie
-        ``track_activate`` bekam, hängt sonst für immer in der Queue (Bug:
-        „Bilderzeugung seit 700 Minuten").
+        Queued running tasks return to pending because their handlers can retry.
+        Tracked running or pending tasks become interrupted: their external
+        GPU/image/TTS process no longer exists. Pending tracked tasks that never
+        reached ``track_activate`` must also be cleared instead of waiting forever.
         """
         now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
-            # Queued tasks: zurueck auf pending
+            # Requeue interrupted handler-backed tasks.
             c1 = conn.execute(
                 "UPDATE tasks SET status='pending', started_at=NULL, error='Server-Neustart'"
                 " WHERE status='running' AND (task_origin='queued' OR task_origin IS NULL)"
             )
-            # Tracked tasks (running ODER pending): als interrupted markieren —
-            # der externe Prozess ist nach dem Neustart weg, kann nie zu Ende.
+            # Tracked running or pending tasks cannot finish after their
+            # external process has disappeared during restart.
             c2 = conn.execute(
                 "UPDATE tasks SET status='interrupted', completed_at=?, error='Server-Neustart'"
                 " WHERE status IN ('running','pending') AND task_origin='tracked'",
@@ -170,11 +168,9 @@ class TaskQueue:
         if c2.rowcount:
             logger.warning("Stale tracked Tasks als interrupted markiert: %d", c2.rowcount)
 
-    # Laufzeit-Reaper: tracked Tasks, die INNERHALB einer Session haengen
-    # bleiben (kein Neustart) — der externe In-Process-Generator ist
-    # gestorben/blockiert, ohne track_finish zu rufen. Symptom: "Ort-Bild"
-    # haengt ewig pending (z.B. Backend beim Trigger down). Lazy beim Status-
-    # Abruf, damit kein extra Thread noetig ist.
+    # Reap tracked tasks stuck within a session: the in-process generator
+    # died or blocked without calling track_finish. Run lazily on status
+    # reads instead of adding a dedicated thread.
     _TRACKED_STALE_TIMEOUT_MIN = 20
 
     def _reap_stale_tracked_runtime(self) -> int:
@@ -501,7 +497,7 @@ class TaskQueue:
 
     def get_status(self) -> Dict[str, Any]:
         """Returns status for background tasks (queued + tracked)."""
-        # Haengende tracked Tasks vor dem Lesen aufraeumen (siehe Methode).
+        # Reap stuck tracked tasks before reading; see the helper above.
         self._reap_stale_tracked_runtime()
         conn = self._connect()
         try:
@@ -569,7 +565,8 @@ class TaskQueue:
             logger.debug("Worker gestartet: %s", t.name)
         self._workers = alive
 
-    def _is_paused(self, queue_name: str) -> bool:
+    def is_paused(self, queue_name: str = "default") -> bool:
+        """Read the persisted pause flag shared with autonomous world services."""
         conn = self._connect()
         try:
             row = conn.execute(
@@ -801,10 +798,9 @@ class TaskQueue:
     def track_discard(self, task_id: str) -> bool:
         """Remove a tracked placeholder entry entirely (no history row).
 
-        Fuer Platzhalter-Tasks (z.B. expression_regen waehrend des Mutex-Waits),
-        die nach getaner Sichtbarkeits-Arbeit verschwinden sollen — im Gegensatz
-        zu track_cancel ('Manuell abgebrochen'), das einen echten User-Abbruch
-        in der Historie dokumentiert. Returns True if a row was deleted.
+        For placeholders such as expression_regen during a mutex wait, remove
+        the entry after its visibility work. Unlike track_cancel, this does
+        not record a user cancellation. Return True when a row was deleted.
         """
         self._track_start_times.pop(task_id, None)
         with self._write_lock, self._connect() as conn:

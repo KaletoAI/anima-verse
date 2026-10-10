@@ -61,6 +61,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app.core import places
 from app.core.game_time import GameDuration, GameTime
+from app.core.hooks import get_provider
 from app.core.log import get_logger
 from app.core.timeutils import game_time
 
@@ -312,7 +313,7 @@ def present_partners(name: str) -> List[Dict[str, str]]:
         if other == name or not is_temporary_npc(other):
             continue
         prof = get_character_profile(other) or {}
-        if is_character_sleeping(other) or prof.get("journey") or _is_busy(other, prof):
+        if is_character_sleeping(other) or prof.get("journey") or _is_busy(other, prof) or not action_available(other):
             continue
         out.append({"name": other,
                     "role": str(prof.get("npc_slot_role") or "").strip(),
@@ -367,7 +368,18 @@ def _apply_talk(name: str, answer: Dict[str, Any],
         logger.info("npc_action(%s): changes room this turn — nothing is said "
                     "or proposed", name)
         return {}
-    present = {p["name"].casefold(): p["name"] for p in variables.get("present") or []}
+    if answer.get("action") is not None:
+        provider = get_provider("npc_action_execute")
+        if not provider:
+            return {}
+        try:
+            result = provider(name, answer["action"], variables, moved=moved)
+        except ValueError as error:
+            logger.info("npc_action(%s): structured proposal rejected: %s", name, error)
+            return {}
+        return result if isinstance(result, dict) else {}
+    present = {p["name"].casefold(): p["name"] for p in variables.get("present") or []
+               if action_available(p["name"])}
     say = answer.get("say")
     if isinstance(say, dict) and str(say.get("line") or "").strip():
         to = present.get(str(say.get("to") or "").strip().casefold(), "")
@@ -416,6 +428,12 @@ def _apply_talk(name: str, answer: Dict[str, Any],
         logger.info("npc_action(%s): invitation to %s for %s not recorded — "
                     "nothing was proposed this turn", name, partner, pose)
     return {}
+
+
+def action_available(name: str) -> bool:
+    """Whether an optional package permits an unrelated background action."""
+    provider = get_provider("npc_action_available")
+    return not provider or bool(provider(name))
 
 
 def candidates() -> List[str]:
@@ -474,6 +492,8 @@ def candidates() -> List[str]:
                 continue
             if home and _in_party(name):
                 continue
+            if not action_available(name):
+                continue
             if _is_busy(name, profile):
                 continue
             if _in_chat(name):
@@ -488,6 +508,14 @@ def candidates() -> List[str]:
 # ---------------------------------------------------------------------------
 # Prompt
 # ---------------------------------------------------------------------------
+
+def _with_action_context(name: str, variables: Dict[str, Any]) -> Dict[str, Any]:
+    variables["extension_prompt"] = ""
+    provider = get_provider("npc_action_context")
+    if provider:
+        variables["extension_prompt"] = provider(name, variables) or ""
+    return variables
+
 
 def prompt_vars(name: str) -> Dict[str, Any]:
     """Every variable ``tasks/npc_action.md`` needs, or ``{}`` when this NPC
@@ -507,8 +535,8 @@ def prompt_vars(name: str) -> Dict[str, Any]:
 
     ``location_id`` rides along as bookkeeping the template ignores: it is the
     place the room list was taken from, and :func:`run_action_for` compares it
-    against the character's location again before it writes anything. The home
-    variant leaves it empty — a roaming NPC has no room to invalidate.
+    against the character's location again before it writes anything. Both
+    variants carry the real location/room; a home area only changes presentation.
     """
     from app.models.character import (get_character_current_location,
                                       get_character_current_room,
@@ -534,13 +562,13 @@ def prompt_vars(name: str) -> Dict[str, Any]:
         from app.core.npc_home import describe
         label = describe(home)
         if label:
-            return {
-                "location_id": "",
+            return _with_action_context(name, {
+                "location_id": get_character_current_location(name) or "",
                 "npc_name": name,
                 "npc_role": str(profile.get("npc_slot_role") or "").strip(),
                 "standing_task": str(profile.get("standing_task") or "").strip(),
                 "location_name": "",
-                "current_room_id": "",
+                "current_room_id": get_character_current_room(name) or "",
                 "current_room_name": "",
                 "current_activity": get_effective_activity(name),
                 "game_time_label": game_time().label(),
@@ -548,7 +576,7 @@ def prompt_vars(name: str) -> Dict[str, Any]:
                 "home": label,
                 "pose_keys": _solo_pose_keys(),
                 **extra,
-            }
+            })
         logger.warning("npc_action(%s): unreadable npc_home %r — asked as an "
                        "ordinary room NPC", name, home)
 
@@ -571,7 +599,7 @@ def prompt_vars(name: str) -> Dict[str, Any]:
         return {}
 
     current_room = get_character_current_room(name) or ""
-    return {
+    return _with_action_context(name, {
         "location_id": location_id,
         "npc_name": name,
         "npc_role": str(profile.get("npc_slot_role") or "").strip(),
@@ -586,7 +614,7 @@ def prompt_vars(name: str) -> Dict[str, Any]:
         "home": "",
         "pose_keys": _solo_pose_keys(),
         **extra,
-    }
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -696,7 +724,9 @@ def _apply_home_answer(name: str, answer: Dict[str, Any],
     profile = get_character_profile(name) or {}
     home = profile.get("npc_home") or {}
     pose = _pose_from_answer(answer, _solo_pose_keys())
-    if not pose and not answer.get("say"):
+    from app.core.party_engine import is_party_follower
+    follower = is_party_follower(name)
+    if not pose and not answer.get("say") and not follower:
         # A silent roaming turn ends in a walk (below): the walker is
         # walking by construction, so the sentence never has to go through
         # the resolver — the "geht den Waldweg entlang" candidates came
@@ -710,11 +740,16 @@ def _apply_home_answer(name: str, answer: Dict[str, Any],
                     "— walking anyway", name, activity[:60])
 
     talk = _apply_talk(name, answer, variables, moved=False)
-    if talk.get("said_to"):
+    if talk.get("said_to") or talk.get("intent_id"):
         # Opening a conversation and walking off are two acts; this turn is
         # the conversation. The next turn draws the walk as usual.
         return {"name": name, "room": "", "activity": activity, "moved": False,
-                "said_to": talk["said_to"], "invited": ""}
+                "said_to": talk.get("said_to", ""),
+                "invited": talk.get("invited", ""),
+                **({"intent_id": talk["intent_id"]} if talk.get("intent_id") else {})}
+    if follower:
+        return {"name": name, "room": "", "activity": activity, "moved": False,
+                "said_to": "", "invited": talk.get("invited", "")}
 
     pos = get_character_pos(name)
     here = (pos["x"], pos["z"]) if pos else None
@@ -761,6 +796,8 @@ def run_action_for(name: str, *,
 
     ``llm`` is injectable for the smoke; it has ``llm_call``'s call shape.
     """
+    if not action_available(name):
+        return None
     if llm is None:
         from app.core.llm_router import llm_call
         llm = llm_call
@@ -781,11 +818,12 @@ def run_action_for(name: str, *,
     if answer is None:
         logger.info("npc_action(%s): no usable answer", name)
         return None
+    if not action_available(name):
+        logger.info("npc_action(%s): execution became unavailable during the turn", name)
+        return None
 
     if variables["home"]:
-        # THE ROAMING VARIANT. No room to validate and no location to compare:
-        # this NPC's place is its home area, and that cannot change during a
-        # turn (only pooling clears it, and a pooled NPC is no candidate).
+        # The package rechecks real placement before executing a proposal.
         return _apply_home_answer(name, answer, variables)
 
     # THE PLACE MUST STILL BE THE PLACE. A turn takes seconds and the world
@@ -813,6 +851,12 @@ def run_action_for(name: str, *,
     pose = _pose_from_answer(answer, variables["pose_keys"])
     current_room = variables["current_room_id"]
     moved = room != current_room
+    from app.core.party_engine import is_party_follower
+    if is_party_follower(name):
+        room, moved = current_room, False
+    if moved and answer.get("action") is not None:
+        logger.info("npc_action(%s): cannot leave while making a structured proposal", name)
+        return None
 
     if moved:
         from app.models.rules import check_access
@@ -834,7 +878,8 @@ def run_action_for(name: str, *,
                  f"[{pose}] " if pose else "", activity)
     return {"name": name, "room": room, "activity": activity, "moved": moved,
             "pose": pose, "said_to": talk.get("said_to", ""),
-            "invited": talk.get("invited", "")}
+            "invited": talk.get("invited", ""),
+            **({"intent_id": talk["intent_id"]} if talk.get("intent_id") else {})}
 
 
 # ---------------------------------------------------------------------------

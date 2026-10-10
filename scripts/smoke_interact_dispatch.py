@@ -101,7 +101,7 @@ async def scenario(frozen, accepted, blocked=""):
     world.set_world_setting("world_sleeping", "1" if blocked == "sleep" else "0")
     from app.core.task_queue import get_task_queue
     queue = get_task_queue()
-    queue._is_paused = lambda name: blocked == "queue"
+    queue.is_paused = lambda name: blocked == "queue"
     loop = al.AgentLoop()
     al._agent_loop = loop
     get_lane_manager().reset()

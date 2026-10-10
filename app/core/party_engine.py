@@ -1,15 +1,9 @@
-"""Party-System — gemeinsam reisen.
+"""Persisted party membership and invitations.
 
-Eine Party hat genau einen *Leader* und N *Follower*. Nur der Leader bewegt sich
-selbst; Follower verlieren SetLocation (NPC) bzw. den Kompass (Avatar) und
-werden beim Zug des Leaders mitgezogen (siehe ``save_character_current_location``
-/ ``save_character_current_room`` in app/models/character.py). Verlassen ist
-jederzeit moeglich; verlaesst der Leader, loest sich die Party auf.
-
-Mitgliedschaft liegt in world.db (Tabelle ``parties``, Schema in
-world_db_schema.py). Ein Character ist in hoechstens einer Party.
-
-Siehe development_instructions/plan-party-system.md.
+A party has one leader and followers, who follow the leader's authoritative
+location/room writes. Membership changes are serialized; invitation acceptance
+and membership insertion commit together. Packages may attach an intent and
+supply its consent continuation through the generic provider registry.
 """
 from __future__ import annotations
 
@@ -18,37 +12,33 @@ import uuid
 from typing import Dict, List, Optional
 
 from app.core.db import get_connection, transaction
+from app.core.hooks import emit, get_provider
+from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
 from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 
 logger = get_logger("party")
+INVITE_MAX_AGE_MINUTES = 30
 
 
 def _row_to_party(row) -> Dict:
     try:
         members = json.loads(row[2] or "[]")
-    except Exception:
+    except (ValueError, TypeError):
         members = []
-    return {
-        "party_id": row[0],
-        "leader": row[1],
-        "members": [m for m in members if isinstance(m, str)],
-        "created_at": row[3],
-    }
+    return {"party_id": row[0], "leader": row[1],
+            "members": [m for m in members if isinstance(m, str)],
+            "created_at": row[3]}
 
 
 def _all_parties() -> List[Dict]:
-    try:
-        rows = get_connection().execute(
-            "SELECT party_id, leader, members, created_at FROM parties").fetchall()
-    except Exception:
-        return []
+    rows = get_connection().execute(
+        "SELECT party_id, leader, members, created_at FROM parties").fetchall()
     return [_row_to_party(r) for r in rows]
 
 
 def get_party_of(character: str) -> Optional[Dict]:
-    """Party, in der ``character`` Leader ODER Follower ist — inkl. ``role``-Feld
-    ("leader"/"follower"). None, wenn er in keiner Party ist."""
+    """Return the character's party with its leader/follower role."""
     c = (character or "").strip()
     if not c:
         return None
@@ -65,260 +55,228 @@ def is_in_party(character: str) -> bool:
 
 
 def is_party_leader(character: str) -> bool:
-    p = get_party_of(character)
-    return bool(p and p["role"] == "leader")
+    return bool((get_party_of(character) or {}).get("role") == "leader")
 
 
 def is_party_follower(character: str) -> bool:
-    p = get_party_of(character)
-    return bool(p and p["role"] == "follower")
+    return bool((get_party_of(character) or {}).get("role") == "follower")
 
 
 def party_followers(leader: str) -> List[str]:
-    """Follower-Liste der Party, die ``leader`` anfuehrt. [] wenn ``leader`` keine
-    Party anfuehrt (z.B. selbst Follower oder partylos)."""
     p = get_party_of(leader)
-    if not p or p["role"] != "leader":
-        return []
-    return list(p["members"])
+    return list(p["members"]) if p and p["role"] == "leader" else []
 
 
 def same_location(a: str, b: str) -> bool:
-    """True when both characters stand at the same location.
-
-    A party is formed face to face — you cannot invite or join across the map
-    (same rule TalkTo enforces). Without this brake an LLM that hallucinates a
-    person into its scene can pull a character from anywhere in the world into
-    its party, and the leader-move drag would then teleport them over.
-    An unknown location counts as "not together".
-    """
+    """Parties form face to face, never across an unknown location."""
     from app.models.character import get_character_current_location
     loc_a = (get_character_current_location(a) or "").strip()
     loc_b = (get_character_current_location(b) or "").strip()
     return bool(loc_a) and loc_a == loc_b
 
 
-def _save_party(party_id: str, leader: str, members: List[str], created_at: str) -> None:
-    with transaction() as conn:
-        conn.execute(
-            "INSERT INTO parties (party_id, leader, members, created_at) "
-            "VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(party_id) DO UPDATE SET "
-            "leader=excluded.leader, members=excluded.members",
-            (party_id, leader, json.dumps(members, ensure_ascii=False), created_at))
+def _write_member(conn, leader: str, member: str) -> Optional[str]:
+    """Membership mutation inside the caller's transaction and membership lock."""
+    if not leader or not member or leader == member or not same_location(leader, member):
+        return None
+    if get_party_of(member):
+        return None
+    lp = get_party_of(leader)
+    if lp and lp["role"] == "follower":
+        return None
+    pid = lp["party_id"] if lp else "party_" + uuid.uuid4().hex[:10]
+    created = lp["created_at"] if lp else utc_now_iso()
+    members = [*(lp["members"] if lp else []), member]
+    conn.execute(
+        "INSERT INTO parties (party_id, leader, members, created_at) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(party_id) DO UPDATE SET members=excluded.members",
+        (pid, leader, json.dumps(members, ensure_ascii=False), created))
+    return pid
+
+
+def _cancel_joiner_journey(member: str) -> None:
+    from app.core.travel_engine import cancel_journey, get_journey
+    if get_journey(member):
+        cancel_journey(member)
 
 
 def add_to_party(leader: str, member: str) -> Optional[str]:
-    """Adds ``member`` as a follower to ``leader``'s party; creates the party if
-    ``leader`` has none yet. Returns the party_id, or None on conflict (member
-    already in a party, leader is a follower himself, leader == member, or the
-    two are not at the same location)."""
-    leader = (leader or "").strip()
-    member = (member or "").strip()
-    if not leader or not member or leader == member:
-        return None
-    if not same_location(leader, member):
-        return None  # central brake: no party across locations
-    if get_party_of(member) is not None:
-        return None  # member kann nicht in zwei Parties sein
-    lp = get_party_of(leader)
-    if lp is not None and lp["role"] == "follower":
-        return None  # ein Follower kann nicht selbst einladen
-    if lp is None:
-        party_id = "party_" + uuid.uuid4().hex[:10]
-        created = utc_now_iso()
-        members = [member]
-    else:
-        party_id = lp["party_id"]
-        created = lp["created_at"]
-        members = list(lp["members"])
-        if member not in members:
-            members.append(member)
-    _save_party(party_id, leader, members, created)
-    # A follower does not travel on its own account — it is dragged along by
-    # the leader, and it loses SetLocation with the join. Its own journey has
-    # to end HERE, at the one choke point every join passes (the JoinParty
-    # verb AND the avatar's accepted invite): the travel ticker only cancels
-    # follower journeys while the LEADER is on the road, so a joiner whose
-    # leader stands still would keep walking away from the party it just
-    # joined.
-    try:
-        from app.core.travel_engine import cancel_journey, get_journey
-        if get_journey(member) is not None:
-            cancel_journey(member)
-    except Exception as e:
-        logger.debug("journey cancel on party join failed for %s: %s",
-                     member, e)
-    logger.info("Party %s: %s becomes a follower of %s (members=%s)",
-                party_id, member, leader, members)
-    return party_id
+    """Add a present follower, creating a party if needed; reject conflicts."""
+    with keyed_lock("party_membership", "world"):
+        with transaction() as conn:
+            pid = _write_member(conn, (leader or "").strip(), (member or "").strip())
+        if pid:
+            _cancel_joiner_journey(member)
+    return pid
 
 
 def leave_party(character: str) -> Dict:
-    """Entfernt ``character`` aus seiner Party.
-
-    - Leader verlaesst -> Party loest sich auf (alle Follower frei).
-    - Letzter Follower weg -> Party loest sich auf (keine 1-Personen-Party).
-
-    Returns ``{"status", "party_id", "disbanded", "freed": [...]}`` oder
-    ``{"status": "not_in_party"}``.
-    """
-    p = get_party_of(character)
-    if not p:
-        return {"status": "not_in_party"}
-    pid = p["party_id"]
-    if p["role"] == "leader":
-        disband_party(pid)
-        return {"status": "ok", "party_id": pid, "disbanded": True,
-                "freed": [p["leader"], *p["members"]]}
-    members = [m for m in p["members"] if m != character]
-    if not members:
-        disband_party(pid)
-        return {"status": "ok", "party_id": pid, "disbanded": True,
-                "freed": [p["leader"], character]}
-    _save_party(pid, p["leader"], members, p["created_at"])
-    return {"status": "ok", "party_id": pid, "disbanded": False, "freed": [character]}
+    """Leave freely; a leader leaving or last follower leaving disbands."""
+    with keyed_lock("party_membership", "world"):
+        p = get_party_of(character)
+        if not p:
+            return {"status": "not_in_party"}
+        members = [m for m in p["members"] if m != character]
+        disbanded = p["role"] == "leader" or not members
+        with transaction() as conn:
+            if disbanded:
+                conn.execute("DELETE FROM parties WHERE party_id=?", (p["party_id"],))
+            else:
+                conn.execute("UPDATE parties SET members=? WHERE party_id=?",
+                             (json.dumps(members, ensure_ascii=False), p["party_id"]))
+    emit("party_membership_changed", party=p, character=character, reason="left")
+    return {"status": "ok", "party_id": p["party_id"], "disbanded": disbanded,
+            "freed": [p["leader"], *p["members"]] if disbanded else [character]}
 
 
 def disband_party(party_id: str) -> None:
-    if not party_id:
-        return
-    try:
+    with keyed_lock("party_membership", "world"):
+        p = next((p for p in _all_parties() if p["party_id"] == party_id), None)
+        if not p:
+            return
         with transaction() as conn:
             conn.execute("DELETE FROM parties WHERE party_id=?", (party_id,))
-        logger.info("Party %s aufgeloest", party_id)
-    except Exception as e:
-        logger.debug("disband_party(%s) fehlgeschlagen: %s", party_id, e)
+    emit("party_membership_changed", party=p, character=p["leader"], reason="disbanded")
 
 
-# --- Pending-Einladungen (NPC laedt Avatar ein) ---------------------------
+def _row_to_invite(row) -> Dict:
+    return {"invite_id": row[0], "inviter": row[1], "invitee": row[2],
+            "created_at": row[3], "status": row[4], "intent_id": row[5] or ""}
 
-def create_pending_invite(inviter: str, invitee: str) -> Optional[str]:
-    """Legt eine offene Einladung an (NPC -> Avatar). Verwirft bestehende
-    pending-Einladungen desselben Paars vorher (kein Stau). Gibt invite_id."""
-    inviter = (inviter or "").strip()
-    invitee = (invitee or "").strip()
+
+def invite_is_fresh(invite: Dict, max_age_minutes: int = INVITE_MAX_AGE_MINUTES) -> bool:
+    try:
+        return (utc_now() - parse_iso(invite["created_at"])).total_seconds() <= max_age_minutes * 60
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
+def create_pending_invite(inviter: str, invitee: str, intent_id: str = "") -> Optional[str]:
+    """Persist a question; a linked intent gets one idempotent invitation."""
+    inviter, invitee = (inviter or "").strip(), (invitee or "").strip()
     if not inviter or not invitee or inviter == invitee:
         return None
-    invite_id = "pinv_" + uuid.uuid4().hex[:10]
-    try:
-        with transaction() as conn:
-            conn.execute(
-                "DELETE FROM party_invites WHERE inviter=? AND invitee=? AND status='pending'",
-                (inviter, invitee))
-            conn.execute(
-                "INSERT INTO party_invites (invite_id, inviter, invitee, created_at, status) "
-                "VALUES (?, ?, ?, ?, 'pending')",
-                (invite_id, inviter, invitee, utc_now_iso()))
-    except Exception as e:
-        logger.debug("create_pending_invite fehlgeschlagen: %s", e)
-        return None
-    logger.info("Party-Einladung %s: %s -> %s (pending)", invite_id, inviter, invitee)
-    return invite_id
-
-
-def get_pending_invites_for(invitee: str) -> List[Dict]:
-    """Open invitations for ``invitee`` (for the UI question).
-
-    Invitations from someone who is no longer at the same location are dropped
-    from the list: accepting them would fail anyway, so the UI must not offer a
-    dead Join button."""
-    invitee = (invitee or "").strip()
-    if not invitee:
-        return []
-    try:
+    stale = []
+    with keyed_lock("party_membership", "world"):
         rows = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, created_at FROM party_invites "
-            "WHERE invitee=? AND status='pending' ORDER BY created_at ASC",
-            (invitee,)).fetchall()
-    except Exception:
-        return []
-    return [{"invite_id": r[0], "inviter": r[1], "invitee": r[2], "created_at": r[3]}
-            for r in rows if same_location(r[1], invitee)]
-
-
-def find_pending_invite(inviter: str, invitee: str,
-                        max_age_minutes: int = 30) -> Optional[Dict]:
-    """The open invitation ``inviter`` -> ``invitee``, if there is a fresh one.
-
-    Used as the DIRECTION record of a party: whoever asked first leads. Only
-    invitations younger than ``max_age_minutes`` (SYSTEM minutes — this is a
-    conversational window, not an in-world duration) count; an invitation that
-    was never answered must not still decide the roles in a scene hours later.
-    """
-    inviter = (inviter or "").strip()
-    invitee = (invitee or "").strip()
-    if not inviter or not invitee:
-        return None
-    try:
-        r = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, created_at FROM party_invites "
-            "WHERE inviter=? AND invitee=? AND status='pending' "
-            "ORDER BY created_at DESC LIMIT 1", (inviter, invitee)).fetchone()
-    except Exception:
-        return None
-    if not r:
-        return None
-    try:
-        age = (utc_now() - parse_iso(r[3])).total_seconds()
-    except Exception:
-        age = 0.0
-    if age > max_age_minutes * 60:
-        return None
-    return {"invite_id": r[0], "inviter": r[1], "invitee": r[2], "created_at": r[3]}
+            "SELECT invite_id, inviter, invitee, created_at, status, intent_id "
+            "FROM party_invites WHERE inviter=? AND invitee=? AND status='pending'",
+            (inviter, invitee)).fetchall()
+        for row in rows:
+            inv = _row_to_invite(row)
+            if intent_id and inv["intent_id"] == intent_id:
+                return inv["invite_id"]
+            stale.append(inv)
+        iid = "pinv_" + uuid.uuid4().hex[:10]
+        with transaction() as conn:
+            conn.execute("UPDATE party_invites SET status='stale' "
+                         "WHERE inviter=? AND invitee=? AND status='pending'", (inviter, invitee))
+            conn.execute("INSERT INTO party_invites "
+                         "(invite_id, inviter, invitee, created_at, status, intent_id) "
+                         "VALUES (?, ?, ?, ?, 'pending', ?)",
+                         (iid, inviter, invitee, utc_now_iso(), intent_id))
+    for inv in stale:
+        emit("party_invite_closed", invite=inv, reason="superseded")
+    return iid
 
 
 def get_invite(invite_id: str) -> Optional[Dict]:
     if not invite_id:
         return None
-    try:
-        r = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, created_at, status FROM party_invites "
-            "WHERE invite_id=?", (invite_id,)).fetchone()
-    except Exception:
-        return None
-    if not r:
-        return None
-    return {"invite_id": r[0], "inviter": r[1], "invitee": r[2],
-            "created_at": r[3], "status": r[4]}
+    row = get_connection().execute(
+        "SELECT invite_id, inviter, invitee, created_at, status, intent_id "
+        "FROM party_invites WHERE invite_id=?", (invite_id,)).fetchone()
+    return _row_to_invite(row) if row else None
+
+
+def get_pending_invites_for(invitee: str) -> List[Dict]:
+    rows = get_connection().execute(
+        "SELECT invite_id, inviter, invitee, created_at, status, intent_id "
+        "FROM party_invites WHERE invitee=? AND status='pending' ORDER BY created_at",
+        ((invitee or "").strip(),)).fetchall()
+    out = []
+    projection = get_provider("party_invite_projection")
+    for row in rows:
+        inv = _row_to_invite(row)
+        if not invite_is_fresh(inv) or not same_location(inv["inviter"], invitee):
+            continue
+        if inv["intent_id"]:
+            if projection is None or get_provider("party_invite_respond") is None:
+                continue
+            inv.update(projection(inv) or {})
+        out.append(inv)
+    return out
+
+
+def find_pending_invite(inviter: str, invitee: str,
+                        max_age_minutes: int = INVITE_MAX_AGE_MINUTES) -> Optional[Dict]:
+    row = get_connection().execute(
+        "SELECT invite_id, inviter, invitee, created_at, status, intent_id "
+        "FROM party_invites WHERE inviter=? AND invitee=? AND status='pending' "
+        "ORDER BY created_at DESC LIMIT 1", (inviter, invitee)).fetchone()
+    inv = _row_to_invite(row) if row else None
+    return inv if inv and invite_is_fresh(inv, max_age_minutes) else None
+
+
+def settle_pending_invite(invite_id: str, accept: bool) -> Dict:
+    """Atomic consent/membership primitive; linked plans validate before this."""
+    with keyed_lock("party_membership", "world"):
+        inv = get_invite(invite_id)
+        if not inv:
+            return {"status": "not_found"}
+        common = {"inviter": inv["inviter"], "invitee": inv["invitee"],
+                  "intent_id": inv["intent_id"]}
+        if inv["status"] != "pending":
+            if inv["status"] == ("accepted" if accept else "declined"):
+                party = get_party_of(inv["invitee"]) or {}
+                if accept and party.get("leader") != inv["inviter"]:
+                    return {"status": "not_found", **common}
+                return {"status": inv["status"], **common,
+                        "party_id": party.get("party_id", "")}
+            return {"status": "not_found", **common}
+        if not invite_is_fresh(inv):
+            with transaction() as conn:
+                conn.execute("UPDATE party_invites SET status='expired' WHERE invite_id=?", (invite_id,))
+            return {"status": "expired", **common}
+        if accept and not same_location(inv["inviter"], inv["invitee"]):
+            return {"status": "not_present", **common}
+        with transaction() as conn:
+            pid = _write_member(conn, inv["inviter"], inv["invitee"]) if accept else ""
+            if accept and not pid:
+                return {"status": "join_conflict", **common}
+            conn.execute("UPDATE party_invites SET status=? WHERE invite_id=? AND status='pending'",
+                         ("accepted" if accept else "declined", invite_id))
+        if accept:
+            _cancel_joiner_journey(inv["invitee"])
+        return {"status": "accepted" if accept else "declined", "party_id": pid, **common}
 
 
 def resolve_pending_invite(invite_id: str, accept: bool) -> Dict:
-    """Beantwortet eine Pending-Einladung. Bei Ja -> invitee tritt der Party des
-    inviter bei. Markiert die Row als accepted/declined. Returns Status-Dict."""
+    """All avatar, NPC and decision answers use the same consent continuation."""
     inv = get_invite(invite_id)
-    if not inv or inv["status"] != "pending":
+    if not inv:
         return {"status": "not_found"}
-    if accept and not same_location(inv["inviter"], inv["invitee"]):
-        # The inviter has moved on in the meantime (or was never here) — say so
-        # instead of failing with a generic conflict.
-        return {"status": "not_present", "inviter": inv["inviter"],
-                "invitee": inv["invitee"]}
-    try:
-        with transaction() as conn:
-            conn.execute("UPDATE party_invites SET status=? WHERE invite_id=?",
-                         ("accepted" if accept else "declined", invite_id))
-    except Exception as e:
-        logger.debug("resolve_pending_invite update fehlgeschlagen: %s", e)
-    if not accept:
-        return {"status": "declined", "inviter": inv["inviter"], "invitee": inv["invitee"]}
-    pid = add_to_party(inv["inviter"], inv["invitee"])
-    if not pid:
-        return {"status": "join_conflict", "inviter": inv["inviter"], "invitee": inv["invitee"]}
-    return {"status": "accepted", "party_id": pid,
-            "inviter": inv["inviter"], "invitee": inv["invitee"]}
+    if inv["intent_id"]:
+        handler = get_provider("party_invite_respond")
+        if handler is None:
+            return {"status": "unavailable", "intent_id": inv["intent_id"]}
+        return handler(invite_id, bool(accept))
+    return settle_pending_invite(invite_id, bool(accept))
+
+
+def close_intent_invites(intent_id: str, status: str = "cancelled") -> None:
+    """Close remaining questions without affecting unrelated invitations."""
+    with keyed_lock("party_membership", "world"), transaction() as conn:
+        conn.execute("UPDATE party_invites SET status=? WHERE intent_id=? AND status='pending'",
+                     (status, intent_id))
 
 
 def clear_invites_for(character: str) -> None:
-    """Verwirft alle offenen Einladungen, an denen ``character`` beteiligt ist
-    (z.B. wenn er einer Party beitritt oder eine verlaesst)."""
+    """Detach invitations and publish lifecycle removal (also used by pooling)."""
     c = (character or "").strip()
     if not c:
         return
-    try:
-        with transaction() as conn:
-            conn.execute(
-                "UPDATE party_invites SET status='stale' WHERE status='pending' "
-                "AND (inviter=? OR invitee=?)", (c, c))
-    except Exception as e:
-        logger.debug("clear_invites_for(%s) fehlgeschlagen: %s", c, e)
+    with keyed_lock("party_membership", "world"), transaction() as conn:
+        conn.execute("UPDATE party_invites SET status='stale' WHERE status='pending' "
+                     "AND (inviter=? OR invitee=?)", (c, c))
+    emit("party_invites_cleared", character=c)

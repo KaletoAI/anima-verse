@@ -1,10 +1,7 @@
-"""on_load entry: the party package's decision point.
+"""Register the party decision point and consent-bound intent runtime.
 
-``party_join``: with a decision model configured, an ordinary NPC invited
-to come along may join or decline at once instead of being woken
-(docs/decision-models.md). Off by default — then nothing changes. The
-decision itself runs in ``PartySkill._decide_join`` (skill.py), where the
-invitation is created.
+The party package owns the targeted NPC continuation; the core only emits
+generic intent/world events and consumes optional capability providers.
 """
 from app.core import decision
 from plugins.party.skill import PARTY_JOIN
@@ -19,3 +16,7 @@ decision.register_point(
     default_timeout_s=3.0,
     origin="party",
 )
+
+from plugins.party.trip_intents import register
+
+register()

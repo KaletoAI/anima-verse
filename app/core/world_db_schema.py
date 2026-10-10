@@ -702,7 +702,8 @@ SCHEMA_STATEMENTS = [
         inviter    TEXT NOT NULL,
         invitee    TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        status     TEXT NOT NULL DEFAULT 'pending'
+        status     TEXT NOT NULL DEFAULT 'pending',
+        intent_id  TEXT NOT NULL DEFAULT ''
     )""",
     "CREATE INDEX IF NOT EXISTS idx_party_invites_invitee ON party_invites (invitee, status)",
 
@@ -908,6 +909,8 @@ SCHEMA_STATEMENTS = [
 # ALTER TABLE migrations run idempotently after all CREATE statements.
 # Add missing columns per table; OperationalError means the column exists.
 ALTER_MIGRATIONS = [
+    # Destination-bound invitations refer to the existing intent store.
+    ("party_invites", "intent_id", "TEXT NOT NULL DEFAULT ''"),
     # thoughts: characters present at the time of the thought (JSON name list)
     # — context for the admin journal (user feedback 2026-07-29). Old rows
     # stay empty.

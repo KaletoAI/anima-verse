@@ -158,18 +158,27 @@ Weiter (⚠, heute nur Built-ins): `equip_piece`/`unequip_piece`,
 
 ## Reise — `app.core.travel_engine` ✅ (movement-Paket)
 
-Ein Ortswechsel über Ortsgrenzen ist eine **Reise**, kein Sprung. Nie selbst eine
-Position schreiben, um jemanden woanders hin zu bringen.
+Cross-location NPC movement is normally a timed journey. Do not write a position to
+simulate travel. Ordinary SetLocation preserves direct avatar movement and initial
+placement; destination-bound shared trips always use timed cross-location travel.
 
 | Funktion | Semantik |
 |---|---|
-| `start_journey(character_name, target_id, target_room="", target_pose="") -> (journey \| None, reason)` | Startet die getaktete Reise zu einem benannten Ort. `target_room` (Raum-Id) / `target_pose` reisen mit und gelten bei der Ankunft — der Raum nur, wenn `check_access` ihn dann erlaubt, sonst die Ankunftsregel. `reason`: `''` = läuft · `unknown_target` (Ort existiert nicht ODER der Charakter kennt ihn nicht) · `unplaced_target` (nicht auf der Karte) · `no_route` |
+| `start_journey(character_name, target_id, target_room="", target_pose="", journey_id="", execution_ref="") -> (journey \| None, reason)` | Start a timed journey to a named location. `target_room` / `target_pose` apply on arrival, subject to access checks. Optional `journey_id` / `execution_ref` link it to the owning execution. `reason`: `''` = started · `unknown_target` (missing or unknown to this character) · `unplaced_target` (not on the map) · `no_route` |
 | `start_journey_to_point(character_name, x, z) -> (journey \| None, reason)` | Reise zu einem freien Punkt. Setzt **kein** `movement_target`, nur die `journey` — Ankunfts-/Abbruchlogik muss beides abfragen |
 | `get_journey(character_name, profile=None)` | Die laufende Reise vom Profil (oder `None`) |
 | `journey_state(waypoints, started_at_game, now_game) -> Dict` | Reine Funktion: Position aus Polylinie + Startzeit + **Spieluhr**. Kein Zustand, kein Tick — deshalb sehen alle Clients dieselbe Position |
-| `cancel_journey(character_name)` | Reise abbrechen |
+| `cancel_journey(character_name, *, journey_id=None, execution_ref=None)` | Cancel travel; supplied ownership selectors must match the current journey |
 | `get_travel_speed_m_s() -> float` | Welt-Tempo (`game.travel_speed_m_s`, Default 1.4 m/s, geklemmt 0.1…20); beim Start auf die Reise geschrieben |
 | `app.models.character.list_active_journeys() -> List[Dict]` | EINE Query über alle reisenden Charaktere (`{name, journey, movement_target, current_location}`) — nie über alle Profile iterieren |
+
+## Authoritative movement — `app.core.movement_authority`
+
+| Function | Semantics |
+|---|---|
+| `movement_allowed(character_name, location_id, room_id="") -> (bool, reason)` | Shared leave, danger, destination condition, location access and room access gates; no denial-history side effects |
+| `move_character(character_name, location_id, room_id="", target_pose="", *, participants=None, journey_id="", execution_ref="", timed=True) -> Dict` | Validate every explicit participant before moving. Start timed cross-location travel or set the local room. Outcomes: `travelling`, `arrived`, `blocked`; rule denial includes its gate and participant. `timed=False` is only for the ordinary caller's existing direct-placement policy, never shared trips |
+
 
 ## Charakter-Profil & Ort — `app.models.character` ✅/⚠
 
@@ -210,7 +219,7 @@ hängt, räumt ihn über denselben Weg auf (Check:
 | `app.core.perception.nearby_in_the_open(character_name, pos=None) -> List[str]` | Wer im Freien in Hörweite ist (Raum-Roster ∪ Radius) |
 | `app.core.room_entry.characters_in_room(location_id, room_id, exclude='') -> List[str]` | Wer gerade im selben Raum steht (Raum-ID ODER Raum-Name wird gematcht); leeres `room_id` heißt bewusst „die ganze Location", `exclude` lässt einen Namen weg |
 | `app.core.agent_loop.get_agent_loop().bump(character_name, hint='', perception_template='', perception_vars=None, tool_whitelist=None) -> bool` ✅ | Charakter für einen zeitnahen Thought-Turn vormerken. `hint` ist die Zeile, die er dabei liest; `tool_whitelist` schränkt die angebotenen Verben ein. Liefert `False`, wenn er keinen Turn bekommen kann (z.B. temporärer NPC) |
-| `app.core.agent_loop.get_agent_loop().bump_respond(character_name, speaker, content, volume='normal', obligatory=True, hint='', winding_down=False, on_demand=False) -> bool` | Queue a visible direct answer through the chat/tool path, independent of autonomous thought eligibility and HOT-chat gating. `on_demand=True` is for explicit tool/UI requests: the answer may run during world freeze, but queue pause and world sleep still block it. Ordinary room reactions must leave it false. |
+| `app.core.agent_loop.get_agent_loop().bump_respond(character_name, speaker, content, volume='normal', obligatory=True, hint='', winding_down=False, on_demand=False, request_id='') -> bool` | Queue a visible direct chat/tool answer independently of autonomous thoughts and HOT-chat gating. Explicit `on_demand=True` requests may answer during freeze, but not queue pause or world sleep. Optional opaque `request_id` correlates a `respond_finished` event when the turn completes, is cancelled, superseded or dropped; callers may request another unanswered question on their next regular check. Ordinary room reactions leave `on_demand=False`. |
 | `app.models.memory.add_memory(character_name, content, memory_type='semantic', importance=3, tags=None, context='', related_character='', …)` | Erinnerung anlegen |
 | `app.models.account.is_player_controlled(character_name)` / `get_active_character()` ✅ / `get_player_identity(default='user')` ✅ | Avatar-Erkennung, Anzeigename des Spielers. Einen festen 1:1-Gesprächspartner gibt es nicht mehr — wer gerade beisammen ist, sagt `app.core.perception.addressable_for(character_name)` |
 
@@ -226,15 +235,19 @@ hängt, räumt ihn über denselben Weg auf (Check:
 
 ## Party — `app.core.party_engine` ✅ (party-Paket)
 
-Gemeinsames Reisen als Core-Engine (R5 — Konsumenten: der Leader-Move-Drag-Hook in
-`app/models/character.py`, die `/play`-Route und `visible_for` der Movement-Skills).
-Das party-Paket ist nur der Auslöser.
+Party membership is a core primitive (R5): leader movement propagates through
+`app/models/character.py`, `/play` exposes membership and movement verbs honor roles.
+The party package owns destination-bound intent execution and consent, not the core.
 
 | Funktion | Semantik |
 |---|---|
 | `get_party_of(character) -> Optional[Dict]` / `is_in_party(character)` / `is_party_follower(character)` | Party-Zustand/Rolle (Basis für `visible_for`) |
 | `add_to_party(leader, member) -> Optional[str]` / `leave_party(character) -> Dict` | Beitritt / Austritt (Follower steigt aus, Leader = Auflösung) |
-| `create_pending_invite(inviter, invitee) -> Optional[str]` / `clear_invites_for(character)` | Avatar-Einladung als UI-Frage; offene Einladungen räumen |
+| `create_pending_invite(inviter, invitee, intent_id="") -> Optional[str]` / `clear_invites_for(character)` | Persist an invitation for consent; `intent_id` optionally links an existing shared-trip plan. Clear open invitations |
+| `get_invite(invite_id)` / `find_pending_invite(inviter, invitee, max_age_minutes=INVITE_MAX_AGE_MINUTES)` / `invite_is_fresh(invite, max_age_minutes=INVITE_MAX_AGE_MINUTES)` | Read the exact question; freshness uses system time |
+| `resolve_pending_invite(invite_id, accept: bool) -> Dict` | The common avatar, NPC-tool and decision-model answer path. Linked plans revalidate their exact question, group, origin and game-time expiry before membership changes |
+| `settle_pending_invite(invite_id, accept: bool) -> Dict` | Atomic membership/consent primitive; callers normally use the validated resolver |
+| `close_intent_invites(intent_id, status="cancelled")` | Close only the questions belonging to that plan |
 
 ## Paar-Interaktionen — `app.core.interaction_engine` ✅ (interact-Paket)
 
@@ -315,6 +328,32 @@ Titel ≥ 6 Zeichen), sonst `None`. Wer vor dem Anlegen prüft, hält
 `keyed_lock("intents", owner)` um `find_duplicate` UND `create_intent` — so legen zwei Turns
 derselben Figur kein Vorhaben doppelt an (Muster: `plugins/retrospect/skill.py`).
 
+Executable actions are package-provided capabilities on the existing intent row,
+not a second workflow store. Successful CRUD writes emit `intent_created`,
+`intent_changed` and `intent_deleted`; execution is serialized by
+`keyed_lock("intent_execution", intent_id)`. Managed actions are excluded from
+generic tool-count/location progress, and `complete_intent` checks the package's
+completion predicate instead of accepting an early narrative claim.
+`GET /intents/action-types` lists currently available action descriptors. Without
+the owning package, its action is not offered. The party action is
+`{"type":"travel_together","destination":{"location_id":"…","room_id":"…"},"scope":"pair"}`:
+one explicit leader and one proposed follower; existing followers require `party`
+scope. Runtime `meta.travel` is server-owned, and a live plan is cancelled rather
+than retargeted. Linked `join_party` answers must include the exact `invite_id`.
+`app.models.intents.default_intent_expiry(trigger, source)` supplies the existing
+GAME-time deadline policy for structured proposals too; an explicitly disabled
+self-intent TTL remains disabled. NPC invitations persist their announcement
+before execution; consent waits for its speech write. Recovery uses
+`app.models.perception_store.utterance_exists(speaker, ts, content)` with the
+persisted technical timestamp to avoid repeating an already recorded line.
+Arrival completes the intent, not the party membership.
+Package skills may override `app.plugins.base.PluginSkill.default_enabled_for(character_name)`
+to offer a state-bound verb when no character activation setting exists.
+Explicit `enabled=False` always wins. The party package uses this for a live
+linked Join answer and for leaving an existing party; it does not enable
+autonomous thoughts or write character configuration.
+
+
 ## Act-Engine — `app.core.act_engine` ✅
 
 `perform_act(actor, text, scope) -> Dict` (async) = die komplette
@@ -372,6 +411,7 @@ Prioritätsreihenfolge abgearbeitet — es laufen also bis zu zwei Tasks gleichz
 | `get_task_queue()` | Singleton der Queue |
 | `TaskQueue.submit(task_type, payload, queue_name, priority, agent_name, max_retries, deduplicate)` | Task einreihen, gibt die `task_id` zurück. `queue_name` ist nur ein Label (UI + Pause-Schalter), kein eigener Worker; `priority` niedriger = früher (Default 20); `deduplicate=True` überspringt die Einreichung, solange ein Task desselben `task_type` (mit demselben `agent_name`, falls gesetzt) pending/running ist, und gibt dann `""` zurück |
 | `TaskQueue.register_handler(task_type, handler)` | Registriert den Handler eines `task_type` — eine Funktion, die das `payload`-Dict bekommt und ein Ergebnis-Dict zurückgibt. Beim Start des Pakets aufrufen, sonst scheitert ein eingereihter Task mit „kein Handler" |
+| `TaskQueue.is_paused(queue_name="default") -> bool` | Read the persisted pause gate through the public interface |
 
 Ein Verb blockiert nie minutenlang im `execute()`. Lange Arbeit wandert in die
 Queue; das Verb antwortet dem LLM sofort, was es angestoßen hat.
@@ -396,6 +436,11 @@ Events, die der Core heute feuert:
 | `interaction.invited` | `invite_id`, `inviter`, `invitee`, `pose_key` |
 | `instagram.post_created` | `poster_name`, `post` |
 | `instagram.user_comment` | `character_name`, `post_id`, `commenter_name`, `comment_text`, `comment_id`, `post` |
+| `intent_created` / `intent_changed` / `intent_deleted` | `intent`; changed also supplies `previous`; successful durable writes only |
+| `world_tick` | —; ordinary periodic world gates apply |
+| `party_membership_changed` / `party_invites_cleared` | `character`; departure/removal invalidates affected plans |
+| `party_invite_closed` | `invite`, `reason` |
+| `respond_finished` | `character_name`, opaque `request_id`, `outcome`; completion/cancellation or pending request superseded/ineligible |
 
 Capabilities, die der Core heute abfragt:
 
@@ -404,6 +449,10 @@ Capabilities, die der Core heute abfragt:
 | `pair_verb_name` | `routes/play.py`, `plugins/set_pose` | `/play/interact/options` bietet nichts an, die Player-UI schlägt keine Paare vor |
 | `romantic_compatibility` | `models/relationship.are_romantically_compatible` | immer kompatibel |
 | `romantic_interests_help` | `/admin/settings` | der Hilfe-Button fehlt |
+| `intent_action_types`, `intent_action_validate`, `intent_action_change_validate`, `intent_action_managed`, `intent_completion_allowed` | Intent API, progress and completion | No executable action descriptors; ordinary intents remain available |
+| `npc_action_available`, `npc_action_context`, `npc_action_execute` | NPC background selection, prompt and typed action | Ordinary NPC behavior |
+| `party_invite_respond`, `party_invite_projection` | Party resolver and player invitation payload | Ordinary membership/question behavior |
+| `journey_execution_context`, `journey_arrival_validate` | Owned travel tick and exact arrival | Ordinary journey behavior |
 
 ## Skill-Hooks (Deklarationen an der Klasse / im Manifest) ✅
 
