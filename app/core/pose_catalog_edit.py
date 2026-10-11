@@ -1,6 +1,6 @@
 """Shared catalog editing rules for HTTP routes and background jobs."""
 import json
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import Any, Dict, Iterator, List, Optional
 
 from app.core import expression_pose_maps as epm
@@ -153,10 +153,14 @@ def require_free_aliases(axis: str, aliases: List[str], exclude_key: str = "") -
 
 def apply_generated_entry(*, mode: str, animation: str, key: str,
                           entry: Optional[Dict[str, Any]] = None,
-                          raw_text: str = "") -> Dict[str, Any]:
-    """Apply a generated solo animation using the catalog editor rules."""
+                          raw_text: str = "", _locked: bool = False) -> Dict[str, Any]:
+    """Apply a generated solo animation using the catalog editor rules.
+
+    ``_locked=True`` requires the caller to hold ``catalog_txn("pose")``
+    throughout the call; its cross-process file lock is not re-entrant.
+    """
     axis = "pose"
-    with catalog_txn(axis):
+    with nullcontext() if _locked else catalog_txn(axis):
         key = validate_key(key)
         animation = str(animation or "").strip().lower()
         if not animation:

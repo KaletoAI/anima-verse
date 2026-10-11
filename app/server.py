@@ -562,6 +562,8 @@ async def lifespan(app: FastAPI):
     register_npc_spawn_handler()
     from app.core.npc_assets import register_npc_assets_handler
     register_npc_assets_handler()
+    from app.core.pose_animation import register as _reg_pose_anim
+    _reg_pose_anim()
     from app.core.improvements.engine import register_improvement_handler
     register_improvement_handler()
     # Importing the package registers the built-in improvement types.
