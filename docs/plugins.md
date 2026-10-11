@@ -307,6 +307,8 @@ null value only; it does not match `""` or the literal string `"none"`. Both
 operands use the same normalization; other scalars compare as trimmed lowercase
 strings.
 
+max_deg is the whole-chain dynamic swing budget in degrees, applied independently to each root chain of an appendage. For links ordered root to tip, let span_j be the immutable bind length (joint to joint; twice the centroid lever for the final link) and R_j the sum of spans from link j to the tip. Each link receives share_j = R_j^2*span_j / sum_k(R_k^2*span_k) and a dynamic limit of max_deg*share_j. Equal spans yield 9:4:1 /14 for three links and 25:16:9:4:1 /55 for five. Shares come from bind geometry, never per frame, and govern soft swing saturation, the extreme-anchor guard and dynamic translation clamping. A one-link chain has share 1. Static sag_max_deg and spill_max_deg are unchanged.
+
 `flatten`, `stretch`, `spill` and `translate` are finite in [0,1], default 0.
 `flatten_floor` is finite in [0,1]; omission inherits effective `squash_min`
 server-side, before attribute multipliers (an absolute character floor overrides them).
@@ -358,7 +360,9 @@ and bounce. Longitudinal behaviour means the rendered length scalar is preserved
 Dynamic axis gains, soft angle limits and gain are applied before this split.
 Each translated component is capped before multiplying by `translate`:
 static <= rest lever length * sin(sag_max_deg), dynamic <= static lever length
-* sin(max_deg), with angles in radians for sine. Longitudinal displacement and
+* sin(max_deg*share_j), with angles converted from degrees to radians for sine.
+The dynamic cap uses each link's immutable share of the whole-chain budget.
+Longitudinal displacement and
 length scaling are unchanged by the split. Weighted borders blend into the
 anchor. Supported layers are package defaults/attribute profiles, world overrides
 and absolute character overrides; state `bone_pose` has no translate multiplier.
@@ -503,13 +507,47 @@ Opposing normals
 remain excluded. This retains sharp end caps. The bounded component with most original candidate support
 is selected; nearest-tip distance breaks ties. This avoids selecting an isolated
 sharp end face after the normal guard separates its UV copies.
-With successful backward growth, the root is the measured attachment station
-plus `root_depth` along the normalized body-back/up bisector `(0, 1, 1)`
-(front is -Y). This puts the rotation pivot inside the torso. Only the root
-moves: internal joints and axis length still use the attachment station, and
-the weight ramp stays anchored on its measured stop plane. `root_depth` also
-retains its existing front-only fallback role. Without backward growth, the
-existing attachment placement and `attachment_inset` are preserved. Internal
+For either non-leak path, only the first link head moves to the pivot.
+Base point A is the measured `attachment_station` with successful backward
+growth, or the existing `root_station`, including `attachment_inset`, without
+growth. Intersect every mesh face with the sagittal plane x=A.x to obtain
+(y,z) segments and their normalized outward face-normal projections; skip
+degenerate projections. F is the front-most (minimum y) segment point within
+A.z+0.02 <= z <= A.z+0.05, including intersections with these bounds.
+To find K, build a BVH over the mesh and start at the unmoved `joints[1]`,
+with x set to A.x. Cast +Y and require an exit E whose outward face normal
+has positive dot with +Y. If the first hit is an entry (negative dot), walk
+through subsequent hits to an exit. From E plus a `1e-6` metre +Y offset,
+reject any next +Y surface within the remaining distance to 2 mm. An outward
+exit followed by no intervening surface keeps the entire interval to
+Q=E+(0,0.002,0) in air, including thin surfaces that a Q-only test could miss.
+Cast +Z from Q to the first ceiling hit H. Map the BVH's input face index to
+that face's section segment and insert H into that segment. Connect section
+endpoints that share a mesh edge or coincide within `1e-6` metres; climb only
+this connected contour. Before declaring a local maximum K, traverse connected
+equal-height neighbours (`|dz| <= 1e-7`) with a visited set, then climb to the
+highest rising neighbour. Self-neighbours and plateau cycles are harmless.
+If an exit, clear interval or ceiling is unavailable, retry each subsequent
+internal joint. Record each attempt's joint index, entry walk and failure
+reason, plus `entry_walked` for the selected joint. If all attempts fail,
+use s=`root_depth` and preserve the final reason in `gap_reason` and the pivot
+reason (`gap ceiling not found` for a missing ceiling).
+The line through F and K defines the chord; the side containing the
+projection of the declared `anchor_bone` head is inward, with positive signed
+distance d. Front is -Y and up is +Z. Along u=normalize((0,1,1)), choose the
+smallest s >= `root_depth` for which d(A+s*u) >= `root_wall_margin`, solving
+the linear distance in closed form. Cap s at the distance from A to the anchor
+target (anchor head plus `anchor_offset`) and record whether it was capped.
+If F or K is missing, or the direction is parallel to the chord
+(absolute distance derivative < 1e-9), use s=`root_depth` and record the reason.
+The anchor-distance cap applies after every solve or fallback branch, including
+the fallback depth; it preserves the reason and sets `capped` when needed.
+Set `joints[0]` to A+s*u. The leak path retains its existing placement.
+Internal joints, tip, axis length, membership and growth use the original
+unmoved polyline. `weight_joints` also keeps that polyline for both paths,
+including the original `root_station` without growth; weights and contact
+followers therefore do not change when the pivot moves. The grown weight
+ramp stays anchored on its measured stop plane. Internal
 joints sample welded part vertices in slabs of total
 width `centerline_slab * length` around each declared axial fraction, where this
 length is the attachment-to-far-slice extent projected onto the refined axis
@@ -521,8 +559,12 @@ these zones a vertex belongs to one link. The attachment `weight_ramp` acts only
 over `0 <= t < weight_ramp` of the centreline, on link 1 only, shortened to at
 most `attachment_ring_max` metres. With successful growth its distance is the
 axial projection from the measured stop plane; otherwise it uses physical
-polyline distance from the root. Metrics `attachment` and `root_offset` record
-the stop station and root displacement in metres.
+polyline distance from the unmoved root. Metric `attachment` records the
+measured stop station (the contact-follow distance reference; without growth the
+fitted base), `root_offset` records `joints[0]-A` in metres, where A is the unmoved root. Per-group `pivot` records F, K,
+`gap_exit` E, `gap_ceiling` H, the successful `joint_index`, solved
+`depth`, signed `margin` at the moved head, `capped` and the fallback `reason`
+(empty on a normal solve; missing chord distance is null).
 `weight_ramp + link_blend` must
 be strictly less than the first split (or 1 for a single link), and internal
 blend zones must not overlap. Each link must have core vertices (weight > 0.9);
@@ -592,7 +634,7 @@ contact followers) must be zero.
 `uncaptured_in_part` checks retained connected surface vertices outside the
 attachment ring; a point merely inside the old straight cylinder is not assumed
 to belong to the part.
-Fingerprint version 9 rebuilds from prerig for the root placement change. `link_blend` replaces the old
+Fingerprint version 10 rebuilds from prerig for the torso-chord pivot change. `link_blend` replaces the old
 2-link `blend_start`/`blend_width` parameters; remove those from declarations.
 The existing required declaration
 fields `leak_radius_limit` and `reweight_factor` remain validated but no longer
@@ -1060,12 +1102,14 @@ The admin Tilt follows its sliders at at most 120 degrees per real second,
 including simultaneous forward/sideways movement.
 
 For anchor turns faster than 360 degrees/s, every spring substep bounds both
-the dynamic deviation increment and its magnitude. With static lever length r,
-`B=r*sin(min(pi/2,max_deg*pi/180))`: increment <= `B*min(1,120*h)`,
+the dynamic deviation increment and its magnitude. With static lever length r
+and the link's immutable bind share `share_j`,
+`B=r*sin(min(pi/2,max_deg*share_j*pi/180))`: increment <= `B*min(1,120*h)`,
 magnitude <= B. On a cap hit velocity follows the target; non-finite spring
 results reset to the current substep target. The existing soft angular limit
 still bounds rendered deviation around the static target. A one-frame 90-degree
-jump stays within `max_deg*1.05`; normal motion retains exact propagation.
+jump stays within the whole-chain budget `max_deg*1.05`, with each link limited
+by its allocated `max_deg*share_j`; normal motion retains exact propagation.
 Gaps, reset and LOD transitions clear anchor history with particle history.
 
 State `bone_pose[group]` additionally accepts optional `length` and `girth`,

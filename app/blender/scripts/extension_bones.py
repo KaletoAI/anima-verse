@@ -17,6 +17,7 @@ sys.path.remove(_SCRIPT_DIR)
 import bpy
 from mathutils import Matrix, Vector
 from mathutils.kdtree import KDTree
+from mathutils.bvhtree import BVHTree
 
 PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'band_upper_bone': 'bone',
@@ -532,6 +533,227 @@ def polyline_station(c, joints, boundaries):
     return nearest[1], nearest[2], math.sqrt(nearest[0])
 
 
+def sagittal_segments(co, faces, base, face_segments=None):
+    """Intersect faces with x=base.x, retaining endpoint mesh-edge identities."""
+    segments = []
+    for face_index,face in enumerate(faces):
+        vertices = [co[i] for i in face]
+        if len(vertices) < 3 or not min(c.x for c in vertices) <= base.x <= max(c.x for c in vertices):
+            continue
+        normal = sum(((vertices[i]-vertices[0]).cross(vertices[i+1]-vertices[0])
+                      for i in range(1,len(vertices)-1)), Vector())
+        if math.hypot(normal.y,normal.z) < 1e-15:
+            continue
+        hits = []
+        for ia,ib in zip(face,face[1:]+face[:1]):
+            a,b = co[ia],co[ib]
+            if a.x == base.x:
+                hits.append((a,(ia,ia)))
+            if (a.x-base.x)*(b.x-base.x) < 0:
+                hits.append((a.lerp(b,(base.x-a.x)/(b.x-a.x)),tuple(sorted((ia,ib)))))
+        unique = []
+        for hit,edge in hits:
+            matching = next((row for row in unique if (hit-row[0]).length < 1e-9),None)
+            if matching is None:
+                unique.append((hit,{edge}))
+            else:
+                matching[1].add(edge)
+        # Concave faces can yield several segments on the same section line.
+        unique.sort(key=lambda row: -normal.z*row[0].y+normal.y*row[0].z)
+        for segment in zip(unique[::2],unique[1::2]):
+            if face_segments is not None:
+                face_segments.setdefault(face_index,[]).append(len(segments))
+            segments.append(segment)
+    return segments
+
+
+def gap_ceiling(co, faces, base, joints, segments, start_index=1, face_segments=None):
+    """Locate the local contour peak above a +Y exit followed by a +Z ray."""
+    gap = {'gap_exit':None, 'gap_ceiling':None, 'joint_index':None,
+           'entry_walked':False, 'attempts':[], 'gap_reason':''}
+    bvh = BVHTree.FromPolygons(co,faces)
+    if face_segments is None:
+        face_segments = {}
+        sagittal_segments(co,faces,base,face_segments)
+    ceiling = None
+    start_segment = None
+    forward = Vector((0,1,0))
+    epsilon = 1e-6
+    for index in range(start_index,len(joints)-1):
+        origin = joints[index].copy()
+        origin.x = base.x
+        attempt = {'joint_index':index, 'entry_walked':False, 'reason':'no +Y exit'}
+        gap['attempts'].append(attempt)
+        exit_point = None
+        # A negative normal is an entry: continue through the part to an exit.
+        # Bound the walk by face count, including degenerate/tangential hits.
+        for _ in range(len(faces)+1):
+            hit,normal,_,_ = bvh.ray_cast(origin,forward)
+            if hit is None:
+                break
+            if normal.dot(forward) > 0:
+                exit_point = hit
+                break
+            if normal.dot(forward) < 0:
+                attempt['entry_walked'] = True
+            origin = hit+forward*epsilon
+        if exit_point is None:
+            continue
+        # With an outward exit, no intervening +Y surface proves that the
+        # entire E..Q interval stays in air, rather than only testing Q.
+        next_hit,_,_,distance = bvh.ray_cast(exit_point+forward*epsilon,forward)
+        if next_hit is not None and distance <= .002-epsilon:
+            attempt['reason'] = 'gap clearance below 2 mm'
+            continue
+        hit,_,face_index,_ = bvh.ray_cast(exit_point+forward*.002,Vector((0,0,1)))
+        if hit is None:
+            attempt['reason'] = 'gap ceiling not found'
+            continue
+        # BVH polygon indices refer to the input faces, not section-list order.
+        candidates = []
+        for segment_index in face_segments.get(face_index,()):
+            (a,_),(b,_) = segments[segment_index]
+            delta = b-a
+            t = max(0.,min(1.,(hit-a).dot(delta)/delta.length_squared)) if delta.length_squared else 0.
+            candidates.append(((a+delta*t-hit).length,segment_index))
+        if not candidates or min(candidates)[0] > 1e-6:
+            attempt['reason'] = 'hit face section missing'
+            continue
+        start_segment = min(candidates)[1]
+        ceiling = hit
+        attempt['reason'] = ''
+        gap.update(gap_exit=list(exit_point),gap_ceiling=list(ceiling),joint_index=index,
+                   entry_walked=attempt['entry_walked'])
+        break
+    if ceiling is None or not segments:
+        gap['gap_reason'] = gap['attempts'][-1]['reason'] if gap['attempts'] else 'gap ceiling not found'
+        return None,gap
+
+    endpoints = [endpoint for segment in segments for endpoint in segment]
+    parents = list(range(len(endpoints)))
+
+    def root(index):
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def join(a,b):
+        a,b = root(a),root(b)
+        parents[max(a,b)] = min(a,b)
+
+    tree = KDTree(len(endpoints))
+    edge_nodes = {}
+    for index,(point,keys) in enumerate(endpoints):
+        tree.insert(point,index)
+        for key in keys:
+            if key in edge_nodes:
+                join(index,edge_nodes[key])
+            else:
+                edge_nodes[key] = index
+    tree.balance()
+    for index,(point,_) in enumerate(endpoints):
+        for _,other,_ in tree.find_range(point,1e-6):
+            join(index,other)
+    neighbours = {}
+    for index in range(0,len(endpoints),2):
+        a,b = root(index),root(index+1)
+        neighbours.setdefault(a,set()).add(b)
+        neighbours.setdefault(b,set()).add(a)
+    # Split only the hit face's section segment at H. A closer endpoint on
+    # another contour must never determine which connected contour we climb.
+    a,b = root(start_segment*2),root(start_segment*2+1)
+    current = len(endpoints)
+    endpoints.append((ceiling,set()))
+    neighbours[a].discard(b)
+    neighbours[b].discard(a)
+    neighbours.setdefault(a,set()).add(current)
+    neighbours.setdefault(b,set()).add(current)
+    neighbours[current] = {a,b}
+    visited = set()
+    while True:
+        plateau = {current}; stack = [current]; higher = set()
+        visited.add(current)
+        while stack:
+            node = stack.pop()
+            for other in neighbours[node]:
+                if other in visited:
+                    continue
+                dz = endpoints[other][0].z-endpoints[node][0].z
+                if abs(dz) <= 1e-7:
+                    visited.add(other); plateau.add(other); stack.append(other)
+                elif dz > 1e-7:
+                    higher.add(other)
+        higher.difference_update(visited)
+        if not higher:
+            peak = max(plateau,key=lambda i: (endpoints[i][0].z,-i))
+            return endpoints[peak][0],gap
+        current = max(higher,key=lambda i: (endpoints[i][0].z,-i))
+
+
+def torso_chord(co, faces, base, joints, start_index=1):
+    """Find F in the existing z band and K by rays and a local contour walk."""
+    front_points = []
+
+    def clipped(a, b, bounds):
+        low, high = 0., 1.
+        for axis, minimum, maximum in bounds:
+            delta = b[axis]-a[axis]
+            if abs(delta) < 1e-15:
+                if not minimum <= a[axis] <= maximum:
+                    return ()
+            else:
+                t0, t1 = (minimum-a[axis])/delta, (maximum-a[axis])/delta
+                low, high = max(low,min(t0,t1)), min(high,max(t0,t1))
+                if low > high:
+                    return ()
+        return tuple(Vector((base.x, a[1]+t*(b[1]-a[1]),
+                             a[2]+t*(b[2]-a[2]))) for t in (low,high))
+
+    face_segments = {}
+    segments = sagittal_segments(co,faces,base,face_segments)
+    for (a,_),(b,_) in segments:
+        front_points.extend(clipped(a,b,((2,base.z+.02,base.z+.05),)))
+    ceiling,gap = gap_ceiling(co,faces,base,joints,segments,start_index,face_segments)
+    return (min(front_points,key=lambda c:c.y) if front_points else None,ceiling,gap)
+
+
+def solve_pivot(base, front, ceiling, anchor, target, p):
+    """Solve the linear signed chord distance along the fixed +Y/+Z bisector."""
+    depth, reason, capped = p['root_depth'], '', False
+    distance = slope = None
+    if front is None or ceiling is None:
+        reason = 'gap ceiling not found' if ceiling is None else 'front point missing'
+    else:
+        dy, dz = ceiling.y-front.y, ceiling.z-front.z
+        chord_length = math.hypot(dy,dz)
+        if chord_length < 1e-15:
+            reason = 'degenerate chord'
+        else:
+            ny, nz = -dz/chord_length, dy/chord_length
+            if ny*(anchor.y-front.y)+nz*(anchor.z-front.z) < 0:
+                ny, nz = -ny, -nz
+            distance = ny*(base.y-front.y)+nz*(base.z-front.z)
+            slope = (ny+nz)/math.sqrt(2)
+            if abs(slope) < 1e-9:
+                reason = 'pivot direction parallel to chord'
+            else:
+                if distance+depth*slope < p['root_wall_margin']:
+                    if slope > 0:
+                        depth = max(depth,(p['root_wall_margin']-distance)/slope)
+                    else:
+                        depth = float('inf')
+                        reason = 'inward margin unreachable'
+    maximum = (target-base).length
+    if depth > maximum:
+        depth, capped = maximum, True
+    head = base+Vector((0,1,1)).normalized()*depth
+    margin = None if distance is None else distance+depth*slope
+    return head, {'front':list(front) if front is not None else None,
+                  'gap_apex':list(ceiling) if ceiling is not None else None,
+                  'depth':depth, 'margin':margin, 'capped':capped, 'reason':reason}
+
+
 def appendage_plan(group, p, co, edges, bones, normals, faces):
     chains = group['chains']
     if len(chains) != 1 or not chains[0]:
@@ -742,8 +964,8 @@ def appendage_plan(group, p, co, edges, bones, normals, faces):
         if growth_centres:
             attachment_station = base_c+direction*(extension_t*length-(base_c-base).dot(direction))
             # Build internal joints and axis length from the measured stop
-            # plane. Only after building joints, move the root by root_depth
-            # along body-back/up (+Y/+Z) so the pivot sits inside the parent part;
+            # plane. Only after building joints, move the root along +Y/+Z
+            # until the pivot reaches the inward torso-chord margin;
             # the physical weight ramp stays on this measured stop plane.
             root_station = attachment_station.copy()
         root = root_station
@@ -768,10 +990,21 @@ def appendage_plan(group, p, co, edges, bones, normals, faces):
         joints.append(station)
     joints.append(tip)
     weight_joints = joints
-    if growth_centres and not leak:
+    pivot = {'front':None, 'gap_apex':None, 'depth':0., 'margin':None,
+             'capped':False, 'reason':'leak path unchanged',
+             'gap_exit':None, 'gap_ceiling':None, 'joint_index':None}
+    if not leak:
         # Preserve the attachment polyline for weights and contact followers.
+        # The pivot starts at the unmoved root: the stop station after growth,
+        # otherwise the inset root. attachment_station keeps its meaning for
+        # the contact-follow distance.
         weight_joints = joints.copy()
-        joints[0] = attachment_station+Vector((0,1,1)).normalized()*p['root_depth']
+        front_point, ceiling_point, gap = torso_chord(co,faces,root,joints)
+        joints[0], pivot = solve_pivot(root,front_point,ceiling_point,
+                                       anchor,target,p)
+        if ceiling_point is None:
+            pivot['reason'] = gap['gap_reason']
+        pivot.update(gap)
     links = [(link['bone'],joints[i],joints[i+1],link['parent']) for i,link in enumerate(chain)]
     tube_radius = None
     tube_centres = []
@@ -881,7 +1114,7 @@ def appendage_plan(group, p, co, edges, bones, normals, faces):
         'placement': [{'head':list(h),'tip':list(t)} for _,h,t,_ in links],
         'weight_joints':[list(c) for c in weight_joints],
         'attachment':list(attachment_station), 'axis_length':axis_length,
-        'root_offset':list(joints[0]-attachment_station),
+        'root_offset':list(joints[0]-weight_joints[0]), 'pivot':pivot,
         'leak':leak, 'leak_reason':'; '.join(leak_reasons),
         'segment_radius':segment_radius, 'measured_half_width':half_width,
         'segment_pass_history':history, 'segment_passes':len(history)-1,

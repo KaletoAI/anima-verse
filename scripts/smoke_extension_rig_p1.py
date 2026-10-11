@@ -81,6 +81,7 @@ All storage and clip/rig paths are temporary. Missing Blender is a skip.
 """
 import copy
 import json
+import math
 import os
 import sys
 import tempfile
@@ -802,9 +803,22 @@ def main():
         # Axial fractions use sin(theta); each slab is .08 of axial length.
         expected_arc=[[0,-.20+.36*(math.cos(math.radians(a))-math.cos(math.radians(15))),
                        .89-.36*math.sin(math.radians(a))] for a in (-15,-5,5,15)]
+        # The +Y exit is near y=-.183; Q remains below y=-.18. The tube
+        # reaches at most y=-.181733 and the box begins at y=-.10, so +Z
+        # finds no ceiling. Thus s=.03 and the head gains .03/sqrt(2) in
+        # y and z: (0,-.178786797,1.004388059).
+        expected_arc[0][1]+=.03/math.sqrt(2)
+        expected_arc[0][2]+=.03/math.sqrt(2)
         joints=[am['placement'][0]['head']]+[v['tip'] for v in am['placement']]
         check(all(close(a,b) for a,b in zip(joints,expected_arc)),'analytic arc centreline joints within 2 mm')
-        check(all(abs(a-10)<1 for a in am['bind_bend_deg']),'analytic arc bind bends within 1 degree')
+        check(am['pivot']['reason']=='gap ceiling not found' and abs(am['pivot']['depth']-.03)<1e-9,
+              'analytic arc uses the declared minimum depth without a ceiling')
+        directions=[[b[i]-a[i] for i in range(3)] for a,b in zip(expected_arc,expected_arc[1:])]
+        expected_bends=[math.degrees(math.acos(sum(x*y for x,y in zip(a,b))/
+                        math.sqrt(sum(x*x for x in a)*sum(y*y for y in b))))
+                        for a,b in zip(directions,directions[1:])]
+        check(all(abs(a-b)<1 for a,b in zip(am['bind_bend_deg'],expected_bends)),
+              'analytic moved-root arc bind bends within 1 degree')
         check(all(n>0 for n in am['core_verts_per_link'].values()),'every curved link has core vertices')
         print('ARC METRICS',json.dumps(am,sort_keys=True))
         arc_rows=exported_vertices(Path(arc['outputs']['model']).read_bytes())
@@ -879,9 +893,14 @@ def main():
         chain=metrics['example_chain']
         check(abs(chain['attachment'][2]-.98)<.002,'attachment is nearer declared anchor')
         check(abs(chain['axis_length']-.175)<.004,'hand-derived chain length .175 m')
-        check(abs(chain['placement'][0]['head'][2]-.985)<.004,'hand-derived attachment inset')
+        unmoved=chain['weight_joints'][0]
+        check(abs(unmoved[2]-.985)<.004,'hand-derived attachment inset')
+        # Only the first head moves to the pivot: A + depth*normalize(0,1,1).
+        depth=chain['pivot']['depth']/math.sqrt(2)
+        check(close(chain['placement'][0]['head'],[unmoved[0],unmoved[1]+depth,unmoved[2]+depth],1e-6),
+              'first head lies on the pivot ray from the unmoved root')
         check(not chain['leak'],'separate cylinder has no leak')
-        check(abs((chain['placement'][0]['tip'][2]-chain['placement'][0]['head'][2])+.07875)<.002,'hand-derived first segment .07875 m')
+        check(abs((chain['placement'][0]['tip'][2]-unmoved[2])+.07875)<.002,'hand-derived first segment .07875 m from the unmoved root')
         check(all(abs(w-1)<.0001 for w in skin_weights(full.read_bytes())),'exported weights normalised')
         rows=exported_vertices(full.read_bytes())
         check(all(len(weights)<=4 for _,weights in rows),'whole exported mesh has at most four influences')

@@ -26,13 +26,15 @@ Every captured negative-section point must fit the same recorded tube used
 by growth and completion. These bounds are acceptance requirements, not
 snapshots of one fixture's output.
 
-For successful growth at zero frame shift, only the root moves into the parent part.
-The body-back/up bisector (0,1,1) has length sqrt(2), so root_depth d gives
-head = attachment + (0,d/sqrt(2),d/sqrt(2)); d=.03 m gives 21.213203 mm
-on both axes. With d=0 the root equals attachment. All subsequent heads and
+For successful growth at zero frame shift, only the root moves into the torso.
+The back/up bisector (0,1,1) has length sqrt(2), so the solved pivot depth s gives
+head = attachment + (0,s/sqrt(2),s/sqrt(2)), with s>=root_depth=.03 m.
+The torso chord can require more than .03 m to reach root_wall_margin.
+With root_depth=0 and root_wall_margin=-1 the root equals attachment.
+All subsequent heads and
 the tip must be identical within 1e-9 m: splits, slab recentring and axis
 length still use the attachment station, independently of root_depth.
-Compare explicit depths .03 and 0, regardless of the declaration. Per-link
+Compare explicit minimum depths .03 and 0, regardless of the declaration. Per-link
 weights must agree within 1e-9 and affected sets must be identical: weight
 planning continues to use the attachment polyline when the root moves.
 """
@@ -130,7 +132,8 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=job['inputs']['model'])
 arm=next(o for o in bpy.context.scene.objects if o.type=='ARMATURE')
 co,edges,normals,faces=[],[],[],[]
-for mesh in (o for o in bpy.context.scene.objects if o.type=='MESH'):
+for mesh in (o for o in bpy.context.scene.objects if o.type=='MESH'
+             and any(md.type=='ARMATURE' and md.object==arm for md in o.modifiers)):
     off=len(co); normal_matrix=mesh.matrix_world.to_3x3().inverted().transposed()
     co.extend(mesh.matrix_world@v.co for v in mesh.data.vertices)
     normals.extend((normal_matrix@v.normal).normalized() for v in mesh.data.vertices)
@@ -152,12 +155,22 @@ for shift in (-.002,0,.002):
     assert m['stem_vertices_captured']>0, m
     if shift==0:
         attachment=Vector(m['attachment'])
-        expected=attachment+Vector((0,.03/math.sqrt(2),.03/math.sqrt(2)))
+        depth=m['pivot']['depth']
+        assert depth>=run_params['root_depth'], m['pivot']
+        expected=attachment+Vector((0,1,1)).normalized()*depth
         head=Vector(m['placement'][0]['head'])
         assert (head-expected).length<=1e-6, (list(head),list(expected))
-        zero_params=dict(run_params,root_depth=0.)
+        unmoved=[Vector(v) for v in m['weight_joints']]
+        ceiling=Vector(m['pivot']['gap_apex'])
+        assert attachment.y < ceiling.y < attachment.y+.12, m['pivot']
+        assert abs(ceiling.z-attachment.z)<=.03, m['pivot']
+        for start in (1,2):
+            _,found,gap=scope['torso_chord'](co,faces,attachment,unmoved,start_index=start)
+            assert gap['joint_index']==start and (found-ceiling).length<=1e-6, gap
+        zero_params=dict(run_params,root_depth=0.,root_wall_margin=-1.)
         zero_plan=scope['appendage_plan'](g,zero_params,co,edges,bones,normals,faces)
         zero=zero_plan[2]
+        assert zero['pivot']['depth']==0., zero['pivot']
         assert plan[1].keys()==zero_plan[1].keys()
         for name,weights in plan[1].items():
             unshifted_weights=zero_plan[1][name]
@@ -185,7 +198,7 @@ for shift in (-.002,0,.002):
             high=row['t']
         assert matched, (i,t,m['base_slice_table'])
     results.append({'shift_mm':shift*1000,'depth_mm':m['base_stop_depth_mm'],'capture':m['stem_vertices_captured'],
-                    'root_head':m['placement'][0]['head'],'attachment':m['attachment']})
+                    'root_head':m['placement'][0]['head'],'attachment':m['attachment'],'pivot':m['pivot']})
 depths=[r['depth_mm'] for r in results]; counts=[r['capture'] for r in results]
 assert max(depths)-min(depths)<=max(3,.25*min(depths))+1e-6, results
 assert max(counts)/min(counts)<=1.5, results
@@ -208,13 +221,18 @@ def main():
         os.environ['STORAGE_DIR']=str(root/'storage'); os.environ['INSTANCE_DIR']=str(root/'instance')
         from app.core import paths
         paths.init(root/'storage')
+        paths.init_instance(root/'instance')
         from app.blender import runner
         normalized=runner.run('normalize',inputs={'model':args.model},params={'target_height_m':args.target_height_m},out_dir=root/'normalized',timeout_s=180)
         assert normalized['ok'], normalized
         operation=runner.SCRIPTS_DIR/'extension_bones.py'
         scripts=root/'scripts'; scripts.mkdir(); (scripts/'probe.py').write_text(PROBE)
+        original_scripts=runner.SCRIPTS_DIR
         runner.SCRIPTS_DIR=scripts
-        result=runner.run('probe',inputs={'model':Path(normalized['outputs']['model'])},params={'operation':str(operation),'group':group},out_dir=root/'probe',timeout_s=600)
+        try:
+            result=runner.run('probe',inputs={'model':Path(normalized['outputs']['model'])},params={'operation':str(operation),'group':group},out_dir=root/'probe',timeout_s=600)
+        finally:
+            runner.SCRIPTS_DIR=original_scripts
         assert result['ok'], result
         print('PASS closed-section analytic and subdivision checks')
         print('PASS appendage_plan frame perturbations',json.dumps(result['data']))
