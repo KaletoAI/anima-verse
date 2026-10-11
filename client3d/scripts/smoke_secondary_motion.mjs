@@ -26,9 +26,13 @@
  * threshold off→60 at .75s also leaves10; interrupted disable halfway leaves
  * 15 at its midpoint, then20. Simultaneous rest+90→-90 crosses0 at .75s,
  * where threshold60→0 must leave both joints20 (zero-rest invariant).
- * Static sag_max_deg and squash bound T'; dynamic angles are linear up to
- * max_deg/2, then max_deg/2*(1+tanh((angle-max_deg/2)/(max_deg/2))).
- * This C1 function is strictly monotonic and bounded by max_deg. Gain is
+ * Static sag_max_deg and squash bound T'; max_deg is a whole-chain swing
+ * budget. Bind spans l_j give R_j=sum of remaining spans and weights R_j²*l_j.
+ * Equal spans: three links give 9:4:1 /14; five give 25:16:9:4:1 /55.
+ * Spans [2,1] give R=[3,1], weights=[3²*2,1²*1]=[18,1] /19.
+ * One link has share 1. With L=max_deg*share, dynamic angles are linear up to
+ * L/2, then L/2*(1+tanh((angle-L/2)/(L/2))).
+ * This C1 function is strictly monotonic and bounded by L. Gain is
  * applied AFTER saturation. A critical spring with body velocity V has
  * d=-V*t*exp(-omega*t), independent of gravity: at V=3,t=1/30,
  * d_x=-0.065778376882. Bent-forward gravity 0/3 share this raw dynamic
@@ -263,6 +267,139 @@ try {
   pairedChain.bends.forEach((bend,i)=>near(bend,theta*[9,4,1][i]/14,.05));
   console.log('ok paired group separates root chains');
   console.log('ok loaded single-link and paired single-link matrices match 187c5e2f');
+  const swingSource=(await promisify(execFile)('git',['show','76767576:packages/scene-render/src/secondaryMotion.ts'],{encoding:'utf8'})).stdout;
+  const swingBuild=await build({stdin:{contents:swingSource,resolveDir:join(process.cwd(),'packages/scene-render/src'),loader:'ts'},bundle:true,platform:'node',format:'esm',write:false,external:['three']});
+  const swingFile=join(dir,'swing-baseline.mjs');await writeFile(swingFile,swingBuild.outputFiles[0].text);
+  const swingBaseline=await import(swingFile);
+  function swingChain(spans,api=C,paired=false,params={}) {
+    const root=new THREE.Group(),anchor=new THREE.Bone();root.add(anchor);
+    const bones=[],positions=[],indices=[],weights=[];
+    for(let side=0;side<(paired?2:1);side++) {
+      let distance=.1;
+      for(let j=0;j<spans.length;j++) {
+        const b=new THREE.Bone();b.name=`swing_${side}_${j}`;
+        (j?bones.at(-1):anchor).add(b);
+        b.position.set(j?0:paired?(side?.2:-.2):0,0,j?spans[j-1]:.1);
+        bones.push(b);
+        positions.push(paired?(side?.2:-.2):0,0,distance+spans[j]/2);
+        indices.push(bones.length,0,0,0);weights.push(1,0,0,0);
+        distance+=spans[j];
+      }
+    }
+    const geometry=new THREE.BufferGeometry();
+    geometry.setAttribute('position',new THREE.BufferAttribute(new Float64Array(positions),3));
+    geometry.setAttribute('skinIndex',new THREE.Uint16BufferAttribute(indices,4));
+    geometry.setAttribute('skinWeight',new THREE.Float32BufferAttribute(weights,4));
+    const mesh=new THREE.SkinnedMesh(geometry,new THREE.MeshBasicMaterial());root.add(mesh);
+    root.updateMatrixWorld(true);mesh.bind(new THREE.Skeleton([anchor,...bones]));
+    const motion=payload({bones:bones.map(b=>b.name),gravity:0,gain:1,max_deg:30,
+      axis_gain:[1,1,0],squash:[1,1],...params});
+    const solver=api.createSecondaryMotion(THREE,root,motion);solver.update(0);
+    return {root,anchor,bones,solver,motion};
+  }
+  function driveSwing(f,frames=720) {
+    const samples=[];
+    for(let frame=1;frame<=frames;frame++) {
+      // Large oscillating translation saturates the transverse swing even at
+      // the root. Alternating 90-degree turns also exercise the extreme guard.
+      f.anchor.position.x=100*Math.sin(frame/20);
+      f.anchor.rotation.y=Math.floor(frame/120)%2*Math.PI/2;
+      f.solver.update(1/120);
+      // gravity/rest/straightening=0: T' follows +Z in the current parent's
+      // pure rotation. World directions avoid the inverse parent scale
+      // compensation in child local matrices when state extent changes.
+      samples.push(f.bones.map(b=>new THREE.Vector3(0,0,1)
+        .applyQuaternion(b.parent.getWorldQuaternion(new THREE.Quaternion())).angleTo(
+          new THREE.Vector3(0,0,1).transformDirection(b.matrixWorld))*180/Math.PI));
+    }
+    f.solver.dispose();return samples;
+  }
+  function assertSwingBudget(samples,limits,label) {
+    for(const angles of samples)for(let side=0;side<angles.length/limits.length;side++) {
+      const chain=angles.slice(side*limits.length,(side+1)*limits.length);
+      chain.forEach((angle,j)=>assert.ok(Number.isFinite(angle)&&angle<=limits[j]+1e-6,
+        `${label} link ${j} dynamic angle ${angle} exceeds ${limits[j]}`));
+      assert.ok(chain.reduce((a,b)=>a+b,0)<=30+1e-6,`${label} whole-chain swing exceeds 30`);
+    }
+  }
+  // The literal ratios above are independent hand derivations. Measuring the
+  // saturated output catches per-link caps, equal splitting and wrong spans.
+  for(const [spans,weights,denominator] of [
+    [[1,1,1],[9,4,1],14],[[1,1,1,1,1],[25,16,9,4,1],55],[[2,1],[18,1],19],
+  ])for(const paired of [false,true]) {
+    const limits=weights.map(w=>30*w/denominator);
+    const samples=driveSwing(swingChain(spans,C,paired));
+    assertSwingBudget(samples,limits,`spans=${spans} paired=${paired}`);
+    const peaks=samples[0].map((_,j)=>Math.max(...samples.map(a=>a[j])));
+    peaks.forEach((peak,j)=>assert.ok(peak>=.99*limits[j%spans.length],`link ${j} did not saturate: ${peak}`));
+    assert.ok(samples.some(a=>a.every((angle,j)=>angle>=.99*limits[j%spans.length])),
+      'the drive must saturate every link in the same frame');
+    console.log('ok whole-chain dynamic swing',JSON.stringify({spans,paired,limits,peaks}));
+  }
+  const oldSwing=driveSwing(swingChain([1,1,1,1,1],swingBaseline));
+  assert.throws(()=>assertSwingBudget(oldSwing,[30*25/55,30*16/55,30*9/55,30*4/55,30/55],'76767576'),
+    /dynamic angle .* exceeds/);
+  assert.ok(oldSwing.some(a=>a.reduce((sum,value)=>sum+value,0)>30+1e-6),
+    '76767576 must also exceed the whole-chain budget on the same drive');
+  console.log('ok old-code swing proof 76767576: per-link and whole-chain assertions FAIL');
+  // Reconfigure while the chain is deformed. Extent changes must retain
+  // bind spans [2,1], hence the same 18:1 split, rather than posed lengths.
+  const resized=swingChain([2,1]);
+  resized.anchor.position.x=100;resized.anchor.rotation.y=Math.PI/2;
+  resized.solver.update(1/120);
+  resized.solver.configure(payload({...resized.motion.groups.test,length:2,girth:1.5}));
+  const resizedSamples=driveSwing(resized);
+  assertSwingBudget(resizedSamples,[30*18/19,30/19],'live extent change');
+  assert.ok(resizedSamples.some(a=>a[0]>=.99*30*18/19&&a[1]>=.99*30/19));
+  console.log('ok live extent reconfigure retains immutable bind-span swing shares');
+  // Zero-frequency jump: two substeps, initially p=T and v=0. The first
+  // capped increment is budget/2 along (-X+Z)/sqrt(2); carrying v_T means
+  // the second increment is zero. With axial gain=0, the root's raw angle
+  // is atan(sin(L)/(2*sqrt(2))), below L/2, so the soft cap leaves it linear.
+  const turn=swingChain([1,1,1],C,false,{freq_hz:0});
+  turn.anchor.rotation.y=Math.PI/2;turn.solver.update(1/120);
+  const turnLimit=30*9/14*Math.PI/180;
+  near(new THREE.Vector3(0,0,1).angleTo(new THREE.Vector3(0,0,1).transformDirection(turn.bones[0].matrix)),
+    Math.atan(Math.sin(turnLimit)/(2*Math.SQRT2)),1e-12);
+  turn.solver.dispose();
+  console.log('ok extreme-turn increment uses the root share of the swing budget');
+  // Translation bounds the dynamic shift by centroid lever * sin(L).
+  // Unit spans put every centroid .5 from its attachment. Axial gain=1
+  // and backward anchor motion lengthen the raw lever, activating this
+  // clamp even though the angular output already obeys its soft limit.
+  for(const translate of [.6,1]) {
+    const translated=swingChain([1,1,1],C,false,{translate,axis_gain:[1,1,1]});
+    const limits=[30*9/14,30*4/14,30/14];
+    const peaks=[0,0,0];
+    for(let frame=1;frame<=360;frame++) {
+      translated.anchor.position.set(100*Math.sin(frame/20),0,-frame/30);
+      translated.solver.update(1/120);
+      translated.bones.forEach((b,j)=>{
+        const shift=new THREE.Vector3().setFromMatrixPosition(b.matrix).distanceTo(b.position);
+        const budget=translate*.5*Math.sin(limits[j]*Math.PI/180);
+        assert.ok(shift<=budget+1e-12,`link ${j} translated ${shift} exceeds ${budget}`);
+        peaks[j]=Math.max(peaks[j],shift);
+      });
+    }
+    peaks.forEach((peak,j)=>near(peak,translate*.5*Math.sin(limits[j]*Math.PI/180),1e-12));
+    translated.solver.dispose();
+  }
+  console.log('ok dynamic translation clamp uses each link share at translate .6 and 1');
+  for(const paired of [false,true])for(const translate of [0,.6,1]) {
+    const params={translate,gravity:.8,gravity_scale:2,sag_max_deg:25,spill:.5,spill_max_deg:20};
+    const current=swingChain([1],C,paired,params),old=swingChain([1],swingBaseline,paired,params);
+    for(let frame=1;frame<=360;frame++) {
+      for(const f of [current,old]) {
+        f.anchor.position.x=100*Math.sin(frame/20);
+        f.anchor.rotation.set(.4*Math.sin(frame/30),Math.floor(frame/120)%2*Math.PI/2,0);
+        f.solver.update(1/120);
+      }
+      current.bones.forEach((b,j)=>b.matrixWorld.elements.forEach((value,k)=>
+        near(value,old.bones[j].matrixWorld.elements[k],1e-12)));
+    }
+    current.solver.dispose();old.solver.dispose();
+  }
+  console.log('ok driven one-link and paired one-link parity with 76767576 within 1e-12');
   // Bind lever +15: upright f_in=sin(15)-sin(15)=0, so length=1.
   const bindTilted=fixture({gravity:0,flatten:1,spill:1,stretch:1},15);
   bindTilted.solver.update(0);near(bindTilted.point().length(),1);

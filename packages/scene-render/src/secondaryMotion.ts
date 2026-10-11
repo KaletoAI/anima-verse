@@ -130,6 +130,8 @@ interface Particle {
   bind: Bind
   roots: Bind[]
   chain?: Particle[]
+  /** Share of the root chain's dynamic swing budget, from immutable bind spans. */
+  motionShare: number
   sag?: { frame: Matrix4; rotation: Quaternion; head: Vector3; centre: Vector3; force: Vector3; torque: Vector3; weight: number; q: Quaternion }
   params: MotionGroup
   paramsFrom: MotionGroup
@@ -400,7 +402,7 @@ export function createSecondaryMotion(
         selected.add(bind.bone)
         const to = restAngle(params)
         const old = previous.get(bind.bone)
-        const particle: Particle = old ?? { bind, roots, params, paramsFrom: params, paramsTo: params, paramsBlend: 1.5, p: null, v: new three.Vector3(),
+        const particle: Particle = old ?? { bind, roots, motionShare: 1, params, paramsFrom: params, paramsTo: params, paramsBlend: 1.5, p: null, v: new three.Vector3(),
           target: null, anchorRotation: null, rest: to, restFrom: to, restTo: to, blend: 1.5,
           straighten: straighteningFraction(to, params.straighten_deg ?? 0),
           straightenFrom: straighteningFraction(to, params.straighten_deg ?? 0), straightenRestFrom: Math.abs(to),
@@ -444,8 +446,21 @@ export function createSecondaryMotion(
         for (let n: Object3D | null = p.bind.bone; n; n = n.parent) if (n === rootParticle.bind.bone) return true
         return false
       }).sort((a, b) => a.bind.depth - b.bind.depth)
+      // The same span convention as sag: joint-to-joint, with twice the
+      // centroid lever for the final link. Bind geometry keeps shares fixed
+      // through rest, extent and dynamic changes; each root owns its budget.
+      const spans = chain.map((st, j) => j + 1 < chain.length
+        ? st.bind.head.distanceTo(chain[j + 1].bind.head)
+        : 2 * st.bind.centroidWorld.distanceTo(st.bind.head))
+      let remaining = 0, sum = 0
+      for (let j = chain.length - 1; j >= 0; j--) {
+        remaining += spans[j]
+        chain[j].motionShare = remaining * remaining * spans[j]
+        sum += chain[j].motionShare
+      }
       for (const st of chain) {
         st.chain = chain
+        st.motionShare = chain.length === 1 ? 1 : sum > 0 ? st.motionShare / sum : 1 / chain.length
         if (chain.length >= 2) st.sag ??= { frame: new three.Matrix4(), rotation: new three.Quaternion(),
           head: new three.Vector3(), centre: new three.Vector3(), force: new three.Vector3(), torque: new three.Vector3(), weight: 0, q: new three.Quaternion() }
       }
@@ -512,6 +527,7 @@ export function createSecondaryMotion(
       }
       for (const st of particles) {
         const b = st.bind
+        const motionLimit = st.params.max_deg * st.motionShare * Math.PI / 180
         anchor.copy(b.local)
         anchorFull.copy(b.local)
         // A driven ancestor contributes its frame WITHOUT its own extension
@@ -657,7 +673,7 @@ export function createSecondaryMotion(
               // Cap each deviation increment and its total displacement during
               // extreme anchor turns. Carry the bounded target velocity on hit
               // so stored momentum cannot inject another burst on the next step.
-              const budget = staticVector.length() * Math.sin(Math.min(Math.PI / 2, st.params.max_deg * Math.PI / 180))
+              const budget = staticVector.length() * Math.sin(Math.min(Math.PI / 2, motionLimit))
               nextDeviation.copy(result.p).sub(t).addScaledVector(vTarget, -h)
               temp.copy(nextDeviation).sub(previousDeviation).clampLength(0, budget * Math.min(1, h * 120))
               nextDeviation.copy(previousDeviation).add(temp).clampLength(0, budget)
@@ -698,7 +714,7 @@ export function createSecondaryMotion(
         // Saturate the swing angle around the static target, not around bind T.
         dynamicQ.setFromUnitVectors(temp.copy(base).normalize(), u.copy(rendered).normalize())
         const angle = dynamicQ.angleTo(identityQ)
-        const limited = softMotionAngle(angle, st.params.max_deg * Math.PI / 180)
+        const limited = softMotionAngle(angle, motionLimit)
         if (angle > 0) dynamicQ.slerp(identityQ, 1 - limited / angle)
         // Only longitudinal dynamics change length; transverse displacement
         // supplies direction. Static length/flatten remain untouched.
@@ -718,7 +734,7 @@ export function createSecondaryMotion(
         // translation leaves no residual rotation when neither cap is active.
         temp.copy(originalLever).normalize()
         shiftPart.addScaledVector(temp, -shiftPart.dot(temp))
-        shiftPart.clampLength(0, base.length() * Math.max(0, Math.sin(st.params.max_deg * Math.PI / 180)))
+        shiftPart.clampLength(0, base.length() * Math.max(0, Math.sin(motionLimit)))
         headShift.add(shiftPart).multiplyScalar(translate)
         const totalLength = rendered.length()
         rendered.sub(headShift).normalize().multiplyScalar(totalLength)
