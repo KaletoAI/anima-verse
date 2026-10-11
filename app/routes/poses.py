@@ -20,16 +20,22 @@ Free text never creates an entry any more — the catalog grows only through the
 approval flow here. The animation vocabulary is NOT hardcoded either: it is
 whatever clips the world currently ships.
 """
-import json
-from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.core import expression_pose_maps as epm
 from app.core import pose_catalog
 from app.core.auth_dependency import require_admin
+from app.core.pose_catalog_edit import (
+    CatalogEditError, after_write, alias_owner, catalog_txn, read_store,
+    require_free_aliases, store_of, validate_group, validate_key,
+    validate_synonyms, write_store,
+)
 from app.core.log import get_logger
+
+# Compatibility for existing smoke imports; implementation lives in core.
+_alias_owner = alias_owner
 
 logger = get_logger(__name__)
 
@@ -45,60 +51,6 @@ def _axis(axis: str) -> str:
     return value
 
 
-@contextmanager
-def _catalog_txn(axis: str) -> Iterator[None]:
-    """Serializes ONE catalog file against every other writer of it.
-
-    The editor's write paths are all ``_read`` → change → ``_write`` over the
-    WHOLE document. They used to be kept apart by the event loop; since the
-    route bodies run in the threadpool (2026-08-24) two admins (or two tabs)
-    can be inside one at the same time, both read the same document and the
-    later write drops the earlier entry. The alias checks
-    (``_require_free_aliases``) have the same problem: they read the catalog
-    cache, and without the lock two new entries can each pass the check for an
-    alias only one of them may own.
-
-    Keyed by the AXIS, so the ``pose`` and the ``expression`` axis do not
-    wait for each other. Blocking — these are rare admin clicks, and a
-    dropped edit would have to be retyped.
-    """
-    from app.core.keyed_lock import keyed_lock
-    # Keyed on the AXIS, not on one store: an entry can move between the
-    # tracked catalog and the world layer, and that touches both. The file
-    # lock serializes against writers OUTSIDE this process (the animation
-    # studio's publish) — same read -> alias check -> write section.
-    with keyed_lock("pose_catalog", axis):
-        with pose_catalog.catalog_file_lock(axis):
-            yield
-
-
-def _read(axis: str, store: str = "shared") -> Dict[str, Any]:
-    """Raw catalog document of ONE store: the shared FILE (keeps ``_comment``
-    and any field this router does not know about, so a write never eats
-    them), or the world layer's entries as a document of the same shape.
-
-    Call it inside :func:`_catalog_txn` whenever the result is written back.
-    """
-    if store == "world":
-        return {"entries": dict(pose_catalog.world_entries(axis))}
-    try:
-        data = json.loads(
-            pose_catalog.catalog_path(axis).read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    entries = data.get("entries")
-    data["entries"] = entries if isinstance(entries, dict) else {}
-    return data
-
-
-def _store_of(axis: str, key: str) -> str:
-    """Which store an existing entry lives in — the merged catalog knows."""
-    entry = pose_catalog.get_catalog(axis).get(key) or {}
-    return str(entry.get("_store") or "shared")
-
-
 def _validated_store(raw: Any, fallback: str) -> str:
     """The store a write should target."""
     value = str(raw or "").strip().lower() or fallback
@@ -107,56 +59,6 @@ def _validated_store(raw: Any, fallback: str) -> str:
             status_code=400,
             detail=f"store must be one of {', '.join(pose_catalog.STORES)}")
     return value
-
-
-def _after_write() -> None:
-    """What every catalog write of either layer has to drop afterwards."""
-    # Drops the catalog cache, the alias embeddings and the expression memo.
-    epm.reload_presets()
-    # The place types (groups) live in this catalog — the seat inventory
-    # composed from the old ones is stale.
-    from app.core import places; places.invalidate()
-
-
-def _write(axis: str, data: Dict[str, Any], store: str = "shared") -> None:
-    """Write ONE store back as a whole: the world layer's entries in one
-    transaction, or the shared file atomically
-    (``pose_catalog.write_shared_document``)."""
-    if store == "world":
-        pose_catalog.replace_world_entries(axis, data.get("entries") or {})
-        _after_write()
-        return
-    pose_catalog.write_shared_document(axis, data)
-    _after_write()
-
-
-def _key(raw: Any) -> str:
-    """Validated entry key. A key with a slash in it would be unreachable
-    through /poses/{key} afterwards — reject it at creation time."""
-    key = str(raw or "").strip().lower()
-    if not key:
-        raise HTTPException(status_code=400, detail="key missing")
-    if "/" in key:
-        raise HTTPException(status_code=400, detail="key must not contain '/'")
-    return key
-
-
-def _synonyms(raw: Any) -> List[str]:
-    if not isinstance(raw, list):
-        raise HTTPException(status_code=400, detail="synonyms must be a list")
-    return [str(s).strip().lower() for s in raw if str(s).strip()]
-
-
-def _group(raw: Any) -> str:
-    """Validated place type — the finite vocabulary of the ``groups`` block.
-
-    A pose without a known place type is unplaceable: the marker speaks group
-    ids, so an unknown one would silently make the pose unreachable.
-    """
-    group = str(raw or "").strip().lower()
-    if group not in pose_catalog.get_groups():
-        raise HTTPException(status_code=400, detail="place type missing or unknown")
-    return group
 
 
 def _places(raw: Any) -> int:
@@ -185,34 +87,6 @@ def _yaw_offset(raw: Any) -> float:
         return float(raw or 0.0)
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="yaw_offset must be a number")
-
-
-def _alias_owner(axis: str, alias: str, exclude_key: str = "") -> str:
-    """Entry key that already claims this alias ("" = free).
-
-    ``exclude_key`` skips exactly one entry — an update re-saving an entry with
-    the synonyms it already owns is not a collision with itself.
-    """
-    alias = (alias or "").strip().lower()
-    for key, entry in pose_catalog.get_catalog(axis).items():
-        if exclude_key and key == exclude_key:
-            continue
-        if alias == key or alias in entry.get("synonyms", []):
-            return key
-    return ""
-
-
-def _require_free_aliases(axis: str, aliases: List[str], exclude_key: str = "") -> None:
-    """409 (naming the owning entry) as soon as one alias is already claimed.
-
-    Every write path goes through this — an alias must point at exactly one
-    entry, otherwise the resolver's alias index silently drops one of them.
-    """
-    for alias in aliases:
-        owner = _alias_owner(axis, alias, exclude_key=exclude_key)
-        if owner:
-            raise HTTPException(status_code=409,
-                                detail=f"'{alias}' already belongs to '{owner}'")
 
 
 # ── Place types: the vocabulary a marker speaks ──────────────────────────
@@ -245,7 +119,7 @@ def _groups_problems(groups: Dict[str, Any], entries: Dict[str, Any]) -> List[st
     is missing, or a default is not a pose of its own group.
 
     A group with NO poses may carry an empty default — a place type has to
-    exist before any pose can name it (``_group`` rejects an unknown one), so
+    exist before any pose can name it (``validate_group`` rejects an unknown one), so
     demanding a default from the start would make the block unable to grow.
 
     A group with ``needs_place: false`` is checked the same way: its poses
@@ -292,40 +166,43 @@ def _put_groups_sync(body: Any) -> Dict[str, Any]:
     body moved to the world, because that version is the seed the world row
     overrides and comes back once the row is dropped.
     """
-    raw = (body or {}).get("groups")
-    if not isinstance(raw, dict) or not raw:
-        raise HTTPException(status_code=400, detail="groups missing")
-    by_store: Dict[str, Dict[str, Any]] = {s: {} for s in pose_catalog.STORES}
-    for key, spec in raw.items():
-        k = _key(key)
-        store = _validated_store((spec or {}).get("store") if isinstance(spec, dict)
-                                 else None, "shared")
-        group = _normalize_group(spec)
-        if not group["label"]:
-            group["label"] = k
-        by_store[store][k] = group
-    with _catalog_txn("pose"):
-        data = _read("pose")
-        old_shared = data.get("groups") if isinstance(data.get("groups"), dict) else {}
-        shared_block: Dict[str, Any] = dict(by_store["shared"])
-        for k in by_store["world"]:
-            if k in old_shared:
-                shared_block[k] = old_shared[k]
-        effective = dict(shared_block)
-        effective.update(by_store["world"])
-        # Checked against the EFFECTIVE entries: a world pose may name a
-        # world group, and a shared pose must still find its group.
-        entries = {k: e for k, e in pose_catalog.get_catalog("pose").items()}
-        problems = _groups_problems(effective, entries)
-        if problems:
-            raise HTTPException(status_code=400, detail="; ".join(problems))
-        pose_catalog.replace_world_groups(by_store["world"])
-        if shared_block != old_shared:
-            data["groups"] = shared_block
-            _write("pose", data)
-        else:
-            _after_write()
-    return {"status": "success", "groups": pose_catalog.get_groups()}
+    try:
+        raw = (body or {}).get("groups")
+        if not isinstance(raw, dict) or not raw:
+            raise HTTPException(status_code=400, detail="groups missing")
+        by_store: Dict[str, Dict[str, Any]] = {s: {} for s in pose_catalog.STORES}
+        for key, spec in raw.items():
+            k = validate_key(key)
+            store = _validated_store((spec or {}).get("store") if isinstance(spec, dict)
+                                     else None, "shared")
+            group = _normalize_group(spec)
+            if not group["label"]:
+                group["label"] = k
+            by_store[store][k] = group
+        with catalog_txn("pose"):
+            data = read_store("pose")
+            old_shared = data.get("groups") if isinstance(data.get("groups"), dict) else {}
+            shared_block: Dict[str, Any] = dict(by_store["shared"])
+            for k in by_store["world"]:
+                if k in old_shared:
+                    shared_block[k] = old_shared[k]
+            effective = dict(shared_block)
+            effective.update(by_store["world"])
+            # Checked against the EFFECTIVE entries: a world pose may name a
+            # world group, and a shared pose must still find its group.
+            entries = {k: e for k, e in pose_catalog.get_catalog("pose").items()}
+            problems = _groups_problems(effective, entries)
+            if problems:
+                raise HTTPException(status_code=400, detail="; ".join(problems))
+            pose_catalog.replace_world_groups(by_store["world"])
+            if shared_block != old_shared:
+                data["groups"] = shared_block
+                write_store("pose", data)
+            else:
+                after_write()
+        return {"status": "success", "groups": pose_catalog.get_groups()}
+    except CatalogEditError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
 
 
 @router.get("")
@@ -399,36 +276,39 @@ async def create_entry(request: Request,
 
 def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
     """The blocking body of ``create_entry`` — runs in the threadpool."""
-    axis = _axis(body.get("axis") or "pose")
-    key = _key(body.get("key"))
-    prompt = str(body.get("prompt") or "").strip()
-    if not prompt:
-        raise HTTPException(status_code=400, detail="prompt missing")
-    animation = str(body.get("animation") or "").strip().lower()
-    if axis == "pose" and not animation:
-        raise HTTPException(status_code=400, detail="animation missing")
-    group = _group(body.get("group")) if axis == "pose" else ""
-    # A new entry defaults to the TRACKED catalog; the importer of a licensed
-    # clip asks for "world" so its name never reaches a committed file.
-    store = _validated_store(body.get("store"), "shared")
-    with _catalog_txn(axis):
-        data = _read(axis, store)
-        if key in pose_catalog.get_catalog(axis):
-            raise HTTPException(status_code=409, detail="Entry already exists")
-        synonyms = _synonyms(body.get("synonyms") or [])
-        _require_free_aliases(axis, [key] + synonyms)
+    try:
+        axis = _axis(body.get("axis") or "pose")
+        key = validate_key(body.get("key"))
+        prompt = str(body.get("prompt") or "").strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail="prompt missing")
+        animation = str(body.get("animation") or "").strip().lower()
+        if axis == "pose" and not animation:
+            raise HTTPException(status_code=400, detail="animation missing")
+        group = validate_group(body.get("group")) if axis == "pose" else ""
+        # A new entry defaults to the TRACKED catalog; the importer of a licensed
+        # clip asks for "world" so its name never reaches a committed file.
+        store = _validated_store(body.get("store"), "shared")
+        with catalog_txn(axis):
+            data = read_store(axis, store)
+            if key in pose_catalog.get_catalog(axis):
+                raise HTTPException(status_code=409, detail="Entry already exists")
+            synonyms = validate_synonyms(body.get("synonyms") or [])
+            require_free_aliases(axis, [key] + synonyms)
 
-        entry: Dict[str, Any] = {"prompt": prompt, "synonyms": synonyms}
-        if axis == "pose":
-            entry["animation"] = animation
-            entry["solo"] = bool(body.get("solo", True))
-            entry["group"] = group
-            if not entry["solo"]:
-                entry["places"] = _places(body.get("places"))
-                entry["yaw_offset"] = _yaw_offset(body.get("yaw_offset"))
-        data["entries"][key] = entry
-        _write(axis, data, store)
-    return {"status": "success", "key": key, "axis": axis, "store": store}
+            entry: Dict[str, Any] = {"prompt": prompt, "synonyms": synonyms}
+            if axis == "pose":
+                entry["animation"] = animation
+                entry["solo"] = bool(body.get("solo", True))
+                entry["group"] = group
+                if not entry["solo"]:
+                    entry["places"] = _places(body.get("places"))
+                    entry["yaw_offset"] = _yaw_offset(body.get("yaw_offset"))
+            data["entries"][key] = entry
+            write_store(axis, data, store)
+        return {"status": "success", "key": key, "axis": axis, "store": store}
+    except CatalogEditError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
 
 
 @router.put("/{key}")
@@ -443,57 +323,60 @@ async def update_entry(key: str, request: Request, axis: str = Query("pose"),
 def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
                        body: Any) -> Dict[str, Any]:
     """The blocking body of ``update_entry`` — runs in the threadpool."""
-    axis = _axis(axis)
-    key = key.strip().lower()
-    with _catalog_txn(axis):
-        was = _store_of(axis, key)
-        # An entry may MOVE between the tracked catalog and the world layer
-        # — that is how an entry which must not be committed gets out of the
-        # tracked file again.
-        store = _validated_store(body.get("store"), was)
-        data = _read(axis, was)
-        entry = data["entries"].get(key)
-        if entry is None:
-            raise HTTPException(status_code=404, detail="Entry not found")
-        if "prompt" in body:
-            entry["prompt"] = str(body["prompt"] or "").strip()
-        if "synonyms" in body:
-            synonyms = _synonyms(body["synonyms"] or [])
-            # The entry's OWN key is excluded: re-saving it with the synonyms
-            # it already holds must stay legal.
-            _require_free_aliases(axis, synonyms, exclude_key=key)
-            entry["synonyms"] = synonyms
-        if "animation" in body and axis == "pose":
-            anim = str(body["animation"] or "").strip().lower()
-            if not anim:
-                raise HTTPException(status_code=400, detail="animation missing")
-            entry["animation"] = anim
-        if "solo" in body and axis == "pose":
-            entry["solo"] = bool(body["solo"])
-        if "group" in body and axis == "pose":
-            entry["group"] = _group(body["group"])
-        if "places" in body and axis == "pose":
-            entry["places"] = _places(body["places"])
-        if "yaw_offset" in body and axis == "pose":
-            entry["yaw_offset"] = _yaw_offset(body["yaw_offset"])
-        if axis == "pose" and entry.get("solo", True):
-            # A solo pose occupies exactly one place and never turns — leaving
-            # the pair fields behind would be a stray the catalog reports.
-            entry.pop("places", None)
-            entry.pop("yaw_offset", None)
-        if store == was:
-            data["entries"][key] = entry
-            _write(axis, data, store)
-        else:
-            # Write the new home FIRST: a crash between the two writes then
-            # leaves the entry in both layers (the world layer wins, so the
-            # game still sees the edited one), never in neither.
-            target = _read(axis, store)
-            target["entries"][key] = entry
-            _write(axis, target, store)
-            data["entries"].pop(key, None)
-            _write(axis, data, was)
-    return {"status": "success", "key": key, "axis": axis, "store": store}
+    try:
+        axis = _axis(axis)
+        key = key.strip().lower()
+        with catalog_txn(axis):
+            was = store_of(axis, key)
+            # An entry may MOVE between the tracked catalog and the world layer
+            # — that is how an entry which must not be committed gets out of the
+            # tracked file again.
+            store = _validated_store(body.get("store"), was)
+            data = read_store(axis, was)
+            entry = data["entries"].get(key)
+            if entry is None:
+                raise HTTPException(status_code=404, detail="Entry not found")
+            if "prompt" in body:
+                entry["prompt"] = str(body["prompt"] or "").strip()
+            if "synonyms" in body:
+                synonyms = validate_synonyms(body["synonyms"] or [])
+                # The entry's OWN key is excluded: re-saving it with the synonyms
+                # it already holds must stay legal.
+                require_free_aliases(axis, synonyms, exclude_key=key)
+                entry["synonyms"] = synonyms
+            if "animation" in body and axis == "pose":
+                anim = str(body["animation"] or "").strip().lower()
+                if not anim:
+                    raise HTTPException(status_code=400, detail="animation missing")
+                entry["animation"] = anim
+            if "solo" in body and axis == "pose":
+                entry["solo"] = bool(body["solo"])
+            if "group" in body and axis == "pose":
+                entry["group"] = validate_group(body["group"])
+            if "places" in body and axis == "pose":
+                entry["places"] = _places(body["places"])
+            if "yaw_offset" in body and axis == "pose":
+                entry["yaw_offset"] = _yaw_offset(body["yaw_offset"])
+            if axis == "pose" and entry.get("solo", True):
+                # A solo pose occupies exactly one place and never turns — leaving
+                # the pair fields behind would be a stray the catalog reports.
+                entry.pop("places", None)
+                entry.pop("yaw_offset", None)
+            if store == was:
+                data["entries"][key] = entry
+                write_store(axis, data, store)
+            else:
+                # Write the new home FIRST: a crash between the two writes then
+                # leaves the entry in both layers (the world layer wins, so the
+                # game still sees the edited one), never in neither.
+                target = read_store(axis, store)
+                target["entries"][key] = entry
+                write_store(axis, target, store)
+                data["entries"].pop(key, None)
+                write_store(axis, data, was)
+        return {"status": "success", "key": key, "axis": axis, "store": store}
+    except CatalogEditError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
 
 
 @router.delete("/{key}")
@@ -501,20 +384,23 @@ def delete_entry(key: str, axis: str = Query("pose"),
                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Deletes a catalog entry. The ``_default`` entry is not deletable — it
     is the target every unresolvable free text falls back to."""
-    axis = _axis(axis)
-    key = key.strip().lower()
-    with _catalog_txn(axis):
-        store = _store_of(axis, key)
-        data = _read(axis, store)
-        entry = data["entries"].get(key)
-        if entry is None:
-            raise HTTPException(status_code=404, detail="Entry not found")
-        if entry.get("_default"):
-            raise HTTPException(status_code=400,
-                                detail="the default entry cannot be deleted")
-        data["entries"].pop(key, None)
-        _write(axis, data, store)
-    return {"status": "success", "key": key, "axis": axis, "store": store}
+    try:
+        axis = _axis(axis)
+        key = key.strip().lower()
+        with catalog_txn(axis):
+            store = store_of(axis, key)
+            data = read_store(axis, store)
+            entry = data["entries"].get(key)
+            if entry is None:
+                raise HTTPException(status_code=404, detail="Entry not found")
+            if entry.get("_default"):
+                raise HTTPException(status_code=400,
+                                    detail="the default entry cannot be deleted")
+            data["entries"].pop(key, None)
+            write_store(axis, data, store)
+        return {"status": "success", "key": key, "axis": axis, "store": store}
+    except CatalogEditError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
 
 
 @router.post("/{key}/rename")
@@ -552,55 +438,58 @@ def _rename_entry_sync(key: str, axis: str, body: Any) -> Dict[str, Any]:
     it exists would be the worse order. The ``_default`` flag travels with
     the entry. The old key is NOT kept as a synonym.
     """
-    from app.core import pose_rename
-    axis = _axis(axis)
-    if axis != "pose":
-        raise HTTPException(status_code=400, detail="only pose keys can be renamed")
-    old = key.strip().lower()
-    new = _key((body or {}).get("new_key"))
-    if new == old:
-        raise HTTPException(status_code=400, detail="the new key is the old key")
-    if old in pose_rename.CODE_NAMED_POSE_KEYS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"'{old}' is named by the server code and cannot be renamed")
-    with _catalog_txn(axis):
-        catalog = pose_catalog.get_catalog(axis)
-        if old not in catalog:
-            raise HTTPException(status_code=404, detail="Entry not found")
-        if new in catalog:
-            raise HTTPException(status_code=409, detail="Entry already exists")
-        # The entry's OWN synonyms are free for it — renaming onto one of them
-        # is how a synonym becomes the key.
-        _require_free_aliases(axis, [new], exclude_key=old)
-        stores: List[str] = []
-        shared = _read(axis, "shared")
-        groups = shared.get("groups") if isinstance(shared.get("groups"), dict) else {}
-        shared_changed = old in shared["entries"]
-        if shared_changed:
-            shared["entries"] = _renamed(shared["entries"], old, new)
-            stores.append("shared")
-        for spec in groups.values():
-            if isinstance(spec, dict) and spec.get("default") == old:
-                spec["default"] = new
-                shared_changed = True
-        world = pose_catalog.world_entries(axis)
-        if old in world:
-            pose_catalog.replace_world_entries(axis, _renamed(world, old, new))
-            stores.append("world")
-        world_groups = pose_catalog.world_groups()
-        if any(g.get("default") == old for g in world_groups.values()):
-            for g in world_groups.values():
-                if g.get("default") == old:
-                    g["default"] = new
-            pose_catalog.replace_world_groups(world_groups)
-        if shared_changed:
-            _write(axis, shared, "shared")
-        else:
-            _after_write()
-    references = pose_rename.rewrite_references(old, new)
-    return {"status": "success", "old_key": old, "key": new, "axis": axis,
-            "stores": stores, "references": references}
+    try:
+        from app.core import pose_rename
+        axis = _axis(axis)
+        if axis != "pose":
+            raise HTTPException(status_code=400, detail="only pose keys can be renamed")
+        old = key.strip().lower()
+        new = validate_key((body or {}).get("new_key"))
+        if new == old:
+            raise HTTPException(status_code=400, detail="the new key is the old key")
+        if old in pose_rename.CODE_NAMED_POSE_KEYS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{old}' is named by the server code and cannot be renamed")
+        with catalog_txn(axis):
+            catalog = pose_catalog.get_catalog(axis)
+            if old not in catalog:
+                raise HTTPException(status_code=404, detail="Entry not found")
+            if new in catalog:
+                raise HTTPException(status_code=409, detail="Entry already exists")
+            # The entry's OWN synonyms are free for it — renaming onto one of them
+            # is how a synonym becomes the key.
+            require_free_aliases(axis, [new], exclude_key=old)
+            stores: List[str] = []
+            shared = read_store(axis, "shared")
+            groups = shared.get("groups") if isinstance(shared.get("groups"), dict) else {}
+            shared_changed = old in shared["entries"]
+            if shared_changed:
+                shared["entries"] = _renamed(shared["entries"], old, new)
+                stores.append("shared")
+            for spec in groups.values():
+                if isinstance(spec, dict) and spec.get("default") == old:
+                    spec["default"] = new
+                    shared_changed = True
+            world = pose_catalog.world_entries(axis)
+            if old in world:
+                pose_catalog.replace_world_entries(axis, _renamed(world, old, new))
+                stores.append("world")
+            world_groups = pose_catalog.world_groups()
+            if any(g.get("default") == old for g in world_groups.values()):
+                for g in world_groups.values():
+                    if g.get("default") == old:
+                        g["default"] = new
+                pose_catalog.replace_world_groups(world_groups)
+            if shared_changed:
+                write_store(axis, shared, "shared")
+            else:
+                after_write()
+        references = pose_rename.rewrite_references(old, new)
+        return {"status": "success", "old_key": old, "key": new, "axis": axis,
+                "stores": stores, "references": references}
+    except CatalogEditError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
 
 
 # ── Candidates: free text the catalog could not absorb ───────────────────
@@ -638,73 +527,76 @@ async def approve_candidate(request: Request,
 
 def _approve_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
     """The blocking body of ``approve_candidate`` — runs in the threadpool."""
-    axis = _axis(body.get("axis") or "pose")
-    raw_text = str(body.get("raw_text") or "").strip().lower()
-    if not raw_text:
-        raise HTTPException(status_code=400, detail="raw_text missing")
-    with _catalog_txn(axis):
-        target = str(body.get("as_synonym_of") or "").strip().lower()
-        # Attaching to an existing entry writes where THAT entry lives; a new
-        # entry goes where the caller asks, tracked catalog by default.
-        store = (_store_of(axis, target) if target
-                 else _validated_store(body.get("store"), "shared"))
-        data = _read(axis, store)
+    try:
+        axis = _axis(body.get("axis") or "pose")
+        raw_text = str(body.get("raw_text") or "").strip().lower()
+        if not raw_text:
+            raise HTTPException(status_code=400, detail="raw_text missing")
+        with catalog_txn(axis):
+            target = str(body.get("as_synonym_of") or "").strip().lower()
+            # Attaching to an existing entry writes where THAT entry lives; a new
+            # entry goes where the caller asks, tracked catalog by default.
+            store = (store_of(axis, target) if target
+                     else _validated_store(body.get("store"), "shared"))
+            data = read_store(axis, store)
 
-        if target:
-            entry = data["entries"].get(target)
-            if entry is None:
-                raise HTTPException(status_code=404, detail="Entry not found")
-            owner = _alias_owner(axis, raw_text)
-            if owner and owner != target:
-                raise HTTPException(status_code=409,
-                                    detail=f"'{raw_text}' already belongs to '{owner}'")
-            synonyms = [str(s).strip().lower() for s in (entry.get("synonyms") or [])
-                        if str(s).strip()]
-            if raw_text != target and raw_text not in synonyms:
-                synonyms.append(raw_text)
-            entry["synonyms"] = synonyms
-            data["entries"][target] = entry
-            key = target
-        else:
-            key = _key(body.get("key"))
-            prompt = str(body.get("prompt") or "").strip()
-            if not prompt:
-                raise HTTPException(status_code=400, detail="prompt missing")
-            animation = str(body.get("animation") or "").strip().lower()
-            # Only non-emptiness is checked: the kind vocabulary is
-            # world-dependent (whatever clips exist), so an unknown kind is a
-            # warning, not a wall.
-            if axis == "pose" and not animation:
-                raise HTTPException(status_code=400, detail="animation missing")
-            # A new pose entry is a new pose: same place-type rule as create,
-            # or the catalog is invalid the moment the candidate is absorbed.
-            group = _group(body.get("group")) if axis == "pose" else ""
-            if key in pose_catalog.get_catalog(axis):
-                raise HTTPException(status_code=409, detail="Entry already exists")
-            # The candidate text itself becomes a synonym unless it IS the key
-            # — on top of whatever the admin typed into the form.
-            synonyms: List[str] = []
-            for alias in _synonyms(body.get("synonyms") or []) + [raw_text]:
-                if alias != key and alias not in synonyms:
-                    synonyms.append(alias)
-            _require_free_aliases(axis, [key] + synonyms)
-            entry = {"prompt": prompt, "synonyms": synonyms}
-            if axis == "pose":
-                entry["animation"] = animation
-                entry["solo"] = bool(body.get("solo", True))
-                entry["group"] = group
-                if not entry["solo"]:
-                    # Same as create: a pair pose carries its own slot count
-                    # and clip rotation — dropping them here would silently
-                    # approve every pair candidate as "2 places, 0°".
-                    entry["places"] = _places(body.get("places"))
-                    entry["yaw_offset"] = _yaw_offset(body.get("yaw_offset"))
-            data["entries"][key] = entry
+            if target:
+                entry = data["entries"].get(target)
+                if entry is None:
+                    raise HTTPException(status_code=404, detail="Entry not found")
+                owner = alias_owner(axis, raw_text)
+                if owner and owner != target:
+                    raise HTTPException(status_code=409,
+                                        detail=f"'{raw_text}' already belongs to '{owner}'")
+                synonyms = [str(s).strip().lower() for s in (entry.get("synonyms") or [])
+                            if str(s).strip()]
+                if raw_text != target and raw_text not in synonyms:
+                    synonyms.append(raw_text)
+                entry["synonyms"] = synonyms
+                data["entries"][target] = entry
+                key = target
+            else:
+                key = validate_key(body.get("key"))
+                prompt = str(body.get("prompt") or "").strip()
+                if not prompt:
+                    raise HTTPException(status_code=400, detail="prompt missing")
+                animation = str(body.get("animation") or "").strip().lower()
+                # Only non-emptiness is checked: the kind vocabulary is
+                # world-dependent (whatever clips exist), so an unknown kind is a
+                # warning, not a wall.
+                if axis == "pose" and not animation:
+                    raise HTTPException(status_code=400, detail="animation missing")
+                # A new pose entry is a new pose: same place-type rule as create,
+                # or the catalog is invalid the moment the candidate is absorbed.
+                group = validate_group(body.get("group")) if axis == "pose" else ""
+                if key in pose_catalog.get_catalog(axis):
+                    raise HTTPException(status_code=409, detail="Entry already exists")
+                # The candidate text itself becomes a synonym unless it IS the key
+                # — on top of whatever the admin typed into the form.
+                synonyms: List[str] = []
+                for alias in validate_synonyms(body.get("synonyms") or []) + [raw_text]:
+                    if alias != key and alias not in synonyms:
+                        synonyms.append(alias)
+                require_free_aliases(axis, [key] + synonyms)
+                entry = {"prompt": prompt, "synonyms": synonyms}
+                if axis == "pose":
+                    entry["animation"] = animation
+                    entry["solo"] = bool(body.get("solo", True))
+                    entry["group"] = group
+                    if not entry["solo"]:
+                        # Same as create: a pair pose carries its own slot count
+                        # and clip rotation — dropping them here would silently
+                        # approve every pair candidate as "2 places, 0°".
+                        entry["places"] = _places(body.get("places"))
+                        entry["yaw_offset"] = _yaw_offset(body.get("yaw_offset"))
+                data["entries"][key] = entry
 
-        _write(axis, data, store)
-    pose_catalog.delete_candidate(axis, raw_text)
-    logger.info("candidate approved: %s/%r -> %r (%s)", axis, raw_text, key, store)
-    return {"status": "success", "axis": axis, "key": key, "store": store}
+            write_store(axis, data, store)
+        pose_catalog.delete_candidate(axis, raw_text)
+        logger.info("candidate approved: %s/%r -> %r (%s)", axis, raw_text, key, store)
+        return {"status": "success", "axis": axis, "key": key, "store": store}
+    except CatalogEditError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
 
 
 @router.post("/candidates/dismiss")
