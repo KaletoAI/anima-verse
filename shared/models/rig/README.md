@@ -6,8 +6,8 @@ no mesh, no texture, no animation. 69 bones, hips at 113.03 cm, arms out along
 ±X in a T-POSE, the armature object in the Mixamo convention (0.01 scale,
 +90° X, centimetres in armature space).
 
-**This file is TRACKED in git** — the only binary here that is. It is
-pipeline, not content: without it no import can run, and every clip in
+**This file is TRACKED in git** — together with `puppet.glb` (below) the only
+binaries here that are. It is pipeline, not content: without it no import can run, and every clip in
 `../clips/` already sits on exactly these bones. It is also served, at
 `GET /assets/animation-rig`, so a renderer can read a clip as a rotation away
 from THIS rest pose before transplanting it onto a character's own bind pose
@@ -92,3 +92,32 @@ skeleton this file holds today; a reference with different bone rest positions
 or a different height would put NEW clips on a different footing than the old
 ones. Replace it only to change the rig on purpose — and then reconvert the
 library with it.
+
+## `puppet.glb` — the UniMate puppet
+
+`puppet.glb` is the fixed input of every generated pose animation
+(`app/core/pose_animation.py`, gateway alias `mesh-unimate`): UniMate animates
+the rig it is SENT, so all generated clips are computed on this one figure and
+then retargeted onto `reference.fbx` like any foreign clip
+(`app/blender/scripts/glb_to_ref_fbx.py` → the FBX import core). It is never a
+character of a world. `paths.get_puppet_file()` resolves it;
+`ANIMATION_PUPPET_FILE` overrides the location (tests must set it).
+
+* A neutral adult man, average build, plain clothing — Mixamo rig from
+  `mesh-mia`, 52 joints named `mixamorig:*`, **no textures** (UniMate ignores
+  them: the same caption and seed gave the identical right-hand path with and
+  without them — 1.72–1.93 m high, 0.19 m sideways, 9 direction changes in
+  2 s). 2.1 MB.
+* Where it comes from (2026-10-11): T-pose image `Qwen2.1-Turbo`, seed 7, the
+  built-in `TPOSE_PROMPT_DEFAULT` plus the `tpose` use-case style and
+  negative, identity "adult man in his thirties of average build and average
+  height, short dark brown hair, clean-shaven, plain fitted light grey
+  long-sleeve t-shirt, dark grey trousers, dark grey sneakers"; mesh
+  `Trellis2-Low`; rig `mesh-mia`; textures stripped in Blender.
+* SHA-256 `92d472421b506f213558ac85fe3cf6b5a93d97bd740fd113f8cf2c9e0d288a8a`
+  — every generated clip's sidecar names it (`source.puppet_sha256`).
+* Why a real mesh and not capsules on `reference.fbx`: the capsule puppet
+  raised the wrong hand for "waves its right hand" and tipped over when
+  sitting; a real body did neither (spike, plan-pose-animation-unimate.md §3a).
+* UniMate scales the rig uniformly (×0.786 for this file); the conversion
+  scales it back to the reference hips (1.13032 m).

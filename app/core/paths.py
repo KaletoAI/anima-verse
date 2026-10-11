@@ -269,6 +269,25 @@ def get_rig_file() -> Path:
     return get_shared_dir() / "models" / "rig" / "reference.fbx"
 
 
+def get_puppet_file() -> Path:
+    """The UniMate PUPPET — ``shared/models/rig/puppet.glb``.
+
+    One rigged GLB of a neutral humanoid (Mixamo rig, no textures) that every
+    generated pose animation is computed on: the gateway alias animates the
+    rig it is sent, and the result is retargeted onto ``reference.fbx`` like
+    any foreign clip. It is never a character of a world. Tracked in git; the
+    README next to it says where it comes from.
+
+    ``ANIMATION_PUPPET_FILE`` overrides the location — tests must set it, same
+    rule as ANIMATION_RIG_FILE. No existence check here: the caller reports a
+    missing puppet.
+    """
+    override = os.environ.get("ANIMATION_PUPPET_FILE", "").strip()
+    if override:
+        return Path(override)
+    return get_shared_dir() / "models" / "rig" / "puppet.glb"
+
+
 def get_mocap_source_dir() -> Path:
     """The downloaded ORIGINAL mocap recordings (``cmu/<subject>/*.asf|amc``).
 
