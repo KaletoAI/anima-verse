@@ -311,6 +311,47 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
 
 
+# Fixed animation paths must precede the /{key} routes.
+@router.post("/animations/generate", status_code=202)
+async def generate_animation(request: Request,
+                             _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Validate and enqueue a pose animation for the admin editor."""
+    import asyncio
+    from app.core import pose_animation
+
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="body must be a JSON object")
+    seed = body.get("seed")
+    if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int)):
+        raise HTTPException(status_code=400, detail="seed must be an integer")
+    try:
+        task_id = await asyncio.to_thread(
+            pose_animation.submit, body.get("mode", ""),
+            key=body.get("key", ""), raw_text=body.get("raw_text", ""),
+            text=body.get("text", ""), hint=body.get("hint", ""),
+            seed=seed)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"task_id": task_id}
+
+
+@router.get("/animations/jobs")
+async def animation_jobs(request: Request,
+                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Recent pose animation jobs for the admin editor."""
+    import asyncio
+    from app.core import pose_animation
+
+    try:
+        limit = int(request.query_params.get("limit", "20"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="limit must be a positive integer") from exc
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be a positive integer")
+    return {"jobs": await asyncio.to_thread(pose_animation.recent_jobs, min(limit, 100))}
+
+
 @router.put("/{key}")
 async def update_entry(key: str, request: Request, axis: str = Query("pose"),
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:

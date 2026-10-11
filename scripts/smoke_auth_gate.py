@@ -4,7 +4,8 @@
 Covers the 2026-09-20 security review findings SEC-2, SEC-6 and SEC-5 (b)+(c).
 Nothing here needs a server or a world: the gate is mounted on a throwaway
 Starlette app built inside this script, and the session lookup is stubbed, so
-``app.server`` is never imported and no world.db is opened.
+``app.server`` is never imported. Only the pose animation route checks open
+a temporary world.db.
 
 WHAT IS CHECKED, and where every expected value comes from
 ----------------------------------------------------------
@@ -151,14 +152,18 @@ F) NO PLAYER SURFACE POSTS TO AN ADMIN-ONLY PATH — a source scan, not a
 
 Usage:  ./.venv/bin/python scripts/smoke_auth_gate.py
 """
+import json
 import os
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 STORAGE = Path(tempfile.mkdtemp(prefix="authgate-smoke-"))
+os.environ["STORAGE_DIR"] = str(STORAGE)
+os.environ["INSTANCE_DIR"] = tempfile.mkdtemp(prefix="authgate-instance-")
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="authgate-clips-")
 
 from app.core import paths  # noqa: E402
@@ -307,6 +312,76 @@ check("CORS preflight status", pre.status_code, 200)
 check("CORS preflight allow-origin",
       pre.headers.get("access-control-allow-origin", ""), "http://localhost:5173")
 
+print()
+print("A2) admin-only pose animation routes and validation")
+from app.routes import poses as poses_route
+from app.core import pose_catalog
+from app.core.db import init_schema
+init_schema()
+
+# Real handlers persist to the temporary queue; no workers are started.
+pose_app = FastAPI()
+pose_app.middleware("http")(auth_dependency.auth_gate_middleware)
+pose_app.middleware("http")(auth_dependency.user_context_middleware)
+pose_app.include_router(poses_route.router)
+pose_client = TestClient(pose_app)
+for method, path in (("POST", "/poses/animations/generate"),
+                     ("GET", "/poses/animations/jobs")):
+    for role in ("user", "admin"):
+        response = pose_client.request(method, path,
+            headers={"x-test-user": role},
+            **({"json": {"mode": "invalid"}} if method == "POST" else {}))
+        check(f"{role} {method} {path}",
+              response.status_code if role == "user" else response.status_code == 403,
+              403 if role == "user" else False)
+
+admin_headers = {"x-test-user": "admin"}
+for body in ([], None, "wave"):
+    response = pose_client.post("/poses/animations/generate", headers=admin_headers,
+                                content=json.dumps(body))
+    check(f"non-object body {body!r} rejected", response.status_code, 400)
+    check(f"non-object body {body!r} reason", response.json().get("detail"),
+          "body must be a JSON object")
+for seed in ("42", 1.5, True, False):
+    response = pose_client.post("/poses/animations/generate", headers=admin_headers,
+                                json={"mode": "free", "text": "wave", "seed": seed})
+    check(f"invalid seed {seed!r} rejected", response.status_code, 400)
+for limit in ("abc", "1.5", "0", "-1"):
+    response = pose_client.get(f"/poses/animations/jobs?limit={limit}",
+                               headers=admin_headers)
+    check(f"invalid jobs limit {limit!r} rejected", response.status_code, 400)
+with patch("app.core.pose_animation.recent_jobs", return_value=[]) as recent_jobs:
+    for query, expected in (("", 20), ("?limit=1", 1), ("?limit=100", 100),
+                            ("?limit=101", 100)):
+        response = pose_client.get(f"/poses/animations/jobs{query}", headers=admin_headers)
+        check(f"valid jobs limit {query!r}", response.status_code, 200)
+        recent_jobs.assert_called_with(expected)
+pose_catalog.replace_world_entries("pose", {
+    "smoke_pair": {"prompt": "two people hugging", "solo": False,
+                   "group": "stand", "animation": "hug", "places": 1}})
+response = pose_client.post("/poses/animations/generate", headers=admin_headers,
+                            json={"mode": "entry", "key": "smoke_pair"})
+check("pair entry rejected", response.status_code, 400)
+check("pair rejection reason", response.json().get("detail"),
+      "pair poses cannot get a generated animation")
+# Submission normally starts workers; keep the real persistence but prevent
+# this standalone smoke from running generation or racing the pending check.
+with patch("app.core.task_queue.TaskQueue.start"):
+    response = pose_client.post("/poses/animations/generate", headers=admin_headers,
+        json={"mode": "free", "text": "wave", "hint": "small wave", "seed": 0})
+check("generation accepted", response.status_code, 202)
+task_id = response.json().get("task_id")
+check("generation returns task id", isinstance(task_id, str) and bool(task_id), True)
+response = pose_client.get("/poses/animations/jobs", headers=admin_headers)
+check("jobs response", response.status_code, 200)
+jobs = response.json().get("jobs", [])
+check("submitted job listed", [(j["task_id"], j["status"], j["mode"]) for j in jobs],
+      [(task_id, "pending", "free")])
+with patch("app.core.task_queue.TaskQueue.start"):
+    for optional_seed in ({}, {"seed": None}):
+        response = pose_client.post("/poses/animations/generate", headers=admin_headers,
+                                    json={"mode": "free", "text": "wave", **optional_seed})
+        check(f"optional seed {optional_seed!r} accepted", response.status_code, 202)
 print()
 print("B) character filter (SEC-6)")
 sens = auth_dependency._is_sensitive_character_path
