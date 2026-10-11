@@ -285,7 +285,9 @@ function irTitle(label, icon) {
 }
 
 function irMediaBadge(o) {
-    const m = o.media === 'video' ? IR_TEXT.mediaVideo : (o.media === 'mesh' ? IR_TEXT.mediaMesh : IR_TEXT.mediaImage);
+    const m = o.media === 'animation' ? 'Animation'
+        : o.media === 'video' ? IR_TEXT.mediaVideo
+        : o.media === 'mesh' ? IR_TEXT.mediaMesh : IR_TEXT.mediaImage;
     let t = m + (o.rig ? ' · ' + o.rig : '');
     if (o.character_scoped) t += ' · ' + IR_TEXT.charScoped;
     return '<span class="rt-taskchip">' + irEsc(t) + '</span>';

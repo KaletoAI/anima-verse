@@ -17,8 +17,8 @@ from typing import Any, Callable, Dict, List, Optional
 from app.imagegen import ImageBackend, BACKEND_REGISTRY
 from app.imagegen.backends.openai_mesh import (MESH2MESH_CATEGORY,
                                                MESH_UPLOAD_MAX_BYTES)
-from app.imagegen.base import (BackendBusyError, MediaGenerationDisabled,
-                               media_generation_enabled)
+from app.imagegen.base import (BackendBusyError, GenerationCancelled,
+                               MediaGenerationDisabled, media_generation_enabled)
 from app.imagegen.selection import BackendPool
 
 from app.core.config import MAX_IMAGE_BACKENDS
@@ -851,6 +851,43 @@ class ImageService:
         if out.get("ok"):
             out.update(route_meta(route))
         return out
+
+    def generate_mesh_animation(self, source_model_path: str, captions: List[str], seed: int, *,
+                                should_cancel: Optional[Callable[[], bool]] = None,
+                                on_job_id: Optional[Callable[[str], None]] = None,
+                                label: str = "") -> Dict[str, Any]:
+        """One UniMate run on the routed animation backend. No re-run on another
+        chain entry: a second run would be a second GPU job (spec §6).
+        """
+        from app.imagegen.routing import resolve_image_route, route_meta
+        route = resolve_image_route("pose_animation", probe=True, pool=self.pool)
+        params = {"source_model_path": source_model_path, "captions": list(captions),
+                  "seed": int(seed), "should_cancel": should_cancel, "on_job_id": on_job_id}
+
+        def _op(bb):
+            def _gen():
+                # The pool treats exceptions and empty results as defects. Carry
+                # cancellation and empty blobs through it without a cooldown.
+                try:
+                    return {"blobs": bb.generate("", "", params, log_meta=None)}
+                except GenerationCancelled as e:
+                    return {"cancelled": e}
+            return self.run_on_backend_channel(bb, _gen, task_type="pose_animation",
+                                               label=label or bb.name)
+        try:
+            result, used = self.run_on_backend(route.backend, _op)
+            if "cancelled" in result:
+                raise result["cancelled"]
+            blobs = result["blobs"]
+        except (MediaGenerationDisabled, BackendBusyError, GenerationCancelled):
+            raise
+        except Exception as e:
+            logger.error("generate_mesh_animation failed: %s", e)
+            return {"ok": False, "error": str(e)}
+        if not blobs:
+            return {"ok": False, "error": "animation backend returned no result"}
+        return {"ok": True, "glb": blobs[0], "backend": used.name,
+                "job_id": getattr(used, "last_job_id", ""), **route_meta(route)}
 
     def generate_rig(self, mesh_path: str, output_path: str, rig: str,
                      backend_glob: str = "", character_name: str = "",

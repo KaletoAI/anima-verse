@@ -4,22 +4,23 @@
 Usage:  ./.venv/bin/python scripts/smoke_image_routing_catalog.py
 
 Spec: development_instructions/plan-image-routing.md § 1 + the binding review
-notes ("Katalog (§1)"). No server, no world, no DB — it imports the catalog
-module only (Part A); Parts B and C scan the callers by AST / text.
+notes ("Katalog (§1)"). No server, no world, no DB: Part A checks catalog and routing, Parts B/C
+scan callers by AST/text, and Part D checks the service with transport doubles.
 
 PART A — THE CATALOG, DERIVED BY HAND FROM THE SPEC
 ---------------------------------------------------
-A1. Exactly these 21 occasions (§ 1 table, minus `mesh_low` which the review
+A1. Exactly these 22 occasions (§ 1 table, minus `mesh_low` which the review
     DROPS, plus `frame` which the review ADDS):
       photo instagram profile expression tpose scene_view location
       timevariant event prop surface_texture item regenerate frame video
-      mesh_humanoid mesh_creature mesh_object mesh_building
+      mesh_humanoid mesh_creature rig_humanoid rig_creature mesh_object
+      mesh_building pose_animation
 A2. `mesh_low` is unknown: get_occasion("mesh_low") raises
     UnknownOccasionError, which is a ValueError.
-A3. media: video -> "video"; the four mesh_* -> "mesh"; all others "image".
+A3. media: video -> "video"; the four mesh_* -> "mesh"; pose_animation -> "animation"; all others "image".
 A4. P1/P2: all mesh_* occasions require img2mesh/none. rig_humanoid
-    requires mesh2rig/mixamo; rig_creature mesh2rig/generic. Other occasions
-    use category render.
+    requires mesh2rig/mixamo; rig_creature mesh2rig/generic.
+    pose_animation requires mesh2anim; image/video occasions use category render.
 A5. character_scoped exactly: photo, instagram, profile, expression, tpose,
     regenerate (§ 1 column "figurbez." = ja; frame is a product shot without
     a figure — review note).
@@ -45,7 +46,7 @@ A9. mesh_occasion_for_rig: mixamo -> mesh_humanoid, generic -> mesh_creature,
     review carry-over: guessing mesh_humanoid for it would mesh with a
     skeleton nobody asked for). Fails on commit 4893221f, which answered
     "mesh_humanoid" for "bogus".
-A10. catalog_payload() has 21 rows in catalog order, each with the keys
+A10. catalog_payload() has 22 rows in catalog order, each with the keys
     id, label, media, category, rig, character_scoped, needs_ref_slot, covers;
     every label is a non-empty English string.
 
@@ -147,8 +148,8 @@ def part_a():
                     "scene_view", "location", "timevariant", "event", "prop",
                     "surface_texture", "item", "regenerate", "frame", "video",
                     "mesh_humanoid", "mesh_creature", "rig_humanoid", "rig_creature", "mesh_object",
-                    "mesh_building"]
-    check("A1 the 21 occasions in catalog order", occ.occasion_ids(), expected_ids)
+                    "mesh_building", "pose_animation"]
+    check("A1 the 22 occasions in catalog order", occ.occasion_ids(), expected_ids)
 
     try:
         occ.get_occasion("mesh_low")
@@ -168,7 +169,7 @@ def part_a():
            "mesh_object": "none", "mesh_building": "none"})
     check("A4 categories",
           sorted({occ.get_occasion(i)["category"] for i in expected_ids}),
-          ["img2mesh", "mesh2rig", "render"])
+          ["img2mesh", "mesh2anim", "mesh2rig", "render"])
     check("A4 mesh category",
           {occ.get_occasion(i)["category"] for i in expected_ids if media[i] == "mesh"},
           {"img2mesh", "mesh2rig"})
@@ -196,6 +197,27 @@ def part_a():
     check("A8 mesh_object img2mesh", fits("mesh_object", k("mesh", "img2mesh")), True)
     check("A8 mesh_humanoid img2mesh", fits("mesh_humanoid", k("mesh", "img2mesh")), True)
     check("A8 mesh_creature img2mesh", fits("mesh_creature", k("mesh", "img2mesh")), True)
+
+    check("A8 animation fits", fits("pose_animation", k("animation", "mesh2anim")), True)
+    check("A8 animation wrong category", fits("pose_animation", k("animation", "img2mesh")), False)
+    check("A8 animation wrong media", fits("pose_animation", k("mesh", "mesh2anim")), False)
+    for oid, expected in (("pose_animation", True), ("rig_humanoid", True),
+                          ("rig_creature", True), ("mesh_humanoid", False)):
+        check(f"A8 requires_chain {oid}", occ.requires_chain(oid), expected)
+
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    from app.imagegen import routing
+    from app.imagegen.selection import BackendPool
+    available = SimpleNamespace(name="Available animation", MEDIA_TYPE="animation",
+                                category="mesh2anim", available=True,
+                                instance_enabled=True, effective_cost=0)
+    with patch.object(routing, "_rules", return_value={}):
+        try:
+            routing.resolve_image_route("pose_animation", pool=BackendPool([available], lambda _: {}))
+            check("A8 empty animation chain raises", False, True)
+        except routing.NoRouteError as e:
+            check("A8 empty animation chain message", "chain is empty" in str(e), True)
 
     check("A9 mixamo", occ.mesh_occasion_for_rig("mixamo"), "mesh_humanoid")
     check("A9 generic", occ.mesh_occasion_for_rig("generic"), "mesh_creature")
@@ -459,8 +481,70 @@ def part_c():
         check(f"C3 {f} writes the routing record", writes, True)
 
 
+def part_d():
+    """Service contract: one execution, unchanged bytes and typed cancellation."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from app.imagegen.service import ImageService
+    from app.imagegen.selection import BackendPool
+    from app.imagegen.base import GenerationCancelled, BackendBusyError, MediaGenerationDisabled
+    from app.imagegen import routing
+
+    service = ImageService.__new__(ImageService)
+    service._pool = BackendPool([], lambda _: {})
+    calls = []
+    cooled = []
+    backend = SimpleNamespace(name="Animation", cost=0, last_job_id="job-42",
+                              mark_unhealthy=lambda *args: cooled.append(args))
+    route = routing.Route(occasion="pose_animation", backend=backend, position=1,
+                          spec="Animation", intended_spec="Animation", first_position=1)
+    cancel = lambda: False
+    job_ids = []
+
+    def generate(prompt, negative, params, log_meta=None):
+        calls.append((prompt, negative, params, log_meta))
+        params["on_job_id"]("job-42")
+        return [b"glb clip"]
+
+    backend.generate = generate
+    def channel(bb, fn, **kwargs):
+        check("D channel handoff", (bb.name, kwargs),
+              ("Animation", {"task_type": "pose_animation", "label": "Clip"}))
+        return fn()
+
+    with patch.object(routing, "resolve_image_route", return_value=route), \
+            patch.object(service, "run_on_backend_channel", side_effect=channel):
+        result = service.generate_mesh_animation("source.glb", ("walk",), 42,
+                    should_cancel=cancel, on_job_id=job_ids.append, label="Clip")
+        check("D result bytes", result["glb"], b"glb clip")
+        check("D backend and job", (result["backend"], result["job_id"]), ("Animation", "job-42"))
+        check("D routing metadata", result["routing"],
+              {"occasion": "pose_animation", "position": 1, "spec": "Animation"})
+        check("D one submission", len(calls), 1)
+        check("D payload", calls[0], ("", "", {"source_model_path": "source.glb",
+              "captions": ["walk"], "seed": 42, "should_cancel": cancel,
+              "on_job_id": job_ids.append}, None))
+        check("D job callback", job_ids, ["job-42"])
+        for error in (GenerationCancelled("cancelled"), BackendBusyError("busy"),
+                      MediaGenerationDisabled("disabled")):
+            backend.generate = lambda *args, **kwargs: (_ for _ in ()).throw(error)
+            try:
+                service.generate_mesh_animation("source.glb", ["walk"], 42, label="Clip")
+                check("D typed " + type(error).__name__, False, True)
+            except type(error):
+                check("D typed " + type(error).__name__, True, True)
+        check("D cancellation and busy do not cool backend", cooled, [])
+        backend.generate = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("transport failed"))
+        failed = service.generate_mesh_animation("source.glb", ["walk"], 42, label="Clip")
+        check("D ordinary failure", (failed["ok"], "transport failed" in failed["error"]), (False, True))
+        backend.generate = lambda *args, **kwargs: []
+        check("D empty result", service.generate_mesh_animation("source.glb", ["walk"], 42, label="Clip"),
+              {"ok": False, "error": "animation backend returned no result"})
+
+
 if __name__ == "__main__":
     part_a()
+    part_d()
     part_b()
     part_c()
     print()

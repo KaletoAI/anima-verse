@@ -31,7 +31,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from app.core.log import get_logger
-from app.imagegen.occasions import backend_fits, catalog_payload, get_occasion
+from app.imagegen.occasions import (backend_fits, catalog_payload, get_occasion,
+                                    requires_chain)
 
 logger = get_logger("image_routing")
 
@@ -69,8 +70,8 @@ class NoRouteError(RuntimeError):
         if self.chain:
             detail = ", ".join(f"{row['spec']} ({STATUS_TEXT.get(row['status'], row['status'])})"
                                for row in self.chain)
-        elif get_occasion(occasion)["category"] == "mesh2rig":
-            detail = "rig chain is empty; configure it in /admin/settings → Media Generation → Routing"
+        elif requires_chain(occasion):
+            detail = "chain is empty; configure it in /admin/settings → Media Generation → Routing"
         else:
             detail = "no backend of this kind is available"
         super().__init__(f"no backend available for {occasion}: {detail}")
@@ -300,7 +301,7 @@ def _cheapest_no_rotation(live: List[Any]) -> Any:
 
 def _empty_chain_pick(occasion: str, backends: List[Any], switches: Dict[str, Any],
                       exclude: set, has_ref: bool, pool: Any, rotate: bool) -> Any:
-    if get_occasion(occasion)["category"] == "mesh2rig":
+    if requires_chain(occasion):
         return None
     live = [b for b in backends
             if backend_fits(occasion, describe_backend(b))
@@ -409,7 +410,7 @@ def _explain_one(row: Dict[str, Any], character: str, backends: List[Any],
         b = _empty_chain_pick(oid, backends, switches, set(), has_ref, p, rotate=False)
         via = "cheapest" if b else "none"
         resolved = b.name if b else None
-        reason = (str(NoRouteError(oid, [])) if row["category"] == "mesh2rig"
+        reason = (str(NoRouteError(oid, [])) if requires_chain(oid)
                   else "empty chain — cheapest available backend of this kind" if b
                   else "empty chain — no backend of this kind is available")
     elif resolved is None:

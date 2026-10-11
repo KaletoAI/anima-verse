@@ -98,10 +98,16 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
                            "none"),
     "mesh_creature": _mesh("3D mesh — creature", "Character mesh (non-humanoid)",
                            "none"),
-    "rig_humanoid": {**_mesh("3D rig — humanoid", "Character rig (humanoid)", "mixamo"), "category": "mesh2rig"},
-    "rig_creature": {**_mesh("3D rig — creature", "Character rig (non-humanoid)", "generic"), "category": "mesh2rig"},
+    "rig_humanoid": {**_mesh("3D rig — humanoid", "Character rig (humanoid)", "mixamo"),
+                     "category": "mesh2rig", "requires_chain": True},
+    "rig_creature": {**_mesh("3D rig — creature", "Character rig (non-humanoid)", "generic"),
+                     "category": "mesh2rig", "requires_chain": True},
     "mesh_object": _mesh("3D mesh — object", "Prop mesh", "none"),
     "mesh_building": _mesh("3D mesh — building", "Building/room mesh", "none"),
+    "pose_animation": {"label": "3D animation — pose clip", "media": "animation",
+                       "category": "mesh2anim", "rig": "", "needs_ref_slot": False,
+                       "style_use_cases": [], "covers": "Poses tab: generate animation",
+                       "requires_chain": True, **_WORLD},
 }
 
 MESH_OCCASIONS_BY_RIG: Dict[str, Tuple[str, ...]] = {
@@ -122,6 +128,11 @@ def get_occasion(occasion_id: str) -> Dict[str, Any]:
     return occ
 
 
+def requires_chain(occasion_id: str) -> bool:
+    """Whether this occasion requires an explicitly configured routing chain."""
+    return bool(get_occasion(occasion_id).get("requires_chain", False))
+
+
 def occasion_ids() -> List[str]:
     return list(OCCASIONS.keys())
 
@@ -136,7 +147,7 @@ def backend_fits(occasion_id: str, kind: Dict[str, Any]) -> bool:
     if (kind.get("media") or "image") != occ["media"]:
         return False
     category = str(kind.get("category") or "").lower()
-    if occ["media"] == "mesh":
+    if occ["media"] in ("mesh", "animation"):
         return category == occ["category"]
     if category == "inpaint":
         return False
