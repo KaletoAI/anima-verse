@@ -7,7 +7,9 @@ An explicit failing rigger cannot call the routed backup. The backend's
 configured no_fingers reaches input_no_fingers unchanged. Missing sources
 submit nothing. Failure at
 rig, normalization, extensions, low rebuild or publication preserves every
-byte of the served/source pair. Default signature selects the served model;
+byte of the served/source pair, including a retained static model with rig none.
+Re-rig of that static mesh preserves its source provenance and removes rig_error
+only on successful atomic publication. Default signature selects the served model;
 character finger settings are ignored; stale snapshots never overwrite a writer.
 Generic source is red on top, blue below; its served PNG must be blue on top
 (the hub FBX V correction). A pre-existing low tier is rebuilt at its old ratio.
@@ -53,7 +55,7 @@ def color_png():
     return out.getvalue()
 
 
-def fixture_glb(rig=False):
+def fixture_glb(rig=False, revision='original'):
     color = color_png()
     doc = {'asset': {'version': '2.0'}, 'meshes': [{'primitives': [{'material': 0}]}],
            'buffers': [{'byteLength': len(color)}],
@@ -61,6 +63,7 @@ def fixture_glb(rig=False):
            'images': [{'bufferView': 0, 'mimeType': 'image/png'}],
            'textures': [{'source': 0}],
            'materials': [{'pbrMetallicRoughness': {'baseColorTexture': {'index': 0}}}]}
+    doc['asset']['extras'] = {'revision': revision}
     if rig:
         doc['nodes'] = [{'name': n} for n in BASE_JOINT_NAMES]
         doc['skins'] = [{'joints': list(range(52))}]
@@ -81,6 +84,8 @@ class Fake(ImageBackend):
         self.calls = []
         self.failure = failure
         self._meta = threading.local()
+        self.source = fixture_glb()
+        self.check_submission = None
 
     def check_availability(self):
         return self.available
@@ -91,14 +96,19 @@ class Fake(ImageBackend):
 
     def generate(self, prompt, negative, params, log_meta=None):
         self.calls.append(dict(params))
-        if self.failure:
+        if self.category != 'mesh2rig' and self.failure:
             raise self.failure
         if self.category == 'mesh2rig':
             uploaded = Path(params['source_model_path'])
             assert (root/'unrigged'/uploaded.name).is_file(), 'source must be durable before rig submission'
             payload = OpenAIMeshBackend.build_input_files(self, params)
             assert set(payload) == {'input_mesh_path'}
-            assert base64.b64decode(payload['input_mesh_path'].split(',', 1)[1]) == fixture_glb()
+            assert uploaded.read_bytes() == self.source, 're-rig must consume the retained newest source'
+            assert base64.b64decode(payload['input_mesh_path'].split(',', 1)[1]) == self.source
+            if self.check_submission:
+                self.check_submission(uploaded.stem)
+            if self.failure:
+                raise self.failure
             assert OpenAIMeshBackend.build_alias_params(self, params) == {'input_no_fingers': self.no_fingers}
             assert 'no_fingers' not in params
             if self.delivered_rig == 'generic':
@@ -267,6 +277,67 @@ with ExitStack() as stack:
     assert result['ok'], result
     assert Image.open(root/'generic.png').getpixel((0,0)) == (0,0,255)
     assert Image.open(root/'unrigged/generic.png').getpixel((0,0)) == (255,0,0)
+    # Retained static mesh after automatic rig failure: failed re-rig is
+    # byte-atomic, and successful re-rig preserves the exact source/provenance.
+    static_source = fixture_glb(revision='retained newest static mesh')
+    static_meta = {
+        'rig': 'none', 'signature': 'static', 'character': 'demo',
+        'mesh_backend': 'mesh-newest',
+        'mesh_route_meta': {'routing': {'occasion': 'mesh_humanoid', 'intended_spec': 'mesh-newest'}},
+        'source_image': 'newest_tpose.png', 'view_images': {'back': 'newest_back.png'},
+        'pieces': {'body': 'newest-piece'}, 'items': ['newest-item'],
+        'job_id': 'recovered-mesh-job', 'source_filename': 'newest-source.glb',
+    }
+    (root/'unrigged/static.glb').write_bytes(static_source)
+    (root/'unrigged/static.png').write_bytes(color_png())
+    (root/'unrigged/static.json').write_text(json.dumps(static_meta))
+    (root/'static.glb').write_bytes(static_source)
+    (root/'static.json').write_text(json.dumps({**static_meta, 'rig_error': 'automatic rig failed'}))
+    rigger.source = static_source
+    static_before = snapshot('static')
+
+    def static_submission(signature):
+        assert signature == 'static'
+        assert snapshot('static') == static_before, 're-rig must not publish partial output'
+
+    rigger.check_submission = static_submission
+    with patch.object(model3d, 'current_outfit_state', return_value=({'body': 'newest-piece'}, ['newest-item'], 'static')):
+        info = model3d.get_model3d_info('demo')['model']
+        assert info['rig'] == 'none' and info['rig_error'] == 'automatic rig failed'
+        assert info['has_unrigged_source']
+        rigger.failure = RuntimeError('static re-rig failed')
+        before_calls = len(rigger.calls)
+        before_backup = len(backup.calls)
+        try:
+            result = model3d.rerig_model('demo', backend_glob='rigger')
+            assert not result['ok']
+        except BackendFailedError:
+            pass
+        finally:
+            rigger.failure = None
+            rigger._cooldown_until = 0
+            rigger._available = True
+        assert len(rigger.calls) == before_calls + 1 and len(backup.calls) == before_backup
+        assert snapshot('static') == static_before
+        assert model3d.get_model3d_info('demo')['model']['rig_error'] == 'automatic rig failed'
+        with patch.object(model3d, 'request_lod', return_value=False):
+            result = model3d.rerig_model('demo', backend_glob='rigger')
+        assert result['ok'], result
+        info = model3d.get_model3d_info('demo')['model']
+        assert info['rig'] == 'mixamo' and not info.get('rig_error')
+        assert (root/'static.glb').read_bytes() == fixture_glb(True)+b'normalizedextended'
+        assert (root/'raw/static.glb').read_bytes() == fixture_glb(True)
+        assert (root/'prerig/static.glb').read_bytes() == fixture_glb(True)+b'normalized'
+        meta = json.loads((root/'static.json').read_text())
+        assert 'rig_error' not in meta
+        for key in ('mesh_backend', 'mesh_route_meta', 'source_image', 'view_images', 'pieces', 'items', 'job_id'):
+            assert meta[key] == static_meta[key], key
+        for relative, value in static_before.items():
+            if relative.parts[0] == 'unrigged':
+                assert (root/relative).read_bytes() == value, relative
+    assert not mesh.calls
+    rigger.source = fixture_glb()
+    rigger.check_submission = None
 print('PASS re-rig stages, immutable source, explicit no fallback, atomic failures, generic basecolor and low rebuild')
 
 # Mount the actual router and actual auth dependency; only session lookup is

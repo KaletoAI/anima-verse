@@ -56,34 +56,80 @@ def _signature_files(directory: Path, signature: str) -> Dict[Path, Path]:
             for p in (directory / relative).glob(f"{signature}.*") if p.is_file()}
 
 
-def _checkpoint_source(character_name: str, signature: str, source: Path) -> None:
-    """Persist a first-generation source before rigging; preserve an old pair.
-
-    A replacement is published with its successful rig, so a failed rebuild
-    never assigns a new source to the currently served model.
-    """
+def _publish_signature(character_name: str, directory: Path, stage: Path,
+                       signature: str, token, *, retain_stage: bool = False,
+                       rollback_on_error: bool = False, invalidate: bool = False) -> Optional[tuple]:
+    """Commit one signature under the reader lock, rejecting stale work."""
+    import os
     from app.core.keyed_lock import keyed_lock
+    staged_files = _signature_files(stage, signature)
+    current_files = _signature_files(directory, signature)
+    replacements = []
+    prepared = stage / ".publication" if retain_stage else stage
+    rollback = stage / ".rollback" if rollback_on_error else None
+    try:
+        for relative, source in staged_files.items():
+            current = current_files.get(relative)
+            if current is None or source.read_bytes() != current.read_bytes():
+                replacements.append(relative)
+                if retain_stage:
+                    target = prepared / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+        if rollback is not None:
+            for relative in set(replacements) | (current_files.keys() - staged_files.keys()):
+                source = current_files.get(relative)
+                if source is not None:
+                    target = rollback / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+    except FileNotFoundError:
+        return None
+    with keyed_lock("model3d", f"{character_name}:{signature}"), \
+            keyed_lock("model3d_publication", str(directory)):
+        if not directory.is_dir() or _publication_token(directory, signature) != token:
+            return None
+        changed = []
+        try:
+            for relative in current_files.keys() - staged_files.keys():
+                current_files[relative].unlink(missing_ok=True)
+                changed.append(relative)
+            # Full sidecar last: the commit marker for lock-aware readers.
+            order = lambda r: (r.suffix == ".json", r.parent == Path('.'), str(r))
+            for relative in sorted(replacements, key=order):
+                target = directory / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(prepared / relative, target)
+                changed.append(relative)
+        except Exception:
+            if rollback is not None:
+                for relative in reversed(changed):
+                    target = directory / relative
+                    if relative in current_files:
+                        os.replace(rollback / relative, target)
+                    else:
+                        target.unlink(missing_ok=True)
+            raise
+        if changed or invalidate:
+            key = (str(directory), signature)
+            _publication_epochs[key] = _publication_epochs.get(key, 0) + 1
+        return _publication_token(directory, signature)
+
+
+def _checkpoint_mesh(character_name: str, signature: str) -> None:
+    """Publish the validated static model and source before submitting its rig."""
     publication = getattr(_staging, "source_publications", {}).get(character_name)
     if not publication:
         return
     directory = publication["directory"]
-    with keyed_lock("model3d", f"{character_name}:{signature}"), \
-            keyed_lock("model3d_publication", str(directory)):
-        if not directory.is_dir() or _publication_token(directory, signature) != publication["token"]:
-            raise RuntimeError("Model changed before source publication")
-        if any((directory / f"{signature}{ext}").exists() for ext in MODEL_EXTS):
-            return
-        destination = directory / "unrigged"
-        destination.mkdir(parents=True, exist_ok=True)
-        files = list(source.parent.glob(f"{signature}.*"))
-        for old in destination.glob(f"{signature}.*"):
-            if not any(p.name == old.name for p in files):
-                old.unlink()
-        for path in sorted(files, key=lambda p: p.suffix == ".json"):
-            _publish_model_bytes(destination / path.name, path.read_bytes())
-        key = (str(directory), signature)
-        _publication_epochs[key] = _publication_epochs.get(key, 0) + 1
-        publication["token"] = _publication_token(directory, signature)
+    stage = get_model3d_dir(character_name)
+    token = _publish_signature(character_name, directory, stage, signature,
+                               publication["token"], retain_stage=True,
+                               rollback_on_error=True)
+    if token is None:
+        raise RuntimeError("Model changed before mesh publication")
+    publication["token"] = token
+    publication["mesh_published"] = True
 
 
 def _publication_token(directory: Path, signature: str):
@@ -103,7 +149,6 @@ def _serial_model(function):
     """
     @functools.wraps(function)
     def wrapped(character_name, *args, **kwargs):
-        import os
         import tempfile
         from app.core.keyed_lock import keyed_lock
         bound = inspect.signature(function).bind_partial(character_name, *args, **kwargs)
@@ -159,73 +204,34 @@ def _serial_model(function):
                 _staging.directories = active
                 _staging.source_publications = publications
             token = publication["token"]
-            # A failed replacement keeps the existing model/source pair. A
-            # first generation may retain its validated source for later work.
+            # A rig failure never rolls back the already published new mesh,
+            # nor publishes partially processed rig/LOD bytes from the stage.
             if function.__name__ == "generate_for_current_outfit" and not result.get("ok"):
-                if any((directory / f"{signature}{ext}").exists() for ext in MODEL_EXTS):
-                    if generation_error is not None:
-                        raise generation_error
-                    return result
+                if publication.get("mesh_published"):
+                    with keyed_lock("model3d", f"{character_name}:{signature}"), \
+                            keyed_lock("model3d_publication", str(directory)):
+                        if directory.is_dir() and _publication_token(directory, signature) == token:
+                            path = directory / f"{signature}.glb"
+                            meta = _read_sidecar(path)
+                            meta["rig_error"] = result.get("error") or "Rig generation failed"
+                            _publish_sidecar(path, meta)
+                            key = (str(directory), signature)
+                            _publication_epochs[key] = _publication_epochs.get(key, 0) + 1
+                if generation_error is not None:
+                    raise generation_error
+                return result
             if function.__name__ == "rerig_model" and not result.get("ok"):
                 return result
-            staged_files = _signature_files(stage, signature)
-            # Prepare comparisons without holding a publication lock.
-            current_files = _signature_files(directory, signature)
-            replacements = []
-            try:
-                for relative, source in staged_files.items():
-                    current = current_files.get(relative)
-                    if current is None or source.read_bytes() != current.read_bytes():
-                        replacements.append(relative)
-            except FileNotFoundError:
+            if not _publish_signature(character_name, directory, stage, signature, token,
+                                      rollback_on_error=function.__name__ in (
+                                          "generate_for_current_outfit", "rerig_model"),
+                                      invalidate=function.__name__ == "delete_model3d"):
                 return stale("Model changed during processing; result discarded")
-            # Re-rig promises failure atomicity even if a late publication
-            # rename fails. Prepare rollback files outside the reader lock.
-            rollback = stage / ".rollback" if function.__name__ == "rerig_model" else None
-            if rollback is not None:
-                try:
-                    for relative in set(replacements) | (current_files.keys() - staged_files.keys()):
-                        source = current_files.get(relative)
-                        if source is None:
-                            continue
-                        target = rollback / relative
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(source, target)
-                except FileNotFoundError:
-                    return stale("Model changed while preparing publication")
-            with keyed_lock("model3d", f"{character_name}:{signature}"), \
-                    keyed_lock("model3d_publication", str(directory)):
-                if not directory.is_dir() or _publication_token(directory, signature) != token:
-                    return stale("Model changed during processing; result discarded")
-                changed = []
-                try:
-                    for relative in current_files.keys() - staged_files.keys():
-                        current_files[relative].unlink(missing_ok=True)
-                        changed.append(relative)
-                    # Full sidecar last: the commit marker for lock-aware readers.
-                    order = lambda r: (r.suffix == ".json", r.parent == Path('.'), str(r))
-                    for relative in sorted(replacements, key=order):
-                        target = directory / relative
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        os.replace(stage / relative, target)
-                        changed.append(relative)
-                except Exception:
-                    if rollback is not None:
-                        for relative in reversed(changed):
-                            target = directory / relative
-                            if relative in current_files:
-                                os.replace(rollback / relative, target)
-                            else:
-                                target.unlink(missing_ok=True)
-                    raise
-                if replacements or current_files.keys() != staged_files.keys() or function.__name__ == "delete_model3d":
-                    key = (str(directory), signature)
-                    _publication_epochs[key] = _publication_epochs.get(key, 0) + 1
-                if isinstance(result, dict):
-                    if "path" in result:
-                        result["path"] = str(directory / Path(result["path"]).name)
-                    if "model_rev" in result:
-                        result["model_rev"] = model_revision(find_model3d(character_name, signature))
+            if isinstance(result, dict):
+                if "path" in result:
+                    result["path"] = str(directory / Path(result["path"]).name)
+                if "model_rev" in result:
+                    result["model_rev"] = model_revision(find_model3d(character_name, signature))
             if generation_error is not None:
                 raise generation_error
             return result
@@ -415,7 +421,8 @@ def request_lod(character_name: str, model_path: Path) -> bool:
     The admin stays in charge: the generated mesh is a floor, not a ceiling.
     A better low-poly version made elsewhere can replace it at any time.
     """
-    if not _auto_lod_enabled() or model_path.suffix.lower() != ".glb":
+    if (not _auto_lod_enabled() or model_path.suffix.lower() != ".glb"
+            or _read_sidecar(model_path).get("rig") == "none"):
         return False
     if character_name in getattr(_staging, "directories", {}):
         result = build_lod(character_name, model_path.stem, ratio=_auto_lod_ratio())
@@ -667,6 +674,8 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
                 for key in ("mesh_backend", "rig_backend", "mesh_route_meta", "rig_route_meta"):
                     info[key] = meta.get(key, "" if key.endswith("backend") else {})
                 info["source_filename"] = meta.get("source_filename", "")
+                info["job_id"] = meta.get("job_id", "")
+                info["rig_error"] = meta.get("rig_error", "")
                 info["face_num"] = meta.get("face_num")
                 # Measured geometry, if this model has been through Blender.
                 # Read from the sidecar only — the info route is polled, and
@@ -1526,6 +1535,51 @@ def _ref_manifest(ref_image: Path) -> Dict[str, Any]:
             "items": [str(i) for i in (items or []) if i]}
 
 
+def _store_unrigged_model(character_name: str, signature: str, result: Dict[str, Any],
+                          rig: str, manifest: Dict[str, Any]) -> Dict[str, Any]:
+    """Store a validated source as the current static model in the publication stage."""
+    from app.core.mesh_source import source_basecolor, validate_source
+    source = Path(result["path"])
+    blob = source.read_bytes()
+    check = validate_source(blob)
+    if not check.get("ok"):
+        return {"ok": False, "error": "; ".join(check.get("errors") or ["invalid unrigged source"]),
+                "errors": check.get("errors", []), "warnings": check.get("warnings", [])}
+    texture = None
+    rig_error = ""
+    if rig == "generic":
+        try:
+            texture = source_basecolor(source, result.get("texture_path") or "")
+        except ValueError as exc:
+            # The mesh remains usable statically even if its color maps cannot
+            # be represented by the generic rig's single external PNG.
+            rig_error = str(exc)
+    directory = get_model3d_dir(character_name)
+    path = directory / f"{signature}.glb"
+    _purge_combination(directory, signature, keep_model=path)
+    retained = directory / "unrigged" / path.name
+    retained.parent.mkdir(parents=True, exist_ok=True)
+    _publish_model_bytes(retained, blob)
+    if texture is not None:
+        _publish_model_bytes(retained.with_suffix(".png"), texture)
+    source_meta = {
+        **manifest, "created_at": utc_now_iso(), "rig": "none", "signature": signature,
+        "mesh_backend": result.get("backend", ""),
+        "mesh_route_meta": {k: result[k] for k in ("routing", "fallback_from") if k in result},
+        "source_filename": result.get("filename", ""),
+    }
+    if result.get("job_id"):
+        source_meta["job_id"] = result["job_id"]
+    _publish_sidecar(retained, source_meta)
+    _publish_model_bytes(path, blob)
+    meta = {**source_meta, "source": "generated", "character": character_name,
+            "backend": result.get("backend", ""), "format": "glb", "has_texture": False}
+    if rig_error:
+        meta["rig_error"] = rig_error
+    _publish_sidecar(path, meta)
+    return {"ok": True, "path": str(path), "meta": meta, "warnings": check.get("warnings", [])}
+
+
 @_serial_model
 def generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 backend_glob: str = "",
@@ -1625,37 +1679,23 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
 
         mesh_res = res
         from app.core.model_validate import validate_glb, validate_fbx
-        from app.core.mesh_source import validate_source
-        source_mesh = Path(mesh_res["path"])
-        check = validate_source(source_mesh.read_bytes())
-        if not check.get("ok"):
-            error = "; ".join(check.get("errors") or ["invalid unrigged source"])
+        stored = _store_unrigged_model(character_name, signature, mesh_res, rig,
+                                       {"source_image": src.name,
+                                        "view_images": {v: Path(p).name for v, p in view_images.items()},
+                                        **_ref_manifest(src)})
+        if not stored.get("ok"):
+            error = stored["error"]
             return {"ok": False, "error": error}
         source_target = out_dir / "unrigged" / f"{signature}.glb"
-        source_target.parent.mkdir(parents=True, exist_ok=True)
-        source_texture = None
-        if rig == "generic":
-            from app.core.mesh_source import source_basecolor
-            try:
-                source_texture = source_basecolor(source_mesh, mesh_res.get("texture_path") or "")
-            except ValueError as exc:
-                error = str(exc)
-                return {"ok": False, "error": error}
-        _publish_model_bytes(source_target, source_mesh.read_bytes())
-        if source_texture is not None:
-            _publish_model_bytes(source_target.with_suffix(".png"), source_texture)
-        source_meta = {"created_at": utc_now_iso(), "rig": "none", "signature": signature,
-                       "mesh_backend": mesh_res.get("backend", ""),
-                       "mesh_route_meta": {k: mesh_res[k] for k in ("routing", "fallback_from") if k in mesh_res},
-                       "source_image": src.name,
-                       "view_images": {v: Path(p).name for v, p in view_images.items()}, **_ref_manifest(src)}
-        _publish_sidecar(source_target, source_meta)
-        _checkpoint_source(character_name, signature, source_target)
+        _checkpoint_mesh(character_name, signature)
+        if stored["meta"].get("rig_error"):
+            error = stored["meta"]["rig_error"]
+            return {"ok": False, "error": error}
         # Sequential caller-thread submission: the mesh slot has been released.
         res = get_image_service().generate_rig(
             mesh_path=str(source_target), output_path=str(staging / f"{signature}-rig.glb"),
             rig=rig, character_name=character_name,
-            basecolor_path=str(source_target.with_suffix(".png")) if source_texture is not None else "")
+            basecolor_path=str(source_target.with_suffix(".png")) if rig == "generic" else "")
         if not res.get("ok"):
             error = str(res.get("error") or "rig generation failed")
             return {"ok": False, "error": error}
@@ -1671,18 +1711,11 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         texture_blob = Path(res["texture_path"]).read_bytes() if res.get("texture_path") else None
         texture_suffix = Path(res["texture_path"]).suffix if res.get("texture_path") else ".png"
         path = out_dir / f"{signature}{delivered.suffix.lower()}"
-        _purge_combination(out_dir, signature, keep_model=path)
-        source_target = out_dir / "unrigged" / f"{signature}.glb"
-        _publish_model_bytes(source_target, source_mesh.read_bytes())
-        if rig == "generic":
-            _publish_model_bytes(source_target.with_suffix(".png"), source_texture)
+        _purge_combination(out_dir, signature, keep_model=path, preserve_unrigged=True)
         stage_meta = {"mesh_backend": mesh_res.get("backend", ""),
                       "rig_backend": res.get("backend", ""),
                       "mesh_route_meta": {k: mesh_res[k] for k in ("routing", "fallback_from") if k in mesh_res},
                       "rig_route_meta": {k: res[k] for k in ("routing", "fallback_from") if k in res}}
-        _publish_sidecar(source_target, {"created_at": utc_now_iso(), "rig": "none",
-                          "source_image": src.name, "view_images": {v: Path(p).name for v, p in view_images.items()},
-                          "signature": signature, **stage_meta, **_ref_manifest(src)})
         (out_dir / "raw").mkdir(parents=True, exist_ok=True)
         _publish_model_bytes(out_dir / "raw" / path.name, blob)
         _publish_model_bytes(path, blob)
@@ -1759,7 +1792,6 @@ def rerig_model(character_name: str, signature: Optional[str] = None, *,
     if not source.is_file():
         return {"ok": False, "error": "No retained unrigged mesh source. Generate a new model to enable re-rigging."}
     rig = required_rig(character_name)
-    previous = _read_sidecar(path) if path else _read_sidecar(source)
     low = tier_variant(path, LOW_TIER) if path else None
     low_meta = _read_sidecar(low) if low else {}
     with tempfile.TemporaryDirectory(prefix=".rerig-", dir=out_dir) as tmp:
@@ -1783,11 +1815,9 @@ def rerig_model(character_name: str, signature: Optional[str] = None, *,
         if texture is not None:
             _publish_model_bytes(path.with_suffix(".png"), texture)
             _publish_model_bytes((out_dir / "raw" / path.name).with_suffix(".png"), texture)
-        meta = {k: v for k, v in previous.items() if k in (
-            "mesh_backend", "mesh_route_meta", "source_image", "view_images", "pieces", "items")}
         source_meta = _read_sidecar(source)
-        for key in ("mesh_backend", "mesh_route_meta"):
-            meta.setdefault(key, source_meta.get(key, "" if key.endswith("backend") else {}))
+        meta = {k: v for k, v in source_meta.items() if k in (
+            "mesh_backend", "mesh_route_meta", "source_image", "view_images", "pieces", "items", "job_id")}
         meta.update(created_at=utc_now_iso(), source="generated", signature=signature,
                     character=character_name, rig=rig, format=path.suffix.lstrip("."),
                     backend=res.get("backend", ""), rig_backend=res.get("backend", ""),
@@ -1873,13 +1903,11 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
     generation outlived our own poll (timeout, server restart) but finished
     on the gateway.
 
-    The result lands in a staging directory first and is checked against the
-    model contract of the character's rig (the same check an upload faces):
-    a mistyped id of a prop or another character's job must not replace this
-    model. ``force`` stores despite a failed check. Only then is the
-    combination replaced — model, texture, sidecar, tiers — and the new file
-    goes through the same retexture/normalise/measure/LOD steps as a fresh
-    generation.
+    A valid unrigged GLB becomes the current static model and its retained
+    re-rig source immediately. A rigged result must match the character's rig;
+    ``force`` may override its validation errors, never a wrong rig kind.
+    Rigged results go through the same retexture/normalise/measure/LOD steps
+    as a fresh generation.
 
     Returns ``{"status": "stored", "meta"}``, ``{"status": "queued"|"running",
     "progress", "elapsed_s"}`` while the job is not finished, ``{"status":
@@ -1908,9 +1936,21 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
             staging = Path(tempfile.mkdtemp(prefix=".fetch-", dir=out_dir))
             res = get_image_service().fetch_mesh_job(
                 job_id, str(staging / f"{signature}.fbx"),
-                backend_glob=backend_glob, rig=rig)
+                backend_glob=backend_glob)
             if res.get("status") != "stored":
                 return res
+            delivered_rig = res.get("rig", rig)
+            if delivered_rig not in ("none", rig):
+                return {"status": "rig_mismatch",
+                        "error": f"job {job_id} delivered a '{delivered_rig}' mesh, '{rig}' is needed here"}
+            if delivered_rig == "none":
+                src = find_ref_image(character_name, "tpose", signature)
+                manifest = {"source_image": src.name, **_ref_manifest(src)} if src else {}
+                stored = _store_unrigged_model(character_name, signature, res, rig, manifest)
+                if not stored.get("ok"):
+                    return {"status": "invalid", "errors": stored["errors"], "warnings": stored["warnings"]}
+                return {"status": "stored", "path": stored["path"],
+                        "meta": stored["meta"], "warnings": stored["warnings"]}
 
             staged = Path(res["path"])
             tex_staged = Path(res["texture_path"]) if res.get("texture_path") else None

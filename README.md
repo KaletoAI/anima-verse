@@ -238,7 +238,10 @@ stops acting autonomously).
   as finished primitives and placement specs in world metres, so neither the 3D client nor the
   admin's floor-plan preview decides geometry. The payload contract is `docs/schnittstellen-3d.md`.
 - **Character models:** one mesh per outfit combination, generated from a dedicated T-pose reference
-  render; humanoids come back as one rigged GLB, non-humanoids as FBX plus texture.
+  render. A valid new mesh immediately replaces the current model as a static GLB (`rig: none`)
+  and is retained as the source for re-rigging. Rigging runs afterwards; failure keeps the new mesh
+  visible, and **Re-rig from mesh** retries without generating another mesh. Successful rigging
+  replaces it with one rigged GLB for humanoids or FBX plus texture for non-humanoids.
   In Game-Admin → Characters → 3D, each T-pose view has a **Regenerate** button that replaces
   only that image, even with Auto off. Back/left/right reuse the existing front reference;
   generate the front first if it is missing. The general Generate button still renders the

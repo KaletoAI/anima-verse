@@ -2192,9 +2192,11 @@ GET /assets/animation-clips         → [{ kind, set?, url, loop, … }]
 GET /assets/surface-textures        → Flächen + Blends (§ A9)
 ```
 
-- **404 ist überall der Normalzustand** (kein Modell / Generierung läuft;
-  keine Zwischenstände). ETag/304 auf allen Binärdateien; `signature` im
-  Meta erkennt Regenerationen ohne Reload.
+- **404 ist überall der Normalzustand**, solange kein Modell verfügbar ist.
+  Nach erfolgreicher Mesh-Erzeugung ist ein Charakter bereits als statisches GLB
+  verfügbar; das anschließende Rigging ersetzt dieses erst nach erfolgreicher
+  Verarbeitung. ETag/304 auf allen Binärdateien; `model_rev` erkennt auch
+  Regenerationen derselben `signature` ohne Reload.
 - `floors` ist float (2,5 = Dach/Attika zählt halb); `height_m` =
   geschätzte Gesamthöhe; `width_m` = geschätzte reale Raumbreite (macht
   den Inhalts-Maßstab explizit). `offset_*` ±25 Welt-Meter.
@@ -2203,8 +2205,9 @@ GET /assets/surface-textures        → Flächen + Blends (§ A9)
   statt der 69 Knochen des Clip-Referenz-Rigs `shared/models/rig/reference.fbx`;
   das Retargeting beim Abspielen gleicht das aus) · `generic` (FBX + separates
   basecolor-Bild, keine Bibliotheks-Clips → prozedurales Idle) ·
-  `none` (Gebäude/Räume/Props, unrigged GLB). Richtwert ≤ ~30 MB,
-  Texturen ≤ 2048; Raum-/Gebäude-Texturen gern als JPEG eingebettet.
+  `none` (Gebäude/Räume/Props sowie Charakter-Meshes vor erfolgreichem Rigging,
+  unrigged GLB; keine Bibliotheks-Clips oder Zusatzknochen-Bewegung). Richtwert
+  ≤ ~30 MB, Texturen ≤ 2048; Raum-/Gebäude-Texturen gern als JPEG eingebettet.
 - **Metal-Roughness (AV3D-14):** GLBs können eine kombinierte MR-Textur
   tragen (G = Roughness, B = Metalness, Faktoren 1.0, TEXCOORD_0);
   Koexistenz-Verhalten des Clients (MR vorhanden → nutzen + neutrale

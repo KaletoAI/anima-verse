@@ -583,7 +583,8 @@ def publication_checks(root, model3d, rigged_source):
                 proceed.set()
             result=future.result(timeout=10)
         check(result.get('status')=='stale' and path.read_bytes()==b'concurrent-final','stale processor cannot overwrite competing publication')
-        # Both backend entry paths must keep their deliveries in the same stage.
+        # Generation exposes its validated static mesh while the rig is processed;
+        # a fetched rigged model stays staged until its processing succeeds.
         from types import SimpleNamespace
         ref=root/'reference.png'; ref.write_bytes(b'reference')
         import struct
@@ -617,7 +618,13 @@ def publication_checks(root, model3d, rigged_source):
                     if not entered.wait(10):
                         raise AssertionError((label,'processing not entered',future.result(timeout=1)))
                     try:
-                        check(_model_asset_response('demo',Request()).body==b'old-final',label+' stages backend delivery before processing')
+                        response = _model_asset_response('demo', Request())
+                        if label == 'generation':
+                            check(response.body == unrigged_source and
+                                  json.loads(path.with_suffix('.json').read_text())['rig'] == 'none' and
+                                  not low.exists(), 'generation serves the new static mesh, never partial rig output')
+                        else:
+                            check(response.body == b'old-final', 'job retrieval stages rigged delivery before processing')
                     finally:
                         proceed.set()
                     outcome=future.result(timeout=10)

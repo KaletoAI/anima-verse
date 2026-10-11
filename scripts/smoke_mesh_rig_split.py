@@ -5,10 +5,11 @@ Hand-derived expectations from plan-mesh-rig-trennung P1/P2: two character
 occasions accept any img2mesh; rig occasions accept any mesh2rig but require
 a configured chain. Migration seeds both rig chains in cost order, drops old
 declarations and preserves enabled flags; a second pass changes nothing.
-A first source must be durable before the rig starts; a failed replacement
-keeps every byte of the old pair. Two busy rig runs produce two failed task
-records, no fallback and no cooldown. A 64 MiB + 1 byte source is refused
-before submission. The shared single-slot channel must record exactly
+A validated source and its served static GLB must be durable before rigging.
+A failed replacement retains the NEW source/static pair, never the old rig.
+Two busy rig runs produce failed task records, no fallback and no cooldown.
+A 64 MiB + 1 byte source is refused before submission. The shared single-slot
+channel must record exactly
 mesh start/end, rig start/end twice, never an overlapping or nested submit.
 The 16x16 source is red on its upper half, blue on its lower half: generic
 FBX needs a V-corrected PNG (top blue), while the retained source stays top
@@ -17,6 +18,9 @@ sidecar and creature PNG; GC/purge removes the combination's source too.
 Two boot migrations put copied API keys in secrets.json only, and the second
 boot writes nothing. Rig requests contain only the backend's configured input_no_fingers in params
 and a data-URI GLB in files.input_mesh_path, including with no alias schema.
+Recovery accepts valid unrigged gateway deliveries without force or automatic
+rigging, retaining their provenance; invalid deliveries leave the pair unchanged.
+A concurrent real upload before the source checkpoint wins without rig submission.
 Usage: ./.venv/bin/python scripts/smoke_mesh_rig_split.py
 """
 import os
@@ -101,7 +105,7 @@ def color_png():
     return out.getvalue()
 
 
-def fixture_glb(rig=False):
+def fixture_glb(rig=False, revision='original'):
     color = color_png()
     doc = {'asset': {'version': '2.0'}, 'meshes': [{'primitives': [{'material': 0}]}],
            'buffers': [{'byteLength': len(color)}],
@@ -109,6 +113,7 @@ def fixture_glb(rig=False):
            'images': [{'bufferView': 0, 'mimeType': 'image/png'}],
            'textures': [{'source': 0}],
            'materials': [{'pbrMetallicRoughness': {'baseColorTexture': {'index': 0}}}]}
+    doc['asset']['extras'] = {'revision': revision}
     if rig:
         doc['nodes'] = [{'name': n} for n in BASE_JOINT_NAMES]
         doc['skins'] = [{'joints': list(range(52))}]
@@ -129,6 +134,9 @@ class Fake(ImageBackend):
         self.calls = []
         self.failure = failure
         self._meta = threading.local()
+        self.source = fixture_glb()
+        self.check_submission = None
+        self.check_delivery = None
 
     def check_availability(self):
         return self.available
@@ -139,14 +147,19 @@ class Fake(ImageBackend):
 
     def generate(self, prompt, negative, params, log_meta=None):
         self.calls.append(dict(params))
-        if self.failure:
+        if self.category != 'mesh2rig' and self.failure:
             raise self.failure
         if self.category == 'mesh2rig':
             uploaded = Path(params['source_model_path'])
             assert (root/'unrigged'/uploaded.name).is_file(), 'source must be durable before rig submission'
             payload = OpenAIMeshBackend.build_input_files(self, params)
             assert set(payload) == {'input_mesh_path'}
-            assert base64.b64decode(payload['input_mesh_path'].split(',', 1)[1]) == fixture_glb()
+            assert uploaded.read_bytes() == mesh.source, 'rig must consume the newest mesh, not a stale source'
+            assert base64.b64decode(payload['input_mesh_path'].split(',', 1)[1]) == mesh.source
+            if self.check_submission:
+                self.check_submission(uploaded.stem)
+            if self.failure:
+                raise self.failure
             assert OpenAIMeshBackend.build_alias_params(self, params) == {'input_no_fingers': self.no_fingers}
             assert 'no_fingers' not in params
             if self.delivered_rig == 'generic':
@@ -156,13 +169,53 @@ class Fake(ImageBackend):
             return [fixture_glb(True)]
         self._meta.files = [{'name': 'test_00001_.glb', 'kind': 'file', 'mime': 'application/octet-stream'}]
         assert 'no_fingers' not in params
-        return [fixture_glb()]
+        if self.check_delivery:
+            self.check_delivery()
+        return [self.source]
+
+    def fetch_job(self, job_id):
+        return {'status': 'done', 'job_id': job_id, 'rig': 'none', 'model': '',
+                'progress': 1, 'elapsed_s': 1, 'error': '',
+                'files': [{'name': 'recovered-source.glb', 'kind': 'file', 'mime': 'application/octet-stream'}],
+                'blobs': [self.source]}
 
     _generate = lambda self, prompt, negative, params: []
     _file_slot = ''
     no_fingers = True
     _remember_input = lambda self, raw: ''
 
+
+def assert_static(signature, *, error=False, routed=True):
+    """Missing early publication or stale backups violate the visible contract."""
+    public = root/f'{signature}.glb'
+    assert public.is_file(), 'validated mesh must be publicly served before rig submission'
+    assert public.read_bytes() == mesh.source, 'served mesh must be the newest unrigged delivery'
+    assert (root/'unrigged'/public.name).read_bytes() == mesh.source
+    metadata = read_sidecar(public)
+    assert metadata['rig'] == 'none' and metadata['mesh_backend'] == 'mesh'
+    assert metadata['pieces'] == {'body': 'new-piece'} and metadata['items'] == ['new-item']
+    assert metadata['source_image'] == src.name
+    if routed:
+        assert metadata['mesh_route_meta']['routing']['occasion'] in ('mesh_humanoid', 'mesh_creature')
+    assert not (root/f'{signature}.fbx').exists(), 'old FBX must not shadow the static GLB'
+    for folder in ('low', 'low/raw', 'low/prerig', 'raw', 'prerig'):
+        for path in (root/folder).glob(f'{signature}.*'):
+            if path.suffix == '.json':
+                assert read_sidecar(path)['rig'] == 'none'
+            elif path.suffix == '.glb':
+                assert path.read_bytes() == mesh.source, f'old rig remains in {folder}'
+            else:
+                raise AssertionError(f'old rig artifact remains: {path}')
+    with patch.object(model3d, 'current_outfit_state', return_value=({'body': 'new-piece'}, ['new-item'], signature)):
+        served, match = model3d.find_model3d_serving('demo')
+        assert served == public and match == 'exact'
+        info = model3d.get_model3d_info('demo')['model']
+        assert info['rig'] == 'none' and info['has_unrigged_source']
+        assert info['filename'] == public.name and info['tiers'] == ['full']
+        if error:
+            assert metadata.get('rig_error') and info['rig_error'] == metadata['rig_error']
+        else:
+            assert not metadata.get('rig_error') and not info.get('rig_error')
 
 def service(*backends):
     svc = object.__new__(ImageService)
@@ -297,10 +350,11 @@ with ExitStack() as stack:
     stack.enter_context(patch.object(model3d, 'get_model3d_dir', side_effect=lambda name: getattr(model3d._staging, 'directories', {}).get(name) or root))
     stack.enter_context(patch.object(model3d, 'find_ref_image', return_value=src))
     stack.enter_context(patch.object(model3d, 'get_model3d_options', return_value={'no_fingers': False}))
-    stack.enter_context(patch.object(model3d, '_ref_manifest', return_value={'pieces': {}, 'items': []}))
+    stack.enter_context(patch.object(model3d, '_ref_manifest', return_value={'pieces': {'body': 'new-piece'}, 'items': ['new-item']}))
     stack.enter_context(patch.object(model_refs, 'enabled_tpose_views', return_value=[]))
     for fn in ('_auto_retexture', '_auto_normalize', '_auto_extension_rig', '_attach_measurement', 'request_lod'):
         stack.enter_context(patch.object(model3d, fn, return_value=None))
+    low.check_submission = creature.check_submission = assert_static
     for rig, rig_name in (('mixamo', 'rig-low'), ('generic', 'creature')):
         rules.clear()
         rules.update({'mesh_humanoid': ['mesh'], 'mesh_creature': ['mesh'], 'rig_humanoid': ['rig-low'], 'rig_creature': ['creature']})
@@ -319,6 +373,7 @@ with ExitStack() as stack:
             assert validate_fbx(target.read_bytes(), tex)['ok']
             assert Image.open(io.BytesIO(tex)).getpixel((0, 0)) == (0, 0, 255)
             assert Image.open(root / 'unrigged' / f'{rig}.png').getpixel((0, 0)) == (255, 0, 0)
+    low.check_submission = creature.check_submission = None
     assert events == [('start', 'mesh'), ('end', 'mesh'), ('start', 'rig-low'), ('end', 'rig-low'), ('start', 'mesh'), ('end', 'mesh'), ('start', 'creature'), ('end', 'creature')]
     before = len(low.calls)
     with patch('app.imagegen.service.media_generation_enabled', return_value=False):
@@ -338,9 +393,19 @@ with ExitStack() as stack:
         f.truncate(64*1024*1024 + 1)
     assert '413' in svc.generate_rig(str(huge), str(root/'huge-rig.glb'), 'mixamo')['error']
     huge.unlink()
-    # Busy is load, propagates unchanged, and never selects another rigger.
-    snapshot = {p.relative_to(root): p.read_bytes() for p in model3d._signature_files(root, 'mixamo').values()}
+    # A distinct valid delivery replaces both an old rig and its old source
+    # before a busy rigger runs. First generation follows the same contract.
+    old_rig = (root/'mixamo.glb').read_bytes()
+    old_source = (root/'unrigged/mixamo.glb').read_bytes()
+    for folder in ('raw', 'prerig', 'low', 'low/raw', 'low/prerig'):
+        (root/folder).mkdir(parents=True, exist_ok=True)
+        (root/folder/'mixamo.glb').write_bytes(old_rig)
+        (root/folder/'mixamo.json').write_text(json.dumps({'rig': 'mixamo'}))
+    mesh.source = fixture_glb(revision='busy replacement')
+    assert mesh.source != old_source and mesh.source != old_rig
     low.failure = BackendBusyError('rig channel busy')
+    low.check_submission = assert_static
+    before = len(low.calls)
     for signature in ('mixamo', 'failed'):
         try:
             with patch.object(model3d, 'required_rig', return_value='mixamo'):
@@ -348,13 +413,91 @@ with ExitStack() as stack:
             raise AssertionError('busy must survive orchestration')
         except BackendBusyError:
             pass
-    assert snapshot == {p.relative_to(root): p.read_bytes() for p in model3d._signature_files(root, 'mixamo').values()}
-    assert (root/'unrigged/failed.glb').read_bytes() == fixture_glb()
-    assert not (root/'failed.glb').exists()
+        assert_static(signature, error=True)
+    assert len(low.calls) == before + 2 and not low.in_cooldown()
     from app.core.task_queue import get_task_queue
     with get_task_queue()._connect() as conn:
         assert conn.execute("SELECT count(*) FROM tasks WHERE task_type='model3d_generation' AND status='failed'").fetchone()[0] >= 2
     low.failure = None
+    # Ordinary backend failure must retain the newest pair too, without a
+    # routed backup or resurrection of the previous static/rigged generation.
+    mesh.source = fixture_glb(revision='failed replacement')
+    low.failure = RuntimeError('rig backend failed')
+    before = len(low.calls)
+    before_high = len(high.calls)
+    for signature in ('mixamo', 'firstfailure'):
+        try:
+            with patch.object(model3d, 'required_rig', return_value='mixamo'):
+                result = model3d.generate_for_current_outfit('demo', signature=signature, force=True)
+            assert not result['ok']
+        except (BackendFailedError, routing.NoRouteError):
+            pass
+        assert_static(signature, error=True)
+        low._cooldown_until = 0
+        low._available = True
+    assert len(low.calls) == before + 2 and len(high.calls) == before_high
+    low.failure = None
+    low.check_submission = creature.check_submission = None
+    # The gateway lookup, service artifact storage and character transaction
+    # stay real. Only the external job download is supplied by the backend.
+    saved_source = mesh.source
+    before_rigs = len(low.calls) + len(creature.calls)
+    for rig in ('mixamo', 'generic'):
+        signature = f'recovery-{rig}'
+        old_ext = '.glb' if rig == 'mixamo' else '.fbx'
+        (root/f'{signature}{old_ext}').write_bytes(fixture_glb(True) if rig == 'mixamo' else b'old rigged FBX')
+        (root/f'{signature}.json').write_text(json.dumps({'rig': rig}))
+        for folder in ('raw', 'prerig', 'low', 'low/raw', 'low/prerig'):
+            (root/folder).mkdir(parents=True, exist_ok=True)
+            (root/folder/f'{signature}{old_ext}').write_bytes(b'old rigged backup')
+        mesh.source = fixture_glb(revision=f'recovered {rig} source')
+        with patch.object(model3d, 'required_rig', return_value=rig):
+            result = model3d.fetch_job_for_current_outfit(
+                'demo', 'mesh-recovery-job', backend_glob='mesh', signature=signature)
+            assert result['status'] == 'stored', result
+            assert_static(signature, routed=False)
+        public_meta = read_sidecar(root/f'{signature}.glb')
+        source_meta = read_sidecar(root/'unrigged'/f'{signature}.glb')
+        for metadata in (public_meta, source_meta):
+            assert metadata['job_id'] == 'mesh-recovery-job'
+            assert metadata['source_filename'] == 'recovered-source.glb'
+        if rig == 'generic':
+            assert Image.open(root/'unrigged'/f'{signature}.png').getpixel((0, 0)) == (255, 0, 0)
+        previous_public = (root/f'{signature}.glb').read_bytes()
+        previous_source = (root/'unrigged'/f'{signature}.glb').read_bytes()
+        mesh.source = b'not a valid GLB'
+        with patch.object(model3d, 'required_rig', return_value=rig):
+            invalid = model3d.fetch_job_for_current_outfit(
+                'demo', 'invalid-mesh-job', backend_glob='mesh', signature=signature)
+        assert invalid['status'] != 'stored'
+        assert (root/f'{signature}.glb').read_bytes() == previous_public
+        assert (root/'unrigged'/f'{signature}.glb').read_bytes() == previous_source
+    assert len(low.calls) + len(creature.calls) == before_rigs, 'recovery must not start automatic rigging'
+    mesh.source = saved_source
+
+    # A real upload on the GPU worker publishes after generation's snapshot
+    # but before its checkpoint. The invalidated mesh must never rig/publish.
+    winner = fixture_glb(True, revision='concurrent upload wins')
+    before_rigs = len(low.calls)
+    def concurrent_upload():
+        with patch.object(model3d, 'current_outfit_state', return_value=({}, [], 'checkpoint-race')):
+            metadata = model3d.save_uploaded_model(
+                'demo', 'concurrent.glb', winner, rig='mixamo', signature='checkpoint-race')
+        assert metadata['rig'] == 'mixamo'
+    mesh.check_delivery = concurrent_upload
+    try:
+        with patch.object(model3d, 'required_rig', return_value='mixamo'):
+            try:
+                result = model3d.generate_for_current_outfit('demo', signature='checkpoint-race', force=True)
+                assert not result['ok']
+            except RuntimeError:
+                pass
+    finally:
+        mesh.check_delivery = None
+    assert (root/'checkpoint-race.glb').read_bytes() == winner
+    assert read_sidecar(root/'checkpoint-race.glb')['source'] == 'upload'
+    assert not (root/'unrigged/checkpoint-race.glb').exists()
+    assert len(low.calls) == before_rigs
     high.failure = RuntimeError('rig backend failed')
     before = len(low.calls)
     try:

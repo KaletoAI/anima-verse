@@ -1442,7 +1442,7 @@ export class FigureLibrary {
     const model: LoadedModel = {
       motion,
       name, template,
-      clips: gltf.animations.filter((c) => c.tracks.length > 0),
+      clips: info.rig === 'none' ? [] : gltf.animations.filter((c) => c.tracks.length > 0),
       scale, height: rawHeight * scale, assignOnly: true, noClips: false, tier,
       libraryFits: false,
     };
@@ -1450,8 +1450,9 @@ export class FigureLibrary {
     // merged PER KIND: a clip embedded in the mesh wins for its own kind, the
     // library fills every kind the model does not carry (swim finding
     // 2026-08-13 — a single embedded clip used to lock the whole library out).
-    // "generic" rigs (own skeletons) stay clip-less -> procedural idle.
-    if (info.rig !== 'generic' && boneNames(template).size) {
+    // Generic rigs keep their own clips; retained unrigged meshes stay static.
+    // Only an actual Mixamo rig can use the shared library.
+    if (info.rig === 'mixamo' && boneNames(template).size) {
       const fit = this.fitLibrary(name, template, model.clips, model.scale);
       model.libraryFits = fit.fits;
       if (fit.extra.length) model.clips = [...model.clips, ...fit.extra];

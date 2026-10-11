@@ -83,6 +83,7 @@ interface Model3DInfo {
   match?: string
   format?: string
   rig?: string
+  rig_error?: string
   size?: number
   url?: string
   texture_url?: string
@@ -272,7 +273,7 @@ export function FieldModel3D({ character }: { character: string }) {
       const token = ++previewRequestRef.current
       try {
         const data = await apiGet<Model3DStatus>(`/characters/${enc}/model3d${previewState ? `?preview_states=${encodeURIComponent(previewState)}` : ''}`)
-        if (!cancelled && context === previewContextRef.current && token === previewRequestRef.current) setSt(old => ({ ...old, motion: data.motion }))
+        if (!cancelled && context === previewContextRef.current && token === previewRequestRef.current) setSt(data)
       } catch { /* Keep the last successful preview during temporary request failures. */ }
       finally { pending = false }
     }
@@ -645,7 +646,8 @@ export function FieldModel3D({ character }: { character: string }) {
     }
   })()
   // Only a Mixamo rig can play the shared clips (humanoid characters).
-  const mixamo = (model?.rig || st.rig) !== 'generic'
+  const mixamo = (model?.rig || st.rig) === 'mixamo'
+  const rigless = model?.rig === 'none'
   const bust = model?.model_rev || model?.created_at || st.signature || ''
 
   // The character's set CHAIN, most specific first: explicit set, then the
@@ -705,7 +707,7 @@ export function FieldModel3D({ character }: { character: string }) {
     <fieldset className="ga-fieldset" key={`${sliderContext}:${group.id}`}>
       <legend>{group.id}</legend>
       <ExtensionMotionSliders overrides={st.options?.extension_motion?.[group.id] ?? {}}
-        disabled={pending}
+        disabled={pending || rigless}
         onPreview={values => setSliderPreview(previous => ({ context: sliderContext,
           groups: { ...(previous.context === sliderContext ? previous.groups : {}), [group.id]: values } }))}
         onSave={values => setExtensionMotion(group.id, values, true)} />
@@ -720,8 +722,8 @@ export function FieldModel3D({ character }: { character: string }) {
           <div ref={previewRef}>
           <Model3DViewer
             previewTilt
-            motion={previewMotion}
-            motionToolbar={motionToolbar}
+            motion={rigless ? undefined : previewMotion}
+            motionToolbar={rigless ? undefined : motionToolbar}
             url={viewerUrl}
             format={model.format || 'fbx'}
             clipUrl={mixamo ? clipUrl : ''}
@@ -731,7 +733,7 @@ export function FieldModel3D({ character }: { character: string }) {
           {/* Shown whenever Blender is around, not only once a distance mesh
               exists: asking for one that is missing is what makes the server
               build it. The button says so, and a reload has it. */}
-          {canMeasure && model.format === 'glb' ? (
+          {canMeasure && model.format === 'glb' && !rigless ? (
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('Showing')}</span>
               <button
@@ -761,7 +763,7 @@ export function FieldModel3D({ character }: { character: string }) {
           ) : null}
           {/* The clips of THIS character's set (+ the setless fallbacks). */}
           <div className="ga-model3d-controls">
-          {myClips.length ? (
+          {mixamo ? (myClips.length ? (
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>
                 {t('Animation')}
@@ -789,17 +791,25 @@ export function FieldModel3D({ character }: { character: string }) {
                 ? t('No clips for this animation set — add <kind>_<set>.fbx files or plain <kind>.fbx fallbacks.')
                 : t('No animation clips — drop Mixamo FBX files ("Without Skin") into shared/models/clips/.')}
             </div>
-          )}
+          )) : null}
           <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><span className="ga-hint">{t('Preview state')}</span>
-            <select className="ga-input" value={previewState} onChange={event => setPreviewState(event.target.value)}>
+            <select className="ga-input" value={previewState} disabled={rigless} onChange={event => setPreviewState(event.target.value)}>
               <option value="">{t('Current (live)')}</option>
               <option value="none">{t('None')}</option>
               {previewFilters.map(row => <option key={row.id} value={row.id}>{row.label || row.id}</option>)}
             </select>
           </label>
           </div>
-          {/* Mixamo clips need the Mixamo skeleton — a generic rig has none. */}
-          {!mixamo ? (
+          {/* Only a Mixamo skeleton can play the shared clips. */}
+          {rigless ? (
+            <div className="ga-hint" role="status" style={model.rig_error ? { color: 'var(--ga-warn, #c77d0a)' } : undefined}>
+              {st.pending
+                ? t('Mesh retained — rigging is running. Showing the new mesh statically.')
+                : model.rig_error
+                  ? `${t('Mesh retained — rigging failed. Showing the new mesh statically.')}: ${model.rig_error}`
+                  : t('Mesh retained — no rig yet. Use Re-rig from mesh to animate it.')}
+            </div>
+          ) : !mixamo ? (
             <div className="ga-hint">
               {t('Generic rig (no standard skeleton) — Mixamo clips will not drive this model.')}
             </div>
@@ -869,10 +879,9 @@ export function FieldModel3D({ character }: { character: string }) {
                 : ''}
             </div>
           ) : null}
-          {/* Rig only means something for an UPLOAD — a generated model's
-              skeleton is fixed by the backend alias. It decides whether the
-              shared clips apply. (owned: the rig update writes the CURRENT
-              combination's sidecar — a nearest stand-in has none.) */}
+          {/* Upload rig declarations decide whether shared clips apply.
+              (owned: the update writes the CURRENT combination's sidecar —
+              a nearest stand-in has none.) */}
           {owned && model.source === 'upload' ? (
             <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('Rig')}</span>
@@ -946,7 +955,7 @@ export function FieldModel3D({ character }: { character: string }) {
                 key={`${character}:${st.model?.signature || st.signature || ''}:${group.id}`}
                 defaults={st.motion_defaults[group.id] as unknown as Physics}
                 overrides={st.options?.extension_motion?.[group.id] ?? {}}
-                disabled={pending || busy}
+                disabled={pending || busy || rigless}
                 onSave={values => setExtensionMotion(group.id, values)} /> : null}
             </div>
           ))}
@@ -1141,6 +1150,9 @@ export function FieldModel3D({ character }: { character: string }) {
           </div>
           <div className="ga-hint">
             {t('Stored as the model of the outfit worn right now, replacing the current one. A job that is still running changes nothing — try again once it is done.')}
+          </div>
+          <div className="ga-hint">
+            {t('A valid unrigged delivery is retained as the static current mesh. Use Re-rig from mesh afterwards; no Store anyway override is needed.')}
           </div>
           {jobErrors.length ? (
             <div className="ga-hint" style={{ color: 'var(--ga-warn, #c77d0a)' }}>

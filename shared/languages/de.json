@@ -2418,6 +2418,10 @@
     "Unknown": "Unbekannt",
     "No retained unrigged mesh source. Generate a new model to enable re-rigging.": "Keine gespeicherte ungeriggte Mesh-Quelle. Erzeuge ein neues Modell, um erneutes Rigging zu ermöglichen.",
     "Reuses the retained mesh and rebuilds the rig, extension bones and existing low tier.": "Verwendet das gespeicherte Mesh und erstellt Rig, Zusatz-Bones und eine vorhandene Low-Stufe neu.",
+    "Mesh retained — rigging is running. Showing the new mesh statically.": "Mesh gespeichert — Rigging läuft. Das neue Mesh wird statisch angezeigt.",
+    "Mesh retained — rigging failed. Showing the new mesh statically.": "Mesh gespeichert — Rigging fehlgeschlagen. Das neue Mesh wird statisch angezeigt.",
+    "Mesh retained — no rig yet. Use Re-rig from mesh to animate it.": "Mesh gespeichert — noch kein Rig. Verwende „Aus Mesh neu riggen“, um es zu animieren.",
+    "A valid unrigged delivery is retained as the static current mesh. Use Re-rig from mesh afterwards; no Store anyway override is needed.": "Ein gültiges ungeriggtes Ergebnis wird als aktuelles statisches Mesh gespeichert. Verwende danach „Aus Mesh neu riggen“; „Trotzdem speichern“ ist dafür nicht erforderlich.",
     "Clamped per character to its maximum rest angle.": "Pro Charakter auf dessen maximalen Ruhewinkel begrenzt."
   }
 }
