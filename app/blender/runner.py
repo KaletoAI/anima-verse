@@ -25,12 +25,13 @@ bundled glTF/FBX importers stay enabled (they are on in factory settings).
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
 
@@ -41,6 +42,10 @@ SCRIPTS_DIR = Path(__file__).parent / "scripts"
 # Tail of the Blender log kept on failure — enough for a traceback, not enough
 # to bloat a log line.
 LOG_TAIL_CHARS = 4000
+
+MIN_VERSION = (4, 2)
+MAX_VERSION_EXCL = (5, 0)   # 5.x removed Action.fcurves — scripts not ported yet
+_VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
 
 _version_cache: Dict[str, str] = {}
 
@@ -55,28 +60,52 @@ def _config(path: str, default: Any) -> Any:
         return default
 
 
-def find_executable() -> str:
-    """Path to the Blender binary: configured value first, then discovery.
+def parse_version(text: str) -> Optional[Tuple[int, int, int]]:
+    m = _VERSION_RE.search(text or "")
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0)) if m else None
 
-    Discovery covers the usual unpacked-tarball locations; a configured path
-    always wins so a host with several installs stays predictable.
-    """
-    configured = str(_config("image_generation.blender_executable", "") or "").strip()
-    if configured:
-        return configured
-    found = shutil.which("blender")
-    if found:
-        return found
-    globs = ("/opt/blender*/blender", "/usr/local/blender*/blender",
-             str(Path.home() / "tools" / "blender*" / "blender"))
-    for pattern in globs:
+
+def _usable(ver: Optional[Tuple[int, int, int]]) -> bool:
+    return bool(ver) and MIN_VERSION <= ver[:2] < MAX_VERSION_EXCL
+
+
+def _candidates() -> List[str]:
+    found = []
+    w = shutil.which("blender")
+    if w:
+        found.append(w)
+    for pattern in ("/opt/blender*/blender", "/usr/local/blender*/blender",
+                    str(Path.home() / "tools" / "blender*" / "blender")):
         root = Path(pattern).anchor or "/"
-        rel = str(Path(pattern).relative_to(root))
-        matches = sorted(Path(root).glob(rel), reverse=True)   # newest first
-        for m in matches:
-            if os.access(m, os.X_OK):
-                return str(m)
-    return ""
+        for m in Path(root).glob(str(Path(pattern).relative_to(root))):
+            if os.access(m, os.X_OK) and str(m) not in found:
+                found.append(str(m))
+    return found
+
+
+def _discover() -> Tuple[str, List[Dict[str, str]]]:
+    configured = str(_config("image_generation.blender_executable", "") or "").strip()
+    rejected: List[Dict[str, str]] = []
+    pool = [configured] if configured else _candidates()
+    best, best_ver = "", None
+    for exe in pool:
+        ver = parse_version(version(exe))
+        if not _usable(ver):
+            rejected.append({"executable": exe, "version": version(exe) or "?",
+                             "reason": f"needs >= {MIN_VERSION[0]}.{MIN_VERSION[1]} and < "
+                                       f"{MAX_VERSION_EXCL[0]}.{MAX_VERSION_EXCL[1]}"})
+            continue
+        if best_ver is None or ver > best_ver:
+            best, best_ver = exe, ver
+    return best, rejected
+
+
+def find_executable() -> str:
+    """Pick the newest Blender in [4.2, 5.0) across discovery locations.
+
+    A configured path wins but must be usable; never silently switch from it.
+    """
+    return _discover()[0]
 
 
 def version(executable: str = "") -> str:
@@ -100,8 +129,14 @@ def version(executable: str = "") -> str:
 
 def status() -> Dict[str, Any]:
     """What the admin UI shows: is refinement on, which binary, which version."""
-    exe = find_executable()
+    exe, rejected = _discover()
     ver = version(exe) if exe else ""
+    error = "" if exe else (
+        "; ".join(
+            f"Blender {item['version']} at {item['executable']} is not supported "
+            f"({item['reason']})" for item in rejected
+        ) or "no blender executable found"
+    )
     enabled = bool(_config("image_generation.blender_enabled", True))
     return {
         "enabled": enabled,
@@ -109,6 +144,8 @@ def status() -> Dict[str, Any]:
         "version": ver,
         "configured": bool(str(_config("image_generation.blender_executable", "")).strip()),
         "usable": bool(enabled and exe and ver),
+        "rejected": rejected,
+        "error": error,
     }
 
 
@@ -137,7 +174,7 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
         return {"ok": False, "error": "blender refinement is disabled",
                 "data": {}, "outputs": {}, "seconds": 0.0}
     if not st["executable"]:
-        return {"ok": False, "error": "no blender executable found",
+        return {"ok": False, "error": st["error"],
                 "data": {}, "outputs": {}, "seconds": 0.0}
 
     script_path = SCRIPTS_DIR / f"{script}.py"

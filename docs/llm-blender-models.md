@@ -305,7 +305,7 @@ under `/admin/settings → Image/Video Generation → Blender refinement (3D)`
 | Key | Default | Meaning |
 |---|---|---|
 | `blender_enabled` | `true` | Master switch for every Blender job |
-| `blender_executable` | `` | Explicit path. Empty = discovery: `which blender`, then `/opt/blender*/blender`, `/usr/local/blender*/blender`, `~/tools/blender*/blender` |
+| `blender_executable` | `` | Explicit path. Empty = discovery: the newest binary in [4.2, 5.0) among `which blender`, `/opt/blender*/`, `/usr/local/blender*/`, `~/tools/blender*/` |
 | `blender_timeout_s` | `120` | Per job |
 | `blender_keep_original` | `true` | Keep the pre-refinement file |
 | `blender_auto_retexture` | `true` | Re-encode textures after a generation |
