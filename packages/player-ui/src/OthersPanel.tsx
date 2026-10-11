@@ -10,7 +10,7 @@ import { ApiError, apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
 import { useEnlarge } from './ZoomButton'
-import { thumbUrl, thumbWidth } from './thumbs'
+import { thumbUrl, thumbWidth, transparentPortraitUrl } from './thumbs'
 
 interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
 /** The avatar's relationship TO this character, as `/play/others` sends it.
@@ -56,12 +56,12 @@ function whereabouts(c: CharState, t: (s: string) => string): string {
   return [doing, place].filter(Boolean).join(', ')
 }
 
-/** Roster portrait: 44 CSS px. The magnifier opens the ORIGINAL. */
+/** Roster portrait: 44 CSS px. The magnifier opens the full-size cutout. */
 const AVATAR_W = thumbWidth(44)
 
 function portraitUrl(c: CharState): string {
   return c.profile_image
-    ? `/characters/${encodeURIComponent(c.name)}/images/${encodeURIComponent(c.profile_image)}`
+    ? transparentPortraitUrl(`/characters/${encodeURIComponent(c.name)}/images/${encodeURIComponent(c.profile_image)}`)
     : `/characters/${encodeURIComponent(c.name)}/outfit-expression?fallback=default`
 }
 
@@ -256,7 +256,7 @@ export function OthersPanel() {
             <img src={thumbUrl(portraitUrl(c), AVATAR_W)} alt={c.name} loading="lazy" decoding="async"
               onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden' }}
               {...enlarge({ src: portraitUrl(c), alt: c.name },
-                { width: 44, height: 44, borderRadius: 6, objectFit: 'cover', flex: '0 0 auto', background: 'rgba(255,255,255,0.08)' })} />
+                { width: 44, height: 44, objectFit: 'contain', flex: '0 0 auto' })} />
             <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {c.name}{c.in_party ? <span title={t('In your party')} style={{ marginLeft: 4 }}>👥</span> : null}

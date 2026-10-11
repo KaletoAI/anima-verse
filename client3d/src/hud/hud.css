@@ -527,17 +527,13 @@
   height: 52px;
   display: grid;
   place-items: center;
-  overflow: hidden;
-  border: 1px solid var(--border, #30363d);
-  border-radius: 50%;
-  background: var(--bg, #0d1117);
   font-size: 1.3em;
   font-weight: 600;
 }
 #hud .hud-plaque-portrait img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 #hud .hud-plaque-body {
   flex: 1 1 auto;

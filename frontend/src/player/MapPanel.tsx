@@ -83,6 +83,7 @@
  *     the target, never behind the walker.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { transparentPortraitUrl } from '@anima/player-ui'
 import { hillshadeImage, MAP_RELIEF_Z_FACTOR } from '@anima/scene-render'
 import type { WorldHeightField } from '@anima/scene-render'
 import { useI18n } from '../i18n/I18nProvider'
@@ -394,9 +395,8 @@ function Characters({ chars, avatar, tooltip }: {
           <g key={c.name}>
             <title>{tooltip(c)}</title>
             {showChip ? (
-              <image href={c.avatar_url} x={p.x - r * 2} y={p.y - r * 2}
-                width={r * 4} height={r * 4} preserveAspectRatio="xMidYMid slice"
-                style={{ clipPath: 'circle(50%)' }} />
+              <image href={transparentPortraitUrl(c.avatar_url)} x={p.x - r * 2} y={p.y - r * 2}
+                width={r * 4} height={r * 4} preserveAspectRatio="xMidYMid meet" />
             ) : null}
             <circle cx={p.x} cy={p.y} r={showChip ? r * 2 : r}
               fill={showChip ? 'none' : me ? COL_ACCENT : COL_STONE}

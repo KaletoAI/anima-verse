@@ -48,17 +48,35 @@ export function thumbWidth(cssWidth: number): number {
   return THUMB_WIDTHS[THUMB_WIDTHS.length - 1]
 }
 
+/** Request a cutout only for local character identity images, never expressions. */
+export function transparentPortraitUrl(url: string): string {
+  const hashAt = url.indexOf('#')
+  const hash = hashAt < 0 ? '' : url.slice(hashAt)
+  const base = hashAt < 0 ? url : url.slice(0, hashAt)
+  const queryAt = base.indexOf('?')
+  const path = queryAt < 0 ? base : base.slice(0, queryAt)
+  if (!THUMBABLE[0].test(path)) return url
+  const query = new URLSearchParams(queryAt < 0 ? '' : base.slice(queryAt + 1))
+  query.set('transparent', '1')
+  return `${path}?${query}${hash}`
+}
+
 /**
  * The thumbnail URL for a full-size image URL, or the input unchanged when the
  * server has no thumbnail route for it.
  *
- * `width` is a bucket (use `thumbWidth(cssPx)`); an existing query string on
- * the input is dropped — a cache-busting `?t=` belongs on the original, and
- * the thumbnail is already keyed by the source's mtime.
+ * `width` is a bucket (use `thumbWidth(cssPx)`). Preserve the transparent
+ * variant; other queries are dropped because thumbnails are source-keyed.
  */
 export function thumbUrl(url: string, width: number): string {
   if (!url) return url
-  const path = url.split('?')[0].split('#')[0]
+  const hashAt = url.indexOf('#')
+  const hash = hashAt < 0 ? '' : url.slice(hashAt)
+  const base = hashAt < 0 ? url : url.slice(0, hashAt)
+  const queryAt = base.indexOf('?')
+  const path = queryAt < 0 ? base : base.slice(0, queryAt)
   if (!THUMBABLE.some((re) => re.test(path))) return url
-  return `/thumbs${path}?w=${width}`
+  const query = new URLSearchParams(queryAt < 0 ? '' : base.slice(queryAt + 1))
+  const transparent = query.get('transparent') === '1' ? '&transparent=1' : ''
+  return `/thumbs${path}?w=${width}${transparent}${hash}`
 }

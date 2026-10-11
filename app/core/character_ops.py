@@ -1840,10 +1840,10 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
     All fields empty deletes the override completely."""
     from app.models.character import get_character_profile, save_character_profile
     workflow = (body.get("workflow") or "").strip()
+    profile_workflow = (body.get("profile_workflow") or "").strip()
     # Separate backend glob for the T-pose reference renders (the image->3D
     # input), e.g. a pose-controlled alias. Empty = the normal match above.
     tpose_workflow = (body.get("tpose_workflow") or "").strip()
-    model = (body.get("model") or "").strip()
     clean_loras = _clean_lora_list(body.get("loras"))
     # Own LoRA list for the T-pose reference renders: it REPLACES the list
     # above for those renders (different backend, different LoRA ecosystem —
@@ -1861,15 +1861,18 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
         # the key is PRESENT in the profile. A del leaves the old config value in
         # place. Empty workflow + no LoRAs = override deleted. ``model`` is dropped
         # (it comes from the workflow).
-        if workflow or tpose_workflow or clean_loras or clean_tpose_loras:
+        if workflow or profile_workflow or tpose_workflow or clean_loras or clean_tpose_loras:
             prof["outfit_imagegen"] = {"workflow": workflow,
+                                       "profile_workflow": profile_workflow,
                                        "tpose_workflow": tpose_workflow,
                                        "loras": clean_loras,
                                        "tpose_loras": clean_tpose_loras}
         else:
             prof["outfit_imagegen"] = {}
-        save_character_profile(character_name, prof)
+        if not save_character_profile(character_name, prof):
+            raise HTTPException(status_code=500, detail="Failed to save image-generation overrides")
     return {"status": "ok", "workflow": workflow,
+            "profile_workflow": profile_workflow,
             "tpose_workflow": tpose_workflow, "loras": clean_loras,
             "tpose_loras": clean_tpose_loras}
 
@@ -2933,17 +2936,14 @@ def facade_error_status(reason: str) -> int:
 
 async def generate_profile_image_core(character_name: str, request) -> Dict[str, Any]:
     """Generates a new profile image via the core image service."""
-    from app.core.dependencies import get_skill_manager
-    import os
     import json as _json
     data = await request.json()
-    user_id = data.get("user_id", "")
 
     # Load the character profile. Profile-image prompt = FACE PROMPT
     # (face_appearance), NOT the body appearance; falls back to the body
     # appearance when empty.
-    from app.models.character import get_character_profile, get_character_appearance, set_character_profile_image
-    from app.models.character_template import resolve_profile_tokens, get_template
+    from app.models.character import get_character_profile, set_character_profile_image
+    from app.models.character_template import get_template
     profile = get_character_profile(character_name)
     tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
     appearance = _resolve_face_prompt(profile, character_name, tmpl)
@@ -2953,7 +2953,7 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
     prompt_text = data.get("prompt", "").strip() or (appearance or "").strip()
 
     # Image service (core engine — wave-6 split)
-    from app.imagegen.service import get_image_service
+    from app.imagegen.service import get_image_service, PortraitReferenceError
     from app.core.lora_library import LoraNotAllowedError
     image_skill = get_image_service()
     if not image_skill.enabled:
@@ -2974,6 +2974,8 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
         "user_id": "",
         "auto_enhance": False,
         "set_profile": True,
+        "use_source_as_reference": bool(data.get("use_source_as_reference", False)),
+        "negative_prompt": (data.get("negative_prompt") or "").strip(),
         "image_use_case": "profile",
         # The "profile" occasion of the image routing (the character's own
         # match first, then the profile chain). A dialog pick is explicit:
@@ -2994,10 +2996,9 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
     try:
         import asyncio
         result = await asyncio.to_thread(image_skill.generate_from_input, input_data)
-    except LoraNotAllowedError as e:
-        # A LoRA the library does not associate with the resolved backend is a
-        # bad request, not a failed render — the dialog offers exactly the
-        # allowed ones, so only a direct API call gets here.
+    except (LoraNotAllowedError, PortraitReferenceError) as e:
+        # Invalid explicit LoRA or portrait-reference input is a client error,
+        # not a generation failure.
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")

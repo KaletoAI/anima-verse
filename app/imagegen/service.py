@@ -325,20 +325,23 @@ def _result_text(gallery_character: str, files: List[str],
     return "\n\n".join(lines)
 
 
+class PortraitReferenceError(ValueError):
+    """A requested portrait reference is missing or unsupported by the backend."""
+
+
 def render_has_reference_image(character_name: str, *,
                                set_profile: bool = False) -> bool:
     """Whether this render will slot an identity reference image — the signal
     that steers backend matching toward an img2img backend (see
     ``BackendPool._prefer_img2img``).
 
-    A ``set_profile`` render CREATES the profile picture and slots no reference
-    (conditioning on a self-reference would loop), so it belongs on the cheaper
-    txt2img backend. Every other render of a character that HAS a profile image
-    pins it as the identity reference (directly, or via an expression variant
-    derived from it) and therefore prefers img2img. Deliberately backend-
-    independent: it is resolved BEFORE the backend (and thus its slot budget) is
-    chosen, and the outfit-LoRA list and the variant render reuse it so all
-    three agree on which backend a character render lands on."""
+    This is the default identity-reference rule: profile creation starts without
+    a reference, other renders of a character with a portrait prefer img2img.
+    An explicitly requested portrait reference is captured separately by the
+    façade and takes precedence over this default. The signal is resolved
+    before the backend (and its slot budget) is chosen; outfit LoRA options and
+    variant renders reuse the same rule.
+    """
     if set_profile or not character_name:
         return False
     try:
@@ -1601,6 +1604,8 @@ class ImageService:
             "prompt": ctx.get("prompt", ctx.get("input", prompt_input)),
             "agent_name": ctx.get("agent_name", ""),
             "set_profile": ctx.get("set_profile", False),
+            "use_source_as_reference": bool(ctx.get("use_source_as_reference", False)),
+            "negative_prompt": ctx.get("negative_prompt", ""),
             "skip_gallery": ctx.get("skip_gallery", False),
             "appearances": ctx.get("appearances", None),
             "auto_enhance": ctx.get("auto_enhance", True),
@@ -1736,6 +1741,11 @@ class ImageService:
         character_name = (input_data.get("agent_name") or "").strip()
         set_profile = bool(input_data.get("set_profile"))
         skip_gallery = bool(input_data.get("skip_gallery"))
+        profile_reference = input_data.get("_profile_reference", "")
+        if profile_reference and backend.ref_slot_count < 1:
+            raise PortraitReferenceError(
+                f"Backend '{backend.name}' has no reference-image slots. "
+                "Choose a reference-capable backend or disable the portrait reference.")
 
         # The LoRA gate, for the backend this render actually resolved to
         # (app/core/lora_library.py holds the rule). TWO halves, because the
@@ -1786,7 +1796,7 @@ class ImageService:
             _uc_name, _uc_img_model,
             clothed=bool(input_data.get("clothed", True)))
         prompt_style = _ucp.get("prompt_style", "")
-        negative_prompt = _ucp.get("prompt_negative", "")
+        negative_prompt = input_data.get("negative_prompt") or _ucp.get("prompt_negative", "")
 
         # Register the task in the queue system for uniform visibility.
         # start_running=False: prompt build (LLM calls) + GPU channel wait time
@@ -1952,16 +1962,14 @@ class ImageService:
                 pv = PromptVariables()
                 pv.persons = persons
                 pv.negative_prompt = negative_prompt
-                # Carries into the slot planner: a profile render fills no
-                # reference slot at all (see _plan_qwen_slots). Without it the
-                # room image of wherever the character stands would end up
-                # conditioning its own portrait.
+                # The portrait slot planner excludes room, other people and
+                # items. Only the explicitly requested current portrait can
+                # fill the creating character's reference slot.
                 pv.set_profile = set_profile
 
                 # Resolve the reference images (style conditioning of the render).
                 # profile_only: profile image instead of the outfit image (e.g.
-                # outfit creation). set_profile=True (profile-image creation)
-                # gets no refs — otherwise a self-reference loop.
+                # outfit creation). Profile creation has no implicit references.
                 # reference_image_override replaces the rendered character's
                 # own reference, but only with a file from its model_refs
                 # directory — anything else is ignored with a warning.
@@ -2086,7 +2094,9 @@ class ImageService:
             # Resolve the reference slots for the generation (conditioning).
             # Workflows with reference slots (e.g. QWEN_STYLE) get the resolved
             # reference images injected directly into the generation.
-            if not no_person_detected and pv:
+            if set_profile:
+                pv.profile_reference = profile_reference
+            if (not no_person_detected or profile_reference) and pv:
                 face_refs = builder.resolve_reference_slots(
                     pv, max_slots=backend.ref_slot_count)
                 params["reference_images"] = face_refs["reference_images"]
@@ -2342,6 +2352,18 @@ class ImageService:
         if not character_name:
             return "Error: Character name missing for storing the image."
 
+        # Resolve only the server's current portrait, never a caller-supplied
+        # path. Capture it once before routing so every re-run uses the same
+        # identity source even if another render changes the profile meanwhile.
+        if input_data.get("set_profile") and input_data.get("use_source_as_reference"):
+            filename = get_character_profile_image(character_name)
+            root = get_character_images_dir(character_name).resolve()
+            reference = (root / filename).resolve()
+            if (not filename or not reference.is_relative_to(root)
+                    or not reference.is_file()):
+                raise PortraitReferenceError("No current portrait is available as a reference.")
+            input_data["_profile_reference"] = str(reference)
+
         from app.core.lora_library import LoraNotAllowedError
         from app.imagegen.base import BackendFailedError
         from app.imagegen.occasions import UnknownOccasionError
@@ -2350,7 +2372,8 @@ class ImageService:
         # Will the render slot an identity reference? Decided from the request
         # (the slot budget is the backend's, known only after resolution): an
         # explicit reference override, or a character with a profile image.
-        has_ref = (bool(input_data.get("reference_image_override"))
+        has_ref = (bool(input_data.get("_profile_reference"))
+                   or bool(input_data.get("reference_image_override"))
                    or render_has_reference_image(
                        character_name, set_profile=bool(input_data.get("set_profile"))))
         explicit = (input_data.get("backend") or "").strip()
@@ -2386,7 +2409,7 @@ class ImageService:
             result, route = run_routed(occasion, _render, character=character_name,
                                        has_ref=has_ref, pool=self.pool)
             return self._finish(result, route_meta(route))
-        except LoraNotAllowedError:
+        except (LoraNotAllowedError, PortraitReferenceError):
             raise
         except MediaGenerationDisabled:
             return "Error: Media generation is disabled for this world"

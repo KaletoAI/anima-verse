@@ -11,6 +11,7 @@ import { ApiError, apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
 import { EmptyState } from './EmptyState'
 import { useEnlarge } from './ZoomButton'
+import { transparentPortraitUrl } from './thumbs'
 
 interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
 interface SelfData {
@@ -91,14 +92,14 @@ export function SelfPanel() {
   }
 
   const portraitUrl = data.profile_image
-    ? `/characters/${encodeURIComponent(data.avatar)}/images/${encodeURIComponent(data.profile_image)}`
+    ? transparentPortraitUrl(`/characters/${encodeURIComponent(data.avatar)}/images/${encodeURIComponent(data.profile_image)}`)
     : `/characters/${encodeURIComponent(data.avatar)}/outfit-expression?fallback=default`
   const bars = Object.entries(data.status_effects || {})
 
   return (
     <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.9em', height: '100%', minHeight: 0 }}>
       {/* Portrait (scales with the window) with the bar overlay along its bottom */}
-      <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'grid', placeItems: 'center', overflow: 'hidden', borderRadius: 8, background: 'rgba(255,255,255,0.04)' }}>
+      <div style={{ flex: 1, minHeight: 0, position: 'relative', display: 'grid', placeItems: 'center', overflow: 'hidden' }}>
         <img src={portraitUrl} alt={data.avatar}
           onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden' }}
           {...enlarge({ src: portraitUrl, alt: data.avatar },

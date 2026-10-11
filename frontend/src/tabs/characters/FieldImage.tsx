@@ -24,8 +24,8 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
   const [bust, setBust] = useState(1)
   const [busy, setBusy] = useState(false)
   const [profileFile, setProfileFile] = useState<string>('')
-  const [genOpen, setGenOpen] = useState(false)  // Profilbild: ImageGenDialog
-  const [genPrompt, setGenPrompt] = useState('')  // vorgeladene Appearance (Default-Prompt)
+  const [genOpen, setGenOpen] = useState(false)  // Profile image: ImageGenDialog
+  const [genPrompt, setGenPrompt] = useState('')  // Preloaded appearance (default prompt)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const loadProfile = useCallback(async () => {
@@ -54,8 +54,8 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
         ? `/characters/${enc}/outfit-expression?fallback=default&v=${bust}`
         : `/characters/${enc}/outfit-expression?override=1&pieces=&items=&fallback=default&v=${bust}`
 
-  // Nach dem Trigger einige Sekunden nachladen (Generierung läuft async in der
-  // Queue) — Bild-URL per Cache-Buster auffrischen, bis das echte Bild da ist.
+  // Poll briefly after triggering the asynchronous queued generation, refreshing
+  // the image URL with a cache buster until the real image becomes available.
   const startPoll = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current)
     let n = 0
@@ -71,8 +71,8 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
   }, [kind, loadProfile])
 
   const fileRef = useRef<HTMLInputElement>(null)
-  // Profilbild hochladen: Datei → /characters/{n}/images (multipart) → als
-  // Profilbild setzen → /characters/{n}/profile-image/{filename}.
+  // Upload a profile image: file → /characters/{n}/images (multipart) →
+  // select it as the profile image via /characters/{n}/profile-image/{filename}.
   const upload = useCallback(async (file: File) => {
     if (!file || busy) return
     setBusy(true)
@@ -94,7 +94,7 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
     }
   }, [busy, enc, loadProfile, t, toast])
 
-  // Aussehen-Bild (kind!='profile'): direkter Trigger (leeres Outfit, Default-Pose).
+  // Appearance image (kind !== 'profile'): direct trigger (empty outfit, default pose).
   const generate = useCallback(async () => {
     if (busy) return
     setBusy(true)
@@ -120,7 +120,10 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
     setGenOpen(false)
     setBusy(true)
     try {
-      const body: Record<string, unknown> = { prompt: payload.prompt }
+      const body: Record<string, unknown> = {
+        prompt: payload.prompt,
+        use_source_as_reference: !!payload.use_source_as_reference,
+      }
       if (payload.backend) body.backend = payload.backend
       if (payload.loras && payload.loras.length) {
         body.loras = payload.loras.map((l) => ({ file: l.name, strength: l.strength }))
@@ -135,8 +138,8 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
     }
   }, [enc, t, toast, startPoll])
 
-  // Profilbild-Dialog oeffnen: vorher die aufgeloeste Appearance als Default-
-  // Prompt laden (editierbar im Dialog), dann oeffnen.
+  // Load the resolved appearance as the editable default prompt before opening
+  // the profile-image dialog.
   const openProfileDialog = useCallback(async () => {
     try {
       const d = await apiGet<{ prompt?: string }>(`/characters/${enc}/profile-image-prompt`)
@@ -192,6 +195,9 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
           defaultPrompt={genPrompt}
           occasion="profile"
           occasionCharacter={character}
+          sourceImageUrl={src || undefined}
+          defaultUseSource={false}
+          sourceReferenceLabel={t('Use current portrait as reference')}
           onSubmit={submitGenerate}
           onClose={() => setGenOpen(false)}
         />

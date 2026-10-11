@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { transparentPortraitUrl } from '@anima/player-ui';
 import type { MapCharacter, MapInteraction } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
@@ -73,7 +74,7 @@ function ringColor(name: string): string {
   return `hsl(${Math.floor(rnd() * 360)}, 65%, 55%)`;
 }
 
-/** Round portrait with a coloured ring as sprite texture; loads the avatar image lazily. */
+/** Uncropped cutout sprite with a coloured pointer; initials while its image loads. */
 function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvatar: boolean): THREE.CanvasTexture {
   const S = 144;
   const c = document.createElement('canvas');
@@ -93,16 +94,14 @@ function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvat
     ctx.closePath();
     ctx.fill();
 
-    ctx.beginPath();
-    ctx.arc(S / 2, S / 2 - 8, r - 8, 0, Math.PI * 2);
-    ctx.fillStyle = '#2b3440';
-    ctx.fill();
-    ctx.save();
-    ctx.clip();
     if (img) {
-      const s = Math.max((2 * (r - 8)) / img.width, (2 * (r - 8)) / img.height);
+      const s = Math.min((2 * (r - 8)) / img.width, (2 * (r - 8)) / img.height);
       ctx.drawImage(img, S / 2 - (img.width * s) / 2, S / 2 - 8 - (img.height * s) / 2, img.width * s, img.height * s);
     } else {
+      ctx.beginPath();
+      ctx.arc(S / 2, S / 2 - 8, r - 8, 0, Math.PI * 2);
+      ctx.fillStyle = '#2b3440';
+      ctx.fill();
       ctx.fillStyle = '#e8e2d5';
       ctx.font = `bold ${S / 3}px system-ui, sans-serif`;
       ctx.textAlign = 'center';
@@ -110,12 +109,6 @@ function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvat
       const initials = name.split(/\s+/).map((p) => p[0] ?? '').join('').slice(0, 2).toUpperCase();
       ctx.fillText(initials, S / 2, S / 2 - 6);
     }
-    ctx.restore();
-    ctx.lineWidth = 7;
-    ctx.strokeStyle = isAvatar ? '#e8b83a' : ringColor(name);
-    ctx.beginPath();
-    ctx.arc(S / 2, S / 2 - 8, r - 5, 0, Math.PI * 2);
-    ctx.stroke();
     tex.needsUpdate = true;
   };
 
@@ -123,7 +116,7 @@ function makePortraitTexture(name: string, avatarUrl: string | undefined, isAvat
   if (avatarUrl) {
     const img = new Image();
     img.onload = () => draw(img);
-    img.src = avatarUrl;
+    img.src = transparentPortraitUrl(avatarUrl);
   }
   return tex;
 }

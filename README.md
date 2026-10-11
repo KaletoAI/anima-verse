@@ -208,6 +208,22 @@ stops acting autonomously).
 - Context-aware prompts (appearance, outfit, mood, activity, location, pose), reference-image slots
   in the order Agent > Room > others > Items for face consistency, pose/expression variants, the
   outfit decency/compliance system.
+- **Portrait controls:** *Game-Admin → Characters → Image* has separate render, portrait and T-pose
+  backend matches in a compact responsive grid, with normal and T-pose LoRA overrides alongside.
+  The portrait match takes precedence for portraits only; empty inherits the render match, then
+  the global portrait routing chain. In the portrait generation dialog, **Use current portrait
+  as reference** optionally preserves identity through an existing portrait (off by default,
+  requires a reference-capable backend). Portraits never use room or item references.
+  Generated portraits frame the whole head and complete hairstyle, including long hair and all
+  hair tips, with background margin on every side. Only a short, straight upper-neck stump is
+  shown; longer hair hangs against the plain background without shoulders, chest or torso.
+  This profile-only framing also applies to custom styles without changing the Face Prompt,
+  expression, outfit or other render occasions.
+  The player and 3D clients display identity portraits as background-free cutouts with the full
+  hairstyle visible. Existing portraits are processed on first display; PNG variants live in
+  the character's `.cache/portraits`, outside the gallery. Originals remain unchanged for
+  reference generation. `?transparent=1` selects the cutout on character image and thumbnail
+  URLs; invalid segmentation is reported rather than silently serving an opaque image.
 - **Consolidated LoRA library:** one entry per LoRA with its backends, synced hourly from each
   backend's LoRA URL; every dropdown is scoped to the selected backend and the server rejects a pick
   the library does not associate with it.

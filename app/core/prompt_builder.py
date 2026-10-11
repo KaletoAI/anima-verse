@@ -59,40 +59,41 @@ class Person:
 
 @dataclass
 class PromptVariables:
-    """Alle separaten Prompt-Variablen fuer die Pipeline."""
-    # Pro Person (Index = Slot 1-based)
+    """Separate prompt variables collected by the pipeline."""
+    # Per person (1-based slot index)
     persons: List[Person] = field(default_factory=list)
     prompt_persons: Dict[int, str] = field(default_factory=dict)    # {1: "Woman1, blonde hair..."}
     prompt_outfits: Dict[int, str] = field(default_factory=dict)    # {1: "Woman1 is wearing red dress"}
     ref_images: Dict[int, str] = field(default_factory=dict)        # {1: "/path/to/image.png"}
 
-    # Items als Props (markiert im Room-Items Panel)
+    # Items selected as props in the room-items panel
     # items: [{"id": "...", "name": "chair", "description": "...", "image": "/path"}]
     items: List[Dict[str, Any]] = field(default_factory=list)
 
-    # Globale Variablen
+    # Global variables
     prompt_mood: str = ""
     prompt_activity: str = ""
     prompt_location: str = ""
-    ref_image_room: str = ""        # Slot 4 = Raum
+    ref_image_room: str = ""        # Room reference
 
-    # Interne Variablen fuer Separated-Prompt-Workflows
+    # Internal variables for separated-prompt workflows
     prompt_pose: str = ""
     prompt_expression: str = ""
 
-    # LLM-generierter Szenen-Prompt
+    # LLM-generated scene prompt
     scene_prompt: str = ""
 
-    # Zusaetze
-    prompt_style: str = ""           # Stil-Adjektiv (z.B. "photorealistic", "anime illustration")
+    # Additions
+    prompt_style: str = ""           # Style adjectives
     negative_prompt: str = ""
-    personality: str = ""           # Nur bei Profilbild
-    profile_image_hint: str = ""    # Zusatz "Profilbild"
+    personality: str = ""           # Profile image only
+    profile_image_hint: str = ""    # Profile image hint
 
-    # Kontext-Flags
+    # Context flags
     photographer_mode: bool = False
     is_selfie: bool = False
     set_profile: bool = False
+    profile_reference: str = ""     # Explicit current portrait, independent of person detection
     no_person_detected: bool = False
 
 
@@ -1224,7 +1225,7 @@ class PromptBuilder:
 
     def _plan_qwen_slots(
         self, variables: PromptVariables, max_slots: int) -> List[Dict[str, Any]]:
-        """Ordnet Referenzbilder nach Prioritaet auf die verfuegbaren Slots.
+        """Assign reference images to the available slots by priority.
 
         Order (fills slots 1..max_slots in turn until full):
             1. creating character (is_agent)
@@ -1236,17 +1237,11 @@ class PromptBuilder:
         (_resolve_qwen_slots) and for the exclusion rules, so both decide
         consistently what actually sits in a slot.
 
-        A profile render (``set_profile``) fills NO slot: the profile picture
-        is where the character's identity comes from, so nothing may condition
-        it — not a self-reference (that would loop) and above all not the room
-        the character happens to stand in. ``service.render_has_reference_
-        image`` promises the backend selection exactly this, and this is the
-        end that keeps the promise.
+        A profile render accepts only an explicitly supplied identity reference
+        of the creating character. It never inherits the room, other people or
+        item references. The default profile request supplies no identity ref.
         """
-        if variables.set_profile:
-            return []
 
-        plan: List[Dict[str, Any]] = []
 
         def _person_entry(pos: int, person) -> Optional[Dict[str, Any]]:
             ref_path = variables.ref_images.get(pos, "")
@@ -1255,6 +1250,15 @@ class PromptBuilder:
             return {"kind": "person", "pos": pos, "path": ref_path,
                     "name": person.name, "is_agent": person.is_agent,
                     "gender": self._normalize_gender(person.gender)}
+
+        if variables.set_profile:
+            ref = variables.profile_reference
+            if not ref or not Path(ref).is_file() or max_slots <= 0:
+                return []
+            return [{"kind": "person", "pos": 1, "path": ref,
+                     "name": self.character_name, "is_agent": True, "gender": ""}]
+
+        plan: List[Dict[str, Any]] = []
 
         # Prio 1: erstellender Character
         for pos, person in enumerate(variables.persons, 1):

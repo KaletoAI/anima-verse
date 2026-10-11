@@ -2561,7 +2561,8 @@ def build_gallery_payload(location_name: str) -> Dict[str, Any]:
     }
 
 
-def build_imagegen_options(occasion: str = "", character: str = "") -> Dict[str, Any]:
+def build_imagegen_options(occasion: str = "", character: str = "", *,
+                           use_source_as_reference: bool = False) -> Dict[str, Any]:
     """Returns the available image-generation backends (the dialogs' backend
     list).
 
@@ -2571,8 +2572,8 @@ def build_imagegen_options(occasion: str = "", character: str = "") -> Dict[str,
     the evaluated ``chain``. ``character`` puts that character's own match in
     front of a character-scoped chain (position 0), applies its backend
     switches and — like the render façade — the img2img preference of a
-    render that slots the character's profile image (a profile render
-    creates that image and slots none). The caller decides whether the
+    render that slots the character's profile image. A profile render does
+    this only with ``use_source_as_reference``. The caller decides whether the
     requesting user may see that character's routing. An unknown occasion
     raises ``UnknownOccasionError`` (the route answers 400)."""
     from app.core.prompt_adapters import get_target_model
@@ -2673,11 +2674,10 @@ def build_imagegen_options(occasion: str = "", character: str = "") -> Dict[str,
     if occasion:
         from app.imagegen.routing import explain_occasion
         from app.imagegen.service import render_has_reference_image
-        # The façade's rule (generate_from_input): a character render slots
-        # the profile image as identity reference unless it IS the profile
-        # render — so "Auto → X" names the backend the render lands on.
+        # The same reference preference as the render: portraits opt in,
+        # other character renders use their ordinary identity reference.
         has_ref = bool(character) and render_has_reference_image(
-            character, set_profile=occasion == "profile")
+            character, set_profile=occasion == "profile" and not use_source_as_reference)
         row = explain_occasion(occasion, character=character, has_ref=has_ref)
         result.update({"occasion": occasion, "resolved": row["resolved"],
                        "via": row["via"], "reason": row["reason"],

@@ -320,8 +320,8 @@
 .ig-feed { display: flex; flex-direction: column; gap: 14px; }
 .ig-post { border: 1px solid var(--border, #30363d); border-radius: 8px; overflow: hidden; background: var(--bg-container, #161b22); }
 .ig-post-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
-.ig-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
-.ig-avatar-ph { display: flex; align-items: center; justify-content: center; background: var(--accent, #2f81f7); color: #fff; font-weight: 600; font-size: 13px; }
+.ig-avatar { width: 28px; height: 28px; object-fit: contain; }
+.ig-avatar-ph { border-radius: 50%; display: flex; align-items: center; justify-content: center; background: var(--accent, #2f81f7); color: #fff; font-weight: 600; font-size: 13px; }
 .ig-author { font-weight: 600; font-size: 13px; }
 .ig-time { margin-left: auto; font-size: 11px; opacity: 0.6; }
 .ig-info { width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--border,#30363d); font-size: 10px; line-height: 15px; text-align: center; opacity: 0.6; cursor: help; }

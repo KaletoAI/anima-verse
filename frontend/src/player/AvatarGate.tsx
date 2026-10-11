@@ -13,9 +13,9 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
 import { ZoomButton } from '../components/ZoomButton'
-import { thumbUrl, thumbWidth } from '@anima/player-ui'
+import { thumbUrl, thumbWidth, transparentPortraitUrl } from '@anima/player-ui'
 
-/** Avatar card portrait: 96 CSS px. The magnifier opens the ORIGINAL. */
+/** Avatar card portrait: 96 CSS px. The magnifier opens the full-size cutout. */
 const AVATAR_W = thumbWidth(96)
 
 interface AvatarSwitchValue { chooseAvatar: () => void }
@@ -81,12 +81,11 @@ export function AvatarGate({ children }: { children: ReactNode }) {
                     borderRadius: 12, cursor: 'pointer', color: 'inherit', position: 'relative',
                     border: name === active ? '2px solid var(--accent,#2f81f7)' : '1px solid var(--border,#30363d)',
                     background: 'var(--bg-container,#161b22)', opacity: busy && busy !== name ? 0.5 : 1 }}>
-                  <img src={thumbUrl(`/characters/${encodeURIComponent(name)}/images/profile`, AVATAR_W)} alt=""
+                  <img src={thumbUrl(transparentPortraitUrl(`/characters/${encodeURIComponent(name)}/images/profile`), AVATAR_W)} alt=""
                     loading="lazy" decoding="async"
                     onError={(e) => { (e.currentTarget as HTMLImageElement).style.visibility = 'hidden' }}
-                    style={{ width: 96, height: 96, borderRadius: '50%', objectFit: 'cover',
-                      background: 'rgba(255,255,255,0.05)' }} />
-                  <ZoomButton item={{ src: `/characters/${encodeURIComponent(name)}/images/profile`, alt: name }} />
+                    style={{ width: 96, height: 96, objectFit: 'contain' }} />
+                  <ZoomButton item={{ src: transparentPortraitUrl(`/characters/${encodeURIComponent(name)}/images/profile`), alt: name }} />
                   <span style={{ fontWeight: 600, fontSize: '0.9em', textAlign: 'center' }}>
                     {busy === name ? '…' : name}
                   </span>

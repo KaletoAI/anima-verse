@@ -37,6 +37,8 @@ from fastapi import APIRouter, HTTPException, Request
 
 from app.core.http_files import etag_file_response
 from app.core.paths import get_storage_dir
+from app.core.portrait_images import (
+    PortraitProcessingError, character_image_path, transparent_portrait_path)
 from app.core.thumbnails import THUMB_MEDIA_TYPE, get_thumbnail, parse_width
 
 router = APIRouter(prefix="/thumbs", tags=["thumbs"])
@@ -73,7 +75,7 @@ def _serve(src: Path, raw_width, request: Request):
 
 @router.get("/characters/{character_name}/images/profile")
 def thumb_character_profile_image(character_name: str, request: Request,
-                                  w: str = ""):
+                                  w: str = "", transparent: bool = False):
     """Thumbnail of the character's profile picture.
 
     Declared BEFORE the generic image route so ``/images/profile`` keeps
@@ -82,32 +84,39 @@ def thumb_character_profile_image(character_name: str, request: Request,
     Every small portrait in the UI (roster rows, phone avatars, post headers)
     points at this URL.
     """
-    from app.models.character import (get_character_images_dir,
-                                      get_character_profile_image)
+    from app.models.character import get_character_profile_image
+
+    width = parse_width(w)
     try:
         profile = get_character_profile_image(character_name) or ""
-        images_dir = get_character_images_dir(character_name)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid character name")
-    if not profile:
-        raise HTTPException(status_code=404, detail="No profile image")
-    _check_filename(profile)
-    src = _inside(images_dir, images_dir / profile)
-    return _serve(src, w, request)
+        if not profile:
+            raise HTTPException(status_code=404, detail="No profile image")
+        src = (transparent_portrait_path(character_name, profile)
+               if transparent else character_image_path(character_name, profile))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Image not found")
+    except PortraitProcessingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _serve(src, width, request)
 
 
 @router.get("/characters/{character_name}/images/{image_filename}")
 def thumb_character_image(character_name: str, image_filename: str,
-                          request: Request, w: str = ""):
-    """Thumbnail of a character gallery image (the player gallery tiles)."""
-    from app.models.character import get_character_images_dir
-    _check_filename(image_filename)
+                          request: Request, w: str = "", transparent: bool = False):
+    """Thumbnail of an original gallery image or a display-only alpha portrait."""
+    width = parse_width(w)
     try:
-        images_dir = get_character_images_dir(character_name)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid character name")
-    src = _inside(images_dir, images_dir / image_filename)
-    return _serve(src, w, request)
+        src = (transparent_portrait_path(character_name, image_filename)
+               if transparent else character_image_path(character_name, image_filename))
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Image not found")
+    except PortraitProcessingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _serve(src, width, request)
 
 
 @router.get("/world/locations/{location_name}/gallery/{image_name}")

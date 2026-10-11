@@ -20,7 +20,7 @@ import { usePoll } from './usePolling'
 import { useToast } from './Toast'
 import { useLightbox } from './Lightbox'
 import { useEnlarge } from './ZoomButton'
-import { thumbUrl, thumbWidth } from './thumbs'
+import { thumbUrl, thumbWidth, transparentPortraitUrl } from './thumbs'
 import { Icon } from './icons'
 import { formatDateTime } from './clockFormat'
 import { clockSettings, useClockSettings } from './clockSettings'
@@ -416,11 +416,11 @@ export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanel
               ) : (
                 <img
                   className="ig-avatar"
-                  src={thumbUrl(`/characters/${encodeURIComponent(agent)}/images/profile`, AVATAR_W)}
+                  src={thumbUrl(transparentPortraitUrl(`/characters/${encodeURIComponent(agent)}/images/profile`), AVATAR_W)}
                   loading="lazy"
                   decoding="async"
                   alt={agent}
-                  {...enlarge({ src: `/characters/${encodeURIComponent(agent)}/images/profile`, alt: agent })}
+                  {...enlarge({ src: transparentPortraitUrl(`/characters/${encodeURIComponent(agent)}/images/profile`), alt: agent })}
                   onError={() => setAvatarFail((m) => ({ ...m, [agent]: true }))}
                 />
               )}

@@ -170,6 +170,8 @@ interface Props {
   showRoomReference?: boolean
   /** Initial state of the "use current image as reference" toggle. */
   defaultUseSource?: boolean
+  /** Optional label for the source-reference toggle; already localized by caller. */
+  sourceReferenceLabel?: string
   /**
    * Require the source image to actually be used as a reference: the chosen
    * backend must expose a reference slot (ref_slot_count > 0) and the
@@ -265,7 +267,7 @@ export function ImageGenDialog({
   open, title, defaultPrompt, sourceImageUrl, settingsPrefix, settingsSuffix,
   styleUseCase, composeRequest,
   showResolution, defaultResolution,
-  showRoomReference, defaultUseSource, requireSourceReference,
+  showRoomReference, defaultUseSource, sourceReferenceLabel, requireSourceReference,
   showCreateNew, defaultCreateNew,
   enhanceEndpoint = '/world/imagegen-enhance-prompt', onSubmit, onClose,
   mode = 'create', hideNegative, characterOptions,
@@ -290,6 +292,7 @@ export function ImageGenDialog({
   const [negative, setNegative] = useState('')
   const [selectedChars, setSelectedChars] = useState<string[]>([])
   const [options, setOptions] = useState<ImagegenOption[] | null>(null)
+  const [optionsLoading, setOptionsLoading] = useState(false)
   const [mediaOff, setMediaOff] = useState(false)
   // Backend the occasion's chain resolves to right now ('' = none / no occasion).
   const [routedName, setRoutedName] = useState<string>('')
@@ -376,10 +379,11 @@ export function ImageGenDialog({
   }, [open, detectedKey])
 
   // Load the options when the dialog first opens, and again whenever the
-  // occasion or its character changes (the routed backend depends on both).
+  // occasion, character or portrait source-reference choice changes.
   const optionsQuery = occasion
     ? `?occasion=${encodeURIComponent(occasion)}`
       + (occasionCharacter ? `&character=${encodeURIComponent(occasionCharacter)}` : '')
+      + (occasion === 'profile' ? `&use_source_as_reference=${!!sourceImageUrl && useSource}` : '')
     : ''
   const latestQuery = useRef(optionsQuery)
   latestQuery.current = optionsQuery
@@ -388,8 +392,13 @@ export function ImageGenDialog({
     if (!open || loadedQuery === optionsQuery) return
     const q = optionsQuery
     setLoadedQuery(q)
-    setOptions(null)
-    setOptionKey('')
+    setOptionsLoading(true)
+    const sourceChoiceOnly = occasion === 'profile' && loadedQuery !== null
+      && loadedQuery.split('&use_source_as_reference=')[0] === q.split('&use_source_as_reference=')[0]
+    if (!sourceChoiceOnly) {
+      setOptions(null)
+      setOptionKey('')
+    }
     apiGet<ImagegenOptionsResponse>(`/world/imagegen-options${q}`)
       .then((d) => {
         if (latestQuery.current !== q) return   // a newer query took over
@@ -399,7 +408,8 @@ export function ImageGenDialog({
         setRoutedChain(d.chain || [])
       })
       .catch(() => { if (latestQuery.current === q) setOptions([]) })
-  }, [open, loadedQuery, optionsQuery])
+      .finally(() => { if (latestQuery.current === q) setOptionsLoading(false) })
+  }, [open, loadedQuery, optionsQuery, occasion])
 
   // Selectable backends: inpaint targets belong only in the Map-Fit/Match-Edges
   // dialogs, never in the normal render selection. Available backends first,
@@ -442,6 +452,13 @@ export function ImageGenDialog({
   const effectiveName = isAuto ? routedName : optionKey
   const currentOption = useMemo<ImagegenOption | null>(
     () => entries.find((e) => e.name === effectiveName) || null, [entries, effectiveName])
+
+  // Portrait references must never remain selected on a slotless backend.
+  useEffect(() => {
+    if (occasion === 'profile' && currentOption && (currentOption.ref_slot_count || 0) === 0) {
+      setUseSource(false)
+    }
+  }, [occasion, currentOption])
 
   // Backend without a negative input (resolved server-side from the
   // auto/yes/no setting): there is nothing to type into, because the
@@ -537,16 +554,17 @@ export function ImageGenDialog({
 
   // A backend switch resets picks the new backend does not offer.
   useEffect(() => {
+    if (occasion === 'profile' && !currentOption) return
     const offered = new Set(backendLoras.map((l) => l.name))
     setLoraSlots((prev) => {
       if (prev.every((s) => s.name === 'None' || offered.has(s.name))) return prev
       return prev.map((s) =>
         s.name === 'None' || offered.has(s.name) ? s : { name: 'None', strength: 1.0 })
     })
-  }, [backendLoras])
+  }, [backendLoras, occasion, currentOption])
 
   const handleSubmit = useCallback(async () => {
-    if (!currentOption) return
+    if (!currentOption || optionsLoading || loadedQuery !== optionsQuery) return
     // Assemble the full prompt: style + prefix + base + suffix (all
     // editable). The server then does not re-append any config parts.
     const fullPrompt = [styleText.trim(), prefixText.trim(), prompt.trim(), suffixText.trim()]
@@ -593,7 +611,7 @@ export function ImageGenDialog({
     } finally {
       setSubmitting(false)
     }
-  }, [currentOption, isAuto, prompt, prefixText, suffixText, settingsPrefix,
+  }, [currentOption, optionsLoading, loadedQuery, optionsQuery, isAuto, prompt, prefixText, suffixText, settingsPrefix,
       settingsSuffix, styleText, styleUseCase, composeRequest, composeLlm,
       loraSlots, onSubmit, onClose,
       isRegen, showCreateNew, createNew,
@@ -911,10 +929,10 @@ export function ImageGenDialog({
                 </div>
               ) : null}
 
-              {(characterOptions || (slotBudget > 0 && (showRoomReference || sourceImageUrl))) ? (
+              {(characterOptions || (slotBudget > 0 && (showRoomReference || sourceImageUrl)) || (sourceImageUrl && sourceReferenceLabel)) ? (
                 <>
                   <label className="ga-imagegen-label">
-                    {slotBudget > 0 ? t('Reference images') : t('Characters in the image')}
+                    {slotBudget > 0 || sourceReferenceLabel ? t('Reference images') : t('Characters in the image')}
                     {slotBudget > 0 ? ` (${usedSlots}/${slotBudget})` : ''}
                   </label>
                   {characterOptions && (availNames.length ? availNames : detNames).length === 0 ? (
@@ -949,14 +967,15 @@ export function ImageGenDialog({
                       <span>{t('Room / background')}</span>
                     </label>
                   ) : null}
-                  {slotBudget > 0 && sourceImageUrl ? (
+                  {sourceImageUrl && (slotBudget > 0 || sourceReferenceLabel) ? (
                     <label className="ga-check-row">
                       <input type="checkbox"
-                        checked={requireSourceReference ? true : useSource}
-                        disabled={submitting || !!requireSourceReference || (!useSource && atBudget)}
+                        checked={slotBudget > 0 && (requireSourceReference ? true : useSource)}
+                        disabled={submitting || slotBudget === 0 || !!requireSourceReference || (!useSource && atBudget)}
                         onChange={(e) => setUseSource(e.target.checked)} />
                       <span>
-                        {t('Current image as reference')}
+                        {sourceReferenceLabel || t('Current image as reference')}
+                        {slotBudget === 0 ? ` — ${t('this backend has no reference slot')}` : ''}
                         {requireSourceReference ? ` (${t('required')})` : ''}
                       </span>
                     </label>
@@ -1040,7 +1059,7 @@ export function ImageGenDialog({
           <button
             className="ga-btn ga-btn-primary"
             onClick={handleSubmit}
-            disabled={submitting || enhancing || !currentOption || sourceRefBlocked || mediaOff}
+            disabled={submitting || enhancing || optionsLoading || loadedQuery !== optionsQuery || !currentOption || sourceRefBlocked || mediaOff}
           >
             {submitting ? '…' : t('Generate')}
           </button>

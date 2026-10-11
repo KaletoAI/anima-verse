@@ -2994,7 +2994,8 @@ def _routing_character_for_caller(character: str) -> str:
 
 
 @router.get("/imagegen-options")
-def get_imagegen_options(occasion: str = "", character: str = "") -> Dict[str, Any]:
+def get_imagegen_options(occasion: str = "", character: str = "",
+                         use_source_as_reference: bool = False) -> Dict[str, Any]:
     """Available image-generation backends; with `occasion`, also what the
     image routing resolves that occasion to right now (dialog preselection).
     `character` is honoured only for an admin or a character the caller
@@ -3002,7 +3003,8 @@ def get_imagegen_options(occasion: str = "", character: str = "") -> Dict[str, A
     from app.imagegen.occasions import UnknownOccasionError
     try:
         return world_ops.build_imagegen_options(
-            occasion.strip(), _routing_character_for_caller(character.strip()))
+            occasion.strip(), _routing_character_for_caller(character.strip()),
+            use_source_as_reference=use_source_as_reference)
     except UnknownOccasionError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

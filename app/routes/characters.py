@@ -12,6 +12,8 @@ from typing import Dict, Any, List, Optional
 from app.core.auth_dependency import require_admin
 from app.core.explicit_backend import require_explicit_backend
 from app.core.http_files import etag_file_response
+from app.core.portrait_images import (
+    PortraitProcessingError, character_image_path, transparent_portrait_path)
 from app.core.log import get_logger
 from app.core.upload_limits import (MODEL_UPLOAD_MAX_BYTES, ensure_image,
                                     ensure_mp4, guard_content_length,
@@ -943,6 +945,7 @@ def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
         override = {}
     return {
         "workflow": override.get("workflow", "") or "",
+        "profile_workflow": override.get("profile_workflow", "") or "",
         # Backend glob for the T-pose reference renders only; empty = the
         # normal render match.
         "tpose_workflow": override.get("tpose_workflow", "") or "",
@@ -1145,43 +1148,44 @@ def get_character_images_list(character_name: str) -> Dict[str, Any]:
 
 
 @router.get("/{character_name}/images/profile")
-def get_character_profile_image_file(character_name: str):
+def get_character_profile_image_file(character_name: str, request: Request,
+                                     transparent: bool = False):
     """Serves the character's profile image directly (shortcut for notifications/avatars)."""
     from fastapi.responses import Response
     try:
         profile_img = get_character_profile_image(character_name)
         if not profile_img:
             return Response(status_code=404)
-        images_dir = get_character_images_dir(character_name)
-        image_path = images_dir / profile_img
-        if not image_path.exists():
-            return Response(status_code=404)
+        image_path = (transparent_portrait_path(character_name, profile_img)
+                      if transparent else character_image_path(character_name, profile_img))
+        if transparent:
+            return etag_file_response(image_path, request, "image/png")
         media_type, _ = mimetypes.guess_type(str(image_path))
         return FileResponse(
             image_path,
             media_type=media_type or "application/octet-stream",
             headers={"Cache-Control": "public, max-age=300"}
         )
-    except Exception:
+    except FileNotFoundError:
         return Response(status_code=404)
+    except PortraitProcessingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.get("/{character_name}/images/{image_filename}")
-def get_character_image(character_name: str, image_filename: str):
-    """Ruft ein spezifisches Bild ab"""
+def get_character_image(character_name: str, image_filename: str, request: Request,
+                        transparent: bool = False):
+    """Serve an original gallery image or its display-only alpha portrait."""
     from fastapi.responses import Response
     try:
-        if ".." in image_filename or "/" in image_filename:
-            raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
-
-        images_dir = get_character_images_dir(character_name)
-        image_path = images_dir / image_filename
-
-        if not image_path.exists():
-            return Response(
-                status_code=404,
-                headers={"Cache-Control": "public, max-age=300"}
-            )
+        image_path = (transparent_portrait_path(character_name, image_filename)
+                      if transparent else character_image_path(character_name, image_filename))
+        if transparent:
+            return etag_file_response(image_path, request, "image/png")
 
         media_type, _ = mimetypes.guess_type(str(image_path))
         return FileResponse(
@@ -1189,10 +1193,14 @@ def get_character_image(character_name: str, image_filename: str):
             media_type=media_type or "application/octet-stream",
             headers={"Cache-Control": "no-cache"}
         )
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except FileNotFoundError:
+        return Response(status_code=404, headers={"Cache-Control": "public, max-age=300"})
+    except PortraitProcessingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # --- 3D model asset (AV3D-5 stage 1) ---

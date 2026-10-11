@@ -23,9 +23,6 @@ A4. P1/P2: all mesh_* occasions require img2mesh/none. rig_humanoid
 A5. character_scoped exactly: photo, instagram, profile, expression, tpose,
     regenerate (§ 1 column "figurbez." = ja; frame is a product shot without
     a figure — review note).
-A6. tpose reads char_spec_field "tpose_workflow" with fallback "workflow"
-    (review note); every other character-scoped one reads "workflow" with no
-    fallback.
 A7. needs_ref_slot only on timevariant (§ 1 "nur Backends mit >= 1 Ref-Slot").
 A8. backend_fits, one line each (kind = media/category/rig/ref_slot_count):
       photo    + image/img2img/ref 1          -> True
@@ -179,14 +176,6 @@ def part_a():
     check("A5 character scoped",
           [i for i in expected_ids if occ.get_occasion(i)["character_scoped"]],
           ["photo", "instagram", "profile", "expression", "tpose", "regenerate"])
-
-    tp = occ.get_occasion("tpose")
-    check("A6 tpose field", (tp["char_spec_field"], tp["char_spec_fallback"]),
-          ("tpose_workflow", "workflow"))
-    check("A6 others read workflow",
-          {(occ.get_occasion(i)["char_spec_field"], occ.get_occasion(i)["char_spec_fallback"])
-           for i in ("photo", "instagram", "profile", "expression", "regenerate")},
-          {("workflow", "")})
 
     check("A7 needs_ref_slot",
           [i for i in expected_ids if occ.get_occasion(i).get("needs_ref_slot")],

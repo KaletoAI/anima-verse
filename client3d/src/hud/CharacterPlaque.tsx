@@ -15,7 +15,7 @@
  * and the bus carries no room-name map to resolve it against.
  */
 import { useSyncExternalStore } from 'react';
-import { useI18n, Icon } from '@anima/player-ui';
+import { useI18n, Icon, transparentPortraitUrl } from '@anima/player-ui';
 import { gameActions, getGameState, setGameState, subscribeGameState, uiActions } from './bus';
 
 export function CharacterPlaque() {
@@ -31,7 +31,7 @@ export function CharacterPlaque() {
     <div className="hud-plaque">
       <div className="hud-plaque-portrait">
         {char.avatar_url
-          ? <img src={char.avatar_url} alt="" />
+          ? <img src={transparentPortraitUrl(char.avatar_url)} alt="" />
           : <span>{char.name.slice(0, 1).toUpperCase()}</span>}
       </div>
 
