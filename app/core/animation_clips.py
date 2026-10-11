@@ -613,11 +613,14 @@ def save_transitions(entries: Any,
 
 def _origin(meta: Optional[Dict[str, Any]]) -> str:
     """Where the clip came from, in one word: ``cmu`` for a CMU-derived take,
-    otherwise the skeleton family the FBX import retargeted from
+    ``unimate`` for a generated UniMate clip, otherwise the skeleton family
+    the FBX import retargeted from
     (``unity-humanoid``, …), ``unknown`` without a sidecar."""
     src = (meta or {}).get("source")
     if not isinstance(src, dict):
         return "unknown"
+    if src.get("generator") == "unimate":
+        return "unimate"
     database = str(src.get("database") or "")
     if "CMU" in database:
         return "cmu"
@@ -714,6 +717,8 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
     geometry = (meta or {}).get("geometry")
     geometry = geometry if isinstance(geometry, dict) else {}
     rm = clip_root_motion(meta)
+    source = (meta or {}).get("source")
+    source = source if isinstance(source, dict) else {}
     return {
         "kind": entry["kind"],
         "role": entry["role"],
@@ -733,6 +738,8 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "size": path.stat().st_size,
         "has_sidecar": meta is not None,
         "origin": _origin(meta),
+        "generator": str(source.get("generator") or ""),
+        "license": str(source.get("license") or ""),
         "duration_s": (meta or {}).get("duration_s"),
         "fps": (meta or {}).get("fps"),
         "frames": (meta or {}).get("frames"),
@@ -1376,3 +1383,40 @@ def _rewrite_sidecar_kind(target: Path, new_kind: str) -> None:
         data["kind"] = new_kind
         target.write_text(json.dumps(data, indent=2, ensure_ascii=False),
                           encoding="utf-8")
+
+
+_UNSAFE_KIND_CHARS = re.compile(r"[^a-z0-9 _-]+")
+
+
+def _kind_base(raw: str) -> str:
+    base = _UNSAFE_KIND_CHARS.sub("-", str(raw or "").strip().lower())
+    base = re.sub(r"-{2,}", "-", base).strip("-") or "pose"
+    base = _NUM_SUFFIX_RE.sub(lambda m: "-" + m.group(0).lstrip("_"), base)
+    return validate_kind(base)
+
+
+def _owned_by(kind: str, pose_key: str) -> bool:
+    try:
+        meta = json.loads((get_animation_clips_dir() / f"{kind}.json").read_text(
+            encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    src = meta.get("source") if isinstance(meta, dict) else None
+    return (isinstance(src, dict) and src.get("generator") == "unimate"
+            and src.get("pose_key") == pose_key)
+
+
+def reserve_kind(base: str, *, pose_key: str) -> str:
+    """Kind for a generated clip: the pose key unless another clip owns that
+    name anywhere (both libraries, every set, pair halves), then -u, -u2, ..."""
+    _clear_entries_cache()
+    taken = {e["kind"] for e in clip_entries()}
+    kind = _kind_base(base)
+    if kind not in taken or _owned_by(kind, pose_key):
+        return kind
+    n = 1
+    while True:
+        cand = f"{kind}-u" if n == 1 else f"{kind}-u{n}"
+        if cand not in taken or _owned_by(cand, pose_key):
+            return cand
+        n += 1

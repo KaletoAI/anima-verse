@@ -28,8 +28,11 @@ The signature table below MIRRORS ``fbx_clip.SIGNATURES`` / ``BONE_MAPS`` on
 purpose: that module imports ``bpy`` and can only be read inside Blender, so a
 server-side probe cannot import it. A new family there needs a line here too.
 """
+import json
+import os
 import re
 import struct
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -516,10 +519,16 @@ def resolve_take(name: str, take: Optional[int]) -> Dict[str, Any]:
     picking the first, which is what the FBX importer assigns and what nobody
     asked for. A file with one animation may name it or not.
     """
-    takes = _cached_takes(inbox_path(name))
+    return _prepare_take(inbox_path(name), take, name=name)
+
+
+def _prepare_take(path: Path, take: Optional[int], *, name: str,
+                  allow_multiple: bool = False) -> Dict[str, Any]:
+    """Resolve a take on an already validated inbox or staged path."""
+    takes = _cached_takes(path)
     count = len(takes)
     if take is None:
-        if count > 1:
+        if count > 1 and not allow_multiple:
             raise ClipImportError(
                 f"{name}: this file holds {count} animations — pick one")
         return {"take": None, "take_count": count, "take_name": ""}
@@ -865,23 +874,10 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
         p = inbox_path(name)
         if not p.is_file():
             raise ClipImportError(f"no such file in the inbox: {name}")
-        family = _cached_probe(p).get("skeleton_family")
-        if not family:
-            raise ClipImportError(
-                f"{name}: unknown rig — no bone map matches its node names "
-                f"(known: {', '.join(sorted(SIGNATURES))})")
-        if src_family and family != src_family:
-            raise ClipImportError(
-                f"{name} carries a {family} rig, the other half is "
-                f"{src_family} — both halves of a pair have to come from the "
-                "same rig")
+        family, take_spec = _prepare_source(p, take, name=name,
+                                           src_family=src_family)
         src_family = src_family or family
-        # Which animation of the file. Fails CLOSED when the file holds
-        # several and the caller named none: Blender assigns only the FIRST
-        # stack's action on import and the converter reads the range of
-        # whatever is active, so guessing here converts the wrong take under
-        # the right name.
-        take_specs.append(resolve_take(name, take))
+        take_specs.append(take_spec)
         paths_in.append(p)
 
     rest_path: Optional[Path] = None
@@ -891,32 +887,8 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
         rest_path = inbox_path(rest_name)
         if not rest_path.is_file():
             raise ClipImportError(f"no such reference pose in the inbox: {rest_name}")
-        # The reference pose is read on the SOURCE rig — a file from another
-        # rig family carries different bones in different places, and the
-        # delta it produces is nonsense that no later stage can notice.
-        # `is_rest_name` is a NAME heuristic, so the picker happily offered a
-        # Unity `Tpose.fbx` for the Mixamo-named MOB1 packs; measured, that put
-        # a constant offset of up to -174 deg into every frame of the affected
-        # clips.
-        rest_family = _cached_probe(rest_path).get("skeleton_family")
-        if not rest_family:
-            # Fail CLOSED, exactly as an unclassifiable clip file does above: a
-            # rest file the probe cannot place would otherwise slip past the
-            # comparison below, and `bone_map: "auto"` would then have to place
-            # it inside Blender — a late, ugly failure at best, and a silent
-            # retarget against the wrong family at worst.
-            raise ClipImportError(
-                f"{rest_name}: unknown rig — the reference pose's rig family "
-                f"could not be identified from its node names "
-                f"(known: {', '.join(sorted(SIGNATURES))})")
-        if rest_family != src_family:
-            raise ClipImportError(
-                f"{rest_name} carries a {rest_family} rig, but the clip is "
-                f"{src_family} — a reference pose has to come from the SAME "
-                "rig as the animation")
-        # A pack ships its reference pose as one stack among the movements, so
-        # the rest slot is addressed exactly like a source: file AND take.
-        rest_spec = resolve_take(rest_name, rest_take)
+        rest_spec = _prepare_rest(rest_path, rest_take, src_family,
+                                  name=rest_name)
 
     cset = str(clip_set or "").strip().lower()
     if cset and ("/" in cset or "\\" in cset or cset in (".", "..")):
@@ -926,6 +898,104 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
             f"'{kind}' already exists in the {target} library"
             f"{f' (set {cset})' if cset else ''} — tick overwrite to replace it")
 
+    inputs, params = _prepare_job(
+        kind, paths_in, take_specs, names, rest_path, rest_spec, rig=rig,
+        fps=fps, start_s=start_s, end_s=end_s, root_motion=root_motion,
+        loop_s=loop_s, loops=loops, offset_b_m=offset_b_m, speed=speed,
+        yaw_deg=yaw_deg, level_head=level_head)
+    if preview:
+        params["kind"] = "preview"
+        out = preview_dir()
+        out.mkdir(parents=True, exist_ok=True)
+        for stale in out.glob("preview*"):
+            stale.unlink()
+        res = runner.run("fbx_clip", inputs=inputs, params=params, out_dir=out,
+                         timeout_s=timeout_s)
+        if not res["ok"]:
+            raise ClipImportError(str(res.get("error") or "blender run failed"))
+        base = "/assets/clips-inbox/preview-clip/"
+        urls = ({"a": base + "preview__a.fbx", "b": base + "preview__b.fbx"}
+                if len(paths_in) == 2 else {"solo": base + "preview.fbx"})
+        return {"preview": True, "pair": len(paths_in) == 2, "urls": urls,
+                "sidecar": res.get("data") or {}, "seconds": res.get("seconds") or 0.0}
+
+    out = Path(out_dir) if out_dir else target_dir(target)
+    if cset:
+        out = out / cset
+    out.mkdir(parents=True, exist_ok=True)
+    res = _run_source(inputs, params, out, timeout_s)
+
+    # The clip entry cache, the pose dropdown and the animation-set fallback
+    # all have to see a fresh kind at once, not after a restart — the ONE
+    # reload every clip-library change goes through.
+    reload_clip_caches()
+
+    entry = next((e for e in clip_entries()
+                  if e["kind"] == kind and e["set"] == cset and e["source"] == target),
+                 None)
+    logger.info("fbx clip imported: %s -> %s%s (%s, %.1fs)", ", ".join(names),
+                f"{cset}/" if cset else "", kind, target, res.get("seconds") or 0.0)
+    return {
+        "kind": kind,
+        "set": cset,
+        "target": target,
+        "pair": len(paths_in) == 2,
+        "files": names,
+        "rest_file": inbox_rel(rest_path) if rest_path is not None else "",
+        "sidecar": res.get("data") or {},
+        "outputs": [Path(p).name for p in (res.get("outputs") or {}).values()],
+        "seconds": res.get("seconds") or 0.0,
+        "clip": None if entry is None else {
+            "kind": entry["kind"], "role": entry["role"], "set": entry["set"],
+            "source": entry["source"], "filename": entry["path"].name,
+            "url": "/assets/animation-clips/"
+                   + ("licensed/" if entry["source"] == "licensed" else "")
+                   + entry["rel"],
+        },
+    }
+
+
+def _prepare_source(path: Path, take: Optional[int], *, name: Optional[str] = None,
+                    src_family: str = "") -> Tuple[str, Dict[str, Any]]:
+    """Probe a source and prepare its take from an inbox or staged path."""
+    name = path.name if name is None else name
+    family = _cached_probe(path).get("skeleton_family")
+    if not family:
+        raise ClipImportError(
+            f"{name}: unknown rig — no bone map matches its node names "
+            f"(known: {', '.join(sorted(SIGNATURES))})")
+    if src_family and family != src_family:
+        raise ClipImportError(
+            f"{name} carries a {family} rig, the other half is "
+            f"{src_family} — both halves of a pair have to come from the "
+            "same rig")
+    return family, _prepare_take(path, take, name=name)
+
+
+def _prepare_rest(path: Path, take: Optional[int], src_family: str, *,
+                  name: Optional[str] = None,
+                  allow_multiple: bool = False) -> Dict[str, Any]:
+    """Require a reference pose on the source rig and prepare its take."""
+    name = path.name if name is None else name
+    family = _cached_probe(path).get("skeleton_family")
+    if not family:
+        raise ClipImportError(
+            f"{name}: unknown rig — the reference pose's rig family "
+            f"could not be identified from its node names "
+            f"(known: {', '.join(sorted(SIGNATURES))})")
+    if family != src_family:
+        raise ClipImportError(
+            f"{name} carries a {family} rig, but the clip is "
+            f"{src_family} — a reference pose has to come from the SAME "
+            "rig as the animation")
+    return _prepare_take(path, take, name=name, allow_multiple=allow_multiple)
+
+
+def _prepare_job(kind, paths_in, take_specs, names, rest_path, rest_spec, *,
+                    rig=None, fps=30, start_s=0.0, end_s=None,
+                    root_motion="strip", loop_s=None, loops=None,
+                    offset_b_m=None, speed=1.0, yaw_deg=0.0, level_head=False):
+    """Build the shared conversion job for inbox and staged sources."""
     rig = Path(rig) if rig else cmu_import.default_rig()
     if not rig.is_file():
         raise ClipImportError(f"rig not found: {rig} "
@@ -978,56 +1048,47 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
     if not st["executable"]:
         raise ClipImportError("no Blender executable found "
                               "(image_generation.blender_executable)")
-    if preview:
-        params["kind"] = "preview"
-        out = preview_dir()
-        out.mkdir(parents=True, exist_ok=True)
-        for stale in out.glob("preview*"):
-            stale.unlink()
-        res = runner.run("fbx_clip", inputs=inputs, params=params, out_dir=out,
-                         timeout_s=timeout_s)
-        if not res["ok"]:
-            raise ClipImportError(str(res.get("error") or "blender run failed"))
-        base = "/assets/clips-inbox/preview-clip/"
-        urls = ({"a": base + "preview__a.fbx", "b": base + "preview__b.fbx"}
-                if len(paths_in) == 2 else {"solo": base + "preview.fbx"})
-        return {"preview": True, "pair": len(paths_in) == 2, "urls": urls,
-                "sidecar": res.get("data") or {}, "seconds": res.get("seconds") or 0.0}
+    return inputs, params
 
-    out = Path(out_dir) if out_dir else target_dir(target)
-    if cset:
-        out = out / cset
+
+def import_source(kind: str, src: Path, rest: Path, *, out_dir: Path,
+                  loop_s: Optional[float], root_motion: str = "strip",
+                  fps: int = 30, timeout_s: int = 900,
+                  source_extra: Optional[Dict] = None) -> Dict[str, Any]:
+    """Import a staged solo source with canonical rest, without cache reloads."""
+    kind = cmu_import.validate_kind(kind)
+    root_motion = cmu_import.validate_root_motion(root_motion, loop_s)
+    src, rest, out = Path(src), Path(rest), Path(out_dir)
+    family, take_spec = _prepare_source(src, 0)
+    take_specs = [take_spec]
+    rest_spec = _prepare_rest(rest, None, family, allow_multiple=True)
+    inputs, params = _prepare_job(
+        kind, [src], take_specs, [src.name], rest, rest_spec,
+        fps=fps, root_motion=root_motion, loop_s=loop_s)
     out.mkdir(parents=True, exist_ok=True)
+    res = _run_source(inputs, params, out, timeout_s)
+    sidecar = out / f"{kind}.json"
+    meta = json.loads(sidecar.read_text(encoding="utf-8"))
+    if source_extra:
+        meta.setdefault("source", {}).update(source_extra)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                             dir=out, delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump(meta, stream, ensure_ascii=False, indent=2)
+            os.replace(temporary, sidecar)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+    return {"kind": kind, "fbx": out / f"{kind}.fbx",
+            "sidecar": sidecar, "meta": meta}
+
+
+def _run_source(inputs, params, out, timeout_s):
+    """Run the shared FBX conversion and translate runner failures."""
     res = runner.run("fbx_clip", inputs=inputs, params=params, out_dir=out,
                      timeout_s=timeout_s)
     if not res["ok"]:
         raise ClipImportError(str(res.get("error") or "blender run failed"))
-
-    # The clip entry cache, the pose dropdown and the animation-set fallback
-    # all have to see a fresh kind at once, not after a restart — the ONE
-    # reload every clip-library change goes through.
-    reload_clip_caches()
-
-    entry = next((e for e in clip_entries()
-                  if e["kind"] == kind and e["set"] == cset and e["source"] == target),
-                 None)
-    logger.info("fbx clip imported: %s -> %s%s (%s, %.1fs)", ", ".join(names),
-                f"{cset}/" if cset else "", kind, target, res.get("seconds") or 0.0)
-    return {
-        "kind": kind,
-        "set": cset,
-        "target": target,
-        "pair": len(paths_in) == 2,
-        "files": names,
-        "rest_file": inbox_rel(rest_path) if rest_path is not None else "",
-        "sidecar": res.get("data") or {},
-        "outputs": [Path(p).name for p in (res.get("outputs") or {}).values()],
-        "seconds": res.get("seconds") or 0.0,
-        "clip": None if entry is None else {
-            "kind": entry["kind"], "role": entry["role"], "set": entry["set"],
-            "source": entry["source"], "filename": entry["path"].name,
-            "url": "/assets/animation-clips/"
-                   + ("licensed/" if entry["source"] == "licensed" else "")
-                   + entry["rel"],
-        },
-    }
+    return res
