@@ -43,7 +43,7 @@ FAILS BEFORE / PASSES AFTER
 Confirmed by running part A against the previous revision of the document
 (`git show 74693e4f:docs/llm-templates.md` — a PINNED commit, never `HEAD:`, which
 would compare the file with itself once this revision is committed) — see the last block of the output:
-17 templates are missing there.
+at least 17 (the count grows with every template added later) templates are missing there.
 """
 import re
 import subprocess
@@ -126,8 +126,8 @@ def main():
               False, str(e))
     else:
         old_missing = missing_from(old, "tasks")
-        check("the previous revision was missing 17 tasks/ templates",
-              len(old_missing) == 17, f"{len(old_missing)}: {old_missing}")
+        check("the previous revision was missing at least 17 tasks/ templates",
+              len(old_missing) >= 17, f"{len(old_missing)}: {old_missing}")
 
     print()
     print(f"{_checks - len(_failures)}/{_checks} checks passed")

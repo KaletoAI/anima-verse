@@ -83,6 +83,7 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # steps of ONE job (needs → match → placement) on one routing task; the
     # steps stay distinguishable in the LLM log through their call labels.
     # No thinking: the answers must be a bare JSON object.
+    "pose_animation_prompt": {"label": "Poses: Animation Captions", "priority": Priority.NORMAL, "category": "tool", "cache_class": "tool", "gate": "image_generation.enabled"},
     "furnish":            {"label": "Furnish (needs · match · placement)", "priority": Priority.NORMAL, "category": "tool", "cache_class": "tool"},
     # The fourth step of the same feature, but the only one that answers PROSE:
     # after the furnishing has landed, the room's description is rewritten so it
@@ -378,6 +379,13 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
     # catalog AND against the admin — nothing reaches the room without passing
     # a validator and the review gate (``room_furnish.confirm`` /
     # ``room_furnish.accept``).
+    "pose_animation_prompt": {
+        # German descriptions in, English captions/posture prompts out;
+        # both the parser and the admin review the result.
+        "tools": False, "vision": False, "json": True, "min_context": 4096,
+        "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
+        "creative": True, "language_de": True, "latency_sensitive": False,
+    },
     "furnish": {
         # The UNION of the three steps that share this task, because one model
         # has to serve all of them: min_context 8192 is the MATCH step (its

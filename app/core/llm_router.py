@@ -297,14 +297,15 @@ def fallback_parent(task: str) -> Optional[str]:
     Pure rule, no config access — the admin routing UI and the effective-
     routing endpoint show the same rule resolve_llm applies:
       * "<parent>_<sub>" → parent for intent / thought / extraction
-      * furnish, prop_mount_classify, room_description_sync → "intent"
+      * furnish, prop_mount_classify, room_description_sync, pose_animation_prompt
+        → "intent"
         (strict-JSON tool work; the tool-class anchor)
       * npc_* → "chat_stream" (character writing; the chat anchor)
     """
     for parent in ("intent", "thought", "extraction"):
         if task.startswith(parent + "_") and task != parent:
             return parent
-    if task in ("furnish", "prop_mount_classify", "room_description_sync"):
+    if task in ("furnish", "prop_mount_classify", "room_description_sync", "pose_animation_prompt"):
         return "intent"
     if task.startswith("npc_"):
         return "chat_stream"

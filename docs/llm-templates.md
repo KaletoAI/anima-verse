@@ -90,6 +90,7 @@ can add a template, not override one. That is where
 | `scene_photo.md` | `image_prompt` | `scene_photo` | Distill a photo prompt out of a room transcript |
 | `image_analysis.md` | `image_recognition` | `plugins/instagram/skill_post.py` (`_analyze_image`) | Vision-LLM objective image description (every vision call resolves `image_recognition`; `image_analysis` is the queue label) |
 | `instagram_caption.md` (in `plugins/instagram/templates/`) | `instagram_caption` | `plugins/instagram/skill_post.py` | Vision-LLM Instagram post caption |
+| `tasks/pose_animation_prompt.md` | `pose_animation_prompt` | `pose_animation_prompt.prepare_motion` | Turn a catalog pose or activity into English UniMate captions, a loop flag and an optional catalog proposal |
 | `animation_prompt.md` | `instagram_caption` | `routes/instagram`, `character_ops` (suggest-animate) | Image-to-video motion prompt |
 
 ### Skills (agent-callable)
@@ -127,18 +128,18 @@ into "what does the room need" and "what does the library already have";
 
 ## Top-level chat composites
 
-### The chat prompt is TWO templates, and the order is a cache contract
+### The chat prompt has TWO parts, and the order is a cache contract
 
 `routes/chat._build_chat_prompt` returns `ChatPrompt(system, moment)`:
 
 | Part | Template | Where it goes |
 |---|---|---|
-| `system` | `chat/chat_stream.md` | the system message |
+| `system` | `chat/chat_stream.md` for full characters; `chat/npc_talk.md` for temporary NPCs | the system message |
 | `moment` | `chat/chat_moment.md` | appended to the LAST user turn, BEHIND the history |
 
 A backend caches a prompt by its prefix, so one changed byte at the top costs
-everything after it — the conversation history included. `chat_stream.md`
-therefore holds only what stays put between turns, ordered by how rarely it
+everything after it — the conversation history included. Both system templates
+inherit `chat/reply_base.md`, which holds only stable context, ordered by how rarely it
 changes: first what every character of the world shares (world setup, medium,
 the rules and the marker instructions), then this character (language,
 identity, partner sheet, tools), then the slow blocks (secrets, summaries,
@@ -146,6 +147,16 @@ earlier days and scenes). `chat_moment.md` is the `[SCENE STATE]` of THIS turn
 — clock and place, moods, who is present, items, memories, relationships, "This
 moment", the SKIP rules — framed so the model reads it as context, not as
 something a person said.
+
+`chat/npc_talk.md` supplies a speech-only reply contract instead of the general
+RP reply-length rules, before character-specific and summary blocks.
+`chat/npc_reply_cue.md` adds a brief NPC-only reminder after the history in the
+scene state. Its `SKIP` option is rendered only for an optional chime-in or a
+closing turn, never offered by this cue for a mandatory answer.
+World context, profile/partner data, tools, markers, summaries and the full
+perception history remain on the ordinary reply path; generated replies are
+not trimmed afterwards. The NPC template has a real-data preview in
+`/admin/templates`, with a temporary NPC selected as the speaking character.
 
 Rules for editing them:
 
@@ -157,9 +168,9 @@ Rules for editing them:
 - the same rule holds for the thought prompt: its tool block is stable, the
   clock is not — keep the clock behind the tools.
 
-`scripts/smoke_chat_prompt_order.py` pins the split: no per-turn variable may
-appear in the system template or in its render call, and the block order is
-checked against the contract.
+`scripts/smoke_chat_prompt_order.py` pins the split: changing per-turn fields
+must preserve both rendered system prompts, the scene state follows the
+history, and the block order is checked against the cache contract.
 
 ### The other `chat/` templates
 
@@ -167,7 +178,7 @@ checked against the contract.
 |---|---|---|
 | `chat/agent_thought_in_chat.md` | `agent_loop` (instead of `agent_thought.md` when the character is in a running chat) | The same thought turn, but written for a character that is mid-conversation |
 | `chat/situational_memories.md` | `memory_situational` (`TEMPLATE`) | Pick the memories that fit the current message |
-| `chat/intent_markers.md` | `{% include %}` in `chat_stream.md` AND `streaming.intent_marker_help()` for both rp_first tool-decision prompts (`streaming.build_tool_decision_input`, `chat_engine._rp_tool_decision_input`) | The `[INTENT: …]` marker grammar (including the `by=player` / `by=self` token) — a fragment, not a prompt of its own, so the two places that teach it cannot drift apart |
+| `chat/intent_markers.md` | `{% include %}` in `reply_base.md` (both system templates) AND `streaming.intent_marker_help()` for both rp_first tool-decision prompts (`streaming.build_tool_decision_input`, `chat_engine._rp_tool_decision_input`) | The `[INTENT: …]` marker grammar (including the `by=player` / `by=self` token) — a fragment, not a prompt of its own, so the places that teach it cannot drift apart |
 
 ### `chat/agent_thought.md`
 

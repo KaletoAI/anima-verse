@@ -94,7 +94,7 @@ Overview page all show the same answer:
 | Task shape | Parent |
 |---|---|
 | `intent_*`, `thought_*`, `extraction_*` | `intent` / `thought` / `extraction` |
-| `furnish`, `prop_mount_classify`, `room_description_sync` | `intent` |
+| `furnish`, `prop_mount_classify`, `room_description_sync`, `pose_animation_prompt` | `intent` |
 | `npc_*` | `chat_stream` |
 | anything else | none — the task simply has no LLM |
 
@@ -167,7 +167,7 @@ mutations of the UI model.
 
 ## Task catalog
 
-27 tasks, in the order they stand in
+28 tasks, in the order they stand in
 [`app/core/llm_tasks.py`](../app/core/llm_tasks.py).
 
 ### Streaming / RP
@@ -206,6 +206,7 @@ exist as routing tasks — only as template file names.
 
 | Task id | Label | Category | Caller | Templates | Purpose |
 |---|---|---|---|---|---|
+| `pose_animation_prompt` | Poses: Animation Captions | tool | `core/pose_animation_prompt.py` | `tasks/pose_animation_prompt.md` | Prepare English UniMate motion captions, a loop flag and optional catalog entry; gated by `image_generation.enabled`. |
 | `furnish` | Furnish (needs · match · placement) | tool | `core/room_furnish.py`, `core/furnish_place.py` | `tasks/furnish_needs.md`, `tasks/furnish_match.md`, `tasks/furnish_place.md` | Stage 1a the room's need list without the library; 1b the match of the setting-filtered catalog onto it; stage 2 the relational placement plan per mount pass. `core/furnish_solver.py` turns the plan into metres — the LLM never names a coordinate. |
 | `room_description_sync` | Furnish: Sync Room Description | tool | `core/room_description_sync.py` | `tasks/room_description_sync.md` | Rewrites the room description so it names the props that really stand there. Prose, previewed in the Furnish dialog before anything is stored. |
 | `prop_mount_classify` | Props: Classify Mount | tool | `core/props_mount.py` | `tasks/prop_mount_classify.md` | Classifies library props into `floor` / `wall` / `ceiling` / `surface` in batches; the answer lands as `mount_suggested` and the admin confirms it. |
