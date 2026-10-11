@@ -133,6 +133,7 @@ class TaskQueue:
                 ("label", "TEXT DEFAULT ''"),
                 ("provider", "TEXT DEFAULT ''"),
                 ("task_origin", "TEXT DEFAULT 'queued'"),
+                ("progress", "TEXT DEFAULT ''"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {typedef}")
@@ -255,6 +256,42 @@ class TaskQueue:
                 payload = {}
             out.append({"task_id": row["task_id"], "status": row["status"],
                         "payload": payload})
+        return out
+
+    def update_task_progress(self, task_id: str, progress: Dict[str, Any]) -> None:
+        """Replace the task's progress JSON completely."""
+        with self._write_lock, self._connect() as conn:
+            conn.execute("UPDATE tasks SET progress=? WHERE task_id=?",
+                         (json.dumps(progress, ensure_ascii=False, default=str), task_id))
+            conn.commit()
+
+    def get_task_progress(self, task_id: str) -> Dict[str, Any]:
+        """Return progress, or an empty dict for missing or invalid data."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT progress FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+        try:
+            data = json.loads((row["progress"] if row else "") or "{}")
+        except (ValueError, TypeError):
+            data = {}
+        return data if isinstance(data, dict) else {}
+
+    def list_recent_tasks(self, task_type: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return recent tasks of one type, including finished tasks."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT task_id, status, payload, progress, error, created_at, completed_at "
+                "FROM tasks WHERE task_type=? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (task_type, limit)).fetchall()
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            data = dict(row)
+            for field in ("payload", "progress"):
+                try:
+                    value = json.loads(data[field] or "{}")
+                except (ValueError, TypeError):
+                    value = {}
+                data[field] = value if isinstance(value, dict) else {}
+            out.append(data)
         return out
 
     def submit(
@@ -626,7 +663,7 @@ class TaskQueue:
                     """UPDATE tasks
                        SET status='pending', started_at=NULL,
                            error=?, retry_count=retry_count+1
-                       WHERE task_id=?""",
+                       WHERE task_id=? AND status != 'cancelled'""",
                     (error, task_id))
             else:
                 result_json = (
@@ -636,7 +673,7 @@ class TaskQueue:
                 conn.execute(
                     """UPDATE tasks
                        SET status=?, completed_at=?, duration_s=?, result=?, error=?
-                       WHERE task_id=?""",
+                       WHERE task_id=? AND status != 'cancelled'""",
                     (status, now, round(duration_s, 3), result_json, error, task_id))
             conn.commit()
 
