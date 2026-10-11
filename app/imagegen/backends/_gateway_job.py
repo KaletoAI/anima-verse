@@ -33,13 +33,14 @@ The lost-job caps are the point of this module: a gateway restart makes
 """
 import re
 import time
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 
 from app.core.log import get_logger
 from app.imagegen.base import (GATEWAY_503_FLAP_WAITS_S, BackendBusyError,
                                GatewayInputMismatchError, GatewayRejectedError,
+                               GenerationCancelled,
                                ImageBackend, is_gateway_busy_502,
                                retry_after_seconds)
 
@@ -166,7 +167,8 @@ def _cancel_lost_job(backend: ImageBackend, job_id: str) -> None:
 
 def poll_job(backend: ImageBackend, job_id: str, *,
              max_wait: int, max_queue_wait: int, poll_interval: float,
-             on_done: Callable[[Dict[str, Any], float], List[bytes]]
+             on_done: Callable[[Dict[str, Any], float], List[bytes]],
+             should_cancel: Optional[Callable[[], bool]] = None
              ) -> List[bytes]:
     """Poll ``/v1/jobs/{job_id}`` until the job resolves or a budget runs out.
 
@@ -175,6 +177,8 @@ def poll_job(backend: ImageBackend, job_id: str, *,
     busy elsewhere — cancelling it early turns a busy phase into a cascade of
     cooldowns). ``on_done(status_dict, running_seconds)`` downloads and returns
     the result blobs for a completed job (``[]`` on a download error).
+    ``should_cancel`` is checked after each poll sleep; a true result cancels
+    the job best effort and raises ``GenerationCancelled(job_id)``.
 
     Returns the result blobs (or ``[]``). Raises ``BackendBusyError`` when the
     job runs or waits past its budget (load, no cooldown). A lost job — 3
@@ -197,6 +201,10 @@ def poll_job(backend: ImageBackend, job_id: str, *,
                            time.time() - queued_since)
             break
         time.sleep(poll_interval)
+        if should_cancel is not None and should_cancel():
+            logger.info("%s: job %s cancelled by the caller", backend.name, job_id)
+            _cancel_lost_job(backend, job_id)
+            raise GenerationCancelled(job_id)
         try:
             poll = requests.get(f"{backend.api_url}/v1/jobs/{job_id}",
                                 headers=backend._headers(), timeout=30)

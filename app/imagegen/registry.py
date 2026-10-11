@@ -1,4 +1,4 @@
-"""Registry of available media backend types (image / video / mesh)."""
+"""Registry of available media backend types (image / video / mesh / animation)."""
 from app.imagegen.backends.a1111 import A1111Backend
 from app.imagegen.backends.civitai import CivitAIBackend
 from app.imagegen.backends.civitai_video import CivitAIVideoBackend
@@ -7,12 +7,13 @@ from app.imagegen.backends.localai_video import LocalAIVideoBackend
 from app.imagegen.backends.openai_chat import OpenAIChatImageBackend
 from app.imagegen.backends.openai_diffusion import OpenAIDiffusionBackend
 from app.imagegen.backends.openai_mesh import OpenAIMeshBackend
+from app.imagegen.backends.openai_mesh_animation import OpenAIMeshAnimationBackend
 from app.imagegen.backends.openai_video import OpenAIVideoBackend
 from app.imagegen.backends.together import TogetherBackend
 from app.imagegen.backends.together_video import TogetherVideoBackend
 
 # Registry of available backend types. MEDIA_TYPE on each class ("image",
-# "video" or "mesh") keeps the media kinds apart in the BackendPool.
+# "video", "mesh" or "animation") keeps the media kinds apart in the BackendPool.
 BACKEND_REGISTRY = {
     "a1111": A1111Backend,
     "openai_chat": OpenAIChatImageBackend,
@@ -27,4 +28,6 @@ BACKEND_REGISTRY = {
     "civitai_video": CivitAIVideoBackend,
     # 3D mesh (MEDIA_TYPE == "mesh")
     "openai_mesh": OpenAIMeshBackend,
+    # Mesh animation (MEDIA_TYPE == "animation")
+    "openai_mesh_animation": OpenAIMeshAnimationBackend,
 }

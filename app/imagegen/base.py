@@ -37,6 +37,10 @@ class BackendBusyError(Exception):
     """
 
 
+class GenerationCancelled(RuntimeError):
+    """The caller cancelled a gateway generation; the message is its job ID."""
+
+
 class MediaGenerationDisabled(RuntimeError):
     """The WORLD has media generation switched off (``image_generation.enabled``).
 
