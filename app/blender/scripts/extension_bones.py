@@ -741,9 +741,10 @@ def appendage_plan(group, p, co, edges, bones, normals, faces):
         root_station = base_c+(base_c-tip_c).normalized()*p['attachment_inset']
         if growth_centres:
             attachment_station = base_c+direction*(extension_t*length-(base_c-base).dot(direction))
-            # A grown attachment has a measured stop plane. Pin the first link
-            # there so its physical weight ramp starts on that plane; an inset
-            # larger than the ramp would make the boundary fully weighted.
+            # Build internal joints and axis length from the measured stop
+            # plane. Only after building joints, move the root by root_depth
+            # along body-back/up (+Y/+Z) so the pivot sits inside the parent part;
+            # the physical weight ramp stays on this measured stop plane.
             root_station = attachment_station.copy()
         root = root_station
         tip = tip_c
@@ -766,6 +767,11 @@ def appendage_plan(group, p, co, edges, bones, normals, faces):
             station += centre-station-direction*(centre-station).dot(direction)
         joints.append(station)
     joints.append(tip)
+    weight_joints = joints
+    if growth_centres and not leak:
+        # Preserve the attachment polyline for weights and contact followers.
+        weight_joints = joints.copy()
+        joints[0] = attachment_station+Vector((0,1,1)).normalized()*p['root_depth']
     links = [(link['bone'],joints[i],joints[i+1],link['parent']) for i,link in enumerate(chain)]
     tube_radius = None
     tube_centres = []
@@ -824,7 +830,7 @@ def appendage_plan(group, p, co, edges, bones, normals, faces):
     top,bottom = max(v.z for v in points),min(v.z for v in points)
     affected = set()
     for i,c in enumerate(co):
-        t,station,distance = polyline_station(c,joints,boundaries)
+        t,station,distance = polyline_station(c,weight_joints,boundaries)
         if not leak:
             if (i not in eligible or welded[i] not in part
                     or not inside_growth_slice(i)
@@ -873,7 +879,9 @@ def appendage_plan(group, p, co, edges, bones, normals, faces):
         'tube_radius':tube_radius, 'tube_centerline':[list(c) for c in tube_centres],
         'attachment_ring_max':p['attachment_ring_max'],
         'placement': [{'head':list(h),'tip':list(t)} for _,h,t,_ in links],
+        'weight_joints':[list(c) for c in weight_joints],
         'attachment':list(attachment_station), 'axis_length':axis_length,
+        'root_offset':list(joints[0]-attachment_station),
         'leak':leak, 'leak_reason':'; '.join(leak_reasons),
         'segment_radius':segment_radius, 'measured_half_width':half_width,
         'segment_pass_history':history, 'segment_passes':len(history)-1,
@@ -898,14 +906,15 @@ def contact_follow_weights(p, co, edges, faces, plan):
     follow = {name:{} for name in weights}
     if m['leak'] or not tube:
         return follow, 0
-    joints = [Vector(m['placement'][0]['head'])]+[Vector(row['tip']) for row in m['placement']]
+    weight_joints = [Vector(c) for c in m.get('weight_joints',
+                    [m['placement'][0]['head']]+[row['tip'] for row in m['placement']])]
     boundaries = [0]+p['chain_split']+[1]
     base = Vector(m['segment_axis_base'])
     axis = (Vector(m['segment_axis_tip'])-base).normalized()
     def attachment_distance(i):
         if m['base_extension_t'] < 0:
             return max(0.,(co[i]-Vector(m['attachment'])).dot(axis))
-        return polyline_station(co[i],joints,boundaries)[1]
+        return polyline_station(co[i],weight_joints,boundaries)[1]
     full = {i for i in tube if sum(w.get(i,0.) for w in weights.values()) >= .9}
     outside = {i for i in full if attachment_distance(i) > p['attachment_ring_max']}
     contacts = [face for face in faces if any(i in outside for i in face) and any(i not in tube for i in face)]
@@ -1046,7 +1055,7 @@ def measure(arm, meshes, edges, plans):
                 m['uncaptured_in_part'] = uncaptured
                 m['captured_beyond_radius'] = beyond
                 m['captured_outside_base_tube'] = outside_base
-                joints = [Vector(m['placement'][0]['head'])]+[Vector(row['tip']) for row in m['placement']]
+                weight_joints = [Vector(c) for c in m['weight_joints']]
                 boundaries = [0]+p['chain_split']+[1]
                 tube_centres = [Vector(c) for c in m['tube_centerline']]
                 tube_boundaries = [i/(len(tube_centres)-1) for i in range(len(tube_centres))] if tube_centres else []
@@ -1056,7 +1065,7 @@ def measure(arm, meshes, edges, plans):
                 for mesh in meshes:
                     for vertex in mesh.data.vertices:
                         index = offset+vertex.index
-                        _,station,distance = polyline_station(mesh.matrix_world@vertex.co,joints,boundaries)
+                        _,station,distance = polyline_station(mesh.matrix_world@vertex.co,weight_joints,boundaries)
                         if m['base_extension_t'] < 0:
                             station = max(0., (mesh.matrix_world@vertex.co-Vector(m['attachment'])).dot(axis))
                         if tube_centres:

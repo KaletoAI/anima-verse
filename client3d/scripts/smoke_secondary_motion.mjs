@@ -226,6 +226,24 @@ try {
   matrixParity(offCenter(C,120,siblings,[0,-.05,.07]),offCenter(frontBaseline,120,siblings,[0,-.05,.07]));
   for(const n of [1,3])matrixParity(straightSag(n,.6,C,true),straightSag(n,.6,frontBaseline,true));
   console.log('ok midline and paired front parity within 1e-9; rest 0 bind unchanged');
+  // Hand derivation: parent at (0,0,0), root at (0,0,-.07), and
+  // three unit links L=(0,-cos(20),sin(20)) put the mean centroid at
+  // root+1.5*L, with z=-.07+1.5*sin(20)=+.443030215. The horizontal
+  // centroid therefore selects +Z despite the root offset selecting -Z.
+  // Siblings at x=+/-.10 give a .20 X span; Y cross (-X)=+Z.
+  // Positive rest90 rotates about -X: R(-X,90)*L=(0,sin(20),cos(20)).
+  const deepSource=(await promisify(execFile)('git',['show','872aa2a1:packages/scene-render/src/secondaryMotion.ts'],{encoding:'utf8'})).stdout;
+  const deepBuild=await build({stdin:{contents:deepSource,resolveDir:join(process.cwd(),'packages/scene-render/src'),loader:'ts'},bundle:true,platform:'node',format:'esm',write:false,external:['three']});
+  const deepFile=join(dir,'deep-baseline.mjs');await writeFile(deepFile,deepBuild.outputFiles[0].text);
+  const deepBaseline=await import(deepFile);
+  const deepChain=api=>restChain(0,20,90,60,api,[0,0,-.07],siblings);
+  const deepExpected=new THREE.Vector3(0,.3420201433256687,.9396926207859084);
+  const deepOld=deepChain(deepBaseline).directions[0];
+  assert.ok(deepOld.z<0 && deepOld.distanceTo(deepExpected)>1,'872aa2a1 must fail the centroid-side front case');
+  console.log('ok old-code deep-root proof 872aa2a1: centroid-side assertion FAIL, direction',deepOld.toArray());
+  for(const direction of deepChain(C).directions)
+    near(direction.distanceTo(deepExpected),0,1e-9);
+  console.log('ok single root behind parent: bodyFront points toward the chain centroid side');
   const theta=Math.atan((.6*9.81/(4*Math.PI)**2)/.15)*180/Math.PI;
   for(const [n,gravity,parts,denominator,total] of [[3,.6,[9,4,1],14,theta],[6,.6,[36,25,16,9,4,1],91,theta],[3,100,[9,4,1],14,25]]) {
     const measured=straightSag(n,gravity);

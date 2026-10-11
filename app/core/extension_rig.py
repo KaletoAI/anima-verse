@@ -59,7 +59,7 @@ def extension_rig_fingerprint(groups, overrides=None):
     """Versioned identity of applicable declarations and character overrides."""
     geometry = [{key: group[key] for key in ("id", "op", "chains", "params", "enabled", "flip") if key in group}
                 for group in groups]
-    return _revision({"version": 8, "groups": sorted(geometry, key=lambda g: g["id"]),
+    return _revision({"version": 9, "groups": sorted(geometry, key=lambda g: g["id"]),
                       "overrides": overrides or {}})
 
 

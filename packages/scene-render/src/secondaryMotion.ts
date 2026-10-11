@@ -342,7 +342,9 @@ export function createSecondaryMotion(
         }
         if (maxSeparation > 1e-4 && maxSeparation >= .25 * maxDistance) {
           const corrected = bindUp.clone().cross(widest.normalize()).normalize()
-          const alignment = corrected.dot(front)
+          const centroidFront = horizontal(meanTarget.clone().sub(roots[0].parentHead))
+          const signDirection = centroidFront.length() < 1e-6 ? front : centroidFront.normalize()
+          const alignment = corrected.dot(signDirection)
           if (Math.abs(alignment) >= 1e-6) front.copy(alignment > 0 ? corrected : corrected.negate())
         }
       }

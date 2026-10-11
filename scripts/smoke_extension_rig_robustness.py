@@ -25,6 +25,16 @@ smaller depth; captured membership must remain positive with max/min <=1.5.
 Every captured negative-section point must fit the same recorded tube used
 by growth and completion. These bounds are acceptance requirements, not
 snapshots of one fixture's output.
+
+For successful growth at zero frame shift, only the root moves into the parent part.
+The body-back/up bisector (0,1,1) has length sqrt(2), so root_depth d gives
+head = attachment + (0,d/sqrt(2),d/sqrt(2)); d=.03 m gives 21.213203 mm
+on both axes. With d=0 the root equals attachment. All subsequent heads and
+the tip must be identical within 1e-9 m: splits, slab recentring and axis
+length still use the attachment station, independently of root_depth.
+Compare explicit depths .03 and 0, regardless of the declaration. Per-link
+weights must agree within 1e-9 and affected sets must be identical: weight
+planning continues to use the attachment polyline when the root moves.
 """
 import argparse
 import copy
@@ -135,10 +145,33 @@ for shift in (-.002,0,.002):
     for key in keys:
         bones[key].head_local+=Vector((shift,-shift,shift))
         bones[key].tail_local+=Vector((shift,-shift,shift))
-    plan=scope['appendage_plan'](g,params,co,edges,bones,normals,faces)
+    run_params=dict(params,root_depth=.03) if shift==0 else params
+    plan=scope['appendage_plan'](g,run_params,co,edges,bones,normals,faces)
     m=plan[2]; base=Vector(m['segment_axis_base']); axis=(Vector(m['segment_axis_tip'])-base).normalized()
     assert not m['leak'], m
     assert m['stem_vertices_captured']>0, m
+    if shift==0:
+        attachment=Vector(m['attachment'])
+        expected=attachment+Vector((0,.03/math.sqrt(2),.03/math.sqrt(2)))
+        head=Vector(m['placement'][0]['head'])
+        assert (head-expected).length<=1e-6, (list(head),list(expected))
+        zero_params=dict(run_params,root_depth=0.)
+        zero_plan=scope['appendage_plan'](g,zero_params,co,edges,bones,normals,faces)
+        zero=zero_plan[2]
+        assert plan[1].keys()==zero_plan[1].keys()
+        for name,weights in plan[1].items():
+            unshifted_weights=zero_plan[1][name]
+            assert weights.keys()==unshifted_weights.keys(), name
+            for i,value in weights.items():
+                assert abs(value-unshifted_weights[i])<=1e-9, (name,i,value,unshifted_weights[i])
+        assert plan[3]==zero_plan[3], (len(plan[3]),len(zero_plan[3]))
+        assert (Vector(zero['placement'][0]['head'])-attachment).length<=1e-9, zero['placement'][0]
+        assert len(m['placement'])==len(zero['placement'])
+        for placed,unshifted in zip(m['placement'][1:],zero['placement'][1:]):
+            assert (Vector(placed['head'])-Vector(unshifted['head'])).length<=1e-9, (placed,unshifted)
+        assert (Vector(m['placement'][-1]['tip'])-Vector(zero['placement'][-1]['tip'])).length<=1e-9
+        assert abs(m['axis_length']-zero['axis_length'])<=1e-9
+        assert (Vector(m['root_offset'])-(head-attachment)).length<=1e-9, m['root_offset']
     for i in plan[3]:
         t=(co[i]-base).dot(axis)/m['segment_axis_length']
         if t>=0: continue
@@ -151,7 +184,8 @@ for shift in (-.002,0,.002):
                 matched=True; break
             high=row['t']
         assert matched, (i,t,m['base_slice_table'])
-    results.append({'shift_mm':shift*1000,'depth_mm':m['base_stop_depth_mm'],'capture':m['stem_vertices_captured']})
+    results.append({'shift_mm':shift*1000,'depth_mm':m['base_stop_depth_mm'],'capture':m['stem_vertices_captured'],
+                    'root_head':m['placement'][0]['head'],'attachment':m['attachment']})
 depths=[r['depth_mm'] for r in results]; counts=[r['capture'] for r in results]
 assert max(depths)-min(depths)<=max(3,.25*min(depths))+1e-6, results
 assert max(counts)/min(counts)<=1.5, results

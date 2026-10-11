@@ -503,19 +503,26 @@ Opposing normals
 remain excluded. This retains sharp end caps. The bounded component with most original candidate support
 is selected; nearest-tip distance breaks ties. This avoids selecting an isolated
 sharp end face after the normal guard separates its UV copies.
-The root is the new attachment station minus `attachment_inset` along the fitted
-axis. The declared splits and attachment weight ramp span this extended length.
-Without backward growth, the existing attachment placement is preserved. Internal
+With successful backward growth, the root is the measured attachment station
+plus `root_depth` along the normalized body-back/up bisector `(0, 1, 1)`
+(front is -Y). This puts the rotation pivot inside the torso. Only the root
+moves: internal joints and axis length still use the attachment station, and
+the weight ramp stays anchored on its measured stop plane. `root_depth` also
+retains its existing front-only fallback role. Without backward growth, the
+existing attachment placement and `attachment_inset` are preserved. Internal
 joints sample welded part vertices in slabs of total
 width `centerline_slab * length` around each declared axial fraction, where this
-length is the root-to-far-slice extent projected onto the refined axis. Their
-cross-section centroids retain the axial station; the root stays at the attachment
-point (including inset), and the tip is the far-slice centre. Bones follow this
+length is the attachment-to-far-slice extent projected onto the refined axis
+for successful growth, or the existing root-to-far-slice extent otherwise. Their
+cross-section centroids retain the axial station, and the tip is the far-slice centre. Bones follow this
 polyline. Each vertex uses its nearest polyline segment to interpolate axial
 `chain_split` coordinates. Linear blends span `split ± link_blend`; outside
 these zones a vertex belongs to one link. The attachment `weight_ramp` acts only
 over `0 <= t < weight_ramp` of the centreline, on link 1 only, shortened to at
-most `attachment_ring_max` metres of physical polyline distance from the root.
+most `attachment_ring_max` metres. With successful growth its distance is the
+axial projection from the measured stop plane; otherwise it uses physical
+polyline distance from the root. Metrics `attachment` and `root_offset` record
+the stop station and root displacement in metres.
 `weight_ramp + link_blend` must
 be strictly less than the first split (or 1 for a single link), and internal
 blend zones must not overlap. Each link must have core vertices (weight > 0.9);
@@ -585,7 +592,7 @@ contact followers) must be zero.
 `uncaptured_in_part` checks retained connected surface vertices outside the
 attachment ring; a point merely inside the old straight cylinder is not assumed
 to belong to the part.
-Fingerprint version 7 rebuilds from prerig. `link_blend` replaces the old
+Fingerprint version 9 rebuilds from prerig for the root placement change. `link_blend` replaces the old
 2-link `blend_start`/`blend_width` parameters; remove those from declarations.
 The existing required declaration
 fields `leak_radius_limit` and `reweight_factor` remain validated but no longer
