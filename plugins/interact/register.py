@@ -13,11 +13,18 @@ module is where that knowledge lives:
 * the decision point ``pair_invite``: with a decision model configured, an
   ordinary NPC's accept/decline may be settled at once instead of waking it
   (docs/decision-models.md). Off by default — then nothing changes.
+* the ``shared_activity_*`` providers expose exact, consent-bound pair
+  continuations without another package importing this verb directly.
 """
 from app.core import decision, decision_points
 from app.core.hooks import register, register_provider
 from app.core.log import get_logger
 from plugins.interact.skill import PAIR_INVITE
+from plugins.interact.undertakings import (shared_activity_cancel,
+                                          shared_activity_options,
+                                          shared_activity_request,
+                                          shared_activity_status,
+                                          shared_activity_validate)
 
 logger = get_logger("interact")
 
@@ -71,6 +78,9 @@ def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
                                 "nobody re-answers a temporary NPC — cancelled",
                                 invite_id, invitee,
                                 res.get("reason") or "no reason given")
+                    from app.core.hooks import emit
+                    emit("interaction.invite_failed", invite_id=invite_id,
+                         reason=res.get("reason") or "The activity could not start.")
                     IE.cancel_invite(invite_id)
             return
     except Exception as e:
@@ -197,4 +207,9 @@ decision.register_point(
     origin="interact",
 )
 register_provider("pair_verb_name", pair_verb_name)
+register_provider("shared_activity_options", shared_activity_options)
+register_provider("shared_activity_validate", shared_activity_validate)
+register_provider("shared_activity_request", shared_activity_request)
+register_provider("shared_activity_status", shared_activity_status)
+register_provider("shared_activity_cancel", shared_activity_cancel)
 register("interaction.invited", _on_invited, tag="interact.bump_invitee")

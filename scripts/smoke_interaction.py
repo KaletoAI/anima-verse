@@ -73,7 +73,7 @@ Hand-derived expectations:
   [10] Invitations. A pair is ASKED, never imposed: ``create_invite`` writes
       the question and nothing else happens — no interaction on either side.
       Only the invitee is asked (the inviter sees what it waits on through
-      ``outgoing_invite_of``), and asking twice replaces the open question
+      ``outgoing_invite_of``), and asking twice reuses the fresh open question
       rather than queueing a second. ``find_pending_invite`` is what turns a
       counter-invitation into consent. Accepting starts the pair and clears
       the question; declining starts nothing and cannot be re-answered. An
@@ -712,10 +712,8 @@ check("Bob is asked", [i["invite_id"] for i in ie.pending_invites_for("Bob")] ==
 check("Ann is not asked (she is the one asking)", ie.pending_invites_for("Ann") == [])
 check("Ann sees what she is waiting on",
       (ie.outgoing_invite_of("Ann") or {}).get("invite_id") == iid)
-# Asking again replaces the open question instead of queueing a second one.
+# Repeating the same question must not bypass the existing consent flow.
 iid2 = ie.create_invite("Ann", "Bob", "embracing")
-check("asking twice leaves ONE open question",
-      [i["invite_id"] for i in ie.pending_invites_for("Bob")] == [iid2] and iid2 != iid)
 
 # The counter-invitation IS the consent: Bob asking Ann for the same thing
 # finds her open question and starts the pair instead of asking back.

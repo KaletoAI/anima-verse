@@ -27,7 +27,7 @@ interface Intent {
   location_id?: string
   outfit_hint?: string
   expires_at?: string
-  action?: { type?: string; destination?: { location_id: string; room_id?: string }; scope?: 'pair' | 'party' }
+  action?: { type?: string; destination?: { location_id: string; room_id?: string }; scope?: 'pair' | 'party'; after_arrival?: { type: 'pair'; pose_key: string } }
   meta?: { travel?: { phase?: string; reason?: string; expected_members?: string[]; destination_label?: string } }
 }
 
@@ -49,6 +49,7 @@ interface FormState {
   destinationId: string
   destinationRoomId: string
   scope: 'pair' | 'party'
+  afterArrivalKey: string
 }
 
 const INITIAL_FORM: FormState = {
@@ -67,6 +68,7 @@ const INITIAL_FORM: FormState = {
   destinationId: '',
   destinationRoomId: '',
   scope: 'pair',
+  afterArrivalKey: '',
 }
 
 const DURATION_OPTIONS: Array<{ value: number; label: string }> = [
@@ -111,6 +113,9 @@ const TRIP_PHASE_LABELS: Record<string, string> = {
   travelling: 'Travelling',
   blocked: 'Blocked',
   arrived: 'Arrived',
+  waiting_activity: 'Waiting for activity consent',
+  activity: 'Activity in progress',
+  completed: 'Completed',
   cancelled: 'Cancelled',
 }
 
@@ -134,6 +139,7 @@ export function IntentsTab() {
   const [characters, setCharacters] = useState<CharacterRef[]>([])
   const [locations, setLocations] = useState<LocationRef[]>([])
   const [actionTypes, setActionTypes] = useState<string[]>([])
+  const [sharedActivityOptions, setSharedActivityOptions] = useState<string[]>([])
   const [showAll, setShowAll] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
@@ -165,6 +171,11 @@ export function IntentsTab() {
     loadLocations().then(setLocations).catch(() => setLocations([]))
     apiGet<string[]>('/intents/action-types').then(setActionTypes)
       .catch((e) => setError((e as Error).message))
+    apiGet<string[]>('/intents/shared-activity-options').then(setSharedActivityOptions)
+      .catch((e) => {
+        setSharedActivityOptions([])
+        setError((e as Error).message)
+      })
   }, [])
 
   useEffect(() => {
@@ -204,6 +215,7 @@ export function IntentsTab() {
         destinationId: '',
         destinationRoomId: '',
         scope: 'pair',
+        afterArrivalKey: '',
       })
       setEditingId(it.id)
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
@@ -280,6 +292,7 @@ export function IntentsTab() {
           type: 'travel_together',
           destination: { location_id: form.destinationId, ...(form.destinationRoomId ? { room_id: form.destinationRoomId } : {}) },
           scope: form.scope,
+          ...(form.afterArrivalKey ? { after_arrival: { type: 'pair', pose_key: form.afterArrivalKey } } : {}),
         }
         payload.trigger = { kind: 'standing' }
         payload.target_count = 0
@@ -410,6 +423,7 @@ export function IntentsTab() {
                         <div className="ga-sched-muted" style={{ fontSize: 12 }}>
                           {t('Shared trip')}: {locName(it.action.destination?.location_id || '')}
                           {it.action.destination?.room_id ? ` / ${locations.find((l) => l.id === it.action?.destination?.location_id)?.rooms?.find((r) => r.id === it.action?.destination?.room_id)?.name || it.action.destination.room_id}` : ''}
+                          <div>{t('After arrival')}: {it.action.after_arrival?.pose_key || t('Travel only')}</div>
                           <div>{t('Scope')}: {it.action.scope === 'party' ? t('Entire party') : t('Pair only')}</div>
                           <div>{t('Trip phase')}: {t(TRIP_PHASE_LABELS[it.meta?.travel?.phase || ''] || it.meta?.travel?.phase || '—')}{it.meta?.travel?.reason ? ` — ${it.meta.travel.reason}` : ''}</div>
                           <div>{t('Participants')}: {(it.meta?.travel?.expected_members || parts).join(', ')}</div>
@@ -494,6 +508,15 @@ export function IntentsTab() {
                   <option value="party">{t('Entire party')}</option>
                 </select>
               </div>
+              <div className="ga-sched-field">
+                <label>{t('After arrival')}</label>
+                <select className="ga-input" value={form.afterArrivalKey}
+                  onChange={(e) => setForm((f) => ({ ...f, afterArrivalKey: e.target.value }))}>
+                  <option value="">{t('Travel only')}</option>
+                  {sharedActivityOptions.map((key) => <option key={key} value={key}>{key}</option>)}
+                </select>
+              </div>
+              {form.afterArrivalKey ? <p className="ga-sched-muted">{t('The paired activity requires exactly two trip members and a separate invitation after arrival.')}</p> : null}
               <p className="ga-sched-muted">{t('The owner leads. Pick one new companion; consent is required. Entire party explicitly includes existing members. Pair only never removes existing members. Cancel and create a new trip to change its destination or group.')}</p>
             </> : null}
           </div>

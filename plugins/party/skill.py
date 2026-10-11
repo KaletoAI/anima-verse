@@ -167,6 +167,8 @@ class PartySkill(PluginSkill):
                               "room_id": destination.get("room_id") or get_arrival_room_id(location)}
                 if normalized != action.get("destination"):
                     return "The counter-proposal differs from the destination awaiting your answer."
+            if data.get("after_arrival") is not None and data["after_arrival"] != action.get("after_arrival"):
+                return "The counter-proposal differs from the activity awaiting your answer."
             return self._join(character_name, {**data, "leader": target,
                                                 "invite_id": incoming["invite_id"]})
         if not P.same_location(character_name, target):
@@ -179,7 +181,8 @@ class PartySkill(PluginSkill):
             from plugins.party.trip_intents import propose_trip
             intent = propose_trip(character_name, target, data.get("destination") or {},
                                   data.get("scope", "pair"),
-                                  intent_id=str(data.get("intent_id") or ""))
+                                  intent_id=str(data.get("intent_id") or ""),
+                                  after_arrival=data.get("after_arrival"))
             travel = (intent.get("meta") or {}).get("travel") or {}
             return (f"Shared trip {intent['id']}: {travel.get('phase', 'waiting_consent')}"
                     f" — {travel.get('reason', '')}")

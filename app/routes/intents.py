@@ -28,6 +28,13 @@ def action_types_route() -> List[str]:
     return provider() if provider else []
 
 
+@router.get("/shared-activity-options")
+def shared_activity_options_route() -> List[str]:
+    """Exact shared activity keys supplied by the installed capability."""
+    provider = get_provider("shared_activity_options")
+    return provider() if provider else []
+
+
 @router.get("")
 def list_route(owner: Optional[str] = None, status: Optional[str] = None,
                source: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -118,7 +125,11 @@ async def create_route(request: Request) -> Dict[str, Any]:
 
     Body: {title, description?, owner?, participants?, source?, trigger?,
            priority?, location_id?, outfit_hint?, target_count?,
-           expires_at? | duration_minutes?}
+           expires_at? | duration_minutes?, action?, meta?}
+
+    A travel_together action may include after_arrival={type:"pair",
+    pose_key:"<exact available key>"}; arrival then asks for fresh pair consent,
+    and only the exact activity's real normal end completes the intent.
 
     ``duration_minutes`` and an at_time trigger's ``run_in_minutes`` are
     in-world minutes from now; the server turns them into GAME stamps.

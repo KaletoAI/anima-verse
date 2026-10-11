@@ -88,6 +88,12 @@ def _validate_action(owner: str, participants: Dict, action: Dict, exclude_id: s
     if not any(room.get("id") == room_id for room in get_location_rooms(location)):
         raise ValueError("Destination room does not exist at this location.")
     members, _ = _members(owner, participants, scope)
+    followup = action.get("after_arrival")
+    if followup is not None:
+        if len(members) != 2:
+            raise ValueError("A paired activity requires exactly two trip members.")
+        from plugins.party.undertakings import validate
+        followup = validate(owner, members[1], followup)
     available = set(list_available_characters())
     origin = _position(owner)
     if not origin["location_id"]:
@@ -101,8 +107,11 @@ def _validate_action(owner: str, participants: Dict, action: Dict, exclude_id: s
             raise ValueError(f"{name} is already travelling for another reason.")
         if not _action_available(name, exclude_id):
             raise ValueError(f"{name} already has an active shared trip.")
-    return {"type": ACTION, "destination": {"location_id": location_id, "room_id": room_id},
-            "scope": scope}
+    normalized = {"type": ACTION, "destination": {"location_id": location_id, "room_id": room_id},
+                  "scope": scope}
+    if followup is not None:
+        normalized["after_arrival"] = followup
+    return normalized
 
 
 def intent_action_change_validate(intent: Dict, changes: Dict) -> Dict:
@@ -143,16 +152,18 @@ def _cancel_owned(intent: Dict) -> None:
     claim = _state(intent).get("claim_id")
     if claim:
         cancel_journey(intent["owner"], journey_id=claim, execution_ref=intent["id"])
+    from plugins.party.undertakings import cancel
+    cancel(intent)
 
 
 def _terminate(intent: Dict, reason: str, status: str = "cancelled") -> None:
-    _cancel_owned(intent)
-    P.close_intent_invites(intent["id"], status)
     state = {**_state(intent), "phase": "cancelled", "reason": reason}
     if intent.get("status") == "active":
-        _save(intent, state, status=status)
+        intent = _save(intent, state, status=status)
     elif _state(intent) != state:
-        _save(intent, state)
+        intent = _save(intent, state)
+    _cancel_owned(intent)
+    P.close_intent_invites(intent["id"], status)
 
 
 def _expired(intent: Dict) -> bool:
@@ -190,6 +201,12 @@ def _group_matches(intent: Dict, accepted: bool) -> bool:
 def intent_completion_allowed(intent: Dict) -> bool:
     if not intent_action_managed(intent):
         return True
+    if intent.get("action", {}).get("after_arrival") and not (_state(intent).get("activity") or {}).get("ended"):
+        return False
+    return _arrived(intent)
+
+
+def _arrived(intent: Dict) -> bool:
     state = _state(intent)
     if not state.get("consent") or not state.get("expected_members"):
         return False
@@ -219,6 +236,12 @@ def _initialize(intent: Dict) -> Dict:
 
 
 def reconcile(intent_id: str, *, request: bool = True) -> None:
+    if _reconcile(intent_id, request=request) and request:
+        from plugins.party.undertakings import request as request_activity
+        request_activity(intent_id)
+
+
+def _reconcile(intent_id: str, *, request: bool = True) -> bool | None:
     """Recover consent/startup and settle arrival without a process-local cache."""
     ask = None
     with keyed_lock("intent_execution", intent_id):
@@ -231,7 +254,7 @@ def reconcile(intent_id: str, *, request: bool = True) -> None:
                 reason = (state.get("reason") if state.get("phase") == "cancelled"
                           else "The shared trip was cancelled or expired.")
                 _terminate(intent, reason)
-            elif _state(intent).get("phase") != "arrived" and not intent_completion_allowed(intent):
+            elif _state(intent).get("phase") not in {"arrived", "completed"} and not intent_completion_allowed(intent):
                 # A non-API writer must not present an unexecuted trip as done.
                 _cancel_owned(intent)
                 _save(intent, {**_state(intent), "phase": "cancelled",
@@ -308,6 +331,9 @@ def reconcile(intent_id: str, *, request: bool = True) -> None:
                 if not _group_matches(intent, True):
                     _terminate(intent, "The agreed party lost or gained a participant.")
                     return
+                if state.get("activity"):
+                    from plugins.party.undertakings import arrive
+                    return arrive(intent)
                 journey = get_journey(intent["owner"])
                 claim = state.get("claim_id")
                 if journey:
@@ -321,11 +347,9 @@ def reconcile(intent_id: str, *, request: bool = True) -> None:
                     if state.get("phase") != "travelling":
                         _save(intent, {**state, "phase": "travelling", "reason": ""})
                     return
-                if intent_completion_allowed(intent):
-                    intent = _save(intent, {**state, "phase": "arrived", "reason": ""})
-                    if not I.complete_intent(intent_id):
-                        raise RuntimeError("Arrival completion could not be persisted.")
-                    return
+                if _arrived(intent):
+                    from plugins.party.undertakings import arrive
+                    return arrive(intent)
                 if state.get("phase") == "travelling":
                     _terminate(intent, "The owned journey ended without everyone arriving at the agreed destination.")
                     return
@@ -351,10 +375,9 @@ def reconcile(intent_id: str, *, request: bool = True) -> None:
                     _save(intent, {**state, "phase": "blocked", "reason": result["reason"]})
                 elif result["status"] == "travelling":
                     _save(intent, {**state, "phase": "travelling", "reason": ""})
-                elif intent_completion_allowed(intent):
-                    intent = _save(intent, {**state, "phase": "arrived", "reason": ""})
-                    if not I.complete_intent(intent_id):
-                        raise RuntimeError("Arrival completion could not be persisted.")
+                elif _arrived(intent):
+                    from plugins.party.undertakings import arrive
+                    return arrive(intent)
                 else:
                     _save(intent, {**state, "phase": "blocked", "reason": "A participant could not enter the destination room."})
     if ask and request:
@@ -412,7 +435,9 @@ def invite_projection(invitation: Dict) -> Dict:
     label = location.get("name") or dest["location_id"]
     if room.get("name"):
         label += " / " + room["name"]
-    return {"destination_label": label, "participants": _state(intent).get("expected_members", [])}
+    followup = intent["action"].get("after_arrival") or {}
+    return {"destination_label": label, "participants": _state(intent).get("expected_members", []),
+            "after_arrival_label": followup.get("pose_key", "")}
 
 
 def request_consent(invite_id: str) -> bool:
@@ -447,7 +472,8 @@ def request_consent(invite_id: str) -> bool:
         details = {"participants": [invitation["inviter"],
                                     *(party.get("members") or []), invitation["invitee"]]}
     variables = {**invitation, **details, "destination_label": details.get("destination_label", ""),
-                 "participants": details.get("participants", [])}
+                 "participants": details.get("participants", []),
+                 "after_arrival_label": details.get("after_arrival_label", "")}
     content = render("party/consent.md", **variables)
     from app.core import decision, decision_points
     if decision.is_active("party_join"):
@@ -502,7 +528,7 @@ def _narrate_answer(invitation: Dict, accepted: bool) -> None:
 
 
 def propose_trip(owner: str, target: str, destination: Dict, scope: str = "pair", *,
-                 intent_id: str = "", announcement: str = "") -> Dict:
+                 intent_id: str = "", announcement: str = "", after_arrival: Dict | None = None) -> Dict:
     if intent_id:
         intent = I.get_intent(intent_id)
         if not intent or intent["owner"] != owner or not intent_action_managed(intent) or intent["status"] != "active":
@@ -515,10 +541,15 @@ def propose_trip(owner: str, target: str, destination: Dict, scope: str = "pair"
                           "room_id": destination.get("room_id") or get_arrival_room_id(location)}
             if normalized != intent["action"]["destination"]:
                 raise ValueError("The destination differs from the persisted shared trip.")
+        if after_arrival is not None and after_arrival != intent["action"].get("after_arrival"):
+            raise ValueError("The activity differs from the persisted shared trip.")
         reconcile(intent_id)
         return I.get_intent(intent_id) or {}
     participants = {owner: {"role": "leader", "progress": []}, target: {"role": "follower", "progress": []}}
-    action = intent_action_validate(owner, participants, {"type": ACTION, "destination": destination, "scope": scope})
+    proposed_action = {"type": ACTION, "destination": destination, "scope": scope}
+    if after_arrival is not None:
+        proposed_action["after_arrival"] = after_arrival
+    action = intent_action_validate(owner, participants, proposed_action)
     meta = {"travel": {"announcement": {
         "line": announcement, "ts": utc_now().isoformat(timespec="microseconds")
     }}} if announcement else {}
@@ -572,20 +603,24 @@ def trip_context(name: str, verb: str) -> str:
             return ""
         state = _state(intent)
         projection = invite_projection({"intent_id": intent["id"]})
+        if not projection:
+            continue
         return render("party/trip_context.md", character_name=name,
                       intent_id=intent["id"], owner=intent["owner"],
                       invite_id=state.get("invite_id", ""),
                       destination_label=projection.get("destination_label", ""),
                       participants=members, phase=state.get("phase", "blocked"),
-                      reason=state.get("reason", ""))
+                      reason=state.get("reason", ""), after_arrival_label=projection.get("after_arrival_label", ""))
     return ""
 
 
 def npc_action_context(name: str, variables: Dict) -> str:
     if not _can_propose(name) or not variables.get("talk_allowed") or not variables.get("present") or not npc_action_available(name):
         return ""
+    activities = hooks.get_provider("shared_activity_options")
     return render("party/npc_action.md", destinations=_destinations(name),
-                  present=variables["present"], npc_name=name)
+                  present=variables["present"], npc_name=name,
+                  shared_activities=activities() if activities else [])
 
 
 def npc_action_execute(name: str, action: Any, variables: Dict, *, moved: bool = False) -> Dict:
@@ -609,7 +644,7 @@ def npc_action_execute(name: str, action: Any, variables: Dict, *, moved: bool =
     from app.core.agent_loop import get_agent_loop
     try:
         intent = propose_trip(name, target, destination, action.get("scope", "pair"),
-                              announcement=line)
+                              announcement=line, after_arrival=action.get("after_arrival"))
     except ValueError:
         return {}
     if intent.get("status") not in {"active", "done"} or not _state(intent).get("invite_id"):
@@ -681,7 +716,7 @@ def _guard_execution(name: str, journey: Dict, ref: str):
                         yield False
                         return
             yield True
-        reconcile(ref)
+    reconcile(ref)
 
 
 def journey_arrival_validate(name: str, journey: Dict, entry_room: str) -> tuple[bool, str]:
@@ -787,3 +822,8 @@ def register() -> None:
     hooks.register("party_invites_cleared", _on_detached, tag="party.trip.detached")
     hooks.register("party_invite_closed", _on_invite_closed, tag="party.trip.invite_closed")
     hooks.register("respond_finished", _on_response_finished, tag="party.trip.response_finished")
+    from plugins.party.undertakings import started, ended, invited, failed
+    hooks.register("interaction.invite_started", started, tag="party.activity.started")
+    hooks.register("interaction.ended", ended, tag="party.activity.ended")
+    hooks.register("interaction.invited", invited, tag="party.activity.invited")
+    hooks.register("interaction.invite_failed", failed, tag="party.activity.failed")

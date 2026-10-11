@@ -6,6 +6,8 @@ Invite another character who is present at your current location to travel toget
 
 For a destination-bound agreement, pass a structured `destination={"location_id":"<known id>","room_id":"<optional id>"}` and `scope="pair"` (only you and one new companion) or explicit `scope="party"` (also include every current follower). The server persists one shared-trip intent, obtains the companion's actual answer, resumes that exact destination and completes only after everyone arrives. Never silently leave/dissolve a party to make pair scope fit. To continue an existing shared trip owned by you, pass its `intent_id` and the same target; do not create a replacement plan or independently call SetLocation before consent.
 
+For an undertaking such as going somewhere and then doing something together, also pass `after_arrival={"type":"pair","pose_key":"<exact available paired pose key>"}`. This requires exactly two trip members. Name the destination AND activity in your proposal. The companion consents to the whole proposal; after arrival the normal pair invitation still checks their willingness and availability. The intent completes only when the actual activity ends, not merely when the trip arrives or the activity is requested. Never invent an animation key or execute arbitrary tools in this field.
+
 To answer somebody else's existing destination-bound proposal, prefer JoinParty
 with its exact `invite_id`. A matching counter-proposal is normalized to that
 answer only when you supply the exact current `intent_id`; a destination alone

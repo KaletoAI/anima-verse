@@ -60,8 +60,31 @@ scope before the line is recorded; no consent request runs before that write suc
 The companion answers via `join_party` with the exact `invite_id`, or an avatar uses
 the destination/group invitation in the player UI. Reply prose alone is not consent.
 Temporary NPCs get a targeted chat/tool response, not autonomous thoughts.
-The trip completes only after every agreed member arrives. A consumed reply that
-produces no explicit answer is eligible to be requested again on the next world check.
+Travel-only intents complete after every agreed member arrives. A consumed reply
+that produces no explicit answer is eligible to be requested again on the next world check.
+
+A shared undertaking may add `after_arrival={"type":"pair","pose_key":"<exact catalog key>"}`.
+The initial proposal and consent surface include both destination and activity.
+This continuation requires exactly two participants and an available pair animation;
+it does not silently exclude extra party members or execute arbitrary tools.
+After arrival, the existing pair invitation obtains the current activity answer.
+Refusal cancels the undertaking without moving the group back. An invitation or
+running animation does not complete it: the exact pair's normal end signal does.
+Loops and one-shots both retain the existing signal-driven end policy; elapsed
+clip time alone is not completion. Leaving, sleeping, removal or intent cancellation
+interrupts the activity instead of reporting success. The party itself remains.
+
+The Game-Admin Shared trip form offers an optional **After arrival** selector from
+`GET /intents/shared-activity-options`. Runtime phases include `waiting_activity`,
+`activity` and `completed`; missing clips/capability or unavailable participants
+have a visible blocked reason. The existing intent metadata stores the exact
+invitation/start/end receipt, so reconciliation cannot replay a submitted action
+or stop a newer unrelated pair. No extra workflow database is introduced.
+The live pair also persists its originating invitation identity, so a lost/delayed
+start hook cannot hide an actual end or prevent an exact owned cancellation.
+Temporary NPCs retain their existing immediate-answer policy: if that answer
+cannot start the pair and no later answer turn exists, the undertaking is cancelled
+with the actual failure cause.
 
 
 ## The round budget on top

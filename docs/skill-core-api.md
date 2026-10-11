@@ -258,13 +258,22 @@ Zustimmung ist immer ein Tool-Call, nie ein Keyword-Match auf Prosa.
 |---|---|
 | `partner_poses() -> List[Tuple[str, str]]` | Welche Paar-Posen es gibt (Key + Anzeige) |
 | `get_interaction(character_name, profile=None)` | Läuft gerade eine? |
+| `create_invite(inviter, invitee, pose_key, *, request_id=None) -> Optional[str]` | Ask through the ordinary consent flow. A supplied id atomically creates/reuses only the exact inviter/invitee/pose row, emits the offer once, and never replaces another pending question. A mismatching existing id is rejected. Ordinary same-pose repeats reuse the fresh question; replacements mark old questions cancelled instead of deleting their identity |
 | `resolve_invite(invite_id, accept) -> Dict` | Einladung beantworten. `status` `cannot` = gerade nicht möglich (schläft, reist, Platz besetzt), die Frage bleibt offen |
 | `get_invite(invite_id)` / `cancel_invite(invite_id) -> bool` / `clear_invites_for(character)` | Einladungen lesen/schließen |
-| `end_interaction(character_name, reason='ended') -> bool` | Laufende Interaktion beenden — für BEIDE |
+| `end_interaction(character_name, reason='ended', *, interaction_id='') -> bool` | End the pair for both participants. An optional ownership id is rechecked under the removal locks; a different live pair is never ended |
 | `pair_profile_locks(a, b)` | Der EINZIGE sanktionierte Weg, zwei Profil-Locks zu halten (sortierte Namensreihenfolge, siehe „Sperren") |
 
-Das Core feuert `interaction.invited`; wie die Antwort heißt, weiß nur das Paket
-(Provider `pair_verb_name`).
+The core emits `interaction.invited` for the question and
+`interaction.invite_started` only after consent has actually started its pair
+(including arrival after an approach). `interaction.ended` follows the actual
+ending. Consumers persist the exact start receipt in their existing intent meta;
+neither an accepted row without its live pair nor a same-pose unrelated pair proves
+completion. Offer wording belongs to the package (`pair_verb_name`).
+The pair's originating `invite_id` is also persisted with both live profile blobs.
+That exact provenance can recover a lost start hook or identify cancellation;
+matching pose/participants alone is never ownership. An actual end can correlate
+by this invitation identity before the intent's start receipt is written.
 
 ## Pose — `app.models.character` ✅ (set_pose-Paket)
 
@@ -346,7 +355,15 @@ self-intent TTL remains disabled. NPC invitations persist their announcement
 before execution; consent waits for its speech write. Recovery uses
 `app.models.perception_store.utterance_exists(speaker, ts, content)` with the
 persisted technical timestamp to avoid repeating an already recorded line.
-Arrival completes the intent, not the party membership.
+For travel-only intents, arrival completes the intent, not party membership.
+Optional `after_arrival={"type":"pair","pose_key":"<exact available catalog key>"}`
+extends that same intent through the existing pair invitation after arrival.
+Exactly two participants are required. `GET /intents/shared-activity-options`
+lists the installed capability's keys. Both initial consent and the player UI
+show the activity; its own invitation can still be declined at the destination.
+Runtime phases are `waiting_activity`, `activity` and `completed`. Only the exact
+interaction's normal end signal completes the undertaking; interruptions cancel
+it and missing capabilities/receipts block without inventing success or replaying.
 Package skills may override `app.plugins.base.PluginSkill.default_enabled_for(character_name)`
 to offer a state-bound verb when no character activation setting exists.
 Explicit `enabled=False` always wins. The party package uses this for a live
@@ -434,6 +451,9 @@ Events, die der Core heute feuert:
 |---|---|
 | `startup` | — (nach dem Boot, aus `app/server.py`) |
 | `interaction.invited` | `invite_id`, `inviter`, `invitee`, `pose_key` |
+| `interaction.invite_started` | `invite_id`, `interaction`, `inviter`, `invitee`; emitted after the ordinary answer/approach starts the real pair |
+| `interaction.ended` | `character`, `partner`, `interaction_id`, `reason`, `invite_id` (empty for a direct start); emitted after the real pair is cleared. The originating invitation identity is persisted in both pair profiles before start hooks, so a concurrent end cannot lose its ownership |
+| `interaction.invite_failed` | `invite_id`, `reason`; the pair package emits this before closing a temporary NPC's retryable failed answer, retaining the actual failure cause for an owned undertaking |
 | `instagram.post_created` | `poster_name`, `post` |
 | `instagram.user_comment` | `character_name`, `post_id`, `commenter_name`, `comment_text`, `comment_id`, `post` |
 | `intent_created` / `intent_changed` / `intent_deleted` | `intent`; changed also supplies `previous`; successful durable writes only |
@@ -447,6 +467,7 @@ Capabilities, die der Core heute abfragt:
 | Capability | Fragt | Ohne Paket |
 |---|---|---|
 | `pair_verb_name` | `routes/play.py`, `plugins/set_pose` | `/play/interact/options` bietet nichts an, die Player-UI schlägt keine Paare vor |
+| `shared_activity_options`, `shared_activity_validate`, `shared_activity_request`, `shared_activity_status`, `shared_activity_cancel` | Structured intent continuation and exact pair ownership | No pair continuation; available options are empty. The action is only `{type:"pair", pose_key:"<exact available key>"}`. Request/status return `pending`, `approaching`, `running`, `declined` or `blocked` with `invite_id` and optional `interaction_id`/`reason`; status never starts anything. Initial unsubmitted requests alone may return `not_found`; missing questions without exact live pair provenance and accepted-but-not-live requests block, never replay. Exact provenance reports a running pair even before `accepted` or start hooks persist. Cancel's optional `interaction_id` restricts actual receipt/provenance ownership; it never grants ownership or ends another pair |
 | `romantic_compatibility` | `models/relationship.are_romantically_compatible` | immer kompatibel |
 | `romantic_interests_help` | `/admin/settings` | der Hilfe-Button fehlt |
 | `intent_action_types`, `intent_action_validate`, `intent_action_change_validate`, `intent_action_managed`, `intent_completion_allowed` | Intent API, progress and completion | No executable action descriptors; ordinary intents remain available |

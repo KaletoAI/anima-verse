@@ -6,6 +6,7 @@ make sense played at ONE anchor, in lockstep. This module owns that state:
 
     profile["interaction"] = {
         "id": "…",                    # shared by both participants
+        "invite_id": "…",             # optional question that consented to this pair
         "kind": "handshake",          # the pair clip kind
         "role": "a" | "b",            # which half this character plays
         "partner": "<character>",
@@ -278,11 +279,13 @@ def assign_roles(actor: str, partner: str, actor_gender: str,
     return (partner, actor) if swap else (actor, partner)
 
 
-def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]:
+def start_interaction(actor: str, partner: str, pose_key: str, *,
+                      invite_id: str = "") -> Dict[str, Any]:
     """Binds ``actor`` (the initiator) and ``partner`` to the pair clip the
     pose names. Who plays which half follows the clip's gender assignment
     (``assign_roles``); without one the actor plays A. Raises ``ValueError``
-    with a reason a tool result can relay."""
+    with a reason a tool result can relay. A supplied ``invite_id`` is stored
+    with both halves before the pair locks are released."""
     from app.core.animation_clips import clip_loops, clip_meta, clip_role_gender
     from app.core.state_events import publish
     from app.models.character import (get_character_current_location,
@@ -382,6 +385,8 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
                 "started_at_game": started,
                 "clip_duration_s": round(clip_duration, 3), "loop": loop,
             }
+            if invite_id:
+                prof["interaction"]["invite_id"] = invite_id
             save_character_profile(name, prof)
     # OUTSIDE the locks: both of these write the profile themselves and reach
     # the places-lock (``set_pose_intent`` -> ``places.assign``), which by the
@@ -427,7 +432,8 @@ def start_interaction(actor: str, partner: str, pose_key: str) -> Dict[str, Any]
     return profiles[actor]["interaction"]
 
 
-def end_interaction(character_name: str, reason: str = "ended") -> bool:
+def end_interaction(character_name: str, reason: str = "ended", *,
+                    interaction_id: str = "") -> bool:
     """Clears the interaction on the character AND the partner. True when
     there was one.
 
@@ -437,13 +443,16 @@ def end_interaction(character_name: str, reason: str = "ended") -> bool:
     is dropped here and ``room_stand.stand_up`` is asked here — the two must
     not end up on top of each other, which is why the first one placed counts
     as the second one's neighbour.
+
+    ``interaction_id`` restricts an owned cancellation to that exact running
+    pair; its identity is checked again under the removal locks.
     """
     from app.core.room_stand import stand_up
     from app.core.state_events import publish
     from app.models.character import (clear_pose_intent, get_character_profile,
                                       save_character_profile)
     inter = get_interaction(character_name)
-    if not inter:
+    if not inter or (interaction_id and inter["id"] != interaction_id):
         return False
     partner = inter["partner"]
     # BOTH profiles under BOTH locks, in sorted-name order (DATA-3). The
@@ -453,19 +462,28 @@ def end_interaction(character_name: str, reason: str = "ended") -> bool:
     # ``character_profile`` in the documented order — doing them inside would
     # invert it.
     stand: list = []
+    cleared = True
+    ended_invite_id = ""
     with pair_profile_locks(character_name, partner):
         for name in (character_name, partner):
             p = get_character_profile(name) or {}
             cur = p.get("interaction")
+            if interaction_id and name == character_name and not (
+                    isinstance(cur, dict) and cur.get("id") == interaction_id
+                    and cur.get("partner") == partner):
+                return False
             if not (isinstance(cur, dict) and cur.get("id") == inter["id"]):
                 continue
+            if not ended_invite_id:
+                ended_invite_id = str(cur.get("invite_id") or "")
             p.pop("interaction", None)
             same_pose = (p.get("pose_key") or "") == inter.get("pose_key")
             if not same_pose:
                 # The pair seat goes with the interaction; with the pair pose
                 # still on, clear_pose_intent below stands the character up.
                 p["place"] = None
-            save_character_profile(name, p)
+            if not save_character_profile(name, p):
+                cleared = False
             stand.append((name, same_pose))
     for name, same_pose in stand:
         if same_pose:
@@ -474,6 +492,10 @@ def end_interaction(character_name: str, reason: str = "ended") -> bool:
             stand_up(name)
     publish("interaction_ended", character_name, partner=partner,
             kind=inter["kind"], interaction_id=inter["id"], reason=reason)
+    if stand and cleared:
+        from app.core.hooks import emit
+        emit("interaction.ended", character=character_name, partner=partner,
+             interaction_id=inter["id"], invite_id=ended_invite_id, reason=reason)
     logger.info("interaction %s ended (%s)", inter["id"], reason)
     return True
 
@@ -495,7 +517,8 @@ def end_interaction(character_name: str, reason: str = "ended") -> bool:
 INVITE_MAX_AGE_MIN = 30
 
 
-#: Answered rows older than this are swept away on the next invitation.
+#: Answered rows older than this are swept away on the next invitation,
+#: except an accepted question whose exact pair is still live.
 #: SYSTEM hours, like the window itself — this is bookkeeping, not world time.
 _INVITE_KEEP_HOURS = 24
 
@@ -519,11 +542,49 @@ def _fresh(created_at: str, max_age_minutes: int = INVITE_MAX_AGE_MIN) -> bool:
         return True
 
 
-def create_invite(inviter: str, invitee: str, pose_key: str) -> Optional[str]:
+def _sweep_invites() -> None:
+    """Remove old answered questions without losing a live pair's consent."""
+    from app.core.db import transaction
+    before = _sweep_before()
+    with transaction() as conn:
+        conn.execute(
+            "DELETE FROM interaction_invites WHERE status NOT IN ('pending', 'accepted') "
+            "AND created_at < ?", (before,))
+        rows = conn.execute(
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status "
+            "FROM interaction_invites WHERE status='accepted' AND created_at < ?",
+            (before,)).fetchall()
+    # Release the database write transaction BEFORE taking profile locks:
+    # a pair write holds those locks while saving its profiles to the DB.
+    for row in rows:
+        inv = _invite_row(row)
+        with pair_profile_locks(inv["inviter"], inv["invitee"]):
+            actor = get_interaction(inv["inviter"])
+            partner = get_interaction(inv["invitee"])
+            if (actor and partner
+                    and actor.get("invite_id") == partner.get("invite_id") == inv["invite_id"]
+                    and actor["id"] == partner["id"]
+                    and actor["partner"] == inv["invitee"]
+                    and partner["partner"] == inv["inviter"]
+                    and actor.get("pose_key") == partner.get("pose_key") == inv["pose_key"]):
+                continue
+            with transaction() as conn:
+                conn.execute(
+                    "DELETE FROM interaction_invites WHERE invite_id=? "
+                    "AND status='accepted' AND created_at < ?",
+                    (inv["invite_id"], before))
+
+
+def create_invite(inviter: str, invitee: str, pose_key: str, *,
+                  request_id: Optional[str] = None) -> Optional[str]:
     """Record "shall we <pose>?" and return its id (None on bad input).
 
-    An open invitation of the same pair is replaced, so a character who asks
-    twice does not queue two questions.
+    Without ``request_id``, a fresh pending question with the same exact
+    inviter/invitee/pose is reused, including a supplied id. Different-pose
+    or stale pending questions of that direction are cancelled, not deleted.
+    A supplied id atomically creates or reuses only its exact
+    inviter/invitee/pose row, never replaces another question, and emits the
+    offer only on creation.
     """
     from app.core.db import transaction
     from app.core.timeutils import utc_now_iso
@@ -532,23 +593,55 @@ def create_invite(inviter: str, invitee: str, pose_key: str) -> Optional[str]:
     pose_key = (pose_key or "").strip()
     if not inviter or not invitee or inviter == invitee or not pose_key:
         return None
-    invite_id = "iinv_" + uuid.uuid4().hex[:10]
+    if request_id is not None and (not isinstance(request_id, str) or not request_id):
+        return None
+    invite_id = request_id if request_id is not None else "iinv_" + uuid.uuid4().hex[:10]
+    created = True
     try:
+        if request_id is None:
+            _sweep_invites()
         with transaction() as conn:
-            conn.execute("DELETE FROM interaction_invites WHERE inviter=? "
-                         "AND invitee=? AND status='pending'", (inviter, invitee))
-            # Answered rows have no readers — nothing queries a declined
-            # question. Sweeping here keeps the table the size of what is
-            # actually open, without a job of its own.
-            conn.execute("DELETE FROM interaction_invites WHERE status!='pending' "
-                         "AND created_at < ?", (_sweep_before(),))
-            conn.execute(
-                "INSERT INTO interaction_invites (invite_id, inviter, invitee, "
-                "pose_key, created_at, status) VALUES (?, ?, ?, ?, ?, 'pending')",
-                (invite_id, inviter, invitee, pose_key, utc_now_iso()))
+            if request_id is None:
+                # This write also serializes ordinary duplicate requests
+                # before they read the remaining same-pose questions.
+                conn.execute(
+                    "UPDATE interaction_invites SET status='cancelled' "
+                    "WHERE inviter=? AND invitee=? AND status='pending' AND pose_key<>?",
+                    (inviter, invitee, pose_key))
+                rows = conn.execute(
+                    "SELECT invite_id, created_at FROM interaction_invites "
+                    "WHERE inviter=? AND invitee=? AND pose_key=? AND status='pending' "
+                    "ORDER BY created_at DESC", (inviter, invitee, pose_key)).fetchall()
+                for row in rows:
+                    if _fresh(row[1]):
+                        if created:
+                            invite_id, created = row[0], False
+                    else:
+                        conn.execute(
+                            "UPDATE interaction_invites SET status='cancelled' "
+                            "WHERE invite_id=? AND status='pending'", (row[0],))
+                if created:
+                    conn.execute(
+                        "INSERT INTO interaction_invites (invite_id, inviter, invitee, "
+                        "pose_key, created_at, status) VALUES (?, ?, ?, ?, ?, 'pending')",
+                        (invite_id, inviter, invitee, pose_key, utc_now_iso()))
+            else:
+                inserted = conn.execute(
+                    "INSERT OR IGNORE INTO interaction_invites "
+                    "(invite_id, inviter, invitee, pose_key, created_at, status) "
+                    "VALUES (?, ?, ?, ?, ?, 'pending')",
+                    (invite_id, inviter, invitee, pose_key, utc_now_iso()))
+                created = inserted.rowcount == 1
+                row = conn.execute(
+                    "SELECT inviter, invitee, pose_key FROM interaction_invites "
+                    "WHERE invite_id=?", (invite_id,)).fetchone()
+                if not row or tuple(row) != (inviter, invitee, pose_key):
+                    return None
     except Exception as e:
         logger.debug("create_invite failed: %s", e)
         return None
+    if not created:
+        return invite_id
     logger.info("interaction invite %s: %s asks %s for '%s'",
                 invite_id, inviter, invitee, pose_key)
     # Somebody now has a question. WHO answers it and how is not the core's
@@ -680,18 +773,23 @@ def find_pending_invite(inviter: str, invitee: str,
     return inv if _fresh(inv["created_at"]) else None
 
 
-def _set_invite_status(invite_id: str, status: str) -> None:
+def _set_invite_status(invite_id: str, status: str, *,
+                       expected_status: str = "answering") -> bool:
+    """Move only the row still owned by this answer or approach."""
     from app.core.db import transaction
     try:
         with transaction() as conn:
-            conn.execute("UPDATE interaction_invites SET status=? WHERE invite_id=?",
-                         (status, invite_id))
+            cur = conn.execute(
+                "UPDATE interaction_invites SET status=? WHERE invite_id=? AND status=?",
+                (status, invite_id, expected_status))
+            return cur.rowcount == 1
     except Exception as e:
         logger.debug("invite %s -> %s failed: %s", invite_id, status, e)
+        return False
 
 
-def _claim_invite(invite_id: str) -> bool:
-    """Take the open row out of circulation for THIS answer.
+def _claim_invite(invite_id: str, status: str = "pending") -> bool:
+    """Take the pending/approaching row out of circulation for THIS answer/start.
 
     One conditional UPDATE, so a double click and a simultaneous counter-call
     cannot both walk into ``start_interaction``: the loser would be told "is
@@ -702,7 +800,7 @@ def _claim_invite(invite_id: str) -> bool:
         with transaction() as conn:
             cur = conn.execute(
                 "UPDATE interaction_invites SET status='answering' "
-                "WHERE invite_id=? AND status='pending'", (invite_id,))
+                "WHERE invite_id=? AND status=?", (invite_id, status))
             return cur.rowcount == 1
     except Exception as e:
         logger.debug("claiming invite %s failed: %s", invite_id, e)
@@ -730,22 +828,27 @@ def resolve_invite(invite_id: str, accept: bool) -> Dict[str, Any]:
     if not _claim_invite(invite_id):
         return {"status": "not_found"}
     if not accept:
-        _set_invite_status(invite_id, "declined")
+        if not _set_invite_status(invite_id, "declined"):
+            return {**out, "status": "cannot", "reason": "the answer could not be saved"}
         return {**out, "status": "declined"}
     blocked = check_can_pair(inv["inviter"], inv["invitee"])
     if blocked:
         _set_invite_status(invite_id, "stale")
         return {**out, "status": "cannot", "reason": blocked}
     try:
-        inter = start_interaction(inv["inviter"], inv["invitee"], inv["pose_key"])
+        inter = start_interaction(inv["inviter"], inv["invitee"], inv["pose_key"],
+                                  invite_id=invite_id)
     except TooFarApart as e:
         # Yes was said; only the metres are missing. The one who agreed walks
         # over, and the ticker binds the pair when they get there. Saying
         # "too far away" to a player who has no way to close the gap would
         # be a dead end, not an answer.
         if _walk_to_partner(inv["invitee"], inv["inviter"]):
-            _set_invite_status(invite_id, "approaching")
-            return {**out, "status": "approaching", "reason": str(e)}
+            if _set_invite_status(invite_id, "approaching"):
+                return {**out, "status": "approaching", "reason": str(e)}
+            from app.core.travel_engine import cancel_journey
+            cancel_journey(inv["invitee"])
+            return {**out, "status": "cannot", "reason": "the approach could not be saved"}
         _set_invite_status(invite_id, "pending")
         return {**out, "status": "cannot", "reason": str(e)}
     except ValueError as e:
@@ -753,10 +856,22 @@ def resolve_invite(invite_id: str, accept: bool) -> Dict[str, Any]:
         # — the same answer may work in a minute.
         _set_invite_status(invite_id, "pending")
         return {**out, "status": "cannot", "reason": str(e)}
-    _set_invite_status(invite_id, "accepted")
+    if not _set_invite_status(invite_id, "accepted"):
+        end_interaction(inv["inviter"], reason="invitation_failed",
+                        interaction_id=inter["id"])
+        return {**out, "status": "cannot", "reason": "the accepted answer could not be saved"}
     clear_invites_for(inv["inviter"])
     clear_invites_for(inv["invitee"])
+    _emit_invite_started(inv, inter)
     return {**out, "status": "started", "interaction": inter}
+
+
+def _emit_invite_started(invitation: Dict[str, Any], interaction: Dict[str, Any]) -> None:
+    """Correlate a real pair start with the question whose consent caused it."""
+    from app.core.hooks import emit
+    emit("interaction.invite_started", invite_id=invitation["invite_id"],
+         interaction=interaction, inviter=invitation["inviter"],
+         invitee=invitation["invitee"])
 
 
 #: How close the walker aims to stop: not ON the other one (an occupied cell
@@ -815,22 +930,36 @@ def settle_approaches() -> int:
     bound = 0
     for r in rows:
         inv = _invite_row(r)
+        claimed = False
         try:
             if not _fresh(inv["created_at"]):
-                _set_invite_status(inv["invite_id"], "stale")
+                _set_invite_status(inv["invite_id"], "stale",
+                                   expected_status="approaching")
                 continue
             if get_journey(inv["invitee"]):
                 continue                      # still on the way
-            start_interaction(inv["inviter"], inv["invitee"], inv["pose_key"])
-            _set_invite_status(inv["invite_id"], "accepted")
+            if not _claim_invite(inv["invite_id"], "approaching"):
+                continue
+            claimed = True
+            inter = start_interaction(inv["inviter"], inv["invitee"], inv["pose_key"],
+                                      invite_id=inv["invite_id"])
+            if not _set_invite_status(inv["invite_id"], "accepted"):
+                end_interaction(inv["inviter"], reason="invitation_failed",
+                                interaction_id=inter["id"])
+                continue
+            claimed = False
             clear_invites_for(inv["inviter"])
             clear_invites_for(inv["invitee"])
             bound += 1
+            _emit_invite_started(inv, inter)
         except ValueError as e:
             logger.info("interaction invite %s expired on arrival: %s",
                         inv["invite_id"], e)
-            _set_invite_status(inv["invite_id"], "stale")
+            if claimed:
+                _set_invite_status(inv["invite_id"], "stale")
         except Exception as e:          # one bad row must not stop the beat
+            if claimed:
+                _set_invite_status(inv["invite_id"], "approaching")
             logger.debug("settle_approaches(%s) failed: %s",
                          inv.get("invite_id"), e)
     return bound
@@ -847,13 +976,14 @@ def cancel_invite(invite_id: str) -> bool:
     inv = get_invite(invite_id)
     if not inv or inv["status"] not in ("pending", "approaching"):
         return False
+    if not _set_invite_status(invite_id, "cancelled", expected_status=inv["status"]):
+        return False
     if inv["status"] == "approaching":
         try:
             from app.core.travel_engine import cancel_journey
             cancel_journey(inv["invitee"])
         except Exception as e:
             logger.debug("cancelling the approach walk failed: %s", e)
-    _set_invite_status(invite_id, "cancelled")
     return True
 
 

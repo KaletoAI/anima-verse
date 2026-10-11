@@ -327,7 +327,7 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     try:
         from app.core.party_engine import get_pending_invites_for
         party_invites = [{key: i[key] for key in
-                          ("invite_id", "inviter", "intent_id", "destination_label", "participants")
+                          ("invite_id", "inviter", "intent_id", "destination_label", "after_arrival_label", "participants")
                           if key in i} for i in get_pending_invites_for(avatar)]
     except Exception:
         party_invites = []
