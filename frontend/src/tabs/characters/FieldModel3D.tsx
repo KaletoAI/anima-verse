@@ -193,6 +193,7 @@ export function FieldModel3D({ character }: { character: string }) {
   const [st, setSt] = useState<Model3DStatus>({})
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [analysisResults, setAnalysisResults] = useState<Array<{ message: string; error: boolean }>>([])
   const [clips, setClips] = useState<AnimationClip[]>([])
   const [clipUrl, setClipUrl] = useState('')
   const [sliderPreview, setSliderPreview] = useState<{ context: string; groups: Record<string, Physics> }>({ context: '', groups: {} })
@@ -216,6 +217,9 @@ export function FieldModel3D({ character }: { character: string }) {
   const [rerigBackend, setRerigBackend] = useState('')
   const rerigTaskRef = useRef('')
   const faceTaskRef = useRef('')
+  // Bumped on every Analyze run and on a character switch: a run whose token is
+  // no longer current must not write results into another character's panel.
+  const analysisRunRef = useRef(0)
   const [faceOpen, setFaceOpen] = useState(false)
   const [faceBackend, setFaceBackend] = useState('')
   const [upscaleFirst, setUpscaleFirst] = useState(true)
@@ -286,6 +290,8 @@ export function FieldModel3D({ character }: { character: string }) {
     setFaceOpen(false)
     setRevertFaceOpen(false)
     setFaceCheck(null)
+    analysisRunRef.current += 1
+    setAnalysisResults([])
     setJobOpen(false)
     setJobId('')
     setJobErrors([])
@@ -573,33 +579,35 @@ export function FieldModel3D({ character }: { character: string }) {
     [enc, load, t, toast],
   )
 
-  // Measuring reads the geometry with Blender; it never modifies the mesh, so
-  // it needs no confirmation and no ownership of the combination.
-  const measure = useCallback(async () => {
+  // Both checks write the sidecar, so run sequentially and retain both results.
+  const analyze = useCallback(async () => {
+    const run = ++analysisRunRef.current
+    const current = () => analysisRunRef.current === run
     setBusy(true)
+    setAnalysisResults([])
     try {
-      await apiPost(`/characters/${enc}/model3d/measure?force=1`, {})
-      await load()
-      toast(t('Measured'))
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      for (const [action, success] of [['measure', t('Measured')], ['diagnose', t('Geometry checked')]]) {
+        let message = success
+        let error = false
+        try {
+          const result = await apiPost<{ ok?: boolean; status?: string; error?: string }>(
+            `/characters/${enc}/model3d/${action}?force=1`, {})
+          if (!current()) return
+          if (result.ok === false || result.status === 'stale' || result.error) {
+            error = true
+            message = `${success}: ${result.status || t('Error')}${result.error ? ` · ${result.error}` : ''}`
+          }
+          await load()
+        } catch (e) {
+          error = true
+          message = `${success}: ${t('Error')}: ${(e as Error).message}`
+        }
+        if (!current()) return
+        setAnalysisResults(results => [...results, { message, error }])
+        toast(message, error ? 'error' : undefined)
+      }
     } finally {
-      setBusy(false)
-    }
-  }, [enc, load, t, toast])
-
-  // Runs the geometry-defect indicators. Reads only, like measuring — the
-  // finding is shown, never acted on.
-  const diagnose = useCallback(async () => {
-    setBusy(true)
-    try {
-      await apiPost(`/characters/${enc}/model3d/diagnose?force=1`, {})
-      await load()
-      toast(t('Geometry checked'))
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    } finally {
-      setBusy(false)
+      if (current()) setBusy(false)
     }
   }, [enc, load, t, toast])
 
@@ -1061,8 +1069,6 @@ export function FieldModel3D({ character }: { character: string }) {
           <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}
             onClick={rebuildExtensions}>{t('Rebuild extension bones')}</button>
         ) : null}
-        <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}
-          onClick={queueExtensions}>{t('Rebuild extension bones for all models')}</button>
           <span className="ga-hint">{t('Physics changes apply immediately. Enabled and flip changes require rebuilding extension bones.')}</span>
         </fieldset>
       ) : null}
@@ -1175,124 +1181,131 @@ export function FieldModel3D({ character }: { character: string }) {
             </div>
           </div>
         </div>, document.body) : null}
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        <button type="button" className="ga-btn ga-btn-sm" disabled={pending}
-          onClick={() => { setUpscaleFirst(!!st.upscale_runnable); setUpscaleBackend(''); setFaceBackend(''); setFaceCheck(null); setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 }); setFaceOpen(true) }}>
-          {t('Face retexture…')}
-        </button>
-        {model?.face_retexture_snapshot?.ok ? <button type="button" className="ga-btn ga-btn-sm" disabled={pending}
-          onClick={() => setRevertFaceOpen(true)}>{t('Revert face retexture…')}</button> : null}
-        <button type="button" className="ga-btn ga-btn-sm"
-          disabled={pending || !model?.has_unrigged_source}
-          title={!model?.has_unrigged_source ? t('No retained unrigged mesh source. Generate a new model to enable re-rigging.') : undefined}
-          onClick={() => { setRerigBackend(''); setRerigOpen(true) }}>
-          {t('Re-rig from mesh')}
-        </button>
-        {model && !model.has_unrigged_source ? <span className="ga-hint">{t('No retained unrigged mesh source. Generate a new model to enable re-rigging.')}</span> : null}
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          disabled={pending || !st.has_input}
-          onClick={openDialog}
-          title={!st.has_input ? t('No T-pose render for the current outfit — generate it first') : undefined}
-        >
-          {pending ? t('Generating…') : owned ? t('Regenerate') : t('Generate')}
-        </button>
-        <button
-          type="button"
-          className={`ga-btn ga-btn-sm${jobOpen ? ' ga-btn-primary' : ''}`}
-          disabled={pending}
-          aria-expanded={jobOpen}
-          onClick={() => setJobOpen((v) => !v)}
-          title={t('Collects a mesh job that finished on the gateway after the generation here gave up waiting — by the job id from the log.')}
-        >
-          {t('Fetch by job ID…')}
-        </button>
-        {/* Pre-warm the whole wardrobe: one T-pose render + mesh per saved
-            outfit, without dressing the character. */}
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          onClick={() => setBatchOpen(true)}
-          title={t('Renders the T-pose reference and the mesh for every saved outfit — the character keeps wearing what it wears.')}
-        >
-          ⚙ {t('All outfits…')}
-        </button>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          disabled={pending}
-          onClick={() => fileRef.current?.click()}
-        >
-          {owned ? t('Upload (replace)') : t('Upload GLB/FBX')}
-        </button>
-        {model ? (
-          <a className="ga-btn ga-btn-sm" href={`/characters/${enc}/model3d/file`} download>
-            {t('Download')}
-          </a>
-        ) : null}
-        {/* Reads the geometry with Blender — never writes the mesh, so it is
-            offered for a nearest stand-in too. */}
-        {model && canMeasure ? (
+      <div role="group" aria-label={t('Model')}>
+        <div className="ga-form-section-label">{t('Model')}</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            disabled={pending || !st.has_input}
+            onClick={openDialog}
+            title={!st.has_input ? t('No T-pose render for the current outfit — generate it first') : undefined}
+          >
+            {pending ? t('Generating…') : owned ? t('Regenerate') : t('Generate')}
+          </button>
           <button
             type="button"
             className="ga-btn ga-btn-sm"
             disabled={pending}
-            onClick={measure}
-            title={t('Reads the real size, triangle count and bone names out of the file. Does not change the model.')}
+            onClick={() => fileRef.current?.click()}
           >
-            {t('Measure')}
+            {owned ? t('Upload (replace)') : t('Upload GLB/FBX')}
           </button>
-        ) : null}
-        {/* Also read-only: the defect indicators of the served mesh. */}
-        {model && canMeasure ? (
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            disabled={pending}
-            onClick={diagnose}
-            title={t('Checks the geometry for the known bake defect (garments turned into flat surfaces). Reads only — the finding is shown, nothing is changed.')}
-          >
-            {t('Check geometry')}
-          </button>
-        ) : null}
-        {/* Only for a GLB this outfit owns — it rewrites the stored file. */}
-        {owned && canMeasure && model?.format === 'glb' ? (
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            disabled={pending}
-            onClick={retexture}
-            title={t('Re-encodes the textures to JPEG — typically 60–90 % smaller with the geometry untouched. The original is kept, and the result is only used if it still validates.')}
-          >
-            {t('Shrink textures')}
-          </button>
-        ) : null}
-        {owned && canMeasure && model?.format === 'glb' ? (
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            disabled={pending}
-            onClick={buildLod}
-            title={t('Builds a reduced copy of this mesh for viewing at a distance. The full model is untouched — the client picks whichever fits the camera distance.')}
-          >
-            {model.tiers?.includes('low') ? t('Rebuild distance mesh') : t('Build distance mesh')}
-          </button>
-        ) : null}
-        {/* Delete targets the CURRENT combination's entry — a nearest
-            stand-in belongs to another combination and has none to delete. */}
-        {owned ? (
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            disabled={pending}
-            onClick={remove}
-            onBlur={() => setConfirmDelete(false)}
-          >
-            {confirmDelete ? t('Really delete?') : t('Delete')}
-          </button>
-        ) : null}
+          {model ? (
+            <a className="ga-btn ga-btn-sm" href={`/characters/${enc}/model3d/file`} download>
+              {t('Download')}
+            </a>
+          ) : null}
+          {/* Delete targets the CURRENT combination's entry — a nearest
+              stand-in belongs to another combination and has none to delete. */}
+          {owned ? (
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              style={{ marginInlineStart: 12 }}
+              disabled={pending}
+              onClick={remove}
+              onBlur={() => setConfirmDelete(false)}
+            >
+              {confirmDelete ? t('Really delete?') : t('Delete')}
+            </button>
+          ) : null}
+        </div>
       </div>
+      <div role="group" aria-label={t('Improve')}>
+        <div className="ga-form-section-label">{t('Improve')}</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button type="button" className="ga-btn ga-btn-sm" disabled={pending}
+            onClick={() => { setUpscaleFirst(!!st.upscale_runnable); setUpscaleBackend(''); setFaceBackend(''); setFaceCheck(null); setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 }); setFaceOpen(true) }}>
+            {t('Face retexture…')}
+          </button>
+          {model?.face_retexture_snapshot?.ok ? <button type="button" className="ga-btn ga-btn-sm" disabled={pending}
+            onClick={() => setRevertFaceOpen(true)}>{t('Revert face retexture…')}</button> : null}
+          <button type="button" className="ga-btn ga-btn-sm"
+            disabled={pending || !model?.has_unrigged_source}
+            title={!model?.has_unrigged_source ? t('No retained unrigged mesh source. Generate a new model to enable re-rigging.') : undefined}
+            onClick={() => { setRerigBackend(''); setRerigOpen(true) }}>
+            {t('Re-rig from mesh…')}
+          </button>
+          {/* Only for a GLB this outfit owns — it rewrites the stored file. */}
+          {owned && canMeasure && model?.format === 'glb' ? (
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              disabled={pending}
+              onClick={retexture}
+              title={t('Re-encodes the textures to JPEG — typically 60–90 % smaller with the geometry untouched. The original is kept, and the result is only used if it still validates.')}
+            >
+              {t('Shrink textures')}
+            </button>
+          ) : null}
+          {owned && canMeasure && model?.format === 'glb' ? (
+            <button
+              type="button"
+              className="ga-btn ga-btn-sm"
+              disabled={pending}
+              onClick={buildLod}
+              title={t('Builds a reduced copy of this mesh for viewing at a distance. The full model is untouched — the client picks whichever fits the camera distance.')}
+            >
+              {model.tiers?.includes('low') ? t('Rebuild distance mesh') : t('Build distance mesh')}
+            </button>
+          ) : null}
+          {model && !model.has_unrigged_source ? <span className="ga-hint">{t('No retained unrigged mesh source. Generate a new model to enable re-rigging.')}</span> : null}
+        </div>
+      </div>
+      <div role="group" aria-label={t('Inspect')}>
+        <div className="ga-form-section-label">{t('Inspect')}</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          {model && canMeasure ? (
+            <button type="button" className="ga-btn ga-btn-sm" disabled={pending} onClick={analyze}
+              title={`${t('Reads the real size, triangle count and bone names out of the file. Does not change the model.')} ${t('Checks the geometry for the known bake defect (garments turned into flat surfaces). Reads only — the finding is shown, nothing is changed.')}`}>
+              {t('Analyze')}
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <div aria-live="polite">
+        {analysisResults.map((result, index) => <div key={index} className="ga-hint" role="status"
+          style={result.error ? { color: 'var(--ga-warn, #c77d0a)' } : undefined}>{result.message}</div>)}
+      </div>
+      <details>
+        <summary className="ga-form-section-label" style={{ cursor: 'pointer' }}>{t('Advanced')}</summary>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 6 }}>
+          <button
+            type="button"
+            className={`ga-btn ga-btn-sm${jobOpen ? ' ga-btn-primary' : ''}`}
+            disabled={pending}
+            aria-expanded={jobOpen}
+            onClick={() => setJobOpen((v) => !v)}
+            title={t('Collects a mesh job that finished on the gateway after the generation here gave up waiting — by the job id from the log.')}
+          >
+            {t('Fetch by job ID…')}
+          </button>
+          {/* Pre-warm the whole wardrobe: one T-pose render + mesh per saved
+              outfit, without dressing the character. */}
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            onClick={() => setBatchOpen(true)}
+            title={t('Renders the T-pose reference and the mesh for every saved outfit — the character keeps wearing what it wears.')}
+          >
+            ⚙ {t('All outfits…')}
+          </button>
+          {st.extension_groups?.length ? (
+          <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}
+            onClick={queueExtensions}>{t('Rebuild extension bones for all models')}</button>
+          ) : null}
+        </div>
       {jobOpen ? (
         <div className="ga-form" style={{ gap: 6 }}>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1357,6 +1370,7 @@ export function FieldModel3D({ character }: { character: string }) {
           ) : null}
         </div>
       ) : null}
+      </details>
       <input
         ref={fileRef}
         type="file"
