@@ -6,8 +6,8 @@ count. Projection and rig run once each through separate channels; original
 mesh provenance stays in the full sidecar. A second run keeps the first
 snapshot byte-for-byte. Re-rig retains facefix and snapshot. Revert restores
 all original files exactly, except full sidecar's reverted status, and removes
-facefix/snapshot. Hub, rig, normalization, publication and stale failures
-publish no bytes and no snapshot. Material loss, texture re-encode,
+facefix/snapshot. Hub, bake, rig, normalization, publication and stale failures
+publish no bytes and no snapshot. Baked texture loss, texture re-encode,
 extension and low failures publish the valid rig with visible failure metadata
 and retain the rollback snapshot (updated plan section 5.7). A corrupt or
 incomplete manifest refuses revert. Source replacement removes both correction
@@ -22,10 +22,11 @@ mesh publication KEEP it (it depends on the photo, not the mesh; user report
 2026-10-13: a regenerated mesh re-ran Iris on an unchanged photo), only the
 outfit GC removes it, and snapshot/export/publication never contain it. Parameter or corrupted
 cache changes must cause a backend call. Explicit unavailable picks refuse start.
-All fixtures are constructed here; fake backends never use a network or Blender.
+Localized loss: the 256² atlas has at most 169 changed texels, global RGB
+mean <0.37 but face RGB mean 140; reverting just those texels must warn on
+the initial rig and a later re-rig. All fixtures are constructed here; fake backends never use a network or Blender.
 Usage: ./.venv/bin/python scripts/smoke_face_retexture_rollback.py
 """
-import copy
 import hashlib
 import json
 import os
@@ -38,25 +39,12 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core import paths
-from smoke_face_retexture_check import fixture_doc, glb, photo
+from smoke_face_retexture_check import glb, photo
+from smoke_face_retexture_bake import fixture as bake_fixture, png
 
 
-def fixture(corrected=False, rigged=False, lost=False):
-    doc, binary = fixture_doc()
-    binary = struct.pack('<6H', 0, 1, 2, 0, 1, 2) + binary[8:]
-    doc['buffers'][0]['byteLength'] = len(binary)
-    doc['bufferViews'][0]['byteLength'] = 12
-    doc['bufferViews'][1]['byteOffset'] = 12
-    doc['bufferViews'][2]['byteOffset'] = 36
-    doc['accessors'][0]['count'] = 6
-    if corrected and lost is not True:
-        doc['accessors'][0]['count'] = 3
-        doc['materials'].append(copy.deepcopy(doc['materials'][0]))
-        second = copy.deepcopy(doc['meshes'][0]['primitives'][0])
-        second['material'] = 1
-        doc['meshes'][0]['primitives'].append(second)
-    if lost == 'merged' and corrected:
-        doc['meshes'][0]['primitives'][1]['material'] = 0
+def fixture(corrected=False, rigged=False):
+    doc, binary = bake_fixture(hub=corrected)
     if rigged:
         from app.core.rig_contract import BASE_JOINT_NAMES
         doc['nodes'] = [{'name': n} for n in BASE_JOINT_NAMES]
@@ -93,6 +81,8 @@ def main():
                 self.calls = []
                 self.failure = None
                 self.lost = False
+                self.localized_loss = False
+                self.changed_geometry = False
                 self._tls = threading.local()
                 self.model = name
             def check_availability(self):
@@ -113,13 +103,50 @@ def main():
                 if self.category == 'face_retexture':
                     assert Path(params['source_model_path']).parent.name == 'unrigged'
                     assert Path(params['source_model_path']).read_bytes() == fixture()
-                    raw = fixture(corrected=True)
+                    doc, binary = bake_fixture(hub=True)
+                    if self.changed_geometry:
+                        binary = bytearray(binary)
+                        struct.pack_into('<f', binary, doc['bufferViews'][1]['byteOffset'], .75)
+                        binary = bytes(binary)
+                    raw = glb(doc, binary)
                     self._tls.files = [{'name': 'corrected.glb', 'mime': 'model/gltf-binary', 'kind': 'model',
                                         'sha256': hashlib.sha256(raw).hexdigest(), 'url': 'https://fake.invalid/corrected'},
                                        {'name': 'comparison.png', 'mime': 'image/png', 'kind': 'image'}]
                     return [raw, photo()]
                 assert Path(params['source_model_path']).parent.name == 'facefix'
-                raw = fixture(corrected=True, rigged=True, lost=self.lost)
+                from app.core.model_validate import parse_glb
+                parsed = parse_glb(Path(params['source_model_path']).read_bytes())
+                doc, binary = parsed['gltf'], parsed['bin']
+                assert len(doc['meshes'][0]['primitives']) == 1
+                if self.lost:
+                    info = doc['materials'][0]['pbrMetallicRoughness']['baseColorTexture']
+                    image_ref = doc['images'][doc['textures'][info['index']]['source']]
+                    view = doc['bufferViews'][image_ref['bufferView']]
+                    replacement = png((100, 100, 100, 123))
+                    binary = binary[:view['byteOffset']] + replacement
+                    view['byteLength'] = len(replacement)
+                    doc['buffers'][0]['byteLength'] = len(binary)
+                if self.localized_loss:
+                    import io
+                    import numpy as np
+                    from PIL import Image
+                    from app.core.face_retexture import _primitive_basecolor
+                    raw_image = _primitive_basecolor(parsed, doc['meshes'][0]['primitives'][0])[1]
+                    pixels = np.array(Image.open(io.BytesIO(raw_image)).convert('RGBA'))
+                    corrected = np.any(pixels[..., :3] != (10,20,200), axis=2)
+                    pixels[corrected, :3] = (10,20,200)
+                    out = io.BytesIO()
+                    Image.fromarray(pixels).save(out, 'PNG')
+                    replacement = out.getvalue()
+                    info = doc['materials'][0]['pbrMetallicRoughness']['baseColorTexture']
+                    view = doc['bufferViews'][doc['images'][doc['textures'][info['index']]['source']]['bufferView']]
+                    binary = binary[:view['byteOffset']] + replacement
+                    view['byteLength'] = len(replacement)
+                    doc['buffers'][0]['byteLength'] = len(binary)
+                from app.core.rig_contract import BASE_JOINT_NAMES
+                doc['nodes'] = [{'name': n} for n in BASE_JOINT_NAMES]
+                doc['skins'] = [{'joints': list(range(52))}]
+                raw = glb(doc, binary)
                 self._tls.files = [{'name': 'rigged.glb', 'mime': 'model/gltf-binary', 'kind': 'model'}]
                 return [raw]
 
@@ -152,6 +179,8 @@ def main():
                 (directory / f'{sig}.json').write_text(json.dumps({**meta, 'rig': 'mixamo', 'lod_ratio': 0.4}))
             face.failure = rig.failure = None
             rig.lost = False
+            rig.localized_loss = False
+            face.changed_geometry = False
             face._available = rig._available = True
             face._cooldown_until = rig._cooldown_until = 0
 
@@ -184,6 +213,10 @@ def main():
             assert face_retexture.snapshot_info(root, sig)['ok']
             meta = model3d._read_sidecar(root / f'{sig}.glb')
             assert meta['mesh_backend'] == 'original-mesh' and meta['job_id'] == 'original-job'
+            assert not meta['face_retexture']['face_texture_lost']
+            assert (root / 'facefix' / f'{sig}.glb').read_bytes() != fixture(corrected=True)
+            assert model3d._read_sidecar(root / 'facefix' / f'{sig}.glb')['baked'] == meta['face_retexture']['baked']
+            assert meta['face_retexture']['baked']['face_triangles'] == 1
             assert meta['face_retexture']['job_id'] == 'fake-face-job' and meta['face_retexture']['status'] == 'applied'
             exported = [p.relative_to(root).as_posix() for p in export_files(root, [sig])]
             assert f'facefix/{sig}.glb' in exported and f'facefix/{sig}.json' in exported
@@ -205,13 +238,14 @@ def main():
             assert set(after) == set(before)
             assert not snap.exists() and not (root / 'facefix' / f'{sig}.glb').exists()
 
-            for failure in ('hub', 'rig', 'normalize', 'publication', 'stale'):
+            for failure in ('hub', 'bake', 'rig', 'normalize', 'publication', 'stale'):
                 seed()
                 before = files()
+                rig_count = len(rig.calls)
                 with ExitStack() as fault:
                     if failure == 'hub': face.failure = GatewayRejectedError('fake hub failure')
                     if failure == 'rig': rig.failure = GatewayRejectedError('fake rig failure')
-                    if failure == 'materials': rig.lost = True
+                    if failure == 'bake': face.changed_geometry = True
                     if failure == 'normalize': fault.enter_context(patch.object(model3d, '_auto_normalize', side_effect=RuntimeError('fake normalize failure')))
                     if failure == 'extensions': fault.enter_context(patch.object(model3d, '_auto_extension_rig', return_value={'ok': False, 'error': 'fake extensions failure'}))
                     if failure == 'low': fault.enter_context(patch.object(model3d, 'build_lod', return_value={'ok': False, 'error': 'fake low failure'}))
@@ -231,14 +265,48 @@ def main():
                         pass
                     else:
                         assert not result['ok'], (failure, result)
+                        if failure == 'bake':
+                            assert 'POSITION' in result['error']
+                            assert len(rig.calls) == rig_count
                 assert files() == before, failure
                 assert not snap.exists(), failure
-            for failure in ('materials', 'merged', 'retexture', 'extensions', 'low'):
+            # A 256-square atlas with the same 16-pixel geometry makes global
+            # loss <2: at most 169 texels * (230+10+180) / (256*256*3) <0.37.
+            # Inside the face mask the mean is 140, so the warning must be set.
+            original_fixture = bake_fixture
+            def sparse_fixture(hub=False):
+                import io
+                from PIL import Image
+                doc, binary = original_fixture(hub=hub)
+                binary = bytearray(binary)
+                start = doc['bufferViews'][1]['byteOffset']
+                for i in range(7):
+                    u, v = struct.unpack_from('<2f', binary, start+i*20+12)
+                    struct.pack_into('<2f', binary, start+i*20+12, u/16, v/16)
+                for image in doc['images']:
+                    view = doc['bufferViews'][image['bufferView']]
+                    raw = bytes(binary[view['byteOffset']:view['byteOffset']+view['byteLength']])
+                    out = io.BytesIO()
+                    Image.open(io.BytesIO(raw)).resize((256,256)).save(out, 'PNG')
+                    binary.extend(b'\0' * (-len(binary) % 4))
+                    view['byteOffset'], view['byteLength'] = len(binary), len(out.getvalue())
+                    binary.extend(out.getvalue())
+                doc['buffers'][0]['byteLength'] = len(binary)
+                return doc, bytes(binary)
+            with patch(__name__ + '.bake_fixture', side_effect=sparse_fixture):
+                seed()
+                rig.localized_loss = True
+                result = model3d.face_retexture_model('demo', sig)
+                assert result['ok'], result
+                assert model3d._read_sidecar(root / f'{sig}.glb')['face_retexture']['face_texture_lost']
+                assert model3d.rerig_model('demo', sig)['ok']
+                assert model3d._read_sidecar(root / f'{sig}.glb')['face_retexture']['face_texture_lost']
+                assert model3d.revert_face_retexture('demo', sig)['ok']
+            for failure in ('texture', 'retexture', 'extensions', 'low'):
                 seed()
                 original_files = files()
                 with ExitStack() as fault:
-                    if failure == 'materials': rig.lost = True
-                    if failure == 'merged': rig.lost = 'merged'
+                    if failure == 'texture': rig.lost = True
                     if failure == 'retexture': fault.enter_context(patch.object(model3d, '_auto_retexture', side_effect=OSError('fake retexture failure')))
                     if failure == 'extensions': fault.enter_context(patch.object(model3d, '_auto_extension_rig', return_value={'ok': False, 'error': 'fake extensions failure'}))
                     if failure == 'low': fault.enter_context(patch.object(model3d, 'build_lod', return_value={'ok': False, 'error': 'fake low failure'}))
@@ -246,7 +314,9 @@ def main():
                     assert result['ok'], (failure, result)
                 assert face_retexture.snapshot_info(root, sig)['ok'], failure
                 meta = model3d._read_sidecar(root / f'{sig}.glb')
-                if failure in ('materials', 'merged'): assert meta['face_retexture']['material_lost']
+                if failure == 'texture':
+                    assert meta['face_retexture']['face_texture_lost']
+                    assert model3d.get_model3d_info('demo')['model']['face_retexture']['face_texture_lost']
                 if failure == 'retexture':
                     assert not meta['refined']['retexture'] and meta['refined']['reason'] == 'fake retexture failure'
                     assert result['warnings']['refined'] == meta['refined']
@@ -579,7 +649,7 @@ def main():
                 asyncio.run(explicit_with_heartbeat())
             svc._pool.backends.remove(up)
 
-    print('PASS: face retexture stages, provenance, first snapshot, byte-exact revert, rerig, source replacement, export, 5 fatal/5 nonfatal failures, damaged snapshots, four admin HTTP routes and P2 upscale integration')
+    print('PASS: face retexture stages, provenance, first snapshot, byte-exact revert, rerig, source replacement, export, 6 fatal/4 nonfatal failures, damaged snapshots, four admin HTTP routes and P2 upscale integration')
 
 
 if __name__ == '__main__':

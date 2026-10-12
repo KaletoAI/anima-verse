@@ -19,7 +19,7 @@
     "Turns only the alignment view. Leave at 0 unless the model does not face forward (−180–180).": "Dreht nur die Ausrichtungsansicht. Auf 0 lassen, außer das Modell schaut nicht nach vorn (−180–180).",
     "Face retexture backend": "Backend für Gesichtskorrektur",
     "Texture re-encoding failed — the model was published without this improvement.": "Textur-Neukodierung fehlgeschlagen — das Modell wurde ohne diese Verbesserung veröffentlicht.",
-    "The rigger merged the face material — the face correction may be lost. Revert restores the previous model.": "Der Rigger hat das Gesichtsmaterial zusammengeführt — die Gesichtskorrektur könnte verloren sein. Zurücksetzen stellt das vorherige Modell wieder her.",
+    "The rigger changed the baked face texture — the face correction may be lost. Revert restores the previous model.": "Der Rigger hat die eingebackene Gesichtstextur verändert — die Gesichtskorrektur könnte verloren sein. Zurücksetzen stellt das vorherige Modell wieder her.",
     "Distance mesh rebuild failed": "Neubau des Distanz-Meshes fehlgeschlagen",
     "Face retexture…": "Gesichtstextur korrigieren…",
     "Revert face retexture…": "Gesichtskorrektur zurücksetzen…",

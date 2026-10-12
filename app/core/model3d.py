@@ -1864,7 +1864,7 @@ def rerig_model(character_name: str, signature: Optional[str] = None, *,
 
 
 def _rig_from_source(character_name: str, signature: str, source: Path, *,
-                     rig_backend_glob: str = "") -> Dict[str, Any]:
+                     rig_backend_glob: str = "", replacement_mask=None) -> Dict[str, Any]:
     """Rig the retained source only; publish the entire chain on success."""
     import tempfile
     from app.imagegen.service import get_image_service
@@ -1891,13 +1891,13 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
         check = validate_glb(blob) if rig == "mixamo" else validate_fbx(blob, texture)
         if not check.get("ok"):
             return {"ok": False, "error": "; ".join(check.get("errors") or ["Invalid rigged result"])}
-        material_lost = False
-        material_reason = ""
+        face_texture_lost = False
         if face_meta or (out_dir / "facefix" / f"{signature}.glb").is_file():
-            from app.core.model_validate import face_texture_geometry
-            materials = face_texture_geometry(blob, rigged=True)
-            material_lost = not materials["ok"]
-            material_reason = "; ".join(materials["errors"])
+            from app.core.face_retexture import face_texture_preserved
+            original_source = out_dir / "unrigged" / f"{signature}.glb"
+            face_texture_lost = not face_texture_preserved(
+                source.read_bytes(), blob, replacement_mask=replacement_mask,
+                original_glb=original_source.read_bytes() if replacement_mask is None and original_source.is_file() else None)
         path = out_dir / f"{signature}{delivered.suffix.lower()}"
         _purge_combination(out_dir, signature, keep_model=path, preserve_sources=True)
         _publish_model_bytes(path, blob)
@@ -1917,9 +1917,7 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
                     source_filename=res.get("filename", ""))
         if (out_dir / "facefix" / f"{signature}.glb").is_file():
             meta["face_retexture"] = {**(face_meta or previous_meta.get("face_retexture", {})),
-                                      "material_lost": material_lost}
-            if material_lost:
-                meta["face_retexture"]["material_loss_reason"] = material_reason
+                                      "face_texture_lost": face_texture_lost}
         for key in ("routing", "fallback_from"):
             if key in res:
                 meta[key] = res[key]
@@ -2293,15 +2291,21 @@ def face_retexture_model(character_name: str, signature: Optional[str] = None, *
         before = validate_face_source(original.read_bytes(), original=True)
         if not verdict['ok'] or verdict['triangles'] != before['triangles']:
             return {'ok': False, 'error': '; '.join(verdict['errors']) or 'Face retexture changed the triangle count'}
+        try:
+            replacement_masks = []
+            raw, baked = face_retexture.bake_face_texture(
+                original.read_bytes(), raw, replacement_masks=replacement_masks)
+        except ValueError as exc:
+            return {'ok': False, 'error': str(exc)}
         source = root / 'facefix' / f'{signature}.glb'
         source.parent.mkdir(exist_ok=True)
         _publish_model_bytes(source, raw)
         face_meta = {'status': 'applied', 'at': utc_now_iso(),
                      'backend': result.get('backend', ''), 'job_id': result.get('job_id', ''),
-                     'params': controls, 'upscale': upscale_meta, 'result_sha256': result.get('result_sha256', ''),
+                     'params': controls, 'upscale': upscale_meta, 'baked': baked, 'result_sha256': result.get('result_sha256', ''),
                      'result_url': result.get('result_url', ''),
                      'route_meta': {k: result[k] for k in ('routing', 'fallback_from') if k in result}}
-        _publish_sidecar(source, {'face_retexture': face_meta})
+        _publish_sidecar(source, {'face_retexture': face_meta, 'baked': baked})
         compare = source.with_suffix('.png')
         if result.get('compare_path'):
             comparison = Path(result['compare_path']).read_bytes()
@@ -2314,7 +2318,7 @@ def face_retexture_model(character_name: str, signature: Optional[str] = None, *
             _publish_model_bytes(compare, comparison)
         else:
             compare.unlink(missing_ok=True)
-        rigged = _rig_from_source(character_name, signature, source)
+        rigged = _rig_from_source(character_name, signature, source, replacement_mask=replacement_masks[0])
         if rigged.get('ok'):
             rigged['face_retexture'] = _read_sidecar(Path(rigged['path'])).get('face_retexture', face_meta)
         return rigged

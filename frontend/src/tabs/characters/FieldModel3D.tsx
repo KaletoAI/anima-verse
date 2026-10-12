@@ -89,7 +89,7 @@ interface FaceRetextureCheck {
 }
 
 interface Model3DInfo {
-  face_retexture?: { status: string; at?: string; backend?: string; job_id?: string; material_lost?: boolean; upscale?: { status: string; backend?: string; in?: number[]; out?: number[]; cached?: boolean; busy?: boolean; error?: string } }
+  face_retexture?: { status: string; at?: string; backend?: string; job_id?: string; face_texture_lost?: boolean; upscale?: { status: string; backend?: string; in?: number[]; out?: number[]; cached?: boolean; busy?: boolean; error?: string } }
   face_retexture_snapshot?: { ok: boolean; created_at?: string; error?: string }
   face_retexture_compare_url?: string
   model_rev?: string
@@ -1096,8 +1096,8 @@ export function FieldModel3D({ character }: { character: string }) {
             ? `${t('Reference upscaled')} · ${model.face_retexture.upscale.backend || ''} · ${model.face_retexture.upscale.in?.join('×')} → ${model.face_retexture.upscale.out?.join('×')}${model.face_retexture.upscale.cached ? ` · ${t('Cached')}` : ''}`
             : model.face_retexture.upscale.status === 'skipped' ? t('Reference upscale skipped — already large enough') : t('Reference upscale off')}
       </p> : null}
-      {model?.face_retexture?.material_lost ? <p className="ga-hint" role="status">
-        {t('The rigger merged the face material — the face correction may be lost. Revert restores the previous model.')}
+      {model?.face_retexture?.face_texture_lost ? <p className="ga-hint" role="status">
+        {t('The rigger changed the baked face texture — the face correction may be lost. Revert restores the previous model.')}
       </p> : null}
       {model?.refined && !model.refined.retexture && model.refined.reason ? <p className="ga-hint" role="status">{t('Texture re-encoding failed — the model was published without this improvement.')}: {model.refined.reason}</p> : null}
       {model?.lod_error ? <p className="ga-hint" role="status">{t('Distance mesh rebuild failed')}: {model.lod_error}</p> : null}
