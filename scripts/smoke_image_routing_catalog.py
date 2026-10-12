@@ -546,6 +546,19 @@ def part_d():
         backend.generate = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("transport failed"))
         failed = service.generate_mesh_animation("source.glb", ["walk"], 42, route=route, label="Clip")
         check("D ordinary failure", (failed["ok"], "transport failed" in failed["error"]), (False, True))
+        backend.motion_meta = {"max_variants": 3}
+        backend.generate = generate
+        cooled.clear()
+        submitted_before = len(calls)
+        for bad in (0, 4, True, 2.9, "2"):
+            try:
+                service.generate_mesh_animation("source.glb", ["walk"], 42, route=route,
+                                                variants=bad, label="Clip")
+                check(f"D variants {bad!r} refused", False, True)
+            except ValueError:
+                check(f"D variants {bad!r} refused", True, True)
+        check("D invalid variants never reach the backend or cool it", (len(calls), cooled),
+              (submitted_before, []))
         backend.generate = lambda *args, **kwargs: []
         empty = service.generate_mesh_animation("source.glb", ["walk"], 42, route=route, label="Clip")
         check("D empty result keeps the verdicts",

@@ -889,8 +889,13 @@ class ImageService:
         """
         from app.imagegen.routing import route_meta
         backend = route.backend
+        # Checked before the channel handoff: an invalid request is the caller's
+        # error and must never put a healthy backend on cooldown.
+        limit = int((getattr(backend, "motion_meta", None) or {}).get("max_variants", 4))
+        if isinstance(variants, bool) or not isinstance(variants, int) or not 1 <= variants <= limit:
+            raise ValueError(f"variants must be an integer 1..{limit}")
         params = {"source_model_path": source_model_path, "captions": list(captions),
-                  "seed": int(seed), "variants": int(variants), "should_cancel": should_cancel,
+                  "seed": int(seed), "variants": variants, "should_cancel": should_cancel,
                   "on_job_id": (lambda job_id: on_job_id(job_id, backend.name)) if on_job_id else None}
 
         def _op(bb):
