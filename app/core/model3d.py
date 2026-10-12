@@ -93,7 +93,6 @@ def _publish_signature(character_name: str, directory: Path, stage: Path,
             return None
         changed = []
         snapshot_removed = False
-        removed_refs = []
         try:
             for relative in current_files.keys() - staged_files.keys():
                 current_files[relative].unlink(missing_ok=True)
@@ -115,21 +114,14 @@ def _publish_signature(character_name: str, directory: Path, stage: Path,
                 if snapshot.exists():
                     os.replace(snapshot, removed_snapshot)
                     snapshot_removed = True
-            if (stage / ".replace-source").exists():
-                for ref in (directory / "facefix-ref").glob(f"{signature}.*"):
-                    if not ref.resolve().is_relative_to(directory.resolve()):
-                        raise ValueError("Reference cache path escapes the model directory")
-                    removed = stage / ".removed-ref" / ref.name
-                    removed.parent.mkdir(exist_ok=True)
-                    os.replace(ref, removed)
-                    removed_refs.append((removed, ref))
+            # facefix-ref/ (the upscaled reference photo) is deliberately NOT
+            # purged here: it depends on the photo, not on the mesh, and its
+            # sidecar hash turns a re-rendered photo into a cache miss anyway.
             prepared_snapshot = stage / ".face-snapshot"
             if prepared_snapshot.exists() and not snapshot.exists():
                 snapshot.parent.mkdir(exist_ok=True)
                 os.replace(prepared_snapshot, snapshot)
         except Exception:
-            for removed, ref in reversed(removed_refs):
-                os.replace(removed, ref)
             if snapshot_removed:
                 os.replace(stage / ".removed-snapshot", directory / "rollback" / signature)
             if rollback is not None:
@@ -140,8 +132,6 @@ def _publish_signature(character_name: str, directory: Path, stage: Path,
                     else:
                         target.unlink(missing_ok=True)
             raise
-        for removed, ref in removed_refs:
-            removed.unlink(missing_ok=True)
         if snapshot_removed:
             shutil.rmtree(removed_snapshot)
         if changed or invalidate:
@@ -796,10 +786,13 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
 
 def _purge_combination(out_dir: Path, signature: str, *,
                        keep_model: Optional[Path] = None, preserve_unrigged: bool = False,
-                       preserve_sources: bool = False) -> None:
+                       preserve_sources: bool = False,
+                       drop_reference_cache: bool = False) -> None:
     """Remove any stored model of this outfit combination (model + texture +
     sidecar), whatever its format/source — the caller writes a fresh one.
-    ``keep_model`` preserves the publication target until atomic replacement."""
+    ``keep_model`` preserves the publication target until atomic replacement.
+    ``drop_reference_cache`` also removes facefix-ref/ (the upscaled photo);
+    only callers that drop the whole combination or its photo set it."""
     from app.core.face_retexture import safe_signature
     safe_signature(signature)
     keep = MODEL_EXTS + (".png", ".jpg", ".jpeg", ".json")
@@ -820,10 +813,15 @@ def _purge_combination(out_dir: Path, signature: str, *,
     # (refine.apply_script backs up only the first time) — the incident of
     # 2026-08-06: a fresh bake's pristine copy was silently never kept.
     from app.blender.refine import RAW_DIR_NAME
-    for directory in (out_dir / "unrigged", out_dir / "facefix", out_dir / "facefix-ref", out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME):
-        if (preserve_unrigged and directory.name == "unrigged") or (preserve_sources and directory.name in ("unrigged", "facefix", "facefix-ref")):
+    # facefix-ref/ is not listed: the upscaled photo outlives a mesh swap
+    # (see _publish_signature); see drop_reference_cache below.
+    for directory in (out_dir / "unrigged", out_dir / "facefix", out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME):
+        if (preserve_unrigged and directory.name == "unrigged") or (preserve_sources and directory.name in ("unrigged", "facefix")):
             continue
         for old in directory.glob(f"{signature}.*"):
+            old.unlink()
+    if drop_reference_cache:
+        for old in (out_dir / "facefix-ref").glob(f"{signature}.*"):
             old.unlink()
 
     if not preserve_sources and not preserve_unrigged:
@@ -862,7 +860,9 @@ def invalidate_models_for_item(character_name: str, item_id: str) -> set:
                            | set(manifest["items"])):
             continue
         try:
-            _purge_combination(d, sidecar.stem)
+            # The item changed the outfit picture, so the photo is re-rendered:
+            # its upscaled copy is stale too.
+            _purge_combination(d, sidecar.stem, drop_reference_cache=True)
         except OSError as e:
             logger.warning("Model3D invalidation %s: %s not removed: %s",
                            character_name, sidecar.stem, e)

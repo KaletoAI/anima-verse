@@ -17,8 +17,10 @@ and permanently removes the previous rollback snapshot; Revert must refuse.
 P2: 16x16 reference -> 32x32 output (scale 2). Upscale off submits original;
 failed/busy submits original with a nested warning, without a busy cooldown.
 Cancel and media-off propagate and publish nothing. Cache survives face/rig
-failure and revert, rerig preserves the nested status, source purge/GC remove
-it, and snapshot/export/publication never contain it. Parameter or corrupted
+failure and revert, rerig preserves the nested status, a source purge or a new
+mesh publication KEEP it (it depends on the photo, not the mesh; user report
+2026-10-13: a regenerated mesh re-ran Iris on an unchanged photo), only the
+outfit GC removes it, and snapshot/export/publication never contain it. Parameter or corrupted
 cache changes must cause a backend call. Explicit unavailable picks refuse start.
 All fixtures are constructed here; fake backends never use a network or Blender.
 Usage: ./.venv/bin/python scripts/smoke_face_retexture_rollback.py
@@ -532,8 +534,8 @@ def main():
                 model3d._purge_combination(root, sig, preserve_sources=True)
                 assert cache.exists()
                 model3d._purge_combination(root, sig)
-                assert not cache.exists() and not cache.with_suffix('.json').exists()
-                # Real source publication also purges the cache outside its stage.
+                assert cache.exists() and cache.with_suffix('.json').exists()
+                # A real source publication (new mesh) keeps the cache as well.
                 seed()
                 assert model3d.face_retexture_model('demo', sig)['ok'] and cache.exists()
                 with tempfile.TemporaryDirectory(dir=root) as replacement_stage:
@@ -542,7 +544,19 @@ def main():
                     (stage / f'{sig}.glb').write_bytes(fixture())
                     assert model3d._publish_signature('demo', root, stage, sig,
                         model3d._publication_token(root, sig), rollback_on_error=True) is not None
-                assert not cache.exists() and not cache.with_suffix('.json').exists()
+                assert cache.exists() and cache.with_suffix('.json').exists()
+                # ... and the next correction on the new source reuses it: no
+                # upscaler call. seed() stands in for the regenerated unrigged
+                # mesh; it wipes the whole fixture dir, so the cache that a real
+                # regeneration leaves in place is carried over by hand.
+                kept = {p.name: p.read_bytes() for p in cache.parent.iterdir()}
+                seed()
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                for name, data in kept.items():
+                    (cache.parent / name).write_bytes(data)
+                calls = up.calls
+                assert model3d.face_retexture_model('demo', sig)['ok'] and up.calls == calls
+                assert model3d._read_sidecar(root / f'{sig}.glb')['face_retexture']['upscale']['cached']
                 # The real GC purger removes PNG and metadata together.
                 seed()
                 assert model3d.face_retexture_model('demo', sig)['ok'] and cache.exists()

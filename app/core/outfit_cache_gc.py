@@ -339,7 +339,8 @@ def purge_stale(character_name: str,
                 pass
         from app.core.model3d import _purge_combination, get_model3d_dir
         try:
-            _purge_combination(get_model3d_dir(character_name), signature)
+            _purge_combination(get_model3d_dir(character_name), signature,
+                               drop_reference_cache=True)
         except OSError as e:
             logger.warning("Cache GC %s: %s not fully removed: %s",
                            character_name, signature, e)
