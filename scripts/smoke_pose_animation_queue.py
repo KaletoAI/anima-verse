@@ -156,13 +156,20 @@ def main():
             assert queue.submit.call_args.kwargs["queue_name"] == "pose_animation"
         queue.get_task_progress.return_value = {}
         queue.is_task_cancelled.return_value = False
+        routed = Mock()
+        routed.resolve_animation_backend.return_value = SimpleNamespace(backend=SimpleNamespace(
+            name="routed", motion_meta={"caption_style": "object", "segment_seconds": 2.0,
+                                        "max_variants": 4}))
         with patch.object(pa, "get_task_queue", return_value=queue), \
+             patch.object(pa, "get_image_service", return_value=routed), \
              patch.object(pa, "prepare_motion", side_effect=RuntimeError("stop after input")) as prepare:
             try:
                 pa._handle({"_task_id": "candidate", "mode": "candidate", "raw_text": "wave the right hand", "text": "wrong fallback"})
             except RuntimeError as exc:
                 assert str(exc) == "stop after input"
             assert prepare.call_args.kwargs["text"] == "wave the right hand"
+            assert prepare.call_args.kwargs["caption_style"] == "object"
+            routed.resolve_animation_backend.assert_called_once_with("")
         # The callback must save the actual submitting backend before a result exists.
         from app.imagegen.service import ImageService
         from app.imagegen.base import GenerationCancelled

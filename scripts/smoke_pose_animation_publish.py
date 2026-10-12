@@ -3,6 +3,8 @@
 
 Usage: .venv/bin/python scripts/smoke_pose_animation_publish.py
 
+Every run ends in awaiting_choice and is published by choose(tid, 0) (plan v3
+Task 5); the publish properties below hold for that choice.
 A foreign waving clip forces waving-u. A second run replaces that owned clip.
 Catalog failure restores byte-identical files; cancellation publishes nothing.
 Stand hips 1.058, feet -.028 and loop seam 3.54 pass the specified limits.
@@ -52,10 +54,17 @@ def main():
         pa.register()
         state = {"version": 0, "cancel": False, "bad": False}
         def generate(puppet, captions, seed, **kwargs):
-            assert seed == 0 and captions == ["An object waves."]
+            assert seed == 0 and captions == ["An object waves."] and kwargs["variants"] == 1
+            assert puppet == str(paths.get_puppet_file())
             kwargs["on_job_id"]("j1", "fixture")
             assert tq.get_task_progress(state["tid"])["backend"] == "fixture"
-            return {"ok": True, "blobs": [b"glb"], "results": [], "backend": "fixture", "job_id": "j1"}
+            return {"ok": True, "blobs": [b"glTF-clip"], "results": [{"n": 0, "ok": True, "reason": ""}],
+                    "backend": "fixture", "job_id": "j1"}
+        from app.imagegen.backends import openai_mesh_animation as uni
+        fixture = SimpleNamespace(name="fixture", motion_meta={
+            "motion_source": "puppet", "caption_style": "object", "segment_seconds": 2.0,
+            "max_variants": 4, "generator": "unimate", "license": uni.DEFAULT_LICENSE,
+            "credit": uni.DEFAULT_CREDIT, "model_revision": uni.DEFAULT_MODEL_REVISION})
         def run(script, *, inputs, out_dir, **kwargs):
             if script == "clip_measure":
                 if state["cancel"]:
@@ -83,6 +92,8 @@ def main():
             try:
                 result = pa._handle({"mode": "entry", "key": "waving", "seed": 0, "_task_id": tid})
                 tq._finish_task(tid, "completed", result=result)
+                assert result["state"] == "awaiting_choice"
+                pa.choose(tid, 0)
                 assert not error
             except RuntimeError as exc:
                 assert error and error in str(exc), str(exc)
@@ -91,7 +102,7 @@ def main():
         try:
             with patch.object(tq, "start"), patch.object(pa, "prepare_motion", return_value=pa.PreparedMotion(["An object waves."], True, None)), \
                  patch.object(pa, "get_image_service", return_value=SimpleNamespace(generate_mesh_animation=generate,
-                                                           resolve_animation_backend=lambda name="": SimpleNamespace(backend=None))), \
+                                                           resolve_animation_backend=lambda name="": SimpleNamespace(backend=fixture))), \
                  patch.object(pa.runner, "run", side_effect=run), patch.object(pa, "import_source", side_effect=importing):
                 untouched = snapshot()
                 with patch.object(pa, "apply_generated_entry", side_effect=RuntimeError("catalog refused")):
@@ -102,13 +113,13 @@ def main():
                 assert snapshot() == untouched
                 state["cancel"] = False
                 first = execute()
-                assert not (paths.get_clips_inbox_dir() / ".unimate" / first).exists()
+                assert not (paths.get_clips_inbox_dir() / ".pose_animation" / first).exists()
                 assert json.loads(catalog.read_text())["entries"]["waving"]["animation"] == "waving-u"
                 meta = json.loads((free / "waving-u.json").read_text())
-                assert meta["license"] == "CC-BY-NC-4.0" and meta["credit"] == pa.CREDIT
-                assert meta["source"] == {"generator": "unimate", "pose_key": "waving", "captions": ["An object waves."],
+                assert meta["license"] == "CC-BY-NC-4.0" and meta["credit"] == uni.DEFAULT_CREDIT
+                assert meta["source"] == {"generator": "unimate", "generated_for_pose": "waving", "captions": ["An object waves."],
                     "seed": 0, "hub_job": "j1", "backend": "fixture", "model_revision": "174fc755ec248d0c98f27759b7a95648e7f05905",
-                    "puppet_sha256": hashlib.sha256(b"puppet").hexdigest()}
+                    "variant_index": 0, "puppet_sha256": hashlib.sha256(b"puppet").hexdigest()}
                 execute()
                 assert (free / "waving-u.fbx").read_bytes() == b"4" and not (free / "waving-u2.fbx").exists()
                 before = snapshot()
@@ -177,32 +188,7 @@ def main():
                 before = snapshot()
                 print("PASS concurrent rename waits through publish installation and catalog commit")
 
-                # Cancellation while waiting for the catalog transaction.
-                held, waiting, release = threading.Event(), threading.Event(), threading.Event()
                 txn = editor.catalog_txn
-                def holder():
-                    with txn("pose"):
-                        held.set()
-                        assert waiting.wait(5)
-                        tq.cancel_task(state["tid"])
-                        release.set()
-                @contextmanager
-                def observed_txn(axis):
-                    waiting.set()
-                    with txn(axis):
-                        yield
-                thread = threading.Thread(target=holder)
-                thread.start()
-                assert held.wait(5)
-                try:
-                    with patch.object(editor, "catalog_txn", side_effect=observed_txn):
-                        execute("cancelled")
-                finally:
-                    waiting.set()
-                    thread.join(5)
-                assert release.is_set() and not thread.is_alive()
-                assert snapshot() == before
-
                 # Reject groups changed after the measurement check, without undoing the edit.
                 publish = pa._publish
                 for group in ("seat", "unsupported"):
@@ -282,15 +268,15 @@ def main():
                 assert snapshot() == before
                 state["cancel"] = False
                 state["bad"] = True
-                failed = execute("check failed")
+                failed = execute("no variant passed the check")
                 assert snapshot() == before
-                assert (paths.get_clips_inbox_dir() / ".unimate" / failed).exists()
+                assert (paths.get_clips_inbox_dir() / ".pose_animation" / failed).exists()
                 jobs = {j["task_id"]: j for j in pa.recent_jobs()}
                 assert jobs[failed]["status"] == "failed" and jobs[cancelled]["status"] == "cancelled"
         finally:
             pc.catalog_path = original_path
             pc.reload_catalogs()
-        print("PASS: publish, replacement, rollback, lock-wait cancellation, stale groups, EXDEV, caches, cleanup and failed check")
+        print("PASS: publish, replacement, rollback, stale groups, EXDEV, caches, cleanup and failed check")
 
 
 if __name__ == "__main__":

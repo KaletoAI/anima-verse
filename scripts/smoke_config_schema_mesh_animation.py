@@ -17,6 +17,9 @@ for name in ("api_key", "model", "extra_params", "mesh_endpoint", "poll_interval
     assert "openai_mesh_animation" in fields[name].get("applicable_for", ["openai_mesh_animation"]), name
 print("PASS: mesh2anim and all nine animation settings fields are visible")
 
+import tempfile
+from app.core import paths
+paths.init(tempfile.mkdtemp())   # the admin module must never reach a real world
 from app.routes import admin_settings as adm
 
 

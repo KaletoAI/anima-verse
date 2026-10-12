@@ -83,8 +83,9 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 with tempfile.TemporaryDirectory() as tmp:
-    from app.core import paths, pose_catalog, pose_catalog_edit, llm_router, prompt_templates
+    from app.core import paths
     paths.init(tmp)
+    from app.core import pose_catalog, pose_catalog_edit, llm_router, prompt_templates
     os.environ.update(ANIMATION_CLIPS_DIR=str(Path(tmp) / "clips"),
                      ANIMATION_CLIPS_LICENSED_DIR=str(Path(tmp) / "licensed"),
                      ANIMATION_CLIPS_INBOX_DIR=str(Path(tmp) / "inbox"))
@@ -124,8 +125,9 @@ else:
 print("PASS caption prefix follows the style")
 
 with tempfile.TemporaryDirectory() as tmp:
-    from app.core import paths, pose_catalog, llm_router, prompt_templates
+    from app.core import paths
     paths.init(tmp)
+    from app.core import pose_catalog, llm_router, prompt_templates
     shared = Path(tmp) / "pose.json"
     shared.write_text(json.dumps({"groups": {"stand": {"needs_place": False}}, "entries": {}}))
     rendered = []

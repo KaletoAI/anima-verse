@@ -1,8 +1,17 @@
-"""Generate, validate and publish one UniMate pose animation."""
+"""Generate, validate and publish a generated pose animation.
+
+One job runs ONE motion model (Auto = the routed ``pose_animation`` chain, or
+an explicit chain member) for 1..4 variants. Every variant is converted,
+imported and checked into its own staging folder; the job then ends in
+``awaiting_choice`` and only ``choose`` publishes (spec
+plan-pose-animation-unimate.md §13 E9/E10). ``discard`` drops the
+candidates, and a daily sweep removes those left undecided for 7 days.
+"""
 import hashlib
 import json
 import math
 import os
+import re
 import secrets
 import shutil
 import tempfile
@@ -16,16 +25,19 @@ from app.core.fbx_import import BONE_NAMES, import_source
 from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
 from app.core.pose_animation_prompt import PreparedMotion, prepare_motion
-from app.core.pose_catalog_edit import apply_generated_entry, read_store
+from app.core.pose_catalog_edit import CatalogEditError, apply_generated_entry, read_store
 from app.core.task_queue import get_task_queue
+from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from app.imagegen.backends._gateway_job import _cancel_lost_job
 from app.imagegen.service import get_image_service
 
 logger = get_logger(__name__)
 
 TASK_TYPE = "pose_animation"
-MODEL_REVISION = "174fc755ec248d0c98f27759b7a95648e7f05905"
-CREDIT = "UniMate: Linzhan Mou, Jiahui Lei, Zhiyang Dou, Chenyue Cai, Chaoyue Song, Adam Finkelstein, Szymon Rusinkiewicz. Checkpoints © 2026 Linzhan Mou."
+STAGING_DIRNAME = ".pose_animation"
+CANDIDATE_MAX_AGE_DAYS = 7
+MAX_VARIANTS = 4
+_TASK_ID_RE = re.compile(r"task_[0-9a-f]+")
 CHECK_LIMITS = {"seam_distance": 4.1, "min_foot_y": -0.035,
                 "hips_y": {"stand": (0.95, 1.20), "seat": (0.55, 0.75),
                            "ground": (0.05, 0.45), "lie": (0.05, 0.30)}}
@@ -43,11 +55,31 @@ def _allowed_group(group: str) -> bool:
     return group in pose_catalog.get_groups() and group in CHECK_LIMITS["hips_y"]
 
 
+class ChoiceError(RuntimeError):
+    """A choice or discard the job's state refuses; ``status`` is the HTTP code."""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+
+
 def submit(mode: str, *, key: str = "", raw_text: str = "", text: str = "",
-           hint: str = "", seed: Optional[int] = None) -> str:
-    """Validate an entry before enqueueing a non-retryable generation."""
+           hint: str = "", seed: Optional[int] = None, backend: str = "",
+           variants: int = 1) -> str:
+    """Validate an entry, the model and the variant count before enqueueing a
+    non-retryable generation. An explicit model must be a usable chain member
+    now — refused here, before any LLM or GPU step."""
     if mode not in ("entry", "candidate", "free"):
         raise ValueError(f"unknown mode {mode}")
+    if isinstance(variants, bool) or not isinstance(variants, int) \
+            or not 1 <= variants <= MAX_VARIANTS:
+        raise ValueError(f"variants must be 1..{MAX_VARIANTS}")
+    backend = (backend or "").strip()
+    if backend:
+        route = get_image_service().resolve_animation_backend(backend)
+        limit = int(route.backend.motion_meta.get("max_variants", MAX_VARIANTS))
+        if variants > limit:
+            raise ValueError(f"'{backend}' allows at most {limit} variants")
     if mode == "entry":
         entry = pose_catalog.get_catalog("pose").get(key)
         if entry is None:
@@ -57,7 +89,8 @@ def submit(mode: str, *, key: str = "", raw_text: str = "", text: str = "",
         if not _allowed_group(entry.get("group", "")):
             raise ValueError("unsupported place type")
     return get_task_queue().submit(TASK_TYPE,
-        {"mode": mode, "key": key, "raw_text": raw_text, "text": text, "hint": hint, "seed": seed},
+        {"mode": mode, "key": key, "raw_text": raw_text, "text": text, "hint": hint, "seed": seed,
+         "backend": backend, "variants": variants},
         queue_name=TASK_TYPE, max_retries=0)
 
 
@@ -68,9 +101,46 @@ def recent_jobs(limit: int = 20) -> List[Dict]:
         payload, progress = task.get("payload") or {}, task.get("progress") or {}
         jobs.append({"task_id": task["task_id"], "status": task["status"],
             "mode": payload.get("mode", ""), "key": progress.get("key", payload.get("key", "")),
-            **{field: progress.get(field) for field in ("phase", "captions", "kind", "hub_job")},
+            **{field: progress.get(field) for field in ("phase", "captions", "kind", "hub_job", "state",
+                                                        "candidates", "backend", "generator", "chosen")},
             **{field: task.get(field) for field in ("error", "created_at", "completed_at")}})
     return jobs
+
+
+def _staging_root() -> Path:
+    return paths.get_clips_inbox_dir() / STAGING_DIRNAME
+
+
+def _staging(task_id: str) -> Path:
+    if not _TASK_ID_RE.fullmatch(str(task_id or "")):
+        raise ChoiceError(404, "unknown job")
+    root = _staging_root().resolve()
+    path = (root / task_id).resolve()
+    if path.parent != root:
+        raise ChoiceError(404, "unknown job")
+    return path
+
+
+def candidate_clip(task_id: str, index: int) -> Path:
+    """The FBX of one usable candidate, for the preview route."""
+    data = _read_candidates(_staging(task_id))
+    if data is None:
+        raise ChoiceError(410, "the candidates are gone")
+    cands = data.get("candidates") or []
+    if not isinstance(index, int) or not 0 <= index < len(cands) or not cands[index].get("fbx"):
+        raise ChoiceError(404, "no such candidate")
+    path = Path(cands[index]["fbx"]).resolve()
+    if _staging(task_id) not in path.parents or not path.is_file():
+        raise ChoiceError(410, "the candidates are gone")
+    return path
+
+
+def _read_candidates(staging: Path) -> Optional[Dict]:
+    try:
+        data = json.loads((staging / "candidates.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def check_clip(meta: dict, dump: dict, group: str, loop: bool) -> List[str]:
@@ -165,6 +235,8 @@ def _publish(*, tid, staging, kind, key, clip, mode, entry, raw_text, checked_gr
         free = paths.get_animation_clips_dir()
         free.mkdir(parents=True, exist_ok=True)
         previous = staging / "previous"
+        if previous.exists():                    # left over by a rolled-back attempt
+            shutil.rmtree(previous)
         previous.mkdir()
         targets = {suffix: free / (kind + suffix) for suffix in (".json", ".fbx")}
         saved, installed = [], []
@@ -233,6 +305,13 @@ def _handle(payload):
     mode, key = payload["mode"], payload.get("key", "")
     cancelled()
     update("llm")
+    service = get_image_service()
+    try:
+        route = service.resolve_animation_backend(payload.get("backend", ""))
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    meta = dict(route.backend.motion_meta)
+    variants = max(1, min(int(payload.get("variants") or 1), int(meta.get("max_variants", MAX_VARIANTS))))
     existing = None
     if mode == "entry":
         existing = pose_catalog.get_catalog("pose").get(key)
@@ -240,7 +319,9 @@ def _handle(payload):
             raise ValueError("entry missing or not solo")
         existing = dict(existing, key=key)
     motion_text = payload.get("raw_text", "") if mode == "candidate" else payload.get("text", "")
-    prepared = prepare_motion(mode, entry=existing, text=motion_text, hint=payload.get("hint", ""))
+    prepared = prepare_motion(mode, entry=existing, text=motion_text, hint=payload.get("hint", ""),
+                              caption_style=meta["caption_style"],
+                              segment_seconds=float(meta["segment_seconds"]))
     entry = existing if mode == "entry" else prepared.entry
     key = key if mode == "entry" else entry["key"]
     if not _allowed_group(entry.get("group", "")):
@@ -248,51 +329,201 @@ def _handle(payload):
     seed = payload.get("seed")
     if seed is None:
         seed = secrets.randbelow(2**31)
-    update("hub", captions=prepared.captions, loop=prepared.loop, entry=entry, key=key, seed=seed)
+    update("hub", captions=prepared.captions, loop=prepared.loop, entry=entry, key=key, seed=seed,
+           backend=route.backend.name, generator=meta["generator"], variants=variants)
     cancelled()
-    puppet = paths.get_puppet_file()
-    puppet_sha256 = hashlib.sha256(puppet.read_bytes()).hexdigest()
+    rig_source = meta["motion_source"] == "reference_rig"
+    source_file = paths.get_rig_file() if rig_source else paths.get_puppet_file()
     # The service checks this cancellation hook after the channel wait, before submit.
-    service = get_image_service()
-    result = service.generate_mesh_animation(str(puppet), prepared.captions, seed,
-        route=service.resolve_animation_backend(""),
+    result = service.generate_mesh_animation(str(source_file), prepared.captions, seed,
+        route=route, variants=variants,
         should_cancel=lambda: tq.is_task_cancelled(tid),
-        on_job_id=lambda job_id, backend_name: update("hub", hub_job=job_id, backend=backend_name), label=f"Pose animation: {key}")
+        on_job_id=lambda job_id, backend_name: update("hub", hub_job=job_id, backend=backend_name),
+        label=f"Pose animation: {key}")
+    verdicts = result.get("results") or []
     if not result.get("ok"):
-        raise RuntimeError(result.get("error") or "animation generation failed")
+        failed = "; ".join(f"variant {i + 1}: {v.get('reason')}" for i, v in enumerate(verdicts)
+                           if v.get("reason") != "unrequested result")
+        raise RuntimeError("no variant passed the check" + (f" — {failed}" if failed else "")
+                           + f" ({result.get('error') or 'animation generation failed'})")
     cancelled()
-    staging = paths.get_clips_inbox_dir() / ".unimate" / tid
+    staging = _staging_root() / tid
     staging.mkdir(parents=True, exist_ok=True)
-    glb = staging / "result.glb"
-    glb.write_bytes(result["blobs"][0])
-    update("convert", backend=result["backend"], hub_job=result.get("job_id") or progress.get("hub_job", ""))
-    converted = runner.run("glb_to_ref_fbx", inputs={"src": glb}, params={"ref_hips_m": 1.13032, "format": "glb"}, out_dir=staging)
+    kind = animation_clips.reserve_kind(key, pose_key=key)
+    update("convert", backend=result["backend"], hub_job=result.get("job_id") or progress.get("hub_job", ""),
+           kind=kind)
+    source = {"generator": meta["generator"], "generated_for_pose": key,
+              "captions": prepared.captions, "seed": seed, "hub_job": progress["hub_job"],
+              "backend": result["backend"], "model_revision": meta["model_revision"]}
+    if not rig_source:
+        source["puppet_sha256"] = hashlib.sha256(source_file.read_bytes()).hexdigest()
+    blobs = iter(result["blobs"])
+    candidates = []
+    for verdict in verdicts:
+        if verdict.get("reason") == "unrequested result":
+            continue
+        index = len(candidates)
+        cand = {"index": index, "ok": False, "reasons": [], "frames": None,
+                "duration_s": None, "fbx": "", "sidecar": ""}
+        candidates.append(cand)
+        if not verdict.get("ok"):
+            cand["reasons"] = [str(verdict.get("reason") or "rejected by the backend")]
+            continue
+        update("convert", variant=index)
+        try:
+            cand.update(_build_candidate(staging / f"cand_{index}", next(blobs), kind,
+                                         dict(source, variant_index=index), meta, prepared,
+                                         entry["group"], cancelled, update, index))
+        except _Cancelled:
+            raise RuntimeError("cancelled")
+        except Exception as exc:
+            logger.warning("pose animation %s variant %d failed: %s", tid, index, exc)
+            cand["reasons"] = [str(exc) or type(exc).__name__]
+    usable = [c for c in candidates if c["ok"]]
+    if not usable:
+        raise RuntimeError("no variant passed the check — " + "; ".join(
+            f"variant {c['index'] + 1}: {' '.join(c['reasons'])}" for c in candidates))
+    (staging / "candidates.json").write_text(json.dumps({
+        "task_id": tid, "created_at": utc_now_iso(), "mode": mode, "key": key, "entry": prepared.entry,
+        "raw_text": payload.get("raw_text", ""), "group": entry["group"], "kind": kind,
+        "candidates": [dict(c, fbx=str(c["fbx"]), sidecar=str(c["sidecar"])) for c in candidates]},
+        ensure_ascii=False, indent=2), encoding="utf-8")
+    public = [_public(c) for c in candidates]
+    update("choose", state="awaiting_choice", candidates=public, variant=None)
+    return {"state": "awaiting_choice", "candidates": public, "backend": result["backend"],
+            "generator": meta["generator"], "kind": kind, "key": key}
+
+
+class _Cancelled(Exception):
+    pass
+
+
+def _public(cand: Dict) -> Dict:
+    return {"index": cand["index"], "ok": cand["ok"], "reasons": list(cand["reasons"]),
+            "frames": cand["frames"], "duration_s": cand["duration_s"], "preview": bool(cand["fbx"])}
+
+
+def _build_candidate(cand_dir: Path, blob: bytes, kind: str, source: Dict, meta: Dict,
+                     prepared: PreparedMotion, group: str, cancelled, update, index: int) -> Dict:
+    """Convert, import, measure and check one variant into ``cand_dir``."""
+    def check_cancel():
+        try:
+            cancelled()
+        except RuntimeError:
+            raise _Cancelled()
+
+    cand_dir.mkdir(parents=True, exist_ok=True)
+    if blob[:4] == b"glTF":
+        src = cand_dir / "result.glb"
+        inputs, params = {"src": src}, {"ref_hips_m": 1.13032, "format": "glb"}
+    elif blob.startswith(b"Kaydara FBX Binary"):
+        src = cand_dir / "result.fbx"
+        inputs, params = {"src": src, "ref": paths.get_rig_file()}, {"format": "fbx"}
+    else:
+        raise ValueError("result is neither glTF nor FBX")
+    src.write_bytes(blob)
+    converted = runner.run("glb_to_ref_fbx", inputs=inputs, params=params, out_dir=cand_dir)
     if not converted.get("ok"):
         raise RuntimeError(converted.get("error") or "animation conversion failed")
-    cancelled()
-    kind = animation_clips.reserve_kind(key, pose_key=key)
-    update("import", kind=kind)
-    source = {"generator": "unimate", "pose_key": key, "captions": prepared.captions,
-        "seed": seed, "hub_job": progress["hub_job"], "backend": result["backend"],
-        "model_revision": MODEL_REVISION, "puppet_sha256": puppet_sha256}
+    check_cancel()
+    update("import", variant=index)
     clip = import_source(kind, Path(converted["outputs"]["motion"]), Path(converted["outputs"]["rest"]),
-        out_dir=staging / "clip", loop_s=1.333 if prepared.loop else None,
+        out_dir=cand_dir / "clip", loop_s=1.333 if prepared.loop else None,
         root_motion="strip", source_extra=source)
-    clip["meta"].update(license="CC-BY-NC-4.0", credit=CREDIT)
+    clip["meta"].update(license=meta["license"], credit=meta["credit"])
     Path(clip["sidecar"]).write_text(json.dumps(clip["meta"], ensure_ascii=False, indent=2), encoding="utf-8")
-    cancelled()
-    update("check")
-    measured = runner.run("clip_measure", inputs={"clip": clip["fbx"]}, out_dir=staging / "measure")
+    check_cancel()
+    update("check", variant=index)
+    measured = runner.run("clip_measure", inputs={"clip": clip["fbx"]}, out_dir=cand_dir / "measure")
     if not measured.get("ok"):
         raise RuntimeError(measured.get("error") or "clip measurement failed")
-    update("check", measurements=measured["data"])
-    reasons = check_clip(clip["meta"], measured["data"], entry["group"], prepared.loop)
-    if reasons:
-        raise RuntimeError("check failed: " + " ".join(reasons))
-    update("publish")
-    return _publish(tid=tid, staging=staging, kind=kind, key=key, clip=clip,
-                    mode=mode, entry=prepared.entry, raw_text=payload.get("raw_text", ""),
-                    checked_group=entry["group"])
+    check_cancel()
+    reasons = check_clip(clip["meta"], measured["data"], group, prepared.loop)
+    data = measured["data"]
+    return {"ok": not reasons, "reasons": reasons, "frames": data.get("frames"),
+            "duration_s": data.get("duration_s"), "fbx": str(clip["fbx"]) if not reasons else "",
+            "sidecar": str(clip["sidecar"]) if not reasons else ""}
+
+
+def _set_state(task_id: str, progress: Dict, **fields) -> None:
+    progress.update(**fields)
+    get_task_queue().update_task_progress(task_id, progress)
+
+
+def choose(task_id: str, index: int) -> Dict:
+    """Publish candidate ``index`` of a job waiting for a choice — exactly once."""
+    staging = _staging(task_id)
+    with keyed_lock("pose_animation_choice", task_id):
+        progress = get_task_queue().get_task_progress(task_id)
+        state = progress.get("state")
+        if not progress:
+            raise ChoiceError(404, "unknown job")
+        if state == "expired":
+            raise ChoiceError(410, "the candidates expired")
+        if state != "awaiting_choice":
+            raise ChoiceError(409, f"the job is not waiting for a choice ({state or progress.get('phase')})")
+        data = _read_candidates(staging)
+        if data is None:
+            raise ChoiceError(410, "the candidates are gone")
+        cands = data.get("candidates") or []
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(cands):
+            raise ChoiceError(404, "no such candidate")
+        cand = cands[index]
+        if not cand.get("ok"):
+            raise ChoiceError(422, "this variant did not pass the check")
+        try:
+            result = _publish(tid=task_id, staging=staging, kind=data["kind"], key=data["key"],
+                              clip={"sidecar": cand["sidecar"], "fbx": cand["fbx"]},
+                              mode=data["mode"], entry=data.get("entry"),
+                              raw_text=data.get("raw_text", ""), checked_group=data["group"])
+        except (RuntimeError, CatalogEditError) as exc:
+            raise ChoiceError(409, str(exc)) from exc
+        _set_state(task_id, progress, phase="published", state="published", chosen=index)
+        return {**(result if isinstance(result, dict) else {}), "kind": data["kind"],
+                "key": data["key"], "index": index}
+
+
+def discard(task_id: str) -> Dict:
+    """Drop every candidate of a job waiting for a choice."""
+    staging = _staging(task_id)
+    with keyed_lock("pose_animation_choice", task_id):
+        progress = get_task_queue().get_task_progress(task_id)
+        if not progress:
+            raise ChoiceError(404, "unknown job")
+        if progress.get("state") != "awaiting_choice":
+            raise ChoiceError(409, f"the job is not waiting for a choice ({progress.get('state') or progress.get('phase')})")
+        shutil.rmtree(staging, ignore_errors=True)
+        _set_state(task_id, progress, phase="discarded", state="discarded")
+        return {"task_id": task_id, "state": "discarded"}
+
+
+def sweep_candidates(max_age_days: int = CANDIDATE_MAX_AGE_DAYS) -> int:
+    """Remove job staging older than ``max_age_days`` (SYSTEM time); a job still
+    waiting becomes ``expired``. Returns how many folders went."""
+    root = _staging_root()
+    if not root.is_dir():
+        return 0
+    removed = 0
+    for folder in root.iterdir():
+        if not folder.is_dir() or not _TASK_ID_RE.fullmatch(folder.name):
+            continue
+        data = _read_candidates(folder)
+        try:
+            age_s = (utc_now() - parse_iso(data["created_at"])).total_seconds()
+        except (KeyError, TypeError, ValueError):
+            # No readable stamp (a failed or interrupted job): the folder's own age.
+            age_s = utc_now().timestamp() - folder.stat().st_mtime
+        if age_s < max_age_days * 86400:
+            continue
+        with keyed_lock("pose_animation_choice", folder.name):
+            shutil.rmtree(folder, ignore_errors=True)
+            progress = get_task_queue().get_task_progress(folder.name)
+            if progress.get("state") == "awaiting_choice":
+                _set_state(folder.name, progress, phase="expired", state="expired")
+        removed += 1
+    if removed:
+        logger.info("pose animation: removed %d expired candidate folder(s)", removed)
+    return removed
 
 
 def register() -> None:

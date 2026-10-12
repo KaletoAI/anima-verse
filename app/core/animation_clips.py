@@ -616,14 +616,15 @@ def save_transitions(entries: Any,
 
 def _origin(meta: Optional[Dict[str, Any]]) -> str:
     """Where the clip came from, in one word: ``cmu`` for a CMU-derived take,
-    ``unimate`` for a generated UniMate clip, otherwise the skeleton family
+    the generator (``unimate``, ``kimodo``, …) for a clip generated for a
+    pose, otherwise the skeleton family
     the FBX import retargeted from
     (``unity-humanoid``, …), ``unknown`` without a sidecar."""
     src = (meta or {}).get("source")
     if not isinstance(src, dict):
         return "unknown"
-    if src.get("generator") == "unimate":
-        return "unimate"
+    if src.get("generated_for_pose") and src.get("generator"):
+        return str(src["generator"])
     database = str(src.get("database") or "")
     if "CMU" in database:
         return "cmu"
@@ -1431,8 +1432,7 @@ def _owned_by(kind: str, pose_key: str) -> bool:
     except (OSError, ValueError):
         return False
     src = meta.get("source") if isinstance(meta, dict) else None
-    return (isinstance(src, dict) and src.get("generator") == "unimate"
-            and src.get("pose_key") == pose_key)
+    return isinstance(src, dict) and src.get("generated_for_pose") == pose_key
 
 
 def reserve_kind(base: str, *, pose_key: str) -> str:

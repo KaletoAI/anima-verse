@@ -3,8 +3,12 @@
 
 Usage: .venv/bin/python scripts/smoke_pose_animation_kind.py
 
-Names occupied anywhere require -u, then -u2; only the same UniMate pose
-owns a replaceable root clip. Numeric underscores must survive name parsing.
+Names occupied anywhere require -u, then -u2; only a clip generated for the
+same pose (source.generated_for_pose, any generator) owns a replaceable root
+clip — a Kimodo clip as much as a UniMate one, and a sidecar that names the
+pose only under the old "pose_key" field owns nothing. The listing reports a
+generated clip's origin as its generator. Numeric underscores must survive
+name parsing.
 """
 import json
 import os
@@ -45,14 +49,22 @@ def main():
         check("sweeping", "sweeping-u")
         put("sweeping-u")
         check("sweeping", "sweeping-u2")
-        put("sweeping", {"source": {"generator": "unimate", "pose_key": "sweeping"},
+        put("sweeping", {"source": {"generator": "unimate", "generated_for_pose": "sweeping"},
                          "license": "CC-BY-NC-4.0"})
         check("sweeping", "sweeping")
         entry = next(e for e in clips.clip_entries() if e["kind"] == "sweeping")
         view = clips.clip_view(entry)
         assert (view["origin"], view["generator"], view["license"]) == (
             "unimate", "unimate", "CC-BY-NC-4.0")
-        put("sweeping", {"source": {"generator": "unimate", "pose_key": "other"}})
+        put("sweeping", {"source": {"generator": "kimodo", "generated_for_pose": "sweeping"},
+                         "license": "NVIDIA-Open-Model-License"})
+        check("sweeping", "sweeping")
+        entry = next(e for e in clips.clip_entries() if e["kind"] == "sweeping")
+        view = clips.clip_view(entry)
+        assert (view["origin"], view["generator"]) == ("kimodo", "kimodo"), view
+        put("sweeping", {"source": {"generator": "unimate", "pose_key": "sweeping"}})
+        check("sweeping", "sweeping-u2")   # sweeping-u is still taken here
+        put("sweeping", {"source": {"generator": "unimate", "generated_for_pose": "other"}})
         (free / "sweeping-u.fbx").unlink()
         (free / "sweeping-u.json").unlink()
         check("sweeping", "sweeping-u")
@@ -60,11 +72,11 @@ def main():
             p.unlink()
         check("wave_02", "wave-02")
         check("Fegen Boden", "fegen boden")
-        put("licensed-only", {"source": {"generator": "unimate", "pose_key": "licensed-only"}},
+        put("licensed-only", {"source": {"generator": "unimate", "generated_for_pose": "licensed-only"}},
             library=licensed)
         check("licensed-only", "licensed-only-u")
-        put("owned-twin", {"source": {"generator": "unimate", "pose_key": "owned-twin"}})
-        put("owned-twin", {"source": {"generator": "other", "pose_key": "other"}},
+        put("owned-twin", {"source": {"generator": "unimate", "generated_for_pose": "owned-twin"}})
+        put("owned-twin", {"source": {"generator": "other", "generated_for_pose": "other"}},
             library=licensed)
         check("owned-twin", "owned-twin")
         put("invalid-owner")

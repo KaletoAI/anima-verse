@@ -21,6 +21,8 @@ Sub-tasks that run per tick (each with its own sub-frequency):
                                   GAME clock, at least one game day apart)
     - chat_retention            — daily (SYSTEM-time storage hygiene: summarized
                                   chat rows past memory.chat_retention_days)
+    - pose_animation_candidates — daily (SYSTEM-time storage hygiene: generated
+                                  pose-animation variants left undecided 7 days)
     - package_tick              — registered package continuations (world tick)
 
 The tick interval is configurable in Game Admin → Settings → Server, range
@@ -363,6 +365,20 @@ def _sub_chat_retention():
         logger.debug("chat_retention sub error: %s", e)
 
 
+def _sub_pose_animation_candidates():
+    """Remove generated pose-animation variants nobody chose within 7 days.
+
+    Storage hygiene on the SYSTEM clock, gated by the global freeze like the
+    other hygiene jobs (see ``_sub_chat_retention``). Daily: the horizon
+    counts whole days.
+    """
+    try:
+        from app.core.pose_animation import sweep_candidates
+        sweep_candidates()  # logs its own summary when something was removed
+    except Exception as e:
+        logger.debug("pose_animation_candidates sub error: %s", e)
+
+
 def _sub_reap_orphaned_avatars():
     """Remove avatar-only characters whose users have no valid session.
     Covers session timeout without logout; see plan-avatar-only-presence.md."""
@@ -530,6 +546,7 @@ _SUB_TASKS: List[tuple] = [
     # 86400s — the horizon counts whole SYSTEM days; a finer interval would
     # only re-scan the same rows for nothing.
     (_sub_chat_retention,            86400,                 "chat_retention"),
+    (_sub_pose_animation_candidates, 86400,                 "pose_animation_candidates"),
     (_sub_day_consolidation,         600,                   "day_consolidation"),
     (_sub_reap_orphaned_avatars,     300,                   "reap_orphaned_avatars"),
     (_sub_lora_library_sync,         3600,                  "lora_library_sync"),
