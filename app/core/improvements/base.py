@@ -17,9 +17,12 @@ class ParamField:
     options: Optional[List[Dict[str, str]]] = None   # [{"value","label"}] for enum/subject_kind
     required: bool = True
 
+    default: str = ""
+
     def to_dict(self) -> Dict[str, Any]:
         return {"key": self.key, "label": self.label, "kind": self.kind,
-                "options": self.options or [], "required": self.required}
+                "options": self.options or [], "required": self.required,
+                "own_options": self.options is not None, "default": self.default}
 
 
 class ImprovementType:
@@ -31,7 +34,7 @@ class ImprovementType:
         """Return normalised params or raise ValueError(message)."""
         out: Dict[str, Any] = {}
         for f in self.params_schema:
-            v = params.get(f.key, "")
+            v = params.get(f.key, f.default)
             v = str(v).strip() if v is not None else ""
             if f.required and not v:
                 raise ValueError(f"missing parameter '{f.key}'")

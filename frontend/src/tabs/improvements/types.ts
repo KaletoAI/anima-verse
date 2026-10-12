@@ -13,9 +13,11 @@ export interface ParamField {
   /**
    * The choices, when the type ships them. `enum`/`subject_kind` always do;
    * a backend field may, to narrow the global list to the backends its
-   * subject can actually use — empty means "offer the global list".
+   * subject can actually use. `own_options` preserves an explicitly empty list.
    */
   options: Array<{ value: string; label: string }>
+  own_options?: boolean
+  default?: string
   required: boolean
 }
 

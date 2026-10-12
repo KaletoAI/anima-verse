@@ -135,8 +135,8 @@ export function QueueView() {
 
   const typeLabel = useCallback((typeId: string) => {
     const found = types.find((x) => x.id === typeId)
-    return found ? found.label : typeId
-  }, [types])
+    return found ? t(found.label) : typeId
+  }, [types, t])
 
   const statusLabel = useCallback((value: string) => (
     STEP_STATUS_LABELS[value] ? t(STEP_STATUS_LABELS[value]) : value

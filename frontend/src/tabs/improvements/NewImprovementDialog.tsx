@@ -132,8 +132,8 @@ export function NewImprovementDialog({
     const values = type.params_schema
       .map((f) => params[f.key] || '')
       .filter(Boolean)
-    return values.length ? `${type.label}: ${values.join(', ')}` : type.label
-  }, [params, type])
+    return values.length ? `${t(type.label)}: ${values.join(', ')}` : t(type.label)
+  }, [params, type, t])
 
   const label = labelTouched ? labelDraft : defaultLabel
 
@@ -146,9 +146,11 @@ export function NewImprovementDialog({
 
   const pickType = useCallback((nextId: string) => {
     setTypeId(nextId)
-    setParams({})
+    setParams(Object.fromEntries(
+      (types.find((x) => x.id === nextId)?.params_schema || [])
+        .map((f) => [f.key, f.default || ''])))
     setPreview(null)
-  }, [])
+  }, [types])
 
   const missing = (type?.params_schema || [])
     .some((f) => f.required && !(params[f.key] || '').trim())
@@ -190,9 +192,11 @@ export function NewImprovementDialog({
                          onChange: (v: string) => void) => (
     <select className="ga-input" value={value}
       onChange={(e) => onChange(e.target.value)}>
-      <option value="">{t('— select —')}</option>
+      {!field.options.some((o) => o.value === '') && (
+        <option value="">{t('— select —')}</option>
+      )}
       {field.options.map((o) => (
-        <option key={o.value} value={o.value}>{o.label}</option>
+        <option key={o.value} value={o.value}>{t(o.label)}</option>
       ))}
     </select>
   )
@@ -209,7 +213,7 @@ export function NewImprovementDialog({
         // backends to what its subject can actually use (a character mesh
         // needs a rigging backend, and /world/props answers with the prop
         // backends only). Without one the global list stays the answer.
-        if (field.options.length) return renderOptions(field, value, onChange)
+        if (field.own_options ?? Boolean(field.options.length)) return renderOptions(field, value, onChange)
         return (
           <select className="ga-input" value={value}
             onChange={(e) => onChange(e.target.value)}>
@@ -220,7 +224,7 @@ export function NewImprovementDialog({
           </select>
         )
       case 'image_backend':
-        if (field.options.length) return renderOptions(field, value, onChange)
+        if (field.own_options ?? Boolean(field.options.length)) return renderOptions(field, value, onChange)
         return (
           <select className="ga-input" value={value}
             onChange={(e) => onChange(e.target.value)}>
@@ -255,7 +259,7 @@ export function NewImprovementDialog({
                 onChange={(e) => pickType(e.target.value)}>
                 <option value="">{t('— select —')}</option>
                 {types.map((x) => (
-                  <option key={x.id} value={x.id}>{x.label}</option>
+                  <option key={x.id} value={x.id}>{t(x.label)}</option>
                 ))}
               </select>
             </Field>
@@ -263,7 +267,7 @@ export function NewImprovementDialog({
             {type ? (
               <>
                 {type.params_schema.map((field) => (
-                  <Field key={field.key} label={field.label}>
+                  <Field key={field.key} label={t(field.label)}>
                     {renderField(field)}
                   </Field>
                 ))}

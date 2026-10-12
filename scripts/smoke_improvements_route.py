@@ -224,7 +224,7 @@ check("the fake type is listed with its label",
 check("…and its param schema comes as ParamField.to_dict()",
       r.json()[0]["params_schema"],
       [{"key": "backend", "label": "Backend", "kind": "text", "options": [],
-        "required": True}])
+        "required": True, "own_options": False, "default": ""}])
 
 # ── 2. create + immediate scan ───────────────────────────────────────────────
 print("\n2. POST /improvements creates and scans")

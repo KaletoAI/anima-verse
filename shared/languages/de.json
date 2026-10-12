@@ -8,6 +8,7 @@
     }
   },
   "translations": {
+    "Face retexture backend": "Backend für Gesichtskorrektur",
     "Texture re-encoding failed — the model was published without this improvement.": "Textur-Neukodierung fehlgeschlagen — das Modell wurde ohne diese Verbesserung veröffentlicht.",
     "The rigger merged the face material — the face correction may be lost. Revert restores the previous model.": "Der Rigger hat das Gesichtsmaterial zusammengeführt — die Gesichtskorrektur könnte verloren sein. Zurücksetzen stellt das vorherige Modell wieder her.",
     "Distance mesh rebuild failed": "Neubau des Distanz-Meshes fehlgeschlagen",
