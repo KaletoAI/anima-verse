@@ -61,6 +61,18 @@ def run(job):
     if missing:
         raise ValueError("bones missing against the reference rig: " + ", ".join(missing))
     scene = bpy.context.scene
+    if fmt == "fbx":
+        # The FBX importer adopts the file's frame rate; retime its keys to 30 fps
+        # over the same duration, so every clip leaves here at 30 fps.
+        src_fps = scene.render.fps / scene.render.fps_base
+        if abs(src_fps - 30.0) > 1e-6:
+            factor, start = 30.0 / src_fps, act.frame_range[0]
+            for fc in act.fcurves:
+                for kp in fc.keyframe_points:
+                    for point in (kp.co, kp.handle_left, kp.handle_right):
+                        point.x = start + (point.x - start) * factor
+                fc.update()
+            scene.render.fps, scene.render.fps_base = 30, 1.0
     scene.frame_start, scene.frame_end = int(act.frame_range[0]), int(act.frame_range[1])
     k = 1.0
     if fmt == "glb":
