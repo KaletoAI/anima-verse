@@ -87,10 +87,10 @@ def main():
         def snapshot():
             return ({p.name: p.read_bytes() for p in free.iterdir()}, hashlib.sha256(catalog.read_bytes()).hexdigest())
         def execute(error=""):
-            tid = pa.submit("entry", key="waving", seed=0)
+            tid = pa.submit("entry", key="waving", seed=0, variants=1)
             state["tid"] = tid
             try:
-                result = pa._handle({"mode": "entry", "key": "waving", "seed": 0, "_task_id": tid})
+                result = pa._handle({"mode": "entry", "key": "waving", "seed": 0, "_task_id": tid, "variants": 1})
                 tq._finish_task(tid, "completed", result=result)
                 assert result["state"] == "awaiting_choice"
                 pa.choose(tid, 0)

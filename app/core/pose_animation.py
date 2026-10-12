@@ -37,6 +37,7 @@ TASK_TYPE = "pose_animation"
 STAGING_DIRNAME = ".pose_animation"
 CANDIDATE_MAX_AGE_DAYS = 7
 MAX_VARIANTS = 4
+DEFAULT_VARIANTS = 3
 _TASK_ID_RE = re.compile(r"task_[0-9a-f]+")
 CHECK_LIMITS = {"seam_distance": 4.1, "min_foot_y": -0.035,
                 "hips_y": {"stand": (0.95, 1.20), "seat": (0.55, 0.75),
@@ -65,7 +66,7 @@ class ChoiceError(RuntimeError):
 
 def submit(mode: str, *, key: str = "", raw_text: str = "", text: str = "",
            hint: str = "", seed: Optional[int] = None, backend: str = "",
-           variants: int = 1) -> str:
+           variants: int = DEFAULT_VARIANTS) -> str:
     """Validate an entry, the model and the variant count before enqueueing a
     non-retryable generation. An explicit model must be a usable chain member
     now — refused here, before any LLM or GPU step."""
@@ -283,6 +284,10 @@ def _handle(payload):
     tq = get_task_queue()
     tid = payload["_task_id"]
     progress = tq.get_task_progress(tid)
+    if progress.get("state") == "awaiting_choice":
+        # The variants were ready when the server stopped: that work is done.
+        return {field: progress.get(field) for field in
+                ("state", "candidates", "backend", "generator", "kind", "key")}
     if progress:
         if progress.get("hub_job"):
             try:
@@ -311,7 +316,8 @@ def _handle(payload):
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
     meta = dict(route.backend.motion_meta)
-    variants = max(1, min(int(payload.get("variants") or 1), int(meta.get("max_variants", MAX_VARIANTS))))
+    variants = max(1, min(int(payload.get("variants") or DEFAULT_VARIANTS),
+                          int(meta.get("max_variants", MAX_VARIANTS))))
     existing = None
     if mode == "entry":
         existing = pose_catalog.get_catalog("pose").get(key)
@@ -465,12 +471,18 @@ def choose(task_id: str, index: int) -> Dict:
         data = _read_candidates(staging)
         if data is None:
             raise ChoiceError(410, "the candidates are gone")
+        if _age_s(data, staging) >= CANDIDATE_MAX_AGE_DAYS * 86400:
+            shutil.rmtree(staging, ignore_errors=True)
+            _set_state(task_id, progress, phase="expired", state="expired")
+            raise ChoiceError(410, "the candidates expired")
         cands = data.get("candidates") or []
         if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(cands):
             raise ChoiceError(404, "no such candidate")
         cand = cands[index]
         if not cand.get("ok"):
             raise ChoiceError(422, "this variant did not pass the check")
+        if not all(Path(cand.get(f) or "").is_file() for f in ("fbx", "sidecar")):
+            raise ChoiceError(410, "the files of this variant are gone")
         try:
             result = _publish(tid=task_id, staging=staging, kind=data["kind"], key=data["key"],
                               clip={"sidecar": cand["sidecar"], "fbx": cand["fbx"]},
@@ -497,6 +509,15 @@ def discard(task_id: str) -> Dict:
         return {"task_id": task_id, "state": "discarded"}
 
 
+def _age_s(data: Optional[Dict], folder: Path) -> float:
+    """Seconds since the candidates were ready (SYSTEM time). Without a
+    readable stamp (a failed or interrupted job) the folder's own age."""
+    try:
+        return (utc_now() - parse_iso(data["created_at"])).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        return utc_now().timestamp() - folder.stat().st_mtime
+
+
 def sweep_candidates(max_age_days: int = CANDIDATE_MAX_AGE_DAYS) -> int:
     """Remove job staging older than ``max_age_days`` (SYSTEM time); a job still
     waiting becomes ``expired``. Returns how many folders went."""
@@ -507,13 +528,7 @@ def sweep_candidates(max_age_days: int = CANDIDATE_MAX_AGE_DAYS) -> int:
     for folder in root.iterdir():
         if not folder.is_dir() or not _TASK_ID_RE.fullmatch(folder.name):
             continue
-        data = _read_candidates(folder)
-        try:
-            age_s = (utc_now() - parse_iso(data["created_at"])).total_seconds()
-        except (KeyError, TypeError, ValueError):
-            # No readable stamp (a failed or interrupted job): the folder's own age.
-            age_s = utc_now().timestamp() - folder.stat().st_mtime
-        if age_s < max_age_days * 86400:
+        if _age_s(_read_candidates(folder), folder) < max_age_days * 86400:
             continue
         with keyed_lock("pose_animation_choice", folder.name):
             shutil.rmtree(folder, ignore_errors=True)

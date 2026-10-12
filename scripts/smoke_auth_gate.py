@@ -418,6 +418,10 @@ for bad in ({}, {"index": "1"}, {"index": True}, {"index": 1.0}):
     response = pose_client.post("/poses/animations/task_ab12/choose", headers=admin_headers,
                                 json=bad)
     check(f"choose body {bad!r} rejected", response.status_code, 400)
+for raw in ("", "{"):
+    response = pose_client.post("/poses/animations/task_ab12/choose", headers=admin_headers,
+                                content=raw)
+    check(f"choose malformed body {raw!r} rejected", response.status_code, 400)
 with patch("app.core.pose_animation.choose", return_value={"kind": "waving", "index": 1}) as choose:
     response = pose_client.post("/poses/animations/task_ab12/choose", headers=admin_headers,
                                 json={"index": 1})
@@ -425,7 +429,7 @@ check("choose forwards", (response.status_code, choose.call_args.args), (200, ("
 with patch("app.core.pose_animation.discard", side_effect=ChoiceError(409, "decided")):
     response = pose_client.post("/poses/animations/task_ab12/discard", headers=admin_headers)
 check("discard maps ChoiceError", response.status_code, 409)
-for path in ("/poses/animations/task_ab12/candidates/4/clip.fbx",
+for path in ("/poses/animations/task_ab12/candidates/16/clip.fbx",
              "/poses/animations/task_ab12/candidates/x/clip.fbx",
              "/poses/animations/..%2Fetc/candidates/0/clip.fbx",
              "/poses/animations/TASK_AB/candidates/0/clip.fbx"):
@@ -435,10 +439,10 @@ with tempfile.TemporaryDirectory() as clip_dir:
     clip_file = Path(clip_dir) / "waving.fbx"
     clip_file.write_bytes(b"Kaydara FBX Binary  ")
     with patch("app.core.pose_animation.candidate_clip", return_value=clip_file) as cand:
-        response = pose_client.get("/poses/animations/task_ab12/candidates/2/clip.fbx",
+        response = pose_client.get("/poses/animations/task_ab12/candidates/4/clip.fbx",
                                    headers=admin_headers)
-    check("candidate clip served", (response.status_code, response.content, cand.call_args.args),
-          (200, b"Kaydara FBX Binary  ", ("task_ab12", 2)))
+    check("candidate clip served beyond index 3", (response.status_code, response.content,
+          cand.call_args.args), (200, b"Kaydara FBX Binary  ", ("task_ab12", 4)))
 print()
 print("B) character filter (SEC-6)")
 sens = auth_dependency._is_sensitive_character_path

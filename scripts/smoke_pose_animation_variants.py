@@ -39,6 +39,15 @@ Expected by hand:
 11. An explicit backend that the service refuses -> submit raises ValueError
     and nothing is queued; variants 5 -> ValueError.
 12. periodic_jobs runs the sweep daily (86400 s) under "pose_animation_candidates".
+Review fixes:
+ 2b. A restart that re-enters a job whose progress already says awaiting_choice
+     returns that finished result instead of failing it; no hub cancel.
+ 4b. candidates.json present but the chosen FBX gone -> 410.
+ 8b. All three hub verdicts ok, only "v2" fails its check: choose(1) publishes
+     the bytes of variant 1, not of the first one.
+ 9b. A candidate stamped 8 days ago is refused (410) by choose itself even
+     before any sweep ran, and its job becomes "expired".
+ 13. submit without a variant count queues 3 variants.
 """
 import json
 import os
@@ -172,6 +181,11 @@ def main():
                 assert all(p == {"format": "fbx"} and i == ["ref", "src"] for p, i in calls["convert"])
                 assert len(calls["convert"]) == 2
                 print("PASS 2: awaiting_choice with one usable, one hub-failed, one check-failed variant")
+                with patch.object(pa, "_cancel_lost_job") as lost:
+                    again = pa._handle({"mode": "entry", "key": "waving", "_task_id": tid})
+                assert again["state"] == "awaiting_choice" and again["candidates"] == cands
+                lost.assert_not_called()
+                print("PASS 2b: a restart after the variants were ready keeps the finished result")
                 listed = {j["task_id"]: j for j in pa.recent_jobs()}[tid]
                 assert (listed["state"], listed["backend"], listed["generator"]) == \
                     ("awaiting_choice", "kimodo", "kimodo"), listed
@@ -181,6 +195,12 @@ def main():
                 expect(404, pa.choose, tid, 7)
                 expect(404, pa.choose, "task_unknown", 0)
                 print("PASS 4: failed, out-of-range and unknown choices refused")
+                cand_fbx = Path(json.loads((staging(tid) / "candidates.json").read_text())["candidates"][0]["fbx"])
+                kept = cand_fbx.read_bytes()
+                cand_fbx.unlink()
+                expect(410, pa.choose, tid, 0)
+                cand_fbx.write_bytes(kept)
+                print("PASS 4b: a vanished candidate file is 410, not a crash")
                 out = pa.choose(tid, 0)
                 free = paths.get_animation_clips_dir()
                 assert (free / "waving.fbx").read_bytes() == FBX + b"v0"
@@ -204,20 +224,27 @@ def main():
                 assert not staging(tid2).exists() and tq.get_task_progress(tid2)["state"] == "discarded"
                 expect(409, pa.choose, tid2, 0)
                 print("PASS 7: discard removes the candidates; a later choice is refused")
-                tid3, _ = job(variants=2)
+                state["verdicts"] = [{"n": i, "ok": True, "reason": ""} for i in range(3)]
+                tid3, _ = job(variants=3)
+                state["verdicts"] = None
+                assert [c["ok"] for c in tq.get_task_progress(tid3)["candidates"]] == [True, True, False]
                 fresh = tq_mod.TaskQueue()
                 with patch.object(pa, "get_task_queue", return_value=fresh):
-                    pa.choose(tid3, 0)
+                    pa.choose(tid3, 1)
                 assert tq.get_task_progress(tid3)["state"] == "published"
-                print("PASS 8: a choice survives a restart in awaiting_choice")
-                old, young = job(variants=2)[0], job(variants=2)[0]
+                assert (free / "waving.fbx").read_bytes() == FBX + b"v1"
+                print("PASS 8: a choice survives a restart and publishes exactly the chosen variant")
+                old, young, stale = (job(variants=2)[0] for _ in range(3))
                 from app.core.timeutils import utc_now
                 from datetime import timedelta
-                for t, days in ((old, 8), (young, 6)):
+                for t, days in ((old, 8), (young, 6), (stale, 8)):
                     f = staging(t) / "candidates.json"
                     data = json.loads(f.read_text())
                     data["created_at"] = (utc_now() - timedelta(days=days)).isoformat()
                     f.write_text(json.dumps(data))
+                expect(410, pa.choose, stale, 0)
+                assert tq.get_task_progress(stale)["state"] == "expired" and not staging(stale).exists()
+                print("PASS 9b: choose itself refuses a candidate older than 7 days")
                 assert pa.sweep_candidates() == 1
                 assert not staging(old).exists() and staging(young).exists()
                 assert tq.get_task_progress(old)["state"] == "expired"
@@ -238,6 +265,11 @@ def main():
                         raise AssertionError(f"submit accepted {kwargs}")
                 assert len(tq.list_recent_tasks(pa.TASK_TYPE, limit=100)) == before
                 print("PASS 11: refused backend or variant count queues nothing")
+                queued = pa.submit("free", text="wave")
+                payload = next(t for t in tq.list_recent_tasks(pa.TASK_TYPE, limit=100)
+                               if t["task_id"] == queued)["payload"]
+                assert payload["variants"] == 3, payload
+                print("PASS 13: the default variant count is 3")
         finally:
             pc.catalog_path = original_path
             pc.reload_catalogs()

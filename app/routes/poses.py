@@ -367,14 +367,15 @@ async def animation_backends(_: Dict[str, Any] = Depends(require_admin)) -> Dict
     import asyncio
     from app.imagegen.service import get_image_service
 
-    backends = await asyncio.to_thread(get_image_service().animation_backends)
+    # The service singleton may build itself (availability probes): off the loop.
+    backends = await asyncio.to_thread(lambda: get_image_service().animation_backends())
     return {"backends": backends, "default_variants": DEFAULT_ANIMATION_VARIANTS}
 
 
 @router.get("/animations/{task_id}/candidates/{index}/clip.fbx")
 def animation_candidate_clip(request: Request,
                              task_id: str = PathParam(..., pattern=_TASK_ID_PATTERN),
-                             index: int = PathParam(..., ge=0, le=3),
+                             index: int = PathParam(..., ge=0, le=15),
                              _: Dict[str, Any] = Depends(require_admin)):
     """One candidate's FBX for the preview player."""
     from app.core import pose_animation
@@ -395,7 +396,10 @@ async def choose_animation(request: Request,
     import asyncio
     from app.core import pose_animation
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="body must be a JSON object") from exc
     index = body.get("index") if isinstance(body, dict) else None
     if isinstance(index, bool) or not isinstance(index, int):
         raise HTTPException(status_code=400, detail="index must be an integer")
