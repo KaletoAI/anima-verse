@@ -43,6 +43,15 @@ interior surface vertices have chain weight 1, including the contact side.
 The second contact fixture has radius .03, centre y=-.0998; its nearest
 surface is .0002 m behind the tube's back y=-.13. Opposing normals prohibit
 welding. All 608 blob positions stay unweighted even with contact_ramp=.08.
+For exact contact (body centre y=-.10), the tangent copies at y=-.13
+share exported weights despite separate segmentation. With following disabled,
+flat side normals give two tube and two body copies at z=.91: their average
+has chain total .5 and body shares .175,.125,.1,.1. Both chain links and the
+two largest body shares survive, so normalize .5+.175+.125=.8 to obtain
+chain total 5/8. At z=.80 the cap adds a third full tube copy: three tube
+and two body copies average to chain total .6 and body .14,.1,.08,.08.
+One chain link and three body influences survive, giving .6/.92=15/23.
+Body positions away from this seam stay unweighted.
 The offset fixture adds a 2 mm front bulge: for theta_j=2*pi*j/32,
 x=.03*cos(theta_j), y=-.16+.03*sin(theta_j)-.002*max(0,-sin(theta_j)).
 The reference is -.10 and threshold .061 selects the 15 negative-sine samples.
@@ -789,11 +798,18 @@ def main():
                                params={'groups':[contact_group]},out_dir=root/'exact-rig',timeout_s=180)
         check(exact_result['data']['status']=='applied','exact capped contact applies')
         exact_rows=exported_vertices(Path(exact_result['outputs']['model']).read_bytes(),with_normals=True)
-        exact_blob=[weights for point,weights,normal in exact_rows if .7999<point[1]<.9801
+        exact_blob=[(point,weights) for point,weights,normal in exact_rows if .7999<point[1]<.9801
                     and abs((point[0]**2+(point[2]-.1)**2)**.5-.03)<.0000001
                     and normal[0]*point[0]+normal[2]*(point[2]-.1)>.025]
-        check(len(exact_blob)>=608 and all(not any(n.startswith('ExampleLink') for n in row) for row in exact_blob),
-              'exact contact at the sharp capped rim never bridges to the blob')
+        check(len(exact_blob)>=608 and all(not any(n.startswith('ExampleLink') for n in row)
+              for point,row in exact_blob if abs(point[0])>1e-7 or abs(point[2]-.13)>1e-7),
+              'exact contact body positions away from the coincident seam stay unweighted')
+        for z,count,expected in ((.91,4,5/8),(.8,5,15/23)):
+            seam=[w for point,w,_ in exact_rows if close(point,[0,z,.13],1e-6)]
+            check(len(seam)==count and all(w==seam[0] for w in seam),
+                  'exact contact copies share one exported weight set at '+str(z))
+            check(all(abs(sum(v for n,v in w.items() if n.startswith('ExampleLink'))-expected)<1e-6
+                      for w in seam),'exact contact averaged chain total '+str((z,expected)))
         with patch.object(runner,'SCRIPTS_DIR',fixtures):
             curved=runner.run('fixture',params={'bones':list(BASE_JOINT_NAMES),'curved':True},out_dir=root/'curved',timeout_s=180)
         arc_group=copy.deepcopy(groups[1])

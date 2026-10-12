@@ -593,9 +593,12 @@ weight to the chain's declared parent on every captured vertex, including fallba
 Outside the captured part, optional contact following spreads the motion across
 adjacent body surfaces without changing mesh topology. A contact face shares a retained
 tube vertex (total chain weight >= 0.9) outside `attachment_ring_max` with a
-non-tube vertex. Its eligible non-tube vertices form the d=0 boundary. A
-multi-source shortest edge-path search extends up to `contact_follow_distance`
-metres; no position welding or face diagonals participate. The chain weight is
+non-tube vertex. Its eligible non-tube vertices form the d=0 boundary.
+An eligible non-tube copy coincident with an outside full tube vertex also
+seeds at d=0, even when no face spans the copies. This uses a fixed 0.00001 m
+position tolerance, independent of pack parameters and segmentation normals.
+A multi-source shortest edge-path search extends up to `contact_follow_distance`
+metres; propagation uses source edges, without face diagonals. The chain weight is
 `contact_follow_weight * smoothstep(1 - d / contact_follow_distance)`; zero
 weight disables following. Link shares come from the nearest full-weight tube
 vertex, so internal link blends remain aligned. Ring-zone points and points
@@ -629,13 +632,30 @@ The remainder follows the existing original-group normalization and
 source-to-parent transfer. Ramped vertices use the same four-influence packing
 as followers, preserving the chain total and link shares while fitting the
 original remainder into the available slots. A link without a core vertex
-fails normally; the declared distance is never shortened automatically. With no contact faces
-the weights stay bit-identical. `contact_inside_ramped` counts original tube
+fails normally; the declared distance is never shortened automatically. With no
+contact faces the inside ramp leaves the tube plan untouched; the final copy
+unification rule below still applies. `contact_inside_ramped` counts original tube
 vertices whose weights were scaled, including coincident copies;
 `contact_inside_weight_min` reports their minimum exported total chain weight
 (or 1 when none were scaled). `contact_faces_outside_ring`,
 `contact_tissue_vertices_weighted`, `contact_follow_weight_max` and
 `contact_follow_weight_mean` report the boundary and actual exported weights.
+After source-to-parent transfer, follower handling and the final four-influence
+pass, coincident copies always share exported weights. Otherwise a weight split
+across a crease tears the mesh open under motion. Within the same fixed
+0.00001 m tolerance, connected groups with differing exported weight dictionaries
+receive their average, reduced to the four largest weights (ties prefer the
+lower exported joint index), then normalized and written to every copy.
+Already-agreeing groups are untouched. This can turn an open seam into local
+stretch under motion; counts and posed metrics use the unified exported values.
+This final rule also applies when contact following or the inside ramp is disabled.
+Final averaging can restore body/source weights from a non-tube copy onto its
+captured tube copy, or make that tube copy partial outside the attachment ring.
+The source-transfer and full-tube rules above hold before this final averaging;
+final defect counters can therefore be nonzero on deliberately unified copies.
+Each `appendage_chain` reports `coincident_groups_unified`: the global number
+of positional groups changed in this export, repeated for each chain group.
+Groups with zero chain weight also count; it is not a per-link or per-copy count.
 The opt-in real smoke compares max and p99 stretch over the same complete
 contact neighbourhood at 70 degrees, checks topology and tube weights, and
 reports `far_chain_weight_max` (must be zero) and `above_stop_weighted`.
@@ -649,18 +669,20 @@ included for diagnosis. `captured_outside_base_tube` must be zero;
 `cut`; a curved measured tube can leave that cylinder. The actual tube bound
 is checked by `captured_beyond_tube_radius`, which must be zero.
 `partial_weight_vertices` counts tube chain weights in (0.1,0.9), while
-`partial_outside_attachment_ring` also counts tube vertices only and must be zero.
+`partial_outside_attachment_ring` also counts tube vertices only and is expected
+to be zero before final coincident-copy unification.
 Intentionally inside-ramped vertices are excluded from this defect counter
 and from `uncaptured_in_part`; `partial_weight_vertices` still includes them.
 `tube_radius` and
 `captured_tube_distance_max` report metres of nearest-centroid-polyline distance;
 `tube_centerline` records those measured slice centres in world-space metres.
-`captured_beyond_tube_radius` and `weighted_outside_part` (excluding declared
-contact followers) must be zero.
+`captured_beyond_tube_radius` must be zero. `weighted_outside_part` (excluding
+declared contact followers) is expected to be zero before final copy unification.
 `uncaptured_in_part` checks retained connected surface vertices outside the
 attachment ring; a point merely inside the old straight cylinder is not assumed
 to belong to the part.
-Fingerprint version 11 rebuilds from prerig for the inside contact ramp. `link_blend` replaces the old
+Fingerprint version 12 rebuilds from prerig for coincident contact seeds and
+shared exported copy weights. `link_blend` replaces the old
 2-link `blend_start`/`blend_width` parameters; remove those from declarations.
 The existing required declaration
 fields `leak_radius_limit` and `reweight_factor` remain validated but no longer

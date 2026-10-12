@@ -19,6 +19,10 @@ from mathutils import Matrix, Vector
 from mathutils.kdtree import KDTree
 from mathutils.bvhtree import BVHTree
 
+# Metres: positional copies at UV seams and creases must deform together.
+# This is independent of the normal-aware segmentation weld and pack params.
+COINCIDENT_EPSILON_M = 1e-5
+
 PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'band_upper_bone': 'bone',
                      'band_lower_offset': 'number',
@@ -1129,7 +1133,7 @@ def appendage_plan(group, p, co, edges, bones, normals, faces):
 
 
 def contact_follow_weights(p, co, edges, faces, plan):
-    """Shared-face boundary is d=0; propagate only along eligible source edges.
+    """Shared-face and coincident-copy seeds are d=0; follow eligible edges.
 
     The nearest-tube distance guard applies to every follower, including points
     dominated by declared source joints. Such points qualify only within the
@@ -1152,7 +1156,7 @@ def contact_follow_weights(p, co, edges, faces, plan):
     full = {i for i in tube if sum(w.get(i,0.) for w in weights.values()) >= .9}
     outside = {i for i in full if attachment_distance(i) > p['attachment_ring_max']}
     contacts = [face for face in faces if any(i in outside for i in face) and any(i not in tube for i in face)]
-    if not p['contact_follow_weight'] or not contacts:
+    if not p['contact_follow_weight'] or not outside:
         return follow, len(contacts)
     kd = KDTree(len(full))
     for i in sorted(full):
@@ -1175,6 +1179,16 @@ def contact_follow_weights(p, co, edges, faces, plan):
         adjacency.setdefault(a,[]).append(b)
         adjacency.setdefault(b,[]).append(a)
     distances = {i:0. for face in contacts for i in face if eligible(i)}
+    # A crease can have separate tube/body copies without any shared face.
+    # Only outside full tube vertices seed, with the same eligibility guards.
+    copies = KDTree(len(co))
+    for i,c in enumerate(co):
+        copies.insert(c,i)
+    copies.balance()
+    for i in sorted(outside):
+        for j in sorted(j for _,j,_ in copies.find_range(co[i],COINCIDENT_EPSILON_M)):
+            if eligible(j):
+                distances[j] = 0.
     queue = [(0.,i) for i in distances]
     heapq.heapify(queue)
     while queue:
@@ -1188,7 +1202,7 @@ def contact_follow_weights(p, co, edges, faces, plan):
             if candidate < limit and candidate < distances.get(j,float('inf')):
                 distances[j] = candidate
                 heapq.heappush(queue,(candidate,j))
-    for i,d in distances.items():
+    for i,d in sorted(distances.items()):
         value = p['contact_follow_weight']*smooth(1-d/limit)
         source = nearest[i]
         total = sum(w.get(source,0.) for w in weights.values())
@@ -1197,6 +1211,68 @@ def contact_follow_weights(p, co, edges, faces, plan):
             if share*value > 0:
                 follow[name][i] = share*value
     return follow, len(contacts)
+
+
+def unify_coincident_weights(co, owners, joint_index, final_weights):
+    """Unify differing exported copies after all transfer and influence limits.
+
+    Positional connected components ignore normals. Agreeing groups receive no
+    writes. Return the global changed-group count, including body-only groups.
+    """
+    copies = KDTree(len(co))
+    for i,c in enumerate(co):
+        copies.insert(c,i)
+    copies.balance()
+    parent = list(range(len(co)))
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i,c in enumerate(co):
+        for j in sorted(j for _,j,_ in copies.find_range(c,COINCIDENT_EPSILON_M) if j > i):
+            a,b = root(i),root(j)
+            parent[max(a,b)] = min(a,b)
+    groups = {}
+    for i in range(len(co)):
+        groups.setdefault(root(i),[]).append(i)
+    changed = 0
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        weights = []
+        for i in group:
+            mesh,vi = owners[i]
+            weights.append({mesh.vertex_groups[ge.group].name:ge.weight
+                            for ge in mesh.data.vertices[vi].groups
+                            if mesh.vertex_groups[ge.group].name in joint_index and ge.weight > 0})
+        if all(w == weights[0] for w in weights[1:]):
+            continue
+        # Rank exactly rounded sums: dividing per copy, or summing in copy
+        # order, lets rounding break ties that the lower joint index decides.
+        # Normalising the kept sums gives the same shares as averaging.
+        names = {name for w in weights for name in w}
+        average = {name:math.fsum(w.get(name,0.) for w in weights) for name in names}
+        kept = sorted(average.items(),key=lambda entry:(-entry[1],joint_index[entry[0]]))[:4]
+        total = sum(value for _,value in kept)
+        for i in group:
+            mesh,vi = owners[i]
+            for ge in list(mesh.data.vertices[vi].groups):
+                vg = mesh.vertex_groups[ge.group]
+                if vg.name in joint_index:
+                    vg.remove([vi])
+            for name,value in kept:
+                vg = mesh.vertex_groups.get(name) or mesh.vertex_groups.new(name=name)
+                vg.add([vi],value/total,'REPLACE')
+            for values in final_weights.values():
+                values.pop(i,None)
+            # Blender stores float weights; metrics use the values actually written.
+            for ge in mesh.data.vertices[vi].groups:
+                name = mesh.vertex_groups[ge.group].name
+                if name in final_weights and ge.weight > 0:
+                    final_weights[name][i] = ge.weight
+        changed += 1
+    return changed
 
 
 def contact_inside_weights(p, co, edges, faces, plan, follow):
@@ -1599,8 +1675,11 @@ def extension_bones(args):
             vg.add([vi],w/total,'REPLACE')
             if vg.name in final_weights:
                 final_weights[vg.name][i]=w/total
+    coincident_groups_unified = unify_coincident_weights(co,owners,joint_index,final_weights)
     # Counts and posed geometry must describe the representation we export.
     for g,_,plan in plans:
+        if g['op'] == 'appendage_chain':
+            plan[2]['coincident_groups_unified'] = coincident_groups_unified
         for name in plan[1]:
             plan[1][name]=final_weights[name]
         if g['op'] == 'appendage_chain' and any(not any(v > .9 for v in w.values()) for w in plan[1].values()):
