@@ -462,7 +462,8 @@ class ImageService:
             api_url = os.environ.get(f"{prefix}API_URL", "").strip()
             cost = float(os.environ.get(f"{prefix}COST", "0"))
 
-            if not api_url:
+            backend_class = BACKEND_REGISTRY.get(api_type)
+            if not api_url and getattr(backend_class, "REQUIRES_URL", True):
                 logger.warning("Instanz %d (%s): Keine API_URL konfiguriert, ueberspringe", n, name)
                 continue
 
@@ -473,7 +474,13 @@ class ImageService:
                 continue
 
             try:
-                if api_type in ("openai_chat", "civitai"):
+                if api_type in ("openai_upscale", "local_upscale"):
+                    backend = backend_class(
+                        name=name, api_url=api_url, cost=cost, env_prefix=prefix,
+                        upscale_scale=float(os.environ.get(f"{prefix}UPSCALE_SCALE", "") or 2),
+                        color_fix=(os.environ.get(f"{prefix}COLOR_FIX", "true").lower() not in ("false", "0", "no", "off")),
+                        max_side=int(os.environ.get(f"{prefix}MAX_SIDE", "") or 4096))
+                elif api_type in ("openai_chat", "civitai"):
                     api_key = os.environ.get(f"{prefix}API_KEY", "")
                     model = os.environ.get(f"{prefix}MODEL", "")
                     backend = backend_class(
@@ -712,6 +719,89 @@ class ImageService:
         ``list_mesh_backends``: the two lists never overlap."""
         return [b for b in self.list_available_backends(media="mesh")
                 if getattr(b, "category", "") == MESH2MESH_CATEGORY]
+
+    def list_upscale_backends(self) -> List[ImageBackend]:
+        """Dedicated options; ordinary image availability lists exclude these."""
+        return [b for b in self.backends if b.instance_enabled and b.available
+                and getattr(b, "MEDIA_TYPE", "image") == "image"
+                and b.category == "upscale"]
+
+    def upscale_image(self, image_bytes: bytes, *, backend_glob: str = "",
+                      character_name: str = "", cache_path=None) -> Dict[str, Any]:
+        """Run the upscale occasion with optional verified, atomic reference caching."""
+        import io
+        import tempfile
+        from PIL import Image
+        from app.core.timeutils import utc_now_iso
+        from app.imagegen.upscale import cache_identity, normalize_output
+        from app.imagegen.routing import route_meta, run_routed, resolve_spec
+        if not media_generation_enabled():
+            raise MediaGenerationDisabled("Media generation is disabled for this world")
+        with Image.open(io.BytesIO(image_bytes)) as decoded:
+            decoded.load()
+            input_size = list(decoded.size)
+        primary = None
+        if backend_glob.strip():
+            _, primary = resolve_spec("upscale", backend_glob, character=character_name, pool=self.pool)
+            if primary is None:
+                raise ValueError("Selected upscale backend is unavailable — no automatic fallback")
+
+        def render(b):
+            identity = cache_identity(image_bytes, b)
+            image_path = Path(cache_path) if cache_path else None
+            meta_path = image_path.with_suffix('.json') if image_path else None
+            if image_path:
+                try:
+                    meta = json.loads(meta_path.read_text())
+                    raw = image_path.read_bytes()
+                    with Image.open(io.BytesIO(raw)) as cached:
+                        cached.load()
+                        valid = cached.format == 'PNG' and cached.mode == 'RGB' and list(cached.size) == meta['out']
+                    if (valid and meta.get('identity') == identity and
+                            meta.get('sha256') == hashlib.sha256(raw).hexdigest()):
+                        return {'bytes': raw, **meta['upscale'], 'cached': True}, b
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
+            if min(max(input_size) * b.upscale_scale, b.max_side) <= max(input_size):
+                return {'bytes': image_bytes, 'backend': b.name, 'scale': b.upscale_scale,
+                        'in': input_size, 'out': input_size, 'cached': False,
+                        'status': 'skipped', 'reason': 'already large enough'}, b
+
+            def op(bb):
+                def generate():
+                    blobs = bb.generate('', '', {'image_bytes': image_bytes})
+                    if len(blobs or []) != 1:
+                        raise ValueError('Upscale must return exactly one image')
+                    raw, size = normalize_output(blobs[0], bb.max_side)
+                    if max(size) <= max(input_size):
+                        raise ValueError('Upscale result is not larger than the input')
+                    return {'bytes': raw, 'backend': bb.name, 'scale': bb.upscale_scale,
+                            'in': input_size, 'out': size, 'cached': False, 'status': 'applied'}
+                return self.run_on_backend_channel(bb, generate, task_type='image_upscale', agent_name=character_name)
+            result, used = self.run_on_backend(b, op, character_name=character_name)
+            if image_path:
+                image_path.parent.mkdir(parents=True, exist_ok=True)
+                meta = {'identity': identity, 'sha256': hashlib.sha256(result['bytes']).hexdigest(),
+                        'in': input_size, 'out': result['out'], 'created_at': utc_now_iso(),
+                        'upscale': {k: v for k, v in result.items() if k != 'bytes'}}
+                for target, raw in ((image_path, result['bytes']),
+                                    (meta_path, json.dumps(meta, indent=2).encode())):
+                    temporary = None
+                    try:
+                        with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as handle:
+                            temporary = Path(handle.name)
+                            handle.write(raw)
+                        os.replace(temporary, target)
+                    finally:
+                        if temporary is not None:
+                            temporary.unlink(missing_ok=True)
+            return result, used
+
+        if primary is not None:
+            (result, used), route = render(primary), None
+        else:
+            (result, used), route = run_routed('upscale', render, character=character_name, pool=self.pool)
+        return {**result, **route_meta(route)}
 
     def list_face_retexture_backends(self) -> List[ImageBackend]:
         """Available projection backends, separate from generation/reduction."""

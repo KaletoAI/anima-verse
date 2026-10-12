@@ -93,6 +93,7 @@ def _publish_signature(character_name: str, directory: Path, stage: Path,
             return None
         changed = []
         snapshot_removed = False
+        removed_refs = []
         try:
             for relative in current_files.keys() - staged_files.keys():
                 current_files[relative].unlink(missing_ok=True)
@@ -114,11 +115,21 @@ def _publish_signature(character_name: str, directory: Path, stage: Path,
                 if snapshot.exists():
                     os.replace(snapshot, removed_snapshot)
                     snapshot_removed = True
+            if (stage / ".replace-source").exists():
+                for ref in (directory / "facefix-ref").glob(f"{signature}.*"):
+                    if not ref.resolve().is_relative_to(directory.resolve()):
+                        raise ValueError("Reference cache path escapes the model directory")
+                    removed = stage / ".removed-ref" / ref.name
+                    removed.parent.mkdir(exist_ok=True)
+                    os.replace(ref, removed)
+                    removed_refs.append((removed, ref))
             prepared_snapshot = stage / ".face-snapshot"
             if prepared_snapshot.exists() and not snapshot.exists():
                 snapshot.parent.mkdir(exist_ok=True)
                 os.replace(prepared_snapshot, snapshot)
         except Exception:
+            for removed, ref in reversed(removed_refs):
+                os.replace(removed, ref)
             if snapshot_removed:
                 os.replace(stage / ".removed-snapshot", directory / "rollback" / signature)
             if rollback is not None:
@@ -129,6 +140,8 @@ def _publish_signature(character_name: str, directory: Path, stage: Path,
                     else:
                         target.unlink(missing_ok=True)
             raise
+        for removed, ref in removed_refs:
+            removed.unlink(missing_ok=True)
         if snapshot_removed:
             shutil.rmtree(removed_snapshot)
         if changed or invalidate:
@@ -762,6 +775,10 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
     out.update(list_mesh_backends(occasion=mesh_occasion_for_rig(rig)))
     out["rig_backends"] = list_rig_backends()
     from app.imagegen.service import get_image_service
+    out["upscale_backends"] = [{"name": b.name, "model": b.model}
+                               for b in get_image_service().list_upscale_backends()]
+    from app.imagegen.routing import explain_occasion
+    out["upscale_runnable"] = bool(explain_occasion("upscale").get("resolved"))
     out["face_retexture_backends"] = [{"name": b.name, "model": b.model}
                                      for b in get_image_service().list_face_retexture_backends()]
     if path:
@@ -803,8 +820,8 @@ def _purge_combination(out_dir: Path, signature: str, *,
     # (refine.apply_script backs up only the first time) — the incident of
     # 2026-08-06: a fresh bake's pristine copy was silently never kept.
     from app.blender.refine import RAW_DIR_NAME
-    for directory in (out_dir / "unrigged", out_dir / "facefix", out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME):
-        if (preserve_unrigged and directory.name == "unrigged") or (preserve_sources and directory.name in ("unrigged", "facefix")):
+    for directory in (out_dir / "unrigged", out_dir / "facefix", out_dir / "facefix-ref", out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME):
+        if (preserve_unrigged and directory.name == "unrigged") or (preserve_sources and directory.name in ("unrigged", "facefix", "facefix-ref")):
             continue
         for old in directory.glob(f"{signature}.*"):
             old.unlink()
@@ -2224,7 +2241,8 @@ def _model_revision_unlocked(path: Optional[Path]) -> str:
 
 @_serial_model
 def face_retexture_model(character_name: str, signature: Optional[str] = None, *,
-                         backend_glob: str = "", params=None) -> Dict[str, Any]:
+                         backend_glob: str = "", params=None, upscale: bool = True,
+                         upscale_backend_glob: str = "") -> Dict[str, Any]:
     """Project the original photo, then rebuild every derived asset in the stage."""
     import tempfile
     from app.core import face_retexture
@@ -2240,6 +2258,29 @@ def face_retexture_model(character_name: str, signature: Optional[str] = None, *
     original = root / 'unrigged' / f'{signature}.glb'
     meta = _read_sidecar(original)
     image = face_retexture.flatten_photo(face_retexture.photo_path(character_name, signature, meta).read_bytes())
+    upscale_meta = {'status': 'off'}
+    if upscale:
+        from app.imagegen.base import GenerationCancelled, GpuTaskCancelled, MediaGenerationDisabled, BackendBusyError
+        from app.core.upscale_reference import require_upscale_backend
+        if upscale_backend_glob:
+            require_upscale_backend(upscale_backend_glob, character_name)
+        publication = getattr(_staging, 'source_publications', {}).get(character_name)
+        cache_root = publication['directory'] if publication else root
+        cache_path = cache_root / 'facefix-ref' / f'{signature}.png'
+        if not cache_path.resolve().is_relative_to(cache_root.resolve()):
+            raise ValueError('Reference cache path escapes the model directory')
+        try:
+            improved = get_image_service().upscale_image(
+                image, backend_glob=upscale_backend_glob, character_name=character_name,
+                cache_path=cache_path)
+            image = improved['bytes']
+            upscale_meta = {k: v for k, v in improved.items() if k != 'bytes'}
+        except (GenerationCancelled, GpuTaskCancelled, MediaGenerationDisabled):
+            raise
+        except Exception as exc:
+            upscale_meta = {'status': 'failed', 'error': str(exc),
+                            'busy': isinstance(exc, BackendBusyError)}
+            logger.warning('Reference upscale failed: %s', exc)
     with tempfile.TemporaryDirectory(prefix='.face-job-', dir=root) as tmp:
         result = get_image_service().generate_face_retexture(
             str(original), image, tmp, controls, backend_glob, character_name)
@@ -2257,7 +2298,7 @@ def face_retexture_model(character_name: str, signature: Optional[str] = None, *
         _publish_model_bytes(source, raw)
         face_meta = {'status': 'applied', 'at': utc_now_iso(),
                      'backend': result.get('backend', ''), 'job_id': result.get('job_id', ''),
-                     'params': controls, 'result_sha256': result.get('result_sha256', ''),
+                     'params': controls, 'upscale': upscale_meta, 'result_sha256': result.get('result_sha256', ''),
                      'result_url': result.get('result_url', ''),
                      'route_meta': {k: result[k] for k in ('routing', 'fallback_from') if k in result}}
         _publish_sidecar(source, {'face_retexture': face_meta})
@@ -2307,7 +2348,8 @@ def revert_face_retexture(character_name: str, signature: Optional[str] = None) 
 
 
 def trigger_face_retexture(character_name: str, signature: str, *,
-                           backend_glob: str = '', params=None) -> Dict[str, Any]:
+                           backend_glob: str = '', params=None, upscale: bool = True,
+                           upscale_backend_glob: str = '') -> Dict[str, Any]:
     """Track orchestration on the character's shared generation guard."""
     from app.core.task_queue import get_task_queue
     from app.core.face_retexture import safe_signature, validated_params
@@ -2332,7 +2374,8 @@ def trigger_face_retexture(character_name: str, signature: str, *,
         try:
             with _char_lock(character_name):
                 result = face_retexture_model(character_name, signature,
-                                               backend_glob=backend_glob, params=controls)
+                                               backend_glob=backend_glob, params=controls,
+                                               upscale=upscale, upscale_backend_glob=upscale_backend_glob)
         except Exception as exc:
             result = {'ok': False, 'error': str(exc)}
             logger.exception('Face retexture failed for %s', character_name)

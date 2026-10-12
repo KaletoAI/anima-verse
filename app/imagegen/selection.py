@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from app.core.log import get_logger
 from app.core.provider_queue import TooManyJobsError
 from app.imagegen.base import (BackendBusyError, BackendFailedError,
-                               GatewayRejectedError, GpuTaskCancelled,
+                               GatewayRejectedError, GpuTaskCancelled, GenerationCancelled,
                                ImageBackend, MediaGenerationDisabled)
 
 logger = get_logger("image_gen")
@@ -45,6 +45,17 @@ def _no_channel_error():
         class _Never(Exception):
             pass
         return _Never
+
+
+def is_generator_backend(b) -> bool:
+    """Whether an entry can generate ordinary images (not a special image operation)."""
+    if isinstance(b, dict):
+        media = b.get("media", "image")
+        category = b.get("category", "")
+    else:
+        media = getattr(b, "MEDIA_TYPE", "image")
+        category = getattr(b, "category", "")
+    return media == "image" and category not in {"inpaint", "upscale"}
 
 
 class BackendPool:
@@ -123,8 +134,7 @@ class BackendPool:
     def _select_backend(self, has_input_image: bool = False) -> Optional[ImageBackend]:
         """Picks the cheapest available and globally enabled IMAGE backend."""
         available = [b for b in self.backends if b.available and b.instance_enabled
-                     and not self._is_inpaint_backend(b)
-                     and self._media_of(b) == "image"]
+                     and is_generator_backend(b)]
         available = self._prefer_img2img(available, has_input_image)
         return self.pick_lowest_cost(available, rotation_key="_select_backend")
 
@@ -145,7 +155,7 @@ class BackendPool:
             is_enabled = b.instance_enabled and bool(agent_inst.get("enabled", True))
             if is_enabled:
                 # Inpaint + video backends never enter normal agent image render
-                if self._is_inpaint_backend(b) or self._media_of(b) != "image":
+                if not is_generator_backend(b):
                     continue
                 available.append(b)
 
@@ -189,7 +199,8 @@ class BackendPool:
             forced = next(
                 (b for b in self.backends
                  if b.name == pref and b.available and b.instance_enabled
-                 and self._media_of(b) == media),
+                 and self._media_of(b) == media
+                 and (media != "image" or is_generator_backend(b))),
                 None)
             if not forced:
                 logger.warning(
@@ -213,20 +224,9 @@ class BackendPool:
         matches = [b for b in self.backends
                    if fnmatch.fnmatch(b.name.lower(), pl)
                    and b.available and b.instance_enabled
-                   and self._media_of(b) == media]
-        # Globs skip inpaint backends so "*"/"Flux*" never lands a normal
-        # render there — UNLESS the pattern matches ONLY inpaint backends
-        # (e.g. "Qwen Inpaint*"): then the caller explicitly aimed at them
-        # and excluding everything would silently fall back elsewhere.
-        has_wildcard = any(ch in pat for ch in "*?[")
-        if has_wildcard:
-            non_inpaint = [b for b in matches
-                           if not self._is_inpaint_backend(b)]
-            if non_inpaint:
-                matches = non_inpaint
-            # A glob leaves the choice to us — with an input image, prefer the
-            # img2img backends among the matches. An exact name never gets
-            # second-guessed.
+                   and self._media_of(b) == media
+                   and (media != "image" or is_generator_backend(b))]
+        if any(ch in pat for ch in "*?["):
             matches = self._prefer_img2img(matches, has_input_image)
         if not matches:
             return None
@@ -258,7 +258,7 @@ class BackendPool:
         for b in self.backends:
             if not b.available:
                 continue
-            if self._media_of(b) != media:
+            if self._media_of(b) != media or (media == "image" and not is_generator_backend(b)):
                 continue
             # Per-agent flag restricts only — see _select_backend_for_agent.
             agent_inst = agent_instances.get(b.name) or {}
@@ -337,7 +337,7 @@ class BackendPool:
             logger.warning("Backend-Runner: %s — per-user job limit reached, "
                            "no cooldown", backend.name)
             raise
-        except GpuTaskCancelled:
+        except (GpuTaskCancelled, GenerationCancelled):
             # The user cancelled this job in the queue panel — not the
             # backend's fault and not load either: no cooldown, re-raised typed
             # so neither a retry nor the image routing starts it elsewhere.
@@ -410,7 +410,7 @@ class BackendPool:
         for b in self.backends:
             if not b.instance_enabled:
                 continue
-            if self._media_of(b) != "image":
+            if not is_generator_backend(b):
                 continue
             agent_inst = agent_instances.get(b.name, {})
             if "enabled" in agent_inst and not agent_inst["enabled"]:
@@ -454,6 +454,7 @@ class BackendPool:
         # Probe fresh availability of the matching candidates, then match.
         for b in self.backends:
             if (b.instance_enabled and self._media_of(b) == media
+                    and (media != "image" or is_generator_backend(b))
                     and fnmatch.fnmatch(b.name.lower(), pl)):
                 b.check_availability()
         target = self.match_backend(backend_name, media=media,

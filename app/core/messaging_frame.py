@@ -13,6 +13,8 @@ Files:
   worlds/<world>/ui/messaging_frame.png    (frame with a transparent display area)
   worlds/<world>/ui/messaging_frame.json   {prompt, bbox, frame_size, generated_at}
 """
+from app.imagegen.selection import is_generator_backend
+
 import json
 import time
 from pathlib import Path
@@ -249,7 +251,7 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
     if backend_glob:
         known = [b.name for b in getattr(image_skill, "backends", [])
                  if getattr(b, "instance_enabled", False)
-                 and getattr(b, "MEDIA_TYPE", "image") == "image"]
+                 and is_generator_backend(b)]
         unknown = unknown_backend_error(backend_glob, known)
         if unknown:
             return {"status": "error", "error": unknown}

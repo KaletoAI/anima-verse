@@ -19,6 +19,8 @@ Failure semantics mirror the busy/cooldown contract in ``base.py``:
   * gateway rejects the payload (400/413) or a started job dies on an INPUT
     error -> ``GatewayRejectedError`` (terminal, no cooldown — the reason is
     the client's, not the backend's)
+  * a gateway-side cancelled job -> ``GenerationCancelled`` (terminal,
+    no retry, fallback or cooldown)
   * a started job fails with "park timeout" / "backend busy" ->
     ``BackendBusyError`` (load, no cooldown)
   * gateway loses the job (repeated 404) or keeps failing the poll (5xx /
@@ -39,7 +41,7 @@ import requests
 
 from app.core.log import get_logger
 from app.imagegen.base import (GATEWAY_503_FLAP_WAITS_S, BackendBusyError,
-                               GatewayInputMismatchError, GatewayRejectedError,
+                               GatewayInputMismatchError, GatewayRejectedError, GatewayOutputError,
                                GenerationCancelled,
                                ImageBackend, is_gateway_busy_502,
                                retry_after_seconds)
@@ -235,7 +237,7 @@ def poll_job(backend: ImageBackend, job_id: str, *,
             sd = poll.json() if poll.content else {}
             status = (sd.get("status") or "").lower() if isinstance(sd, dict) else ""
             if status == "cancelled":
-                raise GatewayRejectedError(f"{backend.name}: job {job_id} was cancelled")
+                raise GenerationCancelled(job_id)
             if status in ("failed", "error"):
                 detail = str(sd.get("error") or sd)
                 if _TERMINAL_JOB_ERROR.search(detail):
@@ -269,7 +271,7 @@ def poll_job(backend: ImageBackend, job_id: str, *,
             if status in ("done", "completed"):
                 return on_done(sd, time.time() - start)
             # queued / running → keep waiting
-        except (GatewayRejectedError, GatewayInputMismatchError, BackendBusyError):
+        except (GatewayRejectedError, GatewayInputMismatchError, BackendBusyError, GenerationCancelled, GatewayOutputError):
             # A verdict about the INPUT (or a job that parked out on load) —
             # raised above or by ``on_done`` — not a failed poll. Counting it
             # as one would keep polling a job that is already decided.
@@ -294,3 +296,22 @@ def poll_job(backend: ImageBackend, job_id: str, *,
         pass
     # Load, not a defect -> no cooldown (the fallback engine reads this).
     raise BackendBusyError("timeout" if started else "gateway queue")
+
+
+def download_result(backend: ImageBackend, url: str):
+    """Validate the origin of every redirect before forwarding credentials."""
+    from urllib.parse import urljoin, urlparse
+    def origin(value):
+        parsed = urlparse(value)
+        if parsed.username or parsed.password or parsed.scheme not in ("http", "https"):
+            raise GatewayRejectedError("Invalid gateway result URL")
+        return parsed.scheme.lower(), parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+    expected = origin(backend.api_url)
+    for _ in range(6):
+        if origin(url) != expected:
+            raise GatewayRejectedError("Gateway result URL has a foreign origin; download refused")
+        response = requests.get(url, headers=backend._headers(), timeout=300, allow_redirects=False)
+        if response.status_code not in (301, 302, 303, 307, 308):
+            return response
+        url = urljoin(url, response.headers.get("Location", ""))
+    raise GatewayRejectedError("Too many gateway result redirects")

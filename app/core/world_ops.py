@@ -4,6 +4,8 @@ Logic moved 1:1 out of the route handlers (code-review section 5b); the
 routes remain thin HTTP adapters (auth, request parsing, response types).
 HTTPExceptions that were embedded mid-logic moved along unchanged.
 """
+from app.imagegen.selection import is_generator_backend
+
 import asyncio
 import math
 import os
@@ -2609,7 +2611,7 @@ def build_imagegen_options(occasion: str = "", character: str = "", *,
             continue
         # IMAGE options only — video backends have their own selection
         # surface (animate dialog) and must not appear as image targets.
-        if getattr(b, "MEDIA_TYPE", "image") != "image":
+        if not is_generator_backend(b):
             continue
         opt = {
             "type": "backend",
@@ -3682,7 +3684,7 @@ async def generate_time_variant_core(location_name: str, image_name: str,
     # source image is the image being edited). An inpaint backend does NOT
     # fit — it expects a mask, which the day/night convert does not provide.
     def _suits(b) -> bool:
-        return ((getattr(b, "category", "") or "") != "inpaint"
+        return (is_generator_backend(b)
                 and int(getattr(b, "ref_slot_count", 0) or 0) >= 1)
 
     backend = None

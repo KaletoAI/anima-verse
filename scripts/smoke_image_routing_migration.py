@@ -86,7 +86,8 @@ B6 the admin schema declares none of the removed fields, and the
 C) Configuration kinds: categories are trimmed and lowercased, and neither
 config descriptors nor live mesh backends expose a rig property. A matching
 img2mesh default seeds all four mesh occasions; mesh2mesh never counts.
-Missing backend lists seed eight current aliases without rig declarations;
+Missing backend lists seed eleven entries: eight original aliases, the P1
+face alias and the two P2 upscalers, without backend rig declarations;
 explicit lists (including empty lists) are retained.
 """
 import ast
@@ -319,7 +320,7 @@ def part_c():
           (False, 1))
     c = {"image_generation": {}}
     check("C3 missing list seeded", (cfgmod._seed_default_mesh_backends(c),
-                                     len(c["image_generation"]["backends"])), (True, 8))
+                                     len(c["image_generation"]["backends"])), (True, 11))
     c = {"image_generation": {"backends": []}}
     check("C3 emptied list stays empty", (cfgmod._seed_default_mesh_backends(c),
                                           c["image_generation"]["backends"]), (False, []))

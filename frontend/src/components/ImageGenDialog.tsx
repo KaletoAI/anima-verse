@@ -1,3 +1,4 @@
+import { isGeneratorBackend } from '../lib/imageBackends'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
@@ -416,7 +417,7 @@ export function ImageGenDialog({
   // offline ones keep their "(offline?)" label from the server.
   const entries = useMemo<ImagegenOption[]>(() => {
     if (!options) return []
-    const list = options.filter((o) => o.category !== 'inpaint')
+    const list = options.filter(isGeneratorBackend)
     return [...list.filter((o) => o.available !== false),
             ...list.filter((o) => o.available === false)]
   }, [options])

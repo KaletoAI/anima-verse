@@ -1,5 +1,4 @@
 {
-  "Texture re-encoding failed — the model was published without this improvement.": "Textur-Neukodierung fehlgeschlagen — das Modell wurde ohne diese Verbesserung veröffentlicht.",
   "_meta": {
     "label": "Deutsch",
     "language": "de",
@@ -9,6 +8,7 @@
     }
   },
   "translations": {
+    "Texture re-encoding failed — the model was published without this improvement.": "Textur-Neukodierung fehlgeschlagen — das Modell wurde ohne diese Verbesserung veröffentlicht.",
     "The rigger merged the face material — the face correction may be lost. Revert restores the previous model.": "Der Rigger hat das Gesichtsmaterial zusammengeführt — die Gesichtskorrektur könnte verloren sein. Zurücksetzen stellt das vorherige Modell wieder her.",
     "Distance mesh rebuild failed": "Neubau des Distanz-Meshes fehlgeschlagen",
     "Face retexture…": "Gesichtstextur korrigieren…",
@@ -2495,6 +2495,13 @@
     "Variants ready — choose one": "Varianten fertig — bitte eine wählen",
     "waiting for your choice": "wartet auf deine Auswahl",
     "Choose variant ({n})": "Variante wählen ({n})",
-    "Variants expired": "Varianten abgelaufen"
+    "Variants expired": "Varianten abgelaufen",
+    "Upscale reference first": "Referenzbild zuerst hochskalieren",
+    "Upscale backend": "Upscale-Backend",
+    "Reference upscaled": "Referenzbild hochskaliert",
+    "Reference upscale failed — using original photo": "Hochskalierung fehlgeschlagen — Originalfoto wird verwendet",
+    "Reference upscale skipped — already large enough": "Hochskalierung übersprungen — Referenzbild bereits groß genug",
+    "Reference upscale off": "Hochskalierung ausgeschaltet",
+    "Cached": "Aus Cache"
   }
 }

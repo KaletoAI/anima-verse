@@ -1,3 +1,4 @@
+import { isGeneratorBackend } from '../../lib/imageBackends'
 /**
  * Create one improvement entry.
  *
@@ -120,7 +121,7 @@ export function NewImprovementDialog({
   // normal render; available backends sort first, offline ones keep the
   // server's own "(offline?)" label.
   const imageEntries = useMemo(() => {
-    const list = (imageOptions || []).filter((o) => o.category !== 'inpaint')
+    const list = (imageOptions || []).filter(isGeneratorBackend)
     return [...list.filter((o) => o.available !== false),
             ...list.filter((o) => o.available === false)]
   }, [imageOptions])

@@ -1454,7 +1454,7 @@ async def imagegen_backend_models(backend_name: str,
     try:
         if api_type in ("together", "openai_diffusion", "localai", "openai_chat",
                         "localai_video", "together_video", "openai_video",
-                        "openai_mesh", "openai_mesh_animation"):
+                        "openai_mesh", "openai_mesh_animation", "openai_upscale"):
             base = api_url if api_url.endswith("/v1") else (api_url + "/v1")
             # api_key optional for localai/localai_video (LocalAI without auth);
             # gateway/Together need it

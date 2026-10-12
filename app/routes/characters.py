@@ -1754,6 +1754,7 @@ def start_character_face_retexture(character_name: str, signature: str = "",
                                    feather: float = Query(0.18, ge=0, le=0.5),
                                    render_resolution: int = Query(768, ge=256, le=2048),
                                    yaw: float = Query(0, ge=-180, le=180), lang: str = "en",
+                                   upscale: bool = True, upscale_backend: str = "",
                                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Validate the preflight, then start a tracked correction job."""
     from app.core import face_retexture
@@ -1769,7 +1770,14 @@ def start_character_face_retexture(character_name: str, signature: str = "",
     ready = face_retexture.runnable(character_name, backend)
     if not eligibility["ok"] or not ready["ok"]:
         return _face_retexture_localize({"ok": False, "problems": eligibility["problems"] + ready["problems"]}, lang)
-    return trigger_face_retexture(character_name, signature, backend_glob=backend, params=controls)
+    if upscale and upscale_backend:
+        from app.core.upscale_reference import require_upscale_backend
+        try:
+            upscale_backend = require_upscale_backend(upscale_backend, character_name).name
+        except ValueError as exc:
+            raise HTTPException(503, str(exc)) from exc
+    return trigger_face_retexture(character_name, signature, backend_glob=backend, params=controls,
+                                  upscale=upscale, upscale_backend_glob=upscale_backend)
 
 
 @router.post("/{character_name}/model3d/face-retexture/revert")

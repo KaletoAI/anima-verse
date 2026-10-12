@@ -4,6 +4,8 @@ Logic moved 1:1 out of the route handlers (code-review section 5a); the
 routes remain thin HTTP adapters (auth, request parsing, response types).
 HTTPExceptions that were embedded mid-logic moved along unchanged.
 """
+from app.imagegen.selection import is_generator_backend
+
 from fastapi import HTTPException
 from typing import Any, Dict, List, Optional
 from app.core.log import get_logger
@@ -1704,6 +1706,7 @@ def _media_backend_options(media: str) -> List[Dict[str, str]]:
         return []
     picked = [b for b in svc.backends
               if getattr(b, "MEDIA_TYPE", "image") == media
+              and (media != "image" or is_generator_backend(b))
               and getattr(b, "instance_enabled", False) and b.available]
     picked.sort(key=lambda b: (b.cost if b.cost is not None else 999999, b.name))
     return [{"value": b.name, "label": b.name} for b in picked]

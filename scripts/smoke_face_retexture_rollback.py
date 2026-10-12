@@ -14,6 +14,12 @@ incomplete manifest refuses revert. Source replacement removes both correction
 and snapshot; export carries corrected GLB/JSON but excludes diagnostic/snapshot.
 After a mesh checkpoint, a failed final publication keeps the new static mesh
 and permanently removes the previous rollback snapshot; Revert must refuse.
+P2: 16x16 reference -> 32x32 output (scale 2). Upscale off submits original;
+failed/busy submits original with a nested warning, without a busy cooldown.
+Cancel and media-off propagate and publish nothing. Cache survives face/rig
+failure and revert, rerig preserves the nested status, source purge/GC remove
+it, and snapshot/export/publication never contain it. Parameter or corrupted
+cache changes must cause a backend call. Explicit unavailable picks refuse start.
 All fixtures are constructed here; fake backends never use a network or Blender.
 Usage: ./.venv/bin/python scripts/smoke_face_retexture_rollback.py
 """
@@ -396,7 +402,170 @@ def main():
                 finally:
                     ticker.cancel()
             asyncio.run(run_routes())
-    print('PASS: face retexture stages, provenance, first snapshot, byte-exact revert, rerig, source replacement, export, 5 fatal/5 nonfatal failures, damaged snapshots and four admin HTTP routes')
+            # P2 integration uses the real service, publication and face/rig orchestration.
+            from app.imagegen.base import BackendBusyError, GenerationCancelled, MediaGenerationDisabled
+            from PIL import Image
+            import io
+            class Upscale(ImageBackend):
+                def __init__(self):
+                    super().__init__('upscale-fixture', '', 0, 'fake_upscale', 'FACE_UPSCALE_SMOKE_')
+                    self.category = 'upscale'
+                    self._available = True
+                    self.instance_enabled = True
+                    self.model = 'fixture-v1'
+                    self.upscale_scale = 2
+                    self.max_side = 512
+                    self.color_fix = True
+                    self.calls = 0
+                    self.failure = None
+                def check_availability(self): return self.available
+                def _generate(self, prompt, negative, params):
+                    self.calls += 1
+                    if self.failure: raise self.failure
+                    decoded = Image.open(io.BytesIO(params['image_bytes']))
+                    out = io.BytesIO()
+                    decoded.resize((decoded.width*2, decoded.height*2)).save(out, format='PNG')
+                    return [out.getvalue()]
+            up = Upscale()
+            svc._pool.backends.append(up)
+            with patch.object(routing, '_rules', side_effect=lambda occasion: ['rigger'] if occasion == 'rig_humanoid' else ['upscale-fixture'] if occasion == 'upscale' else []):
+                seed()
+                original_photo = face_retexture.flatten_photo(photo())
+                calls = up.calls
+                assert model3d.face_retexture_model('demo', sig, upscale=False)['ok']
+                assert up.calls == calls and face.calls[-1]['reference_image_bytes'] == original_photo
+                assert model3d._read_sidecar(root / f'{sig}.glb')['face_retexture']['upscale']['status'] == 'off'
+                seed()
+                assert model3d.face_retexture_model('demo', sig)['ok']
+                sent = face.calls[-1]['reference_image_bytes']
+                assert Image.open(io.BytesIO(sent)).size == (32, 32) and sent != original_photo
+                status = model3d._read_sidecar(root / f'{sig}.glb')['face_retexture']['upscale']
+                assert status['in'] == [16, 16] and status['out'] == [32, 32] and not status['cached']
+                cache = root / 'facefix-ref' / f'{sig}.png'
+                assert cache.read_bytes() == sent
+                assert not any(r.parts[0] == 'facefix-ref' for r in model3d._signature_files(root, sig))
+                manifest = json.loads((snap / 'manifest.json').read_text())
+                assert not any(entry['path'].startswith('facefix-ref/') for entry in manifest['files'])
+                assert not any('facefix-ref' in p.parts for p in export_files(root, [sig]))
+                calls = up.calls
+                assert model3d.face_retexture_model('demo', sig)['ok'] and up.calls == calls
+                assert model3d._read_sidecar(root / f'{sig}.glb')['face_retexture']['upscale']['cached']
+                assert model3d.rerig_model('demo', sig)['ok'] and cache.exists()
+                assert model3d._read_sidecar(root / f'{sig}.glb')['face_retexture']['upscale']['cached']
+                assert model3d.get_model3d_info('demo')['upscale_backends'][0]['name'] == up.name
+                assert model3d.revert_face_retexture('demo', sig)['ok'] and cache.exists()
+                assert model3d.face_retexture_model('demo', sig)['ok'] and up.calls == calls
+                up.color_fix = False
+                assert model3d.face_retexture_model('demo', sig)['ok'] and up.calls == calls+1
+                calls = up.calls
+                cache.write_bytes(b'broken')
+                assert model3d.face_retexture_model('demo', sig)['ok'] and up.calls == calls+1
+                # Failed projection and failed rig retain the useful cache.
+                for target in (face, rig):
+                    calls = up.calls
+                    target.failure = GatewayRejectedError('fixture failure after upscale')
+                    try: model3d.face_retexture_model('demo', sig)
+                    except GatewayRejectedError: pass
+                    else: raise AssertionError('Face/rig fixture should fail')
+                    target.failure = None
+                    assert cache.exists() and up.calls == calls
+                for failure in (RuntimeError('upscale fixture failed'), BackendBusyError('upscale fixture busy')):
+                    seed()
+                    up._available = True
+                    up._cooldown_until = 0
+                    up.failure = failure
+                    assert model3d.face_retexture_model('demo', sig)['ok']
+                    assert face.calls[-1]['reference_image_bytes'] == original_photo
+                    status = model3d._read_sidecar(root / f'{sig}.glb')['face_retexture']['upscale']
+                    assert status['status'] == 'failed' and status['error']
+                    if isinstance(failure, BackendBusyError):
+                        assert status['busy'] and not up.in_cooldown()
+                for failure in (GenerationCancelled('upscale-fixture-job'), MediaGenerationDisabled('fixture disabled')):
+                    seed()
+                    up._available = True
+                    up._cooldown_until = 0
+                    up.failure = failure
+                    before = files()
+                    face_count = len(face.calls)
+                    try: model3d.face_retexture_model('demo', sig)
+                    except type(failure): pass
+                    else: raise AssertionError('Cancel/master switch must propagate')
+                    assert files() == before and len(face.calls) == face_count and not snap.exists()
+                    assert not up.in_cooldown()
+                # Real Hub polling cancellation: zero face calls/publications,
+                # no CPU fallback and no cooldown (expected by hand from 13a.7).
+                from app.imagegen.backends.openai_upscale import OpenAIUpscaleBackend
+                from app.imagegen.backends import _gateway_job
+                from types import SimpleNamespace
+                hub = OpenAIUpscaleBackend('hub-cancel', 'https://gateway.invalid', 1, 'FACE_UPSCALE_SMOKE_')
+                hub._schema = (True, 'reference', frozenset({'scale'}))
+                hub._available = True
+                hub.instance_enabled = True
+                hub.poll_interval = 0
+                svc._pool.backends.append(hub)
+                seed()
+                before = files()
+                face_count, cpu_count = len(face.calls), up.calls
+                reply = SimpleNamespace(status_code=200, content=b'present', json=lambda: {'status': 'cancelled'})
+                schema_reply = SimpleNamespace(status_code=200, raise_for_status=lambda: None,
+                    json=lambda: {'images': [{'name': 'reference', 'required': True}], 'params': ['scale']})
+                def hub_response(url, **kwargs):
+                    return schema_reply if url.endswith('/schema') else reply
+                with patch.object(routing, '_rules', side_effect=lambda occasion: ['hub-cancel', 'upscale-fixture'] if occasion == 'upscale' else ['rigger'] if occasion == 'rig_humanoid' else []), patch('app.imagegen.backends.openai_upscale.submit_job', return_value='cancelled-job'), patch.object(_gateway_job.requests, 'get', side_effect=hub_response):
+                    try:
+                        model3d.face_retexture_model('demo', sig)
+                    except GenerationCancelled:
+                        pass
+                    else:
+                        raise AssertionError('Gateway cancellation must abort the face run')
+                assert files() == before and not snap.exists()
+                assert len(face.calls) == face_count and up.calls == cpu_count
+                assert not hub.in_cooldown()
+                svc._pool.backends.remove(hub)
+                seed()
+                up.failure = None
+                up._available = True
+                up._cooldown_until = 0
+                assert model3d.face_retexture_model('demo', sig)['ok'] and cache.exists()
+                from app.core.outfit_cache_gc import _mesh_files
+                assert cache in _mesh_files('demo')[sig]
+                model3d._purge_combination(root, sig, preserve_sources=True)
+                assert cache.exists()
+                model3d._purge_combination(root, sig)
+                assert not cache.exists() and not cache.with_suffix('.json').exists()
+                # Real source publication also purges the cache outside its stage.
+                seed()
+                assert model3d.face_retexture_model('demo', sig)['ok'] and cache.exists()
+                with tempfile.TemporaryDirectory(dir=root) as replacement_stage:
+                    stage = Path(replacement_stage)
+                    (stage / '.replace-source').touch()
+                    (stage / f'{sig}.glb').write_bytes(fixture())
+                    assert model3d._publish_signature('demo', root, stage, sig,
+                        model3d._publication_token(root, sig), rollback_on_error=True) is not None
+                assert not cache.exists() and not cache.with_suffix('.json').exists()
+                # The real GC purger removes PNG and metadata together.
+                seed()
+                assert model3d.face_retexture_model('demo', sig)['ok'] and cache.exists()
+                from app.core import outfit_cache_gc
+                with patch.object(outfit_cache_gc, 'verify_cache', return_value={'stale_signatures': [sig]}):
+                    assert outfit_cache_gc.purge_stale('demo', [sig])['deleted_files'] > 0
+                assert not cache.exists() and not cache.with_suffix('.json').exists()
+                seed()
+                up._available = False
+                async def explicit_upscale_route():
+                    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+                        response = await client.post(url, headers=headers, params={'signature': sig, 'upscale_backend': up.name})
+                        assert response.status_code == 503
+                async def explicit_with_heartbeat():
+                    async def heartbeat():
+                        while True: await asyncio.sleep(0.01)
+                    ticker = asyncio.create_task(heartbeat())
+                    try: await asyncio.wait_for(explicit_upscale_route(), 10)
+                    finally: ticker.cancel()
+                asyncio.run(explicit_with_heartbeat())
+            svc._pool.backends.remove(up)
+
+    print('PASS: face retexture stages, provenance, first snapshot, byte-exact revert, rerig, source replacement, export, 5 fatal/5 nonfatal failures, damaged snapshots, four admin HTTP routes and P2 upscale integration')
 
 
 if __name__ == '__main__':

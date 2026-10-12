@@ -1,3 +1,4 @@
+import { isGeneratorBackend } from '../../lib/imageBackends'
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -47,7 +48,7 @@ export function ImageSetDialog({ location, onClose }: {
       '/world/imagegen-options?occasion=location')
       .then((d) => {
         // Inpaint backends are edit-only targets — not for set generation.
-        const opts = (d.options || []).filter((o) => (o.category || '') !== 'inpaint')
+        const opts = (d.options || []).filter(isGeneratorBackend)
         setOptions(opts)
         setRoutedName(d.resolved || '')
         setBackend('')

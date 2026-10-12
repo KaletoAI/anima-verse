@@ -908,11 +908,11 @@ _DEFAULT_MESH_BACKENDS = [
     ("Triposplat", "img2mesh", 1, 0, 0, 0),
     ("Hunyuan3D", "img2mesh", 2, 40000, 40000, 0),
     ("mesh-mia", "mesh2rig", 0, 0, 0, 0),
+    ("GLB-Face-Retexture", "face_retexture", 1, 0, 0, 0),
     ("mesh-rig-unirig", "mesh2rig", 0, 0, 0, 0),
 ]
 
 
-    ("GLB-Face-Retexture", "face_retexture", 1, 0, 0, 0),
 def _default_mesh_backend_entries() -> list:
     """The seed list as config dicts (img2mesh, mesh2rig and mesh2mesh)."""
     out = []
@@ -938,6 +938,15 @@ def _default_mesh_backend_entries() -> list:
         if faces_max:
             entry["face_num_max"] = faces_max
         out.append(entry)
+    out.extend([
+        {"name": "Iris-3B-Upscale", "enabled": True, "api_type": "openai_upscale",
+         "api_url": _MESH_GATEWAY_URL, "api_key": "", "model": "Iris-3B-Upscale",
+         "category": "upscale", "cost": 1, "upscale_scale": 2, "color_fix": True,
+         "max_side": 4096, "max_concurrent": 1},
+        {"name": "Real-ESRGAN-CPU", "enabled": True, "api_type": "local_upscale",
+         "category": "upscale", "cost": 0, "upscale_scale": 2, "max_side": 4096,
+         "max_concurrent": 1},
+    ])
     return out
 
 
@@ -959,7 +968,7 @@ def _seed_default_mesh_backends(config: dict) -> bool:
         return False
     ig["backends"] = _default_mesh_backend_entries()
     logger.info("Default mesh backends seeded (%d)",
-                len(_DEFAULT_MESH_BACKENDS) + 1)
+                len(ig["backends"]))
     return True
 
 
@@ -2306,6 +2315,7 @@ def _flatten_to_env(config: dict) -> None:
                      # Mesh backend (openai_mesh, img2mesh)
                      "mesh_endpoint", "remove_background",
                      "face_num", "face_num_max", "no_fingers", "mesh_steps",
+                     "upscale_scale", "color_fix", "max_side",
                      # Mesh animation (openai_mesh_animation, mesh2anim)
                      "motion_source", "source_slot", "caption_style", "segment_seconds",
                      "variant_param", "duration_param", "max_variants", "generator",

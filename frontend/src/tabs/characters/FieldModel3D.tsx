@@ -88,7 +88,7 @@ interface FaceRetextureCheck {
 }
 
 interface Model3DInfo {
-  face_retexture?: { status: string; at?: string; backend?: string; job_id?: string; material_lost?: boolean }
+  face_retexture?: { status: string; at?: string; backend?: string; job_id?: string; material_lost?: boolean; upscale?: { status: string; backend?: string; in?: number[]; out?: number[]; cached?: boolean; busy?: boolean; error?: string } }
   face_retexture_snapshot?: { ok: boolean; created_at?: string; error?: string }
   face_retexture_compare_url?: string
   model_rev?: string
@@ -151,6 +151,8 @@ interface Model3DStatus {
     extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }> }
   extension_groups?: ExtensionRigDeclaration[]
   rig_backends?: MeshBackend[]
+  upscale_backends?: MeshBackend[]
+  upscale_runnable?: boolean
   face_retexture_backends?: MeshBackend[]
   face_retexture_result?: { task_id: string; ok: boolean; error?: string }
   rerig_result?: { task_id: string; ok: boolean; error?: string }
@@ -216,6 +218,8 @@ export function FieldModel3D({ character }: { character: string }) {
   const faceTaskRef = useRef('')
   const [faceOpen, setFaceOpen] = useState(false)
   const [faceBackend, setFaceBackend] = useState('')
+  const [upscaleFirst, setUpscaleFirst] = useState(true)
+  const [upscaleBackend, setUpscaleBackend] = useState('')
   const [faceCheck, setFaceCheck] = useState<FaceRetextureCheck | null>(null)
   const [faceCheckError, setFaceCheckError] = useState('')
   const [faceControls, setFaceControls] = useState({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 })
@@ -413,6 +417,8 @@ export function FieldModel3D({ character }: { character: string }) {
     if (busy || st.pending || !faceCheck?.ok || !faceCheck.runnable) return
     const context = previewContextRef.current
     const query = new URLSearchParams({ signature: faceSignature, backend: faceBackend, lang })
+    query.set('upscale', String(upscaleFirst))
+    query.set('upscale_backend', upscaleBackend)
     for (const [key, value] of Object.entries(faceControls)) query.set(key, String(value))
     setBusy(true)
     try {
@@ -1076,6 +1082,13 @@ export function FieldModel3D({ character }: { character: string }) {
         {model.face_retexture.at ? ` · ${formatDateTime(model.face_retexture.at, clockSettings())}` : ''}
         {model.face_retexture_compare_url ? <> · <a href={model.face_retexture_compare_url} target="_blank" rel="noopener noreferrer">{t('Comparison image')}</a></> : null}
       </div> : null}
+      {model?.face_retexture?.upscale ? <p className="ga-hint" role="status">
+        {model.face_retexture.upscale.status === 'failed'
+          ? `${t('Reference upscale failed — using original photo')}${model.face_retexture.upscale.busy ? ` · ${t('Busy')}` : ''} · ${model.face_retexture.upscale.error || ''}`
+          : model.face_retexture.upscale.status === 'applied'
+            ? `${t('Reference upscaled')} · ${model.face_retexture.upscale.backend || ''} · ${model.face_retexture.upscale.in?.join('×')} → ${model.face_retexture.upscale.out?.join('×')}${model.face_retexture.upscale.cached ? ` · ${t('Cached')}` : ''}`
+            : model.face_retexture.upscale.status === 'skipped' ? t('Reference upscale skipped — already large enough') : t('Reference upscale off')}
+      </p> : null}
       {model?.face_retexture?.material_lost ? <p className="ga-hint" role="status">
         {t('The rigger merged the face material — the face correction may be lost. Revert restores the previous model.')}
       </p> : null}
@@ -1103,6 +1116,13 @@ export function FieldModel3D({ character }: { character: string }) {
                 {faceCheck.warnings.map(w => <p className="ga-hint" key={w.code}>{w.message}</p>)}
                 {faceCheck.ok && faceCheck.runnable ? <p className="ga-hint">{t('Ready for face retexture.')}</p> : null}
               </> : null}
+              <label><input type="checkbox" checked={upscaleFirst} disabled={busy} onChange={e => setUpscaleFirst(e.target.checked)} />{t('Upscale reference first')}</label>
+              {upscaleFirst ? <label>{t('Upscale backend')}
+                <select value={upscaleBackend} disabled={busy} onChange={e => setUpscaleBackend(e.target.value)}>
+                  <option value="">{t('Auto (routing)')}</option>
+                  {(st.upscale_backends || []).map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
+                </select>
+              </label> : null}
               <label>{t('Strength')}<input type="number" min={0} max={1} step={0.05} value={faceControls.strength} disabled={busy}
                 onChange={e => setFaceControls(v => ({ ...v, strength: e.target.valueAsNumber }))} /></label>
               <label>{t('Feather')}<input type="number" min={0} max={0.5} step={0.01} value={faceControls.feather} disabled={busy}
@@ -1157,7 +1177,7 @@ export function FieldModel3D({ character }: { character: string }) {
         </div>, document.body) : null}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         <button type="button" className="ga-btn ga-btn-sm" disabled={pending}
-          onClick={() => { setFaceBackend(''); setFaceCheck(null); setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 }); setFaceOpen(true) }}>
+          onClick={() => { setUpscaleFirst(!!st.upscale_runnable); setUpscaleBackend(''); setFaceBackend(''); setFaceCheck(null); setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 }); setFaceOpen(true) }}>
           {t('Face retexture…')}
         </button>
         {model?.face_retexture_snapshot?.ok ? <button type="button" className="ga-btn ga-btn-sm" disabled={pending}

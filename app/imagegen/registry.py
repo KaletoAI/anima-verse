@@ -1,4 +1,6 @@
 """Registry of available media backend types (image / video / mesh / animation)."""
+from app.imagegen.backends.local_upscale import LocalUpscaleBackend
+from app.imagegen.backends.openai_upscale import OpenAIUpscaleBackend
 from app.imagegen.backends.a1111 import A1111Backend
 from app.imagegen.backends.civitai import CivitAIBackend
 from app.imagegen.backends.civitai_video import CivitAIVideoBackend
@@ -15,6 +17,8 @@ from app.imagegen.backends.together_video import TogetherVideoBackend
 # Registry of available backend types. MEDIA_TYPE on each class ("image",
 # "video", "mesh" or "animation") keeps the media kinds apart in the BackendPool.
 BACKEND_REGISTRY = {
+    "local_upscale": LocalUpscaleBackend,
+    "openai_upscale": OpenAIUpscaleBackend,
     "a1111": A1111Backend,
     "openai_chat": OpenAIChatImageBackend,
     "civitai": CivitAIBackend,

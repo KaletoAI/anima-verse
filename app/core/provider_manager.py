@@ -235,7 +235,7 @@ class ProviderManager:
             if api_type not in BACKEND_REGISTRY:
                 continue
             api_url = os.environ.get(f"{prefix}API_URL", "").strip()
-            if not api_url:
+            if not api_url and getattr(BACKEND_REGISTRY[api_type], "REQUIRES_URL", True):
                 continue
 
             mc_str = os.environ.get(f"{prefix}MAX_CONCURRENT", "1").strip()

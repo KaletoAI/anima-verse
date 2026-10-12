@@ -162,7 +162,8 @@ def _check_image_backends(config: dict) -> list:
         api_url = be.get("api_url", "")
         api_key = be.get("api_key", "")
 
-        if not api_url:
+        from app.imagegen.registry import BACKEND_REGISTRY
+        if not api_url and getattr(BACKEND_REGISTRY.get(api_type), "REQUIRES_URL", True):
             issues.append(_err("image_generation", f"Backend '{name}': API URL missing"))
 
         # Real cloud backends need an API key. openai_chat/localai/openai_diffusion

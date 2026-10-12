@@ -38,7 +38,7 @@ class BackendBusyError(Exception):
 
 
 class GenerationCancelled(RuntimeError):
-    """The caller cancelled a gateway generation; the message is its job ID."""
+    """A caller or gateway cancelled a generation; the message is its job ID."""
 
 
 class MediaGenerationDisabled(RuntimeError):
@@ -78,6 +78,10 @@ class GatewayRejectedError(RuntimeError):
     The backend runner therefore treats it exactly like a 4xx payload error —
     re-raise, NO cooldown (see ``selection.run_on_backend``).
     """
+
+
+class GatewayOutputError(RuntimeError):
+    """A completed gateway job delivered invalid output (terminal backend defect)."""
 
 
 class BackendFailedError(RuntimeError):
@@ -210,6 +214,7 @@ class ImageBackend(ABC):
     # video backend and vice-versa (like the inpaint-category exclusion). Video
     # backends return one MP4 as a single-element List[bytes]; the central
     # generate() skips the image-only downscale post-processing for them.
+    REQUIRES_URL = True
     MEDIA_TYPE = "image"
 
     def __init__(self, name: str, api_url: str, cost: float, api_type: str, env_prefix: str):

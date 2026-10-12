@@ -206,7 +206,7 @@ class OpenAIMeshBackend(ImageBackend):
         self._file_slot: str = ""
         self._alias_param_names: set = set()
         self._tls = threading.local()
-        self._schema_verified = False
+        self._face_schema = (False, (), "", frozenset())
 
     # -- result metadata ----------------------------------------------------
     @property
@@ -308,7 +308,7 @@ class OpenAIMeshBackend(ImageBackend):
             self._mark_unavailable()
             return False
         self._fetch_alias_schema()
-        if self.category == "face_retexture" and not self._schema_verified:
+        if self.category == "face_retexture" and not self._face_schema[0]:
             self._mark_unavailable()
             return False
         self._mark_available()
@@ -321,11 +321,8 @@ class OpenAIMeshBackend(ImageBackend):
         ALL image slots are kept, in declaration order: a multi-view alias
         declares ``input_image_front``/``_back``/``_left``/``_right``, the
         classic one a single ``input_image``."""
-        self._schema_verified = False
-        if self.category == "face_retexture":
-            self._image_slots = []
-            self._file_slot = ""
-            self._alias_param_names = set()
+        # Publish only a fully fetched/validated face schema, never partial fields.
+        face_schema = (False, (), "", frozenset())
         try:
             r = requests.get(f"{self.api_url}/v1/generations/{self.model}/schema",
                              headers=self._headers(), timeout=10)
@@ -344,8 +341,7 @@ class OpenAIMeshBackend(ImageBackend):
                         slots.append(str(slot))
             elif isinstance(images, dict):
                 slots = [str(k) for k in images if str(k)]
-            if slots:
-                self._image_slots = slots
+            file_slot = ""
             # Non-image input slots (mesh→mesh: input_mesh_path). Same shape as
             # the image slots; absent on every img2mesh alias.
             files = sd.get("files") or []
@@ -353,9 +349,9 @@ class OpenAIMeshBackend(ImageBackend):
                 first = files[0]
                 slot = (first.get("name") if isinstance(first, dict) else str(first)) or ""
                 if slot:
-                    self._file_slot = slot
+                    file_slot = slot
             elif isinstance(files, dict) and files:
-                self._file_slot = next(iter(files))
+                file_slot = next(iter(files))
             # Declared param names — optional params (e.g.
             # input_texture_resolution) are only sent when the alias really
             # declares them.
@@ -368,14 +364,22 @@ class OpenAIMeshBackend(ImageBackend):
                     n = (entry.get("name") if isinstance(entry, dict) else entry) or ""
                     if n:
                         names.add(str(n).strip().lower())
-            self._alias_param_names = names
-            self._schema_verified = self.category != "face_retexture" or bool(self._image_slots and self._file_slot)
+            face_schema = (bool(slots and file_slot), tuple(slots), file_slot, frozenset(names))
+            if self.category != "face_retexture":
+                if slots:
+                    self._image_slots = slots
+                if file_slot:
+                    self._file_slot = file_slot
+                self._alias_param_names = names
             logger.info("%s: Alias-Schema gelesen (image_slots=%s, file_slot=%s, "
                         "params=%s)", self.name,
-                        self._image_slots or ["input_image"],
-                        self._file_slot or "-", sorted(names) or "?")
+                        slots or ["input_image"],
+                        file_slot or "-", sorted(names) or "?")
         except Exception as e:
             logger.debug("%s: alias schema not readable: %s", self.name, e)
+        finally:
+            if self.category == "face_retexture":
+                self._face_schema = face_schema
 
     @staticmethod
     def _slot_view(slot: str) -> str:
@@ -435,7 +439,7 @@ class OpenAIMeshBackend(ImageBackend):
             used.add(view)
         return out
 
-    def build_input_files(self, params: Dict[str, Any]) -> Dict[str, str]:
+    def build_input_files(self, params: Dict[str, Any], *, schema=None) -> Dict[str, str]:
         """The ``files`` block of a mesh→mesh request, or ``{}`` when this run
         has no source mesh (every img2mesh generation).
 
@@ -451,7 +455,8 @@ class OpenAIMeshBackend(ImageBackend):
         src = str(params.get("source_model_path") or "").strip()
         if not src:
             return {}
-        slot = self._file_slot or "input_mesh_path"
+        slot = (schema or self._face_schema)[2] if self.category == "face_retexture" else self._file_slot
+        slot = slot or "input_mesh_path"
         if src.startswith(("http://", "https://")):
             return {slot: src}
         p = Path(src)
@@ -506,7 +511,7 @@ class OpenAIMeshBackend(ImageBackend):
         return max(0, faces)
 
     def build_alias_params(self, params: Dict[str, Any], *,
-                           inputs_cut_out: bool = False) -> Dict[str, Any]:
+                           inputs_cut_out: bool = False, schema=None) -> Dict[str, Any]:
         """The ``params`` block of the generation request — every key a public
         ``input_*`` name of the alias schema (mesh-client-spec § 1/3).
 
@@ -517,9 +522,10 @@ class OpenAIMeshBackend(ImageBackend):
         Public so the param mapping can be checked without a gateway
         (scripts/smoke_mesh_gateway.py)."""
         if self.category == "face_retexture":
+            verified, _, _, names = schema or self._face_schema
             defaults = {"strength": 1, "feather": 0.18, "render_resolution": 768, "yaw": 0}
             return {key: params.get(key, value) for key, value in defaults.items()
-                    if self._schema_verified and key in self._alias_param_names}
+                    if verified and key in names}
         if self.category == "mesh2rig":
             return {"input_no_fingers": bool(params.get("no_fingers", self.no_fingers))}
         # input_name is ALWAYS set: it decides the delivered file names, and an
@@ -592,7 +598,8 @@ class OpenAIMeshBackend(ImageBackend):
         # mesh→mesh (shrink) or img2mesh — mutually exclusive: a run either
         # carries a source MESH in `files` or an input IMAGE in `images`.
         try:
-            input_files = self.build_input_files(params)
+            schema = self._face_schema
+            input_files = self.build_input_files(params, schema=schema)
         except (OSError, ValueError) as e:
             logger.error("%s: Eingangs-Mesh unbrauchbar: %s", self.name, e)
             return []
@@ -605,12 +612,12 @@ class OpenAIMeshBackend(ImageBackend):
         if input_files:
             payload["files"] = input_files
         if self.category == "face_retexture":
-            if not self._schema_verified or not input_files:
+            if not schema[0] or not input_files:
                 raise GatewayRejectedError("Face retexture requires a verified alias schema and original mesh")
             raw = params.get("reference_image_bytes")
             if not isinstance(raw, bytes) or not raw or len(raw) > MESH_UPLOAD_MAX_BYTES:
                 raise GatewayRejectedError("Face retexture requires a reference image of at most 64 MB")
-            slots = self.select_slot_images(self._image_slots, {"front": "reference"})
+            slots = self.select_slot_images(schema[1], {"front": "reference"})
             if len(slots) != 1:
                 raise GatewayRejectedError("Face retexture schema must declare a front reference-image slot")
             self._remember_input(raw)
@@ -651,7 +658,7 @@ class OpenAIMeshBackend(ImageBackend):
             inputs_cut_out = bool(cut_out_flags) and all(cut_out_flags)
 
         alias_params = self.build_alias_params(params,
-                                               inputs_cut_out=inputs_cut_out)
+                                               inputs_cut_out=inputs_cut_out, schema=schema)
         payload["params"] = alias_params
 
         url = f"{self.api_url}{self.mesh_endpoint}"
@@ -750,22 +757,9 @@ class OpenAIMeshBackend(ImageBackend):
 
 
     def _download_same_origin(self, url: str):
-        """Validate every redirect before forwarding the gateway credential."""
-        from urllib.parse import urljoin
-        def origin(value):
-            parsed = urlparse(value)
-            if parsed.username or parsed.password or parsed.scheme not in ("http", "https"):
-                raise GatewayRejectedError("Invalid mesh result URL")
-            return parsed.scheme.lower(), parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
-        expected = origin(self.api_url)
-        for _ in range(6):
-            if origin(url) != expected:
-                raise GatewayRejectedError("Mesh result URL has a foreign origin; download refused")
-            response = requests.get(url, headers=self._headers(), timeout=300, allow_redirects=False)
-            if response.status_code not in (301, 302, 303, 307, 308):
-                return response
-            url = urljoin(url, response.headers.get("Location", ""))
-        raise GatewayRejectedError("Too many mesh result redirects")
+        """Use the shared credential-safe gateway downloader."""
+        from app.imagegen.backends._gateway_job import download_result
+        return download_result(self, url)
 
     def fetch_job(self, job_id: str) -> Dict[str, Any]:
         """Looks up an EXISTING gateway job once and, if it has finished,

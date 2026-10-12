@@ -102,6 +102,9 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
                      "category": "mesh2rig", "requires_chain": True},
     "rig_creature": {**_mesh("3D rig — creature", "Character rig (non-humanoid)", "generic"),
                      "category": "mesh2rig", "requires_chain": True},
+    "upscale": {**_image("Upscale — reference image", "Face retexture reference", [], _WORLD),
+                "category": "upscale", "requires_chain": False,
+                "default_chain": ["Iris-3B-Upscale", "Real-ESRGAN-CPU"]},
     "face_retexture": {**_mesh("Face retexture", "Character face texture correction", "none"),
                        "category": "face_retexture", "requires_chain": False},
     "mesh_object": _mesh("3D mesh — object", "Prop mesh", "none"),
@@ -151,7 +154,9 @@ def backend_fits(occasion_id: str, kind: Dict[str, Any]) -> bool:
     category = str(kind.get("category") or "").lower()
     if occ["media"] in ("mesh", "animation"):
         return category == occ["category"]
-    if category == "inpaint":
+    if occ["category"] == "upscale":
+        return category == "upscale"
+    if category in ("inpaint", "upscale"):
         return False
     if occ.get("needs_ref_slot") and int(kind.get("ref_slot_count") or 0) < 1:
         return False
@@ -177,5 +182,6 @@ def catalog_payload() -> List[Dict[str, Any]]:
              "category": o["category"], "rig": o.get("rig", ""),
              "character_scoped": bool(o["character_scoped"]),
              "needs_ref_slot": bool(o.get("needs_ref_slot")),
-             "covers": o.get("covers", "")}
+             "covers": o.get("covers", ""),
+             "default_chain": list(o.get("default_chain", []))}
             for oid, o in OCCASIONS.items()]

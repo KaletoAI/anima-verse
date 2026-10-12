@@ -153,7 +153,8 @@ def describe_config_backend(entry: Dict[str, Any]) -> Dict[str, Any]:
 def _rules(occasion: str) -> List[str]:
     from app.core import config
     rules = config.get("image_generation.routing", {}) or {}
-    chain = rules.get(occasion) if isinstance(rules, dict) else None
+    chain = (rules[occasion] if isinstance(rules, dict) and occasion in rules
+             else get_occasion(occasion).get("default_chain"))
     return list(chain) if isinstance(chain, list) else []
 
 
@@ -211,7 +212,10 @@ def chain_for(occasion: str, character: str = "") -> List[Tuple[str, str, int]]:
             continue
         seen.add(s.lower())
         pos += 1
-        out.append((s, "rule", pos))
+        from app.core import config
+        rules = config.get("image_generation.routing", {}) or {}
+        source = "default" if occ.get("default_chain") and occasion not in rules else "rule"
+        out.append((s, source, pos))
     return out
 
 
@@ -443,6 +447,8 @@ def _explain_one(row: Dict[str, Any], character: str, backends: List[Any],
         if skipped:
             reason += " — " + ", ".join(
                 f"{_pos_label(r['position'])} skipped: {r['status_text']}" for r in skipped)
+    if chain and chain[0]["source"] == "default":
+        reason += " (default chain)"
     intended = intended_entry(chain)
     return {**row, "chain": chain, "resolved": resolved, "position": position,
             "via": via, "reason": reason,

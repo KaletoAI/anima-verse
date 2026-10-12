@@ -48,7 +48,8 @@ function irRemove(routing, occ, idx) {
     const chain = irChain(routing, occ);
     if (idx < 0 || idx >= chain.length) return false;
     chain.splice(idx, 1);
-    if (chain.length) routing[occ] = chain; else delete routing[occ];
+    const defaults = typeof IR_OCCASIONS !== 'undefined' && (IR_OCCASIONS || []).some(o => o.id === occ && (o.default_chain || []).length);
+    if (chain.length || defaults) routing[occ] = chain; else delete routing[occ];
     return true;
 }
 
@@ -121,7 +122,8 @@ function irFits(occ, b) {
         if (cat !== occ.category) return false;
         return true;
     }
-    if (cat === 'inpaint') return false;
+    if (occ.category === 'upscale') return cat === 'upscale';
+    if (cat === 'inpaint' || cat === 'upscale') return false;
     if (occ.needs_ref_slot && (Number(b.ref_slot_count) || 0) < 1) return false;
     return true;
 }
@@ -403,11 +405,27 @@ function renderImageRoutingRules(content) {
             html += '</div>';
             continue;
         }
-        html += irChainHtml(o, irChain(routing, o.id));
+        if (!Object.prototype.hasOwnProperty.call(routing, o.id) && (o.default_chain || []).length) {
+            html += '<div class="desc rt-muted">(default chain): ' + irEsc(o.default_chain.join(' → ')) + '</div>';
+            html += '<button class="btn btn-sm" onclick="irCustomDefault(\'' + sJs(o.id) + '\', false)">Customize chain</button> '
+                  + '<button class="btn btn-sm" onclick="irCustomDefault(\'' + sJs(o.id) + '\', true)">Use cheapest backend</button>';
+        } else {
+            html += irChainHtml(o, irChain(routing, o.id));
+        }
         html += '</div>';
     }
     html += '</div>';
     content.innerHTML = html;
+}
+
+function irCustomDefault(occ, cheapest) {
+    const r = irRoutingForEdit();
+    if (!r) return;
+    const definition = (IR_OCCASIONS || []).find(o => o.id === occ);
+    if (!definition) return;
+    r[occ] = cheapest ? [] : [...(definition.default_chain || [])];
+    touchPath('image_generation.routing');
+    irRerender();
 }
 
 function irChainHtml(o, chain) {

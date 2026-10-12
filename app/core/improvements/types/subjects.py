@@ -20,6 +20,8 @@ engine calls them synchronously in a queue worker:
   simply saturated — raises :class:`CandidateBusy` instead: that is load, not a
   defect, and the engine leaves the step pending without counting an attempt.
 """
+from app.imagegen.selection import is_generator_backend
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -749,7 +751,7 @@ def image_backend_options() -> List[Dict[str, str]]:
     from app.core.world_ops import build_imagegen_options
     return [{"value": o["name"], "label": o["label"]}
             for o in build_imagegen_options().get("options", [])
-            if o.get("category") != "inpaint"]
+            if is_generator_backend(o)]
 
 
 # ---------------------------------------------------------------------------

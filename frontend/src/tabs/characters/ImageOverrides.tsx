@@ -1,3 +1,4 @@
+import { isGeneratorBackend } from '../../lib/imageBackends'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
@@ -173,7 +174,7 @@ export function ImageOverrides({
         // not for a character's normal render matching.
         setBackends(
           (opts.options || [])
-            .filter((o) => o.name && o.category !== 'inpaint')
+            .filter((o) => o.name && isGeneratorBackend(o))
             .map((o) => o.name as string),
         )
         setAvailableLoras((loraOpts.loras || []).filter((l) => l.name && l.name !== 'None'))

@@ -5,8 +5,10 @@ Usage:  ./.venv/bin/python scripts/smoke_i18n_orphans.py
 
 WHY THIS EXISTS
 ---------------
-``shared/languages/de.json`` is a flat map ``{"English source": "deutsche
-Uebersetzung"}``. The key IS the English string as it stands in the code, so a
+``shared/languages/de.json`` stores the flat map
+``{"English source": "German translation"}`` inside ``translations``.
+Only ``_meta`` and ``translations`` may appear at the root; any other key
+is invisible to both loaders and must fail this guard. The key IS the English string as it stands in the code, so a
 key without a source string is dead weight: nobody ever looks it up, and it
 quietly suggests that the surface it once belonged to is translatable. Two
 ways keys go stale:
@@ -347,6 +349,11 @@ PRE_CLEANUP_MIN_ORPHANS = 60
 PRE_CLEANUP_SAMPLE = "Analyse sentiment after conversations"
 
 
+def outside_translation_keys(raw):
+    """Only metadata and the loader's translations object belong at the root."""
+    return sorted(set(raw) - {"_meta", "translations"})
+
+
 def main() -> int:
     print("A) extractor self-test (expected sets written by hand in the docstring)")
     py1 = py_literals('def f():\n    """doc"""\n    return t("Hello")\n')
@@ -363,6 +370,9 @@ def main() -> int:
     check("ts: seam fallback rejoins a wrapped literal", "one two" in seam, seam)
 
     raw = json.loads(DE_JSON.read_text(encoding="utf-8"))
+    check("no keys outside translations", not outside_translation_keys(raw), str(outside_translation_keys(raw)))
+    check("a live key outside translations is rejected",
+          outside_translation_keys({"_meta": {}, "translations": {}, "Cached": "Aus Cache"}) == ["Cached"])
     translations = raw.get("translations", {})
     print(f"\nB) de.json: {len(translations)} keys")
     braced = [k for k in translations if "${" in k]

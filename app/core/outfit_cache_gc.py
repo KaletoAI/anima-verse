@@ -193,11 +193,11 @@ def _mesh_files(character_name: str) -> Dict[str, List[Path]]:
     if not d.exists():
         return out
     keep = MODEL_EXTS + (".json", ".png", ".jpg", ".jpeg")
-    subdirs = [d / t for t in MODEL_TIERS if t != FULL_TIER] + [d / "unrigged", d / "facefix", d / RAW_DIR_NAME, d / "prerig", d / "low" / "prerig", d / "low" / RAW_DIR_NAME]
+    subdirs = [d / t for t in MODEL_TIERS if t != FULL_TIER] + [d / "unrigged", d / "facefix", d / "facefix-ref", d / RAW_DIR_NAME, d / "prerig", d / "low" / "prerig", d / "low" / RAW_DIR_NAME]
     for folder in [d] + subdirs:
         if not folder.is_dir():
             continue
-        any_suffix = folder.name in (RAW_DIR_NAME, "prerig", "unrigged", "facefix")    # the purger takes raw/<sig>.*
+        any_suffix = folder.name in (RAW_DIR_NAME, "prerig", "unrigged", "facefix", "facefix-ref")    # the purger takes raw/<sig>.*
         for p in sorted(folder.iterdir()):
             if p.is_file() and (any_suffix or p.suffix.lower() in keep):
                 out.setdefault(p.stem, []).append(p)
