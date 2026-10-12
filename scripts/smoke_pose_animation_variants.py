@@ -48,6 +48,14 @@ Review fixes:
  9b. A candidate stamped 8 days ago is refused (410) by choose itself even
      before any sweep ran, and its job becomes "expired".
  13. submit without a variant count queues 3 variants.
+Final-review fixes:
+ 14. A choice is reserved before the first file moves: a crash inside the
+     publish (simulated by a BaseException out of the catalog write) leaves the
+     job "publishing" with chosen 0 — choose(1) is then 409, choose(0) finishes
+     the same variant.
+ 15. clear_completed(-1 h) deletes finished jobs but keeps one still waiting for
+     a choice.
+ 16. recent_jobs(limit=1) still lists an older job waiting for a choice.
 """
 import json
 import os
@@ -270,6 +278,32 @@ def main():
                                if t["task_id"] == queued)["payload"]
                 assert payload["variants"] == 3, payload
                 print("PASS 13: the default variant count is 3")
+                crash, _ = job(variants=3)
+                real_apply = pa.apply_generated_entry
+                def dies(**kwargs):
+                    real_apply(**kwargs)
+                    raise KeyboardInterrupt("server stopped")
+                with patch.object(pa, "apply_generated_entry", side_effect=dies):
+                    try:
+                        pa.choose(crash, 0)
+                    except KeyboardInterrupt:
+                        pass
+                progress = tq.get_task_progress(crash)
+                assert (progress["state"], progress["chosen"]) == ("publishing", 0), progress
+                assert "interrupted" in expect(409, pa.choose, crash, 1)
+                pa.choose(crash, 0)
+                assert tq.get_task_progress(crash)["state"] == "published"
+                print("PASS 14: an interrupted publish can only finish the same variant")
+                waiting, _ = job(variants=3)
+                tq.clear_completed(older_than_hours=-1)
+                left = {t["task_id"] for t in tq.list_recent_tasks(pa.TASK_TYPE, limit=100)}
+                assert waiting in left and crash not in left, left
+                print("PASS 15: clearing finished jobs keeps one waiting for a choice")
+                newer, _ = job(variants=1)
+                pa.discard(newer) if tq.get_task_progress(newer).get("state") == "awaiting_choice" else None
+                listed = [j["task_id"] for j in pa.recent_jobs(limit=1)]
+                assert listed[0] == newer and waiting in listed, listed
+                print("PASS 16: an older job waiting for a choice stays listed")
         finally:
             pc.catalog_path = original_path
             pc.reload_catalogs()

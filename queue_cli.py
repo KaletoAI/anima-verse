@@ -275,8 +275,12 @@ def cmd_clear(args: argparse.Namespace) -> None:
     cutoff = (datetime.now() - timedelta(hours=args.hours)).isoformat(timespec="seconds")
     statuses = [args.status] if args.status else ["completed", "failed", "cancelled"]
     placeholders = ",".join("?" * len(statuses))
+    # Same clause as task_queue.KEEP_HELD_RESULTS_SQL: a finished task still
+    # waiting for a person's choice is kept.
     cur = conn.execute(
-        f"DELETE FROM tasks WHERE status IN ({placeholders}) AND completed_at < ?",
+        f"DELETE FROM tasks WHERE status IN ({placeholders}) AND completed_at < ? "
+        "AND COALESCE(CASE WHEN json_valid(progress) THEN json_extract(progress, '$.state') END, '') "
+        "NOT IN ('awaiting_choice', 'publishing')",
         (*statuses, cutoff),
     )
     conn.commit()

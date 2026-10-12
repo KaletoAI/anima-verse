@@ -63,7 +63,8 @@ function activeJob(job: AnimationJob) {
 
 /** A finished job whose variants wait for the admin's pick. */
 function awaitingChoice(job: AnimationJob) {
-  return job.status === 'completed' && job.state === 'awaiting_choice'
+  return job.status === 'completed'
+    && (job.state === 'awaiting_choice' || job.state === 'publishing')
 }
 /** The tab has five surfaces: the catalog entries, the installed clip library
  *  behind their animation kinds, the CMU clip pool those kinds come from, the

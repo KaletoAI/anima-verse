@@ -98,7 +98,12 @@ def submit(mode: str, *, key: str = "", raw_text: str = "", text: str = "",
 def recent_jobs(limit: int = 20) -> List[Dict]:
     """Expose the queue history without leaking internal payload fields."""
     jobs = []
-    for task in get_task_queue().list_recent_tasks(TASK_TYPE, limit=limit):
+    # Jobs still waiting for a choice stay listed past the history limit (they
+    # expire after 7 days, so the extra scan is bounded).
+    tasks = get_task_queue().list_recent_tasks(TASK_TYPE, limit=max(limit, 500))
+    tasks = tasks[:limit] + [t for t in tasks[limit:]
+                             if (t.get("progress") or {}).get("state") in ("awaiting_choice", "publishing")]
+    for task in tasks:
         payload, progress = task.get("payload") or {}, task.get("progress") or {}
         jobs.append({"task_id": task["task_id"], "status": task["status"],
             "mode": payload.get("mode", ""), "key": progress.get("key", payload.get("key", "")),
@@ -466,7 +471,12 @@ def choose(task_id: str, index: int) -> Dict:
             raise ChoiceError(404, "unknown job")
         if state == "expired":
             raise ChoiceError(410, "the candidates expired")
-        if state != "awaiting_choice":
+        if state == "publishing" and progress.get("chosen") != index:
+            # A publish of another variant was interrupted (server stop); only
+            # that one may be finished, or the job discarded.
+            raise ChoiceError(409, f"an interrupted choice of variant {int(progress.get('chosen', 0)) + 1} "
+                                   "must be finished first")
+        if state not in ("awaiting_choice", "publishing"):
             raise ChoiceError(409, f"the job is not waiting for a choice ({state or progress.get('phase')})")
         data = _read_candidates(staging)
         if data is None:
@@ -483,12 +493,18 @@ def choose(task_id: str, index: int) -> Dict:
             raise ChoiceError(422, "this variant did not pass the check")
         if not all(Path(cand.get(f) or "").is_file() for f in ("fbx", "sidecar")):
             raise ChoiceError(410, "the files of this variant are gone")
+        # Reserved BEFORE the first file moves: a server stop inside the publish
+        # leaves "publishing" behind, never a job open for a second variant.
+        _set_state(task_id, progress, phase="publishing", state="publishing", chosen=index)
         try:
             result = _publish(tid=task_id, staging=staging, kind=data["kind"], key=data["key"],
                               clip={"sidecar": cand["sidecar"], "fbx": cand["fbx"]},
                               mode=data["mode"], entry=data.get("entry"),
                               raw_text=data.get("raw_text", ""), checked_group=data["group"])
         except (RuntimeError, CatalogEditError) as exc:
+            # _publish rolled back every file and catalog change: open again.
+            progress.pop("chosen", None)
+            _set_state(task_id, progress, phase="choose", state="awaiting_choice")
             raise ChoiceError(409, str(exc)) from exc
         _set_state(task_id, progress, phase="published", state="published", chosen=index)
         return {**(result if isinstance(result, dict) else {}), "kind": data["kind"],
@@ -502,7 +518,7 @@ def discard(task_id: str) -> Dict:
         progress = get_task_queue().get_task_progress(task_id)
         if not progress:
             raise ChoiceError(404, "unknown job")
-        if progress.get("state") != "awaiting_choice":
+        if progress.get("state") not in ("awaiting_choice", "publishing"):
             raise ChoiceError(409, f"the job is not waiting for a choice ({progress.get('state') or progress.get('phase')})")
         shutil.rmtree(staging, ignore_errors=True)
         _set_state(task_id, progress, phase="discarded", state="discarded")
@@ -533,7 +549,7 @@ def sweep_candidates(max_age_days: int = CANDIDATE_MAX_AGE_DAYS) -> int:
         with keyed_lock("pose_animation_choice", folder.name):
             shutil.rmtree(folder, ignore_errors=True)
             progress = get_task_queue().get_task_progress(folder.name)
-            if progress.get("state") == "awaiting_choice":
+            if progress.get("state") in ("awaiting_choice", "publishing"):
                 _set_state(folder.name, progress, phase="expired", state="expired")
         removed += 1
     if removed:

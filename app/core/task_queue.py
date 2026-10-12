@@ -42,6 +42,14 @@ logger = get_logger("task_queue")
 # Config
 # ---------------------------------------------------------------------------
 from app.core.paths import get_storage_dir as _get_storage_dir
+# A finished task whose result still waits for a person's decision (progress
+# state "awaiting_choice"/"publishing", e.g. generated pose-animation variants)
+# is not history yet: a cleanup keeps it. queue_cli.py repeats this clause.
+KEEP_HELD_RESULTS_SQL = ("COALESCE(CASE WHEN json_valid(progress) THEN "
+                         "json_extract(progress, '$.state') END, '') "
+                         "NOT IN ('awaiting_choice', 'publishing')")
+
+
 def _get_db_path() -> Path:
     return _get_storage_dir() / "task_queue.db"
 MAX_RETRIES_DEFAULT = int(os.environ.get("TASK_QUEUE_MAX_RETRIES", "0"))
@@ -521,7 +529,7 @@ class TaskQueue:
             statuses = self._CLEARABLE_STATUSES
         placeholders = ",".join("?" * len(statuses))
         sql = (f"DELETE FROM tasks WHERE status IN ({placeholders}) "
-               "AND completed_at < ?")
+               "AND completed_at < ? AND " + KEEP_HELD_RESULTS_SQL)
         params: List[Any] = [*statuses, cutoff]
         if queue_name:
             sql += " AND queue_name=?"
