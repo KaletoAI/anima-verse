@@ -53,8 +53,13 @@ import { SliderInput } from '../../components/SliderInput'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../lib/api'
 import { orderSets } from './clipSets'
-import type { ApiClipRow, ClipListing } from './clipSets'
+import type { ApiClipRow as BaseApiClipRow, ClipListing } from './clipSets'
 import { rootMotionSummary } from './rootMotion'
+
+interface ApiClipRow extends BaseApiClipRow {
+  generator?: string
+  license?: string
+}
 
 function libraryOf(c: ApiClipRow): string {
   return c.library || c.source || 'free'
@@ -465,6 +470,12 @@ export function ClipLibrary({
             {t('licensed')}
           </span>
         ) : null}
+        {cell.all.some((clip) => clip.generator === 'unimate') ? (
+          <span className="ga-tag ga-tag-tier"
+            title={cell.all.find((clip) => clip.generator === 'unimate')?.license}>
+            {t('UniMate · NC')}
+          </span>
+        ) : null}
         {n > 1 ? <span style={{ opacity: 0.7 }}>×{n}</span> : null}
       </span>
     )
@@ -494,6 +505,9 @@ export function ClipLibrary({
         <div style={{ display: 'flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap' }}>
           <code style={{ wordBreak: 'break-all' }}>{clip.filename || relOf(clip)}</code>
           <span className={`ga-tag${lib === 'licensed' ? ' ga-tag-tier' : ''}`}>{t(lib)}</span>
+          {clip.generator === 'unimate' ? (
+            <span className="ga-tag ga-tag-tier" title={clip.license}>{t('UniMate · NC')}</span>
+          ) : null}
         </div>
         <div className="ga-form-hint" style={{ marginTop: 2 }}>{facts.join(' · ')}</div>
         <label

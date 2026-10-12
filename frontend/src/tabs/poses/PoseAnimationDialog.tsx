@@ -1,0 +1,154 @@
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { Field } from '../../components/Field'
+import { useI18n } from '../../i18n/I18nProvider'
+import { apiPost } from '../../lib/api'
+import { useToast } from '../../lib/Toast'
+
+export interface PoseAnimationRequest {
+  mode: 'entry' | 'candidate' | 'free'
+  entryKey?: string
+  rawText?: string
+  prompt?: string
+  initialText?: string
+  initialHint?: string
+}
+
+export function PoseAnimationDialog({ open, mode, entryKey, rawText, prompt,
+  initialText = '', initialHint = '', onClose, onStarted,
+}: PoseAnimationRequest & {
+  open: boolean
+  onClose: () => void
+  onStarted: (taskId: string, request: PoseAnimationRequest) => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [text, setText] = useState(initialText)
+  const [hint, setHint] = useState(initialHint)
+  const [busy, setBusy] = useState(false)
+  const firstField = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
+  const formRef = useRef<HTMLFormElement | null>(null)
+  const submitting = useRef(false)
+  const title = mode === 'entry' ? t('Generate animation') : t('Generate entry and animation')
+
+  useEffect(() => {
+    if (!open) return
+    setText(initialText)
+    setHint(initialHint)
+  }, [open, mode, entryKey, rawText, initialText, initialHint])
+
+  useEffect(() => {
+    if (!open) return
+    const previousFocus = document.activeElement as HTMLElement | null
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    firstField.current?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !submitting.current) onClose()
+      if (event.key === 'Tab') {
+        const controls = formRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), textarea:not(:disabled)',
+        )
+        if (!controls?.length) {
+          event.preventDefault()
+          formRef.current?.focus()
+          return
+        }
+        const first = controls[0]
+        const last = controls[controls.length - 1]
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault()
+          last.focus()
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault()
+          first.focus()
+        }
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      document.removeEventListener('keydown', onKey)
+      previousFocus?.focus()
+    }
+  }, [open, onClose])
+
+  const submit = async () => {
+    if (submitting.current || (mode === 'free' && !text.trim())) return
+    submitting.current = true
+    setBusy(true)
+    try {
+      const result = await apiPost<{ task_id: string }>('/poses/animations/generate', {
+        mode,
+        ...(mode === 'entry' ? { key: entryKey } : {}),
+        ...(mode === 'candidate' ? { raw_text: rawText } : {}),
+        ...(mode === 'free' ? { text: text.trim() } : {}),
+        hint: hint.trim(),
+      })
+      onStarted(result.task_id, { mode, entryKey, rawText, prompt,
+        initialText: text, initialHint: hint })
+    } catch (error) {
+      toast(t('Error') + ': ' + (error as Error).message, 'error')
+    } finally {
+      submitting.current = false
+      setBusy(false)
+    }
+  }
+
+  if (!open) return null
+  const close = () => { if (!submitting.current) onClose() }
+  return createPortal(
+    <div className="ga-modal-backdrop" onClick={close}>
+      <form ref={formRef} tabIndex={-1} className="ga-modal" role="dialog" aria-modal="true" aria-label={title}
+        style={{ maxWidth: 520 }} onClick={(event) => event.stopPropagation()}
+        onSubmit={(event) => { event.preventDefault(); void submit() }}>
+        <div className="ga-modal-header">
+          <span>{title}</span>
+          <button type="button" className="ga-modal-close" aria-label={t('Close')}
+            disabled={busy} onClick={close}>×</button>
+        </div>
+        <div className="ga-modal-body">
+          <div className="ga-form">
+            {mode === 'entry' ? <>
+              <Field label={t('Key')}>
+                <input className="ga-input" aria-label={t('Key')} readOnly value={entryKey || ''} />
+              </Field>
+              <Field label={t('Pose text')}>
+                <textarea className="ga-textarea" aria-label={t('Pose text')} readOnly
+                  rows={3} value={prompt || ''} />
+              </Field>
+            </> : mode === 'candidate' ? (
+              <Field label={t('Candidate text')}>
+                <textarea className="ga-textarea" aria-label={t('Candidate text')} readOnly
+                  rows={3} value={rawText || ''} />
+              </Field>
+            ) : (
+              <Field label={t('Describe the activity')}>
+                <textarea className="ga-textarea" aria-label={t('Describe the activity')}
+                  ref={(element) => { firstField.current = element }} required disabled={busy}
+                  rows={4} value={text} onChange={(event) => setText(event.target.value)} />
+              </Field>
+            )}
+            <Field label={t('Additional wish (optional)')}>
+              <input className="ga-input" aria-label={t('Additional wish (optional)')}
+                ref={(element) => { if (mode !== 'free') firstField.current = element }}
+                disabled={busy} value={hint} onChange={(event) => setHint(event.target.value)} />
+            </Field>
+            <div className="ga-form-hint">
+              {t('UniMate · non-commercial only · the clip goes into the shared library')}
+            </div>
+          </div>
+        </div>
+        <div className="ga-modal-footer" style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+          <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={close}>
+            {t('Cancel')}
+          </button>
+          <button type="submit" className="ga-btn ga-btn-sm ga-btn-primary"
+            disabled={busy || (mode === 'free' && !text.trim()) || (mode === 'entry' && !entryKey)}>
+            {mode === 'entry' ? t('Generate') : t('Generate entry and animation')}
+          </button>
+        </div>
+      </form>
+    </div>, document.body,
+  )
+}

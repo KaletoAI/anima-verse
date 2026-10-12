@@ -19,7 +19,9 @@
  * editing an entry's prompt does NOT invalidate the images already rendered
  * under it — that is what the clear button next to the editor is for.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { PoseAnimationDialog } from './PoseAnimationDialog'
+import type { PoseAnimationRequest } from './PoseAnimationDialog'
 import { ClipCatalog } from './ClipCatalog'
 import { ClipInbox } from './ClipInbox'
 import { ClipLibrary } from './ClipLibrary'
@@ -38,6 +40,19 @@ import { CommaListInput } from '../../components/CommaListInput'
 import { PromptDialog } from '../../components/PromptDialog'
 
 type Axis = 'pose' | 'expression'
+interface AnimationJob {
+  task_id: string
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  mode: PoseAnimationRequest['mode']
+  key?: string | null
+  phase?: string | null
+  kind?: string | null
+  error?: string | null
+}
+
+function activeJob(job: AnimationJob) {
+  return job.status === 'pending' || job.status === 'running'
+}
 /** The tab has five surfaces: the catalog entries, the installed clip library
  *  behind their animation kinds, the CMU clip pool those kinds come from, the
  *  inbox of foreign files waiting to be imported, and the bridge clips that
@@ -168,6 +183,13 @@ export function PosesTab() {
   const [confirmClear, setConfirmClear] = useState(false)
   const [busy, setBusy] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
+  const [animationDialog, setAnimationDialog] = useState<PoseAnimationRequest | null>(null)
+  const [animationJobs, setAnimationJobs] = useState<AnimationJob[]>([])
+  const [jobsRefresh, setJobsRefresh] = useState(0)
+  const jobStatuses = useRef(new Map<string, AnimationJob['status']>())
+  const jobRequests = useRef(new Map<string, PoseAnimationRequest>())
+  const notifiedJobs = useRef(new Set<string>())
+  const pendingCompletions = useRef(new Map<string, { job: AnimationJob; reload: Promise<void> }>())
 
   const isPose = axis === 'pose'
 
@@ -209,6 +231,127 @@ export function PosesTab() {
     await loadClips()
     await load()
   }, [load, loadClips])
+
+  useEffect(() => {
+    let disposed = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const drainPendingCompletions = async () => {
+      const pending = [...pendingCompletions.current.values()]
+      if (pending.length) {
+        await Promise.all(pending.map(({ reload }) => reload))
+        if (disposed) return
+        const ready = pending.map(({ job }) => job)
+        if (axis === 'pose') {
+          setDraft((current) => {
+            const job = ready.find((item) => item.key === current?.key)
+            return current && job?.kind ? { ...current, animation: job.kind } : current
+          })
+        }
+        for (const job of ready) {
+          toast(t('Animation ready') + (job.key ? `: ${job.key}` : ''))
+          notifiedJobs.current.add(job.task_id)
+          pendingCompletions.current.delete(job.task_id)
+        }
+      }
+    }
+    const poll = async () => {
+      try {
+        await drainPendingCompletions()
+        if (disposed) return
+        const result = await apiGet<{ jobs: AnimationJob[] }>('/poses/animations/jobs')
+        if (disposed) return
+        setAnimationJobs(result.jobs)
+        const completed = result.jobs.filter((job) => job.status === 'completed'
+          && !notifiedJobs.current.has(job.task_id)
+          && !pendingCompletions.current.has(job.task_id)
+          && (jobStatuses.current.get(job.task_id) === 'pending'
+            || jobStatuses.current.get(job.task_id) === 'running'
+            || jobRequests.current.has(job.task_id)))
+        for (const job of result.jobs) jobStatuses.current.set(job.task_id, job.status)
+        if (completed.length) {
+          // Share the reload across effect restarts; keep completions pending
+          // until a live poll has reconciled the draft and shown every toast.
+          const reload = reloadLibrary()
+          for (const job of completed) pendingCompletions.current.set(job.task_id, { job, reload })
+        }
+        await drainPendingCompletions()
+        if (disposed) return
+        if (result.jobs.some(activeJob) || pendingCompletions.current.size > 0) timer = setTimeout(() => { void poll() }, 4000)
+      } catch (error) {
+        if (disposed) return
+        toast(t('Error') + ': ' + (error as Error).message, 'error')
+        // Retry while active jobs or unreconciled completions remain.
+        if (pendingCompletions.current.size > 0
+          || [...jobStatuses.current.values()].some((status) => status === 'pending' || status === 'running')) {
+          timer = setTimeout(() => { void poll() }, 4000)
+        }
+      }
+    }
+    void poll()
+    return () => { disposed = true; clearTimeout(timer) }
+  }, [axis, jobsRefresh, reloadLibrary, t, toast])
+
+  const closeAnimationDialog = useCallback(() => setAnimationDialog(null), [])
+  const animationStarted = (taskId: string, request: PoseAnimationRequest) => {
+    jobRequests.current.set(taskId, request)
+    jobStatuses.current.set(taskId, 'pending')
+    setAnimationJobs((jobs) => [{ task_id: taskId, status: 'pending', mode: request.mode,
+      key: request.entryKey }, ...jobs])
+    setAnimationDialog(null)
+    setJobsRefresh((value) => value + 1)
+    if (request.mode === 'candidate' && request.rawText === approveOf) {
+      setDraft(null)
+      setSelected('')
+      setIsNew(false)
+      setApproveOf('')
+    }
+  }
+
+  const retryAnimation = (job: AnimationJob) => {
+    const entry = data.entries.find((item) => item.key === job.key)
+    if (entry) {
+      setAnimationDialog({ mode: 'entry', entryKey: entry.key, prompt: entry.prompt,
+        initialHint: jobRequests.current.get(job.task_id)?.initialHint })
+    } else {
+      const request = jobRequests.current.get(job.task_id)
+      if (request) setAnimationDialog(request)
+    }
+  }
+
+  const phaseLabel = (phase: string | null | undefined) => {
+    switch (phase) {
+      case 'llm': return t('writing captions')
+      case 'hub': return t('animating')
+      case 'convert': return t('converting')
+      case 'import': return t('importing')
+      case 'check': return t('checking')
+      case 'publish': return t('publishing')
+      default: return phase || t('pending')
+    }
+  }
+
+  const jobStatus = (job: AnimationJob) => (
+    <div role="status" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+      <span className="ga-tag">
+        {activeJob(job)
+          ? t('Generating … ({phase})').replace('{phase}', phaseLabel(job.phase))
+          : t('Failed: {error}').replace('{error}', job.error || t('Unknown error'))}
+      </span>
+      {job.status === 'failed'
+        && (data.entries.some((entry) => entry.key === job.key && entry.solo !== false)
+          || (!data.entries.some((entry) => entry.key === job.key)
+            && jobRequests.current.has(job.task_id))) ? (
+        <button type="button" className="ga-btn ga-btn-sm" onClick={() => retryAnimation(job)}>
+          {t('Retry')}
+        </button>
+      ) : null}
+    </div>
+  )
+
+  const jobsByKey = new Map<string, AnimationJob>()
+  for (const job of animationJobs) {
+    if (job.key && !jobsByKey.has(job.key)) jobsByKey.set(job.key, job)
+  }
 
   // Switching the axis drops the open draft — the two catalogs share no keys.
   useEffect(() => {
@@ -814,6 +957,15 @@ export function PosesTab() {
           ) : null}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
+            {isPose ? <>
+              <button type="button" className="ga-btn ga-btn-sm"
+                onClick={() => setAnimationDialog({ mode: 'free' })}>
+                {t('New from description')}
+              </button>
+              {animationJobs.filter((job) => !data.entries.some((entry) => entry.key === job.key)
+                && (activeJob(job) || job.status === 'failed'))
+                .map((job) => <div key={job.task_id}>{jobStatus(job)}</div>)}
+            </> : null}
             <input
               className="ga-input"
               placeholder={t('Search…')}
@@ -880,6 +1032,10 @@ export function PosesTab() {
                   {p.store === 'world'
                     ? <span className="ga-source">{t('world')}</span> : null}
                 </button>
+                {isPose && jobsByKey.has(p.key) && (() => {
+                  const job = jobsByKey.get(p.key)!
+                  return activeJob(job) || job.status === 'failed' ? jobStatus(job) : null
+                })()}
               </li>
             ))}
           </ul>
@@ -1157,6 +1313,18 @@ export function PosesTab() {
                           </option>
                         ) : null}
                       </select>
+                      {draft.solo !== false && (approveOf || !isNew) ? (
+                        <button type="button" className="ga-btn ga-btn-sm"
+                          disabled={animationJobs.some((job) => job.key === draft.key && activeJob(job))}
+                          onClick={() => {
+                            const entry = data.entries.find((item) => item.key === draft.key)
+                            setAnimationDialog(approveOf
+                              ? { mode: 'candidate', rawText: approveOf }
+                              : { mode: 'entry', entryKey: draft.key, prompt: entry?.prompt || draft.prompt })
+                          }}>
+                          {approveOf ? t('Generate new') : draft.animation ? t('Regenerate') : t('Generate animation')}
+                        </button>
+                      ) : null}
                     </Field>
                     {/* Which figure sets actually have a file for the selected
                         kind — a kind that only exists as `female` leaves every
@@ -1274,6 +1442,7 @@ export function PosesTab() {
                     {draft.animation ? (
                       <ClipPreview
                         kind={draft.animation}
+                        bust={animationJobs.find((job) => job.key === draft.key && job.status === 'completed')?.task_id}
                         height={360}
                         group={draft.group}
                         rootDrop={(data.groups || {})[draft.group || '']?.root_drop ?? 0}
@@ -1305,6 +1474,10 @@ export function PosesTab() {
         onSubmit={(v) => { void renameKey(v) }}
         onClose={() => setRenameOpen(false)}
       />
+      {animationDialog ? (
+        <PoseAnimationDialog open {...animationDialog} onClose={closeAnimationDialog}
+          onStarted={animationStarted} />
+      ) : null}
     </div>
   )
 }
