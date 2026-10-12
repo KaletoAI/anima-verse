@@ -210,10 +210,12 @@ stops acting autonomously).
   outfit decency/compliance system.
 - **Portrait controls:** *Game-Admin → Characters → Image* has separate render, portrait and T-pose
   backend matches in a compact responsive grid, with normal and T-pose LoRA overrides alongside.
-  The portrait match takes precedence for portraits only; empty inherits the render match, then
-  the global portrait routing chain. In the portrait generation dialog, **Use current portrait
-  as reference** optionally preserves identity through an existing portrait (off by default,
-  requires a reference-capable backend). Portraits never use room or item references.
+  The portrait match takes precedence for portraits only; empty uses the global portrait routing
+  chain directly, never the character's general render match. In *Characters → Gallery*, the
+  star button on an image selects it as the profile image; the current portrait has a filled star.
+  In the portrait generation dialog, **Use current portrait as reference** optionally preserves
+  identity through an existing portrait (off by default, requires a reference-capable backend).
+  Portraits never use room or item references.
   Generated portraits frame the whole head and complete hairstyle, including long hair and all
   hair tips, with background margin on every side. Only a short, straight upper-neck stump is
   shown; longer hair hangs against the plain background without shoulders, chest or torso.

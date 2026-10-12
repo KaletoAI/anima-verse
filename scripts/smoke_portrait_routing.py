@@ -3,9 +3,9 @@
 
 Usage: ./.venv/bin/python scripts/smoke_portrait_routing.py
 
-Derived from the UI contract: profile_workflow replaces workflow at character
-position 0 for profile only; empty inherits workflow; clearing all overrides
-removes position 0. Photo/expression and T-pose keep their own selections.
+Derived from the UI contract: profile_workflow takes character position 0 for
+profile only; empty uses the server's portrait chain, never workflow. Clearing
+all overrides removes position 0. Photo/expression and T-pose keep their selections.
 Round-trip through real profile persistence and a real BackendPool; no HTTP,
 server or generation. Every path is isolated in temporary storage.
 """
@@ -46,6 +46,10 @@ def main():
                             (("Normal", 0), ("Portrait", 1), ("TPose", 2))],
                            agent_instances_provider=lambda name: {})
         assert save_character_profile("demo", {"name": "demo"}, create_new=True)
+        settings = config.get_all()
+        settings["image_generation"] = {**settings["image_generation"],
+                                        "routing": {"profile": ["Portrait*"]}}
+        config.save(settings)
         values = {"workflow": "Normal", "profile_workflow": "Portrait*",
                   "tpose_workflow": "TPose", "loras": [], "tpose_loras": []}
         character_ops.apply_outfit_imagegen("demo", values)
@@ -57,13 +61,23 @@ def main():
             assert (route.backend.name, route.position) == (expected, 0), route
         values["profile_workflow"] = ""
         character_ops.apply_outfit_imagegen("demo", values)
-        assert resolve_image_route("profile", character="demo", pool=pool).backend.name == "Normal"
+        route = resolve_image_route("profile", character="demo", pool=pool)
+        assert (route.backend.name, route.position) == ("Portrait", 1), route
+        for occasion in ("photo", "expression"):
+            assert resolve_image_route(occasion, character="demo", pool=pool).backend.name == "Normal"
+        values["tpose_workflow"] = ""
+        character_ops.apply_outfit_imagegen("demo", values)
+        assert resolve_image_route("tpose", character="demo", pool=pool).backend.name == "Normal"
         character_ops.apply_outfit_imagegen("demo", {"profile_workflow": "Portrait"})
         assert resolve_image_route("profile", character="demo", pool=pool).backend.name == "Portrait"
         character_ops.apply_outfit_imagegen("demo", {})
         assert get_character_profile("demo")["outfit_imagegen"] == {}
-        assert resolve_image_route("profile", character="demo", pool=pool).position is None
-        print("PASS: portrait override persistence, precedence, inheritance and clearing")
+        assert resolve_image_route("profile", character="demo", pool=pool).position == 1
+        settings["image_generation"]["routing"] = {}
+        config.save(settings)
+        route = resolve_image_route("profile", character="demo", pool=pool)
+        assert (route.backend.name, route.position) == ("Normal", None), route
+        print("PASS: portrait override persistence, server-chain inheritance, independent render/T-pose and clearing")
 
 
 if __name__ == "__main__":

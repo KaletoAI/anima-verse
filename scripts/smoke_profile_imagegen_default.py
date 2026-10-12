@@ -7,10 +7,10 @@ payload `generate_from_input` is handed — the consumer of this rule.
 
 THE RULE, by hand (development_instructions/plan-image-routing.md § 1 + review):
 a portrait is the "profile" occasion. The backend is resolved INSIDE the
-service by the image routing (the character's `outfit_imagegen.profile_workflow`,
-else `outfit_imagegen.workflow`, is position 0, then the profile chain), so
-the caller writes only `occasion` — never a `workflow` glob, never a config
-default. Only an explicit dialog pick reaches `backend` (hard, no fallback).
+service by the image routing (the character's `outfit_imagegen.profile_workflow`
+is position 0 when set, otherwise the server's profile chain), so the caller
+writes only `occasion` — never a `workflow` glob, never a config default.
+Only an explicit dialog pick reaches `backend` (hard, no fallback).
 
   [1] no request pick -> payload occasion "profile", backend "", no
       "workflow" key — on BOTH entry points (route core and the NPC asset job).

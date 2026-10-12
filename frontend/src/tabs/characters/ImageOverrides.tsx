@@ -9,13 +9,13 @@ import { Field } from '../../components/Field'
  *  - Backend match: a glob over image-backend names (e.g. "Flux*"). It is
  *    position 0 before the occasion chain of the image routing (Admin → Media
  *    Generation → Routing): every render of this character that names no
- *    backend of its own (outfit and variant previews, portraits, chat photos,
- *    TakePhoto turns) tries this match first, then the chain. A model picker
+ *    backend of its own (outfit and variant previews, chat photos, TakePhoto
+ *    turns) tries this match first, then the chain. A model picker
  *    is intentionally absent (the model comes from the backend).
  *  - T-pose backend match: a second glob used ONLY for the T-pose reference
  *    renders (the image->3D input) — position 0 of the T-pose chain.
- *  - Portrait backend match: a separate glob for portraits; empty inherits
- *    the render match before the portrait occasion chain.
+ *  - Portrait backend match: a separate glob for portraits; empty uses
+ *    the server's portrait occasion chain without inheriting the render match.
  *  - LoRA override: LoRAs always applied for this character.
  *  - T-pose LoRAs: replace the LoRA override for the T-pose reference renders
  *    (different backend, different LoRA ecosystem — no merge).
@@ -293,7 +293,7 @@ export function ImageOverrides({
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: 16 }}>
           {[
             { label: t('Backend match (glob)'), value: pattern, set: setPattern, key: 'pattern', matches: matching, placeholder: 'Flux*', empty: t('Empty: occasion chain') },
-            { label: t('Portrait backend match (glob)'), value: profilePattern, set: setProfilePattern, key: 'profilePattern', matches: profileMatching, placeholder: 'Portrait*', empty: t('Empty: render match, then portrait chain') },
+            { label: t('Portrait backend match (glob)'), value: profilePattern, set: setProfilePattern, key: 'profilePattern', matches: profileMatching, placeholder: 'Portrait*', empty: t('Empty: portrait chain') },
             { label: t('T-pose backend match (glob)'), value: tposePattern, set: setTposePattern, key: 'tposePattern', matches: tposeMatching, placeholder: 'TPose*', empty: t('Empty: render match, then T-pose chain') },
           ].map((match) => (
             <Field key={match.key} label={match.label}>

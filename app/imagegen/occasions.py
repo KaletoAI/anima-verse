@@ -60,7 +60,7 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
     "profile": _image(
         "Profile portrait", "Character portrait, temporary NPC portrait",
         ["profile"], {"character_scoped": True, "char_spec_field": "profile_workflow",
-                      "char_spec_fallback": "workflow"}),
+                      "char_spec_fallback": ""}),
     "expression": _image(
         "Expression & outfit variant",
         "Mood/activity variants, wardrobe preview, NPC default variant",

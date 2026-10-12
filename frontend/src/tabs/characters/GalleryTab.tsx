@@ -1,14 +1,16 @@
 /**
  * GalleryTab — a character's image gallery in the Game-Admin.
- * Deliberately minimal: thumbnail grid · delete image (with inline confirmation) ·
- * view enlarged in the lightbox. No further features.
+ * Thumbnail grid · select profile image · delete with inline confirmation ·
+ * view enlarged in the lightbox.
  *
- * Source: GET /characters/{name}/images · delete: DELETE …/images/{file}.
+ * Source: GET /characters/{name}/images · delete: DELETE …/images/{file}
+ * · select portrait: POST …/profile-image/{file}.
  * The lightbox is the shared singleton; its ONE host is mounted in main.tsx.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiDelete } from '../../lib/api'
+import { apiGet, apiDelete, apiPost } from '../../lib/api'
+import { useToast } from '../../lib/Toast'
 import { openLightbox } from '../../components/Lightbox'
 import { GalleryAccess } from './GalleryAccess'
 import { thumbUrl, thumbWidth } from '@anima/player-ui'
@@ -26,6 +28,7 @@ interface ImagesResp {
 
 export function GalleryTab({ character }: { character: string }) {
   const { t } = useI18n()
+  const { toast } = useToast()
   const [data, setData] = useState<ImagesResp | null>(null)
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -46,6 +49,22 @@ export function GalleryTab({ character }: { character: string }) {
   const openOne = (f: string) => {
     const v = videoOf(f)
     openLightbox(v ? { video: v, alt: f } : { src: imgUrl(f), alt: f })
+  }
+
+  const setProfile = async (f: string) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const result = await apiPost<{ profile_image: string }>(
+        `/characters/${encodeURIComponent(character)}/profile-image/${encodeURIComponent(f)}`, {},
+      )
+      setData((d) => d?.character === character ? { ...d, profile_image: result.profile_image } : d)
+      toast(t('Saved'))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
   }
 
   const del = async (f: string) => {
@@ -95,6 +114,15 @@ export function GalleryTab({ character }: { character: string }) {
                       background: 'rgba(0,0,0,0.5)', borderRadius: 4, padding: '0 4px', color: '#fff',
                     }}>★</span>
                   )}
+                  {!isProfile && !confirming && (
+                    <button type="button" title={t('Set as profile image')} aria-label={t('Set as profile image')}
+                      disabled={busy} onClick={() => setProfile(f)}
+                      style={{
+                        position: 'absolute', top: 4, left: 4, width: 26, height: 26, borderRadius: 6,
+                        border: '1px solid rgba(255,255,255,0.18)', background: 'rgba(20,22,28,0.7)',
+                        color: '#fff', cursor: 'pointer', lineHeight: 1, fontSize: '0.9em',
+                      }}>☆</button>
+                  )}
                   {hasVideo && (
                     <span style={{
                       position: 'absolute', bottom: 4, right: 4, fontSize: '0.8em',
@@ -122,6 +150,7 @@ export function GalleryTab({ character }: { character: string }) {
                     </div>
                   ) : (
                     <button type="button" title={t('Delete image')} aria-label={t('Delete image')}
+                      disabled={busy}
                       onClick={() => setConfirmDel(f)}
                       style={{
                         position: 'absolute', top: 4, right: 4, width: 26, height: 26, borderRadius: 6,
