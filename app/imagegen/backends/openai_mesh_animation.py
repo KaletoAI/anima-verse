@@ -190,21 +190,27 @@ class OpenAIMeshAnimationBackend(ImageBackend):
                         on_done=lambda sd, _s: self._download(sd, job_id, variants))
 
     def _download(self, sd, job_id: str, variants: int = 1) -> List[bytes]:
-        """Every verified result in ``n`` order; one verdict per model result."""
+        """Up to ``variants`` verified results in ``n`` order; one verdict per
+        model result. A failing result never stops its siblings."""
         results = sorted((r for r in (sd.get("results") or [])
                           if isinstance(r, dict) and r.get("mime") in RESULT_MIMES),
                          key=lambda r: r.get("n", 0) if isinstance(r.get("n", 0), int) else 0)
         blobs: List[bytes] = []
         meta: List[Dict] = []
-        for pos, res in enumerate(results):
+        for res in results:
             entry = {"n": res.get("n", 0), "name": str(res.get("name") or ""),
                      "mime": res.get("mime"), "sha256": res.get("sha256"), "ok": False,
                      "reason": ""}
             meta.append(entry)
-            if pos >= variants:
+            # Verified in n order until the requested count is reached, so an
+            # invalid early result never crowds out a valid later one.
+            if len(blobs) >= variants:
                 entry["reason"] = "unrequested result"
                 continue
-            blob, reason = self._fetch_result(job_id, res)
+            try:
+                blob, reason = self._fetch_result(job_id, res)
+            except requests.RequestException as exc:
+                blob, reason = None, f"download failed: {exc}"
             entry["ok"], entry["reason"] = blob is not None, reason
             if blob is None:
                 logger.error("%s: job %s result %s discarded: %s",

@@ -272,6 +272,29 @@ def variants_section():
             assert [m["n"] for m in got] == [0, 2], got
             assert got[0]["ok"] is False and "neither glTF nor FBX" in got[0]["reason"]
             print("PASS V3: foreign bytes dropped with a reason, preview PNG ignored")
+            import requests as real_requests
+            http.reset_mock()
+            http.RequestException = real_requests.RequestException
+            http.post.return_value = response({"job_id": JOB}, status=202)
+            http.get.side_effect = [response({"status": "done", "results": three[:2] + [
+                                        {"n": 2, "mime": "model/fbx", "sha256": sha(fbx1)}]}),
+                                    response(content=fbx1),
+                                    real_requests.Timeout("read timed out"),
+                                    response(content=fbx1)]
+            assert backend.generate("ignored", "", params=params, log_meta=None) == [fbx1, fbx1]
+            got = backend.last_result_meta
+            assert [m["ok"] for m in got] == [True, False, True], got
+            assert "read timed out" in got[1]["reason"], got[1]
+            print("PASS V3a: a download error on one variant does not stop its siblings")
+            surplus = [{"n": 0, "mime": "model/fbx"},
+                       {"n": 1, "mime": "model/fbx", "sha256": sha(fbx2)},
+                       {"n": 2, "mime": "model/fbx", "sha256": sha(fbx1)}]
+            assert run(surplus, [fbx2], {"variants": 1}) == [fbx2]
+            got = backend.last_result_meta
+            assert [(m["ok"], m["reason"]) for m in got] == [
+                (False, "missing sha256"), (True, ""), (False, "unrequested result")], got
+            assert http.get.call_count == 2
+            print("PASS V3b: an invalid first result does not crowd out a valid later one")
     with tempfile.TemporaryDirectory() as td:
         plain = OpenAIMeshAnimationBackend("unimate", URL, 0, "SKILL_IMAGEGEN_9_")
         meta = plain.motion_meta
