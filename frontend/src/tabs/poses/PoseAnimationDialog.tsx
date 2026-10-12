@@ -2,8 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Field } from '../../components/Field'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiPost } from '../../lib/api'
+import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { generatorName } from './generatedClip'
+
+/** One model of the pose_animation chain, as GET /poses/animations/backends lists it. */
+interface AnimationBackend {
+  name: string
+  available: boolean
+  motion_meta: { generator?: string; license?: string; max_variants?: number }
+}
 
 export interface PoseAnimationRequest {
   mode: 'entry' | 'candidate' | 'free'
@@ -26,6 +34,9 @@ export function PoseAnimationDialog({ open, mode, entryKey, rawText, prompt,
   const [text, setText] = useState(initialText)
   const [hint, setHint] = useState(initialHint)
   const [busy, setBusy] = useState(false)
+  const [backends, setBackends] = useState<AnimationBackend[]>([])
+  const [model, setModel] = useState('')
+  const [variants, setVariants] = useState(3)
   const firstField = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
   const formRef = useRef<HTMLFormElement | null>(null)
   const submitting = useRef(false)
@@ -39,6 +50,29 @@ export function PoseAnimationDialog({ open, mode, entryKey, rawText, prompt,
 
   useEffect(() => {
     if (!open) return
+    let live = true
+    apiGet<{ backends: AnimationBackend[]; default_variants: number }>('/poses/animations/backends')
+      .then((result) => {
+        if (!live) return
+        setBackends(result.backends || [])
+        setVariants(result.default_variants || 3)
+      })
+      .catch((error) => { if (live) toast(t('Error') + ': ' + (error as Error).message, 'error') })
+    return () => { live = false }
+  }, [open, t, toast])
+
+  // Auto runs the first usable chain entry; its limits and licence are what the
+  // dialog shows until a model is picked explicitly.
+  const chosen = model
+    ? backends.find((b) => b.name === model)
+    : backends.find((b) => b.available) || backends[0]
+  const maxVariants = Math.max(1, Math.min(4, chosen?.motion_meta.max_variants || 4))
+  useEffect(() => {
+    if (variants > maxVariants) setVariants(maxVariants)
+  }, [variants, maxVariants])
+
+  useEffect(() => {
+    if (!open) return
     const previousFocus = document.activeElement as HTMLElement | null
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
@@ -47,7 +81,7 @@ export function PoseAnimationDialog({ open, mode, entryKey, rawText, prompt,
       if (event.key === 'Escape' && !submitting.current) onClose()
       if (event.key === 'Tab') {
         const controls = formRef.current?.querySelectorAll<HTMLElement>(
-          'button:not(:disabled), input:not(:disabled), textarea:not(:disabled)',
+          'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled)',
         )
         if (!controls?.length) {
           event.preventDefault()
@@ -84,6 +118,8 @@ export function PoseAnimationDialog({ open, mode, entryKey, rawText, prompt,
         ...(mode === 'candidate' ? { raw_text: rawText } : {}),
         ...(mode === 'free' ? { text: text.trim() } : {}),
         hint: hint.trim(),
+        backend: model,
+        variants,
       })
       onStarted(result.task_id, { mode, entryKey, rawText, prompt,
         initialText: text, initialHint: hint })
@@ -134,8 +170,33 @@ export function PoseAnimationDialog({ open, mode, entryKey, rawText, prompt,
                 ref={(element) => { if (mode !== 'free') firstField.current = element }}
                 disabled={busy} value={hint} onChange={(event) => setHint(event.target.value)} />
             </Field>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Field label={t('Model')}>
+                <select className="ga-input" aria-label={t('Model')} disabled={busy} value={model}
+                  onChange={(event) => setModel(event.target.value)}>
+                  <option value="">{t('Auto (routing)')}</option>
+                  {backends.map((b) => (
+                    <option key={b.name} value={b.name} disabled={!b.available}>
+                      {b.name}{b.motion_meta.generator ? ` (${generatorName(b.motion_meta.generator)})` : ''}
+                      {b.available ? '' : ` — ${t('unavailable')}`}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label={t('Variants')}>
+                <select className="ga-input" aria-label={t('Variants')} disabled={busy} value={variants}
+                  onChange={(event) => setVariants(Number(event.target.value))}>
+                  {Array.from({ length: maxVariants }, (_, i) => i + 1).map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
             <div className="ga-form-hint">
-              {t('UniMate · non-commercial only · the clip goes into the shared library')}
+              {chosen
+                ? `${generatorName(chosen.motion_meta.generator)} · ${chosen.motion_meta.license || ''} · `
+                : ''}
+              {t('you pick one variant; the clip goes into the shared library')}
             </div>
           </div>
         </div>

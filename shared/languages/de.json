@@ -1495,8 +1495,6 @@
     "Top": "Oberteil",
     "Underwear bottom": "Unterwäsche unten",
     "Underwear top": "Unterwäsche oben",
-    "UniMate · NC": "UniMate · NC",
-    "UniMate · non-commercial only · the clip goes into the shared library": "UniMate · nur nicht-kommerziell · der Clip kommt in die gemeinsame Bibliothek",
     "Import mode": "Import-Modus",
     "Full clone": "Vollständiger Klon",
     "keep all history (same/compatible world)": "gesamte Historie behalten (gleiche/kompatible Welt)",
@@ -2442,6 +2440,17 @@
     "Mesh retained — rigging failed. Showing the new mesh statically.": "Mesh gespeichert — Rigging fehlgeschlagen. Das neue Mesh wird statisch angezeigt.",
     "Mesh retained — no rig yet. Use Re-rig from mesh to animate it.": "Mesh gespeichert — noch kein Rig. Verwende „Aus Mesh neu riggen“, um es zu animieren.",
     "A valid unrigged delivery is retained as the static current mesh. Use Re-rig from mesh afterwards; no Store anyway override is needed.": "Ein gültiges ungeriggtes Ergebnis wird als aktuelles statisches Mesh gespeichert. Verwende danach „Aus Mesh neu riggen“; „Trotzdem speichern“ ist dafür nicht erforderlich.",
-    "Clamped per character to its maximum rest angle.": "Pro Charakter auf dessen maximalen Ruhewinkel begrenzt."
+    "Clamped per character to its maximum rest angle.": "Pro Charakter auf dessen maximalen Ruhewinkel begrenzt.",
+    "you pick one variant; the clip goes into the shared library": "du wählst eine Variante; der Clip kommt in die gemeinsame Bibliothek",
+    "Variants discarded": "Varianten verworfen",
+    "Choose a variant": "Variante wählen",
+    "Did not pass the check": "Prüfung nicht bestanden",
+    "Use this": "Diese nehmen",
+    "Discard every variant of this job?": "Alle Varianten dieses Auftrags verwerfen?",
+    "Discard all": "Alle verwerfen",
+    "Variants ready — choose one": "Varianten fertig — bitte eine wählen",
+    "waiting for your choice": "wartet auf deine Auswahl",
+    "Choose variant ({n})": "Variante wählen ({n})",
+    "Variants expired": "Varianten abgelaufen"
   }
 }

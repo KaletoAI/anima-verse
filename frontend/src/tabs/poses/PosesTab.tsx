@@ -22,6 +22,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PoseAnimationDialog } from './PoseAnimationDialog'
 import type { PoseAnimationRequest } from './PoseAnimationDialog'
+import { PoseAnimationChoice } from './PoseAnimationChoice'
+import type { AnimationCandidate } from './PoseAnimationChoice'
 import { ClipCatalog } from './ClipCatalog'
 import { ClipInbox } from './ClipInbox'
 import { ClipLibrary } from './ClipLibrary'
@@ -48,10 +50,20 @@ interface AnimationJob {
   phase?: string | null
   kind?: string | null
   error?: string | null
+  /** awaiting_choice → published | discarded | expired (plan v3: variant choice) */
+  state?: string | null
+  candidates?: AnimationCandidate[] | null
+  backend?: string | null
+  generator?: string | null
 }
 
 function activeJob(job: AnimationJob) {
   return job.status === 'pending' || job.status === 'running'
+}
+
+/** A finished job whose variants wait for the admin's pick. */
+function awaitingChoice(job: AnimationJob) {
+  return job.status === 'completed' && job.state === 'awaiting_choice'
 }
 /** The tab has five surfaces: the catalog entries, the installed clip library
  *  behind their animation kinds, the CMU clip pool those kinds come from, the
@@ -190,6 +202,7 @@ export function PosesTab() {
   const jobRequests = useRef(new Map<string, PoseAnimationRequest>())
   const notifiedJobs = useRef(new Set<string>())
   const pendingCompletions = useRef(new Map<string, { job: AnimationJob; reload: Promise<void> }>())
+  const [choiceJob, setChoiceJob] = useState<AnimationJob | null>(null)
 
   const isPose = axis === 'pose'
 
@@ -243,12 +256,13 @@ export function PosesTab() {
         const ready = pending.map(({ job }) => job)
         if (axis === 'pose') {
           setDraft((current) => {
-            const job = ready.find((item) => item.key === current?.key)
+            const job = ready.find((item) => item.key === current?.key && item.state === 'published')
             return current && job?.kind ? { ...current, animation: job.kind } : current
           })
         }
         for (const job of ready) {
-          toast(t('Animation ready') + (job.key ? `: ${job.key}` : ''))
+          toast((awaitingChoice(job) ? t('Variants ready — choose one') : t('Animation ready'))
+            + (job.key ? `: ${job.key}` : ''))
           notifiedJobs.current.add(job.task_id)
           pendingCompletions.current.delete(job.task_id)
         }
@@ -326,11 +340,21 @@ export function PosesTab() {
       case 'import': return t('importing')
       case 'check': return t('checking')
       case 'publish': return t('publishing')
+      case 'choose': return t('waiting for your choice')
       default: return phase || t('pending')
     }
   }
 
-  const jobStatus = (job: AnimationJob) => (
+  const jobStatus = (job: AnimationJob) => awaitingChoice(job) ? (
+    <div role="status" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+      <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" onClick={() => setChoiceJob(job)}>
+        {t('Choose variant ({n})').replace('{n}',
+          String((job.candidates || []).filter((cand) => cand.ok).length))}
+      </button>
+    </div>
+  ) : job.state === 'expired' ? (
+    <div role="status"><span className="ga-tag">{t('Variants expired')}</span></div>
+  ) : (
     <div role="status" style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
       <span className="ga-tag">
         {activeJob(job)
@@ -963,7 +987,7 @@ export function PosesTab() {
                 {t('New from description')}
               </button>
               {animationJobs.filter((job) => !data.entries.some((entry) => entry.key === job.key)
-                && (activeJob(job) || job.status === 'failed'))
+                && (activeJob(job) || job.status === 'failed' || awaitingChoice(job)))
                 .map((job) => <div key={job.task_id}>{jobStatus(job)}</div>)}
             </> : null}
             <input
@@ -1034,7 +1058,7 @@ export function PosesTab() {
                 </button>
                 {isPose && jobsByKey.has(p.key) && (() => {
                   const job = jobsByKey.get(p.key)!
-                  return activeJob(job) || job.status === 'failed' ? jobStatus(job) : null
+                  return activeJob(job) || job.status === 'failed' || awaitingChoice(job) ? jobStatus(job) : null
                 })()}
               </li>
             ))}
@@ -1442,7 +1466,7 @@ export function PosesTab() {
                     {draft.animation ? (
                       <ClipPreview
                         kind={draft.animation}
-                        bust={animationJobs.find((job) => job.key === draft.key && job.status === 'completed')?.task_id}
+                        bust={animationJobs.find((job) => job.key === draft.key && job.state === 'published')?.task_id}
                         height={360}
                         group={draft.group}
                         rootDrop={(data.groups || {})[draft.group || '']?.root_drop ?? 0}
@@ -1477,6 +1501,21 @@ export function PosesTab() {
       {animationDialog ? (
         <PoseAnimationDialog open {...animationDialog} onClose={closeAnimationDialog}
           onStarted={animationStarted} />
+      ) : null}
+      {choiceJob ? (
+        <PoseAnimationChoice taskId={choiceJob.task_id} poseKey={choiceJob.key}
+          generator={choiceJob.generator} candidates={choiceJob.candidates || []}
+          onClose={() => setChoiceJob(null)}
+          onDecided={(kind) => {
+            const decided = choiceJob
+            setChoiceJob(null)
+            setJobsRefresh((value) => value + 1)
+            void reloadLibrary()
+            if (kind && axis === 'pose') {
+              setDraft((current) => current && current.key === decided.key
+                ? { ...current, animation: kind } : current)
+            }
+          }} />
       ) : null}
     </div>
   )

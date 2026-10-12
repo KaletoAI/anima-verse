@@ -55,6 +55,7 @@ import { ApiError, apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../li
 import { orderSets } from './clipSets'
 import type { ApiClipRow as BaseApiClipRow, ClipListing } from './clipSets'
 import { rootMotionSummary } from './rootMotion'
+import { generatedBadge } from './generatedClip'
 
 interface ApiClipRow extends BaseApiClipRow {
   generator?: string
@@ -470,12 +471,14 @@ export function ClipLibrary({
             {t('licensed')}
           </span>
         ) : null}
-        {cell.all.some((clip) => clip.generator === 'unimate') ? (
-          <span className="ga-tag ga-tag-tier"
-            title={cell.all.find((clip) => clip.generator === 'unimate')?.license}>
-            {t('UniMate · NC')}
-          </span>
-        ) : null}
+        {(() => {
+          const generated = cell.all.find((clip) => generatedBadge(clip))
+          return generated ? (
+            <span className="ga-tag ga-tag-tier" title={generated.license}>
+              {generatedBadge(generated)}
+            </span>
+          ) : null
+        })()}
         {n > 1 ? <span style={{ opacity: 0.7 }}>×{n}</span> : null}
       </span>
     )
@@ -505,8 +508,8 @@ export function ClipLibrary({
         <div style={{ display: 'flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap' }}>
           <code style={{ wordBreak: 'break-all' }}>{clip.filename || relOf(clip)}</code>
           <span className={`ga-tag${lib === 'licensed' ? ' ga-tag-tier' : ''}`}>{t(lib)}</span>
-          {clip.generator === 'unimate' ? (
-            <span className="ga-tag ga-tag-tier" title={clip.license}>{t('UniMate · NC')}</span>
+          {generatedBadge(clip) ? (
+            <span className="ga-tag ga-tag-tier" title={clip.license}>{generatedBadge(clip)}</span>
           ) : null}
         </div>
         <div className="ga-form-hint" style={{ marginTop: 2 }}>{facts.join(' · ')}</div>
