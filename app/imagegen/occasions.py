@@ -102,6 +102,8 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
                      "category": "mesh2rig", "requires_chain": True},
     "rig_creature": {**_mesh("3D rig — creature", "Character rig (non-humanoid)", "generic"),
                      "category": "mesh2rig", "requires_chain": True},
+    "face_retexture": {**_mesh("Face retexture", "Character face texture correction", "none"),
+                       "category": "face_retexture", "requires_chain": False},
     "mesh_object": _mesh("3D mesh — object", "Prop mesh", "none"),
     "mesh_building": _mesh("3D mesh — building", "Building/room mesh", "none"),
     "pose_animation": {"label": "3D animation — pose clip", "media": "animation",

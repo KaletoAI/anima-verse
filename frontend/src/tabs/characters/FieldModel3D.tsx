@@ -73,7 +73,24 @@ interface ExtensionRigResult {
   per_tier?: Record<string, ExtensionRigResult>
 }
 
+interface FaceRetextureFinding {
+  code: string
+  message: string
+  fix?: string
+  detail?: string
+}
+interface FaceRetextureCheck {
+  ok: boolean
+  problems: FaceRetextureFinding[]
+  warnings: FaceRetextureFinding[]
+  runnable: boolean
+  runnable_problems: FaceRetextureFinding[]
+}
+
 interface Model3DInfo {
+  face_retexture?: { status: string; at?: string; backend?: string; job_id?: string; material_lost?: boolean }
+  face_retexture_snapshot?: { ok: boolean; created_at?: string; error?: string }
+  face_retexture_compare_url?: string
   model_rev?: string
   extension_rig?: ExtensionRigResult
   filename?: string
@@ -107,6 +124,8 @@ interface Model3DInfo {
   low_size?: number
   low_tris?: number
   low_ratio?: number
+  refined?: { retexture: boolean; reason?: string; bytes_saved?: number; at?: string }
+  lod_error?: string
 }
 
 interface MeshBackend {
@@ -132,6 +151,8 @@ interface Model3DStatus {
     extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }> }
   extension_groups?: ExtensionRigDeclaration[]
   rig_backends?: MeshBackend[]
+  face_retexture_backends?: MeshBackend[]
+  face_retexture_result?: { task_id: string; ok: boolean; error?: string }
   rerig_result?: { task_id: string; ok: boolean; error?: string }
   backends?: MeshBackend[]
   default?: string
@@ -164,7 +185,7 @@ export function FieldModel3D({ character }: { character: string }) {
   // Subscribe to the shared clock settings so the stamps above re-render
   // once the server-configured format and timezone arrive.
   useClockSettings()
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(character)
   const [st, setSt] = useState<Model3DStatus>({})
@@ -192,6 +213,13 @@ export function FieldModel3D({ character }: { character: string }) {
   const [rerigOpen, setRerigOpen] = useState(false)
   const [rerigBackend, setRerigBackend] = useState('')
   const rerigTaskRef = useRef('')
+  const faceTaskRef = useRef('')
+  const [faceOpen, setFaceOpen] = useState(false)
+  const [faceBackend, setFaceBackend] = useState('')
+  const [faceCheck, setFaceCheck] = useState<FaceRetextureCheck | null>(null)
+  const [faceCheckError, setFaceCheckError] = useState('')
+  const [faceControls, setFaceControls] = useState({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 })
+  const [revertFaceOpen, setRevertFaceOpen] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
   const [pendingFbx, setPendingFbx] = useState<File | null>(null)
@@ -234,6 +262,11 @@ export function FieldModel3D({ character }: { character: string }) {
           d.rerig_result.ok ? undefined : 'error')
         rerigTaskRef.current = ''
       }
+      if (d && !d.pending && faceTaskRef.current && d.face_retexture_result?.task_id === faceTaskRef.current) {
+        toast(d.face_retexture_result.ok ? t('Face retexture completed') : `${t('Face retexture failed')}: ${d.face_retexture_result.error || t('Error')}`,
+          d.face_retexture_result.ok ? undefined : 'error')
+        faceTaskRef.current = ''
+      }
       if (!d?.pending || n >= 200) {
         if (pollRef.current) clearInterval(pollRef.current)
         setBusy(false)
@@ -245,6 +278,10 @@ export function FieldModel3D({ character }: { character: string }) {
     setConfirmDelete(false)
     setRerigOpen(false)
     rerigTaskRef.current = ''
+    faceTaskRef.current = ''
+    setFaceOpen(false)
+    setRevertFaceOpen(false)
+    setFaceCheck(null)
     setJobOpen(false)
     setJobId('')
     setJobErrors([])
@@ -356,6 +393,61 @@ export function FieldModel3D({ character }: { character: string }) {
       if (context !== previewContextRef.current) return
       toast(t('Error') + ': ' + (e as Error).message, 'error')
       setBusy(false)
+    }
+  }
+
+  const faceSignature = st.signature || ''
+  useEffect(() => {
+    if (!faceOpen) return
+    let cancelled = false
+    setFaceCheck(null)
+    setFaceCheckError('')
+    const query = new URLSearchParams({ signature: faceSignature, backend: faceBackend, lang })
+    apiGet<FaceRetextureCheck>(`/characters/${enc}/model3d/face-retexture/check?${query}`)
+      .then(result => { if (!cancelled) setFaceCheck(result) })
+      .catch(error => { if (!cancelled) setFaceCheckError((error as Error).message) })
+    return () => { cancelled = true }
+  }, [faceOpen, faceSignature, faceBackend, enc, lang])
+
+  const applyFaceRetexture = async () => {
+    if (busy || st.pending || !faceCheck?.ok || !faceCheck.runnable) return
+    const context = previewContextRef.current
+    const query = new URLSearchParams({ signature: faceSignature, backend: faceBackend, lang })
+    for (const [key, value] of Object.entries(faceControls)) query.set(key, String(value))
+    setBusy(true)
+    try {
+      const result = await apiPost<{ ok?: boolean; status?: string; task_id?: string; problems?: FaceRetextureFinding[] }>(
+        `/characters/${enc}/model3d/face-retexture?${query}`, {})
+      if (context !== previewContextRef.current) return
+      if (result.ok === false) throw new Error((result.problems || []).map(p => `${p.message} ${p.fix || ''}`).join(' · '))
+      setFaceOpen(false)
+      faceTaskRef.current = result.task_id || ''
+      toast(t('Face retexture running…'))
+      startPoll()
+    } catch (error) {
+      if (context !== previewContextRef.current) return
+      toast(t('Error') + ': ' + (error as Error).message, 'error')
+      setBusy(false)
+    }
+  }
+
+  const revertFaceRetexture = async () => {
+    if (busy || st.pending) return
+    const context = previewContextRef.current
+    setBusy(true)
+    const query = new URLSearchParams({ signature: st.model?.signature || '', lang })
+    try {
+      const result = await apiPost<{ ok: boolean; error?: string }>(`/characters/${enc}/model3d/face-retexture/revert?${query}`, {})
+      if (context !== previewContextRef.current) return
+      if (!result.ok) throw new Error(result.error || t('Face retexture revert failed'))
+      setRevertFaceOpen(false)
+      toast(t('Face retexture reverted'))
+      await load()
+    } catch (error) {
+      if (context !== previewContextRef.current) return
+      toast(t('Error') + ': ' + (error as Error).message, 'error')
+    } finally {
+      if (context === previewContextRef.current) setBusy(false)
     }
   }
 
@@ -974,6 +1066,75 @@ export function FieldModel3D({ character }: { character: string }) {
       {model ? <div className="ga-hint">
         {t('Mesh backend')}: {model.mesh_backend || t('Unknown')} · {t('Rig backend')}: {model.rig_backend || t('Unknown')}
       </div> : null}
+      {!st.pending && st.face_retexture_result ? <div className="ga-hint" role="status">
+        {st.face_retexture_result.ok ? t('Face retexture completed') : `${t('Face retexture failed')}: ${st.face_retexture_result.error || t('Error')}`}
+      </div> : null}
+      {model?.face_retexture ? <div className="ga-hint" role="status">
+        {model.face_retexture.status === 'applied' ? t('Face retexture applied') : t('Face retexture reverted')}
+        {model.face_retexture.backend ? ` · ${model.face_retexture.backend}` : ''}
+        {model.face_retexture.job_id ? ` · ${model.face_retexture.job_id}` : ''}
+        {model.face_retexture.at ? ` · ${formatDateTime(model.face_retexture.at, clockSettings())}` : ''}
+        {model.face_retexture_compare_url ? <> · <a href={model.face_retexture_compare_url} target="_blank" rel="noopener noreferrer">{t('Comparison image')}</a></> : null}
+      </div> : null}
+      {model?.face_retexture?.material_lost ? <p className="ga-hint" role="status">
+        {t('The rigger merged the face material — the face correction may be lost. Revert restores the previous model.')}
+      </p> : null}
+      {model?.refined && !model.refined.retexture && model.refined.reason ? <p className="ga-hint" role="status">{t('Texture re-encoding failed — the model was published without this improvement.')}: {model.refined.reason}</p> : null}
+      {model?.lod_error ? <p className="ga-hint" role="status">{t('Distance mesh rebuild failed')}: {model.lod_error}</p> : null}
+      {faceOpen ? createPortal(
+        <div className="ga-modal-backdrop" onClick={() => { if (!busy) setFaceOpen(false) }}>
+          <div className="ga-modal" role="dialog" aria-modal="true" aria-label={t('Face retexture')}
+            style={{ maxWidth: 560 }} onClick={e => e.stopPropagation()}>
+            <div className="ga-modal-header">{t('Face retexture')}</div>
+            <div className="ga-modal-body ga-form">
+              <p className="ga-hint">{t('Corrects the face texture from the original photo, then rebuilds the rig and derived meshes. Each run starts from the original unrigged mesh.')}</p>
+              <label>{t('Backend')}
+                <select value={faceBackend} disabled={busy} onChange={e => { setFaceCheck(null); setFaceBackend(e.target.value) }}>
+                  <option value="">{t('Auto (routing)')}</option>
+                  {(st.face_retexture_backends || []).map(b => <option key={b.name} value={b.name}>{b.name}{b.model ? ` · ${b.model}` : ''}</option>)}
+                </select>
+              </label>
+              {faceCheckError ? <p role="alert">{faceCheckError}</p> : null}
+              {!faceCheck && !faceCheckError ? <p role="status">{t('Checking face retexture eligibility…')}</p> : null}
+              {faceCheck ? <>
+                {[...faceCheck.problems, ...faceCheck.runnable_problems].map(p => <p key={p.code} role="alert">
+                  {p.message}{p.detail ? ` (${p.detail})` : ''}<br /><span className="ga-hint">{p.fix}</span>
+                </p>)}
+                {faceCheck.warnings.map(w => <p className="ga-hint" key={w.code}>{w.message}</p>)}
+                {faceCheck.ok && faceCheck.runnable ? <p className="ga-hint">{t('Ready for face retexture.')}</p> : null}
+              </> : null}
+              <label>{t('Strength')}<input type="number" min={0} max={1} step={0.05} value={faceControls.strength} disabled={busy}
+                onChange={e => setFaceControls(v => ({ ...v, strength: e.target.valueAsNumber }))} /></label>
+              <label>{t('Feather')}<input type="number" min={0} max={0.5} step={0.01} value={faceControls.feather} disabled={busy}
+                onChange={e => setFaceControls(v => ({ ...v, feather: e.target.valueAsNumber }))} /></label>
+              <label>{t('Render resolution')}<input type="number" min={256} max={2048} step={1} value={faceControls.render_resolution} disabled={busy}
+                onChange={e => setFaceControls(v => ({ ...v, render_resolution: e.target.valueAsNumber }))} /></label>
+              <label>{t('Yaw (degrees)')}<input type="number" min={-180} max={180} step={1} value={faceControls.yaw} disabled={busy}
+                onChange={e => setFaceControls(v => ({ ...v, yaw: e.target.valueAsNumber }))} /></label>
+            </div>
+            <div className="ga-modal-footer">
+              <button type="button" className="ga-btn" disabled={busy} onClick={() => setFaceOpen(false)}>{t('Cancel')}</button>
+              <button type="button" className="ga-btn ga-btn-primary"
+                disabled={pending || !faceCheck?.ok || !faceCheck.runnable || !Number.isFinite(faceControls.strength) || faceControls.strength < 0 || faceControls.strength > 1 || !Number.isFinite(faceControls.feather) || faceControls.feather < 0 || faceControls.feather > 0.5 || !Number.isInteger(faceControls.render_resolution) || faceControls.render_resolution < 256 || faceControls.render_resolution > 2048 || !Number.isFinite(faceControls.yaw) || faceControls.yaw < -180 || faceControls.yaw > 180}
+                onClick={applyFaceRetexture}>{t('Start face retexture')}</button>
+            </div>
+          </div>
+        </div>, document.body) : null}
+      {revertFaceOpen ? createPortal(
+        <div className="ga-modal-backdrop" onClick={() => { if (!busy) setRevertFaceOpen(false) }}>
+          <div className="ga-modal" role="dialog" aria-modal="true" aria-label={t('Revert face retexture')}
+            style={{ maxWidth: 520 }} onClick={e => e.stopPropagation()}>
+            <div className="ga-modal-header">{t('Revert face retexture')}</div>
+            <div className="ga-modal-body">
+              <p>{t('Restore the model snapshot from {time}?').replace('{time}', model?.face_retexture_snapshot?.created_at ? formatDateTime(model.face_retexture_snapshot.created_at, clockSettings()) : t('Unknown'))}</p>
+              <p>{t('This also resets all later changes to this model, including re-rigging, extension bones and distance meshes. No generation job is started.')}</p>
+            </div>
+            <div className="ga-modal-footer">
+              <button type="button" className="ga-btn" disabled={busy} onClick={() => setRevertFaceOpen(false)}>{t('Cancel')}</button>
+              <button type="button" className="ga-btn ga-btn-primary" disabled={pending || !model?.face_retexture_snapshot?.ok} onClick={revertFaceRetexture}>{t('Revert face retexture')}</button>
+            </div>
+          </div>
+        </div>, document.body) : null}
       {rerigOpen ? createPortal(
         <div className="ga-modal-backdrop" onClick={() => { if (!busy) setRerigOpen(false) }}>
           <div className="ga-modal" role="dialog" aria-modal="true" aria-label={t('Re-rig from mesh')}
@@ -995,6 +1156,12 @@ export function FieldModel3D({ character }: { character: string }) {
           </div>
         </div>, document.body) : null}
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <button type="button" className="ga-btn ga-btn-sm" disabled={pending}
+          onClick={() => { setFaceBackend(''); setFaceCheck(null); setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 }); setFaceOpen(true) }}>
+          {t('Face retexture…')}
+        </button>
+        {model?.face_retexture_snapshot?.ok ? <button type="button" className="ga-btn ga-btn-sm" disabled={pending}
+          onClick={() => setRevertFaceOpen(true)}>{t('Revert face retexture…')}</button> : null}
         <button type="button" className="ga-btn ga-btn-sm"
           disabled={pending || !model?.has_unrigged_source}
           title={!model?.has_unrigged_source ? t('No retained unrigged mesh source. Generate a new model to enable re-rigging.') : undefined}

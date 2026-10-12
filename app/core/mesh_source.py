@@ -75,3 +75,13 @@ def validate_source(raw: bytes) -> dict:
         verdict["ok"] = False
         verdict["errors"].append("source mesh must be unrigged (no skins); combined mesh+rig aliases are not supported")
     return verdict
+
+
+def validate_face_source(raw: bytes, *, original: bool = False) -> dict:
+    """Require an unrigged textured triangle mesh for face projection."""
+    from app.core.model_validate import face_texture_geometry
+    verdict = validate_source(raw)
+    geometry = face_texture_geometry(raw, original=original)
+    return {**geometry, 'ok': verdict['ok'] and geometry['ok'],
+            'errors': verdict['errors'] + geometry['errors'],
+            'warnings': verdict['warnings']}

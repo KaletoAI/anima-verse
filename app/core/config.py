@@ -912,6 +912,7 @@ _DEFAULT_MESH_BACKENDS = [
 ]
 
 
+    ("GLB-Face-Retexture", "face_retexture", 1, 0, 0, 0),
 def _default_mesh_backend_entries() -> list:
     """The seed list as config dicts (img2mesh, mesh2rig and mesh2mesh)."""
     out = []

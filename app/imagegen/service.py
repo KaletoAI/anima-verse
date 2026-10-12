@@ -1,4 +1,5 @@
 """Image generation service with cost-based backend selection"""
+import hashlib
 import base64
 import functools
 import json
@@ -711,6 +712,72 @@ class ImageService:
         ``list_mesh_backends``: the two lists never overlap."""
         return [b for b in self.list_available_backends(media="mesh")
                 if getattr(b, "category", "") == MESH2MESH_CATEGORY]
+
+    def list_face_retexture_backends(self) -> List[ImageBackend]:
+        """Available projection backends, separate from generation/reduction."""
+        return [b for b in self.list_available_backends(media="mesh")
+                if getattr(b, "category", "") == "face_retexture"]
+
+    @staticmethod
+    def _select_face_retexture_results(files):
+        """Accept exactly one corrected GLB and at most one comparison PNG."""
+        models = [f for f in files if f.get("mime") == "model/gltf-binary" or
+                  (f.get("kind") == "model" and str(f.get("name", "")).lower().endswith(".glb"))]
+        images = [f for f in files if f.get("mime") == "image/png"]
+        if len(models) != 1:
+            raise ValueError("Face retexture must deliver exactly one GLB")
+        if len(images) > 1:
+            raise ValueError("Face retexture delivered multiple comparison images")
+        return models[0], images[0] if images else None
+
+    def generate_face_retexture(self, mesh_path: str, image_bytes: bytes,
+                               output_dir: str, params=None, backend_glob: str = "",
+                               character_name: str = "") -> Dict[str, Any]:
+        """Submit projection on its own channel, capturing worker-local provenance."""
+        from app.imagegen.routing import route_meta, run_routed, resolve_spec
+        from app.imagegen.base import GatewayRejectedError
+        request = dict(params or {})
+        request.update(source_model_path=mesh_path, reference_image_bytes=image_bytes)
+        primary = None
+        if backend_glob.strip():
+            _, primary = resolve_spec("face_retexture", backend_glob,
+                                      character=character_name, pool=self.pool)
+            if primary is None:
+                raise ValueError("Selected face retexture backend is unavailable — no automatic fallback")
+
+        def render(b):
+            def op(bb):
+                def generate():
+                    blobs = bb.generate("", "", request,
+                                        log_meta={"agent_name": character_name, "media": "mesh"})
+                    if not blobs:
+                        raise GatewayRejectedError("Face retexture job returned no corrected mesh")
+                    files = list(getattr(bb, "last_result_files", []) or [])
+                    if len(files) != len(blobs):
+                        raise GatewayRejectedError("Face retexture results have incomplete metadata")
+                    return {"files": [dict(f, blob=raw) for f, raw in zip(files, blobs)],
+                            "job_id": getattr(bb, "last_job_id", "")}
+                return self.run_on_backend_channel(bb, generate, task_type="mesh_generation",
+                                                   agent_name=character_name)
+            return self.run_on_backend(b, op, character_name=character_name)
+        if primary is not None:
+            (result, used), route = render(primary), None
+        else:
+            (result, used), route = run_routed("face_retexture", render,
+                                              character=character_name, pool=self.pool)
+        model, compare = self._select_face_retexture_results(result["files"])
+        directory = Path(output_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / "corrected.glb"
+        target.write_bytes(model["blob"])
+        compare_path = directory / "comparison.png" if compare else None
+        if compare_path:
+            compare_path.write_bytes(compare["blob"])
+        return {"ok": True, "path": str(target),
+                "compare_path": str(compare_path) if compare_path else "",
+                "backend": used.name, "job_id": result["job_id"],
+                "result_sha256": model.get("sha256") or hashlib.sha256(model["blob"]).hexdigest(),
+                "result_url": model.get("url", ""), **route_meta(route)}
 
     def generate_mesh(self, source_image_path: str, output_path: str,
                       backend_glob: str = "", character_name: str = "",

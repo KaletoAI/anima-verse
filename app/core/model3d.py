@@ -14,6 +14,7 @@ model". Switching back to a known outfit reuses whatever is stored.
 """
 
 import json
+import hashlib
 import functools
 import inspect
 import re
@@ -36,6 +37,7 @@ MODEL_EXTS = (".fbx", ".glb", ".gltf", ".obj", ".ply", ".vrm")
 _lock = threading.Lock()
 _generating: set = set()
 _rerig_results: Dict[str, Dict[str, Any]] = {}
+_face_retexture_results: Dict[str, Dict[str, Any]] = {}
 # Distance meshes currently being built in the background, keyed by file path
 # — one build per file, however many clients ask for it at once.
 _lod_building: set = set()
@@ -51,7 +53,7 @@ _publication_epochs: Dict[tuple, int] = {}
 def _signature_files(directory: Path, signature: str) -> Dict[Path, Path]:
     """Only one signature's public files and private backups, never stages."""
     folders = (Path('.'), Path('low'), Path('raw'), Path('prerig'), Path('unrigged'),
-               Path('low/raw'), Path('low/prerig'))
+               Path('low/raw'), Path('low/prerig'), Path('facefix'))
     return {relative / p.name: p for relative in folders
             for p in (directory / relative).glob(f"{signature}.*") if p.is_file()}
 
@@ -90,6 +92,7 @@ def _publish_signature(character_name: str, directory: Path, stage: Path,
         if not directory.is_dir() or _publication_token(directory, signature) != token:
             return None
         changed = []
+        snapshot_removed = False
         try:
             for relative in current_files.keys() - staged_files.keys():
                 current_files[relative].unlink(missing_ok=True)
@@ -98,10 +101,26 @@ def _publish_signature(character_name: str, directory: Path, stage: Path,
             order = lambda r: (r.suffix == ".json", r.parent == Path('.'), str(r))
             for relative in sorted(replacements, key=order):
                 target = directory / relative
+                if not target.resolve().is_relative_to(directory.resolve()):
+                    raise ValueError("Model publication path escapes its directory")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(prepared / relative, target)
                 changed.append(relative)
+            snapshot = directory / "rollback" / signature
+            if not snapshot.resolve().is_relative_to(directory.resolve()):
+                raise ValueError("Rollback path escapes the model directory")
+            removed_snapshot = stage / ".removed-snapshot"
+            if (stage / ".replace-source").exists() or (stage / ".face-revert").exists():
+                if snapshot.exists():
+                    os.replace(snapshot, removed_snapshot)
+                    snapshot_removed = True
+            prepared_snapshot = stage / ".face-snapshot"
+            if prepared_snapshot.exists() and not snapshot.exists():
+                snapshot.parent.mkdir(exist_ok=True)
+                os.replace(prepared_snapshot, snapshot)
         except Exception:
+            if snapshot_removed:
+                os.replace(stage / ".removed-snapshot", directory / "rollback" / signature)
             if rollback is not None:
                 for relative in reversed(changed):
                     target = directory / relative
@@ -110,6 +129,8 @@ def _publish_signature(character_name: str, directory: Path, stage: Path,
                     else:
                         target.unlink(missing_ok=True)
             raise
+        if snapshot_removed:
+            shutil.rmtree(removed_snapshot)
         if changed or invalidate:
             key = (str(directory), signature)
             _publication_epochs[key] = _publication_epochs.get(key, 0) + 1
@@ -157,7 +178,7 @@ def _serial_model(function):
             if function.__name__ in ("set_model3d_rig", "delete_model3d"):
                 exact = find_model3d(character_name)
                 signature = exact.stem if exact else None
-            elif function.__name__ in ("build_lod", "rebuild_extension_rig", "measure_model", "diagnose_model", "retexture_model", "rerig_model"):
+            elif function.__name__ in ("build_lod", "rebuild_extension_rig", "measure_model", "diagnose_model", "retexture_model", "rerig_model", "face_retexture_model", "revert_face_retexture"):
                 served = find_model3d_serving(character_name)[0]
                 signature = served.stem if served else None
             signature = signature or current_outfit_state(character_name)[2]
@@ -188,6 +209,9 @@ def _serial_model(function):
                     shutil.copy2(source, target)
             except FileNotFoundError:
                 return stale("Model changed while staging")
+            if function.__name__ == "face_retexture_model" and not (directory / "rollback" / signature).exists():
+                from app.core.face_retexture import prepare_snapshot
+                prepare_snapshot(stage, signature)
             _staging.directories = {**active, character_name: stage}
             publications = getattr(_staging, "source_publications", {})
             publication = {"directory": directory, "signature": signature, "token": token}
@@ -220,11 +244,11 @@ def _serial_model(function):
                 if generation_error is not None:
                     raise generation_error
                 return result
-            if function.__name__ == "rerig_model" and not result.get("ok"):
+            if function.__name__ in ("rerig_model", "face_retexture_model", "revert_face_retexture") and not result.get("ok"):
                 return result
             if not _publish_signature(character_name, directory, stage, signature, token,
                                       rollback_on_error=function.__name__ in (
-                                          "generate_for_current_outfit", "rerig_model"),
+                                          "generate_for_current_outfit", "rerig_model", "face_retexture_model", "revert_face_retexture"),
                                       invalidate=function.__name__ == "delete_model3d"):
                 return stale("Model changed during processing; result discarded")
             if isinstance(result, dict):
@@ -673,6 +697,9 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
                 info["backend"] = meta.get("backend", "")
                 for key in ("mesh_backend", "rig_backend", "mesh_route_meta", "rig_route_meta"):
                     info[key] = meta.get(key, "" if key.endswith("backend") else {})
+                info["lod_error"] = meta.get("lod_error", "")
+                if isinstance(meta.get("refined"), dict):
+                    info["refined"] = meta["refined"]
                 info["source_filename"] = meta.get("source_filename", "")
                 info["job_id"] = meta.get("job_id", "")
                 info["rig_error"] = meta.get("rig_error", "")
@@ -734,17 +761,30 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
     out["blender"] = runner.status()
     out.update(list_mesh_backends(occasion=mesh_occasion_for_rig(rig)))
     out["rig_backends"] = list_rig_backends()
+    from app.imagegen.service import get_image_service
+    out["face_retexture_backends"] = [{"name": b.name, "model": b.model}
+                                     for b in get_image_service().list_face_retexture_backends()]
+    if path:
+        from app.core.face_retexture import snapshot_info
+        out["model"]["face_retexture"] = _read_sidecar(path).get("face_retexture")
+        out["model"]["face_retexture_snapshot"] = snapshot_info(path.parent, path.stem)
+        if (path.parent / "facefix" / f"{path.stem}.png").is_file():
+            out["model"]["face_retexture_compare_url"] = f"/characters/{quote(character_name)}/model3d/face-retexture/compare?signature={path.stem}"
     with _lock:
         out["pending"] = character_name in _generating
         out["rerig_result"] = _rerig_results.get(character_name)
+        out["face_retexture_result"] = _face_retexture_results.get(character_name)
     return out
 
 
 def _purge_combination(out_dir: Path, signature: str, *,
-                       keep_model: Optional[Path] = None, preserve_unrigged: bool = False) -> None:
+                       keep_model: Optional[Path] = None, preserve_unrigged: bool = False,
+                       preserve_sources: bool = False) -> None:
     """Remove any stored model of this outfit combination (model + texture +
     sidecar), whatever its format/source — the caller writes a fresh one.
     ``keep_model`` preserves the publication target until atomic replacement."""
+    from app.core.face_retexture import safe_signature
+    safe_signature(signature)
     keep = MODEL_EXTS + (".png", ".jpg", ".jpeg", ".json")
     for old in out_dir.glob(f"{signature}.*"):
         if old.suffix.lower() in keep and old not in (keep_model, keep_model.with_suffix(".json") if keep_model else None):
@@ -763,11 +803,19 @@ def _purge_combination(out_dir: Path, signature: str, *,
     # (refine.apply_script backs up only the first time) — the incident of
     # 2026-08-06: a fresh bake's pristine copy was silently never kept.
     from app.blender.refine import RAW_DIR_NAME
-    for directory in (out_dir / "unrigged", out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME):
-        if preserve_unrigged and directory.name == "unrigged":
+    for directory in (out_dir / "unrigged", out_dir / "facefix", out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME):
+        if (preserve_unrigged and directory.name == "unrigged") or (preserve_sources and directory.name in ("unrigged", "facefix")):
             continue
         for old in directory.glob(f"{signature}.*"):
             old.unlink()
+
+    if not preserve_sources and not preserve_unrigged:
+        if out_dir in getattr(_staging, "directories", {}).values():
+            (out_dir / ".replace-source").touch()
+        else:
+            snapshot = out_dir / "rollback" / signature
+            if snapshot.resolve().is_relative_to(out_dir.resolve()) and snapshot.is_dir():
+                shutil.rmtree(snapshot)
 
 
 def invalidate_models_for_item(character_name: str, item_id: str) -> set:
@@ -1412,6 +1460,9 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
     _publish_sidecar(target, side)
     if meta.get("extension_rig"):
         meta["extension_rig"].setdefault("per_tier", {})[LOW_TIER] = side["extension_rig"]
+    had_lod_error = "lod_error" in meta
+    meta.pop("lod_error", None)
+    if meta.get("extension_rig") or had_lod_error:
         _publish_sidecar(path, meta)
     logger.info("Model3D %s: LOD %s (%s -> %s tris, %d bytes)", character_name,
                 target.name, stage.get("tris_before"), stage.get("tris"),
@@ -1662,8 +1713,12 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     import tempfile
     staging = Path(tempfile.mkdtemp(prefix=".generate-", dir=out_dir))
     try:
+        source_bytes = src.read_bytes()
+        uploaded_photo = staging / src.name
+        uploaded_photo.write_bytes(source_bytes)
+        source_manifest = _ref_manifest(src)
         res = get_image_service().generate_mesh(
-            source_image_path=str(src),
+            source_image_path=str(uploaded_photo),
             output_path=str(staging / f"{signature}.glb"),
             backend_glob=backend_glob,
             character_name=character_name,
@@ -1682,7 +1737,8 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         stored = _store_unrigged_model(character_name, signature, mesh_res, rig,
                                        {"source_image": src.name,
                                         "view_images": {v: Path(p).name for v, p in view_images.items()},
-                                        **_ref_manifest(src)})
+                                        "source_image_sha256": hashlib.sha256(source_bytes).hexdigest(),
+                                        **source_manifest})
         if not stored.get("ok"):
             error = stored["error"]
             return {"ok": False, "error": error}
@@ -1782,22 +1838,33 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
 @_serial_model
 def rerig_model(character_name: str, signature: Optional[str] = None, *,
                 backend_glob: str = "") -> Dict[str, Any]:
+    """Rebuild from the corrected source when present, otherwise the original."""
+    directory = get_model3d_dir(character_name)
+    source = directory / "facefix" / f"{signature}.glb"
+    if not source.is_file():
+        source = directory / "unrigged" / f"{signature}.glb"
+    return _rig_from_source(character_name, signature, source, rig_backend_glob=backend_glob)
+
+
+def _rig_from_source(character_name: str, signature: str, source: Path, *,
+                     rig_backend_glob: str = "") -> Dict[str, Any]:
     """Rig the retained source only; publish the entire chain on success."""
     import tempfile
     from app.imagegen.service import get_image_service
     from app.core.model_validate import validate_glb, validate_fbx
     path = find_model3d(character_name, signature)
     out_dir = get_model3d_dir(character_name)
-    source = out_dir / "unrigged" / f"{signature}.glb"
     if not source.is_file():
         return {"ok": False, "error": "No retained unrigged mesh source. Generate a new model to enable re-rigging."}
     rig = required_rig(character_name)
+    previous_meta = _read_sidecar(path) if path else {}
+    face_meta = _read_sidecar(source).get("face_retexture") if source.parent.name == "facefix" else None
     low = tier_variant(path, LOW_TIER) if path else None
     low_meta = _read_sidecar(low) if low else {}
     with tempfile.TemporaryDirectory(prefix=".rerig-", dir=out_dir) as tmp:
         res = get_image_service().generate_rig(
             mesh_path=str(source), output_path=str(Path(tmp) / f"{signature}.glb"),
-            rig=rig, character_name=character_name, backend_glob=backend_glob,
+            rig=rig, character_name=character_name, backend_glob=rig_backend_glob,
             basecolor_path=str(source.with_suffix(".png")) if rig == "generic" else "")
         if not res.get("ok"):
             return {"ok": False, "error": res.get("error") or "Rig generation failed"}
@@ -1807,15 +1874,22 @@ def rerig_model(character_name: str, signature: Optional[str] = None, *,
         check = validate_glb(blob) if rig == "mixamo" else validate_fbx(blob, texture)
         if not check.get("ok"):
             return {"ok": False, "error": "; ".join(check.get("errors") or ["Invalid rigged result"])}
+        material_lost = False
+        material_reason = ""
+        if face_meta or (out_dir / "facefix" / f"{signature}.glb").is_file():
+            from app.core.model_validate import face_texture_geometry
+            materials = face_texture_geometry(blob, rigged=True)
+            material_lost = not materials["ok"]
+            material_reason = "; ".join(materials["errors"])
         path = out_dir / f"{signature}{delivered.suffix.lower()}"
-        _purge_combination(out_dir, signature, keep_model=path, preserve_unrigged=True)
+        _purge_combination(out_dir, signature, keep_model=path, preserve_sources=True)
         _publish_model_bytes(path, blob)
         (out_dir / "raw").mkdir(exist_ok=True)
         _publish_model_bytes(out_dir / "raw" / path.name, blob)
         if texture is not None:
             _publish_model_bytes(path.with_suffix(".png"), texture)
             _publish_model_bytes((out_dir / "raw" / path.name).with_suffix(".png"), texture)
-        source_meta = _read_sidecar(source)
+        source_meta = _read_sidecar(out_dir / "unrigged" / f"{signature}.glb")
         meta = {k: v for k, v in source_meta.items() if k in (
             "mesh_backend", "mesh_route_meta", "source_image", "view_images", "pieces", "items", "job_id")}
         meta.update(created_at=utc_now_iso(), source="generated", signature=signature,
@@ -1824,23 +1898,50 @@ def rerig_model(character_name: str, signature: Optional[str] = None, *,
                     rig_route_meta={k: res[k] for k in ("routing", "fallback_from") if k in res},
                     has_texture=texture is not None,
                     source_filename=res.get("filename", ""))
+        if (out_dir / "facefix" / f"{signature}.glb").is_file():
+            meta["face_retexture"] = {**(face_meta or previous_meta.get("face_retexture", {})),
+                                      "material_lost": material_lost}
+            if material_lost:
+                meta["face_retexture"]["material_loss_reason"] = material_reason
         for key in ("routing", "fallback_from"):
             if key in res:
                 meta[key] = res[key]
-        _auto_retexture(character_name, path, meta)
+        try:
+            _auto_retexture(character_name, path, meta)
+        except Exception as exc:
+            _publish_model_bytes(path, blob)
+            meta["refined"] = {"retexture": False, "reason": str(exc),
+                               "bytes_saved": 0, "at": utc_now_iso()}
         _auto_normalize(character_name, path, meta, fail_on_error=True)
-        extension = _auto_extension_rig(character_name, path, meta)
+        # Optional improvements must never discard a successfully validated rig.
+        normalized = path.read_bytes()
+        try:
+            extension = _auto_extension_rig(character_name, path, meta)
+        except Exception as exc:
+            extension = {"ok": False, "error": str(exc)}
         if not extension.get("ok"):
-            return {"ok": False, "error": extension.get("error") or "Extension bones failed"}
+            _publish_model_bytes(path, normalized)
+            meta["extension_rig"] = {**(meta.get("extension_rig") or {}),
+                                     "status": "failed",
+                                     "reason": extension.get("error") or "Extension bones failed"}
         _attach_measurement(meta, path)
         _publish_sidecar(path, meta)
-        if low:
-            result = build_lod(character_name, signature, ratio=low_meta.get("lod_ratio") or _auto_lod_ratio())
-            if not result.get("ok"):
-                return {"ok": False, "error": result.get("error") or "Low tier rebuild failed"}
-        else:
-            request_lod(character_name, path)
-        return {"ok": True, "path": str(path), "filename": path.name}
+        try:
+            if low or (face_meta and _auto_lod_enabled()):
+                result = build_lod(character_name, signature, ratio=low_meta.get("lod_ratio") or _auto_lod_ratio())
+                if not result.get("ok"):
+                    raise RuntimeError(result.get("error") or "Low tier rebuild failed")
+            else:
+                request_lod(character_name, path)
+        except Exception as exc:
+            for relative, low_path in _signature_files(out_dir, signature).items():
+                if relative.parts[0] == LOW_TIER:
+                    low_path.unlink(missing_ok=True)
+            meta["lod_error"] = str(exc)
+            _publish_sidecar(path, meta)
+        return {"ok": True, "path": str(path), "filename": path.name,
+                "warnings": {k: meta[k] for k in ("face_retexture", "extension_rig", "lod_error", "refined") if k in meta}}
+
 
 
 def trigger_rerig(character_name: str, signature: str, *, backend_glob: str = "") -> Dict[str, Any]:
@@ -2119,3 +2220,128 @@ def _model_revision_unlocked(path: Optional[Path]) -> str:
         except OSError:
             records.append((tier, False, 0, 0, 0))
     return hashlib.sha256(json.dumps(records, separators=(",", ":")).encode()).hexdigest() if found else ""
+
+
+@_serial_model
+def face_retexture_model(character_name: str, signature: Optional[str] = None, *,
+                         backend_glob: str = "", params=None) -> Dict[str, Any]:
+    """Project the original photo, then rebuild every derived asset in the stage."""
+    import tempfile
+    from app.core import face_retexture
+    from app.core.mesh_source import validate_face_source
+    from app.imagegen.service import get_image_service
+    controls = face_retexture.validated_params(params)
+    eligibility = face_retexture.check(character_name, signature)
+    ready = face_retexture.runnable(character_name, backend_glob)
+    problems = eligibility['problems'] + ready['problems']
+    if problems:
+        return {'ok': False, 'problems': problems, 'error': '; '.join(p['message'] for p in problems)}
+    root = get_model3d_dir(character_name)
+    original = root / 'unrigged' / f'{signature}.glb'
+    meta = _read_sidecar(original)
+    image = face_retexture.flatten_photo(face_retexture.photo_path(character_name, signature, meta).read_bytes())
+    with tempfile.TemporaryDirectory(prefix='.face-job-', dir=root) as tmp:
+        result = get_image_service().generate_face_retexture(
+            str(original), image, tmp, controls, backend_glob, character_name)
+        if not result.get('ok'):
+            return {'ok': False, 'error': result.get('error') or 'Face retexture failed'}
+        raw = Path(result['path']).read_bytes()
+        if len(raw) > face_retexture.MAX_BYTES:
+            return {'ok': False, 'error': 'Corrected mesh exceeds the 64 MB rig upload limit'}
+        verdict = validate_face_source(raw)
+        before = validate_face_source(original.read_bytes(), original=True)
+        if not verdict['ok'] or verdict['triangles'] != before['triangles']:
+            return {'ok': False, 'error': '; '.join(verdict['errors']) or 'Face retexture changed the triangle count'}
+        source = root / 'facefix' / f'{signature}.glb'
+        source.parent.mkdir(exist_ok=True)
+        _publish_model_bytes(source, raw)
+        face_meta = {'status': 'applied', 'at': utc_now_iso(),
+                     'backend': result.get('backend', ''), 'job_id': result.get('job_id', ''),
+                     'params': controls, 'result_sha256': result.get('result_sha256', ''),
+                     'result_url': result.get('result_url', ''),
+                     'route_meta': {k: result[k] for k in ('routing', 'fallback_from') if k in result}}
+        _publish_sidecar(source, {'face_retexture': face_meta})
+        compare = source.with_suffix('.png')
+        if result.get('compare_path'):
+            comparison = Path(result['compare_path']).read_bytes()
+            from PIL import Image
+            import io
+            decoded = Image.open(io.BytesIO(comparison))
+            decoded.load()
+            if decoded.format != 'PNG':
+                return {'ok': False, 'error': 'Comparison image is not a PNG'}
+            _publish_model_bytes(compare, comparison)
+        else:
+            compare.unlink(missing_ok=True)
+        rigged = _rig_from_source(character_name, signature, source)
+        if rigged.get('ok'):
+            rigged['face_retexture'] = _read_sidecar(Path(rigged['path'])).get('face_retexture', face_meta)
+        return rigged
+
+
+@_serial_model
+def revert_face_retexture(character_name: str, signature: Optional[str] = None) -> Dict[str, Any]:
+    """Restore the verified first snapshot without submitting any AI job."""
+    from app.core.face_retexture import snapshot_info
+    root = get_model3d_dir(character_name)
+    publication = getattr(_staging, 'source_publications', {}).get(character_name)
+    real_root = publication['directory'] if publication else root
+    snapshot = real_root / 'rollback' / signature
+    info = snapshot_info(real_root, signature)
+    if not info['ok']:
+        return info
+    for path in _signature_files(root, signature).values():
+        path.unlink()
+    for entry in info['files']:
+        relative = Path(entry['path'])
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(snapshot / relative, target)
+    path = find_model3d(character_name, signature)
+    meta = _read_sidecar(path)
+    meta['face_retexture'] = {'status': 'reverted', 'at': utc_now_iso()}
+    _publish_sidecar(path, meta)
+    (root / '.face-revert').touch()
+    return {'ok': True, 'path': str(path), 'filename': path.name,
+            'face_retexture': meta['face_retexture']}
+
+
+def trigger_face_retexture(character_name: str, signature: str, *,
+                           backend_glob: str = '', params=None) -> Dict[str, Any]:
+    """Track orchestration on the character's shared generation guard."""
+    from app.core.task_queue import get_task_queue
+    from app.core.face_retexture import safe_signature, validated_params
+    safe_signature(signature)
+    controls = validated_params(params)
+    with _lock:
+        if character_name in _generating:
+            return {'status': 'already_running'}
+        _generating.add(character_name)
+        _face_retexture_results.pop(character_name, None)
+    try:
+        queue = get_task_queue()
+        task_id = queue.track_start('model3d_face_retexture', f'Face retexture: {character_name}',
+                                    agent_name=character_name, start_running=True)
+    except Exception:
+        with _lock:
+            _generating.discard(character_name)
+        raise
+
+    def run():
+        result = {'ok': False, 'error': 'Face retexture failed'}
+        try:
+            with _char_lock(character_name):
+                result = face_retexture_model(character_name, signature,
+                                               backend_glob=backend_glob, params=controls)
+        except Exception as exc:
+            result = {'ok': False, 'error': str(exc)}
+            logger.exception('Face retexture failed for %s', character_name)
+        finally:
+            try:
+                queue.track_finish(task_id, error='' if result.get('ok') else result.get('error') or 'Face retexture failed')
+            finally:
+                with _lock:
+                    _face_retexture_results[character_name] = {**result, 'task_id': task_id}
+                    _generating.discard(character_name)
+    threading.Thread(target=run, daemon=True).start()
+    return {'status': 'generating', 'task_id': task_id}

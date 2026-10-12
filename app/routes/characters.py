@@ -1705,6 +1705,113 @@ def rerig_character_model3d(
     return trigger_rerig(character_name, signature, backend_glob=pick)
 
 
+def _face_retexture_signature(character_name: str, signature: str) -> str:
+    """Resolve a selected outfit key and reject path/glob input."""
+    from app.core.face_retexture import safe_signature
+    from app.core.model_refs import current_outfit_state
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(404, "Character not found")
+    try:
+        return safe_signature(signature or current_outfit_state(character_name)[2])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+def _face_retexture_localize(value: dict, lang: str) -> dict:
+    from app.core.i18n import t
+    result = dict(value)
+    for key in ("problems", "warnings"):
+        if key in result:
+            result[key] = [{**p, **{field: t(p[field], lang) for field in ("message", "fix") if field in p}}
+                           for p in result[key]]
+    if "error" in result:
+        result["error"] = t(result["error"], lang)
+    return result
+
+
+@router.get("/{character_name}/model3d/face-retexture/check")
+def check_character_face_retexture(character_name: str, signature: str = "",
+                                   backend: str = "", lang: str = "en",
+                                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Keep permanent eligibility and temporary routing readiness distinct."""
+    from app.core import face_retexture
+    from app.core.keyed_lock import keyed_lock
+    signature = _face_retexture_signature(character_name, signature)
+    root = get_character_dir(character_name) / "model3d"
+    with keyed_lock("model3d_publication", str(root)):
+        eligibility = face_retexture.check(character_name, signature)
+        snapshot = face_retexture.snapshot_info(root, signature)
+    ready = face_retexture.runnable(character_name, backend)
+    return {**_face_retexture_localize(eligibility, lang), "signature": signature,
+            "runnable": ready["ok"],
+            "runnable_problems": _face_retexture_localize(ready, lang)["problems"],
+            "snapshot": _face_retexture_localize(snapshot, lang)}
+
+
+@router.post("/{character_name}/model3d/face-retexture")
+def start_character_face_retexture(character_name: str, signature: str = "",
+                                   backend: str = "", strength: float = Query(1, ge=0, le=1),
+                                   feather: float = Query(0.18, ge=0, le=0.5),
+                                   render_resolution: int = Query(768, ge=256, le=2048),
+                                   yaw: float = Query(0, ge=-180, le=180), lang: str = "en",
+                                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Validate the preflight, then start a tracked correction job."""
+    from app.core import face_retexture
+    from app.core.model3d import trigger_face_retexture
+    signature = _face_retexture_signature(character_name, signature)
+    controls = {"strength": strength, "feather": feather,
+                "render_resolution": render_resolution, "yaw": yaw}
+    try:
+        face_retexture.validated_params(controls)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    eligibility = face_retexture.check(character_name, signature)
+    ready = face_retexture.runnable(character_name, backend)
+    if not eligibility["ok"] or not ready["ok"]:
+        return _face_retexture_localize({"ok": False, "problems": eligibility["problems"] + ready["problems"]}, lang)
+    return trigger_face_retexture(character_name, signature, backend_glob=backend, params=controls)
+
+
+@router.post("/{character_name}/model3d/face-retexture/revert")
+def revert_character_face_retexture(character_name: str, signature: str = "", lang: str = "en",
+                                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Restore a verified local snapshot, serialized against character jobs."""
+    from app.core.model3d import revert_face_retexture, _char_lock, _generating, _lock
+    signature = _face_retexture_signature(character_name, signature)
+    with _lock:
+        if character_name in _generating:
+            raise HTTPException(409, "A model job is already running")
+        _generating.add(character_name)
+    try:
+        with _char_lock(character_name):
+            result = revert_face_retexture(character_name, signature)
+        return _face_retexture_localize(result, lang)
+    finally:
+        with _lock:
+            _generating.discard(character_name)
+
+
+@router.get("/{character_name}/model3d/face-retexture/compare")
+def compare_character_face_retexture(character_name: str, request: Request, signature: str = "",
+                                     _: Dict[str, Any] = Depends(require_admin)):
+    """Serve the diagnostic image with the same publication lock as models."""
+    from app.core.keyed_lock import keyed_lock
+    signature = _face_retexture_signature(character_name, signature)
+    root = get_character_dir(character_name) / "model3d"
+    path = root / "facefix" / f"{signature}.png"
+    with keyed_lock("model3d_publication", str(root)):
+        if not path.is_file() or not path.resolve().is_relative_to(root.resolve()):
+            raise HTTPException(404, "Comparison image not found")
+        from fastapi.responses import Response
+        stat = path.stat()
+        etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}-{stat.st_ino:x}"'
+        headers = {"ETag": etag, "Cache-Control": "no-cache"}
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers=headers)
+        contents = path.read_bytes()
+    return Response(contents, media_type="image/png", headers=headers)
+
+
 @router.post("/{character_name}/model3d/fetch-job")
 def fetch_character_model3d_job(character_name: str, job: str = "",
                                 backend: str = "", force: bool = False,

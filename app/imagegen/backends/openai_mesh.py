@@ -71,7 +71,7 @@ import requests
 
 from app.core.log import get_logger
 from app.imagegen.backends._gateway_job import poll_job, submit_job
-from app.imagegen.base import GatewayInputMismatchError, ImageBackend
+from app.imagegen.base import GatewayRejectedError, GatewayInputMismatchError, ImageBackend
 
 logger = get_logger("image_backends")
 
@@ -206,6 +206,7 @@ class OpenAIMeshBackend(ImageBackend):
         self._file_slot: str = ""
         self._alias_param_names: set = set()
         self._tls = threading.local()
+        self._schema_verified = False
 
     # -- result metadata ----------------------------------------------------
     @property
@@ -226,6 +227,11 @@ class OpenAIMeshBackend(ImageBackend):
         The artifact tokens in the name (``_basecolor`` / ``_metallic`` /
         ``_articulationxl``) are what sorts the files apart."""
         return [dict(f) for f in (getattr(self._tls, "result_files", []) or [])]
+
+    @property
+    def last_job_id(self) -> str:
+        """The separate generation job ID, captured on its worker thread."""
+        return getattr(self._tls, "job_id", "")
 
     # -- input identity -----------------------------------------------------
     # The gateway once ran two jobs on the same input file name and delivered
@@ -262,8 +268,7 @@ class OpenAIMeshBackend(ImageBackend):
         for key in self.INPUT_LIST_KEYS:
             val = sd.get(key)
             if isinstance(val, list) and val:
-                entries = val
-                break
+                entries.extend(val)
         got = [str(e.get("sha256") or "").strip().lower()
                for e in entries if isinstance(e, dict)]
         got = [h for h in got if h]
@@ -302,8 +307,11 @@ class OpenAIMeshBackend(ImageBackend):
             logger.debug("%s: not reachable: %s", self.name, e)
             self._mark_unavailable()
             return False
-        self._mark_available()
         self._fetch_alias_schema()
+        if self.category == "face_retexture" and not self._schema_verified:
+            self._mark_unavailable()
+            return False
+        self._mark_available()
         return True
 
     def _fetch_alias_schema(self) -> None:
@@ -313,12 +321,19 @@ class OpenAIMeshBackend(ImageBackend):
         ALL image slots are kept, in declaration order: a multi-view alias
         declares ``input_image_front``/``_back``/``_left``/``_right``, the
         classic one a single ``input_image``."""
+        self._schema_verified = False
+        if self.category == "face_retexture":
+            self._image_slots = []
+            self._file_slot = ""
+            self._alias_param_names = set()
         try:
             r = requests.get(f"{self.api_url}/v1/generations/{self.model}/schema",
                              headers=self._headers(), timeout=10)
             if r.status_code != 200:
                 return
             sd = r.json() if r.content else {}
+            if not isinstance(sd, dict):
+                return
             images = sd.get("images") or []
             slots: List[str] = []
             if isinstance(images, list):
@@ -354,6 +369,7 @@ class OpenAIMeshBackend(ImageBackend):
                     if n:
                         names.add(str(n).strip().lower())
             self._alias_param_names = names
+            self._schema_verified = self.category != "face_retexture" or bool(self._image_slots and self._file_slot)
             logger.info("%s: Alias-Schema gelesen (image_slots=%s, file_slot=%s, "
                         "params=%s)", self.name,
                         self._image_slots or ["input_image"],
@@ -500,6 +516,10 @@ class OpenAIMeshBackend(ImageBackend):
 
         Public so the param mapping can be checked without a gateway
         (scripts/smoke_mesh_gateway.py)."""
+        if self.category == "face_retexture":
+            defaults = {"strength": 1, "feather": 0.18, "render_resolution": 768, "yaw": 0}
+            return {key: params.get(key, value) for key, value in defaults.items()
+                    if self._schema_verified and key in self._alias_param_names}
         if self.category == "mesh2rig":
             return {"input_no_fingers": bool(params.get("no_fingers", self.no_fingers))}
         # input_name is ALWAYS set: it decides the delivered file names, and an
@@ -568,6 +588,7 @@ class OpenAIMeshBackend(ImageBackend):
         self._tls.result_files = []
         self._tls.result_rig = None
         self._tls.input_sha256s = []
+        self._tls.job_id = ""
         # mesh→mesh (shrink) or img2mesh — mutually exclusive: a run either
         # carries a source MESH in `files` or an input IMAGE in `images`.
         try:
@@ -583,7 +604,18 @@ class OpenAIMeshBackend(ImageBackend):
         inputs_cut_out = False
         if input_files:
             payload["files"] = input_files
-        else:
+        if self.category == "face_retexture":
+            if not self._schema_verified or not input_files:
+                raise GatewayRejectedError("Face retexture requires a verified alias schema and original mesh")
+            raw = params.get("reference_image_bytes")
+            if not isinstance(raw, bytes) or not raw or len(raw) > MESH_UPLOAD_MAX_BYTES:
+                raise GatewayRejectedError("Face retexture requires a reference image of at most 64 MB")
+            slots = self.select_slot_images(self._image_slots, {"front": "reference"})
+            if len(slots) != 1:
+                raise GatewayRejectedError("Face retexture schema must declare a front reference-image slot")
+            self._remember_input(raw)
+            payload["images"] = {next(iter(slots)): "data:image/png;base64," + base64.b64encode(raw).decode("ascii")}
+        elif not input_files:
             # One slot per view the alias declares: a multi-view alias gets
             # front/back/left/right, the classic single-slot alias only front.
             views = self._input_images(params)
@@ -647,6 +679,7 @@ class OpenAIMeshBackend(ImageBackend):
         if not job_id:
             return []
 
+        self._tls.job_id = job_id
         return poll_job(self, job_id, max_wait=self.max_wait,
                         max_queue_wait=self.max_queue_wait,
                         poll_interval=self.poll_interval,
@@ -683,7 +716,7 @@ class OpenAIMeshBackend(ImageBackend):
             if not _r_url:
                 _r_url = (f"{self.api_url}/v1/jobs/{job_id}/result/"
                           f"{res.get('n', idx)}")
-            dl = requests.get(_r_url, headers=self._headers(), timeout=300)
+            dl = self._download_same_origin(_r_url)
             if dl.status_code != 200 or len(dl.content) < 100:
                 logger.error("%s: Result-Download %d HTTP %d (%d bytes)",
                              self.name, idx, dl.status_code, len(dl.content))
@@ -703,6 +736,8 @@ class OpenAIMeshBackend(ImageBackend):
                         or self._result_name_from(_r_url, dl),
                 "mime": str(res.get("mime") or ""),
                 "kind": str(res.get("kind") or ""),
+                "url": _r_url,
+                "sha256": want or hashlib.sha256(dl.content).hexdigest(),
             })
         self._tls.result_files = files
         self._tls.result_rig = str(sd.get("rig") or "") if "rig" in sd else None
@@ -713,6 +748,24 @@ class OpenAIMeshBackend(ImageBackend):
                               for f, b in zip(files, blobs)))
         return blobs
 
+
+    def _download_same_origin(self, url: str):
+        """Validate every redirect before forwarding the gateway credential."""
+        from urllib.parse import urljoin
+        def origin(value):
+            parsed = urlparse(value)
+            if parsed.username or parsed.password or parsed.scheme not in ("http", "https"):
+                raise GatewayRejectedError("Invalid mesh result URL")
+            return parsed.scheme.lower(), parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+        expected = origin(self.api_url)
+        for _ in range(6):
+            if origin(url) != expected:
+                raise GatewayRejectedError("Mesh result URL has a foreign origin; download refused")
+            response = requests.get(url, headers=self._headers(), timeout=300, allow_redirects=False)
+            if response.status_code not in (301, 302, 303, 307, 308):
+                return response
+            url = urljoin(url, response.headers.get("Location", ""))
+        raise GatewayRejectedError("Too many mesh result redirects")
 
     def fetch_job(self, job_id: str) -> Dict[str, Any]:
         """Looks up an EXISTING gateway job once and, if it has finished,

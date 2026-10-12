@@ -209,6 +209,8 @@ def poll_job(backend: ImageBackend, job_id: str, *,
             poll = requests.get(f"{backend.api_url}/v1/jobs/{job_id}",
                                 headers=backend._headers(), timeout=30)
             if poll.status_code != 200:
+                if poll.status_code == 410:
+                    raise GatewayRejectedError(f"{backend.name}: job {job_id} is no longer retrievable (HTTP 410)")
                 if poll.status_code == 404:
                     misses_404 += 1
                     if misses_404 >= _MAX_CONSEC_404:
@@ -216,8 +218,7 @@ def poll_job(backend: ImageBackend, job_id: str, *,
                                      "row — the gateway no longer knows it, "
                                      "giving up", backend.name, job_id,
                                      misses_404)
-                        _cancel_lost_job(backend, job_id)
-                        return []
+                        raise GatewayRejectedError(f"{backend.name}: job {job_id} is no longer retrievable (HTTP 404)")
                 else:
                     misses_other += 1
                     if misses_other > _MAX_CONSEC_OTHER:
@@ -233,6 +234,8 @@ def poll_job(backend: ImageBackend, job_id: str, *,
             misses_other = 0
             sd = poll.json() if poll.content else {}
             status = (sd.get("status") or "").lower() if isinstance(sd, dict) else ""
+            if status == "cancelled":
+                raise GatewayRejectedError(f"{backend.name}: job {job_id} was cancelled")
             if status in ("failed", "error"):
                 detail = str(sd.get("error") or sd)
                 if _TERMINAL_JOB_ERROR.search(detail):

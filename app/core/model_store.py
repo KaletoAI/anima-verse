@@ -138,6 +138,9 @@ def export_files(directory: Path, stems: Iterable[str],
         for f in (d / "unrigged").glob(f"{stem}.*"):
             if f.is_file() and f.suffix.lower() in (".glb", ".json", ".png"):
                 out[f] = None
+        for f in (d / "facefix").glob(f"{stem}.*"):
+            if f.is_file() and f.suffix.lower() in (".glb", ".json"):
+                out[f] = None
     sel = d / SEL_FILE
     if sel.exists():
         out[sel] = None

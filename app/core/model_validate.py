@@ -701,3 +701,105 @@ def validate_fbx(data: bytes, texture: Optional[bytes]) -> Dict[str, Any]:
                 "empty-texture artefact of a failed generation, not a result")
     return {"ok": not errors, "errors": errors, "warnings": warnings,
             "joint_count": 0, "rig": "generic"}
+
+
+def face_texture_geometry(data: bytes, *, original: bool = False,
+                          rigged: bool = False) -> Dict[str, Any]:
+    """Validate projection inputs and material preservation; count triangles."""
+    import io
+    from PIL import Image
+    errors = []
+    triangles = 0
+    primitive_count = 0
+    try:
+        parsed = parse_glb(data)
+        gltf, binary = parsed['gltf'], parsed['bin']
+        if gltf.get('extensionsRequired'):
+            raise ValueError('required extensions are unsupported')
+        forbidden = {'KHR_draco_mesh_compression', 'EXT_meshopt_compression',
+                     'KHR_texture_basisu', 'EXT_texture_webp'}
+
+        if forbidden.intersection(gltf.get('extensionsUsed') or []):
+            raise ValueError('compressed geometry or textures are unsupported')
+
+        def extensions(value):
+            if isinstance(value, dict):
+                if forbidden.intersection(value.get('extensions') or {}):
+                    raise ValueError('compressed geometry or textures are unsupported')
+                for child in value.values():
+                    extensions(child)
+            elif isinstance(value, list):
+                for child in value:
+                    extensions(child)
+        extensions(gltf)
+        if not rigged and (gltf.get('skins') or gltf.get('animations') or
+                           any('skin' in n for n in gltf.get('nodes', []))):
+            raise ValueError('skins and animations are unsupported')
+        buffers = gltf.get('buffers') or []
+        if len(buffers) != 1 or any('uri' in b for b in buffers):
+            raise ValueError('buffers must be embedded')
+        if int(buffers[0]['byteLength']) > len(binary):
+            raise ValueError('embedded buffer is truncated')
+        if any('uri' in i for i in gltf.get('images', [])):
+            raise ValueError('images must use embedded bufferViews')
+        meshes = gltf.get('meshes') or []
+        primitives = [p for m in meshes for p in m.get('primitives', [])]
+        primitive_count = len(primitives)
+        if not primitives or (original and (len(meshes) != 1 or len(primitives) != 1)):
+            raise ValueError('expected one mesh with one primitive' if original else 'no primitives')
+        if rigged and (len(primitives) < 2 or len({p.get('material') for p in primitives}) < 2):
+            raise ValueError('rigger lost the separate face/body materials')
+
+        def at(items, index):
+            if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+                raise ValueError('invalid GLB reference')
+            return items[index]
+
+        def view_bytes(index):
+            view = at(gltf.get('bufferViews') or [], index)
+            start, size = int(view.get('byteOffset', 0)), int(view['byteLength'])
+            if view.get('buffer', 0) != 0 or start < 0 or size <= 0 or start + size > len(binary):
+                raise ValueError('invalid embedded bufferView')
+            return view, binary[start:start + size]
+
+        def accessor(index, kind, components):
+            acc = at(gltf.get('accessors') or [], index)
+            if acc.get('sparse') is not None or acc.get('type') != kind or acc.get('componentType') not in components:
+                raise ValueError('unsupported index/UV accessor')
+            view, raw = view_bytes(acc.get('bufferView'))
+            count = int(acc['count'])
+            width = {5121: 1, 5123: 2, 5125: 4, 5126: 4}[acc['componentType']] * (2 if kind == 'VEC2' else 1)
+            offset, stride = int(acc.get('byteOffset', 0)), int(view.get('byteStride', width))
+            if count <= 0 or offset < 0 or stride < width or offset + (count - 1) * stride + width > len(raw):
+                raise ValueError('index/UV accessor is truncated')
+            return acc, raw, offset, stride
+
+        for primitive in primitives:
+            if primitive.get('mode', 4) != 4 or primitive.get('targets'):
+                raise ValueError('only static triangles are supported')
+            if not rigged:
+                acc, raw, offset, stride = accessor(primitive.get('indices'), 'SCALAR', (5121, 5123, 5125))
+                uv, _, _, _ = accessor((primitive.get('attributes') or {}).get('TEXCOORD_0'), 'VEC2', (5121, 5123, 5126))
+                if acc['count'] % 3:
+                    raise ValueError('triangle indices must be a multiple of three')
+                fmt = {5121: '<B', 5123: '<H', 5125: '<I'}[acc['componentType']]
+                if any(struct.unpack_from(fmt, raw, offset + i * stride)[0] >= uv['count'] for i in range(acc['count'])):
+                    raise ValueError('triangle index exceeds UV accessor')
+                triangles += acc['count'] // 3
+            material = at(gltf.get('materials') or [], primitive.get('material'))
+            if material.get('alphaMode', 'OPAQUE') != 'OPAQUE':
+                raise ValueError('basecolor must be opaque')
+            ref = material['pbrMetallicRoughness']['baseColorTexture']['index']
+            texture = at(gltf.get('textures') or [], ref)
+            image = at(gltf.get('images') or [], texture['source'])
+            if image.get('mimeType') not in ('image/png', 'image/jpeg'):
+                raise ValueError('basecolor must be PNG or JPEG')
+            _, raw = view_bytes(image.get('bufferView'))
+            decoded = Image.open(io.BytesIO(raw))
+            decoded.load()
+            if decoded.format not in ('PNG', 'JPEG'):
+                raise ValueError('basecolor encoding is unsupported')
+    except (ValueError, OSError, KeyError, IndexError, TypeError, struct.error) as exc:
+        errors.append(str(exc))
+    return {'ok': not errors, 'errors': errors, 'triangles': triangles,
+            'primitives': primitive_count}

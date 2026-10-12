@@ -6,13 +6,14 @@ normalized prerig and served bytes; source GLB/PNG/JSON remain byte-identical.
 An explicit failing rigger cannot call the routed backup. The backend's
 configured no_fingers reaches input_no_fingers unchanged. Missing sources
 submit nothing. Failure at
-rig, normalization, extensions, low rebuild or publication preserves every
+rig, normalization or publication preserves every
 byte of the served/source pair, including a retained static model with rig none.
 Re-rig of that static mesh preserves its source provenance and removes rig_error
 only on successful atomic publication. Default signature selects the served model;
 character finger settings are ignored; stale snapshots never overwrite a writer.
 Generic source is red on top, blue below; its served PNG must be blue on top
-(the hub FBX V correction). A pre-existing low tier is rebuilt at its old ratio.
+(the hub FBX V correction). A pre-existing low tier is rebuilt at its old ratio. Extension/low failures
+publish the valid rig with failed metadata instead (face-retexture plan §5.7).
 A player POST returns 403, an admin starts a tracked background task.
 Usage: ./.venv/bin/python scripts/smoke_model_rerig.py
 """
@@ -203,7 +204,7 @@ with ExitStack() as stack:
     assert meta['rig_backend'] == 'rigger' and 'no_fingers' not in meta
     assert not mesh.calls
     for failure in ('rig', 'normalize', 'extension', 'low', 'publication'):
-        if failure == 'publication': seed('mixamo')
+        if failure in ('extension', 'low', 'publication'): seed('mixamo')
         before=snapshot('mixamo')
         with ExitStack() as failures:
             if failure == 'rig': rigger.failure=RuntimeError('broken rigger')
@@ -223,7 +224,7 @@ with ExitStack() as stack:
             else: failures.enter_context(patch.object(model3d, 'build_lod', return_value={'ok': False, 'error': 'low failed'}))
             try:
                 result=model3d.rerig_model('demo', signature='mixamo', backend_glob='rigger')
-                assert not result['ok']
+                assert result['ok'] == (failure in ('extension', 'low'))
             except BackendFailedError:
                 assert failure == 'rig'
             except OSError as exc:
@@ -233,7 +234,14 @@ with ExitStack() as stack:
         rigger.failure=None
         rigger._cooldown_until=0
         rigger._available=True
-        assert snapshot('mixamo') == before, failure
+        if failure in ('extension', 'low'):
+            meta = model3d._read_sidecar(root / 'mixamo.glb')
+            if failure == 'extension': assert meta['extension_rig']['status'] == 'failed'
+            if failure == 'low': assert meta['lod_error'] == 'low failed' and not (root / 'low/mixamo.glb').exists()
+            for relative, raw in before.items():
+                if relative.parts[0] == 'unrigged': assert (root / relative).read_bytes() == raw
+        else:
+            assert snapshot('mixamo') == before, failure
     assert len(rigger.calls) == 6, 'extension and low failure must actually run the rig'
     assert not backup.calls and not mesh.calls
     rigger.no_fingers = False
