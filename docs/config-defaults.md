@@ -139,10 +139,25 @@ Welches Backend einen Anlass rendert, steht nicht mehr in Env-Variablen, sondern
 `image_generation.routing` (Admin → Media Generation → Routing); siehe
 `app/imagegen/occasions.py`.
 
-**Mesh-Animation** (`api_type: openai_mesh_animation`, Anlass `pose_animation`): ein Backend-Eintrag mit
-`model: mesh-unimate`, `max_concurrent: 1` und `extra_params` `{"input_cfg_scale": 3.0, "input_chain_overlap": 10}`;
-Key in `instance/secrets.json`. Der Anlass verlangt eine konfigurierte Kette — leer heißt `NoRouteError`, nie das
-günstigste Backend. Kein Default-Eintrag: ohne Kette bleibt die Funktion im Poses-Tab mit klarer Meldung aus.
+**Mesh-Animation** (`api_type: openai_mesh_animation`, Anlass `pose_animation`): ein Backend-Eintrag pro
+Bewegungsmodell, Key in `instance/secrets.json`. Was die Modelle unterscheidet, steht als Feld am Eintrag
+(Defaults = UniMate): `motion_source` (`puppet` | `reference_rig`), `source_slot`, `caption_style`
+(`object` | `person`), `segment_seconds`, `variant_param`, `duration_param`, `max_variants` (1–4), `generator`,
+`license`, `credit`, `model_revision`.
+
+| Feld | `mesh-unimate` | `motion-kimodo` |
+|---|---|---|
+| `model` | `mesh-unimate` | `motion-kimodo` |
+| `extra_params` | `{"input_cfg_scale": 3.0, "input_chain_overlap": 10}` | — |
+| `motion_source` / `source_slot` | `puppet` / `input_mesh_path` (Default) | `reference_rig` / `input_rig_path` |
+| `caption_style` / `segment_seconds` | `object` / 2 (Default) | `person` / 4 |
+| `variant_param` / `duration_param` | `input_num_repetitions` / leer (Default) | `input_num_samples` / `input_duration` |
+| `generator` / `license` | `unimate` / `CC-BY-NC-4.0` (Default) | `kimodo` / `NVIDIA-Open-Model-License` |
+
+Der Anlass verlangt eine konfigurierte Kette — leer heißt `NoRouteError`, nie das günstigste Backend. Der
+Poses-Dialog bietet „Auto (Routing)" (erster nutzbarer Ketteneintrag) oder ein bestimmtes Backend der Kette
+(ohne Ersatz) und 1 bis `max_variants` Varianten (Default 3). Kein Default-Eintrag: ohne Kette bleibt die
+Funktion im Poses-Tab mit klarer Meldung aus.
 
 Der **Hauptschalter** `image_generation.enabled` („Media generation enabled",
 Admin-Sektion „Media Generation") wird NICHT in eine Env-Variable gebrückt: er

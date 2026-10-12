@@ -197,19 +197,25 @@ original work of this project — no mocap, no bought pack — and as redistribu
 as the rest of this folder. The source file is the clip's real master: change the
 source and publish again with `--replace`, never edit the FBX.
 
-## Generated clips (UniMate)
+## Generated clips (UniMate, Kimodo)
 
-Clips whose sidecar says `"source": {"generator": "unimate", "pose_key": …}`
+Clips whose sidecar says `"source": {"generator": …, "generated_for_pose": …}`
 were generated from a pose catalog entry in the Poses tab ("Generate
 animation", "Generate new", "New from description" — `app/core/pose_animation.py`):
-an LLM writes motion captions, the gateway alias `mesh-unimate` animates the
-puppet `../rig/puppet.glb`, and the result is retargeted onto the reference rig
-like any foreign clip. Each such clip belongs to ONE pose entry (its own kind;
-an existing clip is never overwritten — a taken name gets `-u`, `-u2`, …).
+an LLM writes motion captions in the chosen model's style, one gateway run
+produces 1–4 variants, every variant is retargeted onto the reference rig and
+checked, and only the variant the admin picks is published. Two motion models
+are wired as backends of the occasion `pose_animation`:
 
-**Licence:** the UniMate weights are CC BY-NC 4.0, so every generated clip's
-sidecar carries `"license": "CC-BY-NC-4.0"` and the model credit. This project
-is non-commercial, so they sit in this library; filter them out by
-`source.generator == "unimate"` wherever a commercial licence is negotiated. The
-sidecar also records captions, seed, gateway job, model revision and the
-puppet's SHA-256, so a clip can be regenerated on purpose.
+| generator | gateway alias | animates | licence (`"license"` in the sidecar) |
+|---|---|---|---|
+| `unimate` | `mesh-unimate` | the puppet `../rig/puppet.glb`, scaled back onto the reference rig | `CC-BY-NC-4.0` (non-commercial) |
+| `kimodo` | `motion-kimodo` | the reference rig `../rig/reference.fbx` directly | `NVIDIA-Open-Model-License` |
+
+Each such clip belongs to ONE pose entry (`source.generated_for_pose`; its own
+kind; an existing clip of another owner is never overwritten — a taken name
+gets `-u`, `-u2`, …). This project is non-commercial, so both sit in this
+library; filter by `source.generator` and `license` wherever a commercial
+licence is negotiated. The sidecar also records captions, seed, gateway job,
+backend, model revision, the variant index and — for the puppet — its
+SHA-256, so a clip can be regenerated on purpose.
