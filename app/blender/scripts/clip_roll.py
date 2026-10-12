@@ -91,6 +91,7 @@ from pathlib import Path
 _SCRIPTS_DIR = str(Path(__file__).parent)
 sys.path.insert(0, _SCRIPTS_DIR)
 import _common                                                # noqa: E402
+from _action import curves  # noqa: E402
 import cmu_clip                                               # noqa: E402
 sys.path.remove(_SCRIPTS_DIR)
 
@@ -256,19 +257,20 @@ def _basis(P_parent, rest_parent, rest_b, P_b) -> Matrix:
     return (P_parent @ rest_parent.inverted() @ rest_b).inverted() @ P_b
 
 
-def _write_keys(arm, action, bone_name: str, values: dict):
+def _write_keys(arm, bone_name: str, values: dict):
     """``values``: {frame: Quaternion}; the bone's rotation curves get these
     keys (created if the clip did not drive the bone so far)."""
     path = f'pose.bones["{bone_name}"].rotation_quaternion'
-    curves = []
+    fcs = curves(arm)
+    tracks = []
     for i in range(4):
-        fc = action.fcurves.find(path, index=i)
+        fc = fcs.find(path, index=i)
         if fc is None:
-            fc = action.fcurves.new(data_path=path, index=i)
+            fc = fcs.new(data_path=path, index=i)
             fc.keyframe_points.add(len(values))
             for k, f in enumerate(sorted(values)):
                 fc.keyframe_points[k].co = (float(f), 0.0)
-        curves.append(fc)
+        tracks.append(fc)
     prev = None
     for f in sorted(values):
         q = values[f].copy()
@@ -276,12 +278,12 @@ def _write_keys(arm, action, bone_name: str, values: dict):
             q.negate()          # same rotation, continuous sign between keys
         prev = q
         for i, v in enumerate((q.w, q.x, q.y, q.z)):
-            fc = curves[i]
+            fc = tracks[i]
             kp = next((k for k in fc.keyframe_points if abs(k.co[0] - f) < 1e-6), None)
             if kp is None:
                 kp = fc.keyframe_points.insert(float(f), v, options={"FAST"})
             kp.co[1] = v
-    for fc in curves:
+    for fc in tracks:
         fc.update()
     arm.pose.bones[bone_name].rotation_mode = "QUATERNION"
 
@@ -388,8 +390,8 @@ def _process(slot: str, src: str, rig_rest: dict, args: dict, ref_path):
             "solve_residual_max_deg": round(max(resid), 6) if resid else 0.0,
         }
         if not dry:
-            _write_keys(arm, action, fr.arm, new_arm_keys)
-            _write_keys(arm, action, fr.fore, new_fore_keys)
+            _write_keys(arm, fr.arm, new_arm_keys)
+            _write_keys(arm, fr.fore, new_fore_keys)
 
     data = {"frames": len(frames), "fps": fps, "target_twist_deg": targets,
             "dry_run": dry, "arms": arms_data}
@@ -430,7 +432,7 @@ def _process(slot: str, src: str, rig_rest: dict, args: dict, ref_path):
     out_path = None
     if not dry and not reasons:
         driven = sorted({fc.data_path.split('"')[1][len(PREFIX):]
-                         for fc in action.fcurves
+                         for fc in curves(arm)
                          if fc.data_path.endswith("rotation_quaternion")
                          and fc.data_path.split('"')[1].startswith(PREFIX)})
         cmu_clip.DRIVEN.clear()

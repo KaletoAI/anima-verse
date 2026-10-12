@@ -43,8 +43,8 @@ SCRIPTS_DIR = Path(__file__).parent / "scripts"
 # to bloat a log line.
 LOG_TAIL_CHARS = 4000
 
-MIN_VERSION = (4, 2)
-MAX_VERSION_EXCL = (5, 0)   # 5.x removed Action.fcurves — scripts not ported yet
+MIN_VERSION = (5, 0)        # 5.0 replaced Action.fcurves with slotted actions (scripts/_action.py)
+MAX_VERSION_EXCL = (6, 0)
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
 
 _version_cache: Dict[str, str] = {}
@@ -101,7 +101,7 @@ def _discover() -> Tuple[str, List[Dict[str, str]]]:
 
 
 def find_executable() -> str:
-    """Pick the newest Blender in [4.2, 5.0) across discovery locations.
+    """Pick the newest Blender in [5.0, 6.0) across discovery locations.
 
     A configured path wins but must be usable; never silently switch from it.
     """

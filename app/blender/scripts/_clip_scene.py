@@ -5,6 +5,7 @@ imports ``cmu_clip``, so this module imports neither.
 """
 import bpy
 from mathutils import Matrix
+from _action import curves
 
 
 def sample(arm, frames):
@@ -21,32 +22,33 @@ def sample(arm, frames):
     return mats, joints
 
 
-def write_track(action, path: str, values: dict, size: int) -> None:
+def write_track(arm, path: str, values: dict, size: int) -> None:
     """``values``: {frame: tuple of ``size`` floats} onto the curves of one
     data path — created when the clip did not drive them so far."""
-    curves, points = [], []
+    fcs = curves(arm)
+    tracks, points = [], []
     order = sorted(values)
     for i in range(size):
-        fc = action.fcurves.find(path, index=i)
+        fc = fcs.find(path, index=i)
         if fc is None:
-            fc = action.fcurves.new(data_path=path, index=i)
+            fc = fcs.new(data_path=path, index=i)
             fc.keyframe_points.add(len(order))
             for k, f in enumerate(order):
                 fc.keyframe_points[k].co = (float(f), 0.0)
-        curves.append(fc)
+        tracks.append(fc)
         points.append({int(round(kp.co[0])): kp for kp in fc.keyframe_points})
     for f in order:
         for i, v in enumerate(values[f]):
             kp = points[i].get(int(f))
             if kp is None:
-                kp = curves[i].keyframe_points.insert(float(f), v, options={"FAST"})
+                kp = tracks[i].keyframe_points.insert(float(f), v, options={"FAST"})
                 points[i][int(f)] = kp
             kp.co[1] = v
-    for fc in curves:
+    for fc in tracks:
         fc.update()
 
 
-def write_root(arm, action, bone: str, mats: dict, rest: Matrix) -> None:
+def write_root(arm, bone: str, mats: dict, rest: Matrix) -> None:
     """Puts the transformed root poses back as keys: the bone has no parent,
     so its basis is ``rest⁻¹ · M`` (``cmu_clip._bake``'s formula)."""
     quats, locs = {}, {}
@@ -61,5 +63,5 @@ def write_root(arm, action, bone: str, mats: dict, rest: Matrix) -> None:
         t = basis.to_translation()
         locs[f] = (t.x, t.y, t.z)
     arm.pose.bones[bone].rotation_mode = "QUATERNION"
-    write_track(action, f'pose.bones["{bone}"].rotation_quaternion', quats, 4)
-    write_track(action, f'pose.bones["{bone}"].location', locs, 3)
+    write_track(arm, f'pose.bones["{bone}"].rotation_quaternion', quats, 4)
+    write_track(arm, f'pose.bones["{bone}"].location', locs, 3)

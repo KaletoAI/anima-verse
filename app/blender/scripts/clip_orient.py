@@ -87,6 +87,7 @@ from pathlib import Path
 _SCRIPTS_DIR = str(Path(__file__).parent)
 sys.path.insert(0, _SCRIPTS_DIR)
 import _common                                                # noqa: E402
+from _action import curves  # noqa: E402
 import _cmu                                                   # noqa: E402
 import cmu_clip                                               # noqa: E402
 from _clip_scene import sample as _sample, write_root as _write_root  # noqa: E402
@@ -225,7 +226,7 @@ def _process(slot: str, src: str, root_name: str, args: dict):
         joints_after = [{n: (point(h), point(t))
                          for n, (h, t) in before_joints[f].items()} for f in frames]
     else:
-        _write_root(arm, action, root_name, {f: planned[f][root_name] for f in frames}, rest)
+        _write_root(arm, root_name, {f: planned[f][root_name] for f in frames}, rest)
         after, joints = _sample(arm, frames)
         joints_after = [joints[f] for f in frames]
         # The take must have moved RIGIDLY: every bone where the arithmetic
@@ -277,7 +278,7 @@ def _process(slot: str, src: str, root_name: str, args: dict):
     out_path = None
     if not dry and not reasons:
         driven = sorted({fc.data_path.split('"')[1][len(PREFIX):]
-                         for fc in action.fcurves
+                         for fc in curves(arm)
                          if fc.data_path.endswith("rotation_quaternion")
                          and fc.data_path.split('"')[1].startswith(PREFIX)})
         cmu_clip.DRIVEN.clear()

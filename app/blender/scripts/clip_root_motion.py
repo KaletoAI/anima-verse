@@ -103,7 +103,7 @@ def apply(arm, mode: str, fps: int) -> dict:
         rest = arm.data.bones[hips].matrix_local.copy()
         moved = {f: Matrix.Translation(Vector((path[i][0], 0.0, path[i][1]))) @ mats[f][hips]
                  for i, f in enumerate(frames)}
-        write_root(arm, action, hips, moved, rest)
+        write_root(arm, hips, moved, rest)
         mats, joints = sample(arm, frames)
         # Same weights as the path was built from: the pass moved the root in
         # XZ only, so the heights (and with them the contacts) are unchanged.

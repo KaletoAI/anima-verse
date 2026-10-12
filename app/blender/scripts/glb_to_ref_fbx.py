@@ -12,6 +12,7 @@ from pathlib import Path
 _SCRIPTS_DIR = str(Path(__file__).parent)
 sys.path.insert(0, _SCRIPTS_DIR)
 import _common
+from _action import curves
 sys.path.remove(_SCRIPTS_DIR)
 
 import bpy
@@ -67,7 +68,7 @@ def run(job):
         src_fps = scene.render.fps / scene.render.fps_base
         if abs(src_fps - 30.0) > 1e-6:
             factor, start = 30.0 / src_fps, act.frame_range[0]
-            for fc in act.fcurves:
+            for fc in curves(arm):
                 for kp in fc.keyframe_points:
                     for point in (kp.co, kp.handle_left, kp.handle_right):
                         point.x = start + (point.x - start) * factor

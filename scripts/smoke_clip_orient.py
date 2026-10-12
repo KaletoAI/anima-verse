@@ -158,6 +158,7 @@ import json, math, sys
 sys.path.insert(0, {scripts!r})
 import bpy
 import cmu_clip
+from _action import curves
 from mathutils import Matrix, Vector
 
 RIG = {rig!r}
@@ -168,10 +169,11 @@ ARM = PREFIX + "LeftArm"
 NF = 3
 
 
-def key(action, path, index, frame, value):
-    fc = action.fcurves.find(path, index=index)
+def key(arm, path, index, frame, value):
+    fcs = curves(arm)
+    fc = fcs.find(path, index=index)
     if fc is None:
-        fc = action.fcurves.new(data_path=path, index=index)
+        fc = fcs.new(data_path=path, index=index)
     fc.keyframe_points.insert(float(frame), value, options={{"FAST"}})
     fc.update()
 
@@ -189,13 +191,13 @@ def build(name, dx):
         q = basis.to_quaternion()
         t = basis.to_translation()
         for i, v in enumerate((q.w, q.x, q.y, q.z)):
-            key(action, 'pose.bones["%s"].rotation_quaternion' % ROOT, i, f, v)
+            key(arm, 'pose.bones["%s"].rotation_quaternion' % ROOT, i, f, v)
         for i, v in enumerate((t.x, t.y, t.z)):
-            key(action, 'pose.bones["%s"].location' % ROOT, i, f, v)
+            key(arm, 'pose.bones["%s"].location' % ROOT, i, f, v)
     qa = Matrix.Rotation(math.radians(40.0), 3, "Z").to_quaternion()
     for f in range(1, NF + 1):
         for i, v in enumerate((qa.w, qa.x, qa.y, qa.z)):
-            key(action, 'pose.bones["%s"].rotation_quaternion' % ARM, i, f, v)
+            key(arm, 'pose.bones["%s"].rotation_quaternion' % ARM, i, f, v)
     for pb in arm.pose.bones:
         pb.rotation_mode = "QUATERNION"
     scene = bpy.context.scene

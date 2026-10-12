@@ -95,6 +95,7 @@ from pathlib import Path
 _SCRIPTS_DIR = str(Path(__file__).parent)
 sys.path.insert(0, _SCRIPTS_DIR)
 import _common                                                # noqa: E402
+from _action import curves  # noqa: E402
 import _cmu                                                   # noqa: E402
 import _foot_plant                                            # noqa: E402
 import _root_motion                                           # noqa: E402
@@ -641,13 +642,14 @@ def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
     action = bpy.data.actions.new(name=f"Armature|{take.role or 'solo'}")
     arm.animation_data_create()
     arm.animation_data.action = action
-    curves = {}
+    fcs = curves(arm)
+    made = {}
 
     def fc(path, index):
         key = (path, index)
-        if key not in curves:
-            curves[key] = action.fcurves.new(data_path=path, index=index)
-        return curves[key]
+        if key not in made:
+            made[key] = fcs.new(data_path=path, index=index)
+        return made[key]
 
     nframes = len(frames)
     hips_name = PREFIX + "Hips"

@@ -79,13 +79,14 @@ rest = load_rest()
 PROBE = r'''
 import json, sys
 import bpy
+from bpy_extras import anim_utils
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.context.scene.render.fps = 30
 bpy.ops.import_scene.fbx(filepath=sys.argv[-2], global_scale=1.0, use_anim=True, anim_offset=0.0)
 arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
 act = arm.animation_data.action
 quats = []
-for fc in act.fcurves:
+for fc in anim_utils.action_get_channelbag_for_slot(act, arm.animation_data.action_slot).fcurves:
     if fc.data_path.endswith("rotation_quaternion"):
         quats += [(fc.array_index, k.co[1]) for k in fc.keyframe_points]
 rows = []

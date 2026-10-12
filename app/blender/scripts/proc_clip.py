@@ -25,6 +25,7 @@ from pathlib import Path
 _SCRIPTS_DIR = str(Path(__file__).parent)
 sys.path.insert(0, _SCRIPTS_DIR)
 import _common                                                # noqa: E402
+from _action import curves  # noqa: E402
 import _cmu                                                   # noqa: E402
 import cmu_clip                                               # noqa: E402
 from fbx_clip import _FakeBone, _FakeSkeleton, _FbxTake       # noqa: E402
@@ -85,7 +86,7 @@ def _measure(fbx: str, out_dir: Path, fps: int) -> str:
                              use_anim=True, anim_offset=0.0)
     arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
     act = arm.animation_data.action
-    tracks = {fc.data_path.split('"')[1] for fc in act.fcurves
+    tracks = {fc.data_path.split('"')[1] for fc in curves(arm)
               if fc.data_path.endswith("rotation_quaternion")}
     missing = [s for s in MEASURED if arm.pose.bones.get(cmu_clip.PREFIX + s) is None]
     if missing:
@@ -135,7 +136,7 @@ def _finish(sidecar, outputs, kind, fps, lift_cm):
         hips = arm.data.bones[cmu_clip.PREFIX + "Hips"]
         local = hips.matrix_local.to_3x3().inverted() @ Vector((0.0, lift_cm, 0.0))
         path = f'pose.bones["{cmu_clip.PREFIX}Hips"].location'
-        for fc in arm.animation_data.action.fcurves:
+        for fc in curves(arm):
             if fc.data_path == path:
                 for k in fc.keyframe_points:
                     k.co[1] += local[fc.array_index]
