@@ -76,7 +76,7 @@ a hosted OpenAI-compatible cloud) in the [README](../README.md#getting-started).
      `Lanes (max concurrent)`, `Temperature`, `Max Tokens`, `Tasks`); **Overview** — what the
      server resolves right now. A task nobody routed falls back to its parent (`intent_*` /
      `thought_*` / `extraction_*` → the parent, `furnish` / `prop_mount_classify` /
-     `room_description_sync` → `intent`, `npc_*` → `chat_stream`), so you never have to fill all
+     `room_description_sync` / `pose_animation_prompt` → `intent`, `npc_*` → `chat_stream`), so you never have to fill all
      of them.
    - *(optional)* **Media Generation → Backends** for image / video / mesh backends,
      **Text-to-Speech**, **Game calendar** — only for the corresponding features.

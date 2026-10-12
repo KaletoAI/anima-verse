@@ -139,6 +139,11 @@ Welches Backend einen Anlass rendert, steht nicht mehr in Env-Variablen, sondern
 `image_generation.routing` (Admin → Media Generation → Routing); siehe
 `app/imagegen/occasions.py`.
 
+**Mesh-Animation** (`api_type: openai_mesh_animation`, Anlass `pose_animation`): ein Backend-Eintrag mit
+`model: mesh-unimate`, `max_concurrent: 1` und `extra_params` `{"input_cfg_scale": 3.0, "input_chain_overlap": 10}`;
+Key in `instance/secrets.json`. Der Anlass verlangt eine konfigurierte Kette — leer heißt `NoRouteError`, nie das
+günstigste Backend. Kein Default-Eintrag: ohne Kette bleibt die Funktion im Poses-Tab mit klarer Meldung aus.
+
 Der **Hauptschalter** `image_generation.enabled` („Media generation enabled",
 Admin-Sektion „Media Generation") wird NICHT in eine Env-Variable gebrückt: er
 wird live gelesen (`app/imagegen/base.py::media_generation_enabled`). Aus ist

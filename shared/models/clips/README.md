@@ -196,3 +196,20 @@ and built by `animation-studio` (`python -m animstudio build|publish`). They are
 original work of this project — no mocap, no bought pack — and as redistributable
 as the rest of this folder. The source file is the clip's real master: change the
 source and publish again with `--replace`, never edit the FBX.
+
+## Generated clips (UniMate)
+
+Clips whose sidecar says `"source": {"generator": "unimate", "pose_key": …}`
+were generated from a pose catalog entry in the Poses tab ("Generate
+animation", "Generate new", "New from description" — `app/core/pose_animation.py`):
+an LLM writes motion captions, the gateway alias `mesh-unimate` animates the
+puppet `../rig/puppet.glb`, and the result is retargeted onto the reference rig
+like any foreign clip. Each such clip belongs to ONE pose entry (its own kind;
+an existing clip is never overwritten — a taken name gets `-u`, `-u2`, …).
+
+**Licence:** the UniMate weights are CC BY-NC 4.0, so every generated clip's
+sidecar carries `"license": "CC-BY-NC-4.0"` and the model credit. This project
+is non-commercial, so they sit in this library; filter them out by
+`source.generator == "unimate"` wherever a commercial licence is negotiated. The
+sidecar also records captions, seed, gateway job, model revision and the
+puppet's SHA-256, so a clip can be regenerated on purpose.
