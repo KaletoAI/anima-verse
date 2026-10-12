@@ -95,6 +95,10 @@ def submit(mode: str, *, key: str = "", raw_text: str = "", text: str = "",
         queue_name=TASK_TYPE, max_retries=0)
 
 
+REQUEST_FIELDS = (("mode", ""), ("key", ""), ("text", ""), ("raw_text", ""), ("hint", ""),
+                  ("backend", ""), ("variants", DEFAULT_VARIANTS))
+
+
 def recent_jobs(limit: int = 20) -> List[Dict]:
     """Expose the queue history without leaking internal payload fields."""
     jobs = []
@@ -109,7 +113,10 @@ def recent_jobs(limit: int = 20) -> List[Dict]:
             "mode": payload.get("mode", ""), "key": progress.get("key", payload.get("key", "")),
             **{field: progress.get(field) for field in ("phase", "captions", "kind", "hub_job", "state",
                                                         "candidates", "backend", "generator", "chosen")},
-            **{field: task.get(field) for field in ("error", "created_at", "completed_at")}})
+            **{field: task.get(field) for field in ("error", "created_at", "completed_at")},
+            # What the admin asked for, so a retry can reopen the dialog with it.
+            # No seed: a retry draws a new one.
+            "request": {field: payload.get(field, default) for field, default in REQUEST_FIELDS}})
     return jobs
 
 
@@ -523,6 +530,20 @@ def discard(task_id: str) -> Dict:
         shutil.rmtree(staging, ignore_errors=True)
         _set_state(task_id, progress, phase="discarded", state="discarded")
         return {"task_id": task_id, "state": "discarded"}
+
+
+def dismiss(task_id: str) -> Dict:
+    """Remove a finished job from the list, with any staging it left behind.
+    A job still running or waiting for a choice is refused (choose or discard)."""
+    staging = _staging(task_id)
+    with keyed_lock("pose_animation_choice", task_id):
+        deleted = get_task_queue().delete_finished_task(task_id)
+        if deleted is None:
+            raise ChoiceError(404, "unknown job")
+        if not deleted:
+            raise ChoiceError(409, "the job is still running or waiting for a choice")
+        shutil.rmtree(staging, ignore_errors=True)
+    return {"task_id": task_id, "dismissed": True}
 
 
 def _age_s(data: Optional[Dict], folder: Path) -> float:

@@ -422,6 +422,19 @@ async def discard_animation(task_id: str = PathParam(..., pattern=_TASK_ID_PATTE
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
+@router.post("/animations/{task_id}/dismiss")
+async def dismiss_animation(task_id: str = PathParam(..., pattern=_TASK_ID_PATTERN),
+                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Remove a failed or finished job from the list."""
+    import asyncio
+    from app.core import pose_animation
+
+    try:
+        return await asyncio.to_thread(pose_animation.dismiss, task_id)
+    except pose_animation.ChoiceError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
 @router.put("/{key}")
 async def update_entry(key: str, request: Request, axis: str = Query("pose"),
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:

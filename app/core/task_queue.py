@@ -540,6 +540,21 @@ class TaskQueue:
         logger.info("Bereinigt: %d Tasks", cur.rowcount)
         return cur.rowcount
 
+    def delete_finished_task(self, task_id: str) -> Optional[bool]:
+        """Deletes one finished task. ``None`` = no such task, ``False`` = it is
+        still pending/running or holds a result waiting for a decision."""
+        placeholders = ",".join("?" * len(self._CLEARABLE_STATUSES))
+        with self._write_lock, self._connect() as conn:
+            if not conn.execute("SELECT 1 FROM tasks WHERE task_id=?", (task_id,)).fetchone():
+                return None
+            cur = conn.execute(
+                f"DELETE FROM tasks WHERE task_id=? AND status IN ({placeholders}) AND "
+                + KEEP_HELD_RESULTS_SQL, (task_id, *self._CLEARABLE_STATUSES))
+            conn.commit()
+        if cur.rowcount:
+            logger.info("Task entfernt: %s", task_id)
+        return bool(cur.rowcount)
+
     def get_status(self) -> Dict[str, Any]:
         """Returns status for background tasks (queued + tracked)."""
         # Reap stuck tracked tasks before reading; see the helper above.

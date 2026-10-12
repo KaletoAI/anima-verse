@@ -330,7 +330,8 @@ for method, path in (("POST", "/poses/animations/generate"),
                      ("GET", "/poses/animations/backends"),
                      ("GET", "/poses/animations/task_ab12/candidates/0/clip.fbx"),
                      ("POST", "/poses/animations/task_ab12/choose"),
-                     ("POST", "/poses/animations/task_ab12/discard")):
+                     ("POST", "/poses/animations/task_ab12/discard"),
+                     ("POST", "/poses/animations/task_ab12/dismiss")):
     for role in ("user", "admin"):
         response = pose_client.request(method, path,
             headers={"x-test-user": role},
@@ -429,6 +430,16 @@ check("choose forwards", (response.status_code, choose.call_args.args), (200, ("
 with patch("app.core.pose_animation.discard", side_effect=ChoiceError(409, "decided")):
     response = pose_client.post("/poses/animations/task_ab12/discard", headers=admin_headers)
 check("discard maps ChoiceError", response.status_code, 409)
+for status_code in (404, 409):
+    with patch("app.core.pose_animation.dismiss", side_effect=ChoiceError(status_code, "nope")):
+        response = pose_client.post("/poses/animations/task_ab12/dismiss", headers=admin_headers)
+    check(f"dismiss maps ChoiceError {status_code}", response.status_code, status_code)
+with patch("app.core.pose_animation.dismiss",
+           return_value={"task_id": "task_ab12", "dismissed": True}) as dismiss:
+    response = pose_client.post("/poses/animations/task_ab12/dismiss", headers=admin_headers)
+check("dismiss forwards", (response.status_code, dismiss.call_args.args), (200, ("task_ab12",)))
+response = pose_client.post("/poses/animations/TASK_AB/dismiss", headers=admin_headers)
+check("dismiss rejects a malformed task id", response.status_code, 422)
 for path in ("/poses/animations/task_ab12/candidates/16/clip.fbx",
              "/poses/animations/task_ab12/candidates/x/clip.fbx",
              "/poses/animations/..%2Fetc/candidates/0/clip.fbx",

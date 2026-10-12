@@ -55,10 +55,25 @@ interface AnimationJob {
   candidates?: AnimationCandidate[] | null
   backend?: string | null
   generator?: string | null
+  /** what was asked for — a retry reopens the dialog with it */
+  request?: {
+    mode: PoseAnimationRequest['mode']
+    key: string
+    text: string
+    raw_text: string
+    hint: string
+    backend: string
+    variants: number
+  } | null
 }
 
 function activeJob(job: AnimationJob) {
   return job.status === 'pending' || job.status === 'running'
+}
+
+/** A job that ended without variants to pick — it can be retried or removed. */
+function failedJob(job: AnimationJob) {
+  return job.status === 'failed' || job.status === 'cancelled'
 }
 
 /** A finished job whose variants wait for the admin's pick. */
@@ -200,7 +215,6 @@ export function PosesTab() {
   const [animationJobs, setAnimationJobs] = useState<AnimationJob[]>([])
   const [jobsRefresh, setJobsRefresh] = useState(0)
   const jobStatuses = useRef(new Map<string, AnimationJob['status']>())
-  const jobRequests = useRef(new Map<string, PoseAnimationRequest>())
   const notifiedJobs = useRef(new Set<string>())
   const pendingCompletions = useRef(new Map<string, { job: AnimationJob; reload: Promise<void> }>())
   const [choiceJob, setChoiceJob] = useState<AnimationJob | null>(null)
@@ -280,8 +294,7 @@ export function PosesTab() {
           && !notifiedJobs.current.has(job.task_id)
           && !pendingCompletions.current.has(job.task_id)
           && (jobStatuses.current.get(job.task_id) === 'pending'
-            || jobStatuses.current.get(job.task_id) === 'running'
-            || jobRequests.current.has(job.task_id)))
+            || jobStatuses.current.get(job.task_id) === 'running'))
         for (const job of result.jobs) jobStatuses.current.set(job.task_id, job.status)
         if (completed.length) {
           // Share the reload across effect restarts; keep completions pending
@@ -308,7 +321,6 @@ export function PosesTab() {
 
   const closeAnimationDialog = useCallback(() => setAnimationDialog(null), [])
   const animationStarted = (taskId: string, request: PoseAnimationRequest) => {
-    jobRequests.current.set(taskId, request)
     jobStatuses.current.set(taskId, 'pending')
     setAnimationJobs((jobs) => [{ task_id: taskId, status: 'pending', mode: request.mode,
       key: request.entryKey }, ...jobs])
@@ -322,14 +334,30 @@ export function PosesTab() {
     }
   }
 
-  const retryAnimation = (job: AnimationJob) => {
-    const entry = data.entries.find((item) => item.key === job.key)
-    if (entry) {
-      setAnimationDialog({ mode: 'entry', entryKey: entry.key, prompt: entry.prompt,
-        initialHint: jobRequests.current.get(job.task_id)?.initialHint })
-    } else {
-      const request = jobRequests.current.get(job.task_id)
-      if (request) setAnimationDialog(request)
+  /** The dialog request that repeats a failed job, or null when it cannot be
+   *  repeated (its catalog entry is gone or is a pair pose). */
+  const retryRequest = (job: AnimationJob): PoseAnimationRequest | null => {
+    const asked = job.request
+    if (!asked) return null
+    const preset = { initialHint: asked.hint, initialModel: asked.backend,
+      initialVariants: asked.variants }
+    if (asked.mode === 'entry') {
+      const entry = data.entries.find((item) => item.key === asked.key && item.solo !== false)
+      return entry ? { mode: 'entry', entryKey: entry.key, prompt: entry.prompt, ...preset } : null
+    }
+    if (asked.mode === 'candidate') {
+      return asked.raw_text ? { mode: 'candidate', rawText: asked.raw_text, ...preset } : null
+    }
+    return asked.text ? { mode: 'free', initialText: asked.text, ...preset } : null
+  }
+
+  const dismissJob = async (job: AnimationJob) => {
+    try {
+      await apiPost(`/poses/animations/${job.task_id}/dismiss`, {})
+      setAnimationJobs((jobs) => jobs.filter((item) => item.task_id !== job.task_id))
+      jobStatuses.current.delete(job.task_id)
+    } catch (error) {
+      toast(t('Error') + ': ' + (error as Error).message, 'error')
     }
   }
 
@@ -362,14 +390,19 @@ export function PosesTab() {
           ? t('Generating … ({phase})').replace('{phase}', phaseLabel(job.phase))
           : t('Failed: {error}').replace('{error}', job.error || t('Unknown error'))}
       </span>
-      {job.status === 'failed'
-        && (data.entries.some((entry) => entry.key === job.key && entry.solo !== false)
-          || (!data.entries.some((entry) => entry.key === job.key)
-            && jobRequests.current.has(job.task_id))) ? (
-        <button type="button" className="ga-btn ga-btn-sm" onClick={() => retryAnimation(job)}>
-          {t('Retry')}
-        </button>
-      ) : null}
+      {failedJob(job) ? (() => {
+        const retry = retryRequest(job)
+        return <>
+          {retry ? (
+            <button type="button" className="ga-btn ga-btn-sm" onClick={() => setAnimationDialog(retry)}>
+              {t('Retry')}
+            </button>
+          ) : null}
+          <button type="button" className="ga-btn ga-btn-sm" onClick={() => { void dismissJob(job) }}>
+            {t('Remove')}
+          </button>
+        </>
+      })() : null}
     </div>
   )
 
@@ -992,7 +1025,7 @@ export function PosesTab() {
                 // An entry row shows only its NEWEST job; every other job still
                 // waiting for a choice stays reachable here.
                 const inRow = hasEntry && jobsByKey.get(job.key || '')?.task_id === job.task_id
-                return (!hasEntry && (activeJob(job) || job.status === 'failed'))
+                return (!hasEntry && (activeJob(job) || failedJob(job)))
                   || (awaitingChoice(job) && !inRow)
               }).map((job) => (
                 <div key={job.task_id} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -1068,7 +1101,7 @@ export function PosesTab() {
                 </button>
                 {isPose && jobsByKey.has(p.key) && (() => {
                   const job = jobsByKey.get(p.key)!
-                  return activeJob(job) || job.status === 'failed' || awaitingChoice(job) ? jobStatus(job) : null
+                  return activeJob(job) || failedJob(job) || awaitingChoice(job) ? jobStatus(job) : null
                 })()}
               </li>
             ))}

@@ -20,10 +20,13 @@ export interface PoseAnimationRequest {
   prompt?: string
   initialText?: string
   initialHint?: string
+  /** a retry preselects the model and variant count of the failed run */
+  initialModel?: string
+  initialVariants?: number
 }
 
 export function PoseAnimationDialog({ open, mode, entryKey, rawText, prompt,
-  initialText = '', initialHint = '', onClose, onStarted,
+  initialText = '', initialHint = '', initialModel = '', initialVariants, onClose, onStarted,
 }: PoseAnimationRequest & {
   open: boolean
   onClose: () => void
@@ -35,8 +38,8 @@ export function PoseAnimationDialog({ open, mode, entryKey, rawText, prompt,
   const [hint, setHint] = useState(initialHint)
   const [busy, setBusy] = useState(false)
   const [backends, setBackends] = useState<AnimationBackend[]>([])
-  const [model, setModel] = useState('')
-  const [variants, setVariants] = useState(3)
+  const [model, setModel] = useState(initialModel)
+  const [variants, setVariants] = useState(initialVariants || 3)
   const firstField = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
   const formRef = useRef<HTMLFormElement | null>(null)
   const submitting = useRef(false)
@@ -54,12 +57,15 @@ export function PoseAnimationDialog({ open, mode, entryKey, rawText, prompt,
     apiGet<{ backends: AnimationBackend[]; default_variants: number }>('/poses/animations/backends')
       .then((result) => {
         if (!live) return
-        setBackends(result.backends || [])
-        setVariants(result.default_variants || 3)
+        const listed = result.backends || []
+        setBackends(listed)
+        // A model that left the chain since the failed run falls back to Auto.
+        setModel((current) => (listed.some((b) => b.name === current) ? current : ''))
+        setVariants(initialVariants || result.default_variants || 3)
       })
       .catch((error) => { if (live) toast(t('Error') + ': ' + (error as Error).message, 'error') })
     return () => { live = false }
-  }, [open, t, toast])
+  }, [open, initialVariants, t, toast])
 
   // Auto runs the first usable chain entry; its limits and licence are what the
   // dialog shows until a model is picked explicitly.
@@ -121,8 +127,7 @@ export function PoseAnimationDialog({ open, mode, entryKey, rawText, prompt,
         backend: model,
         variants,
       })
-      onStarted(result.task_id, { mode, entryKey, rawText, prompt,
-        initialText: text, initialHint: hint })
+      onStarted(result.task_id, { mode, entryKey, rawText, prompt })
     } catch (error) {
       toast(t('Error') + ': ' + (error as Error).message, 'error')
     } finally {

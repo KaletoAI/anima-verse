@@ -56,6 +56,15 @@ Final-review fixes:
  15. clear_completed(-1 h) deletes finished jobs but keeps one still waiting for
      a choice.
  16. recent_jobs(limit=1) still lists an older job waiting for a choice.
+Failed jobs can be retried and removed:
+ 17. A failed free job lists its request {mode free, key "", text "wave",
+     raw_text "", hint "slowly", backend "kimodo", variants 2} — no seed, so a
+     retry draws a new one.
+ 18. dismiss(failed job) -> {"task_id": tid, "dismissed": True}: the task is
+     gone from the queue and its leftover staging folder is removed; a second
+     dismiss -> 404.
+ 19. dismiss of a job waiting for a choice -> 409 and it stays listed; of a
+     pending job -> 409; of "task_zz" (not a task id) -> 404.
 """
 import json
 import os
@@ -304,6 +313,23 @@ def main():
                 listed = [j["task_id"] for j in pa.recent_jobs(limit=1)]
                 assert listed[0] == newer and waiting in listed, listed
                 print("PASS 16: an older job waiting for a choice stays listed")
+                failed = pa.submit("free", text="wave", hint="slowly", backend="kimodo", variants=2)
+                tq._finish_task(failed, "failed", error="hub down")
+                listed = {j["task_id"]: j for j in pa.recent_jobs()}[failed]
+                assert listed["request"] == {"mode": "free", "key": "", "text": "wave", "raw_text": "",
+                                             "hint": "slowly", "backend": "kimodo", "variants": 2}, listed
+                print("PASS 17: a failed job lists its request without the seed")
+                (staging(failed) / "cand_0").mkdir(parents=True)
+                assert pa.dismiss(failed) == {"task_id": failed, "dismissed": True}
+                assert failed not in {t["task_id"] for t in tq.list_recent_tasks(pa.TASK_TYPE, limit=100)}
+                assert not staging(failed).exists()
+                expect(404, pa.dismiss, failed)
+                print("PASS 18: dismiss removes a failed job and its leftovers")
+                expect(409, pa.dismiss, waiting)
+                assert waiting in {t["task_id"] for t in tq.list_recent_tasks(pa.TASK_TYPE, limit=100)}
+                expect(409, pa.dismiss, queued)
+                expect(404, pa.dismiss, "task_zz")
+                print("PASS 19: dismiss refuses waiting, pending and unknown jobs")
         finally:
             pc.catalog_path = original_path
             pc.reload_catalogs()
