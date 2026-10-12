@@ -193,6 +193,7 @@ def main():
                            attachment_ring_max=.01, weld_normal_min=.5,
                            centerline_slab=.08, link_blend=.06,
                            contact_follow_distance=args.contact_follow_distance,
+                           contact_inside_distance=0.,
                            contact_follow_weight=args.contact_follow_weight)
     group['params'].pop('blend_start', None)
     group['params'].pop('blend_width', None)

@@ -146,6 +146,7 @@ DECLARED_PARAMS = {'pair_protrusion': {'band_lower_bone': 'Spine1',
                      'segment_min_vertices': 3,
                      'contact_ramp': 0.01,
                      'contact_follow_distance': .025,
+                     'contact_inside_distance': 0.,
                      'contact_follow_weight': 0.,
                      'base_slice_size': .01,
                      'base_radius_margin': 1.6,
@@ -1135,7 +1136,7 @@ def main():
                     'segment_radius_percentile','segment_radius_margin',
                     'segment_radius_growth_max','segment_passes','centerline_slab','link_blend',
                     'base_slice_size','base_radius_margin','base_growth_max','base_extension_max','base_history_slices',
-                    'attachment_ring_max','weld_normal_min','contact_follow_distance','contact_follow_weight'):
+                    'attachment_ring_max','weld_normal_min','contact_follow_distance','contact_follow_weight','contact_inside_distance'):
             missing=copy.deepcopy(chain_group); del missing['params'][key]
             bad=runner.run('extension_bones',inputs={'model':Path(fused['outputs']['model'])},
                            params={'groups':[missing]},out_dir=root/('missing-'+key),timeout_s=180)
@@ -1150,6 +1151,7 @@ def main():
                           ('base_growth_max',1),('base_extension_max',0),
                           ('base_history_slices',0),('base_history_slices',1.5),
                           ('contact_follow_distance',0),('contact_follow_weight',-.1),('contact_follow_weight',1),
+                          ('contact_inside_distance',-.01),
                           ('attachment_ring_max',0),('weld_normal_min',-1.1),('weld_normal_min',1.1),
                           ('centerline_slab',0),('centerline_slab',1),('link_blend',0),('link_blend',1)]:
             invalid=copy.deepcopy(chain_group); invalid['params'][key]=value

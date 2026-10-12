@@ -83,6 +83,7 @@ PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'segment_min_vertices': 'number',
                      'contact_ramp': 'number',
                      'contact_follow_distance': 'number',
+                     'contact_inside_distance': 'number',
                      'contact_follow_weight': 'number',
                      'base_slice_size': 'number',
                      'base_radius_margin': 'number',
@@ -181,7 +182,7 @@ def parameters(group):
                    'root_wall_margin', 'window_margin', 'near_slice_margin',
                    'attachment_inset', 'fallback_z_margin',
                    'fallback_front_fraction', 'fallback_top_margin',
-                   'reweight_factor', 'test_rotation_decay')
+                   'reweight_factor', 'test_rotation_decay', 'contact_inside_distance')
     for key in nonnegative:
         if key in p and p[key] < 0:
             raise ValueError(key + ' must be nonnegative')
@@ -1198,6 +1199,96 @@ def contact_follow_weights(p, co, edges, faces, plan):
     return follow, len(contacts)
 
 
+def contact_inside_weights(p, co, edges, faces, plan, follow):
+    """Ramp full tube weights inward, preserving follower values and link shares.
+
+    Coincident full vertices share a graph node, distance and boundary value.
+    Equal shortest paths prefer the lowest seed index. Seeds stay outside the
+    attachment ring; propagation includes every full tube vertex (total >= .9).
+    """
+    limit = p['contact_inside_distance']
+    weights, m, tube = plan[1], plan[2], plan[3]
+    if not limit or m['leak'] or not tube:
+        return set()
+    joints = [Vector(c) for c in m['weight_joints']]
+    boundaries = [0]+p['chain_split']+[1]
+    axis = (Vector(m['segment_axis_tip'])-Vector(m['segment_axis_base'])).normalized()
+    def outside_ring(i):
+        station = (max(0., (co[i]-Vector(m['attachment'])).dot(axis))
+                   if m['base_extension_t'] < 0 else polyline_station(co[i],joints,boundaries)[1])
+        return station > p['attachment_ring_max']
+    full = {i for i in tube if sum(w.get(i,0.) for w in weights.values()) >= .9}
+    seeds = {i for i in full if outside_ring(i)}
+    contacts = [face for face in faces if any(i in seeds for i in face)
+                and any(i not in tube for i in face)]
+    if not contacts:
+        return set()
+    # Collapse position copies without a normal guard: UV seams share weights.
+    parent = {i:i for i in full}
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    kd = KDTree(len(full))
+    for i in sorted(full):
+        kd.insert(co[i],i)
+    kd.balance()
+    for i in sorted(full):
+        for _,j,_ in sorted(kd.find_range(co[i],p['weld_distance']),key=lambda row:row[1]):
+            a,b = root(i),root(j)
+            parent[max(a,b)] = min(a,b)
+    welded = {i:root(i) for i in sorted(full)}
+    adjacency = {}
+    for a,b in sorted(edges):
+        if a not in full or b not in full:
+            continue
+        u,v = welded[a],welded[b]
+        if u == v:
+            continue
+        distance = (co[a]-co[b]).length
+        for x,y in ((u,v),(v,u)):
+            row = adjacency.setdefault(x,{})
+            row[y] = min(distance,row.get(y,float('inf')))
+    boundary, seed_indices = {}, {}
+    for face in sorted(contacts):
+        value = max((sum(w.get(i,0.) for w in follow.values())
+                     for i in face if i not in tube),default=0.)
+        for i in sorted(seeds.intersection(face)):
+            seed = welded[i]
+            boundary[seed] = max(value,boundary.get(seed,0.))
+            seed_indices[seed] = min(i,seed_indices.get(seed,i))
+    # A welded representative can be a non-contact copy, not an actual seed.
+    seed_boundary = {seed_indices[i]:boundary[i] for i in sorted(boundary)}
+    distances = {i:(0.,seed_indices[i]) for i in sorted(boundary)}
+    queue = [(0.,seed_indices[i],i) for i in sorted(boundary)]
+    heapq.heapify(queue)
+    while queue:
+        d,seed,i = heapq.heappop(queue)
+        if (d,seed) != distances[i]:
+            continue
+        for j,length in sorted(adjacency.get(i,{}).items()):
+            candidate = (d+length,seed)
+            if candidate[0] < limit and candidate < distances.get(j,(float('inf'),float('inf'))):
+                distances[j] = candidate
+                heapq.heappush(queue,(candidate[0],seed,j))
+    ramped = set()
+    for i,node in welded.items():
+        if node not in distances:
+            continue
+        distance,seed = distances[node]
+        b = seed_boundary[seed]
+        factor = b+(1-b)*smooth(distance/limit)
+        if factor < 1:
+            ramped.add(i)
+            for w in weights.values():
+                if i in w:
+                    w[i] *= factor
+    if any(not any(value > .9 for value in w.values()) for w in weights.values()):
+        raise ValueError('chain link has no core vertices (weight > 0.9)')
+    return ramped
+
+
 def contact_follow_entries(entries, extension_names):
     """Fit overlapping extension shares plus the original remainder into four slots."""
     extension = [(vg,w) for vg,w in entries if vg.name in extension_names]
@@ -1244,6 +1335,10 @@ def measure(arm, meshes, edges, plans):
         pct=lambda f: ratios[min(len(ratios)-1,int(f*len(ratios)))] if ratios else None
         if g['op'] == 'appendage_chain':
             captured = plan[3] if plan[2] else weighted
+            ramped = plan[6] if len(plan)>6 else set()
+            plan[2]['contact_inside_ramped'] = len(ramped)
+            plan[2]['contact_inside_weight_min'] = min(
+                (sum(w.get(i,0.) for w in plan[1].values()) for i in ramped),default=1.)
             plan[2]['core_verts_per_link'] = {name:sum(v > .9 for v in w.values()) for name,w in plan[1].items()}
             directions = [(tail-head).normalized() for _,head,tail,_ in plan[0]]
             plan[2]['bind_bend_deg'] = [math.degrees(a.angle(b)) for a,b in zip(directions,directions[1:])]
@@ -1306,13 +1401,13 @@ def measure(arm, meshes, edges, plans):
                         value = sum(w.get(index,0.) for w in plan[1].values())
                         is_partial = .1 < value < .9
                         partial += is_partial and index in captured
-                        outside_ring += index in captured and is_partial and station > p['attachment_ring_max']+1e-6
+                        outside_ring += index in captured and index not in ramped and is_partial and station > p['attachment_ring_max']+1e-6
                         outside_weighted += index not in captured and index not in (plan[5] if len(plan)>5 else set()) and value > .1
                         if index in captured:
                             maximum_distance = max(maximum_distance,distance)
                             if m['tube_radius'] is not None:
                                 beyond_tube += distance > m['tube_radius']+1e-6
-                            missing += station > p['attachment_ring_max']+1e-6 and value < .9
+                            missing += index not in ramped and station > p['attachment_ring_max']+1e-6 and value < .9
                     offset += len(mesh.data.vertices)
                 m.update(partial_weight_vertices=partial, partial_outside_attachment_ring=outside_ring,
                          captured_beyond_tube_radius=beyond_tube, captured_tube_distance_max=maximum_distance,
@@ -1413,7 +1508,8 @@ def extension_bones(args):
             if g['op']=='appendage_chain':
                 follow,count = contact_follow_weights(p,co,edges,faces,plan)
                 followers = {i for w in follow.values() for i in w}
-                plan = (*plan,followers)
+                ramped = contact_inside_weights(p,co,edges,faces,plan,follow)
+                plan = (*plan,followers,ramped)
                 plan[2]['contact_faces_outside_ring'] = count
                 for name,w in follow.items():
                     plan[1][name].update(w)
@@ -1441,8 +1537,11 @@ def extension_bones(args):
             b.use_connect=False
             b.roll=0
     bpy.ops.object.mode_set(mode='OBJECT')
+    # Edit mode rebuilds the bone data; references cached before it are stale.
+    bones = {bone_key(b.name):b for b in arm.data.bones}
     totals,allweights={},{}
     followers = set().union(*(plan[5] for g,p,plan in plans if len(plan)>5))
+    ramped = set().union(*(plan[6] for g,p,plan in plans if len(plan)>6))
     for g,p,plan in plans:
         for name,w in plan[1].items():
             allweights[name]=w
@@ -1485,7 +1584,7 @@ def extension_bones(args):
         entries=[(mesh.vertex_groups[ge.group],ge.weight) for ge in vertex.groups
                  if mesh.vertex_groups[ge.group].name in joint_index and ge.weight>0]
         entries.sort(key=lambda entry:(-entry[1],joint_index[entry[0].name]))
-        if i in followers:
+        if i in followers or i in ramped:
             kept = contact_follow_entries(entries,allweights)
             kept_names = {vg.name for vg,_ in kept}
             for vg,_ in entries:
