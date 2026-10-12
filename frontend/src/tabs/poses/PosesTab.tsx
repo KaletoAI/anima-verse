@@ -986,9 +986,18 @@ export function PosesTab() {
                 onClick={() => setAnimationDialog({ mode: 'free' })}>
                 {t('New from description')}
               </button>
-              {animationJobs.filter((job) => !data.entries.some((entry) => entry.key === job.key)
-                && (activeJob(job) || job.status === 'failed' || awaitingChoice(job)))
-                .map((job) => <div key={job.task_id}>{jobStatus(job)}</div>)}
+              {animationJobs.filter((job) => {
+                const hasEntry = data.entries.some((entry) => entry.key === job.key)
+                // An entry row shows only its NEWEST job; every other job still
+                // waiting for a choice stays reachable here.
+                const inRow = hasEntry && jobsByKey.get(job.key || '')?.task_id === job.task_id
+                return (!hasEntry && (activeJob(job) || job.status === 'failed'))
+                  || (awaitingChoice(job) && !inRow)
+              }).map((job) => (
+                <div key={job.task_id} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  {job.key ? <code>{job.key}</code> : null}{jobStatus(job)}
+                </div>
+              ))}
             </> : null}
             <input
               className="ga-input"

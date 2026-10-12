@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ClipPreview } from './ClipPreview'
 import { generatorName } from './generatedClip'
@@ -32,11 +32,39 @@ export function PoseAnimationChoice({ taskId, poseKey, generator, candidates, on
   const [busy, setBusy] = useState(false)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
 
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  const busyRef = useRef(false)
+  const closeRef = useRef(onClose)
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !busy) onClose() }
+    busyRef.current = busy
+    closeRef.current = onClose
+  })
+
+  // Focus enters the dialog, Tab stays inside it, and focus returns on close.
+  useEffect(() => {
+    const previousFocus = document.activeElement as HTMLElement | null
+    boxRef.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !busyRef.current) closeRef.current()
+      if (event.key !== 'Tab') return
+      const controls = boxRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled)')
+      if (!controls?.length) return
+      const first = controls[0]
+      const last = controls[controls.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
     document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [busy, onClose])
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      previousFocus?.focus()
+    }
+  }, [])
 
   const choose = async (index: number) => {
     setBusy(true)
@@ -68,7 +96,7 @@ export function PoseAnimationChoice({ taskId, poseKey, generator, candidates, on
   const title = t('Choose a variant') + (poseKey ? `: ${poseKey}` : '')
   return createPortal(
     <div className="ga-modal-backdrop" onClick={() => { if (!busy) onClose() }}>
-      <div className="ga-modal" role="dialog" aria-modal="true" aria-label={title}
+      <div ref={boxRef} className="ga-modal" role="dialog" aria-modal="true" aria-label={title}
         style={{ maxWidth: 1100, width: '95vw' }} onClick={(event) => event.stopPropagation()}>
         <div className="ga-modal-header">
           <span>{title}{generator ? ` · ${generatorName(generator)}` : ''}</span>
