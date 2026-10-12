@@ -1,8 +1,15 @@
-"""Prepare validated UniMate motion captions and optional catalog proposals."""
+"""Prepare validated text-to-motion captions and optional catalog proposals.
+
+The caption prefix follows the chosen animation backend (``caption_style``,
+spec plan-pose-animation-unimate.md §13 E8): each model was trained on its
+own caption form."""
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
 from app.core.llm_json import parse_json
+
+
+CAPTION_PREFIXES = {"object": "An object ", "person": "A person "}
 
 
 class MotionPromptError(ValueError):
@@ -22,7 +29,7 @@ def _check_mode(mode: str) -> None:
 
 
 def parse_motion_answer(raw: str, *, mode: str, shared_groups: Set[str],
-                        taken_aliases: Set[str]) -> PreparedMotion:
+                        taken_aliases: Set[str], prefix: str = "An object ") -> PreparedMotion:
     """Validate an answer without accessing the catalog or an LLM."""
     _check_mode(mode)
     answer = parse_json(raw)
@@ -39,11 +46,11 @@ def parse_motion_answer(raw: str, *, mode: str, shared_groups: Set[str],
     for i, caption in enumerate(segments, 1):
         if not isinstance(caption, str):
             raise MotionPromptError(f"caption {i} must be a string")
-        if not caption.startswith("An object "):
-            raise MotionPromptError(f"caption {i} must start with 'An object '")
+        if not caption.startswith(prefix):
+            raise MotionPromptError(f"caption {i} must start with '{prefix}'")
         if len(caption.splitlines()) != 1 or "\n" in caption or "\r" in caption:
             raise MotionPromptError(f"caption {i} must not contain a line break")
-        if not caption[len("An object "):].strip():
+        if not caption[len(prefix):].strip():
             raise MotionPromptError(f"caption {i} must describe an action")
     loop = answer.get("loop")
     if not isinstance(loop, bool):
@@ -87,13 +94,17 @@ def parse_motion_answer(raw: str, *, mode: str, shared_groups: Set[str],
 
 
 def prepare_motion(mode: str, *, entry: Optional[Dict] = None,
-                   text: str = "", hint: str = "") -> PreparedMotion:
+                   text: str = "", hint: str = "", caption_style: str = "object",
+                   segment_seconds: float = 2.0) -> PreparedMotion:
     """Render and route one motion request, then validate its answer."""
     from app.core import pose_catalog
     from app.core.llm_router import llm_call
     from app.core.prompt_templates import render_task
 
     _check_mode(mode)
+    prefix = CAPTION_PREFIXES.get(caption_style)
+    if prefix is None:
+        raise MotionPromptError(f"unknown caption style '{caption_style}'")
     if mode == "entry" and (not isinstance(entry, dict) or
                             any(field not in entry for field in ("key", "group", "prompt"))):
         raise MotionPromptError("entry missing required key, group or prompt")
@@ -105,11 +116,12 @@ def prepare_motion(mode: str, *, entry: Optional[Dict] = None,
         taken.update(s.strip().lower() for s in item.get("synonyms", []) if isinstance(s, str))
     system, user = render_task("pose_animation_prompt", mode=mode, entry=entry,
         text=text, hint=hint, groups=", ".join(sorted(groups)),
-        taken=", ".join(sorted(taken)), body="humanoid")
+        taken=", ".join(sorted(taken)), body="humanoid", caption_style=caption_style,
+        prefix=prefix, segment_seconds=float(segment_seconds))
     try:
         response = llm_call("pose_animation_prompt", system, user,
                             max_tokens=600, label="Pose animation captions")
     except RuntimeError as exc:
         raise MotionPromptError(f"no LLM routed for pose_animation_prompt: {exc}") from exc
-    return parse_motion_answer(response.content, mode=mode,
-                               shared_groups=groups, taken_aliases=taken)
+    return parse_motion_answer(response.content, mode=mode, shared_groups=groups,
+                               taken_aliases=taken, prefix=prefix)
