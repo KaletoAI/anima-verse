@@ -2304,7 +2304,11 @@ def _flatten_to_env(config: dict) -> None:
                      "denoise_strength", "allow_mature_content",
                      # Mesh backend (openai_mesh, img2mesh)
                      "mesh_endpoint", "remove_background",
-                     "face_num", "face_num_max", "no_fingers", "mesh_steps"]:
+                     "face_num", "face_num_max", "no_fingers", "mesh_steps",
+                     # Mesh animation (openai_mesh_animation, mesh2anim)
+                     "motion_source", "source_slot", "caption_style", "segment_seconds",
+                     "variant_param", "duration_param", "max_variants", "generator",
+                     "license", "model_revision", "credit"]:
             val = be.get(key, "")
             # extra_params can be a dict (JSON editor) — bridge as JSON string.
             if key == "extra_params" and isinstance(val, (dict, list)):

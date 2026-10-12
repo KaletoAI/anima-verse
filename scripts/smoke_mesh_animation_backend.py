@@ -11,6 +11,21 @@ Downloads disable redirects and HTTP 302 or two GLBs return nothing. Caller canc
 after one poll sends one cancel and raises; park timeout remains busy.
 Additional checks cover caption/seed validation, output magic, safe download
 URLs, ignored extra settings, availability and thread-local job identity.
+
+Variant section (plan v3 Task 1), a reference-rig backend configured with
+motion_source=reference_rig, source_slot=input_rig_path,
+variant_param=input_num_samples, duration_param=input_duration and
+segment_seconds=4: an FBX source travels as
+files.input_rig_path = data:application/octet-stream;base64,<bytes>, the alias
+gets input_num_samples=3 and input_duration=4.0, and neither
+input_num_repetitions nor input_mesh_path. A GLB source is refused before the
+POST (FBX magic required), and so is variants=5 against max_variants=4. Three
+results where the third has no sha256 give 2 blobs in n order and a
+last_result_meta of 3 entries, the third {ok: False, reason: "missing sha256"}.
+A result whose bytes are neither glTF nor FBX is dropped with a reason; a
+result beyond the requested count is dropped as "unrequested result"; a
+non-model MIME (a preview PNG) is ignored without a meta entry. The puppet
+backend's motion_meta carries the UniMate defaults.
 """
 import base64
 import hashlib
@@ -135,12 +150,14 @@ def main():
                     assert log.error.called
             print("PASS 5b: empty, null and malformed checksums discarded")
             assert run(results=[{**result, "sha256": result["sha256"].upper()}]) == [BLOB]
-            with patch("app.imagegen.backends.openai_mesh_animation.logger") as log:
-                assert run(results=[result, {**result, "n": 1}]) == []
-                assert any("expected exactly one result" in c.args[0]
-                           for c in log.error.call_args_list)
-            assert http.get.call_count == 1
-            print("PASS 6: two GLBs discarded before download")
+            http.reset_mock()
+            http.post.return_value = response({"job_id": JOB}, status=202)
+            http.get.side_effect = [response({"status": "done", "results": [result, {**result, "n": 1}]}),
+                                    response(content=BLOB)]
+            assert backend.generate("ignored", "", params=params, log_meta=None) == [BLOB]
+            assert http.get.call_count == 2
+            assert [m["reason"] for m in backend.last_result_meta] == ["", "unrequested result"]
+            print("PASS 6: a result beyond the requested count is not downloaded")
             checks = iter([False, True])
             try:
                 run({"should_cancel": lambda: next(checks)}, status={"status": "running"})
@@ -177,7 +194,111 @@ def main():
             http.get.return_value = response(status=403)
             assert not backend.check_availability()
             print("PASS extras: validation, output magic, availability, thread-local ID")
+    variants_section()
     print("All animation backend smokes passed")
+
+
+FBX = b"Kaydara FBX Binary  \x00\x1a\x00" + b"\x00" * 40
+
+
+def variants_section():
+    env = {"SKILL_IMAGEGEN_2_MODEL": "motion-kimodo",
+           "SKILL_IMAGEGEN_2_API_KEY": "smoke-key",
+           "SKILL_IMAGEGEN_2_POLL_INTERVAL": "0.001",
+           "SKILL_IMAGEGEN_2_MOTION_SOURCE": "reference_rig",
+           "SKILL_IMAGEGEN_2_SOURCE_SLOT": "input_rig_path",
+           "SKILL_IMAGEGEN_2_CAPTION_STYLE": "person",
+           "SKILL_IMAGEGEN_2_VARIANT_PARAM": "input_num_samples",
+           "SKILL_IMAGEGEN_2_DURATION_PARAM": "input_duration",
+           "SKILL_IMAGEGEN_2_SEGMENT_SECONDS": "4",
+           "SKILL_IMAGEGEN_2_MAX_VARIANTS": "4",
+           "SKILL_IMAGEGEN_2_GENERATOR": "kimodo",
+           "SKILL_IMAGEGEN_2_LICENSE": "NVIDIA-Open-Model-License"}
+    fbx1, fbx2 = FBX + b"one", FBX + b"two"
+    sha = lambda b: hashlib.sha256(b).hexdigest()
+    with tempfile.TemporaryDirectory() as td, patch.dict(os.environ, env):
+        rig = Path(td) / "reference.fbx"
+        rig.write_bytes(FBX + b"rig")
+        puppet = Path(td) / "puppet.glb"
+        puppet.write_bytes(b"glTFsource")
+        backend = OpenAIMeshAnimationBackend("kimodo", URL, 0, "SKILL_IMAGEGEN_2_")
+        meta = backend.motion_meta
+        assert meta["motion_source"] == "reference_rig" and meta["caption_style"] == "person"
+        assert meta["segment_seconds"] == 4.0 and meta["max_variants"] == 4
+        assert meta["generator"] == "kimodo" and meta["license"] == "NVIDIA-Open-Model-License"
+        params = {"source_model_path": str(rig), "seed": 7, "captions": ["A person waves."],
+                  "variants": 3}
+        http = Mock()
+        with patch("app.imagegen.backends._gateway_job.requests", http), \
+             patch("app.imagegen.backends.openai_mesh_animation.requests", http), \
+             patch("app.imagegen.backends._gateway_job.time.sleep"):
+            def run(results, blobs, overrides=None):
+                http.reset_mock()
+                http.post.return_value = response({"job_id": JOB}, status=202)
+                http.get.side_effect = ([response({"status": "done", "results": results})]
+                                        + [response(content=b) for b in blobs])
+                return backend.generate("ignored", "", params={**params, **(overrides or {})},
+                                        log_meta=None)
+
+            three = [{"n": 0, "mime": "application/octet-stream", "sha256": sha(fbx1)},
+                     {"n": 1, "mime": "model/fbx", "sha256": sha(fbx2)},
+                     {"n": 2, "mime": "model/fbx"}]
+            assert run(three, [fbx1, fbx2]) == [fbx1, fbx2]
+            body = http.post.call_args.kwargs["json"]
+            assert body["params"] == {"seed": 7, "input_num_samples": 3, "input_duration": 4.0}, body["params"]
+            assert body["files"] == {"input_rig_path": "data:application/octet-stream;base64,"
+                                     + base64.b64encode(FBX + b"rig").decode()}
+            assert body["model"] == "motion-kimodo" and body["prompt"] == "A person waves."
+            got = backend.last_result_meta
+            assert [m["ok"] for m in got] == [True, True, False], got
+            assert got[2]["reason"] == "missing sha256" and got[2]["n"] == 2
+            assert http.get.call_count == 3
+            print("PASS V1: reference rig upload, variant + duration params, 2 of 3 results")
+            for bad in ({"source_model_path": str(puppet)}, {"variants": 5}, {"variants": 0}):
+                try:
+                    run(three, [fbx1, fbx2], bad)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError(f"accepted {bad}")
+                assert http.post.call_count == 0
+            print("PASS V2: GLB source and out-of-range variants refused before POST")
+            junk = b"PK\x03\x04 not a model"
+            mixed = [{"n": 0, "mime": "application/octet-stream", "sha256": sha(junk)},
+                     {"n": 1, "mime": "image/png", "sha256": sha(b"png")},
+                     {"n": 2, "mime": "model/fbx", "sha256": sha(fbx2)}]
+            assert run(mixed, [junk, fbx2]) == [fbx2]
+            got = backend.last_result_meta
+            assert [m["n"] for m in got] == [0, 2], got
+            assert got[0]["ok"] is False and "neither glTF nor FBX" in got[0]["reason"]
+            print("PASS V3: foreign bytes dropped with a reason, preview PNG ignored")
+    with tempfile.TemporaryDirectory() as td:
+        plain = OpenAIMeshAnimationBackend("unimate", URL, 0, "SKILL_IMAGEGEN_9_")
+        meta = plain.motion_meta
+        assert meta["motion_source"] == "puppet" and meta["source_slot"] == "input_mesh_path"
+        assert meta["caption_style"] == "object" and meta["variant_param"] == "input_num_repetitions"
+        assert meta["duration_param"] == "" and meta["segment_seconds"] == 2.0
+        assert meta["generator"] == "unimate" and meta["license"] == "CC-BY-NC-4.0"
+        assert meta["credit"].startswith("UniMate:") and len(meta["model_revision"]) == 40
+    print("PASS V4: puppet backend defaults are the UniMate values")
+    from app.core import config as config_mod
+    from app.core.config_schema import SECTIONS
+    schema = SECTIONS["image_generation"]["sub_arrays"]["backends"]["fields"]
+    fields = {"motion_source": "reference_rig", "source_slot": "input_rig_path",
+              "caption_style": "person", "variant_param": "input_num_samples",
+              "duration_param": "input_duration", "segment_seconds": 4.0, "max_variants": 3,
+              "generator": "kimodo", "license": "NVIDIA-Open-Model-License",
+              "credit": "Kimodo, NVIDIA", "model_revision": "v1.1"}
+    with patch.dict(os.environ, {}, clear=False):
+        config_mod._flatten_to_env({"image_generation": {"backends": [
+            {"name": "kimodo", "api_type": "openai_mesh_animation", **fields}]}})
+        bridged = OpenAIMeshAnimationBackend("kimodo", URL, 0, "SKILL_IMAGEGEN_1_").motion_meta
+    assert bridged == {**fields, "segment_seconds": 4.0, "max_variants": 3}, bridged
+    defaults = plain.motion_meta
+    for key in fields:
+        assert schema[key]["default"] == defaults[key], key
+        assert schema[key]["applicable_for"] == ["openai_mesh_animation"], key
+    print("PASS V5: config bridge carries every motion field; schema defaults = backend defaults")
 
 
 if __name__ == "__main__":
