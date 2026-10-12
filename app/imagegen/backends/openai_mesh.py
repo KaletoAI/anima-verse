@@ -256,10 +256,14 @@ class OpenAIMeshBackend(ImageBackend):
     def _check_input_identity(self, sd: Dict[str, Any], job_id: str) -> None:
         """Compare our uploaded inputs against the job view's input list.
 
-        Raises ``GatewayInputMismatchError`` when the gateway reports inputs
-        and any of OURS is missing from them. No list (old gateway), no digest
-        (http URLs the gateway fetched itself) or a list without any sha256 →
-        no check, no warning.
+        Raises ``GatewayInputMismatchError`` when the gateway reports an input
+        hash that is NOT one of ours — the job ran on somebody else's bytes.
+        One of ours missing from the report is no mismatch: the gateway lists
+        only some input kinds with a digest (a face-retexture job reports its
+        reference image under ``input_images`` but the uploaded mesh only as
+        ``<upload:… (24.3 MB)>``, without sha256). No list (old gateway), no
+        digest (http URLs the gateway fetched itself) or a list without any
+        sha256 → no check, no warning.
         """
         want = list(getattr(self._tls, "input_sha256s", None) or [])
         if not want:
@@ -274,16 +278,16 @@ class OpenAIMeshBackend(ImageBackend):
         got = [h for h in got if h]
         if not got:
             return
-        missing = [h for h in want if h not in got]
-        if not missing:
-            logger.debug("%s: Job %s Eingang bestaetigt (%d sha256, erster %s)",
-                         self.name, job_id, len(want), want[0][:12])
+        foreign = [h for h in got if h not in want]
+        if not foreign:
+            logger.debug("%s: job %s input confirmed (%d of %d sha256 reported)",
+                         self.name, job_id, len(set(got)), len(want))
             return
         raise GatewayInputMismatchError(
             f"{self.name}: job {job_id} ran on a DIFFERENT input than we "
-            f"uploaded (ours sha256 "
-            f"{', '.join(h[:12] for h in missing)} missing, the gateway stored "
-            f"{', '.join(h[:12] for h in got)}) — result discarded")
+            f"uploaded (the gateway stored sha256 "
+            f"{', '.join(h[:12] for h in foreign)}, ours are "
+            f"{', '.join(h[:12] for h in want)}) — result discarded")
 
     def _headers(self) -> Dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}

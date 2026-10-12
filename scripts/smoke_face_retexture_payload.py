@@ -90,6 +90,18 @@ def main():
         assert backend.last_job_id == 'fake-job'
         backend._check_input_identity({'input_files': [{'sha256': hashlib.sha256(source.read_bytes()).hexdigest()}],
                                        'input_images': [{'sha256': hashlib.sha256(image).hexdigest()}]}, 'fake-job')
+        # The live hub (2026-10-13) reports only the reference image with a
+        # digest; the mesh upload appears as "<upload:…>" without one. Ours
+        # being partly unreported is no mismatch ...
+        backend._check_input_identity({'input_images': [{'sha256': hashlib.sha256(image).hexdigest()}]}, 'fake-job')
+        # ... but a reported digest that is not ours still fails the job.
+        from app.imagegen.base import GatewayInputMismatchError
+        try:
+            backend._check_input_identity({'input_images': [{'sha256': 'e' * 64}]}, 'fake-job')
+        except GatewayInputMismatchError:
+            pass
+        else:
+            raise AssertionError('a foreign reported input hash was accepted')
         backend._face_schema = (True, ('reference_image',), 'input_mesh_path', frozenset({'strength'}))
         assert backend.build_alias_params({'yaw': 20}) == {'strength': 1}
         backend._face_schema = (False, (), '', frozenset())
