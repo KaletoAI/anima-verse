@@ -543,6 +543,125 @@ def test_overwrite() -> None:
           str([c["rel"] for c in clips]))
 
 
+def test_shared_write_lock():
+    import threading
+    from unittest.mock import patch
+    from app.core.keyed_lock import keyed_lock
+    operations = [lambda: ac.rename_clip("free", "absent.fbx", kind="new"),
+                  lambda: ac.delete_clip("free", "absent.fbx"),
+                  lambda: ac.set_clip_loop("free", "absent.fbx", True),
+                  lambda: ac.set_clip_role_gender("free", "absent.fbx", role_gender={"a": "female", "b": "male"}),
+                  lambda: ac.orient_clip("free", "absent.fbx", yaw_deg=20)]
+    for operation in operations:
+        blocked, done = threading.Event(), threading.Event()
+        unexpected = []
+        class ObservedLock:
+            def __init__(self, namespace, key):
+                self.lock = keyed_lock(namespace, key)
+            def __enter__(self):
+                if not self.lock.acquire(blocking=False):
+                    blocked.set()
+                    assert self.lock.acquire(timeout=5)
+            def __exit__(self, *args):
+                self.lock.release()
+        def call():
+            try:
+                operation()
+            except ac.ClipLibraryError:
+                pass
+            except Exception as exc:
+                unexpected.append(exc)
+            finally:
+                done.set()
+        with patch.object(ac, "keyed_lock", side_effect=ObservedLock):
+            with keyed_lock("clip_library", "write"):
+                thread = threading.Thread(target=call)
+                thread.start()
+                assert blocked.wait(2), "writer bypassed the library lock"
+                assert not done.is_set()
+            thread.join(5)
+            assert done.is_set() and not thread.is_alive() and not unexpected, unexpected
+    print("PASS rename/move/delete/loop/gender/orient contend on one library lock")
+
+
+def test_cmu_collision_after_precheck():
+    """A publisher wins after the catalog precheck, before CMU takes the lock."""
+    from contextlib import contextmanager
+    import threading
+    from unittest.mock import patch
+    from app.core import clip_catalog, cmu_import
+    from app.core.keyed_lock import keyed_lock
+
+    build_tree()
+    rig = WORLD / "reference.fbx"
+    rig.write_bytes(b"fixture-rig")
+    destination = FREE / "female"
+    winner = destination / "cmu-race.fbx"
+    sidecar = destination / "cmu-race.json"
+    real_lock = cmu_import.library_write_lock
+    blocked = threading.Event()
+
+    @contextmanager
+    def observed_lock(out):
+        lock = real_lock(out)
+        if not lock.acquire(blocking=False):
+            blocked.set()
+            assert lock.acquire(timeout=5), "CMU import did not acquire released lock"
+        try:
+            yield
+        finally:
+            lock.release()
+
+    def convert(script, *, inputs, params, out_dir, timeout_s):
+        assert script == "cmu_clip" and Path(out_dir) == destination
+        winner.write_bytes(b"cmu-replacement")
+        sidecar.write_bytes(b'{"kind":"cmu-race"}')
+        return {"ok": True, "outputs": {"clip": str(winner)}, "data": {}, "seconds": 1.0}
+
+    with patch.object(clip_catalog, "find_take", return_value={"id": "18_01", "framerate": 120}), \
+         patch.object(cmu_import, "default_rig", return_value=rig), \
+         patch.object(cmu_import, "take_files", return_value=(rig, rig)), \
+         patch.object(cmu_import.runner, "status", return_value={"executable": "fixture"}), \
+         patch.object(cmu_import.runner, "run", side_effect=convert), \
+         patch.object(cmu_import, "library_write_lock", side_effect=observed_lock), \
+         patch.object(clip_catalog, "record_import", return_value={}), \
+         patch.object(clip_catalog, "reload_clip_caches"):
+        for overwrite in (False, True):
+            winner.unlink(missing_ok=True)
+            sidecar.unlink(missing_ok=True)
+            blocked.clear()
+            results, errors = [], []
+
+            def import_clip():
+                try:
+                    results.append(clip_catalog.import_take(
+                        "18_01", "cmu-race", clip_set="female", overwrite=overwrite))
+                except Exception as exc:
+                    errors.append(exc)
+
+            with keyed_lock("clip_library", "write"):
+                thread = threading.Thread(target=import_clip, daemon=True)
+                thread.start()
+                assert blocked.wait(2), "CMU import never waited for library lock"
+                assert thread.is_alive(), "CMU import completed while lock held"
+                winner.write_bytes(b"published-winner")
+                sidecar.write_bytes(b'{"kind":"cmu-race","source":{"generator":"unimate"}}')
+            thread.join(5)
+            assert not thread.is_alive(), "CMU import stayed blocked"
+            if overwrite:
+                check("CMU explicit overwrite replaces a kind published while waiting",
+                      not errors and len(results) == 1
+                      and winner.read_bytes() == b"cmu-replacement"
+                      and sidecar.read_bytes() == b'{"kind":"cmu-race"}', str(errors))
+            else:
+                check("CMU refuses a kind published while waiting for the lock",
+                      len(errors) == 1 and isinstance(errors[0], clip_catalog.ClipKindExists)
+                      and not results, str(errors))
+                check("CMU collision leaves published clip and sidecar intact",
+                      winner.read_bytes() == b"published-winner"
+                      and b"unimate" in sidecar.read_bytes())
+
+
 def main() -> int:
     check("ANIMATION_CLIPS_DIR is honoured",
           paths.get_animation_clips_dir() == FREE,
@@ -550,6 +669,8 @@ def main() -> int:
     check("ANIMATION_CLIPS_LICENSED_DIR is honoured",
           paths.get_licensed_clips_dir() == LICENSED,
           str(paths.get_licensed_clips_dir()))
+    test_cmu_collision_after_precheck()
+    test_shared_write_lock()
     test_listing()
     test_delete()
     test_rename_kind()

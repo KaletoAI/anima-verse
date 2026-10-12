@@ -50,6 +50,8 @@ CLAUDE.md), tracked in git; a ground's own ``move_anim`` / ``idle_anim``
 (``shared/terrain/types.json``) keeps its precedence over these roles.
 """
 import json
+from contextlib import nullcontext
+from functools import wraps
 import math
 import os
 import re
@@ -61,6 +63,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
+from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
 from app.core.paths import (get_animation_clips_dir, get_animation_clips_dirs,
                             get_config_dir, get_licensed_clips_dir,
@@ -739,7 +742,7 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "has_sidecar": meta is not None,
         "origin": _origin(meta),
         "generator": str(source.get("generator") or ""),
-        "license": str(source.get("license") or ""),
+        "license": str((meta or {}).get("license") or ""),
         "duration_s": (meta or {}).get("duration_s"),
         "fps": (meta or {}).get("fps"),
         "frames": (meta or {}).get("frames"),
@@ -881,6 +884,28 @@ def reload_clip_caches() -> None:
         logger.warning("preset reload after clip library change failed: %s", e)
 
 
+def library_write_lock(destination: Path):
+    """Serialize library writes; staging and previews do not mutate a library.
+
+    Lock order: clip_library/write BEFORE any pose catalog transaction.
+    The shared RLock also permits nested library writers on the same thread.
+    """
+    destination = Path(destination).resolve()
+    if any(destination.is_relative_to(Path(root).resolve())
+           for root in (get_animation_clips_dir(), get_licensed_clips_dir())):
+        return keyed_lock("clip_library", "write")
+    return nullcontext()
+
+
+def _library_writer(fn):
+    @wraps(fn)
+    def write(*args, **kwargs):
+        with keyed_lock("clip_library", "write"):
+            return fn(*args, **kwargs)
+    return write
+
+
+@_library_writer
 def delete_clip(library: str, rel: str) -> Dict[str, Any]:
     """Removes one clip from one library — both halves when it is a pair.
 
@@ -928,6 +953,7 @@ def delete_clip(library: str, rel: str) -> Dict[str, Any]:
             "sidecars_removed": sorted(sidecars_removed)}
 
 
+@_library_writer
 def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
                 cset: Optional[str] = None,
                 to_library: Optional[str] = None,
@@ -1017,6 +1043,7 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
     return [_view_of(dest, new_set, new_library) for _s, dest in moves]
 
 
+@_library_writer
 def set_clip_loop(library: str, rel: str, loop: bool) -> List[Dict[str, Any]]:
     """Writes the LOOP flag of a clip — the admin's decision after the import
     (E5): loop = repeat the clip, no loop = hold its last frame.
@@ -1061,6 +1088,7 @@ def set_clip_loop(library: str, rel: str, loop: bool) -> List[Dict[str, Any]]:
     return [_view_of(p, cset, library) for p in files]
 
 
+@_library_writer
 def set_clip_role_gender(library: str, rel: str,
                          role_gender: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Writes which gender plays which half of a PAIR clip.
@@ -1158,6 +1186,7 @@ def _bump_angle(geometry: Dict[str, Any], field: str, delta: float) -> None:
         geometry[field] = total
 
 
+@_library_writer
 def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
                 tilt_deg: float = 0.0, roll_deg: float = 0.0,
                 height_cm: float = 0.0) -> List[Dict[str, Any]]:

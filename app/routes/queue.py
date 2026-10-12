@@ -74,6 +74,10 @@ def cancel_task(task_id: str) -> Dict[str, Any]:
         # Fallback: Tracked tasks (image_generation, etc.)
         cancelled = get_task_queue().track_cancel(task_id)
 
+    if not cancelled:
+        # Queued handler tasks have their own persistent cancellation state.
+        cancelled = get_task_queue().cancel_task(task_id)
+
     if cancelled:
         return {"status": "cancelled", "task_id": task_id}
     return {"status": "not_found", "task_id": task_id,

@@ -97,8 +97,8 @@ def prepare_motion(mode: str, *, entry: Optional[Dict] = None,
     if mode == "entry" and (not isinstance(entry, dict) or
                             any(field not in entry for field in ("key", "group", "prompt"))):
         raise MotionPromptError("entry missing required key, group or prompt")
-    groups = {key for key, group in pose_catalog.get_groups().items()
-              if group.get("_store") != "world"}
+    from app.core.pose_catalog_edit import read_store
+    groups = set(read_store("pose", "shared").get("groups", {}))
     taken = set()
     for key, item in pose_catalog.get_catalog("pose").items():
         taken.add(key.strip().lower())

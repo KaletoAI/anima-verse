@@ -69,6 +69,13 @@ with tempfile.TemporaryDirectory(prefix="admin-settings-instance-") as root:
     raw = adm.settings_raw(user=None)
     assert "chat" not in raw and "server" in raw, "A raw must be instance-only"
     assert "game_calendar" not in adm.settings_schema(user=None)
+    schema = adm.settings_schema(user=None)
+    fields = schema["image_generation"]["sub_arrays"]["backends"]["fields"]
+    assert "mesh2anim" in fields["category"]["choices"]
+    for field in ("api_key", "model", "extra_params", "mesh_endpoint", "poll_interval",
+                  "max_wait", "max_queue_wait", "timeout", "max_concurrent"):
+        assert "openai_mesh_animation" in fields[field].get("applicable_for", ["openai_mesh_animation"]), field
+    print("PASS animation settings fields are visible")
     before = snapshot()
     result = save(raw)
     assert result["status"] == "success" and snapshot() == before, "B unchanged files"

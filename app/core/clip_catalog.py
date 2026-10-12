@@ -318,7 +318,7 @@ def import_take(take_id: str, kind: str, *, clip_set: str = "",
         kind, take_a, take_b, clip_set=cset, start_s=start_s, end_s=end_s,
         loop_s=loop_s, root_motion=root_motion if not take_b else "strip",
         source_fps=take.get("framerate") or None, speed=float(speed or 1.0),
-        yaw_deg=float(yaw_deg or 0.0))
+        yaw_deg=float(yaw_deg or 0.0), overwrite=overwrite)
     status = record_import(take_id, kind, cset, "free")
 
     # The clip entry cache, the pose dropdown and the animation-set fallback

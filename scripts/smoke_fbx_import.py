@@ -518,6 +518,22 @@ def fake_run(script, *, inputs=None, params=None, out_dir=None, timeout_s=0):
     writes (``<kind>.fbx`` or the two halves, plus ``<kind>.json``) and reports
     the same result shape. The sidecar echoes what it was handed, so the
     checks can see WHAT reached the converter."""
+    # The final library write must exclude all other library writers. Previews do not.
+    import threading
+    from app.core.keyed_lock import keyed_lock
+    out_path = Path(out_dir).resolve()
+    in_library = any(out_path.is_relative_to(root.resolve()) for root in (FREE, LICENSED))
+    acquired = []
+    def probe():
+        lock = keyed_lock("clip_library", "write")
+        got = lock.acquire(blocking=False)
+        acquired.append(got)
+        if got:
+            lock.release()
+    thread = threading.Thread(target=probe)
+    thread.start()
+    thread.join(5)
+    assert not thread.is_alive() and acquired == [not in_library], (out_path, acquired)
     kind = (params or {}).get("kind", "x")
     RUNS.append(kind)
     out = Path(out_dir)
@@ -1388,6 +1404,32 @@ def test_real_mob1() -> None:
                      LICENSED / "mob1" / "smoketest-mob1-rest.fbx")
 
 
+def test_library_writer_lock():
+    # A direct import check is independent of the async route adapter.
+    from unittest.mock import patch
+    from app.core import cmu_import
+    (FIXT / "lock-rig.fbx").touch()
+    with patch.object(fbx_import.runner, "status", return_value={"executable": "fixture"}), \
+         patch.object(fbx_import.runner, "run", side_effect=fake_run):
+        for library in ("free", "licensed"):
+            fbx_import.import_fbx("lock-writer", [S("Female_Dance.fbx")], target=library,
+                                  redistributable=True, rig=FIXT / "lock-rig.fbx")
+        fbx_import.import_fbx("lock-preview", [S("Female_Dance.fbx")], preview=True,
+                              rig=FIXT / "lock-rig.fbx")
+        fbx_import.import_fbx("lock-staging", [S("Female_Dance.fbx")], out_dir=FIXT / "staging-fbx",
+                              rig=FIXT / "lock-rig.fbx")
+        with patch.object(cmu_import, "take_files", return_value=(FIXT / "fixture.asf", FIXT / "fixture.amc")):
+            for out in (FREE / "cmu-lock", LICENSED / "cmu-lock", FIXT / "staging-cmu"):
+                cmu_import.convert_take("cmu-writer", "01_01", out_dir=out, rig=FIXT / "lock-rig.fbx", source_fps=30)
+    # Keep the original smoke's library fixture unchanged.
+    for root in (FREE, LICENSED):
+        for path in root.glob("lock-writer.*"):
+            path.unlink()
+        shutil.rmtree(root / "cmu-lock")
+    fbx_import.reload_clip_caches()
+    print("PASS FBX/CMU final library writers hold the shared lock; staging/previews do not")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--real", action="store_true",
@@ -1399,6 +1441,7 @@ def main() -> int:
     check("…and both libraries point at the throwaway dirs",
           paths.get_animation_clips_dir() == FREE
           and paths.get_licensed_clips_dir() == LICENSED)
+    test_library_writer_lock()
     test_probe()
     test_families()
     test_pairs()

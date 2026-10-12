@@ -27,7 +27,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.blender import runner
 from app.core import paths
-from app.core.animation_clips import ROOT_MOTION_MODES
+from app.core.animation_clips import (CLIP_EXTS, ROOT_MOTION_MODES,
+                                      library_write_lock, parse_clip_name)
 from app.core.log import get_logger
 
 logger = get_logger(__name__)
@@ -179,7 +180,7 @@ def convert_take(kind: str, take_a: str, take_b: str = "", *,
                  source_fps: Optional[float] = None, fps: int = 30,
                  speed: float = 1.0, yaw_deg: float = 0.0,
                  rig: Optional[Path] = None, cache: Optional[Path] = None,
-                 timeout_s: int = 900) -> Dict[str, Any]:
+                 timeout_s: int = 900, overwrite: bool = False) -> Dict[str, Any]:
     """Retargets one take (or a pair) and writes the clip files.
 
     ``yaw_deg`` turns the finished clip about the vertical (the import's
@@ -233,15 +234,23 @@ def convert_take(kind: str, take_a: str, take_b: str = "", *,
     if not st["executable"]:
         raise ClipImportError("no Blender executable found "
                            "(image_generation.blender_executable)")
-    out.mkdir(parents=True, exist_ok=True)
-    res = runner.run("cmu_clip", inputs=inputs, params=params, out_dir=out,
-                     timeout_s=timeout_s)
-    if not res["ok"]:
-        raise ClipImportError(str(res.get("error") or "blender run failed"))
-    return {"kind": kind, "set": cset, "dir": out,
-            "sidecar": res.get("data") or {},
-            "outputs": res.get("outputs") or {},
-            "seconds": res.get("seconds") or 0.0}
+    with library_write_lock(out):
+        # Repeat collision detection after a concurrent publisher may have won.
+        # Scan the destination directly, including variants and pair roles.
+        if not overwrite and out.is_dir() and any(
+                p.is_file() and p.suffix.lower() in CLIP_EXTS
+                and parse_clip_name(p.name) == kind for p in out.iterdir()):
+            from app.core.clip_catalog import ClipKindExists
+            raise ClipKindExists(f"'{kind}' already exists in {out} — tick overwrite to replace it")
+        out.mkdir(parents=True, exist_ok=True)
+        res = runner.run("cmu_clip", inputs=inputs, params=params, out_dir=out,
+                         timeout_s=timeout_s)
+        if not res["ok"]:
+            raise ClipImportError(str(res.get("error") or "blender run failed"))
+        return {"kind": kind, "set": cset, "dir": out,
+                "sidecar": res.get("data") or {},
+                "outputs": res.get("outputs") or {},
+                "seconds": res.get("seconds") or 0.0}
 
 
 # ------------------------------------------------------------------ preview

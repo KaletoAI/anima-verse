@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 import threading
 from pathlib import Path
 from typing import Dict, List
@@ -134,5 +135,32 @@ class OpenAIMeshAnimationBackend(ImageBackend):
             return []
         if blob[:4] != b"glTF":
             logger.error("%s: result is not a binary glTF", self.name)
+            return []
+        try:
+            magic, version, total = struct.unpack_from("<4sII", blob)
+            if magic != b"glTF" or version != 2 or total != len(blob):
+                raise ValueError("invalid GLB header")
+            offset, document = 12, None
+            while offset < total:
+                length, kind = struct.unpack_from("<II", blob, offset)
+                offset += 8
+                if length % 4 or offset + length > total:
+                    raise ValueError("invalid GLB chunk length")
+                if document is None:
+                    if kind != 0x4E4F534A:
+                        raise ValueError("first GLB chunk must be JSON")
+                    document = json.loads(blob[offset:offset + length])
+                    if not isinstance(document, dict):
+                        raise ValueError("GLB JSON must be an object")
+                elif kind == 0x4E4F534A:
+                    raise ValueError("duplicate GLB JSON chunk")
+                offset += length
+            skins, animations = document.get("skins"), document.get("animations")
+            if not isinstance(skins, list) or not skins or not all(isinstance(skin, dict) for skin in skins):
+                raise ValueError("GLB has no skin")
+            if not isinstance(animations, list) or len(animations) != 1 or not isinstance(animations[0], dict):
+                raise ValueError("GLB must contain exactly one animation")
+        except (ValueError, TypeError, AttributeError, struct.error) as exc:
+            logger.error("%s: invalid animation GLB: %s", self.name, exc)
             return []
         return [blob]

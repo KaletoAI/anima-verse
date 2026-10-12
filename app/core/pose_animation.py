@@ -12,14 +12,13 @@ from typing import Dict, List, Optional
 
 from app.blender import runner
 from app.core import animation_clips, paths, pose_catalog, pose_catalog_edit
-from app.core.fbx_import import import_source
+from app.core.fbx_import import BONE_NAMES, import_source
 from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
 from app.core.pose_animation_prompt import PreparedMotion, prepare_motion
 from app.core.pose_catalog_edit import apply_generated_entry, read_store
 from app.core.task_queue import get_task_queue
 from app.imagegen.backends._gateway_job import _cancel_lost_job
-from app.imagegen.routing import resolve_image_route
 from app.imagegen.service import get_image_service
 
 logger = get_logger(__name__)
@@ -30,6 +29,14 @@ CREDIT = "UniMate: Linzhan Mou, Jiahui Lei, Zhiyang Dou, Chenyue Cai, Chaoyue So
 CHECK_LIMITS = {"seam_distance": 4.1, "min_foot_y": -0.035,
                 "hips_y": {"stand": (0.95, 1.20), "seat": (0.55, 0.75),
                            "ground": (0.05, 0.45), "lie": (0.05, 0.30)}}
+
+
+# Finger and toe rotations are optional: rigs without those joints are legitimate.
+REQUIRED_ROTATION_BONES = frozenset({
+    "Hips", "Spine", "Spine1", "Spine2", "Neck", "Head",
+    "LeftArm", "LeftForeArm", "LeftHand", "RightArm", "RightForeArm", "RightHand",
+    "LeftUpLeg", "LeftLeg", "LeftFoot", "RightUpLeg", "RightLeg", "RightFoot",
+})
 
 
 def _allowed_group(group: str) -> bool:
@@ -69,6 +76,31 @@ def recent_jobs(limit: int = 20) -> List[Dict]:
 def check_clip(meta: dict, dump: dict, group: str, loop: bool) -> List[str]:
     """Fail closed on missing or nonfinite measurements."""
     reasons = []
+    expected = set(BONE_NAMES["mixamo-noprefix"])
+    for field, required, label in (("bones", expected, "bones"),
+                                   ("rot_tracks", REQUIRED_ROTATION_BONES, "rotation tracks")):
+        value = dump.get(field)
+        if not isinstance(value, list) or not all(isinstance(n, str) for n in value):
+            reasons.append(f"Missing or invalid {label} measurements.")
+        else:
+            missing = required - set(value)
+            if missing:
+                reasons.append(f"Missing {label}: {', '.join(sorted(missing))}.")
+    for field, allowed, label in (("loc_tracks", {"Hips"}, "translation"),
+                                   ("scale_tracks", set(), "scale")):
+        value = dump.get(field)
+        if not isinstance(value, list) or not all(isinstance(n, str) for n in value):
+            reasons.append(f"Missing or invalid {label} track measurements.")
+        else:
+            forbidden = set(value) - allowed
+            if forbidden:
+                reasons.append(f"Forbidden {label} tracks: {', '.join(sorted(forbidden))}.")
+    try:
+        duration = float(dump["duration_s"])
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError()
+    except (KeyError, TypeError, ValueError, OverflowError):
+        reasons.append("Clip duration must be finite and greater than zero.")
     try:
         hips = dump["hips_y"]
         if not isinstance(hips, list) or not hips or not all(math.isfinite(float(y)) for y in hips):
@@ -113,7 +145,9 @@ def _publish(*, tid, staging, kind, key, clip, mode, entry, raw_text, checked_gr
             temporary.unlink(missing_ok=True)
 
     tq = get_task_queue()
-    with keyed_lock(TASK_TYPE, "publish"), pose_catalog_edit.catalog_txn("pose"):
+    # Lock order: library mutation lock before the catalog transaction.
+    # Hold both through reservation, installation, catalog commit and rollback.
+    with keyed_lock("clip_library", "write"), pose_catalog_edit.catalog_txn("pose"):
         if animation_clips.reserve_kind(key, pose_key=key) != kind:
             raise RuntimeError("clip name taken meanwhile — retry")
         current = pose_catalog.get_catalog("pose").get(key) if mode == "entry" else entry
@@ -180,8 +214,10 @@ def _handle(payload):
     if progress:
         if progress.get("hub_job"):
             try:
-                backend = resolve_image_route("pose_animation", pool=get_image_service().pool).backend
-                _cancel_lost_job(backend, progress["hub_job"])
+                backend = next((b for b in get_image_service().pool.backends
+                                if b.name == progress.get("backend")), None)
+                if backend is not None:
+                    _cancel_lost_job(backend, progress["hub_job"])
             except Exception:
                 pass
         raise RuntimeError("interrupted by restart — start the generation again")
@@ -203,7 +239,8 @@ def _handle(payload):
         if existing is None or not existing.get("solo", True):
             raise ValueError("entry missing or not solo")
         existing = dict(existing, key=key)
-    prepared = prepare_motion(mode, entry=existing, text=payload.get("text", ""), hint=payload.get("hint", ""))
+    motion_text = payload.get("raw_text", "") if mode == "candidate" else payload.get("text", "")
+    prepared = prepare_motion(mode, entry=existing, text=motion_text, hint=payload.get("hint", ""))
     entry = existing if mode == "entry" else prepared.entry
     key = key if mode == "entry" else entry["key"]
     if not _allowed_group(entry.get("group", "")):
@@ -215,9 +252,10 @@ def _handle(payload):
     cancelled()
     puppet = paths.get_puppet_file()
     puppet_sha256 = hashlib.sha256(puppet.read_bytes()).hexdigest()
+    # The service checks this cancellation hook after the channel wait, before submit.
     result = get_image_service().generate_mesh_animation(str(puppet), prepared.captions, seed,
         should_cancel=lambda: tq.is_task_cancelled(tid),
-        on_job_id=lambda job_id: update("hub", hub_job=job_id), label=f"Pose animation: {key}")
+        on_job_id=lambda job_id, backend_name: update("hub", hub_job=job_id, backend=backend_name), label=f"Pose animation: {key}")
     if not result.get("ok"):
         raise RuntimeError(result.get("error") or "animation generation failed")
     cancelled()

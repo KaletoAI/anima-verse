@@ -7,6 +7,7 @@ A foreign waving clip forces waving-u. A second run replaces that owned clip.
 Catalog failure restores byte-identical files; cancellation publishes nothing.
 Stand hips 1.058, feet -.028 and loop seam 3.54 pass the specified limits.
 A failed check keeps staging and leaves both catalog and library unchanged.
+A competing rename waits on the same RLock through installation and commit.
 """
 import errno
 from copy import deepcopy
@@ -21,6 +22,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from smoke_pose_animation_queue import structure
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
@@ -51,13 +53,14 @@ def main():
         state = {"version": 0, "cancel": False, "bad": False}
         def generate(puppet, captions, seed, **kwargs):
             assert seed == 0 and captions == ["An object waves."]
-            kwargs["on_job_id"]("j1")
+            kwargs["on_job_id"]("j1", "fixture")
+            assert tq.get_task_progress(state["tid"])["backend"] == "fixture"
             return {"ok": True, "glb": b"glb", "backend": "fixture", "job_id": "j1"}
         def run(script, *, inputs, out_dir, **kwargs):
             if script == "clip_measure":
                 if state["cancel"]:
                     tq.cancel_task(state["tid"])
-                return {"ok": True, "data": {"frames": 40, "hips_y": [1.25 if state["bad"] else 1.058],
+                return {"ok": True, "data": {**structure(), "frames": 40, "hips_y": [1.25 if state["bad"] else 1.058],
                     "min_foot_y": -.028, "head_tilt_deg_median": 0}}
             assert script == "glb_to_ref_fbx" and kwargs["params"] == {"ref_hips_m": 1.13032}
             for name in ("motion", "rest"):
@@ -132,6 +135,47 @@ def main():
                 with patch.object(pa.os, "replace", side_effect=fail_fbx):
                     execute("fbx move failed")
                 assert snapshot() == before
+                # A rename must wait until publish has finished the catalog commit.
+                from app.core.keyed_lock import keyed_lock
+                blocked, finished = threading.Event(), threading.Event()
+                errors, threads = [], []
+                class ObservedLock:
+                    def __init__(self, namespace, key):
+                        self.lock = keyed_lock(namespace, key)
+                    def __enter__(self):
+                        if not self.lock.acquire(blocking=False):
+                            blocked.set()
+                            assert self.lock.acquire(timeout=5)
+                        return self
+                    def __exit__(self, *args):
+                        self.lock.release()
+                def rename():
+                    try:
+                        pa.animation_clips.rename_clip("free", "waving.fbx", kind="foreign-renamed")
+                    except Exception as exc:
+                        errors.append(exc)
+                    finally:
+                        finished.set()
+                def publish_while_rename_waits(**kwargs):
+                    thread = threading.Thread(target=rename)
+                    threads.append(thread)
+                    thread.start()
+                    assert blocked.wait(2), "rename did not contend on the publish library lock"
+                    assert not finished.is_set(), "rename passed a publishing writer"
+                    return apply(**kwargs)
+                try:
+                    with patch.object(pa.animation_clips, "keyed_lock", side_effect=ObservedLock, create=True), \
+                         patch.object(pa, "apply_generated_entry", side_effect=publish_while_rename_waits):
+                        execute()
+                finally:
+                    for thread in threads:
+                        thread.join(5)
+                assert finished.is_set() and not errors and all(not t.is_alive() for t in threads), errors
+                assert (free / "foreign-renamed.fbx").read_bytes() == b"foreign"
+                pa.animation_clips.rename_clip("free", "foreign-renamed.fbx", kind="waving")
+                before = snapshot()
+                print("PASS concurrent rename waits through publish installation and catalog commit")
+
                 # Cancellation while waiting for the catalog transaction.
                 held, waiting, release = threading.Event(), threading.Event(), threading.Event()
                 txn = editor.catalog_txn

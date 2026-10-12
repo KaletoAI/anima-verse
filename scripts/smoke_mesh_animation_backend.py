@@ -5,8 +5,8 @@ Usage: ./.venv/bin/python scripts/smoke_mesh_animation_backend.py
 
 Hand-derived expectations: missing, non-GLB and >64 MiB sources submit
 nothing; captions join with a newline and seed 42 travels with the two
-allowed alias settings and exactly one repetition. One verified GLB returns
-unchanged; absent, empty, null, malformed or mismatching hashes return nothing.
+allowed alias settings and exactly one repetition. One verified GLB with a skin and exactly one animation returns
+unchanged; absent skin, zero/two animations or a truncated container return nothing; absent, empty, null, malformed or mismatching hashes return nothing.
 Downloads disable redirects and HTTP 302 or two GLBs return nothing. Caller cancellation
 after one poll sends one cancel and raises; park timeout remains busy.
 Additional checks cover caption/seed validation, output magic, safe download
@@ -14,6 +14,8 @@ URLs, ignored extra settings, availability and thread-local job identity.
 """
 import base64
 import hashlib
+import json
+import struct
 import os
 import sys
 import tempfile
@@ -26,7 +28,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.imagegen.backends.openai_mesh_animation import OpenAIMeshAnimationBackend
 from app.imagegen.base import BackendBusyError, GenerationCancelled
 
-BLOB = b"glTF" + b"animated fixture" * 10
+def glb(document):
+    chunk = json.dumps(document).encode()
+    chunk += b" " * (-len(chunk) % 4)
+    return struct.pack("<4sII", b"glTF", 2, 20 + len(chunk)) + struct.pack("<II", len(chunk), 0x4E4F534A) + chunk
+
+
+BLOB = glb({"asset": {"version": "2.0"}, "skins": [{}], "animations": [{}]})
 JOB = "animation-job-1"
 URL = "https://hub.invalid"
 
@@ -86,6 +94,18 @@ def main():
                 f.truncate(64 * 1024 * 1024 + 1)
             rejects({"source_model_path": str(large)})
             print("PASS 3: oversized sparse source, no POST")
+            for document in ({"animations": [{}]}, {"skins": [{}]},
+                             {"skins": [{}], "animations": []},
+                             {"skins": [{}], "animations": [{}, {}]},
+                             {"skins": [None], "animations": [{}]},
+                             {"skins": [{}], "animations": [None]}):
+                invalid = glb(document)
+                assert run(blob=invalid, results=[{**result, "sha256": hashlib.sha256(invalid).hexdigest()}]) == [], document
+            duplicate = glb(None) + BLOB[12:]
+            duplicate = duplicate[:8] + struct.pack("<I", len(duplicate)) + duplicate[12:]
+            for invalid in (duplicate, BLOB[:-1], BLOB[:4] + b"broken container"):
+                assert run(blob=invalid, results=[{**result, "sha256": hashlib.sha256(invalid).hexdigest()}]) == []
+            print("PASS structure: missing skin, zero/two animations and malformed GLB discarded")
             ids = []
             assert run({"on_job_id": ids.append}) == [BLOB]
             body = http.post.call_args.kwargs["json"]

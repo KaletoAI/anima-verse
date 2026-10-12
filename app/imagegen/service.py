@@ -854,7 +854,7 @@ class ImageService:
 
     def generate_mesh_animation(self, source_model_path: str, captions: List[str], seed: int, *,
                                 should_cancel: Optional[Callable[[], bool]] = None,
-                                on_job_id: Optional[Callable[[str], None]] = None,
+                                on_job_id: Optional[Callable[[str, str], None]] = None,
                                 label: str = "") -> Dict[str, Any]:
         """One UniMate run on the routed animation backend. No re-run on another
         chain entry: a second run would be a second GPU job (spec §6).
@@ -862,13 +862,16 @@ class ImageService:
         from app.imagegen.routing import resolve_image_route, route_meta
         route = resolve_image_route("pose_animation", probe=True, pool=self.pool)
         params = {"source_model_path": source_model_path, "captions": list(captions),
-                  "seed": int(seed), "should_cancel": should_cancel, "on_job_id": on_job_id}
+                  "seed": int(seed), "should_cancel": should_cancel,
+                  "on_job_id": (lambda job_id: on_job_id(job_id, route.backend.name)) if on_job_id else None}
 
         def _op(bb):
             def _gen():
                 # The pool treats exceptions and empty results as defects. Carry
                 # cancellation and empty blobs through it without a cooldown.
                 try:
+                    if should_cancel and should_cancel():
+                        raise GenerationCancelled("cancelled before submission")
                     return {"blobs": bb.generate("", "", params, log_meta=None)}
                 except GenerationCancelled as e:
                     return {"cancelled": e}

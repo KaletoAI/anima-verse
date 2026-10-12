@@ -13,6 +13,34 @@ import bpy
 from mathutils import Vector
 
 
+def _source_tracks(path):
+    """Read authored channels; Blender's importer bakes extra loc/scale curves."""
+    from io_scene_fbx import parse_fbx
+    root, _version = parse_fbx.parse(str(path))
+    objects = next(e for e in root.elems if e.id == b"Objects")
+    connections = next(e for e in root.elems if e.id == b"Connections")
+    models = {e.props[0]: e.props[1].split(b"\x00", 1)[0].decode("utf-8").split(":")[-1]
+              for e in objects.elems if e.id == b"Model"}
+    nodes = {e.props[0] for e in objects.elems if e.id == b"AnimationCurveNode"}
+    keyed = set()
+    for curve in objects.elems:
+        if curve.id == b"AnimationCurve":
+            fields = {e.id: e.props for e in curve.elems}
+            if (fields.get(b"KeyTime") and len(fields[b"KeyTime"][0]) and
+                    fields.get(b"KeyValueFloat") and len(fields[b"KeyValueFloat"][0])):
+                keyed.add(curve.props[0])
+    links = [e.props for e in connections.elems if e.id == b"C"]
+    keyed_nodes = {p[2] for p in links if len(p) >= 3 and p[1] in keyed and p[2] in nodes}
+    tracks = {"rot_tracks": set(), "loc_tracks": set(), "scale_tracks": set()}
+    fields = {b"Lcl Rotation": "rot_tracks", b"Lcl Translation": "loc_tracks", b"Lcl Scaling": "scale_tracks"}
+    for link in links:
+        if len(link) >= 4 and link[1] in keyed_nodes and link[2] in models:
+            field = fields.get(link[3])
+            if field:
+                tracks[field].add(models[link[2]])
+    return {field: sorted(names) for field, names in tracks.items()}
+
+
 def run(job):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
@@ -46,7 +74,10 @@ def run(job):
             direction = position(bones["HeadTop_End"]) - position(bones["Neck"])
             if direction.length:
                 tilts.append(math.degrees(direction.angle(Vector((0, 1, 0)))))
-    return {"frames": len(heights), "hips_y": heights, "min_foot_y": min(foot_heights),
+    tracks = _source_tracks(job["inputs"]["clip"])
+    duration_s = float(action.frame_range[1] - action.frame_range[0]) / (scene.render.fps / scene.render.fps_base)
+    return {"bones": list(bones), **tracks,
+            "duration_s": duration_s, "frames": len(heights), "hips_y": heights, "min_foot_y": min(foot_heights),
             "head_tilt_deg_median": median(tilts) if tilts else 0.0}, {}
 
 

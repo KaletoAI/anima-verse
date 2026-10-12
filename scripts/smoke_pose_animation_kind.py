@@ -45,13 +45,13 @@ def main():
         check("sweeping", "sweeping-u")
         put("sweeping-u")
         check("sweeping", "sweeping-u2")
-        put("sweeping", {"source": {"generator": "unimate", "pose_key": "sweeping",
-                                    "license": "CC-BY-4.0"}})
+        put("sweeping", {"source": {"generator": "unimate", "pose_key": "sweeping"},
+                         "license": "CC-BY-NC-4.0"})
         check("sweeping", "sweeping")
         entry = next(e for e in clips.clip_entries() if e["kind"] == "sweeping")
         view = clips.clip_view(entry)
         assert (view["origin"], view["generator"], view["license"]) == (
-            "unimate", "unimate", "CC-BY-4.0")
+            "unimate", "unimate", "CC-BY-NC-4.0")
         put("sweeping", {"source": {"generator": "unimate", "pose_key": "other"}})
         (free / "sweeping-u.fbx").unlink()
         (free / "sweeping-u.json").unlink()

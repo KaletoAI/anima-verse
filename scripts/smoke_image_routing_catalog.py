@@ -501,6 +501,9 @@ def part_d():
     cancel = lambda: False
     job_ids = []
 
+    def submitted(job_id, backend_name):
+        job_ids.append((job_id, backend_name))
+
     def generate(prompt, negative, params, log_meta=None):
         calls.append((prompt, negative, params, log_meta))
         params["on_job_id"]("job-42")
@@ -515,16 +518,15 @@ def part_d():
     with patch.object(routing, "resolve_image_route", return_value=route), \
             patch.object(service, "run_on_backend_channel", side_effect=channel):
         result = service.generate_mesh_animation("source.glb", ("walk",), 42,
-                    should_cancel=cancel, on_job_id=job_ids.append, label="Clip")
+                    should_cancel=cancel, on_job_id=submitted, label="Clip")
         check("D result bytes", result["glb"], b"glb clip")
         check("D backend and job", (result["backend"], result["job_id"]), ("Animation", "job-42"))
         check("D routing metadata", result["routing"],
               {"occasion": "pose_animation", "position": 1, "spec": "Animation"})
         check("D one submission", len(calls), 1)
-        check("D payload", calls[0], ("", "", {"source_model_path": "source.glb",
-              "captions": ["walk"], "seed": 42, "should_cancel": cancel,
-              "on_job_id": job_ids.append}, None))
-        check("D job callback", job_ids, ["job-42"])
+        check("D payload", (calls[0][0], calls[0][1], {k: v for k, v in calls[0][2].items() if k != "on_job_id"}, calls[0][3]), ("", "", {"source_model_path": "source.glb",
+              "captions": ["walk"], "seed": 42, "should_cancel": cancel}, None))
+        check("D job callback", job_ids, [("job-42", "Animation")])
         for error in (GenerationCancelled("cancelled"), BackendBusyError("busy"),
                       MediaGenerationDisabled("disabled")):
             backend.generate = lambda *args, **kwargs: (_ for _ in ()).throw(error)

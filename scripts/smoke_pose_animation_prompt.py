@@ -66,3 +66,31 @@ reject(dict(BASE, segments=[42]), "caption 1 must be a string")
 reject(dict(BASE, entry=dict(ENTRY, extra=1)), "unknown field(s): extra", "free")
 reject(dict(BASE, entry=dict(ENTRY, synonyms="sweep")), "synonyms must be a list", "free")
 print(f"{checks}/{checks} checks passed")
+
+# A world override must not hide the shared group from preparation or validation.
+import os
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import patch
+with tempfile.TemporaryDirectory() as tmp:
+    from app.core import paths, pose_catalog, pose_catalog_edit, llm_router, prompt_templates
+    paths.init(tmp)
+    os.environ.update(ANIMATION_CLIPS_DIR=str(Path(tmp) / "clips"),
+                     ANIMATION_CLIPS_LICENSED_DIR=str(Path(tmp) / "licensed"),
+                     ANIMATION_CLIPS_INBOX_DIR=str(Path(tmp) / "inbox"))
+    from app.core.pose_animation_prompt import prepare_motion
+    shared = Path(tmp) / "pose.json"
+    shared.write_text(json.dumps({"groups": {"stand": {"needs_place": False}}, "entries": {}}))
+    rendered = []
+    def render(task, **kwargs):
+        rendered.append(kwargs)
+        return "system", "user"
+    original = pose_catalog.catalog_path
+    with patch.object(pose_catalog, "catalog_path", side_effect=lambda axis: shared if axis == "pose" else original(axis)), \
+         patch.object(pose_catalog, "get_groups", return_value={"stand": {"_store": "world"}, "world-only": {"_store": "world"}}), \
+         patch.object(pose_catalog, "get_catalog", return_value={}), \
+         patch.object(prompt_templates, "render_task", side_effect=render), \
+         patch.object(llm_router, "llm_call", return_value=SimpleNamespace(content=json.dumps(dict(BASE, entry=ENTRY)))):
+        assert prepare_motion("free", text="sweep").entry["group"] == "stand"
+        assert rendered[0]["groups"] == "stand"
+print("PASS shared group remains eligible under a world override")

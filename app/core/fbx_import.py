@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.blender import runner
 from app.core import cmu_import
-from app.core.animation_clips import clip_entries, reload_clip_caches
+from app.core.animation_clips import clip_entries, library_write_lock, reload_clip_caches
 from app.core.clip_catalog import ClipKindExists, existing_kinds
 from app.core.cmu_import import ClipImportError
 from app.core.log import get_logger
@@ -922,37 +922,41 @@ def import_fbx(kind: str, files: List[Any], *, rest_file: Optional[Any] = None,
     out = Path(out_dir) if out_dir else target_dir(target)
     if cset:
         out = out / cset
-    out.mkdir(parents=True, exist_ok=True)
-    res = _run_source(inputs, params, out, timeout_s)
+    with library_write_lock(out):
+        # Recheck after waiting for other library writers before conversion.
+        if not overwrite and kind in existing_kinds(cset, target):
+            raise ClipKindExists(f"'{kind}' already exists in the {target} library")
+        out.mkdir(parents=True, exist_ok=True)
+        res = _run_source(inputs, params, out, timeout_s)
 
-    # The clip entry cache, the pose dropdown and the animation-set fallback
-    # all have to see a fresh kind at once, not after a restart — the ONE
-    # reload every clip-library change goes through.
-    reload_clip_caches()
+        # The clip entry cache, the pose dropdown and the animation-set fallback
+        # all have to see a fresh kind at once, not after a restart — the ONE
+        # reload every clip-library change goes through.
+        reload_clip_caches()
 
-    entry = next((e for e in clip_entries()
-                  if e["kind"] == kind and e["set"] == cset and e["source"] == target),
-                 None)
-    logger.info("fbx clip imported: %s -> %s%s (%s, %.1fs)", ", ".join(names),
-                f"{cset}/" if cset else "", kind, target, res.get("seconds") or 0.0)
-    return {
-        "kind": kind,
-        "set": cset,
-        "target": target,
-        "pair": len(paths_in) == 2,
-        "files": names,
-        "rest_file": inbox_rel(rest_path) if rest_path is not None else "",
-        "sidecar": res.get("data") or {},
-        "outputs": [Path(p).name for p in (res.get("outputs") or {}).values()],
-        "seconds": res.get("seconds") or 0.0,
-        "clip": None if entry is None else {
-            "kind": entry["kind"], "role": entry["role"], "set": entry["set"],
-            "source": entry["source"], "filename": entry["path"].name,
-            "url": "/assets/animation-clips/"
-                   + ("licensed/" if entry["source"] == "licensed" else "")
-                   + entry["rel"],
-        },
-    }
+        entry = next((e for e in clip_entries()
+                      if e["kind"] == kind and e["set"] == cset and e["source"] == target),
+                     None)
+        logger.info("fbx clip imported: %s -> %s%s (%s, %.1fs)", ", ".join(names),
+                    f"{cset}/" if cset else "", kind, target, res.get("seconds") or 0.0)
+        return {
+            "kind": kind,
+            "set": cset,
+            "target": target,
+            "pair": len(paths_in) == 2,
+            "files": names,
+            "rest_file": inbox_rel(rest_path) if rest_path is not None else "",
+            "sidecar": res.get("data") or {},
+            "outputs": [Path(p).name for p in (res.get("outputs") or {}).values()],
+            "seconds": res.get("seconds") or 0.0,
+            "clip": None if entry is None else {
+                "kind": entry["kind"], "role": entry["role"], "set": entry["set"],
+                "source": entry["source"], "filename": entry["path"].name,
+                "url": "/assets/animation-clips/"
+                       + ("licensed/" if entry["source"] == "licensed" else "")
+                       + entry["rel"],
+            },
+        }
 
 
 def _prepare_source(path: Path, take: Optional[int], *, name: Optional[str] = None,
