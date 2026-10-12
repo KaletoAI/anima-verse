@@ -374,6 +374,25 @@ def resolve_image_route(occasion: str, *, character: str = "",
                  intended["position"] if intended else None, chain)
 
 
+def chain_candidates(occasion: str, pool: Any = None) -> List[Tuple[Any, int, str]]:
+    """Every backend the chain of ``occasion`` could run, in chain order:
+    ``[(backend, position, spec)]`` after the CONFIGURATION filters (match,
+    kind, enabled); availability is not checked. A backend matched by two
+    entries is listed once, at its first. The model picker of a dialog offers
+    exactly these."""
+    get_occasion(occasion)
+    backends = list(_pool(pool).backends)
+    out: List[Tuple[Any, int, str]] = []
+    seen = set()
+    for spec, _source, pos in chain_for(occasion):
+        _skip, allowed, _names = _config_filter(occasion, spec, backends, {})
+        for b in allowed:
+            if b.name not in seen:
+                seen.add(b.name)
+                out.append((b, pos, spec))
+    return out
+
+
 def resolve_spec(occasion: str, spec: str, *, character: str = "",
                  has_ref: bool = False, pool: Any = None) -> Tuple[str, Any]:
     """Resolve ONE spec with the occasion's filters (no chain, no fallback) —

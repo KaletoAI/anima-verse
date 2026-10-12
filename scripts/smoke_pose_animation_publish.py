@@ -55,7 +55,7 @@ def main():
             assert seed == 0 and captions == ["An object waves."]
             kwargs["on_job_id"]("j1", "fixture")
             assert tq.get_task_progress(state["tid"])["backend"] == "fixture"
-            return {"ok": True, "glb": b"glb", "backend": "fixture", "job_id": "j1"}
+            return {"ok": True, "blobs": [b"glb"], "results": [], "backend": "fixture", "job_id": "j1"}
         def run(script, *, inputs, out_dir, **kwargs):
             if script == "clip_measure":
                 if state["cancel"]:
@@ -90,7 +90,8 @@ def main():
             return tid
         try:
             with patch.object(tq, "start"), patch.object(pa, "prepare_motion", return_value=pa.PreparedMotion(["An object waves."], True, None)), \
-                 patch.object(pa, "get_image_service", return_value=SimpleNamespace(generate_mesh_animation=generate)), \
+                 patch.object(pa, "get_image_service", return_value=SimpleNamespace(generate_mesh_animation=generate,
+                                                           resolve_animation_backend=lambda name="": SimpleNamespace(backend=None))), \
                  patch.object(pa.runner, "run", side_effect=run), patch.object(pa, "import_source", side_effect=importing):
                 untouched = snapshot()
                 with patch.object(pa, "apply_generated_entry", side_effect=RuntimeError("catalog refused")):

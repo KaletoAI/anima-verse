@@ -852,45 +852,77 @@ class ImageService:
             out.update(route_meta(route))
         return out
 
+    def animation_backends(self) -> List[Dict[str, Any]]:
+        """The models the Poses dialog offers: every backend of the
+        ``pose_animation`` chain, in chain order, with its live state."""
+        from app.imagegen.routing import chain_candidates
+        return [{"name": b.name, "available": bool(b.available) and not b.in_cooldown(),
+                 "motion_meta": dict(getattr(b, "motion_meta", {}) or {})}
+                for b, _pos, _spec in chain_candidates("pose_animation", pool=self.pool)]
+
+    def resolve_animation_backend(self, name: str = ""):
+        """The ``Route`` one pose-animation job runs on. Empty = Auto (the
+        routed chain); a name = exactly that backend, which must be a usable
+        member of the ``pose_animation`` chain — no fallback to Auto
+        (``ValueError`` with the reason)."""
+        from app.imagegen.routing import Route, chain_candidates, resolve_image_route
+        name = (name or "").strip()
+        if not name:
+            return resolve_image_route("pose_animation", probe=True, pool=self.pool)
+        for b, pos, spec in chain_candidates("pose_animation", pool=self.pool):
+            if b.name != name:
+                continue
+            if b.in_cooldown() or not (b.available or b.check_availability()):
+                raise ValueError(f"animation backend '{name}' is unavailable right now")
+            return Route("pose_animation", b, pos, spec, spec, pos, [])
+        raise ValueError(f"'{name}' is not an animation backend of the pose_animation chain")
+
     def generate_mesh_animation(self, source_model_path: str, captions: List[str], seed: int, *,
+                                route, variants: int = 1,
                                 should_cancel: Optional[Callable[[], bool]] = None,
                                 on_job_id: Optional[Callable[[str, str], None]] = None,
                                 label: str = "") -> Dict[str, Any]:
-        """One UniMate run on the routed animation backend. No re-run on another
-        chain entry: a second run would be a second GPU job (spec §6).
+        """One motion run on ``route`` (from ``resolve_animation_backend``). No
+        re-run on another chain entry: a second run would be a second GPU job
+        (spec §6). ``blobs`` are the verified variants, ``results`` the
+        backend's verdict per delivered result (failed ones with a reason).
         """
-        from app.imagegen.routing import resolve_image_route, route_meta
-        route = resolve_image_route("pose_animation", probe=True, pool=self.pool)
+        from app.imagegen.routing import route_meta
+        backend = route.backend
         params = {"source_model_path": source_model_path, "captions": list(captions),
-                  "seed": int(seed), "should_cancel": should_cancel,
-                  "on_job_id": (lambda job_id: on_job_id(job_id, route.backend.name)) if on_job_id else None}
+                  "seed": int(seed), "variants": int(variants), "should_cancel": should_cancel,
+                  "on_job_id": (lambda job_id: on_job_id(job_id, backend.name)) if on_job_id else None}
 
         def _op(bb):
             def _gen():
                 # The pool treats exceptions and empty results as defects. Carry
                 # cancellation and empty blobs through it without a cooldown.
+                # The verdicts and job ID are thread-local on the backend, so they
+                # are read here, on the channel worker that ran the job.
                 try:
                     if should_cancel and should_cancel():
                         raise GenerationCancelled("cancelled before submission")
-                    return {"blobs": bb.generate("", "", params, log_meta=None)}
+                    blobs = bb.generate("", "", params, log_meta=None)
+                    return {"blobs": blobs, "results": list(getattr(bb, "last_result_meta", []) or []),
+                            "job_id": getattr(bb, "last_job_id", "")}
                 except GenerationCancelled as e:
                     return {"cancelled": e}
             return self.run_on_backend_channel(bb, _gen, task_type="pose_animation",
                                                label=label or bb.name)
         try:
-            result, used = self.run_on_backend(route.backend, _op)
+            result, used = self.run_on_backend(backend, _op)
             if "cancelled" in result:
                 raise result["cancelled"]
-            blobs = result["blobs"]
         except (MediaGenerationDisabled, BackendBusyError, GenerationCancelled):
             raise
         except Exception as e:
             logger.error("generate_mesh_animation failed: %s", e)
-            return {"ok": False, "error": str(e)}
-        if not blobs:
-            return {"ok": False, "error": "animation backend returned no result"}
-        return {"ok": True, "glb": blobs[0], "backend": used.name,
-                "job_id": getattr(used, "last_job_id", ""), **route_meta(route)}
+            return {"ok": False, "error": str(e), "results": []}
+        if not result["blobs"]:
+            return {"ok": False, "error": "animation backend returned no usable variant",
+                    "results": result["results"]}
+        return {"ok": True, "blobs": list(result["blobs"]), "results": result["results"],
+                "backend": used.name, "job_id": result["job_id"], **route_meta(route)}
 
     def generate_rig(self, mesh_path: str, output_path: str, rig: str,
                      backend_glob: str = "", character_name: str = "",

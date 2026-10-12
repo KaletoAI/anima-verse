@@ -184,7 +184,7 @@ def main():
         with patch.object(routing, "resolve_image_route", return_value=SimpleNamespace(backend=backend)):
             try:
                 service.generate_mesh_animation("puppet", ["An object waves."], 0,
-                                                on_job_id=submitted)
+                                                route=SimpleNamespace(backend=backend), on_job_id=submitted)
             except GenerationCancelled:
                 pass
             assert observed == [("j2", "original")], observed
@@ -196,7 +196,7 @@ def main():
             service.run_on_backend_channel = channel_after_wait
             try:
                 service.generate_mesh_animation("puppet", ["An object waves."], 0,
-                                                should_cancel=lambda: cancellation["requested"], on_job_id=submitted)
+                                                route=SimpleNamespace(backend=backend), should_cancel=lambda: cancellation["requested"], on_job_id=submitted)
             except GenerationCancelled:
                 pass
             assert observed == [], "cancelled channel waiter submitted a job"

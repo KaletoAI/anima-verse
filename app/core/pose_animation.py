@@ -253,7 +253,9 @@ def _handle(payload):
     puppet = paths.get_puppet_file()
     puppet_sha256 = hashlib.sha256(puppet.read_bytes()).hexdigest()
     # The service checks this cancellation hook after the channel wait, before submit.
-    result = get_image_service().generate_mesh_animation(str(puppet), prepared.captions, seed,
+    service = get_image_service()
+    result = service.generate_mesh_animation(str(puppet), prepared.captions, seed,
+        route=service.resolve_animation_backend(""),
         should_cancel=lambda: tq.is_task_cancelled(tid),
         on_job_id=lambda job_id, backend_name: update("hub", hub_job=job_id, backend=backend_name), label=f"Pose animation: {key}")
     if not result.get("ok"):
@@ -262,7 +264,7 @@ def _handle(payload):
     staging = paths.get_clips_inbox_dir() / ".unimate" / tid
     staging.mkdir(parents=True, exist_ok=True)
     glb = staging / "result.glb"
-    glb.write_bytes(result["glb"])
+    glb.write_bytes(result["blobs"][0])
     update("convert", backend=result["backend"], hub_job=result.get("job_id") or progress.get("hub_job", ""))
     converted = runner.run("glb_to_ref_fbx", inputs={"glb": glb}, params={"ref_hips_m": 1.13032}, out_dir=staging)
     if not converted.get("ok"):

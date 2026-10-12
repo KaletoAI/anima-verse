@@ -482,7 +482,8 @@ def part_c():
 
 
 def part_d():
-    """Service contract: one execution, unchanged bytes and typed cancellation."""
+    """Service contract: one execution on the GIVEN route, every variant blob,
+    the per-result verdicts, typed cancellation."""
     from types import SimpleNamespace
     from unittest.mock import patch
     from app.imagegen.service import ImageService
@@ -494,7 +495,9 @@ def part_d():
     service._pool = BackendPool([], lambda _: {})
     calls = []
     cooled = []
+    verdicts = [{"n": 0, "ok": True, "reason": ""}, {"n": 1, "ok": False, "reason": "missing sha256"}]
     backend = SimpleNamespace(name="Animation", cost=0, last_job_id="job-42",
+                              last_result_meta=verdicts,
                               mark_unhealthy=lambda *args: cooled.append(args))
     route = routing.Route(occasion="pose_animation", backend=backend, position=1,
                           spec="Animation", intended_spec="Animation", first_position=1)
@@ -507,7 +510,7 @@ def part_d():
     def generate(prompt, negative, params, log_meta=None):
         calls.append((prompt, negative, params, log_meta))
         params["on_job_id"]("job-42")
-        return [b"glb clip"]
+        return [b"clip one"]
 
     backend.generate = generate
     def channel(bb, fn, **kwargs):
@@ -515,38 +518,98 @@ def part_d():
               ("Animation", {"task_type": "pose_animation", "label": "Clip"}))
         return fn()
 
-    with patch.object(routing, "resolve_image_route", return_value=route), \
+    def no_resolve(*_a, **_k):
+        raise AssertionError("generate_mesh_animation must not resolve the route again")
+
+    with patch.object(routing, "resolve_image_route", side_effect=no_resolve), \
             patch.object(service, "run_on_backend_channel", side_effect=channel):
-        result = service.generate_mesh_animation("source.glb", ("walk",), 42,
-                    should_cancel=cancel, on_job_id=submitted, label="Clip")
-        check("D result bytes", result["glb"], b"glb clip")
+        result = service.generate_mesh_animation("source.glb", ("walk",), 42, route=route,
+                    variants=2, should_cancel=cancel, on_job_id=submitted, label="Clip")
+        check("D result blobs", result["blobs"], [b"clip one"])
+        check("D per-result verdicts", result["results"], verdicts)
         check("D backend and job", (result["backend"], result["job_id"]), ("Animation", "job-42"))
         check("D routing metadata", result["routing"],
               {"occasion": "pose_animation", "position": 1, "spec": "Animation"})
         check("D one submission", len(calls), 1)
         check("D payload", (calls[0][0], calls[0][1], {k: v for k, v in calls[0][2].items() if k != "on_job_id"}, calls[0][3]), ("", "", {"source_model_path": "source.glb",
-              "captions": ["walk"], "seed": 42, "should_cancel": cancel}, None))
+              "captions": ["walk"], "seed": 42, "variants": 2, "should_cancel": cancel}, None))
         check("D job callback", job_ids, [("job-42", "Animation")])
         for error in (GenerationCancelled("cancelled"), BackendBusyError("busy"),
                       MediaGenerationDisabled("disabled")):
             backend.generate = lambda *args, **kwargs: (_ for _ in ()).throw(error)
             try:
-                service.generate_mesh_animation("source.glb", ["walk"], 42, label="Clip")
+                service.generate_mesh_animation("source.glb", ["walk"], 42, route=route, label="Clip")
                 check("D typed " + type(error).__name__, False, True)
             except type(error):
                 check("D typed " + type(error).__name__, True, True)
         check("D cancellation and busy do not cool backend", cooled, [])
         backend.generate = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("transport failed"))
-        failed = service.generate_mesh_animation("source.glb", ["walk"], 42, label="Clip")
+        failed = service.generate_mesh_animation("source.glb", ["walk"], 42, route=route, label="Clip")
         check("D ordinary failure", (failed["ok"], "transport failed" in failed["error"]), (False, True))
         backend.generate = lambda *args, **kwargs: []
-        check("D empty result", service.generate_mesh_animation("source.glb", ["walk"], 42, label="Clip"),
-              {"ok": False, "error": "animation backend returned no result"})
+        empty = service.generate_mesh_animation("source.glb", ["walk"], 42, route=route, label="Clip")
+        check("D empty result keeps the verdicts",
+              (empty["ok"], empty["error"], empty["results"]),
+              (False, "animation backend returned no usable variant", verdicts))
+
+
+def part_e():
+    """Model choice: Auto = the routed first chain entry; an explicit name must be
+    a usable backend of the pose_animation chain, never a silent Auto fallback.
+
+    Chain ["Kimodo", "UniMate*"]; pool: Kimodo (animation, available),
+    UniMate-A (animation, available), UniMate-B (animation, OFFLINE and its
+    probe stays offline), Flux (image). Expected by hand:
+    E1 animation_backends lists Kimodo, UniMate-A, UniMate-B in chain order
+       with available True/True/False and each motion_meta; Flux is absent.
+    E2 resolve_animation_backend("") -> Kimodo at position 1.
+    E3 "UniMate-A" -> UniMate-A, position 2, spec "UniMate*", no fallback marker.
+    E4 "Flux" (image backend, not in the chain) -> ValueError.
+    E5 "UniMate-B" (offline) -> ValueError, and NOT Kimodo.
+    E6 "Nope" -> ValueError."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from app.imagegen.service import ImageService
+    from app.imagegen.selection import BackendPool
+    from app.imagegen import routing
+
+    def anim(name, available):
+        b = SimpleNamespace(name=name, MEDIA_TYPE="animation", category="mesh2anim",
+                            available=available, instance_enabled=True, effective_cost=0,
+                            motion_meta={"generator": name.lower()})
+        b.in_cooldown = lambda: False
+        b.check_availability = lambda: b.available
+        return b
+    kimodo, uni_a, uni_b = anim("Kimodo", True), anim("UniMate-A", True), anim("UniMate-B", False)
+    flux = SimpleNamespace(name="Flux", MEDIA_TYPE="image", category="txt2img", available=True,
+                           instance_enabled=True, effective_cost=0, in_cooldown=lambda: False,
+                           check_availability=lambda: True)
+    service = ImageService.__new__(ImageService)
+    service._pool = BackendPool([flux, kimodo, uni_a, uni_b], lambda _: {})
+    rules = lambda occ: ["Kimodo", "UniMate*"] if occ == "pose_animation" else []
+    with patch.object(routing, "_rules", side_effect=rules):
+        listed = service.animation_backends()
+        check("E1 animation_backends", [(r["name"], r["available"], r["motion_meta"]) for r in listed],
+              [("Kimodo", True, {"generator": "kimodo"}), ("UniMate-A", True, {"generator": "unimate-a"}),
+               ("UniMate-B", False, {"generator": "unimate-b"})])
+        auto = service.resolve_animation_backend("")
+        check("E2 auto", (auto.backend.name, auto.position), ("Kimodo", 1))
+        pick = service.resolve_animation_backend("UniMate-A")
+        check("E3 explicit", (pick.backend.name, pick.position, pick.spec, pick.is_fallback),
+              ("UniMate-A", 2, "UniMate*", False))
+        for name, label in (("Flux", "E4 image backend"), ("UniMate-B", "E5 offline"),
+                            ("Nope", "E6 unknown")):
+            try:
+                got = service.resolve_animation_backend(name)
+                check(label + " refused", got.backend.name, "ValueError")
+            except ValueError as e:
+                check(label + " refused", name in str(e), True)
 
 
 if __name__ == "__main__":
     part_a()
     part_d()
+    part_e()
     part_b()
     part_c()
     print()
