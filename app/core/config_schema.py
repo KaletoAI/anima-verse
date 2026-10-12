@@ -812,7 +812,7 @@ SECTIONS = {
                         "min": 64,
                         "max": 4096,
                         "half": True,
-                        "not_applicable_for": ["openai_mesh"],
+                        "not_applicable_for": ["openai_mesh", "openai_mesh_animation"],
                     },
                     "height": {
                         "type": "int",
@@ -821,10 +821,10 @@ SECTIONS = {
                         "min": 64,
                         "max": 4096,
                         "half": True,
-                        "not_applicable_for": ["openai_mesh"],
+                        "not_applicable_for": ["openai_mesh", "openai_mesh_animation"],
                     },
                     "_size_note": {
-                        "not_applicable_for": ["openai_mesh"],
+                        "not_applicable_for": ["openai_mesh", "openai_mesh_animation"],
                         "type": "note",
                         "text": (
                             "Square default format (~1:1). Render time scales roughly "
@@ -840,8 +840,8 @@ SECTIONS = {
                             "images prefer an upscale pass afterwards."
                         ),
                     },
-                    "image_family": {"type": "select", "label": "Image Family", "choices": ["", "natural", "keywords"], "description": "How the model wants its prompts: keywords = comma tags (Z-Image/SD), natural = flowing prose (Flux/Qwen). Selects the prompt adapter and which use-case style family applies. Empty = fallback via backend model name.", "not_applicable_for": ["openai_mesh"]},
-                    "supports_negative_prompt": {"type": "select", "label": "Negative prompt", "choices": ["auto", "yes", "no"], "default": "auto", "visible_when": {"category": ["txt2img", "img2img"]}, "not_applicable_for": ["openai_mesh", "localai_video", "together_video", "openai_video", "civitai_video"], "description": "Does this backend have a negative input? auto = decided by the prompt family (Image Family, or the model name when it is empty): natural-family models (Flux, Qwen-Image) are distilled / guidance-free and have NO negative input, keyword-family / CFG models (SD/SDXL, A1111, Z-Image with CFG > 1) have one. yes/no override that — Z-Image Turbo is the case auto gets wrong (keyword family, but guidance-free), so set it to no. Without a negative input every negative (use-case default + negations taken out of the subject + dialog input) is folded into the positive prompt as negations (\"no fog, no trees\") instead of being dropped."},
+                    "image_family": {"type": "select", "label": "Image Family", "choices": ["", "natural", "keywords"], "description": "How the model wants its prompts: keywords = comma tags (Z-Image/SD), natural = flowing prose (Flux/Qwen). Selects the prompt adapter and which use-case style family applies. Empty = fallback via backend model name.", "not_applicable_for": ["openai_mesh", "openai_mesh_animation"]},
+                    "supports_negative_prompt": {"type": "select", "label": "Negative prompt", "choices": ["auto", "yes", "no"], "default": "auto", "visible_when": {"category": ["txt2img", "img2img"]}, "not_applicable_for": ["openai_mesh", "openai_mesh_animation", "localai_video", "together_video", "openai_video", "civitai_video"], "description": "Does this backend have a negative input? auto = decided by the prompt family (Image Family, or the model name when it is empty): natural-family models (Flux, Qwen-Image) are distilled / guidance-free and have NO negative input, keyword-family / CFG models (SD/SDXL, A1111, Z-Image with CFG > 1) have one. yes/no override that — Z-Image Turbo is the case auto gets wrong (keyword family, but guidance-free), so set it to no. Without a negative input every negative (use-case default + negations taken out of the subject + dialog input) is folded into the positive prompt as negations (\"no fog, no trees\") instead of being dropped."},
                     "ref_slot_count": {"type": "number", "label": "Reference Slots", "default": 4, "description": "How many reference images this backend consumes per generation (slot priority: agent > room > others > items). 0 = no reference images.", "applicable_for": ["localai", "openai_diffusion"]},
                     "guidance_scale": {"type": "float", "label": "Guidance Scale", "min": 0, "max": 50, "step": 0.5, "description": "CFG scale. civitai: 1-30 (Flux models always send 1), default 7; civitai_video (WAN): cfgScale, default 4.", "applicable_for": ["a1111", "civitai", "civitai_video"]},
                     "num_inference_steps": {"type": "int", "label": "Inference Steps", "min": 1, "max": 200, "applicable_for": ["a1111", "together", "openai_diffusion", "localai", "civitai"]},
