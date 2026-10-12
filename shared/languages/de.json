@@ -8,6 +8,15 @@
     }
   },
   "translations": {
+    "Source check": "Prüfung des Ausgangsmaterials",
+    "Backends": "Backends",
+    "Parameters": "Parameter",
+    "Auto uses the routing chain of the occasion \"Face retexture\". An explicit pick has no fallback.": "Auto nutzt die Routing-Kette des Anlasses „Face retexture“. Eine explizite Wahl hat keinen Fallback.",
+    "A sharper photo gives a sharper face. If the upscaler fails, the original photo is used.": "Ein schärferes Foto ergibt ein schärferes Gesicht. Scheitert der Upscaler, wird das Originalfoto verwendet.",
+    "How strongly the photo replaces the face texture (0–1).": "Wie stark das Foto die Gesichtstextur ersetzt (0–1).",
+    "Width of the soft blend at the edge of the face (0–0.5).": "Breite des weichen Übergangs am Rand des Gesichts (0–0,5).",
+    "Resolution of the render used to align the photo with the mesh (256–2048).": "Auflösung des Renders, mit dem das Foto am Mesh ausgerichtet wird (256–2048).",
+    "Turns only the alignment view. Leave at 0 unless the model does not face forward (−180–180).": "Dreht nur die Ausrichtungsansicht. Auf 0 lassen, außer das Modell schaut nicht nach vorn (−180–180).",
     "Face retexture backend": "Backend für Gesichtskorrektur",
     "Texture re-encoding failed — the model was published without this improvement.": "Textur-Neukodierung fehlgeschlagen — das Modell wurde ohne diese Verbesserung veröffentlicht.",
     "The rigger merged the face material — the face correction may be lost. Revert restores the previous model.": "Der Rigger hat das Gesichtsmaterial zusammengeführt — die Gesichtskorrektur könnte verloren sein. Zurücksetzen stellt das vorherige Modell wieder her.",

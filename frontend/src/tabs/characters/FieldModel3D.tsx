@@ -21,6 +21,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { MeshBackendDialog } from '../../components/MeshBackendDialog'
+import { Field } from '../../components/Field'
 import { Model3DViewer } from './Model3DViewer'
 import { OutfitBatchDialog } from './OutfitBatchDialog'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
@@ -1107,36 +1108,66 @@ export function FieldModel3D({ character }: { character: string }) {
             <div className="ga-modal-header">{t('Face retexture')}</div>
             <div className="ga-modal-body ga-form">
               <p className="ga-hint">{t('Corrects the face texture from the original photo, then rebuilds the rig and derived meshes. Each run starts from the original unrigged mesh.')}</p>
-              <label>{t('Backend')}
-                <select value={faceBackend} disabled={busy} onChange={e => { setFaceCheck(null); setFaceBackend(e.target.value) }}>
-                  <option value="">{t('Auto (routing)')}</option>
-                  {(st.face_retexture_backends || []).map(b => <option key={b.name} value={b.name}>{b.name}{b.model ? ` · ${b.model}` : ''}</option>)}
-                </select>
-              </label>
-              {faceCheckError ? <p role="alert">{faceCheckError}</p> : null}
-              {!faceCheck && !faceCheckError ? <p role="status">{t('Checking face retexture eligibility…')}</p> : null}
-              {faceCheck ? <>
-                {[...faceCheck.problems, ...faceCheck.runnable_problems].map(p => <p key={p.code} role="alert">
-                  {p.message}{p.detail ? ` (${p.detail})` : ''}<br /><span className="ga-hint">{p.fix}</span>
-                </p>)}
-                {faceCheck.warnings.map(w => <p className="ga-hint" key={w.code}>{w.message}</p>)}
-                {faceCheck.ok && faceCheck.runnable ? <p className="ga-hint">{t('Ready for face retexture.')}</p> : null}
-              </> : null}
-              <label><input type="checkbox" checked={upscaleFirst} disabled={busy} onChange={e => setUpscaleFirst(e.target.checked)} />{t('Upscale reference first')}</label>
-              {upscaleFirst ? <label>{t('Upscale backend')}
-                <select value={upscaleBackend} disabled={busy} onChange={e => setUpscaleBackend(e.target.value)}>
-                  <option value="">{t('Auto (routing)')}</option>
-                  {(st.upscale_backends || []).map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
-                </select>
-              </label> : null}
-              <label>{t('Strength')}<input type="number" min={0} max={1} step={0.05} value={faceControls.strength} disabled={busy}
-                onChange={e => setFaceControls(v => ({ ...v, strength: e.target.valueAsNumber }))} /></label>
-              <label>{t('Feather')}<input type="number" min={0} max={0.5} step={0.01} value={faceControls.feather} disabled={busy}
-                onChange={e => setFaceControls(v => ({ ...v, feather: e.target.valueAsNumber }))} /></label>
-              <label>{t('Render resolution')}<input type="number" min={256} max={2048} step={1} value={faceControls.render_resolution} disabled={busy}
-                onChange={e => setFaceControls(v => ({ ...v, render_resolution: e.target.valueAsNumber }))} /></label>
-              <label>{t('Yaw (degrees)')}<input type="number" min={-180} max={180} step={1} value={faceControls.yaw} disabled={busy}
-                onChange={e => setFaceControls(v => ({ ...v, yaw: e.target.valueAsNumber }))} /></label>
+              <fieldset className="ga-fieldset">
+                <legend className="ga-fieldset-title">{t('Source check')}</legend>
+                {faceCheckError ? <div className="ga-status-danger" role="alert">✗ {faceCheckError}</div> : null}
+                {!faceCheck && !faceCheckError ? <div className="ga-hint" role="status">{t('Checking face retexture eligibility…')}</div> : null}
+                {faceCheck ? <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {[...faceCheck.problems, ...faceCheck.runnable_problems].map(p => <div key={p.code} role="alert">
+                    <div className="ga-status-danger">✗ {p.message}{p.detail ? ` (${p.detail})` : ''}</div>
+                    {p.fix ? <div className="ga-field-hint">→ {p.fix}</div> : null}
+                  </div>)}
+                  {faceCheck.warnings.map(w => <div key={w.code} className="ga-field-warn">⚠ {w.message}</div>)}
+                  {faceCheck.ok && faceCheck.runnable ? <div className="ga-status-ok">✓ {t('Ready for face retexture.')}</div> : null}
+                </div> : null}
+              </fieldset>
+              <fieldset className="ga-fieldset">
+                <legend className="ga-fieldset-title">{t('Backends')}</legend>
+                <Field label={t('Face retexture backend')}
+                  hint={t('Auto uses the routing chain of the occasion "Face retexture". An explicit pick has no fallback.')}>
+                  <select className="ga-input" value={faceBackend} disabled={busy}
+                    onChange={e => { setFaceCheck(null); setFaceBackend(e.target.value) }}>
+                    <option value="">{t('Auto (routing)')}</option>
+                    {(st.face_retexture_backends || []).map(b => <option key={b.name} value={b.name}>{b.name}{b.model ? ` · ${b.model}` : ''}</option>)}
+                  </select>
+                </Field>
+                <label className="ga-check-row" style={{ margin: '8px 0 4px' }}>
+                  <input type="checkbox" checked={upscaleFirst} disabled={busy} onChange={e => setUpscaleFirst(e.target.checked)} />
+                  <span>{t('Upscale reference first')}</span>
+                </label>
+                {upscaleFirst ? <Field label={t('Upscale backend')}
+                  hint={t('A sharper photo gives a sharper face. If the upscaler fails, the original photo is used.')}>
+                  <select className="ga-input" value={upscaleBackend} disabled={busy} onChange={e => setUpscaleBackend(e.target.value)}>
+                    <option value="">{t('Auto (routing)')}</option>
+                    {(st.upscale_backends || []).map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
+                  </select>
+                </Field> : null}
+              </fieldset>
+              <fieldset className="ga-fieldset">
+                <legend className="ga-fieldset-title">{t('Parameters')}</legend>
+                <div className="ga-form-row">
+                  <Field label={t('Strength')} compact tip={t('How strongly the photo replaces the face texture (0–1).')}>
+                    <input className="ga-input" style={{ width: 90 }} type="number" min={0} max={1} step={0.05}
+                      value={faceControls.strength} disabled={busy}
+                      onChange={e => setFaceControls(v => ({ ...v, strength: e.target.valueAsNumber }))} />
+                  </Field>
+                  <Field label={t('Feather')} compact tip={t('Width of the soft blend at the edge of the face (0–0.5).')}>
+                    <input className="ga-input" style={{ width: 90 }} type="number" min={0} max={0.5} step={0.01}
+                      value={faceControls.feather} disabled={busy}
+                      onChange={e => setFaceControls(v => ({ ...v, feather: e.target.valueAsNumber }))} />
+                  </Field>
+                  <Field label={t('Render resolution')} compact tip={t('Resolution of the render used to align the photo with the mesh (256–2048).')}>
+                    <input className="ga-input" style={{ width: 90 }} type="number" min={256} max={2048} step={1}
+                      value={faceControls.render_resolution} disabled={busy}
+                      onChange={e => setFaceControls(v => ({ ...v, render_resolution: e.target.valueAsNumber }))} />
+                  </Field>
+                  <Field label={t('Yaw (degrees)')} compact tip={t('Turns only the alignment view. Leave at 0 unless the model does not face forward (−180–180).')}>
+                    <input className="ga-input" style={{ width: 90 }} type="number" min={-180} max={180} step={1}
+                      value={faceControls.yaw} disabled={busy}
+                      onChange={e => setFaceControls(v => ({ ...v, yaw: e.target.valueAsNumber }))} />
+                  </Field>
+                </div>
+              </fieldset>
             </div>
             <div className="ga-modal-footer">
               <button type="button" className="ga-btn" disabled={busy} onClick={() => setFaceOpen(false)}>{t('Cancel')}</button>
@@ -1169,7 +1200,7 @@ export function FieldModel3D({ character }: { character: string }) {
             <div className="ga-modal-body ga-form">
               <p className="ga-hint">{t('Reuses the retained mesh and rebuilds the rig, extension bones and existing low tier.')}</p>
               <label>{t('Rigger')}
-                <select value={rerigBackend} disabled={busy} onChange={e => setRerigBackend(e.target.value)}>
+                <select className="ga-input" value={rerigBackend} disabled={busy} onChange={e => setRerigBackend(e.target.value)}>
                   <option value="">{t('Auto (routing)')}</option>
                   {(st.rig_backends || []).map(b => <option key={b.name} value={b.name}>{b.name}{b.model ? ` · ${b.model}` : ''}</option>)}
                 </select>
