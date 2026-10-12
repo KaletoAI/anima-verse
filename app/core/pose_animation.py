@@ -266,7 +266,7 @@ def _handle(payload):
     glb = staging / "result.glb"
     glb.write_bytes(result["blobs"][0])
     update("convert", backend=result["backend"], hub_job=result.get("job_id") or progress.get("hub_job", ""))
-    converted = runner.run("glb_to_ref_fbx", inputs={"glb": glb}, params={"ref_hips_m": 1.13032}, out_dir=staging)
+    converted = runner.run("glb_to_ref_fbx", inputs={"src": glb}, params={"ref_hips_m": 1.13032, "format": "glb"}, out_dir=staging)
     if not converted.get("ok"):
         raise RuntimeError(converted.get("error") or "animation conversion failed")
     cancelled()

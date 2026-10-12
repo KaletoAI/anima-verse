@@ -62,7 +62,7 @@ def main():
                     tq.cancel_task(state["tid"])
                 return {"ok": True, "data": {**structure(), "frames": 40, "hips_y": [1.25 if state["bad"] else 1.058],
                     "min_foot_y": -.028, "head_tilt_deg_median": 0}}
-            assert script == "glb_to_ref_fbx" and kwargs["params"] == {"ref_hips_m": 1.13032}
+            assert script == "glb_to_ref_fbx" and kwargs["params"] == {"ref_hips_m": 1.13032, "format": "glb"}
             for name in ("motion", "rest"):
                 (out_dir / (name + ".fbx")).write_bytes(b"source")
             return {"ok": True, "outputs": {name: out_dir / (name + ".fbx") for name in ("motion", "rest")}}

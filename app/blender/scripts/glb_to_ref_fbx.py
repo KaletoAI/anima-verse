@@ -1,4 +1,11 @@
-"""Convert a generated Mixamo GLB to motion and canonical-rest FBX files."""
+"""Convert a generated motion to motion and canonical-rest FBX files.
+
+``format`` "glb": a Mixamo GLB on the puppet, scaled back to the reference
+hips (UniMate). ``format`` "fbx": an FBX already retargeted onto the
+reference rig (Kimodo) — no rescale, but every bone of the ``ref`` input
+must be present. Both strip the ``mixamorig:`` prefix for the inbox
+importer's mixamo-noprefix family.
+"""
 import sys
 from pathlib import Path
 
@@ -10,14 +17,37 @@ sys.path.remove(_SCRIPTS_DIR)
 import bpy
 
 
+PREFIX = "mixamorig:"
+
+
+def _strip(name):
+    return name[len(PREFIX):] if name.startswith(PREFIX) else name
+
+
+def _reference_bones(path):
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.import_scene.fbx(filepath=path)
+    arms = [o for o in bpy.context.scene.objects if o.type == "ARMATURE"]
+    if len(arms) != 1:
+        raise ValueError(f"reference rig: expected one armature, found {len(arms)}")
+    return {_strip(b.name) for b in arms[0].data.bones}
+
+
 def run(job):
-    glb = job["inputs"]["glb"]
-    params = {"ref_hips_m": 1.13032, **job.get("params", {})}
+    params = {"ref_hips_m": 1.13032, "format": "glb", **job.get("params", {})}
+    fmt = params["format"]
+    if fmt not in ("glb", "fbx"):
+        raise ValueError(f"unsupported format '{fmt}'")
+    src = job["inputs"]["src"]
+    required = _reference_bones(job["inputs"]["ref"]) if fmt == "fbx" else set()
     motion_out = str(Path(job["out_dir"]) / "motion.fbx")
     rest_out = str(Path(job["out_dir"]) / "rest.fbx")
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.context.scene.render.fps = 30          # BEFORE the import: glTF keys are seconds
-    bpy.ops.import_scene.gltf(filepath=glb)
+    bpy.context.scene.render.fps = 30          # BEFORE the import: keys are seconds
+    if fmt == "glb":
+        bpy.ops.import_scene.gltf(filepath=src)
+    else:
+        bpy.ops.import_scene.fbx(filepath=src)
     arms = [o for o in bpy.context.scene.objects if o.type == "ARMATURE"]
     if len(arms) != 1:
         raise ValueError(f"expected one armature, found {len(arms)}")
@@ -26,21 +56,25 @@ def run(job):
     if act is None or len(bpy.data.actions) != 1:
         raise ValueError("expected exactly one animation")
     for b in arm.data.bones:                     # the inbox importer knows mixamo-noprefix only
-        if b.name.startswith("mixamorig:"):
-            b.name = b.name[len("mixamorig:"):]
+        b.name = _strip(b.name)
+    missing = sorted(required - {b.name for b in arm.data.bones})
+    if missing:
+        raise ValueError("bones missing against the reference rig: " + ", ".join(missing))
     scene = bpy.context.scene
     scene.frame_start, scene.frame_end = int(act.frame_range[0]), int(act.frame_range[1])
-    # UniMate normalises the rig size: scale back to the reference hips (object scale,
-    # NOT applied, so the action's hip translations scale with the bones).
-    arm.animation_data.action = None
-    for pb in arm.pose.bones:
-        pb.matrix_basis.identity()
-    bpy.context.view_layer.update()
-    hips = arm.pose.bones["Hips"]
-    rest_h = (arm.matrix_world @ hips.matrix).translation.z
-    k = float(params["ref_hips_m"]) / rest_h
-    arm.scale = arm.scale * k
-    arm.animation_data.action = act
+    k = 1.0
+    if fmt == "glb":
+        # UniMate normalises the rig size: scale back to the reference hips (object
+        # scale, NOT applied, so the action's hip translations scale with the bones).
+        arm.animation_data.action = None
+        for pb in arm.pose.bones:
+            pb.matrix_basis.identity()
+        bpy.context.view_layer.update()
+        hips = arm.pose.bones["Hips"]
+        rest_h = (arm.matrix_world @ hips.matrix).translation.z
+        k = float(params["ref_hips_m"]) / rest_h
+        arm.scale = arm.scale * k
+        arm.animation_data.action = act
     for o in [o for o in scene.objects if o.type == "MESH"]:
         bpy.data.objects.remove(o, do_unlink=True)
     common = dict(use_selection=False, object_types={"ARMATURE"}, add_leaf_bones=False,
