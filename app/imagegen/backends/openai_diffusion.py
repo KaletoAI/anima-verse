@@ -29,8 +29,7 @@ class OpenAIDiffusionBackend(LocalAIBackend):
         are valid is defined by the alias workflow on the gateway side — therefore
         NOT hardcoded but freely configurable.
       - ``response_format`` configurable (default ``b64_json``).
-      - **Bearer header also on the result-URL fetch** (gateway result URLs are not
-        public, they require the same job-owner token).
+      - Bearer credentials on same-origin results; signed CDN URLs are anonymous.
       - Error mapping per OpenAI/gateway semantics: 400=request error (no retry),
         401/403=config, 402=quota, 502=1x retry (park timeout = busy),
         503 with Retry-After = busy, 503 without = no healthy backend (cooldown),
@@ -248,14 +247,20 @@ class OpenAIDiffusionBackend(LocalAIBackend):
                 continue
             url = item.get("url", "")
             if url:
-                # Result URLs are not public — send the Bearer header along.
-                img_resp = requests.get(url, headers=self._headers(), timeout=60)
+                from app.imagegen.backends._gateway_job import download_result
+                try:
+                    img_resp = download_result(self, url, timeout=60, foreign="anonymous")
+                except requests.Timeout:
+                    raise  # Preserve the generation/edit timeout busy classification.
+                except Exception as e:
+                    logger.error("%s: Result-URL download failed: %s", self.name, e)
+                    continue
                 if img_resp.status_code == 200:
                     images.append(img_resp.content)
                 else:
                     logger.error(f"{self.name}: Result-URL HTTP {img_resp.status_code}")
         if not images:
-            logger.error(f"{self.name}: Keine Bilder in Response")
+            logger.error(f"{self.name}: No images in response")
         return images
 
     def _generate(self, prompt: str, negative_prompt: str, params: Dict[str, Any]) -> List[bytes]:

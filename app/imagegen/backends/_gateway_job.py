@@ -298,19 +298,44 @@ def poll_job(backend: ImageBackend, job_id: str, *,
     raise BackendBusyError("timeout" if started else "gateway queue")
 
 
-def download_result(backend: ImageBackend, url: str):
-    """Validate the origin of every redirect before forwarding credentials."""
+class _NoNetrcAuth(requests.auth.AuthBase):
+    """Preserve explicit headers while suppressing ambient netrc credentials."""
+
+    def __call__(self, request):
+        return request
+
+
+def download_result(backend: ImageBackend, url: str, *, timeout=300, foreign="refuse"):
+    """Validate every hop; never restore credentials after a foreign origin."""
+    if foreign not in ("refuse", "anonymous"):
+        raise ValueError("Unknown foreign-origin download policy")
     from urllib.parse import urljoin, urlparse
     def origin(value):
         parsed = urlparse(value)
-        if parsed.username or parsed.password or parsed.scheme not in ("http", "https"):
+        if (parsed.username is not None or parsed.password is not None
+                or not parsed.hostname or parsed.scheme not in ("http", "https")):
             raise GatewayRejectedError("Invalid gateway result URL")
-        return parsed.scheme.lower(), parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+        port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)
+        hostname = parsed.hostname
+        try:
+            hostname = hostname.encode("idna").decode("ascii")
+        except UnicodeError:
+            # Invalid IDNs remain distinct; Requests will reject them on send.
+            pass
+        return parsed.scheme.lower(), hostname.lower(), port
     expected = origin(backend.api_url)
+    authenticated = True
     for _ in range(6):
         if origin(url) != expected:
-            raise GatewayRejectedError("Gateway result URL has a foreign origin; download refused")
-        response = requests.get(url, headers=backend._headers(), timeout=300, allow_redirects=False)
+            if foreign == "refuse":
+                raise GatewayRejectedError("Gateway result URL has a foreign origin; download refused")
+            authenticated = False
+        # Verified in installed Requests Session.prepare_request: netrc lookup
+        # checks auth/trust_env, NOT Authorization headers. Explicit no-op auth
+        # protects the backend Bearer too, while retaining environment proxies.
+        # requests.get creates a fresh Session per hop, so cookies cannot carry.
+        response = requests.get(url, headers=backend._headers() if authenticated else None,
+                                timeout=timeout, allow_redirects=False, auth=_NoNetrcAuth())
         if response.status_code not in (301, 302, 303, 307, 308):
             return response
         url = urljoin(url, response.headers.get("Location", ""))

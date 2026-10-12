@@ -19,18 +19,20 @@ backend choice/queueing/failover (never send a backend field), converts
 ``seconds`` to the frame raster itself, and resolves Wan HIGH/LOW LoRA pairs
 from ONE half — the flat {name, strength} list from the dialog goes through
 verbatim. ``MEDIA_TYPE == "video"`` keeps it out of image matching; results
-are owner-gated (downloaded with the creating key). Valid LoRA names: the
+on the gateway are owner-gated; foreign CDN results are downloaded anonymously.
+Valid LoRA names: the
 alias' LoRA endpoint (``fetch_loras``).
 """
 import base64
 import os
 from pathlib import Path
 from typing import Any, Dict, List
+from urllib.parse import urljoin, urlparse
 
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.backends._gateway_job import poll_job, submit_job
+from app.imagegen.backends._gateway_job import download_result, poll_job, submit_job
 from app.imagegen.base import ImageBackend
 
 logger = get_logger("image_backends")
@@ -256,13 +258,23 @@ class OpenAIVideoBackend(ImageBackend):
             _results = sd.get("results") or []
             _r_url = (_results[0].get("url") if _results
                       and isinstance(_results[0], dict) else "") or ""
-            if _r_url and not _r_url.startswith(("http://", "https://")):
-                _r_url = f"{self.api_url}{_r_url}"
-            if not _r_url:
-                _r_url = f"{self.api_url}/v1/jobs/{job_id}/result/0"
-            dl = requests.get(_r_url, headers=self._headers(), timeout=180)
+            try:
+                if _r_url:
+                    parsed = urlparse(_r_url)
+                    if parsed.netloc and not parsed.scheme:
+                        _r_url = urljoin(f"{self.api_url}/", _r_url)
+                    elif not parsed.scheme:
+                        _r_url = f"{self.api_url}{_r_url}"
+                else:
+                    _r_url = f"{self.api_url}/v1/jobs/{job_id}/result/0"
+                dl = download_result(self, _r_url, timeout=180, foreign="anonymous")
+            except (requests.Timeout, requests.ConnectionError):
+                raise  # Preserve poll_job's network failure retry classification.
+            except Exception as e:
+                logger.error("%s: Result-Download failed: %s", self.name, e)
+                return []
             if dl.status_code == 200 and len(dl.content) > 1000:
-                logger.info("%s: Video fertig (%.1fs, %d bytes)", self.name,
+                logger.info("%s: Video finished (%.1fs, %d bytes)", self.name,
                             running_s, len(dl.content))
                 return [dl.content]
             logger.error("%s: Result-Download HTTP %d (%d bytes)",
