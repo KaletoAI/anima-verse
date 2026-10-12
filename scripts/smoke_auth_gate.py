@@ -326,7 +326,11 @@ pose_app.middleware("http")(auth_dependency.user_context_middleware)
 pose_app.include_router(poses_route.router)
 pose_client = TestClient(pose_app)
 for method, path in (("POST", "/poses/animations/generate"),
-                     ("GET", "/poses/animations/jobs")):
+                     ("GET", "/poses/animations/jobs"),
+                     ("GET", "/poses/animations/backends"),
+                     ("GET", "/poses/animations/task_ab12/candidates/0/clip.fbx"),
+                     ("POST", "/poses/animations/task_ab12/choose"),
+                     ("POST", "/poses/animations/task_ab12/discard")):
     for role in ("user", "admin"):
         response = pose_client.request(method, path,
             headers={"x-test-user": role},
@@ -382,6 +386,59 @@ with patch("app.core.task_queue.TaskQueue.start"):
         response = pose_client.post("/poses/animations/generate", headers=admin_headers,
                                     json={"mode": "free", "text": "wave", **optional_seed})
         check(f"optional seed {optional_seed!r} accepted", response.status_code, 202)
+# Plan v3 Task 6: model choice, variant count, candidates, choose and discard.
+for bad in ({"variants": "3"}, {"variants": 1.5}, {"variants": True}, {"backend": 7}):
+    response = pose_client.post("/poses/animations/generate", headers=admin_headers,
+                                json={"mode": "free", "text": "wave", **bad})
+    check(f"invalid generate field {bad!r} rejected", response.status_code, 400)
+with patch("app.core.pose_animation.submit", return_value="task_00") as submit:
+    response = pose_client.post("/poses/animations/generate", headers=admin_headers,
+                                json={"mode": "free", "text": "wave", "backend": "motion-kimodo",
+                                      "variants": 2})
+    check("model and variants forwarded", (response.status_code, submit.call_args.kwargs["backend"],
+          submit.call_args.kwargs["variants"]), (202, "motion-kimodo", 2))
+    pose_client.post("/poses/animations/generate", headers=admin_headers,
+                     json={"mode": "free", "text": "wave"})
+    check("defaults Auto and 3 variants", (submit.call_args.kwargs["backend"],
+          submit.call_args.kwargs["variants"]), ("", 3))
+listing = [{"name": "motion-kimodo", "available": True, "motion_meta": {"max_variants": 4}}]
+with patch("app.imagegen.service.get_image_service") as svc:
+    svc.return_value.animation_backends.return_value = listing
+    response = pose_client.get("/poses/animations/backends", headers=admin_headers)
+check("backends listing", (response.status_code, response.json()),
+      (200, {"backends": listing, "default_variants": 3}))
+from app.core.pose_animation import ChoiceError
+for status_code in (404, 409, 410, 422):
+    with patch("app.core.pose_animation.choose", side_effect=ChoiceError(status_code, "nope")):
+        response = pose_client.post("/poses/animations/task_ab12/choose", headers=admin_headers,
+                                    json={"index": 1})
+    check(f"choose maps ChoiceError {status_code}", (response.status_code,
+          response.json().get("detail")), (status_code, "nope"))
+for bad in ({}, {"index": "1"}, {"index": True}, {"index": 1.0}):
+    response = pose_client.post("/poses/animations/task_ab12/choose", headers=admin_headers,
+                                json=bad)
+    check(f"choose body {bad!r} rejected", response.status_code, 400)
+with patch("app.core.pose_animation.choose", return_value={"kind": "waving", "index": 1}) as choose:
+    response = pose_client.post("/poses/animations/task_ab12/choose", headers=admin_headers,
+                                json={"index": 1})
+check("choose forwards", (response.status_code, choose.call_args.args), (200, ("task_ab12", 1)))
+with patch("app.core.pose_animation.discard", side_effect=ChoiceError(409, "decided")):
+    response = pose_client.post("/poses/animations/task_ab12/discard", headers=admin_headers)
+check("discard maps ChoiceError", response.status_code, 409)
+for path in ("/poses/animations/task_ab12/candidates/4/clip.fbx",
+             "/poses/animations/task_ab12/candidates/x/clip.fbx",
+             "/poses/animations/..%2Fetc/candidates/0/clip.fbx",
+             "/poses/animations/TASK_AB/candidates/0/clip.fbx"):
+    response = pose_client.get(path, headers=admin_headers)
+    check(f"candidate path {path} refused", response.status_code in (400, 404, 422), True)
+with tempfile.TemporaryDirectory() as clip_dir:
+    clip_file = Path(clip_dir) / "waving.fbx"
+    clip_file.write_bytes(b"Kaydara FBX Binary  ")
+    with patch("app.core.pose_animation.candidate_clip", return_value=clip_file) as cand:
+        response = pose_client.get("/poses/animations/task_ab12/candidates/2/clip.fbx",
+                                   headers=admin_headers)
+    check("candidate clip served", (response.status_code, response.content, cand.call_args.args),
+          (200, b"Kaydara FBX Binary  ", ("task_ab12", 2)))
 print()
 print("B) character filter (SEC-6)")
 sens = auth_dependency._is_sensitive_character_path

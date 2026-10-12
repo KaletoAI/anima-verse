@@ -23,6 +23,7 @@ whatever clips the world currently ships.
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import Path as PathParam
 
 from app.core import expression_pose_maps as epm
 from app.core import pose_catalog
@@ -40,6 +41,8 @@ _alias_owner = alias_owner
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/poses", tags=["poses"])
+DEFAULT_ANIMATION_VARIANTS = 3
+_TASK_ID_PATTERN = r"^task_[0-9a-f]+$"
 
 
 def _axis(axis: str) -> str:
@@ -325,12 +328,18 @@ async def generate_animation(request: Request,
     seed = body.get("seed")
     if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int)):
         raise HTTPException(status_code=400, detail="seed must be an integer")
+    backend = body.get("backend", "")
+    if not isinstance(backend, str):
+        raise HTTPException(status_code=400, detail="backend must be a string")
+    variants = body.get("variants", DEFAULT_ANIMATION_VARIANTS)
+    if isinstance(variants, bool) or not isinstance(variants, int):
+        raise HTTPException(status_code=400, detail="variants must be an integer")
     try:
         task_id = await asyncio.to_thread(
             pose_animation.submit, body.get("mode", ""),
             key=body.get("key", ""), raw_text=body.get("raw_text", ""),
             text=body.get("text", ""), hint=body.get("hint", ""),
-            seed=seed)
+            seed=seed, backend=backend, variants=variants)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"task_id": task_id}
@@ -350,6 +359,63 @@ async def animation_jobs(request: Request,
     if limit < 1:
         raise HTTPException(status_code=400, detail="limit must be a positive integer")
     return {"jobs": await asyncio.to_thread(pose_animation.recent_jobs, min(limit, 100))}
+
+
+@router.get("/animations/backends")
+async def animation_backends(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The models the generate dialog offers (the pose_animation chain)."""
+    import asyncio
+    from app.imagegen.service import get_image_service
+
+    backends = await asyncio.to_thread(get_image_service().animation_backends)
+    return {"backends": backends, "default_variants": DEFAULT_ANIMATION_VARIANTS}
+
+
+@router.get("/animations/{task_id}/candidates/{index}/clip.fbx")
+def animation_candidate_clip(request: Request,
+                             task_id: str = PathParam(..., pattern=_TASK_ID_PATTERN),
+                             index: int = PathParam(..., ge=0, le=3),
+                             _: Dict[str, Any] = Depends(require_admin)):
+    """One candidate's FBX for the preview player."""
+    from app.core import pose_animation
+    from app.core.http_files import etag_file_response
+
+    try:
+        path = pose_animation.candidate_clip(task_id, index)
+    except pose_animation.ChoiceError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return etag_file_response(path, request, "application/octet-stream")
+
+
+@router.post("/animations/{task_id}/choose")
+async def choose_animation(request: Request,
+                           task_id: str = PathParam(..., pattern=_TASK_ID_PATTERN),
+                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Publish one candidate as the pose's clip and catalog entry."""
+    import asyncio
+    from app.core import pose_animation
+
+    body = await request.json()
+    index = body.get("index") if isinstance(body, dict) else None
+    if isinstance(index, bool) or not isinstance(index, int):
+        raise HTTPException(status_code=400, detail="index must be an integer")
+    try:
+        return await asyncio.to_thread(pose_animation.choose, task_id, index)
+    except pose_animation.ChoiceError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+
+@router.post("/animations/{task_id}/discard")
+async def discard_animation(task_id: str = PathParam(..., pattern=_TASK_ID_PATTERN),
+                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Drop every candidate of a job waiting for a choice."""
+    import asyncio
+    from app.core import pose_animation
+
+    try:
+        return await asyncio.to_thread(pose_animation.discard, task_id)
+    except pose_animation.ChoiceError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
 @router.put("/{key}")
