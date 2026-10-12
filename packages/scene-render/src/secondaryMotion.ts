@@ -470,17 +470,6 @@ export function createSecondaryMotion(
       old.bind.bone.updateWorldMatrix(false, true)
     }
     particles = nextParticles.sort((a, b) => a.bind.depth - b.bind.depth)
-    if (selected.size) root.traverse(o => {
-      const mesh = o as SkinnedMesh
-      if (!mesh.isSkinnedMesh || !mesh.skeleton.bones.some(bone => selected.has(bone))) return
-      // LBS can fold the chain/body blend zone at large rest angles.
-      // Keep shared materials so template clones retain the same rendering.
-      for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
-        if (material.side === three.DoubleSide) continue
-        material.side = three.DoubleSide
-        material.needsUpdate = true
-      }
-    })
   }
   const reset = () => {
     for (const st of particles) { st.p = null; st.target = null; st.anchorRotation = null; st.v.set(0, 0, 0) }

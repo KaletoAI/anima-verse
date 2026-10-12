@@ -73,6 +73,9 @@ try {
   assert.ok(tiltViewerSource.includes('applyPreviewTilt(previewRoot') && tiltViewerSource.indexOf('applyPreviewTilt(previewRoot') < tiltViewerSource.indexOf('secondary?.update(realDelta)'), 'tilt before solver');
 
   const fieldSource=await readFile('frontend/src/tabs/characters/FieldModel3D.tsx','utf8');
+  assert.match(tiltViewerSource,/ga-model3d-toolbar/);
+  assert.match(fieldSource,/motionToolbar=\{rigless \? undefined : motionToolbar\}/);
+  assert.match(fieldSource,/motion=\{rigless \? undefined : previewMotion\}/,'status root must reach viewer');
   assert.equal(typeof C.installSkinnedNormalCorrection,'function');
   C.installSkinnedNormalCorrection(THREE);
   assert.match(THREE.ShaderChunk.skinnormal_vertex,/inverse\(transpose\(mat3\(skinMatrix\)\)\)/);
@@ -99,71 +102,6 @@ try {
     return {root,anchor,bone,mesh,solver,point};
   }
   const near=(actual,expected,eps=1e-5)=>assert.ok(Math.abs(actual-expected)<eps,`${actual} vs ${expected} ±${eps}`);
-  // Large rest angles can fold the LBS blend zone; bound meshes must render both faces.
-  function checkChainMaterialSides(api=C) {
-    const f=fixture({bones:['missing']});f.solver.dispose();
-    const materials=[f.mesh.material,new THREE.MeshBasicMaterial()];
-    materials[0].shadowSide=THREE.FrontSide;f.mesh.material=materials;
-    const geometry=f.mesh.geometry.clone();
-    geometry.setAttribute('skinIndex',new THREE.Uint16BufferAttribute(new Array(12).fill(0),4));
-    const other=new THREE.SkinnedMesh(geometry,new THREE.MeshBasicMaterial());f.root.add(other);
-    f.root.updateMatrixWorld(true);other.bind(new THREE.Skeleton([f.anchor]));
-    const singleMaterial=new THREE.MeshBasicMaterial(),singleVersion=singleMaterial.version;
-    const single=new THREE.SkinnedMesh(f.mesh.geometry,singleMaterial);f.root.add(single);single.bind(f.mesh.skeleton);
-    const untouchedVersion=other.material.version;
-    const versions=materials.map(material=>material.version);
-    const motion=payload({rest_deg:90});
-    const solver=api.createSecondaryMotion(THREE,f.root,motion);
-    materials.forEach((material,i)=>{
-      assert.equal(material.side,THREE.DoubleSide,'bound chain mesh must render both faces');
-      assert.equal(material.version,versions[i]+1,'side change must invalidate the material');
-    });
-    assert.equal(single.material,singleMaterial);
-    assert.equal(singleMaterial.side,THREE.DoubleSide,'single material on a bound mesh must render both faces');
-    assert.equal(singleMaterial.version,singleVersion+1);
-    assert.equal(f.mesh.material,materials,'material array must remain shared');
-    assert.equal(materials[0].shadowSide,THREE.FrontSide);
-    assert.equal(materials[1].shadowSide,null);
-    const stableVersions=materials.map(material=>material.version);
-    solver.reset();solver.reset();solver.configure(motion);solver.dispose();
-    const again=api.createSecondaryMotion(THREE,f.root,motion);again.reset();again.dispose();
-    assert.equal(f.mesh.material,materials);
-    assert.equal(single.material,singleMaterial);
-    assert.equal(singleMaterial.side,THREE.DoubleSide);
-    assert.equal(singleMaterial.version,singleVersion+1);
-    materials.forEach((material,i)=>{
-      assert.equal(material.side,THREE.DoubleSide);
-      assert.equal(material.version,stableVersions[i],'repeat binding/reset must not invalidate again');
-    });
-    assert.equal(other.material.side,THREE.FrontSide,'skeleton without chain bones must stay untouched');
-    assert.equal(other.material.version,untouchedVersion);
-    assert.equal(other.material.shadowSide,null);
-    const clone=cloneSkeleton(f.root);let cloneMesh;
-    clone.traverse(o=>{if(o.isSkinnedMesh&&Array.isArray(o.material))cloneMesh=o;});
-    materials.forEach((material,i)=>assert.equal(cloneMesh.material[i],material,'skeleton clones retain the shared materials'));
-  }
-  checkChainMaterialSides();
-  for(const bones of [['missing'],['extra','missing']]) {
-    const f=fixture({bones:['missing']});f.solver.dispose();
-    const material=f.mesh.material,version=material.version;
-    const matrices=f.root.children.map(o=>[...o.matrix.elements]);
-    const solver=C.createSecondaryMotion(THREE,f.root,payload({bones}));
-    solver.reset();solver.dispose();
-    assert.equal(f.mesh.material,material);
-    assert.equal(material.side,THREE.FrontSide,'unmatched or partial chains must not change materials');
-    assert.equal(material.version,version);assert.equal(material.shadowSide,null);
-    assert.equal(f.bone.matrixAutoUpdate,true);
-    assert.deepEqual(f.root.children.map(o=>[...o.matrix.elements]),matrices);
-  }
-  const sidedBaselineSource=(await promisify(execFile)('git',['show','5665b9ad:packages/scene-render/src/secondaryMotion.ts'],{encoding:'utf8'})).stdout;
-  const sidedBaselineBuild=await build({stdin:{contents:sidedBaselineSource,resolveDir:join(process.cwd(),'packages/scene-render/src'),loader:'ts'},bundle:true,platform:'node',format:'esm',write:false,external:['three']});
-  const sidedBaselineFile=join(dir,'sided-baseline.mjs');await writeFile(sidedBaselineFile,sidedBaselineBuild.outputFiles[0].text);
-  const sidedBaseline=await import(sidedBaselineFile);
-  assert.throws(()=>checkChainMaterialSides(sidedBaseline),/bound chain mesh must render both faces/,'5665b9ad must fail the material-side regression');
-  console.log('ok bound chain materials render both faces; unrelated/unmatched meshes, shared ownership and repeat binding/reset remain stable (5665b9ad fails)');
-  assert.match(tiltViewerSource,/ga-model3d-toolbar/);
-  assert.match(fieldSource,/motionToolbar=\{rigless \? undefined : motionToolbar\}/);
-  assert.match(fieldSource,/motion=\{rigless \? undefined : previewMotion\}/,'status root must reach viewer');
   // Hand derivation: equal masses at midpoints give distal moment
   // m*g*l*(n-j)^2/2; multiplying by equal spans gives squared counts.
   // Total length 0.3 m puts C at 0.15 m. gravity=.6, f=2 gives

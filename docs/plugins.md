@@ -1059,16 +1059,6 @@ this rotated rest. max_deg and soft saturation limit ONLY dynamic deviation
 from T'; rest is limited only by the effective rest_max_deg. Paired groups
 rotate each chain root about its own derived axis. Negative angles move in the
 opposite direction. Changes blend over 1.5 real seconds with smoothstep.
-
-When client-side chain motion binds a chain bone, every material of each mesh
-skinned to a bound chain bone is set to `DoubleSide` and marked `needsUpdate`.
-At large rest angles, linear blend skinning (LBS) can fold triangles in the
-blend zone between the chain and body; culling those triangles produces visible
-holes. Materials are changed in place, never cloned: a material that a bound
-mesh shares with another mesh (or with the template and its clones) renders
-double-sided there too. A mesh that neither has a bound chain bone in its
-skeleton nor shares a material with such a mesh is unaffected.
-
 `gravity`, `freq`, `zeta`, `gain`, `flatten` and `spill` are finite, nonnegative
 multipliers; `freq` multiplies `freq_hz`, not its square. Values may exceed 1.
 Gain/flatten/spill results clamp to [0,1] after all active states. Missing keys
