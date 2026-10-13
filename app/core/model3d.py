@@ -2258,7 +2258,7 @@ def face_retexture_model(character_name: str, signature: Optional[str] = None, *
     image = face_retexture.flatten_photo(face_retexture.photo_path(character_name, signature, meta).read_bytes())
     upscale_meta = {'status': 'off'}
     if upscale:
-        from app.imagegen.base import GenerationCancelled, GpuTaskCancelled, MediaGenerationDisabled, BackendBusyError
+        from app.imagegen.base import GenerationCancelled, GpuTaskCancelled, HubJobLost, MediaGenerationDisabled, BackendBusyError
         from app.core.upscale_reference import require_upscale_backend
         if upscale_backend_glob:
             require_upscale_backend(upscale_backend_glob, character_name)
@@ -2273,7 +2273,9 @@ def face_retexture_model(character_name: str, signature: Optional[str] = None, *
                 cache_path=cache_path)
             image = improved['bytes']
             upscale_meta = {k: v for k, v in improved.items() if k != 'bytes'}
-        except (GenerationCancelled, GpuTaskCancelled, MediaGenerationDisabled):
+        except (GenerationCancelled, GpuTaskCancelled, MediaGenerationDisabled, HubJobLost):
+            # A lost upscale job is terminal for the whole correction — it
+            # must not degrade into "upscale failed, project the raw photo".
             raise
         except Exception as exc:
             upscale_meta = {'status': 'failed', 'error': str(exc),

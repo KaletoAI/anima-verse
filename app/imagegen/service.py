@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Optional
 from app.imagegen import ImageBackend, BACKEND_REGISTRY
 from app.imagegen.backends.openai_mesh import (MESH2MESH_CATEGORY,
                                                MESH_UPLOAD_MAX_BYTES)
-from app.imagegen.base import (BackendBusyError, GenerationCancelled,
+from app.imagegen.base import (BackendBusyError, GenerationCancelled, HubJobLost,
                                MediaGenerationDisabled, media_generation_enabled)
 from app.imagegen.selection import BackendPool
 
@@ -690,9 +690,10 @@ class ImageService:
             else:
                 (result, used), route = run_routed(occasion, _render,
                                                    character=character_name, pool=self.pool)
-        except MediaGenerationDisabled:
+        except (MediaGenerationDisabled, HubJobLost):
             # The world's master switch is not a failed render: the reason has
-            # to reach the caller instead of collapsing into a bare False.
+            # to reach the caller instead of collapsing into a bare False. A
+            # lost hub job is terminal and must not read as "try again".
             raise
         except Exception as e:
             logger.error("generate_video failed: %s", e)
@@ -987,7 +988,7 @@ class ImageService:
                 occ = occasion or "mesh_object"
                 (result, used), route = run_routed(occ, _render, character=character_name,
                                                    pool=self.pool)
-        except (MediaGenerationDisabled, BackendBusyError, NoRouteError):
+        except (MediaGenerationDisabled, BackendBusyError, NoRouteError, HubJobLost):
             # Master switch, not a failed generation — see generate_video.
             raise
         except Exception as e:
@@ -1075,7 +1076,7 @@ class ImageService:
             result, used = self.run_on_backend(backend, _op)
             if "cancelled" in result:
                 raise result["cancelled"]
-        except (MediaGenerationDisabled, BackendBusyError, GenerationCancelled):
+        except (MediaGenerationDisabled, BackendBusyError, GenerationCancelled, HubJobLost):
             raise
         except Exception as e:
             logger.error("generate_mesh_animation failed: %s", e)
@@ -1388,7 +1389,7 @@ class ImageService:
                 backend, _gen, task_type="mesh_generation", agent_name="system")
         try:
             result, used = self.run_on_backend(primary, _op)
-        except MediaGenerationDisabled:
+        except (MediaGenerationDisabled, HubJobLost):
             # Master switch, not a failed generation — see generate_video.
             raise
         except Exception as e:

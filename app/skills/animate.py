@@ -15,7 +15,7 @@ and the ``TOGETHER_ANIMATE_*`` config were retired — see
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
-from app.imagegen.base import MediaGenerationDisabled
+from app.imagegen.base import HubJobLost, MediaGenerationDisabled
 
 logger = get_logger("animate")
 
@@ -81,7 +81,7 @@ def animate_image(source_image_path: str, prompt: str, output_path: str,
             loras=loras,
             seconds=seconds,
             route_out=route_out)
-    except MediaGenerationDisabled:
+    except (MediaGenerationDisabled, HubJobLost):
         raise
     except Exception as e:
         logger.error("animate_image failed: %s", e)

@@ -16,7 +16,7 @@ from app.core.improvements.base import Candidate, CandidateBusy
 from app.core.log import get_logger
 from app.core.task_queue import get_task_queue
 from app.core.timeutils import parse_iso, utc_now, utc_now_iso
-from app.imagegen.base import BackendBusyError, media_generation_enabled
+from app.imagegen.base import BackendBusyError, HubJobLost, media_generation_enabled
 from app.models.world import is_world_frozen
 
 logger = get_logger("improvements.engine")
@@ -298,7 +298,9 @@ def handle_step(payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.warning("improvement step %s/%s failed: %s",
                        improvement_id, key, e, exc_info=True)
         attempts = int(step["attempts"]) + 1
-        if attempts >= MAX_ATTEMPTS:
+        # A lost hub job is terminal: a second attempt would submit the same
+        # work as a new hub job, which is a person's decision, never ours.
+        if attempts >= MAX_ATTEMPTS or isinstance(e, HubJobLost):
             store.mark_result(improvement_id, key, status="skipped",
                               error=str(e), count_attempt=True)
             store.update(improvement_id,

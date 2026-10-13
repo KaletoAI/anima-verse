@@ -942,6 +942,13 @@ class TaskQueue:
                 duration_s = time.monotonic() - t0
                 retry_count = task.get("retry_count", 0)
                 max_retries = task.get("max_retries", 0)
+                # A lost hub job is TERMINAL (app.imagegen.base.HubJobLost):
+                # a retry would run the handler again and submit the same
+                # work as a new hub job — the one thing a lost job must
+                # never get automatically.
+                from app.imagegen.base import HubJobLost
+                if isinstance(e, HubJobLost):
+                    max_retries = retry_count
                 if retry_count < max_retries:
                     logger.warning(
                         "Fehler (Retry %d/%d): %s: %s",

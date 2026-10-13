@@ -80,6 +80,28 @@ class GatewayRejectedError(RuntimeError):
     """
 
 
+class HubJobLost(RuntimeError):
+    """A hub job recorded before a restart can no longer be collected.
+
+    Raised only on the ATTACH path (``hub_ops`` / ``poll_job(attach_since=…)``):
+    the gateway forgot the job (404/410), the job failed or was cancelled on
+    the gateway, the recorded backend is gone or points elsewhere, the record
+    is older than the gateway's 24 h retention, or the restart fell between
+    the POST and storing the job id.
+
+    TERMINAL in every layer: no retry (task queue, improvements), no fallback
+    to the next chain entry, no backend cooldown — and never an automatic new
+    submission. Re-running the work is a person's decision. ``str()`` always
+    starts with ``"Hub job lost: "``.
+    """
+
+    PREFIX = "Hub job lost: "
+
+    def __init__(self, reason: str):
+        text = str(reason or "unknown reason")
+        super().__init__(text if text.startswith(self.PREFIX) else self.PREFIX + text)
+
+
 class GatewayOutputError(RuntimeError):
     """A completed gateway job delivered invalid output (terminal backend defect)."""
 
