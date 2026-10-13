@@ -32,7 +32,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.backends._gateway_job import download_result, poll_job, submit_job, stage_kwargs
+from app.imagegen.backends._gateway_job import download_result, poll_job, submit_job, stage_kwargs, stage_cancel
 from app.imagegen.base import ImageBackend
 
 logger = get_logger("image_backends")
@@ -251,7 +251,7 @@ class OpenAIVideoBackend(ImageBackend):
         job_id = submit_job(self, url, payload, "Video", **stage_kwargs(params))
         if not job_id:
             return []
-        return self._collect(job_id)
+        return self._collect(job_id, should_cancel=stage_cancel(params))
 
     def _collect(self, job_id: str, *, since: Optional[float] = None,
                  should_cancel=None) -> List[bytes]:

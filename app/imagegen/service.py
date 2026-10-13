@@ -648,11 +648,19 @@ class ImageService:
     @staticmethod
     def _hub_route_hook(hub_stage):
         """``run_routed(on_route=…)`` for a staged run: the routing meta goes
-        into the stage record with the job it submits."""
+        into the stage record with the job it submits, and the backend about
+        to run it right away."""
         if hub_stage is None:
             return None
         from app.imagegen.routing import route_meta
-        return lambda route: hub_stage.note_route(route_meta(route))
+        return lambda route: hub_stage.note_route(route_meta(route), route.backend.name)
+
+    @staticmethod
+    def _hub_note_backend(hub_stage, backend) -> None:
+        """An explicit pick runs without routing meta — the stage still learns
+        which backend runs it."""
+        if hub_stage is not None and backend is not None:
+            hub_stage.note_route({}, backend.name)
 
     def generate_video(self, source_image_path: str, action_prompt: str,
                        output_path: str, backend_glob: str = "",
@@ -739,6 +747,7 @@ class ImageService:
 
         try:
             if primary is not None:
+                self._hub_note_backend(hub_stage, primary)
                 (result, used), route = _render(primary), None
             else:
                 (result, used), route = run_routed(occasion, _render,
@@ -795,6 +804,8 @@ class ImageService:
         from app.core.timeutils import utc_now_iso
         from app.imagegen.upscale import cache_identity, normalize_output
         from app.imagegen.routing import route_meta, run_routed, resolve_spec
+        if hub_stage is None and not media_generation_enabled():
+            raise MediaGenerationDisabled("Media generation is disabled for this world")
         with Image.open(io.BytesIO(image_bytes)) as decoded:
             decoded.load()
             input_size = list(decoded.size)
@@ -877,6 +888,7 @@ class ImageService:
             return result, used
 
         if primary is not None:
+            self._hub_note_backend(hub_stage, primary)
             (result, used), route = render(primary), None
         else:
             (result, used), route = run_routed('upscale', render, character=character_name, pool=self.pool,
@@ -947,6 +959,7 @@ class ImageService:
                                                    agent_name=character_name)
             return self.run_on_backend(b, op, character_name=character_name)
         if primary is not None:
+            self._hub_note_backend(hub_stage, primary)
             (result, used), route = render(primary), None
         else:
             (result, used), route = run_routed("face_retexture", render,
@@ -1097,6 +1110,7 @@ class ImageService:
         else:
             try:
                 if primary is not None:
+                    self._hub_note_backend(hub_stage, primary)
                     (result, used), route = _render(primary), None
                 else:
                     occ = occasion or "mesh_object"
@@ -1160,8 +1174,26 @@ class ImageService:
         re-run on another chain entry: a second run would be a second GPU job
         (spec §6). ``blobs`` are the verified variants, ``results`` the
         backend's verdict per delivered result (failed ones with a reason).
+
+        ``hub_stage`` (app/core/hub_ops.py): a job recorded before a restart
+        is collected instead — then ``route`` may be None.
         """
         from app.imagegen.routing import route_meta
+        # A motion job recorded before a restart is collected FIRST — no route
+        # is needed (``route`` may be None then) and no availability check
+        # may throw away a result the hub still holds.
+        attached = self._hub_attached(hub_stage)
+        if attached is not None:
+            blobs = list(attached.get("blobs") or [])
+            results = list(attached.get("results") or [])
+            if not blobs:
+                return {"ok": False, "error": "animation backend returned no usable variant",
+                        "results": results}
+            return {"ok": True, "blobs": blobs, "results": results,
+                    "backend": attached.get("backend", ""), "job_id": attached.get("job_id", ""),
+                    **(attached.get("route") or {})}
+        if route is None:
+            raise ValueError("an animation run needs a route")
         backend = route.backend
         # Checked before the channel handoff: an invalid request is the caller's
         # error and must never put a healthy backend on cooldown.
@@ -1173,19 +1205,7 @@ class ImageService:
                   "on_job_id": (lambda job_id: on_job_id(job_id, backend.name)) if on_job_id else None}
         if hub_stage is not None:
             params["hub_stage"] = hub_stage
-            hub_stage.note_route(route_meta(route))
-        attached = self._hub_attached(hub_stage)
-        if attached is not None:
-            # A motion job recorded before a restart: its verdicts come from
-            # the collection, exactly as a fresh run reports them.
-            blobs = list(attached.get("blobs") or [])
-            results = list(attached.get("results") or [])
-            if not blobs:
-                return {"ok": False, "error": "animation backend returned no usable variant",
-                        "results": results}
-            return {"ok": True, "blobs": blobs, "results": results,
-                    "backend": attached.get("backend", ""), "job_id": attached.get("job_id", ""),
-                    **(attached.get("route") or {})}
+            hub_stage.note_route(route_meta(route), backend.name)
 
         def _op(bb):
             def _gen():
@@ -1293,6 +1313,7 @@ class ImageService:
             return result, used
 
         if primary is not None:
+            self._hub_note_backend(hub_stage, primary)
             (result, used), route = render(primary), None
         else:
             (result, used), route = run_routed(occasion, render, character=character_name, pool=self.pool,
@@ -1552,6 +1573,7 @@ class ImageService:
             return self.run_on_backend_channel(
                 backend, _gen, task_type="mesh_generation", agent_name="system")
         try:
+            self._hub_note_backend(hub_stage, primary)
             result, used = self.run_on_backend(primary, _op)
         except (MediaGenerationDisabled, HubJobLost):
             # Master switch, not a failed generation — see generate_video.

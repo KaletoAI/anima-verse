@@ -7,7 +7,7 @@ from urllib.parse import quote, urljoin
 import requests
 
 from app.imagegen.base import ImageBackend, GatewayRejectedError, GatewayInputMismatchError, GatewayOutputError
-from app.imagegen.backends._gateway_job import submit_job, poll_job, download_result, stage_kwargs
+from app.imagegen.backends._gateway_job import submit_job, poll_job, download_result, stage_kwargs, stage_cancel
 
 
 class OpenAIUpscaleBackend(ImageBackend):
@@ -68,7 +68,7 @@ class OpenAIUpscaleBackend(ImageBackend):
                          **stage_kwargs(params, {'digest': digest}))
         if not job:
             return []
-        return self._collect(job, digest)
+        return self._collect(job, digest, should_cancel=stage_cancel(params))
 
     def _collect(self, job, digest, *, since=None, should_cancel=None):
         """Poll + download half — shared by a fresh run and ``attach``."""

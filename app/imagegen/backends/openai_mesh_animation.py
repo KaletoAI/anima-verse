@@ -21,7 +21,7 @@ from typing import Dict, List
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.backends._gateway_job import poll_job, submit_job, stage_kwargs
+from app.imagegen.backends._gateway_job import poll_job, submit_job, stage_kwargs, stage_cancel
 from app.imagegen.base import ImageBackend
 
 logger = get_logger("image_backends")
@@ -184,7 +184,8 @@ class OpenAIMeshAnimationBackend(ImageBackend):
         cb = params.get("on_job_id")
         if callable(cb):
             cb(job_id)
-        return self._collect(job_id, variants, should_cancel=params.get("should_cancel"))
+        return self._collect(job_id, variants,
+                             should_cancel=params.get("should_cancel") or stage_cancel(params))
 
     def _collect(self, job_id: str, variants: int, *, since=None, should_cancel=None):
         """Poll + download half — shared by a fresh run and ``attach``."""

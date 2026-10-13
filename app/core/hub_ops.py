@@ -74,7 +74,11 @@ class Kind:
     type of its display row. ``reserve(op)`` (optional) takes the in-process
     guards of a THREAD resume synchronously — before the AgentLoop and the
     queue workers start — and returns the function that releases them.
-    ``agent(op)`` names the agent of the display row."""
+    ``agent(op)`` names the agent of the display row.
+
+    The guards are taken on the resumer's thread and released on the resume
+    thread: they must be plain sets or ``threading.Lock`` — never a
+    ``keyed_lock`` (an RLock refuses a release from another thread)."""
     name: str
     resume: Callable[["Op"], Any]
     track_type: str
@@ -126,9 +130,44 @@ def _ops_root() -> Path:
     return get_storage_dir() / OP_DIRNAME
 
 
-def _conn():
-    from app.core.db import get_connection
-    return get_connection()
+_SCHEMA_READY: set = set()
+
+
+class _Db:
+    """A short-lived connection of its own for every hub_ops access: the
+    thread-local ``db.get_connection`` may carry a caller's open transaction,
+    and a commit/rollback here must never commit or drop someone else's
+    writes."""
+
+    def __enter__(self) -> sqlite3.Connection:
+        from app.core.db import _configure, get_db_path
+        path = get_db_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(str(path), timeout=10)
+        _configure(self.conn)
+        if str(path) not in _SCHEMA_READY:
+            # The table belongs to the world schema (init_schema at boot); a
+            # tool that opens a world without it must not fail on the record
+            # of a generation it triggers.
+            from app.core.world_db_schema import SCHEMA_STATEMENTS
+            for stmt in SCHEMA_STATEMENTS:
+                if "hub_ops" in stmt:
+                    self.conn.execute(stmt)
+            _SCHEMA_READY.add(str(path))
+        return self.conn
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        try:
+            if exc_type is None:
+                self.conn.commit()
+            else:
+                self.conn.rollback()
+        finally:
+            self.conn.close()
+
+
+def _conn() -> _Db:
+    return _Db()
 
 
 def _ok(result: Any) -> bool:
@@ -186,7 +225,8 @@ class Op:
         return keyed_lock("hub_op", self.op_id)
 
     def reload(self) -> "Op":
-        row = _conn().execute("SELECT * FROM hub_ops WHERE op_id=?", (self.op_id,)).fetchone()
+        with _conn() as conn:
+            row = conn.execute("SELECT * FROM hub_ops WHERE op_id=?", (self.op_id,)).fetchone()
         if row is not None:
             fresh = Op(row)
             self.state, self.status, self.error = fresh.state, fresh.status, fresh.error
@@ -197,11 +237,10 @@ class Op:
         with self._lock():
             self.reload()
             change(self.state)
-            conn = _conn()
-            conn.execute("UPDATE hub_ops SET state=?, updated_at=? WHERE op_id=?",
-                         (json.dumps(self.state, ensure_ascii=False), utc_now_iso(),
-                          self.op_id))
-            conn.commit()
+            with _conn() as conn:
+                conn.execute("UPDATE hub_ops SET state=?, updated_at=? WHERE op_id=?",
+                             (json.dumps(self.state, ensure_ascii=False), utc_now_iso(),
+                              self.op_id))
 
     def set_fields(self, **fields: Any) -> None:
         allowed = {"track_id", "owner_kind", "owner", "status", "error", "label"}
@@ -209,11 +248,10 @@ class Op:
         if not cols:
             return
         with self._lock():
-            conn = _conn()
             sets = ", ".join(f"{k}=?" for k in cols)
-            conn.execute(f"UPDATE hub_ops SET {sets}, updated_at=? WHERE op_id=?",
-                         (*cols.values(), utc_now_iso(), self.op_id))
-            conn.commit()
+            with _conn() as conn:
+                conn.execute(f"UPDATE hub_ops SET {sets}, updated_at=? WHERE op_id=?",
+                             (*cols.values(), utc_now_iso(), self.op_id))
             for k, v in cols.items():
                 setattr(self, k, v)
 
@@ -282,39 +320,65 @@ class HubStage:
             update(job)
         self.op.update_state(change)
 
+    def _lost(self, reason: str) -> Exception:
+        """Mark the record LOST before the verdict leaves this module — a
+        pipeline that turns the exception into ``{"ok": False}`` must not
+        downgrade it to an ordinary failure (a task retry would then submit
+        the work anew, spec D8)."""
+        from app.imagegen.base import HubJobLost
+        exc = HubJobLost(reason)
+        self.op.update_state(lambda st: st.update(error_kind="lost"))
+        return exc
+
     def prepare(self) -> str:
         """The atomic claim of the stage before anything is submitted.
 
-        ``"attach"`` — a job id is recorded: collect it, never submit.
-        ``"submit"`` — nothing reached the gateway yet (fresh, or a stage that
-        was only claimed while waiting for its GPU slot): submit normally.
+        ``"attach"`` — a job of an EARLIER process is recorded (or its result
+        was collected already): collect it, never submit.
+        ``"submit"`` — nothing reached the gateway yet (fresh, a stage only
+        claimed while waiting for its GPU slot, or a job of THIS process that
+        the pipeline asks for again): submit normally.
         Raises ``HubJobLost`` for a stage left in ``posting`` by a restart —
-        the submission gap: whether the gateway took that POST is unknown, and
-        submitting again could run the same work twice."""
-        from app.imagegen.base import HubJobLost
-        verdict = {"v": "submit"}
+        the submission gap: whether the gateway took that POST is unknown —
+        and for a claimed stage whose routed backend speaks no job protocol
+        (a third-party video API): it may have run without a job id we could
+        collect, and submitting again would pay for it twice."""
+        verdict = {"v": "submit", "backend": ""}
 
         def update(job: Dict[str, Any]) -> None:
-            if job.get("job_id"):
+            earlier = job.get("pid") != _PROCESS_ID
+            if job.get("collected") or (job.get("job_id") and earlier):
                 verdict["v"] = "attach"
                 return
-            if job.get("phase") == "posting" and job.get("pid") != _PROCESS_ID:
+            if earlier and job.get("phase") == "posting":
                 verdict["v"] = "gap"
                 return
+            if earlier and job.get("route_backend"):
+                backend = find_backend(job["route_backend"])
+                if backend is not None and not callable(getattr(backend, "attach", None)):
+                    verdict["v"], verdict["backend"] = "foreign", backend.name
+                    return
             job.clear()
             job.update(phase="claimed", claimed_at=utc_now_iso(), pid=_PROCESS_ID)
         self._set_job(update)
         if verdict["v"] == "gap":
-            raise HubJobLost(f"the restart interrupted the submission of stage "
+            raise self._lost(f"the restart interrupted the submission of stage "
                              f"'{self.name}' — no job id was recorded, so the job "
                              f"cannot be collected (it may run orphaned on the hub)")
+        if verdict["v"] == "foreign":
+            raise self._lost(f"stage '{self.name}' ran on '{verdict['backend']}', which "
+                             f"has no hub job to collect after a restart")
         return verdict["v"]
 
     # -- hooks called by _gateway_job.submit_job (GPU worker thread) -------
-    def note_route(self, meta: Optional[Dict[str, Any]]) -> None:
+    def note_route(self, meta: Optional[Dict[str, Any]], backend: str = "") -> None:
         """The routing meta of the run (``routing.route_meta``), stored with
-        the job so a resumed result carries the same marks."""
+        the job so a resumed result carries the same marks — and the backend
+        about to run the stage, persisted at once: a backend without a job
+        protocol never reports a job id, and a resume must know it ran there."""
         self._route = dict(meta or {})
+        if backend:
+            self._set_job(lambda job: job.update(route_backend=backend))
 
     def posting(self, backend: Any) -> None:
         def update(job: Dict[str, Any]) -> None:
@@ -369,48 +433,61 @@ class HubStage:
             have = self.collected()
             if have is not None:
                 return have
-            job = self.job
-            job_id = str(job.get("job_id") or "")
-            if not job_id:
-                raise RuntimeError(f"stage '{self.name}' has no job to collect")
+            if self.op.status == FAILED:
+                # The collection ahead of this handler failed while it waited.
+                if self.op.state.get("error_kind") == "lost":
+                    raise HubJobLost(self.op.error or "collection failed")
+                raise RuntimeError(self.op.error or "collection failed")
             try:
-                since = parse_iso(job["submitted_at"]).timestamp()
-            except (KeyError, TypeError, ValueError):
-                raise HubJobLost(f"job {job_id}: unreadable submission stamp")
-            if utc_now().timestamp() - since > MAX_AGE_S:
-                raise HubJobLost(f"job {job_id} is older than 24 h (gateway retention)")
-            backend = find_backend(job.get("backend") or "")
-            if backend is None:
-                raise HubJobLost(f"backend '{job.get('backend')}' of job {job_id} "
-                                 f"is no longer configured")
-            if (getattr(backend, "api_url", "") or "").rstrip("/") != \
-                    str(job.get("api_url") or "").rstrip("/"):
-                raise HubJobLost(f"backend '{backend.name}' now points to another "
-                                 f"gateway than job {job_id}")
-            attach = getattr(backend, "attach", None)
-            if not callable(attach):
-                raise HubJobLost(f"backend '{backend.name}' cannot collect jobs")
-            logger.info("hub op %s (%s): collecting job %s of stage %s from %s",
-                        self.op.op_id, self.op.kind, job_id, self.name, backend.name)
-            blobs = attach(job_id, dict(job.get("attach_params") or {}), since=since,
-                           should_cancel=self.op.should_cancel)
-            meta = {
-                "count": len(blobs or []),
-                "files": list(getattr(backend, "last_result_files", []) or []),
-                "rig": getattr(backend, "last_result_rig", None),
-                "results": list(getattr(backend, "last_result_meta", []) or []),
-                "backend": backend.name,
-                "job_id": job_id,
-                "route": dict(job.get("route") or {}),
-            }
-            directory = self._job_dir()
-            directory.mkdir(parents=True, exist_ok=True)
-            for i, blob in enumerate(blobs or []):
-                (directory / f"{i}.bin").write_bytes(blob)
-            (directory / "meta.json").write_text(json.dumps(meta, ensure_ascii=False),
-                                                 encoding="utf-8")
-            self._set_job(lambda j: j.update(collected=True, phase="collected"))
-            return {**meta, "blobs": list(blobs or [])}
+                return self._collect_locked()
+            except HubJobLost:
+                self.op.update_state(lambda st: st.update(error_kind="lost"))
+                raise
+
+    def _collect_locked(self) -> Dict[str, Any]:
+        from app.imagegen.base import HubJobLost
+        job = self.job
+        job_id = str(job.get("job_id") or "")
+        if not job_id:
+            raise RuntimeError(f"stage '{self.name}' has no job to collect")
+        try:
+            since = parse_iso(job["submitted_at"]).timestamp()
+        except (KeyError, TypeError, ValueError):
+            raise HubJobLost(f"job {job_id}: unreadable submission stamp")
+        if utc_now().timestamp() - since > MAX_AGE_S:
+            raise HubJobLost(f"job {job_id} is older than 24 h (gateway retention)")
+        backend = find_backend(job.get("backend") or "")
+        if backend is None:
+            raise HubJobLost(f"backend '{job.get('backend')}' of job {job_id} "
+                             f"is no longer configured")
+        if (getattr(backend, "api_url", "") or "").rstrip("/") != \
+                str(job.get("api_url") or "").rstrip("/"):
+            raise HubJobLost(f"backend '{backend.name}' now points to another "
+                             f"gateway than job {job_id}")
+        attach = getattr(backend, "attach", None)
+        if not callable(attach):
+            raise HubJobLost(f"backend '{backend.name}' cannot collect jobs")
+        logger.info("hub op %s (%s): collecting job %s of stage %s from %s",
+                    self.op.op_id, self.op.kind, job_id, self.name, backend.name)
+        blobs = attach(job_id, dict(job.get("attach_params") or {}), since=since,
+                       should_cancel=self.op.should_cancel)
+        meta = {
+            "count": len(blobs or []),
+            "files": list(getattr(backend, "last_result_files", []) or []),
+            "rig": getattr(backend, "last_result_rig", None),
+            "results": list(getattr(backend, "last_result_meta", []) or []),
+            "backend": backend.name,
+            "job_id": job_id,
+            "route": dict(job.get("route") or {}),
+        }
+        directory = self._job_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        for i, blob in enumerate(blobs or []):
+            (directory / f"{i}.bin").write_bytes(blob)
+        (directory / "meta.json").write_text(json.dumps(meta, ensure_ascii=False),
+                                             encoding="utf-8")
+        self._set_job(lambda j: j.update(collected=True, phase="collected"))
+        return {**meta, "blobs": list(blobs or [])}
 
 
 # One id per process: a ``posting`` stage written by THIS process is a live
@@ -420,13 +497,14 @@ _PROCESS_ID = uuid.uuid4().hex
 
 
 def find_backend(name: str) -> Any:
-    """The configured, enabled backend of that name, or None."""
+    """The configured backend of that name, or None. Enabled or not: a backend
+    switched off for NEW work still collects what it already ran."""
     if not name:
         return None
     try:
         from app.imagegen.service import get_image_service
         for b in get_image_service().backends:
-            if b.name == name and getattr(b, "instance_enabled", True):
+            if b.name == name:
                 return b
     except Exception as e:  # noqa: BLE001
         logger.warning("hub_ops: backend lookup failed: %s", e)
@@ -459,17 +537,17 @@ def create(kind: str, subject: str, inputs: Dict[str, Any], *, label: str = "",
     owner = "" if thread_owned else current_owner()
     op_id = f"hop_{uuid.uuid4().hex[:12]}"
     now = utc_now_iso()
-    conn = _conn()
     try:
-        conn.execute(
-            "INSERT INTO hub_ops (op_id, kind, subject, status, inputs, state, owner_kind, "
-            "owner, track_id, label, error, created_at, updated_at) "
-            "VALUES (?, ?, ?, 'running', ?, '{}', ?, ?, ?, ?, '', ?, ?)",
-            (op_id, kind, subject, json.dumps(inputs, ensure_ascii=False),
-             "task" if owner else "thread", owner, track_id, label, now, now))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        conn.rollback()
+        with _conn() as conn:
+            conn.execute(
+                "INSERT INTO hub_ops (op_id, kind, subject, status, inputs, state, owner_kind, "
+                "owner, track_id, label, error, created_at, updated_at) "
+                "VALUES (?, ?, ?, 'running', ?, '{}', ?, ?, ?, ?, '', ?, ?)",
+                (op_id, kind, subject, json.dumps(inputs, ensure_ascii=False),
+                 "task" if owner else "thread", owner, track_id, label, now, now))
+    except sqlite3.IntegrityError as exc:
+        if "hub_ops.subject" not in str(exc):
+            raise
         raise HubOpBusy(f"a hub job for this target is already in progress ({subject})")
     logger.info("hub op %s created: %s %s (owner %s)", op_id, kind, subject,
                 owner or "thread")
@@ -477,13 +555,15 @@ def create(kind: str, subject: str, inputs: Dict[str, Any], *, label: str = "",
 
 
 def get(op_id: str) -> Optional[Op]:
-    row = _conn().execute("SELECT * FROM hub_ops WHERE op_id=?", (op_id,)).fetchone()
+    with _conn() as conn:
+        row = conn.execute("SELECT * FROM hub_ops WHERE op_id=?", (op_id,)).fetchone()
     return Op(row) if row is not None else None
 
 
 def list_ops() -> List[Op]:
-    return [Op(r) for r in _conn().execute(
-        "SELECT * FROM hub_ops ORDER BY created_at, op_id").fetchall()]
+    with _conn() as conn:
+        rows = conn.execute("SELECT * FROM hub_ops ORDER BY created_at, op_id").fetchall()
+    return [Op(r) for r in rows]
 
 
 def find_open(kind: str, match: Callable[[Dict[str, Any]], bool]) -> Optional[Op]:
@@ -495,9 +575,10 @@ def find_open(kind: str, match: Callable[[Dict[str, Any]], bool]) -> Optional[Op
     owner = current_owner()
     if not owner:
         return None
-    rows = _conn().execute(
-        "SELECT * FROM hub_ops WHERE kind=? AND owner_kind='task' AND owner=? "
-        "ORDER BY created_at", (kind, owner)).fetchall()
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM hub_ops WHERE kind=? AND owner_kind='task' AND owner=? "
+            "ORDER BY created_at", (kind, owner)).fetchall()
     for row in rows:
         op = Op(row)
         try:
@@ -509,9 +590,8 @@ def find_open(kind: str, match: Callable[[Dict[str, Any]], bool]) -> Optional[Op
 
 
 def delete(op: Op) -> None:
-    conn = _conn()
-    conn.execute("DELETE FROM hub_ops WHERE op_id=?", (op.op_id,))
-    conn.commit()
+    with _conn() as conn:
+        conn.execute("DELETE FROM hub_ops WHERE op_id=?", (op.op_id,))
     shutil.rmtree(op.dir, ignore_errors=True)
 
 
@@ -547,9 +627,10 @@ def open_task_inputs(kind: str) -> List[Dict[str, Any]]:
     owner = current_owner()
     if not owner:
         return []
-    rows = _conn().execute(
-        "SELECT inputs FROM hub_ops WHERE kind=? AND owner_kind='task' AND owner=?",
-        (kind, owner)).fetchall()
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT inputs FROM hub_ops WHERE kind=? AND owner_kind='task' AND owner=?",
+            (kind, owner)).fetchall()
     out = []
     for row in rows:
         try:
@@ -561,18 +642,26 @@ def open_task_inputs(kind: str) -> List[Dict[str, Any]]:
 
 def settle(op: Op, result: Any) -> None:
     """The run of ``op`` returned: deleted after a published success, failed
-    (error stored, then deleted) otherwise."""
+    (error stored, then deleted) otherwise — a LOST stage (marked by the
+    stage handle even when the pipeline turned the verdict into
+    ``{"ok": False}``) stays a task's tombstone."""
     if _ok(result):
         delete(op)
-    else:
-        fail(op, _error_of(result))
+        return
+    op.reload()
+    lost = op.state.get("error_kind") == "lost"
+    error = _error_of(result)
+    if lost and not error.startswith("Hub job lost"):
+        error = "Hub job lost: " + error
+    fail(op, error, lost=lost, keep=lost and op.owner_kind == "task")
 
 
 def settle_error(op: Op, exc: BaseException) -> None:
     """The run of ``op`` raised. A task's lost job stays as a tombstone (see
     ``raise_failed``); everything else is stored and deleted."""
     from app.imagegen.base import HubJobLost
-    lost = isinstance(exc, HubJobLost)
+    op.reload()
+    lost = isinstance(exc, HubJobLost) or op.state.get("error_kind") == "lost"
     fail(op, str(exc) or type(exc).__name__, lost=lost,
          keep=lost and op.owner_kind == "task")
 
@@ -684,6 +773,9 @@ def _collect_ahead(op: Op) -> None:
     retention cannot run out under it. The handler does the rest. A failure
     is stored on the record (``keep``): the handler reports it."""
     from app.imagegen.base import HubJobLost
+    from app.core.task_queue import get_task_queue
+    owner = op.owner
+    op.should_cancel = lambda: get_task_queue().task_status(owner) == "cancelled"
     for name, job in op.jobs().items():
         if not job.get("job_id") or job.get("collected"):
             continue
@@ -698,8 +790,12 @@ def _collect_ahead(op: Op) -> None:
 
 
 def _drop(op: Op, reason: str) -> None:
-    _cancel_jobs(op)
-    fail(op, reason)
+    """End an operation nobody will continue: its hub jobs are cancelled
+    (best effort, on a thread — no HTTP on the startup path) and the record
+    is deleted."""
+    fail(op, reason, keep=True)
+    threading.Thread(target=lambda: (_cancel_jobs(op), delete(op)), daemon=True,
+                     name=f"hub-drop-{op.op_id}").start()
 
 
 def adopt_as_thread(op: Op) -> None:
@@ -719,8 +815,9 @@ def release_task_ops(task_id: str, cancelled: bool = False) -> None:
     one that should have reported it, and it is over."""
     if not task_id:
         return
-    rows = _conn().execute(
-        "SELECT * FROM hub_ops WHERE owner_kind='task' AND owner=?", (task_id,)).fetchall()
+    with _conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM hub_ops WHERE owner_kind='task' AND owner=?", (task_id,)).fetchall()
     for row in rows:
         op = Op(row)
         if op.status == FAILED:
@@ -743,6 +840,11 @@ def start_resumer() -> Dict[str, int]:
     from app.core.task_queue import get_task_queue
     register_builtin_kinds()
     tq = get_task_queue()
+    if list_ops():
+        # Build the (lazy) image service once, here, before several resume
+        # threads would race to construct it.
+        from app.imagegen.service import get_image_service
+        get_image_service()
     counts = {"resumed": 0, "collecting": 0, "dropped": 0, "reported": 0}
     for op in list_ops():
         task_status = tq.task_status(op.owner) if op.owner_kind == "task" else ""

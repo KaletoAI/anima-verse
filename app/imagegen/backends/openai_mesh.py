@@ -70,7 +70,7 @@ from urllib.parse import unquote, urlparse
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.backends._gateway_job import poll_job, submit_job, stage_kwargs
+from app.imagegen.backends._gateway_job import poll_job, submit_job, stage_kwargs, stage_cancel
 from app.imagegen.base import GatewayRejectedError, GatewayInputMismatchError, ImageBackend
 
 logger = get_logger("image_backends")
@@ -692,7 +692,7 @@ class OpenAIMeshBackend(ImageBackend):
             return []
 
         self._tls.job_id = job_id
-        return self._collect(job_id)
+        return self._collect(job_id, should_cancel=stage_cancel(params))
 
     def _collect(self, job_id: str, *, since: Optional[float] = None,
                  should_cancel=None) -> List[bytes]:

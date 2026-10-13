@@ -469,6 +469,8 @@ class TaskQueue:
         """Cancels a pending or running task. Returns True if cancelled."""
         now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
+            row = conn.execute("SELECT status FROM tasks WHERE task_id=?",
+                               (task_id,)).fetchone()
             cur = conn.execute(
                 """UPDATE tasks SET status='cancelled', completed_at=?, error='Cancelled'
                    WHERE task_id=? AND status IN ('pending', 'running')""",
@@ -476,6 +478,15 @@ class TaskQueue:
             conn.commit()
         if cur.rowcount:
             logger.info("Task abgebrochen: %s", task_id)
+            if row is not None and row["status"] == "pending":
+                # A pending task never reaches the worker again: the hub
+                # operations it left open (a restart) go with it now. A running
+                # one is released by its worker when the handler returns.
+                try:
+                    from app.core.hub_ops import release_task_ops
+                    release_task_ops(task_id, cancelled=True)
+                except Exception as rel_err:  # noqa: BLE001
+                    logger.warning("hub ops of %s not released: %s", task_id, rel_err)
             return True
         logger.warning("Task nicht gefunden oder nicht pending/running: %s", task_id)
         return False
@@ -976,7 +987,6 @@ class TaskQueue:
                 "Verarbeite: %s (%s) queue=%s agent=%s",
                 task_id, task_type, task.get("queue_name", ""), task.get("agent_name", ""))
             t0 = time.monotonic()
-            final = True
             _worker_ctx.task_id = task_id
             try:
                 payload = json.loads(task["payload"])
@@ -998,7 +1008,6 @@ class TaskQueue:
                 if isinstance(e, HubJobLost):
                     max_retries = retry_count
                 if retry_count < max_retries:
-                    final = False
                     logger.warning(
                         "Fehler (Retry %d/%d): %s: %s",
                         retry_count + 1, max_retries, task_id, e)
@@ -1010,14 +1019,17 @@ class TaskQueue:
                     self._finish_task(task_id, "failed", error=str(e), duration_s=duration_s)
             finally:
                 _worker_ctx.task_id = ""
+            # Final = anything but back to pending: a retry of a task that was
+            # cancelled meanwhile leaves the row cancelled, and that is final.
+            status_now = self.task_status(task_id)
+            final = status_now != "pending"
             if final:
                 # A hub operation the handler left open (it skipped the
                 # producer, or ended before reaching it) continues on its own
                 # thread; a cancelled task takes its hub jobs along.
                 try:
                     from app.core.hub_ops import release_task_ops
-                    release_task_ops(task_id,
-                                     cancelled=self.task_status(task_id) == "cancelled")
+                    release_task_ops(task_id, cancelled=status_now == "cancelled")
                 except Exception as rel_err:  # noqa: BLE001
                     logger.warning("hub ops of %s not released: %s", task_id, rel_err)
 

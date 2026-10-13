@@ -184,6 +184,15 @@ def stage_kwargs(params: Dict[str, Any],
     return {"stage": stage, "attach_params": dict(attach_params or {})}
 
 
+def stage_cancel(params: Dict[str, Any]) -> Optional[Callable[[], bool]]:
+    """The cancel check of the run's hub operation — set only on a RESUMED
+    operation (its display row's cancel button, spec D6); None otherwise, so
+    a normal run polls exactly as before."""
+    stage = (params or {}).get("hub_stage")
+    op = getattr(stage, "op", None)
+    return getattr(op, "should_cancel", None)
+
+
 def _cancel_lost_job(backend: ImageBackend, job_id: str) -> None:
     """Best-effort ``POST /v1/jobs/{id}/cancel`` for a job we give up on.
 
@@ -359,30 +368,28 @@ def _poll_attached(backend: ImageBackend, job_id: str, *, since: float,
 
     LOST (``HubJobLost``, terminal — never a resubmission): 410, three 404 in
     a row, 401/403 (the job is not readable with this key), the job failed or
-    was cancelled on the gateway, the record is older than 24 h, the time
-    budget (``since + max_queue_wait + max_wait``) ran out, or a finished
-    job's results did not download ``_ATTACH_MAX_EMPTY`` times. UNREACHABLE
-    (connection error, 5xx, an unreadable body) is not lost: the poll backs
-    off up to 30 s and keeps asking until the 24 h are over.
+    was cancelled on the gateway, the record is older than 24 h, a job still
+    QUEUED or RUNNING past its time budget (``since + max_queue_wait +
+    max_wait``), or a finished job's results did not download
+    ``_ATTACH_MAX_EMPTY`` times. UNREACHABLE (connection error, 5xx, an
+    unreadable body) is not lost: the poll backs off up to 30 s and keeps
+    asking until the 24 h are over — the budget never applies to it, and
+    never to a job that is already done.
 
-    The first poll goes out at once — a job that finished while we were down
-    is collected without waiting. No GPU slot and no master switch: nothing
-    is generated, the job already ran."""
+    The first poll goes out at once and always goes out — a job that finished
+    while we were down is collected without waiting, however long Anima was
+    away (within the 24 h). No GPU slot and no master switch: nothing is
+    generated, the job already ran."""
     deadline = since + min(max(0.0, budget_s), ATTACH_MAX_AGE_S)
     pause = max(0.5, float(poll_interval))
     misses_404 = 0
     empty = 0
     first = True
     while True:
-        now = time.time()
-        if now - since > ATTACH_MAX_AGE_S:
-            raise HubJobLost(f"{backend.name}: job {job_id} is older than 24 h "
-                             f"(gateway retention)")
-        if now > deadline:
-            _cancel_lost_job(backend, job_id)
-            raise HubJobLost(f"{backend.name}: job {job_id} did not finish "
-                             f"within its time budget")
         if not first:
+            if time.time() - since > ATTACH_MAX_AGE_S:
+                raise HubJobLost(f"{backend.name}: job {job_id} is older than 24 h "
+                                 f"(gateway retention)")
             time.sleep(pause)
         first = False
         if should_cancel is not None and should_cancel():
@@ -431,6 +438,10 @@ def _poll_attached(backend: ImageBackend, job_id: str, *, since: float,
             raise HubJobLost(f"{backend.name}: job {job_id} failed on the "
                              f"gateway: {detail}")
         if status not in ("done", "completed"):
+            if status in ("queued", "running") and time.time() > deadline:
+                _cancel_lost_job(backend, job_id)
+                raise HubJobLost(f"{backend.name}: job {job_id} did not finish "
+                                 f"within its time budget")
             pause = max(0.5, float(poll_interval))
             if status == "running" and sd.get("progress") is not None:
                 logger.info("%s: job %s running (collect after restart) — "
