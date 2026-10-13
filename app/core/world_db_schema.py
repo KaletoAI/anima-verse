@@ -60,6 +60,28 @@ def rooms_rebuild_needed(table_info) -> bool:
 
 
 SCHEMA_STATEMENTS = [
+    # Hub operations (docs/hub-job-resume.md): one row per long AI-hub job
+    # chain in flight — frozen inputs, stage state, owner. Deleted once the
+    # result is published; a row that survives a restart is what gets
+    # resumed. The PARTIAL unique index is the atomic claim of a target: two
+    # running operations on the same subject can never coexist.
+    """CREATE TABLE IF NOT EXISTS hub_ops (
+        op_id       TEXT PRIMARY KEY,
+        kind        TEXT NOT NULL,
+        subject     TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'running',
+        inputs      TEXT NOT NULL DEFAULT '{}',
+        state       TEXT NOT NULL DEFAULT '{}',
+        owner_kind  TEXT NOT NULL DEFAULT 'thread',
+        owner       TEXT NOT NULL DEFAULT '',
+        track_id    TEXT NOT NULL DEFAULT '',
+        label       TEXT NOT NULL DEFAULT '',
+        error       TEXT NOT NULL DEFAULT '',
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+    )""",
+    """CREATE UNIQUE INDEX IF NOT EXISTS idx_hub_ops_subject_running
+       ON hub_ops (subject) WHERE status = 'running'""",
     # ── Core / World ────────────────────────────────────────────────────
     """CREATE TABLE IF NOT EXISTS world_kv (
         key   TEXT PRIMARY KEY,

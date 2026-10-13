@@ -504,7 +504,8 @@ MAX_REENTRIES = 2
 
 def run_routed(occasion: str, render: Callable[[Any], Any], *,
                character: str = "", has_ref: bool = False,
-               pool: Any = None) -> Tuple[Any, Route]:
+               pool: Any = None,
+               on_route: Optional[Callable[[Route], None]] = None) -> Tuple[Any, Route]:
     """Resolve the occasion's chain and run ``render(backend)``; when the
     render FAILS on that backend (``BackendFailedError`` — raised only after
     ``run_on_backend`` cooled the backend down, or a delivery rig mismatch
@@ -530,12 +531,18 @@ def run_routed(occasion: str, render: Callable[[Any], Any], *,
     entry was skipped (coordinator decision 2). Only a re-run that moves
     past the intended entry is marked.
 
+    ``on_route`` (optional) is told every Route right before ``render`` runs
+    on it — a hub operation stores the routing meta with the job it submits,
+    so a result collected after a restart carries the same marks.
+
     Returns ``(render result, the Route that produced it)``."""
     from app.imagegen.base import BackendFailedError
     route = resolve_image_route(occasion, character=character, has_ref=has_ref,
                                 probe=True, pool=pool)
     failed: List[str] = []
     while True:
+        if on_route is not None:
+            on_route(route)
         try:
             result = render(route.backend)
         except BackendFailedError as e:
