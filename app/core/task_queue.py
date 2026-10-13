@@ -887,6 +887,7 @@ class TaskQueue:
                 "SELECT status FROM tasks WHERE task_id=? AND task_origin='tracked'",
                 (task_id,)).fetchone()
         if not row or row[0] not in ("pending", "running"):
+            self._held_tracks.discard(task_id)
             return False
         self.track_finish(task_id, error=error)
         return True

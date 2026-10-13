@@ -1,4 +1,5 @@
 """Image generation service with cost-based backend selection"""
+import threading
 import hashlib
 import base64
 import functools
@@ -641,7 +642,6 @@ class ImageService:
         from app.core.hub_ops import find_backend
         backend = find_backend(attached.get("backend") or "")
         if backend is None:
-            from app.imagegen.base import HubJobLost
             raise HubJobLost(f"backend '{attached.get('backend')}' is no longer configured")
         return backend
 
@@ -2939,11 +2939,19 @@ class ImageService:
 _service: Optional[ImageService] = None
 
 
+_service_lock = threading.Lock()
+
+
 def get_image_service() -> ImageService:
-    """Lazy singleton. Rebuilt after reset_image_service() (config reload)."""
+    """Lazy singleton. Rebuilt after reset_image_service() (config reload).
+    Built under a lock: hub-job resume threads may ask for it at the same
+    moment right after a restart, and two pools would mean two sets of
+    backend objects."""
     global _service
     if _service is None:
-        _service = ImageService()
+        with _service_lock:
+            if _service is None:
+                _service = ImageService()
     return _service
 
 

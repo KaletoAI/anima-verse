@@ -193,7 +193,8 @@ des bisherigen `_generate`, **herausgezogen**, nicht kopiert (`_collect`).
 ### 3.4 Verloren vs. nicht erreichbar (`poll_job(attach_since=…)`)
 
 **Verloren** → `HubJobLost` (neu in `app/imagegen/base.py`, Text beginnt mit „Hub job lost:“):
-410, 3× 404, Job-Status `failed`/`error`/`cancelled`, Backend nicht mehr konfiguriert oder `api_url` geändert,
+410, 3× 404, 401/403, Job-Status `failed`/`error`/`cancelled`, Backend nicht mehr konfiguriert oder `api_url` geändert,
+eine beanspruchte Stufe auf einem Backend ohne Job-Protokoll (Drittanbieter-Video, lokaler Upscaler),
 `submitted_at` älter als 24 h (ohne HTTP-Aufruf), Zeitbudget D5 überschritten, Absendelücke D1, Ergebnis nach
 10 Versuchen nicht herunterladbar.
 
@@ -332,5 +333,9 @@ Weiter grün: `smoke_imports_resolve.py`, `smoke_auth_gate.py`, `smoke_profile_r
   (Haupt- und LOD-Dateien) stehen vorher im Zustand, Seiteneffekte wie `request_lod` können doppelt anlaufen
   (idempotent).
 - D9: Unabhängige Auto-Produzenten können ein nach Verlust fehlendes Asset später neu erzeugen.
+- Ein Task-Auftrag in einer dauerhaft pausierten Queue hält sein Ziel belegt, bis der Task läuft
+  (sein Job wird trotzdem sofort abgeholt).
+- Die gemeinsame Puppet-/Referenz-Rig-Datei der Posen-Animation wird über den Pfad genutzt, nicht je
+  Job eingefroren.
 - Die Posen-Animation holt pausierte Queues über denselben Abholweg ab; ihr Konvertieren braucht Blender und
   läuft erst im Handler.

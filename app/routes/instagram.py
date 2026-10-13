@@ -605,8 +605,6 @@ def _publish_instagram_video(op, video_file, route: Dict[str, Any],
     from pathlib import Path as _Path
     inputs = op.inputs
     post_id = inputs["post_id"]
-    if not get_post(post_id):
-        return {"ok": False, "error": "post deleted during the animation"}
     target = _Path(inputs["output_path"])
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(_Path(video_file).read_bytes())

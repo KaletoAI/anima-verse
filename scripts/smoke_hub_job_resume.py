@@ -76,6 +76,8 @@ What is expected, derived by hand from the spec (section numbers):
               (raw blobs in the record dir, 0 POSTs), its handler not run; a
               failed thread record is reported and deleted; an unknown kind is
               dropped and its hub job cancelled.
+  C4b         a record whose mesh stage is done and whose rig job is out:
+              only the rig counts as in flight (collected ahead / cancelled).
   C5 (§ 5.6)  pose animation: progress + an open record with a submitted job →
               the handler attaches (no cancel, no LLM, no second submission)
               and ends in awaiting_choice.
@@ -863,6 +865,17 @@ check("C4 the thread record was resumed (and ended: its prop is gone)",
 check("C4 ... and the job of the deleted target was cancelled (§ 3.6)",
       jid_gone in HUB.cancels and HUB.gets.get(jid_gone, 0) == 0, str(HUB.cancels))
 check("C4 counts", counts.get("resumed") == 1 and counts.get("collecting") == 1, str(counts))
+
+# C4b — a two-stage record: the collection ahead picks the stage IN FLIGHT,
+# never the finished stage whose job id the record still carries.
+two = hub_ops.create("smoke_video", "c4b", {}, label="c4b")
+two.update_state(lambda st: st.setdefault("jobs", {}).update(
+    mesh={"phase": "submitted", "job_id": "job-mesh", "pid": "dead-process"},
+    rig={"phase": "submitted", "job_id": "job-rig", "pid": "dead-process"}))
+two.complete("mesh", {})
+check("C4b only the rig stage is in flight", list(hub_ops._in_flight(hub_ops.get(two.op_id))) == ["rig"],
+      str(list(hub_ops._in_flight(hub_ops.get(two.op_id)))))
+hub_ops.delete(two)
 
 # C5
 from app.core import pose_animation as pa  # noqa: E402

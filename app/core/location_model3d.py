@@ -42,6 +42,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from app.core import hub_ops
 from app.core.log import get_logger
 from app.core.model_store import (DEFAULT_TIER, ModelGallery, normalize_tier,
                                   read_sidecar, write_sidecar)
@@ -1241,25 +1242,6 @@ _OP_MESH = "location_mesh"
 _OP_SHRINK = "location_shrink"
 
 
-def _op_gallery_path(op, gallery: ModelGallery, key: str, suffix: str) -> Path:
-    """The gallery target ``key`` of a publish, chosen ONCE and remembered in
-    the record before anything is written."""
-    stored = op.result("publish").get(key)
-    if stored:
-        return Path(stored)
-    return Path(op.remember("publish", **{key: str(gallery.new_path(suffix))})[key])
-
-
-def _op_result(op, res: Dict[str, Any]) -> Dict[str, Any]:
-    """A service result as JSON for the record (file paths relative)."""
-    out = {k: v for k, v in res.items()
-           if isinstance(v, (str, int, float, bool, dict, list)) or v is None}
-    for key in ("path", "texture_path"):
-        if out.get(key):
-            out[key] = op.rel(out[key])
-    return out
-
-
 def _resume_open(op):
     from app.core import hub_ops
     if op.status == hub_ops.FAILED:
@@ -1427,12 +1409,12 @@ def _mesh_stages(op) -> Dict[str, Any]:
             target = op.path("mesh", f"lod_{i}.{st.get('format') or 'glb'}")
             target.write_bytes(st["blob"])
             stages.append({k: v for k, v in st.items() if k != "blob"} | {"file": op.rel(target)})
-        op.complete("mesh", {**_op_result(op, res), "stages": stages})
+        op.complete("mesh", {**hub_ops.result_json(op, res), "stages": stages})
     res = op.result("mesh")
     built = op.abs(res["path"])
 
     gallery = _gallery(owner, room_id)
-    path = _op_gallery_path(op, gallery, "path", built.suffix or ".glb")
+    path = hub_ops.gallery_path(op, gallery, "path", built.suffix or ".glb")
     path.write_bytes(built.read_bytes())
     meta = {
         "created_at": utc_now_iso(),
@@ -1469,7 +1451,7 @@ def _mesh_stages(op) -> Dict[str, Any]:
                             source_image, texture_size,
                             routing={k: res[k] for k in ("routing", "fallback_from")
                                      if res.get(k)},
-                            path_for=lambda i, fmt: _op_gallery_path(op, gallery, f"lod_{i}", f".{fmt}"))
+                            path_for=lambda i, fmt: hub_ops.gallery_path(op, gallery, f"lod_{i}", f".{fmt}"))
     if low:
         select_model(location_id, low, room_id, LOW_TIER)
         logger.info("Location model %s: LOD stage %s selected as low "
@@ -1577,8 +1559,11 @@ def _shrink(location_id: str, source_file: str, backend_glob: str,
             "backend_glob": backend_glob, "face_num": face_num,
             "texture_size": texture_size,
         }, label=label, track_id=task_id)
-        result = hub_ops.execute(op, lambda: (op.freeze_file(src, "inputs", src.name),
-                                              _shrink_stages(op))[1])
+
+        def run():
+            op.freeze_file(src, "inputs", src.name)  # inside the settled run
+            return _shrink_stages(op)
+        result = hub_ops.execute(op, run)
         if not result.get("ok"):
             error = str(result.get("error") or "shrink failed")
         return result
@@ -1616,11 +1601,11 @@ def _shrink_stages(op) -> Dict[str, Any]:
             error = str(res.get("error") or "shrink failed")
             logger.error("Location model %s shrink failed: %s", owner, error)
             return {"ok": False, "error": error}
-        op.complete("shrink", _op_result(op, res))
+        op.complete("shrink", hub_ops.result_json(op, res))
     res = op.result("shrink")
     built = op.abs(res["path"])
     gallery = _gallery(owner, room_id)
-    path = _op_gallery_path(op, gallery, "path", built.suffix or ".glb")
+    path = hub_ops.gallery_path(op, gallery, "path", built.suffix or ".glb")
     path.write_bytes(built.read_bytes())
     meta = {
         "created_at": utc_now_iso(),

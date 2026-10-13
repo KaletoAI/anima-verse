@@ -64,10 +64,12 @@ a fresh result. Without a stage everything behaves as before.
 ## Lost jobs
 
 `HubJobLost` (`app/imagegen/base.py`, text starts with `Hub job lost:`) ends an operation when its
-job cannot be collected: the gateway answers 404 (three times) or 410, the job failed or was
-cancelled on the gateway, the recorded backend is gone or points to another gateway, the job is
-older than 24 h, a job still queued or running is past its time budget, or its results cannot be
-downloaded. An unreachable gateway (connection error, 5xx) is **not** lost: it is polled with up to
+job cannot be collected: the gateway answers 404 (three times) or 410, or 401/403 (the job is not
+readable with this backend's key), the job failed or was cancelled on the gateway, the recorded
+backend is gone or points to another gateway, the job is older than 24 h, a job still queued or
+running is past its time budget, its results cannot be downloaded, or the stage ran on a backend
+without a hub job protocol (a third-party video API, a local upscaler) — there is no job to
+collect, and submitting again could pay for the same work twice. An unreachable gateway (connection error, 5xx) is **not** lost: it is polled with up to
 30 s between attempts until the 24 h are over.
 
 `HubJobLost` is terminal in every layer: the backend runner neither cools the backend down nor wraps
@@ -93,6 +95,9 @@ unchanged.
 - A crash in the seconds of the local publish repeats the publish; gallery paths are fixed before
   they are written, so no second file appears.
 - A pose animation whose task is gone cannot continue (its candidates live in the task row); its job
-  is cancelled.
+  is cancelled. The shared puppet / reference rig is used by path, not frozen per job.
+- A queue task whose queue stays paused keeps its record — and with it its target — claimed until
+  the task runs (its job is collected right away, though). A manual start of the same work is
+  refused meanwhile.
 
 Check: `scripts/smoke_hub_job_resume.py` (fake hub, simulated restart).

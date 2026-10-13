@@ -74,7 +74,6 @@ class Kind:
     type of its display row. ``reserve(op)`` (optional) takes the in-process
     guards of a THREAD resume synchronously — before the AgentLoop and the
     queue workers start — and returns the function that releases them.
-    ``agent(op)`` names the agent of the display row.
 
     The guards are taken on the resumer's thread and released on the resume
     thread: they must be plain sets or ``threading.Lock`` — never a
@@ -83,16 +82,14 @@ class Kind:
     resume: Callable[["Op"], Any]
     track_type: str
     reserve: Optional[Callable[["Op"], Callable[[], None]]] = None
-    agent: Optional[Callable[["Op"], str]] = None
 
 
 _KINDS: Dict[str, Kind] = {}
 
 
 def register_kind(name: str, *, resume: Callable[["Op"], Any], track_type: str,
-                  reserve: Optional[Callable[["Op"], Callable[[], None]]] = None,
-                  agent: Optional[Callable[["Op"], str]] = None) -> None:
-    _KINDS[name] = Kind(name, resume, track_type, reserve, agent)
+                  reserve: Optional[Callable[["Op"], Callable[[], None]]] = None) -> None:
+    _KINDS[name] = Kind(name, resume, track_type, reserve)
 
 
 def get_kind(name: str) -> Optional[Kind]:
@@ -102,10 +99,15 @@ def get_kind(name: str) -> Optional[Kind]:
 def register_builtin_kinds() -> None:
     """Import every module that registers a kind. Explicit, so the resumer
     never depends on which routers happened to be imported first."""
-    from app.core import location_model3d, model3d, pose_animation, props  # noqa: F401
-    from app.skills import animate  # noqa: F401
-    from app.routes import instagram  # noqa: F401
-    from app.skills import video_generation_skill  # noqa: F401
+    import importlib
+    for module in ("app.core.model3d", "app.core.props", "app.core.location_model3d",
+                   "app.core.pose_animation", "app.skills.animate", "app.routes.instagram",
+                   "app.skills.video_generation_skill"):
+        try:
+            importlib.import_module(module)
+        except Exception as e:  # noqa: BLE001 — one broken module must not stop the rest
+            logger.error("hub_ops: %s did not load, its operations cannot resume: %s",
+                         module, e)
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +388,16 @@ class HubStage:
         protocol never reports a job id, and a resume must know it ran there."""
         self._route = dict(meta or {})
         if backend:
-            self._set_job(lambda job: job.update(route_backend=backend))
+            def update(job: Dict[str, Any]) -> None:
+                if job.get("backend") and job.get("backend") != backend:
+                    # A re-run on the next chain entry: the failed entry's job
+                    # is not this stage's job any more.
+                    for key in ("job_id", "submitted_at", "attach_params", "route", "collected"):
+                        job.pop(key, None)
+                    job["phase"] = "claimed"
+                    job["backend"] = backend
+                job["route_backend"] = backend
+            self._set_job(update)
 
     def posting(self, backend: Any) -> None:
         def update(job: Dict[str, Any]) -> None:
@@ -519,15 +530,43 @@ def find_backend(name: str) -> Any:
     return None
 
 
+def _in_flight(op: Op) -> Dict[str, Dict[str, Any]]:
+    """The stages of ``op`` whose job is out: a job id recorded, not
+    collected, and the stage not done yet (a done stage keeps the id of the
+    job it was made from — that job is finished and used)."""
+    return {name: job for name, job in op.jobs().items()
+            if job.get("job_id") and not job.get("collected") and not op.done(name)}
+
+
 def _cancel_jobs(op: Op) -> None:
-    """Best-effort cancel of every recorded, uncollected job of ``op``."""
+    """Best-effort cancel of every job of ``op`` that is still out."""
     from app.imagegen.backends._gateway_job import _cancel_lost_job
-    for job in op.jobs().values():
-        if not job.get("job_id") or job.get("collected"):
-            continue
+    for job in _in_flight(op).values():
         backend = find_backend(job.get("backend") or "")
         if backend is not None:
             _cancel_lost_job(backend, job["job_id"])
+
+
+def gallery_path(op: Op, gallery: Any, key: str, suffix: str) -> Path:
+    """The gallery target ``key`` of a publish, chosen ONCE (``gallery.new_path``)
+    and remembered in the record before anything is written — a repeated
+    publish after a restart rewrites the same file instead of adding one."""
+    stored = op.result("publish").get(key)
+    if stored:
+        return Path(stored)
+    return Path(op.remember("publish", **{key: str(gallery.new_path(suffix))})[key])
+
+
+def result_json(op: Op, res: Dict[str, Any], *paths: str) -> Dict[str, Any]:
+    """A service result as JSON for the record: the plain values, and the file
+    paths among ``paths`` (default ``path``/``texture_path``) relative to the
+    operation directory (copied in when written elsewhere)."""
+    out = {k: v for k, v in res.items()
+           if isinstance(v, (str, int, float, bool, dict, list)) or v is None}
+    for key in (paths or ("path", "texture_path")):
+        if out.get(key):
+            out[key] = op.rel(out[key])
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -573,7 +612,13 @@ def get(op_id: str) -> Optional[Op]:
 def list_ops() -> List[Op]:
     with _conn() as conn:
         rows = conn.execute("SELECT * FROM hub_ops ORDER BY created_at, op_id").fetchall()
-    return [Op(r) for r in rows]
+    out = []
+    for row in rows:
+        try:
+            out.append(Op(row))
+        except (ValueError, TypeError) as e:
+            logger.error("hub_ops: unreadable record %s skipped: %s", row["op_id"], e)
+    return out
 
 
 def find_open(kind: str, match: Callable[[Dict[str, Any]], bool]) -> Optional[Op]:
@@ -616,8 +661,7 @@ def fail(op: Op, error: str, *, lost: bool = False, keep: bool = False) -> None:
     logger.warning("hub op %s (%s) failed: %s", op.op_id, op.kind, error)
     if keep:
         return
-    if not lost and any(j.get("job_id") and not j.get("collected")
-                        and j.get("pid") != _PROCESS_ID for j in op.jobs().values()):
+    if not lost and any(j.get("pid") != _PROCESS_ID for j in _in_flight(op).values()):
         # A resumed operation that ends before collecting its job (its target
         # was deleted, a follow-up failed): nobody will ever read that job —
         # cancel it, best effort and off this thread.
@@ -737,7 +781,11 @@ def resume(op: Op, run: Callable[[], Any], *, agent_name: str = "") -> Any:
         if old:
             tq.annotate_error(old, f" — resumed as {new}")
         op.set_fields(track_id=new)
-        op.should_cancel = lambda: tq.is_task_cancelled(new)
+        owner = op.owner if op.owner_kind == "task" else ""
+        # The display row's cancel button — and, for a task's record, the
+        # task's own cancel (a cancelled task takes its hub jobs along).
+        op.should_cancel = lambda: (tq.is_task_cancelled(new)
+                                    or bool(owner and tq.is_task_cancelled(owner)))
     except Exception as e:  # noqa: BLE001 — display only
         logger.warning("hub op %s: display row not created: %s", op.op_id, e)
     error = ""
@@ -797,9 +845,7 @@ def _collect_ahead(op: Op) -> None:
     from app.core.task_queue import get_task_queue
     owner = op.owner
     op.should_cancel = lambda: get_task_queue().task_status(owner) == "cancelled"
-    for name, job in op.jobs().items():
-        if not job.get("job_id") or job.get("collected"):
-            continue
+    for name, job in _in_flight(op).items():
         try:
             op.stage(name).collect()
         except Exception as e:  # noqa: BLE001
@@ -807,10 +853,10 @@ def _collect_ahead(op: Op) -> None:
             if fresh is not None and fresh.status == RUNNING:
                 fail(fresh, str(e) or type(e).__name__,
                      lost=isinstance(e, HubJobLost), keep=True)
-        return
+            return
 
 
-def _drop(op: Op, reason: str) -> None:
+def drop(op: Op, reason: str) -> None:
     """End an operation nobody will continue: its hub jobs are cancelled
     (best effort, on a thread — no HTTP on the startup path) and the record
     is deleted."""
@@ -846,9 +892,9 @@ def release_task_ops(task_id: str, cancelled: bool = False) -> None:
                            op.op_id, op.kind, op.error)
             delete(op)
         elif cancelled:
-            _drop(op, "the owning task was cancelled")
+            drop(op, "the owning task was cancelled")
         elif get_kind(op.kind) is None:
-            _drop(op, "resume operation unknown")
+            drop(op, "resume operation unknown")
         else:
             adopt_as_thread(op)
 
@@ -857,47 +903,51 @@ def start_resumer() -> Dict[str, int]:
     """Read every operation that survived the restart and continue it
     (spec § 3.6). Synchronous part: the bookkeeping and the guards of the
     thread-owned operations — so it has to run BEFORE the AgentLoop and the
-    TaskQueue workers start. The hub traffic itself runs on daemon threads."""
+    TaskQueue workers start. No HTTP and no image-service construction here
+    (both may wait on an unreachable gateway): the hub traffic runs on daemon
+    threads. One unreadable or failing record never stops the others."""
     from app.core.task_queue import get_task_queue
     register_builtin_kinds()
     tq = get_task_queue()
-    if list_ops():
-        # Build the (lazy) image service once, here, before several resume
-        # threads would race to construct it.
-        from app.imagegen.service import get_image_service
-        get_image_service()
-    counts = {"resumed": 0, "collecting": 0, "dropped": 0, "reported": 0}
+    counts = {"resumed": 0, "collecting": 0, "dropped": 0, "reported": 0, "skipped": 0}
     for op in list_ops():
-        task_status = tq.task_status(op.owner) if op.owner_kind == "task" else ""
-        task_alive = task_status in ("pending", "running")
-        if op.status == FAILED:
-            if task_alive:
-                continue  # the handler reports it
-            logger.warning("hub op %s (%s) had failed: %s", op.op_id, op.kind, op.error)
-            if op.track_id:
-                tq.annotate_error(op.track_id, f" — {op.error}")
-            delete(op)
-            counts["reported"] += 1
-            continue
-        if get_kind(op.kind) is None:
-            _drop(op, "resume operation unknown")
-            if op.track_id:
-                tq.annotate_error(op.track_id, " — resume operation unknown")
-            counts["dropped"] += 1
-            continue
-        if op.owner_kind == "task":
-            if task_alive:
-                threading.Thread(target=_collect_ahead, args=(op,), daemon=True,
-                                 name=f"hub-collect-{op.op_id}").start()
-                counts["collecting"] += 1
-                continue
-            if task_status == "cancelled":
-                _drop(op, "the owning task was cancelled")
-                counts["dropped"] += 1
-                continue
-            op.set_fields(owner_kind="thread", owner="")
-        _start_thread(op)
-        counts["resumed"] += 1
+        try:
+            counts[_resume_one(op, tq)] += 1
+        except Exception as e:  # noqa: BLE001
+            counts["skipped"] += 1
+            logger.error("hub op %s (%s) not resumed: %s", op.op_id, op.kind, e,
+                         exc_info=True)
     if any(counts.values()):
         logger.info("hub ops after restart: %s", counts)
     return counts
+
+
+def _resume_one(op: Op, tq: Any) -> str:
+    task_status = tq.task_status(op.owner) if op.owner_kind == "task" else ""
+    task_alive = task_status in ("pending", "running")
+    if op.status == FAILED:
+        if task_alive:
+            return "skipped"  # the handler reports it
+        logger.warning("hub op %s (%s) had failed: %s", op.op_id, op.kind, op.error)
+        if op.track_id:
+            tq.annotate_error(op.track_id, f" — {op.error}")
+        # Its jobs may still be out (a drop that died before its cancel).
+        threading.Thread(target=lambda: (_cancel_jobs(op), delete(op)), daemon=True,
+                         name=f"hub-drop-{op.op_id}").start()
+        return "reported"
+    if get_kind(op.kind) is None:
+        drop(op, "resume operation unknown")
+        if op.track_id:
+            tq.annotate_error(op.track_id, " — resume operation unknown")
+        return "dropped"
+    if op.owner_kind == "task":
+        if task_alive:
+            threading.Thread(target=_collect_ahead, args=(op,), daemon=True,
+                             name=f"hub-collect-{op.op_id}").start()
+            return "collecting"
+        if task_status == "cancelled":
+            drop(op, "the owning task was cancelled")
+            return "dropped"
+        op.set_fields(owner_kind="thread", owner="")
+    _start_thread(op)
+    return "resumed"

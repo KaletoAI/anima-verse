@@ -658,7 +658,7 @@ def _orphan_resume(op) -> Dict:
     in that task's row, so nothing can continue without it — the hub job is
     cancelled and the record dropped."""
     from app.core import hub_ops
-    hub_ops._drop(op, "the pose-animation task is gone")
+    hub_ops.drop(op, "the pose-animation task is gone")
     return {"ok": False, "error": "the pose-animation task is gone"}
 
 

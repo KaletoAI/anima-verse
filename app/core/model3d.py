@@ -2717,13 +2717,12 @@ def _op_thread_resume(staged, results: Optional[Dict[str, Dict[str, Any]]] = Non
 
 def _register_hub_kinds() -> None:
     from app.core import hub_ops
-    agent = lambda op: op.inputs.get("character", "")
     hub_ops.register_kind(_OP_MESH, resume=_op_thread_resume(_generate_for_current_outfit),
-                          track_type="model3d_generation", reserve=_op_reserve, agent=agent)
+                          track_type="model3d_generation", reserve=_op_reserve)
     hub_ops.register_kind(_OP_RERIG, resume=_op_thread_resume(_rerig_model, _rerig_results),
-                          track_type="model3d_rerig", reserve=_op_reserve, agent=agent)
+                          track_type="model3d_rerig", reserve=_op_reserve)
     hub_ops.register_kind(_OP_FACE, resume=_op_thread_resume(_face_retexture_model, _face_retexture_results),
-                          track_type="model3d_face_retexture", reserve=_op_reserve, agent=agent)
+                          track_type="model3d_face_retexture", reserve=_op_reserve)
 
 
 _register_hub_kinds()

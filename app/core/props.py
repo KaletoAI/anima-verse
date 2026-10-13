@@ -198,6 +198,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from app.core.game_time import (current_season_tokens, sanitize_season_tags,
                                 season_tags_active)
+from app.core import hub_ops
 from app.core.log import get_logger
 from app.core.model_store import (DEFAULT_TIER, ModelGallery, companion_files,
                                   export_files as store_export_files,
@@ -6184,15 +6185,6 @@ def _op_variant_match(prop_id: str, variant: Any):
     return match
 
 
-def _op_gallery_path(op, gallery: ModelGallery, key: str, suffix: str) -> Path:
-    """The gallery target ``key`` of a publish, chosen ONCE and remembered in
-    the record before anything is written."""
-    stored = op.result("publish").get(key)
-    if stored:
-        return Path(stored)
-    return Path(op.remember("publish", **{key: str(gallery.new_path(suffix))})[key])
-
-
 def _resume_open(op):
     from app.core import hub_ops
     if op.status == hub_ops.FAILED:
@@ -6375,7 +6367,7 @@ def _mesh_stages(op) -> Dict[str, Any]:
             target = op.path("mesh", f"lod_{i}.{st.get('format') or 'glb'}")
             target.write_bytes(st["blob"])
             stages.append({k: v for k, v in st.items() if k != "blob"} | {"file": op.rel(target)})
-        op.complete("mesh", {**_op_result(op, res), "stages": stages})
+        op.complete("mesh", {**hub_ops.result_json(op, res), "stages": stages})
     res = op.result("mesh")
     built = op.abs(res["path"])
 
@@ -6388,7 +6380,7 @@ def _mesh_stages(op) -> Dict[str, Any]:
     g = model_gallery(prop_id, variant)
     if not g:
         return {"ok": False, "error": "bad prop id"}
-    path = _op_gallery_path(op, g, "path", built.suffix or ".glb")
+    path = hub_ops.gallery_path(op, g, "path", built.suffix or ".glb")
     path.write_bytes(built.read_bytes())
     inherited = inputs.get("inherited")
     write_model_sidecar(path, {
@@ -6420,7 +6412,7 @@ def _mesh_stages(op) -> Dict[str, Any]:
                             res.get("backend", ""), texture_size,
                             routing={k: res[k] for k in ("routing", "fallback_from")
                                      if res.get(k)},
-                            path_for=lambda i, fmt: _op_gallery_path(op, g, f"lod_{i}", f".{fmt}"))
+                            path_for=lambda i, fmt: hub_ops.gallery_path(op, g, f"lod_{i}", f".{fmt}"))
     if low:
         logger.info("Prop %s: LOD stage %s selected as low variant",
                     prop_id, low)
@@ -6461,16 +6453,6 @@ def _mesh_stages(op) -> Dict[str, Any]:
                 prop_id, _stem_of(prop_id, variant), path.name,
                 res.get("backend", ""))
     return {"ok": True}
-
-
-def _op_result(op, res: Dict[str, Any]) -> Dict[str, Any]:
-    """A service result as JSON for the record (file paths relative)."""
-    out = {k: v for k, v in res.items()
-           if isinstance(v, (str, int, float, bool, dict, list)) or v is None}
-    for key in ("path", "texture_path"):
-        if out.get(key):
-            out[key] = op.rel(out[key])
-    return out
 
 
 def _shrink(prop_id: str, source_file: str, backend_glob: str,
@@ -6516,8 +6498,11 @@ def _shrink(prop_id: str, source_file: str, backend_glob: str,
             "face_num": face_num, "texture_size": texture_size,
             "src_fix": file_areas(src)[ROTATION_KEY],
         }, label=f"Low variant: {name}", track_id=task_id)
-        result = hub_ops.execute(op, lambda: (op.freeze_file(src, "inputs", src.name),
-                                              _shrink_stages(op))[1])
+
+        def run():
+            op.freeze_file(src, "inputs", src.name)  # inside the settled run
+            return _shrink_stages(op)
+        result = hub_ops.execute(op, run)
         if not result.get("ok"):
             error = str(result.get("error") or "shrink failed")
         return result
@@ -6551,7 +6536,7 @@ def _shrink_stages(op) -> Dict[str, Any]:
             error = str(res.get("error") or "shrink failed")
             logger.error("Prop %s shrink failed: %s", prop_id, error)
             return {"ok": False, "error": error}
-        op.complete("shrink", _op_result(op, res))
+        op.complete("shrink", hub_ops.result_json(op, res))
     res = op.result("shrink")
     built = op.abs(res["path"])
     if not read_sidecar(prop_id):
@@ -6559,7 +6544,7 @@ def _shrink_stages(op) -> Dict[str, Any]:
     g = model_gallery(prop_id, variant)
     if not g:
         return {"ok": False, "error": "source model missing"}
-    path = _op_gallery_path(op, g, "path", built.suffix or ".glb")
+    path = hub_ops.gallery_path(op, g, "path", built.suffix or ".glb")
     path.write_bytes(built.read_bytes())
     src_fix = inputs.get("src_fix") or {}
     write_model_sidecar(path, {
