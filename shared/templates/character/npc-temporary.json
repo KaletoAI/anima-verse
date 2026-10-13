@@ -418,8 +418,8 @@
           "type": "text",
           "multiline": true,
           "in_prompt": false,
-          "hint": "Used as the prompt for profile-image generation. Describe head only: face shape, distinct features, hair colour/length/style, eye colour, skin tone, expression baseline.",
-          "hint_de": "Wird als Prompt für die Profilbild-Generierung verwendet. Nur Kopf beschreiben: Gesichtsform, markante Züge, Haar (Farbe/Länge/Stil), Augenfarbe, Hautton, Standard-Mimik.",
+          "hint": "Used as the prompt for profile-image generation. Start with {gender}, {age} years old (filled from the Gender and Age fields). Describe head only: face shape, distinct features, hair colour/length/style, eye colour, skin tone, expression baseline.",
+          "hint_de": "Wird als Prompt für die Profilbild-Generierung verwendet. Mit {gender}, {age} years old beginnen (wird aus Geschlecht und Alter gefüllt). Nur Kopf beschreiben: Gesichtsform, markante Züge, Haar (Farbe/Länge/Stil), Augenfarbe, Hautton, Standard-Mimik.",
           "image_preview": "profile",
           "llm_generable": true,
           "rows": 5

@@ -46,9 +46,11 @@ Fields marked `[config]` are stored in the config; all others go into the profil
 - `character_appearance` — an ENGLISH image-generation prompt: a comma-separated
   list of attributes, no sentence, no name. Example:
   `"man, 50s, heavy-set, close-cropped grey hair, weathered face, brown eyes"`.
-- `face_appearance` — ENGLISH, head only: face shape, distinct features, hair
-  colour/length/style, eye colour, skin tone, baseline expression. No body, no
-  clothing.
+- `face_appearance` — ENGLISH, head only. ALWAYS start with the literal tokens
+  `{gender}, {age} years old, ` (the system fills them from `gender` and `age`),
+  then face shape, distinct features, hair colour/length/style, eye colour, skin
+  tone, baseline expression. No body, no clothing. Example:
+  `"{gender}, {age} years old, square jaw, broken nose, short grey hair, brown eyes, tanned skin"`.
 - `outfit_description` — ENGLISH prompt text describing the ONE outfit this NPC
   wears, as a comma-separated list of garments:
   `"grey linen apron over a rolled-up white shirt, dark trousers, worn boots"`.
