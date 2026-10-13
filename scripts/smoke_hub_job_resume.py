@@ -68,7 +68,8 @@ What is expected, derived by hand from the spec (section numbers):
               directory (the staging dir is gone); the resume publishes them.
   C4 (§ 5.5 + § 3.6) start_resumer: a thread-owned prop record is resumed and
               its guard (props._generating) is taken BEFORE start_resumer
-              returns; a task-owned record of a PAUSED queue is collected ahead
+              returns; its prop was deleted, so the stage ends before any
+              poll and its recorded hub job is cancelled; a task-owned record of a PAUSED queue is collected ahead
               (raw blobs in the record dir, 0 POSTs), its handler not run; a
               failed thread record is reported and deleted; an unknown kind is
               dropped and its hub job cancelled.
@@ -768,6 +769,10 @@ from app.core import location_model3d  # noqa: E402,F401  (registers its kinds)
 thread_op = hub_ops.create("prop_mesh", "prop:smoke|0|x|", {
     "prop_id": "gone-prop", "variant": 0, "guard_key": "gone-prop|0|x|",
     "src": "inputs/none.png"}, label="Prop: gone")
+jid_gone = HUB.new_job("running")
+thread_op.update_state(lambda st: st.setdefault("jobs", {}).update(mesh={
+    "phase": "submitted", "job_id": jid_gone, "backend": "hub-mesh", "api_url": HUB_URL,
+    "submitted_at": utc_now().isoformat(timespec="seconds"), "pid": "dead-process"}))
 task_id = tq.submit("smoke_paused", {}, queue_name="smoke-paused")
 tq.pause_queue("smoke-paused")
 with in_task(task_id):
@@ -818,8 +823,14 @@ for _ in range(100):
     if hub_ops.get(thread_op.op_id) is None:
         break
     time.sleep(0.05)
+for _ in range(100):
+    if jid_gone in HUB.cancels:
+        break
+    time.sleep(0.05)
 check("C4 the thread record was resumed (and ended: its prop is gone)",
       hub_ops.get(thread_op.op_id) is None and "gone-prop|0|x|" not in props_mod._generating)
+check("C4 ... and the job of the deleted target was cancelled (§ 3.6)",
+      jid_gone in HUB.cancels and HUB.gets.get(jid_gone, 0) == 0, str(HUB.cancels))
 check("C4 counts", counts.get("resumed") == 1 and counts.get("collecting") == 1, str(counts))
 
 # C5

@@ -614,8 +614,16 @@ def fail(op: Op, error: str, *, lost: bool = False, keep: bool = False) -> None:
     op.set_fields(status=FAILED, error=str(error or "operation failed")[:1000])
     op.update_state(lambda s: s.update(error_kind="lost" if lost else "error"))
     logger.warning("hub op %s (%s) failed: %s", op.op_id, op.kind, error)
-    if not keep:
-        delete(op)
+    if keep:
+        return
+    if not lost and any(j.get("job_id") and not j.get("collected")
+                        and j.get("pid") != _PROCESS_ID for j in op.jobs().values()):
+        # A resumed operation that ends before collecting its job (its target
+        # was deleted, a follow-up failed): nobody will ever read that job —
+        # cancel it, best effort and off this thread.
+        threading.Thread(target=_cancel_jobs, args=(op,), daemon=True,
+                         name=f"hub-cancel-{op.op_id}").start()
+    delete(op)
 
 
 def raise_failed(op: Op) -> None:
