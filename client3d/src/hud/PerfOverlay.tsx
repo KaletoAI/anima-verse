@@ -1,5 +1,5 @@
 /**
- * The performance readout of the 3D client (Etappe 5,
+ * The performance readout of the 3D client (stage 5,
  * `development_instructions/plan-3d-lod-und-betreten.md`).
  *
  * A normal display in the game picture, not a diagnostic tool: no URL
@@ -19,6 +19,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import { useI18n } from '@anima/player-ui';
+import { bootReport, subscribeBootReport, type LongTaskSummary } from '../game/boot';
 import { getPerfStats, subscribePerfStats } from './bus';
 
 /** Grouped digits in the viewer's locale ("1,234,567" / "1.234.567"). Exact
@@ -38,10 +39,14 @@ function Row({ label, value, wide }: { label: string; value: string; wide?: bool
 
 export function PerfOverlay() {
   const { t } = useI18n();
+  const boot = useSyncExternalStore(subscribeBootReport, bootReport);
   const stats = useSyncExternalStore(subscribePerfStats, getPerfStats);
   // Nothing measured yet (the first tick is up to a second away) — show the
   // frame instead of popping in, so switching it on has an immediate answer.
   const dash = '—';
+  const longTasks = (v: LongTaskSummary | null) => v === null ? t('n/a')
+    : `${v.count}, ${num(v.totalMs)} ms, ${t('max')} ${num(v.maxMs)} ms @ ${v.maxPhase ?? t('n/a')}`;
+
   return (
     <div className="hud-perf" aria-live="off">
       <Row label={t('FPS')} value={stats ? String(Math.round(stats.fps)) : dash} />
@@ -71,6 +76,14 @@ export function PerfOverlay() {
           ? `${num(stats.scatter.mesh.calls + stats.scatter.impostor.calls)}`
             + ` / ${stats.scatterLodMs.toFixed(1)} ms`
           : dash} wide />
+      <Row label={t('Boot')} value="" wide />
+      <Row label={t('Boot stages (ms)')}
+        value={Object.entries(boot.stages).map(([stage, ms]) =>
+          `${stage} ${ms === null ? dash : num(ms)}`).join(' · ')} wide />
+      <Row label={`${t('Boot phases (ms)')} — ${t('Summed elapsed durations; concurrent runs may overlap')}`}
+        value={Object.entries(boot.phases).map(([phase, ms]) => `${phase} ${num(ms)}`).join(' · ')} wide />
+      <Row label={t('Long tasks: count, total, max @ phase')} value={longTasks(boot.longTasks)} wide />
+      <Row label={t('Long tasks after visible (5 s)')} value={longTasks(boot.afterVisible)} wide />
     </div>
   );
 }

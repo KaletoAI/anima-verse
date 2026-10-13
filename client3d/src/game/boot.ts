@@ -21,10 +21,12 @@
  * `client3d/scripts/smoke_walk_math.mjs`.
  */
 
-/** One thing `startApp` waits for, in the order it reaches them. */
-export type BootStage = 'world' | 'figures' | 'scenes' | 'tiles' | 'arrival';
+/** One measured checkpoint of `startApp`; completion may be out of order. */
+export type BootStage = 'world' | 'scenes' | 'tiles' | 'visible' | 'figures' | 'arrival';
 
-/** The stages in progress order. The order is what the LABEL is derived from —
+/** The stages in progress order: world, scenes, tiles, visible, figures, arrival.
+ *  `visible` is the first frame after the arrival location mounts with ground
+ *  and HUD present. Completion may occur out of this display order. The order is what the LABEL is derived from —
  *  the first one still missing is what the client is working on.
  *
  *  `arrival` is the LAST one and it is the one the avatar depends on: the
@@ -36,7 +38,7 @@ export type BootStage = 'world' | 'figures' | 'scenes' | 'tiles' | 'arrival';
  *  plot instead of in its room, and walking in those seconds reported that
  *  wrong point to the server. */
 export const BOOT_STAGES: readonly BootStage[] =
-  ['world', 'figures', 'scenes', 'tiles', 'arrival'];
+  ['world', 'scenes', 'tiles', 'visible', 'figures', 'arrival'];
 
 export interface BootProgress {
   /** 0…100, one equal step per finished stage (`100 / BOOT_STAGES.length`). */
@@ -85,15 +87,16 @@ export type BootNote =
 export interface BootState extends BootProgress {
   /** what the screen shows below the bar, or `null` while all is well */
   note: BootNote | null;
+  stages: readonly BootStage[];
 }
 
 const done = new Set<BootStage>();
 const listeners = new Set<() => void>();
 let note: BootNote | null = null;
-let snapshot: BootState = { ...bootProgress(done), note };
+let snapshot: BootState = { ...bootProgress(done), note, stages: BOOT_STAGES.filter((s) => done.has(s)) };
 
 function publish(): void {
-  snapshot = { ...bootProgress(done), note };
+  snapshot = { ...bootProgress(done), note, stages: BOOT_STAGES.filter((s) => done.has(s)) };
   for (const fn of listeners) fn();
 }
 
@@ -113,7 +116,12 @@ function sameNote(a: BootNote | null, b: BootNote | null): boolean {
 export function reportBootStage(stage: BootStage): void {
   if (done.has(stage)) return;
   done.add(stage);
+  const now = performance.now();
+  performance.mark('boot:' + stage);
+  stageTimes[stage] = now - bootStart;
+  publishReport();
   publish();
+  scheduleObserverEnd();
 }
 
 /** Set (or with `null` clear) the line below the bar. */
@@ -129,4 +137,189 @@ export function getBootState(): BootState { return snapshot; }
 export function subscribeBoot(fn: () => void): () => void {
   listeners.add(fn);
   return () => { listeners.delete(fn); };
+}
+
+
+export type BootPhase = 'clip:download' | 'clip:parse' | 'clip:fit'
+  | 'model:download' | 'model:build' | 'scene:fetch' | 'arrival:mount'
+  | 'ground:fetch' | 'ground:build';
+export interface PhaseInterval { phase: BootPhase; start: number; end: number }
+interface TaskEntry { startTime: number; duration: number }
+export interface LongTaskSummary {
+  count: number; totalMs: number; maxMs: number; maxPhase: BootPhase | null;
+}
+export interface BootReport {
+  stages: Record<BootStage, number | null>;
+  /** Summed elapsed durations of possibly concurrent runs; not wall-clock boot time. */
+  phases: Record<BootPhase, number>;
+  longTasks: LongTaskSummary | null;
+  afterVisible: LongTaskSummary | null;
+}
+
+/** Largest overlap wins; ties go to the interval that started first. */
+export function attributeLongTask(intervals: readonly PhaseInterval[], entry: TaskEntry): BootPhase | null {
+  let best: PhaseInterval | null = null;
+  let overlap = 0;
+  for (const interval of intervals) {
+    const amount = Math.min(interval.end, entry.startTime + entry.duration)
+      - Math.max(interval.start, entry.startTime);
+    if (amount > 0 && (amount > overlap
+      || (amount === overlap && best !== null && interval.start < best.start))) {
+      best = interval;
+      overlap = amount;
+    }
+  }
+  return best?.phase ?? null;
+}
+
+const stageTimes: Record<BootStage, number | null> = {
+  world: null, scenes: null, tiles: null, visible: null, figures: null, arrival: null,
+};
+const phaseSums: Record<BootPhase, number> = {
+  'clip:download': 0, 'clip:parse': 0, 'clip:fit': 0,
+  'model:download': 0, 'model:build': 0, 'scene:fetch': 0,
+  'arrival:mount': 0, 'ground:fetch': 0, 'ground:build': 0,
+};
+// Five seconds match the shader warm-up comparison window in P2 § 4.7.
+const AFTER_VISIBLE_MS = 5000;
+const intervals: PhaseInterval[] = [];
+const tasks: TaskEntry[] = [];
+const reportListeners = new Set<() => void>();
+let bootStart = 0;
+let measuring = false;
+let observer: PerformanceObserver | null = null;
+let observerTimer: ReturnType<typeof setTimeout> | null = null;
+let supportsLongTasks = false;
+let reportSnapshot: BootReport = {
+  stages: { ...stageTimes }, phases: { ...phaseSums }, longTasks: null, afterVisible: null,
+};
+
+function summarize(entries: TaskEntry[]): LongTaskSummary {
+  const result: LongTaskSummary = { count: entries.length, totalMs: 0, maxMs: 0, maxPhase: null };
+  for (const entry of entries) {
+    result.totalMs += entry.duration;
+    if (entry.duration > result.maxMs) {
+      result.maxMs = entry.duration;
+      result.maxPhase = attributeLongTask(intervals, entry);
+    }
+  }
+  return result;
+}
+
+function publishReport(): void {
+  if (!measuring) return;
+  for (const phase of Object.keys(phaseSums) as BootPhase[]) phaseSums[phase] = 0;
+  const end = measurementEnd();
+  for (const interval of intervals) {
+    phaseSums[interval.phase] += Math.max(0, Math.min(interval.end, end, performance.now()) - interval.start);
+  }
+  const arrival = stageTimes.arrival;
+  const visible = stageTimes.visible;
+  reportSnapshot = {
+    stages: { ...stageTimes }, phases: { ...phaseSums },
+    longTasks: supportsLongTasks ? summarize(tasks.filter((e) =>
+      e.startTime >= bootStart && (arrival === null || e.startTime <= bootStart + arrival))) : null,
+    afterVisible: supportsLongTasks ? summarize(tasks.filter((e) => visible !== null
+      && e.startTime >= bootStart + visible
+      && e.startTime <= bootStart + visible + AFTER_VISIBLE_MS)) : null,
+  };
+  for (const fn of reportListeners) fn();
+}
+
+function collectTasks(entries: readonly PerformanceEntry[]): void {
+  if (!measuring || entries.length === 0) return;
+  for (const entry of entries) {
+    if (entry.startTime >= bootStart) tasks.push({ startTime: entry.startTime, duration: entry.duration });
+  }
+  publishReport();
+}
+
+function printReport(): void {
+  const r = reportSnapshot;
+  const summary = (v: LongTaskSummary | null) => v === null ? 'n/a'
+    : `${v.count} (${Math.round(v.totalMs)} ms, max ${Math.round(v.maxMs)} @${v.maxPhase ?? 'n/a'})`;
+  console.info(`[boot] ${BOOT_STAGES.map((s) => `${s} ${r.stages[s] === null ? 'n/a' : Math.round(r.stages[s]!)}`).join(' · ')} ms | ${Object.entries(r.phases).map(([p, ms]) => `${p} ${Math.round(ms)}`).join(' · ')} | longtasks ${summary(r.longTasks)} | after-visible ${summary(r.afterVisible)}`);
+}
+
+function measurementEnd(): number {
+  return stageTimes.arrival === null || stageTimes.visible === null ? Infinity
+    : bootStart + Math.max(stageTimes.arrival, stageTimes.visible + AFTER_VISIBLE_MS);
+}
+
+function scheduleObserverEnd(): void {
+  if (!measuring || stageTimes.arrival === null || stageTimes.visible === null) return;
+  if (observerTimer !== null) clearTimeout(observerTimer);
+  const end = bootStart + Math.max(stageTimes.arrival, stageTimes.visible + AFTER_VISIBLE_MS);
+  observerTimer = setTimeout(() => {
+    for (const interval of intervals) interval.end = Math.min(interval.end, end);
+    if (observer) collectTasks(observer.takeRecords());
+    publishReport();
+    printReport();
+    observer?.disconnect();
+    observer = null;
+    observerTimer = null;
+    measuring = false;
+  }, Math.max(0, end - performance.now()));
+}
+
+/** Begin at Enter/resume. Unsupported browsers deliberately keep null reports. */
+export function markBootStart(): void {
+  observer?.disconnect();
+  observer = null;
+  if (observerTimer !== null) clearTimeout(observerTimer);
+  observerTimer = null;
+  bootStart = performance.now();
+  measuring = true;
+  done.clear();
+  note = null;
+  for (const stage of BOOT_STAGES) stageTimes[stage] = null;
+  for (const phase of Object.keys(phaseSums) as BootPhase[]) phaseSums[phase] = 0;
+  intervals.length = 0;
+  tasks.length = 0;
+  supportsLongTasks = false;
+  try {
+    if (typeof PerformanceObserver !== 'undefined'
+      && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+      observer = new PerformanceObserver((list) => collectTasks(list.getEntries()));
+      observer.observe({ type: 'longtask', buffered: true });
+      supportsLongTasks = true;
+    }
+  } catch {
+    observer?.disconnect();
+    observer = null;
+  }
+  publishReport();
+  publish();
+}
+
+/** Record an already measured run, including its interval for attribution. */
+export function markPhase(name: BootPhase, ms: number): void {
+  if (!measuring) return;
+  const now = performance.now();
+  const end = Math.min(now, measurementEnd());
+  const start = Math.max(bootStart, now - ms);
+  if (end <= start) return;
+  intervals.push({ phase: name, start, end });
+  publishReport();
+}
+
+/** Keep the exact run interval, even if the operation rejects. */
+export async function withPhase<T>(name: BootPhase, fn: () => Promise<T>): Promise<T> {
+  if (!measuring || performance.now() >= measurementEnd()) return await fn();
+  const interval: PhaseInterval = { phase: name, start: performance.now(), end: Infinity };
+  intervals.push(interval);
+  try { return await fn(); }
+  finally {
+    if (measuring && intervals.includes(interval)) {
+      interval.end = Math.min(performance.now(), measurementEnd());
+      publishReport();
+    }
+  }
+}
+
+/** Stable between changes, for React's external-store subscription. */
+export function bootReport(): BootReport { return reportSnapshot; }
+export function subscribeBootReport(fn: () => void): () => void {
+  reportListeners.add(fn);
+  return () => { reportListeners.delete(fn); };
 }

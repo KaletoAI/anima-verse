@@ -8,6 +8,8 @@
     }
   },
   "translations": {
+    "Preparing the arrival…": "Ankunft wird vorbereitet…",
+    "Summed elapsed durations; concurrent runs may overlap": "Summierte verstrichene Dauer; parallele Läufe können sich überlappen",
     "Enabled and flip are saved for this model; they take effect after rebuilding its extension bones.": "Aktiv und Richtungsumkehr werden für dieses Modell gespeichert; sie wirken nach dem Neuaufbau seiner Erweiterungsknochen.",
     "Source check": "Prüfung des Ausgangsmaterials",
     "Backends": "Backends",
@@ -2521,6 +2523,13 @@
     "Cached": "Aus Cache",
     "Main view": "Hauptansicht",
     "T-pose views backend match (glob)": "Backend-Muster für T-Pose-Ansichten (Glob)",
-    "Empty: T-pose views chain": "Leer: Kette für T-Pose-Ansichten"
+    "Empty: T-pose views chain": "Leer: Kette für T-Pose-Ansichten",
+    "Boot": "Start",
+    "Boot stages (ms)": "Startstufen (ms)",
+    "Boot phases (ms)": "Startphasen (ms)",
+    "Long tasks: count, total, max @ phase": "Lange Tasks: Anzahl, Summe, Maximum @ Phase",
+    "Long tasks after visible (5 s)": "Lange Tasks nach Sichtbarkeit (5 s)",
+    "n/a": "n/v",
+    "max": "max."
   }
 }

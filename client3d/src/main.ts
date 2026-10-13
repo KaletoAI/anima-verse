@@ -66,7 +66,7 @@ import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocati
 import { figureTransition, pickablePlaceFor, PLACE_PICK_RADIUS_M, placementOf, pollIsStale,
   type ShownPlacement } from './game/placement';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
-import { reportBootStage, setBootNote } from './game/boot';
+import { markBootStart, withPhase, reportBootStage, setBootNote } from './game/boot';
 import { mountHud, mountTitle } from './hud/mount';
 import { gameActions, getGameState, perfEnabled, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
 import type { ModelTier, ScenePayload } from './api';
@@ -513,7 +513,8 @@ async function boot() {
 }
 
 async function startApp(username: string, role: string) {
-  // --- Knowledge filter (Etappe 5): the ONE switch that decides which view is
+  markBootStart();
+  // --- Knowledge filter (stage 5): the ONE switch that decides which view is
   // fetched. Only an administrator may see the unfiltered map — a stored `1`
   // in anybody else's browser is ignored here (the server would answer 403,
   // and a client that asked would break its own boot for a setting it is not
@@ -789,8 +790,8 @@ async function startApp(username: string, role: string) {
     // …and a ground that could not be built must not black out the boot: the
     // sync swallows a failed FETCH itself, but a rebuild that throws (a broken
     // texture, a driver refusing a buffer) would reject into this race.
-    terrainGround.sync(firstMap.terrain_sig, worldBounds, mapLocations,
-                       firstMap.height_sig ?? '')
+    withPhase('ground:fetch', () => terrainGround.sync(firstMap.terrain_sig, worldBounds, mapLocations,
+                       firstMap.height_sig ?? ''))
       .catch((e) => { console.warn('[ground] first sync failed', e); return false; }),
     sleep(GROUND_BOOT_WAIT_MS),
   ]);
@@ -817,7 +818,7 @@ async function startApp(username: string, role: string) {
   // A 404 keeps the procedural path. Fetch before building the first tiles,
   // so each tile starts in the correct mode.
   const scenes = new SceneLibrary();
-  await scenes.prime(placeable.map((l) => l.id));
+  await withPhase('scene:fetch', () => scenes.prime(placeable.map((l) => l.id)));
   reportBootStage('scenes');
 
   const tiles = new Map<string, Tile>();
@@ -5844,7 +5845,7 @@ async function startApp(username: string, role: string) {
     }
   }
 
-  async function placeAvatarOnArrival(): Promise<void> {
+  async function awaitArrivalMount(): Promise<void> {
     const locId = (lastMap ?? firstMap).characters
       .find((c) => c.name === avatarName)?.location_id ?? '';
     // No location = the wilderness (§ A11) or no avatar at all: the figure
@@ -5860,6 +5861,14 @@ async function startApp(username: string, role: string) {
       if (next === pending) break;
       pending = next;
     }
+  }
+
+  async function placeAvatarOnArrival(): Promise<void> {
+    const locId = (lastMap ?? firstMap).characters
+      .find((c) => c.name === avatarName)?.location_id ?? '';
+    await withPhase('arrival:mount', awaitArrivalMount);
+    requestAnimationFrame(() => reportBootStage('visible'));
+    if (!locId) return;
     const tile = tiles.get(locId);
     // No tile (an unplaced location): the pre-opened id names nothing, so it
     // must not stay the open one — the badge would offer to close a place

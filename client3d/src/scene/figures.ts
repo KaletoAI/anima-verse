@@ -1,3 +1,4 @@
+import { markPhase } from '../game/boot';
 import type { MotionPayload } from "../types";
 import * as THREE from 'three';
 import { createGLTFLoader } from './gltfLoader';
@@ -928,6 +929,7 @@ export class FigureLibrary {
       console.info(`[figures] one-shot clips (hold the last frame): `
         + `${oneShots.length ? oneShots.join(', ') : 'none'}`);
     }
+    const clipStart = performance.now();
     for (const { kind, set, url, loop, rootMotion } of sources) {
       try {
         const { animations } = await loadFile(url);
@@ -951,6 +953,7 @@ export class FigureLibrary {
         console.warn('[figures] clip not loadable:', url, e);
       }
     }
+    markPhase('clip:download', performance.now() - clipStart);
     this.defaultHeight = defaultHeight;
     this.loadFile = loadFile;
 
@@ -974,7 +977,9 @@ export class FigureLibrary {
       // PER KIND, not all-or-nothing: a fallback rig that ships walk/idle/run
       // (Soldier, Xbot, Robot) keeps those and takes swim, yoga and the rest
       // of the library on top. Its own clips win for their own kinds.
+      const fitStart = performance.now();
       const fit = this.fitLibrary(m.name, m.template, m.clips, m.scale);
+      markPhase('clip:fit', performance.now() - fitStart);
       m.libraryFits = fit.fits;
       if (fit.extra.length) {
         const kinds = fit.extra.map((c) => c.name).sort().join(', ');
@@ -1170,7 +1175,10 @@ export class FigureLibrary {
     void (async () => {
       let built = false;
       try {
-        const info = await getCharacterModel(charName);
+        const downloadStart = performance.now();
+        let info: ApiModel | null;
+        try { info = await getCharacterModel(charName); }
+        finally { markPhase('model:download', performance.now() - downloadStart); }
         if (info) {
           const model = await this.buildModel(charName, info, want);
           this.cacheTier(charName, model);
@@ -1333,7 +1341,10 @@ export class FigureLibrary {
     this.pending.add(charName);
     void (async () => {
       try {
-        const info = await getCharacterModel(charName);
+        const downloadStart = performance.now();
+        let info: ApiModel | null;
+        try { info = await getCharacterModel(charName); }
+        finally { markPhase('model:download', performance.now() - downloadStart); }
         if (!info) {
           this.apiModels.set(charName, null);   // the server has none -> portrait
           this.apiSignature.set(charName, "");
@@ -1377,10 +1388,20 @@ export class FigureLibrary {
     // Distinct content needs a distinct URL even if file stat ETags match.
     if (info.modelRev) query.set('rev', info.modelRev);
     const url = query.size ? `${info.url}${info.url.includes('?') ? '&' : '?'}${query}` : info.url;
-    const gltf = await this.loadFile(url, info.format === 'fbx');
+    // In T1 the loader combines download and parsing, as it does for clips.
+    const downloadStart = performance.now();
+    let gltf: Awaited<ReturnType<typeof this.loadFile>>;
+    try { gltf = await this.loadFile(url, info.format === 'fbx'); }
+    finally { markPhase('model:download', performance.now() - downloadStart); }
+    let buildStart = performance.now();
     const template = gltf.scene;
     if (info.textureUrl) {
-      const tex = await new THREE.TextureLoader().loadAsync(info.textureUrl);
+      markPhase('model:build', performance.now() - buildStart);
+      const textureStart = performance.now();
+      let tex: THREE.Texture;
+      try { tex = await new THREE.TextureLoader().loadAsync(info.textureUrl); }
+      finally { markPhase('model:download', performance.now() - textureStart); }
+      buildStart = performance.now();
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.flipY = false;   // FBX UVs follow the glTF convention
       template.traverse((o) => {
@@ -1453,10 +1474,15 @@ export class FigureLibrary {
     // Generic rigs keep their own clips; retained unrigged meshes stay static.
     // Only an actual Mixamo rig can use the shared library.
     if (info.rig === 'mixamo' && boneNames(template).size) {
+      markPhase('model:build', performance.now() - buildStart);
+      const fitStart = performance.now();
       const fit = this.fitLibrary(name, template, model.clips, model.scale);
+      markPhase('clip:fit', performance.now() - fitStart);
+      buildStart = performance.now();
       model.libraryFits = fit.fits;
       if (fit.extra.length) model.clips = [...model.clips, ...fit.extra];
     }
+    markPhase('model:build', performance.now() - buildStart);
     return model;
   }
 

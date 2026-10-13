@@ -102,6 +102,7 @@ export function TitleScreen({ needsLogin, onLogin, onEnter, onDone }: TitleScree
       case 'figures': return t('Waking the inhabitants…');
       case 'scenes': return t('Raising the buildings…');
       case 'tiles': return t('Laying out the land…');
+      case 'visible': return t('Preparing the arrival…');
       case 'arrival': return t('Finding your place…');
       default: return t('Ready');
     }
