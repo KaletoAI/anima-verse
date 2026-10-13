@@ -7,7 +7,7 @@ from urllib.parse import quote, urljoin
 import requests
 
 from app.imagegen.base import ImageBackend, GatewayRejectedError, GatewayInputMismatchError, GatewayOutputError
-from app.imagegen.backends._gateway_job import submit_job, poll_job, download_result
+from app.imagegen.backends._gateway_job import submit_job, poll_job, download_result, stage_kwargs
 
 
 class OpenAIUpscaleBackend(ImageBackend):
@@ -64,25 +64,37 @@ class OpenAIUpscaleBackend(ImageBackend):
         payload = {'model': self.model, 'mode': 'async',
                    'images': {image_slot: 'data:image/png;base64,' + base64.b64encode(raw).decode('ascii')},
                    'params': {k: v for k, v in values.items() if k in param_names}}
-        job = submit_job(self, f'{self.api_url}/v1/generations', payload, 'Upscale')
+        job = submit_job(self, f'{self.api_url}/v1/generations', payload, 'Upscale',
+                         **stage_kwargs(params, {'digest': digest}))
         if not job:
             return []
+        return self._collect(job, digest)
 
-        def done(status, seconds):
-            hashes = [str(entry.get('sha256') or '').lower() for key in ('input_images', 'inputs', 'input_files')
-                      for entry in (status.get(key) or []) if isinstance(entry, dict)]
-            if any(hashes) and digest not in hashes:
-                raise GatewayInputMismatchError('Upscale input identity mismatch')
-            results = status.get('results') or []
-            if len(results) != 1 or results[0].get('mime') != 'image/png':
-                raise GatewayOutputError('Upscale must deliver exactly one image/png')
-            item = results[0]
-            url = item.get('url') or f'/v1/jobs/{job}/result/{item.get("n", 0)}'
-            response = download_result(self, urljoin(self.api_url + '/', url))
-            response.raise_for_status()
-            if item.get('sha256') and hashlib.sha256(response.content).hexdigest() != item['sha256'].lower():
-                raise GatewayOutputError('Upscale result checksum mismatch')
-            return [response.content]
-
+    def _collect(self, job, digest, *, since=None, should_cancel=None):
+        """Poll + download half — shared by a fresh run and ``attach``."""
         return poll_job(self, job, max_wait=self.max_wait, max_queue_wait=self.max_queue_wait,
-                        poll_interval=self.poll_interval, on_done=done)
+                        poll_interval=self.poll_interval,
+                        on_done=lambda status, seconds: self._download_upscale(status, job, digest),
+                        should_cancel=should_cancel, attach_since=since)
+
+    def attach(self, job_id, params, *, since, should_cancel=None):
+        """Collect an upscale job submitted before a restart; ``params['digest']``
+        is the sha256 of the uploaded image, so the identity check still holds."""
+        return self._collect(job_id, str((params or {}).get('digest') or ''),
+                             since=since, should_cancel=should_cancel)
+
+    def _download_upscale(self, status, job, digest):
+        hashes = [str(entry.get('sha256') or '').lower() for key in ('input_images', 'inputs', 'input_files')
+                  for entry in (status.get(key) or []) if isinstance(entry, dict)]
+        if digest and any(hashes) and digest not in hashes:
+            raise GatewayInputMismatchError('Upscale input identity mismatch')
+        results = status.get('results') or []
+        if len(results) != 1 or results[0].get('mime') != 'image/png':
+            raise GatewayOutputError('Upscale must deliver exactly one image/png')
+        item = results[0]
+        url = item.get('url') or f'/v1/jobs/{job}/result/{item.get("n", 0)}'
+        response = download_result(self, urljoin(self.api_url + '/', url))
+        response.raise_for_status()
+        if item.get('sha256') and hashlib.sha256(response.content).hexdigest() != item['sha256'].lower():
+            raise GatewayOutputError('Upscale result checksum mismatch')
+        return [response.content]

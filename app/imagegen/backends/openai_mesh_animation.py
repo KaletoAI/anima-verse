@@ -21,7 +21,7 @@ from typing import Dict, List
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.backends._gateway_job import poll_job, submit_job
+from app.imagegen.backends._gateway_job import poll_job, submit_job, stage_kwargs
 from app.imagegen.base import ImageBackend
 
 logger = get_logger("image_backends")
@@ -176,18 +176,33 @@ class OpenAIMeshAnimationBackend(ImageBackend):
                    "prompt": "\n".join(captions), "params": alias_params,
                    "files": {self.source_slot: "data:" + mime + ";base64,"
                              + base64.b64encode(raw).decode()}}
-        job_id = submit_job(self, f"{self.api_url}{self.mesh_endpoint}", payload, "Animation")
+        job_id = submit_job(self, f"{self.api_url}{self.mesh_endpoint}", payload, "Animation",
+                            **stage_kwargs(params, {"variants": variants}))
         if not job_id:
             return []
         self._tls.job_id = job_id
         cb = params.get("on_job_id")
         if callable(cb):
             cb(job_id)
+        return self._collect(job_id, variants, should_cancel=params.get("should_cancel"))
+
+    def _collect(self, job_id: str, variants: int, *, since=None, should_cancel=None):
+        """Poll + download half — shared by a fresh run and ``attach``."""
         return poll_job(self, job_id, max_wait=self.max_wait,
                         max_queue_wait=self.max_queue_wait,
                         poll_interval=self.poll_interval,
-                        should_cancel=params.get("should_cancel"),
-                        on_done=lambda sd, _s: self._download(sd, job_id, variants))
+                        should_cancel=should_cancel,
+                        on_done=lambda sd, _s: self._download(sd, job_id, variants),
+                        attach_since=since)
+
+    def attach(self, job_id: str, params: Dict, *, since: float, should_cancel=None):
+        """Collect a motion job submitted before a restart. ``params['variants']``
+        is the count that was asked for; the verdicts land in
+        ``last_result_meta`` on this thread like after a fresh run."""
+        self._tls.job_id = job_id
+        self._tls.result_meta = []
+        variants = int((params or {}).get("variants") or 1)
+        return self._collect(job_id, variants, since=since, should_cancel=should_cancel)
 
     def _download(self, sd, job_id: str, variants: int = 1) -> List[bytes]:
         """Up to ``variants`` verified results in ``n`` order; one verdict per
