@@ -171,6 +171,12 @@ def _serial_model(function):
     backups replace first, tier sidecars next, full sidecar last. Unchanged
     files retain their inode/mtime, so a no-op never changes model_rev.
     """
+    # The staged twin of a public entry carries a leading underscore (the
+    # hub-operation entries ``_generate_for_current_outfit`` & co., see
+    # app/core/hub_ops.py): it is the same operation and takes the same
+    # branches below.
+    name = function.__name__.lstrip("_")
+
     @functools.wraps(function)
     def wrapped(character_name, *args, **kwargs):
         import tempfile
@@ -178,10 +184,10 @@ def _serial_model(function):
         bound = inspect.signature(function).bind_partial(character_name, *args, **kwargs)
         signature = bound.arguments.get("signature")
         if not signature:
-            if function.__name__ in ("set_model3d_rig", "delete_model3d"):
+            if name in ("set_model3d_rig", "delete_model3d"):
                 exact = find_model3d(character_name)
                 signature = exact.stem if exact else None
-            elif function.__name__ in ("build_lod", "rebuild_extension_rig", "measure_model", "diagnose_model", "retexture_model", "rerig_model", "face_retexture_model", "revert_face_retexture"):
+            elif name in ("build_lod", "rebuild_extension_rig", "measure_model", "diagnose_model", "retexture_model", "rerig_model", "face_retexture_model", "revert_face_retexture"):
                 served = find_model3d_serving(character_name)[0]
                 signature = served.stem if served else None
             signature = signature or current_outfit_state(character_name)[2]
@@ -190,7 +196,7 @@ def _serial_model(function):
         if "signature" in inspect.signature(function).parameters:
             bound.arguments["signature"] = signature
         def stale(reason):
-            if function.__name__ == "delete_model3d":
+            if name == "delete_model3d":
                 return False
             return {"ok": False, "status": "stale", "error": reason}
         active = getattr(_staging, "directories", {})
@@ -212,7 +218,7 @@ def _serial_model(function):
                     shutil.copy2(source, target)
             except FileNotFoundError:
                 return stale("Model changed while staging")
-            if function.__name__ == "face_retexture_model" and not (directory / "rollback" / signature).exists():
+            if name == "face_retexture_model" and not (directory / "rollback" / signature).exists():
                 from app.core.face_retexture import prepare_snapshot
                 prepare_snapshot(stage, signature)
             _staging.directories = {**active, character_name: stage}
@@ -223,7 +229,7 @@ def _serial_model(function):
             try:
                 result = function(*bound.args, **bound.kwargs)
             except Exception as exc:
-                if function.__name__ != "generate_for_current_outfit":
+                if name != "generate_for_current_outfit":
                     raise
                 generation_error = exc
                 result = {"ok": False, "error": str(exc)}
@@ -233,7 +239,7 @@ def _serial_model(function):
             token = publication["token"]
             # A rig failure never rolls back the already published new mesh,
             # nor publishes partially processed rig/LOD bytes from the stage.
-            if function.__name__ == "generate_for_current_outfit" and not result.get("ok"):
+            if name == "generate_for_current_outfit" and not result.get("ok"):
                 if publication.get("mesh_published"):
                     with keyed_lock("model3d", f"{character_name}:{signature}"), \
                             keyed_lock("model3d_publication", str(directory)):
@@ -247,12 +253,12 @@ def _serial_model(function):
                 if generation_error is not None:
                     raise generation_error
                 return result
-            if function.__name__ in ("rerig_model", "face_retexture_model", "revert_face_retexture") and not result.get("ok"):
+            if name in ("rerig_model", "face_retexture_model", "revert_face_retexture") and not result.get("ok"):
                 return result
             if not _publish_signature(character_name, directory, stage, signature, token,
-                                      rollback_on_error=function.__name__ in (
+                                      rollback_on_error=name in (
                                           "generate_for_current_outfit", "rerig_model", "face_retexture_model", "revert_face_retexture"),
-                                      invalidate=function.__name__ == "delete_model3d"):
+                                      invalidate=name == "delete_model3d"):
                 return stale("Model changed during processing; result discarded")
             if isinstance(result, dict):
                 if "path" in result:
@@ -1648,7 +1654,62 @@ def _store_unrigged_model(character_name: str, signature: str, result: Dict[str,
     return {"ok": True, "path": str(path), "meta": meta, "warnings": check.get("warnings", [])}
 
 
-@_serial_model
+# ── Hub operations (app/core/hub_ops.py) ──────────────────────────────────
+# A generation is a chain of hub jobs (mesh → rig, upscale → face → rig) that
+# outlives a restart of Anima: its record holds the FROZEN inputs and the
+# stage results, its directory the input files and every intermediate. The
+# public entries below are NOT staged themselves: they look up an open record
+# of the current queue task BEFORE the ``_serial_model`` wrapper (which would
+# otherwise stage the worn signature) and settle the record only AFTER the
+# wrapper published — the moment the result really is public. Normal run and
+# resume execute the same staged function and the same stages.
+
+_OP_MESH = "character_mesh"
+_OP_RERIG = "character_rerig"
+_OP_FACE = "face_retexture"
+
+
+def _op_subject(character_name: str, signature: str) -> str:
+    """One model operation per character + combination (the target key)."""
+    return f"model3d:{character_name}:{signature}"
+
+
+def _op_match(character_name: str, signature: Optional[str]):
+    def match(inputs: Dict[str, Any]) -> bool:
+        return (inputs.get("character") == character_name
+                and (signature is None or inputs.get("signature") == signature))
+    return match
+
+
+def _op_rel(op, result: Dict[str, Any], *keys: str) -> Dict[str, Any]:
+    """A service result as JSON for the record: file paths made relative to
+    the operation directory, the rest copied (routing meta included)."""
+    out: Dict[str, Any] = {}
+    for key, value in result.items():
+        if key in keys and value:
+            out[key] = op.rel(value)
+        elif isinstance(value, (str, int, float, bool, dict, list)) or value is None:
+            out[key] = value
+    return out
+
+
+def _op_abs(op, result: Dict[str, Any], *keys: str) -> Dict[str, Any]:
+    out = dict(result)
+    for key in keys:
+        if out.get(key):
+            out[key] = str(op.abs(out[key]))
+    return out
+
+
+def _resume_entry(op, staged_call, character_name: str):
+    """Run a record of the current task again (handler re-run after a
+    restart). A tombstone reports its stored verdict instead (spec D8)."""
+    from app.core import hub_ops
+    if op.status == hub_ops.FAILED:
+        hub_ops.raise_failed(op)
+    return hub_ops.resume(op, staged_call, agent_name=character_name)
+
+
 def generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 backend_glob: str = "",
                                 prefer_cheapest: bool = False,
@@ -1666,185 +1727,132 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     the cache check, the T-pose input and the target file (the outfit batch
     pre-warms combinations without dressing the character).
     Blocking (minutes); call from a worker thread.
+
+    Inside a queue handler that left a mesh operation open before a restart,
+    this RESUMES it — with its frozen signature, never the one worn now — and
+    neither the cache check nor the T-pose lookup run again.
     """
+    from app.core import hub_ops
+    op = hub_ops.find_open(_OP_MESH, _op_match(character_name, signature))
+    if op is not None:
+        return _resume_entry(op, lambda: _generate_for_current_outfit(
+            character_name, signature=op.inputs["signature"], _op_ctx={"op": op}),
+            character_name)
+    return hub_ops.run_new(lambda ctx: _generate_for_current_outfit(
+        character_name, force=force, backend_glob=backend_glob,
+        prefer_cheapest=prefer_cheapest, signature=signature, face_num=face_num,
+        texture_size=texture_size, _op_ctx=ctx))
+
+
+@_serial_model
+def _generate_for_current_outfit(character_name: str, *, force: bool = False,
+                                 backend_glob: str = "",
+                                 prefer_cheapest: bool = False,
+                                 signature: Optional[str] = None,
+                                 face_num: Any = None,
+                                 texture_size: Any = None,
+                                 _op_ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The staged half of ``generate_for_current_outfit``: preprocessing and
+    the record (fresh run), then the stages — or the stages alone when
+    ``_op_ctx`` already carries the record (resume)."""
+    from app.core import hub_ops
     from app.imagegen.service import get_image_service
     from app.core.task_queue import get_task_queue
 
-    rig = required_rig(character_name)
-
-    from app.core.model_refs import is_state_fork
-    if is_state_fork(signature) or "-p" in (signature or ""):
-        return {"ok": False, "error": "state_fork_retired"}
-    if signature is None:
-        _, _, signature = current_outfit_state(character_name)
-    if not force:
-        cached = find_model3d(character_name, signature)
-        if cached:
-            logger.info("Model3D %s: Kombination %s bereits erzeugt (%s)",
-                        character_name, signature, cached.name)
-            return {"ok": True, "cached": True, "path": str(cached)}
-
-    if not backend_glob and prefer_cheapest:
-        # The auto-mesh hook keeps its rule (user decision 2026-07-18): the
-        # cheapest AVAILABLE unrigged img2mesh backend — explicit, no
-        # chain. Every other call without a glob is routed.
-        cheapest = get_image_service().list_mesh_backends()
-        if not cheapest:
-            return {"ok": False, "error": "no img2mesh backend available"}
-        backend_glob = cheapest[0].name
-
-    src = find_ref_image(character_name, "tpose", signature)
-    if not src:
-        logger.warning("Model3D %s: kein T-Pose-Bild fuer Kombination %s",
-                       character_name, signature)
-        return {"ok": False, "error": "no_tpose_input"}
-
-    # Optional extra views of the SAME outfit combination (per character, off
-    # by default): a multi-view mesh backend reconstructs the back and the
-    # body depth from them instead of guessing. Only what actually exists is
-    # passed on — a view that failed to render must not block the mesh.
-    from app.core.model_refs import enabled_tpose_views
-    view_images = {}
-    for _view in enabled_tpose_views(character_name):
-        _vp = find_ref_image(character_name, f"tpose_{_view}", signature)
-        if _vp:
-            view_images[_view] = str(_vp)
-    if view_images:
-        logger.info("Model3D %s: Zusatz-Ansichten fuer %s: %s",
-                    character_name, signature, ", ".join(sorted(view_images)))
-
-    out_dir = get_model3d_dir(character_name)
-    if not out_dir.is_dir():
-        # The character was deleted while this job waited in the queue —
-        # no GPU run for a result nobody can store.
-        return {"ok": False, "error": "character_gone"}
+    op = (_op_ctx or {}).get("op")
     task_id = ""
-    try:
-        task_id = get_task_queue().track_start(
-            "model3d_generation", f"3D model: {character_name}",
-            agent_name=character_name, start_running=True)
-    except Exception:
-        pass
-
     error = ""
-    import tempfile
-    staging = Path(tempfile.mkdtemp(prefix=".generate-", dir=out_dir))
     try:
-        source_bytes = src.read_bytes()
-        uploaded_photo = staging / src.name
-        uploaded_photo.write_bytes(source_bytes)
-        source_manifest = _ref_manifest(src)
-        res = get_image_service().generate_mesh(
-            source_image_path=str(uploaded_photo),
-            output_path=str(staging / f"{signature}.glb"),
-            backend_glob=backend_glob,
-            character_name=character_name,
-            mesh_name=character_name,
-            face_num=face_num,
-            texture_size=texture_size,
-            view_images=view_images or None,
-            occasion=mesh_occasion_for_rig(rig))
-        if not res.get("ok"):
-            error = str(res.get("error") or "generation failed")
-            logger.error("Model3D %s failed: %s", character_name, error)
-            return {"ok": False, "error": error}
+        if op is None:
+            rig = required_rig(character_name)
 
-        mesh_res = res
-        from app.core.model_validate import validate_glb, validate_fbx
-        stored = _store_unrigged_model(character_name, signature, mesh_res, rig,
-                                       {"source_image": src.name,
-                                        "view_images": {v: Path(p).name for v, p in view_images.items()},
-                                        "source_image_sha256": hashlib.sha256(source_bytes).hexdigest(),
-                                        **source_manifest})
-        if not stored.get("ok"):
-            error = stored["error"]
-            return {"ok": False, "error": error}
-        source_target = out_dir / "unrigged" / f"{signature}.glb"
-        _checkpoint_mesh(character_name, signature)
-        if stored["meta"].get("rig_error"):
-            error = stored["meta"]["rig_error"]
-            return {"ok": False, "error": error}
-        # Sequential caller-thread submission: the mesh slot has been released.
-        res = get_image_service().generate_rig(
-            mesh_path=str(source_target), output_path=str(staging / f"{signature}-rig.glb"),
-            rig=rig, character_name=character_name,
-            basecolor_path=str(source_target.with_suffix(".png")) if rig == "generic" else "")
-        if not res.get("ok"):
-            error = str(res.get("error") or "rig generation failed")
-            return {"ok": False, "error": error}
-        texture_blob = Path(res["texture_path"]).read_bytes() if res.get("texture_path") else None
-        check = (validate_glb(Path(res["path"]).read_bytes()) if rig == "mixamo"
-                 else validate_fbx(Path(res["path"]).read_bytes(), texture_blob))
-        if not check.get("ok"):
-            error = "; ".join(check.get("errors") or ["invalid rigged result"])
-            return {"ok": False, "error": error}
+            from app.core.model_refs import is_state_fork
+            if is_state_fork(signature) or "-p" in (signature or ""):
+                return {"ok": False, "error": "state_fork_retired"}
+            if signature is None:
+                _, _, signature = current_outfit_state(character_name)
+            if not force:
+                cached = find_model3d(character_name, signature)
+                if cached:
+                    logger.info("Model3D %s: Kombination %s bereits erzeugt (%s)",
+                                character_name, signature, cached.name)
+                    return {"ok": True, "cached": True, "path": str(cached)}
 
-        delivered = Path(res["path"])
-        blob = delivered.read_bytes()
-        texture_blob = Path(res["texture_path"]).read_bytes() if res.get("texture_path") else None
-        texture_suffix = Path(res["texture_path"]).suffix if res.get("texture_path") else ".png"
-        path = out_dir / f"{signature}{delivered.suffix.lower()}"
-        _purge_combination(out_dir, signature, keep_model=path, preserve_unrigged=True)
-        stage_meta = {"mesh_backend": mesh_res.get("backend", ""),
-                      "rig_backend": res.get("backend", ""),
-                      "mesh_route_meta": {k: mesh_res[k] for k in ("routing", "fallback_from") if k in mesh_res},
-                      "rig_route_meta": {k: res[k] for k in ("routing", "fallback_from") if k in res}}
-        (out_dir / "raw").mkdir(parents=True, exist_ok=True)
-        _publish_model_bytes(out_dir / "raw" / path.name, blob)
-        _publish_model_bytes(path, blob)
-        if texture_blob is not None:
-            _publish_model_bytes(path.with_suffix(texture_suffix), texture_blob)
-            _publish_model_bytes((out_dir / "raw" / path.name).with_suffix(texture_suffix), texture_blob)
-        meta = {
-            "created_at": utc_now_iso(),
-            "source": "generated",
-            **stage_meta,
-            "backend": res.get("backend", ""),
-            "format": res.get("format", path.suffix.lstrip(".").lower()),
-            "rig": res.get("rig", rig),
-            "has_texture": bool(res.get("texture_path")),
-            "source_filename": res.get("filename", ""),
-            "source_image": src.name,
-            "signature": signature,
-            "character": character_name,
-        }
-        for _rk in ("routing", "fallback_from"):
-            if res.get(_rk):
-                meta[_rk] = res[_rk]
-        if view_images:
-            # Which extra views went into this mesh — same shape as
-            # "source_image": file names, not absolute paths.
-            meta["view_images"] = {v: Path(p).name for v, p in view_images.items()}
-        # Manifest (outfit_cache_gc): WHICH pieces this signature stands for.
-        # The md5 cannot be read back, so without this a cache entry can only
-        # be judged by "could it still be produced" — with it, exactly. The
-        # T-pose render this mesh comes from already recorded it, so the
-        # source of truth is copied rather than derived a second time.
-        meta.update(_ref_manifest(src))
-        _auto_retexture(character_name, path, meta)
-        _auto_normalize(character_name, path, meta)
-        _auto_extension_rig(character_name, path, meta)
-        # AFTER the re-encode and the normalisation: the numbers have to
-        # describe the file that is actually served, not the one the backend
-        # handed over.
-        _attach_measurement(meta, path)
-        # And the distance mesh right away — waiting for someone to ask means
-        # the first viewer at range gets the full mesh for nothing, and the
-        # build costs under a second against the minutes this generation just
-        # took.
-        from app.core.extension_rig import extension_metadata
-        meta.setdefault("extension_rig", extension_metadata(character_name))
-        _publish_sidecar(path, meta)
-        request_lod(character_name, path)
-        logger.info("Model3D %s: %s (%d bytes, Kombination %s)", character_name,
-                    path.name, path.stat().st_size, signature)
-        return {"ok": True, "cached": False, "path": str(path),
-                "filename": path.name}
+            if not backend_glob and prefer_cheapest:
+                # The auto-mesh hook keeps its rule (user decision 2026-07-18): the
+                # cheapest AVAILABLE unrigged img2mesh backend — explicit, no
+                # chain. Every other call without a glob is routed.
+                cheapest = get_image_service().list_mesh_backends()
+                if not cheapest:
+                    return {"ok": False, "error": "no img2mesh backend available"}
+                backend_glob = cheapest[0].name
+
+            src = find_ref_image(character_name, "tpose", signature)
+            if not src:
+                logger.warning("Model3D %s: kein T-Pose-Bild fuer Kombination %s",
+                               character_name, signature)
+                return {"ok": False, "error": "no_tpose_input"}
+
+            # Optional extra views of the SAME outfit combination (per character, off
+            # by default): a multi-view mesh backend reconstructs the back and the
+            # body depth from them instead of guessing. Only what actually exists is
+            # passed on — a view that failed to render must not block the mesh.
+            from app.core.model_refs import enabled_tpose_views
+            view_images = {}
+            for _view in enabled_tpose_views(character_name):
+                _vp = find_ref_image(character_name, f"tpose_{_view}", signature)
+                if _vp:
+                    view_images[_view] = str(_vp)
+            if view_images:
+                logger.info("Model3D %s: Zusatz-Ansichten fuer %s: %s",
+                            character_name, signature, ", ".join(sorted(view_images)))
+
+            out_dir = get_model3d_dir(character_name)
+            if not out_dir.is_dir():
+                # The character was deleted while this job waited in the queue —
+                # no GPU run for a result nobody can store.
+                return {"ok": False, "error": "character_gone"}
+            try:
+                task_id = get_task_queue().track_start(
+                    "model3d_generation", f"3D model: {character_name}",
+                    agent_name=character_name, start_running=True)
+            except Exception:
+                task_id = ""
+            source_bytes = src.read_bytes()
+            # The record freezes what this run is made FROM: the signature, the
+            # backend pick, the T-pose bytes (copied — a re-render while the
+            # job runs must not change the input) and the manifest.
+            try:
+                op = hub_ops.create(_OP_MESH, _op_subject(character_name, signature), {
+                    "character": character_name, "signature": signature, "rig": rig,
+                    "backend_glob": backend_glob, "face_num": face_num,
+                    "texture_size": texture_size, "occasion": mesh_occasion_for_rig(rig),
+                    "source_image": src.name,
+                    "source_image_sha256": hashlib.sha256(source_bytes).hexdigest(),
+                    "view_images": {v: Path(p).name for v, p in view_images.items()},
+                    "manifest": _ref_manifest(src),
+                }, label=f"3D model: {character_name}", track_id=task_id)
+            except hub_ops.HubOpBusy as exc:
+                error = str(exc)
+                return {"ok": False, "error": error}
+            if _op_ctx is not None:
+                _op_ctx["op"] = op
+            op.path("inputs", src.name).write_bytes(source_bytes)
+            views = {v: op.rel(op.freeze_file(p, "inputs", "views", f"{v}{Path(p).suffix}"))
+                     for v, p in view_images.items()}
+            op.update_state(lambda st: st.update(view_files=views))
+            op.reload()
+        elif not get_model3d_dir(character_name).is_dir():
+            error = "character_gone"
+            return {"ok": False, "error": error}
+        result = _character_mesh_stages(character_name, op)
+        if not result.get("ok"):
+            error = str(result.get("error") or "generation failed")
+        return result
     except Exception as exc:
-        error = str(exc)
+        error = error or str(exc)
         raise
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
         if task_id:
             try:
                 get_task_queue().track_finish(task_id, error=error)
@@ -1852,21 +1860,212 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
                 pass
 
 
-@_serial_model
+def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
+    """Stages ``mesh`` → ``checkpoint`` → ``rig`` → publish of one record —
+    shared by the fresh run and the resume. Reads only the record (frozen
+    inputs, earlier stage results), never the world's current state."""
+    from app.imagegen.service import get_image_service
+    from app.core.model_validate import validate_glb, validate_fbx
+    inputs = op.inputs
+    signature, rig = inputs["signature"], inputs["rig"]
+    out_dir = get_model3d_dir(character_name)
+
+    if not op.done("mesh"):
+        views = {v: str(op.abs(rel)) for v, rel in (op.state.get("view_files") or {}).items()}
+        res = get_image_service().generate_mesh(
+            source_image_path=str(op.abs(f"inputs/{inputs['source_image']}")),
+            output_path=str(op.path("mesh", f"{signature}.glb")),
+            backend_glob=inputs.get("backend_glob") or "",
+            character_name=character_name,
+            mesh_name=character_name,
+            face_num=inputs.get("face_num"),
+            texture_size=inputs.get("texture_size"),
+            view_images=views or None,
+            occasion=inputs["occasion"],
+            hub_stage=op.stage("mesh"))
+        if not res.get("ok"):
+            error = str(res.get("error") or "generation failed")
+            logger.error("Model3D %s failed: %s", character_name, error)
+            return {"ok": False, "error": error}
+        res.pop("stages", None)
+        op.complete("mesh", _op_rel(op, res, "path", "texture_path"))
+    mesh_res = _op_abs(op, op.result("mesh"), "path", "texture_path")
+
+    publication = getattr(_staging, "source_publications", {}).get(character_name)
+    if not op.done("checkpoint"):
+        stored = _store_unrigged_model(character_name, signature, mesh_res, rig,
+                                       {"source_image": inputs["source_image"],
+                                        "view_images": dict(inputs.get("view_images") or {}),
+                                        "source_image_sha256": inputs["source_image_sha256"],
+                                        **(inputs.get("manifest") or {})})
+        if not stored.get("ok"):
+            return {"ok": False, "error": stored["error"]}
+        _checkpoint_mesh(character_name, signature)
+        # The rig input is frozen with the record: the published retained
+        # source may be replaced (an upload) while the rig job runs.
+        retained = out_dir / "unrigged" / f"{signature}.glb"
+        op.freeze_file(retained, "source", f"{signature}.glb")
+        if retained.with_suffix(".png").is_file():
+            op.freeze_file(retained.with_suffix(".png"), "source", f"{signature}.png")
+        op.complete("checkpoint", {"rig_error": stored["meta"].get("rig_error", "")})
+    elif publication is not None:
+        # Published by the previous runtime: a rig failure now still marks
+        # the static mesh with ``rig_error`` (the wrapper reads this flag).
+        publication["mesh_published"] = True
+    rig_error = op.result("checkpoint").get("rig_error")
+    if rig_error:
+        return {"ok": False, "error": rig_error}
+
+    source = op.abs(f"source/{signature}.glb")
+    if not op.done("rig"):
+        # Sequential caller-thread submission: the mesh slot has been released.
+        res = get_image_service().generate_rig(
+            mesh_path=str(source), output_path=str(op.path("rig", f"{signature}-rig.glb")),
+            rig=rig, character_name=character_name,
+            basecolor_path=str(source.with_suffix(".png")) if rig == "generic" else "",
+            hub_stage=op.stage("rig"))
+        if not res.get("ok"):
+            return {"ok": False, "error": str(res.get("error") or "rig generation failed")}
+        texture_blob = Path(res["texture_path"]).read_bytes() if res.get("texture_path") else None
+        check = (validate_glb(Path(res["path"]).read_bytes()) if rig == "mixamo"
+                 else validate_fbx(Path(res["path"]).read_bytes(), texture_blob))
+        if not check.get("ok"):
+            return {"ok": False, "error": "; ".join(check.get("errors") or ["invalid rigged result"])}
+        res.pop("stages", None)
+        op.complete("rig", _op_rel(op, res, "path", "texture_path"))
+    res = _op_abs(op, op.result("rig"), "path", "texture_path")
+
+    delivered = Path(res["path"])
+    blob = delivered.read_bytes()
+    texture_blob = Path(res["texture_path"]).read_bytes() if res.get("texture_path") else None
+    texture_suffix = Path(res["texture_path"]).suffix if res.get("texture_path") else ".png"
+    path = out_dir / f"{signature}{delivered.suffix.lower()}"
+    _purge_combination(out_dir, signature, keep_model=path, preserve_unrigged=True)
+    stage_meta = {"mesh_backend": mesh_res.get("backend", ""),
+                  "rig_backend": res.get("backend", ""),
+                  "mesh_route_meta": {k: mesh_res[k] for k in ("routing", "fallback_from") if k in mesh_res},
+                  "rig_route_meta": {k: res[k] for k in ("routing", "fallback_from") if k in res}}
+    (out_dir / "raw").mkdir(parents=True, exist_ok=True)
+    _publish_model_bytes(out_dir / "raw" / path.name, blob)
+    _publish_model_bytes(path, blob)
+    if texture_blob is not None:
+        _publish_model_bytes(path.with_suffix(texture_suffix), texture_blob)
+        _publish_model_bytes((out_dir / "raw" / path.name).with_suffix(texture_suffix), texture_blob)
+    meta = {
+        "created_at": utc_now_iso(),
+        "source": "generated",
+        **stage_meta,
+        "backend": res.get("backend", ""),
+        "format": res.get("format", path.suffix.lstrip(".").lower()),
+        "rig": res.get("rig", rig),
+        "has_texture": bool(res.get("texture_path")),
+        "source_filename": res.get("filename", ""),
+        "source_image": inputs["source_image"],
+        "signature": signature,
+        "character": character_name,
+    }
+    for _rk in ("routing", "fallback_from"):
+        if res.get(_rk):
+            meta[_rk] = res[_rk]
+    if inputs.get("view_images"):
+        # Which extra views went into this mesh — same shape as
+        # "source_image": file names, not absolute paths.
+        meta["view_images"] = dict(inputs["view_images"])
+    # Manifest (outfit_cache_gc): WHICH pieces this signature stands for.
+    # The md5 cannot be read back, so without this a cache entry can only
+    # be judged by "could it still be produced" — with it, exactly. The
+    # T-pose render this mesh comes from already recorded it, so the
+    # source of truth is copied rather than derived a second time (frozen
+    # with the record when the run started).
+    meta.update(inputs.get("manifest") or {})
+    _auto_retexture(character_name, path, meta)
+    _auto_normalize(character_name, path, meta)
+    _auto_extension_rig(character_name, path, meta)
+    # AFTER the re-encode and the normalisation: the numbers have to
+    # describe the file that is actually served, not the one the backend
+    # handed over.
+    _attach_measurement(meta, path)
+    # And the distance mesh right away — waiting for someone to ask means
+    # the first viewer at range gets the full mesh for nothing, and the
+    # build costs under a second against the minutes this generation just
+    # took.
+    from app.core.extension_rig import extension_metadata
+    meta.setdefault("extension_rig", extension_metadata(character_name))
+    _publish_sidecar(path, meta)
+    request_lod(character_name, path)
+    logger.info("Model3D %s: %s (%d bytes, Kombination %s)", character_name,
+                path.name, path.stat().st_size, signature)
+    return {"ok": True, "cached": False, "path": str(path),
+            "filename": path.name}
+
+
+def _restore_frozen_source(op, out_dir: Path, signature: str) -> Path:
+    """Write the record's frozen rig source back into the stage at the place
+    ``_rig_from_source`` expects it (``facefix/`` or ``unrigged/``), with its
+    sidecar and texture — so a resumed rig reads the same metadata and runs
+    the same face-preservation check as the first run."""
+    kind = op.inputs.get("source_kind") or "unrigged"
+    target = out_dir / kind / f"{signature}.glb"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    for suffix in (".glb", ".json", ".png"):
+        frozen = op.abs(f"source/{signature}{suffix}")
+        if frozen.is_file() and (not target.with_suffix(suffix).is_file()
+                                 or target.with_suffix(suffix).read_bytes() != frozen.read_bytes()):
+            _publish_model_bytes(target.with_suffix(suffix), frozen.read_bytes())
+    return target
+
+
 def rerig_model(character_name: str, signature: Optional[str] = None, *,
                 backend_glob: str = "") -> Dict[str, Any]:
     """Rebuild from the corrected source when present, otherwise the original."""
+    from app.core import hub_ops
+    op = hub_ops.find_open(_OP_RERIG, _op_match(character_name, signature))
+    if op is not None:
+        return _resume_entry(op, lambda: _rerig_model(
+            character_name, op.inputs["signature"], _op_ctx={"op": op}), character_name)
+    return hub_ops.run_new(lambda ctx: _rerig_model(
+        character_name, signature, backend_glob=backend_glob, _op_ctx=ctx))
+
+
+@_serial_model
+def _rerig_model(character_name: str, signature: Optional[str] = None, *,
+                 backend_glob: str = "",
+                 _op_ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    from app.core import hub_ops
     directory = get_model3d_dir(character_name)
-    source = directory / "facefix" / f"{signature}.glb"
-    if not source.is_file():
-        source = directory / "unrigged" / f"{signature}.glb"
-    return _rig_from_source(character_name, signature, source, rig_backend_glob=backend_glob)
+    op = (_op_ctx or {}).get("op")
+    if op is None:
+        source = directory / "facefix" / f"{signature}.glb"
+        if not source.is_file():
+            source = directory / "unrigged" / f"{signature}.glb"
+        if not source.is_file():
+            return {"ok": False, "error": "No retained unrigged mesh source. Generate a new model to enable re-rigging."}
+        try:
+            op = hub_ops.create(_OP_RERIG, _op_subject(character_name, signature), {
+                "character": character_name, "signature": signature,
+                "backend_glob": backend_glob, "source_kind": source.parent.name,
+            }, label=f"Re-rig: {character_name}")
+        except hub_ops.HubOpBusy as exc:
+            return {"ok": False, "error": str(exc)}
+        if _op_ctx is not None:
+            _op_ctx["op"] = op
+        for suffix in (".glb", ".json", ".png"):
+            if source.with_suffix(suffix).is_file():
+                op.freeze_file(source.with_suffix(suffix), "source", f"{signature}{suffix}")
+    source = _restore_frozen_source(op, directory, op.inputs["signature"])
+    return _rig_from_source(character_name, op.inputs["signature"], source,
+                            rig_backend_glob=op.inputs.get("backend_glob") or "", op=op)
 
 
 def _rig_from_source(character_name: str, signature: str, source: Path, *,
-                     rig_backend_glob: str = "", replacement_mask=None) -> Dict[str, Any]:
-    """Rig the retained source only; publish the entire chain on success."""
-    import tempfile
+                     rig_backend_glob: str = "", replacement_mask=None,
+                     op=None) -> Dict[str, Any]:
+    """Rig the retained source only; publish the entire chain on success.
+
+    ``op``: the hub operation this rig belongs to — its ``rig`` stage is
+    submitted (or, after a restart, collected) through it and the validated
+    rig result is kept in the record's directory before anything is
+    published."""
     from app.imagegen.service import get_image_service
     from app.core.model_validate import validate_glb, validate_fbx
     path = find_model3d(character_name, signature)
@@ -1878,19 +2077,28 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
     face_meta = _read_sidecar(source).get("face_retexture") if source.parent.name == "facefix" else None
     low = tier_variant(path, LOW_TIER) if path else None
     low_meta = _read_sidecar(low) if low else {}
+    import tempfile
     with tempfile.TemporaryDirectory(prefix=".rerig-", dir=out_dir) as tmp:
-        res = get_image_service().generate_rig(
-            mesh_path=str(source), output_path=str(Path(tmp) / f"{signature}.glb"),
-            rig=rig, character_name=character_name, backend_glob=rig_backend_glob,
-            basecolor_path=str(source.with_suffix(".png")) if rig == "generic" else "")
-        if not res.get("ok"):
-            return {"ok": False, "error": res.get("error") or "Rig generation failed"}
+        if op is not None and op.done("rig"):
+            res = _op_abs(op, op.result("rig"), "path", "texture_path")
+        else:
+            target = op.path("rig", f"{signature}.glb") if op is not None else Path(tmp) / f"{signature}.glb"
+            res = get_image_service().generate_rig(
+                mesh_path=str(source), output_path=str(target),
+                rig=rig, character_name=character_name, backend_glob=rig_backend_glob,
+                basecolor_path=str(source.with_suffix(".png")) if rig == "generic" else "",
+                hub_stage=op.stage("rig") if op is not None else None)
+            if not res.get("ok"):
+                return {"ok": False, "error": res.get("error") or "Rig generation failed"}
         delivered = Path(res["path"])
         blob = delivered.read_bytes()
         texture = Path(res["texture_path"]).read_bytes() if res.get("texture_path") else None
         check = validate_glb(blob) if rig == "mixamo" else validate_fbx(blob, texture)
         if not check.get("ok"):
             return {"ok": False, "error": "; ".join(check.get("errors") or ["Invalid rigged result"])}
+        if op is not None and not op.done("rig"):
+            res.pop("stages", None)
+            op.complete("rig", _op_rel(op, res, "path", "texture_path"))
         face_texture_lost = False
         if face_meta or (out_dir / "facefix" / f"{signature}.glb").is_file():
             from app.core.face_retexture import face_texture_preserved
@@ -2237,78 +2445,129 @@ def _model_revision_unlocked(path: Optional[Path]) -> str:
     return hashlib.sha256(json.dumps(records, separators=(",", ":")).encode()).hexdigest() if found else ""
 
 
-@_serial_model
 def face_retexture_model(character_name: str, signature: Optional[str] = None, *,
                          backend_glob: str = "", params=None, upscale: bool = True,
                          upscale_backend_glob: str = "") -> Dict[str, Any]:
-    """Project the original photo, then rebuild every derived asset in the stage."""
-    import tempfile
-    from app.core import face_retexture
+    """Project the original photo, then rebuild every derived asset in the stage.
+
+    A hub operation (upscale → face → bake → rig, app/core/hub_ops.py): inside
+    a queue handler that left one open before a restart, this resumes it."""
+    from app.core import hub_ops
+    op = hub_ops.find_open(_OP_FACE, _op_match(character_name, signature))
+    if op is not None:
+        return _resume_entry(op, lambda: _face_retexture_model(
+            character_name, op.inputs["signature"], _op_ctx={"op": op}), character_name)
+    return hub_ops.run_new(lambda ctx: _face_retexture_model(
+        character_name, signature, backend_glob=backend_glob, params=params,
+        upscale=upscale, upscale_backend_glob=upscale_backend_glob, _op_ctx=ctx))
+
+
+@_serial_model
+def _face_retexture_model(character_name: str, signature: Optional[str] = None, *,
+                          backend_glob: str = "", params=None, upscale: bool = True,
+                          upscale_backend_glob: str = "",
+                          _op_ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The staged half: checks + record (fresh run), then the stages. A
+    resume skips the eligibility and readiness checks — the job it collects
+    was admitted when it was submitted, and a backend that is not reachable
+    yet must not throw away a result the hub still holds."""
+    from app.core import face_retexture, hub_ops
     from app.core.mesh_source import validate_face_source
     from app.imagegen.service import get_image_service
-    controls = face_retexture.validated_params(params)
-    eligibility = face_retexture.check(character_name, signature)
-    ready = face_retexture.runnable(character_name, backend_glob)
-    problems = eligibility['problems'] + ready['problems']
-    if problems:
-        return {'ok': False, 'problems': problems, 'error': '; '.join(p['message'] for p in problems)}
     root = get_model3d_dir(character_name)
-    original = root / 'unrigged' / f'{signature}.glb'
-    meta = _read_sidecar(original)
-    image = face_retexture.flatten_photo(face_retexture.photo_path(character_name, signature, meta).read_bytes())
-    upscale_meta = {'status': 'off'}
-    if upscale:
-        from app.imagegen.base import GenerationCancelled, GpuTaskCancelled, HubJobLost, MediaGenerationDisabled, BackendBusyError
-        from app.core.upscale_reference import require_upscale_backend
-        if upscale_backend_glob:
+    op = (_op_ctx or {}).get("op")
+    if op is None:
+        controls = face_retexture.validated_params(params)
+        eligibility = face_retexture.check(character_name, signature)
+        ready = face_retexture.runnable(character_name, backend_glob)
+        problems = eligibility['problems'] + ready['problems']
+        if problems:
+            return {'ok': False, 'problems': problems, 'error': '; '.join(p['message'] for p in problems)}
+        original = root / 'unrigged' / f'{signature}.glb'
+        meta = _read_sidecar(original)
+        image = face_retexture.flatten_photo(face_retexture.photo_path(character_name, signature, meta).read_bytes())
+        if upscale and upscale_backend_glob:
+            from app.core.upscale_reference import require_upscale_backend
             require_upscale_backend(upscale_backend_glob, character_name)
-        publication = getattr(_staging, 'source_publications', {}).get(character_name)
-        cache_root = publication['directory'] if publication else root
-        cache_path = cache_root / 'facefix-ref' / f'{signature}.png'
-        if not cache_path.resolve().is_relative_to(cache_root.resolve()):
-            raise ValueError('Reference cache path escapes the model directory')
         try:
-            improved = get_image_service().upscale_image(
-                image, backend_glob=upscale_backend_glob, character_name=character_name,
-                cache_path=cache_path)
-            image = improved['bytes']
-            upscale_meta = {k: v for k, v in improved.items() if k != 'bytes'}
-        except (GenerationCancelled, GpuTaskCancelled, MediaGenerationDisabled, HubJobLost):
-            # A lost upscale job is terminal for the whole correction — it
-            # must not degrade into "upscale failed, project the raw photo".
-            raise
-        except Exception as exc:
-            upscale_meta = {'status': 'failed', 'error': str(exc),
-                            'busy': isinstance(exc, BackendBusyError)}
-            logger.warning('Reference upscale failed: %s', exc)
-    with tempfile.TemporaryDirectory(prefix='.face-job-', dir=root) as tmp:
+            op = hub_ops.create(_OP_FACE, _op_subject(character_name, signature), {
+                "character": character_name, "signature": signature, "controls": controls,
+                "backend_glob": backend_glob, "upscale": bool(upscale),
+                "upscale_backend_glob": upscale_backend_glob, "source_kind": "facefix",
+            }, label=f"Face retexture: {character_name}")
+        except hub_ops.HubOpBusy as exc:
+            return {'ok': False, 'error': str(exc)}
+        if _op_ctx is not None:
+            _op_ctx["op"] = op
+        op.path("inputs", "photo.png").write_bytes(image)
+        # Same file name as the published source it is frozen from.
+        op.freeze_file(original, "inputs", "unrigged", f"{signature}.glb")
+    inputs = op.inputs
+    signature = inputs["signature"]
+    controls = inputs["controls"]
+    original_file = op.abs(f"inputs/unrigged/{signature}.glb")
+    original_bytes = original_file.read_bytes()
+    image = op.abs("inputs/photo.png").read_bytes()
+
+    if not op.done("upscale"):
+        upscale_meta = {'status': 'off'}
+        if inputs["upscale"]:
+            from app.imagegen.base import GenerationCancelled, GpuTaskCancelled, HubJobLost, MediaGenerationDisabled, BackendBusyError
+            publication = getattr(_staging, 'source_publications', {}).get(character_name)
+            cache_root = publication['directory'] if publication else root
+            cache_path = cache_root / 'facefix-ref' / f'{signature}.png'
+            if not cache_path.resolve().is_relative_to(cache_root.resolve()):
+                raise ValueError('Reference cache path escapes the model directory')
+            try:
+                improved = get_image_service().upscale_image(
+                    image, backend_glob=inputs.get("upscale_backend_glob") or "",
+                    character_name=character_name, cache_path=cache_path,
+                    hub_stage=op.stage("upscale"))
+                op.path("upscale", "image.png").write_bytes(improved['bytes'])
+                upscale_meta = {k: v for k, v in improved.items() if k != 'bytes'}
+            except (GenerationCancelled, GpuTaskCancelled, MediaGenerationDisabled, HubJobLost):
+                # A lost upscale job is terminal for the whole correction — it
+                # must not degrade into "upscale failed, project the raw photo".
+                raise
+            except Exception as exc:
+                upscale_meta = {'status': 'failed', 'error': str(exc),
+                                'busy': isinstance(exc, BackendBusyError)}
+                logger.warning('Reference upscale failed: %s', exc)
+        op.complete("upscale", {"meta": upscale_meta})
+    upscale_meta = op.result("upscale").get("meta") or {'status': 'off'}
+    if op.abs("upscale/image.png").is_file():
+        image = op.abs("upscale/image.png").read_bytes()
+
+    if not op.done("face"):
         result = get_image_service().generate_face_retexture(
-            str(original), image, tmp, controls, backend_glob, character_name)
+            str(original_file), image, str(op.path("face", "x").parent),
+            controls, inputs.get("backend_glob") or "", character_name,
+            hub_stage=op.stage("face"))
         if not result.get('ok'):
             return {'ok': False, 'error': result.get('error') or 'Face retexture failed'}
+        op.complete("face", _op_rel(op, result, "path", "compare_path"))
+    result = _op_abs(op, op.result("face"), "path", "compare_path")
+
+    if not op.done("bake"):
+        import numpy as np
         raw = Path(result['path']).read_bytes()
         if len(raw) > face_retexture.MAX_BYTES:
             return {'ok': False, 'error': 'Corrected mesh exceeds the 64 MB rig upload limit'}
         verdict = validate_face_source(raw)
-        before = validate_face_source(original.read_bytes(), original=True)
+        before = validate_face_source(original_bytes, original=True)
         if not verdict['ok'] or verdict['triangles'] != before['triangles']:
             return {'ok': False, 'error': '; '.join(verdict['errors']) or 'Face retexture changed the triangle count'}
         try:
             replacement_masks = []
             raw, baked = face_retexture.bake_face_texture(
-                original.read_bytes(), raw, replacement_masks=replacement_masks)
+                original_bytes, raw, replacement_masks=replacement_masks)
         except ValueError as exc:
             return {'ok': False, 'error': str(exc)}
-        source = root / 'facefix' / f'{signature}.glb'
-        source.parent.mkdir(exist_ok=True)
-        _publish_model_bytes(source, raw)
         face_meta = {'status': 'applied', 'at': utc_now_iso(),
                      'backend': result.get('backend', ''), 'job_id': result.get('job_id', ''),
                      'params': controls, 'upscale': upscale_meta, 'baked': baked, 'result_sha256': result.get('result_sha256', ''),
                      'result_url': result.get('result_url', ''),
                      'route_meta': {k: result[k] for k in ('routing', 'fallback_from') if k in result}}
-        _publish_sidecar(source, {'face_retexture': face_meta, 'baked': baked})
-        compare = source.with_suffix('.png')
         if result.get('compare_path'):
             comparison = Path(result['compare_path']).read_bytes()
             from PIL import Image
@@ -2317,13 +2576,29 @@ def face_retexture_model(character_name: str, signature: Optional[str] = None, *
             decoded.load()
             if decoded.format != 'PNG':
                 return {'ok': False, 'error': 'Comparison image is not a PNG'}
-            _publish_model_bytes(compare, comparison)
-        else:
-            compare.unlink(missing_ok=True)
-        rigged = _rig_from_source(character_name, signature, source, replacement_mask=replacement_masks[0])
-        if rigged.get('ok'):
-            rigged['face_retexture'] = _read_sidecar(Path(rigged['path'])).get('face_retexture', face_meta)
-        return rigged
+            op.path("source", f"{signature}.png").write_bytes(comparison)
+        # The corrected source, its sidecar and the replacement mask live in
+        # the record, not only in the stage: a restart during the rig job
+        # must not lose the correction.
+        op.path("source", f"{signature}.glb").write_bytes(raw)
+        op.path("source", f"{signature}.json").write_bytes(json.dumps(
+            {'face_retexture': face_meta, 'baked': baked}, indent=2, ensure_ascii=False).encode("utf-8"))
+        with op.path("bake", "mask.npy").open("wb") as handle:
+            np.save(handle, np.asarray(replacement_masks[0]) if replacement_masks else np.zeros((0, 0), dtype=bool))
+        op.complete("bake", {"face_meta": face_meta, "has_mask": bool(replacement_masks)})
+    face_meta = op.result("bake")["face_meta"]
+    source = _restore_frozen_source(op, root, signature)
+    if not op.abs(f"source/{signature}.png").is_file():
+        source.with_suffix('.png').unlink(missing_ok=True)
+    mask = None
+    if op.result("bake").get("has_mask"):
+        import numpy as np
+        with op.abs("bake/mask.npy").open("rb") as handle:
+            mask = np.load(handle)
+    rigged = _rig_from_source(character_name, signature, source, replacement_mask=mask, op=op)
+    if rigged.get('ok'):
+        rigged['face_retexture'] = _read_sidecar(Path(rigged['path'])).get('face_retexture', face_meta)
+    return rigged
 
 
 @_serial_model
@@ -2394,3 +2669,59 @@ def trigger_face_retexture(character_name: str, signature: str, *,
                     _generating.discard(character_name)
     threading.Thread(target=run, daemon=True).start()
     return {'status': 'generating', 'task_id': task_id}
+
+
+# ── Resume registration (app/core/hub_ops.py) ─────────────────────────────
+
+def _op_reserve(op):
+    """The character's generation guard, taken synchronously by the resumer
+    before the AgentLoop and the queue workers start — an auto-mesh hook or a
+    second admin action sees the character as busy. Released after the run;
+    never releases a guard somebody else holds."""
+    name = op.inputs.get("character") or ""
+    with _lock:
+        if name in _generating:
+            return lambda: None
+        _generating.add(name)
+
+    def release() -> None:
+        with _lock:
+            _generating.discard(name)
+    return release
+
+
+def _op_thread_resume(staged, results: Optional[Dict[str, Dict[str, Any]]] = None):
+    """Resume entry of a thread-owned character operation: the character
+    lock like the trigger threads, the staged function with the frozen
+    signature, and — for re-rig/face — the result the status routes show."""
+    def run(op):
+        from app.core import hub_ops
+        name = op.inputs["character"]
+        result: Dict[str, Any] = {"ok": False, "error": "resume failed"}
+        try:
+            with _char_lock(name):
+                result = hub_ops.resume(op, lambda: staged(
+                    name, op.inputs["signature"], _op_ctx={"op": op}), agent_name=name)
+            return result
+        except Exception as exc:
+            result = {"ok": False, "error": str(exc)}
+            raise
+        finally:
+            if results is not None:
+                with _lock:
+                    results[name] = {**result, "task_id": op.track_id}
+    return run
+
+
+def _register_hub_kinds() -> None:
+    from app.core import hub_ops
+    agent = lambda op: op.inputs.get("character", "")
+    hub_ops.register_kind(_OP_MESH, resume=_op_thread_resume(_generate_for_current_outfit),
+                          track_type="model3d_generation", reserve=_op_reserve, agent=agent)
+    hub_ops.register_kind(_OP_RERIG, resume=_op_thread_resume(_rerig_model, _rerig_results),
+                          track_type="model3d_rerig", reserve=_op_reserve, agent=agent)
+    hub_ops.register_kind(_OP_FACE, resume=_op_thread_resume(_face_retexture_model, _face_retexture_results),
+                          track_type="model3d_face_retexture", reserve=_op_reserve, agent=agent)
+
+
+_register_hub_kinds()

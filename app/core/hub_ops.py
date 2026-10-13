@@ -247,6 +247,13 @@ class Op:
         self.update_state(change)
         return out
 
+    def rel(self, path: Any) -> str:
+        """``path`` relative to the operation directory (what the state keeps)."""
+        return str(Path(path).resolve().relative_to(self.dir.resolve()))
+
+    def abs(self, rel: str) -> Path:
+        return self.dir / rel
+
     def stage(self, name: str) -> "HubStage":
         return HubStage(self, name)
 
@@ -552,24 +559,52 @@ def open_task_inputs(kind: str) -> List[Dict[str, Any]]:
     return out
 
 
-def execute(op: Op, run: Callable[[], Any]) -> Any:
-    """Run the stages of ``op`` and settle the record: deleted after a
-    published success, failed (error stored, then deleted) otherwise."""
-    from app.imagegen.base import HubJobLost
-    try:
-        result = run()
-    except Exception as e:
-        # Exception, not BaseException: a process going down must leave the
-        # record behind — that is exactly the case it exists for. A task's
-        # lost job stays as a tombstone (see raise_failed).
-        lost = isinstance(e, HubJobLost)
-        fail(op, str(e) or type(e).__name__, lost=lost,
-             keep=lost and op.owner_kind == "task")
-        raise
+def settle(op: Op, result: Any) -> None:
+    """The run of ``op`` returned: deleted after a published success, failed
+    (error stored, then deleted) otherwise."""
     if _ok(result):
         delete(op)
     else:
         fail(op, _error_of(result))
+
+
+def settle_error(op: Op, exc: BaseException) -> None:
+    """The run of ``op`` raised. A task's lost job stays as a tombstone (see
+    ``raise_failed``); everything else is stored and deleted."""
+    from app.imagegen.base import HubJobLost
+    lost = isinstance(exc, HubJobLost)
+    fail(op, str(exc) or type(exc).__name__, lost=lost,
+         keep=lost and op.owner_kind == "task")
+
+
+def execute(op: Op, run: Callable[[], Any]) -> Any:
+    """Run the stages of an EXISTING ``op`` and settle the record."""
+    try:
+        result = run()
+    except Exception as e:
+        # Exception, not BaseException: a process going down must leave the
+        # record behind — that is exactly the case it exists for.
+        settle_error(op, e)
+        raise
+    settle(op, result)
+    return result
+
+
+def run_new(call: Callable[[Dict[str, Any]], Any]) -> Any:
+    """Run a pipeline that creates its operation itself, part-way through
+    (after its preprocessing): ``call(ctx)`` puts the record into
+    ``ctx["op"]`` once it exists, and the record is settled AFTER ``call``
+    returned — for the character pipelines that is after the ``_serial_model``
+    wrapper published the stage, the moment the result really is public."""
+    ctx: Dict[str, Any] = {}
+    try:
+        result = call(ctx)
+    except Exception as e:
+        if ctx.get("op") is not None:
+            settle_error(ctx["op"], e)
+        raise
+    if ctx.get("op") is not None:
+        settle(ctx["op"], result)
     return result
 
 

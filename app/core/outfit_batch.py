@@ -405,23 +405,28 @@ def stop(character_name: str) -> bool:
 # ── Run ─────────────────────────────────────────────────────────────────
 
 def _render_one(character_name: str, pieces: Dict[str, str], signature: str,
-                label: str, force: bool) -> Dict[str, Any]:
+                label: str, force: bool, in_flight: bool = False) -> Dict[str, Any]:
     """T-pose reference + mesh for one combination. Returns the result record;
-    never raises — a broken combination must not end the batch."""
+    never raises — a broken combination must not end the batch.
+
+    ``in_flight``: this task left the combination's mesh operation open
+    before a restart (app/core/hub_ops.py) — its T-pose is frozen in the
+    record, so it is not rendered again; the mesh call resumes the record."""
     from app.core.model3d import generate_for_current_outfit
     from app.core.model_refs import find_ref_image, generate_model_ref_images
 
     result = {"signature": signature, "name": label, "ok": False,
               "cached": False, "error": ""}
     try:
-        _set_current(character_name, label, "ref")
-        # Independent of the per-character auto toggles: those decide what an
-        # outfit CHANGE renders, the batch always needs the mesh input.
-        generate_model_ref_images(character_name, kinds=("tpose",), force=force,
-                                  pieces=pieces, items=[], signature=signature)
-        if not find_ref_image(character_name, "tpose", signature):
-            result["error"] = "T-pose render failed"
-            return result
+        if not in_flight:
+            _set_current(character_name, label, "ref")
+            # Independent of the per-character auto toggles: those decide what an
+            # outfit CHANGE renders, the batch always needs the mesh input.
+            generate_model_ref_images(character_name, kinds=("tpose",), force=force,
+                                      pieces=pieces, items=[], signature=signature)
+            if not find_ref_image(character_name, "tpose", signature):
+                result["error"] = "T-pose render failed"
+                return result
 
         _set_current(character_name, label, "mesh")
         res = generate_for_current_outfit(character_name, force=force,
@@ -467,6 +472,14 @@ def _handle_outfit_combos(payload: Dict[str, Any]) -> Dict[str, Any]:
             "failed": 0, "current": None, "results": [],
             "started_at": utc_now_iso(), "finished_at": ""}
 
+    # Combinations whose mesh operation this task left open before a restart
+    # (app/core/hub_ops.py): the static mesh is already published there, so
+    # the cache would call them done while their rig job is still out.
+    from app.core.hub_ops import open_task_inputs
+    in_flight = {str(i.get("signature")) for i in open_task_inputs("character_mesh")
+                 if i.get("character") == character_name}
+    have -= in_flight
+
     done = skipped = failed = 0
     cancelled = False
     logger.info("Outfit combos %s: %d combination(s), force=%s, %d cached",
@@ -487,7 +500,8 @@ def _handle_outfit_combos(payload: Dict[str, Any]) -> Dict[str, Any]:
                         st["skipped"] = skipped
                 continue
             label = _combo_label(pieces, names)
-            result = _render_one(character_name, pieces, signature, label, force)
+            result = _render_one(character_name, pieces, signature, label, force,
+                                 in_flight=signature in in_flight)
             done += 1
             if result["ok"]:
                 have.add(signature)
