@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Check that regenerating one T-pose view preserves every other image.
 
-Derived by hand: with four cached views, selecting back/left/right/front
+Derived by hand: with four cached views, selecting back/left/right/main
 must replace exactly that file, even with force=True and all views enabled.
-A side view without a front must fail without producing any image. Rendering
+A side view without a main must fail without producing any image. Rendering
 is replaced at the external image boundary; file lookup and selection are real.
 Storage is temporary and initialized before importing world modules.
 
@@ -27,7 +27,7 @@ def main():
         refs = Path(tmp) / "characters" / "demo" / "model_refs"
         refs.mkdir(parents=True)
         files = {
-            "front": refs / "tpose_sig.png",
+            "main": refs / "tpose_sig.png",
             "back": refs / "tpose_back_sig.png",
             "left": refs / "tpose_left_sig.png",
             "right": refs / "tpose_right_sig.png",
@@ -35,16 +35,16 @@ def main():
 
         def render(name, **kwargs):
             target = Path(str(kwargs["output_stem"]) + ".png")
-            if target != files["front"]:
-                assert kwargs["reference_image"] == files["front"]
-                assert files["front"].read_bytes() == b"old-front"
+            if target != files["main"]:
+                assert kwargs["reference_image"] == files["main"]
+                assert files["main"].read_bytes() == b"old-main"
             target.write_bytes(b"new")
             return target
 
         with (patch.object(mr, "is_humanoid", return_value=True),
               patch.object(mr, "enabled_tpose_views", return_value=("back", "left", "right")),
               patch.object(expression_regen, "generate_expression_image", side_effect=render)):
-            for selected in ("back", "left", "right", "front"):
+            for selected in ("back", "left", "right", "main"):
                 for view, file in files.items():
                     file.write_bytes(f"old-{view}".encode())
                 mr.generate_model_ref_images(
@@ -55,8 +55,8 @@ def main():
                     assert file.read_bytes() == expected, (selected, view)
                 print(f"ok: {selected} replaced alone")
 
-            files["front"].unlink()
-            before = {view: file.read_bytes() for view, file in files.items() if view != "front"}
+            files["main"].unlink()
+            before = {view: file.read_bytes() for view, file in files.items() if view != "main"}
             try:
                 mr.generate_model_ref_images(
                     "demo", kinds=("tpose",), force=True, tpose_view="back",
@@ -64,10 +64,10 @@ def main():
             except ValueError:
                 pass
             else:
-                raise AssertionError("A side view requires an existing front render")
-            assert not files["front"].exists()
+                raise AssertionError("A side view requires an existing main render")
+            assert not files["main"].exists()
             assert {view: files[view].read_bytes() for view in before} == before
-            print("ok: missing front refuses side regeneration without changing files")
+            print("ok: missing main refuses side regeneration without changing files")
 
 
 if __name__ == "__main__":

@@ -47,8 +47,8 @@ interface RefsInfo {
   signature?: string
   tpose?: RefInfo | null
   pose?: RefInfo | null
-  // Extra T-pose views for multi-view img2mesh (back/left/right). ALL three
-  // are reported for a humanoid character (empty for a non-humanoid one), so
+  // Extra T-pose views for multi-view img2mesh. The body form determines
+  // which three views are reported, so
   // the checkboxes can be rendered; `enabled` is the per-character toggle,
   // `info` the stored render (null = not rendered yet). They have no own
   // status lane; they ride with `tpose`.
@@ -62,7 +62,7 @@ interface RefsInfo {
 }
 
 // Display order of the extra views (checkboxes and thumbnails alike).
-const VIEW_ORDER = ['back', 'left', 'right'] as const
+const VIEW_ORDER = ['front', 'back', 'left', 'right'] as const
 
 type RefKind = 'pose' | 'tpose'
 
@@ -264,7 +264,7 @@ export function FieldModelRefs({
     return stopPoll
   }, [startPoll, stopPoll, refreshKey])
 
-  const generate = useCallback(async (view?: 'front' | typeof VIEW_ORDER[number]) => {
+  const generate = useCallback(async (view?: 'main' | typeof VIEW_ORDER[number]) => {
     if (busy) return
     setBusy(true)
     try {
@@ -316,7 +316,7 @@ export function FieldModelRefs({
           `/characters/${enc}/model-refs/views`, { [view]: value })
         setInfo((prev) => {
           const merged: NonNullable<RefsInfo['views']> = {}
-          VIEW_ORDER.forEach((v) => {
+          VIEW_ORDER.filter((v) => v in (prev.views || {})).forEach((v) => {
             merged[v] = { ...(prev.views?.[v] || {}), enabled: !!d.views?.[v] }
           })
           return { ...prev, views: merged }
@@ -356,9 +356,8 @@ export function FieldModelRefs({
   // Own source strings on purpose: the bare "Back" is the navigation label
   // elsewhere and localizes accordingly — a back VIEW does not.
   const viewLabel = (view: string) =>
-    view === 'back' ? t('Back view') : view === 'left' ? t('Left view') : t('Right view')
-  // The extra views only exist for humanoid characters — the backend reports
-  // an empty map for everyone else, and then there is nothing to offer.
+    view === 'front' ? t('Front view') : view === 'back' ? t('Back view') : view === 'left' ? t('Left view') : t('Right view')
+  // The backend reports the available views for this character body form.
   const hasViews = kindList.includes('tpose') && !!info.views &&
     Object.keys(info.views).length > 0
 
@@ -392,10 +391,10 @@ export function FieldModelRefs({
                   type="button"
                   className="ga-btn ga-btn-sm"
                   disabled={blocked}
-                  onClick={() => generate('front')}
-                  aria-label={`${t('Regenerate')} · ${t('Front view')}`}
+                  onClick={() => generate('main')}
+                  aria-label={`${t('Regenerate')} · ${t('Main view')}`}
                 >
-                  {t('Regenerate')} · {t('Front view')}
+                  {t('Regenerate')} · {t('Main view')}
                 </button>
               ) : null}
               {kind === 'tpose' &&
@@ -479,7 +478,7 @@ export function FieldModelRefs({
           </label>
         ))}
         {hasViews
-          ? VIEW_ORDER.map((view) => (
+          ? VIEW_ORDER.filter((view) => view in (info.views || {})).map((view) => (
               <label
                 key={view}
                 style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}

@@ -66,10 +66,15 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         "Mood/activity variants, wardrobe preview, NPC default variant",
         ["expression", "outfit"], _CHAR),
     "tpose": _image(
-        "T-pose & reference views", "Standard pose reference, T-pose + views",
-        ["tpose", "tpose_animal", "tpose_back", "tpose_side", "outfit"],
+        "T-pose main reference", "Standard pose reference, main mesh input",
+        ["tpose", "tpose_animal", "outfit"],
         {"character_scoped": True, "char_spec_field": "tpose_workflow",
          "char_spec_fallback": "workflow"}),
+    "tpose_view": _image(
+        "T-pose reference views", "Extra humanoid and animal reference views",
+        ["tpose_back", "tpose_side", "tpose_animal_view"],
+        {"character_scoped": True, "char_spec_field": "tpose_view_workflow",
+         "char_spec_fallback": ""}),
     "scene_view": _image("Rendered scene view", "Player 'Rendered' view",
                          ["scene"], _WORLD),
     "location": _image(

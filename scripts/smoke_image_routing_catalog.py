@@ -9,9 +9,10 @@ scan callers by AST/text, and Part D checks the service with transport doubles.
 
 PART A — THE CATALOG, DERIVED BY HAND FROM THE SPEC
 ---------------------------------------------------
-A1. Exactly these 24 occasions (§ 1 table, minus `mesh_low` which the review
-    DROPS, plus `frame` which the review ADDS):
-      photo instagram profile expression tpose scene_view location
+A1. Exactly these 25 occasions (§ 1 table, minus `mesh_low` which the review
+    DROPS, plus `frame` which the review ADDS, plus `tpose_view` from
+    plan-tier-animationen.md P1):
+      photo instagram profile expression tpose tpose_view scene_view location
       timevariant event prop surface_texture item regenerate frame video
       mesh_humanoid mesh_creature rig_humanoid rig_creature upscale face_retexture mesh_object
       mesh_building pose_animation
@@ -22,7 +23,7 @@ A3. media: video -> "video"; the four mesh_* -> "mesh"; pose_animation -> "anima
 A4. P1/P2: all mesh_* occasions require img2mesh/none. rig_humanoid
     requires mesh2rig/mixamo; rig_creature mesh2rig/generic.
     pose_animation requires mesh2anim; image/video occasions use category render.
-A5. character_scoped exactly: photo, instagram, profile, expression, tpose,
+A5. character_scoped exactly: photo, instagram, profile, expression, tpose, tpose_view,
     regenerate (§ 1 column "figurbez." = ja; frame is a product shot without
     a figure — review note).
 A7. needs_ref_slot only on timevariant (§ 1 "nur Backends mit >= 1 Ref-Slot").
@@ -145,12 +146,12 @@ def part_a():
     print("A) catalog")
     from app.imagegen import occasions as occ
 
-    expected_ids = ["photo", "instagram", "profile", "expression", "tpose",
+    expected_ids = ["photo", "instagram", "profile", "expression", "tpose", "tpose_view",
                     "scene_view", "location", "timevariant", "event", "prop",
                     "surface_texture", "item", "regenerate", "frame", "video",
                     "mesh_humanoid", "mesh_creature", "rig_humanoid", "rig_creature", "upscale", "face_retexture", "mesh_object",
                     "mesh_building", "pose_animation"]
-    check("A1 the 24 occasions in catalog order", occ.occasion_ids(), expected_ids)
+    check("A1 the 25 occasions in catalog order", occ.occasion_ids(), expected_ids)
 
     try:
         occ.get_occasion("mesh_low")
@@ -162,7 +163,7 @@ def part_a():
     check("A3 video media", media["video"], "video")
     check("A3 mesh media", sorted(i for i, m in media.items() if m == "mesh"),
           ["face_retexture", "mesh_building", "mesh_creature", "mesh_humanoid", "mesh_object", "rig_creature", "rig_humanoid"])
-    check("A3 image media count", sum(1 for m in media.values() if m == "image"), 15)
+    check("A3 image media count", sum(1 for m in media.values() if m == "image"), 16)
 
     check("A4 rigs", {i: occ.get_occasion(i).get("rig") for i in
                       ("mesh_humanoid", "mesh_creature", "mesh_object", "mesh_building")},
@@ -177,7 +178,7 @@ def part_a():
 
     check("A5 character scoped",
           [i for i in expected_ids if occ.get_occasion(i)["character_scoped"]],
-          ["photo", "instagram", "profile", "expression", "tpose", "regenerate"])
+          ["photo", "instagram", "profile", "expression", "tpose", "tpose_view", "regenerate"])
 
     check("A7 needs_ref_slot",
           [i for i in expected_ids if occ.get_occasion(i).get("needs_ref_slot")],

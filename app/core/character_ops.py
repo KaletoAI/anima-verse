@@ -1847,6 +1847,7 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
     # Separate backend glob for the T-pose reference renders (the image->3D
     # input), e.g. a pose-controlled alias. Empty = the normal match above.
     tpose_workflow = (body.get("tpose_workflow") or "").strip()
+    tpose_view_workflow = (body.get("tpose_view_workflow") or "").strip()
     clean_loras = _clean_lora_list(body.get("loras"))
     # Own LoRA list for the T-pose reference renders: it REPLACES the list
     # above for those renders (different backend, different LoRA ecosystem —
@@ -1864,10 +1865,11 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
         # the key is PRESENT in the profile. A del leaves the old config value in
         # place. Empty workflow + no LoRAs = override deleted. ``model`` is dropped
         # (it comes from the workflow).
-        if workflow or profile_workflow or tpose_workflow or clean_loras or clean_tpose_loras:
+        if workflow or profile_workflow or tpose_workflow or tpose_view_workflow or clean_loras or clean_tpose_loras:
             prof["outfit_imagegen"] = {"workflow": workflow,
                                        "profile_workflow": profile_workflow,
                                        "tpose_workflow": tpose_workflow,
+                                       "tpose_view_workflow": tpose_view_workflow,
                                        "loras": clean_loras,
                                        "tpose_loras": clean_tpose_loras}
         else:
@@ -1876,7 +1878,8 @@ def apply_outfit_imagegen(character_name: str, body: Dict[str, Any]) -> Dict[str
             raise HTTPException(status_code=500, detail="Failed to save image-generation overrides")
     return {"status": "ok", "workflow": workflow,
             "profile_workflow": profile_workflow,
-            "tpose_workflow": tpose_workflow, "loras": clean_loras,
+            "tpose_workflow": tpose_workflow,
+            "tpose_view_workflow": tpose_view_workflow, "loras": clean_loras,
             "tpose_loras": clean_tpose_loras}
 
 

@@ -92,28 +92,28 @@ TPOSE_PROMPT_DEFAULT = (
     "open space visible between them, hair clear of the chest"
 )
 
-# Non-humanoid characters (animals): a T-pose is meaningless on four legs.
-# What the image-to-3D pass needs: a SYMMETRIC stance (the symmetry comes
-# from the pose, not the camera — the 3/4 view is there so body length and
-# leg spacing stay visible), the head straight ahead in the body's direction
-# (a head turned to the camera bakes a twisted neck into the mesh), legs
-# clearly apart, the tail set off from the body, and the mouth closed
-# (open jaws produce broken head geometry). Framing/background come from the
-# "tpose_animal" use-case style, the species description from the identity.
+# Animals use a strict profile, not a three-quarter view, to keep the mesh
+# axis aligned. Facing LEFT makes the main image the left view for a
+# multi-view mesher. Vertical legs preserve natural joints: the old "legs
+# straight" wording made riggers bake unfoldable legs into the mesh.
+# Framing/background come from "tpose_animal"; identity supplies the species.
 ANIMAL_POSE_PROMPT_DEFAULT = (
-    "standing still in a neutral pose on all four legs, three-quarter view, "
-    "head facing straight forward in the direction of the body, not looking "
-    "at the camera, all four legs straight and clearly apart, tail extended "
-    "away from the body, mouth closed"
+    "full side view in profile facing the left edge of the frame, left flank facing the camera, standing square on all four legs, front paws side by side, hind paws side by side, legs vertical under the body, head in profile in line with the body, tail extended away from the body, mouth closed"
 )
 
+ANIMAL_VIEW_PROMPT_DEFAULTS = {
+    "front": "the same animal turned to face the camera, seen directly from the front, head-on view, face and chest facing the camera, standing square on all four legs, legs vertical under the body, mouth closed, front paws side by side, head level, gaze straight ahead",
+    "back": "the same animal turned around, seen directly from behind, rear view, hindquarters and tail facing the camera, head pointing straight away from the camera, standing square on all four legs, legs vertical under the body, mouth closed, hind paws side by side",
+    "right": "the same animal turned to face the other way, full side view in profile facing the right edge of the frame, right flank facing the camera, standing square on all four legs, legs vertical under the body, mouth closed, front paws side by side, hind paws side by side, head in profile in line with the body, tail extended away from the body",
+}
+
 # OPTIONAL extra views of the T-pose reference render (per character, default
-# off, humanoid characters only). They exist for multi-view img2mesh backends:
-# a single front image leaves the mesher to HALLUCINATE the back of the head,
+# off for humanoids and on for animals). They exist for multi-view img2mesh backends:
+# a single main image leaves the mesher to HALLUCINATE the back of the head,
 # the back of the outfit and the body depth — a back view replaces that guess
 # with a rendered surface, the two profiles pin the depth.
 #
-# Like the front pose these are PURE POSE text; framing, lighting and
+# Like the main pose these are PURE POSE text; framing, lighting and
 # background come from the use-case styles ("tpose_back" / "tpose_side").
 #
 # The back view deliberately carries NO face token (and gets an EMPTY
@@ -124,7 +124,7 @@ ANIMAL_POSE_PROMPT_DEFAULT = (
 # see (back of the head, upper back, shoulder blades) and where the head
 # points, instead of the old "face not visible", which named the face itself.
 # "the same figure turned around" speaks to the reference: every extra view
-# slots the front T-pose render (not the frontal profile portrait), so an
+# slots the main T-pose render (not the frontal profile portrait), so an
 # edit-capable backend turns THAT figure around. Hair CLEAR of the back here
 # for the same reason the front view wants it clear of the chest (2026-09-27
 # reword, see there) — the surface the mesher is supposed to read from this
@@ -148,7 +148,7 @@ TPOSE_BACK_PROMPT_DEFAULT = (
 # actually SHOWS — a strongly foreshortened near arm that hides the far one —
 # and the forward/down failure modes are pushed away in _NEG_TPOSE_SIDE.
 # "the same figure turned sideways" speaks to the reference — like the back
-# view, a profile slots the front T-pose render.
+# view, a profile slots the main T-pose render.
 TPOSE_SIDE_PROMPT_TEMPLATE = (
     "the same figure turned sideways, strict {side} side profile view, the "
     "whole body in profile facing the "
@@ -166,11 +166,15 @@ TPOSE_VIEW_PROMPT_DEFAULTS = {
     "left": TPOSE_LEFT_PROMPT_DEFAULT,
     "right": TPOSE_RIGHT_PROMPT_DEFAULT,
 }
-TPOSE_VIEWS = ("back", "left", "right")
+TPOSE_VIEWS_BY_BODY = {
+    "humanoid": ("back", "left", "right"),
+    "animal": ("front", "back", "right"),
+}
 # File kinds of the extra views. They are NOT part of REF_KINDS: there is no
 # own auto-toggle, no own UI tile and no own debounce lane for them — they are
 # rendered inside the "tpose" pass and stand or fall with it.
-VIEW_KINDS = tuple(f"tpose_{v}" for v in TPOSE_VIEWS)
+VIEW_KINDS = tuple(f"tpose_{v}" for v in dict.fromkeys(
+    view for views in TPOSE_VIEWS_BY_BODY.values() for view in views))
 # Framing/lighting/negatives per view. Both profiles share one use case: the
 # framing question ("does the arm span fit") is identical for left and right.
 TPOSE_VIEW_USE_CASES = {
@@ -246,17 +250,21 @@ def get_tpose_view_prompt(view: str) -> str:
     return override or TPOSE_VIEW_PROMPT_DEFAULTS.get(view, "")
 
 
-def enabled_tpose_views(character_name: str) -> tuple:
-    """The extra T-pose views switched on for THIS character (profile field
-    ``model_ref_views``), in TPOSE_VIEWS order. All off by default — one extra
-    view is one extra render per outfit combination.
+def tpose_views_for_character(character_name: str) -> tuple:
+    """Allowed extra views in display/render order for the body form."""
+    return TPOSE_VIEWS_BY_BODY["humanoid" if is_humanoid(character_name) else "animal"]
 
-    A non-humanoid character never has extra views (a T-pose is meaningless on
-    four legs), so the humanoid gate lives HERE and in exactly one place."""
-    if not is_humanoid(character_name):
-        return ()
+
+def get_animal_view_prompt(view: str) -> str:
+    """Animal view pose: admin override or built-in default."""
+    override = str(_cfg(f"animal_{view}_prompt", "") or "").strip()
+    return override or ANIMAL_VIEW_PROMPT_DEFAULTS.get(view, "")
+
+
+def enabled_tpose_views(character_name: str) -> tuple:
+    """Enabled body-form views: animals default on, humanoids default off."""
     enabled = get_view_kinds(character_name)
-    return tuple(v for v in TPOSE_VIEWS if enabled.get(v))
+    return tuple(v for v in tpose_views_for_character(character_name) if enabled.get(v))
 
 
 def is_humanoid(character_name: str) -> bool:
@@ -326,13 +334,14 @@ def set_auto_kinds(character_name: str, updates: Dict[str, Any]) -> Dict[str, bo
 def get_view_kinds(character_name: str) -> Dict[str, bool]:
     """Per-character, per-view toggles for the extra T-pose renders that feed
     multi-view img2mesh (profile field ``model_ref_views``; missing key =
-    off)."""
+    on for animals, off for humanoids)."""
     from app.models.character import get_character_profile
     try:
         raw = (get_character_profile(character_name) or {}).get("model_ref_views") or {}
     except Exception:
         raw = {}
-    return {k: bool(raw.get(k, False)) for k in TPOSE_VIEWS}
+    default = not is_humanoid(character_name)
+    return {k: bool(raw.get(k, default)) for k in tpose_views_for_character(character_name)}
 
 
 def set_view_kinds(character_name: str, updates: Dict[str, Any]) -> Dict[str, bool]:
@@ -342,12 +351,16 @@ def set_view_kinds(character_name: str, updates: Dict[str, Any]) -> Dict[str, bo
     from app.models.character import get_character_profile, save_character_profile
     # Read AND write under the per-character profile lock (DATA-3), same leaf
     # span as ``set_auto_kinds``.
+    views = tpose_views_for_character(character_name)
+    if any(key not in views for key in (updates or {})):
+        raise ValueError("Unknown T-pose view for character body form")
+    default = not is_humanoid(character_name)
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
         current = profile.get("model_ref_views") or {}
-        merged = {k: bool(current.get(k, False)) for k in TPOSE_VIEWS}
+        merged = {k: bool(current.get(k, default)) for k in views}
         for key, val in (updates or {}).items():
-            if key in TPOSE_VIEWS:
+            if key in views:
                 merged[key] = bool(val)
         profile["model_ref_views"] = merged
         save_character_profile(character_name, profile)
@@ -606,8 +619,8 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
     """Per-kind info for the UI — always for the CURRENTLY worn outfit
     combination (filename + sidecar meta, or None if not rendered yet).
 
-    ``views`` carries ALL extra T-pose views of a humanoid character (empty
-    for a non-humanoid one) as ``{"enabled": bool, "info": <info|None>}``: the
+    ``views`` carries ALL extra T-pose views of the character body form as
+    ``{"enabled": bool, "info": <info|None>}``: the
     UI needs every view to render its checkbox, the switched-off ones
     included. The views have no own status lane — they ride with "tpose"."""
     try:
@@ -619,12 +632,11 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
         path = find_ref_image(character_name, kind) if signature else None
         out[kind] = _ref_info(path)
     views: Dict[str, Any] = {}
-    if is_humanoid(character_name):
-        enabled = set(enabled_tpose_views(character_name))
-        for view in TPOSE_VIEWS:
-            path = (find_ref_image(character_name, f"tpose_{view}", signature)
-                    if signature else None)
-            views[view] = {"enabled": view in enabled, "info": _ref_info(path)}
+    enabled = set(enabled_tpose_views(character_name))
+    for view in tpose_views_for_character(character_name):
+        path = (find_ref_image(character_name, f"tpose_{view}", signature)
+                if signature else None)
+        views[view] = {"enabled": view in enabled, "info": _ref_info(path)}
     out["views"] = views
     out["auto"] = get_auto_kinds(character_name)
     out["status"] = get_render_status(character_name)
@@ -688,20 +700,20 @@ def generate_model_ref_images(character_name: str,
     identical, so an overridden run is indistinguishable from a worn one.
 
     The "tpose" kind additionally renders the extra views switched on for
-    this character (back/left/right, humanoid characters only) as
+    this character (views depend on its body form) as
     ``tpose_<view>_<signature>``: input for multi-view img2mesh backends.
-    They ride along with the front render — the kind counts as cached only
-    once every enabled view exists too, and an already rendered front image
+    They ride along with the main render — the kind counts as cached only
+    once every enabled view exists too, and an already rendered main image
     is then reused instead of being generated again. A failing view is
-    logged and skipped; only the front render is essential.
+    logged and skipped; only the main render is essential.
 
-    ``tpose_view`` selects exactly front/back/left/right for a manual render.
-    An extra view reuses the cached front even with ``force=True``; it never
-    regenerates another view. Without a cached front it raises ValueError."""
+    ``tpose_view`` selects main or one body-form view for a manual render.
+    An extra view reuses the cached main even with ``force=True``; it never
+    regenerates another view. Without a cached main it raises ValueError."""
     from app.core.expression_regen import generate_expression_image
     from app.core.expression_pose_maps import default_pose_prompt
 
-    if tpose_view is not None and tpose_view not in ("front", *TPOSE_VIEWS):
+    if tpose_view is not None and tpose_view not in ("main", *tpose_views_for_character(character_name)):
         raise ValueError("Unknown T-pose view")
     override = (pieces, items, signature)
     if any(o is not None for o in override) and any(o is None for o in override):
@@ -732,10 +744,10 @@ def generate_model_ref_images(character_name: str,
     humanoid = is_humanoid(character_name)
     views = enabled_tpose_views(character_name)
     if tpose_view is not None:
-        views = () if tpose_view == "front" else (tpose_view,)
-        if tpose_view != "front" and (
-                not humanoid or not find_ref_image(character_name, "tpose", signature)):
-            raise ValueError("An extra T-pose view requires an existing humanoid front render")
+        views = () if tpose_view == "main" else (tpose_view,)
+        if tpose_view != "main" and (
+                not find_ref_image(character_name, "tpose", signature)):
+            raise ValueError("An extra T-pose view requires an existing main render")
     if not force:
         cached = tuple(k for k in kinds
                        if k != "pose" and find_ref_image(character_name, k, signatures[k])
@@ -781,9 +793,9 @@ def generate_model_ref_images(character_name: str,
             _w, _h = _tpose_size() if _tpose else (None, None)
             # A kind only reaches this loop when something is missing — for
             # "tpose" that may be an extra view alone, and then the existing
-            # front render is reused instead of burning a second GPU run.
+            # main render is reused instead of burning a second GPU run.
             path: Optional[Path] = (
-                None if force and tpose_view in (None, "front")
+                None if force and tpose_view in (None, "main")
                 else find_ref_image(character_name, kind, signature))
             if path is None:
                 path = generate_expression_image(
@@ -804,7 +816,7 @@ def generate_model_ref_images(character_name: str,
                     # Wardrobe previews use the normal character match;
                     # only mesh-input references use the T-pose match.
                     occasion="tpose" if _tpose else "expression")
-            if tpose_view in (None, "front"):
+            if tpose_view in (None, "main"):
                 results[kind] = str(path) if path else None
             if path is None:
                 logger.warning("Model ref %s for %s (%s): render failed",
@@ -813,8 +825,8 @@ def generate_model_ref_images(character_name: str,
                 _cleanup_legacy(refs_dir, kind)
             # Extra views for multi-view img2mesh — same outfit, same size,
             # same signature, only the pose/use-case layer differs. Missing
-            # views are never fatal: the mesh runs off the front render.
-            if _tpose and humanoid and path is not None:
+            # views are never fatal: the mesh runs off the main render.
+            if _tpose and path is not None:
                 for view in views:
                     view_kind = f"tpose_{view}"
                     if not force and find_ref_image(character_name, view_kind,
@@ -824,28 +836,30 @@ def generate_model_ref_images(character_name: str,
                         view_path = generate_expression_image(
                             character_name, mood="", pose_key="",
                             equipped_pieces=pieces, equipped_items=items,
-                            prompt_prefix=get_tpose_view_prompt(view),
+                            prompt_prefix=(get_tpose_view_prompt(view) if humanoid
+                                           else get_animal_view_prompt(view)),
                             pose_prompt_override="",
                             # No face is visible from behind — an expression
                             # layer there only tempts the model to turn the
                             # character around or paint a face on the back.
                             expression_prompt_override=(
                                 "" if view == "back" else REF_EXPRESSION_PROMPT),
-                            image_use_case=TPOSE_VIEW_USE_CASES[view],
+                            image_use_case=(TPOSE_VIEW_USE_CASES[view] if humanoid
+                                            else "tpose_animal_view"),
                             override_width=_w, override_height=_h,
                             output_stem=refs_dir / f"{view_kind}_{signature}",
                             apply_state_modifiers=False,
-                            occasion="tpose",
+                            occasion="tpose_view",
                             # Seen from behind, the species package decides
                             # which exposed anatomy still shows (body slot
                             # `back: true`); front-only fragments and their
                             # LoRAs drag the figure around toward the
                             # camera, which is what this view must not do.
                             back_view=view == "back",
-                            # Every extra view slots the front render of THIS
+                            # Every extra view slots the main render of THIS
                             # outfit, not the frontal profile portrait: a face
                             # in the reference drags the figure toward the
-                            # camera, and the front render carries exactly the
+                            # camera, and the main render carries exactly the
                             # figure, outfit and proportions the views must
                             # match for multi-view img2mesh.
                             reference_image=path)

@@ -8,6 +8,7 @@
     }
   },
   "translations": {
+    "Enabled and flip are saved for this model; they take effect after rebuilding its extension bones.": "Aktiv und Richtungsumkehr werden für dieses Modell gespeichert; sie wirken nach dem Neuaufbau seiner Erweiterungsknochen.",
     "Source check": "Prüfung des Ausgangsmaterials",
     "Backends": "Backends",
     "Parameters": "Parameter",
@@ -2517,6 +2518,9 @@
     "Reference upscale failed — using original photo": "Hochskalierung fehlgeschlagen — Originalfoto wird verwendet",
     "Reference upscale skipped — already large enough": "Hochskalierung übersprungen — Referenzbild bereits groß genug",
     "Reference upscale off": "Hochskalierung ausgeschaltet",
-    "Cached": "Aus Cache"
+    "Cached": "Aus Cache",
+    "Main view": "Hauptansicht",
+    "T-pose views backend match (glob)": "Backend-Muster für T-Pose-Ansichten (Glob)",
+    "Empty: T-pose views chain": "Leer: Kette für T-Pose-Ansichten"
   }
 }

@@ -135,7 +135,7 @@ _NEG_PHOTO = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, "
 # the positive directly ("both feet fully/entirely inside the frame"),
 # mirroring the existing hands clause — this negative is the same pairing.
 _NEG_TPOSE = ("illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, cropped feet, feet cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, palms facing the camera, palms facing up, clenched fists, curled fingers, fingers pressed together, splayed fingers, fanned fingers, oversized hands, large hands, thick fingers, chunky fingers, swollen fingers, fused fingers, mitten hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance")
-_NEG_TPOSE_ANIMAL = ("illustration, anime, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up")
+_NEG_TPOSE_ANIMAL = ("illustration, anime, painting, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, rim light, backlighting, cropped, out of frame, cropped legs, tail cut off, close-up, portrait, head only, human, person, hands, anthropomorphic, standing on two legs, clothing, costume, looking at the camera, head turned toward the camera, open mouth, sitting, lying down, curled up, walking, mid-stride, one paw raised, staggered legs, head turned, looking at viewer")
 
 # Negatives of the OPTIONAL extra mesh views (back / left+right profile).
 # Both build on _NEG_TPOSE and add what actually goes wrong there: the model
@@ -543,13 +543,25 @@ _DEFAULT_IMAGE_USE_CASES = {
     # the negatives push away from anthropomorphism.
     "tpose_animal": {
         "keywords": {
-            "prompt_style": "render of a realistic 3D animal model, lifelike fur and skin textures, full body view of the animal, nose to tail, all four legs and the tail fully inside the frame, three-quarter side view, margin around the animal, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D animal model, lifelike fur and skin textures, full body view of the animal, nose to tail, all four legs and the tail fully inside the frame, full side view, camera perpendicular to the body, margin around the animal, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE_ANIMAL,
             "prompt_instruction": "Write comma-separated tags describing the animal's whole body from nose to tail on a plain background with flat even lighting. Do not mention pose or expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the animal as a realistic 3D creature figure with lifelike fur and skin textures, shown from nose to tail against a plain neutral background, seen from a three-quarter side angle with all four legs and the tail entirely inside the frame and margin around it, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the animal as a realistic 3D creature figure with lifelike fur and skin textures, shown from nose to tail against a plain neutral background, seen in full side view with the camera perpendicular to the body, all four legs and the tail entirely inside the frame and margin around it, flat even shadowless lighting, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_ANIMAL,
+            "prompt_instruction": "Describe the animal's whole body from nose to tail on a plain background with flat even lighting. Do not mention pose or expression.",
+        },
+    },
+    "tpose_animal_view": {
+        "keywords": {
+            "prompt_style": "render of a realistic 3D animal model, lifelike fur and skin textures, full body view of the animal, nose to tail, all four legs and the tail fully inside the frame, full side view, camera perpendicular to the body, margin around the animal, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
+            "prompt_negative": _NEG_TPOSE_ANIMAL + ", cast shadow, drop shadow, shadow on the floor",
+            "prompt_instruction": "Write comma-separated tags describing the animal's whole body from nose to tail on a plain background with flat even lighting. Do not mention pose or expression.",
+        },
+        "natural": {
+            "prompt_style": "a full-body render of the animal as a realistic 3D creature figure with lifelike fur and skin textures, shown from nose to tail against a plain neutral background, seen in full side view with the camera perpendicular to the body, all four legs and the tail entirely inside the frame and margin around it, flat even shadowless lighting, uniform illumination, sharp focus",
+            "prompt_negative": _NEG_TPOSE_ANIMAL + ", cast shadow, drop shadow, shadow on the floor",
             "prompt_instruction": "Describe the animal's whole body from nose to tail on a plain background with flat even lighting. Do not mention pose or expression.",
         },
     },
@@ -1364,6 +1376,16 @@ def _migrate_image_routing(config: dict) -> bool:
     return changed
 
 
+def _migrate_tpose_view_routing(config: dict) -> bool:
+    """Copy the main T-pose chain once; an existing view chain owns its value."""
+    import copy
+    routing = (config.get("image_generation") or {}).get("routing")
+    if not isinstance(routing, dict) or "tpose_view" in routing:
+        return False
+    routing["tpose_view"] = copy.deepcopy(routing.get("tpose", []))
+    return True
+
+
 def _migrate_mesh_rig_split(config: dict) -> bool:
     """Seed empty rig chains from old declarations, then drop the field once.
 
@@ -1422,6 +1444,8 @@ def _apply_file_migrations(config: dict) -> bool:
     """
     changed = False
     if _migrate_image_routing(config):
+        changed = True
+    if _migrate_tpose_view_routing(config):
         changed = True
     if _seed_default_use_cases(config):
         changed = True

@@ -33,7 +33,7 @@ logger = get_logger(__name__)
 # T-pose (humanoid / animal) plus the extra back and profile views. They are
 # the ones a per-character T-pose backend match applies to; every other use
 # case keeps the normal render match. Set in ``app/core/model_refs.py``.
-TPOSE_USE_CASES = ("tpose", "tpose_animal", "tpose_back", "tpose_side")
+TPOSE_USE_CASES = ("tpose", "tpose_animal", "tpose_back", "tpose_side", "tpose_animal_view")
 
 # In-flight generation tracking (character:cache_key)
 _generating: Set[str] = set()
@@ -1071,7 +1071,7 @@ def generate_expression_image(character_name: str,
             # uses "expression" and keeps the normal character LoRAs.
             _tpose_loras = _char_override.get("tpose_loras")
             if (isinstance(_tpose_loras, list) and _tpose_loras
-                    and _occasion == "tpose"):
+                    and _occasion in ("tpose", "tpose_view")):
                 loras_override = _tpose_loras
     except Exception as _err:
         logger.debug("Reading the outfit imagegen override failed: %s", _err)

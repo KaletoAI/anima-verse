@@ -949,6 +949,7 @@ def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
         # Backend glob for the T-pose reference renders only; empty = the
         # normal render match.
         "tpose_workflow": override.get("tpose_workflow", "") or "",
+        "tpose_view_workflow": override.get("tpose_view_workflow", "") or "",
         "model": override.get("model", "") or "",
         "loras": override.get("loras", []) or [],
         # LoRAs used INSTEAD of "loras" for the T-pose reference renders;
@@ -1370,10 +1371,10 @@ async def generate_character_model_refs(character_name: str,
     ``{"kinds": ["pose"]}`` narrows to specific images — each tab sends its
     own kind, so wardrobe (pose) and 3D (tpose) generate independently.
     Without kinds the per-image auto toggles decide. ``view`` selects exactly
-    one T-pose view (front/back/left/right), leaving other renders untouched."""
+    main or one body-form T-pose view, leaving other renders untouched."""
     from app.core.model_refs import (
-        REF_KINDS, TPOSE_VIEWS, current_outfit_state, find_ref_image,
-        is_humanoid, trigger_now,
+        REF_KINDS, tpose_views_for_character, current_outfit_state, find_ref_image,
+        trigger_now,
     )
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
@@ -1384,17 +1385,17 @@ async def generate_character_model_refs(character_name: str,
     kinds = body.get("kinds") if isinstance(body, dict) else None
     view = body.get("view") if isinstance(body, dict) else None
     if view is not None:
-        if view not in ("front", *TPOSE_VIEWS):
+        if view not in ("main", *tpose_views_for_character(character_name)):
             raise HTTPException(status_code=422, detail="Unknown T-pose view")
         if kinds is not None and kinds != ["tpose"]:
             raise HTTPException(status_code=422, detail="view requires kinds ['tpose']")
         kinds = ["tpose"]
-        if view != "front":
+        if view != "main":
             _, _, signature = current_outfit_state(character_name)
-            if not is_humanoid(character_name) or not find_ref_image(
+            if not find_ref_image(
                     character_name, "tpose", signature):
                 raise HTTPException(status_code=409,
-                                    detail="Generate the front T-pose render first")
+                                    detail="Generate the main T-pose render first")
     if kinds is not None:
         if not isinstance(kinds, list):
             raise HTTPException(status_code=422, detail="kinds must be a list")
@@ -1432,7 +1433,7 @@ def _set_character_model_refs_auto_sync(character_name: str,
 async def set_character_model_refs_views(character_name: str,
                                          request: Request) -> Dict[str, Any]:
     """Per-character toggles for the extra T-pose views (multi-view img2mesh
-    input; body: {back?: bool, left?: bool, right?: bool})."""
+    input; keys depend on character body form)."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_set_character_model_refs_views_sync,
@@ -1448,14 +1449,17 @@ def _set_character_model_refs_views_sync(character_name: str,
         raise HTTPException(status_code=404, detail="Character not found")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
-    return {"views": set_view_kinds(character_name, body)}
+    try:
+        return {"views": set_view_kinds(character_name, body)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("/{character_name}/model-refs/{kind}")
 def get_character_model_ref_image(character_name: str, kind: str, request: Request):
     """Serves the reference render of the CURRENT outfit combination; 404
     when absent. ``kind`` is ``tpose``/``pose`` or one of the extra T-pose
-    view kinds (``tpose_back``/``tpose_left``/``tpose_right``). ETag so a
+    view kinds (``tpose_front``/``tpose_back``/``tpose_left``/``tpose_right``). ETag so a
     re-render of the same combination (or an outfit switch) is picked up
     instead of a stale cached image."""
     from fastapi.responses import Response
@@ -1940,6 +1944,9 @@ def _set_character_model3d_options_sync(character_name: str,
     if "auto_generate" in body:
         updates["auto_generate"] = bool(body["auto_generate"])
     if "extension_rig" in body:
+        if not isinstance(body.get("signature"), str):
+            raise HTTPException(400, "extension_rig requires a model signature")
+        updates["signature"] = body["signature"]
         overrides = body["extension_rig"]
         if not isinstance(overrides, dict) or any(
                 not isinstance(group_id, str) or not group_id

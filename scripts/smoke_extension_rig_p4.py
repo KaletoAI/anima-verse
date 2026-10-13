@@ -9,6 +9,8 @@ Rest angles 12 and 24 compose to max=24. Missing gain preserves 1;
 explicit gain=0 yields 0. State flatten/spill/gain multiply then clamp at 1.
 State angles accept [-180,180] independently of the fixture rest limit 45. Legacy fork files: 6 folders x 3
 files plus 4 T-pose views = 22 unreachable files, all must be removed.
+Tier-animationen P1 adds three animal views: main + front/back/right = four
+neutral animal images, all using the outfit-only signature.
 An active state changes motion only; mesh signatures stay outfit-only.
 Two unchanged polls require zero definition and profile reloads on the second.
 Finite state factors 1e308 squared overflow; effective limits require frequency
@@ -309,7 +311,8 @@ def main():
                 patch.object(model_refs, 'is_humanoid', return_value=False),
             ):
                 model_refs.generate_model_ref_images('sample', kinds=('tpose',), force=True)
-            check(len(calls) == 1 and calls[0]['image_use_case'] == 'tpose_animal'
+            # Tier-animationen P1: main + front/back/right = four neutral renders.
+            check(len(calls) == 4 and calls[0]['image_use_case'] == 'tpose_animal'
                   and not calls[0]['apply_state_modifiers'] and str(calls[0]['output_stem']).endswith(neutral), 'animal mesh input neutral')
             from app.core import model3d, outfit_batch, outfit_cache_gc as gc
             meshes = model3d.get_model3d_dir('sample')

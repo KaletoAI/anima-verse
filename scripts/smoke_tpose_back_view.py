@@ -14,9 +14,10 @@ Three parts of the fix, each checked against values derived BY HAND:
     inside the character's own model_refs directory — the value arrives in a
     JSON tool input, so a path elsewhere must never reach a backend upload.
 [4] Measured at the consumer: ``generate_model_ref_images`` hands EVERY
-    extra view (back, left, right) the front render it just produced as
+    extra view (back, left, right) the main render it just produced as
     ``reference_image`` (user decision 2026-09-24 — the profiles too), while
-    the front render itself keeps the normal profile-image reference (None).
+    the main render itself keeps the normal profile-image reference (None).
+    P1 requires one main tpose occasion and three tpose_view occasions.
     The render call is replaced by a recorder; no backend, no DB.
 [5] Palms face DOWN toward the floor in all four pose texts (user decision
     2026-09-24 — the Mixamo bind pose), none forward or away.
@@ -112,6 +113,7 @@ from app.core import expression_regen  # noqa: E402
 
 calls = []
 prefixes = {}
+occasions = {}
 
 
 def _fake_render(character_name, **kw):
@@ -120,27 +122,32 @@ def _fake_render(character_name, **kw):
     kind = out.stem.rsplit("_", 1)[0]
     calls.append((kind, kw.get("reference_image")))
     prefixes[kind] = kw.get("prompt_prefix")
+    occasions[kind] = kw.get("occasion")
     return out
 
 
 expression_regen.generate_expression_image = _fake_render
 model_refs.is_humanoid = lambda name: True
-model_refs.enabled_tpose_views = lambda name: model_refs.TPOSE_VIEWS
+model_refs.enabled_tpose_views = lambda name: model_refs.TPOSE_VIEWS_BY_BODY["humanoid"]
 model_refs.find_ref_image = lambda *a, **k: None
 model_refs.get_model_refs_dir = lambda name: refs
 model_refs.generate_model_ref_images(
     "Demo", kinds=("tpose",), force=True,
     pieces={}, items=[], signature="sig0")
-front_render = refs / "tpose_sig0.png"
+main_render = refs / "tpose_sig0.png"
 check("[4] reference per render (kind, reference_image)",
       calls,
       [("tpose", None),
-       ("tpose_back", front_render),
-       ("tpose_left", front_render),
-       ("tpose_right", front_render)])
+       ("tpose_back", main_render),
+       ("tpose_left", main_render),
+       ("tpose_right", main_render)])
+# P1: one main occasion plus three independent reference-view occasions.
+check("[4] main and extra-view occasions", occasions,
+      {"tpose": "tpose", "tpose_back": "tpose_view",
+       "tpose_left": "tpose_view", "tpose_right": "tpose_view"})
 # [5] Palms DOWN in every view (user decision 2026-09-24, the Mixamo bind
 #     pose) — the front, the back and both profiles, nothing facing forward.
-for _label, _text in (("front", model_refs.TPOSE_PROMPT_DEFAULT),
+for _label, _text in (("main", model_refs.TPOSE_PROMPT_DEFAULT),
                       ("back", model_refs.TPOSE_BACK_PROMPT_DEFAULT),
                       ("left", model_refs.TPOSE_LEFT_PROMPT_DEFAULT),
                       ("right", model_refs.TPOSE_RIGHT_PROMPT_DEFAULT)):
@@ -153,7 +160,7 @@ for _label, _text in (("front", model_refs.TPOSE_PROMPT_DEFAULT),
 #     hair long enough to push there — short hair could not satisfy that and
 #     either broke the instruction or tempted the model to grow the hair.
 for _label, _text, _side in (
-        ("front", model_refs.TPOSE_PROMPT_DEFAULT, "chest"),
+        ("main", model_refs.TPOSE_PROMPT_DEFAULT, "chest"),
         ("back", model_refs.TPOSE_BACK_PROMPT_DEFAULT, "back"),
         ("left", model_refs.TPOSE_LEFT_PROMPT_DEFAULT, "chest"),
         ("right", model_refs.TPOSE_RIGHT_PROMPT_DEFAULT, "chest")):
@@ -175,7 +182,7 @@ for _uc_key in ("tpose", "tpose_back", "tpose_side"):
         _style = _UC9[_uc_key][_fam]["prompt_style"]
         check(f"[9] {_uc_key}/{_fam}: feet named inside the frame",
               "feet" in _style and "inside the frame" in _style, True)
-for _label, _neg in (("front", _NEG9), ("back", _NEG9_BACK),
+for _label, _neg in (("main", _NEG9), ("back", _NEG9_BACK),
                      ("side", _NEG9_SIDE)):
     check(f"[9] {_label} negative: cropped feet guarded like hands",
           "cropped feet, feet cut off" in _neg, True)
@@ -188,7 +195,7 @@ check("[4] profile text speaks to the reference",
 # [6] ------------------------------------------------------------------------
 from app.core.config import _NEG_TPOSE, _NEG_TPOSE_BACK, _NEG_TPOSE_SIDE  # noqa: E402
 
-_POSE_TEXTS = (("front", model_refs.TPOSE_PROMPT_DEFAULT),
+_POSE_TEXTS = (("main", model_refs.TPOSE_PROMPT_DEFAULT),
                ("back", model_refs.TPOSE_BACK_PROMPT_DEFAULT),
                ("left", model_refs.TPOSE_LEFT_PROMPT_DEFAULT),
                ("right", model_refs.TPOSE_RIGHT_PROMPT_DEFAULT))

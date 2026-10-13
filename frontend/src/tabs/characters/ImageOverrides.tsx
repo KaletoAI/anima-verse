@@ -30,10 +30,10 @@ import { Field } from '../../components/Field'
  * `PUT /characters/{name}/outfit-imagegen`, and that route takes the WHOLE
  * record — a body carrying only `loras` would blank the match patterns.
  * The buffer hands its patch to that route unchanged, so the patch has to BE
- * `{workflow, profile_workflow, tpose_workflow, loras, tpose_loras}`, every
+ * `{workflow, profile_workflow, tpose_workflow, tpose_view_workflow, loras, tpose_loras}`, every
  * time, with the edited value taken from the event (the state behind it is one
- * render old) and the other four from the current render. One keystroke here
- * therefore counts as five pending fields in "Save (n)".
+ * render old) and the other fields from the current render. One keystroke here
+ * therefore counts as six pending fields in "Save (n)".
  *
  * The "Add LoRA" choices are the one thing the SAVED values decide: the server
  * resolves them from the stored backend match, so a match still sitting in the
@@ -51,12 +51,13 @@ interface Lora {
 interface Override {
   pattern: string
   tposePattern: string
+  tposeViewPattern: string
   profilePattern: string
   loras: Lora[]
   tposeLoras: Lora[]
 }
 
-const EMPTY_OVERRIDE: Override = { pattern: '', tposePattern: '', profilePattern: '', loras: [], tposeLoras: [] }
+const EMPTY_OVERRIDE: Override = { pattern: '', tposePattern: '', tposeViewPattern: '', profilePattern: '', loras: [], tposeLoras: [] }
 
 // Convert a shell-style glob (only '*' wildcard) to a case-insensitive regex.
 function globToRegex(glob: string): RegExp {
@@ -70,6 +71,7 @@ function withDraft(stored: Override, draft: Record<string, unknown>): Override {
   return {
     pattern: typeof draft.workflow === 'string' ? draft.workflow : stored.pattern,
     tposePattern: typeof draft.tpose_workflow === 'string' ? draft.tpose_workflow : stored.tposePattern,
+    tposeViewPattern: typeof draft.tpose_view_workflow === 'string' ? draft.tpose_view_workflow : stored.tposeViewPattern,
     profilePattern: typeof draft.profile_workflow === 'string' ? draft.profile_workflow : stored.profilePattern,
     loras: Array.isArray(draft.loras) ? (draft.loras as Lora[]) : stored.loras,
     tposeLoras: Array.isArray(draft.tpose_loras) ? (draft.tpose_loras as Lora[]) : stored.tposeLoras,
@@ -84,7 +86,7 @@ export function ImageOverrides({
   savedSignal,
 }: {
   character: string
-  /** Remember the whole override record — see the module note on why all five
+  /** Remember the whole override record — see the module note on why all six
    *  keys travel together. */
   queueImagegen: (patch: Record<string, unknown>) => void
   /** The container's buffered record, laid over what the GET returned. */
@@ -98,6 +100,7 @@ export function ImageOverrides({
   const { toast } = useToast()
   const [pattern, setPattern] = useState('')
   const [tposePattern, setTposePattern] = useState('')
+  const [tposeViewPattern, setTposeViewPattern] = useState('')
   const [profilePattern, setProfilePattern] = useState('')
   const [loras, setLoras] = useState<Lora[]>([])
   const [tposeLoras, setTposeLoras] = useState<Lora[]>([])
@@ -117,6 +120,7 @@ export function ImageOverrides({
   const show = useCallback((rec: Override) => {
     setPattern(rec.pattern)
     setTposePattern(rec.tposePattern)
+    setTposeViewPattern(rec.tposeViewPattern)
     setProfilePattern(rec.profilePattern)
     setLoras(rec.loras)
     setTposeLoras(rec.tposeLoras)
@@ -148,7 +152,7 @@ export function ImageOverrides({
     ;(async () => {
       try {
         const [ovr, opts, loraOpts, tposeOpts] = await Promise.all([
-          apiGet<{ workflow?: string; profile_workflow?: string; tpose_workflow?: string; loras?: Lora[]; tpose_loras?: Lora[] }>(
+          apiGet<{ workflow?: string; profile_workflow?: string; tpose_workflow?: string; tpose_view_workflow?: string; loras?: Lora[]; tpose_loras?: Lora[] }>(
             `/characters/${encodeURIComponent(character)}/outfit-imagegen`,
           ),
           apiGet<{ options?: Array<{ name?: string; category?: string }> }>('/world/imagegen-options'),
@@ -163,6 +167,7 @@ export function ImageOverrides({
         const stored: Override = {
           pattern: ovr.workflow || '',
           tposePattern: ovr.tpose_workflow || '',
+          tposeViewPattern: ovr.tpose_view_workflow || '',
           profilePattern: ovr.profile_workflow || '',
           loras: Array.isArray(ovr.loras) ? ovr.loras : [],
           tposeLoras: Array.isArray(ovr.tpose_loras) ? ovr.tpose_loras : [],
@@ -209,13 +214,14 @@ export function ImageOverrides({
     let cancelled = false
     ;(async () => {
       try {
-        const ovr = await apiGet<{ workflow?: string; profile_workflow?: string; tpose_workflow?: string; loras?: Lora[]; tpose_loras?: Lora[] }>(
+        const ovr = await apiGet<{ workflow?: string; profile_workflow?: string; tpose_workflow?: string; tpose_view_workflow?: string; loras?: Lora[]; tpose_loras?: Lora[] }>(
           `/characters/${encodeURIComponent(character)}/outfit-imagegen`,
         )
         if (cancelled) return
         const stored: Override = {
           pattern: ovr.workflow || '',
           tposePattern: ovr.tpose_workflow || '',
+          tposeViewPattern: ovr.tpose_view_workflow || '',
           profilePattern: ovr.profile_workflow || '',
           loras: Array.isArray(ovr.loras) ? ovr.loras : [],
           tposeLoras: Array.isArray(ovr.tpose_loras) ? ovr.tpose_loras : [],
@@ -235,12 +241,13 @@ export function ImageOverrides({
       queueImagegen({
         workflow: (next.pattern ?? pattern).trim(),
         tpose_workflow: (next.tposePattern ?? tposePattern).trim(),
+        tpose_view_workflow: (next.tposeViewPattern ?? tposeViewPattern).trim(),
         profile_workflow: (next.profilePattern ?? profilePattern).trim(),
         loras: next.loras ?? loras,
         tpose_loras: next.tposeLoras ?? tposeLoras,
       })
     },
-    [queueImagegen, pattern, tposePattern, profilePattern, loras, tposeLoras],
+    [queueImagegen, pattern, tposePattern, tposeViewPattern, profilePattern, loras, tposeLoras],
   )
 
   const matching = useMemo(() => {
@@ -259,6 +266,13 @@ export function ImageOverrides({
     const re = globToRegex(p.replace(/^backend:/i, '').trim())
     return backends.filter((b) => re.test(b))
   }, [tposePattern, backends])
+
+  const tposeViewMatching = useMemo(() => {
+    const p = tposeViewPattern.trim()
+    if (!p) return []
+    const re = globToRegex(p.replace(/^backend:/i, '').trim())
+    return backends.filter((b) => re.test(b))
+  }, [tposeViewPattern, backends])
 
   const profileMatching = useMemo(() => {
     const p = profilePattern.trim()
@@ -296,6 +310,7 @@ export function ImageOverrides({
             { label: t('Backend match (glob)'), value: pattern, set: setPattern, key: 'pattern', matches: matching, placeholder: 'Flux*', empty: t('Empty: occasion chain') },
             { label: t('Portrait backend match (glob)'), value: profilePattern, set: setProfilePattern, key: 'profilePattern', matches: profileMatching, placeholder: 'Portrait*', empty: t('Empty: portrait chain') },
             { label: t('T-pose backend match (glob)'), value: tposePattern, set: setTposePattern, key: 'tposePattern', matches: tposeMatching, placeholder: 'TPose*', empty: t('Empty: render match, then T-pose chain') },
+            { label: t('T-pose views backend match (glob)'), value: tposeViewPattern, set: setTposeViewPattern, key: 'tposeViewPattern', matches: tposeViewMatching, placeholder: 'Flux*', empty: t('Empty: T-pose views chain') },
           ].map((match) => (
             <Field key={match.key} label={match.label}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', minWidth: 0 }}>

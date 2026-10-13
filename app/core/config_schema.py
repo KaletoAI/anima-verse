@@ -27,6 +27,7 @@ from app.core.game_time import TEMPERATURE_LEVELS, WEATHER_KINDS  # noqa: E402
 # them as greyed placeholders only (one source, no drifting copy).
 from app.core.model_refs import (  # noqa: E402
     ANIMAL_POSE_PROMPT_DEFAULT,
+    ANIMAL_VIEW_PROMPT_DEFAULTS,
     TPOSE_BACK_PROMPT_DEFAULT,
     TPOSE_LEFT_PROMPT_DEFAULT,
     TPOSE_PROMPT_DEFAULT,
@@ -573,6 +574,9 @@ SECTIONS = {
                     "_pose_layer_note",
                     "tpose_prompt",
                     "animal_pose_prompt",
+                    "animal_front_prompt",
+                    "animal_back_prompt",
+                    "animal_right_prompt",
                     "default_pose_prompt",
                     "tpose_image_width",
                     "tpose_image_height",
@@ -675,7 +679,10 @@ SECTIONS = {
                 "use-cases editor; facial expression is its own layer. "
                 "Keep pose text pure — no style fragments.")},
             "tpose_prompt": {"type": "text", "label": "T-pose prompt (humanoid)", "placeholder": TPOSE_PROMPT_DEFAULT, "description": "POSE LAYER ONLY for the T-pose reference render of HUMANOID characters (input for image-to-3D/rigging chains) — placed at the START of the prompt so the pose outweighs the outfit text. Palms face FORWARD toward the camera: shows the mesher the most hand detail (note: the Mixamo bind pose has palms down — if hands come out twisted in animation, this is the knob to revisit). Legs are demanded CLEARLY APART with visible space between them — a clean separation, not a straddle: what the mesher needs is the gap, because touching legs fuse into one mesh column. The over-ask that used to sit here (a wide stance, feet wider than the shoulders) moved into the negative prompt, which pushes away touching legs/ankles and a narrow stance. Framing/lighting/background come from the 'tpose' use-case style. EMPTY = built-in default."},
-            "animal_pose_prompt": {"type": "text", "label": "Mesh pose prompt (non-humanoid)", "placeholder": ANIMAL_POSE_PROMPT_DEFAULT, "description": "POSE LAYER ONLY for the mesh-input render of NON-humanoid characters (template feature 'humanoid' off) — a T-pose is meaningless on four legs. The symmetry comes from the POSE (head straight ahead in the body's direction, not at the camera; mouth closed), the 3/4 view only keeps body length and leg spacing visible. Framing/background come from the 'tpose_animal' use-case style (nose-to-tail instead of arm span). EMPTY = built-in default."},
+            "animal_pose_prompt": {"type": "text", "label": "Mesh pose prompt (non-humanoid)", "placeholder": ANIMAL_POSE_PROMPT_DEFAULT, "description": "POSE LAYER ONLY for the mesh-input render of NON-humanoid characters (template feature 'humanoid' off) — a T-pose is meaningless on four legs. Strict left profile: the main image is the left view for multi-view meshing. Square stance, vertical legs and a closed mouth preserve natural anatomy. Framing/background come from the 'tpose_animal' use-case style (nose-to-tail instead of arm span). EMPTY = built-in default."},
+            "animal_front_prompt": {"type": "text", "label": "Animal front view prompt", "placeholder": ANIMAL_VIEW_PROMPT_DEFAULTS["front"], "description": "POSE LAYER ONLY for the animal front reference view. Uses the main left-profile image as reference. Framing, lighting and negatives come from tpose_animal_view. EMPTY = built-in default."},
+            "animal_back_prompt": {"type": "text", "label": "Animal back view prompt", "placeholder": ANIMAL_VIEW_PROMPT_DEFAULTS["back"], "description": "POSE LAYER ONLY for the animal back reference view. Uses the main left-profile image as reference. Framing, lighting and negatives come from tpose_animal_view. EMPTY = built-in default."},
+            "animal_right_prompt": {"type": "text", "label": "Animal right view prompt", "placeholder": ANIMAL_VIEW_PROMPT_DEFAULTS["right"], "description": "POSE LAYER ONLY for the animal right reference view. Uses the main left-profile image as reference. Framing, lighting and negatives come from tpose_animal_view. EMPTY = built-in default."},
             "default_pose_prompt": {"type": "text", "label": "Default pose prompt", "placeholder": "standing with one hand on hip, weight shifted to one leg, shoulder slightly raised, chin up", "description": "POSE LAYER ONLY — replaces the built-in default pose everywhere it applies: expression variants without an activity, wardrobe outfit previews and the default-pose reference render. No style/framing/expression fragments here. EMPTY = built-in default from the '_default' entry of pose_catalog.json."},
             # T-pose needs its OWN aspect: arm span ≈ body height, so the
             # portrait outfit format (832x1216) crops the hands. Square is the
