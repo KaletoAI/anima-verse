@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Set, Tuple
 from app.core import user_activity
 from app.core.improvements import registry, store
 from app.core.improvements.base import Candidate, CandidateBusy
+from app.core.hub_ops import HubOpBusy
 from app.core.log import get_logger
 from app.core.task_queue import get_task_queue
 from app.core.timeutils import parse_iso, utc_now, utc_now_iso
@@ -287,8 +288,9 @@ def handle_step(payload: Dict[str, Any]) -> Dict[str, Any]:
         # The step's own generations must not end the user's idle window.
         with user_activity.suppressed():
             improvement_type.apply(candidate, improvement["params"], task_id)
-    except (BackendBusyError, CandidateBusy) as e:
-        # Load, not a defect — the candidate keeps both its attempts, and sits
+    except (BackendBusyError, CandidateBusy, HubOpBusy) as e:
+        # Load, not a defect (HubOpBusy: another hub operation holds this
+        # target — it is in flight, not broken) — the candidate keeps both its attempts, and sits
         # out BUSY_DEFER_S so it does not block the steps behind it.
         store.mark_result(improvement_id, key, status="pending", error=str(e),
                           count_attempt=False)

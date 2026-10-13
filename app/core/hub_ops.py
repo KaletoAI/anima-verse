@@ -442,10 +442,14 @@ def _cancel_jobs(op: Op) -> None:
 # ---------------------------------------------------------------------------
 
 def create(kind: str, subject: str, inputs: Dict[str, Any], *, label: str = "",
-           track_id: str = "") -> Op:
+           track_id: str = "", thread_owned: bool = False) -> Op:
     """Claim ``subject`` and record a new operation. Raises ``HubOpBusy``
-    when a running operation holds the subject already."""
-    owner = current_owner()
+    when a running operation holds the subject already.
+
+    ``thread_owned`` forces the resumer as the owner even inside a queue
+    handler — for producers a task does not reach deterministically again
+    (a video asked for by an LLM turn)."""
+    owner = "" if thread_owned else current_owner()
     op_id = f"hop_{uuid.uuid4().hex[:12]}"
     now = utc_now_iso()
     conn = _conn()
@@ -515,13 +519,37 @@ def fail(op: Op, error: str, *, lost: bool = False, keep: bool = False) -> None:
 
 
 def raise_failed(op: Op) -> None:
-    """A task re-run met its operation failed by the early collection: report
-    the stored error through the handler and drop the record."""
+    """A task re-run met a FAILED record of its own: report the stored error
+    through the handler. A lost job stays as a tombstone until the task is
+    over (``release_task_ops``) — the same handler may come back to this
+    target again (a restart, a batch loop) and must meet the verdict again
+    instead of submitting the work anew. Any other failure is dropped, a
+    retry of it is ordinary queue behaviour."""
     from app.imagegen.base import HubJobLost
     error = op.error or "operation failed"
-    lost = (op.state.get("error_kind") == "lost")
+    if op.state.get("error_kind") == "lost":
+        raise HubJobLost(error)
     delete(op)
-    raise HubJobLost(error) if lost else RuntimeError(error)
+    raise RuntimeError(error)
+
+
+def open_task_inputs(kind: str) -> List[Dict[str, Any]]:
+    """Frozen inputs of every record of ``kind`` the CURRENT task holds
+    (running or tombstone) — so a batch handler can tell which of its targets
+    are still in flight."""
+    owner = current_owner()
+    if not owner:
+        return []
+    rows = _conn().execute(
+        "SELECT inputs FROM hub_ops WHERE kind=? AND owner_kind='task' AND owner=?",
+        (kind, owner)).fetchall()
+    out = []
+    for row in rows:
+        try:
+            out.append(json.loads(row["inputs"] or "{}"))
+        except ValueError:
+            continue
+    return out
 
 
 def execute(op: Op, run: Callable[[], Any]) -> Any:
@@ -532,8 +560,11 @@ def execute(op: Op, run: Callable[[], Any]) -> Any:
         result = run()
     except Exception as e:
         # Exception, not BaseException: a process going down must leave the
-        # record behind — that is exactly the case it exists for.
-        fail(op, str(e) or type(e).__name__, lost=isinstance(e, HubJobLost))
+        # record behind — that is exactly the case it exists for. A task's
+        # lost job stays as a tombstone (see raise_failed).
+        lost = isinstance(e, HubJobLost)
+        fail(op, str(e) or type(e).__name__, lost=lost,
+             keep=lost and op.owner_kind == "task")
         raise
     if _ok(result):
         delete(op)
