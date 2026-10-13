@@ -366,12 +366,15 @@ _PLAYER_WRITE_EXCEPTIONS = {
     "/world/imagegen-enhance-prompt",
 }
 
-# Single state-changing routes that belong to an otherwise player-facing
+# Single admin-only routes that belong to an otherwise player-facing
 # router. /characters/import unpacks an uploaded ZIP into the storage
 # directory; /characters/create makes a new character.
 _ADMIN_EXACT = {
     "/characters/import",
     "/characters/create",
+    # Unfogged stream of every character's moves; a separate fog-filtered
+    # player-facing push channel is planned.
+    "/events/state-stream",
 }
 # Global queue control — write methods only. Resuming every paused provider
 # queue and clearing the finished-task table act on everybody's jobs, so they

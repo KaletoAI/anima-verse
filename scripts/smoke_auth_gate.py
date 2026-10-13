@@ -17,6 +17,9 @@ A) THE GATE (SEC-2) — ``auth_gate_middleware``, mounted exactly as
    allowlist in ``auth_dependency`` by hand:
 
      anonymous GET /characters/list          -> 401   (not on the allowlist)
+     anonymous GET /events/state-stream      -> 401   (not on the allowlist)
+     user      GET /events/state-stream      -> 403   (admin exact route)
+     admin     GET /events/state-stream      -> 200
      anonymous GET /auth/status              -> 200   (login round trip)
      anonymous GET /i18n/translations/de     -> 200   (login form is translated)
      anonymous GET /play                     -> 200   (shell renders <AuthGate>)
@@ -240,6 +243,9 @@ def location(method, path, accept):
 
 print("A) default-deny gate (SEC-2)")
 check("anon GET /characters/list", status("GET", "/characters/list"), 401)
+check("anon GET /events/state-stream", status("GET", "/events/state-stream"), 401)
+check("user GET /events/state-stream", status("GET", "/events/state-stream", "user"), 403)
+check("admin GET /events/state-stream", status("GET", "/events/state-stream", "admin"), 200)
 check("anon GET /auth/status", status("GET", "/auth/status"), 200)
 check("anon GET /auth/login (POST)", status("POST", "/auth/login"), 200)
 check("anon GET /i18n/translations/de", status("GET", "/i18n/translations/de"), 200)

@@ -4,9 +4,9 @@ ONE generic pub/sub for the state changes external map clients care about
 — ``location_changed`` / ``room_changed`` / ``activity_changed`` — instead
 of a third single-purpose module next to outfit_events.py. Published from
 the central setters in app/models/character.py (plus the offmap/appear
-bypasses that intentionally skip them); consumed by the SSE route
-``GET /events/state-stream``. Party followers ride through the central
-setters, so their moves publish for free.
+bypasses that intentionally skip them); consumed by the admin-only SSE route
+``GET /events/state-stream`` (not fog-filtered). Party followers ride through
+the central setters, so their moves publish for free.
 
 Losing events while nobody subscribes is fine: polling /play/worldmap
 stays every client's baseline — the stream only makes changes arrive

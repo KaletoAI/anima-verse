@@ -2,9 +2,10 @@
 import asyncio
 import json as _json
 
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Depends, Request, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import Dict, Any
+from app.core.auth_dependency import require_admin
 from app.core.log import get_logger
 from app.models.events import (add_event, event_game_label, get_all_events,
                                delete_event)
@@ -86,26 +87,21 @@ async def outfit_event_stream(request: Request) -> StreamingResponse:
 
 
 @router.get("/state-stream")
-async def state_event_stream(request: Request) -> StreamingResponse:
+async def state_event_stream(
+    request: Request, user=Depends(require_admin)
+) -> StreamingResponse:
     """SSE stream of typed character-state events (AV3D-3).
 
     Payloads: ``location_changed {character, from_id, to_id, room_id}``,
     ``room_changed {character, location_id, room_id}``,
-    ``activity_changed {character, activity, animation}``. Pushes what
-    polling /play/worldmap would discover — the 3D client animates NPC
-    movement without the poll jumps; polling stays the baseline.
+    ``activity_changed {character, activity, animation}``.
 
-    Auth like /play/worldmap: any authenticated user, NO per-character
-    filter — the worldmap shows all characters, so the stream that mirrors
-    it must too (deliberate deviation from the outfit stream).
+    Admin-only because the stream is NOT fog-filtered and exposes every
+    character's state changes. Players use /play/worldmap and will later
+    get a separate fog-filtered push channel.
     Unauthenticated: 401.
     """
     from app.core.state_events import subscribe as _subscribe_state
-    from app.core.auth_dependency import get_current_user_optional
-
-    user = get_current_user_optional(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
 
     async def gen():
         yield f"data: {_json.dumps({'type': 'connected'})}\n\n"
