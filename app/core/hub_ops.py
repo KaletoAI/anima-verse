@@ -602,7 +602,10 @@ def find_open(kind: str, match: Callable[[Dict[str, Any]], bool]) -> Optional[Op
 def delete(op: Op) -> None:
     with _conn() as conn:
         conn.execute("DELETE FROM hub_ops WHERE op_id=?", (op.op_id,))
-    shutil.rmtree(op.dir, ignore_errors=True)
+    try:
+        shutil.rmtree(op.dir, ignore_errors=True)
+    except Exception as e:  # noqa: BLE001 — the record is gone, a stray dir is not
+        logger.warning("hub op %s: directory not removed: %s", op.op_id, e)
 
 
 def fail(op: Op, error: str, *, lost: bool = False, keep: bool = False) -> None:

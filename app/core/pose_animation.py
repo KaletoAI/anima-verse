@@ -292,6 +292,9 @@ def _publish(*, tid, staging, kind, key, clip, mode, entry, raw_text, checked_gr
         return result
 
 
+_OP_KIND = "pose_animation"
+
+
 def _handle(payload):
     tq = get_task_queue()
     tid = payload["_task_id"]
@@ -300,7 +303,17 @@ def _handle(payload):
         # The variants were ready when the server stopped: that work is done.
         return {field: progress.get(field) for field in
                 ("state", "candidates", "backend", "generator", "kind", "key")}
+    from app.core import hub_ops
+    op = hub_ops.find_open(_OP_KIND, lambda inputs: True)
+    if op is not None:
+        # The motion job of this task outlived the server (app/core/hub_ops.py):
+        # collect it and convert — no second LLM step, no second job.
+        if op.status == hub_ops.FAILED:
+            hub_ops.raise_failed(op)
+        return hub_ops.execute(op, lambda: _animate_and_build(tid, op, progress, route=None))
     if progress:
+        # Interrupted before a job was recorded (or by a deploy older than the
+        # hub records): nothing to collect.
         if progress.get("hub_job"):
             try:
                 backend = next((b for b in get_image_service().pool.backends
@@ -352,12 +365,51 @@ def _handle(payload):
     cancelled()
     rig_source = meta["motion_source"] == "reference_rig"
     source_file = paths.get_rig_file() if rig_source else paths.get_puppet_file()
+    # The record freezes everything the conversion needs after a restart: the
+    # LLM's captions, the seed, the entry and the model's motion meta.
+    op = hub_ops.create(_OP_KIND, f"pose_animation:{tid}", {
+        "mode": mode, "key": key, "entry": entry, "prepared_entry": prepared.entry,
+        "captions": list(prepared.captions), "loop": bool(prepared.loop), "seed": seed,
+        "backend": route.backend.name, "variants": variants, "meta": meta,
+        "source_file": str(source_file), "raw_text": payload.get("raw_text", ""),
+    }, label=f"Pose animation: {key}")
+    return hub_ops.execute(op, lambda: _animate_and_build(tid, op, progress, route=route))
+
+
+def _animate_and_build(tid: str, op, progress: Dict, *, route) -> Dict:
+    """The motion job (submitted, or collected after a restart) and the
+    conversion of its variants into ``awaiting_choice`` — shared by the fresh
+    run and the resume. Reads only the record's frozen inputs."""
+    from types import SimpleNamespace
+    tq = get_task_queue()
+    service = get_image_service()
+    inputs = op.inputs
+    meta, key, entry = inputs["meta"], inputs["key"], inputs["entry"]
+    prepared = SimpleNamespace(captions=list(inputs["captions"]), loop=bool(inputs["loop"]),
+                               entry=inputs.get("prepared_entry"))
+
+    def update(phase, **fields):
+        progress.update(phase=phase, **fields)
+        tq.update_task_progress(tid, progress)
+
+    def cancelled():
+        if tq.is_task_cancelled(tid):
+            raise RuntimeError("cancelled")
+
+    stage = op.stage("animation")
+    if route is None and not (stage.job.get("job_id") or stage.job.get("collected")):
+        # A resume whose job never reached the hub (claimed while waiting for
+        # its GPU slot): submit it now on the frozen model.
+        try:
+            route = service.resolve_animation_backend(inputs["backend"])
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
     # The service checks this cancellation hook after the channel wait, before submit.
-    result = service.generate_mesh_animation(str(source_file), prepared.captions, seed,
-        route=route, variants=variants,
+    result = service.generate_mesh_animation(inputs["source_file"], prepared.captions, inputs["seed"],
+        route=route, variants=inputs["variants"],
         should_cancel=lambda: tq.is_task_cancelled(tid),
         on_job_id=lambda job_id, backend_name: update("hub", hub_job=job_id, backend=backend_name),
-        label=f"Pose animation: {key}")
+        label=f"Pose animation: {key}", hub_stage=stage)
     verdicts = result.get("results") or []
     if not result.get("ok"):
         failed = "; ".join(f"variant {i + 1}: {v.get('reason')}" for i, v in enumerate(verdicts)
@@ -367,15 +419,36 @@ def _handle(payload):
     cancelled()
     staging = _staging_root() / tid
     staging.mkdir(parents=True, exist_ok=True)
-    kind = animation_clips.reserve_kind(key, pose_key=key)
-    update("convert", backend=result["backend"], hub_job=result.get("job_id") or progress.get("hub_job", ""),
-           kind=kind)
+    kind = op.result("convert").get("kind")
+    if not kind:
+        kind = animation_clips.reserve_kind(key, pose_key=key)
+        op.remember("convert", kind=kind)
+    hub_job = result.get("job_id") or progress.get("hub_job", "")
+    update("convert", backend=result["backend"], hub_job=hub_job, kind=kind)
     source = {"generator": meta["generator"], "generated_for_pose": key,
-              "captions": prepared.captions, "seed": seed, "hub_job": progress["hub_job"],
+              "captions": prepared.captions, "seed": inputs["seed"], "hub_job": hub_job,
               "backend": result["backend"], "model_revision": meta["model_revision"]}
-    if not rig_source:
-        source["puppet_sha256"] = hashlib.sha256(source_file.read_bytes()).hexdigest()
-    blobs = iter(result["blobs"])
+    if meta["motion_source"] != "reference_rig":
+        source["puppet_sha256"] = hashlib.sha256(Path(inputs["source_file"]).read_bytes()).hexdigest()
+    candidates = _build_candidates(staging, result["blobs"], verdicts, kind, source, meta,
+                                   prepared, entry["group"], cancelled, update, tid)
+    (staging / "candidates.json").write_text(json.dumps({
+        "task_id": tid, "created_at": utc_now_iso(), "mode": inputs["mode"], "key": key,
+        "entry": prepared.entry, "raw_text": inputs.get("raw_text", ""), "group": entry["group"],
+        "kind": kind,
+        "candidates": [dict(c, fbx=str(c["fbx"]), sidecar=str(c["sidecar"])) for c in candidates]},
+        ensure_ascii=False, indent=2), encoding="utf-8")
+    public = [_public(c) for c in candidates]
+    update("choose", state="awaiting_choice", candidates=public, variant=None)
+    return {"ok": True, "state": "awaiting_choice", "candidates": public,
+            "backend": result["backend"], "generator": meta["generator"], "kind": kind, "key": key}
+
+
+def _build_candidates(staging: Path, blobs, verdicts, kind: str, source: Dict, meta: Dict,
+                      prepared, group: str, cancelled, update, tid: str) -> List[Dict]:
+    """Convert every delivered variant into its candidate folder (the loop
+    the fresh run and the resume share). Raises when none is usable."""
+    blobs = iter(blobs)
     candidates = []
     for verdict in verdicts:
         if verdict.get("reason") == "unrequested result":
@@ -391,7 +464,7 @@ def _handle(payload):
         try:
             cand.update(_build_candidate(staging / f"cand_{index}", next(blobs), kind,
                                          dict(source, variant_index=index), meta, prepared,
-                                         entry["group"], cancelled, update, index))
+                                         group, cancelled, update, index))
         except _Cancelled:
             raise RuntimeError("cancelled")
         except Exception as exc:
@@ -401,15 +474,7 @@ def _handle(payload):
     if not usable:
         raise RuntimeError("no variant passed the check — " + "; ".join(
             f"variant {c['index'] + 1}: {' '.join(c['reasons'])}" for c in candidates))
-    (staging / "candidates.json").write_text(json.dumps({
-        "task_id": tid, "created_at": utc_now_iso(), "mode": mode, "key": key, "entry": prepared.entry,
-        "raw_text": payload.get("raw_text", ""), "group": entry["group"], "kind": kind,
-        "candidates": [dict(c, fbx=str(c["fbx"]), sidecar=str(c["sidecar"])) for c in candidates]},
-        ensure_ascii=False, indent=2), encoding="utf-8")
-    public = [_public(c) for c in candidates]
-    update("choose", state="awaiting_choice", candidates=public, variant=None)
-    return {"state": "awaiting_choice", "candidates": public, "backend": result["backend"],
-            "generator": meta["generator"], "kind": kind, "key": key}
+    return candidates
 
 
 class _Cancelled(Exception):
@@ -580,3 +645,20 @@ def sweep_candidates(max_age_days: int = CANDIDATE_MAX_AGE_DAYS) -> int:
 
 def register() -> None:
     get_task_queue().register_handler(TASK_TYPE, _handle)
+
+
+def _orphan_resume(op) -> Dict:
+    """A pose record whose task is over: the candidates and the choice live
+    in that task's row, so nothing can continue without it — the hub job is
+    cancelled and the record dropped."""
+    from app.core import hub_ops
+    hub_ops._drop(op, "the pose-animation task is gone")
+    return {"ok": False, "error": "the pose-animation task is gone"}
+
+
+def _register_hub_kind() -> None:
+    from app.core import hub_ops
+    hub_ops.register_kind(_OP_KIND, resume=_orphan_resume, track_type=TASK_TYPE)
+
+
+_register_hub_kind()
