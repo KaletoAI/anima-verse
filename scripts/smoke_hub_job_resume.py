@@ -60,6 +60,9 @@ What is expected, derived by hand from the spec (section numbers):
               = "attach"), the T-pose lookup and the mesh job do not run again
               (mesh calls stay 1), the rigged model lands as sigA.glb, nothing
               is written for sigB, the record is gone.
+  C1b         the same chain owned by a thread: a second start meanwhile raises
+              HubOpBusy (D3/D11), and the kind's registered resume entry —
+              what the resumer calls — collects the rig and publishes.
   C2 (§ 0 preprocessing) prop mesh: the source render runs once; after the
               restart the resumed run renders nothing and the gallery gains
               exactly ONE file.
@@ -670,6 +673,32 @@ check("C1 the rigged model is sigA.glb, nothing for sigB",
       (mdir / "sigA.glb").read_bytes() == b"glTF-rigged" and not list(mdir.glob("sigB.*")))
 check("C1 record gone", not [o for o in hub_ops.list_ops() if o.kind == "character_mesh"])
 
+# C1b — the same chain owned by a THREAD (admin button, auto-mesh hook, a
+# task's hand-over): the resumer's registered entry continues it.
+stub = StubService()
+stub.die.add("rig")
+worn["sig"] = "sigA"
+with patch.object(service_mod, "get_image_service", lambda: stub):
+    try:
+        model3d.generate_for_current_outfit("demo", force=True)
+    except _Died:
+        pass
+    rec = [o for o in hub_ops.list_ops() if o.kind == "character_mesh"]
+    check("C1b thread record left with its rig job", len(rec) == 1 and rec[0].owner_kind == "thread"
+          and rec[0].jobs().get("rig", {}).get("job_id"))
+    # D3: while it is open, a second start of the same work is refused.
+    try:
+        model3d.generate_for_current_outfit("demo", force=True)
+        check("C1b a second start raises HubOpBusy", False)
+    except hub_ops.HubOpBusy:
+        check("C1b a second start raises HubOpBusy (improvements: busy, no attempt)", True)
+    restart()
+    res = hub_ops.get_kind("character_mesh").resume(hub_ops.get(rec[0].op_id))
+check("C1b the thread resume entry publishes (rig collected)",
+      res.get("ok") and stub.rig_calls == ["attach"]
+      and (mdir / "sigA.glb").read_bytes() == b"glTF-rigged", str(res))
+check("C1b record gone", hub_ops.get(rec[0].op_id) is None)
+
 # C2
 from app.core import props  # noqa: E402
 pid = props.create_prop(name="Crate")["id"]
@@ -751,9 +780,11 @@ with patch.object(service_mod, "get_image_service", lambda: face), \
           bool(rec) and (rec[0].dir / "source/sigF.glb").read_bytes() == b"glTF-baked")
     restart()
     # A manual call does NOT adopt a thread's record (D3: the target is busy)…
-    busy = model3d.face_retexture_model("demo", "sigF", upscale=False)
-    check("C3 a manual second start is refused while the record is open",
-          not busy.get("ok") and "already in progress" in str(busy.get("error")), str(busy))
+    try:
+        model3d.face_retexture_model("demo", "sigF", upscale=False)
+        check("C3 a manual second start is refused while the record is open", False)
+    except hub_ops.HubOpBusy as e:
+        check("C3 a manual second start is refused while the record is open", True, str(e))
     # …the resumer's entry for the kind continues it.
     res = hub_ops.get_kind("face_retexture").resume(hub_ops.get(rec[0].op_id))
 check("C3 resumed (the thread resumer's entry) and published",

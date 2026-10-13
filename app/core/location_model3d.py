@@ -1360,24 +1360,26 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
     error = ""
     try:
         key = _gen_key(owner, room_id, source_image, backend_glob, tier)
-        try:
-            op = hub_ops.create(_OP_MESH, "location:" + key, {
-                "location_id": location_id, "owner": owner, "room_id": room_id,
-                "source_image": source_image, "guard_key": key,
-                "backend_glob": backend_glob, "face_num": face_num,
-                "texture_size": texture_size, "tier": tier or DEFAULT_TIER,
-                "lod_faces": lod_faces,
-                "view_images": {v: Path(p).name for v, p in view_paths.items()},
-            }, label=label, track_id=task_id)
-        except hub_ops.HubOpBusy as exc:
-            error = str(exc)
-            return {"ok": False, "error": error}
-        op.freeze_file(src, "inputs", src.name)
-        views_frozen = {v: op.rel(op.freeze_file(p, "inputs", "views", Path(p).name))
-                        for v, p in view_paths.items()}
-        op.update_state(lambda st: st.update(view_files=views_frozen))
-        op.reload()
-        result = hub_ops.execute(op, lambda: _mesh_stages(op))
+        # A target in flight raises HubOpBusy (improvements read it as busy).
+        op = hub_ops.create(_OP_MESH, "location:" + key, {
+            "location_id": location_id, "owner": owner, "room_id": room_id,
+            "source_image": source_image, "guard_key": key,
+            "backend_glob": backend_glob, "face_num": face_num,
+            "texture_size": texture_size, "tier": tier or DEFAULT_TIER,
+            "lod_faces": lod_faces,
+            "view_images": {v: Path(p).name for v, p in view_paths.items()},
+        }, label=label, track_id=task_id)
+
+        def run():
+            # Frozen inputs, inside the settled run (a failing copy never
+            # leaves a claim behind).
+            op.freeze_file(src, "inputs", src.name)
+            views_frozen = {v: op.rel(op.freeze_file(p, "inputs", "views", Path(p).name))
+                            for v, p in view_paths.items()}
+            op.update_state(lambda st: st.update(view_files=views_frozen))
+            op.reload()
+            return _mesh_stages(op)
+        result = hub_ops.execute(op, run)
         if not result.get("ok"):
             error = str(result.get("error") or "generation failed")
         return result
@@ -1569,18 +1571,14 @@ def _shrink(location_id: str, source_file: str, backend_glob: str,
     error = ""
     try:
         key = _gen_key(owner, room_id, f"{_SHRINK_KEY_PREFIX}{source_file}")
-        try:
-            op = hub_ops.create(_OP_SHRINK, "location:" + key, {
-                "location_id": location_id, "owner": owner, "room_id": room_id,
-                "source_file": source_file, "guard_key": key,
-                "backend_glob": backend_glob, "face_num": face_num,
-                "texture_size": texture_size,
-            }, label=label, track_id=task_id)
-        except hub_ops.HubOpBusy as exc:
-            error = str(exc)
-            return {"ok": False, "error": error}
-        op.freeze_file(src, "inputs", src.name)
-        result = hub_ops.execute(op, lambda: _shrink_stages(op))
+        op = hub_ops.create(_OP_SHRINK, "location:" + key, {
+            "location_id": location_id, "owner": owner, "room_id": room_id,
+            "source_file": source_file, "guard_key": key,
+            "backend_glob": backend_glob, "face_num": face_num,
+            "texture_size": texture_size,
+        }, label=label, track_id=task_id)
+        result = hub_ops.execute(op, lambda: (op.freeze_file(src, "inputs", src.name),
+                                              _shrink_stages(op))[1])
         if not result.get("ok"):
             error = str(result.get("error") or "shrink failed")
         return result

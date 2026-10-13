@@ -981,6 +981,11 @@ class TaskQueue:
             if not handler:
                 logger.error("Kein Handler: %s (%s)", task_id, task_type)
                 self._finish_task(task_id, "failed", error=f"Kein Handler für '{task_type}'")
+                try:
+                    from app.core.hub_ops import release_task_ops
+                    release_task_ops(task_id)
+                except Exception as rel_err:  # noqa: BLE001
+                    logger.warning("hub ops of %s not released: %s", task_id, rel_err)
                 continue
 
             logger.info(

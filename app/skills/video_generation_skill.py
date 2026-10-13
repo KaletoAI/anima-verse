@@ -266,8 +266,8 @@ def _publish_character_video(op, video_file, route: Dict[str, Any],
     ``video_character`` hub operation (fresh render or after a restart). The
     gallery finds the video through the image_videos map ({stem}.mp4) and
     shows it as the image's companion, with its description/prompt."""
+    from datetime import datetime as _dt
     from pathlib import Path as _Path
-    from app.core.timeutils import utc_now_iso
     inputs = op.inputs
     character_name = inputs["character"]
     images_dir = get_character_images_dir(character_name)
@@ -279,7 +279,8 @@ def _publish_character_video(op, video_file, route: Dict[str, Any],
         "animate_backend": route.get("backend", ""),
         "animate_routing": route.get("routing"),
         "animate_fallback_from": route.get("fallback_from"),
-        "animate_created_at": utc_now_iso(),
+        # Same stamp format as before the hub records (legacy skill).
+        "animate_created_at": _dt.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "animate_duration_s": round(float(duration_s or 0.0), 1),
     })
     return {"ok": True}

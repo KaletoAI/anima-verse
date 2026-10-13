@@ -299,12 +299,15 @@ def _handle(payload):
     tq = get_task_queue()
     tid = payload["_task_id"]
     progress = tq.get_task_progress(tid)
-    if progress.get("state") == "awaiting_choice":
-        # The variants were ready when the server stopped: that work is done.
-        return {field: progress.get(field) for field in
-                ("state", "candidates", "backend", "generator", "kind", "key")}
     from app.core import hub_ops
     op = hub_ops.find_open(_OP_KIND, lambda inputs: True)
+    if progress.get("state") == "awaiting_choice":
+        # The variants were ready when the server stopped: that work is done
+        # (a record the stop caught before it was settled is just dropped).
+        if op is not None:
+            hub_ops.delete(op)
+        return {field: progress.get(field) for field in
+                ("state", "candidates", "backend", "generator", "kind", "key")}
     if op is not None:
         # The motion job of this task outlived the server (app/core/hub_ops.py):
         # collect it and convert — no second LLM step, no second job.
@@ -371,6 +374,8 @@ def _handle(payload):
         "mode": mode, "key": key, "entry": entry, "prepared_entry": prepared.entry,
         "captions": list(prepared.captions), "loop": bool(prepared.loop), "seed": seed,
         "backend": route.backend.name, "variants": variants, "meta": meta,
+        # The shared puppet / reference rig by path, not a copy: it is a
+        # library asset of the instance, not an input of this one job.
         "source_file": str(source_file), "raw_text": payload.get("raw_text", ""),
     }, label=f"Pose animation: {key}")
     return hub_ops.execute(op, lambda: _animate_and_build(tid, op, progress, route=route))
@@ -405,7 +410,8 @@ def _animate_and_build(tid: str, op, progress: Dict, *, route) -> Dict:
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
     # The service checks this cancellation hook after the channel wait, before submit.
-    result = service.generate_mesh_animation(inputs["source_file"], prepared.captions, inputs["seed"],
+    source_file = Path(inputs["source_file"])
+    result = service.generate_mesh_animation(str(source_file), prepared.captions, inputs["seed"],
         route=route, variants=inputs["variants"],
         should_cancel=lambda: tq.is_task_cancelled(tid),
         on_job_id=lambda job_id, backend_name: update("hub", hub_job=job_id, backend=backend_name),
@@ -429,7 +435,7 @@ def _animate_and_build(tid: str, op, progress: Dict, *, route) -> Dict:
               "captions": prepared.captions, "seed": inputs["seed"], "hub_job": hub_job,
               "backend": result["backend"], "model_revision": meta["model_revision"]}
     if meta["motion_source"] != "reference_rig":
-        source["puppet_sha256"] = hashlib.sha256(Path(inputs["source_file"]).read_bytes()).hexdigest()
+        source["puppet_sha256"] = hashlib.sha256(source_file.read_bytes()).hexdigest()
     candidates = _build_candidates(staging, result["blobs"], verdicts, kind, source, meta,
                                    prepared, entry["group"], cancelled, update, tid)
     (staging / "candidates.json").write_text(json.dumps({

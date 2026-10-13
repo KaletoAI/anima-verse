@@ -6303,27 +6303,28 @@ def _generate(prop_id: str, prompt: str, negative: str,
         if not read_sidecar(prop_id):
             error = "subject deleted during generation"
             return {"ok": False, "error": error}
-        try:
-            op = hub_ops.create(_OP_MESH, "prop:" + _gen_key(prop_id, variant, mesh_backend_glob), {
-                "prop_id": prop_id, "variant": variant, "name": name,
-                "guard_key": _gen_key(prop_id, variant, mesh_backend_glob),
-                "mesh_backend_glob": mesh_backend_glob, "face_num": face_num,
-                "texture_size": texture_size, "lod_faces": lod_faces, "tier": tier,
-                "inherited": inherited,
-                "src": f"inputs/{src.name}",
-                "view_images": {v: Path(p).name for v, p in view_paths.items()},
-            }, label=f"Prop: {name}", track_id=task_id)
-        except hub_ops.HubOpBusy as exc:
-            error = str(exc)
-            return {"ok": False, "error": error}
-        # Frozen inputs: the variant's picture may be re-rendered while the
-        # mesh job runs; the mesh is made from THIS one.
-        op.freeze_file(src, "inputs", src.name)
-        views_frozen = {v: op.rel(op.freeze_file(p, "inputs", "views", Path(p).name))
-                        for v, p in view_paths.items()}
-        op.update_state(lambda st: st.update(view_files=views_frozen))
-        op.reload()
-        result = hub_ops.execute(op, lambda: _mesh_stages(op))
+        # A target in flight raises HubOpBusy (improvements read it as busy).
+        op = hub_ops.create(_OP_MESH, "prop:" + _gen_key(prop_id, variant, mesh_backend_glob), {
+            "prop_id": prop_id, "variant": variant, "name": name,
+            "guard_key": _gen_key(prop_id, variant, mesh_backend_glob),
+            "mesh_backend_glob": mesh_backend_glob, "face_num": face_num,
+            "texture_size": texture_size, "lod_faces": lod_faces, "tier": tier,
+            "inherited": inherited,
+            "src": f"inputs/{src.name}",
+            "view_images": {v: Path(p).name for v, p in view_paths.items()},
+        }, label=f"Prop: {name}", track_id=task_id)
+
+        def run():
+            # Frozen inputs: the variant's picture may be re-rendered while
+            # the mesh job runs; the mesh is made from THIS one. Inside the
+            # settled run, so a failing copy never leaves a claim behind.
+            op.freeze_file(src, "inputs", src.name)
+            views_frozen = {v: op.rel(op.freeze_file(p, "inputs", "views", Path(p).name))
+                            for v, p in view_paths.items()}
+            op.update_state(lambda st: st.update(view_files=views_frozen))
+            op.reload()
+            return _mesh_stages(op)
+        result = hub_ops.execute(op, run)
         if not result.get("ok"):
             error = str(result.get("error") or "mesh generation failed")
         return result
@@ -6509,18 +6510,14 @@ def _shrink(prop_id: str, source_file: str, backend_glob: str,
     error = ""
     try:
         key = _gen_key(prop_id, variant, f"shrink:{source_file}")
-        try:
-            op = hub_ops.create(_OP_SHRINK, "prop:" + key, {
-                "prop_id": prop_id, "variant": variant, "name": name, "guard_key": key,
-                "source_file": source_file, "backend_glob": backend_glob,
-                "face_num": face_num, "texture_size": texture_size,
-                "src_fix": file_areas(src)[ROTATION_KEY],
-            }, label=f"Low variant: {name}", track_id=task_id)
-        except hub_ops.HubOpBusy as exc:
-            error = str(exc)
-            return {"ok": False, "error": error}
-        op.freeze_file(src, "inputs", src.name)
-        result = hub_ops.execute(op, lambda: _shrink_stages(op))
+        op = hub_ops.create(_OP_SHRINK, "prop:" + key, {
+            "prop_id": prop_id, "variant": variant, "name": name, "guard_key": key,
+            "source_file": source_file, "backend_glob": backend_glob,
+            "face_num": face_num, "texture_size": texture_size,
+            "src_fix": file_areas(src)[ROTATION_KEY],
+        }, label=f"Low variant: {name}", track_id=task_id)
+        result = hub_ops.execute(op, lambda: (op.freeze_file(src, "inputs", src.name),
+                                              _shrink_stages(op))[1])
         if not result.get("ok"):
             error = str(result.get("error") or "shrink failed")
         return result

@@ -129,8 +129,8 @@ def run_video_op(kind: str, subject: str, inputs: Dict[str, Any], *,
     source = Path(inputs["source"])
     op = hub_ops.create(kind, subject, {**inputs, "source": f"inputs/{source.name}"},
                         label=label, track_id=track_id, thread_owned=True)
-    op.freeze_file(source, "inputs", source.name)
-    return hub_ops.execute(op, lambda: _video_stages(op))
+    return hub_ops.execute(op, lambda: (op.freeze_file(source, "inputs", source.name),
+                                        _video_stages(op))[1])
 
 
 def _video_stages(op) -> Dict[str, Any]:

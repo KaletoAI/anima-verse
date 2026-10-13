@@ -1822,19 +1822,17 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
             # The record freezes what this run is made FROM: the signature, the
             # backend pick, the T-pose bytes (copied — a re-render while the
             # job runs must not change the input) and the manifest.
-            try:
-                op = hub_ops.create(_OP_MESH, _op_subject(character_name, signature), {
-                    "character": character_name, "signature": signature, "rig": rig,
-                    "backend_glob": backend_glob, "face_num": face_num,
-                    "texture_size": texture_size, "occasion": mesh_occasion_for_rig(rig),
-                    "source_image": src.name,
-                    "source_image_sha256": hashlib.sha256(source_bytes).hexdigest(),
-                    "view_images": {v: Path(p).name for v, p in view_images.items()},
-                    "manifest": _ref_manifest(src),
-                }, label=f"3D model: {character_name}", track_id=task_id)
-            except hub_ops.HubOpBusy as exc:
-                error = str(exc)
-                return {"ok": False, "error": error}
+            # A target in flight raises HubOpBusy (improvements read it as
+            # busy, the trigger threads log it).
+            op = hub_ops.create(_OP_MESH, _op_subject(character_name, signature), {
+                "character": character_name, "signature": signature, "rig": rig,
+                "backend_glob": backend_glob, "face_num": face_num,
+                "texture_size": texture_size, "occasion": mesh_occasion_for_rig(rig),
+                "source_image": src.name,
+                "source_image_sha256": hashlib.sha256(source_bytes).hexdigest(),
+                "view_images": {v: Path(p).name for v, p in view_images.items()},
+                "manifest": _ref_manifest(src),
+            }, label=f"3D model: {character_name}", track_id=task_id)
             if _op_ctx is not None:
                 _op_ctx["op"] = op
             op.path("inputs", src.name).write_bytes(source_bytes)
@@ -2016,20 +2014,23 @@ def _restore_frozen_source(op, out_dir: Path, signature: str) -> Path:
 
 
 def rerig_model(character_name: str, signature: Optional[str] = None, *,
-                backend_glob: str = "") -> Dict[str, Any]:
-    """Rebuild from the corrected source when present, otherwise the original."""
+                backend_glob: str = "", track_id: str = "") -> Dict[str, Any]:
+    """Rebuild from the corrected source when present, otherwise the original.
+
+    ``track_id``: the caller's display row (the trigger's), recorded so a
+    resume after a restart can say which row took over."""
     from app.core import hub_ops
     op = hub_ops.find_open(_OP_RERIG, _op_match(character_name, signature))
     if op is not None:
         return _resume_entry(op, lambda: _rerig_model(
             character_name, op.inputs["signature"], _op_ctx={"op": op}), character_name)
     return hub_ops.run_new(lambda ctx: _rerig_model(
-        character_name, signature, backend_glob=backend_glob, _op_ctx=ctx))
+        character_name, signature, backend_glob=backend_glob, track_id=track_id, _op_ctx=ctx))
 
 
 @_serial_model
 def _rerig_model(character_name: str, signature: Optional[str] = None, *,
-                 backend_glob: str = "",
+                 backend_glob: str = "", track_id: str = "",
                  _op_ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     from app.core import hub_ops
     directory = get_model3d_dir(character_name)
@@ -2040,13 +2041,11 @@ def _rerig_model(character_name: str, signature: Optional[str] = None, *,
             source = directory / "unrigged" / f"{signature}.glb"
         if not source.is_file():
             return {"ok": False, "error": "No retained unrigged mesh source. Generate a new model to enable re-rigging."}
-        try:
-            op = hub_ops.create(_OP_RERIG, _op_subject(character_name, signature), {
-                "character": character_name, "signature": signature,
-                "backend_glob": backend_glob, "source_kind": source.parent.name,
-            }, label=f"Re-rig: {character_name}")
-        except hub_ops.HubOpBusy as exc:
-            return {"ok": False, "error": str(exc)}
+        op = hub_ops.create(_OP_RERIG, _op_subject(character_name, signature), {
+            "character": character_name, "signature": signature,
+            "rig": required_rig(character_name),
+            "backend_glob": backend_glob, "source_kind": source.parent.name,
+        }, label=f"Re-rig: {character_name}", track_id=track_id)
         if _op_ctx is not None:
             _op_ctx["op"] = op
         for suffix in (".glb", ".json", ".png"):
@@ -2072,7 +2071,9 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
     out_dir = get_model3d_dir(character_name)
     if not source.is_file():
         return {"ok": False, "error": "No retained unrigged mesh source. Generate a new model to enable re-rigging."}
-    rig = required_rig(character_name)
+    # The rig kind is frozen with the operation: a change of the character's
+    # rig while a job was out must not fail the collected result.
+    rig = (op.inputs.get("rig") if op is not None else None) or required_rig(character_name)
     previous_meta = _read_sidecar(path) if path else {}
     face_meta = _read_sidecar(source).get("face_retexture") if source.parent.name == "facefix" else None
     low = tier_variant(path, LOW_TIER) if path else None
@@ -2188,7 +2189,8 @@ def trigger_rerig(character_name: str, signature: str, *, backend_glob: str = ""
         result = {"ok": False, "error": "Re-rig failed"}
         try:
             with _char_lock(character_name):
-                result = rerig_model(character_name, signature, backend_glob=backend_glob)
+                result = rerig_model(character_name, signature, backend_glob=backend_glob,
+                                     track_id=task_id)
         except Exception as exc:
             result = {"ok": False, "error": str(exc)}
             logger.exception("Re-rig failed for %s", character_name)
@@ -2447,7 +2449,7 @@ def _model_revision_unlocked(path: Optional[Path]) -> str:
 
 def face_retexture_model(character_name: str, signature: Optional[str] = None, *,
                          backend_glob: str = "", params=None, upscale: bool = True,
-                         upscale_backend_glob: str = "") -> Dict[str, Any]:
+                         upscale_backend_glob: str = "", track_id: str = "") -> Dict[str, Any]:
     """Project the original photo, then rebuild every derived asset in the stage.
 
     A hub operation (upscale → face → bake → rig, app/core/hub_ops.py): inside
@@ -2459,13 +2461,14 @@ def face_retexture_model(character_name: str, signature: Optional[str] = None, *
             character_name, op.inputs["signature"], _op_ctx={"op": op}), character_name)
     return hub_ops.run_new(lambda ctx: _face_retexture_model(
         character_name, signature, backend_glob=backend_glob, params=params,
-        upscale=upscale, upscale_backend_glob=upscale_backend_glob, _op_ctx=ctx))
+        upscale=upscale, upscale_backend_glob=upscale_backend_glob, track_id=track_id,
+        _op_ctx=ctx))
 
 
 @_serial_model
 def _face_retexture_model(character_name: str, signature: Optional[str] = None, *,
                           backend_glob: str = "", params=None, upscale: bool = True,
-                          upscale_backend_glob: str = "",
+                          upscale_backend_glob: str = "", track_id: str = "",
                           _op_ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The staged half: checks + record (fresh run), then the stages. A
     resume skips the eligibility and readiness checks — the job it collects
@@ -2489,14 +2492,12 @@ def _face_retexture_model(character_name: str, signature: Optional[str] = None, 
         if upscale and upscale_backend_glob:
             from app.core.upscale_reference import require_upscale_backend
             require_upscale_backend(upscale_backend_glob, character_name)
-        try:
-            op = hub_ops.create(_OP_FACE, _op_subject(character_name, signature), {
-                "character": character_name, "signature": signature, "controls": controls,
-                "backend_glob": backend_glob, "upscale": bool(upscale),
-                "upscale_backend_glob": upscale_backend_glob, "source_kind": "facefix",
-            }, label=f"Face retexture: {character_name}")
-        except hub_ops.HubOpBusy as exc:
-            return {'ok': False, 'error': str(exc)}
+        op = hub_ops.create(_OP_FACE, _op_subject(character_name, signature), {
+            "character": character_name, "signature": signature, "controls": controls,
+            "backend_glob": backend_glob, "upscale": bool(upscale),
+            "upscale_backend_glob": upscale_backend_glob, "source_kind": "facefix",
+            "rig": required_rig(character_name),
+        }, label=f"Face retexture: {character_name}", track_id=track_id)
         if _op_ctx is not None:
             _op_ctx["op"] = op
         op.path("inputs", "photo.png").write_bytes(image)
@@ -2656,7 +2657,8 @@ def trigger_face_retexture(character_name: str, signature: str, *,
             with _char_lock(character_name):
                 result = face_retexture_model(character_name, signature,
                                                backend_glob=backend_glob, params=controls,
-                                               upscale=upscale, upscale_backend_glob=upscale_backend_glob)
+                                               upscale=upscale, upscale_backend_glob=upscale_backend_glob,
+                                               track_id=task_id)
         except Exception as exc:
             result = {'ok': False, 'error': str(exc)}
             logger.exception('Face retexture failed for %s', character_name)
@@ -2701,7 +2703,7 @@ def _op_thread_resume(staged, results: Optional[Dict[str, Dict[str, Any]]] = Non
         try:
             with _char_lock(name):
                 result = hub_ops.resume(op, lambda: staged(
-                    name, op.inputs["signature"], _op_ctx={"op": op}), agent_name=name)
+                    name, signature=op.inputs["signature"], _op_ctx={"op": op}), agent_name=name)
             return result
         except Exception as exc:
             result = {"ok": False, "error": str(exc)}
