@@ -1179,7 +1179,8 @@ def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
                       room_id: str = "",
                       source_image: str = "",
                       texture_size: Any = None,
-                      routing: Optional[Dict[str, Any]] = None) -> str:
+                      routing: Optional[Dict[str, Any]] = None,
+                      path_for=None) -> str:
     """Store the LOD stages of ONE generation as their own gallery files and
     return the SMALLEST one's file name (the caller selects it as ``low``).
 
@@ -1192,13 +1193,18 @@ def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
 
     ``routing`` carries the run's ``routing``/``fallback_from`` meta (image
     routing): a stage comes out of the same job as the main file, so it is
-    marked like it."""
+    marked like it.
+
+    ``path_for(index, format)`` (optional) names the target of stage
+    ``index`` — a hub operation remembers it BEFORE writing, so a repeated
+    publish after a restart rewrites the same file instead of adding one."""
     smallest = ""
-    for stage in stages:
+    for index, stage in enumerate(stages):
         blob = stage.get("blob") or b""
         if not blob:
             continue
-        path = gallery.new_path(f".{stage.get('format') or 'glb'}")
+        fmt = stage.get('format') or 'glb'
+        path = path_for(index, fmt) if path_for else gallery.new_path(f".{fmt}")
         path.write_bytes(blob)
         meta: Dict[str, Any] = {
             "created_at": utc_now_iso(),
@@ -1226,6 +1232,55 @@ def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
     return smallest
 
 
+# ── Hub operations (app/core/hub_ops.py) ──────────────────────────────────
+# The mesh and shrink jobs survive a restart: the record freezes the source
+# image (or source model), the views, the budgets and the target; the result
+# lands in the record's directory and is copied into the gallery when it is
+# published, under paths chosen once.
+_OP_MESH = "location_mesh"
+_OP_SHRINK = "location_shrink"
+
+
+def _op_gallery_path(op, gallery: ModelGallery, key: str, suffix: str) -> Path:
+    """The gallery target ``key`` of a publish, chosen ONCE and remembered in
+    the record before anything is written."""
+    stored = op.result("publish").get(key)
+    if stored:
+        return Path(stored)
+    return Path(op.remember("publish", **{key: str(gallery.new_path(suffix))})[key])
+
+
+def _op_result(op, res: Dict[str, Any]) -> Dict[str, Any]:
+    """A service result as JSON for the record (file paths relative)."""
+    out = {k: v for k, v in res.items()
+           if isinstance(v, (str, int, float, bool, dict, list)) or v is None}
+    for key in ("path", "texture_path"):
+        if out.get(key):
+            out[key] = op.rel(out[key])
+    return out
+
+
+def _resume_open(op):
+    from app.core import hub_ops
+    if op.status == hub_ops.FAILED:
+        hub_ops.raise_failed(op)
+    return hub_ops.resume(op, lambda: _KIND_STAGES[op.kind](op))
+
+
+def _label_of(location_id: str, owner: str, room_id: str) -> str:
+    label = owner
+    try:
+        from app.models.world import get_location_by_id, get_room_by_id
+        loc = get_location_by_id(location_id) or {}
+        label = loc.get("name") or owner
+        if room_id:
+            room = get_room_by_id(loc, room_id) or {}
+            label = f"{label} / {room.get('name') or room_id}"
+    except Exception:
+        pass
+    return label
+
+
 def _generate(location_id: str, source_image: str, backend_glob: str,
               room_id: str = "", face_num: Any = None,
               texture_size: Any = None,
@@ -1247,12 +1302,20 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
     ``backend_glob`` is an explicit pick (that alias or nothing); empty = the
     "mesh_building" chain of the image routing, whose ``routing`` /
     ``fallback_from`` meta lands on the model's sidecar (and its LOD
-    stages')."""
+    stages').
+
+    A hub operation (app/core/hub_ops.py): inside a queue handler that left
+    one open before a restart, this resumes it."""
+    from app.core import hub_ops
     from app.models.world import get_gallery_dir
-    from app.imagegen.service import get_image_service
     owner = _owner_id(location_id)
     if not owner:
         return {"ok": False, "error": "location_not_found"}
+    op = hub_ops.find_open(_OP_MESH, lambda i: (i.get("location_id") == location_id
+                                               and i.get("room_id") == room_id
+                                               and i.get("source_image") == source_image))
+    if op is not None:
+        return _resume_open(op)
     # The caller passes a gallery FILE NAME — resolve it against the location's
     # gallery dir (same owner redirect) and reject path escapes.
     if not source_image or "/" in source_image or ".." in source_image:
@@ -1286,93 +1349,134 @@ def _generate(location_id: str, source_image: str, backend_glob: str,
     # wrapper is the ONE tracked header task — the queue-channel entry of the
     # actual GPU job lives in the queue panel, not the header task list.
     from app.core.task_queue import get_task_queue
-    label = owner
-    try:
-        from app.models.world import get_location_by_id, get_room_by_id
-        loc = get_location_by_id(location_id) or {}
-        label = loc.get("name") or owner
-        if room_id:
-            room = get_room_by_id(loc, room_id) or {}
-            label = f"{label} / {room.get('name') or room_id}"
-    except Exception:
-        pass
+    label = f"{'Room' if room_id else 'Building'} model: {_label_of(location_id, owner, room_id)}"
     task_id = ""
     try:
         task_id = get_task_queue().track_start(
-            "model3d_generation",
-            f"{'Room' if room_id else 'Building'} model: {label}",
-            start_running=True)
+            "model3d_generation", label, start_running=True)
     except Exception:
         task_id = ""
 
     error = ""
     try:
-        gallery = _gallery(owner, room_id)
-        res = get_image_service().generate_mesh(
-            source_image_path=str(src),
-            output_path=str(gallery.new_path()),
-            backend_glob=backend_glob,
-            mesh_name=_stem(room_id) if room_id else owner,
-            face_num=face_num,
-            texture_size=texture_size,
-            lod_faces=lod_faces,
-            view_images=view_paths or None,
-            occasion="mesh_building")
-        if not res.get("ok"):
-            error = str(res.get("error") or "generation failed")
-            logger.error("Location model %s failed: %s", owner, error)
+        key = _gen_key(owner, room_id, source_image, backend_glob, tier)
+        try:
+            op = hub_ops.create(_OP_MESH, "location:" + key, {
+                "location_id": location_id, "owner": owner, "room_id": room_id,
+                "source_image": source_image, "guard_key": key,
+                "backend_glob": backend_glob, "face_num": face_num,
+                "texture_size": texture_size, "tier": tier or DEFAULT_TIER,
+                "lod_faces": lod_faces,
+                "view_images": {v: Path(p).name for v, p in view_paths.items()},
+            }, label=label, track_id=task_id)
+        except hub_ops.HubOpBusy as exc:
+            error = str(exc)
             return {"ok": False, "error": error}
-
-        path = Path(res["path"])
-        meta = {
-            "created_at": utc_now_iso(),
-            "source": "generated",
-            "format": res.get("format", path.suffix.lstrip(".").lower() or "glb"),
-            "rig": res.get("rig", "none"),
-            "tier": tier or DEFAULT_TIER,
-            "source_image": source_image,
-            "backend": res.get("backend", ""),
-            "location": owner,
-        }
-        for _rk in ("routing", "fallback_from"):
-            if res.get(_rk):
-                meta[_rk] = res[_rk]
-        if view_paths:
-            # Which extra views went into this mesh — file names, like
-            # "source_image".
-            meta["view_images"] = {v: Path(p).name for v, p in view_paths.items()}
-        # What this run was made WITH — the numbers that separate a full from
-        # a low variant. They belong to the FILE, not to the subject.
-        if face_num:
-            meta["face_num"] = int(face_num)
-        if texture_size:
-            meta["texture_size"] = int(texture_size)
-        if room_id:
-            meta["room"] = room_id
-        write_sidecar(path, meta)
-        select_model(location_id, path.name, room_id, tier)
-        logger.info("Location model %s: %s (%d bytes, from %s)", owner, path.name,
-                    path.stat().st_size, source_image)
-        low = _store_lod_stages(gallery, res.get("stages") or [], path.name,
-                                res.get("backend", ""), owner, room_id,
-                                source_image, texture_size,
-                                routing={k: res[k] for k in ("routing", "fallback_from")
-                                         if res.get(k)})
-        if low:
-            select_model(location_id, low, room_id, LOW_TIER)
-            logger.info("Location model %s: LOD stage %s selected as low "
-                        "variant", owner, low)
-        elif (tier or DEFAULT_TIER) == DEFAULT_TIER:
-            # The alias delivered no stages — build the distance mesh locally
-            # (CPU, seconds) instead of leaving the tier to a batch run.
-            request_low_tier(location_id, room_id, owner=owner)
-        return {"ok": True, "path": str(path), "meta": meta}
+        op.freeze_file(src, "inputs", src.name)
+        views_frozen = {v: op.rel(op.freeze_file(p, "inputs", "views", Path(p).name))
+                        for v, p in view_paths.items()}
+        op.update_state(lambda st: st.update(view_files=views_frozen))
+        op.reload()
+        result = hub_ops.execute(op, lambda: _mesh_stages(op))
+        if not result.get("ok"):
+            error = str(result.get("error") or "generation failed")
+        return result
+    except Exception as e:
+        error = error or f"{type(e).__name__}: {e}"
+        raise
     finally:
         if task_id:
             try:
                 get_task_queue().track_finish(task_id, error=error)
             except Exception:
                 pass
+
+
+def _mesh_stages(op) -> Dict[str, Any]:
+    """Stage ``mesh`` → publish of one location record (fresh run and resume)."""
+    from app.imagegen.service import get_image_service
+    inputs = op.inputs
+    location_id, room_id = inputs["location_id"], inputs.get("room_id") or ""
+    source_image = inputs["source_image"]
+    face_num, texture_size = inputs.get("face_num"), inputs.get("texture_size")
+    tier = inputs.get("tier") or DEFAULT_TIER
+    owner = _owner_id(location_id)
+    if not owner:
+        return {"ok": False, "error": "location_not_found"}
+    if not op.done("mesh"):
+        views = {v: str(op.abs(rel)) for v, rel in (op.state.get("view_files") or {}).items()}
+        res = get_image_service().generate_mesh(
+            source_image_path=str(op.abs(f"inputs/{source_image}")),
+            output_path=str(op.path("mesh", "model.glb")),
+            backend_glob=inputs.get("backend_glob") or "",
+            mesh_name=_stem(room_id) if room_id else owner,
+            face_num=face_num,
+            texture_size=texture_size,
+            lod_faces=inputs.get("lod_faces"),
+            view_images=views or None,
+            occasion="mesh_building",
+            hub_stage=op.stage("mesh"))
+        if not res.get("ok"):
+            error = str(res.get("error") or "generation failed")
+            logger.error("Location model %s failed: %s", owner, error)
+            return {"ok": False, "error": error}
+        stages = []
+        for i, st in enumerate(res.pop("stages", None) or []):
+            target = op.path("mesh", f"lod_{i}.{st.get('format') or 'glb'}")
+            target.write_bytes(st["blob"])
+            stages.append({k: v for k, v in st.items() if k != "blob"} | {"file": op.rel(target)})
+        op.complete("mesh", {**_op_result(op, res), "stages": stages})
+    res = op.result("mesh")
+    built = op.abs(res["path"])
+
+    gallery = _gallery(owner, room_id)
+    path = _op_gallery_path(op, gallery, "path", built.suffix or ".glb")
+    path.write_bytes(built.read_bytes())
+    meta = {
+        "created_at": utc_now_iso(),
+        "source": "generated",
+        "format": res.get("format", path.suffix.lstrip(".").lower() or "glb"),
+        "rig": res.get("rig", "none"),
+        "tier": tier,
+        "source_image": source_image,
+        "backend": res.get("backend", ""),
+        "location": owner,
+    }
+    for _rk in ("routing", "fallback_from"):
+        if res.get(_rk):
+            meta[_rk] = res[_rk]
+    if inputs.get("view_images"):
+        # Which extra views went into this mesh — file names, like
+        # "source_image".
+        meta["view_images"] = dict(inputs["view_images"])
+    # What this run was made WITH — the numbers that separate a full from
+    # a low variant. They belong to the FILE, not to the subject.
+    if face_num:
+        meta["face_num"] = int(face_num)
+    if texture_size:
+        meta["texture_size"] = int(texture_size)
+    if room_id:
+        meta["room"] = room_id
+    write_sidecar(path, meta)
+    select_model(location_id, path.name, room_id, tier)
+    logger.info("Location model %s: %s (%d bytes, from %s)", owner, path.name,
+                path.stat().st_size, source_image)
+    stages = [dict(st, blob=op.abs(st["file"]).read_bytes()) for st in (res.get("stages") or [])]
+    low = _store_lod_stages(gallery, stages, path.name,
+                            res.get("backend", ""), owner, room_id,
+                            source_image, texture_size,
+                            routing={k: res[k] for k in ("routing", "fallback_from")
+                                     if res.get(k)},
+                            path_for=lambda i, fmt: _op_gallery_path(op, gallery, f"lod_{i}", f".{fmt}"))
+    if low:
+        select_model(location_id, low, room_id, LOW_TIER)
+        logger.info("Location model %s: LOD stage %s selected as low "
+                    "variant", owner, low)
+    elif tier == DEFAULT_TIER:
+        # The alias delivered no stages — build the distance mesh locally
+        # (CPU, seconds) instead of leaving the tier to a batch run.
+        request_low_tier(location_id, room_id, owner=owner)
+    return {"ok": True, "path": str(path), "meta": meta}
 
 
 def _run(location_id: str, source_image: str, backend_glob: str,
@@ -1434,11 +1538,18 @@ def _shrink(location_id: str, source_file: str, backend_glob: str,
             texture_size: Any = None) -> Dict[str, Any]:
     """Blocking mesh→mesh reduction of ONE stored model. Runs on a worker
     thread (see trigger_shrink). Adds a NEW file to the same gallery and makes
-    it the ``low`` variant — the source file stays untouched."""
-    from app.imagegen.service import get_image_service
+    it the ``low`` variant — the source file stays untouched.
+
+    A hub operation like the mesh step (app/core/hub_ops.py)."""
+    from app.core import hub_ops
     owner = _owner_id(location_id)
     if not owner:
         return {"ok": False, "error": "location_not_found"}
+    op = hub_ops.find_open(_OP_SHRINK, lambda i: (i.get("location_id") == location_id
+                                                 and i.get("room_id") == room_id
+                                                 and i.get("source_file") == source_file))
+    if op is not None:
+        return _resume_open(op)
     gallery = _gallery(owner, room_id)
     src = gallery.file(source_file)
     if not src:
@@ -1447,67 +1558,123 @@ def _shrink(location_id: str, source_file: str, backend_glob: str,
         return {"ok": False, "error": "source_model_missing"}
 
     from app.core.task_queue import get_task_queue
-    label = owner
-    try:
-        from app.models.world import get_location_by_id, get_room_by_id
-        loc = get_location_by_id(location_id) or {}
-        label = loc.get("name") or owner
-        if room_id:
-            room = get_room_by_id(loc, room_id) or {}
-            label = f"{label} / {room.get('name') or room_id}"
-    except Exception:
-        pass
+    label = f"Low variant: {_label_of(location_id, owner, room_id)}"
     task_id = ""
     try:
         task_id = get_task_queue().track_start(
-            "model3d_generation", f"Low variant: {label}", start_running=True)
+            "model3d_generation", label, start_running=True)
     except Exception:
         task_id = ""
 
     error = ""
     try:
-        res = get_image_service().generate_mesh_variant(
-            source_model_path=str(src),
-            output_path=str(gallery.new_path()),
-            backend_glob=backend_glob,
-            mesh_name=_stem(room_id) if room_id else owner,
-            face_num=face_num,
-            texture_size=texture_size)
-        if not res.get("ok"):
-            error = str(res.get("error") or "shrink failed")
-            logger.error("Location model %s shrink failed: %s", owner, error)
+        key = _gen_key(owner, room_id, f"{_SHRINK_KEY_PREFIX}{source_file}")
+        try:
+            op = hub_ops.create(_OP_SHRINK, "location:" + key, {
+                "location_id": location_id, "owner": owner, "room_id": room_id,
+                "source_file": source_file, "guard_key": key,
+                "backend_glob": backend_glob, "face_num": face_num,
+                "texture_size": texture_size,
+            }, label=label, track_id=task_id)
+        except hub_ops.HubOpBusy as exc:
+            error = str(exc)
             return {"ok": False, "error": error}
-
-        path = Path(res["path"])
-        meta = {
-            "created_at": utc_now_iso(),
-            "source": "shrink",
-            "format": res.get("format", "glb"),
-            "rig": "none",
-            "tier": LOW_TIER,
-            "backend": res.get("backend", ""),
-            # Which stored file this variant was reduced FROM — the only way
-            # to tell later which full mesh a low variant belongs to.
-            "source_file": source_file,
-            "location": owner,
-        }
-        if face_num:
-            meta["face_num"] = int(face_num)
-        if texture_size:
-            meta["texture_size"] = int(texture_size)
-        if room_id:
-            meta["room"] = room_id
-        write_sidecar(path, meta)
-        select_model(location_id, path.name, room_id, LOW_TIER)
-        logger.info("Location model %s: low variant %s (%d bytes, from %s)",
-                    owner, path.name, path.stat().st_size, source_file)
-        return {"ok": True, "path": str(path), "meta": meta}
+        op.freeze_file(src, "inputs", src.name)
+        result = hub_ops.execute(op, lambda: _shrink_stages(op))
+        if not result.get("ok"):
+            error = str(result.get("error") or "shrink failed")
+        return result
+    except Exception as e:
+        error = error or f"{type(e).__name__}: {e}"
+        raise
     finally:
         if task_id:
             try:
                 get_task_queue().track_finish(task_id, error=error)
             except Exception:
                 pass
+
+
+def _shrink_stages(op) -> Dict[str, Any]:
+    """Stage ``shrink`` → publish of one location record (fresh run and resume)."""
+    from app.imagegen.service import get_image_service
+    inputs = op.inputs
+    location_id, room_id = inputs["location_id"], inputs.get("room_id") or ""
+    source_file = inputs["source_file"]
+    face_num, texture_size = inputs.get("face_num"), inputs.get("texture_size")
+    owner = _owner_id(location_id)
+    if not owner:
+        return {"ok": False, "error": "location_not_found"}
+    if not op.done("shrink"):
+        res = get_image_service().generate_mesh_variant(
+            source_model_path=str(op.abs(f"inputs/{source_file}")),
+            output_path=str(op.path("shrink", "model.glb")),
+            backend_glob=inputs.get("backend_glob") or "",
+            mesh_name=_stem(room_id) if room_id else owner,
+            face_num=face_num,
+            texture_size=texture_size,
+            hub_stage=op.stage("shrink"))
+        if not res.get("ok"):
+            error = str(res.get("error") or "shrink failed")
+            logger.error("Location model %s shrink failed: %s", owner, error)
+            return {"ok": False, "error": error}
+        op.complete("shrink", _op_result(op, res))
+    res = op.result("shrink")
+    built = op.abs(res["path"])
+    gallery = _gallery(owner, room_id)
+    path = _op_gallery_path(op, gallery, "path", built.suffix or ".glb")
+    path.write_bytes(built.read_bytes())
+    meta = {
+        "created_at": utc_now_iso(),
+        "source": "shrink",
+        "format": res.get("format", "glb"),
+        "rig": "none",
+        "tier": LOW_TIER,
+        "backend": res.get("backend", ""),
+        # Which stored file this variant was reduced FROM — the only way
+        # to tell later which full mesh a low variant belongs to.
+        "source_file": source_file,
+        "location": owner,
+    }
+    if face_num:
+        meta["face_num"] = int(face_num)
+    if texture_size:
+        meta["texture_size"] = int(texture_size)
+    if room_id:
+        meta["room"] = room_id
+    write_sidecar(path, meta)
+    select_model(location_id, path.name, room_id, LOW_TIER)
+    logger.info("Location model %s: low variant %s (%d bytes, from %s)",
+                owner, path.name, path.stat().st_size, source_file)
+    return {"ok": True, "path": str(path), "meta": meta}
+
+
+_KIND_STAGES = {_OP_MESH: _mesh_stages, _OP_SHRINK: _shrink_stages}
+
+
+def _op_reserve(op):
+    """The double-start guard of the record's target, taken by the resumer
+    before the AgentLoop starts (``is_pending`` reports the target busy)."""
+    key = op.inputs.get("guard_key") or ""
+    with _lock:
+        if not key or key in _generating:
+            return lambda: None
+        _generating.add(key)
+
+    def release() -> None:
+        with _lock:
+            _generating.discard(key)
+    return release
+
+
+def _register_hub_kinds() -> None:
+    from app.core import hub_ops
+    for kind in _KIND_STAGES:
+        hub_ops.register_kind(kind, resume=_resume_open, track_type="model3d_generation",
+                              reserve=_op_reserve)
+
+
+_register_hub_kinds()
 
 
 def trigger_shrink(location_id: str, *, source_file: str,
