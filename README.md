@@ -154,6 +154,10 @@ stops acting autonomously).
   outfits, mood, height, language, memory budgets, per-character LLM overrides. The repo ships
   `human-roleplay`, `human-default`, `animal-default` and `npc-temporary` under
   `shared/templates/character/`.
+- **Temporary NPC clothing:** their background action turn sees whether the described clothes
+  are worn and can explicitly undress/get dressed, even alone or in a home area. Undressed NPCs
+  get a situational dressing reminder; water, intimacy, sleep and dress-code exemptions suppress
+  that reminder. Bathing is not a keyword-triggered clothing change.
 - **One name rule for every creator:** the create form, the character ZIP import, World Dev and the
   temporary-NPC spawn all validate a NEW name the same way — letters of any script, digits, single
   spaces, `-`, `'`, `.` and `_` (not leading), up to 60 characters. Existing characters are never re-checked or renamed.
@@ -216,11 +220,10 @@ stops acting autonomously).
   In the portrait generation dialog, **Use current portrait as reference** optionally preserves
   identity through an existing portrait (off by default, requires a reference-capable backend).
   Portraits never use room or item references.
-  Generated portraits frame the whole head and complete hairstyle, including long hair and all
-  hair tips, with background margin on every side. Only a short, straight upper-neck stump is
-  shown; longer hair hangs against the plain background without shoulders, chest or torso.
-  This profile-only framing also applies to custom styles without changing the Face Prompt,
-  expression, outfit or other render occasions.
+  Generated portraits follow a few basic rules, since they serve as the identity reference for
+  later renders: front view, neutral expression, no clothing, accessories or objects, no
+  background, head and neck only (shoulders only for long hair). The rules also apply to custom
+  styles without changing the Face Prompt or other render occasions.
   The player and 3D clients display identity portraits as background-free cutouts with the full
   hairstyle visible. Existing portraits are processed on first display; PNG variants live in
   the character's `.cache/portraits`, outside the gallery. Originals remain unchanged for
@@ -280,8 +283,11 @@ stops acting autonomously).
   nickname Pip"). The speaking character gets its own direction in the chat prompt, which
   is what keeps a German world from drifting between a formal and an informal address
   mid-conversation. Edited in Game-Admin → Characters → **Relationships**.
-- **Phone panel:** a phone-style chat layout in `/play` for remote conversations, with a
-  world-configurable frame.
+- **Phone panel:** a phone-style chat layout in `/play`, with a world-configurable frame.
+  Only explicitly sent phone messages appear in its contacts, threads and unread count.
+  Face-to-face speech stays in the room chat; system notifications and private thought prose
+  are not copied into the phone. A deliberate phone send remains valid even in the same room.
+  Existing legacy entries already stored as messaging are preserved, not automatically deleted.
 
 ### Knowledge, search & automation
 - **Knowledge extraction** (`knowledge` package): pull facts from local files (Markdown/JSON/…) via

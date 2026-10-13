@@ -493,14 +493,14 @@ _DEFAULT_IMAGE_USE_CASES = {
     },
     "profile": {
         "keywords": {
-            "prompt_style": "photorealistic, isolated floating head, only a short upper-neck stump, looking at camera, plain neutral background, sharp focus, high detail",
+            "prompt_style": "photorealistic portrait, soft even lighting, sharp focus, high detail",
             "prompt_negative": _NEG_PHOTO,
-            "prompt_instruction": "Write comma-separated tags for an isolated whole-head portrait — face, complete hairstyle including all hair tips, expression, short upper-neck stump. Preserve the subject's identity and full hair length; fit the entire hairstyle inside the frame without showing shoulders or torso.",
+            "prompt_instruction": "Write comma-separated tags for the face and hairstyle only.",
         },
         "natural": {
-            "prompt_style": "a photorealistic portrait of an isolated floating head with only a short upper-neck stump, looking at the camera, plain neutral background, sharp focus",
+            "prompt_style": "a photorealistic portrait, soft even lighting, sharp focus",
             "prompt_negative": _NEG_PHOTO,
-            "prompt_instruction": "Describe an isolated whole-head portrait — face, complete hairstyle including all hair tips, expression, short upper-neck stump. Preserve the subject's identity and full hair length; fit the entire hairstyle inside the frame without showing shoulders or torso.",
+            "prompt_instruction": "Describe the face and hairstyle only.",
         },
     },
     # NOTE prompt layering: use-case styles carry camera/quality/framing/
@@ -689,10 +689,10 @@ def get_use_case_prompts(use_case: str, image_model: str = "",
     placeholder into a prompt; the default keeps the clause for every path
     that does not know the character's state.
 
-    Profile portraits are outfit-independent identity references: the whole
-    head and complete hairstyle fit with margin; only a short neck is shown.
-    Long hair remains fully visible against the background without adding
-    shoulders or a bust. This also applies to custom styles; fabric stays empty.
+    Profile portraits are identity references for later renders, so the
+    basic rules below are added to every profile style, custom ones too:
+    frontal, neutral expression, nothing worn or held, no background, head
+    and neck only (shoulders only for long hair). Fabric stays empty.
     """
     uc = (use_case or "").strip() or "character"
     family = image_model_to_family(image_model)
@@ -705,27 +705,20 @@ def get_use_case_prompts(use_case: str, image_model: str = "",
         text = (override or "").strip() or (builtin.get(f, "") or "")
         out[f] = text.replace("{fabric}", fabric)
     if uc == "profile":
-        # Fit the complete hairstyle independently of the visible body boundary.
-        framing = ("whole head and complete hairstyle fully inside the frame, "
-                   "including the hair crown, ears, loose strands and all hair tips, "
-                   "preserve the full authored hair length without cutting or "
-                   "shortening the hairstyle, zoom out enough to leave generous "
-                   "plain neutral background margin above, beside and below "
-                   "the entire hair silhouette, only a short straight upper-neck "
-                   "stump ending horizontally below the jaw and above the "
-                   "shoulder line, narrow straight-sided neck base, long hair "
-                   "may extend below the neck base against plain neutral "
-                   "background with no body behind it, preserve hair colour, "
-                   "texture and hairstyle, no shoulders, chest, torso or "
-                   "visible clothing")
-        out["prompt_style"] = f"{out['prompt_style']}, {framing}"
+        # Basic rules of an identity reference; first, so they outweigh the style.
+        rules = ("front view, facing the camera, neutral expression, "
+                 "head and neck only, shoulders only if the hair is long, "
+                 "complete hairstyle inside the frame, no clothing, "
+                 "no accessories, no jewelry, no headwear, no glasses, no objects, "
+                 "no background")
+        out["prompt_style"] = f"{rules}, {out['prompt_style']}"
         out["prompt_negative"] = (
-            f"{out['prompt_negative']}, cropped hair, cut off hair tips, truncated hairstyle, cropped crown, cut off top of head, head out of frame, extreme close-up, long neck, flared neck base, rounded bust base, shoulders, chest, torso, upper body, clothing, shirt, blouse, jacket, collar, straps"
+            f"{out['prompt_negative']}, side view, three-quarter view, looking away, "
+            "smiling, open mouth, cropped hair, cut off top of head, chest, torso, "
+            "clothing, jewelry, earrings, necklace, hat, glasses, hands, objects, "
+            "background scenery, room, landscape"
         )
-        out["prompt_instruction"] = (
-            f"{out['prompt_instruction']} Keep the portrait outfit-independent: "
-            f"{framing}. Do not add an outfit or show the full body."
-        )
+        out["prompt_instruction"] = f"{out['prompt_instruction']} Rules: {rules}."
     return out
 
 
