@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Smoke run for the multi-view mesh input: view detection + slot mapping.
 
-No world, no DB, no server, no gateway — the two pure mappings of
-``OpenAIMeshBackend`` are called as static/class methods, without an instance.
+No server or gateway: pure mappings plus payload/service checks with mocked
+submission and temporary storage for character sidecar checks.
 
 What is being checked, derived by hand from the agreed design (not from what
 the code currently prints):
@@ -50,9 +50,17 @@ Expected results, worked out by hand from those rules:
       -> {"input_image_front": "f.png"}                 (first slot per view)
 
 Usage:  ./.venv/bin/python scripts/smoke_mesh_multiview.py
+
+P2 expectations derived from spec §4.4: with four slots an animal sends
+head-on as front, main as left, plus back/right. Without head-on, main fills
+both front and left. One slot sends main only and records single_view=True.
+Humanoids keep main as front plus back/left/right; single_view is absent.
 """
 import sys
+import threading
+import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -139,6 +147,138 @@ got = OpenAIMeshBackend.select_slot_images(
 check("the first slot of a view wins, the image is not uploaded twice",
       got == {"input_image_front": "f.png"}, str(got))
 
+
+print("\n(h) body-dependent mapping for the chosen alias")
+mapper = getattr(OpenAIMeshBackend, "mesh_slot_views", None)
+check("public mesh_slot_views exists", callable(mapper))
+if callable(mapper):
+    for label, body, views, slots, expected in (
+        ("animal four slots", "animal", {"front": "h.png", "back": "b.png", "right": "r.png"}, MV_SLOTS,
+         {"input_image_front": "h.png", "input_image_back": "b.png", "input_image_left": "m.png", "input_image_right": "r.png"}),
+        ("animal without head-on", "animal", {"back": "b.png", "right": "r.png"}, MV_SLOTS,
+         {"input_image_front": "m.png", "input_image_back": "b.png", "input_image_left": "m.png", "input_image_right": "r.png"}),
+        ("animal single slot", "animal", {"front": "h.png", "back": "b.png"}, ["input_image"], {"input_image": "m.png"}),
+        ("animal unreadable schema", "animal", {"front": "h.png"}, [], {"input_image": "m.png"}),
+        ("humanoid unchanged", "humanoid", {"back": "b.png", "left": "l.png", "right": "r.png"}, MV_SLOTS,
+         {"input_image_front": "m.png", "input_image_back": "b.png", "input_image_left": "l.png", "input_image_right": "r.png"}),
+    ):
+        before = dict(views)
+        got = OpenAIMeshBackend.select_slot_images(slots, mapper(body, "m.png", views, slots))
+        check(label, got == expected, str(got))
+        check(label + " leaves raw views intact", views == before)
+
+# Check the real payload builder without a gateway submission.
+backend = object.__new__(OpenAIMeshBackend)
+backend._tls = threading.local()
+backend._face_schema = (False, (), "", frozenset())
+backend.category = "img2mesh"
+backend.name = backend.model = "smoke"
+backend.api_url = "https://unused.invalid"
+backend.mesh_endpoint = "/meshes"
+main = "https://unused.invalid/main.png"
+head = "https://unused.invalid/head.png"
+for body, slots, expected, single in (
+    ("animal", ["input_image"], {"input_image": main}, True),
+    ("animal", MV_SLOTS, {"input_image_front": head, "input_image_left": main}, False),
+    ("humanoid", ["input_image"], {"input_image": main}, False),
+):
+    backend._image_slots = slots
+    with patch.object(backend, "build_alias_params", return_value={}), \
+            patch("app.imagegen.backends.openai_mesh.submit_job", return_value="") as submit:
+        backend._generate("", "", {"source_image_path": main, "view_body": body,
+                                   "reference_images": {"front": head} if body == "animal" else {}})
+    check(body + " payload " + str(len(slots)), submit.call_args.args[2]["images"] == expected)
+    check(body + " single_view " + str(len(slots)), getattr(backend, "last_single_view", None) is single)
+
+# Refs-only humanoid calls must retain the front without a source path.
+backend._image_slots = MV_SLOTS
+back = "https://unused.invalid/back.png"
+with patch.object(backend, "build_alias_params", return_value={}), \
+        patch("app.imagegen.backends.openai_mesh.submit_job", return_value="") as submit:
+    backend._generate("", "", {"view_body": "humanoid",
+                               "reference_images": {"front": main, "back": back}})
+images = submit.call_args.args[2]["images"] if submit.call_args else None
+check("humanoid refs-only payload retains front and back",
+      images == {
+          "input_image_front": main, "input_image_back": back},
+      str(images))
+
+# The service must copy worker-local metadata before leaving the channel.
+from app.imagegen.service import ImageService
+
+service = object.__new__(ImageService)
+service._pool = object()
+raw = {"front": "h.png", "back": "b.png", "right": "r.png"}
+for body, single in (("animal", True), ("animal", False), ("humanoid", False)):
+    backend._tls.single_view = single
+    backend._tls.result_files = [{"name": "mesh.glb", "mime": "model/gltf-binary"}]
+    with patch.object(backend, "generate", return_value=[b"mesh"]) as generate, \
+            patch.object(service, "run_on_backend_channel", create=True,
+                         side_effect=lambda bb, op, **kw: op()) as channel, \
+            patch.object(service, "run_on_backend", create=True,
+                         side_effect=lambda bb, op, **kw: (op(bb), bb)), \
+            patch("app.imagegen.routing.run_routed",
+                  side_effect=lambda occasion, render, **kw: (render(backend), None)), \
+            patch.object(service, "_store_mesh_files", return_value={"ok": True, "path": "unused.glb"}):
+        result = service.generate_mesh("m.png", "unused.glb", view_images=raw, view_body=body)
+    check(body + " raw views reach chosen backend", generate.call_args.args[2]["reference_images"] == raw)
+    check(body + " main and body reach chosen backend",
+          generate.call_args.args[2]["source_image_path"] == "m.png"
+          and generate.call_args.args[2]["view_body"] == body)
+    check("generation uses backend channel", channel.call_count == 1)
+    check(body + " result flag " + str(single),
+          result.get("single_view") is True if single else "single_view" not in result)
+
+# Initialise isolated storage before importing character model modules.
+from app.core import paths
+import json
+
+with tempfile.TemporaryDirectory(prefix="smoke-mesh-multiview-") as tmp:
+    paths.init(tmp)
+    from app.core import model3d
+
+    directory = Path(tmp) / "models"
+    directory.mkdir()
+    source = Path(tmp) / "source.glb"
+    source.write_bytes(b"mesh")
+    for single in (True, False):
+        result = {"path": str(source), "backend": "smoke"}
+        if single:
+            result["single_view"] = True
+        with patch.object(model3d, "get_model3d_dir", return_value=directory), \
+                patch.object(model3d, "_purge_combination"), \
+                patch("app.core.mesh_source.validate_source", return_value={"ok": True}):
+            stored = model3d._store_unrigged_model("smoke", "signature", result, "mixamo", {})
+        for relative in ("signature.json", "unrigged/signature.json"):
+            meta = json.loads((directory / relative).read_text())
+            check(relative + " single_view " + str(single),
+                  meta.get("single_view") is True if single else "single_view" not in meta)
+
+        # Re-rig the retained source through the real publication path. Only
+        # the rig service, validation and optional processing are stubbed.
+        def generate_rig(*, mesh_path, output_path, **kwargs):
+            check("re-rig consumes retained source",
+                  Path(mesh_path) == directory / "unrigged/signature.glb")
+            Path(output_path).write_bytes(b"rigged mesh")
+            return {"ok": True, "path": output_path, "backend": "smoke-rigger"}
+
+        with patch.object(model3d, "get_model3d_dir", return_value=directory), \
+                patch.object(model3d, "find_model3d", return_value=directory / "signature.glb"), \
+                patch.object(model3d, "required_rig", return_value="mixamo"), \
+                patch("app.imagegen.service.get_image_service", return_value=service), \
+                patch.object(service, "generate_rig", side_effect=generate_rig), \
+                patch("app.core.model_validate.validate_glb", return_value={"ok": True}), \
+                patch.object(model3d, "_auto_retexture"), \
+                patch.object(model3d, "_auto_normalize"), \
+                patch.object(model3d, "_auto_extension_rig", return_value={"ok": True}), \
+                patch.object(model3d, "_attach_measurement"), \
+                patch.object(model3d, "request_lod", return_value=False):
+            rerigged = model3d._rig_from_source(
+                "smoke", "signature", directory / "unrigged/signature.glb")
+        check("re-rig succeeds " + str(single), rerigged.get("ok") is True, str(rerigged))
+        meta = json.loads((directory / "signature.json").read_text())
+        check("re-rig published single_view " + str(single),
+              meta.get("single_view") is True if single else "single_view" not in meta)
 
 print()
 if FAILURES:

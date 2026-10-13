@@ -1645,6 +1645,8 @@ def _store_unrigged_model(character_name: str, signature: str, result: Dict[str,
         "mesh_route_meta": {k: result[k] for k in ("routing", "fallback_from") if k in result},
         "source_filename": result.get("filename", ""),
     }
+    if result.get("single_view"):
+        source_meta["single_view"] = True
     if result.get("job_id"):
         source_meta["job_id"] = result["job_id"]
     _publish_sidecar(retained, source_meta)
@@ -1712,7 +1714,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     # by default): a multi-view mesh backend reconstructs the back and the
     # body depth from them instead of guessing. Only what actually exists is
     # passed on — a view that failed to render must not block the mesh.
-    from app.core.model_refs import enabled_tpose_views
+    from app.core.model_refs import enabled_tpose_views, is_humanoid
     view_images = {}
     for _view in enabled_tpose_views(character_name):
         _vp = find_ref_image(character_name, f"tpose_{_view}", signature)
@@ -1752,6 +1754,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             face_num=face_num,
             texture_size=texture_size,
             view_images=view_images or None,
+            view_body="humanoid" if is_humanoid(character_name) else "animal",
             occasion=mesh_occasion_for_rig(rig))
         if not res.get("ok"):
             error = str(res.get("error") or "generation failed")
@@ -1794,7 +1797,8 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         texture_suffix = Path(res["texture_path"]).suffix if res.get("texture_path") else ".png"
         path = out_dir / f"{signature}{delivered.suffix.lower()}"
         _purge_combination(out_dir, signature, keep_model=path, preserve_unrigged=True)
-        stage_meta = {"mesh_backend": mesh_res.get("backend", ""),
+        stage_meta = {**({"single_view": True} if mesh_res.get("single_view") else {}),
+                      "mesh_backend": mesh_res.get("backend", ""),
                       "rig_backend": res.get("backend", ""),
                       "mesh_route_meta": {k: mesh_res[k] for k in ("routing", "fallback_from") if k in mesh_res},
                       "rig_route_meta": {k: res[k] for k in ("routing", "fallback_from") if k in res}}
@@ -1917,7 +1921,7 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
             _publish_model_bytes((out_dir / "raw" / path.name).with_suffix(".png"), texture)
         source_meta = _read_sidecar(out_dir / "unrigged" / f"{signature}.glb")
         meta = {k: v for k, v in source_meta.items() if k in (
-            "mesh_backend", "mesh_route_meta", "source_image", "view_images", "pieces", "items", "job_id")}
+            "mesh_backend", "mesh_route_meta", "source_image", "view_images", "pieces", "items", "job_id", "single_view")}
         meta.update(created_at=utc_now_iso(), source="generated", signature=signature,
                     character=character_name, rig=rig, format=path.suffix.lstrip("."),
                     backend=res.get("backend", ""), rig_backend=res.get("backend", ""),

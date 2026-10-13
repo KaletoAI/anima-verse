@@ -210,6 +210,11 @@ class OpenAIMeshBackend(ImageBackend):
 
     # -- result metadata ----------------------------------------------------
     @property
+    def last_single_view(self) -> bool:
+        """Whether this worker's animal mesh used a single-slot alias."""
+        return bool(getattr(self._tls, "single_view", False))
+
+    @property
     def last_result_rig(self) -> Optional[str]:
         """The hub job's rig field, captured on the generating worker thread."""
         return getattr(self._tls, "result_rig", None)
@@ -418,6 +423,18 @@ class OpenAIMeshBackend(ImageBackend):
             views.setdefault("front", src)
         return views
 
+    @staticmethod
+    def mesh_slot_views(body: str, main: str, views: Dict[str, str],
+                        slots: List[str]) -> Dict[str, str]:
+        """Choose body-dependent views for the actually selected alias."""
+        if body == "animal":
+            if len(slots) <= 1:
+                return {"front": main}
+            return {"front": views.get("front") or main, "left": main,
+                    **{v: views[v] for v in ("back", "right") if views.get(v)}}
+        return {"front": main,
+                **{v: views[v] for v in ("back", "left", "right") if views.get(v)}}
+
     @classmethod
     def select_slot_images(cls, slots: List[str],
                            view_paths: Dict[str, str]) -> Dict[str, str]:
@@ -599,6 +616,7 @@ class OpenAIMeshBackend(ImageBackend):
         self._tls.result_rig = None
         self._tls.input_sha256s = []
         self._tls.job_id = ""
+        self._tls.single_view = False
         # mesh→mesh (shrink) or img2mesh — mutually exclusive: a run either
         # carries a source MESH in `files` or an input IMAGE in `images`.
         try:
@@ -629,7 +647,12 @@ class OpenAIMeshBackend(ImageBackend):
         elif not input_files:
             # One slot per view the alias declares: a multi-view alias gets
             # front/back/left/right, the classic single-slot alias only front.
-            views = self._input_images(params)
+            raw = self._input_images(params)
+            main = str(params.get("source_image_path") or "") or raw.get("front", "")
+            views = self.mesh_slot_views(
+                params.get("view_body", "humanoid"), main, raw, self._image_slots)
+            self._tls.single_view = (params.get("view_body") == "animal"
+                                     and len(self._image_slots) <= 1)
             slot_paths = self.select_slot_images(self._image_slots, views)
             images: Dict[str, str] = {}
             # A URL is fetched by the gateway — we cannot look at it, so it
@@ -659,6 +682,8 @@ class OpenAIMeshBackend(ImageBackend):
                              self.name)
                 return []
             payload["images"] = images
+            logger.info("%s: mesh views sent: %s", self.name,
+                        ", ".join(self._slot_view(slot) for slot in images))
             inputs_cut_out = bool(cut_out_flags) and all(cut_out_flags)
 
         alias_params = self.build_alias_params(params,

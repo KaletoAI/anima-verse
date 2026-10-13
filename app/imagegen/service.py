@@ -873,16 +873,18 @@ class ImageService:
                       backend_glob: str = "", character_name: str = "",
                       mesh_name: str = "", face_num=None, texture_size=None,
                       view_images: Optional[Dict[str, str]] = None,
-                      lod_faces=None, occasion: str = "") -> Dict[str, Any]:
+                      lod_faces=None, occasion: str = "", *,
+                      view_body: str = "humanoid") -> Dict[str, Any]:
         """Generates a 3D model from one or more views via a MEDIA_TYPE=="mesh"
         backend.
 
-        ``source_image_path`` is the FRONT view and always required.
-        ``view_images`` may add the optional ``back`` / ``left`` / ``right``
-        views (local paths). Which of them actually travel is the ALIAS'
-        decision: the backend maps our views onto the image slots the alias
-        schema declares, so an alias with a single ``input_image`` slot gets
-        the front view only, a multi-view alias every view we hold.
+        ``source_image_path`` is the required main image: front for a
+        humanoid, left profile for an animal (``view_body``). ``view_images``
+        carries raw optional front/back/left/right paths. The actually chosen
+        alias decides which views travel: multi-slot animals use head-on as
+        front (or main when missing) and main as left; single-slot animals
+        use main alone and return ``single_view: true``. Humanoids keep main
+        as front, with optional back/left/right views.
 
         Characters select mesh_humanoid or mesh_creature explicitly and
         submit their required rig in a second job.
@@ -910,20 +912,13 @@ class ImageService:
         it ran behind the intended chain entry) ``fallback_from``
         (``routing.route_meta``); ``{"ok": False, "error"}`` on a failure.
         """
-        # Keyed by VIEW, not by slot name: the backend does the slot mapping
-        # from the alias schema.
-        refs: Dict[str, str] = {"front": source_image_path}
-        for view in ("back", "left", "right"):
-            path = str((view_images or {}).get(view) or "").strip()
-            if path:
-                refs[view] = path
-        if len(refs) > 1:
-            logger.info("generate_mesh: %d extra view(s) included (%s)",
-                        len(refs) - 1,
-                        ", ".join(v for v in refs if v != "front"))
+        # Preserve raw views until the chosen backend knows its alias slots.
+        refs = {v: str(p).strip() for v, p in (view_images or {}).items()
+                if p and str(p).strip()}
         params: Dict[str, Any] = {
             "source_image_path": source_image_path,
             "reference_images": refs,
+            "view_body": view_body,
             # NEVER the bare subject id: the stages of a run live under this
             # name on the backend and a repeat would drag the older ones along
             # (§ 3.2). The subject stays the prefix, so the delivered file
@@ -972,7 +967,8 @@ class ImageService:
                     # and the viewer's FBXLoader died on "cannot find the
                     # version number").
                     meta = list(getattr(bb, "last_result_files", []) or [])
-                    return {"blobs": blobs, "files": meta} if blobs else []
+                    return {"blobs": blobs, "files": meta,
+                            "single_view": bool(getattr(bb, "last_single_view", False))} if blobs else []
                 return self.run_on_backend_channel(bb, _gen, task_type="mesh_generation",
                                                    agent_name=character_name)
             # Busy (no cooldown) vs. defect (cooldown + BackendFailedError,
@@ -1006,6 +1002,8 @@ class ImageService:
                 tex_path.write_bytes(png_basecolor(texture["blob"]))
                 out["texture_path"] = str(tex_path)
         if out.get("ok"):
+            if result.get("single_view"):
+                out["single_view"] = True
             out.update(route_meta(route))
         return out
 
