@@ -1361,10 +1361,14 @@ function renderModelSelect(val, path) {
     // The provider is read from the sibling field at click time (not baked in at
     // render time) — otherwise the button would still point at the old provider
     // after a provider switch and fetch the wrong model list.
-    let select = '<select id="f-' + esc(path) + '" onchange="setVal(\'' + sJs(path) + '\', this.value); onRoutingModelChanged(\'' + sJs(path) + '\')">';
+    let select = '<div class="model-picker">';
+    select += '<input type="search" id="model-search-' + esc(path) + '" aria-label="Search models" placeholder="Search models…" '
+           + 'onfocus="loadModels(\'' + sJs(path) + '\')" oninput="filterModels(\'' + sJs(path) + '\')">';
+    select += '<select id="f-' + esc(path) + '" aria-label="Model" onchange="setVal(\'' + sJs(path) + '\', this.value); onRoutingModelChanged(\'' + sJs(path) + '\')">';
     select += '<option value="' + esc(val) + '" selected>' + esc(val || '— select —') + '</option>';
     select += '</select>';
-    select += ' <button class="btn btn-sm" onclick="loadModels(\'' + sJs(path) + '\')">Load Models</button>';
+    select += '<div id="model-search-status-' + esc(path) + '" class="desc" role="status"></div>';
+    select += '<button class="btn btn-sm" onclick="loadModels(\'' + sJs(path) + '\')">Load Models</button></div>';
     return select;
 }
 
@@ -2075,7 +2079,7 @@ async function loadModels(path, provName) {
 
     const sel = document.getElementById('f-' + path);
     if (!sel) return;
-    const currentVal = sel.value;
+    const currentVal = getVal(path) || '';
 
     // Cache: do NOT cache empty lists (otherwise one failed request blocks
     // every retry until the page is reloaded).
@@ -2098,16 +2102,37 @@ async function loadModels(path, provName) {
         }
     }
 
-    const models = PROVIDERS_CACHE[provName];
-    const vis = PROVIDERS_VISION[provName] || new Set();
+    // A provider switch or page re-render may have happened during the request.
+    const providerPath = path.replace(/\.model$/, '.provider');
+    if (getVal(providerPath) !== provName || document.getElementById('f-' + path) !== sel) return;
+    sel.innerHTML = '<option value="' + esc(currentVal) + '" selected>' + esc(currentVal || '— select —') + '</option>';
+    filterModels(path);
+}
+
+function filterModels(path) {
+    const sel = document.getElementById('f-' + path);
+    const search = document.getElementById('model-search-' + path);
+    if (!sel || !search) return;
+    const provider = getVal(path.replace(/\.model$/, '.provider'));
+    const models = PROVIDERS_CACHE[provider] || [];
+    const vis = PROVIDERS_VISION[provider] || new Set();
+    const query = search.value.trim().toLowerCase();
+    const matches = models.filter(model => model.toLowerCase().includes(query));
+    const current = getVal(path) || '';
     let opts = '<option value="">— select —</option>';
-    for (const m of models) {
-        opts += '<option value="' + esc(m) + '"' + (m === currentVal ? ' selected' : '') + '>' + esc(m) + (vis.has(m) ? ' (vision)' : '') + '</option>';
+    // Filtering is display-only: never drop or silently replace the saved pick.
+    if (current && !matches.includes(current)) {
+        opts += '<option value="' + esc(current) + '" selected>' + esc(current)
+              + (models.includes(current) ? '' : ' (not on server)') + '</option>';
     }
+    for (const model of matches) {
+        opts += '<option value="' + esc(model) + '"' + (model === current ? ' selected' : '') + '>'
+              + esc(model) + (vis.has(model) ? ' (vision)' : '') + '</option>';
+    }
+    if (!matches.length) opts += '<option value="" disabled>No matching models</option>';
     sel.innerHTML = opts;
-    if (currentVal && !models.includes(currentVal)) {
-        sel.innerHTML = '<option value="' + esc(currentVal) + '" selected>' + esc(currentVal) + ' (not on server)</option>' + opts;
-    }
+    const status = document.getElementById('model-search-status-' + path);
+    if (status) status.textContent = matches.length ? matches.length + ' matching models' : 'No matching models';
 }
 
 function refreshModelSelect(provPath) {
@@ -2116,7 +2141,10 @@ function refreshModelSelect(provPath) {
     parts[parts.length - 1] = 'model';
     const modelPath = parts.join('.');
     const provName = getVal(provPath);
+    const search = document.getElementById('model-search-' + modelPath);
+    if (search) search.value = '';
     if (provName) loadModels(modelPath, provName);
+    else filterModels(modelPath);
 }
 
 async function validateConfig() {

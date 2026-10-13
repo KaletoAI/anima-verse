@@ -145,6 +145,11 @@ id must occur as a string literal in some caller under `app/` or `plugins/`
   model, temperature, max tokens, chat template. The tasks of an entry are
   read-only chips here; deleting an entry asks inline and names the tasks that
   would lose their only LLM.
+  **Search models…** loads the selected provider's models on focus and filters
+  their names by case-insensitive substring. Clearing the search restores the
+  full list; changing provider clears the search. Filtering never changes the
+  selected model, including models no longer listed by the provider. Choose a
+  model from the filtered dropdown, then **Save** to persist the change.
 - **Overview** — read-only mirror of what the server would route right now.
 
 ### `GET /admin/settings/llm-routing/effective`
