@@ -1780,16 +1780,21 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         res = get_image_service().generate_rig(
             mesh_path=str(source_target), output_path=str(staging / f"{signature}-rig.glb"),
             rig=rig, character_name=character_name,
-            basecolor_path=str(source_target.with_suffix(".png")) if rig == "generic" else "")
+            basecolor_path=str(source_target.with_suffix(".png")) if rig == "generic" else "",
+            rig_options={})
         if not res.get("ok"):
             error = str(res.get("error") or "rig generation failed")
             return {"ok": False, "error": error}
         texture_blob = Path(res["texture_path"]).read_bytes() if res.get("texture_path") else None
         check = (validate_glb(Path(res["path"]).read_bytes()) if rig == "mixamo"
-                 else validate_fbx(Path(res["path"]).read_bytes(), texture_blob))
+                 else validate_fbx(Path(res["path"]).read_bytes(), texture_blob,
+                                   _rig_result_validation_meta(res)))
         if not check.get("ok"):
             error = "; ".join(check.get("errors") or ["invalid rigged result"])
             return {"ok": False, "error": error}
+
+        for warning in check.get("warnings", []):
+            logger.warning("Model3D %s: %s", character_name, warning)
 
         delivered = Path(res["path"])
         blob = delivered.read_bytes()
@@ -1800,6 +1805,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         stage_meta = {**({"single_view": True} if mesh_res.get("single_view") else {}),
                       "mesh_backend": mesh_res.get("backend", ""),
                       "rig_backend": res.get("backend", ""),
+                      **_rig_result_validation_meta(res),
                       "mesh_route_meta": {k: mesh_res[k] for k in ("routing", "fallback_from") if k in mesh_res},
                       "rig_route_meta": {k: res[k] for k in ("routing", "fallback_from") if k in res}}
         (out_dir / "raw").mkdir(parents=True, exist_ok=True)
@@ -1852,9 +1858,12 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         logger.info("Model3D %s: %s (%d bytes, Kombination %s)", character_name,
                     path.name, path.stat().st_size, signature)
         return {"ok": True, "cached": False, "path": str(path),
-                "filename": path.name}
+                "filename": path.name, "warnings": check.get("warnings", [])}
     except Exception as exc:
         error = str(exc)
+        from app.imagegen.base import BackendNotApplicableError
+        if isinstance(exc, BackendNotApplicableError):
+            return {"ok": False, "error": error, "reason": exc.reason}
         raise
     finally:
         shutil.rmtree(staging, ignore_errors=True)
@@ -1876,6 +1885,15 @@ def rerig_model(character_name: str, signature: Optional[str] = None, *,
     return _rig_from_source(character_name, signature, source, rig_backend_glob=backend_glob)
 
 
+def _rig_result_validation_meta(result: dict) -> dict:
+    """Present backend metrics and declared clips to the FBX validator."""
+    metrics = result.get("meta") or {}
+    meta = {"rig_metrics": metrics}
+    if "clips" in result or "clips" in metrics:
+        meta["clips"] = result.get("clips", metrics.get("clips"))
+    return meta
+
+
 def _rig_from_source(character_name: str, signature: str, source: Path, *,
                      rig_backend_glob: str = "", replacement_mask=None) -> Dict[str, Any]:
     """Rig the retained source only; publish the entire chain on success."""
@@ -1892,18 +1910,25 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
     low = tier_variant(path, LOW_TIER) if path else None
     low_meta = _read_sidecar(low) if low else {}
     with tempfile.TemporaryDirectory(prefix=".rerig-", dir=out_dir) as tmp:
-        res = get_image_service().generate_rig(
-            mesh_path=str(source), output_path=str(Path(tmp) / f"{signature}.glb"),
-            rig=rig, character_name=character_name, backend_glob=rig_backend_glob,
-            basecolor_path=str(source.with_suffix(".png")) if rig == "generic" else "")
+        from app.imagegen.base import BackendNotApplicableError
+        try:
+            res = get_image_service().generate_rig(
+                mesh_path=str(source), output_path=str(Path(tmp) / f"{signature}.glb"),
+                rig=rig, character_name=character_name, backend_glob=rig_backend_glob,
+                basecolor_path=str(source.with_suffix(".png")) if rig == "generic" else "",
+                rig_options={})
+        except BackendNotApplicableError as exc:
+            return {"ok": False, "error": str(exc), "reason": exc.reason}
         if not res.get("ok"):
             return {"ok": False, "error": res.get("error") or "Rig generation failed"}
         delivered = Path(res["path"])
         blob = delivered.read_bytes()
         texture = Path(res["texture_path"]).read_bytes() if res.get("texture_path") else None
-        check = validate_glb(blob) if rig == "mixamo" else validate_fbx(blob, texture)
+        check = validate_glb(blob) if rig == "mixamo" else validate_fbx(blob, texture, _rig_result_validation_meta(res))
         if not check.get("ok"):
             return {"ok": False, "error": "; ".join(check.get("errors") or ["Invalid rigged result"])}
+        for warning in check.get("warnings", []):
+            logger.warning("Model3D %s: %s", character_name, warning)
         face_texture_lost = False
         if face_meta or (out_dir / "facefix" / f"{signature}.glb").is_file():
             from app.core.face_retexture import face_texture_preserved
@@ -1925,6 +1950,7 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
         meta.update(created_at=utc_now_iso(), source="generated", signature=signature,
                     character=character_name, rig=rig, format=path.suffix.lstrip("."),
                     backend=res.get("backend", ""), rig_backend=res.get("backend", ""),
+                    **_rig_result_validation_meta(res),
                     rig_route_meta={k: res[k] for k in ("routing", "fallback_from") if k in res},
                     has_texture=texture is not None,
                     source_filename=res.get("filename", ""))
@@ -1968,7 +1994,8 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
             meta["lod_error"] = str(exc)
             _publish_sidecar(path, meta)
         return {"ok": True, "path": str(path), "filename": path.name,
-                "warnings": {k: meta[k] for k in ("face_retexture", "extension_rig", "lod_error", "refined") if k in meta}}
+                "warnings": {**{k: meta[k] for k in ("face_retexture", "extension_rig", "lod_error", "refined") if k in meta},
+                             **({"validation": check["warnings"]} if check.get("warnings") else {})}}
 
 
 
@@ -2088,13 +2115,17 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
                 check = _validator_for(rig, character_name)(data)
             else:
                 check = validate_fbx(
-                    data, tex_staged.read_bytes() if tex_staged else None)
+                    data, tex_staged.read_bytes() if tex_staged else None,
+                    _rig_result_validation_meta(res))
             if not check["ok"] and not force:
                 logger.warning("Model3D %s: job %s fails the %s contract: %s",
                                character_name, job_id, rig,
                                "; ".join(check["errors"]))
                 return {"status": "invalid", "errors": check["errors"],
                         "warnings": check["warnings"]}
+
+            for warning in check.get("warnings", []):
+                logger.warning("Model3D %s: job %s: %s", character_name, job_id, warning)
 
             path = out_dir / f"{signature}{staged.suffix.lower()}"
             _purge_combination(out_dir, signature, keep_model=path)

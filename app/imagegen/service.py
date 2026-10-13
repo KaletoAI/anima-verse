@@ -1086,7 +1086,7 @@ class ImageService:
 
     def generate_rig(self, mesh_path: str, output_path: str, rig: str,
                      backend_glob: str = "", character_name: str = "",
-                     basecolor_path: str = "") -> Dict[str, Any]:
+                     basecolor_path: str = "", rig_options: Optional[dict] = None) -> Dict[str, Any]:
         """Run a standalone rigger after the caller's mesh channel job ended."""
         from app.imagegen.occasions import backend_fits
         from app.imagegen.routing import describe_backend, route_meta, run_routed
@@ -1098,16 +1098,29 @@ class ImageService:
         size = source.stat().st_size
         if size > MESH_UPLOAD_MAX_BYTES:
             return {"ok": False, "error": "source mesh exceeds the 64 MB upload limit (HTTP 413); no rig job submitted"}
-        verdict = validate_source(source.read_bytes())
-        if not verdict.get("ok"):
-            return {"ok": False, "error": "; ".join(verdict.get("errors") or ["invalid unrigged source"])}
+        source_bytes = source.read_bytes()
+        verdict = validate_source(source_bytes)
+        source_error = "; ".join(verdict.get("errors") or []) if not verdict.get("ok") else ""
+        if source_error and (rig != "generic" or not validate_source(
+                source_bytes, require_texture=False).get("ok")):
+            return {"ok": False, "error": source_error}
         texture = None
+        source_texture = None
+        texture_error = ""
+        texture_io_error = None
         if rig == "generic":
             try:
-                texture = fbx_basecolor(source_basecolor(source, basecolor_path))
+                source_texture = source_basecolor(source, basecolor_path)
+                texture = fbx_basecolor(source_texture)
             except ValueError as exc:
-                return {"ok": False, "error": str(exc)}
-        params = {"source_model_path": str(source)}
+                texture_error = str(exc)
+            except FileNotFoundError as exc:
+                # Only a missing separate color map is inapplicable; losing
+                # the source mesh itself remains a genuine I/O failure.
+                if not basecolor_path or Path(exc.filename or "") != Path(basecolor_path):
+                    raise
+                texture_io_error = exc
+        params = {"source_model_path": str(source), "rig_options": dict(rig_options or {})}
         primary = None
         if backend_glob.strip():
             primary = self._wait_for_explicit_backend(backend_glob, media="mesh")
@@ -1117,11 +1130,36 @@ class ImageService:
                 return {"ok": False, "error": f"rig backend '{primary.name}' has the wrong category"}
 
         def render(b):
+            if b.api_type != "local_quadruped_rig":
+                if source_error:
+                    return {"error": source_error}, b
+                if texture_io_error is not None:
+                    raise texture_io_error
             def op(bb):
                 def generate():
-                    blobs = bb.generate("", "", params, log_meta={"agent_name": character_name, "media": "mesh"})
+                    from app.imagegen.base import BackendNotApplicableError
+                    if bb.api_type == "local_quadruped_rig" and (source_error or texture_error or texture_io_error):
+                        raise BackendNotApplicableError(bb, "no basecolor texture: " +
+                                                        (source_error or texture_error or str(texture_io_error)))
+                    if texture_error:
+                        raise BackendNotApplicableError(bb, texture_error)
+                    import tempfile
+                    with tempfile.TemporaryDirectory(prefix="av-rig-texture-") as tmp:
+                        backend_params = dict(params)
+                        if texture is not None:
+                            png = Path(tmp) / "source_basecolor.png"
+                            png.write_bytes(source_texture if bb.api_type == "local_quadruped_rig" else texture)
+                            backend_params["basecolor_path"] = str(png)
+                        elif basecolor_path:
+                            backend_params["basecolor_path"] = basecolor_path
+                        options = dict(backend_params["rig_options"])
+                        options.setdefault("clips", getattr(bb, "clips", []))
+                        options.setdefault("tail_motion", getattr(bb, "tail_mode_default", "calm"))
+                        backend_params["rig_options"] = options
+                        blobs = bb.generate("", "", backend_params, log_meta={"agent_name": character_name, "media": "mesh"})
                     return {"blobs": blobs, "files": list(getattr(bb, "last_result_files", []) or []),
-                            "rig": getattr(bb, "last_result_rig", None)} if blobs else []
+                            "rig": getattr(bb, "last_result_rig", None),
+                            "meta": dict(getattr(bb, "last_result_meta", {}) or {})} if blobs else []
                 return self.run_on_backend_channel(bb, generate, task_type="mesh_generation", agent_name=character_name)
             result, used = self.run_on_backend(b, op, character_name=character_name)
             files = [dict(f, blob=blob) for f, blob in zip(result["files"], result["blobs"])]
@@ -1144,11 +1182,12 @@ class ImageService:
         if result.get("error"):
             return {"ok": False, "error": result["error"]}
         files = [dict(f, blob=b) for f, b in zip(result["files"], result["blobs"])]
-        if texture is not None:
+        if texture is not None and not any("_basecolor" in str(f.get("name")) for f in files):
             files.append({"name": "source_basecolor.png", "mime": "image/png", "kind": "image", "blob": texture})
         out = self._store_mesh_files(files, rig, output_path, used.name)
         if out.get("ok"):
             out.update(route_meta(route))
+            out["meta"] = result.get("meta") or {}
         return out
 
     @staticmethod

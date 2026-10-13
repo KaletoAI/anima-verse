@@ -247,6 +247,13 @@ def get_clips_inbox_dir() -> Path:
     return get_shared_dir() / "models" / "clips-inbox"
 
 
+
+def get_quadruped_dir() -> Path:
+    """Shared CC0 quadruped assets; tests may override their location."""
+    override = os.environ.get("ANIMATION_QUADRUPED_DIR", "").strip()
+    return Path(override) if override else get_shared_dir() / "models" / "quadruped"
+
+
 def get_rig_file() -> Path:
     """The RETARGET REFERENCE skeleton — ``shared/models/rig/reference.fbx``.
 

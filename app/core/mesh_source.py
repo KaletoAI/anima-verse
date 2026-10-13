@@ -63,10 +63,10 @@ def fbx_basecolor(raw: bytes) -> bytes:
     return out.getvalue()
 
 
-def validate_source(raw: bytes) -> dict:
-    """Apply contract none and reject skins on the reproducible source."""
+def validate_source(raw: bytes, *, require_texture: bool = True) -> dict:
+    """Apply contract none, optionally check geometry alone, and reject skins."""
     from app.core.model_validate import validate_static_glb
-    verdict = validate_static_glb(raw)
+    verdict = validate_static_glb(raw, require_texture=require_texture)
     try:
         skinned = bool(parse_glb(raw)["gltf"].get("skins"))
     except (ValueError, KeyError, IndexError, TypeError):

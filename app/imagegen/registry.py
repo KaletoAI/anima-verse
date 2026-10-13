@@ -1,4 +1,5 @@
 """Registry of available media backend types (image / video / mesh / animation)."""
+from app.imagegen.backends.local_quadruped_rig import LocalQuadrupedRigBackend
 from app.imagegen.backends.local_upscale import LocalUpscaleBackend
 from app.imagegen.backends.openai_upscale import OpenAIUpscaleBackend
 from app.imagegen.backends.a1111 import A1111Backend
@@ -32,6 +33,7 @@ BACKEND_REGISTRY = {
     "civitai_video": CivitAIVideoBackend,
     # 3D mesh (MEDIA_TYPE == "mesh")
     "openai_mesh": OpenAIMeshBackend,
+    "local_quadruped_rig": LocalQuadrupedRigBackend,
     # Mesh animation (MEDIA_TYPE == "animation")
     "openai_mesh_animation": OpenAIMeshAnimationBackend,
 }

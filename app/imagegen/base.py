@@ -84,6 +84,16 @@ class GatewayOutputError(RuntimeError):
     """A completed gateway job delivered invalid output (terminal backend defect)."""
 
 
+class BackendNotApplicableError(RuntimeError):
+    """This healthy backend cannot process the supplied mesh; no cooldown."""
+
+    def __init__(self, backend: Any, reason: str):
+        self.backend = backend
+        self.backend_name = str(getattr(backend, "name", "") or backend)
+        self.reason = str(reason)
+        super().__init__(f"{self.backend_name}: {self.reason}")
+
+
 class BackendFailedError(RuntimeError):
     """A backend FAILED — a defect, not load and not a rejected input.
 

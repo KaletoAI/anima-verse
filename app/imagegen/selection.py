@@ -14,7 +14,7 @@ from app.core.log import get_logger
 from app.core.provider_queue import TooManyJobsError
 from app.imagegen.base import (BackendBusyError, BackendFailedError,
                                GatewayRejectedError, GpuTaskCancelled, GenerationCancelled,
-                               ImageBackend, MediaGenerationDisabled)
+                               ImageBackend, MediaGenerationDisabled, BackendNotApplicableError)
 
 logger = get_logger("image_gen")
 
@@ -351,6 +351,8 @@ class BackendPool:
             # simply be skipped, never cooled down.
             logger.warning("Backend-Runner: %s has no queue channel (%s) — "
                            "no cooldown, this backend is skipped", backend.name, e)
+            raise
+        except BackendNotApplicableError:
             raise
         except MediaGenerationDisabled:
             # The world switched media generation off. Like the missing

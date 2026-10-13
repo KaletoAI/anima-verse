@@ -3,7 +3,8 @@
 
 Hand-derived expectations from plan-mesh-rig-trennung P1/P2: two character
 occasions accept any img2mesh; rig occasions accept any mesh2rig but require
-a configured chain. Migration seeds both rig chains in cost order, drops old
+a configured chain. Migration seeds the humanoid chain in cost order and P3 seeds empty creature
+chains as quadruped-local then existing generic riggers, drops old
 declarations and preserves enabled flags; a second pass changes nothing.
 A validated source and its served static GLB must be durable before rigging.
 A failed replacement retains the NEW source/static pair, never the old rig.
@@ -52,11 +53,13 @@ cfg = {'image_generation': {'backends': [
 ]}}
 assert _migrate_mesh_rig_split(cfg)
 entries = cfg['image_generation']['backends']
-assert len(entries) == 6 and entries[0]['enabled'] is False and entries[1]['enabled'] is True
+assert len(entries) == 7 and entries[0]['enabled'] is False and entries[1]['enabled'] is True
 assert all('mesh_rig' not in b for b in entries)
-assert cfg['image_generation']['routing'] == {'rig_humanoid': ['mia-low', 'mia-high'], 'rig_creature': ['unirig']}
+assert cfg['image_generation']['routing'] == {'rig_humanoid': ['mia-low', 'mia-high'], 'rig_creature': ['quadruped-local', 'unirig', 'off']}
 assert not _migrate_mesh_rig_split(cfg)
 fresh = {'image_generation': {'backends': [{'name': 'Trellis2-Low', 'api_type': 'openai_mesh', 'category': 'img2mesh', 'enabled': True}]}}
+assert _migrate_mesh_rig_split(fresh)
+assert fresh['image_generation']['routing']['rig_creature'] == ['quadruped-local']
 assert not _migrate_mesh_rig_split(fresh)
 assert fresh['image_generation']['backends'][0]['enabled'] is True
 existing = {'image_generation': {'routing': {'rig_humanoid': ['custom']}, 'backends': [{'name': 'mia', 'category': 'mesh2rig', 'api_type': 'openai_mesh', 'mesh_rig': 'mixamo'}]}}
@@ -70,7 +73,26 @@ for raw in (['old'], 'old', '', False):
     assert not _migrate_mesh_rig_split(malformed)
 null_root = {'image_generation': {'routing': None, 'backends': [{'name': 'mia', 'api_type': 'openai_mesh', 'category': 'mesh2rig', 'mesh_rig': 'mixamo'}]}}
 assert _migrate_mesh_rig_split(null_root)
-assert null_root['image_generation']['routing'] == {'rig_humanoid': ['mia']}
+assert null_root['image_generation']['routing'] == {'rig_humanoid': ['mia'], 'rig_creature': ['quadruped-local']}
+# P3 seeds absent/empty creature chains but retains a nonempty user chain.
+for initial in ({}, {'rig_creature': []}):
+    seeded = {'image_generation': {'backends': [], 'routing': initial}}
+    assert _migrate_mesh_rig_split(seeded)
+    assert seeded['image_generation']['routing']['rig_creature'] == ['quadruped-local']
+    assert not _migrate_mesh_rig_split(seeded)
+owned = {'image_generation': {'backends': [], 'routing': {'rig_creature': ['custom-animal']}}}
+assert _migrate_mesh_rig_split(owned)
+assert not _migrate_mesh_rig_split(owned)
+assert owned['image_generation']['routing']['rig_creature'] == ['custom-animal']
+from app.core.config import _default_mesh_backend_entries
+from app.core.config_schema import SECTIONS
+timeout_field = SECTIONS['image_generation']['sub_arrays']['backends']['fields']['timeout']
+assert timeout_field['min_by_api_type']['local_quadruped_rig'] == 40
+assert timeout_field['min'] == 10  # Other backends retain their existing minimum.
+seed_local = next(b for b in _default_mesh_backend_entries() if b['name'] == 'quadruped-local')
+assert seed_local['timeout'] == seed_local['max_wait'] == 600
+assert 'clips' not in seed_local and seed_local['tail_mode_default'] == 'calm'
+assert 'mesh_rig' not in seed_local
 print('PASS category separation and idempotent migration')
 
 # The fake pool keeps routing and runner behavior real; only GPU submission
@@ -511,6 +533,203 @@ with ExitStack() as stack:
     bad_source.write_bytes(fixture_glb(True))
     assert 'unrigged' in svc.generate_rig(str(bad_source), str(root/'bad-rig.glb'), 'mixamo')['error']
     bad_source.unlink()
+# P3 hand-derived contract: one local FBX then the unchanged PNG, generic
+# rig, metrics copied into rig_metrics. A not-applicable input skips one
+# chain entry without cooldown or fallback_from; an explicit pick ends its
+# asynchronous job with that reason and never calls the gateway.
+from app.imagegen.backends.local_quadruped_rig import LocalQuadrupedRigBackend
+from app.imagegen.base import BackendNotApplicableError
+from app.blender import runner
+local = LocalQuadrupedRigBackend('quadruped-local', '', 0, 'P3_FAKE_')
+local._available = True
+p3_service = service(mesh, local, creature)
+p3_fbx = b'Kaydara FBX Binary\x00P3 unchanged'
+p3_metrics = {'fold': {'front_L': 1.1}, 'fold_mean': 1.1, 'takes': [],
+              'sym_max_pct': 0.0, 'landmark_fallback': [], 'acceptance': {}, 'dims_m': [1, 2, 1]}
+p3_calls = []
+p3_expected_clips = []
+p3_expected_timeout = 590
+p3_worker_result = {}
+def p3_channel(b, fn, **kwargs):
+    def capture():
+        value = fn()
+        if b is local:
+            p3_worker_result.update(files=local.last_result_files, meta=local.last_result_meta)
+        return value
+    return channel(b, capture, **kwargs)
+mesh.source = fixture_glb()
+
+def p3_blender(script, *, inputs, params, out_dir, timeout_s):
+    p3_calls.append((script, dict(params), timeout_s))
+    assert script == 'quadruped_rig' and timeout_s == p3_expected_timeout
+    assert set(inputs) == {'mesh', 'texture', 'ref'}
+    assert Path(inputs['ref']).name == 'fox-animations.glb'
+    assert params == {'clips': p3_expected_clips, 'tail_motion': 'calm'}
+    assert Path(inputs['texture']).read_bytes() == color_png(), 'local UVs need the original PNG, not gateway V correction'
+    out_dir.mkdir(exist_ok=True)
+    fbx, png, metrics = [out_dir/n for n in ('result.fbx', 'result_basecolor.png', 'metrics.json')]
+    fbx.write_bytes(p3_fbx)
+    png.write_bytes(Path(inputs['texture']).read_bytes())
+    metrics.write_text(json.dumps(p3_metrics))
+    return {'ok': True, 'outputs': {'mesh': str(fbx), 'texture': str(png), 'metrics': str(metrics)}, 'data': p3_metrics}
+
+with ExitStack() as stack:
+    stack.enter_context(patch.object(runner, 'is_available', return_value=True))
+    blender_stub = stack.enter_context(patch.object(runner, 'run', side_effect=p3_blender))
+    stack.enter_context(patch.object(p3_service, 'run_on_backend_channel', side_effect=p3_channel))
+    rules.update(rig_creature=['quadruped-local', 'creature'])
+    result = p3_service.generate_rig(str(root/'unrigged/generic.glb'), str(root/'p3.fbx'), 'generic')
+    assert result['ok'] and result['meta'] == p3_metrics and result['rig'] == 'generic'
+    assert Path(result['path']).read_bytes() == p3_fbx
+    assert Path(result['texture_path']).read_bytes() == color_png()
+    assert [f['name'] for f in p3_worker_result['files']] == ['quadruped_rigged.fbx', 'quadruped_basecolor.png']
+    assert local.last_result_rig == 'generic' and p3_worker_result['meta'] == p3_metrics
+    for configured_timeout, p3_expected_timeout in ((10, 30), (40, 30), (600, 590)):
+        local.timeout = configured_timeout
+        limited = p3_service.generate_rig(str(root/'unrigged/generic.glb'), str(root/'limited.fbx'),
+                                          'generic', backend_glob='quadruped-local')
+        assert limited['ok']
+    # All takes come from the asset catalog, regardless of caller selection.
+    catalog_dir = root/'quadruped-catalog'
+    catalog_dir.mkdir()
+    p3_expected_clips = {'idle': {'src': 'fox', 'action': 'Idle', 'loop': True},
+                         'sit': {'src': 'fox', 'action': 'Sit', 'loop': False}}
+    (catalog_dir/'clips.json').write_text(json.dumps(p3_expected_clips))
+    with patch('app.core.paths.get_quadruped_dir', return_value=catalog_dir):
+        catalog_result = p3_service.generate_rig(
+            str(root/'unrigged/generic.glb'), str(root/'catalog.fbx'), 'generic',
+            rig_options={'clips': ['idle']})
+    assert catalog_result['ok'], catalog_result
+    p3_expected_clips = []
+    stack.enter_context(patch('app.imagegen.service.get_image_service', return_value=p3_service))
+    stack.enter_context(patch.object(model3d, 'get_model3d_dir', side_effect=lambda name: getattr(model3d._staging, 'directories', {}).get(name) or root))
+    stack.enter_context(patch.object(model3d, 'find_ref_image', return_value=src))
+    stack.enter_context(patch.object(model3d, 'get_model3d_options', return_value={}))
+    stack.enter_context(patch.object(model3d, '_ref_manifest', return_value={}))
+    stack.enter_context(patch.object(model_refs, 'enabled_tpose_views', return_value=[]))
+    stack.enter_context(patch.object(model3d, 'required_rig', return_value='generic'))
+    for fn in ('_auto_retexture', '_auto_normalize', '_attach_measurement', 'request_lod'):
+        stack.enter_context(patch.object(model3d, fn, return_value=None))
+    stack.enter_context(patch.object(model3d, '_auto_extension_rig', return_value={'ok': True}))
+    p3_metrics['clips'] = {'idle': {'loop': True}}
+    generated = model3d.generate_for_current_outfit('demo', signature='p3', force=True)
+    assert generated['ok'], generated
+    assert generated['warnings'] == ['missing animation take: idle'], generated
+    assert read_sidecar(Path(generated['path']))['rig_metrics'] == p3_metrics
+    # Re-rig also copies the backend metrics, with the same real store path.
+    stack.enter_context(patch.object(model3d, 'find_model3d', return_value=Path(generated['path'])))
+    rerigged = model3d._rig_from_source('demo', 'p3', root/'unrigged/p3.glb')
+    assert rerigged['ok'], rerigged
+    assert rerigged['warnings']['validation'] == ['missing animation take: idle'], rerigged
+    assert read_sidecar(root/'p3.fbx')['rig_metrics'] == p3_metrics
+    reason = 'quadruped acceptance failed: cluster_min_fraction=0.0'
+    blender_stub.side_effect = None
+    blender_stub.return_value = {'ok': False, 'error': reason, 'data': {'not_applicable': True, 'reason': reason}}
+    gateway_before = len(creature.calls)
+    skipped = p3_service.generate_rig(str(root/'unrigged/generic.glb'), str(root/'p3-skip.fbx'), 'generic')
+    assert skipped['ok'] and skipped['backend'] == 'creature' and 'fallback_from' not in skipped, skipped
+    assert len(creature.calls) == gateway_before + 1 and not local.in_cooldown()
+    def rejected_render(b):
+        return p3_service.run_on_backend(b, lambda bb: (_ for _ in ()).throw(BackendNotApplicableError(bb, reason)))
+    (_, used), route = routing.run_routed('rig_creature', lambda b: rejected_render(b) if b is local else ('ok', b), pool=p3_service.pool)
+    assert used is creature and route.chain[0]['status'] in routing.CONFIG_SKIP_STATUSES
+    assert route.chain[0]['not_applicable']['quadruped-local'] == reason
+    gateway_before = len(creature.calls)
+    finished = threading.Event()
+    from app.core.task_queue import get_task_queue
+    queue = get_task_queue()
+    real_finish = queue.track_finish
+    def track_finish(*args, **kwargs):
+        value = real_finish(*args, **kwargs)
+        finished.set()
+        return value
+    with patch.object(queue, 'track_finish', side_effect=track_finish):
+        started = model3d.trigger_rerig('demo', 'p3', backend_glob='quadruped-local')
+        assert started['status'] == 'generating' and started['task_id']
+        assert finished.wait(5), 'asynchronous re-rig did not finish'
+    # Acquiring the lock waits for final result publication after track_finish.
+    with model3d._lock:
+        rejection = model3d._rerig_results['demo']
+    assert rejection['ok'] is False and reason in rejection['error'], rejection
+    assert len(creature.calls) == gateway_before and not local.in_cooldown()
+    # First-generation job also preserves the reason, with a one-entry chain.
+    rules['rig_creature'] = ['quadruped-local']
+    rejected = model3d.generate_for_current_outfit('demo', signature='p3-rejected', force=True)
+    assert not rejected['ok'] and reason in rejected['error'], rejected
+    # Blender absence is a channel defect and must cool down the local entry.
+    blender_stub.side_effect = p3_blender
+    with patch.object(runner, 'is_available', return_value=False), patch.object(runner, 'status', return_value={'error': 'unsupported Blender 4.0'}):
+        try:
+            p3_service.generate_rig(str(root/'unrigged/generic.glb'), str(root/'p3-absent.fbx'), 'generic', backend_glob='quadruped-local')
+            raise AssertionError('missing Blender must fail')
+        except BackendFailedError as exc:
+            assert 'unsupported Blender 4.0' in str(exc)
+    assert local.in_cooldown()
+    local._cooldown_until = 0
+    local._available = True
+    # Real missing PNG and textureless GLB must skip only the local backend.
+    textureless = root/'textureless.glb'
+    from app.core.model_validate import parse_glb
+    parsed = parse_glb(fixture_glb())
+    gltf = parsed['gltf']
+    for key in ('images', 'textures', 'materials'):
+        gltf.pop(key, None)
+    doc = json.dumps(gltf).encode()
+    doc += b' ' * (-len(doc) % 4)
+    binary = parsed['bin']
+    binary += b'\0' * (-len(binary) % 4)
+    textureless.write_bytes(struct.pack('<4sII', b'glTF', 2, 28+len(doc)+len(binary)) +
+                           struct.pack('<II', len(doc), 0x4e4f534a) + doc +
+                           struct.pack('<II', len(binary), 0x004e4942) + binary)
+    for mesh_path, png_path in ((root/'unrigged/generic.glb', str(root/'missing.png')),
+                                (textureless, '')):
+        try:
+            p3_service.generate_rig(str(mesh_path), str(root/'p3-no-texture.fbx'), 'generic',
+                                   backend_glob='quadruped-local', basecolor_path=png_path)
+            raise AssertionError('missing texture must be rejected')
+        except BackendNotApplicableError as exc:
+            assert exc.reason.startswith('no basecolor texture: '), exc.reason
+        assert not local.in_cooldown()
+    rules['rig_creature'] = ['quadruped-local', 'creature']
+    captured_routes = []
+    real_run_routed = routing.run_routed
+    def capture_route(*args, **kwargs):
+        value = real_run_routed(*args, **kwargs)
+        captured_routes.append(value[1])
+        return value
+    with patch.object(routing, 'run_routed', side_effect=capture_route):
+        no_texture = p3_service.generate_rig(str(textureless), str(root/'textureless.fbx'), 'generic')
+    assert not no_texture['ok']  # Gateway retains its source validation failure.
+    skipped_route = captured_routes[-1]
+    assert skipped_route.chain[0]['status'] in routing.CONFIG_SKIP_STATUSES
+    assert skipped_route.chain[0]['not_applicable']['quadruped-local'].startswith('no basecolor texture: ')
+    assert 'fallback_from' not in routing.route_meta(skipped_route)
+    try:
+        p3_service.generate_rig(str(root/'unrigged/generic.glb'), str(root/'missing.fbx'),
+                               'generic', basecolor_path=str(root/'missing.png'))
+        raise AssertionError('gateway missing-file behavior changed')
+    except FileNotFoundError:
+        pass
+    assert not local.in_cooldown()
+    # Other actual file errors must remain failures, even for an explicit local pick.
+    try:
+        p3_service.generate_rig(str(root/'unrigged/generic.glb'), str(root/'bad-io.fbx'),
+                               'generic', backend_glob='quadruped-local', basecolor_path=str(root))
+        raise AssertionError('directory I/O error must stay real')
+    except IsADirectoryError:
+        pass
+    lost_source = FileNotFoundError(2, 'source mesh disappeared', str(root/'unrigged/generic.glb'))
+    with patch('app.core.mesh_source.source_basecolor', side_effect=lost_source):
+        try:
+            p3_service.generate_rig(str(root/'unrigged/generic.glb'), str(root/'lost-source.fbx'),
+                                   'generic', backend_glob='quadruped-local')
+            raise AssertionError('lost mesh must stay a real I/O failure')
+        except FileNotFoundError as exc:
+            assert exc is lost_source
+warning = validate_fbx(p3_fbx, color_png(), {'rig_metrics': {'takes': []}, 'clips': {'idle': {'loop': True}}})
+assert warning['ok'] and warning['warnings'] == ['missing animation take: idle']
+print('PASS P3 local files/meta, healthy skips, explicit async rejection, first-job reason, Blender cooldown and take warnings')
+
 executor.shutdown()
 print('PASS two stages, sequential single-slot channel, upload payload, route sidecars, generic FBX/PNG and V correction')
 
@@ -587,11 +806,14 @@ assert config.migrate_file(world_cfg, instance_path=inst/'config.json')
 public = json.loads((inst/'config.json').read_text())
 secret_text = (inst/'secrets.json').read_text()
 assert 'test-secret' not in (inst/'config.json').read_text()
-assert len(public['image_generation']['backends']) == 1
+assert len(public['image_generation']['backends']) == 2
 assert 'mesh_rig' not in public['image_generation']['backends'][0]
-assert public['image_generation']['routing']['rig_creature'] == ['rigger']
+assert public['image_generation']['routing']['rig_creature'] == ['quadruped-local', 'rigger']
 config.load(world_cfg, instance_path=inst/'config.json')
-assert all(b['api_key'] == 'test-secret' for b in config.get('image_generation.backends'))
+assert next(b for b in config.get('image_generation.backends') if b['name'] == 'rigger')['api_key'] == 'test-secret'
+rules['rig_creature'] = public['image_generation']['routing']['rig_creature']
+route = routing.resolve_image_route('rig_creature', pool=service(local, creature).pool)
+assert route.backend.name == 'quadruped-local'
 assert not config.migrate_file(world_cfg, instance_path=inst/'config.json')
 assert (inst/'secrets.json').read_text() == secret_text
 print('PASS two actual boot migrations and separate secret layering')

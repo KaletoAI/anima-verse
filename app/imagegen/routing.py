@@ -321,7 +321,8 @@ def _empty_chain_pick(occasion: str, backends: List[Any], switches: Dict[str, An
 
 def resolve_image_route(occasion: str, *, character: str = "",
                         has_ref: bool = False, exclude: Iterable[str] = (),
-                        probe: bool = False, pool: Any = None) -> Route:
+                        probe: bool = False, pool: Any = None,
+                        not_applicable: Optional[Dict[str, str]] = None) -> Route:
     """Resolve the chain of ``occasion`` to ONE backend (see module doc).
 
     ``exclude``: backend names that already failed in this routed call.
@@ -331,7 +332,8 @@ def resolve_image_route(occasion: str, *, character: str = "",
     overview never does)."""
     get_occasion(occasion)                       # UnknownOccasionError
     p = _pool(pool)
-    backends = list(p.backends)
+    rejected = not_applicable or {}
+    backends = [b for b in p.backends if b.name not in rejected]
     switches = _character_switches(character)
     excl = set(exclude or ())
     entries = chain_for(occasion, character)
@@ -369,6 +371,10 @@ def resolve_image_route(occasion: str, *, character: str = "",
                 row["backend"] = b.name
             else:
                 row["backend"] = _cheapest_no_rotation(live).name
+        reasons = {n: reason for n, reason in rejected.items()
+                   if fnmatch.fnmatch(n.lower(), spec.lower())}
+        if reasons:
+            row["not_applicable"] = reasons
         chain.append(row)
     if chosen is None:
         raise NoRouteError(occasion, chain)
@@ -531,13 +537,28 @@ def run_routed(occasion: str, render: Callable[[Any], Any], *,
     past the intended entry is marked.
 
     Returns ``(render result, the Route that produced it)``."""
-    from app.imagegen.base import BackendFailedError
+    from app.imagegen.base import BackendFailedError, BackendNotApplicableError
     route = resolve_image_route(occasion, character=character, has_ref=has_ref,
                                 probe=True, pool=pool)
     failed: List[str] = []
+    rejected: Dict[str, str] = {}
     while True:
         try:
             result = render(route.backend)
+        except BackendNotApplicableError as e:
+            if route.position is None or e.backend_name != route.backend.name:
+                raise
+            rejected[e.backend_name] = e.reason
+            logger.info("Image routing %s: %s not applicable (%s); no cooldown",
+                        occasion, e.backend_name, e.reason)
+            try:
+                route = resolve_image_route(occasion, character=character,
+                                            has_ref=has_ref, exclude=failed,
+                                            pool=pool, not_applicable=rejected)
+            except NoRouteError:
+                # Preserve the mesh rejection reason for the asynchronous job.
+                raise e
+            continue
         except BackendFailedError as e:
             # Only a failure of the ROUTED backend re-runs: a helper step
             # inside ``render`` that fails on another backend says nothing
@@ -553,7 +574,7 @@ def run_routed(occasion: str, render: Callable[[Any], Any], *,
             try:
                 route = resolve_image_route(occasion, character=character,
                                             has_ref=has_ref, exclude=failed,
-                                            pool=pool)
+                                            pool=pool, not_applicable=rejected)
             except NoRouteError as nr:
                 raise nr from e
             continue

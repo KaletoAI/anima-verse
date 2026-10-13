@@ -652,7 +652,7 @@ def validate_glb(data: bytes, extension_names=None) -> Dict[str, Any]:
             "material_names": info["material_names"]}
 
 
-def validate_static_glb(data: bytes) -> Dict[str, Any]:
+def validate_static_glb(data: bytes, *, require_texture: bool = True) -> Dict[str, Any]:
     """Validates an UNRIGGED GLB (rig "none" — the AV3D-9 building models):
     readable container, at least one mesh, a real embedded texture. No
     skeleton requirement, and a present skin is not an error either — the
@@ -673,14 +673,15 @@ def validate_static_glb(data: bytes) -> Dict[str, Any]:
     if not (info["gltf"].get("meshes") or []):
         errors.append("no mesh in the GLB — an empty scene is not a model")
 
-    _check_embedded_textures(info, "building model", errors, warnings)
+    if require_texture:
+        _check_embedded_textures(info, "building model", errors, warnings)
 
     return {"ok": not errors, "errors": errors, "warnings": warnings,
             "joint_count": info["joint_count"], "rig": "none",
             "material_names": info["material_names"]}
 
 
-def validate_fbx(data: bytes, texture: Optional[bytes]) -> Dict[str, Any]:
+def validate_fbx(data: bytes, texture: Optional[bytes], meta: Optional[dict] = None) -> Dict[str, Any]:
     """Validates a generic FBX: it must come WITH its basecolor texture."""
     errors: List[str] = []
     warnings: List[str] = []
@@ -699,6 +700,11 @@ def validate_fbx(data: bytes, texture: Optional[bytes]) -> Dict[str, Any]:
             errors.append(
                 f"texture is {size[0]}x{size[1]} px — that is the known "
                 "empty-texture artefact of a failed generation, not a result")
+    metrics = (meta or {}).get("rig_metrics") or {}
+    if "takes" in metrics and "clips" in (meta or {}):
+        for take in (meta or {})["clips"]:
+            if take not in metrics["takes"]:
+                warnings.append(f"missing animation take: {take}")
     return {"ok": not errors, "errors": errors, "warnings": warnings,
             "joint_count": 0, "rig": "generic"}
 

@@ -914,6 +914,7 @@ _DEFAULT_MESH_BACKENDS = [
     ("Hunyuan3D", "img2mesh", 2, 40000, 40000, 0),
     ("mesh-mia", "mesh2rig", 0, 0, 0, 0),
     ("GLB-Face-Retexture", "face_retexture", 1, 0, 0, 0),
+    ("quadruped-local", "mesh2rig", 0, 0, 0, 1),
     ("mesh-rig-unirig", "mesh2rig", 0, 0, 0, 0),
 ]
 
@@ -938,6 +939,11 @@ def _default_mesh_backend_entries() -> list:
             "remove_background": True,
             "no_fingers": False,
         }
+        if name == "quadruped-local":
+            entry = {"name": name, "enabled": True,
+                     "api_type": "local_quadruped_rig", "category": "mesh2rig",
+                     "cost": 0, "timeout": 600, "max_wait": 600,
+                     "max_concurrent": 1, "tail_mode_default": "calm"}
         if faces:
             entry["face_num"] = faces
         if faces_max:
@@ -963,13 +969,19 @@ def _seed_default_mesh_backends(config: dict) -> bool:
     (``config_scope.shipped_default``): a layer file stores the list only when
     it differs from the seed, so a missing key means "the shipped list" and
     this brings it back. A list the admin edited — emptied to ``[]``
-    included — is in the file and is never touched: appending aliases to it
-    would resurrect entries they deleted on purpose.
+    included — retains its gateway entries. The URL-free local quadruped
+    backend is the sole addition to an existing list.
 
     In-memory only — see `migrate_file()` for the disk side.
     """
     ig = config.setdefault("image_generation", {})
     if "backends" in ig:
+        entries = ig["backends"]
+        if isinstance(entries, list) and not any(
+                isinstance(b, dict) and b.get("name") == "quadruped-local" for b in entries):
+            entries.append(next(b for b in _default_mesh_backend_entries()
+                                if b["name"] == "quadruped-local"))
+            return True
         return False
     ig["backends"] = _default_mesh_backend_entries()
     logger.info("Default mesh backends seeded (%d)",
@@ -1386,6 +1398,9 @@ def _migrate_tpose_view_routing(config: dict) -> bool:
     return True
 
 
+_quadruped_chain_hints = set()
+
+
 def _migrate_mesh_rig_split(config: dict) -> bool:
     """Seed empty rig chains from old declarations, then drop the field once.
 
@@ -1396,13 +1411,28 @@ def _migrate_mesh_rig_split(config: dict) -> bool:
     entries = ig.get("backends")
     if not isinstance(entries, list):
         return False
-    changed = False
+    changed = _seed_default_mesh_backends(config)
     routing = ig.get("routing")
     for occasion, rig in (("rig_humanoid", "mixamo"), ("rig_creature", "generic")):
         # Preserve malformed stored roots for the admin repair surface.
         if routing is not None and not isinstance(routing, dict):
             continue
         if (routing or {}).get(occasion):
+            if occasion == "rig_creature":
+                hint = repr(routing[occasion])
+                if hint not in _quadruped_chain_hints:
+                    logger.info("Rig creature chain preserved; quadruped-local is available for local quadruped fitting")
+                    _quadruped_chain_hints.add(hint)
+            continue
+        if occasion == "rig_creature":
+            if routing is None:
+                routing = ig["routing"] = {}
+            routing[occasion] = ["quadruped-local"] + [
+                b["name"] for b in entries if isinstance(b, dict)
+                and b.get("name") and b["name"] != "quadruped-local"
+                and (str(b.get("mesh_rig") or "").strip().lower() == "generic"
+                     or b["name"] == "mesh-rig-unirig")]
+            changed = True
             continue
         eligible = [b for b in entries if isinstance(b, dict)
                     and str(b.get("api_type") or "").strip().lower() == "openai_mesh"
@@ -2332,7 +2362,7 @@ def _flatten_to_env(config: dict) -> None:
                      # Mesh backend (openai_mesh, img2mesh)
                      "mesh_endpoint", "remove_background",
                      "face_num", "face_num_max", "no_fingers", "mesh_steps",
-                     "upscale_scale", "color_fix", "max_side",
+                     "upscale_scale", "color_fix", "max_side", "tail_mode_default",
                      # Mesh animation (openai_mesh_animation, mesh2anim)
                      "motion_source", "source_slot", "caption_style", "segment_seconds",
                      "variant_param", "duration_param", "max_variants", "generator",
