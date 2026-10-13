@@ -12,7 +12,7 @@ The former standalone ``AnimateService`` / ``TogetherAnimateService`` classes
 and the ``TOGETHER_ANIMATE_*`` config were retired — see
 ``development_instructions/plan-video-generation.md``.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from app.core.log import get_logger
 from app.imagegen.base import HubJobLost, MediaGenerationDisabled
@@ -52,7 +52,8 @@ def get_animate_services() -> List[Dict[str, Any]]:
 
 def animate_image(source_image_path: str, prompt: str, output_path: str,
                   service: str = "", loras=None, seconds=None,
-                  route_out: Optional[Dict[str, Any]] = None) -> bool:
+                  route_out: Optional[Dict[str, Any]] = None,
+                  hub_stage=None) -> bool:
     """Renders a video from a still via a video backend (image-to-video).
 
     Args:
@@ -70,7 +71,11 @@ def animate_image(source_image_path: str, prompt: str, output_path: str,
     Returns True on success, False on error — except when the world has media
     generation switched off: that is a refusal, not a failed render, so
     ``MediaGenerationDisabled`` travels on to the caller (the route maps it to
-    409, a queue job records its message).
+    409, a queue job records its message). A lost hub job (``HubJobLost``)
+    travels on as well: it is terminal, never "try again".
+
+    ``hub_stage``: the operation stage this render belongs to (see
+    :func:`run_video_op`).
     """
     try:
         return _image_service().generate_video(
@@ -80,9 +85,75 @@ def animate_image(source_image_path: str, prompt: str, output_path: str,
             backend_glob=service,
             loras=loras,
             seconds=seconds,
-            route_out=route_out)
+            route_out=route_out,
+            hub_stage=hub_stage)
     except (MediaGenerationDisabled, HubJobLost):
         raise
     except Exception as e:
         logger.error("animate_image failed: %s", e)
         return False
+
+
+# ── Hub operations (app/core/hub_ops.py) ──────────────────────────────────
+# A video renders for minutes on the hub. As an operation it survives a
+# restart: the record freezes the still (copied), the prompt, the pick and
+# the target; the MP4 lands in the record's directory and the kind's
+# PUBLISHER puts it where the caller wants it (the Instagram feed, a
+# character's gallery image). Video operations always belong to a thread
+# (spec D10): the video skill may run inside a queue handler that will not
+# reach this call again after a restart.
+
+_PUBLISHERS: Dict[str, Callable[..., Dict[str, Any]]] = {}
+
+
+def register_video_kind(kind: str, publish: Callable[..., Dict[str, Any]],
+                        track_type: str) -> None:
+    """``publish(op, video_file, route)`` puts the finished MP4 in place and
+    writes the caller's metadata; it returns ``{"ok": …}``."""
+    from app.core import hub_ops
+    _PUBLISHERS[kind] = publish
+    hub_ops.register_kind(
+        kind, track_type=track_type,
+        resume=lambda op: hub_ops.resume(op, lambda: _video_stages(op),
+                                         agent_name=op.inputs.get("character", "")))
+
+
+def run_video_op(kind: str, subject: str, inputs: Dict[str, Any], *,
+                 label: str, track_id: str = "") -> Dict[str, Any]:
+    """Animate ``inputs["source"]`` as a hub operation of ``kind`` and publish
+    it. ``inputs``: ``source``, ``prompt``, optional ``service``, ``loras``,
+    ``seconds``, ``character``, ``fail_message`` plus whatever the kind's
+    publisher reads. Raises ``HubOpBusy`` when the target is in flight."""
+    from pathlib import Path
+    from app.core import hub_ops
+    source = Path(inputs["source"])
+    op = hub_ops.create(kind, subject, {**inputs, "source": f"inputs/{source.name}"},
+                        label=label, track_id=track_id, thread_owned=True)
+    op.freeze_file(source, "inputs", source.name)
+    return hub_ops.execute(op, lambda: _video_stages(op))
+
+
+def _video_stages(op) -> Dict[str, Any]:
+    """Stage ``video`` → publish (fresh run and resume)."""
+    from app.core.timeutils import parse_iso, utc_now
+    inputs = op.inputs
+    if not op.done("video"):
+        route: Dict[str, Any] = {}
+        ok = animate_image(str(op.abs(inputs["source"])), inputs.get("prompt", ""),
+                           str(op.path("video", "out.mp4")),
+                           service=inputs.get("service") or "", loras=inputs.get("loras"),
+                           seconds=inputs.get("seconds"), route_out=route,
+                           hub_stage=op.stage("video"))
+        if not ok:
+            return {"ok": False, "error": inputs.get("fail_message") or "Animation failed"}
+        try:
+            duration = (utc_now() - parse_iso(op.created_at)).total_seconds()
+        except (TypeError, ValueError):
+            duration = 0.0
+        op.complete("video", {"route": route, "duration_s": round(duration, 1)})
+    result = op.result("video")
+    publish = _PUBLISHERS.get(op.kind)
+    if publish is None:
+        return {"ok": False, "error": "resume operation unknown"}
+    return publish(op, op.abs("video/out.mp4"), dict(result.get("route") or {}),
+                   duration_s=result.get("duration_s") or 0.0)

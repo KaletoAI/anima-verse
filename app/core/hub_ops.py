@@ -286,8 +286,16 @@ class Op:
         return out
 
     def rel(self, path: Any) -> str:
-        """``path`` relative to the operation directory (what the state keeps)."""
-        return str(Path(path).resolve().relative_to(self.dir.resolve()))
+        """``path`` relative to the operation directory (what the state keeps).
+        A file outside it is copied in first — a stage result must be durable
+        wherever the producer happened to write it."""
+        p = Path(path).resolve()
+        root = self.dir.resolve()
+        if not p.is_relative_to(root):
+            target = self.path("kept", p.name)
+            shutil.copy2(p, target)
+            p = target.resolve()
+        return str(p.relative_to(root))
 
     def abs(self, rel: str) -> Path:
         return self.dir / rel
@@ -535,6 +543,8 @@ def create(kind: str, subject: str, inputs: Dict[str, Any], *, label: str = "",
     handler — for producers a task does not reach deterministically again
     (a video asked for by an LLM turn)."""
     owner = "" if thread_owned else current_owner()
+    owner = owner if isinstance(owner, str) else ""
+    track_id = track_id if isinstance(track_id, str) else ""
     op_id = f"hop_{uuid.uuid4().hex[:12]}"
     now = utc_now_iso()
     try:
