@@ -643,6 +643,18 @@ async def lifespan(app: FastAPI):
     except Exception as _we:
         logger.warning("Alias embedding warm-up not started: %s", _we)
 
+    # Hub jobs that outlived the previous process (docs/hub-job-resume.md):
+    # AFTER every handler is registered, BEFORE the AgentLoop and the queue
+    # workers start — the resumer takes the guards of the operations it
+    # continues synchronously, so an auto-mesh hook or a re-run handler sees
+    # those targets as busy instead of submitting the same work again. The
+    # hub traffic itself runs on daemon threads.
+    try:
+        from app.core.hub_ops import start_resumer
+        start_resumer()
+    except Exception as _hr:
+        logger.error("Hub-job resumer failed: %s", _hr, exc_info=True)
+
     # AgentLoop starten — kontinuierliche Gedanken-Schleife mit
     # importance-gewichtetem Round-Robin. Ersetzt den alten periodischen
     # Tick. Pause haengt am world-pause-Toggle (task_queue 'default').
