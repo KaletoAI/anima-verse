@@ -6115,7 +6115,8 @@ def _render_source(prop_id: str, backend_glob: str,
 def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
                       main_file: str, backend: str,
                       texture_size: Any = None,
-                      routing: Optional[Dict[str, Any]] = None) -> str:
+                      routing: Optional[Dict[str, Any]] = None,
+                      path_for=None) -> str:
     """Store the LOD stages of ONE generation as their own gallery files and
     select the SMALLEST for tier ``low``. Returns the selected file name.
 
@@ -6128,13 +6129,18 @@ def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
 
     ``routing`` carries the run's ``routing``/``fallback_from`` meta (image
     routing): a stage comes out of the same job as the main file, so it is
-    marked like it."""
+    marked like it.
+
+    ``path_for(index, format)`` (optional) names the target of stage
+    ``index`` — a hub operation remembers it BEFORE writing, so a repeated
+    publish after a restart rewrites the same file instead of adding one."""
     selected = ""
-    for stage in stages:
+    for index, stage in enumerate(stages):
         blob = stage.get("blob") or b""
         if not blob:
             continue
-        path = gallery.new_path(f".{stage.get('format') or 'glb'}")
+        fmt = stage.get('format') or 'glb'
+        path = path_for(index, fmt) if path_for else gallery.new_path(f".{fmt}")
         path.write_bytes(blob)
         # LOD stages carry their own embedded textures and are, per the
         # gateway spec, often LARGER than the main result because of it —
@@ -6161,6 +6167,39 @@ def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
     return selected
 
 
+# ── Hub operations (app/core/hub_ops.py) ──────────────────────────────────
+# The mesh step of a generation and the shrink are hub jobs that survive a
+# restart: the source render (preprocessing) happens once, BEFORE the record;
+# the record freezes the source image, the views, the budgets and the
+# inherited dial; the mesh lands in the record's directory and is copied into
+# the gallery only when it is published — under a path chosen once.
+_OP_MESH = "prop_mesh"
+_OP_SHRINK = "prop_shrink"
+
+
+def _op_variant_match(prop_id: str, variant: Any):
+    def match(inputs: Dict[str, Any]) -> bool:
+        return (inputs.get("prop_id") == prop_id
+                and (variant is None or inputs.get("variant") == variant))
+    return match
+
+
+def _op_gallery_path(op, gallery: ModelGallery, key: str, suffix: str) -> Path:
+    """The gallery target ``key`` of a publish, chosen ONCE and remembered in
+    the record before anything is written."""
+    stored = op.result("publish").get(key)
+    if stored:
+        return Path(stored)
+    return Path(op.remember("publish", **{key: str(gallery.new_path(suffix))})[key])
+
+
+def _resume_open(op):
+    from app.core import hub_ops
+    if op.status == hub_ops.FAILED:
+        hub_ops.raise_failed(op)
+    return hub_ops.resume(op, lambda: _KIND_STAGES[op.kind](op))
+
+
 def _generate(prop_id: str, prompt: str, negative: str,
               image_backend_glob: str, mesh_backend_glob: str,
               face_num: Any = None, texture_size: Any = None,
@@ -6180,8 +6219,17 @@ def _generate(prop_id: str, prompt: str, negative: str,
     ``view``/``front_reference``/``reference_variant`` steer the source render
     (which view, whether a front image is slotted as its reference and whose);
     ``views`` names the extra views the MESH step should send along beside the
-    front image."""
+    front image.
+
+    The mesh step is a hub operation: inside a queue handler that left one
+    open before a restart, this resumes it — the source is NOT rendered again
+    and no second gallery file is started."""
+    from app.core import hub_ops
     from app.core.task_queue import get_task_queue
+    if not image_only:
+        op = hub_ops.find_open(_OP_MESH, _op_variant_match(prop_id, variant))
+        if op is not None:
+            return _resume_open(op)
     name = read_sidecar(prop_id).get("name") or prop_id
     task_id = ""
     try:
@@ -6213,7 +6261,6 @@ def _generate(prop_id: str, prompt: str, negative: str,
                      if mesh_only else "source image missing")
             return {"ok": False, "error": error}
 
-        from app.imagegen.service import get_image_service
         g = model_gallery(prop_id, variant)
         if not g:
             error = "bad prop id"
@@ -6256,95 +6303,30 @@ def _generate(prop_id: str, prompt: str, negative: str,
         if not read_sidecar(prop_id):
             error = "subject deleted during generation"
             return {"ok": False, "error": error}
-        res = get_image_service().generate_mesh(
-            source_image_path=str(src),
-            output_path=str(g.new_path()),
-            backend_glob=mesh_backend_glob,
-            mesh_name=prop_id,
-            face_num=face_num,
-            texture_size=texture_size,
-            view_images=view_paths or None,
-            lod_faces=lod_faces,
-            # An empty glob = the "mesh_object" chain of the image routing.
-            occasion="mesh_object")
-        if not res.get("ok"):
-            error = str(res.get("error") or "mesh generation failed")
-            logger.error("Prop %s mesh failed: %s", prop_id, error)
+        try:
+            op = hub_ops.create(_OP_MESH, "prop:" + _gen_key(prop_id, variant, mesh_backend_glob), {
+                "prop_id": prop_id, "variant": variant, "name": name,
+                "guard_key": _gen_key(prop_id, variant, mesh_backend_glob),
+                "mesh_backend_glob": mesh_backend_glob, "face_num": face_num,
+                "texture_size": texture_size, "lod_faces": lod_faces, "tier": tier,
+                "inherited": inherited,
+                "src": f"inputs/{src.name}",
+                "view_images": {v: Path(p).name for v, p in view_paths.items()},
+            }, label=f"Prop: {name}", track_id=task_id)
+        except hub_ops.HubOpBusy as exc:
+            error = str(exc)
             return {"ok": False, "error": error}
-
-        # A NEW file in the gallery, active for its tier — the previous meshes
-        # stay (pick one of them in the admin panel). Everything about THIS
-        # run goes on the file's own sidecar, not on the prop record.
-        path = Path(res["path"])
-        write_model_sidecar(path, {
-            "created_at": utc_now_iso(),
-            "source": "generated",
-            "format": res.get("format", path.suffix.lstrip(".").lower() or "glb"),
-            "rig": res.get("rig", "none"),
-            "tier": tier or DEFAULT_TIER,
-            "backend": res.get("backend", ""),
-            **({"face_num": int(face_num)} if face_num else {}),
-            **({"texture_size": int(texture_size)} if texture_size else {}),
-            # Over the alias' ceiling the job runs CLAMPED, and the file says
-            # so — the gallery row shows it (v2 E5).
-            **({FACE_TARGET_NOTE_KEY: note}
-               if (note := _face_target_note(res.get("backend", ""), face_num))
-               else {}),
-            **({ROTATION_KEY: inherited}
-               if inherited and any(inherited.values()) else {}),
-            **({"view_images": {v: Path(p).name
-                                for v, p in view_paths.items()}}
-               if view_paths else {}),
-            **{k: res[k] for k in ("routing", "fallback_from") if res.get(k)},
-        })
-        g.select(path.name, tier)
-        # LOD stages of the SAME job (§ 3.2): each becomes its own gallery
-        # file, the smallest fills the `low` slot — one generation leaves a
-        # complete full+low pair.
-        low = _store_lod_stages(g, res.get("stages") or [], path.name,
-                                res.get("backend", ""), texture_size,
-                                routing={k: res[k] for k in ("routing", "fallback_from")
-                                         if res.get(k)})
-        if low:
-            logger.info("Prop %s: LOD stage %s selected as low variant",
-                        prop_id, low)
-
-        meta = read_sidecar(prop_id)
-        meta["source"] = "generated"
-        # Only the PRIMARY variant informs the object's proportions — a second
-        # chair mesh must not redistribute the dims the admin sees.
-        primary = _stem_of(prop_id, variant) == _stem_of(prop_id)
-        if primary:
-            bbox = _extract_bbox(prop_id)
-            if bbox:
-                meta["bbox"] = bbox
-                _redistribute_dims(meta, file_areas(path)[ROTATION_KEY])
-        _write_sidecar(prop_id, meta)
-        # The picture-area split of the mesh that just landed (when the prop
-        # asked for key colours) — for EVERY variant (v2 E1: each is its own
-        # mesh), same law as the slots below: this chain does not go through
-        # `_store_bbox`, so the landing hook has to stand here as well. Its
-        # own read-modify-write, never raises; a worker thread may wait
-        # longer for a Blender slot.
-        _areas_after_landing(prop_id, variant, wait_s=30.0)
-        if primary:
-            # …and the object's texture slots, off the mesh that just landed.
-            # AFTER the write above, never before: `_autofill_slots` does its
-            # own read-modify-write and the `meta` in hand here predates it.
-            # This chain does not go through `_store_bbox` (it selects and
-            # measures inline), so the call has to stand here as well or a
-            # GENERATED prop would never get its slots.
-            _autofill_slots(prop_id)
-        # The walking surface of the mesh that just landed — AFTER the area
-        # split above, which rewrites the file. Same law as the slots: this
-        # chain does not go through `_store_bbox`, so the hook has to stand
-        # here as well, and it stands OUTSIDE the primary gate because every
-        # variant carries its own mesh (spec-surface-height § 5 Nr. 1).
-        bake_surfaces(prop_id, variant)
-        logger.info("Prop %s: model generated into variant %s (%s, backend %s)",
-                    prop_id, _stem_of(prop_id, variant), path.name,
-                    res.get("backend", ""))
-        return {"ok": True}
+        # Frozen inputs: the variant's picture may be re-rendered while the
+        # mesh job runs; the mesh is made from THIS one.
+        op.freeze_file(src, "inputs", src.name)
+        views_frozen = {v: op.rel(op.freeze_file(p, "inputs", "views", Path(p).name))
+                        for v, p in view_paths.items()}
+        op.update_state(lambda st: st.update(view_files=views_frozen))
+        op.reload()
+        result = hub_ops.execute(op, lambda: _mesh_stages(op))
+        if not result.get("ok"):
+            error = str(result.get("error") or "mesh generation failed")
+        return result
     except Exception as e:
         # Busy / media switch off / cancelled / anything else that escapes
         # the chain: the tracked task says why instead of finishing as a
@@ -6359,6 +6341,137 @@ def _generate(prop_id: str, prompt: str, negative: str,
                 pass
 
 
+def _mesh_stages(op) -> Dict[str, Any]:
+    """Stage ``mesh`` → publish of one prop record — shared by the fresh run
+    and the resume. Reads only the record, never the variant's current files."""
+    from app.imagegen.service import get_image_service
+    inputs = op.inputs
+    prop_id, variant = inputs["prop_id"], inputs.get("variant")
+    face_num, texture_size = inputs.get("face_num"), inputs.get("texture_size")
+    tier = inputs.get("tier") or DEFAULT_TIER
+    if not op.done("mesh"):
+        if not read_sidecar(prop_id):
+            return {"ok": False, "error": "subject deleted during generation"}
+        views = {v: str(op.abs(rel)) for v, rel in (op.state.get("view_files") or {}).items()}
+        res = get_image_service().generate_mesh(
+            source_image_path=str(op.abs(inputs["src"])),
+            output_path=str(op.path("mesh", "model.glb")),
+            backend_glob=inputs.get("mesh_backend_glob") or "",
+            mesh_name=prop_id,
+            face_num=face_num,
+            texture_size=texture_size,
+            view_images=views or None,
+            lod_faces=inputs.get("lod_faces"),
+            # An empty glob = the "mesh_object" chain of the image routing.
+            occasion="mesh_object",
+            hub_stage=op.stage("mesh"))
+        if not res.get("ok"):
+            error = str(res.get("error") or "mesh generation failed")
+            logger.error("Prop %s mesh failed: %s", prop_id, error)
+            return {"ok": False, "error": error}
+        stages = []
+        for i, st in enumerate(res.pop("stages", None) or []):
+            target = op.path("mesh", f"lod_{i}.{st.get('format') or 'glb'}")
+            target.write_bytes(st["blob"])
+            stages.append({k: v for k, v in st.items() if k != "blob"} | {"file": op.rel(target)})
+        op.complete("mesh", {**_op_result(op, res), "stages": stages})
+    res = op.result("mesh")
+    built = op.abs(res["path"])
+
+    # ── publish ──
+    # A NEW file in the gallery, active for its tier — the previous meshes
+    # stay (pick one of them in the admin panel). Everything about THIS
+    # run goes on the file's own sidecar, not on the prop record.
+    if not read_sidecar(prop_id):
+        return {"ok": False, "error": "subject deleted during generation"}
+    g = model_gallery(prop_id, variant)
+    if not g:
+        return {"ok": False, "error": "bad prop id"}
+    path = _op_gallery_path(op, g, "path", built.suffix or ".glb")
+    path.write_bytes(built.read_bytes())
+    inherited = inputs.get("inherited")
+    write_model_sidecar(path, {
+        "created_at": utc_now_iso(),
+        "source": "generated",
+        "format": res.get("format", path.suffix.lstrip(".").lower() or "glb"),
+        "rig": res.get("rig", "none"),
+        "tier": tier,
+        "backend": res.get("backend", ""),
+        **({"face_num": int(face_num)} if face_num else {}),
+        **({"texture_size": int(texture_size)} if texture_size else {}),
+        # Over the alias' ceiling the job runs CLAMPED, and the file says
+        # so — the gallery row shows it (v2 E5).
+        **({FACE_TARGET_NOTE_KEY: note}
+           if (note := _face_target_note(res.get("backend", ""), face_num))
+           else {}),
+        **({ROTATION_KEY: inherited}
+           if inherited and any(inherited.values()) else {}),
+        **({"view_images": dict(inputs["view_images"])}
+           if inputs.get("view_images") else {}),
+        **{k: res[k] for k in ("routing", "fallback_from") if res.get(k)},
+    })
+    g.select(path.name, tier)
+    # LOD stages of the SAME job (§ 3.2): each becomes its own gallery
+    # file, the smallest fills the `low` slot — one generation leaves a
+    # complete full+low pair.
+    stages = [dict(st, blob=op.abs(st["file"]).read_bytes()) for st in (res.get("stages") or [])]
+    low = _store_lod_stages(g, stages, path.name,
+                            res.get("backend", ""), texture_size,
+                            routing={k: res[k] for k in ("routing", "fallback_from")
+                                     if res.get(k)},
+                            path_for=lambda i, fmt: _op_gallery_path(op, g, f"lod_{i}", f".{fmt}"))
+    if low:
+        logger.info("Prop %s: LOD stage %s selected as low variant",
+                    prop_id, low)
+
+    meta = read_sidecar(prop_id)
+    meta["source"] = "generated"
+    # Only the PRIMARY variant informs the object's proportions — a second
+    # chair mesh must not redistribute the dims the admin sees.
+    primary = _stem_of(prop_id, variant) == _stem_of(prop_id)
+    if primary:
+        bbox = _extract_bbox(prop_id)
+        if bbox:
+            meta["bbox"] = bbox
+            _redistribute_dims(meta, file_areas(path)[ROTATION_KEY])
+    _write_sidecar(prop_id, meta)
+    # The picture-area split of the mesh that just landed (when the prop
+    # asked for key colours) — for EVERY variant (v2 E1: each is its own
+    # mesh), same law as the slots below: this chain does not go through
+    # `_store_bbox`, so the landing hook has to stand here as well. Its
+    # own read-modify-write, never raises; a worker thread may wait
+    # longer for a Blender slot.
+    _areas_after_landing(prop_id, variant, wait_s=30.0)
+    if primary:
+        # …and the object's texture slots, off the mesh that just landed.
+        # AFTER the write above, never before: `_autofill_slots` does its
+        # own read-modify-write and the `meta` in hand here predates it.
+        # This chain does not go through `_store_bbox` (it selects and
+        # measures inline), so the call has to stand here as well or a
+        # GENERATED prop would never get its slots.
+        _autofill_slots(prop_id)
+    # The walking surface of the mesh that just landed — AFTER the area
+    # split above, which rewrites the file. Same law as the slots: this
+    # chain does not go through `_store_bbox`, so the hook has to stand
+    # here as well, and it stands OUTSIDE the primary gate because every
+    # variant carries its own mesh (spec-surface-height § 5 Nr. 1).
+    bake_surfaces(prop_id, variant)
+    logger.info("Prop %s: model generated into variant %s (%s, backend %s)",
+                prop_id, _stem_of(prop_id, variant), path.name,
+                res.get("backend", ""))
+    return {"ok": True}
+
+
+def _op_result(op, res: Dict[str, Any]) -> Dict[str, Any]:
+    """A service result as JSON for the record (file paths relative)."""
+    out = {k: v for k, v in res.items()
+           if isinstance(v, (str, int, float, bool, dict, list)) or v is None}
+    for key in ("path", "texture_path"):
+        if out.get(key):
+            out[key] = op.rel(out[key])
+    return out
+
+
 def _shrink(prop_id: str, source_file: str, backend_glob: str,
             face_num: Any = None, texture_size: Any = None,
             variant: Any = None) -> Dict[str, Any]:
@@ -6370,9 +6483,15 @@ def _shrink(prop_id: str, source_file: str, backend_glob: str,
 
     Without a ``face_num`` the variant's ``target_faces_low`` applies (v2 E5):
     this IS the variant's distance mesh, so it is the same budget the CPU
-    reduction aims at — only reached by a backend instead of by Decimate."""
+    reduction aims at — only reached by a backend instead of by Decimate.
+
+    A hub operation like the mesh step (app/core/hub_ops.py)."""
+    from app.core import hub_ops
     from app.core.task_queue import get_task_queue
-    from app.imagegen.service import get_image_service
+    op = hub_ops.find_open(_OP_SHRINK, lambda i: (i.get("prop_id") == prop_id
+                                                 and i.get("source_file") == source_file))
+    if op is not None:
+        return _resume_open(op)
     g = model_gallery(prop_id, variant)
     src = g.file(source_file) if g else None
     if not g or not src:
@@ -6389,46 +6508,112 @@ def _shrink(prop_id: str, source_file: str, backend_glob: str,
 
     error = ""
     try:
-        res = get_image_service().generate_mesh_variant(
-            source_model_path=str(src),
-            output_path=str(g.new_path()),
-            backend_glob=backend_glob,
-            mesh_name=prop_id,
-            face_num=face_num,
-            texture_size=texture_size)
-        if not res.get("ok"):
-            error = str(res.get("error") or "shrink failed")
-            logger.error("Prop %s shrink failed: %s", prop_id, error)
+        key = _gen_key(prop_id, variant, f"shrink:{source_file}")
+        try:
+            op = hub_ops.create(_OP_SHRINK, "prop:" + key, {
+                "prop_id": prop_id, "variant": variant, "name": name, "guard_key": key,
+                "source_file": source_file, "backend_glob": backend_glob,
+                "face_num": face_num, "texture_size": texture_size,
+                "src_fix": file_areas(src)[ROTATION_KEY],
+            }, label=f"Low variant: {name}", track_id=task_id)
+        except hub_ops.HubOpBusy as exc:
+            error = str(exc)
             return {"ok": False, "error": error}
-        path = Path(res["path"])
-        src_fix = file_areas(src)[ROTATION_KEY]
-        write_model_sidecar(path, {
-            "created_at": utc_now_iso(),
-            "source": "shrink",
-            "format": res.get("format", "glb"),
-            "rig": "none",
-            "tier": LOW_TIER,
-            "backend": res.get("backend", ""),
-            "source_file": source_file,
-            **({"face_num": int(face_num)} if face_num else {}),
-            **({"texture_size": int(texture_size)} if texture_size else {}),
-            **({FACE_TARGET_NOTE_KEY: note}
-               if (note := _face_target_note(res.get("backend", ""), face_num))
-               else {}),
-            # A backend re-mesh keeps the axes of its source, not its nodes
-            # or materials — the fix travels, the areas do not (v2 E1).
-            **({ROTATION_KEY: src_fix} if any(src_fix.values()) else {}),
-        })
-        g.select(path.name, LOW_TIER)
-        logger.info("Prop %s: low variant %s (backend %s, from %s)",
-                    prop_id, path.name, res.get("backend", ""), source_file)
-        return {"ok": True, "path": str(path)}
+        op.freeze_file(src, "inputs", src.name)
+        result = hub_ops.execute(op, lambda: _shrink_stages(op))
+        if not result.get("ok"):
+            error = str(result.get("error") or "shrink failed")
+        return result
+    except Exception as e:
+        error = error or f"{type(e).__name__}: {e}"
+        raise
     finally:
         if task_id:
             try:
                 get_task_queue().track_finish(task_id, error=error)
             except Exception:
                 pass
+
+
+def _shrink_stages(op) -> Dict[str, Any]:
+    """Stage ``shrink`` → publish of one prop record (fresh run and resume)."""
+    from app.imagegen.service import get_image_service
+    inputs = op.inputs
+    prop_id, variant, source_file = inputs["prop_id"], inputs.get("variant"), inputs["source_file"]
+    face_num, texture_size = inputs.get("face_num"), inputs.get("texture_size")
+    if not op.done("shrink"):
+        res = get_image_service().generate_mesh_variant(
+            source_model_path=str(op.abs(f"inputs/{source_file}")),
+            output_path=str(op.path("shrink", "model.glb")),
+            backend_glob=inputs.get("backend_glob") or "",
+            mesh_name=prop_id,
+            face_num=face_num,
+            texture_size=texture_size,
+            hub_stage=op.stage("shrink"))
+        if not res.get("ok"):
+            error = str(res.get("error") or "shrink failed")
+            logger.error("Prop %s shrink failed: %s", prop_id, error)
+            return {"ok": False, "error": error}
+        op.complete("shrink", _op_result(op, res))
+    res = op.result("shrink")
+    built = op.abs(res["path"])
+    if not read_sidecar(prop_id):
+        return {"ok": False, "error": "subject deleted during generation"}
+    g = model_gallery(prop_id, variant)
+    if not g:
+        return {"ok": False, "error": "source model missing"}
+    path = _op_gallery_path(op, g, "path", built.suffix or ".glb")
+    path.write_bytes(built.read_bytes())
+    src_fix = inputs.get("src_fix") or {}
+    write_model_sidecar(path, {
+        "created_at": utc_now_iso(),
+        "source": "shrink",
+        "format": res.get("format", "glb"),
+        "rig": "none",
+        "tier": LOW_TIER,
+        "backend": res.get("backend", ""),
+        "source_file": source_file,
+        **({"face_num": int(face_num)} if face_num else {}),
+        **({"texture_size": int(texture_size)} if texture_size else {}),
+        **({FACE_TARGET_NOTE_KEY: note}
+           if (note := _face_target_note(res.get("backend", ""), face_num))
+           else {}),
+        # A backend re-mesh keeps the axes of its source, not its nodes
+        # or materials — the fix travels, the areas do not (v2 E1).
+        **({ROTATION_KEY: src_fix} if any(src_fix.values()) else {}),
+    })
+    g.select(path.name, LOW_TIER)
+    logger.info("Prop %s: low variant %s (backend %s, from %s)",
+                prop_id, path.name, res.get("backend", ""), source_file)
+    return {"ok": True, "path": str(path)}
+
+
+_KIND_STAGES = {_OP_MESH: _mesh_stages, _OP_SHRINK: _shrink_stages}
+
+
+def _op_reserve(op):
+    """The double-start guard of the record's target, taken by the resumer
+    before the AgentLoop starts (``is_pending`` reports the prop busy)."""
+    key = op.inputs.get("guard_key") or ""
+    with _lock:
+        if not key or key in _generating:
+            return lambda: None
+        _generating.add(key)
+
+    def release() -> None:
+        with _lock:
+            _generating.discard(key)
+    return release
+
+
+def _register_hub_kinds() -> None:
+    from app.core import hub_ops
+    for kind in _KIND_STAGES:
+        hub_ops.register_kind(kind, resume=_resume_open, track_type="model3d_generation",
+                              reserve=_op_reserve)
+
+
+_register_hub_kinds()
 
 
 def trigger_shrink(prop_id: str, *, source_file: str, backend_glob: str = "",

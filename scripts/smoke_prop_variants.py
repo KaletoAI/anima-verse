@@ -1541,10 +1541,16 @@ def views_section() -> None:
           res.get("ok"), str(res))
     check("the mesher was handed the variant's OWN front as the subject",
           MESH_INPUTS == ["source-v2.png"], str(MESH_INPUTS))
+    # The run is a hub operation (docs/hub-job-resume.md): the mesher gets
+    # the run's FROZEN copy of the view (same name, inside the operation's
+    # directory, gone once the run is published) — a re-render while the job
+    # runs cannot change its input.
+    _views = (MESH_KWARGS[-1].get("view_images") or {}) if MESH_KWARGS else {}
     check("...and exactly the one view it holds, by absolute path",
-          MESH_KWARGS and MESH_KWARGS[-1].get("view_images")
-          == {"back": str(back_path)},
-          str(MESH_KWARGS[-1:] and MESH_KWARGS[-1].get("view_images")))
+          sorted(_views) == ["back"] and Path(_views["back"]).is_absolute()
+          and Path(_views["back"]).name == back_path.name
+          and "hub_ops" in Path(_views["back"]).parts,
+          str(_views))
 
     row = next((r for r in store.list_models(crate, 1) if r["active"]), {})
     check("the landed mesh records what it was made from, by NAME",
