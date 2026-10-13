@@ -306,7 +306,7 @@ class Model:
 def _base_image(mat):
     """The image feeding the Principled base colour (through a Mix node if the
     importer added one), else the first image texture, else None."""
-    if mat is None or not mat.use_nodes or mat.node_tree is None:
+    if mat is None or mat.node_tree is None:
         return None
     nodes = mat.node_tree.nodes
     for n in nodes:
@@ -359,7 +359,6 @@ def _slot_material(name, image):
     of that name survived the import, so it never carries stale nodes."""
     mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
     mat.name = name
-    mat.use_nodes = True
     nt = mat.node_tree
     nt.nodes.clear()
     out = nt.nodes.new("ShaderNodeOutputMaterial")

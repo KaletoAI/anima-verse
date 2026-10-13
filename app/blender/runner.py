@@ -43,7 +43,10 @@ SCRIPTS_DIR = Path(__file__).parent / "scripts"
 # to bloat a log line.
 LOG_TAIL_CHARS = 4000
 
-MIN_VERSION = (5, 0)        # 5.0 replaced Action.fcurves with slotted actions (scripts/_action.py)
+# Blender 5.1 made transform_apply flip normals on negatively scaled objects
+# (corrective_flip_normals, enabled by default); 5.0 does not. Require 5.2 so
+# normalize.py produces consistent models across supported installations.
+MIN_VERSION = (5, 2)
 MAX_VERSION_EXCL = (6, 0)
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
 
@@ -101,7 +104,7 @@ def _discover() -> Tuple[str, List[Dict[str, str]]]:
 
 
 def find_executable() -> str:
-    """Pick the newest Blender in [5.0, 6.0) across discovery locations.
+    """Pick the newest Blender in [5.2, 6.0) across discovery locations.
 
     A configured path wins but must be usable; never silently switch from it.
     """

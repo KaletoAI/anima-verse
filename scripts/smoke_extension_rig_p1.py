@@ -319,7 +319,7 @@ if p.get('shared_blob'): source_weights=[('Hips',.08),('Spine',.2),('Spine1',.12
 if p.get('ties'): source_weights=[('Hips',.2),('Spine',.2),('Spine1',.2),('Spine2',.2),('LeftUpLeg',.2)]
 for name,weight in source_weights:
     vg=obj.vertex_groups.new(name='mixamorig:'+name); vg.add(list(range(len(vertices))),weight,'REPLACE')
-mat=bpy.data.materials.new('Surface'); mat.use_nodes=True
+mat=bpy.data.materials.new('Surface')
 image=bpy.data.images.new('Colour',width=8,height=8)
 image.pixels=[.5,.6,.7,1]*64
 tex=mat.node_tree.nodes.new('ShaderNodeTexImage'); tex.image=image

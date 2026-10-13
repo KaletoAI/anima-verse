@@ -151,7 +151,7 @@ if job['renders']:
         for view,cam in cameras.items():
             scene.camera=cam; scene.render.filepath=str(Path(job['renders'])/('follow_%s_%s.png'%(angle,view)))
             bpy.ops.render.render(write_still=True)
-    scene.render.engine='BLENDER_EEVEE_NEXT'; scene.world.use_nodes=True
+    scene.render.engine='BLENDER_EEVEE'
     scene.world.node_tree.nodes['Background'].inputs['Strength'].default_value=.8
     for name,offset,power in [('Key',(-.25,-.3,.3),35),('Fill',(.2,-.15,.1),15)]:
         data=bpy.data.lights.new(name,'AREA'); data.energy=power; data.size=.3

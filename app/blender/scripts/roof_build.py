@@ -32,7 +32,6 @@ import bpy                                                    # noqa: E402
 
 def _material(spec, index):
     mat = bpy.data.materials.new(str(spec.get("name") or f"m{index}"))
-    mat.use_nodes = True
     bsdf = mat.node_tree.nodes.get("Principled BSDF")
     if bsdf:
         r, g, b = (list(spec.get("color") or []) + [0.5, 0.5, 0.5])[:3]

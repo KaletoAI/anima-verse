@@ -87,8 +87,12 @@ Each link retains a core vertex (> .9). The old-code proof pins f27a8e47: P/M di
 match that implementation, while its analytic seam stays 1 instead of .6
 and its L stretch must fail at least one acceptance bound. Expected
 analytic values above are derived by hand, never from recorded output.
+Blender 5 invalidates bone references across edit mode. The pinned baseline
+gets only the one-line bone-cache refresh after returning to Object mode;
+nothing else changes, so the old-code proof keeps its meaning.
 """
 import argparse
+import ast
 import copy
 import hashlib
 import json
@@ -445,6 +449,32 @@ def main():
         baseline.write_text(subprocess.check_output(['git','show',
             BASELINE_COMMIT+':app/blender/scripts/extension_bones.py'],
             cwd=Path(__file__).resolve().parents[1],text=True))
+        baseline_text=baseline.read_text()
+        tree=ast.parse(baseline_text)
+        def mode_switch(statement, mode):
+            return (isinstance(statement,ast.Expr)
+                    and isinstance(statement.value,ast.Call)
+                    and ast.unparse(statement.value.func)=='bpy.ops.object.mode_set'
+                    and any(keyword.arg=='mode' and isinstance(keyword.value,ast.Constant)
+                            and keyword.value.value==mode for keyword in statement.value.keywords))
+        insertion_points=[]
+        for function in tree.body:
+            if not isinstance(function,ast.FunctionDef) or function.name!='extension_bones':
+                continue
+            in_edit_mode=False
+            for statement in function.body:
+                if mode_switch(statement,'EDIT'):
+                    in_edit_mode=True
+                elif mode_switch(statement,'OBJECT') and in_edit_mode:
+                    insertion_points.append(statement.end_lineno)
+                    in_edit_mode=False
+        if len(insertion_points)!=1:
+            raise AssertionError(f'Expected exactly one pinned edit-mode exit, got {insertion_points}')
+        lines=baseline_text.splitlines(keepends=True)
+        insertion=insertion_points[0]
+        indent=lines[insertion-1][:len(lines[insertion-1])-len(lines[insertion-1].lstrip())]
+        lines.insert(insertion,indent+'bones = {bone_key(b.name):b for b in arm.data.bones}\n')
+        baseline.write_text(''.join(lines))
         probe_params={'operation':str(operation),'baseline_operation':str(baseline),
                       'baseline_commit':BASELINE_COMMIT}
         original_scripts=runner.SCRIPTS_DIR

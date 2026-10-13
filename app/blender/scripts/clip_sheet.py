@@ -39,7 +39,6 @@ def _material(side, engine):
     mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
     mat.diffuse_color = COLORS[side]
     if engine == "CYCLES":
-        mat.use_nodes = True
         mat.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = COLORS[side]
     return mat
 
@@ -151,7 +150,6 @@ def run(job):
         bpy.ops.object.light_add(type="SUN", location=(2, -3, 5))
         world = bpy.data.worlds.new("w")
         scene.world = world
-        world.use_nodes = True
         world.node_tree.nodes["Background"].inputs["Strength"].default_value = 0.8
     else:
         scene.display.shading.color_type = "MATERIAL"

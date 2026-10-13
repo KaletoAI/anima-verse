@@ -60,7 +60,6 @@ def cube_with_texture(path, alpha):
             px[i] = 0.5
         img.pixels = px
     mat = bpy.data.materials.new("M")
-    mat.use_nodes = True
     nt = mat.node_tree
     tex = nt.nodes.new("ShaderNodeTexImage")
     tex.image = img

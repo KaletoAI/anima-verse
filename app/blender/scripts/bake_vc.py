@@ -113,7 +113,6 @@ def _bake(obj, size, index):
     img = bpy.data.images.new(f"baked_vc_{index}", size, size, alpha=False)
 
     mat = bpy.data.materials.new(f"baked_vc_mat_{index}")
-    mat.use_nodes = True
     nt = mat.node_tree
     nt.nodes.clear()
     out = nt.nodes.new("ShaderNodeOutputMaterial")

@@ -60,7 +60,6 @@ WORLD_STRENGTH = 0.55
 
 def _material(spec, index):
     mat = bpy.data.materials.new(str(spec.get("name") or f"m{index}"))
-    mat.use_nodes = True
     bsdf = mat.node_tree.nodes.get("Principled BSDF")
     if bsdf:
         r, g, b = (list(spec.get("color") or []) + [0.5, 0.5, 0.5])[:3]
@@ -83,7 +82,6 @@ def _material(spec, index):
 def _world(colour):
     """The neutral background — and, at the same time, the ambient fill."""
     world = bpy.data.worlds.new("Exterior")
-    world.use_nodes = True
     bg = world.node_tree.nodes.get("Background")
     if bg:
         r, g, b = (list(colour or []) + [0.55, 0.55, 0.55])[:3]
