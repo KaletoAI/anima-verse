@@ -47,8 +47,8 @@ if (rawUrl) {
       const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
       return await new FBXLoader().loadAsync(rawUrl);
     }
-    const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
-    return (await new GLTFLoader().loadAsync(rawUrl)).scene;
+    const { createGLTFLoader } = await import('./scene/gltfLoader');
+    return (await createGLTFLoader().loadAsync(rawUrl)).scene;
   };
   loadRaw().then(async (root) => {
     const texUrl = params.get('tex');

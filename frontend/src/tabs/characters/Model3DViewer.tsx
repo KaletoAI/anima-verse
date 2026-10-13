@@ -64,8 +64,8 @@ export const loadTestFigure = (): Promise<Object3D | null> => {
           const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
           obj = await new FBXLoader().loadAsync('/play/test-figure/model')
         } else {
-          const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
-          obj = (await new GLTFLoader().loadAsync('/play/test-figure/model')).scene
+          const { createGLTFLoader } = await import('../../lib/gltfLoader')
+          obj = (await createGLTFLoader().loadAsync('/play/test-figure/model')).scene
         }
         // Neutral clay figure — placement and scale are judged, not a look.
         const THREE = await import('three')
@@ -751,8 +751,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, previewTilt 
           const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
           object = await new FBXLoader().loadAsync(url)
         } else if (ext === 'glb' || ext === 'gltf' || ext === 'vrm') {
-          const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
-          const gltf = await new GLTFLoader().loadAsync(url)
+          const { createGLTFLoader } = await import('../../lib/gltfLoader')
+          const gltf = await createGLTFLoader().loadAsync(url)
           object = gltf.scene
           // The parser is kept for ONE reason: it is the only place that still
           // knows which glTF NODE a loaded mesh came from (`associations`) and

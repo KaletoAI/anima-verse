@@ -356,3 +356,57 @@ above the roof builder in the same panel.
   are the same machinery with another schema, and they are a stage of their own;
 * no automatic re-build when the outline or the storey count changes: the roof
   is a stored model like any other, and the button is one click.
+
+## Lossless GLB delivery copies
+
+`image_generation.blender_meshopt_delivery` is an instance setting in the
+Blender group, enabled by default. On the first inline GLB request,
+`app/core/glb_delivery.py` serves the stored original and schedules one build
+on a dedicated single-worker thread. Blender must be usable. The job
+`app/blender/scripts/meshopt.py` rewrites GLB buffers directly using Blender's
+bundled meshopt bridge; it never imports or exports a scene. Stored files,
+Python model readers, downloads and exports retain their original bytes. The
+character Download link explicitly requests `model3d/file?download=true`,
+which uses attachment disposition and bypasses the delivery cache.
+
+Delivery copies require `EXT_meshopt_compression`. Buffer 0 holds aligned
+compressed streams and raw views; buffer 1 is a URI-less fallback placeholder.
+Geometry streams carry no filter (the spec default `NONE`, lossless); the key is
+omitted because Blender's own glTF importer rejects an explicit `NONE`. Images, animation data,
+inverse bind matrices, sparse and mixed-use storage remain raw. Every encoded
+view is decoded and compared byte-for-byte before an output is accepted.
+The triangle codec can cyclically rotate triangle corners: when that changes
+index bytes, the job uses `INDICES` instead of `TRIANGLES` to retain the exact
+index array. No vertex, triangle, accessor, mesh or node indices are reordered.
+Unknown required extensions, existing compression, multiple source buffers,
+no eligible geometry, or savings below 5 percent keep the source unchanged.
+
+Copies live at `<storage>/.cache/meshopt/<source-sha256>.glb`. Hashes are
+memoized by resolved source path, inode, mtime_ns, ctime_ns and size, and a
+file that changes while it is hashed is not memoized. Successful deterministic
+skips create a `.skip` marker; timeouts and failures remain retryable. Builds
+verify their input snapshot against the requested hash and publish atomically.
+Cache requests touch mtime, but the content hash provides a stable HTTP ETag;
+the response filename remains the original name. A daily periodic sub-job
+removes copies and markers unused for more than 30 system days, under the
+normal world-pause gate.
+
+Both clients configure every GLTFLoader through their app's `gltfLoader.ts`
+factory with Three.js's MeshoptDecoder. Admin previews keep lazy loading and
+`parser.associations` still maps to unchanged glTF indices. Clients do not
+parse GLB bufferViews themselves.
+
+Verification (temporary storage only):
+
+```bash
+ALSOFT_DRIVERS=null .venv/bin/python scripts/smoke_blender_meshopt.py
+node scripts/smoke_glb_meshopt_three.mjs
+.venv/bin/python scripts/smoke_glb_delivery.py
+```
+
+The first smoke derives its synthetic geometry layouts by hand and checks
+source-byte preservation, raw views, skip gates and the rigged puppet. The
+second uses the real Three.js decoder to compare loaded attributes, indices,
+ordered rig data and parser associations. The third checks deduplication,
+source changes, deterministic skips, retryable failures, HTTP behavior and
+30-day retention with a fake runner.

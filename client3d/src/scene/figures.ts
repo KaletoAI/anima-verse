@@ -1,6 +1,6 @@
 import type { MotionPayload } from "../types";
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { createGLTFLoader } from './gltfLoader';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { seededRandom } from './textures';
 import {
@@ -820,7 +820,7 @@ export class FigureLibrary {
       if (res.ok) manifest = await res.json();
     } catch { /* no manifest -> server assets only */ }
     this.assignments = manifest.assignments ?? {};
-    const loader = new GLTFLoader();
+    const loader = createGLTFLoader();
     const defaultHeight = manifest.defaultHeight ?? BASE_FIGURE_HEIGHT_M;
 
     const loadFile = async (url: string, forceFbx = false): Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }> => {

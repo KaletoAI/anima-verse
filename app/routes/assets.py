@@ -61,7 +61,7 @@ from app.core.animation_clips import (CLIP_EXTS, ClipExists,
                                       set_clip_loop, set_clip_role_gender)
 from app.core.auth_dependency import require_admin
 from app.core.cmu_import import ClipImportError, validate_root_motion
-from app.core.http_files import etag_file_response
+from app.core.http_files import etag_file_response, glb_file_response
 from app.core.log import get_logger
 from app.core.paths import (get_animation_clips_dir, get_licensed_clips_dir,
                             get_rig_file)
@@ -894,7 +894,7 @@ def get_prop_model(prop_id: str, request: Request, tier: str = "",
     path = model_path(prop_id, tier, variant=idx)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    return etag_file_response(path, request, "model/gltf-binary",
+    return glb_file_response(path, request,
                               cache_control="public, max-age=3600")
 
 

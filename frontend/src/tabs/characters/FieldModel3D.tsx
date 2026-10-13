@@ -1233,7 +1233,7 @@ export function FieldModel3D({ character }: { character: string }) {
             {owned ? t('Upload (replace)') : t('Upload GLB/FBX')}
           </button>
           {model ? (
-            <a className="ga-btn ga-btn-sm" href={`/characters/${enc}/model3d/file`} download>
+            <a className="ga-btn ga-btn-sm" href={`/characters/${enc}/model3d/file?download=true`} download>
               {t('Download')}
             </a>
           ) : null}

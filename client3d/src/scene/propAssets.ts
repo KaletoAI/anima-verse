@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { createGLTFLoader } from './gltfLoader';
 import { neutralizeGltfMaterials } from './glbMaterials';
 
 // GLB-Ladewarteschlange für alle Modelle der Szene (Gebäude, Raum-Dioramen,
@@ -11,7 +11,7 @@ import { neutralizeGltfMaterials } from './glbMaterials';
 // eines Props kommen mit seiner Spec (`dims` → `max_m`, `fix_euler`), der
 // Client muss /assets/props nicht mehr kennen.
 
-const loader = new GLTFLoader();
+const loader = createGLTFLoader();
 const loadCache = new Map<string, Promise<THREE.Group | null>>();
 
 // Lade-Warteschlange: Prop-GLBs sind groß (bis ~25 MB) und zahlreich — alles

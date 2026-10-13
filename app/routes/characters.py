@@ -1263,13 +1263,15 @@ def _resolve_character_model_snapshot(character_name: str):
     return None, None, None
 
 
-def _model_asset_response(character_name: str, request: Request, *, tier: str = "", texture: bool = False):
+def _model_asset_response(character_name: str, request: Request, *, tier: str = "",
+                          texture: bool = False, download: bool = False):
     """Capture final bytes and their ETag under the short publication lock.
 
     FileResponse opens paths later, after the lock would have been released;
     a bytes response keeps the selected publication stable for this request.
     """
-    from fastapi.responses import Response
+    from fastapi.responses import FileResponse, Response
+    from app.core.http_files import glb_file_response
     from app.core.keyed_lock import keyed_lock
     from app.core.model3d import get_model3d_dir, find_model3d_serving_tier, find_texture
     with keyed_lock("model3d_publication", str(get_model3d_dir(character_name))):
@@ -1278,14 +1280,23 @@ def _model_asset_response(character_name: str, request: Request, *, tier: str = 
             path = find_texture(character_name, path.stem) if path else None
         if path is None:
             return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+        if not texture and path.suffix.lower() == ".glb":
+            response = glb_file_response(
+                path, request, disposition="attachment" if download else "inline")
+            if isinstance(response, FileResponse):
+                # Preserve the existing publication snapshot: FileResponse
+                # otherwise opens the source after this lock is released.
+                return Response(Path(response.path).read_bytes(),
+                                media_type=response.media_type,
+                                headers=dict(response.headers))
+            return response
         stat = path.stat()
         etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}-{stat.st_ino:x}"'
         headers = {"ETag": etag, "Cache-Control": "no-cache"}
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers=headers)
         contents = path.read_bytes()
-        media = ("image/jpeg" if path.suffix.lower() in (".jpg", ".jpeg") else "image/png") if texture else (
-            "model/gltf-binary" if path.suffix.lower() == ".glb" else "application/octet-stream")
+        media = ("image/jpeg" if path.suffix.lower() in (".jpg", ".jpeg") else "image/png") if texture else "application/octet-stream"
     return Response(contents, media_type=media, headers=headers)
 
 
@@ -1946,14 +1957,15 @@ def _set_character_model3d_options_sync(character_name: str,
 
 @router.get("/{character_name}/model3d/file")
 def get_character_model3d_file(character_name: str, request: Request,
-                               tier: str = ""):
+                               tier: str = "", download: bool = False):
     """Serves the mesh for the current outfit combination — exact entry,
     else the nearest stored one (find_model3d_serving). ETag +
     If-None-Match — the files are several MB. 404 when absent.
 
     ``tier=low`` serves the reduced version of the SAME combination, falling
-    back to the full mesh when none was built."""
-    return _model_asset_response(character_name, request, tier=tier)
+    back to the full mesh when none was built. ``download=true`` serves
+    the stored original with attachment disposition."""
+    return _model_asset_response(character_name, request, tier=tier, download=download)
 
 
 @router.get("/{character_name}/model3d/texture")

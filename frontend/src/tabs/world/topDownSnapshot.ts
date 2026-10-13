@@ -52,8 +52,8 @@ function loadRoomModel(roomId: string): Promise<CachedModel | null> {
           width_m?: number }>(`${base}/meta`)
         const fmt = (meta.format || 'glb').toLowerCase()
         if (fmt !== 'glb' && fmt !== 'gltf') return null
-        const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
-        const gltf = await new GLTFLoader().loadAsync(meta.url || base)
+        const { createGLTFLoader } = await import('../../lib/gltfLoader')
+        const gltf = await createGLTFLoader().loadAsync(meta.url || base)
         return { obj: gltf.scene, rotation: meta.rotation || {},
                  offsetY: meta.offset_y || 0,
                  offsetX: meta.offset_x || 0, offsetZ: meta.offset_z || 0,
@@ -88,8 +88,8 @@ function loadBuildingModel(locationId: string): Promise<BuildingModel | null> {
           offset_x?: number; offset_z?: number }>(`${base}/meta`)
         const fmt = (meta.format || 'glb').toLowerCase()
         if (fmt !== 'glb' && fmt !== 'gltf') return null
-        const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
-        const gltf = await new GLTFLoader().loadAsync(meta.url || base)
+        const { createGLTFLoader } = await import('../../lib/gltfLoader')
+        const gltf = await createGLTFLoader().loadAsync(meta.url || base)
         return { obj: gltf.scene, rotation: meta.rotation || {},
                  offsetX: meta.offset_x || 0, offsetZ: meta.offset_z || 0 }
       } catch {
@@ -325,8 +325,8 @@ export function renderPropTopDown(modelUrl: string): Promise<PropSprite | null> 
 }
 
 async function renderPropTopDownNow(modelUrl: string): Promise<PropSprite | null> {
-  const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
-  const gltf = await new GLTFLoader().loadAsync(modelUrl)
+  const { createGLTFLoader } = await import('../../lib/gltfLoader')
+  const gltf = await createGLTFLoader().loadAsync(modelUrl)
   const THREE = await import('three')
   const obj = gltf.scene
   obj.updateMatrixWorld(true)

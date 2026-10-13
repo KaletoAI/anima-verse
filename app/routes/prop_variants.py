@@ -342,13 +342,15 @@ def prop_variant_model_delete(prop_id: str, index: int,
 def prop_variant_model_file(prop_id: str, index: int, filename: str,
                             request: Request):
     """Serve ONE stored mesh of this variant by filename (admin preview)."""
-    from app.core.http_files import etag_file_response
+    from app.core.http_files import etag_file_response, glb_file_response
     from app.core.props import model_file_path
     _variant(prop_id, index)
     p = model_file_path(prop_id, filename, variant=index)
     if not p:
         raise HTTPException(status_code=404, detail="Model not found")
-    return etag_file_response(p, request, "model/gltf-binary")
+    if p.suffix.lower() == ".glb":
+        return glb_file_response(p, request)
+    return etag_file_response(p, request, "application/octet-stream")
 
 
 @router.post("/props/{prop_id}/variants/{index}/models/shrink")

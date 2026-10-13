@@ -1307,13 +1307,13 @@ def location_model3d_file(location_id: str, filename: str, request: Request):
     """Serve ONE stored building model by filename — the admin viewer previews
     non-active models with it (clients only ever see the active one)."""
     from app.core.location_model3d import model_file_path
-    from app.core.http_files import etag_file_response
+    from app.core.http_files import etag_file_response, glb_file_response
     p = model_file_path(location_id, filename)
     if not p:
         raise HTTPException(status_code=404, detail="Model not found")
-    media = ("model/gltf-binary" if p.suffix.lower() == ".glb"
-             else "application/octet-stream")
-    return etag_file_response(p, request, media)
+    if p.suffix.lower() == ".glb":
+        return glb_file_response(p, request)
+    return etag_file_response(p, request, "application/octet-stream")
 
 
 @router.post("/locations/{location_id}/model3d/rotation")
@@ -1586,13 +1586,13 @@ def _room_model3d_select_sync(location_id: str, room_id: str,
 def room_model3d_file(location_id: str, room_id: str, filename: str, request: Request):
     """Serve ONE stored room model by filename (admin preview)."""
     from app.core.location_model3d import model_file_path
-    from app.core.http_files import etag_file_response
+    from app.core.http_files import etag_file_response, glb_file_response
     p = model_file_path(location_id, filename, room_id=room_id)
     if not p:
         raise HTTPException(status_code=404, detail="Model not found")
-    media = ("model/gltf-binary" if p.suffix.lower() == ".glb"
-             else "application/octet-stream")
-    return etag_file_response(p, request, media)
+    if p.suffix.lower() == ".glb":
+        return glb_file_response(p, request)
+    return etag_file_response(p, request, "application/octet-stream")
 
 
 @router.post("/locations/{location_id}/rooms/{room_id}/model3d/rotation")

@@ -1467,13 +1467,13 @@ def play_location_model(location_id: str, request: Request, tier: str = ""):
     ``get_client_meta``)."""
     from fastapi.responses import Response
     from app.core.location_model3d import find_building_model
-    from app.core.http_files import etag_file_response
+    from app.core.http_files import etag_file_response, glb_file_response
     p = find_building_model(location_id, tier=tier)
     if not p:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    media = ("model/gltf-binary" if p.suffix.lower() == ".glb"
-             else "application/octet-stream")
-    return etag_file_response(p, request, media)
+    if p.suffix.lower() == ".glb":
+        return glb_file_response(p, request)
+    return etag_file_response(p, request, "application/octet-stream")
 
 
 @router.get("/play/locations/{location_id}/model/meta")
@@ -1535,12 +1535,13 @@ def play_test_figure_model(request: Request):
     character model. 404 when neither exists — the preview falls back to
     its mannequin."""
     from fastapi.responses import Response
-    from app.core.http_files import etag_file_response
+    from app.core.http_files import etag_file_response, glb_file_response
     p, fmt, _src = _test_figure_file()
     if not p:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    media = "model/gltf-binary" if fmt == "glb" else "application/octet-stream"
-    return etag_file_response(p, request, media)
+    if p.suffix.lower() == ".glb":
+        return glb_file_response(p, request)
+    return etag_file_response(p, request, "application/octet-stream")
 
 
 @router.get("/play/test-figure/meta")
@@ -1572,15 +1573,15 @@ def play_room_model(room_id: str, request: Request, tier: str = ""):
     from fastapi.responses import Response
     from app.models.world import find_location_by_room
     from app.core.location_model3d import find_building_model
-    from app.core.http_files import etag_file_response
+    from app.core.http_files import etag_file_response, glb_file_response
     loc = find_location_by_room(room_id)
     p = (find_building_model(loc.get("id", ""), room_id=room_id, tier=tier)
          if loc else None)
     if not p:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    media = ("model/gltf-binary" if p.suffix.lower() == ".glb"
-             else "application/octet-stream")
-    return etag_file_response(p, request, media)
+    if p.suffix.lower() == ".glb":
+        return glb_file_response(p, request)
+    return etag_file_response(p, request, "application/octet-stream")
 
 
 @router.get("/play/rooms/{room_id}/recipe")

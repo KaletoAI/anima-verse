@@ -23,6 +23,7 @@ Sub-tasks that run per tick (each with its own sub-frequency):
                                   chat rows past memory.chat_retention_days)
     - pose_animation_candidates — daily (SYSTEM-time storage hygiene: generated
                                   pose-animation variants left undecided 7 days)
+    - glb_delivery_cache         — daily (unused meshopt copies after 30 SYSTEM days)
     - package_tick              — registered package continuations (world tick)
 
 The tick interval is configurable in Game Admin → Settings → Server, range
@@ -365,6 +366,15 @@ def _sub_chat_retention():
         logger.debug("chat_retention sub error: %s", e)
 
 
+def _sub_glb_delivery_cache():
+    """Sweep unused delivery copies daily, under the normal world-pause gate."""
+    try:
+        from app.core.glb_delivery import sweep_cache
+        sweep_cache()
+    except Exception as e:
+        logger.debug("glb_delivery_cache sub error: %s", e)
+
+
 def _sub_pose_animation_candidates():
     """Remove generated pose-animation variants nobody chose within 7 days.
 
@@ -545,6 +555,7 @@ _SUB_TASKS: List[tuple] = [
     (_sub_variant_prune,             3600,                  "variant_prune"),
     # 86400s — the horizon counts whole SYSTEM days; a finer interval would
     # only re-scan the same rows for nothing.
+    (_sub_glb_delivery_cache,        86400,                 "glb_delivery_cache"),
     (_sub_chat_retention,            86400,                 "chat_retention"),
     (_sub_pose_animation_candidates, 86400,                 "pose_animation_candidates"),
     (_sub_day_consolidation,         600,                   "day_consolidation"),

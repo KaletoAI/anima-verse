@@ -297,8 +297,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           width_m?: number }>(`${base}/meta`)
         const fmt = (meta.format || 'glb').toLowerCase()
         if (fmt !== 'glb' && fmt !== 'gltf') throw new Error(`format ${fmt}`)
-        const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
-        const gltf = await new GLTFLoader().loadAsync(meta.url || base)
+        const { createGLTFLoader } = await import('../../lib/gltfLoader')
+        const gltf = await createGLTFLoader().loadAsync(meta.url || base)
         cache.set(key, { obj: gltf.scene, rotation: meta.rotation || {},
                          offsetY: meta.offset_y || 0,
                          offsetX: meta.offset_x || 0,
@@ -329,8 +329,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
           obj = await new FBXLoader().loadAsync('/play/test-figure/model')
         } else {
-          const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
-          obj = (await new GLTFLoader().loadAsync('/play/test-figure/model')).scene
+          const { createGLTFLoader } = await import('../../lib/gltfLoader')
+          obj = (await createGLTFLoader().loadAsync('/play/test-figure/model')).scene
         }
         // NEUTRAL example figure: strip any textures/materials to one flat
         // clay-gray material — the preview judges placement and scale, not
@@ -632,8 +632,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       cacheRef.current.set(key, 'loading')
       ;(async () => {
         try {
-          const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js')
-          const gltf = await new GLTFLoader().loadAsync(url)
+          const { createGLTFLoader } = await import('../../lib/gltfLoader')
+          const gltf = await createGLTFLoader().loadAsync(url)
           cacheRef.current.set(key, { obj: gltf.scene, rotation: {},
             offsetY: 0, widthM: 0 })
         } catch {
