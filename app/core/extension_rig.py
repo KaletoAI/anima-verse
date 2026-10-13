@@ -56,23 +56,66 @@ def extension_bone_names(character_name, profile=None):
 
 
 def extension_rig_fingerprint(groups, overrides=None):
-    """Versioned identity of applicable declarations and character overrides."""
+    """Versioned identity of applicable declarations and model overrides."""
     geometry = [{key: group[key] for key in ("id", "op", "chains", "params", "enabled", "flip") if key in group}
                 for group in groups]
     return _revision({"version": 12, "groups": sorted(geometry, key=lambda g: g["id"]),
                       "overrides": overrides or {}})
 
 
-def resolved_extension_groups(character_name, profile=None):
+def model_extension_overrides(profile, signature):
+    """Mesh switches for one model; absent signatures use declaration defaults."""
+    return ((profile.get("model3d_opts") or {}).get("extension_rig_models") or {}).get(signature) or {}
+
+
+def migrate_extension_rig_models_once():
+    """Copy retired character switches to stored full models, once by content.
+
+    Runs before the legacy model-store import, so the signature that import
+    will fill (the current outfit's) receives the switches as well. Pooled
+    characters keep their models and may be revived, so they are included.
+    """
+    import copy
+    from app.core.keyed_lock import keyed_lock
+    from app.core.model3d import get_model3d_dir
+    from app.core.model_refs import current_outfit_state, is_state_fork
+    from app.models.character import (list_available_characters, get_character_dir,
+                                      get_character_profile, save_character_profile)
+    migrated = 0
+    for name in list_available_characters(include_pooled=True):
+        with keyed_lock("character_profile", name):
+            profile = get_character_profile(name) or {}
+            opts = dict(profile.get("model3d_opts") or {})
+            if "extension_rig" not in opts:
+                continue
+            old = opts.pop("extension_rig")
+            if old:
+                models = dict(opts.get("extension_rig_models") or {})
+                directory = get_model3d_dir(name)
+                for suffix in ("*.glb", "*.fbx"):
+                    for path in directory.glob(suffix):
+                        if path.is_file() and not is_state_fork(path.stem):
+                            models[path.stem] = copy.deepcopy(old)
+                if any((get_character_dir(name) / "model").glob("model.*")):
+                    models[current_outfit_state(name)[2]] = copy.deepcopy(old)
+                opts["extension_rig_models"] = models
+            profile["model3d_opts"] = opts
+            if not save_character_profile(name, profile):
+                raise RuntimeError("Character profile could not be saved during extension rig migration")
+            migrated += 1
+    return migrated
+
+
+def resolved_extension_groups(character_name, profile=None, signature=None):
     """Return applicable groups with enabled/flip flags, including disabled ones.
 
-    Overrides live in the existing model options block. They affect mesh
+    Overrides live per signature in the model options block. They affect mesh
     operations only; package applicability and motion defaults stay independent.
     """
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
-    overrides = (profile.get("model3d_opts") or {}).get("extension_rig") or {}
+    overrides = model_extension_overrides(profile, signature)
     result = []
     for group in rig_groups_for(character_name, profile):
         override = overrides.get(group["id"]) or {}
@@ -244,13 +287,13 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
     return {"rev": _revision(inputs), "groups": groups}
 
 
-def extension_metadata(character_name, profile=None):
+def extension_metadata(character_name, profile=None, signature=None):
     """Reserved sidecar state; P0 never claims an application succeeded."""
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
     groups = rig_groups_for(character_name, profile)
-    overrides = (profile.get("model3d_opts") or {}).get("extension_rig") or {}
+    overrides = model_extension_overrides(profile, signature)
     return {"fingerprint": extension_rig_fingerprint(groups, overrides),
             "groups": [g["id"] for g in groups], "attempted": False,
             "status": "not_found" if groups else "none_applicable",

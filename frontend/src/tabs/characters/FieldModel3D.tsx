@@ -148,7 +148,7 @@ interface Model3DStatus {
   has_input?: boolean
   model?: Model3DInfo | null
   options?: { auto_generate?: boolean;
-    extension_rig?: Record<string, { enabled?: boolean; flip?: boolean }>;
+    extension_rig_models?: Record<string, Record<string, { enabled?: boolean; flip?: boolean }>>;
     extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }> }
   extension_groups?: ExtensionRigDeclaration[]
   rig_backends?: MeshBackend[]
@@ -673,17 +673,20 @@ export function FieldModel3D({ character }: { character: string }) {
   }, [enc, t, toast])
 
   const setExtensionOption = useCallback(async (id: string, key: 'enabled' | 'flip', value: boolean) => {
+    const sig = st.model?.signature
+    if (!sig) return
     setBusy(true)
     try {
-      const overrides = { ...st.options?.extension_rig,
-        [id]: { ...st.options?.extension_rig?.[id], [key]: value } }
+      const modelOverrides = st.options?.extension_rig_models?.[sig]
+      const overrides = { ...modelOverrides,
+        [id]: { ...modelOverrides?.[id], [key]: value } }
       const result = await apiPost<{ options: Model3DStatus['options'] }>(
-        `/characters/${enc}/model3d/options`, { extension_rig: overrides })
+        `/characters/${enc}/model3d/options`, { signature: sig, extension_rig: overrides })
       setSt((previous) => ({ ...previous, options: result.options }))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally { setBusy(false) }
-  }, [enc, st.options?.extension_rig, t, toast])
+  }, [enc, st.model?.signature, st.options?.extension_rig_models, t, toast])
 
   const setExtensionMotion = useCallback(async (id: string, values?: Physics, slidersOnly = false) => {
     setBusy(true)
@@ -1045,15 +1048,15 @@ export function FieldModel3D({ character }: { character: string }) {
             <div key={group.id} style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
               <span>{group.id}</span>
               <label>
-                <input type="checkbox" disabled={pending}
-                  checked={st.options?.extension_rig?.[group.id]?.enabled !== false}
+                <input type="checkbox" disabled={pending || busy || !st.model?.signature}
+                  checked={st.options?.extension_rig_models?.[st.model?.signature || '']?.[group.id]?.enabled !== false}
                   onChange={(event) => setExtensionOption(group.id, 'enabled', event.target.checked)} />
                 {' '}{t('Enabled')} <MotionPreviewHint field="enabled" />
               </label>
               {group.op === 'appendage_chain' ? (
                 <label>
-                  <input type="checkbox" disabled={pending}
-                    checked={st.options?.extension_rig?.[group.id]?.flip === true}
+                  <input type="checkbox" disabled={pending || busy || !st.model?.signature}
+                    checked={st.options?.extension_rig_models?.[st.model?.signature || '']?.[group.id]?.flip === true}
                     onChange={(event) => setExtensionOption(group.id, 'flip', event.target.checked)} />
                   {' '}{t('Flip direction')} <MotionPreviewHint field="flip" />
                 </label>
@@ -1070,7 +1073,7 @@ export function FieldModel3D({ character }: { character: string }) {
           <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}
             onClick={rebuildExtensions}>{t('Rebuild extension bones')}</button>
         ) : null}
-          <span className="ga-hint">{t('Physics changes apply immediately. Enabled and flip changes require rebuilding extension bones.')}</span>
+          <span className="ga-hint">{t('Enabled and flip are saved for this model; they take effect after rebuilding its extension bones.')}</span>
         </fieldset>
       ) : null}
       {!st.pending && st.rerig_result ? <div className="ga-hint" role="status">

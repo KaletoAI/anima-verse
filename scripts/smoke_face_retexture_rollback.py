@@ -56,8 +56,8 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         os.environ['STORAGE_DIR'] = str(Path(tmp) / 'world')
         os.environ['INSTANCE_DIR'] = str(Path(tmp) / 'instance')
-        paths.init(os.environ['STORAGE_DIR'])
-        paths.init_instance(Path(os.environ['INSTANCE_DIR']))
+        paths.init(Path(tmp) / 'world')
+        paths.init_instance(Path(tmp) / 'instance')
         from app.core import model3d, face_retexture, db
         from app.core.model_store import export_files
         from app.imagegen import routing

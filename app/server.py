@@ -464,6 +464,16 @@ async def lifespan(app: FastAPI):
     except Exception as _wse:
         logger.debug("legacy workflow-spec migration failed: %s", _wse)
 
+    # Preserve existing extension fingerprints when switches become per-model —
+    # before the legacy store import below, which processes its model with them.
+    try:
+        from app.core.extension_rig import migrate_extension_rig_models_once
+        _erm = migrate_extension_rig_models_once()
+        if _erm:
+            logger.info("Extension rig switches migrated to per-model storage: %s characters", _erm)
+    except Exception as _erme:
+        logger.warning("Extension rig per-model migration failed: %s", _erme)
+
     # Migration: the pre-per-outfit global 3D-model store (characters/<name>/
     # model/) lost its routes; import its GLB/FBX into the current outfit's v2
     # slot and drop the legacy folder, so the banned serving fallback can go.

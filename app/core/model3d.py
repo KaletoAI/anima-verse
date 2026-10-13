@@ -286,7 +286,7 @@ def get_model3d_options(character_name: str) -> Dict[str, Any]:
             # Auto-generate the mesh on the CHEAPEST backend as soon as a
             # fresh T-pose render of a new outfit combination succeeds.
             "auto_generate": bool(raw.get("auto_generate")),
-            "extension_rig": dict(raw.get("extension_rig") or {}),
+            "extension_rig_models": dict(raw.get("extension_rig_models") or {}),
             "extension_motion": dict(raw.get("extension_motion") or {})}
 
 
@@ -307,17 +307,26 @@ def set_model3d_options(character_name: str,
             else:
                 opts.pop("auto_generate", None)
         if "extension_rig" in updates:
+            from app.core.face_retexture import safe_signature
+            signature = safe_signature(updates.get("signature"))
+            if find_model3d(character_name, signature) is None:
+                raise ValueError("Stored full model not found for signature")
             overrides = updates["extension_rig"]
             if not isinstance(overrides, dict):
                 raise ValueError("extension_rig must be a group override map")
             cleaned = {}
             for group_id, values in overrides.items():
-                if not isinstance(group_id, str) or not isinstance(values, dict):
+                if not isinstance(group_id, str) or not group_id or not isinstance(values, dict):
                     raise ValueError("invalid extension group override")
                 if set(values) - {"enabled", "flip"} or any(type(v) is not bool for v in values.values()):
                     raise ValueError("extension overrides accept enabled and flip booleans only")
                 cleaned[group_id] = dict(values)
-            opts["extension_rig"] = cleaned
+            models = dict(opts.get("extension_rig_models") or {})
+            if cleaned:
+                models[signature] = cleaned
+            else:
+                models.pop(signature, None)
+            opts["extension_rig_models"] = models
         if "extension_motion" in updates:
             from app.core.extension_rig import validate_motion_overrides
             overrides = updates["extension_motion"]
@@ -730,7 +739,7 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         # Which resolutions exist for THIS file. "full" is always there (it is
         # the file itself); "low" only once it has been built.
         from app.core.extension_rig import extension_metadata
-        info.setdefault("extension_rig", extension_metadata(character_name, profile=profile))
+        info.setdefault("extension_rig", extension_metadata(character_name, profile=profile, signature=path.stem))
         info["model_rev"] = model_revision(path)
         info["tiers"] = available_tiers(path)
         low = tier_variant(path, LOW_TIER)
@@ -909,18 +918,18 @@ def _auto_extension_rig(character_name: str, path: Path,
     import tempfile
     from app.blender import refine
     from app.core.extension_rig import (rig_groups_for, resolved_extension_groups,
-                                       extension_rig_fingerprint)
+                                       extension_rig_fingerprint, model_extension_overrides)
     from app.core.model_validate import parse_glb, validate_glb
     from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
     from app.models.character import get_character_profile
     profile = get_character_profile(character_name) or {}
     declarations = rig_groups_for(character_name, profile=profile)
-    overrides = ((profile.get("model3d_opts") or {}).get("extension_rig") or {})
+    overrides = model_extension_overrides(profile, path.stem)
     fingerprint = extension_rig_fingerprint(declarations, overrides)
     previous = meta.get("extension_rig") or {}
     if previous.get("attempted") and previous.get("status") in ("applied", "not_found", "none_applicable") and previous.get("fingerprint") == fingerprint and (not force or previous.get("status") == "applied"):
         return {"ok": previous.get("status") != "failed", "applied": False, "noop": True, "extension_rig": previous}
-    groups = [g for g in resolved_extension_groups(character_name, profile=profile) if g["enabled"]]
+    groups = [g for g in resolved_extension_groups(character_name, profile=profile, signature=path.stem) if g["enabled"]]
     state = {"fingerprint": fingerprint, "groups": [g["id"] for g in declarations],
              "status": "not_found" if groups else "none_applicable",
              "reason": "", "has_applied": previous.get("has_applied", previous.get("status") == "applied"), "attempted": True, "attempted_at": utc_now_iso(), "metrics": {}, "per_tier": {}}
@@ -1122,7 +1131,7 @@ def _save_uploaded_model(character_name: str, original_filename: str,
     _auto_extension_rig(character_name, target, meta)
     _attach_measurement(meta, target)
     from app.core.extension_rig import extension_metadata
-    meta.setdefault("extension_rig", extension_metadata(character_name))
+    meta.setdefault("extension_rig", extension_metadata(character_name, signature=target.stem))
     _publish_sidecar(target, meta)
     request_lod(character_name, target)
     logger.info("Model3D %s: Upload %s (%d bytes, Kombination %s)",
@@ -1261,7 +1270,7 @@ def measure_model(character_name: str, signature: Optional[str] = None, *,
         from app.blender.refine import unavailable_reason
         return {"ok": False, "error": unavailable_reason() or "measurement failed"}
     from app.core.extension_rig import extension_metadata
-    meta.setdefault("extension_rig", extension_metadata(character_name))
+    meta.setdefault("extension_rig", extension_metadata(character_name, signature=path.stem))
     try:
         _publish_sidecar(path, meta)
     except OSError as e:
@@ -1321,7 +1330,7 @@ def diagnose_model(character_name: str, signature: Optional[str] = None, *,
     }
     meta["diagnosis"] = diagnosis
     from app.core.extension_rig import extension_metadata
-    meta.setdefault("extension_rig", extension_metadata(character_name))
+    meta.setdefault("extension_rig", extension_metadata(character_name, signature=path.stem))
     try:
         _publish_sidecar(path, meta)
     except OSError as e:
@@ -1367,7 +1376,7 @@ def retexture_model(character_name: str,
     if res.get("applied"):
         _attach_measurement(meta, path)
     from app.core.extension_rig import extension_metadata
-    meta.setdefault("extension_rig", extension_metadata(character_name))
+    meta.setdefault("extension_rig", extension_metadata(character_name, signature=path.stem))
     try:
         _publish_sidecar(path, meta)
     except OSError as e:
@@ -1442,7 +1451,7 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
         if (meta.get("extension_rig") or {}).get("status") == "applied":
             from app.core.extension_rig import resolved_extension_groups
             measured = runner.run("extension_bones", inputs={"model": next(iter(res["outputs"].values()))},
-                                  params={"groups": resolved_extension_groups(character_name), "metrics_only": True})
+                                  params={"groups": resolved_extension_groups(character_name, signature=path.stem), "metrics_only": True})
             if not measured.get("ok") or (measured.get("data") or {}).get("status") != "applied":
                 return {"ok": False, "error": measured.get("error") or
                         (measured.get("data") or {}).get("reason") or "Low tier metrics failed"}
@@ -1467,7 +1476,7 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
         "character": character_name,
     }
     from app.core.extension_rig import extension_metadata
-    side["extension_rig"] = dict(meta.get("extension_rig") or extension_metadata(character_name))
+    side["extension_rig"] = dict(meta.get("extension_rig") or extension_metadata(character_name, signature=path.stem))
     side["extension_rig"].pop("per_tier", None)
     side["extension_rig"]["inherited"] = True
     side["extension_rig"]["metrics"] = {
@@ -1504,7 +1513,7 @@ def set_model3d_rig(character_name: str, rig: str, *,
         meta = {}
     meta["rig"] = rig
     from app.core.extension_rig import extension_metadata
-    meta.setdefault("extension_rig", extension_metadata(character_name))
+    meta.setdefault("extension_rig", extension_metadata(character_name, signature=path.stem))
     _publish_sidecar(path, meta)
     return meta
 
@@ -1833,7 +1842,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         # build costs under a second against the minutes this generation just
         # took.
         from app.core.extension_rig import extension_metadata
-        meta.setdefault("extension_rig", extension_metadata(character_name))
+        meta.setdefault("extension_rig", extension_metadata(character_name, signature=path.stem))
         _publish_sidecar(path, meta)
         request_lod(character_name, path)
         logger.info("Model3D %s: %s (%d bytes, Kombination %s)", character_name,
@@ -2115,7 +2124,7 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
             _auto_extension_rig(character_name, path, meta)
             _attach_measurement(meta, path)
             from app.core.extension_rig import extension_metadata
-            meta.setdefault("extension_rig", extension_metadata(character_name))
+            meta.setdefault("extension_rig", extension_metadata(character_name, signature=path.stem))
             _publish_sidecar(path, meta)
             request_lod(character_name, path)
             logger.info("Model3D %s: job %s fetched as %s (%d bytes, "

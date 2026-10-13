@@ -27,11 +27,13 @@ class ExtensionRigRebuild(ImprovementType):
 
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         import json
-        from app.core.extension_rig import extension_rig_fingerprint, rig_groups_for
-        from app.core.model3d import get_model3d_dir, get_model3d_options
+        from app.core.extension_rig import (extension_rig_fingerprint, rig_groups_for,
+                                           model_extension_overrides)
+        from app.core.model3d import get_model3d_dir
+        from app.models.character import get_character_profile
         name = params["character"]
-        fingerprint = extension_rig_fingerprint(
-            rig_groups_for(name), get_model3d_options(name).get("extension_rig"))
+        profile = get_character_profile(name) or {}
+        declarations = rig_groups_for(name, profile=profile)
         def read_meta(path):
             try:
                 value = json.loads(path.with_suffix(".json").read_text())
@@ -43,6 +45,8 @@ class ExtensionRigRebuild(ImprovementType):
         for path in get_model3d_dir(name).glob("*.glb"):
             if is_state_fork(path.stem):
                 continue
+            fingerprint = extension_rig_fingerprint(
+                declarations, model_extension_overrides(profile, path.stem))
             meta = read_meta(path)
             state = meta.get("extension_rig") or {}
             if not state.get("attempted") or state.get("fingerprint") != fingerprint or state.get("status") not in (

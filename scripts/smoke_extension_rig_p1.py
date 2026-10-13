@@ -1002,12 +1002,12 @@ def main():
         from app.core.extension_rig import extension_metadata
         from app.core.improvements.base import Candidate
         from app.core.improvements.types.extension_rig_rebuild import ExtensionRigRebuild
-        fingerprint=extension_metadata('demo')['fingerprint']
-        model3d.set_model3d_options('demo',{'extension_rig':{'example_chain':{'flip':True}}})
-        check(model3d.get_model3d_options('demo')['extension_rig']['example_chain']['flip'] and extension_metadata('demo')['fingerprint']!=fingerprint,'profile flip persists and changes fingerprint')
+        fingerprint=extension_metadata('demo', signature='example')['fingerprint']
+        model3d.set_model3d_options('demo',{'signature':'example','extension_rig':{'example_chain':{'flip':True}}})
+        check(model3d.get_model3d_options('demo')['extension_rig_models']['example']['example_chain']['flip'] and extension_metadata('demo', signature='example')['fingerprint']!=fingerprint,'profile flip persists and changes fingerprint')
         disabled={g['id']:{'enabled':False} for g in groups}
-        model3d.set_model3d_options('demo',{'extension_rig':disabled})
-        check(model3d.get_model3d_options('demo')['extension_rig']==disabled and extension_metadata('demo')['fingerprint']!=fingerprint,'disabled overrides persist and change fingerprint')
+        model3d.set_model3d_options('demo',{'signature':'example','extension_rig':disabled})
+        check(model3d.get_model3d_options('demo')['extension_rig_models']['example']==disabled and extension_metadata('demo', signature='example')['fingerprint']!=fingerprint,'disabled overrides persist and change fingerprint')
         low_before=low.read_bytes()
         with patch.object(model3d,'build_lod',return_value={'ok':False,'error':'disabled tier failure'}):
             reset_failed=model3d.rebuild_extension_rig('demo','example')
@@ -1027,7 +1027,7 @@ def main():
         check(improvement.validate({'character': 'demo'}) == {'character': 'demo'},
               'temporary NPC Improvements validation is template-independent')
 
-        model3d.set_model3d_options('demo',{'extension_rig':{}})
+        model3d.set_model3d_options('demo',{'signature':'example','extension_rig':{}})
         restored=model3d.rebuild_extension_rig('demo','example')
         check(restored['ok'] and full.read_bytes()==original and clean.read_bytes()==source,'restoring overrides reapplies from clean source without attenuation')
         fingerprint=json.loads(full.with_suffix('.json').read_text())['extension_rig']['fingerprint']
