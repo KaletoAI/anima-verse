@@ -45,7 +45,7 @@ def run(job):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
     scene.render.fps = 30
-    bpy.ops.import_scene.fbx(filepath=job["inputs"]["clip"], automatic_bone_orientation=False)
+    bpy.ops.wm.fbx_import(filepath=job["inputs"]["clip"])
     arms = [obj for obj in scene.objects if obj.type == "ARMATURE"]
     if len(arms) != 1:
         raise ValueError("expected one armature")

@@ -202,7 +202,7 @@ def _ry(theta: float) -> Matrix:
 
 def _load_rig(path: str):
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.fbx(filepath=path, global_scale=1.0)
+    bpy.ops.wm.fbx_import(filepath=path, global_scale=1.0)
     arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
     for o in list(bpy.data.objects):
         if o is not arm:

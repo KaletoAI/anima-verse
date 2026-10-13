@@ -800,20 +800,43 @@ def _synth_hand_targets(P: dict, nodes: dict, palm: dict = None) -> None:
 class _Source:
     """ONE imported FBX, sampled take by take.
 
-    Importing is what a pack file costs — measured on a 87 MB file with 121
-    takes: 6.5 s and 850 MB for the import, 0.01 s to sample one 30-frame take
-    off it. So the file is opened ONCE and every take the job needs is read
-    from that one scene; opening per take would turn a scene of five roles
-    into half a minute of re-reading the same bytes.
+    Open the file once and sample every requested take from that scene.
+    With one animated layer per take, the C++ importer creates one action
+    whose slots bind the animated objects. Selection assigns action and slot.
 
-    Only one FBX can be open at a time (the importer resets the scene), so an
-    instance is valid until the next one is created. :func:`run` respects that
-    by grouping its entries per file.
+    Creating a source resets the scene, so an instance is valid until the
+    next one is created. :func:`run` groups its entries per file accordingly.
     """
 
     def __init__(self, path: str, family: str, palm: dict = None):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.import_scene.fbx(filepath=path, global_scale=1.0)
+        initial = []
+
+        def suspend_actions(scene, depsgraph):
+            # The import operator evaluates its first take before returning.
+            # Detach actions before that evaluation so the imported static
+            # channels survive; clearing actions afterwards is too late.
+            for owner in bpy.data.objects:
+                anim = owner.animation_data
+                if anim and anim.action and anim.action_slot:
+                    initial.append((owner, anim.action, anim.action_slot))
+                    anim.action = None
+
+        bpy.app.handlers.depsgraph_update_pre.append(suspend_actions)
+        try:
+            bpy.ops.wm.fbx_import(filepath=path, global_scale=1.0)
+        finally:
+            bpy.app.handlers.depsgraph_update_pre.remove(suspend_actions)
+        self.static_transforms = [
+            (owner, owner.matrix_basis.copy(),
+             [(pb, pb.matrix_basis.copy()) for pb in owner.pose.bones]
+             if owner.type == "ARMATURE" else [])
+            for owner, _, _ in initial]
+        self.initial_assignments = initial
+        self.owners = [(owner, slot.identifier) for owner, _, slot in initial]
+        for owner, action, slot in initial:
+            owner.animation_data.action = action
+            owner.animation_data.action_slot = slot
         scene_nodes = _scene_nodes()
         names = set(scene_nodes)
         if family == "auto":
@@ -833,45 +856,56 @@ class _Source:
                 f"{family}: essential bones missing in the file: {missing}")
         scene = bpy.context.scene
         self.fps = float(scene.render.fps) / float(scene.render.fps_base or 1.0)
-        # File order — the n-th action is the n-th take of the file. Blender
-        # creates one per animation stack as it reads them, and session_uid
-        # counts up in creation order. The NAME cannot be used: it is
-        # "<object>|<stack>|<layer>" capped at 63 characters, so a long take
-        # name arrives here truncated.
+        # With ONE animated layer per stack, the C++ importer creates one
+        # action per take, in file order, with one slot per animated object.
+        # Multiple animated layers create multiple actions and are unsupported.
+        # Creation order is independent of names.
         self.actions = sorted(bpy.data.actions, key=lambda a: a.session_uid)
 
-    def select(self, take, take_count=0, take_name=""):
-        """Makes take number ``take`` (an index into the file's stacks) the
-        active animation. ``None`` keeps whatever the importer assigned, which
-        is the first stack — right for a single-take file and for nothing else.
+    def _restore_static(self):
+        """Reset object channels and every bone, including absent take tracks."""
+        for owner, basis, bones in self.static_transforms:
+            owner.animation_data.action = None
+            owner.matrix_basis = basis
+            for pb, bone_basis in bones:
+                pb.matrix_basis = bone_basis
 
-        ``take_count`` and ``take_name`` are the server's reading of the same
-        file, checked against Blender's. They disagree when the file has more
-        than one animated object (then the actions are stacks TIMES objects and
-        the index means something else) — a mismatch that would otherwise
-        surface as a clip with the wrong motion in it.
+    def select(self, take, take_count=0, take_name=""):
+        """Activate a file-order take and bind each object to its own slot.
+
+        ``None`` restores the importer's initial assignment for a single-take
+        file. ``take_count`` and ``take_name`` validate the server's stack
+        listing against the imported actions, independently of object count.
         """
         if take is None:
+            self._restore_static()
+            for owner, action, slot in self.initial_assignments:
+                owner.animation_data.action = action
+                owner.animation_data.action_slot = slot
             return
         if take_count and len(self.actions) != take_count:
             raise ValueError(
-                f"take {take}: the file lists {take_count} animations but "
-                f"Blender made {len(self.actions)} actions — the index is not "
-                "a take number here (several animated objects?)")
+                f"take {take}: the file lists {take_count} takes but "
+                f"Blender imported {len(self.actions)} take actions — "
+                "multi-layer takes are unsupported; "
+                "the file order and the listing disagree")
         if not 0 <= take < len(self.actions):
             raise ValueError(
-                f"take {take} out of range: the file has {len(self.actions)}")
+                f"take {take} out of range: the file has {len(self.actions)} takes")
         action = self.actions[take]
-        # A prefix long enough to catch a wrong index, short enough to survive
-        # the 63-character cap in front of it.
+        # Blender 5 allows 255-byte datablock names. A short prefix also
+        # tolerates truncation of longer source names and duplicate suffixes.
         head = str(take_name or "")[:16]
-        if head and head not in action.name:
+        if head and not action.name.startswith(head):
             raise ValueError(
-                f"take {take} is {action.name!r}, which does not carry "
-                f"{head!r} — the file order and the listing disagree")
-        for o in bpy.data.objects:
-            if o.animation_data:
-                o.animation_data.action = action
+                f"take {take}: the imported action does not start with the "
+                "listed take name — the file order and the listing disagree")
+        self._restore_static()
+        for owner, identifier in self.owners:
+            slot = action.slots.get(identifier)
+            owner.animation_data.action = action if slot else None
+            if slot is not None:
+                owner.animation_data.action_slot = slot
 
     def sample(self):
         """The active take as ``(fps, frame_range, positions_by_frame,

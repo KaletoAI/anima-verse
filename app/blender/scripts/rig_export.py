@@ -136,7 +136,7 @@ def _verify_written(out: Path, heads: dict) -> dict:
     import/export round trip, not in the scene.
     """
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.fbx(filepath=str(out), global_scale=1.0)
+    bpy.ops.wm.fbx_import(filepath=str(out), global_scale=1.0)
     arm = next((o for o in bpy.data.objects if o.type == "ARMATURE"), None)
     if arm is None:
         raise ValueError("the written file reads back without an armature")
@@ -167,7 +167,7 @@ def run(job):
     out = Path(job["out_dir"]) / f"{name}.fbx"
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.fbx(filepath=str(src), global_scale=1.0)
+    bpy.ops.wm.fbx_import(filepath=str(src), global_scale=1.0)
     arm = next((o for o in bpy.data.objects if o.type == "ARMATURE"), None)
     if arm is None:
         raise ValueError("the source FBX carries no armature")

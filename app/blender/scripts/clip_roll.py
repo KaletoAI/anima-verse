@@ -207,8 +207,8 @@ def _import_armature(path: str, fps: int, anim: bool = True):
     brought (other new objects are dropped)."""
     before = set(bpy.data.objects)
     bpy.context.scene.render.fps = fps
-    bpy.ops.import_scene.fbx(filepath=str(path), global_scale=1.0,
-                             use_anim=anim, anim_offset=0.0)
+    bpy.ops.wm.fbx_import(filepath=str(path), global_scale=1.0,
+                          use_anim=anim, anim_offset=0.0)
     new = [o for o in bpy.data.objects if o not in before]
     arms = [o for o in new if o.type == "ARMATURE"]
     if len(arms) != 1:

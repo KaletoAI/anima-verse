@@ -133,7 +133,7 @@ def run(job):
     params = dict(job.get("params") or {})
     engine = params.get("engine", "BLENDER_WORKBENCH")
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.fbx(filepath=job["inputs"]["clip"], global_scale=1.0)
+    bpy.ops.wm.fbx_import(filepath=job["inputs"]["clip"], global_scale=1.0)
     arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
     frames = [int(f) for f in params["frames"]]
     _mannequin(arm, engine)

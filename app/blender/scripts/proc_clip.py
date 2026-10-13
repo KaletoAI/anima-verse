@@ -82,8 +82,8 @@ def _measure(fbx: str, out_dir: Path, fps: int) -> str:
     import bpy
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.context.scene.render.fps = fps
-    bpy.ops.import_scene.fbx(filepath=fbx, global_scale=1.0,
-                             use_anim=True, anim_offset=0.0)
+    bpy.ops.wm.fbx_import(filepath=fbx, global_scale=1.0,
+                          use_anim=True, anim_offset=0.0)
     arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
     act = arm.animation_data.action
     tracks = {fc.data_path.split('"')[1] for fc in curves(arm)
@@ -127,8 +127,8 @@ def _finish(sidecar, outputs, kind, fps, lift_cm):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         scene = bpy.context.scene
         scene.render.fps = fps
-        bpy.ops.import_scene.fbx(filepath=fbx, global_scale=1.0,
-                                 use_anim=True, anim_offset=0.0)
+        bpy.ops.wm.fbx_import(filepath=fbx, global_scale=1.0,
+                              use_anim=True, anim_offset=0.0)
         arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
         f0, f1 = arm.animation_data.action.frame_range
         scene.render.fps = fps

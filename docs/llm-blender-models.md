@@ -342,6 +342,32 @@ Blender builds" shape: geometry repair and measurement (`normalize.py`,
 exterior render (`exterior.py`). `app/blender/refine.py` is the façade for the
 character/prop refinement; it has no roof path.
 
+The clip pipeline imports FBX with Blender's C++ ufbx importer,
+`bpy.ops.wm.fbx_import` (Blender 5.2 or newer). A take with one animated layer
+becomes one action with one slot per animated object. Multiple animated
+layers produce multiple actions per take and are unsupported; the take-count
+check rejects a mismatch. Selecting a take restores imported static object
+transforms and pose-bone bases before binding the action and the object's
+slot, so missing tracks cannot retain a previous take's transforms. A temporary
+dependency-graph callback clears actions before the importer's first evaluation
+to capture those static values. The shared mesh import in `_common.import_model`
+continues to use the legacy Python importer: the tested mesh fixtures differ
+in image datablocks and material extensions with the C++ importer, and
+normalized mesh normals differ by up to 0.09.
+
+`scripts/smoke_fbx_importer_parity.py` compares clips with the pinned revision
+`a98f9ed543e0493e55790104ad2533d90e0bb2fd`. The migration is accepted with
+rest-coordinate tolerance `1e-3` cm and pose-matrix component tolerance
+`1e-3` (translation in cm, rotation part unitless, about 0.057 degrees).
+Float32 spacing at 100–200 cm is 7.6e-6–1.5e-5 cm; bare imports already
+differ by about 1.2e-4, and a few chained matrix products accumulate rounding.
+The bounds cover that noise while rejecting centimetre or several-degree
+behaviour changes; the synthetic two-take check catches a wrong mapping
+with a 30 cm error. A second synthetic case animates an armature and its parent
+in A, then only the armature in B; B after A must equal B alone within `1e-3`,
+with the parent and an omitted finger at their hand-derived static transforms.
+Bone sets, frame ranges, and fps must match exactly.
+
 `exterior.py` is worth knowing about here: it renders a building exterior from a
 stated vertex list and files the result as a `building-front` gallery image, so
 the ordinary image→mesh route can take it from there. Its button sits directly

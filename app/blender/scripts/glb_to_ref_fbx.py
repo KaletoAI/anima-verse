@@ -27,7 +27,7 @@ def _strip(name):
 
 def _reference_bones(path):
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.import_scene.fbx(filepath=path)
+    bpy.ops.wm.fbx_import(filepath=path)
     arms = [o for o in bpy.context.scene.objects if o.type == "ARMATURE"]
     if len(arms) != 1:
         raise ValueError(f"reference rig: expected one armature, found {len(arms)}")
@@ -48,7 +48,7 @@ def run(job):
     if fmt == "glb":
         bpy.ops.import_scene.gltf(filepath=src)
     else:
-        bpy.ops.import_scene.fbx(filepath=src)
+        bpy.ops.wm.fbx_import(filepath=src)
     arms = [o for o in bpy.context.scene.objects if o.type == "ARMATURE"]
     if len(arms) != 1:
         raise ValueError(f"expected one armature, found {len(arms)}")
