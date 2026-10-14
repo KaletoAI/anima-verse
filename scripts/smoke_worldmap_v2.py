@@ -388,6 +388,7 @@ def main() -> int:
     # legacy row is the only way such a polygon can exist.
     import json as _json
     from app.core.db import transaction as _transaction
+    before_fixture = terrain.terrain_sig()
     with _transaction() as _conn:
         _conn.execute(
             "INSERT INTO terrain_areas (id, kind, polygon, z_order, meta, "
@@ -395,6 +396,8 @@ def main() -> int:
             ("ta_junk", "water",
              _json.dumps([[160, 60], "nope", [None, 5]]), 0, "{}",
              "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"))
+    terrain._bump_terrain_generation()
+    assert before_fixture != terrain.terrain_sig(), "raw area fixture invalidates terrain"
     junk = build_worldmap_payload("demo_avatar", show_all=True)
     check("junk vertices skipped, the valid one still counts",
           junk.get("world_bounds"),

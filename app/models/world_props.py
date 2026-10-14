@@ -34,10 +34,33 @@ import hashlib
 import json
 import math
 import secrets
+import threading
+from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.db import get_connection, transaction
 from app.core.timeutils import utc_now_iso
+
+
+_generation_lock = threading.Lock()
+_generation = 0
+
+
+def world_props_generation() -> int:
+    """Return the generation of committed authoring writes."""
+    with _generation_lock:
+        return _generation
+
+
+def _bump_world_props_generation() -> None:
+    global _generation
+    with _generation_lock:
+        _generation += 1
+
+
+_payload_lock = threading.Lock()
+_payload_cache = (None, [], "")
+
 
 #: World coordinates a placement may carry, in metres — the same box the
 #: painted areas live in (``terrain.MAX_COORD``).
@@ -233,23 +256,24 @@ def save_world_prop(raw: Any, must_exist: bool = False) -> Dict[str, Any]:
             if not cur.rowcount:
                 from app.core.bulk_edit import GoneError
                 raise GoneError("world prop")
-            return entry
-        row = conn.execute("SELECT 1 FROM world_props WHERE id=?",
-                           (entry["id"],)).fetchone()
-        if row is None:
-            n = conn.execute("SELECT COUNT(*) FROM world_props").fetchone()[0]
-            if int(n) >= MAX_WORLD_PROPS:
-                raise ValueError(
-                    f"at most {MAX_WORLD_PROPS} world props per world")
-        conn.execute(
-            "INSERT INTO world_props (id, prop_id, x, z, yaw_deg, offset_y, "
-            "variant, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET prop_id=excluded.prop_id, "
-            "x=excluded.x, z=excluded.z, yaw_deg=excluded.yaw_deg, "
-            "offset_y=excluded.offset_y, variant=excluded.variant, "
-            "updated_at=excluded.updated_at",
-            (entry["id"], entry["prop_id"], entry["x"], entry["z"],
-             entry["yaw_deg"], entry["offset_y"], entry["variant"], now, now))
+        else:
+            row = conn.execute("SELECT 1 FROM world_props WHERE id=?",
+                               (entry["id"],)).fetchone()
+            if row is None:
+                n = conn.execute("SELECT COUNT(*) FROM world_props").fetchone()[0]
+                if int(n) >= MAX_WORLD_PROPS:
+                    raise ValueError(
+                        f"at most {MAX_WORLD_PROPS} world props per world")
+            conn.execute(
+                "INSERT INTO world_props (id, prop_id, x, z, yaw_deg, offset_y, "
+                "variant, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET prop_id=excluded.prop_id, "
+                "x=excluded.x, z=excluded.z, yaw_deg=excluded.yaw_deg, "
+                "offset_y=excluded.offset_y, variant=excluded.variant, "
+                "updated_at=excluded.updated_at",
+                (entry["id"], entry["prop_id"], entry["x"], entry["z"],
+                 entry["yaw_deg"], entry["offset_y"], entry["variant"], now, now))
+    _bump_world_props_generation()
     return entry
 
 
@@ -258,7 +282,10 @@ def delete_world_prop(placement_id: str) -> bool:
     with transaction() as conn:
         cur = conn.execute("DELETE FROM world_props WHERE id=?",
                            ((placement_id or "").strip(),))
-        return cur.rowcount > 0
+        deleted = cur.rowcount > 0
+    if deleted:
+        _bump_world_props_generation()
+    return deleted
 
 
 def world_prop_stamps() -> Dict[str, str]:
@@ -279,8 +306,8 @@ def save_world_props_bulk(upserts: Any, deletes: Any) -> Dict[str, Any]:
     """Write a whole placement edit — many props, one transaction.
 
     The batch half of :func:`save_world_prop` / :func:`delete_world_prop`.
-    Nothing is invalidated here (a placement changes no relief), but the CAP
-    is: it is checked against the world the batch LEAVES BEHIND, so a batch
+    The finished payload is invalidated once after the transaction. The cap
+    is checked against the world the batch LEAVES BEHIND, so a batch
     that deletes ten props and places ten new ones fits even at the ceiling —
     which the per-object route could never do, since its deletes and its
     creates were separate requests in an order nobody controlled.
@@ -321,6 +348,8 @@ def save_world_props_bulk(upserts: Any, deletes: Any) -> Dict[str, Any]:
                 (prop["id"], prop["prop_id"], prop["x"], prop["z"],
                  prop["yaw_deg"], prop["offset_y"], prop["variant"], now, now))
             saved.append({"temp_id": entry["temp_id"], "world_prop": prop})
+    if saved or delete_ids:
+        _bump_world_props_generation()
     return {"saved": saved, "deleted": delete_ids, "rejected": rejected}
 
 
@@ -334,7 +363,10 @@ def delete_world_props_of(prop_id: str) -> int:
         return 0
     with transaction() as conn:
         cur = conn.execute("DELETE FROM world_props WHERE prop_id=?", (pid,))
-        return int(cur.rowcount or 0)
+        deleted = int(cur.rowcount or 0)
+    if deleted:
+        _bump_world_props_generation()
+    return deleted
 
 
 # ── Payload ─────────────────────────────────────────────────────────────
@@ -401,7 +433,32 @@ def _prop_facts(prop_id: str) -> Dict[str, Any]:
     }
 
 
+def _cached_payload():
+    global _payload_cache
+    from app.core.db import get_db_path
+    from app.core.scene_recipe import prop_lib_token, season_token
+    key = (str(get_db_path()), world_props_generation(), prop_lib_token(), season_token())
+    with _payload_lock:
+        if _payload_cache[0] != key:
+            rows = _build_payload_rows()
+            basis = json.dumps(rows, sort_keys=True, default=str)
+            sig = hashlib.md5(basis.encode()).hexdigest()[:10]
+            _payload_cache = (key, rows, sig)
+        return _payload_cache
+
+
+def payload_snapshot() -> Tuple[List[Dict[str, Any]], str]:
+    """Copy the finished rows and their matching cached signature together."""
+    _, rows, sig = _cached_payload()
+    return deepcopy(rows), sig
+
+
 def payload_rows() -> List[Dict[str, Any]]:
+    """Return independent copies of the cached finished placements."""
+    return payload_snapshot()[0]
+
+
+def _build_payload_rows() -> List[Dict[str, Any]]:
     """The ``world_props`` block of the worldmap payload (§ A9a) — one row per
     RENDERABLE placement, unfiltered by fog or knowledge (deco is always
     visible).
@@ -566,6 +623,8 @@ def world_props_sig(rows: Optional[List[Dict[str, Any]]] = None) -> str:
     carry the derived half too: a low mesh generated in the background changes
     no DB row and still has to reach a running client.
     """
-    basis = json.dumps(payload_rows() if rows is None else rows,
+    if rows is None:
+        return _cached_payload()[2]
+    basis = json.dumps(rows,
                        sort_keys=True, default=str)
     return hashlib.md5(basis.encode()).hexdigest()[:10]

@@ -41,9 +41,11 @@ generated tomorrow must be nameable today (the admin tab marks a value the
 library does not hold, the way the LoRA library marks a missing LoRA).
 """
 
+from copy import deepcopy
 import json
 import math
 import re
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -170,7 +172,47 @@ def _shared_path() -> Path:
     return get_shared_dir() / "terrain" / "types.json"
 
 
+_generation_lock = threading.Lock()
+_generation = 0
+
+
+def types_generation() -> int:
+    """Return the generation of committed authoring writes."""
+    with _generation_lock:
+        return _generation
+
+
+def _bump_types_generation() -> None:
+    global _generation
+    with _generation_lock:
+        _generation += 1
+
+
+_catalog_lock = threading.RLock()
+_shared_cache = (None, {})
+_catalog_cache = (None, {})
+
+
+def types_json_stat():
+    """Seed identity, including replacement and same-size in-place edits."""
+    path = _shared_path()
+    try:
+        st = path.stat()
+        return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    except OSError:
+        return None
+
+
 def _shared_types() -> Dict[str, Dict[str, Any]]:
+    global _shared_cache
+    key = types_json_stat()
+    with _catalog_lock:
+        if _shared_cache[0] != key:
+            _shared_cache = (key, _read_shared_types())
+        return deepcopy(_shared_cache[1])
+
+
+def _read_shared_types() -> Dict[str, Dict[str, Any]]:
     try:
         raw = json.loads(_shared_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -481,9 +523,15 @@ def _world_types() -> Dict[str, Dict[str, Any]]:
 
 def effective_catalog() -> Dict[str, Dict[str, Any]]:
     """shared overlaid by world rows — override-replace per kind."""
-    catalog = _shared_types()
-    catalog.update(_world_types())
-    return catalog
+    global _catalog_cache
+    from app.core.db import get_db_path
+    key = (str(get_db_path()), types_generation(), types_json_stat())
+    with _catalog_lock:
+        if _catalog_cache[0] != key:
+            shared = _shared_types()
+            shared.update(_world_types())
+            _catalog_cache = (key, shared)
+        return deepcopy(_catalog_cache[1])
 
 
 def sources() -> Dict[str, str]:
@@ -536,6 +584,7 @@ def save_world_type(raw: Any) -> Dict[str, Any]:
              1 if entry["passable"] else 0, entry["speed_factor"],
              json.dumps(entry["meta"], ensure_ascii=False),
              entry.get("surface", ""), utc_now_iso()))
+    _bump_types_generation()
     _note_ground_write()
     return entry
 
@@ -548,6 +597,7 @@ def delete_world_type(kind: str) -> bool:
                            ((kind or "").strip(),))
         deleted = cur.rowcount > 0
     if deleted:
+        _bump_types_generation()
         # The SHARED entry becomes effective again — including its water
         # defaults, or its lack of them. Dropping an override is a ground
         # change like any other.

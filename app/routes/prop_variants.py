@@ -40,6 +40,8 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Request,
 from app.core.auth_dependency import require_admin
 from app.core.log import get_logger
 
+from app.core.scene_recipe import invalidate_prop_lib_token
+
 logger = get_logger("prop_variants")
 
 router = APIRouter(prefix="/world", tags=["world"])
@@ -135,7 +137,9 @@ async def prop_variant_add(prop_id: str, request: Request) -> Dict[str, Any]:
         raise HTTPException(
             status_code=409,
             detail=f"At most {variant_max()} active variants per prop")
-    return {"status": "ok", "index": index}
+    result_payload = {"status": "ok", "index": index}
+    invalidate_prop_lib_token()
+    return result_payload
 
 
 @router.post("/props/{prop_id}/variants/picture")
@@ -169,8 +173,10 @@ async def prop_variant_add_picture(
                                     if "label" in body else None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
-    return {"status": "ok", "index": index,
+    result_payload = {"status": "ok", "index": index,
             "variant": list_variants(prop_id)[index]}
+    invalidate_prop_lib_token()
+    return result_payload
 
 
 @router.post("/props/{prop_id}/variants/{index}/slot-values")
@@ -207,8 +213,10 @@ async def prop_variant_slot_values(
     if not stored:
         raise HTTPException(status_code=404, detail="Variant not found")
     entry = list_variants(prop_id)[index]
-    return {"status": "ok", "index": index,
+    result_payload = {"status": "ok", "index": index,
             "slot_values": entry["slot_values"], "label": entry["label"]}
+    invalidate_prop_lib_token()
+    return result_payload
 
 
 @router.post("/props/{prop_id}/variants/{index}/area-defaults")
@@ -233,8 +241,10 @@ async def prop_variant_area_defaults(
         raise HTTPException(status_code=400, detail=str(exc)) from None
     if entry is None:
         raise HTTPException(status_code=404, detail="Variant not found")
-    return {"status": "ok", "index": index,
+    result_payload = {"status": "ok", "index": index,
             "area_defaults": entry["area_defaults"], "variant": entry}
+    invalidate_prop_lib_token()
+    return result_payload
 
 
 @router.post("/props/{prop_id}/variants/{index}/recopy")
@@ -261,8 +271,10 @@ def prop_variant_recopy(
         raise HTTPException(status_code=400, detail=str(exc)) from None
     if not done:
         raise HTTPException(status_code=404, detail="Variant not found")
-    return {"status": "ok", "index": index,
+    result_payload = {"status": "ok", "index": index,
             "variant": list_variants(prop_id)[index]}
+    invalidate_prop_lib_token()
+    return result_payload
 
 
 @router.post("/props/{prop_id}/variants/{index}/active")
@@ -282,7 +294,9 @@ async def prop_variant_active(prop_id: str, index: int,
     if not set_variant_active(prop_id, index, active):
         raise HTTPException(status_code=409,
                             detail="A prop needs at least one active variant")
-    return {"status": "ok", "index": index, "active": active}
+    result_payload = {"status": "ok", "index": index, "active": active}
+    invalidate_prop_lib_token()
+    return result_payload
 
 
 @router.delete("/props/{prop_id}/variants/{index}")
@@ -299,7 +313,9 @@ def prop_variant_delete(prop_id: str, index: int) -> Dict[str, Any]:
     if not delete_variant(prop_id, index):
         raise HTTPException(status_code=409,
                             detail="A prop needs at least one variant")
-    return {"status": "deleted", "index": index}
+    result_payload = {"status": "deleted", "index": index}
+    invalidate_prop_lib_token()
+    return result_payload
 
 
 # ── One variant's gallery (twins of the unqualified prop routes) ─────────
@@ -325,7 +341,9 @@ async def prop_variant_model_select(prop_id: str, index: int,
     tier = _tier(data.get("tier"))
     if not select_model(prop_id, filename, tier=tier, variant=index):
         raise HTTPException(status_code=404, detail="Model not found")
-    return {"status": "success", "active": filename, "tier": tier}
+    result_payload = {"status": "success", "active": filename, "tier": tier}
+    invalidate_prop_lib_token()
+    return result_payload
 
 
 @router.delete("/props/{prop_id}/variants/{index}/models")
@@ -334,8 +352,10 @@ def prop_variant_model_delete(prop_id: str, index: int,
     """Remove ONE stored mesh of this variant (``?file=``) or all of them."""
     from app.core.props import delete_model
     _variant(prop_id, index)
-    return {"status": "success",
+    result_payload = {"status": "success",
             "removed": delete_model(prop_id, file.strip(), variant=index)}
+    invalidate_prop_lib_token()
+    return result_payload
 
 
 @router.get("/props/{prop_id}/variants/{index}/models/files/{filename}")
@@ -363,7 +383,9 @@ async def prop_variant_model_shrink(prop_id: str, index: int,
     body = _shrink_body(await request.json())
     if not model_file_path(prop_id, body["source_file"], variant=index):
         raise HTTPException(status_code=404, detail="Model not found")
-    return _shrink_start(trigger_shrink, prop_id, variant=index, **body)
+    result_payload = _shrink_start(trigger_shrink, prop_id, variant=index, **body)
+    invalidate_prop_lib_token()
+    return result_payload
 
 
 @router.post("/props/{prop_id}/variants/{index}/models/lod")
@@ -376,9 +398,11 @@ def prop_variant_model_lod(prop_id: str, index: int,
     # `_lod_result` forwards only `ratio`/`force` to the builder (it serves
     # locations and characters too), so the variant is bound here instead of
     # widening a helper three other routes share.
-    return _lod_result(
+    result_payload = _lod_result(
         lambda pid, **kw: build_low_tier(pid, variant=index, **kw),
         prop_id, ratio=ratio, kind="prop")
+    invalidate_prop_lib_token()
+    return result_payload
 
 
 @router.post("/props/{prop_id}/variants/{index}/upload")
@@ -406,7 +430,9 @@ async def prop_variant_upload(prop_id: str, index: int,
         })
     if not save_uploaded_glb(prop_id, contents, _tier(tier), variant=index):
         raise HTTPException(status_code=404, detail="Prop not found")
-    return {"status": "ok", "warnings": result["warnings"]}
+    result_payload = {"status": "ok", "warnings": result["warnings"]}
+    invalidate_prop_lib_token()
+    return result_payload
 
 
 @router.post("/props/{prop_id}/variants/{index}/source")
@@ -418,8 +444,10 @@ async def prop_variant_source_upload(prop_id: str, index: int,
     image belongs to the variant like its meshes do, so an upload here can
     never overwrite another version's picture."""
     from app.routes.world import _prop_source_upload
-    return await _prop_source_upload(prop_id, file, _variant(prop_id, index),
+    result_payload = await _prop_source_upload(prop_id, file, _variant(prop_id, index),
                                      view=view)
+    invalidate_prop_lib_token()
+    return result_payload
 
 
 @router.delete("/props/{prop_id}/variants/{index}/source")
@@ -435,7 +463,9 @@ def prop_variant_source_delete(prop_id: str, index: int,
                             detail="view must be back, left or right")
     if not delete_source_image(prop_id, index, view):
         raise HTTPException(status_code=404, detail="No such view image")
-    return {"status": "ok"}
+    result_payload = {"status": "ok"}
+    invalidate_prop_lib_token()
+    return result_payload
 
 
 @router.post("/props/{prop_id}/variants/{index}/generate")
@@ -488,4 +518,6 @@ async def prop_variant_generate(prop_id: str, index: int,
         front_reference=front_reference,
         reference_variant=reference_variant,
         views=views)
-    return {"status": "generating" if started else "already_running"}
+    result_payload = {"status": "generating" if started else "already_running"}
+    invalidate_prop_lib_token()
+    return result_payload

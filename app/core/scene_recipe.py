@@ -56,6 +56,7 @@ is read through ``room_recipe`` exactly as the room recipe does it.
 import math
 import os
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import (Any, Dict, Iterator, List, Optional, Sequence, Set,
@@ -4614,6 +4615,30 @@ _scene_cache_lock = threading.Lock()
 _scene_cache: "OrderedDict[str, Tuple[str, Dict[str, Any]]]" = OrderedDict()
 
 
+_prop_token_lock = threading.Lock()
+_prop_token_cache = (None, 0.0, "")
+
+
+def invalidate_prop_lib_token() -> None:
+    """Publishers invalidate the polling token after their files are visible."""
+    global _prop_token_cache
+    with _prop_token_lock:
+        _prop_token_cache = (None, 0.0, "")
+
+
+def prop_lib_token() -> str:
+    """Stat fingerprint with a five-second system-clock TTL for polling."""
+    global _prop_token_cache
+    from app.core.props import _props_dir
+    directory = _props_dir()
+    with _prop_token_lock:
+        now = time.monotonic()
+        if _prop_token_cache[0] != directory or now >= _prop_token_cache[1]:
+            _prop_token_cache = (directory, now + 5.0,
+                                 _dir_stat_sig(directory, depth=1))
+        return _prop_token_cache[2]
+
+
 def _dir_stat_sig(directory: Path, depth: int = 0) -> str:
     """``name:mtime_ns:size`` of every file under ``directory``, sorted.
 
@@ -4725,11 +4750,7 @@ def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
         return json.dumps(get_groups(), sort_keys=True, default=str)
 
     def _props() -> str:
-        # The private accessor on purpose: the props root has ONE spelling in
-        # this codebase, and a second one here would silently stop
-        # fingerprinting the day it moves.
-        from app.core.props import _props_dir
-        return _dir_stat_sig(_props_dir(), depth=1)
+        return prop_lib_token()
 
     def _models() -> str:
         from app.core.location_model3d import _model_dir, _owner_id

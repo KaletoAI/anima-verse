@@ -290,6 +290,37 @@ def expire_events() -> int:
     return len(expired_ids)
 
 
+def list_active_world_events() -> List[Dict[str, Any]]:
+    """Filter expired world events in SQL before decoding their payloads.
+
+    Missing and empty expiry mean an unlimited lifetime. Equality is active,
+    matching _is_expired's strict comparison of canonical game stamps.
+    Non-object JSON previously triggered _load_events' file fallback (empty
+    when absent/unreadable), contributing no worldmap markers. Skip those
+    rows in SQL; malformed/empty JSON still decodes to the legacy stub.
+    """
+    def canonical_expiry(value):
+        try:
+            return GameTime.parse(value).canonical()
+        except (ValueError, TypeError):
+            return None
+
+    # Keep the existing rule for unreadable stamps without decoding the
+    # payload in Python. SQLite extracts only the expiry for this scalar.
+    conn = get_connection()
+    conn.create_function("canonical_event_expiry", 1, canonical_expiry)
+    now = game_time().canonical()
+    rows = conn.execute(
+        "SELECT id, ts, game_ts, payload FROM events "
+        "WHERE kind='world_event' AND "
+        "CASE WHEN json_valid(payload) THEN json_type(payload) = 'object' "
+        "ELSE 1 END AND "
+        "COALESCE(canonical_event_expiry(CASE WHEN json_valid(payload) "
+        "THEN json_extract(payload, '$.expires_at') END), ?) >= ? "
+        "ORDER BY ts ASC", (now, now)).fetchall()
+    return [_row_to_event(row) for row in rows]
+
+
 def list_events(location_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Lists active events. Optionally filtered by location."""
     events = _active_events(_load_events())

@@ -34,6 +34,7 @@ import hashlib
 import json
 import math
 import secrets
+import threading
 from typing import Any, Dict, List, Optional
 
 from app.core.db import get_connection, transaction
@@ -41,6 +42,26 @@ from app.core.log import get_logger
 from app.core.timeutils import utc_now_iso
 
 logger = get_logger("terrain")
+
+_generation_lock = threading.Lock()
+_generation = 0
+
+
+def terrain_generation() -> int:
+    """Return the generation of committed authoring writes."""
+    with _generation_lock:
+        return _generation
+
+
+def _bump_terrain_generation() -> None:
+    global _generation
+    with _generation_lock:
+        _generation += 1
+
+
+_sig_lock = threading.Lock()
+_sig_cache = (None, "")
+
 
 #: Vertices ONE polygon may carry — the outline of a painted area, and by
 #: mirror (``app.models.heightfield``) of a height area.
@@ -1137,6 +1158,7 @@ def save_area(raw: Any, must_exist: bool = False) -> Dict[str, Any]:
                  json.dumps(area["polygon"], ensure_ascii=False),
                  area["z_order"],
                  json.dumps(area["meta"], ensure_ascii=False), now, now))
+    _bump_terrain_generation()
     _note_relief_write()
     return area
 
@@ -1148,6 +1170,7 @@ def delete_area(area_id: str) -> bool:
                            ((area_id or "").strip(),))
         deleted = cur.rowcount > 0
     if deleted:
+        _bump_terrain_generation()
         _note_relief_write()
     return deleted
 
@@ -1211,6 +1234,7 @@ def migrate_scatter_yaw_mode_once() -> int:
         with transaction() as conn:
             conn.executemany(
                 "UPDATE terrain_areas SET meta=? WHERE id=?", pending)
+        _bump_terrain_generation()
         logger.info("Scatter yaw modes migrated to 'aligned': %d areas",
                     len(pending))
     return len(pending)
@@ -1281,11 +1305,44 @@ def save_areas_bulk(upserts: Any, deletes: Any) -> Dict[str, Any]:
     # An empty batch — or one whose deletes were all already gone — moves
     # nothing, and then the signature must not move either.
     if changed:
+        _bump_terrain_generation()
         _note_relief_write()
     return {"saved": saved, "deleted": delete_ids, "rejected": rejected}
 
 
-def terrain_sig() -> str:
+def _terrain_sig_key():
+    """Capture every cache dependency before reading signature inputs."""
+    from app.core.db import get_db_path
+    from app.core.terrain_layers import LAYER_CUT_VERSION
+    from app.core.terrain_types import types_generation, types_json_stat
+    from app.core.scene_recipe import prop_lib_token, season_token
+    from app.models.world import world_generation
+    from app.models.world_props import world_props_generation
+    return (LAYER_CUT_VERSION, str(get_db_path()), terrain_generation(),
+            types_generation(), world_props_generation(), world_generation(),
+            prop_lib_token(), types_json_stat(), season_token())
+
+
+def areas_snapshot():
+    """Return the pre-read dependency key together with the selected areas."""
+    key = _terrain_sig_key()
+    return key, list_areas()
+
+
+def terrain_sig(*, areas=None, areas_key=None) -> str:
+    """Cached signature; supplied areas require their pre-read dependency key."""
+    global _sig_cache
+    key = _terrain_sig_key()
+    with _sig_lock:
+        if _sig_cache[0] == key:
+            return _sig_cache[1]
+        # Unversioned or stale caller snapshots cannot populate this key.
+        value = _terrain_sig(areas=areas if areas_key == key else None)
+        _sig_cache = (key, value)
+        return value
+
+
+def _terrain_sig(*, areas=None) -> str:
     """10-char signature over areas + the EFFECTIVE type catalog — bumps
     whenever the painted world changes, so polling clients know when to
     refetch (and the nav-grid cache key inherits it).
@@ -1321,7 +1378,8 @@ def terrain_sig() -> str:
     # is the signature its ground hangs on, and nothing else in the poll
     # covers a world prop's geometry.
     basis = json.dumps({"code_version": LAYER_CUT_VERSION,
-                        "areas": with_scatter_props(list_areas()),
+                        "areas": with_scatter_props(
+                            list_areas() if areas is None else areas),
                         "prop_boxes": prop_boxes(),
                         "types": effective_catalog()},
                        sort_keys=True, default=str)

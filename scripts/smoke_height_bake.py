@@ -591,9 +591,12 @@ terrain_store.save_area({"id": "ta_lake_bare", "kind": "lake", "z_order": 0,
                          "polygon": WATER_AUTO["polygon"], "meta": {}})
 import sqlite3  # noqa: E402
 from app.core.db import transaction  # noqa: E402
+_fixture_sig = terrain_store.terrain_sig()
 with transaction() as conn:
     conn.execute("UPDATE terrain_areas SET meta='{}' WHERE id=?",
                  ("ta_lake_bare",))
+terrain_store._bump_terrain_generation()
+assert _fixture_sig != terrain_store.terrain_sig(), "raw area fixture invalidates terrain"
 hf.invalidate_cache()
 bare = {a["id"]: a for a in
         hf.with_effective_water_level(terrain_store.list_areas())}

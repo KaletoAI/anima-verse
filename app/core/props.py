@@ -673,6 +673,8 @@ def _write_sidecar(prop_id: str, meta: Dict[str, Any]) -> None:
     # A prop's markers are part of the seat inventory of every room it
     # stands in — the sidecar is where they change.
     from app.core import places; places.invalidate()
+    from app.core.scene_recipe import invalidate_prop_lib_token
+    invalidate_prop_lib_token()
 
 
 # ── Model variants ──────────────────────────────────────────────────────

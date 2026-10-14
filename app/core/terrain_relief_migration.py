@@ -96,6 +96,7 @@ def move_relief_to_areas() -> Dict[str, int]:
     from app.core.db import transaction
     from app.models.terrain import _sanitize_relief
     stats = {"kinds": 0, "areas": 0, "kept": 0}
+    types_changed = False
     seed = _seed_relief()
     with transaction() as conn:
         # The WORLD rows win over the seed, whole (override-replace per kind):
@@ -151,8 +152,15 @@ def move_relief_to_areas() -> Dict[str, int]:
                 continue
             for key in _KEYS:
                 meta.pop(key, None)
+            types_changed = True
             conn.execute("UPDATE terrain_types SET meta=? WHERE kind=?",
                          (json.dumps(meta, ensure_ascii=False), kind))
+    from app.models.terrain import _bump_terrain_generation
+    from app.core.terrain_types import _bump_types_generation
+    if stats["areas"]:
+        _bump_terrain_generation()
+    if types_changed:
+        _bump_types_generation()
     return stats
 
 

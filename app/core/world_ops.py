@@ -411,7 +411,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     when it has one and its bare CENTRE POINT when it has none, and every
     painted terrain area contributes the box of its polygon (E4 finding B7).
     """
-    from app.models.events import list_events
+    from app.models.events import list_active_world_events
     from app.models.character import (
         list_available_characters, get_character_current_location,
         get_character_pos, list_character_positions, get_character_config,
@@ -430,12 +430,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                                          polygon_plan_width_m)
     from app.core.boundary_entry import opening_world_frames
     from app.core.heightfield import current_sig as height_sig
-    from app.models.terrain import list_areas, terrain_sig
-    from app.models.world_props import payload_rows, world_props_sig
+    from app.models.terrain import areas_snapshot, terrain_sig
+    from app.models.world_props import payload_snapshot
 
-    # Built ONCE per payload: the signature below hashes the very rows that
-    # are sent, so building them twice would also read the prop library twice.
-    _world_props = payload_rows()
+    # Capture matching rows and signature together: a later write must not
+    # pair an older payload with a newer cache token.
+    _world_props, _world_props_sig = payload_snapshot()
 
     avatar = (avatar_name or "").strip()
     fogged = not show_all
@@ -566,7 +566,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # camera fit, minimap). Each area contributes the axis-aligned box of its
     # polygon; malformed or non-finite points are skipped rather than poisoning
     # the extent with NaN.
-    for _area in list_areas():
+    areas_key, areas = areas_snapshot()
+    for _area in areas:
         for _pt in (_area.get("polygon") or []):
             if not isinstance(_pt, (list, tuple)) or len(_pt) < 2:
                 continue
@@ -869,7 +870,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         })
 
     events_by_location = {}
-    for ev in list_events():
+    for ev in list_active_world_events():
         if ev.get("resolved"):
             continue
         cat = ev.get("category") or ""
@@ -903,7 +904,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         "world_bounds": world_bounds,
         # Signature of the painted terrain (areas + world type rows), read
         # ONCE per payload: when it changes, clients refetch /play/terrain.
-        "terrain_sig": terrain_sig(),
+        "terrain_sig": terrain_sig(areas=areas, areas_key=areas_key),
         # Signature of the authored world RELIEF (E8 task 2). Same job as
         # `terrain_sig` and the same reason it rides here: when it changes,
         # clients refetch `GET /play/heightfield` — the one payload too big to
@@ -937,7 +938,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # Same job as `terrain_sig` one field up, over the FINISHED block: a
         # client rebuilds its meshes when this moves and never otherwise —
         # the list itself is on every poll, comparing 500 rows by hand is not.
-        "world_props_sig": world_props_sig(_world_props),
+        "world_props_sig": _world_props_sig,
         "fogged": fogged,
         # The two WALK LIMITS (§ A12, E8 task 1). They are world settings the
         # server judges every reported point with (`POST /play/pos`, § A15),

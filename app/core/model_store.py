@@ -263,6 +263,8 @@ class ModelGallery:
         tmp.write_text(json.dumps(sel, indent=2, ensure_ascii=False),
                        encoding="utf-8")
         os.replace(tmp, target)
+        from app.core.scene_recipe import invalidate_prop_lib_token
+        invalidate_prop_lib_token()
 
     def _update_selection(
             self, change: Callable[[Dict[str, Dict[str, str]]], bool]) -> bool:
@@ -473,4 +475,7 @@ class ModelGallery:
             return changed
 
         self._update_selection(change)
+        if removed:
+            from app.core.scene_recipe import invalidate_prop_lib_token
+            invalidate_prop_lib_token()
         return removed

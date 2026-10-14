@@ -169,6 +169,7 @@ def write_crate(tags) -> None:
         "name": "Crate", "category": "furniture",
         "width_m": 0.8, "depth_m": 0.8, "height_m": 0.6,
         "tags": list(tags)}), encoding="utf-8")
+    scene_recipe.invalidate_prop_lib_token()
 
 
 write_crate(["walkable"])

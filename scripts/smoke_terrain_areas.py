@@ -1017,12 +1017,15 @@ from app.core.db import transaction as _transaction  # noqa: E402
 def plant_area(area_id, meta):
     """One area written PAST the sanitizer — the pre-migration state, which
     no writer in this codebase can produce any more."""
+    before = terrain.terrain_sig()
     with _transaction() as conn:
         conn.execute(
             "INSERT INTO terrain_areas (id, kind, polygon, z_order, meta, "
             "created_at, updated_at) VALUES (?, 'grass', ?, 0, ?, ?, ?)",
             (area_id, json.dumps(SQUARE), json.dumps(meta),
              "2026-09-10T00:00:00", "2026-09-10T00:00:00"))
+    terrain._bump_terrain_generation()
+    assert before != terrain.terrain_sig(), "raw migration fixture invalidates terrain"
 
 
 _MIG_FIXED = {"scatter": [{"density_per_100m2": 2.0, "yaw_mode": "fixed",

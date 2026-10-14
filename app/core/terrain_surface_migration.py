@@ -59,6 +59,9 @@ def assign_surfaces(known_kinds: Iterable[str]) -> Dict[str, int]:
             stats["assigned"] += 1
             logger.info("Terrain kind %r keeps its ground: surface=%r",
                         kind, key)
+    if stats["assigned"]:
+        from app.core.terrain_types import _bump_types_generation
+        _bump_types_generation()
     return stats
 
 
@@ -78,9 +81,7 @@ def migrate_terrain_surfaces_once(
             known_kinds = library_kinds()
         stats = assign_surfaces(known_kinds)
         set_world_setting(_GUARD_KEY, "1")
-        # No signature has to be bumped by hand: ``terrain_sig`` is hashed over
-        # the effective catalog on every read, so the changed rows reach a
-        # polling client with the next worldmap answer by themselves.
+        # assign_surfaces invalidates the cached effective catalog.
         return stats
     except Exception as e:
         logger.warning("Terrain surface migration failed: %s", e)
