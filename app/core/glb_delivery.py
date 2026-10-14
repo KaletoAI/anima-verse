@@ -7,6 +7,7 @@ memoized on disk; crashes and timeouts may retry on a later request.
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import os
 from pathlib import Path
 import re
 import tempfile
@@ -25,9 +26,9 @@ _hashes: OrderedDict[Path, tuple[int, int, int, int, str]] = OrderedDict()
 _CACHE_NAME = re.compile(r"[0-9a-f]{64}\.(glb|skip)\Z")
 
 
-def _sha(path: Path) -> str:
+def _sha(path: Path, source=None) -> str:
     resolved = path.resolve()
-    stat = resolved.stat()
+    stat = os.fstat(source.fileno()) if source is not None else resolved.stat()
     # Inode and ctime detect replacements/edits that preserve size and mtime.
     signature = (stat.st_mtime_ns, stat.st_size, stat.st_ino, stat.st_ctime_ns)
     with _lock:
@@ -35,11 +36,15 @@ def _sha(path: Path) -> str:
         if memo and memo[:4] == signature:
             _hashes.move_to_end(resolved)
             return memo[4]
-    with resolved.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    after = resolved.stat()
-    if (after.st_mtime_ns, after.st_size, after.st_ino, after.st_ctime_ns) != signature:
-        raise OSError("source changed while hashing")
+    if source is not None:
+        digest = hashlib.file_digest(source, "sha256").hexdigest()
+        source.seek(0)
+    else:
+        with resolved.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        after = resolved.stat()
+        if (after.st_mtime_ns, after.st_size, after.st_ino, after.st_ctime_ns) != signature:
+            raise OSError("source changed while hashing")
     with _lock:
         _hashes[resolved] = (*signature, digest)
         _hashes.move_to_end(resolved)
@@ -86,7 +91,7 @@ def _build(source: Path, cache: Path, sha: str) -> None:
             _pending.discard(key)
 
 
-def delivery_path(path: Path) -> Path:
+def delivery_path(path: Path, *, source=None) -> Path:
     """Serve a cached delivery copy, otherwise enqueue once and serve the source."""
     path = Path(path)
     if path.suffix.lower() != ".glb" or not config.get("image_generation.blender_meshopt_delivery", True):
@@ -94,7 +99,7 @@ def delivery_path(path: Path) -> Path:
     try:
         if not runner.status()["usable"]:
             return path
-        sha, cache = _sha(path), _cache_dir()
+        sha, cache = _sha(path, source), _cache_dir()
         key = (cache, sha)
         with _lock:
             # Recheck under the scheduling lock: a worker may have published
@@ -103,7 +108,7 @@ def delivery_path(path: Path) -> Path:
                 entry = cache / f"{sha}.{suffix}"
                 if entry.is_file():
                     try:
-                        entry.touch(exist_ok=True)
+                        entry.with_name(entry.name + ".used").touch(exist_ok=True)
                     except FileNotFoundError:
                         continue
                     return entry if suffix == "glb" else path
@@ -132,8 +137,11 @@ def sweep_cache(*, now: float | None = None) -> int:
             if not _CACHE_NAME.fullmatch(entry.name) or not entry.is_file():
                 continue
             try:
-                if entry.stat().st_mtime < cutoff:
+                used = entry.with_name(entry.name + ".used")
+                last_use = used.stat().st_mtime if used.exists() else entry.stat().st_mtime
+                if last_use < cutoff:
                     entry.unlink()
+                    used.unlink(missing_ok=True)
                     removed += 1
             except FileNotFoundError:
                 pass

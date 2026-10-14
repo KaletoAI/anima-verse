@@ -563,6 +563,9 @@ def publication_checks(root, model3d, rigged_source):
         return True
     class Request:
         headers={}
+        query_params={}
+    async def streamed_bytes(response):
+        return b"".join([chunk async for chunk in response.body_iterator])
     with patch.object(model3d,'current_outfit_state',return_value=({},[],signature)), \
             patch.object(model3d,'_auto_retexture',side_effect=process), \
             patch.object(model3d,'_auto_normalize'), patch.object(model3d,'_auto_extension_rig'), \
@@ -572,7 +575,7 @@ def publication_checks(root, model3d, rigged_source):
             assert entered.wait(10)
             try:
                 response=_model_asset_response('demo',Request())
-                check(response.body==b'old-final' and path.read_bytes()==b'old-final','concurrent route reader cannot see delivered or intermediate bytes')
+                check(asyncio.run(streamed_bytes(response))==b'old-final' and path.read_bytes()==b'old-final','concurrent route reader cannot see delivered or intermediate bytes')
                 check(model3d.model_revision(path)==old_revision and json.loads(path.with_suffix('.json').read_text())['marker']=='old','processing leaves revision and metadata unchanged')
                 with keyed_lock('model3d',f'demo:{signature}'):
                     check(not future.done(),'long processing leaves publication lock available')
@@ -630,11 +633,11 @@ def publication_checks(root, model3d, rigged_source):
                     try:
                         response = _model_asset_response('demo', Request())
                         if label == 'generation':
-                            check(response.body == unrigged_source and
+                            check(asyncio.run(streamed_bytes(response)) == unrigged_source and
                                   json.loads(path.with_suffix('.json').read_text())['rig'] == 'none' and
                                   not low.exists(), 'generation serves the new static mesh, never partial rig output')
                         else:
-                            check(response.body == b'old-final', 'job retrieval stages rigged delivery before processing')
+                            check(asyncio.run(streamed_bytes(response)) == b'old-final', 'job retrieval stages rigged delivery before processing')
                     finally:
                         proceed.set()
                     outcome=future.result(timeout=10)

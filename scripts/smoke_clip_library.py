@@ -79,6 +79,9 @@ Expected values, derived by hand from that fixture and the layout rules:
   spaces, so its url is ``…/climbing%20a%20ladder.fbx`` while ``rel`` keeps the
   raw file path, and a set segment is encoded on its own (the ``/`` survives).
 
+URL pathname assertions ignore the content v query; smoke_clip_cache_headers.py
+checks its byte identity and HTTP cache rules.
+
 Usage:  ./.venv/bin/python scripts/smoke_clip_library.py
 """
 import json
@@ -206,9 +209,9 @@ def test_listing() -> None:
           (walk["loop"], walk["has_sidecar"], walk["origin"])
           == (True, True, "cmu"), str(walk["origin"]))
     check("walk: rel/library/url",
-          (walk["rel"], walk["library"], walk["source"], walk["url"])
+          (walk["rel"], walk["library"], walk["source"], walk["url"].split("?", 1)[0])
           == ("walk.fbx", "free", "free", "/assets/animation-clips/walk.fbx"),
-          walk["url"])
+          walk["url"].split("?", 1)[0])
 
     variant = views[("free", "walk_02.fbx")]
     check("walk_02 has no own sidecar and shares walk.json (kind walk, 3.0 s)",
@@ -236,15 +239,15 @@ def test_listing() -> None:
           == (None, None, None, False, False, "unknown"),
           str(dance["duration_s"]))
     check("dance url carries the licensed/ prefix",
-          dance["url"] == "/assets/animation-clips/licensed/dance.fbx",
-          dance["url"])
+          dance["url"].split("?", 1)[0] == "/assets/animation-clips/licensed/dance.fbx",
+          dance["url"].split("?", 1)[0])
 
     sit = views[("free", "female/sit.fbx")]
     check("female/sit: set female, rel with directory, loop false",
           (sit["set"], sit["rel"], sit["loop"], sit["duration_s"])
           == ("female", "female/sit.fbx", False, 2.0), sit["rel"])
     check("female/sit url carries the set segment",
-          sit["url"] == "/assets/animation-clips/female/sit.fbx", sit["url"])
+          sit["url"].split("?", 1)[0] == "/assets/animation-clips/female/sit.fbx", sit["url"].split("?", 1)[0])
 
     print("\nRoot motion — the sidecar's travel as the listing and the server read it")
     check("run.fbx reports foot_lock with the shared run.json's travel",
@@ -388,8 +391,8 @@ def test_move_set() -> None:
           and not (FREE / "wave.fbx").exists()
           and clips[0]["rel"] == "male/wave.fbx", clips[0]["rel"])
     check("the moved clip reports its set and url",
-          (clips[0]["set"], clips[0]["url"])
-          == ("male", "/assets/animation-clips/male/wave.fbx"), clips[0]["url"])
+          (clips[0]["set"], clips[0]["url"].split("?", 1)[0])
+          == ("male", "/assets/animation-clips/male/wave.fbx"), clips[0]["url"].split("?", 1)[0])
 
     clips = ac.rename_clip("free", "female/sit.fbx", cset="")
     check("moving to the root moves the sidecar along",
@@ -402,8 +405,8 @@ def test_move_set() -> None:
           (LICENSED / "walk.fbx").is_file() and not (FREE / "walk.fbx").exists()
           and clips[0]["library"] == "licensed", clips[0]["library"])
     check("the licensed url prefix comes with it",
-          clips[0]["url"] == "/assets/animation-clips/licensed/walk.fbx",
-          clips[0]["url"])
+          clips[0]["url"].split("?", 1)[0] == "/assets/animation-clips/licensed/walk.fbx",
+          clips[0]["url"].split("?", 1)[0])
     check("walk_02.fbx stays behind and keeps its sidecar, the copy went along",
           (FREE / "walk_02.fbx").is_file() and (FREE / "walk.json").is_file()
           and (LICENSED / "walk.json").is_file())
@@ -446,13 +449,13 @@ def test_validation() -> None:
     # The url is a URL, the rel a file path: the ONE space of the name is the
     # ONE %20 of the url, the rel keeps it raw.
     check("the url percent-encodes the space, the rel does not",
-          (spaced["url"], spaced["rel"])
+          (spaced["url"].split("?", 1)[0], spaced["rel"])
           == ("/assets/animation-clips/climbing%20a%20ladder.fbx",
-              "climbing a ladder.fbx"), spaced["url"])
+              "climbing a ladder.fbx"), spaced["url"].split("?", 1)[0])
     moved = ac.rename_clip("free", "climbing a ladder.fbx", cset="male")[0]
     check("a set segment is encoded on its own, the separator survives",
-          moved["url"] == "/assets/animation-clips/male/climbing%20a%20ladder.fbx",
-          moved["url"])
+          moved["url"].split("?", 1)[0] == "/assets/animation-clips/male/climbing%20a%20ladder.fbx",
+          moved["url"].split("?", 1)[0])
     check("nothing was moved by the refused calls",
           not (FREE / "walk__a.fbx").exists()
           and (FREE / "walk_02.fbx").is_file())
@@ -613,10 +616,12 @@ def test_cmu_collision_after_precheck():
             lock.release()
 
     def convert(script, *, inputs, params, out_dir, timeout_s):
-        assert script == "cmu_clip" and Path(out_dir) == destination
-        winner.write_bytes(b"cmu-replacement")
-        sidecar.write_bytes(b'{"kind":"cmu-race"}')
-        return {"ok": True, "outputs": {"clip": str(winner)}, "data": {}, "seconds": 1.0}
+        assert script == "cmu_clip" and Path(out_dir).parent == destination
+        converted = Path(out_dir) / winner.name
+        converted_sidecar = Path(out_dir) / sidecar.name
+        converted.write_bytes(b"cmu-replacement")
+        converted_sidecar.write_bytes(b'{"kind":"cmu-race"}')
+        return {"ok": True, "outputs": {"clip": str(converted), "sidecar": str(converted_sidecar)}, "data": {}, "seconds": 1.0}
 
     with patch.object(clip_catalog, "find_take", return_value={"id": "18_01", "framerate": 120}), \
          patch.object(cmu_import, "default_rig", return_value=rig), \

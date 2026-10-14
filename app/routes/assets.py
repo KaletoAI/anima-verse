@@ -61,7 +61,7 @@ from app.core.animation_clips import (CLIP_EXTS, ClipExists,
                                       set_clip_loop, set_clip_role_gender)
 from app.core.auth_dependency import require_admin
 from app.core.cmu_import import ClipImportError, validate_root_motion
-from app.core.http_files import etag_file_response, glb_file_response
+from app.core.http_files import etag_file_response, glb_file_response, snapshot_response
 from app.core.log import get_logger
 from app.core.paths import (get_animation_clips_dir, get_licensed_clips_dir,
                             get_rig_file)
@@ -759,24 +759,16 @@ def get_animation_rig(request: Request):
 
 @router.get("/animation-clips/{rel:path}")
 def get_animation_clip(rel: str, request: Request):
-    """Serves a clip file — ``<file>`` for a neutral clip, ``<set>/<file>`` for
-    a set clip, ``licensed/…`` for one out of the licensed library.
-
-    ``no-cache`` is not "do not store" — it stores and REVALIDATES, so the
-    ETag still saves the transfer while a rewritten file is picked up at once.
-    A clip used to be treated as immutable and was served with a day of
-    ``max-age``, during which a browser does not ask at all; that stopped
-    being true with `scripts/repair_clip_roll.py`, which rewrites clips in
-    place, and cost an afternoon of "nothing changed" on a file that had."""
+    """Serve a descriptor snapshot; only a matching content v is immutable."""
     path = resolve_clip_path(rel)
     if path is None:
         raise HTTPException(status_code=400, detail="Invalid clip path")
     if not path.is_file():
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media_type, _ = mimetypes.guess_type(str(path))
-    return etag_file_response(path, request,
-                              media_type or "application/octet-stream",
-                              cache_control="no-cache")
+    return snapshot_response(path, request,
+                             media_type=media_type or "application/octet-stream",
+                             version=request.query_params.get("v"))
 
 
 @router.get("/surface-textures")

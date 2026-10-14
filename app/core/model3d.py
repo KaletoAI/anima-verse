@@ -16,6 +16,7 @@ model". Switching back to a known outfit reuses whatever is stored.
 import json
 import hashlib
 import functools
+import os
 import inspect
 import re
 import shutil
@@ -270,8 +271,15 @@ def _model_reader(function):
     @functools.wraps(function)
     def wrapped(character_name, *args, **kwargs):
         from app.core.keyed_lock import keyed_lock
-        with keyed_lock("model3d_publication", str(get_model3d_dir(character_name))):
-            return function(character_name, *args, **kwargs)
+        url_base = kwargs.pop("_url_base", None) or f"/characters/{quote(character_name)}/model3d/file"
+        publication = keyed_lock("model3d_publication", str(get_model3d_dir(character_name)))
+        with publication:
+            out = function(character_name, *args, **kwargs)
+            captured = _capture_model_urls(character_name, url_base) if out.get("model") else []
+        urls = _finish_model_urls(captured, publication)
+        if out.get("model"):
+            out["model"].update(urls)
+        return out
     return wrapped
 
 
@@ -657,6 +665,62 @@ def find_texture(character_name: str,
     return None
 
 
+def _capture_model_urls(character_name: str, enc_base: str):
+    """Select/open/fstat source snapshots under the caller's publication lock."""
+    captured = []
+    def capture(key, base, path, delivery=False):
+        f = open(path, "rb")
+        try:
+            captured.append((key, base, path, f, os.fstat(f.fileno()), delivery))
+        except BaseException:
+            f.close()
+            raise
+    try:
+        full, _, _ = find_model3d_serving_tier(character_name, "")
+        if full is None:
+            return captured
+        capture("url", enc_base + "?v=", full, True)
+        if tier_variant(full, LOW_TIER) is not None:
+            low, _, _ = find_model3d_serving_tier(character_name, LOW_TIER)
+            capture("low_url", enc_base + f"?tier={LOW_TIER}&v=", low, True)
+        if full.suffix.lower() == ".fbx":
+            texture = find_texture(character_name, full.stem)
+            if texture is not None:
+                base = enc_base[:-4] + "texture" if enc_base.endswith("/file") else enc_base + "/texture"
+                capture("texture_url", base + "?v=", texture)
+        return captured
+    except BaseException:
+        for _, _, _, f, _, _ in captured:
+            f.close()
+        raise
+
+
+def _finish_model_urls(captured, publication=None):
+    from app.core.http_files import opened_content_version, select_opened_delivery
+    urls = {}
+    try:
+        for key, base, path, f, st, delivery in captured:
+            try:
+                if delivery and path.suffix.lower() == ".glb":
+                    path, f, st = select_opened_delivery(path, f, st, publication)
+                urls[key] = base + opened_content_version(f, st)
+            finally:
+                f.close()
+        return urls
+    finally:
+        for _, _, _, f, _, _ in captured:
+            f.close()
+
+
+def versioned_model_urls(character_name: str, enc_base: str) -> Dict[str, str]:
+    """Capture model descriptors under the lock, hash their bytes after release."""
+    from app.core.keyed_lock import keyed_lock
+    publication = keyed_lock("model3d_publication", str(get_model3d_dir(character_name)))
+    with publication:
+        captured = _capture_model_urls(character_name, enc_base)
+    return _finish_model_urls(captured, publication)
+
+
 @_model_reader
 def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, Any]:
     """Status of the mesh for the CURRENTLY worn outfit: cached file + meta,
@@ -695,8 +759,7 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
                                 "match": match,
                                 "format": path.suffix.lstrip(".").lower(),
                                 "rig": rig,
-                                "size": path.stat().st_size,
-                                "url": f"/characters/{enc}/model3d/file"}
+                                "size": path.stat().st_size}
         info["has_unrigged_source"] = (path.parent / "unrigged" / f"{path.stem}.glb").is_file()
         info["unrigged_source_reason"] = "" if info["has_unrigged_source"] else "No retained unrigged mesh source. Generate a new model to enable re-rigging."
         info["source"] = "generated"  # default for legacy sidecars
@@ -745,7 +808,6 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         low = tier_variant(path, LOW_TIER)
         if low:
             info["low_size"] = low.stat().st_size
-            info["low_url"] = f"/characters/{enc}/model3d/file?tier={LOW_TIER}"
             try:
                 low_meta = json.loads(low.with_suffix(".json").read_text(encoding="utf-8"))
                 info["low_tris"] = low_meta.get("tris")
@@ -759,7 +821,6 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         if info["format"] == "fbx":
             tex = find_texture(character_name, path.stem)
             if tex:
-                info["texture_url"] = f"/characters/{enc}/model3d/texture"
                 info["texture_size"] = tex.stat().st_size
         out["model"] = info
     from app.core.extension_rig import motion_payload

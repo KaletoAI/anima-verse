@@ -59,9 +59,12 @@ import shutil
 import tempfile
 import threading
 import time
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
+
+from app.core.http_files import atomic_replace, content_version
 
 from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
@@ -738,7 +741,8 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         # it a second time and never rebuild it from name + set.
         "url": "/assets/animation-clips/"
                + ("licensed/" if entry["source"] == "licensed" else "")
-               + "/".join(quote(seg) for seg in entry["rel"].split("/")),
+               + "/".join(quote(seg) for seg in entry["rel"].split("/"))
+               + f"?v={content_version(path)}",
         "size": path.stat().st_size,
         "has_sidecar": meta is not None,
         "origin": _origin(meta),
@@ -1027,7 +1031,15 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
     for source, dest in moves:
         own = _own_sidecar(source)
         needs_shared = needs_shared or own is None
-        shutil.move(str(source), str(dest))
+        fd, name = tempfile.mkstemp(dir=dest.parent, suffix=".clip-tmp")
+        os.close(fd)
+        stage = Path(name)
+        try:
+            shutil.copy2(source, stage)
+            atomic_replace(stage, dest)
+            source.unlink()
+        finally:
+            stage.unlink(missing_ok=True)
         if own is not None:
             _take_own_sidecar(own, dest.with_suffix(".json"), new_kind)
 
@@ -1263,11 +1275,13 @@ def orient_clip(library: str, rel: str, *, yaw_deg: float = 0.0,
         staged = []
         try:
             for slot, target in slots.items():
-                stage = target.with_name(target.name + ".orient-tmp")
-                shutil.copy2(written[slot], stage)
+                fd, name = tempfile.mkstemp(dir=target.parent, prefix="." + target.name + ".", suffix=".tmp")
+                os.close(fd)
+                stage = Path(name)
                 staged.append((stage, target))
+                shutil.copy2(written[slot], stage)
             for stage, target in staged:
-                os.replace(stage, target)
+                atomic_replace(stage, target)
         finally:
             for stage, _target in staged:
                 if stage.exists():

@@ -1538,14 +1538,9 @@ export class FigureLibrary {
 
   /** Load, upright and normalise a model; library clips only on a Mixamo rig.
    *  FBX models (generic/animals) get their texture separately.
-   *  `tier=low` asks for the distance edition — where it does not (yet) exist
-   *  the server serves the full mesh under the same tier. */
+   *  A low URL selects the distance edition; absent low URLs use the full mesh. */
   private async buildModel(name: string, info: ApiModel, tier: FigureTier = 'full'): Promise<LoadedModel> {
-    const query = new URLSearchParams();
-    if (tier === 'low') query.set('tier', 'low');
-    // Distinct content needs a distinct URL even if file stat ETags match.
-    if (info.modelRev) query.set('rev', info.modelRev);
-    const url = query.size ? `${info.url}${info.url.includes('?') ? '&' : '?'}${query}` : info.url;
+    const url = tier === 'low' ? info.lowUrl ?? info.url : info.url;
     // In T1 the loader combines download and parsing, as it does for clips.
     const downloadStart = performance.now();
     let gltf: Awaited<ReturnType<typeof this.loadFile>>;

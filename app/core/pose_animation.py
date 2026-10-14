@@ -223,7 +223,8 @@ def _publish(*, tid, staging, kind, key, clip, mode, entry, raw_text, checked_gr
         temporary = Path(name)
         try:
             shutil.copy2(source, temporary)
-            os.replace(temporary, target)
+            from app.core.http_files import atomic_replace
+            atomic_replace(temporary, target)
         finally:
             temporary.unlink(missing_ok=True)
 

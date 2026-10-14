@@ -651,6 +651,7 @@ export interface ApiModel {
   modelRev?: string;
   motion?: MotionPayload;
   url: string;
+  lowUrl?: string;
   /** identity of this particular model (changes e.g. with the outfit) */
   signature?: string;
   format: 'glb' | 'fbx';
@@ -696,6 +697,7 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
   if (!m?.url) return null;
   return {
     url: m.url,
+    lowUrl: m.low_url,
     // Identität der AUSGELIEFERTEN Datei (Server kann bei unbekannter
     // Kombination das nächstliegende Modell servieren): wechselt auch dann,
     // wenn das exakte Mesh später fertig wird und den Nearest-Treffer ablöst.

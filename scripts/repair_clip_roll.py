@@ -279,7 +279,7 @@ def apply_one(rig: Path, clip: Path, side: dict, target, timeout: int,
     if bak.exists():
         return f"backup already exists, not touching: {bak}"
     fps = int(side.get("fps") or 30)
-    with tempfile.TemporaryDirectory(prefix="clip-roll-") as tmp:
+    with tempfile.TemporaryDirectory(prefix=".clip-roll-", dir=clip.parent) as tmp:
         out_dir = Path(tmp)
         res = runner.run("clip_roll", inputs={"rig": rig, "src": clip},
                          params={"target_twist_deg": target, "fps": fps,
@@ -316,7 +316,10 @@ def apply_one(rig: Path, clip: Path, side: dict, target, timeout: int,
         if problems:
             return "verification: " + "; ".join(problems)
         shutil.copy2(clip, bak)
-        shutil.move(str(written), str(clip))
+        from app.core.http_files import atomic_replace, sibling_stage
+        with sibling_stage(clip) as stage:
+            shutil.copy2(written, stage)
+            atomic_replace(stage, clip)
         moved = {s: (res["data"]["clips"]["src"]["arms"][s]["moved"]["mean"]) for s in ("L", "R")}
         _mark_sidecar(clip, moved, target)
         print(f"    written: {clip}\n    backup:  {bak}\n    moved: L {moved['L']:+.1f} deg, R {moved['R']:+.1f} deg;"

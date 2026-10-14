@@ -7,6 +7,9 @@ shared/models/clips is never touched. Covers the discovery
 validation (app/routes/assets.py), and — part [8] — that a MISSING clip
 library breaks nothing beyond "no animations play".
 
+URL pathname assertions ignore the content v query; smoke_clip_cache_headers.py
+checks its byte identity and HTTP cache rules.
+
 Usage:  ./.venv/bin/python scripts/smoke_clip_dirs.py
 """
 import os
@@ -178,7 +181,7 @@ def test_discovery() -> None:
 def test_listing() -> None:
     print("\n[4] listing URLs")
     data = assets.list_animation_clips()
-    urls = {c["url"] for c in data["clips"]}
+    urls = {c["url"].split("?", 1)[0] for c in data["clips"]}
     check("a set clip's URL carries the set segment",
           "/assets/animation-clips/male/sit.fbx" in urls, str(sorted(urls)))
     check("a root clip's URL is unchanged",
@@ -268,8 +271,8 @@ def test_licensed() -> None:
     check("male/sit stays free", entries["male/sit.fbx"]["source"] == "free")
     check("kinds are the union", "x" in ac.clip_kinds() and "walk" in ac.clip_kinds())
     data = assets.list_animation_clips()
-    urls = {c["rel"] if "rel" in c else c["url"]: c for c in data["clips"]}
-    by_url = {c["url"]: c for c in data["clips"]}
+    urls = {c["rel"] if "rel" in c else c["url"].split("?", 1)[0]: c for c in data["clips"]}
+    by_url = {c["url"].split("?", 1)[0]: c for c in data["clips"]}
     check("licensed url carries the prefix",
           "/assets/animation-clips/licensed/sit.fbx" in by_url
           and "/assets/animation-clips/sit.fbx" not in by_url, str(sorted(by_url)))

@@ -1220,10 +1220,7 @@ def get_character_image(character_name: str, image_filename: str, request: Reque
 
 
 def _resolve_character_model(character_name: str):
-    from app.core.keyed_lock import keyed_lock
-    from app.core.model3d import get_model3d_dir
-    with keyed_lock("model3d_publication", str(get_model3d_dir(character_name))):
-        return _resolve_character_model_snapshot(character_name)
+    return _resolve_character_model_snapshot(character_name)
 
 
 def _resolve_character_model_snapshot(character_name: str):
@@ -1235,15 +1232,16 @@ def _resolve_character_model_snapshot(character_name: str):
     Only the META route needs this: get_model3d_info re-reads the profile and
     enumerates the mesh backends. The byte routes below resolve the file path
     directly."""
-    from app.core.model3d import find_model3d_serving, find_texture, get_model3d_info
-    path, _match = find_model3d_serving(character_name)
-    if path:
-        status = get_model3d_info(character_name)
-        info = status.get("model") or {}
-        meta = {"format": path.suffix.lstrip(".").lower(),
+    from app.core.model3d import find_texture, get_model3d_info
+    status = get_model3d_info(character_name, _url_base=f"/characters/{quote(character_name)}/model")
+    info = status.get("model") or {}
+    if info:
+        from app.core.model3d import get_model3d_dir
+        path = get_model3d_dir(character_name) / info["filename"]
+        meta = {"format": info["format"],
                 "rig": info.get("rig", "mixamo"),
                 "filename": path.name,
-                "size": path.stat().st_size,
+                "size": info["size"],
                 "has_texture": bool(info.get("texture_url")),
                 "created_at": info.get("created_at", ""),
                 "backend": info.get("backend", ""),
@@ -1255,7 +1253,8 @@ def _resolve_character_model_snapshot(character_name: str):
                 "source": info.get("source", "generated"),
                 "extension_rig": info.get("extension_rig"),
                 "motion": status["motion"],
-                "model_rev": info["model_rev"], "tiers": info["tiers"]}
+                "model_rev": info["model_rev"], "tiers": info["tiers"],
+                **{key: info[key] for key in ("url", "low_url", "texture_url") if key in info}}
         # FBX case only — a GLB embeds its textures; a stray image next to a
         # GLB is an auxiliary material map, never the basecolor.
         tex = (find_texture(character_name, path.stem)
@@ -1266,39 +1265,39 @@ def _resolve_character_model_snapshot(character_name: str):
 
 def _model_asset_response(character_name: str, request: Request, *, tier: str = "",
                           texture: bool = False, download: bool = False):
-    """Capture final bytes and their ETag under the short publication lock.
-
-    FileResponse opens paths later, after the lock would have been released;
-    a bytes response keeps the selected publication stable for this request.
-    """
-    from fastapi.responses import FileResponse, Response
-    from app.core.http_files import glb_file_response
+    """Select and open under publication lock; stream the same descriptor."""
+    from app.core.http_files import snapshot_response
     from app.core.keyed_lock import keyed_lock
     from app.core.model3d import get_model3d_dir, find_model3d_serving_tier, find_texture
-    with keyed_lock("model3d_publication", str(get_model3d_dir(character_name))):
+    publication = keyed_lock("model3d_publication", str(get_model3d_dir(character_name)))
+    def pick():
         path, _, _ = find_model3d_serving_tier(character_name, tier)
         if texture:
-            path = find_texture(character_name, path.stem) if path else None
-        if path is None:
-            return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-        if not texture and path.suffix.lower() == ".glb":
-            response = glb_file_response(
-                path, request, disposition="attachment" if download else "inline")
-            if isinstance(response, FileResponse):
-                # Preserve the existing publication snapshot: FileResponse
-                # otherwise opens the source after this lock is released.
-                return Response(Path(response.path).read_bytes(),
-                                media_type=response.media_type,
-                                headers=dict(response.headers))
-            return response
-        stat = path.stat()
-        etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}-{stat.st_ino:x}"'
-        headers = {"ETag": etag, "Cache-Control": "no-cache"}
-        if request.headers.get("if-none-match") == etag:
-            return Response(status_code=304, headers=headers)
-        contents = path.read_bytes()
-        media = ("image/jpeg" if path.suffix.lower() in (".jpg", ".jpeg") else "image/png") if texture else "application/octet-stream"
-    return Response(contents, media_type=media, headers=headers)
+            return find_texture(character_name, path.stem) if path else None
+        return path
+    chosen: dict = {}
+    def pick_and_remember():
+        p = pick()
+        chosen["path"] = p
+        if p is not None:
+            src, _, _ = find_model3d_serving_tier(character_name, tier)
+            chosen["filename"] = (src.name if (src is not None and not texture) else p.name)
+        return p
+    def media_for(p: Path) -> str:
+        suf = p.suffix.lower()
+        if suf == ".glb":
+            return "model/gltf-binary"
+        if suf == ".fbx":
+            return "application/octet-stream"
+        if suf in (".jpg", ".jpeg"):
+            return "image/jpeg"
+        return "image/png"
+    return snapshot_response(None, request, media_type=media_for,
+                             version=request.query_params.get("v"),
+                             disposition="attachment" if download else "inline",
+                             filename=lambda: chosen.get("filename"),
+                             lock=publication, delivery=not texture and not download,
+                             resolve=pick_and_remember)
 
 
 
@@ -1315,10 +1314,6 @@ def get_character_model_meta(character_name: str) -> Dict[str, Any]:
     _path, meta, tex = _resolve_character_model(character_name)
     if not meta:
         raise HTTPException(status_code=404, detail="No model")
-    enc = quote(character_name)
-    meta = {**meta, "url": f"/characters/{enc}/model"}
-    if tex:
-        meta["texture_url"] = f"/characters/{enc}/model/texture"
     # Body height in cm — the client scales the figures against each other
     # with it (models come out of the generator at arbitrary scale). None =
     # unset, the client keeps its default.

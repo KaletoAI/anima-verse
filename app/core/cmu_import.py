@@ -243,8 +243,20 @@ def convert_take(kind: str, take_a: str, take_b: str = "", *,
             from app.core.clip_catalog import ClipKindExists
             raise ClipKindExists(f"'{kind}' already exists in {out} — tick overwrite to replace it")
         out.mkdir(parents=True, exist_ok=True)
-        res = runner.run("cmu_clip", inputs=inputs, params=params, out_dir=out,
-                         timeout_s=timeout_s)
+        import tempfile
+        import shutil
+        from app.core.http_files import atomic_replace, sibling_stage
+        with tempfile.TemporaryDirectory(prefix=".cmu-import-", dir=out) as temporary:
+            res = runner.run("cmu_clip", inputs=inputs, params=params, out_dir=Path(temporary),
+                             timeout_s=timeout_s)
+            if res["ok"]:
+                for slot, name in (res.get("outputs") or {}).items():
+                    source = Path(name)
+                    target = out / source.name
+                    with sibling_stage(target) as stage:
+                        shutil.copy2(source, stage)
+                        atomic_replace(stage, target)
+                    res["outputs"][slot] = str(target)
         if not res["ok"]:
             raise ClipImportError(str(res.get("error") or "blender run failed"))
         return {"kind": kind, "set": cset, "dir": out,

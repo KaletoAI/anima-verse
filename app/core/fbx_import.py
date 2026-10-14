@@ -1091,8 +1091,19 @@ def import_source(kind: str, src: Path, rest: Path, *, out_dir: Path,
 
 def _run_source(inputs, params, out, timeout_s):
     """Run the shared FBX conversion and translate runner failures."""
-    res = runner.run("fbx_clip", inputs=inputs, params=params, out_dir=out,
-                     timeout_s=timeout_s)
-    if not res["ok"]:
-        raise ClipImportError(str(res.get("error") or "blender run failed"))
-    return res
+    import tempfile
+    import shutil
+    from app.core.http_files import atomic_replace, sibling_stage
+    with tempfile.TemporaryDirectory(prefix=".clip-import-", dir=out) as temporary:
+        res = runner.run("fbx_clip", inputs=inputs, params=params, out_dir=Path(temporary),
+                         timeout_s=timeout_s)
+        if not res["ok"]:
+            raise ClipImportError(str(res.get("error") or "blender run failed"))
+        for slot, name in (res.get("outputs") or {}).items():
+            source = Path(name)
+            target = out / source.name
+            with sibling_stage(target) as stage:
+                shutil.copy2(source, stage)
+                atomic_replace(stage, target)
+            res["outputs"][slot] = str(target)
+        return res

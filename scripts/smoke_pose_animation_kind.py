@@ -111,7 +111,8 @@ def main():
             (out_dir / "generated.fbx").touch()
             (out_dir / "generated.json").write_text(json.dumps({
                 "source": {"bone_map": "mixamo-noprefix"}, "frames": 60}))
-            return {"ok": True}
+            return {"ok": True, "outputs": {"clip": str(out_dir / "generated.fbx"),
+                    "sidecar": str(out_dir / "generated.json")}}
 
         with patch.object(importer.runner, "status", return_value={"executable": "fixture"}), \
                 patch.object(importer.runner, "run", side_effect=convert), \

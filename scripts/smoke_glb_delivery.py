@@ -14,7 +14,7 @@ A skip marker, disabled switch or
 missing Blender queues zero builds. Failures without deterministic skipped
 reasons queue again. At a fixed time T, only recognized entries with mtime
 strictly below T - 30*86400 are removed; the boundary itself survives.
-Touching a cache entry updates retention without changing its HTTP ETag.
+Touching a sibling .used marker updates retention without changing served stat or ETag.
 With delivery disabled, an atomic same-size replacement with preserved
 mtime returns 200 and the new bytes when revalidated with the old ETag.
 Eight inline route sites select delivery; an explicit character Download
@@ -33,6 +33,16 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core import paths
+
+
+def run_async(coroutine):
+    """Poll completions when the sandbox prevents selector socket wakeups."""
+    import selectors
+    class SmokeSelector(selectors.DefaultSelector):
+        def select(self, timeout=None):
+            return super().select(.05 if timeout is None else min(timeout, .05))
+    with asyncio.Runner(loop_factory=lambda: asyncio.SelectorEventLoop(SmokeSelector())) as runner:
+        return runner.run(coroutine)
 
 
 async def disabled_delivery_http(src):
@@ -71,12 +81,17 @@ async def disabled_delivery_http(src):
 
 
 def route_guards(src, target):
-    """All eight inline route sites use delivery; explicit download keeps bytes."""
+    """All eight inline route sites use delivery; explicit download keeps bytes.
+
+    Character responses stream a descriptor snapshot; consume it before checking.
+    """
+    async def body(response):
+        return b"".join([chunk async for chunk in response.body_iterator])
     from app.core import glb_delivery, props, model3d, location_model3d
     from app.models import world as world_model
     from app.routes import assets, characters, play, prop_variants, world
     from starlette.requests import Request
-    req = Request({"type": "http", "headers": []})
+    req = Request({"type": "http", "headers": [], "query_string": b""})
     with patch.object(glb_delivery, "delivery_path", return_value=target), \
             patch.object(props, "model_path", return_value=src), \
             patch.object(props, "model_file_path", return_value=src), \
@@ -97,9 +112,9 @@ def route_guards(src, target):
             assert Path(response.path) == target
             assert src.name in response.headers["content-disposition"]
         inline = characters.get_character_model3d_file("demo", req)
-        assert inline.body == target.read_bytes()
+        assert run_async(body(inline)) == target.read_bytes()
         download = characters.get_character_model3d_file("demo", req, download=True)
-        assert download.body == src.read_bytes()
+        assert run_async(body(download)) == src.read_bytes()
         assert download.headers["content-disposition"].startswith("attachment;")
         # Filename routing must retain FBX bytes without delivery lookup.
         fbx = src.with_suffix(".fbx")
@@ -118,7 +133,7 @@ def main():
         from app.core.http_files import glb_file_response
         from starlette.requests import Request
         assert scope_of("image_generation.blender_meshopt_delivery") == "instance"
-        asyncio.run(disabled_delivery_http(Path(tmp) / "disabled.glb"))
+        run_async(disabled_delivery_http(Path(tmp) / "disabled.glb"))
         src = Path(tmp) / "original.glb"
         src.write_bytes(b"first source")
         cache = Path(tmp) / ".cache/meshopt"
@@ -154,12 +169,16 @@ def main():
             target = delivery.delivery_path(src)
             assert target == cache / (hashlib.sha256(b"first source").hexdigest()+".glb")
             assert target.read_bytes() == b"delivery copy" and src.read_bytes() == b"first source"
-            req = Request({"type": "http", "headers": []})
+            req = Request({"type": "http", "headers": [], "query_string": b""})
             os.utime(target, (1, 1))
+            served_stat = target.stat()
             r1 = glb_file_response(src, req)
             first_etag = r1.headers["etag"]
             r2 = glb_file_response(src, req)
-            assert first_etag == r2.headers["etag"] and target.stat().st_mtime > 1
+            assert first_etag == r2.headers["etag"]
+            assert target.stat().st_mtime_ns == served_stat.st_mtime_ns
+            assert target.stat().st_ctime_ns == served_stat.st_ctime_ns
+            assert target.with_name(target.name + ".used").stat().st_mtime > 1
             assert "original.glb" in r2.headers["content-disposition"]
             conditional = Request({"type": "http", "headers": [(b"if-none-match", first_etag.encode())]})
             assert glb_file_response(src, conditional).status_code == 304
@@ -190,7 +209,8 @@ def main():
             assert marker.is_file()
             os.utime(marker, (1, 1))
             assert delivery.delivery_path(src) == src and len(calls) == 4
-            assert marker.stat().st_mtime > 1
+            assert marker.stat().st_mtime == 1
+            assert marker.with_name(marker.name + ".used").stat().st_mtime > 1
             src.write_bytes(b"timeout source with different size")
             outcome[0] = "fail"
             for _ in range(2):
@@ -241,7 +261,18 @@ def main():
             p = cache / name
             p.write_bytes(b"fixture")
             os.utime(p, (mtime, mtime))
+        # Old served bytes stay when their independent usage marker is recent.
+        used_old = cache / ("e"*64 + ".glb")
+        used_old.write_bytes(b"recently used old copy")
+        os.utime(used_old, (1, 1))
+        used_marker = used_old.with_name(used_old.name + ".used")
+        used_marker.touch()
+        expired = cache / ("a"*64 + ".glb.used")
+        expired.touch()
+        os.utime(expired, (cutoff-1, cutoff-1))
         assert delivery.sweep_cache(now=now) == 2
+        assert used_old.exists() and used_marker.exists()
+        assert not expired.exists()
         assert all((cache/name).exists() == (mtime >= cutoff or name == "unrelated.txt") for name, mtime in fixtures)
     print("PASS: delivery deduplication, invalidation, gates, retries, HTTP and 30-day sweep")
 

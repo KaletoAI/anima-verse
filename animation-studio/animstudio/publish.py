@@ -155,9 +155,10 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
             dst = lib / f"{kind}{suffix}"
             if dst.exists():
                 backups[dst] = dst.read_bytes()
-            tmp = dst.with_name(dst.name + ".tmp")
-            shutil.copyfile(out / f"{kind}{suffix}", tmp)
-            os.replace(tmp, dst)
+            from app.core.http_files import atomic_replace, sibling_stage
+            with sibling_stage(dst) as tmp:
+                shutil.copyfile(out / f"{kind}{suffix}", tmp)
+                atomic_replace(tmp, dst)
             written.append(dst)
         reload_clip_caches()
         with pc.catalog_file_lock("pose"):
@@ -181,7 +182,9 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
     except Exception:
         for p in written:
             if p in backups:
-                p.write_bytes(backups[p])
+                with sibling_stage(p) as tmp:
+                    tmp.write_bytes(backups[p])
+                    atomic_replace(tmp, p)
             else:
                 p.unlink(missing_ok=True)
         reload_clip_caches()

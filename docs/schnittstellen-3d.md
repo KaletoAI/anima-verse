@@ -2184,13 +2184,34 @@ GET /play/rooms/{id}/model/meta     → { format, rotation, offset_y*,
        layout.model_offset_y)
 GET /play/rooms/{id}/model          → GLB (ETag)
 GET /characters/{name}/model3d      → { model: {url, format, rig,
-      texture_url?}, signature } | 404
+      low_url?, texture_url?, model_rev}, signature } | 404
 GET /play/test-figure/meta|/model   → Referenz-Figur der Admin-Vorschau
 GET /assets/props                   → Bare Array (§ A2 Props)
 GET /assets/props/{id}/model        → GLB (ETag; 404 = kein Mesh)
 GET /assets/animation-clips         → [{ kind, set?, url, loop, … }]
+GET /characters/{name}/model/meta   → {url, low_url?, texture_url?, …}
+GET /assets/animation-clips/{rel}   → FBX/GLB (content ETag)
 GET /assets/surface-textures        → Flächen + Blends (§ A9)
 ```
+
+**Byte-genaue Versionen (P2 T5).** Die Clip-Liste und beide Modell-Infos
+(`/characters/{name}/model3d` und `/characters/{name}/model/meta`) liefern fertige
+`url`, `low_url` und bei FBX `texture_url` mit `v=<erste 16 SHA-256-Hexzeichen>`.
+`low_url` enthält zusätzlich `tier=low`. Clients übernehmen alle URLs unverändert;
+`model_rev` bleibt die Kennung für einen Modelltausch, wird aber nicht als `rev`
+an Datei-URLs angehängt. Für GLB wird die aktuell gewählte Meshopt-Lieferkopie
+versioniert, für Downloads weiterhin das Original ausgeliefert.
+
+Clip- und Charaktermodell-Dateirouten nutzen `http_files.snapshot_response`:
+Pfadwahl, Öffnen und `fstat` erfolgen unter dem Publikations-Schloss (bei Modellen),
+ETag und Stream stammen aus demselben offenen Deskriptor. Nur eine exakt passende
+`v` erhält `Cache-Control: public, max-age=31536000, immutable`; fehlende oder alte
+Versionen liefern aktuelle Bytes mit `no-cache`. Passendes `If-None-Match` ergibt
+304 mit denselben Cache-Headern. Schreiber veröffentlichen neben dem Ziel
+bereitgestellte Dateien per `atomic_replace`, niemals durch In-place-Schreiben.
+Der Prozess-LRU umfasst 4096 Einträge und nutzt Gerät, Inode, Größe, mtime und
+ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restrisiko.
+
 
 - **404 ist überall der Normalzustand**, solange kein Modell verfügbar ist.
   Nach erfolgreicher Mesh-Erzeugung ist ein Charakter bereits als statisches GLB
@@ -10231,7 +10252,7 @@ files using a temporary file in the destination directory and `os.replace`.
 The selection cache watches candidate meshes and their model/reference sidecars
 with the same stat fields, and caches the selected path and signature together.
 The 3D client reloads on a change to either `model_sig` or `model_rev` and
-includes the revision in mesh request URLs to bypass stale stat-based ETags,
+takes content-versioned mesh URLs unchanged from the server,
 and retains `motion` on each figure independently of mesh changes. P2 consumes
 motion through the shared secondary-motion solver. Admin `/model/meta`
 returns the same `motion` and `model_rev`; `/model3d` exposes `motion` at the
