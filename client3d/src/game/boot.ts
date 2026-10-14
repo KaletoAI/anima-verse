@@ -154,18 +154,24 @@ export interface BootReport {
   /** Summed elapsed durations of possibly concurrent runs; not wall-clock boot time. */
   phases: Record<BootPhase, number>;
   longTasks: LongTaskSummary | null;
+  longTaskMaxByPhase: Partial<Record<BootPhase, number>>;
   afterVisible: LongTaskSummary | null;
 }
 
-/** Largest overlap wins; ties go to the interval that started first. */
+const CPU_PHASES = new Set<BootPhase>(['clip:parse', 'clip:fit', 'model:build', 'ground:build']);
+
+/** CPU overlaps take priority; within each group, largest overlap then earliest start wins. */
 export function attributeLongTask(intervals: readonly PhaseInterval[], entry: TaskEntry): BootPhase | null {
   let best: PhaseInterval | null = null;
   let overlap = 0;
   for (const interval of intervals) {
     const amount = Math.min(interval.end, entry.startTime + entry.duration)
       - Math.max(interval.start, entry.startTime);
-    if (amount > 0 && (amount > overlap
-      || (amount === overlap && best !== null && interval.start < best.start))) {
+    const cpu = CPU_PHASES.has(interval.phase);
+    const bestCpu = best !== null && CPU_PHASES.has(best.phase);
+    if (amount > 0 && (best === null || (cpu && !bestCpu)
+      || (cpu === bestCpu && (amount > overlap
+        || (amount === overlap && interval.start < best.start))))) {
       best = interval;
       overlap = amount;
     }
@@ -192,7 +198,7 @@ let observer: PerformanceObserver | null = null;
 let observerTimer: ReturnType<typeof setTimeout> | null = null;
 let supportsLongTasks = false;
 let reportSnapshot: BootReport = {
-  stages: { ...stageTimes }, phases: { ...phaseSums }, longTasks: null, afterVisible: null,
+  stages: { ...stageTimes }, phases: { ...phaseSums }, longTasks: null, longTaskMaxByPhase: {}, afterVisible: null,
 };
 
 function summarize(entries: TaskEntry[]): LongTaskSummary {
@@ -216,8 +222,18 @@ function publishReport(): void {
   }
   const arrival = stageTimes.arrival;
   const visible = stageTimes.visible;
+  const longTaskMaxByPhase: Partial<Record<BootPhase, number>> = {};
+  if (supportsLongTasks) {
+    for (const entry of tasks) {
+      if (entry.startTime < bootStart || entry.startTime > end) continue;
+      const phase = attributeLongTask(intervals, entry);
+      if (phase !== null) {
+        longTaskMaxByPhase[phase] = Math.max(longTaskMaxByPhase[phase] ?? 0, entry.duration);
+      }
+    }
+  }
   reportSnapshot = {
-    stages: { ...stageTimes }, phases: { ...phaseSums },
+    stages: { ...stageTimes }, phases: { ...phaseSums }, longTaskMaxByPhase,
     longTasks: supportsLongTasks ? summarize(tasks.filter((e) =>
       e.startTime >= bootStart && (arrival === null || e.startTime <= bootStart + arrival))) : null,
     afterVisible: supportsLongTasks ? summarize(tasks.filter((e) => visible !== null
@@ -239,7 +255,7 @@ function printReport(): void {
   const r = reportSnapshot;
   const summary = (v: LongTaskSummary | null) => v === null ? 'n/a'
     : `${v.count} (${Math.round(v.totalMs)} ms, max ${Math.round(v.maxMs)} @${v.maxPhase ?? 'n/a'})`;
-  console.info(`[boot] ${BOOT_STAGES.map((s) => `${s} ${r.stages[s] === null ? 'n/a' : Math.round(r.stages[s]!)}`).join(' · ')} ms | ${Object.entries(r.phases).map(([p, ms]) => `${p} ${Math.round(ms)}`).join(' · ')} | longtasks ${summary(r.longTasks)} | after-visible ${summary(r.afterVisible)}`);
+  console.info(`[boot] ${BOOT_STAGES.map((s) => `${s} ${r.stages[s] === null ? 'n/a' : Math.round(r.stages[s]!)}`).join(' · ')} ms | ${Object.entries(r.phases).map(([p, ms]) => `${p} ${Math.round(ms)}`).join(' · ')} | longtasks ${summary(r.longTasks)} | max by phase ${Object.entries(r.longTaskMaxByPhase).map(([p, ms]) => `${p} ${Math.round(ms)}`).join(' · ') || 'n/a'} | after-visible ${summary(r.afterVisible)}`);
 }
 
 function measurementEnd(): number {

@@ -83,6 +83,8 @@ export function PerfOverlay() {
       <Row label={`${t('Boot phases (ms)')} — ${t('Summed elapsed durations; concurrent runs may overlap')}`}
         value={Object.entries(boot.phases).map(([phase, ms]) => `${phase} ${num(ms)}`).join(' · ')} wide />
       <Row label={t('Long tasks: count, total, max @ phase')} value={longTasks(boot.longTasks)} wide />
+      <Row label={t('Long task max by phase (ms)')} value={Object.entries(boot.longTaskMaxByPhase)
+        .map(([phase, ms]) => `${phase} ${Math.round(ms)}`).join(' · ') || t('n/a')} wide />
       <Row label={t('Long tasks after visible (5 s)')} value={longTasks(boot.afterVisible)} wide />
     </div>
   );

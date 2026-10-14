@@ -2529,6 +2529,7 @@
     "Boot stages (ms)": "Startstufen (ms)",
     "Boot phases (ms)": "Startphasen (ms)",
     "Long tasks: count, total, max @ phase": "Lange Tasks: Anzahl, Summe, Maximum @ Phase",
+    "Long task max by phase (ms)": "Maximum langer Tasks pro Phase (ms)",
     "Long tasks after visible (5 s)": "Lange Tasks nach Sichtbarkeit (5 s)",
     "n/a": "n/v",
     "max": "max."

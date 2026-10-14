@@ -3595,6 +3595,23 @@ async function main() {
     [400, 50, null], [50, 50, 'scene:fetch'],
   ]) check(`long task ${startTime}`, attributeLongTask(intervals, { startTime, duration }), expected);
 
+  // Arrival overlaps all 60 ms, parse only 20 ms: CPU must win.
+  check('CPU beats enclosing wait', attributeLongTask([
+    { phase: 'arrival:mount', start: 0, end: 300 },
+    { phase: 'clip:parse', start: 100, end: 120 },
+  ], { startTime: 90, duration: 60 }), 'clip:parse');
+  // Equal 20 ms CPU overlaps choose start 100 rather than 110.
+  check('CPU ties choose earlier start', attributeLongTask([
+    { phase: 'clip:fit', start: 110, end: 130 },
+    { phase: 'clip:parse', start: 100, end: 120 },
+  ], { startTime: 90, duration: 60 }), 'clip:parse');
+  check('largest CPU overlap wins', attributeLongTask([
+    { phase: 'arrival:mount', start: 0, end: 300 },
+    { phase: 'clip:parse', start: 100, end: 120 },
+    { phase: 'model:build', start: 110, end: 140 },
+  ], { startTime: 90, duration: 60 }), 'model:build');
+  // Wait-only cases above retain largest overlap and earlier-start ties.
+
   console.log('boot — the store the title screen subscribes to');
   check('a fresh store is at zero',
     { percent: getBootState().percent, label: getBootState().label,
@@ -3711,6 +3728,15 @@ async function main() {
       { count: 2, totalMs: 130, maxMs: 70, maxPhase: null });
     check('after-visible window includes both endpoints', boot.bootReport().afterVisible,
       { count: 2, totalMs: 150, maxMs: 80, maxPhase: null });
+    // Parse [150,300] overlaps the 60 and 70 ms tasks: maximum 70.
+    // Fit [400,410] overlaps a new 80 ms task starting at 400.
+    // The 90 ms task at 5201 is beyond the measurement window.
+    boot.markPhase('clip:parse', 150);
+    bootNow = 410;
+    boot.markPhase('clip:fit', 10);
+    observerCallback({ getEntries: () => [{ startTime: 400, duration: 80 }] });
+    check('per-phase maxima use full attributed durations inside window',
+      boot.bootReport().longTaskMaxByPhase, { 'clip:parse': 70, 'clip:fit': 80 });
     check('arrival does not print a provisional report', printed, 0);
     const emptySnapshot = boot.bootReport();
     observerCallback({ getEntries: () => [] });
@@ -3719,10 +3745,17 @@ async function main() {
     let finish;
     const crossing = boot.withPhase('model:build', () => new Promise((resolve) => { finish = resolve; }));
     bootNow = 5200;
+    observerCallback({ getEntries: () => [{ startTime: 5190, duration: 80 }] });
     timerCallback();
     check('window end disconnects observer', disconnected, true);
     check('final drain prints one authoritative report', printed, 1);
     check('authoritative line includes drained task', printedLine.includes('longtasks 3 (230 ms'), true);
+    // Build [5100,5200] overlaps the 80 ms task at 5190 for 10 ms.
+    // The 90 ms task starting at 5201 is still outside the window.
+    check('per-phase maxima reflect completed intervals',
+      boot.bootReport().longTaskMaxByPhase, { 'clip:parse': 70, 'clip:fit': 80, 'model:build': 80 });
+    check('console includes phase maxima',
+      printedLine.includes('max by phase clip:parse 70 · clip:fit 80 · model:build 80'), true);
     check('crossing interval is clipped to 100 ms', boot.bootReport().phases['model:build'], 100);
     const frozen = boot.bootReport();
     bootNow = 5300;

@@ -685,9 +685,9 @@ export interface ApiModelAnchors {
   signature?: string;
 }
 
-/** Modell-Info eines Charakters; null wenn der Server keins hat (404).
- *  Andere Fehler (Netzwerk, 5xx) werfen — der Aufrufer darf sie nicht als
- *  "hat keins" cachen, sondern soll später erneut versuchen. */
+/** Character model info; null when the server has none (404).
+ *  Other errors (network, 5xx) throw — callers must retry later rather
+ *  than cache them as "no model". */
 export async function getCharacterModel(name: string): Promise<ApiModel | null> {
   const res = await fetch(`/characters/${encodeURIComponent(name)}/model3d`);
   if (res.status === 404) return null;
@@ -698,9 +698,9 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
   return {
     url: m.url,
     lowUrl: m.low_url,
-    // Identität der AUSGELIEFERTEN Datei (Server kann bei unbekannter
-    // Kombination das nächstliegende Modell servieren): wechselt auch dann,
-    // wenn das exakte Mesh später fertig wird und den Nearest-Treffer ablöst.
+    // Identity of the SERVED file (the server may serve the nearest model
+    // for an unknown combination): also changes when the exact mesh
+    // becomes ready later and replaces the nearest match.
     signature: m.signature ?? m.filename ?? data.signature,
     modelRev: m.model_rev,
     motion: data.motion,

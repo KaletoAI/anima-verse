@@ -749,7 +749,6 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
     # served file must agree.
     path, match = find_model3d_serving(character_name) if signature else (None, "")
     if path:
-        enc = quote(character_name)
         info: Dict[str, Any] = {"filename": path.name,
                                 # Identity of the SERVED file — clients key
                                 # model reloads on this, so the swap from a

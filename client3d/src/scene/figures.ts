@@ -975,7 +975,11 @@ export class FigureLibrary {
           try {
             clip = await parseFirstClip(buf, sources[i].url);
           } catch (e) { console.warn('[figures] clip not parsable:', sources[i].url, e); }
-          finally { markPhase('clip:parse', performance.now() - start); }
+          finally {
+            const ms = performance.now() - start;
+            markPhase('clip:parse', ms);
+            if (ms > 200) console.info('[figures] slow clip parse', sources[i].url, Math.round(ms), 'ms');
+          }
         }
         results.push({ clip });
         await nextFrame();
@@ -1451,12 +1455,16 @@ export class FigureLibrary {
   }
 
   private async fitSlices(clips: THREE.AnimationClip[], run: (slice: THREE.AnimationClip[]) => void) {
+    let lastYield = performance.now();
     for (let k = 0; k < clips.length; k += FIT_SLICE_CLIPS) {
+      if (performance.now() - lastYield > FIT_SLICE_MS) {
+        await nextFrame();
+        lastYield = performance.now();
+      }
       const sliceStart = performance.now();
       run(clips.slice(k, k + FIT_SLICE_CLIPS));
       const elapsed = performance.now() - sliceStart;
       markPhase('clip:fit', elapsed);
-      if (elapsed > FIT_SLICE_MS) await nextFrame();
     }
   }
 
