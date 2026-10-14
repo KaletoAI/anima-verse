@@ -26,6 +26,7 @@
  * itself when something is said and withdraws when the room stays silent; see
  * the block around CHAT_IDLE_MS below. Self/Others stay purely manual.
  */
+import { getBootState, subscribeBoot } from '../game/boot';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
@@ -173,6 +174,7 @@ export function Hud({ avatar, username, role }: {
 }) {
   const { t } = useI18n();
   const game = useSyncExternalStore(subscribeGameState, getGameState);
+  const boot = useSyncExternalStore(subscribeBoot, getBootState);
   const [open, setOpen] = useState<Record<PanelId, boolean>>({
     chat: true, self: false, others: false, menu: false,
     belongings: false, mind: false, phone: false, news: false, tasks: false,
@@ -1242,6 +1244,9 @@ export function Hud({ avatar, username, role }: {
           prompt out of place. The prompt is read, not operated, so it stays
           pointer-transparent (see the pointer rule in hud.css). */}
       <div className="hud-bottom">
+        {boot.note?.kind === 'characters' && (
+          <div className="hud-talk" role="status">{t('Loading characters…')}</div>
+        )}
         {offer === 'talk' && game.talkTarget && (
           <div className="hud-talk">
             {t('Press F to talk to {name}').replace('{name}', game.talkTarget.name)}

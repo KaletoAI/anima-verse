@@ -8,6 +8,7 @@
     }
   },
   "translations": {
+    "Loading characters…": "Figuren werden geladen…",
     "Preparing the arrival…": "Ankunft wird vorbereitet…",
     "Summed elapsed durations; concurrent runs may overlap": "Summierte verstrichene Dauer; parallele Läufe können sich überlappen",
     "Enabled and flip are saved for this model; they take effect after rebuilding its extension bones.": "Aktiv und Richtungsumkehr werden für dieses Modell gespeichert; sie wirken nach dem Neuaufbau seiner Erweiterungsknochen.",

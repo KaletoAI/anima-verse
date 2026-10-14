@@ -82,7 +82,8 @@ export type BootNote =
   /** the server did not answer; the next attempt is in `seconds` */
   | { kind: 'retry'; seconds: number }
   /** `startApp` threw — the page has to be reloaded */
-  | { kind: 'failed' };
+  | { kind: 'failed' }
+  | { kind: 'characters' };
 
 export interface BootState extends BootProgress {
   /** what the screen shows below the bar, or `null` while all is well */

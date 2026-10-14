@@ -89,6 +89,7 @@ export function TitleScreen({ needsLogin, onLogin, onEnter, onDone }: TitleScree
   /** The trouble line, in words — `game/boot.ts` carries it as a value
    *  because the vanilla side that sets it has no `t()`. */
   const noteText = (note: NonNullable<BootState['note']>): string => {
+    if (note.kind === 'characters') return t('Loading characters…');
     if (note.kind === 'failed') return t('Start failed — please reload the page.');
     return t('The server is not answering — trying again in {n} s…')
       .replace('{n}', String(note.seconds));
@@ -126,7 +127,7 @@ export function TitleScreen({ needsLogin, onLogin, onEnter, onDone }: TitleScree
   // explains the black world with it. While the trouble line says "failed",
   // the screen stays.
   useEffect(() => {
-    if (!entered || boot.percent < 100) return;
+    if (!entered || !boot.stages.includes('visible')) return;
     if (boot.note?.kind === 'failed') {
       // The failure may arrive AFTER the fade was started (the throw comes out
       // of a `.catch` on `startApp`, the last stage was reported before it) —
@@ -139,7 +140,7 @@ export function TitleScreen({ needsLogin, onLogin, onEnter, onDone }: TitleScree
     const fade = prefersReducedMotion() ? 0 : FADE_MS;
     const timer = window.setTimeout(() => doneRef.current(), fade);
     return () => window.clearTimeout(timer);
-  }, [entered, boot.percent, boot.note?.kind]);
+  }, [entered, boot.stages.includes('visible'), boot.note?.kind]);
 
   const enter = useCallback(() => {
     setEntered(true);

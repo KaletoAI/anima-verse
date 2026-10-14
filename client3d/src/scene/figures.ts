@@ -1,5 +1,7 @@
 import { createFocusQueue } from '../game/focusQueue';
-import { markPhase } from '../game/boot';
+import { commitInListOrder } from '../game/clipCommit';
+import type { ClipResult } from '../game/clipCommit';
+import { withPhase, markPhase } from '../game/boot';
 import type { MotionPayload } from "../types";
 import * as THREE from 'three';
 import { createGLTFLoader } from './gltfLoader';
@@ -765,7 +767,45 @@ const CLIP_SYNONYMS: Record<string, string[]> = {
  *  NPC instance). */
 const loggedActionKinds = new Set<string>();
 
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+// Eight clips bound each work slice; 12 ms leaves time for rendering at 60 Hz.
+const FIT_SLICE_CLIPS = 8;
+const FIT_SLICE_MS = 12;
+
 export class FigureLibrary {
+  state: 'loading' | 'ready' | 'failed' = 'loading';
+  private settle!: () => void;
+  readonly settled = new Promise<void>((resolve) => { this.settle = resolve; });
+  private manifest: Manifest = { models: [] };
+  private fallbackPool: Promise<void> | null = null;
+  private poolState: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
+  private waitingForPool = new Set<string>();
+  private firstAttemptFailed = new Set<string>();
+  private readyWaiters = new Map<string, Array<() => void>>();
+
+  private figureReady(name: string): boolean {
+    const api = this.apiModels.get(name);
+    return !!api || this.firstAttemptFailed.has(name)
+      || (api === null && (this.poolState === 'ready' || this.poolState === 'failed'));
+  }
+
+  avatarFigureReady(name: string): Promise<void> {
+    if (this.figureReady(name)) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const waiters = this.readyWaiters.get(name) ?? [];
+      waiters.push(resolve);
+      this.readyWaiters.set(name, waiters);
+    });
+  }
+
+  private resolveReadyWaiters() {
+    for (const [name, waiters] of this.readyWaiters) {
+      if (!this.figureReady(name)) continue;
+      this.readyWaiters.delete(name);
+      for (const resolve of waiters) resolve();
+    }
+  }
+
   private models: LoadedModel[] = [];
   private assignments: Record<string, string> = {};
   /** Character models loaded from the server (null = the server has none). */
@@ -795,7 +835,7 @@ export class FigureLibrary {
    *  already out of the caches, still drawn by the figure on screen. Freed in
    *  `freeRetired` the moment the new model is announced. */
   private retired = new Map<string, LoadedModel[]>();
-  /** Server-Clips: kind -> (set|'' -> Clip) */
+  /** Server clips: kind -> (set|'' -> Clip) */
   private clipIndex = new Map<string, Map<string, THREE.AnimationClip>>();
   /** Root path of every pair-clip half (`<kind>__<role>`), clip-frame metres */
   private pairRoots = new Map<string, RootPath>();
@@ -821,33 +861,172 @@ export class FigureLibrary {
   /** called as soon as a character model loaded later is ready */
   onModelReady: ((charName: string) => void) | null = null;
 
-  /** true when at least one model is usable; otherwise the portrait fallback.
-   *  opts.only: load only this model (model name or character name) —
-   *  otherwise all standard models + the assigned ones (assignOnly without an
-   *  assignment is skipped; test models would bloat every page load). */
+  /** Load the shared library, independently of character models. True means
+   *  both listing and reference rig succeeded; settled always resolves.
+   *  opts.only eagerly loads the selected manifest model for the test page. */
   async load(opts: { only?: string } = {}): Promise<boolean> {
-    // The manifest is optional (dev/offline fallback) — without it we carry
-    // on with the server assets alone.
-    let manifest: Manifest = { models: [] };
-    try {
-      const res = await fetch('/models/manifest.json');
-      if (res.ok) manifest = await res.json();
-    } catch { /* no manifest -> server assets only */ }
-    this.assignments = manifest.assignments ?? {};
     const loader = createGLTFLoader();
-    const defaultHeight = manifest.defaultHeight ?? BASE_FIGURE_HEIGHT_M;
-
-    const loadFile = async (url: string, forceFbx = false): Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }> => {
+    let fbxLoader: Promise<import('three/addons/loaders/FBXLoader.js').FBXLoader> | undefined;
+    const getFbxLoader = () => fbxLoader ??= import('three/addons/loaders/FBXLoader.js')
+      .then(({ FBXLoader }) => new FBXLoader());
+    const parseFirstClip = async (buf: ArrayBuffer, url: string): Promise<THREE.AnimationClip | null> => {
+      const animations = /\.fbx(\?|$)/i.test(url)
+        ? (await getFbxLoader()).parse(buf, '').animations
+        : (await loader.parseAsync(buf, '')).animations;
+      return animations[0]?.clone() ?? null;
+    };
+    this.loadFile = async (url: string, forceFbx = false): Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }> => {
       if (forceFbx || /\.fbx(\?|$)/i.test(url)) {
-        const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
-        const obj = await new FBXLoader().loadAsync(url);
+        const obj = await (await getFbxLoader()).loadAsync(url);
         return { scene: obj, animations: obj.animations ?? [] };
       }
       const gltf = await loader.loadAsync(url);
       return { scene: gltf.scene, animations: gltf.animations };
     };
 
-    let wanted = manifest.models ?? [];
+    let rigOk = false;
+    let listOk = false;
+    try {
+      const manifestP = (async (): Promise<Manifest> => {
+        try {
+          const res = await fetch('/models/manifest.json');
+          if (res.ok) return await res.json();
+        } catch { /* Optional offline manifest. */ }
+        return { models: [] };
+      })();
+      const libraryP = getAnimationClips().then((library) => {
+        if (library.locomotion) setLocomotionClips(library.locomotion);
+        if (library.transitions) setClipTransitions(library.transitions);
+        return library;
+      });
+      const rigP = this.loadFile('/assets/animation-rig', true).then((rig) => {
+        this.donorRest = restPoseOf(THREE, rig.scene);
+        this.donorHipsY = rigHipsHeight(THREE, rig.scene);
+        rigOk = true;
+      });
+      const [manifestResult, libraryResult, rigResult] = await Promise.allSettled([manifestP, libraryP, rigP]);
+      const manifest = manifestResult.status === 'fulfilled' ? manifestResult.value : { models: [] };
+      this.manifest = manifest;
+      this.assignments = manifest.assignments ?? {};
+      this.defaultHeight = manifest.defaultHeight ?? BASE_FIGURE_HEIGHT_M;
+      if (rigResult.status === 'rejected') {
+        console.warn('[figures] no reference rig at /assets/animation-rig —'
+          + ' library clips are copied 1:1 and overwrite each rig\'s own stance');
+      }
+      const library = libraryResult.status === 'fulfilled' ? libraryResult.value
+        : { ok: false, clips: [], locomotion: null, transitions: [] };
+      listOk = library.ok;
+      // Where the clips come from: the server's global library (AV3D-5) by
+      // preference, the local manifest clips otherwise (dev/offline). What is
+      // done with them is the loop below — every rig gets the kinds it does not
+      // carry itself, and a rig the library does not fit borrows from another
+      // model (bone names rewritten, mixamorig prefix mapping).
+      const serverClips = library.clips;
+      // A PAIR clip's half is indexed under `<kind>__<role>` (§ A8a) — the name
+      // an interaction asks for; a solo clip keeps its plain kind. The listing's
+      // loop flag rides along PER FILE: it belongs to the kind in ITS set.
+      // So does the ROOT-MOTION flag: a file imported with `keep`/`foot_lock`
+      // carries a travel in its hips track that the figure is to follow
+      // (`Figure.update`); `strip` or no block plays in place as before.
+      const sources: Array<{ kind: string; set: string; url: string; loop?: boolean;
+                             rootMotion?: boolean }> =
+        serverClips.map((c) => ({
+          kind: c.role ? `${c.kind}__${c.role}` : c.kind, set: c.set ?? '',
+          url: c.url, loop: c.loop,
+          rootMotion: !!c.root_motion && c.root_motion.mode !== 'strip',
+        }));
+      if (!sources.length) {
+        // Dev/offline fallback: the local manifest clips (no sets)
+        for (const [kind, url] of Object.entries(manifest.clipFiles ?? {})) sources.push({ kind, set: '', url });
+      } else {
+        const desc = sources.map((s) => s.set ? `${s.kind}/${s.set}` : s.kind).join(', ');
+        console.info(`[figures] ${sources.length} clips from the server: ${desc}`);
+        // Loud on purpose: a one-shot that should cycle (or the other way
+        // round) is a report about ONE file in ONE set, and this line is what
+        // says which files the flag was actually delivered for.
+        const oneShots = sources.filter((s) => s.loop === false)
+          .map((s) => s.set ? `${s.set}/${s.kind}` : s.kind).sort();
+        console.info(`[figures] one-shot clips (hold the last frame): `
+          + `${oneShots.length ? oneShots.join(', ') : 'none'}`);
+      }
+      const clipQueue = createFocusQueue({ max: 4 });
+      const buffers = await withPhase('clip:download', async () => {
+        const values: Array<ArrayBuffer | null> = sources.map(() => null);
+        await Promise.all(sources.map((source, i) => clipQueue.push({
+          distance: () => i,
+          run: async () => {
+            try {
+              const res = await fetch(source.url);
+              if (res.ok) values[i] = await res.arrayBuffer();
+              else console.warn('[figures] clip not loadable:', source.url, res.status);
+            } catch (e) { console.warn('[figures] clip not loadable:', source.url, e); }
+          },
+        })));
+        return values;
+      });
+      const results: ClipResult<THREE.AnimationClip>[] = [];
+      for (let i = 0; i < sources.length; i++) {
+        let clip: THREE.AnimationClip | null = null;
+        const buf = buffers[i];
+        if (buf) {
+          const start = performance.now();
+          try {
+            clip = await parseFirstClip(buf, sources[i].url);
+          } catch (e) { console.warn('[figures] clip not parsable:', sources[i].url, e); }
+          finally { markPhase('clip:parse', performance.now() - start); }
+        }
+        results.push({ clip });
+        await nextFrame();
+      }
+      const committed = commitInListOrder(sources, results, {
+        rename: (clip, kind) => { clip.name = kind; return clip; },
+        setFlags: (clip, source) => {
+          setClipLoop(clip, source.loop);
+          setClipRootMotion(clip, source.rootMotion);
+        },
+        isPair: isPairClipName,
+        pairRoot: extractRootPath,
+      });
+      this.clipIndex = committed.index;
+      this.pairRoots = committed.pairRoots as Map<string, RootPath>;
+      if (opts.only) await this.ensureFallbackPool(opts);
+    } catch (e) {
+      console.warn('[figures] library failed', e);
+      listOk = false;
+    } finally {
+      this.state = rigOk && listOk ? 'ready' : 'failed';
+      this.settle();
+    }
+    return this.state === 'ready';
+  }
+
+  private ensureFallbackPool(opts: { only?: string } = {}): Promise<void> {
+    if (this.fallbackPool) return this.fallbackPool;
+    this.poolState = 'loading';
+    this.fallbackPool = this.loadManifestModels(opts).then((loaded) => {
+      if (!loaded) throw new Error('no fallback model loaded');
+      this.poolState = 'ready';
+    }).catch((e) => {
+      console.warn('[figures] fallback pool failed — retrying in 30 s', e);
+      this.poolState = 'failed';
+    }).finally(() => {
+      for (const name of this.waitingForPool) this.onModelReady?.(name);
+      this.resolveReadyWaiters();
+      if (this.poolState === 'failed') {
+        this.fallbackPool = null;
+        window.setTimeout(() => {
+          if (this.waitingForPool.size) {
+            this.poolState = 'idle';
+            void this.ensureFallbackPool();
+          }
+        }, 30_000);
+      } else this.waitingForPool.clear();
+    });
+    return this.fallbackPool;
+  }
+
+  private async loadManifestModels(opts: { only?: string }): Promise<number> {
+    let wanted = this.manifest.models ?? [];
     if (opts.only) {
       const name = this.assignments[opts.only] ?? opts.only;
       wanted = wanted.filter((m) => m.name === name);
@@ -858,7 +1037,7 @@ export class FigureLibrary {
 
     const results = await Promise.allSettled(
       wanted.map(async (m): Promise<LoadedModel> => {
-        const gltf = await loadFile(m.url);
+        const gltf = await this.loadFile(m.url);
         const template = gltf.scene;
         // Stand Z-up exports (the Blender/FBX route) upright automatically
         {
@@ -881,7 +1060,7 @@ export class FigureLibrary {
         }
         const bbox = new THREE.Box3().setFromObject(template);
         const rawHeight = Math.max(bbox.max.y - bbox.min.y, 0.01);
-        const height = m.height ?? defaultHeight;
+        const height = m.height ?? this.defaultHeight;
         const usable = gltf.animations.filter((c) => c.tracks.length > 0);
         // Static meshes (no skeleton, no clips) are allowed too — an interim
         // state until a rigged model exists; such figures glide without a
@@ -895,104 +1074,14 @@ export class FigureLibrary {
       else console.warn('[figures]', r.reason);
     }
 
-    // Where the clips come from: the server's global library (AV3D-5) by
-    // preference, the local manifest clips otherwise (dev/offline). What is
-    // done with them is the loop below — every rig gets the kinds it does not
-    // carry itself, and a rig the library does not fit borrows from another
-    // model (bone names rewritten, mixamorig prefix mapping).
-    const library = await getAnimationClips();
-    // The admin's locomotion roles ride on the same listing — taken over
-    // BEFORE the first figure is built, so its first `play` already asks the
-    // configured idle kind. A listing without the field keeps the defaults.
-    if (library.locomotion) {
-      const roles = setLocomotionClips(library.locomotion);
-      console.info(`[figures] locomotion roles: walk=${roles.walk}, run=${roles.run}, idle=${roles.idle}`);
-    }
-    // The transition table rides the same listing, and for the same reason:
-    // a figure built before it arrived would switch clips hard once.
-    if (library.transitions) {
-      const rules = setClipTransitions(library.transitions);
-      console.info(`[figures] clip transitions: ${rules.length}`);
-    }
-    const serverClips = library.clips;
-    // A PAIR clip's half is indexed under `<kind>__<role>` (§ A8a) — the name
-    // an interaction asks for; a solo clip keeps its plain kind. The listing's
-    // loop flag rides along PER FILE: it belongs to the kind in ITS set.
-    // So does the ROOT-MOTION flag: a file imported with `keep`/`foot_lock`
-    // carries a travel in its hips track that the figure is to follow
-    // (`Figure.update`); `strip` or no block plays in place as before.
-    const sources: Array<{ kind: string; set: string; url: string; loop?: boolean;
-                           rootMotion?: boolean }> =
-      serverClips.map((c) => ({
-        kind: c.role ? `${c.kind}__${c.role}` : c.kind, set: c.set ?? '',
-        url: c.url, loop: c.loop,
-        rootMotion: !!c.root_motion && c.root_motion.mode !== 'strip',
-      }));
-    if (!sources.length) {
-      // Dev/offline fallback: the local manifest clips (no sets)
-      for (const [kind, url] of Object.entries(manifest.clipFiles ?? {})) sources.push({ kind, set: '', url });
-    } else {
-      const desc = sources.map((s) => s.set ? `${s.kind}/${s.set}` : s.kind).join(', ');
-      console.info(`[figures] ${sources.length} clips from the server: ${desc}`);
-      // Loud on purpose: a one-shot that should cycle (or the other way
-      // round) is a report about ONE file in ONE set, and this line is what
-      // says which files the flag was actually delivered for.
-      const oneShots = sources.filter((s) => s.loop === false)
-        .map((s) => s.set ? `${s.set}/${s.kind}` : s.kind).sort();
-      console.info(`[figures] one-shot clips (hold the last frame): `
-        + `${oneShots.length ? oneShots.join(', ') : 'none'}`);
-    }
-    const clipStart = performance.now();
-    for (const { kind, set, url, loop, rootMotion } of sources) {
-      try {
-        const { animations } = await loadFile(url);
-        if (!animations[0]) continue;
-        const clip = animations[0].clone();
-        clip.name = kind;
-        // The flag of THIS file — kept on the clip object, because the same
-        // kind in another set may have the opposite one (E5).
-        setClipLoop(clip, loop);
-        setClipRootMotion(clip, rootMotion);
-        // The half of a pair clip carries ROOT MOTION inside the anchor frame
-        // (the handshake's approach, the dance's travel). `adaptExternalClips`
-        // strips the horizontal hips motion like for every clip, so the root
-        // path is kept aside here and drives the figure's ROOT instead — in
-        // true world metres, independent of the figure's own scale.
-        if (isPairClipName(kind)) this.pairRoots.set(kind, extractRootPath(clip));
-        if (!this.clipIndex.has(kind)) this.clipIndex.set(kind, new Map());
-        const bySet = this.clipIndex.get(kind)!;
-        if (!bySet.has(set)) bySet.set(set, clip);   // first hit per kind+set
-      } catch (e) {
-        console.warn('[figures] clip not loadable:', url, e);
-      }
-    }
-    markPhase('clip:download', performance.now() - clipStart);
-    this.defaultHeight = defaultHeight;
-    this.loadFile = loadFile;
-
-    // The REST POSE the library's rotation tracks are written in. It has to
-    // come from the reference RIG, never from a clip file: an FBX carrying an
-    // animation stores its nodes at the take's first frame (measured: a mean
-    // 7.6° and up to 100° away from the rig — `idle.fbx` has the arms down).
-    // Missing rig = the pre-2026-08-31 behaviour, tracks copied 1:1.
-    try {
-      const rig = await loadFile('/assets/animation-rig', true);
-      this.donorRest = restPoseOf(THREE, rig.scene);
-      this.donorHipsY = rigHipsHeight(THREE, rig.scene);
-    } catch {
-      console.warn('[figures] no reference rig at /assets/animation-rig —'
-        + ' library clips are copied 1:1 and overwrite each rig\'s own stance');
-    }
-
     const donor = this.models.find((m) => m.clips.length > 0);
     for (const m of this.models) {
       if (m.noClips || !boneNames(m.template).size) continue;
       // PER KIND, not all-or-nothing: a fallback rig that ships walk/idle/run
       // (Soldier, Xbot, Robot) keeps those and takes swim, yoga and the rest
       // of the library on top. Its own clips win for their own kinds.
-      const fitStart = performance.now();
-      const fit = this.fitLibrary(m.name, m.template, m.clips, m.scale);
-      markPhase('clip:fit', performance.now() - fitStart);
+      await nextFrame();
+      const fit = await this.fitLibraryAsync(m.name, m.template, m.clips, m.scale);
       m.libraryFits = fit.fits;
       if (fit.extra.length) {
         const kinds = fit.extra.map((c) => c.name).sort().join(', ');
@@ -1012,7 +1101,7 @@ export class FigureLibrary {
       // re-locked on this skeleton exactly like a library clip.
       relockOnRig(m.name, m.clips, m.template, m.scale);
     }
-    return true;   // server models may still arrive later (fetchCharacterModel)
+    return results.filter((r) => r.status === 'fulfilled').length;
   }
 
   private loadFile!: (url: string, forceFbx?: boolean) => Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }>;
@@ -1265,11 +1354,15 @@ export class FigureLibrary {
    * and does not care about bone frames — today that path is only reachable
    * for models without any clips of their own.
    */
-  private fitLibrary(charName: string, template: THREE.Object3D,
+  private async fitLibraryAsync(charName: string, template: THREE.Object3D,
                      own: readonly THREE.AnimationClip[], scale: number
-  ): LibraryFit {
+  ): Promise<LibraryFit> {
+    let sectionStart = performance.now();
     const candidates = this.clipsFor(charName);
-    if (!candidates.length) return { extra: [], fits: false };
+    if (!candidates.length) {
+      markPhase('clip:fit', performance.now() - sectionStart);
+      return { extra: [], fits: false };
+    }
     // The gate below is the FALLBACK path's guard only: it asks whether a
     // plain 1:1 copy would survive this bind pose. With the donor rest in
     // hand the copy is not what happens — every value is re-expressed against
@@ -1286,10 +1379,21 @@ export class FigureLibrary {
           + ` Without the reference rig the tracks can only be COPIED, which`
           + ` would fold the limbs over the torso, so no library clip is bound`
           + ` and this rig stays out of the random pool.`);
+        markPhase('clip:fit', performance.now() - sectionStart);
         return { extra: [], fits: false };
       }
     }
-    const adapted = adaptExternalClips(candidates, template, corrections, this.donorHipsY);
+    const adapted: THREE.AnimationClip[] = [];
+    // Without a rig, idle/cluster scaling depends on ALL candidates.
+    if (!(this.donorHipsY !== undefined && Number.isFinite(this.donorHipsY) && this.donorHipsY > 0)) {
+      adapted.push(...adaptExternalClips(candidates, template, corrections, this.donorHipsY));
+    } else {
+      markPhase('clip:fit', performance.now() - sectionStart);
+      await this.fitSlices(candidates, (slice) => {
+        adapted.push(...adaptExternalClips(slice, template, corrections, this.donorHipsY));
+      });
+      sectionStart = performance.now();
+    }
     carryClipLoops(candidates, adapted);
     const have = new Set(own.map((c) => c.name.toLowerCase()));
     const missing = missingClipKinds(
@@ -1308,20 +1412,50 @@ export class FigureLibrary {
     // skeleton (`footLockMeasure`): the import holds the feet only on the
     // reference rig's proportions. BEFORE the ground offsets: the pin
     // rewrites the leg tracks the offsets are measured from.
-    relockOnRig(charName, extra, template, scale);
+    markPhase('clip:fit', performance.now() - sectionStart);
+    await nextFrame();
+    const lockLines: string[] = [];
+    let missingFeet = false;
+    await this.fitSlices(extra, (slice) => {
+      const reports = relockRootPaths(slice, template, 1 / (100 * scale), (line) => {
+        // Each slice has the same summary prefix; concatenate only its clip parts.
+        lockLines.push(line.slice('foot lock per rig — '.length));
+      });
+      missingFeet ||= reports.some((r) => r.reason === 'no foot bones');
+    });
+    sectionStart = performance.now();
+    if (lockLines.length) {
+      const line = `[figures] ${charName}: foot lock per rig — ${lockLines.join(', ')}`;
+      if (missingFeet) console.warn(line);
+      else console.info(line);
+    }
     // WHERE each of these clips puts the body over the ground, measured once
     // per rig (`clipGround`, finding 3 of 2026-08-13). Pure data: what it is
     // good for is decided in `Figure.play`, and only while a terrain move clip
     // runs. Measured AFTER the filter — a clip this rig will never play costs
     // no skinning samples.
-    measureGroundOffsets(extra, template);
+    markPhase('clip:fit', performance.now() - sectionStart);
+    await nextFrame();
+    await this.fitSlices(extra, (slice) => measureGroundOffsets(slice, template));
+    sectionStart = performance.now();
     const floats = extra.filter((c) => clipGroundOffset(c) > 0.05)
       .map((c) => `${c.name} +${clipGroundOffset(c).toFixed(2)} m`);
     if (floats.length) {
       console.info(`[figures] ${charName}: clips authored off the floor —`
         + ` ${floats.join(', ')} (dropped while walking that ground)`);
     }
+    markPhase('clip:fit', performance.now() - sectionStart);
     return { extra, fits: adapted.length > 0 };
+  }
+
+  private async fitSlices(clips: THREE.AnimationClip[], run: (slice: THREE.AnimationClip[]) => void) {
+    for (let k = 0; k < clips.length; k += FIT_SLICE_CLIPS) {
+      const sliceStart = performance.now();
+      run(clips.slice(k, k + FIT_SLICE_CLIPS));
+      const elapsed = performance.now() - sliceStart;
+      markPhase('clip:fit', elapsed);
+      if (elapsed > FIT_SLICE_MS) await nextFrame();
+    }
   }
 
   /** Pick the clips for a character along its set chain:
@@ -1362,6 +1496,9 @@ export class FigureLibrary {
           this.apiModels.set(charName, null);   // the server has none -> portrait
           this.apiSignature.set(charName, "");
           this.apiRevision.set(charName, "");
+          this.waitingForPool.add(charName);
+          if (this.poolState === 'idle') void this.ensureFallbackPool();
+          this.resolveReadyWaiters();
           this.onModelReady?.(charName);
           this.freeRetired(charName);
           return;
@@ -1373,6 +1510,7 @@ export class FigureLibrary {
         if (info.signature) this.apiSignature.set(charName, info.signature);
         if (info.modelRev) this.apiRevision.set(charName, info.modelRev);
         console.info(`[figures] ${charName}: model from the server (${info.format}/${info.rig}/${tier}, ${model.clips.length} clips, ${(model.height * 100).toFixed(0)} cm)`);
+        this.resolveReadyWaiters();
         this.onModelReady?.(charName);
         // The replacement is live now — whoever holds figures rebuilds them in
         // `onModelReady` (`npcs.rebuild`), so the clone of the PREVIOUS model
@@ -1380,6 +1518,11 @@ export class FigureLibrary {
         // buffers and textures go.
         this.freeRetired(charName);
       } catch (e) {
+        this.firstAttemptFailed.add(charName);
+        this.waitingForPool.add(charName);
+        if (this.poolState === 'idle') void this.ensureFallbackPool();
+        this.resolveReadyWaiters();
+        this.onModelReady?.(charName);
         // A transient error (network, 5xx, texture): not cached as "has
         // none" — try again later.
         console.warn(`[figures] ${charName}: model could not be loaded — retrying in 30 s`, e);
@@ -1488,9 +1631,9 @@ export class FigureLibrary {
     // Only an actual Mixamo rig can use the shared library.
     if (info.rig === 'mixamo' && boneNames(template).size) {
       markPhase('model:build', performance.now() - buildStart);
-      const fitStart = performance.now();
-      const fit = this.fitLibrary(name, template, model.clips, model.scale);
-      markPhase('clip:fit', performance.now() - fitStart);
+      await nextFrame();
+      await this.settled;
+      const fit = await this.fitLibraryAsync(name, template, model.clips, model.scale);
       buildStart = performance.now();
       model.libraryFits = fit.fits;
       if (fit.extra.length) model.clips = [...model.clips, ...fit.extra];
@@ -1506,6 +1649,13 @@ export class FigureLibrary {
     if (api === undefined) this.fetchCharacterModel(charName);   // kick off the load
     // api === null (the server has none) or not loaded yet: on to the manifest
     // assignment/pool — the portrait fallback is the last resort.
+    const wantsPool = api === null || this.firstAttemptFailed.has(charName)
+      || (api === undefined && !!this.assignments[charName]);
+    if (wantsPool && this.poolState !== 'ready') {
+      this.waitingForPool.add(charName);
+      if (this.poolState === 'idle') void this.ensureFallbackPool();
+      return null;
+    }
     if (!this.models.length) return null;
     const assigned = this.assignments[charName] ?? charName;
     let model = this.models.find((m) => m.name === assigned);

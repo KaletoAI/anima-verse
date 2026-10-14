@@ -102,7 +102,7 @@ const SOUNDTRACK_TICK_MS = 1000;
 // exactly ONE location shows its interior, and the crossfade (applyTileFade)
 // is the TRANSITION, driven by open/close events — never by camera distance.
 // The former INTERIOR_CAM_DIST 26 + "target within 0.75 cells" auto-open is
-// gone; opening is explicit ("Hineinsehen"/"Betreten") or avatar-driven.
+// gone; opening is explicit ("Look inside"/"Enter") or avatar-driven.
 /** Camera farther out than this closes the open view (overview only). Must
  *  stay ABOVE the embodied EMBODY_MAX_DIST 34 with headroom, so the open view
  *  can never close under an embodied avatar — 60 leaves 26 m of it, and since
@@ -529,15 +529,28 @@ async function startApp(username: string, role: string) {
   const figures = new FigureLibrary();
   // figures.load() never throws (manifest/clips catch their own errors) and
   // must not be repeated — another run would attach every model twice.
-  const figuresReady = figures.load();
+  void figures.load();
+  let npcBootReady = false;
+  let bootDone = false;
+  let avatarReady = false;
+  let pendingTakeControl = false;
+  let avatarReadiness: Promise<void> | null = null;
+  function trackAvatarReadiness(): Promise<void> {
+    return avatarReadiness ??= figures.avatarFigureReady(firstMap.avatar).then(() => {
+      avatarReady = true;
+      if (bootDone && pendingTakeControl) {
+        pendingTakeControl = false;
+        setBootNote(null);
+        if (getGameState().mode !== 'embodied') gameActions.takeControl?.();
+      }
+    });
+  }
   const [allLocs, firstMap, surfaces] = await retryBoot('world data', () => Promise.all([
     api.getLocations(),
     api.getWorldMap(showAll),
     api.getSurfaceTextures(),
   ]), titleSink);
   reportBootStage('world');
-  await figuresReady;
-  reportBootStage('figures');
   setSurfaceTextures(surfaces);   // global terrain textures (AV3D-13)
   setPropLoadFocus(engine.target);   // GLB queue: models nearest the camera first
   // The far scatter billboards are baked with the app's OWN renderer — one
@@ -592,6 +605,9 @@ async function startApp(username: string, role: string) {
   // Server models trickle in asynchronously -> rebuild the affected NPC
   figures.onModelReady = (charName) => {
     npcs.rebuild(charName);
+    // The library can settle during the ground/scene awaits, before placement
+    // declarations exist. The final continuation catches every early model.
+    if (figures.state === 'loading' || !npcBootReady) return;
     if (lastMap) npcs.update(computeNpcStates(lastMap), npcUpdateOpts());
   };
   const panel = new InfoPanel();
@@ -1752,7 +1768,7 @@ async function startApp(username: string, role: string) {
         }]);
       }
       for (const [tile, loc] of dirty) rebuildTile(tile, loc);
-    } catch { /* Server kurz weg -> nächster Poll */ }
+    } catch { /* Server briefly unavailable -> next poll */ }
   }
   setInterval(pollLocations, 10_000);
 
@@ -1768,7 +1784,7 @@ async function startApp(username: string, role: string) {
   engine.target.copy(center);
   engine.dist = engine.targetDist = fitDistance(firstMap.world_bounds);
 
-  // --- Hover & Klick -------------------------------------------------------
+  // --- Hover & click -------------------------------------------------------
   let hovered: Tile | null = null;
   engine.onHover = (id) => {
     const tile = id ? tiles.get(id) ?? null : null;
@@ -1807,7 +1823,7 @@ async function startApp(username: string, role: string) {
     const tile = tiles.get(id);
     if (tile) engine.flyTo(tile.center.clone(), flyInDist());
   };
-  // "Hineinsehen" (Etappe 3): the old fly-to stays part of it — fly in AND
+  // "Look inside" (stage 3): the old fly-to stays part of it — fly in AND
   // open the detail view. Pure view state, no server call.
   panel.onLookInside = (id) => {
     const tile = tiles.get(id);
@@ -1927,6 +1943,18 @@ async function startApp(username: string, role: string) {
   // way into the mode — the camera ride, the storey following and the takeover
   // all come with it.
   gameActions.takeControl = () => {
+    if (!bootDone) {
+      pendingTakeControl = true;
+      setBootNote({ kind: 'characters' });
+      return;
+    }
+    if (npcs.positionOf(firstMap.avatar) && !avatarReady) {
+      pendingTakeControl = true;
+      setBootNote({ kind: 'characters' });
+      void trackAvatarReadiness();
+      return;
+    }
+    pendingTakeControl = false;
     const me = lastMap?.characters.find((c) => c.name === lastMap!.avatar);
     const tile = me ? tiles.get(me.location_id) : undefined;
     // WILDERNESS IS A PLACE (E4 task 5). An avatar without a tile used to be
@@ -2289,12 +2317,12 @@ async function startApp(username: string, role: string) {
         for (const c of chars) {
           if (c.room) roomOf.set(c.name, c.room);
         }
-      } catch { /* Raum-Zuordnung ist optional */ }
+      } catch { /* Room assignment is optional */ }
     }
   }
   setInterval(pollRooms, ROOMS_POLL_MS);
 
-  // --- NPC-Sollpositionen ----------------------------------------------------
+  // --- NPC target positions ----------------------------------------------------
   /** Where a character stands on a tile, in TILE-LOCAL metres — the caller
    *  turns it into the world with the footprint (`tileToWorld`). The row in
    *  front of a building scales with the footprint (0.36 of the edge, which is
@@ -2650,7 +2678,7 @@ async function startApp(username: string, role: string) {
   }
 
   setInterval(() => {
-    if (lastMap) npcs.update(computeNpcStates(lastMap), npcUpdateOpts());
+    if (lastMap && figures.state !== 'loading') npcs.update(computeNpcStates(lastMap), npcUpdateOpts());
     // Talk target (E3-T5): the same 1 Hz tick, and deliberately not a frame
     // hook — walking up to someone is a second-scale event, and
     // `shownPlacement` is only rewritten here anyway. See the section further
@@ -2664,11 +2692,6 @@ async function startApp(username: string, role: string) {
     // key gets folded away.
     syncElevatorPicker();
   }, 1000);
-  // The very first payload of the session is never stale: no seat change of
-  // our own has been made, let alone answered, so the default (`playerStale`
-  // false) is the answer the rule would give.
-  npcs.update(computeNpcStates(firstMap));
-
   // --- Walking on foot (E3-T3; FREE on the metre plane since E4 task 5) -----
   // Two facts carry this: while the mode is on, the avatar's position is OURS
   // (npcs.setPlayerDriven — update() stops placing it), and the server is not
@@ -4843,7 +4866,7 @@ async function startApp(username: string, role: string) {
     // there is nothing to walk between. A party follower is carried by its
     // leader and the server refuses the call anyway.
     //
-    // T5 (backend-status-3d.md, "Raumwechsel greift nur in Gebäuden"): on an
+    // T5 (backend-status-3d.md, "Room switching applies only inside buildings"): on an
     // AREA location that is not the whole story. Its rooms are outdoor zones,
     // drawn at every zoom level and walked into from the map instead of being
     // placed inside. Tying the switch to the interior alone meant the room
@@ -5641,7 +5664,7 @@ async function startApp(username: string, role: string) {
   // plate any more, and the field it chased is coherent across distances since
   // E2 (G2: one pyramid, one sampler), so nothing drifts for it to chase.
 
-  // --- Frame-Hook: Detail-Ansicht (Singleton), NPC-Animation, Pin-Bobbing ---
+  // --- Frame hook: detail view (singleton), NPC animation, pin bobbing ---
   let bob = 0;
   engine.addFrameHook((dt) => {
     // Who owns the open view this frame (Etappe 3):
@@ -5882,8 +5905,7 @@ async function startApp(username: string, role: string) {
   async function placeAvatarOnArrival(): Promise<void> {
     const locId = (lastMap ?? firstMap).characters
       .find((c) => c.name === avatarName)?.location_id ?? '';
-    await withPhase('arrival:mount', awaitArrivalMount);
-    requestAnimationFrame(() => reportBootStage('visible'));
+    await awaitArrivalMount();
     if (!locId) return;
     const tile = tiles.get(locId);
     // No tile (an unplaced location): the pre-opened id names nothing, so it
@@ -5936,14 +5958,24 @@ async function startApp(username: string, role: string) {
   //    boot asks first and stays on the overview in silence.
   // Last in `startApp` on purpose: everything it touches (figures, tiles, the
   // registered action) stands by now.
-  await settleArrival();
+  npcBootReady = true;
+  await withPhase('arrival:mount', awaitArrivalMount);
+  setBootNote({ kind: 'characters' });
+  requestAnimationFrame(() => reportBootStage('visible'));
+  await figures.settled;
+  reportBootStage('figures');
+  npcs.update(computeNpcStates(lastMap ?? firstMap), npcUpdateOpts());
+  // Off-map avatars never instantiate, so there is no model promise to await.
   if (firstMap.avatar && npcs.positionOf(firstMap.avatar)) {
-    gameActions.takeControl?.();
+    await trackAvatarReadiness();
+    npcs.update(computeNpcStates(lastMap ?? firstMap), npcUpdateOpts());
   }
-  // The bar reaches 100 % HERE and not at `tiles`: the player's figure stands
-  // on the floor it belongs on and the steering is live, so the title screen
-  // uncovers a world one can walk in rather than one that is still arranging
-  // itself under one's feet.
+  await settleArrival();
+  bootDone = true;
+  if (npcs.positionOf(firstMap.avatar) && (firstMap.avatar || pendingTakeControl)
+      && getGameState().mode !== 'embodied') gameActions.takeControl?.();
+  pendingTakeControl = false;
+  setBootNote(null);
   reportBootStage('arrival');
 }
 

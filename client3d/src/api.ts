@@ -561,6 +561,7 @@ export interface ApiClip {
  *  a figure plays: the LOCOMOTION roles (`game/walk.setLocomotionClips`) and
  *  the TRANSITIONS between two clips (`game/walk.setClipTransitions`). */
 export interface ApiClipLibrary {
+  ok: boolean;
   clips: ApiClip[];
   /** `{walk, run, idle} → kind`, every role filled by the server; `null` when
    *  the listing could not be read — the roles then keep their own names. */
@@ -574,14 +575,14 @@ export interface ApiClipLibrary {
 export async function getAnimationClips(): Promise<ApiClipLibrary> {
   try {
     const res = await fetch('/assets/animation-clips');
-    if (!res.ok) return { clips: [], locomotion: null, transitions: [] };
+    if (!res.ok) return { ok: false, clips: [], locomotion: null, transitions: [] };
     const data = await res.json();
     const locomotion = data.locomotion && typeof data.locomotion === 'object'
       ? (data.locomotion as Record<string, string>) : null;
     const transitions = Array.isArray(data.transitions) ? data.transitions : [];
-    return { clips: (data.clips ?? []) as ApiClip[], locomotion, transitions };
+    return { ok: true, clips: (data.clips ?? []) as ApiClip[], locomotion, transitions };
   } catch {
-    return { clips: [], locomotion: null, transitions: [] };
+    return { ok: false, clips: [], locomotion: null, transitions: [] };
   }
 }
 
