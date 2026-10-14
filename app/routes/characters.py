@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 from app.core.auth_dependency import require_admin
 from app.core.explicit_backend import require_explicit_backend
-from app.core.http_files import etag_file_response
+from app.core.http_files import etag_file_response, etag_matches
 from app.core.portrait_images import (
     PortraitProcessingError, character_image_path, transparent_portrait_path)
 from app.core.log import get_logger
@@ -1824,7 +1824,7 @@ def compare_character_face_retexture(character_name: str, request: Request, sign
         stat = path.stat()
         etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}-{stat.st_ino:x}"'
         headers = {"ETag": etag, "Cache-Control": "no-cache"}
-        if request.headers.get("if-none-match") == etag:
+        if etag_matches(request.headers.get("if-none-match"), etag):
             return Response(status_code=304, headers=headers)
         contents = path.read_bytes()
     return Response(contents, media_type="image/png", headers=headers)

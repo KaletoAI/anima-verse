@@ -28,6 +28,10 @@ die Clients stellen dar.** Geteilte Geometrie liegt im Paket
   die Feldlisten von Worldmap- und Szenen-Payload gegen den Server.
 
 
+JSON-Antworten können gzip-komprimiert mit schwachem ETag (`W/"…"`) kommen. Clients schicken den
+ETag beim Revalidieren unverändert in `If-None-Match` zurück; der Server vergleicht schwach
+(`http_files.etag_matches`).
+
 ## Inhalt
 
 - [Präambel v6 — „Gebiete“ (2026-08-19)](#präambel-v6-gebiete-2026-08-19)

@@ -1690,6 +1690,7 @@ def play_location_scene(location_id: str, request: Request):
     from fastapi.responses import JSONResponse, Response
     from app.models.world import get_location_by_id
     from app.core.scene_recipe import scene_fingerprint, scene_for_location
+    from app.core.http_files import etag_matches
     loc = get_location_by_id(location_id)
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
@@ -1698,7 +1699,7 @@ def play_location_scene(location_id: str, request: Request):
     # nothing here issues a weak tag, so nothing has to parse one.
     etag = f'"{scene_fingerprint(loc, location_id)}"'
     headers = {"ETag": etag, "Cache-Control": "no-cache"}
-    if request.headers.get("if-none-match") == etag:
+    if etag_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers=headers)
     payload = scene_for_location(loc, location_id, etag.strip('"'))
     if payload is None:

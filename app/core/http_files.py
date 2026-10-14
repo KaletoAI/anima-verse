@@ -9,6 +9,7 @@ snapshot_response; the stat-based helpers remain for other callers.
 import contextlib
 import hashlib
 import os
+import re
 import threading
 import tempfile
 from collections import OrderedDict
@@ -45,7 +46,7 @@ def etag_file_response(path: Path, request: Request, media_type: str,
     stat = path.stat()
     etag = etag or f'"{stat.st_mtime_ns:x}-{stat.st_size:x}-{stat.st_ino:x}"'
     headers = {"ETag": etag, "Cache-Control": cache_control}
-    if request.headers.get("if-none-match") == etag:
+    if etag_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers=headers)
     return FileResponse(path, media_type=media_type, filename=filename or path.name,
                         headers=headers, content_disposition_type=disposition)
@@ -156,8 +157,13 @@ def atomic_replace(tmp: Path, dest: Path) -> None:
 
 
 def etag_matches(value: str | None, etag: str) -> bool:
-    """Match an exact ETag, a comma-separated list, or a wildcard."""
-    return bool(value and any(tag.strip() in (etag, "*") for tag in value.split(",")))
+    """Weak comparison (RFC 9110 section 8.8.3.2): ignore W/ on both sides."""
+    if not value:
+        return False
+    if value.strip() == "*":
+        return True
+    want = etag.removeprefix("W/")
+    return any(tag.removeprefix("W/") == want for tag in re.findall(r'(?:W/)?"[^"]*"', value))
 
 
 class _SnapshotResponse(StreamingResponse):

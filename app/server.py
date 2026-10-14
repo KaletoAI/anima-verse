@@ -790,7 +790,7 @@ def _cors_origins() -> list:
 
 # Middleware ORDER matters and reads bottom-up: `add_middleware` prepends, so
 # the LAST one added is the outermost. Execution is therefore
-#   request_timing -> player_activity -> user_context -> CORS -> auth gate -> router
+#   request_timing -> selective_gzip -> player_activity -> user_context -> CORS -> auth gate -> router
 # The gate sits innermost on purpose: it needs the user that
 # user_context_middleware resolved, a CORS preflight (OPTIONS) is answered by
 # CORSMiddleware before it ever gets there, and its own 401/403 answers still
@@ -808,7 +808,8 @@ app.add_middleware(
     allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"])
+    allow_headers=["*"],
+    expose_headers=["ETag"])
 
 # Resolve current_user_ctx from the session cookie for each request.
 app.middleware("http")(user_context_middleware)
@@ -826,6 +827,8 @@ async def player_activity_middleware(request, call_next):
 
 
 from app.core.request_timing import RequestTimingMiddleware
+from app.core.selective_gzip import SelectiveGZipMiddleware
+app.add_middleware(SelectiveGZipMiddleware)
 app.add_middleware(RequestTimingMiddleware)
 
 # Include routers
