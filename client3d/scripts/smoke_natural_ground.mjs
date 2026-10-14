@@ -141,7 +141,7 @@
  * A patch is worth nothing where nobody applies it. `rebuildBase` is a closure
  * over fetched payloads and cannot be called from here, so its lines are pinned
  * against the source text: the hole first, then the veil and the natural
- * ground, the field handed over in `reloadHeight` and given back in `dispose`.
+ * ground, the field handed over in `applyHeight` and given back in `dispose`.
  * It is applied EXACTLY ONCE in the file since Wasser v2 K-A E5 — the terrain's
  * material is the only ground material left — and nowhere else: the admin
  * preview and the shared package must not import any of this (view polish is

@@ -546,6 +546,11 @@ async function startApp(username: string, role: string) {
   // a second copy of every texture the props already uploaded.
   setImpostorRenderer(engine.renderer);
   const npcs = new NpcManager(figures);
+  figures.setModelFocus((name) => {
+    const p = npcs.positionOf(name);
+    return { avatar: name === firstMap.avatar,
+             distance: p ? p.distanceToSquared(engine.target) : Number.POSITIVE_INFINITY };
+  });
   // The figures walk on the world's relief (§ A16): the manager re-derives a
   // traveller's point every frame, so it gets the sampler rather than a height
   // per poll. `terrainGround` is created a few lines down — the arrow reads it
@@ -779,6 +784,23 @@ async function startApp(username: string, role: string) {
     mapLocations = list;
     mapLocSig = locationsSignature(list);
   }
+  // Scene recipe (contract part B): the server supplies the complete scene
+  // as finished primitives and placement specs. When available, the client
+  // derives no geometry, opening splits, constants or colours of its own.
+  // A 404 keeps the procedural path. Fetch before building the first tiles,
+  // so each tile starts in the correct mode.
+  const scenes = new SceneLibrary();
+  const arrivalId = firstMap.characters.find(c => c.name === firstMap.avatar)?.location_id;
+  const locationCentres = new Map(firstMap.locations.map(l => [l.id, footprintCentre(l)]));
+  const arrivalCentre = arrivalId ? locationCentres.get(arrivalId) : null;
+  const distanceToArrival = (id: string): number => {
+    if (id === arrivalId) return 0;
+    const p = locationCentres.get(id);
+    if (!p || !arrivalCentre) return Infinity;
+    return (p.x - arrivalCentre.x) ** 2 + (p.z - arrivalCentre.z) ** 2;
+  };
+  const primeP = withPhase('scene:fetch', () => scenes.prime(placeable.map(l => l.id), distanceToArrival));
+
   // THE FIRST SYNC IS AWAITED, with a deadline (E8 task 3): the world's
   // RELIEF comes with it, and the camera below is framed on the centre of the
   // world — which is a point on the ground, not on the y = 0 plane. Waiting
@@ -790,8 +812,8 @@ async function startApp(username: string, role: string) {
     // …and a ground that could not be built must not black out the boot: the
     // sync swallows a failed FETCH itself, but a rebuild that throws (a broken
     // texture, a driver refusing a buffer) would reject into this race.
-    withPhase('ground:fetch', () => terrainGround.sync(firstMap.terrain_sig, worldBounds, mapLocations,
-                       firstMap.height_sig ?? ''))
+    terrainGround.sync(firstMap.terrain_sig, worldBounds, mapLocations,
+                       firstMap.height_sig ?? '')
       .catch((e) => { console.warn('[ground] first sync failed', e); return false; }),
     sleep(GROUND_BOOT_WAIT_MS),
   ]);
@@ -812,13 +834,7 @@ async function startApp(username: string, role: string) {
   // with the plane it belongs to, because the metre world's ground is a base
   // plane PLUS the painted areas and every one of them would roof the cellar.
 
-  // Scene recipe (contract part B): the server supplies the complete scene
-  // as finished primitives and placement specs. When available, the client
-  // derives no geometry, opening splits, constants or colours of its own.
-  // A 404 keeps the procedural path. Fetch before building the first tiles,
-  // so each tile starts in the correct mode.
-  const scenes = new SceneLibrary();
-  await withPhase('scene:fetch', () => scenes.prime(placeable.map((l) => l.id)));
+  await primeP;
   reportBootStage('scenes');
 
   const tiles = new Map<string, Tile>();

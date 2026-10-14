@@ -65,6 +65,7 @@
  * exactly as it is when the overview does.
  */
 import * as THREE from 'three';
+import { markPhase } from '../game/boot';
 import { buildAreaGeometry,
   heightAt as worldHeightAt, pickVariant, pointInRing,
   propBoxFootprints, propGroundFit, rayGroundHit,
@@ -1171,7 +1172,7 @@ export function createGround(): Ground {
    * there, and folding an optional field into `WorldHeightField` would make
    * every reader of the ground carry a question about water. The two maps are
    * filled, evicted and cleared in the same breath (`takeTiles`, `evictTiles`,
-   * `reloadHeight`), so a key in one is a key in the other or in neither.
+   * `applyHeight`), so a key in one is a key in the other or in neither.
    *
    * MUTATED IN PLACE for the reason `relief` is: it is sampled per texel of the
    * water pyramid.
@@ -2912,9 +2913,15 @@ export function createGround(): Ground {
    * its hills and right in every other respect; a client that refused to draw
    * a ground at all would be wrong about the whole world.
    */
-  async function reloadHeight(heightSig: string): Promise<boolean> {
+  async function fetchHeightIndex() {
+    const result = await fetchIndex(fetchHeightfield);
+    return result.ok ? result.value : null;
+  }
+
+  async function applyHeight(payload: Awaited<ReturnType<typeof fetchHeightIndex>>,
+                             heightSig: string): Promise<boolean> {
+    if (!payload) return false;
     try {
-      const payload = await fetchHeightfield();
       relief.overview = payload;
       // A NEW SIGNATURE THROWS THE TILES AWAY WITH THE OVERVIEW (§ A16.3).
       // `height_sig` is the ONE signature of the relief; a tile that outlived it
@@ -3213,13 +3220,13 @@ export function createGround(): Ground {
    * wood and right about where the ground IS; a client that refused to draw a
    * ground at all would be wrong about the whole world.
    */
-  async function reloadLayers(sig: string): Promise<void> {
-    let index: TerrainLayerIndex;
-    try {
-      index = await fetchTerrainLayers() as TerrainLayerIndex;
-    } catch {
-      return;
-    }
+  async function fetchLayerIndex(): Promise<TerrainLayerIndex | null> {
+    const result = await fetchIndex(() => fetchTerrainLayers());
+    return result.ok ? result.value as TerrainLayerIndex : null;
+  }
+
+  async function applyLayers(index: TerrainLayerIndex | null, sig: string): Promise<void> {
+    if (!index) return;
     layerFmt = index;
     layerSig = index.sig || sig;
     layerIndexKeys = new Set<string>(index.tile_keys ?? []);
@@ -3377,6 +3384,19 @@ export function createGround(): Ground {
     };
   }
 
+  /** Catch immediately: an index may never be consumed after another fails. */
+  async function fetchIndex<T>(fetch: () => Promise<T>): Promise<
+    { ok: true; value: T } | { ok: false; error: unknown }> {
+    try { return { ok: true, value: await fetch() }; }
+    catch (error) { return { ok: false, error }; }
+  }
+
+  async function buildGround<T>(build: () => Promise<T>): Promise<T> {
+    const start = performance.now();
+    try { return await build(); }
+    finally { markPhase('ground:build', performance.now() - start); }
+  }
+
   /**
    * Fetch what changed and rebuild the ground once — relief first.
    *
@@ -3390,25 +3410,42 @@ export function createGround(): Ground {
   async function reload(sig: string, bounds: WorldBounds | null,
                         heightSig: string, wantTerrain: boolean,
                         wantHeight: boolean): Promise<boolean> {
-    if (wantHeight) await reloadHeight(heightSig);
+    // Every index starts before any application. Fetch results never reject,
+    // including layers that remain unused when the terrain fetch fails.
+    const fetchStart = performance.now();
+    const heightP = wantHeight ? fetchHeightIndex() : null;
+    const terrainP = wantTerrain ? fetchIndex(fetchTerrain) : null;
+    const layersP = wantTerrain ? fetchLayerIndex() : null;
+    // Observe the whole parallel fetch interval without delaying application.
+    void Promise.allSettled([heightP, terrainP, layersP].filter(p => p !== null))
+      .then(() => markPhase('ground:fetch', performance.now() - fetchStart));
+    if (heightP) {
+      const height = await heightP;
+      await buildGround(() => applyHeight(height, heightSig));
+    }
     let ok = true;
-    if (wantTerrain) {
+    if (terrainP) {
       try {
-        payload = await fetchTerrain();
-        loadedSig = payload.sig || sig;
-        // THE PLACED PROPS' BOXES ride in with the terrain (§ A9b) and reach
-        // the scatter here — a bench moved one metre bumps `terrain_sig`
-        // (`terrain.terrain_sig` hashes the boxes), so this is the same
-        // occasion the painted ground is refetched on and never a second poll.
-        propFootprints = propBoxFootprints(payload.prop_boxes);
-        refreshFootprints();
-        rebuildCatalog();
-        // THE MASKS HANG ON `terrain_sig` TOO, and on nothing else: the bake is
-        // a function of the painted areas plus the type catalog, which is
-        // exactly what that signature covers. Fetched here rather than on its
-        // own beat so the table, the catalog and the areas are always one
-        // world — the compositor's slices are built from the catalog's colours.
-        await reloadLayers(loadedSig);
+        const terrainResult = await terrainP;
+        if (!terrainResult.ok) throw terrainResult.error;
+        await buildGround(async () => {
+          payload = terrainResult.value;
+          loadedSig = payload.sig || sig;
+          // THE PLACED PROPS' BOXES ride in with the terrain (§ A9b) and reach
+          // the scatter here — a bench moved one metre bumps `terrain_sig`
+          // (`terrain.terrain_sig` hashes the boxes), so this is the same
+          // occasion the painted ground is refetched on and never a second poll.
+          propFootprints = propBoxFootprints(payload.prop_boxes);
+          refreshFootprints();
+          rebuildCatalog();
+          // THE MASKS HANG ON `terrain_sig` TOO, and on nothing else: the bake is
+          // a function of the painted areas plus the type catalog, which is
+          // exactly what that signature covers. Fetched here rather than on its
+          // own beat so the table, the catalog and the areas are always one
+          // world — the compositor's slices are built from the catalog's colours.
+        });
+        const layers = await layersP!;
+        await buildGround(() => applyLayers(layers, loadedSig!));
       } catch {
         // Keep whatever stands. `loadedSig` is deliberately NOT advanced, so
         // the next poll with the same signature tries again.
@@ -3419,8 +3456,10 @@ export function createGround(): Ground {
     // are re-cut from the payload that stands, and standing on the old ground
     // while the world is draped around it is the one state that would look
     // broken.
-    if (ok || wantHeight) await rebuildAreas();
-    rebuildBase(bounds);
+    await buildGround(async () => {
+      if (ok || wantHeight) await rebuildAreas();
+      rebuildBase(bounds);
+    });
     return ok;
   }
 

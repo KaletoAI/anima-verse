@@ -1,3 +1,4 @@
+import { createFocusQueue } from '../game/focusQueue';
 import { markPhase } from '../game/boot';
 import type { MotionPayload } from "../types";
 import * as THREE from 'three';
@@ -773,6 +774,18 @@ export class FigureLibrary {
   private apiSignature = new Map<string, string>();
   private apiRevision = new Map<string, string>();
   private motionState = new Map<string, { payload: MotionPayload | undefined }>();
+  private modelQueue = createFocusQueue({ max: 3 }); // Limit concurrent model downloads and builds.
+  private modelFocus: (name: string) => { distance: number; avatar: boolean } =
+    () => ({ distance: 0, avatar: false });
+  setModelFocus(fn: (name: string) => { distance: number; avatar: boolean }) { this.modelFocus = fn; }
+  private enqueueModel(charName: string, run: () => Promise<void>) {
+    void this.modelQueue.push({
+      key: charName,
+      priority: this.modelFocus(charName).avatar ? 'avatar' : 'normal',
+      distance: () => this.modelFocus(charName).distance,
+      run,
+    });
+  }
   private pending = new Set<string>();
   /** Wanted resolution tier per character (view state, default full). */
   private tierWanted = new Map<string, FigureTier>();
@@ -1172,7 +1185,7 @@ export class FigureLibrary {
       return;
     }
     this.pending.add(charName);
-    void (async () => {
+    this.enqueueModel(charName, async () => {
       let built = false;
       try {
         const downloadStart = performance.now();
@@ -1190,7 +1203,7 @@ export class FigureLibrary {
         this.pending.delete(charName);
       }
       if (built) this.syncTier(charName);
-    })();
+    });
   }
 
   private cacheTier(charName: string, model: LoadedModel) {
@@ -1339,7 +1352,7 @@ export class FigureLibrary {
   private fetchCharacterModel(charName: string) {
     if (this.apiModels.has(charName) || this.pending.has(charName)) return;
     this.pending.add(charName);
-    void (async () => {
+    this.enqueueModel(charName, async () => {
       try {
         const downloadStart = performance.now();
         let info: ApiModel | null;
@@ -1375,7 +1388,7 @@ export class FigureLibrary {
         this.pending.delete(charName);
         this.syncTier(charName);   // the wish may have changed while loading
       }
-    })();
+    });
   }
 
   /** Load, upright and normalise a model; library clips only on a Mixamo rig.

@@ -574,8 +574,22 @@ const ugSrc = texts.get('client3d/src/scene/undergrowth.ts');
 check('…and really gates on it, beside the ring and not instead of it',
   /pointInRing\(p\.x, p\.z, area\.ring\)\s*\n\s*&& opts\.topLayerAt\(p\.x, p\.z\) === area\.layer/
     .test(ugSrc) ? 1 : 0, 1);
+// Restrict these ordering checks to reload, excluding helpers and comments.
+const reloadSrc = groundSrc.slice(groundSrc.indexOf('  async function reload('),
+  groundSrc.indexOf('\n  return {', groundSrc.indexOf('  async function reload(')))
+  .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
 check('the masks are fetched on the terrain signature, with the areas',
-  /await reloadLayers\(loadedSig\);/.test(groundSrc) ? 1 : 0, 1);
+  /const terrainP = wantTerrain \? fetchIndex\(fetchTerrain\) : null;\s*const layersP = wantTerrain \? fetchLayerIndex\(\) : null;/
+    .test(reloadSrc) && reloadSrc.indexOf('const layersP') < reloadSrc.indexOf('await') ? 1 : 0, 1);
+check('…and a failed terrain result throws into the catch before masks are applied',
+  /if \(terrainP\)\s*\{\s*try\s*\{\s*const terrainResult = await terrainP;\s*if \(!terrainResult.ok\) throw terrainResult.error;[\s\S]*?applyLayers\(layers, loadedSig!\)[\s\S]*?\} catch \{\s*ok = false;/
+    .test(reloadSrc) ? 1 : 0, 1);
+check('…and successful terrain sets the signature and rebuilds the catalog first',
+  /payload = terrainResult.value;\s*loadedSig = payload.sig \|\| sig;[\s\S]*?rebuildCatalog\(\);[\s\S]*?const layers = await layersP!;\s*await buildGround\(\(\) => applyLayers\(layers, loadedSig!\)\);/
+    .test(reloadSrc) ? 1 : 0, 1);
+check('…and mask application is awaited before the areas are rebuilt',
+  /await buildGround\(\(\) => applyLayers\(layers, loadedSig!\)\);[\s\S]*?await rebuildAreas\(\);/
+    .test(reloadSrc) ? 1 : 0, 1);
 check('…and their window follows the height tiles\' own want set',
   /wantedTiles\(layerIndexKeys, tileM, anchorX, anchorZ,\n\s*HEIGHT_TILE_RADIUS_M\)/
     .test(groundSrc) ? 1 : 0, 1);

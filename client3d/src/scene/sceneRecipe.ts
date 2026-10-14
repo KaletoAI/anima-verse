@@ -1,3 +1,4 @@
+import { createFocusQueue } from '../game/focusQueue';
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { applyClipOutline, applyCutouts, applyDepthCut, applySlotMaterials,
@@ -386,13 +387,18 @@ export class SceneLibrary {
    *  the tile is then created in the right mode straight away instead of being
    *  built legacy and thrown away again at once. Failures stay uncached — the
    *  normal request/sweep cycle picks them up. */
-  async prime(locationIds: string[]): Promise<void> {
-    await Promise.all(locationIds.map(async (id) => {
-      if (this.cache.has(id)) return;
-      try {
-        this.cache.set(id, await getLocationScene(id));
-      } catch { /* the next cycle asks again */ }
-    }));
+  async prime(locationIds: string[], distanceOf: (id: string) => number = () => 0): Promise<void> {
+    const queue = createFocusQueue({ max: 6 }); // Bound simultaneous scene requests.
+    await Promise.all(locationIds.map((id) => queue.push({
+      key: id,
+      distance: () => distanceOf(id),
+      run: async () => {
+        if (this.cache.has(id)) return;
+        try {
+          this.cache.set(id, await getLocationScene(id));
+        } catch { /* the next cycle asks again */ }
+      },
+    })));
     const n = [...this.cache.values()].filter(Boolean).length;
     console.info(`[scene] ${n}/${locationIds.length} locations with a scene recipe`);
   }
