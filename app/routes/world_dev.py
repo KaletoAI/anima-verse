@@ -1546,7 +1546,7 @@ def _apply_character_internal(char_data: Dict[str, Any],
     char_data["template"] = template
 
     # Detect whether this is a new character — if so, save_character_profile
-    # needs create_new=True to bypass the "Geister-Character"-Guard. Without
+    # needs create_new=True to bypass the ghost-character guard. Without
     # this, the very first save silently returns and we end up with a row
     # that only has config_json filled (created later by save_character_config
     # / add_character_outfit), but profile_json stays {} and template "".
@@ -1645,10 +1645,14 @@ def _apply_character_internal(char_data: Dict[str, Any],
                 continue
             md_path = char_dir / rel_path
             md_path.parent.mkdir(parents=True, exist_ok=True)
-            md_path.write_text(str(content).rstrip() + "\n", encoding="utf-8")
+            from app.models.character_template import invalidate_source_file
+            try:
+                md_path.write_text(str(content).rstrip() + "\n", encoding="utf-8")
+            finally:
+                invalidate_source_file(md_path)
 
     # Extra soul MDs (sections without template source_file mapping —
-    # Smart-Import rendert dort z.B. nested ``"# Soul"``/``"# Tasks"`` rein).
+    # Smart import may render nested ``"# Soul"``/``"# Tasks"`` headings there).
     extra_md = char_data.get("_extra_soul_md") or {}
     if isinstance(extra_md, dict) and extra_md:
         from app.core.soul_sections import SECTION_FILE_MAP
@@ -1659,7 +1663,11 @@ def _apply_character_internal(char_data: Dict[str, Any],
                 continue
             md_path = char_dir / rel
             md_path.parent.mkdir(parents=True, exist_ok=True)
-            md_path.write_text(str(content).rstrip() + "\n", encoding="utf-8")
+            from app.models.character_template import invalidate_source_file
+            try:
+                md_path.write_text(str(content).rstrip() + "\n", encoding="utf-8")
+            finally:
+                invalidate_source_file(md_path)
 
     config = get_character_config(char_name)
     config_changed = False
@@ -1880,7 +1888,11 @@ def _apply_soul_data_sync(data: Any):
     char_dir = get_character_dir(char_name)
     md_path = char_dir / SECTION_FILE_MAP[section]
     md_path.parent.mkdir(parents=True, exist_ok=True)
-    md_path.write_text(str(content).rstrip() + "\n", encoding="utf-8")
+    from app.models.character_template import invalidate_source_file
+    try:
+        md_path.write_text(str(content).rstrip() + "\n", encoding="utf-8")
+    finally:
+        invalidate_source_file(md_path)
     logger.info("WorldDev: Soul '%s/%s' (%d chars) geschrieben",
                 char_name, section, len(content))
     return {"status": "success", "character": char_name,
@@ -2535,7 +2547,11 @@ def _apply_json_sync(data: Any):
         char_dir = get_character_dir(char_name, create=True)
         md_path = char_dir / SECTION_FILE_MAP[section]
         md_path.parent.mkdir(parents=True, exist_ok=True)
-        md_path.write_text(str(content).rstrip() + "\n", encoding="utf-8")
+        from app.models.character_template import invalidate_source_file
+        try:
+            md_path.write_text(str(content).rstrip() + "\n", encoding="utf-8")
+        finally:
+            invalidate_source_file(md_path)
         return {"status": "success", "type": "soul", "name": char_name,
                 "section": section, "warnings": [], "size": len(content)}
 

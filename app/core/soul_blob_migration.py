@@ -185,9 +185,13 @@ def migrate_soul_blobs_once(only: Optional[str] = None) -> Dict[str, Any]:
                 if "## " not in existing:
                     existing = _scaffold_for(md_path.name) or existing
                 md_path.parent.mkdir(parents=True, exist_ok=True)
-                md_path.write_text(
-                    _compose_rescue(existing, blob_value, section),
-                    encoding="utf-8")
+                from app.models.character_template import invalidate_source_file
+                try:
+                    md_path.write_text(
+                        _compose_rescue(existing, blob_value, section),
+                        encoding="utf-8")
+                finally:
+                    invalidate_source_file(md_path)
             except Exception as exc:
                 logger.warning("soul-blob migration [%s]: writing %s failed: "
                                "%s — key kept in the profile", name, relpath, exc)

@@ -2426,7 +2426,11 @@ async def write_soul_file(character_name: str, section_id: str, request) -> Dict
     md_path = char_dir / _SOUL_FILE_MAP[section_id]
     md_path.parent.mkdir(parents=True, exist_ok=True)
     # Guarantee a trailing newline without collecting superfluous ones
-    md_path.write_text(content.rstrip() + "\n", encoding="utf-8")
+    from app.models.character_template import invalidate_source_file
+    try:
+        md_path.write_text(content.rstrip() + "\n", encoding="utf-8")
+    finally:
+        invalidate_source_file(md_path)
     return {"status": "success", "section": section_id, "size": len(content)}
 
 

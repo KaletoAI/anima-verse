@@ -30,7 +30,7 @@ recorded from an implementation run). Metres, contract v6:
 
 The game clock is pinned to a fixed GameTime for the whole run (the module
 attribute ``timeutils.game_time`` is replaced; ``build_worldmap_payload``
-imports it inside the function, so both the current and the HEAD module see
+imports it inside the function, so both the current and the baseline module see
 the frozen value). Without that the two builds compared in [3] would be
 milliseconds apart and their journey/eta numbers would differ for that reason
 alone.
@@ -42,58 +42,13 @@ Hand-derived expectations
     the function on ``app.models.character`` (every reader resolves it through
     that module, including the ones ``world_ops`` imports locally).
 
-    Per character, AFTER the fix — four loads, and not one of them is a
-    second read of a field the loop already holds:
-
-      1  ``_prof``  — the ONE load; location, room, movement target, profile
-                      image, activity, pose key, sleep flag, journey,
-                      animation set, height, interaction and place are all
-                      read out of it
-      1  ``get_character_current_feeling`` — has no ``profile=`` parameter
-                      (``app/models/character.py``); the only loop reader left
-                      that cannot be handed the profile
-      2  ``resolve_animation_sets`` -> ``derive_set`` -> ``model_refs.
-         is_humanoid`` -> ``character_template.is_feature_enabled``, which
-         loads ``get_character_config`` (1 profile for its language/decency
-         injection) and then the profile itself (1) for the template name
-
-    Plus 2 for a character that HOLDS A PLACE: ``places.place_of`` calls
-    ``places.where(name)``, which asks ``get_character_current_location`` and
-    ``get_character_current_room`` without a profile. Two of the five hold one
-    (npc_seated on s1, npc_sleeper on b1).
-
-      expected total (admin view) = 5 * 4 + 2 * 2 = 24
-
-    The fogged view (an avatar, ``show_all=False``) adds FOUR reads of the
-    AVATAR, all outside the loop: ``get_character_language`` (1),
-    ``visibility_context`` -> ``get_known_locations`` -> ``get_character_config``
-    (1), ``_avatar_loc`` (1) and the payload's ``current_location_id`` (1).
-
-      expected total (fogged view) = 24 + 4 = 28
-
-    The checks are upper bounds (``<=``), because the three loads per
-    character that are NOT the loop's own live in other modules
-    (``character.py``, ``character_template.py``, ``places.py``) and may well
-    shrink further.
-
-    BEFORE the fix the same count was, per character:
-
-      1 get_character_current_location + 1 _prof + 1 get_movement_target
-      + 1 get_character_profile_image + 1 get_effective_activity
-      + 2 get_effective_pose_key (is_character_sleeping + get_character_pose_key,
-          neither got the profile) + 1 get_character_current_room
-      + 1 get_character_current_feeling + 2 is_feature_enabled   = 11
-
-    …except for the SLEEPER: ``get_effective_pose_key`` answers "sleeping"
-    straight after ``is_character_sleeping`` and never reaches
-    ``get_character_pose_key``, so it pays 10 rather than 11.
-
-      total before (admin) = 4 * 11 + 1 * 10 + 2 * 2 = 58
-
-    So this check FAILS on the old code (58 > 24) and passes on the new one.
-    With git available it is not reasoned about but measured: section [3]
-    builds the payload through ``git show HEAD:app/core/world_ops.py`` as
-    well and prints both counts and both timings.
+    After T4a, each of the five roster characters loads its profile once.
+    Config, mood, animation sets and places reuse it: admin total = 5.
+    The fogged view adds four avatar reads outside the loop:
+    get_character_language (1), visibility_context -> get_known_locations ->
+    get_character_config (1), _avatar_loc (1), current_location_id (1).
+    Fogged total = 5 + 4 = 9. The avatar is npc_lead, one of the five.
+    Counts are upper bounds; removing another reader may lower them.
 
 [2] The payload is unchanged. Every field the loop now reads out of ``_prof``
     is recomputed through the plain readers WITHOUT ``profile=`` (the old
@@ -102,7 +57,7 @@ Hand-derived expectations
       animation_set(s), place, avatar_url and the pose key behind
       activity_animation.
 
-[3] Old vs. new, whole payload: the HEAD revision of ``app/core/world_ops.py``
+[3] Old vs. new, whole payload: the 718322ce revision of ``app/core/world_ops.py``
     is loaded from a temp file as a second module and its payload is compared
     to the current one as canonical JSON — byte-identical, for the admin view
     (``show_all=True``) and for the fogged avatar view alike. Skipped with a
@@ -351,10 +306,8 @@ def row(payload, name: str) -> dict:
     return {}
 
 
-#: The revision the "before" side is read from: the parent of the commit that
-#: handed ``profile=`` down the worldmap loop (2862b391). Pinned, not ``HEAD`` —
-#: once that commit is HEAD, comparing against HEAD compares the file with itself.
-BASELINE_REV = "2862b391^"
+#: Explicit pre-T4a baseline, stable after future commits.
+BASELINE_REV = "718322ce"
 
 
 def load_head_module():
@@ -406,16 +359,15 @@ def main() -> int:
 
     print("\n[1] one profile load per character")
     print(f"  --  build took {secs * 1000:.1f} ms")
-    # 5 * 4 (own + feeling + config/template behind the animation set)
-    # + 2 * 2 (places.where for the two characters holding a place)
-    check_bound("get_character_profile calls per admin build", calls, 24)
+    # One profile for each of the five roster characters.
+    check_bound("get_character_profile calls per admin build", calls, 5)
     fog, fog_calls, fog_secs = build_counted(
         world_ops.build_worldmap_payload, "npc_lead", False)
     print(f"  --  fogged build took {fog_secs * 1000:.1f} ms")
     # The fogged view adds the avatar's own four reads outside the loop:
     # get_character_language, visibility_context, `_avatar_loc` and the
     # payload's `current_location_id`.
-    check_bound("get_character_profile calls per fogged build", fog_calls, 28)
+    check_bound("get_character_profile calls per fogged build", fog_calls, 9)
 
     print("\n[2] the payload is unchanged — every field recomputed "
           "through the plain readers")
@@ -467,21 +419,21 @@ def main() -> int:
             check(f"{label} locations_rev is a non-empty string",
                   isinstance(revision, str) and bool(revision), True)
             comparable = dict(new_payload)
-            comparable.pop("locations_rev", None)
-            check(f"{label} payload identical (sha256/16)",
-                  canonical(old_payload), canonical(comparable))
+            check(f"{label} entire canonical JSON identical",
+                  json.dumps(old_payload, sort_keys=True, default=str) ==
+                  json.dumps(comparable, sort_keys=True, default=str), True)
             if canonical(old_payload) != canonical(comparable):
                 print(f"  --  {label} canonical JSON differences:")
                 print_json_differences(old_payload, comparable)
 
         old_ms = repeat_ms(head.build_worldmap_payload, None, True)
         new_ms = repeat_ms(world_ops.build_worldmap_payload, None, True)
-        print(f"  --  HEAD: {old_calls} profile loads, {old_ms:.2f} ms/build"
+        print(f"  --  718322ce: {old_calls} profile loads, {old_ms:.2f} ms/build"
               f"  ->  now: {calls} profile loads, {new_ms:.2f} ms/build"
               f"  ({100 * (1 - new_ms / old_ms):.0f} % faster)")
-        print(f"  --  HEAD fogged: {old_fog_calls} profile loads  ->  "
+        print(f"  --  718322ce fogged: {old_fog_calls} profile loads  ->  "
               f"now: {fog_calls}")
-        print(f"  --  (single-build timings: HEAD {old_secs * 1000:.1f} ms, "
+        print(f"  --  (single-build timings: 718322ce {old_secs * 1000:.1f} ms, "
               f"now {secs * 1000:.1f} ms)")
         check("the new build loads strictly fewer profiles",
               calls < old_calls, True)

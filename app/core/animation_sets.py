@@ -52,13 +52,13 @@ def _profile(character_name: str,
 
 
 def derive_set(character_name: str,
-               profile: Optional[Dict[str, Any]] = None) -> str:
+               profile: Optional[Dict[str, Any]] = None, *, config=None) -> str:
     """The set that follows from the character itself: animals -> "animal",
     humanoids -> their gender when it is one we have clips for. "" when nothing
     fits (the plain clips apply)."""
     try:
         from app.core.model_refs import is_humanoid
-        if not is_humanoid(character_name):
+        if not is_humanoid(character_name, profile=profile, config=config):
             return "animal"
         gender = str(_profile(character_name, profile).get(
             "gender") or "").strip().lower()
@@ -78,7 +78,7 @@ def explicit_set(character_name: str,
 
 
 def resolve_sets(character_name: str,
-                 profile: Optional[Dict[str, Any]] = None) -> List[str]:
+                 profile: Optional[Dict[str, Any]] = None, *, config=None) -> List[str]:
     """The character's set chain, most specific first.
 
     An explicit set need NOT be complete: a character on ``lady`` that has no
@@ -95,7 +95,7 @@ def resolve_sets(character_name: str,
         profile = _profile(character_name, None)
     chain: List[str] = []
     for s in (explicit_set(character_name, profile),
-              derive_set(character_name, profile)):
+              derive_set(character_name, profile, config=config)):
         if s and s not in chain:
             chain.append(s)
     return chain

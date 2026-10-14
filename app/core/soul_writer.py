@@ -6,12 +6,18 @@ the section structure of each file and how to find the right ``##``
 sub-heading in either German or English. New ``##`` headings, when a file
 or category is empty, are written in the character's language.
 """
+import os
+import stat
+import tempfile
 from pathlib import Path
+from threading import Lock
 from typing import Dict, List, Tuple
 
+from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
 
 logger = get_logger("soul_writer")
+_UMASK_LOCK = Lock()
 
 
 SOUL_FILE_SCHEMA: Dict[str, Dict] = {
@@ -74,6 +80,30 @@ def _scaffold(file_id: str, language: str) -> str:
     return "\n".join(parts).rstrip() + "\n"
 
 
+def _atomic_write(path: Path, text: str) -> None:
+    """Replace a soul file; caller holds its soul_file lock."""
+    from app.models.character_template import invalidate_source_file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            mode = stat.S_IMODE(path.stat().st_mode)
+        except FileNotFoundError:
+            with _UMASK_LOCK:
+                mask = os.umask(0)
+                os.umask(mask)
+            mode = 0o666 & ~mask
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+        invalidate_source_file(path)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
 def append_entry(character_name: str, file_id: str, category_id: str,
                  line: str, language: str = "en") -> bool:
     """Append a bullet line under the right ``##`` subsection.
@@ -92,25 +122,26 @@ def append_entry(character_name: str, file_id: str, category_id: str,
     fallback_head = de_head if language == "de" else en_head
 
     path = get_soul_file_path(character_name, file_id)
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
-    if not text.strip():
-        text = _scaffold(file_id, language)
+    with keyed_lock("soul_file", str(path)):
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+        if not text.strip():
+            text = _scaffold(file_id, language)
 
-    bullet = line if line.lstrip().startswith("- ") else f"- {line}"
-    new_text = _insert_under_heading(text, candidates, bullet, fallback_head)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(new_text, encoding="utf-8")
+        bullet = line if line.lstrip().startswith("- ") else f"- {line}"
+        new_text = _insert_under_heading(text, candidates, bullet, fallback_head)
+        _atomic_write(path, new_text)
     return True
 
 
 def rewrite_file(character_name: str, file_id: str, entries,
                  language: str = "en") -> int:
-    """Schreibt eine Soul-Datei KOMPLETT NEU aus dem konsolidierten Satz
-    ``entries`` (Liste von {text, category}). Ersetzt den bisherigen Inhalt —
-    so kann der Retrospect konsolidieren/deduplizieren statt nur anzuhängen.
-    Reihenfolge der Kategorien folgt dem Schema. Gibt die Anzahl geschriebener
-    Einträge zurück. (Caller entscheidet, ob bei leerem Satz überhaupt ersetzt
-    wird — siehe retrospect._replace_entries, das leere Buckets NICHT wegschreibt.)"""
+    """Rewrite a soul file from consolidated ``entries`` ({text, category}).
+
+    Replaces existing content so Retrospect can consolidate and deduplicate.
+    Categories follow schema order. Returns the number of entries written.
+    The caller decides whether to replace an empty set; retrospect's
+    _replace_entries skips empty buckets.
+    """
     if file_id not in SOUL_FILE_SCHEMA:
         raise KeyError(f"Unknown soul file: {file_id}")
     by_cat: Dict[str, List[str]] = {cid: [] for cid in list_categories(file_id)}
@@ -139,8 +170,8 @@ def rewrite_file(character_name: str, file_id: str, entries,
         parts.append("")
     new_text = "\n".join(parts).rstrip() + "\n"
     path = get_soul_file_path(character_name, file_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(new_text, encoding="utf-8")
+    with keyed_lock("soul_file", str(path)):
+        _atomic_write(path, new_text)
     return n
 
 

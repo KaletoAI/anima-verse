@@ -267,11 +267,11 @@ def enabled_tpose_views(character_name: str) -> tuple:
     return tuple(v for v in tpose_views_for_character(character_name) if enabled.get(v))
 
 
-def is_humanoid(character_name: str) -> bool:
+def is_humanoid(character_name: str, *, profile=None, config=None) -> bool:
     """Template feature flag; unknown characters count as humanoid."""
     try:
         from app.models.character_template import is_feature_enabled
-        return bool(is_feature_enabled(character_name, "humanoid"))
+        return bool(is_feature_enabled(character_name, "humanoid", profile=profile, config=config))
     except Exception:
         return True
 

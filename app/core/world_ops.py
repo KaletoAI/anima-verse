@@ -329,6 +329,47 @@ def _model_signature(name: str, profile: Dict[str, Any]) -> str:
     return sig
 
 
+def _fog_inputs() -> Dict[str, dict]:
+    """Read only the fields needed to decide NPC visibility, in one query."""
+    import json
+    from app.core.db import get_connection
+    rows = get_connection().execute(
+        "SELECT c.name, COALESCE(s.current_location, ''), "
+        "json_extract(c.profile_json, '$.journey'), "
+        "COALESCE(json_extract(s.meta, '$.movement_target'), "
+        "json_extract(c.profile_json, '$.movement_target'), '') "
+        "FROM characters c LEFT JOIN character_state s ON s.character_name = c.name"
+    ).fetchall()
+    out = {}
+    for name, location, raw, target in rows:
+        try:
+            journey = json.loads(raw) if raw else None
+        except (ValueError, TypeError):
+            journey = None
+        out[name] = {"current_location": location,
+                     "journey": journey if isinstance(journey, dict) else None,
+                     "movement_target": target}
+    return out
+
+
+def _visible_row(name, loc_id, pos, journey, ctx) -> bool:
+    """The existing off-map, sight, location and explored-ground gates."""
+    if not loc_id and pos is None:
+        return False
+    avatar, fogged, visible_ids, in_sight, under_veil = ctx
+    if not loc_id:
+        # Only location journeys bypass sight; point journeys stay local.
+        if (fogged and name != avatar
+                and not (avatar and journey and journey.get("target"))
+                and not in_sight(pos)):
+            return False
+    elif fogged and name != avatar and loc_id not in visible_ids:
+        return False
+    if name != avatar and under_veil(loc_id, pos):
+        return False
+    return True
+
+
 def build_worldmap_payload(avatar_name: Optional[str] = None,
                            show_all: bool = False) -> Dict[str, Any]:
     """Aggregated world map in METRES: locations (centre/rotation/footprint
@@ -373,7 +414,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.models.events import list_events
     from app.models.character import (
         list_available_characters, get_character_current_location,
-        get_character_pos,
+        get_character_pos, list_character_positions, get_character_config,
         get_effective_activity, get_effective_pose_key, get_movement_target,
         get_character_profile_image,
         get_character_current_room, get_character_current_feeling,
@@ -608,72 +649,44 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             return False
         return not point_explored(_seen, p)
 
+    _pos = {r["name"]: {"x": r["x"], "z": r["z"]}
+            for r in list_character_positions()}
+    _fog = _fog_inputs() if fogged else {}
+    _fog.pop(avatar, None)  # The avatar keeps its full-profile path until P1.
+    _row_ctx = (avatar, fogged, visible_ids, _in_sight, _under_veil)
     characters = []
     for name in list_available_characters():
-        # ONE profile load per character — it is the FIRST thing read, and
-        # every reader below takes it as ``profile=``: location, room, target,
-        # profile image, activity, pose key, sleep flag, journey, animation
-        # sets, height, interaction and place all live in this one dict
-        # (``get_character_profile`` merges the character_state columns in).
-        # This loop runs per character on a 3-second poll per connected
-        # client, so a second load of the same blob is pure waste: it costs
-        # two SQLite queries, a json.loads and a deep-copied template each.
+        pos = _pos.get(name)
+        if fogged and name != avatar:
+            inputs = _fog.get(name, {})
+            loc_id = inputs.get("current_location") or ""
+            if not loc_id and pos is None:
+                continue
+            try:
+                _j = get_journey(name, profile=inputs)
+            except Exception as e:
+                _j = None
+                logger.debug("journey read failed for %s: %s", name, e)
+            if not _visible_row(name, loc_id, pos, _j, _row_ctx):
+                continue
         try:
             from app.models.character import get_character_profile as _gcp
             _prof = _gcp(name) or {}
         except Exception:
             _prof = {}
         loc_id = get_character_current_location(name, profile=_prof) or ""
-        pos = get_character_pos(name)
         if not loc_id and pos is None:
-            continue  # offmap (e.g. avatar-only & uncontrolled) -> not on the map
-        # The active journey (or None), read BEFORE the fog gate because the
-        # wilderness rule asks whether this character is travelling.
-        # NOTE: this reader can WRITE — a stored v1 journey (cell path) is
-        # discarded here together with its movement target, once, on the first
-        # read after the format change (travel_engine.get_journey).
+            continue
+        # A survivor can move after the batch. Validate the profile we will
+        # actually publish, while rejected NPCs still never load a profile.
         try:
             _j = get_journey(name, profile=_prof)
         except Exception as e:
             _j = None
-            # debug, not warning: this endpoint is polled every few seconds
-            # per client — a broken journey would flood the log at warning
-            # level for as long as it exists.
             logger.debug("journey read failed for %s: %s", name, e)
-        if not loc_id:
-            # Wilderness: a free point outside every footprint is a legal
-            # place to be. Under fog the avatar always sees itself, a stranger
-            # out there only within its SIGHT RANGE (§ A12).
-            # Travellers are the exception: a journey runs through the
-            # wilderness for most of its length, so the sight rule would make
-            # a figure blink out for the whole trip — exactly what § A11 warns
-            # against. Its row stays, but thinned (see the travel block).
-            # WITHOUT an active avatar there is no exception either: that view
-            # knows nothing at all (no location passes the filter), so a
-            # traveller must not be the one thing it does see.
-            # AND ONLY A JOURNEY TO A LOCATION counts (`target`). A POINT
-            # journey is how a roaming NPC crosses its home area — it is
-            # walking most of the time, so the exception would make every
-            # circle/area NPC permanently visible across the whole map. § A11
-            # is about a figure that would blink out mid-TRIP between places;
-            # a wanderer inside its own patch of wood is not that figure.
-            if (fogged and name != avatar
-                    and not (avatar and _j and _j.get("target"))
-                    and not _in_sight(pos)):
-                continue
-        # The avatar always sees itself; everyone else only where the avatar
-        # can look. Standing in an unknown place hides a character entirely.
-        elif fogged and name != avatar and loc_id not in visible_ids:
+        if not _visible_row(name, loc_id, pos, _j, _row_ctx):
             continue
-        # …and whatever the two gates above let through still has to stand on
-        # ground the avatar has seen (see `_under_veil`). This is deliberately
-        # the LAST word and applies to a traveller as well: § A11 keeps a
-        # traveller's row so it does not blink out mid-trip under the SIGHT
-        # rule, but a figure crossing ground that is drawn as haze is not a
-        # figure the player may see — the veil would be a curtain with a hole
-        # in it.
-        if name != avatar and _under_veil(loc_id, pos):
-            continue
+        config = get_character_config(name, profile=_prof)
         mt = get_movement_target(name, profile=_prof) or ""
         prof = get_character_profile_image(name, profile=_prof) or ""
         activity = get_effective_activity(name, profile=_prof) or ""
@@ -690,7 +703,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # derived from the character (animal / female / male). The client walks
         # it per kind and only falls back to the plain <kind>.fbx when neither
         # set has that clip — an explicit set may be incomplete.
-        anim_sets = resolve_animation_sets(name, profile=_prof)
+        anim_sets = resolve_animation_sets(name, profile=_prof, config=config)
         # The journey read above as § A11's travel block: the metre polyline
         # plus the walked distance let a client interpolate the figure between
         # two polls instead of teleporting it. Isolated like the ticker's
@@ -824,7 +837,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "activity_animation": _bridge or resolve_pose_animation(pose_key),
             "animation_set": (anim_sets[0] if anim_sets else ""),
             "animation_sets": anim_sets,
-            "mood": get_character_current_feeling(name) or "",
+            "mood": get_character_current_feeling(name, profile=_prof) or "",
             "movement_target_id": mt,
             "movement_target_name": target_name,
             "travel": travel,

@@ -137,11 +137,12 @@ def room_places(location_id: str, room_id: str) -> List[Place]:
     return list(by_room.get(room_id) or [])
 
 
-def where(name: str) -> Tuple[str, str]:
+def where(name: str, *, profile=None) -> Tuple[str, str]:
     """``(location_id, room_id)`` the character is in — empty strings when
     it is nowhere."""
     from app.models.character import get_character_current_location, get_character_current_room
-    return (get_character_current_location(name) or "", get_character_current_room(name) or "")
+    return (get_character_current_location(name, profile=profile) or "",
+            get_character_current_room(name, profile=profile) or "")
 
 
 #: The census query behind :func:`_present` and :func:`location_occupancy`.
@@ -572,10 +573,10 @@ def place_of(name: str, profile: Optional[dict] = None) -> Optional[Place]:
     of the held slot — for a pair the place's centre, its anchor."""
     from app.models.character import get_character_profile
     prof = profile if profile is not None else (get_character_profile(name) or {})
-    return resolve_place(name, prof.get("place"))
+    return resolve_place(name, prof.get("place"), profile=prof)
 
 
-def resolve_place(name: str, pl: Any) -> Optional[Place]:
+def resolve_place(name: str, pl: Any, *, profile=None) -> Optional[Place]:
     """A profile ``place`` field (``{"id", "slot", "room_id"}``) resolved
     against today's inventory of the room ``name`` is in — the body of
     :func:`place_of`, for a caller that holds the field but no longer the
@@ -584,7 +585,7 @@ def resolve_place(name: str, pl: Any) -> Optional[Place]:
     for a vanished marker, another room's id or a slot beyond the capacity."""
     if not isinstance(pl, dict) or not pl.get("id"):
         return None
-    loc, room = where(name)
+    loc, room = where(name, profile=profile)
     for p in room_places(loc, room):
         slot = _held_slot(pl, p, room)
         if slot is not None:

@@ -419,7 +419,11 @@ def import_character_from_zip(
             continue
         target = char_dir / safe_rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(zf.read(member))
+        from app.models.character_template import invalidate_source_file
+        try:
+            target.write_bytes(zf.read(member))
+        finally:
+            invalidate_source_file(target)
         file_count += 1
 
     # Restore DB — `characters` first so FK-like consumers see it.

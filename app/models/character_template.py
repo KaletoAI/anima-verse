@@ -15,6 +15,9 @@ Field types:
 """
 import copy
 import json
+import os
+from collections import OrderedDict
+from threading import RLock
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -266,7 +269,7 @@ def is_roleplay_character(character_name: str) -> bool:
         return False
 
 
-def is_feature_enabled(character_name: str, feature: str) -> bool:
+def is_feature_enabled(character_name: str, feature: str, *, profile=None, config=None) -> bool:
     """Whether a feature is active for the character.
 
     Order:
@@ -286,19 +289,19 @@ def is_feature_enabled(character_name: str, feature: str) -> bool:
     """
     try:
         from app.models.character import get_character_profile, get_character_config
-        # 1) Per-Char-Config Override
+        # 1) Per-character config override
         try:
-            cfg = get_character_config(character_name) or {}
+            cfg = config if config is not None else (get_character_config(character_name, profile=profile) or {})
             if feature in cfg:
                 val = cfg[feature]
-                # UI-Selects speichern manchmal Strings statt Booleans
+                # UI selects sometimes store strings instead of booleans
                 if isinstance(val, str):
                     return val.lower() in ("true", "1", "yes", "ja")
                 return bool(val)
         except Exception:
             pass
-        # 2) Template-Default
-        profile = get_character_profile(character_name) or {}
+        # 2) Template default
+        profile = profile if profile is not None else (get_character_profile(character_name) or {})
         tmpl_name = profile.get("template", "human-default")
         tmpl = get_template(tmpl_name)
         if not tmpl:
@@ -547,6 +550,16 @@ def build_prompt_section(
     return lines
 
 
+_SOURCE_CACHE = OrderedDict()
+_SOURCE_CACHE_LOCK = RLock()
+
+
+def invalidate_source_file(path: Path) -> None:
+    """Discard the cached source after a writer updates its file."""
+    with _SOURCE_CACHE_LOCK:
+        _SOURCE_CACHE.pop(Path(os.path.abspath(path)), None)
+
+
 def load_source_file(character_name: str, relpath: str) -> str:
     """Load the content of an MD/text file from the character directory.
 
@@ -563,10 +576,24 @@ def load_source_file(character_name: str, relpath: str) -> str:
     """
     try:
         from app.models.character import get_character_dir
-        p = get_character_dir(character_name) / relpath
-        if not p.exists():
-            return ""
-        return strip_empty_sections(p.read_text(encoding="utf-8"))
+        p = Path(os.path.abspath(get_character_dir(character_name) / relpath))
+        with _SOURCE_CACHE_LOCK:
+            try:
+                st = os.stat(p)
+            except OSError:
+                _SOURCE_CACHE.pop(p, None)
+                return ""
+            identity = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+            cached = _SOURCE_CACHE.get(p)
+            if cached is not None and cached[:5] == identity:
+                _SOURCE_CACHE.move_to_end(p)
+                return cached[5]
+            text = strip_empty_sections(p.read_text(encoding="utf-8"))
+            _SOURCE_CACHE[p] = (*identity, text)
+            _SOURCE_CACHE.move_to_end(p)
+            if len(_SOURCE_CACHE) > 2048:
+                _SOURCE_CACHE.popitem(last=False)
+            return text
     except Exception:
         return ""
 

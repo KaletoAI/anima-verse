@@ -1050,11 +1050,11 @@ def _get_character_defaults() -> Dict[str, Any]:
     }
 
 
-def get_character_config(character_name: str) -> Dict[str, Any]:
-    """Gibt die per-Character Konfiguration zurueck (LLM, Vision, TTS, etc.).
+def get_character_config(character_name: str, *, profile=None) -> Dict[str, Any]:
+    """Return per-character configuration (LLM, Vision, TTS, etc.).
 
-    Das Profil-Feld 'language' wird automatisch als 'tts_language' injiziert,
-    damit die TTS-Kette die richtige Sprache verwendet.
+    The profile's 'language' field is injected as 'tts_language' so the
+    TTS pipeline uses the correct language.
 
     There is no JSON fallback (DATA-17): world data is DB-only and nothing has
     written ``character_config.json`` since the migration — the reader only
@@ -1073,7 +1073,7 @@ def get_character_config(character_name: str) -> Dict[str, Any]:
 
     config = None
 
-    # Versuche aus DB zu lesen
+    # Read from the database
     try:
         row = _read_config_json_row(get_connection(), character_name)
         if row and row[0] and row[0] != "{}":
@@ -1083,10 +1083,9 @@ def get_character_config(character_name: str) -> Dict[str, Any]:
                      character_name, e, exc_info=True)
 
     if config is None:
-        # Auto-Create darf nur greifen wenn der Character TATSAECHLICH existiert
-        # (Profil-Row in DB ODER Character-Verzeichnis). Sonst legt jeder
-        # get_character_config("Lirien")-Aufruf — z.B. weil ein LLM den
-        # Vornamen statt des vollen Namens nennt — eine neue Geister-Row an.
+        # Auto-create only when the character exists (a profile row or
+        # character directory). Otherwise a call with an abbreviated name
+        # from the LLM would create a ghost row.
         config = _get_character_defaults()
         _exists = False
         try:
@@ -1111,7 +1110,7 @@ def get_character_config(character_name: str) -> Dict[str, Any]:
         for _key, _default in _get_character_defaults().items():
             config.setdefault(_key, _default)
 
-    # Name injizieren (fuer TTS etc.)
+    # Inject the name (for TTS, etc.)
     config["name"] = character_name
 
     # ONE profile load for both profile-derived fields below. They used to
@@ -1119,18 +1118,18 @@ def get_character_config(character_name: str) -> Dict[str, Any]:
     # this function sits on hot loops — the travel ticker asks it per
     # character per tick through ``get_known_locations``.
     try:
-        _prof = get_character_profile(character_name) or {}
+        _prof = profile if profile is not None else (get_character_profile(character_name) or {})
     except Exception:
         _prof = {}
 
-    # Sprache aus Profil als tts_language injizieren (Profil hat Vorrang).
+    # Inject the profile language as tts_language (profile takes precedence).
     # Same rule as ``get_character_language``: the profile's code, else 'de'.
     profile_lang = (_prof.get("language", "") or "") or "de"
     if profile_lang:
         config["tts_language"] = profile_lang
 
-    # decency_preference (Profil-Feld) fuer den Character-Editor mitladen —
-    # free-text Stil-Hinweis fuer die Outfit-Erstellung (ersetzt outfit_exceptions).
+    # Load the profile decency_preference for the character editor —
+    # a free-text style hint for outfit creation (replaces outfit_exceptions).
     config["decency_preference"] = _prof.get("decency_preference", "") or ""
 
     return config
@@ -2416,11 +2415,11 @@ def save_character_current_room(character_name: str, room_id: str,
             "outfit compliance on room change failed: %s", _e)
 
 
-def get_character_current_feeling(character_name: str) -> str:
+def get_character_current_feeling(character_name: str, *, profile=None) -> str:
     """The character's current feeling ("" when it has none)."""
     if not character_name:
         return ""
-    profile = get_character_profile(character_name)
+    profile = profile if profile is not None else get_character_profile(character_name)
     return profile.get("current_feeling", "")
 
 
@@ -2873,7 +2872,11 @@ def populate_soul_files_from_profile(character_name: str,
             existing = md_path.read_text(encoding="utf-8")
             new_text = _inject_into_first_empty_section(existing, value.strip())
             if new_text and new_text != existing:
-                md_path.write_text(new_text, encoding="utf-8")
+                from app.models.character_template import invalidate_source_file
+                try:
+                    md_path.write_text(new_text, encoding="utf-8")
+                finally:
+                    invalidate_source_file(md_path)
                 populated += 1
     if populated:
         logger.info("Soul-Files befuellt aus Profil fuer %s: %d", character_name, populated)
@@ -2953,7 +2956,7 @@ def ensure_soul_files(character_name: str,
     tpl_dir = _soul_template_dir()
     created = 0
     for fname, feature in _SOUL_FILE_FEATURES.items():
-        # Feature-Check (ungated → immer anlegen)
+        # Check the feature (always create ungated files)
         if feature and not features.get(feature, False):
             continue
         target = soul_dir / fname
@@ -2963,7 +2966,11 @@ def ensure_soul_files(character_name: str,
         if not src.exists():
             continue
         soul_dir.mkdir(parents=True, exist_ok=True)
-        target.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        from app.models.character_template import invalidate_source_file
+        try:
+            target.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        finally:
+            invalidate_source_file(target)
         created += 1
     if created:
         logger.info("Soul-Files angelegt fuer %s: %d", character_name, created)
