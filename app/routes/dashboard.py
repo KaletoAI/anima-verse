@@ -1,7 +1,6 @@
-"""System Load Dashboard — Uebersicht ueber LLM- und Bildgenerierungs-Last.
+"""System Load Dashboard — overview of LLM and image generation load.
 
-Liest logs/llm_calls.jsonl und logs/image_prompts.jsonl, aggregiert die Daten
-und stellt sie als interaktive Timeline mit Chart.js dar.
+Read and aggregate call logs into an interactive Chart.js timeline.
 """
 import json
 from datetime import datetime, timedelta
@@ -26,7 +25,7 @@ IMAGE_LOG = Path("./logs/image_prompts.jsonl")
 
 
 def _get_systems() -> List[Dict[str, Any]]:
-    """Laedt System-Konfiguration aus ProviderManager (basierend auf .env)."""
+    """Load system configuration from ProviderManager."""
     try:
         from app.core.provider_manager import get_provider_manager
         return get_provider_manager().get_systems_config()
@@ -35,7 +34,7 @@ def _get_systems() -> List[Dict[str, Any]]:
 
 
 def _read_jsonl(path: Path, cutoff: str = "") -> List[Dict[str, Any]]:
-    """Liest JSONL-Datei und filtert nach cutoff-Zeitpunkt."""
+    """Read JSONL entries and filter by cutoff timestamp."""
     if not path.exists():
         return []
     entries = []
@@ -54,14 +53,21 @@ def _read_jsonl(path: Path, cutoff: str = "") -> List[Dict[str, Any]]:
     return entries
 
 
+@router.get("/request-timing")
+def request_timing_data():
+    """Return recent per-route request timing statistics."""
+    from app.core.request_timing import route_stats
+    return {"routes": route_stats()}
+
+
 @router.get("/data")
 def dashboard_data(hours: int = Query(24, ge=0)):
-    """Liefert aggregierte Dashboard-Daten als JSON."""
+    """Return aggregated dashboard data as JSON."""
     cutoff = ""
     if hours > 0:
         cutoff = (utc_now() - timedelta(hours=hours)).isoformat(timespec="seconds")
 
-    # LLM Calls laden
+    # Load LLM calls
     raw_llm = _read_jsonl(LLM_LOG, cutoff)
     llm_calls = []
     for e in raw_llm:
@@ -77,7 +83,7 @@ def dashboard_data(hours: int = Query(24, ge=0)):
             "tokens_out": e.get("tokens", {}).get("output", 0),
         })
 
-    # Image Calls laden
+    # Load image calls
     raw_img = _read_jsonl(IMAGE_LOG, cutoff)
     image_calls = []
     for e in raw_img:
@@ -100,7 +106,7 @@ def dashboard_data(hours: int = Query(24, ge=0)):
             "model": e.get("model", ""),
         })
 
-    # Zeitraum
+    # Time range
     all_starts = [c["starttime"] for c in llm_calls + image_calls if c.get("starttime")]
     all_ends = [c["endtime"] for c in llm_calls + image_calls if c.get("endtime")]
     time_start = min(all_starts) if all_starts else ""
@@ -116,14 +122,14 @@ def dashboard_data(hours: int = Query(24, ge=0)):
 
 @router.get("/activity")
 def activity_feed(hours: int = Query(24, ge=0)):
-    """Aggregierter Activity-Feed: Instagram, Reaktionen, Story Arcs, Gedanken-Nachrichten."""
+    """Aggregated activity feed: Instagram, reactions, story arcs and thoughts."""
     cutoff = ""
     if hours > 0:
         cutoff = (utc_now() - timedelta(hours=hours)).isoformat(timespec="seconds")
 
     events = []
 
-    # 1. Instagram Posts + Kommentare
+    # 1. Instagram posts and comments
     try:
         from app.models.instagram import load_feed
         feed = load_feed()
@@ -147,7 +153,7 @@ def activity_feed(hours: int = Query(24, ge=0)):
                     "timestamp": cts,
                     "character": comment.get("author", ""),
                     "summary": (comment.get("text", "") or "")[:150],
-                    "detail": f"auf Post von {post.get('agent_name', '')}",
+                    "detail": f"on a post by {post.get('agent_name', '')}",
                 })
     except Exception as e:
         logger.debug("Activity: Instagram error: %s", e)
@@ -162,7 +168,7 @@ def activity_feed(hours: int = Query(24, ge=0)):
                     "type": "story_arc",
                     "timestamp": ts,
                     "character": ", ".join(arc.get("participants", [])),
-                    "summary": f"Arc gestartet: {arc.get('title', '')}",
+                    "summary": f"Arc started: {arc.get('title', '')}",
                     "detail": arc.get("seed", "")[:120],
                     "meta": {"status": arc.get("status"), "tension": arc.get("tension")},
                 })
@@ -195,13 +201,13 @@ def activity_feed(hours: int = Query(24, ge=0)):
                         "type": "story_resolved",
                         "timestamp": rts,
                         "character": ", ".join(arc.get("participants", [])),
-                        "summary": f"Arc abgeschlossen: {arc.get('title', '')}",
+                        "summary": f"Arc resolved: {arc.get('title', '')}",
                         "detail": (arc.get("resolution", "") or "")[:120],
                     })
     except Exception as e:
         logger.debug("Activity: Story Arcs error: %s", e)
 
-    # 3. Gedanken-Nachrichten + Social Dialogs (aus Notifications)
+    # 3. Thought messages and social dialogs (from notifications)
     try:
         from app.models.notifications import get_notifications
         notifs = get_notifications(limit=200)
@@ -221,10 +227,10 @@ def activity_feed(hours: int = Query(24, ge=0)):
     except Exception as e:
         logger.debug("Activity: Notifications error: %s", e)
 
-    # 4. (frueher: Social Dialogs aus log geparst — entfaellt, da sie jetzt
-    #     normale Chat-Eintraege sind, siehe plan-thoughts-and-conversation.md)
+    # Social dialogs are ordinary chat entries now
+    # (see plan-thoughts-and-conversation.md).
 
-    # Nach Zeitstempel sortieren (neueste zuerst)
+    # Sort by timestamp (newest first)
     events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
 
     return {
@@ -246,7 +252,7 @@ def dashboard_page():
 
 def _build_dashboard_html() -> str:
     return '''<!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -263,7 +269,7 @@ def _build_dashboard_html() -> str:
         <button class="time-btn" data-hours="6">6h</button>
         <button class="time-btn active" data-hours="24">24h</button>
         <button class="time-btn" data-hours="168">7d</button>
-        <button class="time-btn" data-hours="0">Alle</button>
+        <button class="time-btn" data-hours="0">All</button>
     </div>
     <div class="header-links">
         <a href="/">Chat</a>
@@ -277,40 +283,40 @@ def _build_dashboard_html() -> str:
     <div class="cards" id="cards"><div class="loading">Loading data…</div></div>
 
     <div class="chart-section">
-        <div class="chart-title">System-Auslastung (Sekunden pro Zeitfenster)</div>
+        <div class="chart-title">System load (seconds per time window)</div>
         <div class="chart-wrap"><canvas id="loadChart"></canvas></div>
     </div>
 
     <div class="chart-section">
-        <div class="chart-title">Gleichzeitige Tasks</div>
+        <div class="chart-title">Concurrent tasks</div>
         <div class="chart-wrap"><canvas id="concChart"></canvas></div>
     </div>
 
     <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
         <div class="chart-section">
-            <div class="chart-title">LLM nach Task-Typ</div>
+            <div class="chart-title">LLM by task type</div>
             <div class="chart-wrap"><canvas id="taskChart"></canvas></div>
         </div>
         <div class="chart-section">
-            <div class="chart-title">Last pro System (LLM vs Bilder)</div>
+            <div class="chart-title">Load per system (LLM vs images)</div>
             <div class="chart-wrap"><canvas id="provChart"></canvas></div>
         </div>
     </div>
 
     <div class="chart-section">
-        <div class="chart-title">LLM Auswertung nach Modell (Gesamtdauer in Sekunden)</div>
+        <div class="chart-title">LLM by model (total duration in seconds)</div>
         <div class="chart-wrap" style="height:auto;min-height:260px;"><canvas id="modelDurChart"></canvas></div>
     </div>
 
     <div class="chart-section" style="overflow-x:auto;">
-        <div class="chart-title">Modell-Statistiken</div>
+        <div class="chart-title">Model statistics</div>
         <table class="detail-table" id="modelStatsTable">
             <thead>
                 <tr>
-                    <th data-mcol="model">Modell</th>
-                    <th data-mcol="count">Aufrufe</th>
-                    <th data-mcol="total_dur">Gesamt (s)</th>
-                    <th data-mcol="avg_dur">&#8960; Dauer (s)</th>
+                    <th data-mcol="model">Model</th>
+                    <th data-mcol="count">Calls</th>
+                    <th data-mcol="total_dur">Total (s)</th>
+                    <th data-mcol="avg_dur">&#8960; Duration (s)</th>
                     <th data-mcol="min_dur">Min (s)</th>
                     <th data-mcol="max_dur">Max (s)</th>
                     <th data-mcol="p90_dur">P90 (s)</th>
@@ -325,17 +331,25 @@ def _build_dashboard_html() -> str:
 
     <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 16px;">
         <div class="chart-section">
-            <div class="chart-title">&#8960; Ausfuehrungszeit pro Modell (Sekunden)</div>
+            <div class="chart-title">&#8960; Execution time per model (seconds)</div>
             <div class="chart-wrap" style="height:auto;min-height:260px;"><canvas id="modelAvgChart"></canvas></div>
         </div>
         <div class="chart-section">
-            <div class="chart-title">Tokens/s Output pro Modell</div>
+            <div class="chart-title">Output tokens/s per model</div>
             <div class="chart-wrap" style="height:auto;min-height:260px;"><canvas id="modelTokChart"></canvas></div>
         </div>
     </div>
 
+    <div class="table-section" style="overflow-x:auto;">
+        <h3>Request timing</h3>
+        <table class="detail-table">
+            <thead><tr><th>Route</th><th>Method</th><th>n</th><th>p50 ms</th><th>p95 ms</th><th>max ms</th><th>errors</th><th>aborted</th><th>streams</th></tr></thead>
+            <tbody id="requestTimingBody"></tbody>
+        </table>
+    </div>
+
     <div class="activity-section">
-        <h3>Autonome Aktivitaeten</h3>
+        <h3>Autonomous activity</h3>
         <div class="activity-stats" id="activityStats"></div>
         <div class="activity-feed" id="activityFeed">
             <div class="activity-empty">Loading…</div>
@@ -343,17 +357,17 @@ def _build_dashboard_html() -> str:
     </div>
 
     <div class="table-section">
-        <h3>Alle Aufrufe</h3>
+        <h3>All calls</h3>
         <table class="detail-table" id="detailTable">
             <thead>
                 <tr>
-                    <th data-col="starttime">Zeit</th>
-                    <th data-col="type">Typ</th>
+                    <th data-col="starttime">Time</th>
+                    <th data-col="type">Type</th>
                     <th data-col="system">System</th>
                     <th data-col="model">Model</th>
                     <th data-col="task">Task</th>
                     <th data-col="service">Agent</th>
-                    <th data-col="duration_s">Dauer</th>
+                    <th data-col="duration_s">Duration</th>
                     <th data-col="tokens">Tokens</th>
                 </tr>
             </thead>

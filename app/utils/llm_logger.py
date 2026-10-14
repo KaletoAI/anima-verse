@@ -340,13 +340,13 @@ def _archive_pruned_lines(path: Path, buckets: Dict[str, List[str]]) -> None:
 
 
 def prune_jsonl_log(path: Path, retention_days: int) -> int:
-    """Moves JSONL entries whose ``starttime`` is older than ``retention_days``
+    """Moves JSONL entries whose ``starttime`` or ``ts`` is older than ``retention_days``
     days out of the live log and into a monthly archive. The shortened live
     file is rewritten atomically (tmp + rename).
 
-    Both logs (llm_calls.jsonl, image_prompts.jsonl) carry ``starttime``
-    as an ISO string — same schema assumption. Entries without a starttime,
-    with an unparsable line or with a ``starttime`` that does not start with
+    Call logs carry ``starttime``; request timing carries ``ts``. Both are
+    ISO system timestamps. Entries without a timestamp, with an unparsable
+    line or with a timestamp that does not start with
     ``YYYY-MM`` are kept conservatively (no usable timestamp = cannot age out)
     and therefore never end up in the archive.
 
@@ -394,7 +394,7 @@ def prune_jsonl_log(path: Path, retention_days: int) -> int:
                         # keep an unparsable line rather than dropping it
                         kept.append(line_strip)
                         continue
-                    ts = (obj.get("starttime") or "").strip()
+                    ts = (obj.get("starttime") or obj.get("ts") or "").strip()
                     month = ts[:7]
                     if ts and ts < cutoff_iso and _MONTH_RE.match(month):
                         buckets.setdefault(month, []).append(line_strip)
@@ -444,7 +444,8 @@ def prune_jsonl_log(path: Path, retention_days: int) -> int:
 def prune_logs_on_startup() -> Dict[str, int]:
     """Called by the server lifespan at startup. Reads the retention period
     from the config (server.log_retention_days, default 5) and trims
-    llm_calls.jsonl, image_prompts.jsonl and decisions.jsonl to that window.
+    llm_calls.jsonl, image_prompts.jsonl, decisions.jsonl and
+    request_timing.jsonl to that window.
 
     Entries falling out of the window are not dropped but appended to their
     monthly bucket under ``logs/archive/`` (see ``prune_jsonl_log``). The
@@ -462,11 +463,13 @@ def prune_logs_on_startup() -> Dict[str, int]:
     llm_calls = prune_jsonl_log(LOG_FILE, days)
     image_prompts = prune_jsonl_log(LOG_DIR / "image_prompts.jsonl", days)
     decisions = prune_jsonl_log(LOG_DIR / "decisions.jsonl", days)
+    request_timing = prune_jsonl_log(LOG_DIR / "request_timing.jsonl", days)
     out = {
         "llm_calls": llm_calls,
         "image_prompts": image_prompts,
         "decisions": decisions,
-        "archived": llm_calls + image_prompts + decisions,
+        "request_timing": request_timing,
+        "archived": llm_calls + image_prompts + decisions + request_timing,
         "retention_days": days,
     }
     return out

@@ -790,7 +790,7 @@ def _cors_origins() -> list:
 
 # Middleware ORDER matters and reads bottom-up: `add_middleware` prepends, so
 # the LAST one added is the outermost. Execution is therefore
-#   player_activity -> user_context -> CORS -> auth gate -> router
+#   request_timing -> player_activity -> user_context -> CORS -> auth gate -> router
 # The gate sits innermost on purpose: it needs the user that
 # user_context_middleware resolved, a CORS preflight (OPTIONS) is answered by
 # CORSMiddleware before it ever gets there, and its own 401/403 answers still
@@ -810,7 +810,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"])
 
-# User-Context-Middleware: setzt current_user_ctx aus Session-Cookie pro Request
+# Resolve current_user_ctx from the session cookie for each request.
 app.middleware("http")(user_context_middleware)
 
 # The ONE place the user-activity stamp is written: only humans issue HTTP
@@ -824,6 +824,9 @@ async def player_activity_middleware(request, call_next):
     activity_middleware_hook(request.method, request.url.path)
     return await call_next(request)
 
+
+from app.core.request_timing import RequestTimingMiddleware
+app.add_middleware(RequestTimingMiddleware)
 
 # Include routers
 app.include_router(auth.router)

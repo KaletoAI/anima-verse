@@ -50,6 +50,7 @@ function _resolveSystemImg(call) {
 // --- Data Loading ---
 async function loadData(hours) {
     _hours = hours;
+    loadRequestTiming();
     try {
         const resp = await fetch(`/dashboard/data?hours=${hours}`);
         _data = await resp.json();
@@ -82,16 +83,16 @@ function renderCards() {
     const tokIn = llm.reduce((a,c) => a + (c.tokens_in || 0), 0);
     const tokOut = llm.reduce((a,c) => a + (c.tokens_out || 0), 0);
 
-    // Per-System Statistiken
+    // Per-system statistics
     const sysStats = {};
     for (const c of llm) {
-        const sys = _resolveSystemLLM(c) || 'Extern';
+        const sys = _resolveSystemLLM(c) || 'External';
         if (!sysStats[sys]) sysStats[sys] = { llmCount: 0, imgCount: 0, llmDur: 0, imgDur: 0 };
         sysStats[sys].llmCount++;
         sysStats[sys].llmDur += c.duration_s || 0;
     }
     for (const c of img) {
-        const sys = _resolveSystemImg(c) || 'Extern';
+        const sys = _resolveSystemImg(c) || 'External';
         if (!sysStats[sys]) sysStats[sys] = { llmCount: 0, imgCount: 0, llmDur: 0, imgDur: 0 };
         sysStats[sys].imgCount++;
         sysStats[sys].imgDur += c.duration_s || 0;
@@ -99,22 +100,22 @@ function renderCards() {
 
     let sysCardsHtml = '';
     for (const [name, s] of Object.entries(sysStats).sort((a,b) => (b[1].llmDur + b[1].imgDur) - (a[1].llmDur + a[1].imgDur))) {
-        if (name === 'Extern') continue;
+        if (name === 'External') continue;
         const color = COLORS.get(name);
         const totalDur = (s.llmDur + s.imgDur).toFixed(0);
         sysCardsHtml += `<div class="card" style="border-left:3px solid ${color}">
             <div class="card-label" style="color:${color}">${_esc(name)}</div>
             <div class="card-value" style="color:${color};font-size:20px;">${totalDur}s</div>
-            <div class="card-sub">LLM: ${s.llmCount} (${s.llmDur.toFixed(0)}s) | Bild: ${s.imgCount} (${s.imgDur.toFixed(0)}s)</div>
+            <div class="card-sub">LLM: ${s.llmCount} (${s.llmDur.toFixed(0)}s) | Image: ${s.imgCount} (${s.imgDur.toFixed(0)}s)</div>
         </div>`;
     }
 
     document.getElementById('cards').innerHTML = `
         ${sysCardsHtml}
         <div class="card"><div class="card-label">LLM Calls</div><div class="card-value llm">${llm.length}</div>
-            <div class="card-sub">&Oslash; ${avgLlm}s | Gesamt: ${llmDurs.reduce((a,b)=>a+b,0).toFixed(0)}s</div></div>
-        <div class="card"><div class="card-label">Bilder</div><div class="card-value img">${img.length}</div>
-            <div class="card-sub">&Oslash; ${avgImg}s | Gesamt: ${imgDurs.reduce((a,b)=>a+b,0).toFixed(0)}s</div></div>
+            <div class="card-sub">&Oslash; ${avgLlm}s | Total: ${llmDurs.reduce((a,b)=>a+b,0).toFixed(0)}s</div></div>
+        <div class="card"><div class="card-label">Images</div><div class="card-value img">${img.length}</div>
+            <div class="card-sub">&Oslash; ${avgImg}s | Total: ${imgDurs.reduce((a,b)=>a+b,0).toFixed(0)}s</div></div>
         <div class="card"><div class="card-label">Tokens</div><div class="card-value tok">${_fmtNum(tokIn + tokOut)}</div>
             <div class="card-sub">In: ${_fmtNum(tokIn)} | Out: ${_fmtNum(tokOut)}</div></div>
     `;
@@ -132,14 +133,14 @@ function renderLoadChart() {
     const sysLoad = {};  // system_name -> bucket_index -> total_seconds
 
     for (const c of _data.llm_calls) {
-        const sys = _resolveSystemLLM(c) || 'Extern';
+        const sys = _resolveSystemLLM(c) || 'External';
         const idx = _bucketIndex(buckets, c.starttime);
         if (idx < 0) continue;
         if (!sysLoad[sys]) sysLoad[sys] = new Array(buckets.length).fill(0);
         sysLoad[sys][idx] += c.duration_s || 0;
     }
     for (const c of _data.image_calls) {
-        const sys = _resolveSystemImg(c) || 'Extern';
+        const sys = _resolveSystemImg(c) || 'External';
         const idx = _bucketIndex(buckets, c.starttime);
         if (idx < 0) continue;
         if (!sysLoad[sys]) sysLoad[sys] = new Array(buckets.length).fill(0);
@@ -147,10 +148,10 @@ function renderLoadChart() {
     }
 
     const labels = buckets.map(b => _fmtTime(b));
-    // Sort systems: configured systems first, then Extern
+    // Sort systems: configured systems first, then External
     const sysOrder = Object.keys(sysLoad).sort((a,b) => {
-        if (a === 'Extern') return 1;
-        if (b === 'Extern') return -1;
+        if (a === 'External') return 1;
+        if (b === 'External') return -1;
         return a.localeCompare(b);
     });
     const datasets = sysOrder.map(sys => ({
@@ -171,7 +172,7 @@ function renderLoadChart() {
             scales: {
                 x: { stacked: true, ticks: { color: '#8b949e', font: { size: 10 }, maxRotation: 45 }, grid: { color: '#21262d' } },
                 y: { stacked: true, ticks: { color: '#8b949e', font: { size: 10 } }, grid: { color: '#21262d' },
-                     title: { display: true, text: 'Sekunden', color: '#8b949e', font: { size: 11 } } }
+                     title: { display: true, text: 'Seconds', color: '#8b949e', font: { size: 11 } } }
             }
         }
     });
@@ -185,7 +186,7 @@ function renderConcurrencyChart() {
 
     function addEvents(calls, resolverFn) {
         for (const c of calls) {
-            const sys = resolverFn(c) || 'Extern';
+            const sys = resolverFn(c) || 'External';
             if (!c.starttime || !c.endtime) continue;
             const st = new Date(c.starttime).getTime();
             const et = new Date(c.endtime).getTime();
@@ -202,8 +203,8 @@ function renderConcurrencyChart() {
 
     const labels = buckets.map(b => _fmtTime(b));
     const sysOrder = Object.keys(sysCon).sort((a,b) => {
-        if (a === 'Extern') return 1;
-        if (b === 'Extern') return -1;
+        if (a === 'External') return 1;
+        if (b === 'External') return -1;
         return a.localeCompare(b);
     });
     const datasets = sysOrder.map(sys => ({
@@ -253,8 +254,8 @@ function renderTaskChart() {
         data: {
             labels,
             datasets: [
-                { label: 'Sekunden', data: durData, backgroundColor: '#d2992266', borderColor: '#d29922', borderWidth: 1 },
-                { label: 'Anzahl', data: countData, backgroundColor: '#58a6ff44', borderColor: '#58a6ff', borderWidth: 1 },
+                { label: 'Seconds', data: durData, backgroundColor: '#d2992266', borderColor: '#d29922', borderWidth: 1 },
+                { label: 'Count', data: countData, backgroundColor: '#58a6ff44', borderColor: '#58a6ff', borderWidth: 1 },
             ]
         },
         options: {
@@ -272,13 +273,13 @@ function renderTaskChart() {
 function renderProvChart() {
     const sysBreak = {};
     for (const c of _data.llm_calls) {
-        const sys = _resolveSystemLLM(c) || 'Extern';
+        const sys = _resolveSystemLLM(c) || 'External';
         if (!sysBreak[sys]) sysBreak[sys] = { llmDur: 0, imgDur: 0, llmCount: 0, imgCount: 0 };
         sysBreak[sys].llmDur += c.duration_s || 0;
         sysBreak[sys].llmCount++;
     }
     for (const c of _data.image_calls) {
-        const sys = _resolveSystemImg(c) || 'Extern';
+        const sys = _resolveSystemImg(c) || 'External';
         if (!sysBreak[sys]) sysBreak[sys] = { llmDur: 0, imgDur: 0, llmCount: 0, imgCount: 0 };
         sysBreak[sys].imgDur += c.duration_s || 0;
         sysBreak[sys].imgCount++;
@@ -294,9 +295,9 @@ function renderProvChart() {
         data: {
             labels,
             datasets: [
-                { label: 'LLM (Sek.)', data: sorted.map(s => Math.round(s[1].llmDur * 10) / 10),
+                { label: 'LLM (s)', data: sorted.map(s => Math.round(s[1].llmDur * 10) / 10),
                   backgroundColor: '#58a6ff88', borderColor: '#58a6ff', borderWidth: 1 },
-                { label: 'Bilder (Sek.)', data: sorted.map(s => Math.round(s[1].imgDur * 10) / 10),
+                { label: 'Images (s)', data: sorted.map(s => Math.round(s[1].imgDur * 10) / 10),
                   backgroundColor: '#3fb95088', borderColor: '#3fb950', borderWidth: 1 },
             ]
         },
@@ -305,7 +306,7 @@ function renderProvChart() {
             plugins: { legend: { labels: { color: '#8b949e', boxWidth: 12, font: { size: 11 } } },
                 tooltip: { callbacks: { afterLabel: (ctx) => {
                     const s = sorted[ctx.dataIndex][1];
-                    return `LLM: ${s.llmCount}x | Bilder: ${s.imgCount}x`;
+                    return `LLM: ${s.llmCount}x | Images: ${s.imgCount}x`;
                 }}}
             },
             scales: {
@@ -359,7 +360,7 @@ function renderModelStats() {
         data: {
             labels: byDur.map(s => s.model),
             datasets: [{
-                label: 'Gesamtdauer (s)',
+                label: 'Total duration (s)',
                 data: byDur.map(s => Math.round(s.total_dur * 10) / 10),
                 backgroundColor: byDur.map((s,i) => COLORS.palette[i % COLORS.palette.length] + 'cc'),
                 borderColor: byDur.map((s,i) => COLORS.palette[i % COLORS.palette.length]),
@@ -372,12 +373,12 @@ function renderModelStats() {
                 legend: { display: false },
                 tooltip: { callbacks: { afterLabel: (ctx) => {
                     const s = byDur[ctx.dataIndex];
-                    return `${s.count} Aufrufe | \u2300 ${s.avg_dur.toFixed(1)}s | P90 ${s.p90_dur.toFixed(1)}s`;
+                    return `${s.count} Calls | \u2300 ${s.avg_dur.toFixed(1)}s | P90 ${s.p90_dur.toFixed(1)}s`;
                 }}}
             },
             scales: {
                 x: { ticks: { color: '#8b949e', font: { size: 10 } }, grid: { color: '#21262d' },
-                     title: { display: true, text: 'Sekunden', color: '#8b949e', font: { size: 11 } } },
+                     title: { display: true, text: 'Seconds', color: '#8b949e', font: { size: 11 } } },
                 y: { ticks: { color: '#c9d1d9', font: { size: 11 } }, grid: { color: '#21262d' } }
             }
         }
@@ -395,7 +396,7 @@ function renderModelStats() {
         data: {
             labels: byAvg.map(s => s.model),
             datasets: [
-                { label: '\u2300 Dauer (s)', data: byAvg.map(s => Math.round(s.avg_dur * 10) / 10),
+                { label: '\u2300 Duration (s)', data: byAvg.map(s => Math.round(s.avg_dur * 10) / 10),
                   backgroundColor: '#d2992288', borderColor: '#d29922', borderWidth: 1 },
                 { label: 'P90 (s)', data: byAvg.map(s => Math.round(s.p90_dur * 10) / 10),
                   backgroundColor: '#f8514988', borderColor: '#f85149', borderWidth: 1 },
@@ -406,7 +407,7 @@ function renderModelStats() {
             plugins: { legend: { labels: { color: '#8b949e', boxWidth: 12, font: { size: 11 } } } },
             scales: {
                 x: { ticks: { color: '#8b949e', font: { size: 10 } }, grid: { color: '#21262d' },
-                     title: { display: true, text: 'Sekunden', color: '#8b949e', font: { size: 11 } } },
+                     title: { display: true, text: 'Seconds', color: '#8b949e', font: { size: 11 } } },
                 y: { ticks: { color: '#c9d1d9', font: { size: 11 } }, grid: { color: '#21262d' } }
             }
         }
@@ -534,7 +535,7 @@ function renderTable() {
     }).join('');
 
     if (all.length > 200) {
-        tbody.innerHTML += `<tr><td colspan="8" style="text-align:center;color:#8b949e;padding:12px;">... ${all.length - 200} weitere Eintraege</td></tr>`;
+        tbody.innerHTML += `<tr><td colspan="8" style="text-align:center;color:#8b949e;padding:12px;">... ${all.length - 200} more entries</td></tr>`;
     }
 }
 
@@ -629,9 +630,9 @@ const ACT_ICONS = {
     story_arc: '📚', story_beat: '🎬', story_resolved: '🏁',
 };
 const ACT_LABELS = {
-    instagram_post: 'Instagram', instagram_reaction: 'Reaktion',
-    thought: 'Gedanke',
-    story_arc: 'Story Arc', story_beat: 'Story Beat', story_resolved: 'Arc Ende',
+    instagram_post: 'Instagram', instagram_reaction: 'Reaction',
+    thought: 'Thought',
+    story_arc: 'Story Arc', story_beat: 'Story Beat', story_resolved: 'Arc end',
 };
 let _activityData = [];
 let _activityFilter = 'all';
@@ -653,8 +654,8 @@ function renderActivityStats() {
     for (const e of _activityData) {
         counts[e.type] = (counts[e.type] || 0) + 1;
     }
-    let html = `<span class="activity-stat act-all ${_activityFilter==='all'?'active':''}" onclick="setActivityFilter('all')">Alle (${_activityData.length})</span>`;
-    // Definierte Reihenfolge
+    let html = `<span class="activity-stat act-all ${_activityFilter==='all'?'active':''}" onclick="setActivityFilter('all')">All (${_activityData.length})</span>`;
+    // Fixed order
     const order = ['instagram_post','instagram_reaction','thought','story_arc','story_beat','story_resolved'];
     for (const t of order) {
         if (!counts[t]) continue;
@@ -697,7 +698,7 @@ function renderActivityFeed() {
                 </div>
                 <div class="activity-text">${_esc(e.summary || '')}</div>
                 ${e.detail ? `<div class="activity-detail">${_esc(e.detail)}</div>` : ''}
-                ${imgUrl ? `<img class="activity-beat-img" src="${_esc(_safeUrl(imgUrl))}" alt="Beat Bild" onclick="this.classList.toggle('expanded')">` : ''}
+                ${imgUrl ? `<img class="activity-beat-img" src="${_esc(_safeUrl(imgUrl))}" alt="Beat image" onclick="this.classList.toggle('expanded')">` : ''}
             </div>
         </div>`;
     }).join('');
@@ -706,3 +707,20 @@ function renderActivityFeed() {
 // --- Init ---
 loadData(24);
 loadActivity(24);
+
+async function loadRequestTiming() {
+    const body = document.getElementById('requestTimingBody');
+    try {
+        const response = await fetch('/dashboard/request-timing');
+        if (!response.ok) throw new Error('Request timing unavailable');
+        const data = await response.json();
+        const routes = (data.routes || []).slice().sort((a, b) => b.p95 - a.p95);
+        body.innerHTML = routes.map(row => `<tr>
+            <td>${_esc(row.route)}</td><td>${_esc(row.method)}</td>
+            ${['n', 'p50', 'p95', 'max', 'errors', 'aborted', 'streams'].map(key =>
+                `<td>${_esc(['p50', 'p95', 'max'].includes(key) ? Number(row[key]).toFixed(1) : row[key])}</td>`).join('')}
+        </tr>`).join('') || '<tr><td colspan="9">No request samples yet</td></tr>';
+    } catch (e) {
+        body.innerHTML = '<tr><td colspan="9">Error loading request timing</td></tr>';
+    }
+}
