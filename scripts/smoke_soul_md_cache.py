@@ -5,6 +5,7 @@ Usage: ./.venv/bin/python scripts/smoke_soul_md_cache.py
 All storage is temporary and initialized before world modules are imported.
 """
 import asyncio
+import os
 import stat
 import sys
 import tempfile
@@ -15,7 +16,11 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core import paths
 
-with tempfile.TemporaryDirectory() as tmp:
+current_umask = os.umask(0)
+os.umask(current_umask)
+
+with tempfile.TemporaryDirectory() as tmp, patch.object(
+        os, "umask", side_effect=AssertionError("writer must not mutate umask")):
     paths.init(Path(tmp))
     from app.models import character_template as template
     from app.models.character import get_character_dir
@@ -99,6 +104,7 @@ with tempfile.TemporaryDirectory() as tmp:
         stream.write("plain")
     fresh = f.parent / "fresh.md"
     soul_writer._atomic_write(fresh, "fresh")
+    assert stat.S_IMODE(fresh.stat().st_mode) == 0o666 & ~current_umask
     assert stat.S_IMODE(fresh.stat().st_mode) == stat.S_IMODE(plain.stat().st_mode)
 
     soul_writer.append_entry("demo", "beliefs", "about_self", "First")
@@ -111,5 +117,6 @@ with tempfile.TemporaryDirectory() as tmp:
     before = target.stat().st_ino
     soul_writer.rewrite_file("demo", "beliefs", [{"category": "about_self", "text": "Third"}])
     assert target.stat().st_ino != before, "rewrite atomically replaces inode"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640, "rewrite preserves mode"
     assert "Third" in template.load_source_file("demo", "soul/beliefs.md")
 print("Soul cache checks passed")

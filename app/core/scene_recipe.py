@@ -3721,23 +3721,16 @@ def _figures() -> Dict[str, Any]:
             "stand_clearance": STAND_CLEARANCE}
 
 
-def season_token() -> str:
-    """The current season's key, ``""`` in a world without seasons.
+def season_token() -> Tuple[str, ...]:
+    """All normalized current-season spellings used by variant selection.
 
-    ONE spelling for the two readers that need it: the scene signature (a
-    season swaps prop variants and surface textures without touching a single
-    stored value, see :func:`_signature`) and the scene cache's input
-    fingerprint (:func:`scene_fingerprint`), which has to move for exactly the
-    same reason.
+    Cache inputs must include localized and base names as well as the key:
+    renaming any spelling can change the variants selected by the matcher.
+    ``current_season_tokens`` owns that matching definition; sorting only
+    makes its set deterministic for cache keys and serialized signatures.
     """
-    from app.core.game_time import get_calendar
-    from app.core.timeutils import game_time
-    try:
-        cal = get_calendar()
-        return (cal.seasons[game_time().parts(cal).season_index].key
-                if cal.seasons else "")
-    except Exception:
-        return ""
+    from app.core.game_time import current_season_tokens
+    return tuple(sorted(current_season_tokens()))
 
 
 def _signature(location: Dict[str, Any], plan_width_m: float,
@@ -4765,7 +4758,7 @@ def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
 
     parts = [
         str(SCENE_RECIPE_VERSION),
-        season_token(),
+        json.dumps(season_token()),
         _safe(_storage),
         _safe(lambda: json.dumps(location, sort_keys=True, default=str)),
         _safe(_terrain),

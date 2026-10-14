@@ -8,16 +8,14 @@ or category is empty, are written in the character's language.
 """
 import os
 import stat
-import tempfile
 from pathlib import Path
-from threading import Lock
 from typing import Dict, List, Tuple
+from uuid import uuid4
 
 from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
 
 logger = get_logger("soul_writer")
-_UMASK_LOCK = Lock()
 
 
 SOUL_FILE_SCHEMA: Dict[str, Dict] = {
@@ -84,7 +82,8 @@ def _atomic_write(path: Path, text: str) -> None:
     """Replace a soul file; caller holds its soul_file lock."""
     from app.models.character_template import invalidate_source_file
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
+    tmp = path.with_name(path.name + "." + uuid4().hex)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(text)
@@ -93,15 +92,15 @@ def _atomic_write(path: Path, text: str) -> None:
         try:
             mode = stat.S_IMODE(path.stat().st_mode)
         except FileNotFoundError:
-            with _UMASK_LOCK:
-                mask = os.umask(0)
-                os.umask(mask)
-            mode = 0o666 & ~mask
-        os.chmod(tmp, mode)
+            pass  # New files retain the mode assigned by the OS under its umask.
+        else:
+            os.chmod(tmp, mode)
         os.replace(tmp, path)
-        invalidate_source_file(path)
     finally:
-        Path(tmp).unlink(missing_ok=True)
+        try:
+            Path(tmp).unlink(missing_ok=True)
+        finally:
+            invalidate_source_file(path)
 
 
 def append_entry(character_name: str, file_id: str, category_id: str,
