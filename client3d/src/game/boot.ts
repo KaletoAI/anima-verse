@@ -187,7 +187,7 @@ const phaseSums: Record<BootPhase, number> = {
   'model:download': 0, 'model:build': 0, 'scene:fetch': 0,
   'arrival:mount': 0, 'ground:fetch': 0, 'ground:build': 0,
 };
-// Five seconds match the shader warm-up comparison window in P2 § 4.7.
+// The after-visible window: long tasks in the first five seconds the player sees (P2 § 4.7).
 const AFTER_VISIBLE_MS = 5000;
 const intervals: PhaseInterval[] = [];
 const tasks: TaskEntry[] = [];
