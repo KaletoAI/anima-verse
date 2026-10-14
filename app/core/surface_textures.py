@@ -540,6 +540,26 @@ def library_kinds() -> set:
     return kinds
 
 
+_surface_sig_lock = threading.Lock()
+_surface_sig_cache = None
+
+
+def surface_lib_sig() -> str:
+    """Hash recognised kinds, including blends, on every 5-second TTL expiry."""
+    import hashlib
+    global _surface_sig_cache
+    with _surface_sig_lock:
+        now = time.monotonic()
+        directory = _dir()
+        cached = _surface_sig_cache
+        if cached is not None and cached[0] == directory and now < cached[1]:
+            return cached[2]
+        signature = hashlib.sha1(
+            json.dumps(sorted(library_kinds())).encode("utf-8")).hexdigest()
+        _surface_sig_cache = (directory, now + 5, signature)
+        return signature
+
+
 def resolve_terrain_kind(terrain: Any, known) -> str:
     """The library kind a location's ``terrain`` field names — '' when it
     names none.

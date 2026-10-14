@@ -875,12 +875,12 @@ Eine Location-Zeile trägt genau ihre Kartengeometrie plus die
 
 **Wurzelfelder des Payloads — die vollständige Liste:** `avatar` · `current_location_id` · `locations` ·
 `characters` · `events_by_location` · `game_time` · `game_rate` · `world_bounds` ·
-`terrain_sig` · `height_sig` · `explored_sig` · `world_props` ·
+`locations_rev` · `terrain_sig` · `height_sig` · `explored_sig` · `world_props` ·
 `world_props_sig` · `fogged` · `max_step_height_m` · `max_slope_deg` ·
 `backdrop` (**optionaler Schlüssel** — nur wenn die Fernkulisse eingeschaltet
 ist, § A17).
 
-Sechzehn feste Schlüssel plus `backdrop`. Gebaut werden sie in
+Siebzehn feste Schlüssel plus `backdrop`. Gebaut werden sie in
 `world_ops.build_worldmap_payload`; wer die Liste ändert, ändert
 `scripts/smoke_docs_schnittstellen_3d.py` mit, das sie gegen ein hier
 gebautes Payload hält.
@@ -892,6 +892,7 @@ gebautes Payload hält.
 | Wurzelfeld | Typ | Bedeutung |
 |---|---|---|
 | `world_bounds` | `{"min_x","min_z","max_x","max_z"} \| null` | Ausdehnung der Welt in Metern, auf 2 Stellen gerundet; **vor** dem Fog-Filter berechnet (A1.6) |
+| `locations_rev` | `str` | Revision der 3D-Ortsdetails (Prozess-Epoche, Weltidentität, Schreibgeneration und Oberflächenarten). Bei **Ungleichheit** zur angewendeten Revision holt der Client die Details neu; übernommen wird erst nach erfolgreichem Abruf (200 oder 304), aus dem ETag der tatsächlich erhaltenen Daten. |
 | `terrain_sig` | `str` (10) | Signatur über gemalte Flächen + Welt-Typenzeilen. Ändert sie sich, holt der Client `GET /play/terrain` neu — sonst nie |
 | `height_sig` | `str` (10) | Signatur über **alles, was die fünf Backstufen von `h_final` lesen** (§ A16.1): die autorierten Höhenflächen, das Mikro-Relief der gemalten **Flächen** (`relief_inputs` — relief-freies Malen zählt nicht mit), die Wasser-Polygone samt ihren effektiven Zahlen (`water_basis`: Spiegel, beide Profil-Enden, Fließrichtung, aufgelöste Tiefe/Rampe — W1; ~~`zone_water_basis`~~ ist gelöscht) und die **Platzierungen der GEBAUTEN Orte** (ein verschobener Ort verschiebt sein Plateau; ein Ort, der einen Raum schließt oder öffnet, tritt in `placed_footprints()` ein oder aus — `level_ground` ist aus der Signatur verschwunden, § A16.4). Ändert sie sich, holt der Client `GET /play/heightfield` neu **und verwirft Kachel-Index samt aller geladenen Kacheln** (§ A16.5) — sonst nie. Wie `terrain_sig` **nie gefoggt**: ein Bergrücken ist von weit außerhalb sichtbar, und ein verstecktes Relief ließe Bild und Laufregel auseinanderlaufen |
 | `fogged` | `bool` | `true` = gefilterte Sicht (§ A12) |
@@ -900,6 +901,25 @@ gebautes Payload hält.
 | `max_step_height_m` | `float` | Welt-Einstellung `game.max_step_height_m` (Default 0,4; validiert und geklemmt auf [0,05; 5]). Höchste Stufe, die eine Figur nimmt — Teil des Höhen-Gates von `POST /play/pos` (§ A15 Nr. 9) |
 | `max_slope_deg` | `float` | Welt-Einstellung `game.max_slope_deg` (Default 40; geklemmt auf [10; 89]). Steilste Steigung, die eine Figur erklimmt — dasselbe Gate |
 | `backdrop` | `{"height_m","seed","arcs"} \| fehlt` | Die **Fernkulisse** (§ A17) — reine Optik. Fehlt der Schlüssel, ist sie aus (oder der Server ist älter); beides ist für den Client derselbe Zustand |
+
+**`GET /world/locations?view=3d` — Ortsdetails nach Bedarf:** Die Antwort
+`{locations: [...]}` enthält pro Ort genau `id`, `name`, `description`,
+`rooms`, `entry_room`, `terrain`, `surface_kind` und `map3d`; jeder Raum
+enthält genau `id`, `name` und `layout`. Fehlende optionale Felder stehen als
+`null` im Payload. Position und abgeleitete Geometrie liefert die Weltkarte.
+Galeriezähler (`image_count`) und Bedingungen gehören nicht zu dieser Ansicht.
+`agent_name` zusammen mit `view=3d` ergibt **400**; die Vollansicht ohne
+`view=3d` bleibt unverändert.
+
+Der ETag ist `"<locations_rev>"`, mit `Cache-Control: no-cache`. Ein passendes
+`If-None-Match` ergibt **304 ohne Payload-Bau**. gzip kann den ETag als
+`W/"<locations_rev>"` ausliefern; für den Vergleich mit der Weltkarte entfernt
+der Client `W/` und die Anführungszeichen. Er hält ETag und Payload gemeinsam
+im Cache, verwendet bei 304 die gecachten Daten und bündelt gleichzeitige
+Abrufe. Synchronisiert wird beim Start, bei ungleicher `locations_rev` in der
+Weltkarte sowie vorsorglich alle 120 Sekunden. Bei Fehlern bleibt die bisher
+angewendete Revision bestehen; auch nach 304 werden noch nicht angewendete
+Cache-Daten übernommen. Sichtbar werdende Orte nutzen dieselbe 3D-Ansicht.
 
 **Jede Signatur hasht eine Server-Code-Version mit.** `height_sig`
 (`HEIGHT_BAKE_VERSION` in `app/core/heightfield.py`), die Szenen-`signature`

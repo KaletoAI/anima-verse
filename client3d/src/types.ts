@@ -344,6 +344,7 @@ export interface GameTimeInfo {
 }
 
 export interface WorldMap {
+  locations_rev: string;
   avatar: string;
   current_location_id: string;
   /** Only what the avatar knows — unless this is the admin's unfiltered view

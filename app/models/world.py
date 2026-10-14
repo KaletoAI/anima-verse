@@ -69,9 +69,16 @@ def _migrate_room_image_prompts(data: Dict[str, Any]) -> bool:
 # The key is the DB path, so switching world/storage (``paths.init``) cannot
 # serve the previous world's locations.
 _world_cache_lock = threading.Lock()
+BOOT_EPOCH: str = uuid.uuid4().hex
 _world_generation = 0
 _world_cache: Dict[str, Any] = {"key": None, "gen": None,
                                 "texts": None, "by_id": None}
+
+
+def world_generation() -> int:
+    """Return the existing location-write generation."""
+    with _world_cache_lock:
+        return _world_generation
 
 
 def _bump_world_generation() -> None:

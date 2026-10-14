@@ -155,13 +155,36 @@ def build_locations_payload(character_name: str) -> Dict[str, Any]:
             filtered.append(loc)
         locations = filtered
 
+    for loc in locations:
+        loc_id = loc.get("id", "")
+        loc["image_count"] = len(list_gallery_images(loc_id)) if loc_id else 0
+    _enrich_locations(locations)
+    return {"locations": locations}
+
+
+# Only fields read from the detail response; geometry is supplied by worldmap.
+VIEW_3D_FIELDS = (
+    "id", "name", "description", "rooms", "entry_room", "terrain",
+    "surface_kind", "map3d",
+)
+VIEW_3D_ROOM_FIELDS = ("id", "name", "layout")
+
+
+def locations_rev() -> str:
+    """Revision of the world-only 3D view, across worlds and server boots."""
+    from app.models import world
+    from app.core.db import get_db_path
+    from app.core.surface_textures import surface_lib_sig
+    return f"{world.BOOT_EPOCH}:{get_db_path()}:{world.world_generation()}:{surface_lib_sig()}"
+
+
+def _enrich_locations(locations: List[Dict[str, Any]]) -> None:
+    """Add shared boundary and surface hints without character or gallery IO."""
     from app.core.boundary_entry import has_entrance
     from app.core.surface_textures import library_kinds, resolve_terrain_kind
     from app.core.world_geometry import polygon_self_intersects
     known_kinds = library_kinds()
     for loc in locations:
-        loc_id = loc.get("id", "")
-        loc["image_count"] = len(list_gallery_images(loc_id)) if loc_id else 0
         # Findings about the DRAWN boundary, for the surface that draws it
         # (contract v6 Nr. 1). The scene payload states the same thing in its
         # ``problems[]``, but a bare location — a pin with an outline and
@@ -181,7 +204,21 @@ def build_locations_payload(character_name: str) -> Dict[str, Any]:
         # procedural ground for it and the editor marks the miss.
         loc["surface_kind"] = resolve_terrain_kind(loc.get("terrain"),
                                                    known_kinds)
-    return {"locations": locations}
+
+
+def build_locations_payload_3d() -> Dict[str, Any]:
+    """Project world locations to the exact client detail contract."""
+    locations = list_locations()
+    _enrich_locations(locations)
+    projected = []
+    for loc in locations:
+        row = {field: loc.get(field) for field in VIEW_3D_FIELDS}
+        row["rooms"] = [
+            {field: room.get(field) for field in VIEW_3D_ROOM_FIELDS}
+            for room in loc.get("rooms", [])
+        ]
+        projected.append(row)
+    return {"locations": projected}
 
 
 # === Worldmap payload (player map panel + 3D client) ===
@@ -838,6 +875,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     backdrop = get_backdrop()
 
     return {
+        "locations_rev": locations_rev(),
         "avatar": avatar,
         "current_location_id": (get_character_current_location(avatar) if avatar else ""),
         "locations": locations,

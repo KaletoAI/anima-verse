@@ -545,11 +545,14 @@ async function startApp(username: string, role: string) {
       }
     });
   }
-  const [allLocs, firstMap, surfaces] = await retryBoot('world data', () => Promise.all([
-    api.getLocations(),
+  const [locations3d, firstMap, surfaces] = await retryBoot('world data', () => Promise.all([
+    api.getLocations3d(),
     api.getWorldMap(showAll),
     api.getSurfaceTextures(),
   ]), titleSink);
+  const allLocs = locations3d.locations;
+  let appliedEtag = locations3d.etag;
+  let locationsRev = appliedEtag.replace(/^W\//, '').replace(/^"|"$/g, '');
   reportBootStage('world');
   setSurfaceTextures(surfaces);   // global terrain textures (AV3D-13)
   setPropLoadFocus(engine.target);   // GLB queue: models nearest the camera first
@@ -1737,40 +1740,49 @@ async function startApp(username: string, role: string) {
     const tile = tiles.get(locId);
     if (tile) rebuildTile(tile, tile.loc);
   };
-  async function pollLocations() {
-    try {
-      const fresh = await api.getLocations();
-      const freshById = new Map(fresh.map((l) => [l.id, l]));
-      // Collect first, build after. The neighbourhood grid this used to feed
-      // (and the coast blends baked from it) is gone with the cell — the
-      // ground between the places is the painted terrain of `/play/terrain`
-      // now, and a changed `terrain`/`surface_kind` simply repaints the one
-      // tile it belongs to, through the ordinary signature rebuild.
-      const dirty: [Tile, WorldLocation][] = [];
-      for (const [id, tile] of tiles) {
-        const detail = freshById.get(id);
-        if (!detail) continue;
-        const sig = sigOf(detail);
-        if (locSig.get(id) === sig) continue;
-        locSig.set(id, sig);
-        // map3d from the detail record, but without losing the DERIVED floors:
-        // only the worldmap variant carries those (the tile came from boot) —
-        // otherwise the procedural shell shrank on the first real rebuild.
-        const m3 = detail.map3d ?? tile.loc.map3d;
-        const floors = detail.map3d?.floors ?? tile.loc.map3d?.floors;
-        dirty.push([tile, {
-          ...tile.loc,
-          rooms: detail.rooms ?? [],
-          map3d: m3 && floors !== undefined ? { ...m3, floors } : m3,
-          entry_room: detail.entry_room ?? tile.loc.entry_room,
-          terrain: detail.terrain ?? tile.loc.terrain,
-          surface_kind: detail.surface_kind ?? tile.loc.surface_kind,
-        }]);
-      }
-      for (const [tile, loc] of dirty) rebuildTile(tile, loc);
-    } catch { /* Server briefly unavailable -> next poll */ }
+  function applyLocations(fresh: WorldLocation[]) {
+    const freshById = new Map(fresh.map((l) => [l.id, l]));
+    // Collect first, build after. The neighbourhood grid this used to feed
+    // (and the coast blends baked from it) is gone with the cell — the
+    // ground between the places is the painted terrain of `/play/terrain`
+    // now, and a changed `terrain`/`surface_kind` simply repaints the one
+    // tile it belongs to, through the ordinary signature rebuild.
+    const dirty: [Tile, WorldLocation][] = [];
+    for (const [id, tile] of tiles) {
+      const detail = freshById.get(id);
+      if (!detail) continue;
+      const sig = sigOf(detail);
+      if (locSig.get(id) === sig) continue;
+      locSig.set(id, sig);
+      // map3d from the detail record, but without losing the DERIVED floors:
+      // only the worldmap variant carries those (the tile came from boot) —
+      // otherwise the procedural shell shrank on the first real rebuild.
+      const m3 = detail.map3d ?? tile.loc.map3d;
+      const floors = detail.map3d?.floors ?? tile.loc.map3d?.floors;
+      dirty.push([tile, {
+        ...tile.loc,
+        rooms: detail.rooms ?? [],
+        map3d: m3 && floors !== undefined ? { ...m3, floors } : m3,
+        entry_room: detail.entry_room ?? tile.loc.entry_room,
+        terrain: detail.terrain ?? tile.loc.terrain,
+        surface_kind: detail.surface_kind ?? tile.loc.surface_kind,
+      }]);
+    }
+    for (const [tile, loc] of dirty) rebuildTile(tile, loc);
   }
-  setInterval(pollLocations, 10_000);
+
+  async function syncLocations() {
+    try {
+      const { etag, locations } = await api.getLocations3d();
+      if (etag !== appliedEtag) {
+        applyLocations(locations);
+        appliedEtag = etag;
+      }
+      locationsRev = etag.replace(/^W\//, '').replace(/^"|"$/g, '');
+    } catch { /* Server briefly unavailable; retain the applied revision. */ }
+  }
+  setInterval(() => { void syncLocations(); }, 120_000);
+  void syncLocations();
 
   // The cell PATHFINDER lived here (`publishPathGrid` + `scene/pathfind.ts`):
   // an A* over the grid so NPCs walked around buildings instead of through
@@ -2153,7 +2165,7 @@ async function startApp(username: string, role: string) {
    *
    * A location can be dragged to another metre, turned or resized in the world
    * editor while clients are running, and nothing noticed: the layout poll
-   * (`pollLocations`) keys on `map3d` + the room layouts, and none of the four
+   * (`applyLocations`) keys on `map3d` + the room layouts, and none of the four
    * geometry numbers lives there — they are columns of the location row
    * (§ A1.1). The tile therefore kept standing where it was built, which is a
    * disagreement with the server about where the walls of a place are: the
@@ -2164,7 +2176,7 @@ async function startApp(username: string, role: string) {
    * corner, until the browser was reloaded.
    *
    * ONLY the geometry is taken over. Everything else on `tile.loc` is the more
-   * recent merge (`pollLocations` writes rooms, `map3d`, `entry_room`,
+   * recent merge (`applyLocations` writes rooms, `map3d`, `entry_room`,
    * `terrain` into it from a fresher `/world/locations` than the boot
    * snapshot `detailById` still holds), and re-merging the payload here would
    * throw those away.
@@ -2208,6 +2220,7 @@ async function startApp(username: string, role: string) {
       // this payload belongs to the OTHER view and would re-reveal tiles the
       // switch has just taken away. The switch published its own snapshot.
       if (rev !== viewRev) return;
+      if (map.locations_rev !== locationsRev) void syncLocations();
       lastMap = map;
       mapPolledAt = polledAt;
       mapStamp += 1;
@@ -3167,7 +3180,7 @@ async function startApp(username: string, role: string) {
     const rev = viewRev;
     let details: Map<string, WorldLocation>;
     try {
-      details = new Map((await api.getLocations()).map((l) => [l.id, l]));
+      details = new Map((await api.getLocations3d()).locations.map((l) => [l.id, l]));
     } catch {
       return;   // server briefly away — the next poll tries again
     }

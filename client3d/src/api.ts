@@ -73,6 +73,27 @@ export async function getLocations(): Promise<WorldLocation[]> {
   return data.locations;
 }
 
+type Locations3d = { etag: string; locations: WorldLocation[] };
+let loc3d: Locations3d | null = null;
+let loc3dInFlight: Promise<Locations3d> | null = null;
+
+/** Conditional fetch, single-flight. Return the cached data with ITS ETag,
+ *  including on 304: another caller may not have applied that data yet. */
+export function getLocations3d(): Promise<Locations3d> {
+  if (loc3dInFlight) return loc3dInFlight;
+  loc3dInFlight = (async () => {
+    const res = await fetch('/world/locations?view=3d', {
+      headers: loc3d ? { 'If-None-Match': loc3d.etag } : {},
+    });
+    if (res.status === 304 && loc3d) return loc3d;
+    const etag = res.headers.get('ETag') ?? '';
+    const data = await json<{ locations: WorldLocation[] }>(res);
+    loc3d = { etag, locations: data.locations };
+    return loc3d;
+  })().finally(() => { loc3dInFlight = null; });
+  return loc3dInFlight;
+}
+
 /** The player's map. `all` asks for the UNFILTERED view (contract § A12) — it
  *  is the admin switch of the game menu and answers 403 for anybody else, so
  *  callers must only pass it for role `admin`. */

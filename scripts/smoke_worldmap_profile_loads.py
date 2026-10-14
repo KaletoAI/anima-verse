@@ -114,24 +114,27 @@ Usage:  ./.venv/bin/python scripts/smoke_worldmap_profile_loads.py
 import hashlib
 import importlib.util
 import json
-import os
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 STORAGE = Path(tempfile.mkdtemp(prefix="worldmap-loads-smoke-"))
 CLIPS = Path(tempfile.mkdtemp(prefix="worldmap-loads-clips-"))
-# Never look at the repo's real animation clips (they are user data).
-os.environ["ANIMATION_CLIPS_DIR"] = str(CLIPS)
 
 from app.core import paths  # noqa: E402
 
 paths.init(STORAGE)
+# Redirect library roots before consumers import the path helpers.
+patch.object(paths, "get_animation_clips_dir", return_value=CLIPS).start()
+patch.object(paths, "get_licensed_clips_dir", return_value=CLIPS / "licensed").start()
+from app.core import surface_textures
+patch.object(surface_textures, "_dir", return_value=STORAGE / "surfaces").start()
 
 from app.core import db  # noqa: E402
 
@@ -312,6 +315,26 @@ def canonical(payload) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
+def print_json_differences(old, new, path="$"):
+    """Report every differing key/value without projecting away any fields."""
+    if isinstance(old, dict) and isinstance(new, dict):
+        for key in sorted(set(old) | set(new)):
+            child = f"{path}.{key}"
+            if key not in old:
+                print(f"    {child}: absent -> {new[key]!r}")
+            elif key not in new:
+                print(f"    {child}: {old[key]!r} -> absent")
+            else:
+                print_json_differences(old[key], new[key], child)
+    elif isinstance(old, list) and isinstance(new, list):
+        if len(old) != len(new):
+            print(f"    {path}.length: {len(old)} -> {len(new)}")
+        for index, (before, after) in enumerate(zip(old, new)):
+            print_json_differences(before, after, f"{path}[{index}]")
+    elif old != new:
+        print(f"    {path}: {old!r} -> {new!r}")
+
+
 def repeat_ms(fn, *args, n: int = 20) -> float:
     """Milliseconds per build, averaged over ``n`` runs — one build is a
     fraction of a millisecond of real work here and too noisy to compare."""
@@ -437,10 +460,20 @@ def main() -> int:
             print(f"  --  baseline no longer runs against this tree ({e}) — skipped")
             head = None
     if head is not None:
-        check("admin payload identical (sha256/16)", canonical(old_admin),
-              canonical(admin))
-        check("fogged payload identical (sha256/16)", canonical(old_fog),
-              canonical(fog))
+        for label, old_payload, new_payload in (
+            ("admin", old_admin, admin), ("fogged", old_fog, fog),
+        ):
+            revision = new_payload.get("locations_rev")
+            check(f"{label} locations_rev is a non-empty string",
+                  isinstance(revision, str) and bool(revision), True)
+            comparable = dict(new_payload)
+            comparable.pop("locations_rev", None)
+            check(f"{label} payload identical (sha256/16)",
+                  canonical(old_payload), canonical(comparable))
+            if canonical(old_payload) != canonical(comparable):
+                print(f"  --  {label} canonical JSON differences:")
+                print_json_differences(old_payload, comparable)
+
         old_ms = repeat_ms(head.build_worldmap_payload, None, True)
         new_ms = repeat_ms(world_ops.build_worldmap_payload, None, True)
         print(f"  --  HEAD: {old_calls} profile loads, {old_ms:.2f} ms/build"

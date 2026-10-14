@@ -4,7 +4,8 @@ import io
 import os
 from fastapi import (APIRouter, Request, HTTPException, Query, UploadFile,
                      File, Form, Depends)
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, Response
+from app.core.http_files import etag_matches
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from app.core.log import get_logger
@@ -43,19 +44,26 @@ router = APIRouter(prefix="/world", tags=["world"])
 # routes that used to sit here are gone without replacement.
 
 
-# === Orte ===
+# === Locations ===
 
 @router.get("/locations")
-def get_locations_route(character_name: str = Query("", alias="agent_name")
-) -> Dict[str, Any]:
-    """Listet Orte aus Sicht eines Characters auf.
+def get_locations_route(request: Request,
+                        character_name: str = Query("", alias="agent_name"),
+                        view: str = Query("")) -> Any:
+    """List locations, optionally filtered by a character's inventory/state.
 
-    Wenn `character_name` gesetzt ist, werden Orte mit `visible_when`/
-    `accessible_when` gegen das Character-Inventar/-State gefiltert. Unsichtbare
-    Orte (visible_when schlaegt fehl) werden entfernt; unzugaengliche Orte
-    (accessible_when schlaegt fehl) bekommen ein `accessible: false` Flag.
-    Ohne `character_name` werden alle Orte ungefiltert zurueckgegeben (Admin-View).
+    Invisible locations are omitted; inaccessible ones get accessible=false.
+    Without agent_name the full view is unfiltered. The conditional 3D view
+    contains only world data and does not accept agent_name.
     """
+    if view == "3d":
+        if character_name:
+            raise HTTPException(400, "view=3d is the world view; agent_name is not allowed")
+        etag = f'"{world_ops.locations_rev()}"'
+        headers = {"ETag": etag, "Cache-Control": "no-cache"}
+        if etag_matches(request.headers.get("if-none-match"), etag):
+            return Response(status_code=304, headers=headers)
+        return JSONResponse(world_ops.build_locations_payload_3d(), headers=headers)
     return world_ops.build_locations_payload(character_name)
 
 
