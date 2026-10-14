@@ -85,6 +85,9 @@ import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } fr
 // machine in task 5 (free walking over `POST /play/pos`). The payload
 // types have carried metres only since task 2 — `pos_x`/`pos_z`/`yaw_deg`/
 // `world_bounds` — so a grid read would not even type-check today.
+// TEMPORARY measurement switch for plan P2 Task 4; remove in the follow-up commit.
+const WARMUP_ENABLED = new URLSearchParams(location.search).get('warmup') === '1';
+
 const WORLDMAP_POLL_MS = 3000;
 const ROOMS_POLL_MS = 4000;
 /** How long the boot waits for the ground (terrain + relief) before framing
@@ -5961,6 +5964,16 @@ async function startApp(username: string, role: string) {
   npcBootReady = true;
   await withPhase('arrival:mount', awaitArrivalMount);
   setBootNote({ kind: 'characters' });
+  if (WARMUP_ENABLED) {
+    // Synchronous on purpose: compileAsync polls each material's program on a
+    // timer, and a material disposed meanwhile (an NPC rebuild) makes that
+    // timer throw outside the promise, so `visible` would never come.
+    try {
+      engine.renderer.compile(engine.scene, engine.camera);
+    } catch (error) {
+      console.warn('[boot] Shader warm-up failed', error);
+    }
+  }
   requestAnimationFrame(() => reportBootStage('visible'));
   await figures.settled;
   reportBootStage('figures');

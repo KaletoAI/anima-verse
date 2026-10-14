@@ -32,6 +32,8 @@ import { relockRootPaths } from './footLockMeasure';
 export { clipRootPath, clipRootTurn, rootPathAt, setClipRootPath, setClipRootTurn };
 export type { RootPath, RootTurn };
 
+const textureLoader = new THREE.TextureLoader();
+
 /**
  * Animated 3D figures for NPCs (AV3D-5): models come from the server
  * (GET /characters/{name}/model3d), /models/manifest.json is only the
@@ -1049,7 +1051,7 @@ export class FigureLibrary {
           }
         }
         if (m.texture) {
-          const tex = await new THREE.TextureLoader().loadAsync(m.texture);
+          const tex = await textureLoader.loadAsync(m.texture);
           tex.colorSpace = THREE.SRGBColorSpace;
           tex.flipY = !!m.textureFlipY;
           template.traverse((o) => {
@@ -1555,7 +1557,7 @@ export class FigureLibrary {
       markPhase('model:build', performance.now() - buildStart);
       const textureStart = performance.now();
       let tex: THREE.Texture;
-      try { tex = await new THREE.TextureLoader().loadAsync(info.textureUrl); }
+      try { tex = await textureLoader.loadAsync(info.textureUrl); }
       finally { markPhase('model:download', performance.now() - textureStart); }
       buildStart = performance.now();
       tex.colorSpace = THREE.SRGBColorSpace;
