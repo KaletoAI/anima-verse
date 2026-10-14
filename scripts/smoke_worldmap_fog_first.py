@@ -11,6 +11,10 @@ from collections import Counter
 from unittest.mock import patch
 
 import smoke_worldmap_profile_loads as seed
+from app.core import paths
+
+# Reuse the seed module's throwaway world and make the redirect explicit.
+paths.init(seed.STORAGE)
 from app.core import exploration, world_ops
 from app.models import character
 
