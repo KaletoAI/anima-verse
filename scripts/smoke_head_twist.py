@@ -162,6 +162,45 @@ def main():
         glb = root/'json.glb'; glb.write_bytes(struct.pack('<4sIIII',b'glTF',2,20+len(payload),len(payload),0x4E4F534A)+payload)
         assert abs(read_head_twist(glb)['head']-40)<1e-6
         print('PASS pure twist math, GLB JSON reader, T-pose freshness/cache')
+        # Frame gate allowance by hand: a joint turned 38.8 deg passes with an
+        # allowance of 40 (limit 45), fails without (limit 5); others stay at 5.
+        from app.core.model_validate import rig_frames_preserved
+        from app.blender.refine import head_twist_allowance
+        def rig(head_deg):
+            h = math.radians(head_deg)/2
+            gltf = {'asset':{'version':'2.0'},'nodes':[
+                {'name':'mixamorig:Neck','children':[1]},
+                {'name':'mixamorig:Head','rotation':[0,math.sin(h),0,math.cos(h)]}],
+                'skins':[{'joints':[0,1]}]}
+            body = json.dumps(gltf).encode(); body += b' '*((-len(body))%4)
+            return struct.pack('<4sIIII',b'glTF',2,20+len(body),len(body),0x4E4F534A)+body
+        assert not rig_frames_preserved(rig(38.8), rig(0))['ok']
+        assert rig_frames_preserved(rig(38.8), rig(0), allowed_deg={'head':40})['ok']
+        assert not rig_frames_preserved(rig(38.8), rig(0), allowed_deg={'neck':40})['ok']
+        assert head_twist_allowance({'head_twist':{'corrected':True,'applied':{'neck':-6.8,'head':38.8}}}) == {'neck':6.8,'head':38.8}
+        assert head_twist_allowance({'head_twist':{'corrected':False,'applied':{'head':45.6}}}) == {}
+        assert head_twist_allowance({'head_twist':{'corrected':True,'applied':{'head':float('nan'),'neck':float('inf'),'hips':9}}}) == {}
+        assert not rig_frames_preserved(rig(38.8), rig(0), allowed_deg={'head':float('nan')})['ok']
+        assert not rig_frames_preserved(rig(38.8), rig(0), allowed_deg={'head':float('inf')})['ok']
+        # Non-parallel axes (review case): neck upright, head pitched 60 deg about X.
+        # Turning the neck by a about its axis, then the head by b about ITS axis,
+        # leaves the head's local frame L' = N'^T H' = N^T Ra^T Rb Ra H; Ra^T Rb Ra
+        # is a rotation by b, so the local frame moves by exactly |b| = 19.43 here,
+        # which is what normalize reports as applied['head'].
+        def mul(A,B): return [[sum(A[i][k]*B[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+        def tr(A): return [list(r) for r in zip(*A)]
+        def axis_rot(ax, deg):
+            x,y,z = ax; c,s_ = math.cos(math.radians(deg)), math.sin(math.radians(deg)); C=1-c
+            return [[c+x*x*C, x*y*C-z*s_, x*z*C+y*s_],[y*x*C+z*s_, c+y*y*C, y*z*C-x*s_],[z*x*C-y*s_, z*y*C+x*s_, c+z*z*C]]
+        def ang(R): return math.degrees(math.acos(max(-1,min(1,(R[0][0]+R[1][1]+R[2][2]-1)/2))))
+        N = [[1,0,0],[0,1,0],[0,0,1]]
+        H = axis_rot((1,0,0), 60)
+        Ra = axis_rot((0,1,0), 10)
+        Hn = mul(Ra, H); b = 19.43
+        Rb = axis_rot(tuple(Hn[i][1] for i in range(3)), b)
+        L, L2 = mul(tr(N), H), mul(tr(mul(Ra,N)), mul(Rb, Hn))
+        assert abs(ang(mul(L2, tr(L))) - b) < 1e-9
+        print('PASS joint-frame gate allows exactly the reported untwist')
         st = runner.status()
         if not st['usable']:
             print('SKIP Blender:',st['error']); return
@@ -187,6 +226,18 @@ def main():
                 assert len(expected)==len(points)
                 assert max(min(max(abs(a-b) for a,b in zip(p,q)) for q in points) for p in expected)<1e-6
         print('PASS Blender corrected geometry, current twist, unchanged straight geometry')
+        # The production path: refine.normalize runs the same script behind the
+        # joint-frame gate. The 30-degree head must be ACCEPTED (Head frame turns
+        # 30 deg, reported applied 30, limit 30 + 5 tolerance) — the gate used to
+        # reject it. The neck is straight, so nothing is applied to it.
+        from app.blender import refine
+        gated = root/'gated.glb'; gated.write_bytes((root/'30.glb').read_bytes())
+        res = refine.normalize(gated, 2.0)
+        assert res['applied'], res
+        allowance = refine.head_twist_allowance(res['data'])
+        assert set(allowance) == {'head'} and abs(allowance['head']-30) < .01, res['data']
+        assert abs(read_head_twist(gated)['head']) < .5
+        print('PASS refine.normalize applies the untwist through the frame gate')
 
 
 if __name__=='__main__':

@@ -64,7 +64,9 @@ def apply_script(path: Path, script: str, params: Dict[str, Any], *,
                  validator: Optional[Callable[[bytes], Dict[str, Any]]] = None,
                  require_smaller: bool = True,
                  keep_original: bool = True,
-                 base_joints_only: bool = False) -> Dict[str, Any]:
+                 base_joints_only: bool = False,
+                 frame_allowance: Optional[Callable[[Dict[str, Any]], Dict[str, float]]] = None
+                 ) -> Dict[str, Any]:
     """Runs a mesh-modifying script and swaps its result in ONLY if it earns it.
 
     Four gates, in order. The result must exist (a script that finds nothing to
@@ -121,8 +123,10 @@ def apply_script(path: Path, script: str, params: Dict[str, Any], *,
         # broken. Only a refinement that preserves them may swap in.
         if path.suffix.lower() == ".glb":
             from app.core.model_validate import rig_frames_preserved
+            allowed = frame_allowance(out["data"]) if frame_allowance else None
             frames = rig_frames_preserved(path.read_bytes(), blob,
-                                          base_joints_only=base_joints_only)
+                                          base_joints_only=base_joints_only,
+                                          allowed_deg=allowed)
             if not frames.get("ok"):
                 out["error"] = ("refined model rewrote the rig frames: "
                                 + "; ".join(frames.get("errors") or []))
@@ -235,7 +239,35 @@ def normalize(path: Path, target_height_m: float,
                         {"target_height_m": float(target_height_m)},
                         validator=validator, require_smaller=False,
                         keep_original=bool(config.get(
-                            "image_generation.blender_keep_original", True)))
+                            "image_generation.blender_keep_original", True)),
+                        frame_allowance=head_twist_allowance)
+
+
+def head_twist_allowance(data: Dict[str, Any]) -> Dict[str, float]:
+    """The joint-frame rotation normalize's head untwist applied ON PURPOSE.
+
+    The frame gate of ``apply_script`` rejects any changed joint frame; the
+    untwist turns Neck and then Head about their own axes and reports each
+    angle under ``head_twist.applied``. Rotating a joint about its own axis
+    after its parent was corrected moves its LOCAL frame by exactly that
+    angle, so the allowance is the reported angle per joint. Nothing is
+    allowed without a correction, and a non-finite value allows nothing.
+    """
+    import math
+    twist = data.get("head_twist") or {}
+    if not twist.get("corrected"):
+        return {}
+    out: Dict[str, float] = {}
+    for joint, value in (twist.get("applied") or {}).items():
+        if joint not in ("neck", "head"):
+            continue
+        try:
+            deg = abs(float(value))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(deg):
+            out[joint] = deg
+    return out
 
 
 def auto_bake_vc_enabled() -> bool:

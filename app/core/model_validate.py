@@ -456,7 +456,8 @@ def glb_bounds(data: bytes) -> Optional[Tuple[List[float], List[float]]]:
 
 def rig_frames_preserved(before: bytes, after: bytes,
                          tol_deg: float = 5.0, *,
-                         base_joints_only: bool = False) -> Dict[str, Any]:
+                         base_joints_only: bool = False,
+                         allowed_deg: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
     """Whether a refinement kept every skin joint's LOCAL ROTATION frame.
 
     ``{ok, errors}``. The invariant behind it: none of our mesh steps
@@ -469,6 +470,11 @@ def rig_frames_preserved(before: bytes, after: bytes,
     that disappeared is an error, a ``before`` without skins passes (nothing
     to preserve). Never raises — an unreadable file yields ok with a warning
     in ``errors``-free form, because only a POSITIVE finding may block.
+
+    ``allowed_deg`` maps a NORMALISED joint name (``rig_contract.norm_bone_name``)
+    to the rotation a step deliberately applied to that joint (normalize's head
+    untwist reports it); that joint may then move up to that angle plus
+    ``tol_deg``. Every other joint keeps the plain tolerance.
     """
     def _joint_rots(data: bytes) -> Optional[Dict[str, List[float]]]:
         try:
@@ -505,7 +511,13 @@ def rig_frames_preserved(before: bytes, after: bytes,
             continue
         dot = abs(sum(x * y for x, y in zip(qa, qb)))
         ang = math.degrees(2 * math.acos(min(1.0, dot)))
-        if ang > tol_deg:
+        limit = tol_deg
+        if allowed_deg:
+            from app.core.rig_contract import norm_bone_name
+            extra = abs(float(allowed_deg.get(norm_bone_name(name), 0.0)))
+            if math.isfinite(extra):
+                limit += extra
+        if ang > limit:
             errors.append(f"joint '{name}' frame rotated {ang:.1f}°")
     if errors:
         head = errors[:3]

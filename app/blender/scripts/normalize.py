@@ -56,7 +56,11 @@ from app.core.head_twist import bone_name, twist_degrees
 
 
 def _untwist_head():
-    report = {"before": {}, "after": {}, "corrected": False, "error": ""}
+    # "applied" = the rotation actually turned about each joint's own axis,
+    # in degrees — exactly how far that joint's LOCAL frame moves (the head's
+    # angle is measured after the neck has been corrected). The joint-frame
+    # gate in refine.apply_script allows these and nothing else.
+    report = {"before": {}, "after": {}, "applied": {}, "corrected": False, "error": ""}
     for arm in list(bpy.context.scene.objects):
         if arm.type != "ARMATURE":
             continue
@@ -87,6 +91,7 @@ def _untwist_head():
             twist = angle(n)
             if abs(twist) <= 2:
                 continue
+            report["applied"][n] = round(twist, 3)
             p = bones[n]
             matrix = world(p)
             axis = (matrix.to_3x3() @ Vector((0, 1, 0))).normalized()
