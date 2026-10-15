@@ -89,6 +89,8 @@ interface FaceRetextureCheck {
 }
 
 interface Model3DInfo {
+  tpose_status?: 'current' | 'changed' | 'other_outfit' | 'unknown'
+  head_twist?: { current: number | null; corrected: number | null }
   clips?: Record<string, { loop: boolean }>
   rig_metrics?: {
     fold?: Record<string, number>
@@ -831,6 +833,39 @@ export function FieldModel3D({ character }: { character: string }) {
     </fieldset>
   ) : null)
   const extensionResult = model?.extension_rig?.per_tier?.[viewTier] || model?.extension_rig
+  const statusRow = (label: string, value: string, color: string, explanation: string) => (
+    <div className="ga-model3d-status-row" title={explanation}>
+      <span className={`ga-model3d-status-dot ga-model3d-status-${color}`} />
+      <span>{label} · {value}</span>
+    </div>
+  )
+  const tp = model?.tpose_status || 'unknown'
+  const currentTwist = model?.head_twist?.current
+  const fixedTwist = model?.head_twist?.corrected
+  const turned = currentTwist != null && Math.abs(currentTwist) > 2
+  const rigText = model?.rig_error ? t('Error') : turned
+    ? `${t('head {n}° turned').replace('{n}', String(Math.abs(Math.round(currentTwist))))} → ${t('Re-rig')}`
+    : `${model?.rig_backend || '–'}${fixedTwist != null ? ` · ${t('head {n}° fixed').replace('{n}', String(Math.abs(Math.round(fixedTwist))))}` : ''}`
+  const face = model?.face_retexture
+  const up = face?.upscale
+  const faceText = face?.status === 'failed' ? t('Failed') : face?.face_texture_lost ? t('Face texture lost')
+    : face?.status === 'applied' ? (up?.status === 'applied' && up.backend
+      ? `${up.backend}${up.in?.[0] && up.out?.[0] ? ` ×${+(up.out[0] / up.in[0]).toFixed(1)}` : ''}` : t('applied')) : '–'
+  const statusPanel = <div className="ga-model3d-status">
+    {statusRow(t('T-pose'), tp === 'current' ? t('current') : tp === 'changed' ? t('re-rendered')
+      : tp === 'other_outfit' ? t('other outfit') : t('unknown'),
+      tp === 'current' ? 'green' : tp === 'changed' ? 'red' : tp === 'other_outfit' ? 'yellow' : 'grey',
+      t('T-pose source freshness'))}
+    {statusRow(t('Mesh'), model?.mesh_backend || '–', model?.mesh_backend ? 'green' : 'grey', model?.mesh_backend || t('unknown'))}
+    {statusRow(t('Rig'), rigText, model?.rig_error ? 'red' : turned ? 'yellow' : model?.rig_backend && currentTwist != null ? 'green' : 'grey', model?.rig_error || rigText)}
+    {statusRow(t('Face'), faceText, face?.status === 'failed' ? 'red' : face?.face_texture_lost ? 'yellow' : face?.status === 'applied' ? 'green' : 'grey', faceText)}
+  </div>
+  const rigMetrics = model?.rig_metrics
+  const hasRigMetrics = rigMetrics && (typeof rigMetrics.sym_max_pct === 'number'
+    || Object.values(rigMetrics.fold || {}).some(v => typeof v === 'number')
+    || Object.values(rigMetrics.clips || {}).some(v => Object.values(v).some(n => typeof n === 'number'))
+    || !!rigMetrics.landmark_fallback?.length)
+
 
   return (
     <div className="ga-form">
@@ -839,6 +874,7 @@ export function FieldModel3D({ character }: { character: string }) {
           <div ref={previewRef}>
           <Model3DViewer
             previewTilt
+            statusPanel={statusPanel}
             motion={rigless ? undefined : previewMotion}
             motionToolbar={rigless ? undefined : motionToolbar}
             url={viewerUrl}
@@ -849,13 +885,18 @@ export function FieldModel3D({ character }: { character: string }) {
             textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
           />
           </div>
-          {model.rig_metrics ? (
+          {hasRigMetrics && model.rig_metrics ? (
             <fieldset className="ga-fieldset">
               <legend>{t('Rig metrics')}</legend>
-              {Object.entries(model.rig_metrics.fold || {}).map(([leg, fold]) => <div key={leg}>{t('Leg fold')}: {leg} — {fold.toFixed(3)}</div>)}
-              <div>{t('Symmetry error')}: {model.rig_metrics.sym_max_pct?.toFixed(3)} %</div>
-              {Object.entries(model.rig_metrics.clips || {}).map(([name, metrics]) => (
-                <div key={name}>{name}: {t('Stretch p99.9')} {metrics.stretch_p999.toFixed(3)} · {t('Contact error')} {metrics.contact_err_max.toFixed(3)} % · {t('Tail minimum')} {metrics.tail_min_z.toFixed(4)} m · {t('IK unreachable')} {metrics.ik_unreachable}</div>
+              {Object.entries(model.rig_metrics.fold || {}).filter(([, value]) => typeof value === 'number').map(([leg, fold]) => <div key={leg}>{t('Leg fold')}: {leg} — {fold.toFixed(3)}</div>)}
+              {typeof model.rig_metrics.sym_max_pct === 'number' ? <div>{t('Symmetry error')}: {model.rig_metrics.sym_max_pct.toFixed(3)} %</div> : null}
+              {Object.entries(model.rig_metrics.clips || {}).filter(([, value]) => Object.values(value).some(n => typeof n === 'number')).map(([name, metrics]) => (
+                <div key={name}>{name}: {[
+                  typeof metrics.stretch_p999 === 'number' ? `${t('Stretch p99.9')} ${metrics.stretch_p999.toFixed(3)}` : '',
+                  typeof metrics.contact_err_max === 'number' ? `${t('Contact error')} ${metrics.contact_err_max.toFixed(3)} %` : '',
+                  typeof metrics.tail_min_z === 'number' ? `${t('Tail minimum')} ${metrics.tail_min_z.toFixed(4)} m` : '',
+                  typeof metrics.ik_unreachable === 'number' ? `${t('IK unreachable')} ${metrics.ik_unreachable}` : '',
+                ].filter(Boolean).join(' · ')}</div>
               ))}
               {model.rig_metrics.landmark_fallback?.length ? <p className="ga-hint">{t('Landmark fallback')}: {model.rig_metrics.landmark_fallback.join(', ')}</p> : null}
             </fieldset>

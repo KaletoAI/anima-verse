@@ -839,6 +839,26 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
             tex = find_texture(character_name, path.stem)
             if tex:
                 info["texture_size"] = tex.stat().st_size
+        from app.core.head_twist import read_head_twist, tpose_status
+        from app.core.face_retexture import photo_path
+        source_meta = _read_sidecar(path.parent / "unrigged" / f"{path.stem}.glb")
+        try:
+            photo = photo_path(character_name, path.stem, source_meta)
+        except ValueError:
+            photo = None
+        info["tpose_status"] = tpose_status(match, source_meta, photo)
+        twist = read_head_twist(path)
+        correction = (_read_sidecar(path).get("blender") or {}).get("head_twist") or {}
+        fixed = None
+        if correction.get("corrected"):
+            before_twist = correction.get("before") or {}
+            after_twist = correction.get("after") or {}
+            changes = [before_twist[n] - after_twist[n] for n in ("head", "neck")
+                       if n in before_twist and n in after_twist]
+            if changes:
+                fixed = max(changes, key=abs)
+        info["head_twist"] = {"current": round(max(twist.values(), key=abs), 1) if twist else None,
+                              "corrected": fixed}
         out["model"] = info
     from app.core.extension_rig import motion_payload
     out["motion"] = motion_payload(character_name, profile=profile, preview_states=preview_states)
@@ -1287,6 +1307,8 @@ def _auto_normalize(character_name: str, path: Path,
         "before": data.get("before") or {},
         "after": data.get("after") or {},
     }
+    if "head_twist" in data:
+        meta["blender"]["head_twist"] = data["head_twist"]
     logger.info("Model3D %s: normalised to %.2f m (%s basis, scale %.4f)",
                 character_name, target, data.get("height_basis", "?"),
                 float(data.get("scale") or 0))
@@ -1902,6 +1924,7 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
             except Exception:
                 task_id = ""
             source_bytes = src.read_bytes()
+            view_bytes = {v: Path(p).read_bytes() for v, p in view_images.items()}
             # The record freezes what this run is made FROM: the signature, the
             # backend pick, the T-pose bytes (copied — a re-render while the
             # job runs must not change the input) and the manifest.
@@ -1916,13 +1939,17 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                 "source_image": src.name,
                 "source_image_sha256": hashlib.sha256(source_bytes).hexdigest(),
                 "view_images": {v: Path(p).name for v, p in view_images.items()},
+                "view_images_sha256": {v: hashlib.sha256(blob).hexdigest() for v, blob in view_bytes.items()},
                 "manifest": _ref_manifest(src),
             }, label=f"3D model: {character_name}", track_id=task_id)
             if _op_ctx is not None:
                 _op_ctx["op"] = op
             op.path("inputs", src.name).write_bytes(source_bytes)
-            views = {v: op.rel(op.freeze_file(p, "inputs", "views", f"{v}{Path(p).suffix}"))
-                     for v, p in view_images.items()}
+            views = {}
+            for v, p in view_images.items():
+                frozen = op.path("inputs", "views", f"{v}{Path(p).suffix}")
+                frozen.write_bytes(view_bytes[v])
+                views[v] = op.rel(frozen)
             op.update_state(lambda st: st.update(view_files=views))
             op.reload()
         elif not get_model3d_dir(character_name).is_dir():
@@ -1981,6 +2008,8 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
                                        {"source_image": inputs["source_image"],
                                         "view_images": dict(inputs.get("view_images") or {}),
                                         "source_image_sha256": inputs["source_image_sha256"],
+                                        **({"view_images_sha256": dict(inputs["view_images_sha256"])}
+                                           if "view_images_sha256" in inputs else {}),
                                         **(inputs.get("manifest") or {})})
         if not stored.get("ok"):
             return {"ok": False, "error": stored["error"]}
@@ -2067,6 +2096,9 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
         # Which extra views went into this mesh — same shape as
         # "source_image": file names, not absolute paths.
         meta["view_images"] = dict(inputs["view_images"])
+    for key in ("source_image_sha256", "view_images_sha256"):
+        if key in inputs:
+            meta[key] = inputs[key]
     # Manifest (outfit_cache_gc): WHICH pieces this signature stands for.
     # The md5 cannot be read back, so without this a cache entry can only
     # be judged by "could it still be produced" — with it, exactly. The
@@ -2243,7 +2275,8 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
             _publish_model_bytes((out_dir / "raw" / path.name).with_suffix(".png"), texture)
         source_meta = _read_sidecar(out_dir / "unrigged" / f"{signature}.glb")
         meta = {k: v for k, v in source_meta.items() if k in (
-            "mesh_backend", "mesh_route_meta", "source_image", "view_images", "pieces", "items", "job_id", "single_view")}
+            "mesh_backend", "mesh_route_meta", "source_image", "source_image_sha256",
+            "view_images", "view_images_sha256", "pieces", "items", "job_id", "single_view")}
         meta.update(created_at=utc_now_iso(), source="generated", signature=signature,
                     character=character_name, rig=rig, format=path.suffix.lstrip("."),
                     backend=res.get("backend", ""), rig_backend=res.get("backend", ""),

@@ -259,6 +259,11 @@ with ExitStack() as stack:
         assert info['model']['mesh_backend'] == 'mesh-original'
         assert info['model']['rig_backend'] == 'rigger'
         assert {b['name'] for b in info['rig_backends']} == {'rigger', 'backup', 'creature'}
+        # A -25 degree neck outweighs a +5 degree head; preserve its sign.
+        for angles, expected in [({'neck': -25, 'head': 5}, -25),
+                                 ({'neck': 3, 'head': -30}, -30), ({}, None)]:
+            with patch('app.core.head_twist.read_head_twist', return_value=angles):
+                assert model3d.get_model3d_info('demo')['model']['head_twist']['current'] == expected
         (root/'unrigged/mixamo.glb').unlink()
         info=model3d.get_model3d_info('demo')
         assert info['model']['has_unrigged_source'] is False
@@ -292,6 +297,8 @@ with ExitStack() as stack:
         'mesh_backend': 'mesh-newest',
         'mesh_route_meta': {'routing': {'occasion': 'mesh_humanoid', 'intended_spec': 'mesh-newest'}},
         'source_image': 'newest_tpose.png', 'view_images': {'back': 'newest_back.png'},
+        'source_image_sha256': 'front-content-hash',
+        'view_images_sha256': {'back': 'back-content-hash'},
         'pieces': {'body': 'newest-piece'}, 'items': ['newest-item'],
         'job_id': 'recovered-mesh-job', 'source_filename': 'newest-source.glb',
     }
@@ -337,7 +344,8 @@ with ExitStack() as stack:
         assert (root/'prerig/static.glb').read_bytes() == fixture_glb(True)+b'normalized'
         meta = json.loads((root/'static.json').read_text())
         assert 'rig_error' not in meta
-        for key in ('mesh_backend', 'mesh_route_meta', 'source_image', 'view_images', 'pieces', 'items', 'job_id'):
+        for key in ('mesh_backend', 'mesh_route_meta', 'source_image', 'source_image_sha256',
+                    'view_images', 'view_images_sha256', 'pieces', 'items', 'job_id'):
             assert meta[key] == static_meta[key], key
         for relative, value in static_before.items():
             if relative.parts[0] == 'unrigged':

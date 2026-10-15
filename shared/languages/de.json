@@ -2544,6 +2544,17 @@
     "Tail minimum": "Schwanzminimum",
     "IK unreachable": "IK unerreichbar",
     "Landmark fallback": "Gelenk-Messpunkt nicht eindeutig; Fuchs-Höhenverhältnis verwendet",
-    "Play": "Abspielen"
+    "Play": "Abspielen",
+    "current": "aktuell",
+    "re-rendered": "neu gerendert",
+    "other outfit": "anderes Outfit",
+    "head {n}° turned": "Kopf {n}° gedreht",
+    "head {n}° fixed": "Kopf {n}° korrigiert",
+    "T-pose source freshness": "Aktualität der T-Pose-Vorlage",
+    "Face texture lost": "Gesichtstextur verloren",
+    "Face": "Gesicht",
+    "Mesh": "Mesh",
+    "Re-rig": "Neu riggen",
+    "Reset tilt": "Neigung zurücksetzen"
   }
 }

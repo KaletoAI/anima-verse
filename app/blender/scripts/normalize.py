@@ -22,6 +22,7 @@ exact and anatomy would only add noise. Anything without a head joint
 
 Steps, in order:
 
+    0. untwist   correct Neck/Head forward twist, bake skin and rest pose
     1. measure   bounding box, crown joint, triangles, joints
     2. scale     measured height -> target_height_m, uniformly
     3. ground    X/Y centre of the box to 0, lowest point to z=0
@@ -38,6 +39,7 @@ holds it to the same check as a fresh delivery and keeps the original if the
 export broke anything (§ 2.2).
 """
 import sys
+import math
 from pathlib import Path
 
 _SCRIPTS_DIR = str(Path(__file__).parent)
@@ -47,6 +49,69 @@ sys.path.remove(_SCRIPTS_DIR)
 
 import bpy                                                    # noqa: E402
 from mathutils import Matrix, Vector                          # noqa: E402
+
+
+_common.app_root_on_path()
+from app.core.head_twist import bone_name, twist_degrees
+
+
+def _untwist_head():
+    report = {"before": {}, "after": {}, "corrected": False, "error": ""}
+    for arm in list(bpy.context.scene.objects):
+        if arm.type != "ARMATURE":
+            continue
+        bones = {bone_name(p.name): p for p in arm.pose.bones}
+        if not all(n in bones for n in ("hips", "neck", "head")):
+            continue
+        def world(p):
+            return arm.matrix_world @ p.matrix
+        forward = world(bones["hips"]).to_3x3() @ Vector((0, 0, 1))
+        def angle(n):
+            return twist_degrees(world(bones[n]).to_3x3(), forward)
+        # Raw angles: measure both before correcting the parent.
+        report["before"] = {n: round(angle(n), 1) for n in ("neck", "head")}
+        if any(abs(angle(n)) > 120 for n in ("neck", "head")):
+            report["error"] = "Implausible head twist exceeds 120 degrees; skipped"
+            report["after"] = dict(report["before"])
+            return report
+        if any(sum(mod.type == "ARMATURE" and mod.object == arm for mod in obj.modifiers) > 1
+               for obj in _mesh_objects()):
+            report["error"] = "several armature modifiers; head twist left as is"
+            report["after"] = dict(report["before"])
+            return report
+        bpy.ops.object.select_all(action="DESELECT")
+        arm.select_set(True)
+        bpy.context.view_layer.objects.active = arm
+        bpy.ops.object.mode_set(mode="POSE")
+        for n in ("neck", "head"):
+            twist = angle(n)
+            if abs(twist) <= 2:
+                continue
+            p = bones[n]
+            matrix = world(p)
+            axis = (matrix.to_3x3() @ Vector((0, 1, 0))).normalized()
+            pivot = matrix.translation
+            rotation = (Matrix.Translation(pivot) @ Matrix.Rotation(math.radians(-twist), 4, axis)
+                        @ Matrix.Translation(-pivot))
+            p.matrix = arm.matrix_world.inverted() @ rotation @ matrix
+            bpy.context.view_layer.update()
+            report["corrected"] = True
+        report["after"] = {n: round(angle(n), 1) for n in ("neck", "head")}
+        bpy.ops.object.mode_set(mode="OBJECT")
+        if report["corrected"]:
+            for obj in _mesh_objects():
+                for mod in list(obj.modifiers):
+                    if mod.type != "ARMATURE" or mod.object != arm:
+                        continue
+                    bpy.context.view_layer.objects.active = obj
+                    bpy.ops.object.modifier_copy(modifier=mod.name)
+                    bpy.ops.object.modifier_apply(modifier=mod.name)
+            bpy.context.view_layer.objects.active = arm
+            bpy.ops.object.mode_set(mode="POSE")
+            bpy.ops.pose.armature_apply(selected=False)
+            bpy.ops.object.mode_set(mode="OBJECT")
+        return report
+    return report
 
 
 def _mesh_objects():
@@ -134,6 +199,15 @@ def normalize(args):
     _common.reset_scene()
     _common.import_model(src)
 
+    try:
+        head_twist = _untwist_head()
+    except Exception as exc:
+        if bpy.context.object and bpy.context.object.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
+        _common.reset_scene()
+        _common.import_model(src)
+        head_twist = {"before": {}, "after": {}, "corrected": False, "error": str(exc)}
+
     bounds = _world_bounds(_mesh_objects())
     if not bounds:
         raise ValueError("model contains no mesh")
@@ -190,6 +264,7 @@ def normalize(args):
         bpy.ops.export_scene.fbx(filepath=str(path))
 
     return {
+        "head_twist": head_twist,
         "height_basis": basis,
         "scale": round(scale, 6),
         "target_height_m": target,

@@ -248,7 +248,7 @@ export interface TilePlacement {
   figureHeightWorld?: number
 }
 
-export function Model3DViewer({ url, format, motion, motionToolbar, previewTilt = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,
+export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel, previewTilt = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
   placement, onBounds, markers, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
@@ -256,7 +256,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, previewTilt 
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox }:
-  { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
+  { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
     rotation?: { x?: number; y?: number; z?: number }
@@ -2107,18 +2107,23 @@ export function Model3DViewer({ url, format, motion, motionToolbar, previewTilt 
       ) : null}
       </div>
       {previewTilt ? <aside className="ga-model3d-toolbar">
+        {statusPanel}
       <div className="ga-fieldset ga-model3d-tilt">
-        <label className="ga-model3d-slider">{t('Tilt forward/back')} {tiltForward}°
-          <input type="range" min={-90} max={90} value={tiltForward}
-            title={t('+90 = lying on the back')}
-            onChange={event => setTiltForward(Number(event.target.value))} />
-        </label>
-        <label className="ga-model3d-slider">{t('Tilt sideways')} {tiltSideways}°
-          <input type="range" min={-90} max={90} value={tiltSideways}
-            onChange={event => setTiltSideways(Number(event.target.value))} />
-        </label>
-        <button type="button" className="ga-btn ga-btn-sm"
-          onClick={() => { setTiltForward(0); setTiltSideways(0) }}>{t('Reset tilt')}</button>
+        <div className="ga-model3d-slider-stack">
+          <label className="ga-model3d-slider">{t('Tilt forward/back')} {tiltForward}°
+            <input type="range" min={-90} max={90} value={tiltForward}
+              title={t('+90 = lying on the back')}
+              onChange={event => setTiltForward(Number(event.target.value))} />
+          </label>
+          <label className="ga-model3d-slider">{t('Tilt sideways')} {tiltSideways}°
+            <input type="range" min={-90} max={90} value={tiltSideways}
+              onChange={event => setTiltSideways(Number(event.target.value))} />
+          </label>
+        </div>
+        <div className="ga-model3d-toolbar-actions">
+          <button type="button" className="ga-btn ga-btn-sm"
+            onClick={() => { setTiltForward(0); setTiltSideways(0) }}>{t('Reset tilt')}</button>
+        </div>
       </div>
         {motionToolbar}
       </aside> : null}
