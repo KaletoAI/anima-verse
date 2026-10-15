@@ -171,11 +171,17 @@ VIEW_3D_ROOM_FIELDS = ("id", "name", "layout")
 
 
 def locations_rev() -> str:
-    """Revision of the world-only 3D view, across worlds and server boots."""
+    """Revision of the world-only 3D view, across worlds and server boots.
+
+    Hashed: it goes out as an ETag to every player, and the raw form would
+    carry the server's world.db path.
+    """
+    import hashlib
     from app.models import world
     from app.core.db import get_db_path
     from app.core.surface_textures import surface_lib_sig
-    return f"{world.BOOT_EPOCH}:{get_db_path()}:{world.world_generation()}:{surface_lib_sig()}"
+    raw = f"{world.BOOT_EPOCH}:{get_db_path()}:{world.world_generation()}:{surface_lib_sig()}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
 def _enrich_locations(locations: List[Dict[str, Any]]) -> None:

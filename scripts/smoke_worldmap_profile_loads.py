@@ -418,7 +418,12 @@ def main() -> int:
             revision = new_payload.get("locations_rev")
             check(f"{label} locations_rev is a non-empty string",
                   isinstance(revision, str) and bool(revision), True)
+            # The revision is an opaque token whose encoding changed after
+            # 718322ce (raw -> hashed); it is checked above, not compared.
             comparable = dict(new_payload)
+            comparable.pop("locations_rev", None)
+            old_payload = dict(old_payload)
+            old_payload.pop("locations_rev", None)
             check(f"{label} entire canonical JSON identical",
                   json.dumps(old_payload, sort_keys=True, default=str) ==
                   json.dumps(comparable, sort_keys=True, default=str), True)
