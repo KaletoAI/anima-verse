@@ -93,14 +93,13 @@ def load_feed() -> List[Dict[str, Any]]:
 
 
 def save_feed(feed: List[Dict[str, Any]]):
-    """Speichert den unified Feed in die DB (Upsert).
+    """Upsert the unified feed in the DB.
 
-    Instagram-Posts werden in der events-Tabelle mit kind='instagram_post' gespeichert.
-    Lookup fuer Updates: post_id ist in payload["id"].
+    Posts live in events with kind='instagram_post'; payload["id"] identifies updates.
     """
     try:
         with transaction() as conn:
-            # Vorhandene Posts laden: db_id -> post_id
+            # Load existing posts: db_id -> post_id
             existing_rows = conn.execute(
                 "SELECT id, payload FROM events WHERE kind='instagram_post'"
             ).fetchall()
@@ -117,7 +116,7 @@ def save_feed(feed: List[Dict[str, Any]]):
 
             new_post_ids = {p.get("id") for p in feed if p.get("id")}
 
-            # Geloeschte Posts entfernen
+            # Remove deleted posts
             for db_id, pid in db_to_post.items():
                 if pid not in new_post_ids:
                     conn.execute("DELETE FROM events WHERE id=?", (db_id,))
@@ -143,6 +142,9 @@ def save_feed(feed: List[Dict[str, Any]]):
                     )
     except Exception as e:
         logger.error("save_feed DB-Fehler: %s", e)
+        return
+    from app.core import sync_topics
+    sync_topics.notify("notices", to=sync_topics.Everyone())
 
 
 def create_post(character_name: str,
@@ -321,6 +323,8 @@ def delete_post(post_id: str) -> bool:
         return False
     if n <= 0:
         return False
+    from app.core import sync_topics
+    sync_topics.notify("notices", to=sync_topics.Everyone())
     still_named = set()
     for other in feed:
         if other is not post:

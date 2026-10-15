@@ -910,7 +910,7 @@ def add_item_to_room(location_id: str,
     hidden: bool = False,
     discovery_difficulty: int = 0,
     note: str = "") -> bool:
-    """Platziert ein Item in einem Raum.
+    """Place an item in a room.
 
     Reads the world FRESH under ``world_write_lock`` and writes back exactly
     the one location the item lands in. Before 2026-09-21 this handed the
@@ -920,7 +920,7 @@ def add_item_to_room(location_id: str,
     from app.models.world import (_load_world_data, upsert_location,
                                   world_write_lock)
 
-    # Item existiert?
+    # Check that the item exists.
     item = get_item(item_id)
     if not item:
         return False
@@ -931,17 +931,21 @@ def add_item_to_room(location_id: str,
                 for room in loc.get("rooms", []):
                     if room.get("id") == room_id:
                         room_items = room.get("items", [])
-                        # Bereits vorhanden? Quantity erhoehen
+                        # Increase the quantity of an existing entry.
                         for ri in room_items:
                             if ri.get("item_id") == item_id:
+                                visible_before = not ri.get("hidden", False)
                                 ri["quantity"] = ri.get("quantity", 1) + quantity
                                 ri["hidden"] = hidden
                                 ri["discovery_difficulty"] = discovery_difficulty
                                 if note:
                                     ri["note"] = note
-                                upsert_location(loc)
+                                if not upsert_location(loc, sync_world=False):
+                                    return False
+                                from app.core import sync_topics
+                                sync_topics.room_items_changed(location_id, room_id, visible_before, not hidden)
                                 return True
-                        # Neu hinzufuegen
+                        # Add a new entry.
                         room_items.append({
                             "item_id": item_id,
                             "quantity": max(1, quantity),
@@ -950,7 +954,10 @@ def add_item_to_room(location_id: str,
                             "note": note.strip(),
                         })
                         room["items"] = room_items
-                        upsert_location(loc)
+                        if not upsert_location(loc, sync_world=False):
+                            return False
+                        from app.core import sync_topics
+                        sync_topics.room_items_changed(location_id, room_id, False, not hidden)
                         logger.info("Item %s in Raum %s/%s platziert", item_id, location_id, room_id)
                         return True
         return False
@@ -960,7 +967,7 @@ def remove_item_from_room(location_id: str,
     room_id: str,
     item_id: str,
     quantity: int = 1) -> bool:
-    """Entfernt ein Item (oder reduziert Quantity) aus einem Raum.
+    """Remove an item from a room or reduce its quantity.
 
     Same rule as :func:`add_item_to_room`: fresh read under the world write
     lock, and only the one location is written back.
@@ -976,11 +983,15 @@ def remove_item_from_room(location_id: str,
                         room_items = room.get("items", [])
                         for ri in room_items:
                             if ri.get("item_id") == item_id:
+                                visible_before = not ri.get("hidden", False)
                                 ri["quantity"] = ri.get("quantity", 1) - quantity
                                 if ri["quantity"] <= 0:
                                     room_items.remove(ri)
                                 room["items"] = room_items
-                                upsert_location(loc)
+                                if not upsert_location(loc, sync_world=False):
+                                    return False
+                                from app.core import sync_topics
+                                sync_topics.room_items_changed(location_id, room_id, visible_before, visible_before and ri["quantity"] > 0)
                                 logger.info("Item %s aus Raum %s/%s entfernt", item_id, location_id, room_id)
                                 return True
         return False
@@ -1086,31 +1097,31 @@ def _load_inventory(character_name: str) -> Dict[str, Any]:
 
 
 def _save_inventory(character_name: str, data: Dict[str, Any]):
-    """Speichert das Inventar eines Characters in die DB (Upsert)."""
+    """Upsert the character inventory in the DB."""
     now = utc_now_iso()
     inventory = data.get("inventory", [])
     try:
         with transaction() as conn:
-            # Bestehende Eintraege holen um Diffs zu berechnen
+            # Load existing entries to compute the diff.
             existing_ids = {r[0] for r in conn.execute(
                 "SELECT item_id FROM inventory_items WHERE character_name=?",
                 (character_name,),
             ).fetchall()}
             new_ids = {e.get("item_id") for e in inventory if e.get("item_id")}
 
-            # Geloeschte Eintraege entfernen
+            # Remove deleted entries.
             for iid in existing_ids - new_ids:
                 conn.execute(
                     "DELETE FROM inventory_items WHERE character_name=? AND item_id=?",
                     (character_name, iid),
                 )
 
-            # Upsert fuer alle aktuellen Eintraege
+            # Upsert all current entries.
             for entry in inventory:
                 iid = entry.get("item_id")
                 if not iid:
                     continue
-                # Meta: alle Keys ausser Kern-Felder
+                # Metadata contains every field except the core columns.
                 meta = {k: v for k, v in entry.items()
                         if k not in ("item_id", "quantity", "obtained_at")}
                 conn.execute("""
@@ -1129,7 +1140,10 @@ def _save_inventory(character_name: str, data: Dict[str, Any]):
                     json.dumps(meta, ensure_ascii=False),
                 ))
     except Exception as e:
-        logger.error("_save_inventory DB-Fehler fuer %s: %s", character_name, e)
+        logger.error("_save_inventory DB error for %s: %s", character_name, e)
+        return
+    from app.core import sync_topics
+    sync_topics.avatars([character_name], "self")
 
 
 def get_character_inventory(character_name: str,

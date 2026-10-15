@@ -243,7 +243,7 @@ def save_relationships(rels: List[Dict[str, Any]]):
 
 
 def _save_relationship(rel: Dict[str, Any]):
-    """Speichert/aktualisiert eine einzelne Beziehung."""
+    """Insert or update one relationship."""
     a, b = _sort_pair(rel.get("character_a", ""), rel.get("character_b", ""))
     if not a or not b:
         return
@@ -263,10 +263,27 @@ def _save_relationship(rel: Dict[str, Any]):
                          "type", "strength", "sentiment_a_to_b", "sentiment_b_to_a",
                          "romantic_tension", "interaction_count")}
 
+    def differs(conn, row_id):
+        row = conn.execute(
+            "SELECT from_char, to_char, content, ts, meta FROM relationships WHERE id=?",
+            (row_id,)).fetchone()
+        if row is None:
+            return False
+        try:
+            old_content = json.loads(row["content"] or "{}")
+            old_meta = json.loads(row["meta"] or "{}")
+        except (TypeError, ValueError):
+            # Preserve the writer's ability to replace a malformed old row.
+            return True
+        return (row["from_char"] != a or row["to_char"] != b
+                or old_content != content or row["ts"] != ts or old_meta != meta)
+
+    changed = True
     db_id = rel.get("_db_id")
     try:
         if db_id:
             with transaction() as conn:
+                changed = differs(conn, db_id)
                 conn.execute("""
                     UPDATE relationships
                     SET from_char=?, to_char=?, content=?, ts=?, meta=?
@@ -274,7 +291,7 @@ def _save_relationship(rel: Dict[str, Any]):
                 """, (a, b, json.dumps(content, ensure_ascii=False),
                       ts, json.dumps(meta, ensure_ascii=False), db_id))
         else:
-            # Suche bestehende Row fuer dieses Paar
+            # Find the existing row for this pair.
             conn = get_connection()
             existing = conn.execute("""
                 SELECT id FROM relationships
@@ -284,6 +301,7 @@ def _save_relationship(rel: Dict[str, Any]):
             if existing:
                 rel["_db_id"] = existing[0]
                 with transaction() as conn:
+                    changed = differs(conn, existing[0])
                     conn.execute("""
                         UPDATE relationships
                         SET from_char=?, to_char=?, content=?, ts=?, meta=?
@@ -300,6 +318,13 @@ def _save_relationship(rel: Dict[str, Any]):
                     rel["_db_id"] = cur.lastrowid
     except Exception as e:
         logger.error("_save_relationship Fehler fuer %s/%s: %s", a, b, e)
+        return
+    if changed:
+        try:
+            from app.core import sync_topics
+            sync_topics.avatars([a, b], "self")
+        except Exception as e:
+            logger.debug("relationship sync failed: %s", e)
 
 
 def get_relationship(char_a: str, char_b: str

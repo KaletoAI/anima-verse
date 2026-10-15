@@ -223,7 +223,7 @@ def shape(width: float = 16.0, door_prop: str = "", upper: bool = False) -> None
             "x": -8.0, "y": -8.0, "w": 16.0, "d": 12.0, "level": 1,
             "surfaces": {"floor": "wood"}}})
     loc["rooms"] = rooms
-    upsert_location(loc)
+    upsert_location(loc, sync_world=True)
 
 
 shape()
@@ -391,7 +391,7 @@ def main() -> int:
           (canon(dialled), dialled["signature"], ""))
 
     print("\n[N1]…[N3] no-ops must move nothing")
-    upsert_location(get_location_by_id(DEPOT))
+    upsert_location(get_location_by_id(DEPOT), sync_world=True)
     resaved = probe()
     check("re-saving the location unchanged keeps the signature",
           resaved[1] == after_season[1],

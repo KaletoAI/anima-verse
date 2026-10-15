@@ -138,6 +138,9 @@ def record_state_change(character_name: str, change_type: str, value: str,
                      character_name, change_type, e, exc_info=True)
         return False
 
+    from app.core import sync_topics
+    sync_topics.avatars([character_name], "self")
+
     # Trim: max 200 entries per character. Housekeeping only — a failure here
     # leaves the entry written, so it must not turn into a False.
     try:
@@ -2281,7 +2284,7 @@ def _publish_activity_changed(character_name: str, pose: str, old_pose: str,
 
     from app.core import sync_topics
     if stored:
-        sync_topics.changed_at(character_name)
+        sync_topics.changed_at(character_name, topics=("presence", "self"))
 
 
 def get_effective_activity(character_name: str,
@@ -4398,14 +4401,11 @@ def is_character_sleeping(character_name: str,
 
 def adjust_status_effects(character_name: str, deltas: Dict[str, int],
                           source: str = "") -> Dict[str, Any]:
-    """Wendet ganzzahlige Deltas auf status_effects an (geclamped 0-100).
+    """Apply integer deltas to existing status_effects, clamped to 0-100.
 
-    deltas: {stat_key: delta}. Keys, die nicht bereits im status_effects-Dict
-    des Characters existieren, werden ignoriert — es werden keine neuen Stats
-    erfunden (passt zur generischen, template-getriebenen Stat-Definition).
-
-    Returns die tatsaechlich angewandten Aenderungen
-    ``{stat: {"old": x, "new": y}}`` und schreibt eine state-change-History.
+    Unknown keys are ignored; the character template defines the stats.
+    Return the applied changes as ``{stat: {"old": x, "new": y}}`` and
+    record their state history after a successful profile save.
     """
     if not deltas:
         return {}
@@ -4442,8 +4442,10 @@ def adjust_status_effects(character_name: str, deltas: Dict[str, int],
                 changes[key] = {"old": old, "new": new}
         if changes:
             profile["status_effects"] = status
-            save_character_profile(character_name, profile)
-    if changes:
+            stored = save_character_profile(character_name, profile)
+    if changes and stored:
+        from app.core import sync_topics
+        sync_topics.changed_at(character_name, topics=("presence", "self"))
         try:
             record_state_change(character_name, "effects", source or "chat",
                                 metadata={"changes": changes, "source": source})
@@ -4575,7 +4577,10 @@ def set_state_flag(character_name: str, flag: str, value) -> None:
         else:
             since.pop(flag, None)
         profile["state_flag_since"] = since
-        save_character_profile(character_name, profile)
+        stored = save_character_profile(character_name, profile)
+    if stored:
+        from app.core import sync_topics
+        sync_topics.changed_at(character_name, topics=("presence", "self"))
 
 
 def stamp_state_flag_since(character_name: str, flag: str) -> None:

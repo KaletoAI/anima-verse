@@ -91,6 +91,8 @@ def create_notification(character: str,
         logger.error("create_notification failed for %s (%s): %s",
                      character, notification_type, e, exc_info=True)
         return ""
+    from app.core import sync_topics
+    sync_topics.avatars([character, (metadata or {}).get("to")], "notices")
     return nid
 
 
@@ -181,94 +183,59 @@ def get_unread_count(character_whitelist: Optional[List[str]] = None) -> int:
 
 
 def mark_read(notification_id: str) -> bool:
-    """Mark a single notification as read. Returns True if found."""
+    """Mark a notification read and notify its owners after commit."""
+    return _mutate_notification(notification_id, delete=False)
+
+
+def _mutate_notification(notification_id: str, *, delete: bool) -> bool:
+    """Keep the owners read before the write until its transaction commits."""
+    found = None
     try:
         with transaction() as conn:
-            # str_id lives in meta JSON, need to scan or use meta field
-            # To avoid JSON scan, load all and find db_id
-            rows = conn.execute(
-                "SELECT id, meta FROM notifications"
-            ).fetchall()
-            for row_id, meta_str in rows:
+            for row_id, meta_str in conn.execute("SELECT id, meta FROM notifications").fetchall():
                 try:
                     meta = json.loads(meta_str or "{}")
-                    if meta.get("str_id") == notification_id:
-                        conn.execute(
-                            "UPDATE notifications SET read=1 WHERE id=?",
-                            (row_id,),
-                        )
-                        return True
-                except Exception:
-                    pass
+                except (TypeError, ValueError):
+                    continue
+                if meta.get("str_id") == notification_id:
+                    found = meta
+                    sql = "DELETE FROM notifications WHERE id=?" if delete else "UPDATE notifications SET read=1 WHERE id=?"
+                    conn.execute(sql, (row_id,))
+                    break
     except Exception:
-        pass
-    return False
+        return False
+    if found is None:
+        return False
+    from app.core import sync_topics
+    sync_topics.avatars([found.get("character"), (found.get("metadata") or {}).get("to")], "notices")
+    return True
 
 
 def mark_all_read(character_whitelist: Optional[List[str]] = None) -> int:
-    """Mark notifications as read. Returns count of newly marked.
-
-    character_whitelist: the SAME filter :func:`get_notifications` and
-    :func:`get_unread_count` take — only notifications whose sender
-    (``character``) or recipient (``metadata.to``) is in the list are marked.
-    Without it every unread row is marked, which is right for an admin sweep
-    and wrong for a player: it used to clear notifications of characters the
-    caller is not even allowed to SEE, and they were gone from the badge of
-    whoever the row really belonged to.
-    ``None`` = unrestricted (the same convention as the two readers); an
-    EMPTY list means "this user may see nothing" and marks nothing.
-    """
+    """Mark exactly the unread rows visible to the whitelist (None = all)."""
+    if character_whitelist == []:
+        return 0
+    changed = []
     try:
         with transaction() as conn:
-            if character_whitelist is None:
-                count_row = conn.execute(
-                    "SELECT COUNT(*) FROM notifications WHERE read=0"
-                ).fetchone()
-                count = count_row[0] if count_row else 0
-                if count:
-                    conn.execute("UPDATE notifications SET read=1 WHERE read=0")
-                return count
-            if not character_whitelist:
-                return 0
-            # Sender and recipient both live in the meta JSON blob, so the
-            # match happens in Python — exactly like get_unread_count.
-            allowed = set(character_whitelist)
-            ids = []
-            for row_id, meta_str in conn.execute(
-                    "SELECT id, meta FROM notifications WHERE read=0").fetchall():
+            for row_id, meta_str in conn.execute("SELECT id, meta FROM notifications WHERE read=0").fetchall():
                 try:
                     meta = json.loads(meta_str or "{}")
-                except Exception:
-                    continue
-                char = meta.get("character", "")
-                to = (meta.get("metadata") or {}).get("to", "")
-                if char in allowed or (to and to in allowed):
-                    ids.append(row_id)
-            for row_id in ids:
+                except (TypeError, ValueError):
+                    meta = {}
+                owners = [meta.get("character"), (meta.get("metadata") or {}).get("to")]
+                if character_whitelist is None or any(n in character_whitelist for n in owners if n):
+                    changed.append((row_id, owners))
+            for row_id, _ in changed:
                 conn.execute("UPDATE notifications SET read=1 WHERE id=?", (row_id,))
-            return len(ids)
     except Exception:
         return 0
+    from app.core import sync_topics
+    for _, owners in changed:
+        sync_topics.avatars(owners, "notices")
+    return len(changed)
 
 
 def delete_notification(notification_id: str) -> bool:
-    """Delete a single notification. Returns True if found."""
-    try:
-        with transaction() as conn:
-            rows = conn.execute(
-                "SELECT id, meta FROM notifications"
-            ).fetchall()
-            for row_id, meta_str in rows:
-                try:
-                    meta = json.loads(meta_str or "{}")
-                    if meta.get("str_id") == notification_id:
-                        conn.execute(
-                            "DELETE FROM notifications WHERE id=?",
-                            (row_id,),
-                        )
-                        return True
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return False
+    """Delete a notification and notify the owners read before deletion."""
+    return _mutate_notification(notification_id, delete=True)

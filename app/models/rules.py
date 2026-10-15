@@ -60,12 +60,14 @@ def _load_shared_rules() -> List[Dict[str, Any]]:
 
 
 def _save_shared_rules(rules: List[Dict[str, Any]]):
-    """Schreibt rules in shared/rules/rules.json zurueck (ohne Origin-Marker)."""
+    """Write the shared baseline without origin markers."""
+    old_rules = _load_shared_rules()
     path = _get_shared_rules_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     clean = [{k: v for k, v in r.items() if not k.startswith("_")} for r in rules]
     path.write_text(json.dumps({"rules": clean}, ensure_ascii=False, indent=2),
                     encoding="utf-8")
+    _rules_changed(old_rules, clean)
 
 
 def _load_world_rules() -> List[Dict[str, Any]]:
@@ -129,14 +131,10 @@ def load_rules() -> List[Dict[str, Any]]:
 
 
 def save_rules(rules: List[Dict[str, Any]], target_dir: str = "world"):
-    """Speichert Regeln. ``target_dir``:
-        "world"  — Welt-DB (Default; backward kompatibel)
-        "shared" — shared/rules/rules.json (globale Baseline fuer alle Welten)
+    """Save rules to the world DB or the shared baseline.
 
-    Bei "world": Upsert in DB, Eintraege deren id nicht in der Liste sind
-    werden geloescht (full-replace-Semantik fuer Welt-Layer).
-    Bei "shared": die Liste wird als komplette shared/rules/rules.json
-    geschrieben.
+    ``target_dir="world"`` replaces the world layer, deleting absent IDs.
+    ``target_dir="shared"`` replaces shared/rules/rules.json for all worlds.
     """
     if target_dir == "shared":
         try:
@@ -146,12 +144,21 @@ def save_rules(rules: List[Dict[str, Any]], target_dir: str = "world"):
             logger.error("save_rules shared-Fehler: %s", e)
         return
 
-    # World-DB upsert + Cleanup verwaister IDs
+    # Upsert world rules and remove absent IDs.
     try:
         with transaction() as conn:
-            existing_ids = {r[0] for r in conn.execute(
-                "SELECT id FROM rules"
-            ).fetchall()}
+            old_rows = conn.execute("SELECT id, meta FROM rules").fetchall()
+            old_rules = []
+            for rid, meta in old_rows:
+                try:
+                    rule = json.loads(meta or "{}")
+                except (TypeError, ValueError):
+                    rule = {}
+                if not isinstance(rule, dict):
+                    rule = {}
+                rule["id"] = rid
+                old_rules.append(rule)
+            existing_ids = {r[0] for r in old_rows}
             new_ids = {r.get("id") for r in rules if r.get("id")}
 
             for rid in existing_ids - new_ids:
@@ -161,9 +168,9 @@ def save_rules(rules: List[Dict[str, Any]], target_dir: str = "world"):
                 rid = rule.get("id")
                 if not rid:
                     continue
-                # _origin Marker nicht persistieren (Render-Field, nicht Daten)
+                # Origin markers are presentation metadata; never persist them.
                 clean = {k: v for k, v in rule.items() if not k.startswith("_")}
-                # text = Lesbare Zusammenfassung der Regel fuer die Tabelle
+                # Store a readable summary in the text column.
                 text = clean.get("name", clean.get("text", ""))
                 category = clean.get("type", clean.get("category", ""))
                 meta_str = json.dumps(clean, ensure_ascii=False)
@@ -177,6 +184,8 @@ def save_rules(rules: List[Dict[str, Any]], target_dir: str = "world"):
                 """, (rid, text, category, meta_str))
     except Exception as e:
         logger.error("save_rules DB-Fehler: %s", e)
+        return
+    _rules_changed(old_rules, rules)
 
 
 # Default-Rules-Seed: bei Welt-Init oder bei expliziter Migration werden
@@ -429,6 +438,12 @@ def _rule_rooms(target: Dict[str, Any]) -> List[str]:
     return [str(r) for r in rooms if r]
 
 
+def _rule_location_rooms(target: Dict[str, Any]) -> Tuple[str, List[str]]:
+    """Resolve the editor and event target schemas for checks and notices."""
+    location = (target.get("location_id") or target.get("location") or "").strip()
+    return location, _rule_rooms(target)
+
+
 def _names_every_room(location_id: str, room_ids: List[str]) -> bool:
     """True when ``room_ids`` covers every room of the location.
 
@@ -475,8 +490,7 @@ def check_access(character_name: str,
         # rules authored in the UI would have no effect.
         target = rule.get("target", {})
         scope = target.get("scope", "")
-        t_loc = (target.get("location_id") or target.get("location") or "").strip()
-        t_rooms = _rule_rooms(target)
+        t_loc, t_rooms = _rule_location_rooms(target)
 
         matched = False
         if scope in ("location", "room") and t_loc and t_loc == location_id:
@@ -600,8 +614,7 @@ def check_leave(character_name: str, *,
 
         target = rule.get("target", {}) or {}
         scope = target.get("scope", "")
-        t_loc = (target.get("location_id") or target.get("location") or "").strip()
-        rule_room_ids = _rule_rooms(target)
+        t_loc, rule_room_ids = _rule_location_rooms(target)
         matched = False
         if scope in ("room", "location") and rule_room_ids and cur_room \
                 and t_loc == cur_loc and cur_room in rule_room_ids:
@@ -930,3 +943,31 @@ def _find_nearest_sleep(character_name: str) -> Tuple[str, str]:
         return loc, room
     except Exception:
         return "", ""
+
+
+def _rules_changed(old_rules, new_rules) -> None:
+    """Notify removed, added and both scopes of changed rules, by stored id."""
+    try:
+        from app.core import sync_topics
+        def indexed(rules):
+            return {r["id"]: {k: v for k, v in r.items() if not k.startswith("_")}
+                    for r in rules if r.get("id")}
+        before, after = indexed(old_rules), indexed(new_rules)
+        for rid in before.keys() | after.keys():
+            if before.get(rid) == after.get(rid):
+                continue
+            for rule in (before.get(rid), after.get(rid)):
+                if rule is None:
+                    continue
+                target = rule.get("target") or {}
+                location, _ = _rule_location_rooms(target)
+                character = (rule.get("character") or "").strip()
+                if character:
+                    to = sync_topics.Avatar(character)
+                elif target.get("scope") in ("location", "room") and location:
+                    to = sync_topics.AtLocation(location)
+                else:
+                    to = sync_topics.Everyone()
+                sync_topics.notify("notices", to=to)
+    except Exception as e:
+        logger.debug("rule sync failed: %s", e)

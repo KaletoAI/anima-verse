@@ -169,6 +169,8 @@ def save_height_area(raw: Any, must_exist: bool = False) -> Dict[str, Any]:
                  area["height_m"], area["falloff_m"],
                  json.dumps(area["meta"], ensure_ascii=False), now, now))
     _invalidate()
+    from app.core import sync_topics
+    sync_topics.notify("world", to=sync_topics.Everyone())
     return area
 
 
@@ -180,6 +182,8 @@ def delete_height_area(area_id: str) -> bool:
         deleted = cur.rowcount > 0
     if deleted:
         _invalidate()
+        from app.core import sync_topics
+        sync_topics.notify("world", to=sync_topics.Everyone())
     return deleted
 
 
@@ -236,6 +240,8 @@ def save_height_areas_bulk(upserts: Any, deletes: Any) -> Dict[str, Any]:
             saved.append({"temp_id": entry["temp_id"], "area": area})
     if changed:
         _invalidate()
+        from app.core import sync_topics
+        sync_topics.notify("world", to=sync_topics.Everyone())
     return {"saved": saved, "deleted": delete_ids, "rejected": rejected}
 
 

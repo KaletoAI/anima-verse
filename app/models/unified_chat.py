@@ -282,6 +282,10 @@ class UnifiedChatManager:
                          character_name, partner_name, e, exc_info=True)
             return False
 
+        if getattr(message, "medium", "") == "messaging":
+            from app.core import sync_topics
+            sync_topics.avatars([character_name, partner], "notices")
+
         # Shadow write into the perception stream (additive, never blocking).
         # plan-room-conversation phase 1 — goes away from phase 3 on.
         try:

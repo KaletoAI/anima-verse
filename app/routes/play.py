@@ -3972,6 +3972,9 @@ def _phone_set_read(avatar: str, partner: str, ts: str) -> None:
                 (_phone_read_key(avatar, partner), ts or ""))
     except Exception as e:
         logger.debug("phone read marker write failed: %s", e)
+        return
+    from app.core import sync_topics
+    sync_topics.avatars([avatar], "notices")
 
 
 @router.get("/play/messages")

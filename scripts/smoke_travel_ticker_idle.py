@@ -131,7 +131,7 @@ set_map3d(HOME, plan_width_m=10.0,
                               "type": "passage"}])
 MARKET = add_location(name="Idle Market", description="ticker idle smoke")["id"]
 update_location_position(MARKET, 100.0, 0.0)
-HALL = add_room(MARKET, "Hall", "the room the west gate opens into")["id"]
+HALL = add_room(MARKET, "Hall", "the room the west gate opens into", sync_world=True)["id"]
 set_map3d(MARKET, plan_width_m=10.0,
           boundary_openings=[{"edge": 3, "at": 0.5, "width_m": 4.0,
                               "type": "passage", "room": HALL}])

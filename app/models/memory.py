@@ -251,6 +251,9 @@ def save_memories(character_name: str, entries: List[Dict[str, Any]]):
                 )
     except Exception as e:
         logger.error("save_memories error for %s: %s", character_name, e)
+        return
+    from app.core import sync_topics
+    sync_topics.avatars([character_name], "self")
 
 
 def add_memory(character_name: str,
@@ -329,6 +332,11 @@ def add_memory(character_name: str,
             row_id = int(cur.lastrowid or 0)
     except Exception as e:
         logger.error("add_memory DB error for %s: %s", character_name, e)
+        row_id = 0
+
+    if row_id:
+        from app.core import sync_topics
+        sync_topics.avatars([character_name], "self")
 
     # Keep the situational-memory vector cache warm. Fire-and-forget: the
     # first internal embedding loads an ONNX model, and add_memory runs inside
@@ -345,11 +353,11 @@ def add_memory(character_name: str,
 
 
 def delete_memory(character_name: str, entry_id: str) -> bool:
-    """Loescht eine einzelne Memory."""
+    """Delete one memory."""
     try:
-        # entry_id kann hex-String (mem_xxx) oder numeric sein
+        # entry_id may be a hex string (mem_xxx) or numeric.
         conn = get_connection()
-        # Versuche zuerst als numerische Row-ID
+        # Try a numeric row ID first.
         if str(entry_id).isdigit():
             cur = conn.execute(
                 "DELETE FROM memories WHERE id=? AND character_name=?",
@@ -361,7 +369,7 @@ def delete_memory(character_name: str, entry_id: str) -> bool:
                 (int(entry_id[4:]), character_name),
             )
         else:
-            # Hex-ID: suche in meta oder content (Legacy-Fallback)
+            # Hex ID: search metadata as a legacy fallback.
             rows = conn.execute(
                 "SELECT id FROM memories WHERE character_name=? AND meta LIKE ?",
                 (character_name, f'%"{entry_id}"%'),
@@ -373,6 +381,9 @@ def delete_memory(character_name: str, entry_id: str) -> bool:
                 (rows[0][0], character_name),
             )
         conn.commit()
+        if cur.rowcount > 0:
+            from app.core import sync_topics
+            sync_topics.avatars([character_name], "self")
         return cur.rowcount > 0
     except Exception as e:
         logger.error("delete_memory Fehler fuer %s id=%s: %s", character_name, entry_id, e)
@@ -380,7 +391,7 @@ def delete_memory(character_name: str, entry_id: str) -> bool:
 
 
 def clear_memories(character_name: str) -> int:
-    """Loescht alle Memories. Gibt Anzahl zurueck."""
+    """Delete all memories and return their count."""
     try:
         conn = get_connection()
         count = conn.execute(
@@ -391,6 +402,8 @@ def clear_memories(character_name: str) -> int:
                 "DELETE FROM memories WHERE character_name=?", (character_name,)
             )
             conn.commit()
+            from app.core import sync_topics
+            sync_topics.avatars([character_name], "self")
         return count
     except Exception as e:
         logger.error("clear_memories Fehler fuer %s: %s", character_name, e)
@@ -848,7 +861,7 @@ def save_mood_history(character_name: str, entries: List[Dict[str, Any]]):
 
 
 def record_mood(character_name: str, mood: str, source: str = ""):
-    """Zeichnet einen Mood-Datenpunkt auf."""
+    """Record one mood data point."""
     if not mood:
         return
     try:
@@ -857,8 +870,10 @@ def record_mood(character_name: str, mood: str, source: str = ""):
                 INSERT INTO mood_history (character_name, ts, mood, source)
                 VALUES (?, ?, ?, ?)
             """, (character_name, _now_iso(), mood.strip().lower(), source))
+        from app.core import sync_topics
+        sync_topics.avatars([character_name], "self")
         logger.debug("Mood recorded for %s: %s", character_name, mood)
-        # Trim falls noetig
+        # Trim excess history if necessary.
         max_entries = int(os.environ.get("MOOD_HISTORY_MAX_ENTRIES", "500"))
         conn = get_connection()
         total = conn.execute(

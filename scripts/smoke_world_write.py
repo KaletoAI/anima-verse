@@ -106,7 +106,7 @@ check("two places seeded", len(list_locations()), 2)
 data = _load_world_data()
 snapshot = [l for l in data["locations"] if l["id"] == A]   # B dropped
 snapshot[0]["description"] = "a changed"
-upsert_location(snapshot[0])
+upsert_location(snapshot[0], sync_world=True)
 check("the upserted place carries the change",
       (get_location_by_id(A) or {}).get("description"), "a changed")
 check("the place missing from the snapshot survives", len(list_locations()), 2)
@@ -114,12 +114,12 @@ check("…and is still readable by id", (get_location_by_id(B) or {}).get("name"
       "Beta")
 
 # Room delete-by-absence WITHIN the upserted location stays.
-r1 = add_room(A, "Kitchen")["id"]
-add_room(A, "Cellar")
+r1 = add_room(A, "Kitchen", sync_world=True)["id"]
+add_room(A, "Cellar", sync_world=True)
 check("A has ground + 2 rooms", len(room_ids(A)), 3)
 loc_a = get_location_by_id(A)
 loc_a["rooms"] = [r for r in loc_a["rooms"] if r["id"] != r1]
-upsert_location(loc_a)
+upsert_location(loc_a, sync_world=True)
 check("a room dropped from the location's list is deleted",
       r1 in room_ids(A), False)
 check("…and the other rooms stay", len(room_ids(A)), 2)
@@ -131,7 +131,7 @@ check("…and still has it after a room add and an upsert",
       GROUND_ROOM_ID in room_ids(A), True)
 loc_a = get_location_by_id(A)
 loc_a["description"] = "a again"
-upsert_location(loc_a)
+upsert_location(loc_a, sync_world=True)
 check("…and after one more upsert", GROUND_ROOM_ID in room_ids(A), True)
 
 print("\n[3] deleting is explicit")
@@ -224,7 +224,7 @@ from app.models.inventory import (  # noqa: E402
     add_item, add_item_to_room, get_room_items)
 
 HOME = add_location(name="Home", description="")["id"]
-ROOM = add_room(HOME, "Hall")["id"]
+ROOM = add_room(HOME, "Hall", sync_world=True)["id"]
 ITEM = add_item(name="Lantern", description="", item_id="item_lantern")["id"]
 
 

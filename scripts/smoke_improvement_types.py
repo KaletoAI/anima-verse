@@ -990,8 +990,8 @@ def set_room_layout(location_id, room_id, layout):
     world._save_world_data(data)
 
 
-TAPROOM = world.add_room(LOC_ID, "Taproom")["id"]
-CELLAR = world.add_room(LOC_ID, "Cellar")["id"]
+TAPROOM = world.add_room(LOC_ID, "Taproom", sync_world=True)["id"]
+CELLAR = world.add_room(LOC_ID, "Cellar", sync_world=True)["id"]
 fake_building_generate(LOC_ID, "new.png", "tr", room_id=TAPROOM)
 fake_building_generate(LOC_ID, "new.png", "tr", room_id=CELLAR)
 check("both rooms have a model", [

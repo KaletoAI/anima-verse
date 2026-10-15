@@ -73,7 +73,7 @@ with patch.object(types, '_shared_path', return_value=seed):
     changed('admin type route', lambda: _put_terrain_type_route_sync('grass', {'name': 'Admin changed'}))
     changed('delete_world_type', lambda: types.delete_world_type('grass'))
     changed('types stat', lambda: seed.write_text(json.dumps({'types': [{'kind': 'grass', 'name': 'Seed changed'}]})))
-    changed('location generation', lambda: world.upsert_location({'id': 'site', 'name': 'Site'}), world.world_generation)
+    changed('location generation', lambda: world.upsert_location({'id': 'site', 'name': 'Site'}, sync_world=True), world.world_generation)
 
     # The shared seed is read once, and neither cache exposes mutable data.
     catalog = types.effective_catalog()
@@ -115,7 +115,7 @@ with patch.object(types, '_shared_path', return_value=seed):
     placement = wp.save_world_prop({'prop_id': 'rock', 'x': 0, 'z': 0})
     changed('upsert_location prop_boxes', lambda: world.upsert_location({
         'id': 'site', 'name': 'Site', 'pos_x': 0, 'pos_z': 0,
-        'map3d': {'boundary': [[-5,-5],[5,-5],[5,5],[-5,5]]}}))
+        'map3d': {'boundary': [[-5,-5],[5,-5],[5,5],[-5,5]]}}, sync_world=True))
     wp.delete_world_prop(placement['id'])
     from app.core import heightfield
     from app.core.world_ops import build_worldmap_payload

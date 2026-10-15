@@ -2282,7 +2282,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                 # ONE location written, under the lock the fresh read
                 # above was taken with — a parallel editor's new place
                 # is none of this edit's business.
-                upsert_location(_target)
+                upsert_location(_target, sync_world=True)
         if _evict_corridors:
             evict_rooms_to_ground(str(location.get("id") or ""),
                                   _evict_corridors)
@@ -2453,7 +2453,7 @@ def update_location_with_extras(location_id: str,
                 # ONE location written, under the lock the fresh read
                 # above was taken with — a parallel editor's new place
                 # is none of this edit's business.
-                upsert_location(_target)
+                upsert_location(_target, sync_world=True)
         if _evict_corridors:
             evict_rooms_to_ground(location_id, _evict_corridors)
         from app.core import places; places.invalidate()
@@ -3093,12 +3093,12 @@ def set_location_prompt_changed(location_id: str, room_id: str,
                         for room in loc.get("rooms", []):
                             if room.get("id") == room_id:
                                 room["prompt_changed"] = True
-                                upsert_location(loc)
+                                upsert_location(loc, sync_world=False)
                                 return {"status": "success", "prompt_changed": True}
                         raise HTTPException(status_code=404, detail="Raum nicht gefunden")
                     else:
                         loc["prompt_changed"] = True
-                        upsert_location(loc)
+                        upsert_location(loc, sync_world=False)
                         return {"status": "success", "prompt_changed": True}
             raise HTTPException(status_code=404, detail="Location nicht gefunden")
 

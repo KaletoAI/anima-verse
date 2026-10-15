@@ -139,6 +139,8 @@ def _insert_event(event: Dict[str, Any]) -> None:
             )
     except Exception as e:
         logger.error("_insert_event DB error: %s", e)
+        return
+    _events_changed([event.get("location_id")])
 
 
 def _update_event(event: Dict[str, Any]) -> bool:
@@ -151,12 +153,14 @@ def _update_event(event: Dict[str, Any]) -> bool:
             row_id = _row_id_for(conn, str_id)
             if row_id is None:
                 return False
+            old_location = conn.execute("SELECT json_extract(payload, '$.location_id') FROM events WHERE id=?", (row_id,)).fetchone()[0]
             conn.execute(
                 "UPDATE events SET ts=?, game_ts=?, payload=? WHERE id=?",
                 (event.get("created_at", utc_now_iso()),
                  event.get("game_ts", "") or "",
                  json.dumps(event, ensure_ascii=False), row_id),
             )
+        _events_changed([old_location, event.get("location_id")])
         return True
     except Exception as e:
         logger.error("_update_event DB error: %s", e)
@@ -170,7 +174,9 @@ def _delete_event_row(event_id: str) -> bool:
             row_id = _row_id_for(conn, event_id)
             if row_id is None:
                 return False
+            old_location = conn.execute("SELECT json_extract(payload, '$.location_id') FROM events WHERE id=?", (row_id,)).fetchone()[0]
             conn.execute("DELETE FROM events WHERE id=?", (row_id,))
+        _events_changed([old_location])
         return True
     except Exception as e:
         logger.error("_delete_event_row DB error: %s", e)
@@ -259,19 +265,20 @@ def expire_events() -> int:
     try:
         with transaction() as conn:
             rows = conn.execute(
-                "SELECT id, json_extract(payload, '$.id') FROM events "
+                "SELECT id, json_extract(payload, '$.id'), json_extract(payload, '$.location_id') FROM events "
                 "WHERE kind='world_event' "
                 "AND json_extract(payload, '$.expires_at') IS NOT NULL "
                 "AND json_extract(payload, '$.expires_at') < ?",
                 (now_canonical,),
             ).fetchall()
-            for row_id, str_id in rows:
+            for row_id, str_id, _location in rows:
                 conn.execute("DELETE FROM events WHERE id=?", (row_id,))
                 if str_id:
                     expired_ids.append(str_id)
     except Exception as e:
         logger.error("expire_events DB error: %s", e)
         return 0
+    _events_changed([row[2] for row in rows])
     if expired_ids:
         try:
             from app.models.rules import delete_rules_by_event
@@ -606,3 +613,13 @@ def event_game_label(event: Dict[str, Any], lang: str = "en") -> str:
         return GameTime.parse(event.get("game_ts") or "").display_label(lang)
     except (ValueError, TypeError):
         return ""
+
+
+def _events_changed(locations) -> None:
+    """Notify readers of each old/new event scope; a global event reaches all."""
+    try:
+        from app.core import sync_topics
+        for loc in set(locations):
+            sync_topics.notify("notices", to=sync_topics.AtLocation(loc) if loc else sync_topics.Everyone())
+    except Exception as e:
+        logger.debug("event sync failed: %s", e)

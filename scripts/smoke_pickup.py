@@ -153,7 +153,7 @@ def ensure_character(*names):
 ensure_character("Alpha", "Beta", "Gamma", "Bounded", "A1", "A2", "A3", "A4")
 
 LOC = add_location(name="Warehouse", description="a shed")["id"]
-ROOM = (add_room(LOC, "Floor", "the floor") or {}).get("id") or "floor"
+ROOM = (add_room(LOC, "Floor", "the floor", sync_world=True) or {}).get("id") or "floor"
 
 STONE = add_item(name="Stone", description="a grey stone", stackable=True,
                  max_stack=99)["id"]

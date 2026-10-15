@@ -100,7 +100,7 @@ def place(name, knowledge_item=""):
     if knowledge_item:
         loc = get_location_by_id(lid)
         loc["knowledge_item_id"] = knowledge_item
-        upsert_location(loc)
+        upsert_location(loc, sync_world=True)
     return lid
 
 
@@ -109,16 +109,16 @@ SECRET = place("Secret", KEY)
 LOCKED = place("Locked", MISSING)
 UNKNOWN = place("Unknown")
 
-HALL = add_room(OPEN, "Hall")["id"]
-VAULT = add_room(OPEN, "Vault")["id"]
-CELLAR = add_room(OPEN, "Cellar")["id"]
+HALL = add_room(OPEN, "Hall", sync_world=True)["id"]
+VAULT = add_room(OPEN, "Vault", sync_world=True)["id"]
+CELLAR = add_room(OPEN, "Cellar", sync_world=True)["id"]
 loc = get_location_by_id(OPEN)
 for r in loc["rooms"]:
     if r["id"] == VAULT:
         r["knowledge_item_id"] = VAULT_KEY
     if r["id"] == CELLAR:
         r["knowledge_item_id"] = MISSING
-upsert_location(loc)
+upsert_location(loc, sync_world=True)
 
 set_known_locations(CHAR, [OPEN, SECRET, LOCKED])
 

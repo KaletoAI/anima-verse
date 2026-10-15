@@ -1295,7 +1295,7 @@ def _apply_surfaces(location_id: str, room_id: str,
                                    room_id, json.dumps(merged))
                     return False
                 room["layout"] = clean
-                upsert_location(loc)
+                upsert_location(loc, sync_world=True)
                 logger.info("room_furnish %s: surfaces applied (%s)", room_id,
                             json.dumps(clean.get("surfaces") or {}))
                 return True

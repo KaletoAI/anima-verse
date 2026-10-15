@@ -71,7 +71,7 @@ for lid, x, edge in [(HOME, 0, 1), (FAR, 100, 3)]:
     loc.update(pos_x=x, pos_z=0, map3d={"plan_width_m": 10,
         "boundary": [[-5, -5], [5, -5], [5, 5], [-5, 5]],
         "boundary_openings": [{"edge": edge, "at": 0.5, "width_m": 4, "type": "passage"}]})
-    W.upsert_location(loc)
+    W.upsert_location(loc, sync_world=True)
 CLIPS = ROOT / "clips"
 CLIPS.mkdir()
 for role in ("a", "b"):

@@ -4617,6 +4617,8 @@ def invalidate_prop_lib_token() -> None:
     global _prop_token_cache
     with _prop_token_lock:
         _prop_token_cache = (None, 0.0, "")
+    from app.core import sync_topics
+    sync_topics.notify("world", to=sync_topics.Everyone())
 
 
 def prop_lib_token() -> str:

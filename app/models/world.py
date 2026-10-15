@@ -434,7 +434,7 @@ def _write_location_rows(conn, locations: List[Dict[str, Any]],
             ))
 
 
-def _after_world_write() -> None:
+def _after_world_write(*, sync_world: bool) -> None:
     """Runs AFTER the transaction of every location write.
 
     Drops the read cache — whoever reads next must see what was just written —
@@ -458,37 +458,44 @@ def _after_world_write() -> None:
         note_world_write()
     except Exception as e:   # noqa: BLE001 — a cache must never fail a write
         logger.warning("heightfield refresh after a world write failed: %s", e)
+    if sync_world:
+        from app.core import sync_topics
+        sync_topics.notify("world", to=sync_topics.Everyone())
 
 
-def _upsert_locations(locations: List[Dict[str, Any]]) -> None:
+def _upsert_locations(locations: List[Dict[str, Any]], *, sync_world: bool) -> bool:
     rows = [l for l in (locations or [])
             if isinstance(l, dict) and l.get("id")]
     if not rows:
-        return
+        return False
     with world_write_lock:
         try:
             with transaction() as conn:
                 _write_location_rows(conn, rows, utc_now_iso())
         except Exception as e:
-            logger.error("upsert_location DB-Fehler: %s", e)
-        _after_world_write()
+            logger.error("upsert_location DB error: %s", e)
+            return False
+        _after_world_write(sync_world=sync_world)
+    return True
 
 
-def upsert_location(location: Dict[str, Any]) -> None:
+def upsert_location(location: Dict[str, Any], *, sync_world: bool) -> bool:
     """Write exactly ONE location (and its rooms). The mutation path.
 
     Everything that loads the world, changes ONE place and stores it again
     goes through here — under :data:`world_write_lock`, and touching no row
     but this location's. That is what keeps an item drop in a room from
     rewriting (and, before 2026-09-21, deleting) the rest of the world.
+    Return True only after a successful commit, False on failure or no rows.
     """
-    _upsert_locations([location])
+    return _upsert_locations([location], sync_world=sync_world)
 
 
-def upsert_locations(locations: List[Dict[str, Any]]) -> None:
+def upsert_locations(locations: List[Dict[str, Any]], *, sync_world: bool) -> bool:
     """Write SEVERAL locations in one transaction — the migrations and the
-    sweeps that touch many places at once. Still no delete-by-absence."""
-    _upsert_locations(locations)
+    sweeps that touch many places at once. Still no delete-by-absence.
+    Return True only after a successful commit, False on failure or no rows."""
+    return _upsert_locations(locations, sync_world=sync_world)
 
 
 def delete_location_row(location_id: str) -> bool:
@@ -512,7 +519,7 @@ def delete_location_row(location_id: str) -> bool:
         except Exception as e:
             logger.error("delete_location_row DB-Fehler (%s): %s", lid, e)
             return False
-        _after_world_write()
+        _after_world_write(sync_world=True)
     return gone
 
 
@@ -540,8 +547,9 @@ def replace_all_locations(data: Any) -> None:
                     conn.execute("DELETE FROM locations WHERE id=?", (lid,))
                 _write_location_rows(conn, rows, utc_now_iso())
         except Exception as e:
-            logger.error("replace_all_locations DB-Fehler: %s", e)
-        _after_world_write()
+            logger.error("replace_all_locations DB error: %s", e)
+            return
+        _after_world_write(sync_world=True)
 
 
 def _save_world_data(data: Dict[str, Any]) -> None:
@@ -552,8 +560,9 @@ def _save_world_data(data: Dict[str, Any]) -> None:
     :func:`replace_all_locations`; whoever changed ONE place says
     :func:`upsert_location`.
     """
-    _upsert_locations(data.get("locations", []) if isinstance(data, dict)
-                      else list(data or []))
+    _upsert_locations(
+        data.get("locations", []) if isinstance(data, dict) else list(data or []),
+        sync_world=True)
 
 
 # === Welt-Settings (world_kv) ===
@@ -849,7 +858,8 @@ def _validate_room_description(text: str) -> str:
 
 
 def add_room(location_id: str, room_name: str, description: str = "",
-             image_prompt_day: str = "", image_prompt_night: str = "") -> Optional[Dict[str, Any]]:
+             image_prompt_day: str = "", image_prompt_night: str = "",
+             *, sync_world: bool) -> Optional[Dict[str, Any]]:
     """Adds a new room to a location. Returns the room, or None on error.
 
     A corridor room counts with its DISPLAY name: unnamed, it answers with the
@@ -886,7 +896,8 @@ def add_room(location_id: str, room_name: str, description: str = "",
                 if image_prompt_day or image_prompt_night:
                     new_room["prompt_changed"] = True
                 rooms.append(new_room)
-                upsert_location(loc)
+                if not upsert_location(loc, sync_world=sync_world):
+                    return None
                 logger.info("Room '%s' added to location %s (id=%s)", room_name, location_id, new_room["id"])
                 return new_room
         return None
@@ -896,8 +907,8 @@ def update_room_description(location_id: str, room_id: str,
                             new_description: str,
                             image_prompt_day: str = None,
                             image_prompt_night: str = None) -> bool:
-    """Aktualisiert Beschreibung und/oder Image-Prompts eines Raums. Returns True bei Erfolg."""
-    # Validierung
+    """Update a room description and/or image prompts; return True on success."""
+    # Validation
     new_description = _validate_room_description(new_description)
     if not new_description and image_prompt_day is None and image_prompt_night is None:
         logger.warning("Raum-Beschreibung nach Validierung leer und kein image_prompt — Update abgelehnt")
@@ -918,7 +929,9 @@ def update_room_description(location_id: str, room_id: str,
                             if image_prompt_night != room.get("image_prompt_night", ""):
                                 room["prompt_changed"] = True
                             room["image_prompt_night"] = image_prompt_night
-                        upsert_location(loc)
+                        if upsert_location(loc, sync_world=False):
+                            from app.core import sync_topics
+                            sync_topics.notify("scene", to=sync_topics.AtLocation(location_id))
                         return True
         return False
 
@@ -962,7 +975,7 @@ def append_room_props(location_id: str, room_id: str,
                 if not clean:
                     return False
                 room["layout"] = clean
-                upsert_location(loc)
+                upsert_location(loc, sync_world=True)
                 # Accepted props bring markers — the seat inventory is stale.
                 from app.core import places; places.invalidate()
                 logger.info("Room %s: %d prop placements accepted",
@@ -980,7 +993,7 @@ def clear_room_prompt_changed(location_id: str, room_id: str) -> bool:
                 for room in loc.get("rooms", []):
                     if room.get("id") == room_id:
                         if room.pop("prompt_changed", None):
-                            upsert_location(loc)
+                            upsert_location(loc, sync_world=False)
                         return True
         return False
 
@@ -992,7 +1005,7 @@ def clear_location_prompt_changed(location_id: str) -> bool:
         for loc in data.get("locations", []):
             if loc.get("id") == location_id:
                 if loc.pop("prompt_changed", None):
-                    upsert_location(loc)
+                    upsert_location(loc, sync_world=False)
                 return True
         return False
 
@@ -1537,7 +1550,7 @@ def migrate_ground_rooms_once() -> Dict[str, int]:
                         "room with the reserved id %r — skipped, nothing moved "
                         "there", lid, loc.get("name", ""), GROUND_ROOM_ID)
             if changed:
-                upsert_locations(data.get("locations", []))
+                upsert_locations(data.get("locations", []), sync_world=True)
 
         # Which locations have a usable ground now — collisions excluded.
         rooms_by_loc: Dict[str, List[str]] = {}
@@ -1710,7 +1723,7 @@ def migrate_floor_rooms_once() -> Dict[str, int]:
                     counts["doors"] += doors
                 changed = changed or bool(added)
             if changed:
-                upsert_locations(data.get("locations", []))
+                upsert_locations(data.get("locations", []), sync_world=True)
         # AFTER THE SAVE, like every write path: the room is gone from the
         # blob first, then the characters standing in it are moved. The other
         # way round a crash in between would leave a character pointing at a
@@ -1863,7 +1876,7 @@ def migrate_room_exits_once() -> Dict[str, int]:
                     layout.pop("exit", None)
                     changed = True
             if changed:
-                upsert_locations(data.get("locations", []))
+                upsert_locations(data.get("locations", []), sync_world=True)
         set_world_setting("migration.room_exit_doors_v1", "done")
         logger.info(
             "exit-door migration: %d room(s) with an exit point, %d door(s) "
@@ -1915,7 +1928,7 @@ def migrate_clear_entry_rooms_once() -> Dict[str, int]:
                 counts["locations"] += 1
                 changed = True
             if changed:
-                upsert_locations(data.get("locations", []))
+                upsert_locations(data.get("locations", []), sync_world=True)
         set_world_setting("migration.clear_entry_room_v1", "done")
         logger.info(
             "entry-room migration: %d location(s) cleared — arrivals land on "
@@ -1994,7 +2007,7 @@ def add_location(name: str, description: str,
         data = _load_world_data()
         locations = data.get("locations", [])
 
-        # Room-IDs sicherstellen
+        # Ensure room IDs.
         if rooms is not None:
             for room in rooms:
                 if not room.get("id"):
@@ -2082,7 +2095,7 @@ def add_location(name: str, description: str,
                 # Backfill a missing ID
                 if not location.get("id"):
                     location["id"] = _generate_location_id()
-                upsert_location(location)
+                upsert_location(location, sync_world=True)
                 # Only now: whoever stood in a corridor that just vanished is
                 # moved onto the ground. The room list is stored FIRST, exactly
                 # like the ground migration writes — the character rows are
@@ -2126,12 +2139,12 @@ def add_location(name: str, description: str,
                 pass
         if image_prompt_day or image_prompt_night:
             new_location["prompt_changed"] = True
-        upsert_location(new_location)
+        upsert_location(new_location, sync_world=True)
         return new_location
 
 
 def rename_location(location_id: str, new_name: str) -> Optional[Dict[str, Any]]:
-    """Benennt einen Ort um. ID bleibt gleich."""
+    """Rename a location while keeping its ID."""
     with world_write_lock:
         data = _load_world_data()
         locations = data.get("locations", [])
@@ -2139,7 +2152,7 @@ def rename_location(location_id: str, new_name: str) -> Optional[Dict[str, Any]]
         for location in locations:
             if location.get("id") == location_id:
                 location["name"] = new_name
-                upsert_location(location)
+                upsert_location(location, sync_world=True)
                 return location
         return None
 
@@ -2239,7 +2252,7 @@ def update_location_position(location_id: str, pos_x: Optional[float],
                     loc["pos_z"] = _pz
                     if _yaw is not None:
                         loc["yaw_deg"] = _yaw
-                upsert_location(loc)
+                upsert_location(loc, sync_world=True)
                 # Occupant sync AFTER the position write — local import, like the
                 # other character cross-references in this module.
                 from app.models.character import _shift_location_occupants
@@ -2293,9 +2306,9 @@ def cleanup_orphan_backgrounds() -> Dict[str, int]:
                     touched_locs += 1
 
         if touched_locs:
-            upsert_locations(data.get("locations", []))
+            upsert_locations(data.get("locations", []), sync_world=False)
 
-    # Meta-JSONs: image_types/rooms/metas/prompts pro Owner-Dir.
+    # Metadata JSON: image types, rooms, metadata and prompts per owner directory.
     if gallery_root.exists():
         import json as _json
         for owner_dir in gallery_root.iterdir():
@@ -2753,7 +2766,7 @@ def _migrate_transit_places_locked() -> Dict[str, int]:
         # logged by the helper and never aborts the boot.
         deleted_galleries = _remove_location_media(gone_ids)
         if fields_stripped:
-            upsert_locations(survivors)
+            upsert_locations(survivors, sync_world=True)
         if victim_ids:
             # The migration deletes places like any other delete does, so it
             # owes the same reference sweep — otherwise it hands the world a
@@ -2919,16 +2932,16 @@ def get_background_images(location_id: str) -> List[str]:
 
 
 def toggle_background_image(location_id: str, image_name: str) -> bool:
-    """Toggled ob ein Bild als Hintergrund markiert ist.
+    """Toggle whether an image is selected as a background.
 
-    Returns True wenn das Bild jetzt markiert ist, False wenn entfernt.
+    Return True when selected, False when removed.
     """
     with world_write_lock:
         data = _load_world_data()
         for loc in data.get("locations", []):
             if loc.get("id") == location_id:
                 bg_images = loc.get("background_images", [])
-                # Altes Einzelfeld migrieren
+                # Migrate the old single-image field.
                 if "background_image" in loc:
                     old_bg = loc.pop("background_image", "")
                     if old_bg and old_bg not in bg_images:
@@ -2937,18 +2950,22 @@ def toggle_background_image(location_id: str, image_name: str) -> bool:
                 if image_name in bg_images:
                     bg_images.remove(image_name)
                     loc["background_images"] = bg_images
-                    upsert_location(loc)
+                    if upsert_location(loc, sync_world=False):
+                        from app.core import sync_topics
+                        sync_topics.notify("scene", to=sync_topics.AtLocation(location_id))
                     return False
                 else:
                     bg_images.append(image_name)
                     loc["background_images"] = bg_images
-                    upsert_location(loc)
+                    if upsert_location(loc, sync_world=False):
+                        from app.core import sync_topics
+                        sync_topics.notify("scene", to=sync_topics.AtLocation(location_id))
                     return True
         return False
 
 
 def remove_background_image(location_id: str, image_name: str) -> None:
-    """Entfernt ein Bild aus der Hintergrund-Liste (z.B. bei Bild-Loeschung)."""
+    """Remove an image from the background list, for example after deletion."""
     with world_write_lock:
         data = _load_world_data()
         for loc in data.get("locations", []):
@@ -2957,7 +2974,9 @@ def remove_background_image(location_id: str, image_name: str) -> None:
                 if image_name in bg_images:
                     bg_images.remove(image_name)
                     loc["background_images"] = bg_images
-                    upsert_location(loc)
+                    if upsert_location(loc, sync_world=False):
+                        from app.core import sync_topics
+                        sync_topics.notify("scene", to=sync_topics.AtLocation(location_id))
 
 
 def _location_id_of(location_identifier: str) -> str:
@@ -3254,7 +3273,7 @@ def migrate_map_images_once() -> Dict[str, int]:
             meta["image_types"] = types
             _save_gallery_meta(lid, meta)
         if changed:
-            upsert_locations(data.get("locations", []))
+            upsert_locations(data.get("locations", []), sync_world=True)
     if images_deleted or fields_stripped:
         logger.info("map icons removed: %d images, %d fields",
                     images_deleted, fields_stripped)

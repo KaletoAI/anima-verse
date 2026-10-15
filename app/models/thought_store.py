@@ -76,6 +76,8 @@ def add_thought(character_name: str, content: str, location_id: str = "",
                  location_id or "", room_id or "", text,
                  json.dumps(list(present), ensure_ascii=False) if present else "",
                  json.dumps(list(nearby), ensure_ascii=False) if nearby else ""))
+        from app.core import sync_topics
+        sync_topics.avatars([character_name], "self")
         return True
     except Exception as e:
         logger.warning("add_thought(%s) failed: %s", character_name, e)

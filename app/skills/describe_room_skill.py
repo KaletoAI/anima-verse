@@ -246,9 +246,12 @@ class DescribeRoomSkill(BaseSkill):
                 )
 
             new_room = add_room(location_id, room_name, new_description,
-                                image_prompt_day=new_image_prompt or "")
+                                image_prompt_day=new_image_prompt or "", sync_world=False)
             if not new_room:
                 return f"Fehler: Raum '{room_name}' konnte nicht angelegt werden."
+
+            from app.core import sync_topics
+            sync_topics.notify("scene", to=sync_topics.AtLocation(location_id))
 
             logger.info(
                 "%s created the new room '%s' in '%s': desc='%s', image_prompt='%s'",

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""B-T2a writer smoke, hand-derived expectations (all cases NEU).
+"""B-T2a/B-T2b writer smoke, hand-derived expectations (all cases NEU).
 
 All cases are red on a241a8aa: sync_topics was absent there, and writers
 had no fog-filtered hooks. Each case starts a fresh X/Y/Z world: a+npc in
 X, b in Y, c in Z. Movement traces also record utterances, so move and
 arrival reach a/b with presence+scene; own_move reaches a/c with both and removes
-a from X; wilderness reaches only a with presence; room reaches a with
+a from X. Its committed history adds self for a; outfit compliance creates
+an owner mismatch notification, adding notices for a; wilderness reaches only a with presence; room reaches a with
 presence+scene. Starting travel reaches a with presence,
 never b at its destination; arrival then reaches a/b. Utterance reaches a
 with scene. Outfit reaches a with presence+self. Party reaches a with
@@ -17,7 +18,8 @@ the old writers have no sync calls. Helper failures are NEU because the
 helpers did not exist; injected lookup/notification failures must escape
 none of them, and party_of must return empty. No REGRESSION cases are relabelled.
 NEU review cases: stale_move_hook ends bound to committed Z and rejects Y-only
-notifications; failed_location/failed_wake keep queues empty and bindings unchanged.
+notifications; failed_location/failed_wake keep queues empty and bindings unchanged
+when independent history/notification writes are stubbed.
 Alias mutations reject unhooked writers and accept hooked writers.
 NEU partial_interaction_end signals only the saved actor at X, never the
 failed partner at Y; failed_cancel emits no signal after a rejected save.
@@ -25,6 +27,7 @@ Dotted publisher imports require a sync hook too.
 A repeated model checkpoint is a no-op and must produce no second signal.
 """
 import ast
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import sys
@@ -60,6 +63,31 @@ INVENTORY = {
 }
 
 
+# B-T2b inventory includes the lowest committed writers and inherited edges.
+INVENTORY.update({
+    "app/models/notifications.py": ["create_notification", "_mutate_notification", "mark_all_read"],
+    "app/models/unified_chat.py": ["save_message"],
+    "app/routes/play.py": ["_phone_set_read"],
+    "app/models/instagram.py": ["save_feed", "delete_post"],
+    "app/models/rules.py": ["_rules_changed"],
+    "app/models/events.py": ["_events_changed"],
+    "app/core/event_images.py": ["publish_image_ready"],
+    "app/models/inventory.py": ["_notify_outfit_changed", "_save_inventory", "add_item_to_room", "remove_item_from_room"],
+    "app/models/world.py": ["evict_rooms_to_ground", "_after_world_write", "update_room_description", "toggle_background_image", "remove_background_image"],
+    "app/models/terrain.py": ["_bump_terrain_generation"],
+    "app/core/terrain_types.py": ["_bump_types_generation"],
+    "app/models/world_props.py": ["_bump_world_props_generation"],
+    "app/models/heightfield.py": ["save_height_area", "delete_height_area", "save_height_areas_bulk"],
+    "app/core/scene_recipe.py": ["invalidate_prop_lib_token"],
+    "app/core/surface_textures.py": ["_surface_changed"],
+    "app/models/thought_store.py": ["add_thought"],
+    "app/models/memory.py": "save_memories add_memory delete_memory clear_memories record_mood".split(),
+    "app/models/diary.py": ["_save_stored"],
+    "app/models/relationship.py": ["_save_relationship"],
+})
+INVENTORY["app/models/character.py"] += ["record_state_change", "adjust_status_effects", "set_state_flag"]
+
+
 # Rows 10 and 15 inherit the location/publication writers rather than adding
 # a second hook. Guard those edges as well as the direct-hook inventory.
 DELEGATED = {
@@ -67,6 +95,39 @@ DELEGATED = {
     "app/core/travel_engine.py": {"_settle_arrival": "save_character_current_location"},
     "app/core/model3d.py": {"_checkpoint_mesh": "_publish_signature"},
 }
+
+DELEGATED.update({
+    "app/models/notifications.py": {"mark_read": "_mutate_notification", "delete_notification": "_mutate_notification"},
+    "app/models/instagram.py": {"create_post": "save_feed"},
+    "app/models/rules.py": {"save_rules": "_rules_changed", "_save_shared_rules": "_rules_changed"},
+    "app/models/events.py": {n: "_events_changed" for n in ("_insert_event", "_update_event", "_delete_event_row", "expire_events")},
+    "app/models/world.py": {"delete_location_row": "_after_world_write", "replace_all_locations": "_after_world_write", "_upsert_locations": "_after_world_write", "_save_world_data": "_upsert_locations", "upsert_location": "_upsert_locations", "upsert_locations": "_upsert_locations", "add_room": "upsert_location"},
+    "app/core/surface_textures.py": {n: "_surface_changed" for n in ("_write_selection", "_write_blends", "_write_kind_meta", "save_uploaded", "delete_texture", "set_size_m")},
+    "app/models/diary.py": {"add_summary": "_save_stored"},
+    "app/models/relationship.py": {"record_interaction": "save_relationships", "set_address": "save_relationships", "save_relationships": "_save_relationship"},
+})
+DELEGATED["app/models/character.py"] = {"force_set_status": ("save_character_current_location", "save_character_current_room", "save_character_current_feeling", "set_pose_intent")}
+
+
+def source_files():
+    """Follow plugin pack symlinks; rglob/git grep do not descend into them."""
+    for base in ("app", "plugins"):
+        for directory, dirs, files in os.walk(ROOT / base, followlinks=True):
+            dirs[:] = [d for d in dirs if d not in ("__pycache__", ".git", "node_modules")]
+            for filename in files:
+                if filename.endswith(".py"):
+                    yield Path(directory) / filename
+
+
+def keyword_errors(source, file):
+    errors = []
+    for n in ast.walk(ast.parse(source)):
+        if not isinstance(n, ast.Call):
+            continue
+        name = n.func.id if isinstance(n.func, ast.Name) else n.func.attr if isinstance(n.func, ast.Attribute) else ""
+        if name in ("upsert_location", "upsert_locations", "add_room") and not any(k.arg == "sync_world" for k in n.keywords):
+            errors.append(f"{file}:{n.lineno} {name} missing explicit sync_world")
+    return errors
 
 
 def hook(fn):
@@ -113,7 +174,8 @@ def publisher_errors(source, file="injected.py"):
 
 def inventory():
     errors = []
-    for file, names in INVENTORY.items():
+    for file in INVENTORY.keys() | DELEGATED.keys():
+        names = INVENTORY.get(file, [])
         tree = ast.parse((ROOT / file).read_text())
         funcs = {n.name: n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
         for node in ast.walk(tree):
@@ -124,21 +186,34 @@ def inventory():
                 for item in node.items for part in ast.walk(item.context_expr)):
                 if hook(node):
                     errors.append(f"{file}:{node.lineno} sync hook inside transaction")
-        for caller, target in DELEGATED.get(file, {}).items():
-            if caller not in funcs or not any(
-                isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                and n.func.id == target for n in ast.walk(funcs[caller])):
-                errors.append(f"{file}:{caller} missing inherited writer {target}")
+        for caller, targets in DELEGATED.get(file, {}).items():
+            for target in (targets if isinstance(targets, tuple) else (targets,)):
+                if caller not in funcs or not any(
+                    isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                    and n.func.id == target for n in ast.walk(funcs[caller])):
+                    errors.append(f"{file}:{caller} missing inherited writer {target}")
         for name in names:
             if name not in funcs or not hook(funcs[name]):
                 errors.append(f"{file}:{name} missing sync hook")
-    for file in (ROOT / "app").rglob("*.py"):
-        errors.extend(publisher_errors(file.read_text(), str(file.relative_to(ROOT))))
+    for file in source_files():
+        source = file.read_text()
+        errors.extend(publisher_errors(source, str(file.relative_to(ROOT))))
+        errors.extend(keyword_errors(source, str(file.relative_to(ROOT))))
+    tree = ast.parse((ROOT / "app/models/world.py").read_text())
+    for name in ("upsert_location", "upsert_locations", "_after_world_write", "add_room"):
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
+        required = {arg.arg for arg, default in zip(fn.args.kwonlyargs, fn.args.kw_defaults) if default is None}
+        if "sync_world" not in required:
+            errors.append(f"{name}: sync_world must be a required keyword")
     assert not errors, "\n".join(errors)
 
 
 def inventory_self_check():
     """NEU: alias mutations reject unhooked writers and accept hooked ones."""
+    for name in ("upsert_location", "upsert_locations", "add_room"):
+        assert keyword_errors(f"{name}({{}})", "injected.py")
+        assert keyword_errors(f"world.{name}({{}})", "injected.py")
+        assert not keyword_errors(f"{name}({{}}, sync_world=False)", "injected.py")
     forms = [("from app.core import state_events", "state_events.publish"),
              ("from app.core import state_events as X", "X.publish"),
              ("import app.core.state_events as X", "X.publish"),
@@ -238,7 +313,7 @@ def behaviour(case):
             ch.enter_offmap_sleep("a")
             drain(conns)
         before = conns[0].binding()
-        with patch.object(ch, "save_character_profile", return_value=False):
+        with patch.object(ch, "save_character_profile", return_value=False), patch.object(ch, "record_state_change"), patch("app.models.notifications.create_notification", return_value=""):
             if case == "failed_location":
                 ch.save_character_current_location("a", loc["Y"])
             else:
@@ -278,7 +353,7 @@ def behaviour(case):
         expect(conns, ["presence", "scene"], ["presence", "scene"])
     elif case == "own_move":
         ch.save_character_current_location("a", loc["Z"])
-        expect(conns, ["presence", "scene"], c=["presence", "scene"])
+        expect(conns, ["presence", "scene", "self", "notices"], c=["presence", "scene"])
         assert conns[0].location == loc["Z"]
         sync_topics.notify("scene", to=sync_topics.AtLocation(loc["X"]))
         expect(conns)
@@ -286,7 +361,8 @@ def behaviour(case):
         ch.set_character_pos("npc", 1000, 1000)
         expect(conns, ["presence"])
     elif case == "room":
-        room = world.add_room(loc["X"], "demo room")["id"]
+        room = world.add_room(loc["X"], "demo room", sync_world=True)["id"]
+        drain(conns)
         ch.save_character_current_room("npc", room)
         expect(conns, ["presence", "scene"])
     elif case == "travel_start":
@@ -370,12 +446,252 @@ def behaviour(case):
         expect(conns)
 
 
+def behaviour_part3(case):
+    """NEU (a241a8aa lacked hooks). Hand oracle: owner=a; Y=b; Z=c;
+    structure/global events=all; visible room items=R1 only, hidden=none.
+    Embedding scheduling is stubbed: this smoke proves DB writes and routing,
+    and must not start an ONNX worker during interpreter shutdown.
+    A cold height cache must never turn a local item write into world push.
+    """
+    loc, conns = fixture("part3_" + case)
+    from app.models import notifications, inventory as inv, events, rules, memory
+    if case == "notification":
+        nid = notifications.create_notification("npc", "demo", metadata={"to": "a"})
+        assert nid
+        expect(conns, ["notices"])
+        assert notifications.mark_read(nid)
+        expect(conns, ["notices"])
+    elif case == "mark_all_global":
+        with db.transaction() as conn:
+            conn.execute("DELETE FROM notifications")
+        for name in ("a", "b"):
+            notifications.create_notification("npc", "demo", metadata={"to": name})
+        drain(conns)
+        assert notifications.mark_all_read(None) == 2
+        expect(conns, ["notices"], ["notices"])
+    elif case == "phone":
+        from app.models.unified_chat import UnifiedChatManager
+        from app.models.channel import Message
+        assert UnifiedChatManager.save_message(Message(role="assistant", content="demo", medium="messaging"), "npc", "a")
+        expect(conns, ["notices"])
+    elif case == "inventory":
+        item = inv.add_item(name="demo item")
+        inv.add_to_inventory("a", item["id"])
+        expect(conns, ["self"])
+    elif case.startswith("room_item"):
+        r1 = world.add_room(loc["X"], "demo R1", sync_world=True)["id"]
+        r2 = world.add_room(loc["X"], "demo R2", sync_world=True)["id"]
+        for name, room in (("a", r1), ("npc", r1), ("d", r2)):
+            if name == "d":
+                ch.save_character_profile(name, {"current_location": ""}, create_new=True)
+                ch.save_character_current_location(name, loc["X"])
+            ch.save_character_current_room(name, room)
+        conns.append(sync_topics.register("d", "demo", "d", loc["X"]))
+        item = inv.add_item(name="demo item")
+        drain(conns)
+        if case == "room_item_cold":
+            from app.core import heightfield
+            heightfield.invalidate_cache()
+        assert inv.add_item_to_room(loc["X"], r1, item["id"], hidden=case == "room_item_hidden")
+        assert drain(conns) == ([set()] * 4 if case == "room_item_hidden" else [{"self"}, set(), set(), set()])
+    elif case == "world_admin":
+        world.upsert_location(world.get_location_by_id(loc["X"]), sync_world=True)
+        expect(conns, ["world"], ["world"], ["world"])
+    elif case == "background_skill":
+        world.toggle_background_image(loc["Y"], "demo.png")
+        expect(conns, b=["scene"])
+    elif case in ("terrain", "height"):
+        raw = {"polygon": [[0,0],[5,0],[5,5],[0,5]], "height_m": 2, "kind": "grass"}
+        if case == "terrain":
+            from app.models.terrain import save_area
+            save_area(raw)
+        else:
+            from app.models.heightfield import save_height_area
+            save_height_area(raw)
+        expect(conns, ["world"], ["world"], ["world"])
+    elif case.startswith("event_"):
+        events.add_event("demo", location_id=loc["Y"] if case == "event_local" else None)
+        if case == "event_local":
+            expect(conns, b=["notices"])
+        else:
+            expect(conns, ["notices"], ["notices"], ["notices"])
+    elif case == "rule_local":
+        rules.save_rules([{"id": "demo", "target": {"scope": "location", "location_id": loc["Z"]}}])
+        expect(conns, c=["notices"])
+    elif case == "force_status":
+        # NEU: clearing an admin-forced activity changes presence and self.
+        profile = ch.get_character_profile("npc")
+        profile.update(pose_key="standing", pose_flavor="demo activity", place=None)
+        assert ch.save_character_profile("npc", profile)
+        drain(conns)
+        ch.force_set_status("npc", activity="")
+        expect(conns, ["presence", "self"])
+    elif case == "mind":
+        with patch("app.core.memory_situational.schedule_embedding"):
+            memory.add_memory("a", "demo memory")
+        expect(conns, ["self"])
+
+
+def commit_failures():
+    """NEU: a rejected COMMIT rolls back the row and sends no topic.
+
+    Hand oracle: all queues remain empty after each rejected transaction;
+    the rejected notification/feed/event/inventory/world rows stay absent.
+    """
+    loc, conns = fixture("commit_failures")
+    from app.models import notifications, inventory as inv, events, rules, instagram, memory, thought_store, diary, relationship
+    from app.models.unified_chat import UnifiedChatManager
+    from app.models.channel import Message
+    from app.routes import play
+    @contextmanager
+    def rejected():
+        conn = db.get_connection()
+        try:
+            yield conn
+            raise RuntimeError("demo rejected commit")
+        finally:
+            conn.rollback()
+    writers = [
+        (notifications, lambda: notifications.create_notification("a", "demo")),
+        (instagram, lambda: instagram.save_feed([{"id": "demo", "agent_name": "a"}])),
+        (events, lambda: events.add_event("demo", location_id=loc["X"])),
+        (rules, lambda: rules.save_rules([{"id": "demo", "character": "a"}])),
+        (inv, lambda: inv._save_inventory("a", {"inventory": []})),
+        (world, lambda: world.upsert_location({"id": "demo", "name": "demo"}, sync_world=True)),
+        (memory, lambda: memory.add_memory("a", "demo")),
+        (memory, lambda: memory.save_memories("a", [])),
+        (memory, lambda: memory.record_mood("a", "happy")),
+        (thought_store, lambda: thought_store.add_thought("a", "demo")),
+        (diary, lambda: diary.add_summary("a", "demo", "Y0001-D001")),
+        (relationship, lambda: relationship._save_relationship({"character_a": "a", "character_b": "b"})),
+    ]
+    for module, write in writers:
+        with patch.object(module, "transaction", rejected):
+            write()
+        expect(conns)
+    with patch("app.models.unified_chat.transaction", rejected):
+        assert not UnifiedChatManager.save_message(Message(role="assistant", content="demo", medium="messaging"), "npc", "a")
+    with patch.object(db, "transaction", rejected):
+        play._phone_set_read("a", "npc", "demo")
+    expect(conns)
+    assert world.get_location_by_id("demo") is None
+
+
+def scope_changes():
+    """NEU: owners/old and new scopes follow committed changes only.
+
+    Rules and events moving X->Y reach a and b; removal reaches Y only.
+    A hidden->visible or visible->hidden item reaches a in R1; hidden->hidden
+    reaches nobody. Notification deletion and whitelisted reads reach owners.
+    """
+    loc, conns = fixture("scope_changes")
+    from app.models import rules, events, notifications, inventory as inv
+    rules.save_rules([{"id": "demo", "target": {"scope": "location", "location_id": loc["X"]}}])
+    drain(conns)
+    rules.save_rules([{"id": "demo", "target": {"scope": "location", "location_id": loc["Y"]}}])
+    expect(conns, ["notices"], ["notices"])
+    rules.save_rules([])
+    expect(conns, b=["notices"])
+    event = events.add_event("demo", location_id=loc["X"])
+    drain(conns)
+    event["location_id"] = loc["Y"]
+    assert events._update_event(event)
+    expect(conns, ["notices"], ["notices"])
+    assert events._delete_event_row(event["id"])
+    expect(conns, b=["notices"])
+    nid = notifications.create_notification("npc", "demo", metadata={"to": "a"})
+    drain(conns)
+    assert notifications.delete_notification(nid)
+    expect(conns, ["notices"])
+    room = world.add_room(loc["X"], "demo R1", sync_world=True)["id"]
+    ch.save_character_current_room("a", room)
+    item = inv.add_item(name="demo")
+    drain(conns)
+    for hidden, expected in ((True, []), (False, ["self"]), (True, ["self"]), (True, [])):
+        assert inv.add_item_to_room(loc["X"], room, item["id"], hidden=hidden)
+        expect(conns, expected)
+    assert inv.remove_item_from_room(loc["X"], room, item["id"])
+    expect(conns)
+
+
+def rule_editor_scope():
+    """REGRESSION: RulesTab location/rooms reaches only a at X.
+
+    b at Y and c at Z cannot see X; a room selection still routes to X.
+    """
+    loc, conns = fixture("rule_editor_scope")
+    from app.models import rules
+    room = world.add_room(loc["X"], "demo room", sync_world=True)["id"]
+    drain(conns)
+    for rooms in ([], [room]):
+        target = {"scope": "location", "action": "enter", "location": loc["X"]}
+        if rooms:
+            target["rooms"] = rooms
+        rules.save_rules([{"id": "demo", "name": "demo", "type": "block",
+                           "condition": "", "message": "demo", "target": target}])
+        expect(conns, ["notices"])
+
+
+def rule_character_scope():
+    """REGRESSION: character a overrides location Y on add/change/delete.
+
+    a is at X, b at Y, c at Z: all three writes must reach only a.
+    """
+    loc, conns = fixture("rule_character_scope")
+    from app.models import rules
+    rule = {"id": "demo", "character": "a",
+            "target": {"scope": "location", "location_id": loc["Y"]}}
+    rules.save_rules([rule])
+    expect(conns, ["notices"])
+    rule["message"] = "changed"
+    rules.save_rules([rule])
+    expect(conns, ["notices"])
+    rules.save_rules([])
+    expect(conns, ["notices"])
+
+
+def relationship_mixed_decay():
+    """REGRESSION: decaying an NPC pair emits nothing to unchanged a/b.
+
+    a/b has today's decay stamp: elapsed zero skips it. The NPC pair was idle
+    14 days and last decayed 7 days ago: strength 20 loses exactly 1 point.
+    """
+    loc, conns = fixture("relationship_mixed_decay")
+    from app.models import relationship
+    from app.core import relationship_decay
+    from app.core.game_time import GameTime, GameDuration
+    now = GameTime(0) + GameDuration.of(days=100)
+    relationship.record_interaction("a", "b", "demo")
+    player = relationship.get_relationship("a", "b")
+    player["last_decay_game"] = now.canonical()
+    relationship.save_relationships([player])
+    relationship._save_relationship({
+        "character_a": "npc", "character_b": "npc_other", "strength": 20,
+        "last_interaction_game": (now - GameDuration.of(days=14)).canonical(),
+        "last_decay_game": (now - GameDuration.of(days=7)).canonical()})
+    before = relationship.get_relationship("a", "b")
+    drain(conns)
+    with patch.object(relationship_decay, "game_time", return_value=now):
+        assert relationship_decay.handle_relationship_decay({})["success"]
+    expect(conns)
+    assert relationship.get_relationship("a", "b") == before
+    npc_pair = relationship.get_relationship("npc", "npc_other")
+    assert npc_pair["last_decay_game"] == now.canonical()
+    assert npc_pair["strength"] == 19
+
+
 if __name__ == "__main__":
     failures = []
     cases = "move own_move wilderness room travel_start utterance outfit party private_profile public_profile delete model_checkpoint profile_image world_dev_patch helper_failures stale_move_hook failed_location failed_wake partial_interaction_end failed_cancel inventory_self_check inventory".split()
+    cases += ["part3_" + c for c in "notification mark_all_global phone inventory room_item room_item_cold room_item_hidden world_admin background_skill terrain height event_local event_global rule_local mind force_status".split()]
+    cases += ["commit_failures", "scope_changes", "rule_editor_scope", "rule_character_scope", "relationship_mixed_decay"]
     for case in cases:
         try:
-            if case == "inventory":
+            if case in ("commit_failures", "scope_changes", "rule_editor_scope", "rule_character_scope", "relationship_mixed_decay"):
+                globals()[case]()
+            elif case.startswith("part3_"):
+                behaviour_part3(case[6:])
+            elif case == "inventory":
                 inventory()
             elif case == "inventory_self_check":
                 inventory_self_check()

@@ -1021,7 +1021,7 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
         # ON the original.
         for key in ("pos_x", "pos_z", "yaw_deg"):
             loc.pop(key, None)
-        upsert_location(loc)
+        upsert_location(loc, sync_world=True)
 
     # Move gallery files
     gallery_dir = get_gallery_dir(new_loc_id)

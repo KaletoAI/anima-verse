@@ -194,7 +194,7 @@ def shape(placements) -> None:
         "props": [{"id": f"c{i}", "prop_id": CRATE,
                    "at": [2.0 + i, 2.0], "yaw": 0}
                   for i in range(placements)]}
-    upsert_location(loc)
+    upsert_location(loc, sync_world=True)
 
 
 shape(1)

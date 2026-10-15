@@ -386,7 +386,7 @@ set_map3d(HOME, plan_width_m=10.0,
                               "type": "passage"}])
 MARKET = add_location(name="Ticker Market", description="travel ticker smoke")["id"]
 update_location_position(MARKET, 100.0, 0.0)
-HALL = add_room(MARKET, "Hall", "the room the west gate opens into")["id"]
+HALL = add_room(MARKET, "Hall", "the room the west gate opens into", sync_world=True)["id"]
 set_map3d(MARKET, plan_width_m=10.0,
           boundary_openings=[{"edge": 3, "at": 0.5, "width_m": 4.0,
                               "type": "passage", "room": HALL}])
@@ -709,7 +709,7 @@ print("[7] a route through the target's footprint never enters it ungated")
 EASTGATE = add_location(name="Ticker Eastgate",
                         description="its only door faces away")["id"]
 update_location_position(EASTGATE, 300.0, 0.0)
-YARD = add_room(EASTGATE, "Yard", "behind the east gate")["id"]
+YARD = add_room(EASTGATE, "Yard", "behind the east gate", sync_world=True)["id"]
 set_map3d(EASTGATE, plan_width_m=10.0,
           boundary_openings=[{"edge": 1, "at": 0.5, "width_m": 4.0,
                               "type": "passage", "room": YARD}])
@@ -829,7 +829,7 @@ set_factor(1.0)                        # back to the file's default pace
 print("[7c] accessible_when is a wall at the arrival gate too")
 VAULT = add_location(name="Ticker Vault", description="needs the key")["id"]
 update_location_position(VAULT, 500.0, 0.0)
-VAULT_HALL = add_room(VAULT, "Vault Hall", "behind the west door")["id"]
+VAULT_HALL = add_room(VAULT, "Vault Hall", "behind the west door", sync_world=True)["id"]
 set_map3d(VAULT, plan_width_m=10.0,
           boundary_openings=[{"edge": 3, "at": 0.5, "width_m": 4.0,
                               "type": "passage", "room": VAULT_HALL}])

@@ -657,7 +657,7 @@ def part_b():
           ("Cloud", {"occasion": "location", "position": 1, "spec": "Cloud"}))
 
     from app.skills.describe_room_skill import DescribeRoomSkill
-    room = world.add_room(loc, "Millroom", "Grinding stones under a timber roof.")
+    room = world.add_room(loc, "Millroom", "Grinding stones under a timber roof.", sync_world=True)
     cloud = FakeBackend("Cloud", 5, "keywords")
     install_pool(cloud)
     before = set(threading.enumerate())
@@ -744,7 +744,7 @@ def part_c(loc, millroom_id):
         "Millroom", image_prompt="A mill interior, warm light"), ([millroom_id], True))
     check("C4 description changed, image prompt kept", describe(
         "Millroom", description="An empty millroom."), ([], False))
-    loft = world.add_room(loc, "Loft", "Beams and dusty grain sacks.")
+    loft = world.add_room(loc, "Loft", "Beams and dusty grain sacks.", sync_world=True)
     check("C5 room without an image", describe(
         "Loft", description="Beams and dusty grain sacks."), ([loft["id"]], True))
     rendered, said = describe("Cellar", description="A cool stone cellar.")

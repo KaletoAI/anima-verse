@@ -52,7 +52,7 @@ for lid, x, edge in [(HOME, 0, 1), (AWAY, 100, 3)]:
                "boundary": [[-5, -5], [5, -5], [5, 5], [-5, 5]],
                "boundary_openings": [{"edge": edge, "at": 0.5,
                                       "width_m": 4, "type": "passage"}]})
-    W.upsert_location(loc)
+    W.upsert_location(loc, sync_world=True)
 
 serial = 0
 
@@ -144,12 +144,12 @@ assert all(C.get_character_current_room(n) == "kitchen" for n in [a, b, extra])
 a, b = pair()
 loc = W.get_location_by_id(AWAY)
 loc["accessible_when"] = ["NOT always"]
-W.upsert_location(loc)
+W.upsert_location(loc, sync_world=True)
 it = propose((a, b), AWAY, "hall")
 assert P.resolve_pending_invite(invite(it)["invite_id"], True)["status"] == "accepted"
 assert phase(it) == "blocked" and not travel_engine.get_journey(a)
 loc["accessible_when"] = []
-W.upsert_location(loc)
+W.upsert_location(loc, sync_world=True)
 hooks.emit("world_tick")
 assert travel_engine.get_journey(a) and phase(it) == "travelling"
 assert I.get_intent(it["id"])["status"] == "active"

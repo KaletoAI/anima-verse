@@ -206,6 +206,9 @@ def _save_stored(character_name: str, entries: List[Dict[str, Any]]) -> None:
                     )
     except Exception as e:
         logger.error("_save_stored diary DB-Fehler fuer %s: %s", character_name, e)
+        return
+    from app.core import sync_topics
+    sync_topics.avatars([character_name], "self")
 
 
 def _day_start_stamp(day_key: str) -> str:

@@ -167,8 +167,8 @@ set_map3d(HOME, plan_width_m=10.0,
                               "type": "passage"}])
 CAFE = add_location(name="Smoke Cafe", description="journey room smoke")["id"]
 update_location_position(CAFE, 100.0, 0.0)
-HAUPTRAUM = add_room(CAFE, "Hauptraum", "the guest room")["id"]
-BACK = add_room(CAFE, "Back", "staff only")["id"]
+HAUPTRAUM = add_room(CAFE, "Hauptraum", "the guest room", sync_world=True)["id"]
+BACK = add_room(CAFE, "Back", "staff only", sync_world=True)["id"]
 set_map3d(CAFE, plan_width_m=10.0,
           boundary_openings=[{"edge": 3, "at": 0.5, "width_m": 4.0,
                               "type": "passage"}])

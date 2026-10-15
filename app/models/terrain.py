@@ -57,6 +57,8 @@ def _bump_terrain_generation() -> None:
     global _generation
     with _generation_lock:
         _generation += 1
+    from app.core import sync_topics
+    sync_topics.notify("world", to=sync_topics.Everyone())
 
 
 _sig_lock = threading.Lock()

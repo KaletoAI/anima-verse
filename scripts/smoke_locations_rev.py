@@ -50,7 +50,7 @@ async def main():
         client = AsyncClient(transport=ASGITransport(app=app), base_url="http://smoke")
         with patch.object(surface_textures, "_dir", return_value=library):
             world.upsert_location({"id": "smoke", "name": "Smoke", "rooms": [
-                {"id": "room", "name": "Room", "description": "excluded"}]})
+                {"id": "room", "name": "Room", "description": "excluded"}]}, sync_world=True)
             assert hasattr(world_ops, "locations_rev"), "locations_rev is not implemented"
             rev = (await client.get("/play/worldmap")).json().get("locations_rev")
             assert rev, "worldmap must expose locations_rev"
@@ -79,7 +79,7 @@ async def main():
             assert list(full) == ["id", "name", "rooms", "decency", "style_hint",
                                   "swim_allowed", "activity_hint", "yaw_deg",
                                   "image_count", "has_entrance", "surface_kind"], list(full)
-            world.upsert_location({"id": "smoke", "name": "Changed", "rooms": []})
+            world.upsert_location({"id": "smoke", "name": "Changed", "rooms": []}, sync_world=True)
             assert world_ops.locations_rev() != rev
             rev = world_ops.locations_rev()
             with patch.object(world, "BOOT_EPOCH", "another-boot"):

@@ -208,6 +208,7 @@ def _read_selection() -> Dict[str, Any]:
 def _write_selection(sel: Dict[str, Any]) -> None:
     (_dir(create=True) / _SEL_FILE).write_text(
         json.dumps(sel, indent=2, ensure_ascii=False), encoding="utf-8")
+    _surface_changed()
 
 
 def _selection_slots(value: Any) -> Dict[str, str]:
@@ -333,6 +334,7 @@ def set_size_m(kind: str, size_m: float, filename: str = "") -> bool:
         _write_meta(p, meta)
     else:
         _sidecar_path(p).unlink(missing_ok=True)
+    _surface_changed()
     return True
 
 
@@ -400,6 +402,7 @@ def _read_blends() -> Dict[str, Dict[str, Any]]:
 def _write_blends(blends: Dict[str, Dict[str, Any]]) -> None:
     (_dir(create=True) / _BLENDS_FILE).write_text(
         json.dumps(blends, indent=2, ensure_ascii=False), encoding="utf-8")
+    _surface_changed()
 
 
 def sanitize_blend(raw: Any) -> Optional[Dict[str, Any]]:
@@ -648,6 +651,7 @@ def delete_texture(kind: str, filename: str = "") -> bool:
             else:
                 sel.pop(kind)
             _write_selection(sel)
+    _surface_changed()
     return True
 
 
@@ -686,6 +690,7 @@ def save_uploaded(kind: str = "", contents: bytes = b"", *,
     p.write_bytes(contents)
     _write_meta(p, {"created_at": utc_now_iso(), "source": "uploaded"})
     select_texture(kind, p.name)
+    _surface_changed()
     return {"ok": True, "kind": kind, "filename": p.name}
 
 
@@ -827,6 +832,7 @@ def sanitize_material(raw: Any) -> Optional[Dict[str, Any]]:
 def _write_kind_meta(data: Dict[str, Dict[str, str]]) -> None:
     (_dir(create=True) / _KINDS_FILE).write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    _surface_changed()
 
 
 def set_kind_meta(kind: str, *, name: Any = None, description: Any = None,
@@ -1216,3 +1222,9 @@ def trigger_generation(kind: str = "", *, name: str = "",
 
     threading.Thread(target=_run, daemon=True).start()
     return kind
+
+
+def _surface_changed() -> None:
+    """Announce a completed surface library write."""
+    from app.core import sync_topics
+    sync_topics.notify("world", to=sync_topics.Everyone())

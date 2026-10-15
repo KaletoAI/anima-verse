@@ -384,7 +384,7 @@ def migrate_scale_frame_once() -> Dict[str, int]:
         if changed:
             # Only an upsert: a boot migration must not delete a place that
             # is simply not in its snapshot.
-            upsert_locations(wdata.get("locations") or [])
+            upsert_locations(wdata.get("locations") or [], sync_world=True)
     set_world_setting(_SCALE_FRAME_FLAG, "done")
     return stats
 

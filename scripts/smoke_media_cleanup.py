@@ -119,7 +119,7 @@ def section_a_h_locations() -> None:
     print("\n[A] location delete takes gallery + models   [H] + thumbnails")
     from app.models.world import delete_location, upsert_location
     for lid, name in (("aa11bb22", "Alpha"), ("cc33dd44", "Gamma")):
-        upsert_location({"id": lid, "name": name, "description": "", "rooms": []})
+        upsert_location({"id": lid, "name": name, "description": "", "rooms": []}, sync_world=True)
         g = STORAGE / "world_gallery" / lid
         g.mkdir(parents=True)
         (g / "a.png").write_bytes(png_bytes())
@@ -154,7 +154,7 @@ def section_a_h_locations() -> None:
     check("A: the decoy survives", decoy.is_dir(), True)
     from app.core import location_model3d
     upsert_location({"id": "ee55ff66", "name": "Fresh", "description": "",
-                     "rooms": []})
+                     "rooms": []}, sync_world=True)
     check("A: deselect on a live place without models",
           location_model3d.select_model("ee55ff66", ""), True)
     check("A: ...the 'no model' sentinel is persisted",

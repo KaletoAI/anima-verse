@@ -337,7 +337,7 @@ def main() -> int:
     print("\n[10] the same contract for a room diorama and a building")
     refine.auto_lod_enabled = lambda: False  # back to the explicit path alone
     loc_id = add_location(name="Smoke Hall", description="smoke")["id"]
-    room_id_ = add_room(loc_id, "Hall")["id"]
+    room_id_ = add_room(loc_id, "Hall", sync_world=True)["id"]
     for room_id, kind_ratio in (("", ratio_building), (room_id_, ratio_room)):
         what = room_id and "room" or "building"
         location_model3d.save_uploaded_building(

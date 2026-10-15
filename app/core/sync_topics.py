@@ -389,3 +389,15 @@ def profile_patched(character: str, before: dict, after: dict) -> None:
             avatars([character], "self")
     except Exception as e:
         logger.warning("profile_patched(%s) failed: %s", character, e)
+
+
+def room_items_changed(loc_id: str, room_id: str, visible_before: bool, visible_after: bool) -> None:
+    """Refresh belongings only for readers of a visible item in this room."""
+    if not (visible_before or visible_after):
+        return
+    try:
+        from app.core.room_entry import characters_in_room
+        from app.models.world import GROUND_ROOM_ID
+        avatars(characters_in_room(loc_id, room_id or GROUND_ROOM_ID), "self")
+    except Exception as e:
+        logger.debug("room item sync failed: %s", e)

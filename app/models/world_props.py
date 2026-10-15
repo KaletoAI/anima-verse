@@ -56,6 +56,8 @@ def _bump_world_props_generation() -> None:
     global _generation
     with _generation_lock:
         _generation += 1
+    from app.core import sync_topics
+    sync_topics.notify("world", to=sync_topics.Everyone())
 
 
 _payload_lock = threading.Lock()

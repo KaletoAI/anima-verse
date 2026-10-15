@@ -190,7 +190,7 @@ _subs_lock = threading.Lock()
 
 
 def publish_image_ready(event_id: str, location_id: str, kind: str) -> None:
-    """Broadcast: Event-Bild fertig. ``kind`` ist 'event' oder 'resolved'."""
+    """Publish a completed event or resolved image to its location."""
     payload = {"event_id": event_id, "location_id": location_id, "kind": kind}
     with _subs_lock:
         subs = list(_subscribers)
@@ -199,6 +199,8 @@ def publish_image_ready(event_id: str, location_id: str, kind: str) -> None:
             loop.call_soon_threadsafe(q.put_nowait, payload)
         except Exception as e:
             logger.debug("publish_image_ready: %s", e)
+    from app.core import sync_topics
+    sync_topics.notify("scene", to=sync_topics.AtLocation(location_id))
 
 
 async def subscribe() -> AsyncIterator[Dict[str, Any]]:

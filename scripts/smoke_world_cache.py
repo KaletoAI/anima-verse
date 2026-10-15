@@ -85,7 +85,7 @@ def check(label, actual, expected):
 
 print("\n[1] a reader owns what it gets")
 A = add_location(name="Alpha", description="stored")["id"]
-ROOM = add_room(A, "Hall")["id"]
+ROOM = add_room(A, "Hall", sync_world=True)["id"]
 loc = get_location_by_id(A)
 loc["description"] = "mutated by the caller"
 loc["rooms"][0]["name"] = "mutated room"
@@ -109,7 +109,7 @@ check("_load_world_data hands out copies too",
 print("\n[2] a write is visible to the very next read")
 loc = get_location_by_id(A)
 loc["description"] = "written"
-upsert_location(loc)
+upsert_location(loc, sync_world=True)
 check("upsert is visible", (get_location_by_id(A) or {}).get("description"),
       "written")
 check("…in list_locations as well", list_locations()[0]["description"],
@@ -159,7 +159,7 @@ ids = []
 for i in range(30):
     lid = add_location(name=f"Place{i}", description="x" * 400)["id"]
     for r in range(6):
-        add_room(lid, f"Room{r}")
+        add_room(lid, f"Room{r}", sync_world=True)
     ids.append(lid)
 target = ids[len(ids) // 2]
 
