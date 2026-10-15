@@ -70,7 +70,7 @@ from urllib.parse import unquote, urlparse
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.backends._gateway_job import poll_job, submit_job
+from app.imagegen.backends._gateway_job import poll_job, submit_job, stage_kwargs, stage_cancel
 from app.imagegen.base import GatewayRejectedError, GatewayInputMismatchError, ImageBackend
 
 logger = get_logger("image_backends")
@@ -711,16 +711,40 @@ class OpenAIMeshBackend(ImageBackend):
                     inputs_cut_out,
                     alias_params.get("input_remove_background", "-"),
                     shas[0][:12] if shas else "-")
-        job_id = submit_job(self, url, payload, "Mesh")
+        job_id = submit_job(self, url, payload, "Mesh",
+                            **stage_kwargs(params, {"input_sha256s": shas,
+                                                    "single_view": bool(self._tls.single_view)}))
         if not job_id:
             return []
 
         self._tls.job_id = job_id
+        return self._collect(job_id, should_cancel=stage_cancel(params))
+
+    def _collect(self, job_id: str, *, since: Optional[float] = None,
+                 should_cancel=None) -> List[bytes]:
+        """The poll + download half of a mesh job — shared by a fresh run
+        (``_generate``) and by collecting a recorded job after a restart
+        (``attach``, ``since`` = the original submission, SYSTEM epoch)."""
         return poll_job(self, job_id, max_wait=self.max_wait,
                         max_queue_wait=self.max_queue_wait,
                         poll_interval=self.poll_interval,
                         on_done=lambda sd, running_s: self._download_results(
-                            sd, job_id, running_s))
+                            sd, job_id, running_s),
+                        should_cancel=should_cancel, attach_since=since)
+
+    def attach(self, job_id: str, params: Dict[str, Any], *, since: float,
+               should_cancel=None) -> List[bytes]:
+        """Collect a job submitted before a restart: no POST, no GPU slot.
+        ``params`` are the attach params ``submit_job`` recorded — the sha256
+        of what was uploaded, so the input-identity check still guards the
+        result. Fills ``last_result_files`` / ``last_result_rig`` /
+        ``last_job_id`` on THIS thread like a fresh run."""
+        self._tls.result_files = []
+        self._tls.result_rig = None
+        self._tls.input_sha256s = [str(h) for h in (params or {}).get("input_sha256s") or []]
+        self._tls.single_view = bool((params or {}).get("single_view"))
+        self._tls.job_id = job_id
+        return self._collect(job_id, since=since, should_cancel=should_cancel)
 
     def _download_results(self, sd: Dict[str, Any], job_id: str,
                           running_s: float) -> List[bytes]:

@@ -42,7 +42,7 @@ import requests
 from app.core.log import get_logger
 from app.imagegen.base import (GATEWAY_503_FLAP_WAITS_S, BackendBusyError,
                                GatewayInputMismatchError, GatewayRejectedError, GatewayOutputError,
-                               GenerationCancelled,
+                               GenerationCancelled, HubJobLost,
                                ImageBackend, is_gateway_busy_502,
                                retry_after_seconds)
 
@@ -75,7 +75,8 @@ _TERMINAL_JOB_HINT = ("the input mesh has no UVs/texture, so the re-bake step "
 
 
 def submit_job(backend: ImageBackend, url: str, payload: Dict[str, Any],
-               kind: str) -> str:
+               kind: str, *, stage: Any = None,
+               attach_params: Optional[Dict[str, Any]] = None) -> str:
     """POST the async job and return its ``job_id`` ("" on a logged failure).
 
     Retries the POST up to 3× on 429 and on a 503 WITH ``Retry-After`` (queue
@@ -87,11 +88,22 @@ def submit_job(backend: ImageBackend, url: str, payload: Dict[str, Any],
     the opposite — the payload itself was rejected — and raises
     ``GatewayRejectedError`` so the reason surfaces.
     ``kind`` is a short label for the error log (e.g. "Video" / "Mesh").
+
+    ``stage`` is the operation's hub-stage handle (``app.core.hub_ops``,
+    ``params["hub_stage"]``) or None. It is told ``posting`` right before
+    every POST, ``not_posted`` when the gateway answered without taking the
+    job, and ``submitted`` with the job id the moment we have it — together
+    with ``attach_params``, what ``backend.attach`` needs to collect the job
+    after a restart (input hashes, variant count). A POST whose answer never
+    arrived (connection error) stays ``posting``: whether the gateway took it
+    is unknown, and that window is the documented submission gap.
     """
     resp = None
     busy_attempts = 0
     flaps = 0
     while True:
+        if stage is not None:
+            stage.posting(backend)
         try:
             resp = requests.post(url, json=payload, headers=backend._headers(),
                                  timeout=backend.timeout)
@@ -99,6 +111,10 @@ def submit_job(backend: ImageBackend, url: str, payload: Dict[str, Any],
             logger.error("%s: connection error: %s", backend.name, e)
             return ""
         code = resp.status_code
+        if stage is not None and code not in (200, 201, 202):
+            # An HTTP answer that is not an acceptance: the gateway holds no
+            # job for this POST.
+            stage.not_posted()
         retry_after = retry_after_seconds(resp)
         if code == 503 and retry_after is None:
             # No healthy backend for the alias — retried across the gateway's
@@ -148,8 +164,33 @@ def submit_job(backend: ImageBackend, url: str, payload: Dict[str, Any],
     if not job_id:
         logger.error("%s: no job_id in response: %s", backend.name,
                      str(body)[:200])
+        if stage is not None:
+            stage.not_posted()
         return ""
+    if stage is not None:
+        stage.submitted(backend, job_id, dict(attach_params or {}))
     return job_id
+
+
+def stage_kwargs(params: Dict[str, Any],
+                 attach_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The ``submit_job`` keywords of a run: the hub-stage handle from
+    ``params["hub_stage"]`` plus the attach params — and NOTHING when the run
+    has no stage, so a plain generation calls ``submit_job`` exactly as
+    before (E4)."""
+    stage = (params or {}).get("hub_stage")
+    if stage is None:
+        return {}
+    return {"stage": stage, "attach_params": dict(attach_params or {})}
+
+
+def stage_cancel(params: Dict[str, Any]) -> Optional[Callable[[], bool]]:
+    """The cancel check of the run's hub operation — set only on a RESUMED
+    operation (its display row's cancel button, spec D6); None otherwise, so
+    a normal run polls exactly as before."""
+    stage = (params or {}).get("hub_stage")
+    op = getattr(stage, "op", None)
+    return getattr(op, "should_cancel", None)
 
 
 def _cancel_lost_job(backend: ImageBackend, job_id: str) -> None:
@@ -170,7 +211,8 @@ def _cancel_lost_job(backend: ImageBackend, job_id: str) -> None:
 def poll_job(backend: ImageBackend, job_id: str, *,
              max_wait: int, max_queue_wait: int, poll_interval: float,
              on_done: Callable[[Dict[str, Any], float], List[bytes]],
-             should_cancel: Optional[Callable[[], bool]] = None
+             should_cancel: Optional[Callable[[], bool]] = None,
+             attach_since: Optional[float] = None
              ) -> List[bytes]:
     """Poll ``/v1/jobs/{job_id}`` until the job resolves or a budget runs out.
 
@@ -187,7 +229,16 @@ def poll_job(backend: ImageBackend, job_id: str, *,
     consecutive 404s, or more than 10 other failed polls — is cancelled
     (best effort, ``_cancel_lost_job``) and returns ``[]`` (gone/broken ->
     cooldown is correct).
+
+    ``attach_since`` (SYSTEM epoch seconds of the original submission)
+    switches to ATTACH semantics — collecting a job recorded before a restart
+    (``_poll_attached``). Without it the behaviour above is unchanged.
     """
+    if attach_since is not None:
+        return _poll_attached(backend, job_id, since=float(attach_since),
+                              budget_s=float(max_queue_wait) + float(max_wait),
+                              poll_interval=poll_interval, on_done=on_done,
+                              should_cancel=should_cancel)
     start = time.time()
     queued_since = start
     started = False
@@ -271,7 +322,7 @@ def poll_job(backend: ImageBackend, job_id: str, *,
             if status in ("done", "completed"):
                 return on_done(sd, time.time() - start)
             # queued / running → keep waiting
-        except (GatewayRejectedError, GatewayInputMismatchError, BackendBusyError, GenerationCancelled, GatewayOutputError):
+        except (GatewayRejectedError, GatewayInputMismatchError, BackendBusyError, GenerationCancelled, GatewayOutputError, HubJobLost):
             # A verdict about the INPUT (or a job that parked out on load) —
             # raised above or by ``on_done`` — not a failed poll. Counting it
             # as one would keep polling a job that is already decided.
@@ -296,6 +347,120 @@ def poll_job(backend: ImageBackend, job_id: str, *,
         pass
     # Load, not a defect -> no cooldown (the fallback engine reads this).
     raise BackendBusyError("timeout" if started else "gateway queue")
+
+
+# Attach mode (a job recorded before a restart). The gateway keeps a job for
+# its default TTL of 24 h; after that it answers 404, so an older record is
+# lost without asking.
+ATTACH_MAX_AGE_S = 24 * 3600
+# An unreachable gateway is not a lost job: polls back off up to this pause.
+_ATTACH_MAX_PAUSE_S = 30.0
+# A finished job whose results do not download this many times in a row is lost.
+_ATTACH_MAX_EMPTY = 10
+
+
+def _poll_attached(backend: ImageBackend, job_id: str, *, since: float,
+                   budget_s: float, poll_interval: float,
+                   on_done: Callable[[Dict[str, Any], float], List[bytes]],
+                   should_cancel: Optional[Callable[[], bool]] = None
+                   ) -> List[bytes]:
+    """Collect an EXISTING job after a restart (hub-job resume spec § 3.4).
+
+    LOST (``HubJobLost``, terminal — never a resubmission): 410, three 404 in
+    a row, 401/403 (the job is not readable with this key), the job failed or
+    was cancelled on the gateway, the record is older than 24 h, a job still
+    QUEUED or RUNNING past its time budget (``since + max_queue_wait +
+    max_wait``), or a finished job's results did not download
+    ``_ATTACH_MAX_EMPTY`` times. UNREACHABLE (connection error, 5xx, an
+    unreadable body) is not lost: the poll backs off up to 30 s and keeps
+    asking until the 24 h are over — the budget never applies to it, and
+    never to a job that is already done.
+
+    The first poll goes out at once and always goes out — a job that finished
+    while we were down is collected without waiting, however long Anima was
+    away (within the 24 h). No GPU slot and no master switch: nothing is
+    generated, the job already ran."""
+    deadline = since + min(max(0.0, budget_s), ATTACH_MAX_AGE_S)
+    pause = max(0.5, float(poll_interval))
+    misses_404 = 0
+    empty = 0
+    first = True
+    while True:
+        if not first:
+            if time.time() - since > ATTACH_MAX_AGE_S:
+                raise HubJobLost(f"{backend.name}: job {job_id} is older than 24 h "
+                                 f"(gateway retention)")
+            time.sleep(pause)
+        first = False
+        if should_cancel is not None and should_cancel():
+            logger.info("%s: job %s cancelled by the caller", backend.name, job_id)
+            _cancel_lost_job(backend, job_id)
+            raise GenerationCancelled(job_id)
+        try:
+            poll = requests.get(f"{backend.api_url}/v1/jobs/{job_id}",
+                                headers=backend._headers(), timeout=30)
+        except requests.RequestException as e:
+            pause = min(_ATTACH_MAX_PAUSE_S, pause * 2)
+            logger.warning("%s: job %s unreachable (%s) — next poll in %.0fs",
+                           backend.name, job_id, e, pause)
+            continue
+        code = poll.status_code
+        if code == 410:
+            raise HubJobLost(f"{backend.name}: job {job_id} is no longer "
+                             f"retrievable (HTTP 410)")
+        if code == 404:
+            misses_404 += 1
+            if misses_404 >= _MAX_CONSEC_404:
+                raise HubJobLost(f"{backend.name}: the gateway no longer knows "
+                                 f"job {job_id} (HTTP 404)")
+            continue
+        if code in (401, 403):
+            raise HubJobLost(f"{backend.name}: job {job_id} is not readable "
+                             f"with this backend's key (HTTP {code})")
+        if code != 200:
+            pause = min(_ATTACH_MAX_PAUSE_S, pause * 2)
+            logger.warning("%s: job %s poll HTTP %d — next poll in %.0fs",
+                           backend.name, job_id, code, pause)
+            continue
+        misses_404 = 0
+        try:
+            sd = poll.json() if poll.content else {}
+        except ValueError:
+            sd = {}
+        if not isinstance(sd, dict):
+            sd = {}
+        status = str(sd.get("status") or "").lower()
+        if status == "cancelled":
+            raise HubJobLost(f"{backend.name}: job {job_id} was cancelled on "
+                             f"the gateway")
+        if status in ("failed", "error"):
+            detail = str(sd.get("error") or "no reason given")[:200]
+            raise HubJobLost(f"{backend.name}: job {job_id} failed on the "
+                             f"gateway: {detail}")
+        if status not in ("done", "completed"):
+            if status in ("queued", "running") and time.time() > deadline:
+                _cancel_lost_job(backend, job_id)
+                raise HubJobLost(f"{backend.name}: job {job_id} did not finish "
+                                 f"within its time budget")
+            pause = max(0.5, float(poll_interval))
+            if status == "running" and sd.get("progress") is not None:
+                logger.info("%s: job %s running (collect after restart) — "
+                            "%.0f%%", backend.name, job_id,
+                            float(sd.get("progress") or 0) * 100)
+            continue
+        try:
+            blobs = on_done(sd, float(sd.get("elapsed_s") or 0))
+        except requests.RequestException as e:
+            blobs = []
+            logger.warning("%s: job %s result download unreachable: %s",
+                           backend.name, job_id, e)
+        if blobs:
+            return blobs
+        empty += 1
+        if empty >= _ATTACH_MAX_EMPTY:
+            raise HubJobLost(f"{backend.name}: the results of job {job_id} "
+                             f"could not be downloaded")
+        pause = min(_ATTACH_MAX_PAUSE_S, pause * 2)
 
 
 class _NoNetrcAuth(requests.auth.AuthBase):

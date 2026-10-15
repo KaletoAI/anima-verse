@@ -176,7 +176,7 @@ class VideoGenerationSkill(BaseSkill):
             logger.info("Source: %s", image_path)
             logger.info("Action: %s", action_prompt)
 
-            from app.skills.animate import animate_image
+            from app.skills.animate import run_video_op
 
             # Video file name: same stem as the image + .mp4
             video_stem = image_path.stem
@@ -184,11 +184,19 @@ class VideoGenerationSkill(BaseSkill):
             video_path = images_dir / video_filename
 
             # No backend is named: the "video" chain of the image routing
-            # picks it (and falls back along the chain on a failure).
-            _ro: Dict[str, Any] = {}
+            # picks it (and falls back along the chain on a failure). As a hub
+            # operation (docs/hub-job-resume.md) the video is still collected
+            # and stored on the image after a restart of Anima — only this
+            # chat answer cannot be delivered then.
             _anim_start = time.time()
-            success = animate_image(source_image_path=str(image_path), prompt=action_prompt,
-                                    output_path=str(video_path), route_out=_ro)
+            _res = run_video_op(
+                "video_character", f"video:character:{character_name}:{video_filename}",
+                {"source": str(image_path), "prompt": action_prompt,
+                 "character": character_name, "image_filename": image_filename,
+                 "video_filename": video_filename,
+                 "fail_message": "Animation fehlgeschlagen"},
+                label="Video generieren", track_id=_track_id)
+            success = bool(_res.get("ok"))
             _anim_duration = time.time() - _anim_start
 
             if not success:
@@ -198,20 +206,6 @@ class VideoGenerationSkill(BaseSkill):
                 return img_result + "\n\nFehler: Video-Animation fehlgeschlagen."
 
             logger.info("Animation erfolgreich (%.1fs): %s", _anim_duration, video_filename)
-
-            # Store the video metadata on the IMAGE (as with a manual animation).
-            # The gallery finds the video through the image_videos map ({stem}.mp4)
-            # and shows it as the image's companion — with its description/prompt.
-            from datetime import datetime as _dt
-            _meta = {
-                "animate_prompt": action_prompt,
-                "animate_backend": _ro.get("backend", ""),
-                "animate_routing": _ro.get("routing"),
-                "animate_fallback_from": _ro.get("fallback_from"),
-                "animate_created_at": _dt.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                "animate_duration_s": round(_anim_duration, 1),
-            }
-            add_character_image_metadata(character_name, image_filename, _meta)
 
             # Return only the video link (the image is an intermediate step, not shown in the chat)
             video_url = f"/characters/{character_name}/images/{video_filename}?user_id={user_id}"
@@ -264,3 +258,37 @@ class VideoGenerationSkill(BaseSkill):
                 "'action_prompt' (motion/action description for animation)."
             ),
             func=self.execute)
+
+
+def _publish_character_video(op, video_file, route: Dict[str, Any],
+                             duration_s: float = 0.0) -> Dict[str, Any]:
+    """Store a finished video next to its still — the publish step of the
+    ``video_character`` hub operation (fresh render or after a restart). The
+    gallery finds the video through the image_videos map ({stem}.mp4) and
+    shows it as the image's companion, with its description/prompt."""
+    from datetime import datetime as _dt
+    from pathlib import Path as _Path
+    inputs = op.inputs
+    character_name = inputs["character"]
+    images_dir = get_character_images_dir(character_name)
+    if not images_dir.is_dir():
+        return {"ok": False, "error": "character deleted during the animation"}
+    (images_dir / inputs["video_filename"]).write_bytes(_Path(video_file).read_bytes())
+    add_character_image_metadata(character_name, inputs["image_filename"], {
+        "animate_prompt": inputs.get("prompt", ""),
+        "animate_backend": route.get("backend", ""),
+        "animate_routing": route.get("routing"),
+        "animate_fallback_from": route.get("fallback_from"),
+        # Same stamp format as before the hub records (legacy skill).
+        "animate_created_at": _dt.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "animate_duration_s": round(float(duration_s or 0.0), 1),
+    })
+    return {"ok": True}
+
+
+def _register_hub_kinds() -> None:
+    from app.skills.animate import register_video_kind
+    register_video_kind("video_character", _publish_character_video, "video_generation")
+
+
+_register_hub_kinds()

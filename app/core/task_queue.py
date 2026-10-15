@@ -50,6 +50,17 @@ KEEP_HELD_RESULTS_SQL = ("COALESCE(CASE WHEN json_valid(progress) THEN "
                          "NOT IN ('awaiting_choice', 'publishing')")
 
 
+# The task whose handler runs on the current worker thread — the OWNER of a
+# hub operation started inside it (app/core/hub_ops.py): after a restart the
+# same task runs again and resumes what it left open.
+_worker_ctx = threading.local()
+
+
+def current_task_id() -> str:
+    """The queued task whose handler runs on this thread, or ""."""
+    return getattr(_worker_ctx, "task_id", "") or ""
+
+
 def _get_db_path() -> Path:
     return _get_storage_dir() / "task_queue.db"
 MAX_RETRIES_DEFAULT = int(os.environ.get("TASK_QUEUE_MAX_RETRIES", "0"))
@@ -113,6 +124,10 @@ class TaskQueue:
         self._started = False
         self._stopped = False
         self._track_start_times: Dict[str, float] = {}  # task_id → monotonic
+        # Tracked rows whose owner is known to be alive although it may run
+        # for hours (a hub job collected after a restart): the stale reaper
+        # leaves them alone. Process-local, like the reaper itself.
+        self._held_tracks: set = set()
 
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
@@ -186,6 +201,8 @@ class TaskQueue:
         from datetime import timedelta
         now = utc_now()
         cutoff = (now - timedelta(minutes=self._TRACKED_STALE_TIMEOUT_MIN)).isoformat(timespec="seconds")
+        held = sorted(self._held_tracks)
+        held_clause = (" AND task_id NOT IN (" + ",".join("?" * len(held)) + ")") if held else ""
         try:
             with self._write_lock, self._connect() as conn:
                 c = conn.execute(
@@ -193,8 +210,9 @@ class TaskQueue:
                     "error='Timeout — haengender Task aufgeraeumt (Backend evtl. zwischenzeitlich weg)' "
                     "WHERE task_origin='tracked' AND ("
                     "  (status='pending'  AND created_at < ?) OR "
-                    "  (status='running'  AND COALESCE(started_at, created_at) < ?))",
-                    (now.isoformat(timespec="seconds"), cutoff, cutoff))
+                    "  (status='running'  AND COALESCE(started_at, created_at) < ?))"
+                    + held_clause,
+                    (now.isoformat(timespec="seconds"), cutoff, cutoff, *held))
                 conn.commit()
             if c.rowcount:
                 logger.warning("Stale tracked Tasks (Laufzeit-Timeout) aufgeraeumt: %d", c.rowcount)
@@ -451,6 +469,8 @@ class TaskQueue:
         """Cancels a pending or running task. Returns True if cancelled."""
         now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
+            row = conn.execute("SELECT status FROM tasks WHERE task_id=?",
+                               (task_id,)).fetchone()
             cur = conn.execute(
                 """UPDATE tasks SET status='cancelled', completed_at=?, error='Cancelled'
                    WHERE task_id=? AND status IN ('pending', 'running')""",
@@ -458,6 +478,15 @@ class TaskQueue:
             conn.commit()
         if cur.rowcount:
             logger.info("Task abgebrochen: %s", task_id)
+            if row is not None and row["status"] == "pending":
+                # A pending task never reaches the worker again: the hub
+                # operations it left open (a restart) go with it now. A running
+                # one is released by its worker when the handler returns.
+                try:
+                    from app.core.hub_ops import release_task_ops
+                    release_task_ops(task_id, cancelled=True)
+                except Exception as rel_err:  # noqa: BLE001
+                    logger.warning("hub ops of %s not released: %s", task_id, rel_err)
             return True
         logger.warning("Task nicht gefunden oder nicht pending/running: %s", task_id)
         return False
@@ -801,8 +830,35 @@ class TaskQueue:
                 (label, task_id))
             conn.commit()
 
+    def track_hold(self, task_id: str) -> None:
+        """Exempt a live tracked row from the 20-minute stale reaper — for an
+        owner that is known to be alive and may legitimately wait for hours
+        (a hub job collected after a restart). Released by the finish."""
+        if task_id:
+            self._held_tracks.add(task_id)
+
+    def task_status(self, task_id: str) -> str:
+        """The status of one task row, "" when there is none."""
+        if not task_id:
+            return ""
+        with self._connect() as conn:
+            row = conn.execute("SELECT status FROM tasks WHERE task_id=?",
+                               (task_id,)).fetchone()
+        return str(row["status"]) if row else ""
+
+    def annotate_error(self, task_id: str, suffix: str) -> None:
+        """Append ``suffix`` to a row's error text (e.g. an interrupted row
+        learns which row resumed its work)."""
+        if not task_id or not suffix:
+            return
+        with self._write_lock, self._connect() as conn:
+            conn.execute("UPDATE tasks SET error=COALESCE(error,'') || ? WHERE task_id=?",
+                         (suffix, task_id))
+            conn.commit()
+
     def track_finish(self, task_id: str, error: str = "") -> None:
         """Mark a tracked task as completed or failed."""
+        self._held_tracks.discard(task_id)
         t0 = self._track_start_times.pop(task_id, None)
         duration_s = round(time.monotonic() - t0, 2) if t0 else 0.0
         status = "failed" if error else "completed"
@@ -831,12 +887,14 @@ class TaskQueue:
                 "SELECT status FROM tasks WHERE task_id=? AND task_origin='tracked'",
                 (task_id,)).fetchone()
         if not row or row[0] not in ("pending", "running"):
+            self._held_tracks.discard(task_id)
             return False
         self.track_finish(task_id, error=error)
         return True
 
     def track_cancel(self, task_id: str) -> bool:
         """Cancel a tracked task. Returns True if found."""
+        self._held_tracks.discard(task_id)
         t0 = self._track_start_times.pop(task_id, None)
         duration_s = round(time.monotonic() - t0, 2) if t0 else 0.0
         now = utc_now_iso()
@@ -924,12 +982,18 @@ class TaskQueue:
             if not handler:
                 logger.error("Kein Handler: %s (%s)", task_id, task_type)
                 self._finish_task(task_id, "failed", error=f"Kein Handler für '{task_type}'")
+                try:
+                    from app.core.hub_ops import release_task_ops
+                    release_task_ops(task_id)
+                except Exception as rel_err:  # noqa: BLE001
+                    logger.warning("hub ops of %s not released: %s", task_id, rel_err)
                 continue
 
             logger.info(
                 "Verarbeite: %s (%s) queue=%s agent=%s",
                 task_id, task_type, task.get("queue_name", ""), task.get("agent_name", ""))
             t0 = time.monotonic()
+            _worker_ctx.task_id = task_id
             try:
                 payload = json.loads(task["payload"])
                 payload["_task_id"] = task_id  # Allow handlers to check cancellation
@@ -942,6 +1006,13 @@ class TaskQueue:
                 duration_s = time.monotonic() - t0
                 retry_count = task.get("retry_count", 0)
                 max_retries = task.get("max_retries", 0)
+                # A lost hub job is TERMINAL (app.imagegen.base.HubJobLost):
+                # a retry would run the handler again and submit the same
+                # work as a new hub job — the one thing a lost job must
+                # never get automatically.
+                from app.imagegen.base import HubJobLost
+                if isinstance(e, HubJobLost):
+                    max_retries = retry_count
                 if retry_count < max_retries:
                     logger.warning(
                         "Fehler (Retry %d/%d): %s: %s",
@@ -952,6 +1023,21 @@ class TaskQueue:
                     logger.error(
                         "Fehler: %s (%s): %s", task_id, task_type, e, exc_info=True)
                     self._finish_task(task_id, "failed", error=str(e), duration_s=duration_s)
+            finally:
+                _worker_ctx.task_id = ""
+            # Final = anything but back to pending: a retry of a task that was
+            # cancelled meanwhile leaves the row cancelled, and that is final.
+            status_now = self.task_status(task_id)
+            final = status_now != "pending"
+            if final:
+                # A hub operation the handler left open (it skipped the
+                # producer, or ended before reaching it) continues on its own
+                # thread; a cancelled task takes its hub jobs along.
+                try:
+                    from app.core.hub_ops import release_task_ops
+                    release_task_ops(task_id, cancelled=status_now == "cancelled")
+                except Exception as rel_err:  # noqa: BLE001
+                    logger.warning("hub ops of %s not released: %s", task_id, rel_err)
 
 
 # ---------------------------------------------------------------------------

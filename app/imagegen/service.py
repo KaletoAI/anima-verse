@@ -1,4 +1,5 @@
 """Image generation service with cost-based backend selection"""
+import threading
 import hashlib
 import base64
 import functools
@@ -18,7 +19,7 @@ from typing import Any, Callable, Dict, List, Optional
 from app.imagegen import ImageBackend, BACKEND_REGISTRY
 from app.imagegen.backends.openai_mesh import (MESH2MESH_CATEGORY,
                                                MESH_UPLOAD_MAX_BYTES)
-from app.imagegen.base import (BackendBusyError, GenerationCancelled,
+from app.imagegen.base import (BackendBusyError, GenerationCancelled, HubJobLost,
                                MediaGenerationDisabled, media_generation_enabled)
 from app.imagegen.selection import BackendPool
 
@@ -619,11 +620,54 @@ class ImageService:
             agent_name=agent_name, label=(label or backend.name),
             gpu_type=backend.api_type)
 
+    # -- hub operations (app/core/hub_ops.py) --------------------------------
+    @staticmethod
+    def _hub_attached(hub_stage) -> Optional[Dict[str, Any]]:
+        """The collected result of a stage whose job was recorded before a
+        restart, or None when the stage has to be submitted normally.
+
+        ``prepare`` is the stage's atomic claim: a recorded job id means
+        ATTACH (no routing, no POST, no GPU slot, no master switch — the job
+        already ran), a stage the restart caught mid-POST raises
+        ``HubJobLost`` (the submission gap). The returned dict carries
+        ``blobs`` plus the backend metadata of the job (``files``, ``rig``,
+        ``results``, ``backend`` name, ``job_id``, ``route`` meta)."""
+        if hub_stage is None or hub_stage.prepare() != "attach":
+            return None
+        return hub_stage.collected() or hub_stage.collect()
+
+    @staticmethod
+    def _hub_backend(attached: Dict[str, Any]) -> Any:
+        """The backend object a collected job ran on (looked up by name)."""
+        from app.core.hub_ops import find_backend
+        backend = find_backend(attached.get("backend") or "")
+        if backend is None:
+            raise HubJobLost(f"backend '{attached.get('backend')}' is no longer configured")
+        return backend
+
+    @staticmethod
+    def _hub_route_hook(hub_stage):
+        """``run_routed(on_route=…)`` for a staged run: the routing meta goes
+        into the stage record with the job it submits, and the backend about
+        to run it right away."""
+        if hub_stage is None:
+            return None
+        from app.imagegen.routing import route_meta
+        return lambda route: hub_stage.note_route(route_meta(route), route.backend.name)
+
+    @staticmethod
+    def _hub_note_backend(hub_stage, backend) -> None:
+        """An explicit pick runs without routing meta — the stage still learns
+        which backend runs it."""
+        if hub_stage is not None and backend is not None:
+            hub_stage.note_route({}, backend.name)
+
     def generate_video(self, source_image_path: str, action_prompt: str,
                        output_path: str, backend_glob: str = "",
                        character_name: str = "", loras=None,
                        seconds=None, occasion: str = "video",
-                       route_out: Optional[Dict[str, Any]] = None) -> bool:
+                       route_out: Optional[Dict[str, Any]] = None,
+                       hub_stage=None) -> bool:
         """Renders a video from a still via a MEDIA_TYPE=="video" backend and
         writes the returned MP4 to ``output_path``. Returns True on success.
 
@@ -643,15 +687,32 @@ class ImageService:
         render — it does not collapse into ``False``). A routed render filters
         the list per backend instead (soft half of the gate), so a fallback
         backend never receives a LoRA it does not know.
+
+        ``hub_stage`` (app/core/hub_ops.py): the operation stage this render
+        belongs to — its job is recorded on submission, and a job recorded
+        before a restart is collected instead of rendered again.
         """
         base_params: Dict[str, Any] = {"source_image_path": source_image_path,
                                        "reference_images": {"frame": source_image_path}}
         if seconds:
             base_params["seconds"] = int(seconds)
+        if hub_stage is not None:
+            base_params["hub_stage"] = hub_stage
 
         from app.core.lora_library import (assert_loras_allowed, filter_allowed_loras,
                                            warn_dropped_loras)
         from app.imagegen.routing import route_meta, run_routed
+        attached = self._hub_attached(hub_stage)
+        if attached is not None:
+            if not attached.get("blobs"):
+                return False
+            if route_out is not None:
+                route_out.update({"backend": attached.get("backend", ""),
+                                  **(attached.get("route") or {})})
+            from pathlib import Path as _P
+            _P(output_path).parent.mkdir(parents=True, exist_ok=True)
+            _P(output_path).write_bytes(attached["blobs"][0])
+            return True
         primary = None
         if backend_glob.strip():
             primary = self._wait_for_explicit_backend(backend_glob, media="video")
@@ -686,13 +747,16 @@ class ImageService:
 
         try:
             if primary is not None:
+                self._hub_note_backend(hub_stage, primary)
                 (result, used), route = _render(primary), None
             else:
                 (result, used), route = run_routed(occasion, _render,
-                                                   character=character_name, pool=self.pool)
-        except MediaGenerationDisabled:
+                                                   character=character_name, pool=self.pool,
+                                                   on_route=self._hub_route_hook(hub_stage))
+        except (MediaGenerationDisabled, HubJobLost):
             # The world's master switch is not a failed render: the reason has
-            # to reach the caller instead of collapsing into a bare False.
+            # to reach the caller instead of collapsing into a bare False. A
+            # lost hub job is terminal and must not read as "try again".
             raise
         except Exception as e:
             logger.error("generate_video failed: %s", e)
@@ -727,19 +791,63 @@ class ImageService:
                 and b.category == "upscale"]
 
     def upscale_image(self, image_bytes: bytes, *, backend_glob: str = "",
-                      character_name: str = "", cache_path=None) -> Dict[str, Any]:
-        """Run the upscale occasion with optional verified, atomic reference caching."""
+                      character_name: str = "", cache_path=None,
+                      hub_stage=None) -> Dict[str, Any]:
+        """Run the upscale occasion with optional verified, atomic reference caching.
+
+        ``hub_stage``: the operation stage (app/core/hub_ops.py) — a job
+        recorded before a restart is collected and then normalised and cached
+        exactly like a fresh result."""
         import io
         import tempfile
         from PIL import Image
         from app.core.timeutils import utc_now_iso
         from app.imagegen.upscale import cache_identity, normalize_output
         from app.imagegen.routing import route_meta, run_routed, resolve_spec
-        if not media_generation_enabled():
+        if hub_stage is None and not media_generation_enabled():
             raise MediaGenerationDisabled("Media generation is disabled for this world")
         with Image.open(io.BytesIO(image_bytes)) as decoded:
             decoded.load()
             input_size = list(decoded.size)
+
+        def finish(blobs, bb):
+            if len(blobs or []) != 1:
+                raise ValueError('Upscale must return exactly one image')
+            raw, size = normalize_output(blobs[0], bb.max_side)
+            if max(size) <= max(input_size):
+                raise ValueError('Upscale result is not larger than the input')
+            return {'bytes': raw, 'backend': bb.name, 'scale': bb.upscale_scale,
+                    'in': input_size, 'out': size, 'cached': False, 'status': 'applied'}
+
+        def store_cache(result, identity):
+            image_path = Path(cache_path) if cache_path else None
+            if not image_path:
+                return
+            meta_path = image_path.with_suffix('.json')
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            meta = {'identity': identity, 'sha256': hashlib.sha256(result['bytes']).hexdigest(),
+                    'in': input_size, 'out': result['out'], 'created_at': utc_now_iso(),
+                    'upscale': {k: v for k, v in result.items() if k != 'bytes'}}
+            for target, raw in ((image_path, result['bytes']),
+                                (meta_path, json.dumps(meta, indent=2).encode())):
+                temporary = None
+                try:
+                    with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as handle:
+                        temporary = Path(handle.name)
+                        handle.write(raw)
+                    os.replace(temporary, target)
+                finally:
+                    if temporary is not None:
+                        temporary.unlink(missing_ok=True)
+
+        attached = self._hub_attached(hub_stage)
+        if attached is not None:
+            bb = self._hub_backend(attached)
+            result = finish(attached.get("blobs"), bb)
+            store_cache(result, cache_identity(image_bytes, bb))
+            return {**result, **(attached.get("route") or {})}
+        if not media_generation_enabled():
+            raise MediaGenerationDisabled("Media generation is disabled for this world")
         primary = None
         if backend_glob.strip():
             _, primary = resolve_spec("upscale", backend_glob, character=character_name, pool=self.pool)
@@ -767,40 +875,24 @@ class ImageService:
                         'in': input_size, 'out': input_size, 'cached': False,
                         'status': 'skipped', 'reason': 'already large enough'}, b
 
+            params = {'image_bytes': image_bytes}
+            if hub_stage is not None:
+                params['hub_stage'] = hub_stage
+
             def op(bb):
                 def generate():
-                    blobs = bb.generate('', '', {'image_bytes': image_bytes})
-                    if len(blobs or []) != 1:
-                        raise ValueError('Upscale must return exactly one image')
-                    raw, size = normalize_output(blobs[0], bb.max_side)
-                    if max(size) <= max(input_size):
-                        raise ValueError('Upscale result is not larger than the input')
-                    return {'bytes': raw, 'backend': bb.name, 'scale': bb.upscale_scale,
-                            'in': input_size, 'out': size, 'cached': False, 'status': 'applied'}
+                    return finish(bb.generate('', '', params), bb)
                 return self.run_on_backend_channel(bb, generate, task_type='image_upscale', agent_name=character_name)
             result, used = self.run_on_backend(b, op, character_name=character_name)
-            if image_path:
-                image_path.parent.mkdir(parents=True, exist_ok=True)
-                meta = {'identity': identity, 'sha256': hashlib.sha256(result['bytes']).hexdigest(),
-                        'in': input_size, 'out': result['out'], 'created_at': utc_now_iso(),
-                        'upscale': {k: v for k, v in result.items() if k != 'bytes'}}
-                for target, raw in ((image_path, result['bytes']),
-                                    (meta_path, json.dumps(meta, indent=2).encode())):
-                    temporary = None
-                    try:
-                        with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as handle:
-                            temporary = Path(handle.name)
-                            handle.write(raw)
-                        os.replace(temporary, target)
-                    finally:
-                        if temporary is not None:
-                            temporary.unlink(missing_ok=True)
+            store_cache(result, identity)
             return result, used
 
         if primary is not None:
+            self._hub_note_backend(hub_stage, primary)
             (result, used), route = render(primary), None
         else:
-            (result, used), route = run_routed('upscale', render, character=character_name, pool=self.pool)
+            (result, used), route = run_routed('upscale', render, character=character_name, pool=self.pool,
+                                               on_route=self._hub_route_hook(hub_stage))
         return {**result, **route_meta(route)}
 
     def list_face_retexture_backends(self) -> List[ImageBackend]:
@@ -822,12 +914,28 @@ class ImageService:
 
     def generate_face_retexture(self, mesh_path: str, image_bytes: bytes,
                                output_dir: str, params=None, backend_glob: str = "",
-                               character_name: str = "") -> Dict[str, Any]:
-        """Submit projection on its own channel, capturing worker-local provenance."""
+                               character_name: str = "", hub_stage=None) -> Dict[str, Any]:
+        """Submit projection on its own channel, capturing worker-local provenance.
+
+        ``hub_stage``: the operation stage (app/core/hub_ops.py) — a job
+        recorded before a restart is collected instead of submitted."""
         from app.imagegen.routing import route_meta, run_routed, resolve_spec
         from app.imagegen.base import GatewayRejectedError
         request = dict(params or {})
         request.update(source_model_path=mesh_path, reference_image_bytes=image_bytes)
+        if hub_stage is not None:
+            request["hub_stage"] = hub_stage
+        attached = self._hub_attached(hub_stage)
+        if attached is not None:
+            files, blobs = list(attached.get("files") or []), list(attached.get("blobs") or [])
+            if not blobs:
+                raise GatewayRejectedError("Face retexture job returned no corrected mesh")
+            if len(files) != len(blobs):
+                raise GatewayRejectedError("Face retexture results have incomplete metadata")
+            result = {"files": [dict(f, blob=raw) for f, raw in zip(files, blobs)],
+                      "job_id": attached.get("job_id", "")}
+            return self._store_face_retexture(result, output_dir, attached.get("backend", ""),
+                                              attached.get("route") or {})
         primary = None
         if backend_glob.strip():
             _, primary = resolve_spec("face_retexture", backend_glob,
@@ -851,10 +959,18 @@ class ImageService:
                                                    agent_name=character_name)
             return self.run_on_backend(b, op, character_name=character_name)
         if primary is not None:
+            self._hub_note_backend(hub_stage, primary)
             (result, used), route = render(primary), None
         else:
             (result, used), route = run_routed("face_retexture", render,
-                                              character=character_name, pool=self.pool)
+                                              character=character_name, pool=self.pool,
+                                              on_route=self._hub_route_hook(hub_stage))
+        return self._store_face_retexture(result, output_dir, used.name, route_meta(route))
+
+    def _store_face_retexture(self, result: Dict[str, Any], output_dir: str,
+                              backend_name: str, route: Dict[str, Any]) -> Dict[str, Any]:
+        """Write the corrected GLB (+ comparison PNG) of a projection job —
+        shared by a fresh run and a job collected after a restart."""
         model, compare = self._select_face_retexture_results(result["files"])
         directory = Path(output_dir)
         directory.mkdir(parents=True, exist_ok=True)
@@ -865,16 +981,17 @@ class ImageService:
             compare_path.write_bytes(compare["blob"])
         return {"ok": True, "path": str(target),
                 "compare_path": str(compare_path) if compare_path else "",
-                "backend": used.name, "job_id": result["job_id"],
+                "backend": backend_name, "job_id": result["job_id"],
                 "result_sha256": model.get("sha256") or hashlib.sha256(model["blob"]).hexdigest(),
-                "result_url": model.get("url", ""), **route_meta(route)}
+                "result_url": model.get("url", ""), **route}
 
     def generate_mesh(self, source_image_path: str, output_path: str,
                       backend_glob: str = "", character_name: str = "",
                       mesh_name: str = "", face_num=None, texture_size=None,
                       view_images: Optional[Dict[str, str]] = None,
                       lod_faces=None, occasion: str = "", *,
-                      view_body: str = "humanoid") -> Dict[str, Any]:
+                      view_body: str = "humanoid",
+                      hub_stage=None) -> Dict[str, Any]:
         """Generates a 3D model from one or more views via a MEDIA_TYPE=="mesh"
         backend.
 
@@ -911,6 +1028,10 @@ class ImageService:
         "backend", "stages"} plus, for a routed render, ``routing`` and (when
         it ran behind the intended chain entry) ``fallback_from``
         (``routing.route_meta``); ``{"ok": False, "error"}`` on a failure.
+
+        ``hub_stage`` (app/core/hub_ops.py): the operation stage of this run —
+        its job is recorded on submission, and a job recorded before a
+        restart is collected and stored exactly like a fresh one.
         """
         # Preserve raw views until the chosen backend knows its alias slots.
         refs = {v: str(p).strip() for v, p in (view_images or {}).items()
@@ -934,10 +1055,13 @@ class ImageService:
         # chains expose it.
         if texture_size:
             params["texture_size"] = int(texture_size)
+        if hub_stage is not None:
+            params["hub_stage"] = hub_stage
 
         from app.imagegen.routing import NoRouteError, route_meta, run_routed
+        attached = self._hub_attached(hub_stage)
         primary = None
-        if backend_glob.strip():
+        if attached is None and backend_glob.strip():
             primary = self._wait_for_explicit_backend(backend_glob, media="mesh")
             if not primary:
                 # An explicit pick is never routed elsewhere: a wrong alias
@@ -976,22 +1100,30 @@ class ImageService:
             # the runner.
             return self.run_on_backend(b, _op, character_name=character_name)
 
-        try:
-            if primary is not None:
-                (result, used), route = _render(primary), None
-            else:
-                occ = occasion or "mesh_object"
-                (result, used), route = run_routed(occ, _render, character=character_name,
-                                                   pool=self.pool)
-        except (MediaGenerationDisabled, BackendBusyError, NoRouteError):
-            # Master switch, not a failed generation — see generate_video.
-            raise
-        except Exception as e:
-            logger.error("generate_mesh failed: %s", e)
-            return {"ok": False, "error": str(e)}
+        if attached is not None:
+            result = {"blobs": attached.get("blobs") or [], "files": attached.get("files") or [],
+                      "single_view": bool(attached.get("single_view"))}
+            used_name, routed = attached.get("backend", ""), dict(attached.get("route") or {})
+        else:
+            try:
+                if primary is not None:
+                    self._hub_note_backend(hub_stage, primary)
+                    (result, used), route = _render(primary), None
+                else:
+                    occ = occasion or "mesh_object"
+                    (result, used), route = run_routed(occ, _render, character=character_name,
+                                                       pool=self.pool,
+                                                       on_route=self._hub_route_hook(hub_stage))
+            except (MediaGenerationDisabled, BackendBusyError, NoRouteError, HubJobLost):
+                # Master switch, not a failed generation — see generate_video.
+                raise
+            except Exception as e:
+                logger.error("generate_mesh failed: %s", e)
+                return {"ok": False, "error": str(e)}
+            used_name, routed = getattr(used, "name", ""), route_meta(route)
         files: List[Dict[str, Any]] = [dict(f, blob=b) for f, b
                                        in zip(result["files"], result["blobs"])]
-        out = self._store_mesh_files(files, "none", output_path, getattr(used, "name", ""))
+        out = self._store_mesh_files(files, "none", output_path, used_name)
         # Retain the mesh-stage basecolor when provided: a standalone generic
         # rigger returns only FBX, so its texture must come from this stage.
         if out.get("ok") and occasion in ("mesh_humanoid", "mesh_creature"):
@@ -1004,7 +1136,7 @@ class ImageService:
         if out.get("ok"):
             if result.get("single_view"):
                 out["single_view"] = True
-            out.update(route_meta(route))
+            out.update(routed)
         return out
 
     def animation_backends(self) -> List[Dict[str, Any]]:
@@ -1036,13 +1168,31 @@ class ImageService:
                                 route, variants: int = 1,
                                 should_cancel: Optional[Callable[[], bool]] = None,
                                 on_job_id: Optional[Callable[[str, str], None]] = None,
-                                label: str = "") -> Dict[str, Any]:
+                                label: str = "", hub_stage=None) -> Dict[str, Any]:
         """One motion run on ``route`` (from ``resolve_animation_backend``). No
         re-run on another chain entry: a second run would be a second GPU job
         (spec §6). ``blobs`` are the verified variants, ``results`` the
         backend's verdict per delivered result (failed ones with a reason).
+
+        ``hub_stage`` (app/core/hub_ops.py): a job recorded before a restart
+        is collected instead — then ``route`` may be None.
         """
         from app.imagegen.routing import route_meta
+        # A motion job recorded before a restart is collected FIRST — no route
+        # is needed (``route`` may be None then) and no availability check
+        # may throw away a result the hub still holds.
+        attached = self._hub_attached(hub_stage)
+        if attached is not None:
+            blobs = list(attached.get("blobs") or [])
+            results = list(attached.get("results") or [])
+            if not blobs:
+                return {"ok": False, "error": "animation backend returned no usable variant",
+                        "results": results}
+            return {"ok": True, "blobs": blobs, "results": results,
+                    "backend": attached.get("backend", ""), "job_id": attached.get("job_id", ""),
+                    **(attached.get("route") or {})}
+        if route is None:
+            raise ValueError("an animation run needs a route")
         backend = route.backend
         # Checked before the channel handoff: an invalid request is the caller's
         # error and must never put a healthy backend on cooldown.
@@ -1052,6 +1202,9 @@ class ImageService:
         params = {"source_model_path": source_model_path, "captions": list(captions),
                   "seed": int(seed), "variants": variants, "should_cancel": should_cancel,
                   "on_job_id": (lambda job_id: on_job_id(job_id, backend.name)) if on_job_id else None}
+        if hub_stage is not None:
+            params["hub_stage"] = hub_stage
+            hub_stage.note_route(route_meta(route), backend.name)
 
         def _op(bb):
             def _gen():
@@ -1073,7 +1226,7 @@ class ImageService:
             result, used = self.run_on_backend(backend, _op)
             if "cancelled" in result:
                 raise result["cancelled"]
-        except (MediaGenerationDisabled, BackendBusyError, GenerationCancelled):
+        except (MediaGenerationDisabled, BackendBusyError, GenerationCancelled, HubJobLost):
             raise
         except Exception as e:
             logger.error("generate_mesh_animation failed: %s", e)
@@ -1086,8 +1239,13 @@ class ImageService:
 
     def generate_rig(self, mesh_path: str, output_path: str, rig: str,
                      backend_glob: str = "", character_name: str = "",
-                     basecolor_path: str = "", rig_options: Optional[dict] = None) -> Dict[str, Any]:
-        """Run a standalone rigger after the caller's mesh channel job ended."""
+                     basecolor_path: str = "", rig_options: Optional[dict] = None,
+                     hub_stage=None) -> Dict[str, Any]:
+        """Run a standalone rigger after the caller's mesh channel job ended.
+
+        ``hub_stage`` (app/core/hub_ops.py): a rig job recorded before a
+        restart is collected, checked for the required rig and stored like a
+        fresh one; a wrong rig is then a plain failure, never a re-run."""
         from app.imagegen.occasions import backend_fits
         from app.imagegen.routing import describe_backend, route_meta, run_routed
         from app.core.mesh_source import source_basecolor, fbx_basecolor, validate_source
@@ -1121,6 +1279,24 @@ class ImageService:
                     raise
                 texture_io_error = exc
         params = {"source_model_path": str(source), "rig_options": dict(rig_options or {})}
+        if hub_stage is not None:
+            params["hub_stage"] = hub_stage
+        attached = self._hub_attached(hub_stage)
+        if attached is not None:
+            files = [dict(f, blob=b) for f, b in zip(attached.get("files") or [],
+                                                     attached.get("blobs") or [])]
+            delivered = _delivered_mesh_rig(files, attached.get("rig"))
+            if delivered != rig:
+                return {"ok": False, "error": f"delivered rig '{delivered or 'unknown'}', "
+                                              f"'{rig}' required for {occasion}"}
+            if texture is not None and not any("_basecolor" in str(f.get("name")) for f in files):
+                files.append({"name": "source_basecolor.png", "mime": "image/png",
+                              "kind": "image", "blob": texture})
+            out = self._store_mesh_files(files, rig, output_path, attached.get("backend", ""))
+            if out.get("ok"):
+                out.update(attached.get("route") or {})
+                out["meta"] = {}
+            return out
         primary = None
         if backend_glob.strip():
             primary = self._wait_for_explicit_backend(backend_glob, media="mesh")
@@ -1176,9 +1352,11 @@ class ImageService:
             return result, used
 
         if primary is not None:
+            self._hub_note_backend(hub_stage, primary)
             (result, used), route = render(primary), None
         else:
-            (result, used), route = run_routed(occasion, render, character=character_name, pool=self.pool)
+            (result, used), route = run_routed(occasion, render, character=character_name, pool=self.pool,
+                                               on_route=self._hub_route_hook(hub_stage))
         if result.get("error"):
             return {"ok": False, "error": result["error"]}
         files = [dict(f, blob=b) for f, b in zip(result["files"], result["blobs"])]
@@ -1357,7 +1535,8 @@ class ImageService:
 
     def generate_mesh_variant(self, source_model_path: str, output_path: str,
                               backend_glob: str = "", mesh_name: str = "",
-                              face_num=None, texture_size=None) -> Dict[str, Any]:
+                              face_num=None, texture_size=None,
+                              hub_stage=None) -> Dict[str, Any]:
         """Reduces an EXISTING mesh to a coarser one via a mesh→mesh backend
         (``mesh-shrink``, mesh-client-spec § 3.4) — the "low variant" of a
         stored model.
@@ -1375,8 +1554,16 @@ class ImageService:
         file nobody notices until the distance view turns grey.
 
         Returns {"ok", "path", "format", "rig", "filename", "backend"}.
+
+        ``hub_stage`` (app/core/hub_ops.py): a shrink job recorded before a
+        restart is collected and validated like a fresh one.
         """
         from pathlib import Path as _P
+        attached = self._hub_attached(hub_stage)
+        if attached is not None:
+            return self._store_mesh_variant(
+                {"blobs": attached.get("blobs") or [], "files": attached.get("files") or []},
+                output_path, attached.get("backend", ""))
         src = _P(source_model_path)
         if not src.is_file():
             return {"ok": False, "error": "source model not found"}
@@ -1397,6 +1584,8 @@ class ImageService:
             params["face_num"] = int(face_num)
         if texture_size:
             params["texture_size"] = int(texture_size)
+        if hub_stage is not None:
+            params["hub_stage"] = hub_stage
 
         shrinks = self.list_shrink_backends()
         primary = None
@@ -1424,8 +1613,9 @@ class ImageService:
             return self.run_on_backend_channel(
                 backend, _gen, task_type="mesh_generation", agent_name="system")
         try:
+            self._hub_note_backend(hub_stage, primary)
             result, used = self.run_on_backend(primary, _op)
-        except MediaGenerationDisabled:
+        except (MediaGenerationDisabled, HubJobLost):
             # Master switch, not a failed generation — see generate_video.
             raise
         except Exception as e:
@@ -1433,6 +1623,14 @@ class ImageService:
             return {"ok": False, "error": str(e)}
         if not result:
             return {"ok": False, "error": "generation failed"}
+        return self._store_mesh_variant(result, output_path, getattr(used, "name", ""))
+
+    @staticmethod
+    def _store_mesh_variant(result: Dict[str, Any], output_path: str,
+                            backend_name: str) -> Dict[str, Any]:
+        """Validate and store a shrink job's GLB — shared by a fresh run and a
+        job collected after a restart."""
+        from pathlib import Path as _P
         files: List[Dict[str, Any]] = [dict(f, blob=b) for f, b
                                        in zip(result["files"], result["blobs"])]
         # rig "none": the GLB is the whole delivery — the *_basecolor* /
@@ -1472,7 +1670,7 @@ class ImageService:
         return {"ok": True, "path": str(out),
                 "format": out.suffix.lstrip(".").lower(), "rig": "none",
                 "filename": str(model.get("name") or out.name),
-                "backend": getattr(used, "name", "")}
+                "backend": backend_name}
 
     def _get_backend_defaults(self, backend: ImageBackend) -> Dict[str, Any]:
         """Read instance defaults for character overrides. Technical generation
@@ -2781,11 +2979,19 @@ class ImageService:
 _service: Optional[ImageService] = None
 
 
+_service_lock = threading.Lock()
+
+
 def get_image_service() -> ImageService:
-    """Lazy singleton. Rebuilt after reset_image_service() (config reload)."""
+    """Lazy singleton. Rebuilt after reset_image_service() (config reload).
+    Built under a lock: hub-job resume threads may ask for it at the same
+    moment right after a restart, and two pools would mean two sets of
+    backend objects."""
     global _service
     if _service is None:
-        _service = ImageService()
+        with _service_lock:
+            if _service is None:
+                _service = ImageService()
     return _service
 
 

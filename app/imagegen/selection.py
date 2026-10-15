@@ -14,7 +14,8 @@ from app.core.log import get_logger
 from app.core.provider_queue import TooManyJobsError
 from app.imagegen.base import (BackendBusyError, BackendFailedError,
                                GatewayRejectedError, GpuTaskCancelled, GenerationCancelled,
-                               ImageBackend, MediaGenerationDisabled, BackendNotApplicableError)
+                               HubJobLost, ImageBackend, MediaGenerationDisabled,
+                               BackendNotApplicableError)
 
 logger = get_logger("image_gen")
 
@@ -305,6 +306,11 @@ class BackendPool:
           backend instead of retrying the same one.
         - MediaGenerationDisabled = the world's media master switch is off:
           the backend was never asked. No cooldown, re-raised typed.
+        - HubJobLost = a hub job recorded before a restart can no longer be
+          collected (``hub_ops`` attach path). TERMINAL: no cooldown, never
+          wrapped into ``BackendFailedError`` — that wrapper is what makes
+          ``run_routed`` submit the same work on the next chain entry, i.e.
+          exactly the automatic resubmission a lost job must never get.
         - GpuTaskCancelled = the user cancelled the job in the queue panel:
           no cooldown, re-raised. (The queue watchdog's GpuTaskTimeout is a
           BackendBusyError and takes the busy branch.)
@@ -329,6 +335,10 @@ class BackendPool:
             # typed exception survives to the retry layer.
             logger.warning("Backend-Runner: %s busy — no cooldown, "
                            "no backend switch", backend.name)
+            raise
+        except HubJobLost:
+            logger.warning("Backend-Runner: %s — hub job lost, terminal "
+                           "(no cooldown, no re-run)", backend.name)
             raise
         except TooManyJobsError:
             # The user asked for more parallel jobs than he may have. Nothing

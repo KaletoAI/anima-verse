@@ -26,13 +26,13 @@ alias' LoRA endpoint (``fetch_loras``).
 import base64
 import os
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin, urlparse
 
 import requests
 
 from app.core.log import get_logger
-from app.imagegen.backends._gateway_job import download_result, poll_job, submit_job
+from app.imagegen.backends._gateway_job import download_result, poll_job, submit_job, stage_kwargs, stage_cancel
 from app.imagegen.base import ImageBackend
 
 logger = get_logger("image_backends")
@@ -248,39 +248,56 @@ class OpenAIVideoBackend(ImageBackend):
         url = f"{self.api_url}{self.video_endpoint}"
         logger.info("%s: starte Video-Job (Alias=%s, %ds)",
                     self.name, payload["model"], seconds)
-        job_id = submit_job(self, url, payload, "Video")
+        job_id = submit_job(self, url, payload, "Video", **stage_kwargs(params))
         if not job_id:
             return []
+        return self._collect(job_id, should_cancel=stage_cancel(params))
 
-        def _download(sd: Dict[str, Any], running_s: float) -> List[bytes]:
-            # Spec v2: results[].url (owner-gated); fallback: the older
-            # /result/0 path.
-            _results = sd.get("results") or []
-            _r_url = (_results[0].get("url") if _results
-                      and isinstance(_results[0], dict) else "") or ""
-            try:
-                if _r_url:
-                    parsed = urlparse(_r_url)
-                    if parsed.netloc and not parsed.scheme:
-                        _r_url = urljoin(f"{self.api_url}/", _r_url)
-                    elif not parsed.scheme:
-                        _r_url = f"{self.api_url}{_r_url}"
-                else:
-                    _r_url = f"{self.api_url}/v1/jobs/{job_id}/result/0"
-                dl = download_result(self, _r_url, timeout=180, foreign="anonymous")
-            except (requests.Timeout, requests.ConnectionError):
-                raise  # Preserve poll_job's network failure retry classification.
-            except Exception as e:
-                logger.error("%s: Result-Download failed: %s", self.name, e)
-                return []
-            if dl.status_code == 200 and len(dl.content) > 1000:
-                logger.info("%s: Video finished (%.1fs, %d bytes)", self.name,
-                            running_s, len(dl.content))
-                return [dl.content]
-            logger.error("%s: Result-Download HTTP %d (%d bytes)",
-                         self.name, dl.status_code, len(dl.content))
-            return []
-
+    def _collect(self, job_id: str, *, since: Optional[float] = None,
+                 should_cancel=None) -> List[bytes]:
+        """Poll + download half — shared by a fresh run and ``attach``."""
         return poll_job(self, job_id, max_wait=self.max_wait,
                         max_queue_wait=self.max_queue_wait,
-                        poll_interval=self.poll_interval, on_done=_download)
+                        poll_interval=self.poll_interval,
+                        on_done=lambda sd, running_s: self._download_video(
+                            sd, running_s, job_id),
+                        should_cancel=should_cancel, attach_since=since)
+
+    def attach(self, job_id: str, params: Dict[str, Any], *, since: float,
+               should_cancel=None) -> List[bytes]:
+        """Collect a video job submitted before a restart (no POST, no GPU
+        slot). ``params`` are unused — the result is identified by the job."""
+        return self._collect(job_id, since=since, should_cancel=should_cancel)
+
+    def _download_video(self, sd: Dict[str, Any], running_s: float,
+                        job_id: str) -> List[bytes]:
+        """Downloads the MP4 of a FINISHED job (``[]`` on an HTTP error;
+        network errors propagate so ``poll_job`` counts them as a failed poll)."""
+        # Spec v2: results[].url (owner-gated); fallback: the older
+        # /result/0 path.
+        _results = sd.get("results") or []
+        _r_url = (_results[0].get("url") if _results
+                  and isinstance(_results[0], dict) else "") or ""
+        try:
+            if _r_url:
+                parsed = urlparse(_r_url)
+                if parsed.netloc and not parsed.scheme:
+                    _r_url = urljoin(f"{self.api_url}/", _r_url)
+                elif not parsed.scheme:
+                    _r_url = f"{self.api_url}{_r_url}"
+            else:
+                _r_url = f"{self.api_url}/v1/jobs/{job_id}/result/0"
+            dl = download_result(self, _r_url, timeout=180, foreign="anonymous")
+        except (requests.Timeout, requests.ConnectionError):
+            raise  # Preserve poll_job's network failure retry classification.
+        except Exception as e:
+            logger.error("%s: Result-Download failed: %s", self.name, e)
+            return []
+        if dl.status_code == 200 and len(dl.content) > 1000:
+            logger.info("%s: Video finished (%.1fs, %d bytes)", self.name,
+                        running_s, len(dl.content))
+            return [dl.content]
+        logger.error("%s: Result-Download HTTP %d (%d bytes)",
+                     self.name, dl.status_code, len(dl.content))
+        return []
+

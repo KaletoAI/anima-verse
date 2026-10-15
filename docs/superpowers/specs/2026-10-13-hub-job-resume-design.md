@@ -1,285 +1,341 @@
 # Spec: Hub-Jobs überleben einen Anima-Neustart
 
-Stand: 2026-10-13, **Revision 1, ÜBERHOLT. Revision 2 ist nötig, bevor ein Plan entsteht.**
-Design mit dem Nutzer abschnittsweise abgestimmt (Umfang, Fehlerfall, Ansatz A, Abschnitte 1–3).
+Stand: 2026-10-13, **Revision 2**. Ersetzt Revision 1 („Fortsetzen durch erneutes Ausführen der ganzen
+Operation“), die nach Review-Runde 1 verworfen wurde. Jede Code-Aussage hier ist gegen `main`
+(`319d1bd`) geprüft; Zeilenangaben sind ungefähre Ankerpunkte.
 
-## 0. Stand nach Review-Runde 1 (Codex `gpt-6-astra`, 2026-10-13). Hier weitermachen.
+## 0. Bindende Entscheidungen
 
-**Befund:** § 3 („Fortsetzen durch erneutes Ausführen der ganzen Operation“) ist nicht tragfähig.
-- **Vorverarbeitung wird mit wiederholt:** Props rendern ihr Quellbild neu, und Props und Locations
-  legen neue Galerieziele an (`props.py` ~6200/6261, `location_model3d.py` ~1313).
-- **Ketten zerfallen:** Der Cache-Check in `generate_for_current_outfit` (~1680) überspringt einen
-  ausstehenden Rig-Job. Die Gesichtskorrektur legt die korrigierte Quelle nur im Staging ab.
-- **Zeilen werden zu früh gelöscht:** Sie verschwinden vor Prüfen, Rig und Veröffentlichen bzw. vor dem
-  Instagram-Feed.
-- **`HubJobLost` geht verloren:** Die Ausnahme wird als Backend-Fehler eingewickelt
-  (`selection.py` ~364 → Routing-Fallback `routing.py` ~541). Upscale-Fehler werden geschluckt
-  (`model3d.py` ~2278), dazu kommen die Wiederholungen von Queue und Improvements.
-- **Schlüssel instabil:** `npc_assets` nimmt die gerade getragene Signatur (~382). Beim Video fehlen
-  LoRAs und Dauer im Schlüssel.
-- **Weitere Lücken:** Die Start-Reihenfolge (AgentLoop vor den TaskQueue-Workern, `server.py` ~651/661)
-  und pausierte Queues sind nicht berücksichtigt. Abholer würden nach 20 min als `interrupted` geerntet,
-  und `track_finish` überschreibt unbedingt.
-- **Absendelücke:** Zwischen der Annahme des POST und dem Speichern der Job-ID kann ein doppelter
-  Job entstehen.
-- Das Gesichtskorrektur-Backend ist `openai_mesh` (`openai_mesh.py` ~618). `poll_job` meldet 404/410
-  schon heute als `GatewayRejectedError`.
+### 0.1 Befunde aus Review-Runde 1 (Codex `gpt-6-astra`, 2026-10-13), gegen den Code bestätigt
 
-**Neue Richtung (vom Nutzer noch nicht im Detail abgenommen):**
-- **Auftragsdatensatz** mit eingefrorenen Eingaben: Signatur, Hash der Quelldatei, Zieldateien,
-  Backend und Route.
-- **Stufen-Zustandsmaschine**, z. B. `mesh → rig → publish` oder `upscale → face → rig → publish`.
-- **Pipelines in Stufenfunktionen zerlegt**, die der Normallauf und die Fortsetzung GEMEINSAM nutzen.
-- **Zwischenergebnisse dauerhaft abgelegt** statt nur im Staging.
-- **Datensatz bis zum Veröffentlichen behalten.** Ein terminaler Fehler wird gespeichert, bevor der
-  Datensatz gelöscht wird.
-- **`HubJobLost` typisiert** durch alle Ebenen durchgereicht.
-- **Atomarer Claim** vor dem Absenden.
-- **Resumer** vor AgentLoop und Workern starten. Zusätzlich ein Abholweg für pausierte Queues.
+| Befund | Beleg im Code |
+|---|---|
+| Vorverarbeitung würde wiederholt | Props rendern ihr Quellbild in `_generate` neu (`props.py` `_render_source` ~6201); Props und Locations ziehen mit `gallery.new_path()` ein neues Galerieziel (`props.py` ~6261, `location_model3d.py` ~1313) |
+| Ketten zerfallen | `_checkpoint_mesh` veröffentlicht das ungeriggte Mesh als `<sig>.glb` vor dem Rig-Job; der Cache-Check in `generate_for_current_outfit` (`find_model3d`, ~1680) hält es danach für fertig und überspringt das Rig. Die Gesichtskorrektur schreibt `facefix/<sig>.glb` nur in den `_serial_model`-Stage-Ordner (~2302) |
+| Zeilen zu früh gelöscht | Rev. 1 löschte die Zeile am Ende des Service-Aufrufs, also vor Prüfen, Rig, Veröffentlichen bzw. vor dem Instagram-Feed-Eintrag |
+| `HubJobLost` ginge verloren | `run_on_backend` wickelt jede nicht gelistete Ausnahme in `BackendFailedError` + Abkühlpause (`selection.py` ~364), `run_routed` startet darauf den nächsten Ketteneintrag (`routing.py` ~541). `face_retexture_model` schluckt jede Upscale-Ausnahme außer drei Typen (~2278). Die Task-Queue wiederholt jede Ausnahme bis `max_retries` (`task_queue._worker_loop`), Improvements wiederholen einmal (`engine.MAX_ATTEMPTS = 2`) |
+| Schlüssel instabil | `npc_assets._render_mesh` ruft `generate_for_current_outfit(name)` ohne Signatur (~382), also mit der gerade getragenen |
+| Start-Reihenfolge | `server.py` startet AgentLoop (~651) vor `get_task_queue().start()` (~661); pausierte Queues (`queue_paused`) führen ihre Tasks gar nicht aus |
+| Abholer würden geerntet | `_reap_stale_tracked_runtime` markiert getrackte Zeilen nach 20 min als `interrupted`; `track_finish` überschreibt danach jeden Status |
+| Absendelücke | Zwischen Annahme des POST und dem Speichern der Job-ID kann ein Job entstehen, den Anima nicht kennt |
+| Gesichtskorrektur-Backend | `openai_mesh` mit `category == "face_retexture"` (`openai_mesh.py` ~618) |
+| 404/410 heute | `poll_job` meldet 410 sofort und 3× 404 als `GatewayRejectedError` (`_gateway_job.py` ~210–222) |
 
-**Nutzerentscheidungen:**
-- 2026-10-13: Umfang **in einem Zug** (alle Arten aus § 1, keine Phasen), aber **nicht sofort**.
+### 0.2 Nutzerentscheidungen
+
+- 2026-10-13: Umfang **in einem Zug** (alle Arten aus § 1, keine Phasen).
 - 2026-10-13: Die Absendelücke wird **hingenommen**. Der ai-hub bleibt unverändert, die Doku nennt die Lücke.
-- 2026-10-13: Umsetzung als **Cloud-Code-Auftrag** auf dem Branch `feat/hub-job-resume`. Die Spec Rev. 2
-  ersetzt DIESE Datei (versioniert als Ausnahme von `development_instructions/`); der Plan kommt nach
-  `docs/superpowers/plans/2026-10-13-hub-job-resume-plan.md`.
+- 2026-10-13: Umsetzung auf dem Branch `feat/hub-job-resume`; diese Datei ist versioniert (Ausnahme von
+  `development_instructions/`); der Plan liegt in `docs/superpowers/plans/2026-10-13-hub-job-resume-plan.md`.
+- 2026-10-13 (Auftrag): **Nicht** zurück zu „ganze Operation erneut ausführen“. Richtung: Auftragsdatensatz mit
+  eingefrorenen Eingaben, Stufen-Zustandsmaschine, Stufenfunktionen für Normallauf und Fortsetzung gemeinsam.
+  `HubJobLost` ist durch alle Ebenen terminal. Verlorene Jobs werden **nie** automatisch neu abgeschickt.
 
-**Nächster Schritt:** Spec Revision 2 schreiben → erneutes Codex-Review → Nutzer-Review → Plan.
+### 0.3 Entscheidungen dieser Revision (im Sinne von § 0, im PR genannt)
+
+- **D1 Absendelücke:** Ein Datensatz, dessen Stufe beim Neustart im Zustand `posting` steht (POST abgeschickt,
+  keine Job-ID gespeichert), endet als `HubJobLost` („interrupted while submitting“). Kein erneutes Absenden.
+- **D2 Nur beansprucht:** Eine Stufe, die beansprucht, aber noch nicht im POST war (z. B. wartete sie im
+  GPU-Kanal), hat beim Hub nichts hinterlassen. Sie wird bei der Fortsetzung normal abgeschickt. Das ist kein
+  Neu-Absenden eines verlorenen Jobs.
+- **D3 Zweiter Start:** Läuft für dasselbe Ziel schon ein Auftrag, wird ein zweiter Start **abgelehnt**
+  (`HubOpBusy`), nicht angehängt. Ergebnis wie in Rev. 1 gefordert: kein zweiter Job.
+- **D4 Verwaiste Task-Aufträge:** Endet ein Task, ohne seinen offenen Auftrag fortgesetzt zu haben (z. B.
+  `npc_assets` hält das veröffentlichte statische Mesh für fertig), übernimmt ein Thread den Auftrag.
+  Bei einem abgebrochenen Task wird der Hub-Job storniert und der Auftrag verworfen.
+- **D5 Zeitbudget beim Anhängen:** `submitted_at + max_queue_wait + max_wait`, höchstens 24 h. Danach Hub-Job
+  stornieren (best effort) und `HubJobLost`.
+- **D6 Abbrechen:** Der `should_cancel`-Weg gilt für Fortsetzungs-Einträge. Normale Läufe verhalten sich wie
+  heute (E4).
+- **D7 Posen-Animation:** nutzt denselben Auftragsdatensatz (Eigentümer = ihr Task). Der Task-`progress`
+  behält `hub_job` zur Anzeige.
+- **D8 Grabstein:** Ein Task-Auftrag, der mit `HubJobLost` endet, bleibt als `failed`-Datensatz stehen, bis
+  sein Task endgültig vorbei ist. Läuft der Handler erneut (Neustart, `outfit_combos` fängt Fehler je
+  Kombination ab), findet der Einstieg den Grabstein und meldet `HubJobLost`, statt neu abzuschicken.
+  Andere Fehler (kein Verlust) löschen den Datensatz wie gehabt; ein Retry ist dann normales Verhalten.
+- **D9 Abgrenzung:** „Nie automatisch neu abgeschickt“ gilt für den Fortsetzungsweg und den besitzenden
+  Task. Unabhängige Auto-Produzenten, die ein fehlendes Asset später aus eigenem Anlass erzeugen
+  (Auto-Mesh-Hook nach einem T-Pose-Render, stehende Improvements beim nächsten Scan, NPC-Gate), behandeln das
+  Asset wie heute als fehlend. Ein „verloren“-Merker pro Ziel ist nicht Teil dieser Revision (Grenze, § 7).
+- **D10 Video-Aufträge gehören immer einem Thread:** Der Video-Skill kann im Handler eines nicht
+  deterministischen Tasks laufen (Intent, Social), der den Einstieg nach einem Neustart nicht wieder
+  erreicht. Instagram- und Skill-Videos setzt deshalb immer der Resumer fort.
+- **D11 Zielschlüssel = bestehende Guards:** Der `subject` jeder Art entspricht dem heutigen
+  Doppelstart-Schlüssel (Props: Prop + Varianten-Index + Backend bzw. `shrink:<Datei>`; Locations: Bild +
+  Backend + Stufe bzw. Shrink-Datei; Charakter: Charakter + Signatur; Video: Ziel-Datei). Was heute parallel
+  laufen darf, darf es weiter (E4). Improvements werten `HubOpBusy` wie `CandidateBusy` (kein Versuch
+  verbraucht).
+- **D12 Verlorener Upscale ist terminal** für die ganze Gesichtskorrektur (Auftrag: „durch alle Ebenen“);
+  andere Upscale-Fehler bleiben wie heute nicht fatal.
 
 ## 1. Ziel
 
 Nutzerbefund: „Beim Neustart sollen Generierungsaufträge nicht verloren gehen. Der AI-Hub macht die
 Generierungen eh zu Ende, und nach dem Neustart kann das Ergebnis geholt werden.“
 
-**Erfolg heißt:**
+- **(E1)** Ein Hub-Job (Mesh, Rig, Gesichtskorrektur, Upscale, Posen-Animation, Video, Mesh-Verkleinerung), der
+  beim Neustart von Anima auf dem Hub läuft oder fertig ist, wird nach dem Start **abgeholt und normal
+  weiterverarbeitet**: gleiche Dateien, gleiche Sidecars, gleiche Folgeschritte.
+- **(E2)** Nach dem Neustart wird **kein zweiter Hub-Job** für dieselbe Arbeit abgeschickt.
+- **(E3)** Ist der Job nicht mehr abholbar, endet der Auftrag als fehlgeschlagen („Hub job lost: …“). Nichts
+  startet ungefragt neu.
+- **(E4)** Ohne Neustart ändert sich am Verhalten nichts außer dem Datensatz, der während des Laufs existiert.
 
-- **(E1)** Ein langer Hub-Job (Mesh, Rig, Gesichtskorrektur, Posen-Animation, Video, Upscale), der beim
-  Neustart von Anima auf dem Hub läuft oder schon fertig ist, wird nach dem Start **abgeholt und normal
-  weiterverarbeitet**: gleiche Dateien, gleiche Sidecars, gleiche Folgeschritte wie ohne Neustart.
-- **(E2)** Nach dem Neustart wird **kein zweiter Hub-Job** für dieselbe Arbeit abgeschickt (heute
-  passiert das bei Task-Queue-Aufträgen; der alte Job läuft verwaist weiter).
-- **(E3)** Ist der Job nicht mehr abholbar, wird der Auftrag **als fehlgeschlagen markiert**
-  („Hub job lost“). Nichts startet ungefragt neu (Nutzerentscheidung 2).
-- **(E4)** Ohne Neustart ändert sich am Verhalten nichts; das Register ist im Normalbetrieb leer.
+**Nicht im Umfang:** synchrone Bilder (`openai_diffusion`), fremde Async-APIs (CivitAI, `localai_video`,
+`together_video`), ein Neustart **des Hubs** (der Hub markiert seine Jobs dann `failed` → E3).
 
-**Nicht im Umfang** (Nutzerentscheidung 1):
+## 2. Ist-Zustand (verifiziert)
 
-- Normale Bilder über `openai_diffusion`: synchron, ohne Job-ID. Sie bleiben, wie sie sind.
-- Fremde Async-APIs (CivitAI-Workflows, `localai_video`, `together_video`): eigene Job-IDs, nicht der Hub.
-- Ein Neustart **des Hubs**: Der Hub markiert dabei seine laufenden Jobs als `failed`
-  (`jobs.reconcile_orphans()` im ai-hub). Das ist der Fall „verloren“ aus E3, nicht mehr.
+- Die Job-ID lebt in Thread-Locals (`openai_mesh._tls.job_id`) bzw. Closures; einzig die Posen-Animation
+  persistiert sie (`progress.hub_job` über `on_job_id`) und **storniert** den Job nach dem Neustart (`_handle`).
+  Von Hand abholen kann der Admin heute nur Charakter-Meshes per Job-ID (`openai_mesh.fetch_job` →
+  `service.fetch_mesh_job` → `model3d.fetch_job_for_current_outfit`, einmalig, ohne Poll). `attach` nutzt
+  dieselbe Download-Funktion `_download_results`; der Admin-Weg bleibt unverändert.
+- Ein Rig mit falschem Skelett löst heute über `BackendFailedError` den nächsten Ketteneintrag aus. Nach dem
+  Anhängen gibt es kein Routing: dort ist es ein einfacher Fehler des Auftrags.
+- `TaskQueue.__init__` → `_reset_stale_running`: Queue-Tasks `running` → `pending` (Handler läuft erneut),
+  getrackte Zeilen → `interrupted`.
+- Thread-Aufträge: `model3d.trigger_generation`/`trigger_rerig`/`trigger_face_retexture`,
+  `props`/`location_model3d` `trigger_generation`/`trigger_shrink`, Instagram-Animate (`routes/instagram.py`),
+  Video-Skill (`video_generation_skill.py`). Task-Aufträge mit Hub-Jobs: `npc_assets`, `outfit_combos`,
+  `improvement_step` (Mesh, Gesichtskorrektur, Prop-/Location-Mesh), `pose_animation`.
+- Hub-Backends mit Job-Protokoll: `openai_mesh` (img2mesh, mesh2mesh, mesh2rig, face_retexture),
+  `openai_video`, `openai_upscale`, `openai_mesh_animation`. Alle nutzen `_gateway_job.submit_job`/`poll_job`.
+- Hub-Aufbewahrung: Standard-TTL 86 400 s, danach 404.
 
-## 2. Ist-Zustand (Kurzfassung)
+## 3. Entwurf
 
-- Die Job-ID existiert nur in Thread-Locals und Closures (`_gateway_job.submit_job` → `poll_job`).
-  Persistiert wird sie einzig in der Posen-Animation (Task-`progress`, `pose_animation.py` ~L359), und
-  dort wird der Job nach dem Neustart **abgebrochen** (`_handle`, ~L304–312).
-- Task-Queue-Aufträge (`npc_assets`, `outfit_combos`, `improvement_step`, `pose_animation`) werden beim
-  Start auf `pending` gesetzt und **von vorn** ausgeführt (`task_queue._reset_stale_running` /
-  `_recover_stale_running`).
-- Thread-Aufträge (`model3d.trigger_generation`, `trigger_rerig`, `trigger_face_retexture`,
-  `props`/`location_model3d` `_generate`/`_shrink`, Video aus Instagram/Video-Skill) sind nach dem
-  Neustart weg; ihre `track_start`-Zeile wird `interrupted`.
-- Vorhandene Bausteine: `openai_mesh.fetch_job` (einmaliges Abholen ohne Poll und ohne GPU-Slot),
-  `service.fetch_mesh_job`, `model3d.fetch_job_for_current_outfit` (Admin-Route, nimmt die **aktuelle**
-  Signatur), `_checkpoint_mesh` + `_rig_from_source` (Rig aus gespeicherter Quelle).
-- Hub-Aufbewahrung: Standard-TTL 86 400 s (`jobs.default_ttl_s`), abgelaufene Jobs antworten **404**.
-
-## 3. Ansatz: Fortsetzen durch erneutes Ausführen
-
-Es gibt **keine** zweite Nachbearbeitung. Nach dem Neustart wird die **ursprüngliche Operation** erneut
-ausgeführt; die Service-Methode erkennt am **Schlüssel**, dass zu dieser Arbeit schon ein Hub-Job läuft,
-und hängt sich an ihn, statt neu abzuschicken. Alles danach läuft auf dem normalen Code-Weg.
-
-### 3.1 Register `hub_jobs` (world.db)
+### 3.1 Auftragsdatensatz `hub_ops` (world.db)
 
 | Spalte | Inhalt |
 |---|---|
-| `key` (PK) | fester Schlüssel aus den Eingaben, siehe 3.2 |
-| `job_id` | Hub-Job-ID |
-| `backend` | Backend-Name (kein API-Key in der DB) |
-| `api_url` | zur Plausibilisierung; Abweichung vom konfigurierten Backend = verloren |
-| `media` | `mesh` / `rig` / `face` / `upscale` / `video` / `animation` |
-| `owner_kind` | `task` oder `op` |
-| `owner` | Task-ID bzw. registrierter Operationsname (z. B. `model3d.generate`) |
-| `op_args` | JSON-Argumente der Operation (nur bei `owner_kind = op`) |
-| `submitted_at` | Systemzeit (`utc_now`), technischer Stempel |
-| `label` | Anzeigetext für die Task-Liste |
+| `op_id` (PK) | `hop_<hex12>` |
+| `kind` | registrierte Auftragsart, z. B. `character_mesh` |
+| `subject` | Zielschlüssel (D11); **teilweise eindeutig** (`UNIQUE … WHERE status='running'`) = atomarer Claim des Auftrags |
+| `status` | `running` oder `failed` (Fehler gespeichert, Meldung steht noch aus) |
+| `inputs` | eingefrorene Eingaben (JSON): Signatur, Zielangaben, Backend-Wahl, Parameter, Dateinamen, SHA-256 der Quelle |
+| `state` | Stufenzustand (JSON): je Stufe `job` (`phase`, `job_id`, `backend`, `api_url`, `submitted_at`, `attach_params`, `route`, `collected`) und `result` |
+| `owner_kind`, `owner` | `task` + Task-ID oder `thread` + `''` |
+| `track_id` | getrackte Anzeigezeile des laufenden Prozesses |
+| `label`, `error`, `created_at`, `updated_at` | Anzeige, letzter Fehler, Systemzeit (`utc_now_iso`) |
 
-Schreibzugriffe unter einer Sperre. Eine Zeile wird **beim Absenden** geschrieben (direkt nachdem
-`submit_job` die Job-ID hat) und **beim Ende des Aufrufs** gelöscht, egal ob Erfolg oder Fehler. Ausnahme:
-Endet der Prozess, bleibt sie stehen. Genau das ist der Fortsetzungsfall.
+Dateien des Auftrags liegen dauerhaft unter `<world>/hub_ops/<op_id>/` (eingefrorene Eingabedateien,
+abgeholte Rohdaten, Zwischenergebnisse jeder Stufe). Kein API-Key in der DB.
 
-Neues Modul `app/core/hub_jobs.py`: `record(...)`, `find(key)`, `forget(key)`, `pending_ops()`,
-`register_op(name, fn)`, `resume_pending()`.
+Lebenslauf: Anlegen, sobald die Vorverarbeitung fertig ist (vorher gibt es nichts abzuholen) → Stufen →
+Veröffentlichen → Datensatz und Ordner löschen. Fehler: zuerst `status='failed'` + `error` speichern, dann
+Anzeigezeile abschließen, dann löschen — außer beim Grabstein (D8), der bis zum Ende seines Tasks bleibt.
+Ein beim Start gefundener `failed`-Datensatz eines Threads oder eines beendeten Tasks wird gemeldet und
+gelöscht; der eines lebenden Tasks bleibt für dessen Handler.
 
-### 3.2 Schlüssel
+Beim Charakter gilt „Veröffentlichen“ erst, wenn der `_serial_model`-Wrapper die Stage veröffentlicht hat:
+Der Datensatz wird außerhalb des Wrappers abgeschlossen, ein `stale`-Ergebnis endet als Fehler.
 
-Deterministisch aus den Eingaben, die die Arbeit bestimmen. Bei Charakteren gilt die **Signatur zum
-Zeitpunkt des Absendens**:
+### 3.2 Stufen-Zustandsmaschine und Stufenfunktionen
 
-| Medium | Schlüssel |
-|---|---|
-| Charakter-Mesh | `mesh:<Charakter>:<Signatur>` |
-| Rig | `rig:<Charakter>:<Signatur>` |
-| Gesichtskorrektur | `face:<Charakter>:<Signatur>` |
-| Upscale (Gesichtskorrektur) | `upscale:<Charakter>:<Signatur>` |
-| Prop-Mesh / Prop-Variante | `prop_mesh:<Prop>:<Variante>`, `prop_shrink:<Prop>:<Variante>` |
-| Location-Mesh / -Variante | `loc_mesh:<Location>:<Raum>:<Ansicht>`, `loc_shrink:…` |
-| Video | `video:<Quelldatei>:<sha1(Prompt)[:12]>` |
-| Posen-Animation | bleibt im Task-`progress` (eigener Weg, 3.6) |
+Jede Auftragsart besteht aus Stufen. Eine **Hub-Stufe** hat die Phasen
+`claimed → posting → submitted → collected → done`; lokale Stufen nur `done`. Die Stufenfunktionen sind
+dieselben im Normallauf und in der Fortsetzung; sie lesen ausschließlich `inputs` und die Ergebnisse
+früherer Stufen, nie den aktuellen Zustand der Welt (Signatur, getragenes Outfit, Galerie-Auswahl).
+Hat eine Stufe schon einen Job, wird **vor** jeder Verfügbarkeits-, Routing-, Eignungs- oder
+Hauptschalter-Prüfung abgeholt (z. B. `_wait_for_explicit_backend`, `resolve_spec`,
+`face_retexture.runnable`, `resolve_animation_backend`, `prepare_motion`): Ein beim Start noch nicht
+erreichbares Backend darf ein abholbares Ergebnis nicht verwerfen.
 
-Die genaue Zusammensetzung bei Props und Locations legt der Umsetzungsplan anhand der `_generate`- und
-`_shrink`-Argumente fest. Bedingung: Zwei Aufrufe für **dieselbe** Zieldatei haben denselben Schlüssel.
+Charakter-Aufträge laufen in Normallauf und Fortsetzung durch **dieselbe** mit `_serial_model` dekorierte
+Funktion; der öffentliche Einstieg sucht den offenen Auftrag **vor** dem Wrapper und übergibt die
+eingefrorene Signatur (sonst würde der Wrapper bei `signature=None` die getragene stagen). Die Fortsetzung
+setzt `mesh_published` aus dem Zustand (Stufe `checkpoint`), damit ein Rig-Fehler das statische Mesh wie
+heute mit `rig_error` markiert. Für die Rig-Stufe einer Gesichtskorrektur wird die korrigierte Quelle aus
+dem Auftragsordner vorher nach `facefix/<sig>.glb` der Stage zurückgeschrieben, damit `_rig_from_source`
+Metadaten und die Erhaltungsprüfung wie gewohnt findet.
 
-### 3.3 Service-Ebene: anhängen statt absenden
+| Auftragsart | Stufen | Normaler Einstieg |
+|---|---|---|
+| `character_mesh` | `mesh` → `checkpoint` → `rig` → Veröffentlichen | `model3d.generate_for_current_outfit` |
+| `character_rerig` | `rig` → Veröffentlichen | `model3d.rerig_model` |
+| `face_retexture` | `upscale` (optional) → `face` → `bake` → `rig` → Veröffentlichen | `model3d.face_retexture_model` |
+| `prop_mesh` | `mesh` → Veröffentlichen | `props._generate` (nach dem Quellbild-Render) |
+| `prop_shrink` | `shrink` → Veröffentlichen | `props._shrink` |
+| `location_mesh` | `mesh` → Veröffentlichen | `location_model3d._generate` |
+| `location_shrink` | `shrink` → Veröffentlichen | `location_model3d._shrink` |
+| `video_instagram` | `video` → Veröffentlichen (Feed + Bild-Meta) | Instagram-Animate |
+| `video_character` | `video` → Veröffentlichen (Bild-Meta) | Video-Skill (nach dem Standbild) |
+| `pose_animation` | `animation` → Konvertieren → `awaiting_choice` | `pose_animation._handle` |
+
+Zwischenergebnisse liegen im Auftragsordner, nicht im Staging: Hub-Mesh-Stufen schreiben ihr Ergebnis dorthin
+(statt direkt in die Galerie); das Veröffentlichen kopiert es ans Ziel. Der Galeriepfad wird beim ersten
+Veröffentlichen gewählt und im Zustand festgehalten, damit ein wiederholtes Veröffentlichen kein zweites Ziel
+anlegt. Die Gesichtskorrektur legt korrigierte Quelle, Vergleichsbild, Sidecar-Daten und die Ersetzungsmaske
+(`.npy`) im Auftragsordner ab. Das statische Mesh (`checkpoint`) wird wie heute sofort veröffentlicht; die
+Fortsetzung beginnt danach beim Rig, ohne Cache-Check.
+
+### 3.3 Service-Ebene: Stufen-Griff
 
 Die Service-Methoden `generate_mesh`, `generate_mesh_variant`, `generate_rig`, `generate_face_retexture`,
-`upscale_image`, `generate_video` (Hub-Backend `openai_video`) bekommen ein optionales Argument
-`resume: Optional[ResumeSpec]` (`key`, `owner_kind`, `owner`, `op_args`, `label`).
+`upscale_image`, `generate_video`, `generate_mesh_animation` bekommen `hub_stage=None` (Griff auf eine Stufe).
 
-- **Ohne vorhandene Zeile:** normaler Weg (Routing, GPU-Kanal, `run_on_backend`). Ein `on_job_id`-Hook
-  wird in die Backend-Parameter gelegt (Muster aus `openai_mesh_animation`); `_gateway_job.submit_job`
-  ruft ihn nach dem Absenden auf, und er schreibt die Zeile. Der Hook steckt in den Parametern, weil der
-  GPU-Kanal `_gen` auf einem anderen Thread ausführt; ein Thread-Local käme dort nicht an.
-- **Mit vorhandener Zeile:** kein Routing, kein POST, **kein GPU-Slot** (der Job belegt schon die GPU
-  des Hubs). Das Backend wird über den Namen aus dem Pool genommen, `poll_job` mit derselben
-  `on_done`-Download-Funktion wie im Normalfall aufgerufen und das Ergebnis genauso abgelegt wie sonst
-  (`_store_mesh_files` usw.). Rückgabe im normalen Ergebnisformat, ergänzt um `resumed: True`.
-- **Ende des Aufrufs** (Erfolg, Fehler, Abbruch): Zeile löschen.
+- **Ohne Griff:** unverändert (E4).
+- **Griff ohne Job:** Die Stufe wird atomar beansprucht (`prepare()`), dann läuft der normale Weg (Routing,
+  GPU-Kanal, `run_on_backend`). Der Griff wandert in `params["hub_stage"]` mit, weil der GPU-Kanal auf einem
+  anderen Thread läuft. `submit_job` setzt vor jedem POST `posting`, nach der Antwort `submitted` mit Job-ID,
+  Backend, `api_url`, `submitted_at`, den Abhol-Parametern (z. B. SHA-256 der Eingaben, Variantenzahl) und der
+  Route (`run_routed(on_route=…)`). Ein Wiederholungslauf von `run_routed` auf dem nächsten Ketteneintrag
+  überschreibt den Job — das ist derselbe Prozess, kein Neu-Absenden nach Neustart.
+- **Griff mit Job:** kein Routing, kein POST, kein GPU-Slot, kein Hauptschalter. `HubStage.collect()` nimmt das
+  Backend über den Namen, prüft URL und Alter, ruft `backend.attach(job_id, attach_params, since=…)` und legt
+  die Rohdaten im Auftragsordner ab (`collected`). Danach dieselbe Nachbearbeitung wie im Normalweg.
+- **Griff mit `posting` ohne Job-ID:** `HubJobLost` (D1).
 
-Dafür bekommt jedes betroffene Backend (`openai_mesh`, `openai_video`, `openai_upscale`,
-`openai_mesh_animation` sowie das Gesichtskorrektur-Backend) eine Methode `attach(job_id, params)`, die
-die Poll- und Download-Hälfte seines `generate` ohne Absenden ausführt. Sie wird aus dem bestehenden
-`generate` herausgezogen, nicht kopiert.
+Jedes Hub-Backend bekommt `attach(job_id, params, *, since, should_cancel=None)`: die Poll- und Download-Hälfte
+des bisherigen `_generate`, **herausgezogen**, nicht kopiert (`_collect`).
 
-### 3.4 Verloren vs. nicht erreichbar
+### 3.4 Verloren vs. nicht erreichbar (`poll_job(attach_since=…)`)
 
-- **Verloren**, also endgültig: Hub antwortet 404 oder 410, Job-Status `failed` oder `cancelled`, das
-  Backend ist nicht mehr konfiguriert oder seine URL weicht ab, die Zeile ist älter als 24 h.
-  → neue Ausnahme `HubJobLost` (in `app/imagegen/base.py`). Sie ist **terminal**: kein Retry, kein
-  Fallback auf den nächsten Ketteneintrag, **keine Abkühlpause** für das Backend. Die Zeile wird
-  gelöscht.
-- **Nicht erreichbar**: Verbindungsfehler oder 5xx. Das gilt **nicht** als verloren. Beim Anhängen
-  wird alle 30 s erneut gefragt, bis die 24 h erreicht sind. Die Lost-Job-Kappen von `poll_job`
-  (3× 404, 10 andere Fehler) gelten beim Anhängen nur für 404/410. Für Netzfehler zählt die 24-h-Grenze.
-- Die Laufzeitbudgets (`max_wait`, `max_queue_wait`) zählen beim Anhängen ab `submitted_at`, nicht ab
-  dem Neustart.
+**Verloren** → `HubJobLost` (neu in `app/imagegen/base.py`, Text beginnt mit „Hub job lost:“):
+410, 3× 404, 401/403, Job-Status `failed`/`error`/`cancelled`, Backend nicht mehr konfiguriert oder `api_url` geändert,
+eine beanspruchte Stufe auf einem Backend ohne Job-Protokoll (Drittanbieter-Video, lokaler Upscaler),
+`submitted_at` älter als 24 h (ohne HTTP-Aufruf), Zeitbudget D5 überschritten, Absendelücke D1, Ergebnis nach
+10 Versuchen nicht herunterladbar.
 
-### 3.5 Wer setzt fort
+**Nicht erreichbar**: Verbindungsfehler oder 5xx. Beim Anhängen kein Abbruch nach 10 Fehlern; Wartezeit steigt
+auf 30 s, bis 24 h ab `submitted_at` erreicht sind.
 
-**Task-Queue-Aufträge** (`npc_assets`, `outfit_combos`, `improvement_step`): Die Queue führt den Handler
-nach dem Start ohnehin erneut aus. Die Hub-Aufrufe darin geben `resume` mit `owner_kind = task` und
-finden ihre Zeile. Kein eigener Fortsetzungscode. `HubJobLost` lässt den Task **ohne** Wiederholung
-fehlschlagen, auch wenn der Task sonst Retries hätte (`npc_assets`: `ASSET_RETRIES = 2`).
+`HubJobLost` ist terminal in jeder Ebene:
+- `selection.run_on_backend`: eigener Zweig, re-raise, **keine** Abkühlpause, **kein** `BackendFailedError`
+  (also auch kein Ketten-Fallback in `run_routed`).
+- Service-Methoden mit Sammel-`except`: re-raise (`generate_mesh`, `generate_video`, `generate_mesh_variant`,
+  `generate_mesh_animation`), ebenso `animate.animate_image`.
+- `model3d.face_retexture_model`: der Upscale-Fehler-Zweig lässt `HubJobLost` durch.
+- `TaskQueue`: `HubJobLost` → `failed` ohne Wiederholung, unabhängig von `max_retries`.
+- Improvements: Schritt sofort `skipped`, kein zweiter Versuch.
 
-**Thread-Aufträge**: Die auslösende Funktion registriert eine Operation (`hub_jobs.register_op`) und
-gibt sie als Besitzer an:
+### 3.5 Eigentümer und wer fortsetzt
 
-| Operation | Fortsetzung |
-|---|---|
-| `model3d.generate(char, sig, …)` | ungeriggter Checkpoint der Signatur vorhanden → `_rig_from_source`; sonst `generate_for_current_outfit(signature=sig, force=True, …)` |
-| `model3d.rerig(char, sig, backend_glob)` | `rerig_model` |
-| `model3d.face_retexture(char, sig, …)` | `face_retexture_model`; das Upscale nutzt den Cache `facefix-ref`, der Gesichts-Job hängt sich an |
-| `props.generate(…)`, `props.shrink(…)` | `_generate` / `_shrink` mit den gespeicherten Argumenten |
-| `location_model3d.generate(…)`, `location_model3d.shrink(…)` | dito |
-| `video.animate(…)` | Instagram-Animate bzw. Video-Skill mit den gespeicherten Argumenten |
+- **Task-Eigentümer:** Läuft ein Einstieg im Handler eines Queue-Tasks, ist der Task Eigentümer
+  (`task_queue.current_task_id()`, Thread-Local im Worker). Nach dem Neustart läuft der Handler erneut; der
+  Einstieg sucht zuerst einen offenen Auftrag **seines** Tasks (`hub_ops.find_open`) und setzt diesen fort —
+  mit der eingefrorenen Signatur, nicht der getragenen (Befund `npc_assets`). Ohne Signatur-Argument passt jeder
+  offene Auftrag des Tasks für dieses Ziel, mit Signatur nur der gleichen.
+- **Thread-Eigentümer:** setzt der Resumer fort.
+- **D4:** Endet ein Task endgültig (erledigt, fehlgeschlagen ohne Wiederholung) mit offenem Auftrag, wird
+  dieser zum Thread-Auftrag und läuft sofort weiter. Abgebrochen → Hub-Job stornieren, verwerfen.
+- **Handler-Vorverarbeitung:** `outfit_combos` überspringt eine Signatur nicht, solange ihr Task dafür einen
+  offenen Auftrag hat (das veröffentlichte statische Mesh ließe sie sonst „fertig“ aussehen), und rendert
+  ihre T-Pose nicht neu. Die Posen-Animation nutzt bei der Fortsetzung den eingefrorenen Clip-Namen
+  (`reserve_kind` ist nicht idempotent) und überspringt den LLM-Schritt.
 
-`generate_for_current_outfit` ruft Mesh und Rig nacheinander auf. Steht beim Neustart der Rig-Job aus,
-existiert schon der Checkpoint des ungeriggten Meshs; die Fortsetzung beginnt deshalb beim Rig.
+### 3.6 Resumer beim Start
 
-**Posen-Animation** (3.6): eigener Weg über den Task-`progress`.
+`hub_ops.start_resumer()` läuft im Lifespan **nach** der Handler-Registrierung (der Image-Service ist ein
+lazy Singleton und wird beim ersten Abholen gebaut), **vor** AgentLoop
+und `TaskQueue.start()`. Er arbeitet synchron nur das Einlesen ab und startet Daemon-Threads:
 
-### 3.6 Posen-Animation
+1. `failed`-Datensätze melden und löschen.
+2. Unbekannte Art (Code entfernt): `failed` mit „resume operation unknown“, Hub-Job stornieren, löschen.
+3. Task-Eigentümer, Task `pending`/`running`: Abholweg — die laufende Hub-Stufe wird im Hintergrund abgeholt
+   (`collect`), auch wenn die Queue pausiert ist; den Rest macht der Handler. Abholen und Handler teilen
+   eine Sperre je Stufe; der Handler wartet und nimmt das abgelegte Ergebnis. Ein Verlust beim Abholen wird
+   als Grabstein gespeichert (D8). Task beendet oder fehlt → D4.
+4. Thread-Eigentümer: **synchron** die prozessinternen Sperren der Art setzen (z. B. `model3d._generating`,
+   `props._generating`), dann ein Thread pro Auftrag. Erst danach starten AgentLoop und Worker; ein
+   Auto-Mesh-Hook sieht den Charakter also als beschäftigt.
 
-In `pose_animation._handle` wird der Zweig „`progress` vorhanden, kein `awaiting_choice`“ umgebaut:
-Steht `hub_job` und `backend` im `progress`, wird **angehängt** (`attach` des Animations-Backends) und
-mit den gespeicherten `captions`, `seed`, `key`, `entry` und `variants` an der Stelle nach
-`generate_mesh_animation` weitergemacht (Konvertieren → `awaiting_choice`). Ohne `hub_job` (der Neustart
-kam vor dem Absenden) bleibt es beim heutigen Fehler „interrupted by restart“. `HubJobLost` → Task
-fehlgeschlagen mit „Hub job lost“.
+Fortsetzung läuft auch bei eingefrorener Welt und bei ausgeschaltetem Medien-Hauptschalter: Abholen erzeugt
+nichts. Folgestufen mit **neuem** Hub-Job laufen über `run_on_backend_channel` und damit weiter über den
+Hauptschalter; `MediaGenerationDisabled` beendet den Auftrag mit genau diesem Fehler.
 
-### 3.7 Resumer beim Start
+Ziel gelöscht (Charakter/Prop/Location/Post weg): Die Stufe prüft wie heute ihr Ziel; der Auftrag endet,
+der Hub-Job wird storniert.
 
-`hub_jobs.resume_pending()` wird im Server-Lifespan **nach** Task-Queue und Image-Service gestartet.
+### 3.7 Posen-Animation
 
-- Er nimmt nur Zeilen mit `owner_kind = op`; Task-Zeilen bedient der neu laufende Handler.
-- Zeilen derselben Operation und derselben Argumente werden zu **einer** Fortsetzung zusammengefasst
-  (z. B. ein verwaistes Mesh- und ein Rig-Schlüssel derselben Signatur).
-- Pro Fortsetzung startet ein Daemon-Thread. Die vorhandenen Sperren (`_char_lock`, `_serial_model`,
-  Prop-/Location-Sperren) sorgen für die Reihenfolge.
-- Er läuft **auch bei eingefrorener Welt** und **auch bei ausgeschaltetem Medien-Hauptschalter**. Es wird
-  nichts erzeugt, nur abgeholt. Folgeschritte, die einen **neuen** Hub-Job brauchen (z. B. das Rig
-  nach einem abgeholten Mesh), unterliegen weiter dem Hauptschalter; bei `MediaGenerationDisabled`
-  endet die Fortsetzung mit genau diesem Fehler.
-- Ist die Operation unbekannt (Code entfernt, Plugin deinstalliert): Zeile löschen, Task-Eintrag
-  fehlgeschlagen mit „resume operation unknown“.
+`_handle` legt nach dem LLM-Schritt einen `pose_animation`-Auftrag an (Eingaben: Captions, Seed, Key,
+Eintrag, Gruppe, Loop, Varianten, Backend, Motion-Meta). Nach dem Neustart: Progress `awaiting_choice` → wie
+heute fertig. Sonst offener Auftrag des Tasks → Stufe `animation` anhängen, dann die gemeinsame
+Konvertier-Funktion (neu: `_build_candidates`, herausgezogen aus der Schleife in `_handle`; die
+Einzelvariante bleibt `_build_candidate`) → `awaiting_choice`. Ohne Auftrag (Neustart vor dem Absenden) bleibt
+es beim Fehler „interrupted by restart“; ein alter Progress mit `hub_job` ohne Auftrag (vor diesem Deploy)
+wird wie bisher storniert.
 
 ### 3.8 Anzeige
 
-- Jede Fortsetzung erhält einen `track_start`-Eintrag mit dem ursprünglichen Typ (z. B.
-  `model3d_generation`) und dem Label `<label> — collecting after restart`. Am Ende `track_finish`:
-  erfolgreich oder Fehler „Hub job lost: <Grund>“.
-- Die beim Start als `interrupted` markierten Einträge der alten Laufzeit, deren Arbeit fortgesetzt
-  wird, bekommen im Fehlertext den Zusatz „resumed as <neue Task-ID>“.
-- Abbrechen eines Fortsetzungs-Eintrags in der Task-Liste storniert den Hub-Job
-  (`POST /v1/jobs/{id}/cancel`) und löscht die Zeile. Der Weg dafür ist derselbe `should_cancel`-Hook,
-  den `poll_job` schon kennt.
-- Texte englisch. Die Task-Liste in Game-Admin → Queue zeigt die Einträge schon heute an; eine neue
-  UI-Fläche ist nicht nötig. Server-Texte, die an React gehen, laufen über `t()`.
+- Normale Läufe: Anzeigezeilen wie heute; ihre ID steht im Auftrag.
+- Fortsetzung: neue Zeile mit dem ursprünglichen Typ und dem Label `<label> — collecting after restart`; die
+  alte (`interrupted`) Zeile erhält im Fehlertext „ — resumed as <neue ID>“.
+- Die Fortsetzungszeile ist vom 20-min-Reaper ausgenommen (`track_hold`) und wird mit `track_finish_if_open`
+  beendet, damit ein Abbruch nicht überschrieben wird.
+- Abbrechen der Fortsetzungszeile (`track_cancel` in der Queue-Ansicht) → `should_cancel` im Poll → Hub-Job
+  `POST /v1/jobs/{id}/cancel`, Auftrag gelöscht.
+- Texte englisch; Task-Labels sind Daten (wie die bestehenden „3D model: …“), keine `t()`-Schlüssel.
+  Neue UI-Fläche: keine.
 
 ### 3.9 Hub-TTL
 
-Unverändert 24 h (Hub-Standard). Ein Anima-Neustart dauert Sekunden bis Minuten. Wird mehr gebraucht,
-lässt sich `ttl_s` später pro Anfrage setzen; das ist nicht Teil dieser Spec.
+Unverändert 24 h. Der Abholweg holt Task-Aufträge pausierter Queues sofort nach dem Start ab, damit die TTL
+nicht abläuft, während die Queue steht.
 
 ## 4. Fehlerfälle
 
 | Fall | Ergebnis |
 |---|---|
-| Neustart während der Job beim Hub in der Queue steht | anhängen, warten, abholen |
-| Neustart, Job schon fertig | anhängen, sofort abholen |
-| Neustart nach Abholen, vor dem Löschen der Zeile | anhängen; der Hub liefert dasselbe Ergebnis erneut (innerhalb der TTL); die Nachbearbeitung schreibt dieselben Zieldateien |
-| Hub ist beim Start nicht erreichbar | alle 30 s erneut, bis 24 h |
-| Hub wurde selbst neu gestartet | Status `failed` bzw. 404 → `HubJobLost` |
-| Nutzer startet dieselbe Arbeit von Hand, während die Zeile steht | derselbe Schlüssel → hängt sich an den laufenden Job, kein zweiter Job |
-| Charakter, Prop oder Location inzwischen gelöscht | die Operation prüft wie heute ihr Ziel (`character_gone` usw.); der Hub-Job wird storniert, die Zeile gelöscht |
-| Zwei Welten | jede Welt hat ihr eigenes Register in ihrer `world.db` |
+| Neustart, Job in der Hub-Queue oder laufend | anhängen, warten, abholen, weiterverarbeiten |
+| Neustart, Job fertig | anhängen, sofort abholen |
+| Neustart nach Abholen, vor dem Löschen | `collected`: Rohdaten aus dem Auftragsordner; sonst Hub liefert erneut |
+| Neustart zwischen zwei Stufen (Mesh fertig, Rig nicht abgeschickt) | Rig wird normal abgeschickt (neuer Job, Hauptschalter gilt) |
+| Neustart während des POST (D1) | `HubJobLost`, kein neuer Job; die Doku nennt die Lücke |
+| Hub beim Start nicht erreichbar | alle bis zu 30 s erneut, bis 24 h |
+| Hub neu gestartet | `failed`/404 → `HubJobLost` |
+| Zweiter Start desselben Ziels | abgelehnt (D3) |
+| Ziel gelöscht | Auftrag endet, Hub-Job storniert |
+| Zwei Welten | jede Welt hat ihr Register in ihrer `world.db` |
+| Task pausiert | Abholweg sichert das Ergebnis, Handler macht später weiter |
 
 ## 5. Tests
 
-`scripts/smoke_hub_job_resume.py`, ohne Server: temporäre Welt (`paths.init(<tmp>)` vor jedem
-Welt-Import), ein Fake-Hub als lokaler `http.server`, erwartete Werte von Hand im Docstring.
+`scripts/smoke_hub_job_resume.py`, ohne Server, temporäre Welt (`paths.init(<tmp>)`), Fake-Hub als lokaler
+`http.server`, erwartete Werte im Docstring von Hand hergeleitet. Schwere Blender-Schritte werden ersetzt.
 
-1. Absenden mit `resume` → genau eine Zeile mit Schlüssel, Job-ID und Besitzer. Normales Ende → Zeile weg.
-2. Simulierter Neustart (Prozessspeicher leer, DB bleibt): Derselbe Aufruf erzeugt **0 POSTs** an
-   `/v1/generations` und ≥ 1 GET auf `/v1/jobs/{id}`; das Ergebnis liegt am normalen Zielort.
-3. Fake-Hub antwortet 404 → `HubJobLost`, keine Abkühlpause am Backend, kein zweiter
-   Ketteneintrag, Zeile weg, Task-Eintrag fehlgeschlagen.
-4. Fake-Hub antwortet 503 bzw. die Verbindung bricht ab → kein `HubJobLost`; nach Rückkehr wird
-   abgeholt.
-5. Der Resumer überspringt Task-Zeilen und fasst Mesh- und Rig-Zeile derselben Signatur zu einer
-   Fortsetzung zusammen.
-6. Posen-Animation: `progress` mit `hub_job` → `attach` statt `_cancel_lost_job`; Ende in
-   `awaiting_choice`.
-7. Signatur: Zeile mit Signatur A, Charakter trägt inzwischen B → das Ergebnis landet unter A.
-8. Zeile älter als 24 h → `HubJobLost` ohne HTTP-Aufruf.
+1. Absenden mit Stufen-Griff → genau ein Datensatz mit Job-ID, Backend, Besitzer; Ende → Datensatz und Ordner weg.
+2. Simulierter Neustart (Prozessspeicher leer, DB bleibt): **0 POSTs**, ≥ 1 GET, Ergebnis am normalen Ziel.
+3. 404 → `HubJobLost`, keine Abkühlpause, kein zweiter Ketteneintrag, Datensatz weg, Task `failed` ohne Retry.
+4. 503 bzw. Verbindungsabbruch → kein `HubJobLost`; nach Rückkehr abgeholt.
+5. Resumer: Task-Aufträge nur abholen (auch bei pausierter Queue), Thread-Aufträge fortsetzen, Sperren vor dem
+   Start gesetzt.
+6. Posen-Animation: Fortsetzung hängt an statt zu stornieren, Ende `awaiting_choice`.
+7. Signatur A eingefroren, Charakter trägt B → Ergebnis unter A.
+8. `submitted_at` älter als 24 h → `HubJobLost` ohne HTTP.
 
-Außerdem müssen weiter grün sein: `smoke_imports_resolve.py`, `smoke_auth_gate.py`,
-`smoke_profile_rmw_lock.py`, `smoke_game_time_lint.py` (der Stempel ist Systemzeit, keine
-Spielzeit), `smoke_scripts_storage_lint.py`.
+§-0-Fälle: Quellbild nicht neu gerendert, kein zweites Galerieziel; offenes Rig trotz veröffentlichtem
+statischem Mesh fortgesetzt; korrigierte Gesichtsquelle dauerhaft; Datensatz bis Veröffentlichen, Fehler vor
+dem Löschen gespeichert; `HubJobLost` durch `run_on_backend`, `run_routed`, Face-Upscale, Task-Queue,
+Improvements; Absendelücke D1; Claim D2/D3; Reaper und `track_finish_if_open`; D4-Übergabe.
+
+Weiter grün: `smoke_imports_resolve.py`, `smoke_auth_gate.py`, `smoke_profile_rmw_lock.py`,
+`smoke_game_time_lint.py`, sowie die Hub-Smokes `smoke_mesh_gateway`, `smoke_mesh_rig_split`,
+`smoke_face_retexture_rollback`, `smoke_mesh_animation_backend`, `smoke_upscale_backends`. Auf `main` schon rot
+(vorbestehend): `smoke_scripts_storage_lint`, `smoke_mesh_fetch_job`, `smoke_gateway_503_mapping` (C7a/C7d).
 
 ## 6. Doku
 
-- `CLAUDE.md`: ein Absatz beim Image-Generation-Block: Register `hub_jobs`, Schlüsselregel,
-  `HubJobLost` terminal, Resumer.
-- README: eine Zeile in der Feature-Liste.
-- `docs/skill-core-api.md` nur, falls `register_op` für Plugins öffentlich wird. In diesem Umfang
-  nicht, alle Operationen sind Core.
+- `CLAUDE.md` ist gitignored und liegt nicht im Repository; der Absatz (Register, Stufen, `HubJobLost`,
+  Resumer, Absendelücke) steht im PR zum Einfügen und in `docs/hub-job-resume.md`.
+- README: eine Zeile in der Feature-Liste mit Verweis auf `docs/hub-job-resume.md`.
+- `docs/skill-core-api.md` bleibt unverändert: alle Auftragsarten sind Core.
 
-## 7. Offene Punkte für den Umsetzungsplan
+## 7. Bekannte Grenzen
 
-- Exakte Schlüssel für Props und Locations (3.2).
-- Ob das Gesichtskorrektur-Backend `openai_mesh` ist oder ein eigenes. Davon hängt ab, wo `attach` liegt.
-- Wie Instagram-Animate und Video-Skill ihr Ergebnis heute ablegen, damit `video.animate` die nötigen
-  Argumente speichert.
+- Absendelücke (D1): Ein im POST-Fenster angenommener Job läuft auf dem Hub verwaist.
+- Der Video-Skill kann seine Chat-Antwort nach einem Neustart nicht mehr zustellen; das Video landet trotzdem
+  in der Galerie.
+- Mehr als 24 h Ausfall (Hub-TTL) → `HubJobLost`.
+- Ein Absturz mitten im lokalen Veröffentlichen (Sekunden) wiederholt das Veröffentlichen; Galeriepfade
+  (Haupt- und LOD-Dateien) stehen vorher im Zustand, Seiteneffekte wie `request_lod` können doppelt anlaufen
+  (idempotent).
+- D9: Unabhängige Auto-Produzenten können ein nach Verlust fehlendes Asset später neu erzeugen.
+- Ein Task-Auftrag in einer dauerhaft pausierten Queue hält sein Ziel belegt, bis der Task läuft
+  (sein Job wird trotzdem sofort abgeholt).
+- Die gemeinsame Puppet-/Referenz-Rig-Datei der Posen-Animation wird über den Pfad genutzt, nicht je
+  Job eingefroren.
+- Die Posen-Animation holt pausierte Queues über denselben Abholweg ab; ihr Konvertieren braucht Blender und
+  läuft erst im Handler.

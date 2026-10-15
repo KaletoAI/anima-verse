@@ -516,10 +516,8 @@ def _animate_instagram_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
     def _run_animate():
         _tq.track_activate(_track_id)
         try:
-            from app.skills.animate import animate_image
-            from app.models.instagram import load_feed as _load_feed, save_feed as _save_feed
+            from app.skills.animate import run_video_op
             from pathlib import Path as _Path
-            from datetime import datetime
 
             stem = _Path(image_filename).stem
             video_name = f"{stem}.mp4"
@@ -532,38 +530,20 @@ def _animate_instagram_post_sync(post_id: str, data: Any) -> Dict[str, Any]:
             # deadlocks (CLAUDE.md). This call runs on its own daemon thread,
             # the tracked task above is what the queue panel shows — the same
             # shape app/skills/video_generation_skill.py has always used.
-            _ro: Dict[str, Any] = {}
-            success = animate_image(
-                str(image_path), prompt, output_path, service=service,
-                loras=loras, seconds=seconds or None, route_out=_ro)
-
-            if not success:
-                _tq.track_finish(
-                    _track_id,
-                    error=(f"Animation failed on '{service}' (no automatic fallback)"
-                           if service else
-                           "Animation failed — no backend of the video chain rendered"))
-                return
-
-            # Update the existing post: set video_filename
-            feed = _load_feed()
-            for p in feed:
-                if p.get("id") == post_id:
-                    p["video_filename"] = video_name
-                    break
-            _save_feed(feed)
-
-            meta = load_image_meta(image_filename) or {}
-            meta["animate_prompt"] = prompt
-            meta["animate_created_at"] = utc_now_iso()
-            # The video's own backend/routing keys — the IMAGE's routing
-            # fields stay untouched. An explicit pick writes no routing, and
-            # a re-animation must not keep the marks of the previous video.
-            meta["animate_backend"] = _ro.get("backend", "")
-            meta["animate_routing"] = _ro.get("routing")
-            meta["animate_fallback_from"] = _ro.get("fallback_from")
-            save_image_meta(image_filename, meta)
-            _tq.track_finish(_track_id)
+            # As a hub operation (docs/hub-job-resume.md) the video is still
+            # collected and published after a restart of Anima.
+            result = run_video_op(
+                "video_instagram", f"video:instagram:{post_id}",
+                {"source": str(image_path), "prompt": prompt, "service": service,
+                 "loras": loras, "seconds": seconds or None, "character": character_name,
+                 "post_id": post_id, "image_filename": image_filename,
+                 "video_name": video_name, "output_path": output_path,
+                 "fail_message": (f"Animation failed on '{service}' (no automatic fallback)"
+                                  if service else
+                                  "Animation failed — no backend of the video chain rendered")},
+                label="Instagram Bild animieren", track_id=_track_id)
+            _tq.track_finish(_track_id, error="" if result.get("ok")
+                             else str(result.get("error") or "Animation failed"))
         except Exception as e:
             logger.error("Instagram animation failed: %s", e)
             _tq.track_finish(_track_id, error=str(e))
@@ -614,3 +594,42 @@ def delete_instagram_animation(post_id: str) -> Dict[str, Any]:
         save_image_meta(image_filename, meta)
 
     return {"status": "success", "deleted_video": video_name}
+
+
+def _publish_instagram_video(op, video_file, route: Dict[str, Any],
+                             duration_s: float = 0.0) -> Dict[str, Any]:
+    """Put a finished post animation in place — the publish step of the
+    ``video_instagram`` hub operation, after a fresh render or after a
+    restart: the MP4 next to the image, ``video_filename`` on the post, the
+    video's own backend/routing keys on the image meta."""
+    from pathlib import Path as _Path
+    inputs = op.inputs
+    post_id = inputs["post_id"]
+    target = _Path(inputs["output_path"])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(_Path(video_file).read_bytes())
+    feed = load_feed()
+    for p in feed:
+        if p.get("id") == post_id:
+            p["video_filename"] = inputs["video_name"]
+            break
+    save_feed(feed)
+    meta = load_image_meta(inputs["image_filename"]) or {}
+    meta["animate_prompt"] = inputs.get("prompt", "")
+    meta["animate_created_at"] = utc_now_iso()
+    # The video's own backend/routing keys — the IMAGE's routing
+    # fields stay untouched. An explicit pick writes no routing, and
+    # a re-animation must not keep the marks of the previous video.
+    meta["animate_backend"] = route.get("backend", "")
+    meta["animate_routing"] = route.get("routing")
+    meta["animate_fallback_from"] = route.get("fallback_from")
+    save_image_meta(inputs["image_filename"], meta)
+    return {"ok": True}
+
+
+def _register_hub_kinds() -> None:
+    from app.skills.animate import register_video_kind
+    register_video_kind("video_instagram", _publish_instagram_video, "image_animate")
+
+
+_register_hub_kinds()

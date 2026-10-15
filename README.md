@@ -203,6 +203,10 @@ stops acting autonomously).
   returns one MP4; **3D meshes** are another (`openai_mesh`). Backends are matched per use case with
   cost-based selection and failover — except mesh backends, which never fall back onto each other
   because a wrong-rig mesh binds unusably.
+- **Hub jobs survive a restart:** a mesh, rig, face correction, upscale, animation or video still
+  running on the AI hub when Anima restarts is collected afterwards and finished as usual — no second
+  job, the inputs it was started with. A job the hub no longer has ends as "Hub job lost" and is
+  never resubmitted automatically. See [`docs/hub-job-resume.md`](docs/hub-job-resume.md).
 - **One master switch:** *Admin → Settings → Media Generation → „Media generation enabled"* turns
   every image, video and 3D-mesh generation of the world off — requests are refused with a clear
   message and nothing is queued, while existing media stay served.
@@ -743,6 +747,8 @@ imports anything that opens a database, and a tool meant for a real world gets `
   `chat.chattiness` / per-location chattiness settings.
 - **[`docs/plugins.md`](docs/plugins.md)** / **[`docs/skill-core-api.md`](docs/skill-core-api.md)** —
   the plugin manifest reference and the callable core API a package may use.
+- **[`docs/hub-job-resume.md`](docs/hub-job-resume.md)** — how long AI-hub jobs survive a restart:
+  operation records, who resumes, lost jobs and the submission gap.
 - **[`docs/schnittstellen-3d.md`](docs/schnittstellen-3d.md)** — the 3D payload contract that the
   server and both renderers agree on.
 - **[`docker/DEPLOYMENT.md`](docker/DEPLOYMENT.md)** — reproducible Docker deployment against a
