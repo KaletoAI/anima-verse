@@ -251,6 +251,7 @@ stops acting autonomously).
   only that image, even with Auto off. Back/left/right reuse the existing front reference;
   generate the front first if it is missing. The general Generate button still renders the
   front together with all enabled extra views.
+- **Local quadruped rig:** five base takes with a per-animal tail mode.
 - **Location and prop models** are generated from gallery images, with front/back/left/right views
   feeding multi-view mesh aliases.
 - **Animations:** shared clip library under `shared/models/clips/` organised into sets, retargeted

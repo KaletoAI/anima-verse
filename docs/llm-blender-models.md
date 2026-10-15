@@ -373,6 +373,66 @@ stated vertex list and files the result as a `building-front` gallery image, so
 the ordinary image→mesh route can take it from there. Its button sits directly
 above the roof builder in the same panel.
 
+### Quadruped rig (`quadruped_rig`)
+
+The `local_quadruped_rig` backend runs locally in the `rig_creature` chain
+before UniRig (the seeded order; existing non-empty routing is preserved).
+A “not a quadruped” rejection falls through to the next backend without cooldown.
+`app/imagegen/backends/local_quadruped_rig.py` sends the unrigged mesh and
+basecolor PNG to `app/blender/scripts/quadruped_rig.py`, which fits the
+Mesh2Motion fox skeleton to the mesh's body and leg landmarks. Distance skin
+weights are smoothed in weld space, capped to **four influences** per vertex,
+then re-smoothed only within those retained influences.
+
+All takes in `shared/models/quadruped/clips.json` are baked at 24 fps with paw
+IK and source contact masks; run keeps its flight phase. After IK, a per-frame
+ground rule lifts the root only when needed, ignoring tail vertices and the
+paws currently controlled by contact IK. Tail clearance is handled separately,
+with a lift capped at **30°**. Export is **FBX + basecolor PNG** (`generic` rig).
+`app/core/model3d.py` stores metrics and `clips: {take: {loop}}` in model meta;
+the admin viewer and 3D client use those loop flags (`applyEmbeddedClipLoops`
+in `client3d/src/scene/figures.ts`).
+
+The catalog maps take names to `src` (only `fox`), `action`, `loop` and an
+optional `tail` override mapping the selected mode to the effective mode.
+Unknown declaration keys are errors. The five takes are `idle` (`Idle`),
+`walk` (`Walk`), `run` (`Run`), `sit` and `sit-ground` (both `Sit`). The first
+three loop; both sitting takes hold their last frame and use
+`"tail": {"calm": "still"}`. All catalog takes are baked on every rig.
+
+The animal template's `tail_motion` selects `full` (source motion), `calm`
+(yaw amplitude × 0.2, inclination retained), or `still` (rest rotation).
+Empty means the backend's `tail_mode_default`, whose default is `calm`.
+Changing this field requires **Re-rig from mesh**; it is baked into the takes.
+
+Assets live in `shared/models/quadruped/`: `fox-animations.glb` supplies the
+reference mesh, skeleton and actions, `clips.json` declares the takes, and
+`LICENSE.txt` credits **Mesh2Motion (mesh2motion.org), CC0 1.0**.
+Limits: no lying or crawling takes; one skeleton serves all quadrupeds, and
+multiview mesh quality decides the resulting stance.
+
+Measured fixtures (stretch = p99.9 edge stretch factor; ground = maximum root
+lift as % of height; contact = maximum contact error as % of height).
+A dash means no value is listed here.
+
+| Animal / tail mode | Take | Stretch | Ground (%) | Contact (%) |
+|---|---|---|---|---|
+| Cat 7 / calm | idle | 2.19 | — | — |
+| Cat 7 / calm | walk | 4.15 | 1.2 | — |
+| Cat 7 / calm | run | 7.26 | 4.5 | — |
+| Cat 7 / calm | sit | 4.10 | 3.8 | 3.75 |
+| Cat 21 | walk | 6.24 | — | — |
+| Cat 21 | run | 10.49 | — | — |
+| Cat 21 | sit | 5.05 | 9.4 | 11.5 |
+| Dog 21 / full | walk | 7.29 | — | — |
+| Dog 21 / full | run | 12.1 | — | — |
+| Dog 21 / full | sit | 7.6 | 1.6 | — |
+
+Known open points: hind hocks rise high during run; Cat 21 floats about 9% of
+its height when sitting. Verification: `scripts/smoke_quadruped_fit.py`,
+`scripts/smoke_quadruped_clips.py` (also `--numpy-only`) and
+`client3d/scripts/smoke_quadruped_takes.mjs`.
+
 ## 8. What v1 deliberately does NOT do
 
 * no free-form Blender code — see the top of this file;
