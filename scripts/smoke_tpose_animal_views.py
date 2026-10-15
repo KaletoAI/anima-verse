@@ -4,8 +4,8 @@
 Usage: ./.venv/bin/python scripts/smoke_tpose_animal_views.py
 
 Derived by hand from plan-tier-animationen.md §4.4, P1 and E10:
-each body form has three extra views; humanoid back/left/right default off,
-animal front/back/right default on. Their union has four file kinds.
+Humanoids have back/left/right/face default off; animals have front/back/right
+default on. Their union has five file kinds.
 An animal full pass makes four images: one main plus three views, each
 referencing main and routing through tpose_view. Selecting main or front
 makes exactly one image and preserves the other three. Invalid body-form
@@ -60,10 +60,10 @@ def main():
               patch.object(character, "save_character_profile", side_effect=save),
               patch.object(expression_regen, "generate_expression_image", side_effect=render)):
             check("body-form views", mr.TPOSE_VIEWS_BY_BODY == {
-                "humanoid": ("back", "left", "right"),
+                "humanoid": ("back", "left", "right", "face"),
                 "animal": ("front", "back", "right")})
-            check("four extra file kinds", set(mr.VIEW_KINDS) == {
-                "tpose_front", "tpose_back", "tpose_left", "tpose_right"})
+            check("five extra file kinds", set(mr.VIEW_KINDS) == {
+                "tpose_front", "tpose_back", "tpose_left", "tpose_right", "tpose_face"})
             check("animal default on", mr.enabled_tpose_views("animal") == ("front", "back", "right"))
             check("humanoid default off", mr.enabled_tpose_views("humanoid") == ())
             for name, view in (("humanoid", "front"), ("animal", "left")):
@@ -149,7 +149,7 @@ def main():
             occ = occasions.get_occasion("tpose_view")
             check("new character occasion", occ["character_scoped"] and
                 occ["char_spec_field"] == "tpose_view_workflow" and occ["char_spec_fallback"] == "" and
-                occ["style_use_cases"] == ["tpose_back", "tpose_side", "tpose_animal_view"])
+                occ["style_use_cases"] == ["tpose_back", "tpose_side", "tpose_face", "tpose_animal_view"])
             check("view styles removed from main occasion", not set(occ["style_use_cases"]) &
                 set(occasions.get_occasion("tpose")["style_use_cases"]))
             profiles["animal"]["outfit_imagegen"] = {"workflow": "Normal*", "tpose_workflow": "Main*"}

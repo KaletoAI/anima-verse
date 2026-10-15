@@ -1453,7 +1453,7 @@ def _set_character_model_refs_views_sync(character_name: str,
 def get_character_model_ref_image(character_name: str, kind: str, request: Request):
     """Serves the reference render of the CURRENT outfit combination; 404
     when absent. ``kind`` is ``tpose``/``pose`` or one of the extra T-pose
-    view kinds (``tpose_front``/``tpose_back``/``tpose_left``/``tpose_right``). ETag so a
+    view kinds (``tpose_front``/``tpose_back``/``tpose_left``/``tpose_right``/``tpose_face``). ETag so a
     re-render of the same combination (or an outfit switch) is picked up
     instead of a stale cached image."""
     from fastapi.responses import Response
@@ -1733,6 +1733,9 @@ def _face_retexture_localize(value: dict, lang: str) -> dict:
         if key in result:
             result[key] = [{**p, **{field: t(p[field], lang) for field in ("message", "fix") if field in p}}
                            for p in result[key]]
+    if result.get("face_problem"):
+        result["face_problem"] = {**result["face_problem"], **{
+            key: t(result["face_problem"][key], lang) for key in ("message", "fix")}}
     if "error" in result:
         result["error"] = t(result["error"], lang)
     return result
@@ -1740,7 +1743,7 @@ def _face_retexture_localize(value: dict, lang: str) -> dict:
 
 @router.get("/{character_name}/model3d/face-retexture/check")
 def check_character_face_retexture(character_name: str, signature: str = "",
-                                   backend: str = "", lang: str = "en",
+                                   backend: str = "", lang: str = "en", reference: str = Query("", pattern="^(face|front)?$"),
                                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Keep permanent eligibility and temporary routing readiness distinct."""
     from app.core import face_retexture
@@ -1748,7 +1751,7 @@ def check_character_face_retexture(character_name: str, signature: str = "",
     signature = _face_retexture_signature(character_name, signature)
     root = get_character_dir(character_name) / "model3d"
     with keyed_lock("model3d_publication", str(root)):
-        eligibility = face_retexture.check(character_name, signature)
+        eligibility = face_retexture.check(character_name, signature, reference)
         snapshot = face_retexture.snapshot_info(root, signature)
     ready = face_retexture.runnable(character_name, backend)
     return {**_face_retexture_localize(eligibility, lang), "signature": signature,
@@ -1763,7 +1766,8 @@ def start_character_face_retexture(character_name: str, signature: str = "",
                                    feather: float = Query(0.18, ge=0, le=0.5),
                                    render_resolution: int = Query(768, ge=256, le=2048),
                                    yaw: float = Query(0, ge=-180, le=180), lang: str = "en",
-                                   upscale: bool = True, upscale_backend: str = "",
+                                   upscale: Optional[bool] = None, upscale_backend: str = "",
+                                   reference: str = Query("", pattern="^(face|front)?$"),
                                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Validate the preflight, then start a tracked correction job."""
     from app.core import face_retexture
@@ -1775,10 +1779,11 @@ def start_character_face_retexture(character_name: str, signature: str = "",
         face_retexture.validated_params(controls)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    eligibility = face_retexture.check(character_name, signature)
+    eligibility = face_retexture.check(character_name, signature, reference)
     ready = face_retexture.runnable(character_name, backend)
     if not eligibility["ok"] or not ready["ok"]:
         return _face_retexture_localize({"ok": False, "problems": eligibility["problems"] + ready["problems"]}, lang)
+    upscale = face_retexture.use_upscale(eligibility["reference"], upscale)
     if upscale and upscale_backend:
         from app.core.upscale_reference import require_upscale_backend
         try:
@@ -1786,7 +1791,7 @@ def start_character_face_retexture(character_name: str, signature: str = "",
         except ValueError as exc:
             raise HTTPException(503, str(exc)) from exc
     return trigger_face_retexture(character_name, signature, backend_glob=backend, params=controls,
-                                  upscale=upscale, upscale_backend_glob=upscale_backend)
+                                  upscale=upscale, reference=eligibility["reference"], upscale_backend_glob=upscale_backend)
 
 
 @router.post("/{character_name}/model3d/face-retexture/revert")

@@ -52,7 +52,7 @@ logger = get_logger(__name__)
 MAX_REACHABLE_COMBOS = 5_000_000
 #: Longest first — otherwise "tpose_animal_<sig>" or "tpose_back_<sig>"
 #: parses as kind "tpose" with a mangled signature.
-REF_PREFIXES = ("tpose_animal_", "tpose_back_", "tpose_left_", "tpose_right_",
+REF_PREFIXES = ("tpose_animal_", "tpose_front_", "tpose_right_", "tpose_back_", "tpose_left_", "tpose_face_",
                 "tpose_", "pose_")
 #: The shape of a mesh cache key: ``model_refs.outfit_signature`` (md5[:12])
 #: or a retired -s fork (accepted only for deletion). Only a stem of this

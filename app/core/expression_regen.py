@@ -33,7 +33,7 @@ logger = get_logger(__name__)
 # T-pose (humanoid / animal) plus the extra back and profile views. They are
 # the ones a per-character T-pose backend match applies to; every other use
 # case keeps the normal render match. Set in ``app/core/model_refs.py``.
-TPOSE_USE_CASES = ("tpose", "tpose_animal", "tpose_back", "tpose_side", "tpose_animal_view")
+TPOSE_USE_CASES = ("tpose", "tpose_animal", "tpose_back", "tpose_side", "tpose_face", "tpose_animal_view")
 
 # In-flight generation tracking (character:cache_key)
 _generating: Set[str] = set()
@@ -869,7 +869,8 @@ def generate_expression_image(character_name: str,
                               apply_state_modifiers: bool = True,
                               back_view: bool = False,
                               reference_image: Optional[Path] = None,
-                              occasion: str = "") -> Optional[Path]:
+                              occasion: str = "",
+                              record_provenance: bool = False) -> Optional[Path]:
     """Generate an expression/pose variant.
 
     Character + equipped items + pose + expression -> text-prompt-based
@@ -904,6 +905,9 @@ def generate_expression_image(character_name: str,
       in the character's model_refs directory (``checked_reference_override``).
     - ``occasion``: the image routing occasion — empty = "tpose" for the
       T-pose use cases, else "expression".
+
+    - ``record_provenance`` freezes the explicit reference for the backend
+      and certifies its hash and the final processed image bytes in the sidecar.
 
     Returns the path to the generated image, or None on failure.
     """
@@ -1137,7 +1141,24 @@ def generate_expression_image(character_name: str,
     # that asks for fabric textures, and the model duly invents cloth.
     payload["clothed"] = bool(outfit_desc)
 
+    provenance_workspace = None
     try:
+        if record_provenance:
+            import tempfile
+            from app.core.model_refs import checked_reference_override
+            checked = checked_reference_override(character_name, str(reference_image or ""))
+            if not checked:
+                raise ValueError("Provenance requires a valid explicit reference image")
+            # A private immutable copy is what every backend attempt reads.
+            # Keep it inside model_refs so the service's containment gate applies.
+            reference_bytes = Path(checked).read_bytes()
+            reference_sha256 = hashlib.sha256(reference_bytes).hexdigest()
+            provenance_workspace = tempfile.TemporaryDirectory(
+                prefix=".provenance_", dir=Path(checked).parent)
+            workspace = Path(provenance_workspace.name)
+            frozen_reference = workspace / ("reference" + Path(checked).suffix)
+            frozen_reference.write_bytes(reference_bytes)
+            payload["reference_image_override"] = str(frozen_reference)
         img_result = image_skill.generate_from_input(json.dumps(payload))
 
         # Extract filename from result
@@ -1174,7 +1195,10 @@ def generate_expression_image(character_name: str,
             logger.warning("Expression render for %s discarded: %s is gone",
                            character_name, out_dir)
             return None
-        tmp_path = out_dir / f".tmp_{out_stem_name}{src_path.suffix}"
+        # Provenance renders own their staging files; overlapping renders must
+        # never postprocess, hash or clean up another publication's bytes.
+        staging_dir = workspace if record_provenance else out_dir
+        tmp_path = staging_dir / f".tmp_{out_stem_name}{src_path.suffix}"
         shutil.move(str(src_path), str(tmp_path))
 
         try:
@@ -1182,6 +1206,9 @@ def generate_expression_image(character_name: str,
         except Exception as pp_err:
             logger.warning("Post-processing failed, using the original: %s", pp_err)
             final_tmp = tmp_path
+
+        if record_provenance:
+            image_sha256 = hashlib.sha256(final_tmp.read_bytes()).hexdigest()
 
         # Rename atomically into the target path
         final_path = out_dir / f"{out_stem_name}{final_tmp.suffix}"
@@ -1197,7 +1224,8 @@ def generate_expression_image(character_name: str,
             tmp_path.unlink()
 
         # Cleanup: remove any leftover temp files
-        _cleanup_stale_temps(out_dir)
+        if not record_provenance:
+            _cleanup_stale_temps(out_dir)
 
         # Metadata JSON next to the image. equipped_pieces/items are recorded
         # so invalidate_variants_for_item can delete exactly the variants that
@@ -1236,9 +1264,19 @@ def generate_expression_image(character_name: str,
         for _rk in ("routing", "fallback_from"):
             if _gen_meta.get(_rk):
                 _expr_meta[_rk] = _gen_meta[_rk]
+        if record_provenance:
+            _expr_meta.update(reference_sha256=reference_sha256,
+                              image_sha256=image_sha256)
         try:
             _meta_path = final_path.with_suffix(".json")
-            _meta_path.write_text(json.dumps(_expr_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+            if record_provenance:
+                # Readers may see an interleaved image/sidecar pair, but its
+                # image hash must fail rather than certify another render.
+                staged_meta = workspace / "sidecar.json"
+                staged_meta.write_text(json.dumps(_expr_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+                staged_meta.rename(_meta_path)
+            else:
+                _meta_path.write_text(json.dumps(_expr_meta, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as _me:
             logger.warning("Writing the expression meta failed: %s", _me)
 
@@ -1255,6 +1293,9 @@ def generate_expression_image(character_name: str,
     except Exception as e:
         logger.error("Expression generation failed: %s", e)
         return None
+    finally:
+        if provenance_workspace is not None:
+            provenance_workspace.cleanup()
 
 
 def _update_refs_in_json(json_file: Path, rename_map: Dict[str, str],

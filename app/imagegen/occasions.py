@@ -72,7 +72,7 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
          "char_spec_fallback": "workflow"}),
     "tpose_view": _image(
         "T-pose reference views", "Extra humanoid and animal reference views",
-        ["tpose_back", "tpose_side", "tpose_animal_view"],
+        ["tpose_back", "tpose_side", "tpose_face", "tpose_animal_view"],
         {"character_scoped": True, "char_spec_field": "tpose_view_workflow",
          "char_spec_fallback": ""}),
     "scene_view": _image("Rendered scene view", "Player 'Rendered' view",

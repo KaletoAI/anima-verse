@@ -573,13 +573,25 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe the animal's whole body from nose to tail on a plain background with flat even lighting. Do not mention pose or expression.",
         },
     },
-    # Optional EXTRA views of the humanoid mesh-input render (enabled per
-    # character on the character editor's 3D tab, default off) — the input
-    # for multi-view img2mesh backends. Framing/lighting stay identical to
+    # Optional extra humanoid references (enabled per
+    # character on the character editor's 3D tab, default off). The face
+    # close-up serves face retexture; the others feed multi-view img2mesh. Framing/lighting stay identical to
     # "tpose" so the views compose into one consistent set; only the
     # negatives differ, because a back or profile render fails in its own way.
     # _seed_default_use_cases backfills both into existing worlds
     # automatically — no migration needed.
+    "tpose_face": {
+        "keywords": {
+            "prompt_style": "realistic 3D character portrait, lifelike skin texture, head and shoulders, entire head visible, face filling the frame, straight frontal view, plain neutral background, soft diffuse frontal light, even shadowless illumination, sharp focus, high detail",
+            "prompt_negative": "shadows on the face, hair shadows, one side darker, directional key light, smiling, open mouth, teeth, tilted head, three-quarter view, profile, looking away, closed eyes, hands near the face, cropped head, sunglasses",
+            "prompt_instruction": "Write comma-separated tags describing the character's head and shoulders with the reference hairstyle and accessories. Do not mention pose or expression.",
+        },
+        "natural": {
+            "prompt_style": "a realistic 3D portrait of the character with lifelike skin texture, framed closely around the head and shoulders with the entire head visible and the face filling most of the frame, seen straight from the front against a plain neutral background, soft diffuse frontal light evenly illuminating the face without shadows, sharp focus and high detail",
+            "prompt_negative": "shadows on the face, hair shadows, one side darker, directional key light, smiling, open mouth, teeth, tilted head, three-quarter view, profile, looking away, closed eyes, hands near the face, cropped head, sunglasses",
+            "prompt_instruction": "Describe the character's head and shoulders with the reference hairstyle and accessories. Do not mention pose or expression.",
+        },
+    },
     "tpose_back": {
         "keywords": {
             "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, both feet fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",

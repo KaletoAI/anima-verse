@@ -81,6 +81,9 @@ interface FaceRetextureFinding {
   detail?: string
 }
 interface FaceRetextureCheck {
+  reference: 'face' | 'front'
+  face_available: boolean
+  face_problem?: FaceRetextureFinding | null
   ok: boolean
   problems: FaceRetextureFinding[]
   warnings: FaceRetextureFinding[]
@@ -98,7 +101,7 @@ interface Model3DInfo {
     landmark_fallback?: string[]
     clips?: Record<string, { stretch_p999: number; contact_err_max: number; tail_min_z: number; ik_unreachable: number }>
   }
-  face_retexture?: { status: string; reason?: string; error?: string; at?: string; backend?: string; job_id?: string; face_texture_lost?: boolean; upscale?: { status: string; backend?: string; in?: number[]; out?: number[]; cached?: boolean; busy?: boolean; error?: string } }
+  face_retexture?: { reference?: 'face' | 'front'; status: string; reason?: string; error?: string; at?: string; backend?: string; job_id?: string; face_texture_lost?: boolean; upscale?: { status: string; backend?: string; in?: number[]; out?: number[]; cached?: boolean; busy?: boolean; error?: string } }
   face_retexture_revert?: 'snapshot' | 'rerig' | null
   face_retexture_snapshot?: { ok: boolean; created_at?: string; error?: string }
   face_retexture_compare_url?: string
@@ -233,6 +236,7 @@ export function FieldModel3D({ character }: { character: string }) {
   const analysisRunRef = useRef(0)
   const [faceOpen, setFaceOpen] = useState(false)
   const [faceBackend, setFaceBackend] = useState('')
+  const [faceReference, setFaceReference] = useState<'' | 'face' | 'front'>('')
   const [upscaleFirst, setUpscaleFirst] = useState(true)
   const [upscaleBackend, setUpscaleBackend] = useState('')
   const [faceCheck, setFaceCheck] = useState<FaceRetextureCheck | null>(null)
@@ -422,17 +426,25 @@ export function FieldModel3D({ character }: { character: string }) {
     let cancelled = false
     setFaceCheck(null)
     setFaceCheckError('')
-    const query = new URLSearchParams({ signature: faceSignature, backend: faceBackend, lang })
+    const query = new URLSearchParams({ signature: faceSignature, backend: faceBackend, reference: faceReference, lang })
     apiGet<FaceRetextureCheck>(`/characters/${enc}/model3d/face-retexture/check?${query}`)
-      .then(result => { if (!cancelled) setFaceCheck(result) })
+      .then(result => {
+        if (cancelled) return
+        setFaceCheck(result)
+        if (!faceReference) {
+          setFaceReference(result.reference)
+          setUpscaleFirst(result.reference === 'front' && !!st.upscale_runnable)
+        }
+      })
       .catch(error => { if (!cancelled) setFaceCheckError((error as Error).message) })
     return () => { cancelled = true }
-  }, [faceOpen, faceSignature, faceBackend, enc, lang])
+  }, [faceOpen, faceSignature, faceBackend, faceReference, st.upscale_runnable, enc, lang])
 
   const applyFaceRetexture = async () => {
     if (busy || st.pending || !faceCheck?.ok || !faceCheck.runnable) return
     const context = previewContextRef.current
-    const query = new URLSearchParams({ signature: faceSignature, backend: faceBackend, lang })
+    const query = new URLSearchParams({ signature: faceSignature, backend: faceBackend, reference: faceReference, lang })
+    query.set('reference', faceReference || faceCheck.reference)
     query.set('upscale', String(upscaleFirst))
     query.set('upscale_backend', upscaleBackend)
     for (const [key, value] of Object.entries(faceControls)) query.set(key, String(value))
@@ -847,7 +859,7 @@ export function FieldModel3D({ character }: { character: string }) {
   const face = model?.face_retexture
   const up = face?.upscale
   const faceText = face?.status === 'failed' ? t('Failed') : face?.status === 'skipped' ? t('Skipped') : face?.face_texture_lost ? t('Face texture lost')
-    : face?.status === 'applied' ? (up?.status === 'applied' && up.backend
+    : face?.status === 'applied' ? (face.reference === 'face' ? t('Face view') : up?.status === 'applied' && up.backend
       ? `${up.backend}${up.in?.[0] && up.out?.[0] ? ` ×${+(up.out[0] / up.in[0]).toFixed(1)}` : ''}` : t('applied')) : '–'
   const statusPanel = <div className="ga-model3d-status">
     {statusRow(t('T-pose'), tp === 'current' ? t('current') : tp === 'changed' ? t('re-rendered')
@@ -1155,13 +1167,14 @@ export function FieldModel3D({ character }: { character: string }) {
       {model?.face_retexture ? <div className="ga-hint" role="status">
         {model.face_retexture.status === 'applied' ? t('Face retexture applied') : model.face_retexture.status === 'failed' ? t('Face retexture failed') : model.face_retexture.status === 'skipped' ? t('Skipped') : t('Face retexture reverted')}
         {model.face_retexture.error || model.face_retexture.reason ? ` · ${model.face_retexture.error || model.face_retexture.reason}` : ''}
+        {model.face_retexture.reference === 'face' ? ` · ${t('Face view')}` : ''}
         {model.face_retexture.backend ? ` · ${model.face_retexture.backend}` : ''}
         {model.face_retexture.job_id ? ` · ${model.face_retexture.job_id}` : ''}
         {model.face_retexture.at ? ` · ${formatDateTime(model.face_retexture.at, clockSettings())}` : ''}
         {model.face_retexture_compare_url ? <> · <a href={model.face_retexture_compare_url} target="_blank" rel="noopener noreferrer">{t('Comparison image')}</a></> : null}
       </div> : null}
       {model?.face_retexture?.upscale ? <p className="ga-hint" role="status">
-        {model.face_retexture.upscale.status === 'failed'
+        {model.face_retexture.reference === 'face' && model.face_retexture.upscale.status === 'off' ? t('Face view') : model.face_retexture.upscale.status === 'failed'
           ? `${t('Reference upscale failed — using original photo')}${model.face_retexture.upscale.busy ? ` · ${t('Busy')}` : ''} · ${model.face_retexture.upscale.error || ''}`
           : model.face_retexture.upscale.status === 'applied'
             ? `${t('Reference upscaled')} · ${model.face_retexture.upscale.backend || ''} · ${model.face_retexture.upscale.in?.join('×')} → ${model.face_retexture.upscale.out?.join('×')}${model.face_retexture.upscale.cached ? ` · ${t('Cached')}` : ''}`
@@ -1181,6 +1194,21 @@ export function FieldModel3D({ character }: { character: string }) {
               <p className="ga-hint">{t('Corrects the face texture from the original photo, then rebuilds the rig and derived meshes. Each run starts from the original unrigged mesh.')}</p>
               <fieldset className="ga-fieldset">
                 <legend className="ga-fieldset-title">{t('Source check')}</legend>
+                <Field label={t('Reference image')}>
+                  <select className="ga-input" value={faceReference || faceCheck?.reference || 'front'}
+                    disabled={busy || !faceCheck} onChange={e => {
+                      const reference = e.target.value as 'face' | 'front'
+                      setFaceReference(reference)
+                      setUpscaleFirst(reference === 'front' && !!st.upscale_runnable)
+                      setFaceCheck(null)
+                    }}>
+                    <option value="face" disabled={!faceCheck?.face_available}>{t('Face view')}</option>
+                    <option value="front">{t('Front view (T-pose)')}</option>
+                  </select>
+                  {faceCheck?.face_problem ? <div className="ga-field-hint">
+                    {faceCheck.face_problem.message} {faceCheck.face_problem.fix}
+                  </div> : null}
+                </Field>
                 {faceCheckError ? <div className="ga-status-danger" role="alert">✗ {faceCheckError}</div> : null}
                 {!faceCheck && !faceCheckError ? <div className="ga-hint" role="status">{t('Checking face retexture eligibility…')}</div> : null}
                 {faceCheck ? <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1330,7 +1358,7 @@ export function FieldModel3D({ character }: { character: string }) {
         <div className="ga-form-section-label">{t('Improve')}</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <button type="button" className="ga-btn ga-btn-sm" disabled={pending}
-            onClick={() => { setUpscaleFirst(!!st.upscale_runnable); setUpscaleBackend(''); setFaceBackend(''); setFaceCheck(null); setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 }); setFaceOpen(true) }}>
+            onClick={() => { setFaceReference(''); setUpscaleFirst(!!st.upscale_runnable); setUpscaleBackend(''); setFaceBackend(''); setFaceCheck(null); setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 }); setFaceOpen(true) }}>
             {t('Face retexture…')}
           </button>
           {model?.face_retexture_revert ? <button type="button" className="ga-btn ga-btn-sm" disabled={pending}

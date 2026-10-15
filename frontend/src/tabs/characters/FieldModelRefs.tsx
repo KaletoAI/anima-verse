@@ -63,7 +63,7 @@ interface RefsInfo {
 }
 
 // Display order of the extra views (checkboxes and thumbnails alike).
-const VIEW_ORDER = ['front', 'back', 'left', 'right'] as const
+const VIEW_ORDER = ['front', 'back', 'left', 'right', 'face'] as const
 
 type RefKind = 'pose' | 'tpose'
 
@@ -376,7 +376,7 @@ export function FieldModelRefs({
   // Own source strings on purpose: the bare "Back" is the navigation label
   // elsewhere and localizes accordingly — a back VIEW does not.
   const viewLabel = (view: string) =>
-    view === 'front' ? t('Front view') : view === 'back' ? t('Back view') : view === 'left' ? t('Left view') : t('Right view')
+    view === 'face' ? t('Face view') : view === 'front' ? t('Front view') : view === 'back' ? t('Back view') : view === 'left' ? t('Left view') : t('Right view')
   // The backend reports the available views for this character body form.
   const hasViews = kindList.includes('tpose') && !!info.views &&
     Object.keys(info.views).length > 0
@@ -527,7 +527,7 @@ export function FieldModelRefs({
               <label
                 key={view}
                 style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}
-                title={t('Render this extra T-pose view for multi-view 3D generation')}
+                title={view === 'face' ? t('Render a face close-up for face retexture') : t('Render this extra T-pose view for multi-view 3D generation')}
               >
                 <input
                   type="checkbox"

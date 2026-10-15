@@ -161,23 +161,34 @@ TPOSE_SIDE_PROMPT_TEMPLATE = (
 TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
 TPOSE_RIGHT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="right")
 
+TPOSE_FACE_PROMPT_DEFAULT = (
+    "the same person, close-up portrait of the head and shoulders seen "
+    "straight from the front, face centred and filling most of the frame, head "
+    "level and facing the camera directly, looking straight into the camera, "
+    "eyes open, neutral relaxed expression, mouth closed, the same hairstyle "
+    "as the reference, hair arranged exactly as in the reference, face evenly "
+    "lit from the front by soft diffuse light, no shadows on the face, no hair "
+    "shadows across the forehead or eyes"
+)
+
 TPOSE_VIEW_PROMPT_DEFAULTS = {
+    "face": TPOSE_FACE_PROMPT_DEFAULT,
     "back": TPOSE_BACK_PROMPT_DEFAULT,
     "left": TPOSE_LEFT_PROMPT_DEFAULT,
     "right": TPOSE_RIGHT_PROMPT_DEFAULT,
 }
 TPOSE_VIEWS_BY_BODY = {
-    "humanoid": ("back", "left", "right"),
+    "humanoid": ("back", "left", "right", "face"),
     "animal": ("front", "back", "right"),
 }
-# File kinds of the extra views. They are NOT part of REF_KINDS: there is no
-# own auto-toggle, no own UI tile and no own debounce lane for them — they are
-# rendered inside the "tpose" pass and stand or fall with it.
+# Extra views have per-character toggles and tiles, but share the T-pose
+# status and debounce lane. They render inside its pass, outside REF_KINDS.
 VIEW_KINDS = tuple(f"tpose_{v}" for v in dict.fromkeys(
     view for views in TPOSE_VIEWS_BY_BODY.values() for view in views))
 # Framing/lighting/negatives per view. Both profiles share one use case: the
 # framing question ("does the arm span fit") is identical for left and right.
 TPOSE_VIEW_USE_CASES = {
+    "face": "tpose_face",
     "back": "tpose_back",
     "left": "tpose_side",
     "right": "tpose_side",
@@ -701,7 +712,8 @@ def generate_model_ref_images(character_name: str,
 
     The "tpose" kind additionally renders the extra views switched on for
     this character (views depend on its body form) as
-    ``tpose_<view>_<signature>``: input for multi-view img2mesh backends.
+    ``tpose_<view>_<signature>``: multi-view mesh inputs, except the face
+    close-up which is used only for face retexture.
     They ride along with the main render — the kind counts as cached only
     once every enabled view exists too, and an already rendered main image
     is then reused instead of being generated again. A failing view is
@@ -862,7 +874,8 @@ def generate_model_ref_images(character_name: str,
                             # camera, and the main render carries exactly the
                             # figure, outfit and proportions the views must
                             # match for multi-view img2mesh.
-                            reference_image=path)
+                            reference_image=path,
+                            record_provenance=view == "face")
                     except Exception as e:
                         view_path = None
                         logger.warning(

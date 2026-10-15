@@ -140,11 +140,12 @@ check("[4] reference per render (kind, reference_image)",
       [("tpose", None),
        ("tpose_back", main_render),
        ("tpose_left", main_render),
-       ("tpose_right", main_render)])
-# P1: one main occasion plus three independent reference-view occasions.
+       ("tpose_right", main_render),
+       ("tpose_face", main_render)])
+# One main occasion plus four independent reference-view occasions.
 check("[4] main and extra-view occasions", occasions,
       {"tpose": "tpose", "tpose_back": "tpose_view",
-       "tpose_left": "tpose_view", "tpose_right": "tpose_view"})
+       "tpose_left": "tpose_view", "tpose_right": "tpose_view", "tpose_face": "tpose_view"})
 # [5] Palms DOWN in every view (user decision 2026-09-24, the Mixamo bind
 #     pose) — the front, the back and both profiles, nothing facing forward.
 for _label, _text in (("main", model_refs.TPOSE_PROMPT_DEFAULT),

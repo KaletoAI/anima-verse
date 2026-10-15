@@ -29,6 +29,7 @@ from app.core.model_refs import (  # noqa: E402
     ANIMAL_POSE_PROMPT_DEFAULT,
     ANIMAL_VIEW_PROMPT_DEFAULTS,
     TPOSE_BACK_PROMPT_DEFAULT,
+    TPOSE_FACE_PROMPT_DEFAULT,
     TPOSE_LEFT_PROMPT_DEFAULT,
     TPOSE_PROMPT_DEFAULT,
     TPOSE_RIGHT_PROMPT_DEFAULT,
@@ -598,6 +599,7 @@ SECTIONS = {
                     "tpose_image_width",
                     "tpose_image_height",
                     "tpose_back_prompt",
+                    "tpose_face_prompt",
                     "tpose_left_prompt",
                     "tpose_right_prompt",
                     "model_ref_renders_enabled",
@@ -706,9 +708,10 @@ SECTIONS = {
             # natural fit; the default-pose ref keeps the outfit format.
             "tpose_image_width": {"half": True, "type": "int", "label": "T-pose width (px)", "default": 1024, "min": 64, "max": 4096, "description": "Width of the T-pose reference render. Outstretched arms span roughly the body height — a square (or wider) format keeps the hands inside the frame, unlike the portrait outfit format. Empty = 1024."},
             "tpose_image_height": {"half": True, "type": "int", "label": "T-pose height (px)", "default": 1024, "min": 64, "max": 4096, "description": "Height of the T-pose reference render. Empty = 1024."},
-            # OPTIONAL extra views of the T-pose reference render — input for
-            # multi-view img2mesh backends. Off by default: every view is one
+            # Optional T-pose views for multi-view meshes or face retexture.
+            # Off by default: every view is one
             # more render per outfit combination.
+            "tpose_face_prompt": {"type": "text", "label": "Face view prompt", "placeholder": TPOSE_FACE_PROMPT_DEFAULT, "description": "POSE LAYER ONLY for the optional humanoid face close-up in the T-pose set. Used for face retexture, never as mesh input. Keep the reference hairstyle; the expression layer is neutral. Framing, lighting and negatives come from the 'tpose_face' use-case style. EMPTY = built-in default."},
             "tpose_back_prompt": {"type": "text", "label": "Back view prompt", "placeholder": TPOSE_BACK_PROMPT_DEFAULT, "description": "POSE LAYER ONLY for the extra BACK view of the T-pose reference render (enabled per character on the character editor's 3D tab). No face words here on purpose: every facial token pulls a face into the image and the model then turns the character toward the camera or paints a face onto the back of the head — the expression layer is left out entirely for this view. Framing, lighting and negatives come from the 'tpose_back' use-case style. EMPTY = built-in default."},
             "tpose_left_prompt": {"type": "text", "label": "Left profile prompt", "placeholder": TPOSE_LEFT_PROMPT_DEFAULT, "description": "POSE LAYER ONLY for the extra LEFT profile of the T-pose reference render (enabled per character on the character editor's 3D tab). The text describes what a T-pose profile actually shows — the near arm strongly foreshortened, pointing at the camera and hiding the far arm — because 'toward/away from the camera' alone made the render drop the arms forward and down. Framing, lighting and negatives come from the 'tpose_side' use-case style (shared with the right profile). EMPTY = built-in default."},
             "tpose_right_prompt": {"type": "text", "label": "Right profile prompt", "placeholder": TPOSE_RIGHT_PROMPT_DEFAULT, "description": "POSE LAYER ONLY for the extra RIGHT profile of the T-pose reference render (enabled per character on the character editor's 3D tab). Same text as the left profile with the side flipped. Framing, lighting and negatives come from the 'tpose_side' use-case style. EMPTY = built-in default."},

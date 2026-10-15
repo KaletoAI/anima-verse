@@ -106,6 +106,8 @@ def tpose_status(match, meta, photo):
             return 'changed'
         if 'view_images_sha256' in meta:
             for view, name in (meta.get('view_images') or {}).items():
+                if view == "face":
+                    continue
                 if Path(name).name != name:
                     continue
                 current = photo.parent / name
@@ -117,7 +119,9 @@ def tpose_status(match, meta, photo):
             return 'current'
         from app.core.timeutils import parse_iso
         created = parse_iso(meta['created_at'].replace('Z', '+00:00')).timestamp()
-        for name in (meta.get('view_images') or {}).values():
+        for kind, name in (meta.get('view_images') or {}).items():
+            if kind == "face":
+                continue
             if Path(name).name != name:
                 continue
             view = photo.parent / name

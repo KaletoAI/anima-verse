@@ -416,6 +416,8 @@ class OpenAIMeshBackend(ImageBackend):
         refs = params.get("reference_images") or {}
         if isinstance(refs, dict):
             for key, path in refs.items():
+                if "face" in str(key).lower():
+                    continue  # Texture close-up, never a reconstruction camera.
                 if path:
                     views.setdefault(cls._slot_view(key), str(path))
         src = str(params.get("source_image_path") or "")
@@ -427,6 +429,7 @@ class OpenAIMeshBackend(ImageBackend):
     def mesh_slot_views(body: str, main: str, views: Dict[str, str],
                         slots: List[str]) -> Dict[str, str]:
         """Choose body-dependent views for the actually selected alias."""
+        views = {v: p for v, p in views.items() if v != "face"}
         if body == "animal":
             if len(slots) <= 1:
                 return {"front": main}
@@ -447,9 +450,12 @@ class OpenAIMeshBackend(ImageBackend):
 
         Public/classmethod so the mapping can be checked without a backend
         instance or a gateway (scripts/smoke_mesh_multiview.py)."""
+        view_paths = {v: p for v, p in view_paths.items() if v != "face"}
         out: Dict[str, str] = {}
         used: set = set()
         for slot in (slots or ["input_image"]):
+            if "face" in str(slot).lower():
+                continue
             view = cls._slot_view(slot)
             if view in used:
                 continue

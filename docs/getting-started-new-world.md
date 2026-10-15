@@ -127,6 +127,7 @@ a hosted OpenAI-compatible cloud) in the [README](../README.md#getting-started).
    front view, neutral expression, no clothing, accessories or objects, no background, head and
    neck only (shoulders only for long hair), the face evenly lit from the front without shadows —
    a shadow in the portrait carries into the T-pose render and from there into the 3D face texture.
+   Humanoids can render a dedicated face close-up in the T-pose set for face retexture; it never feeds mesh generation.
    Generated portraits add these rules even with custom
    profile styles; the current outfit does not fill the profile style's `{fabric}` slot. For
    uploads, choose the same composition. Existing images are not changed automatically.

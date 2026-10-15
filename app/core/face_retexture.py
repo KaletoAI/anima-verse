@@ -25,10 +25,18 @@ def read_meta(path: Path) -> dict:
         return {}
 
 
-def photo_path(character: str, signature: str, meta: dict) -> Path:
+def photo_path(character: str, signature: str, meta: dict, reference: str = "front") -> Path:
     from app.models.character import get_character_dir
     root = get_character_dir(character) / 'model_refs'
-    name = meta.get('source_image') or f'tpose_{signature}.png'
+    safe_signature(signature)
+    if reference not in ('face', 'front'):
+        raise ValueError('Invalid face reference choice')
+    if reference == 'face':
+        from app.core.model_refs import find_ref_image
+        found = find_ref_image(character, 'tpose_face', signature)
+        name = found.name if found is not None else f'tpose_face_{signature}.png'
+    else:
+        name = meta.get('source_image') or f'tpose_{signature}.png'
     if not isinstance(name, str) or Path(name).name != name or '\\' in name:
         raise ValueError('Invalid source image name')
     path = root / name
@@ -54,7 +62,58 @@ def flatten_photo(raw: bytes) -> bytes:
     return result
 
 
-def check(character: str, signature: str) -> dict:
+def use_upscale(reference: str, upscale: bool | None) -> bool:
+    """Close-ups need no enlargement unless explicitly requested."""
+    return reference != 'face' if upscale is None else bool(upscale)
+
+
+def reference_info(character: str, signature: str, meta: dict, reference: str = '', *,
+                   _snapshot: dict | None = None) -> dict:
+    """Select a usable close-up only when it belongs to the mesh's front image.
+
+    The unrigged source metadata is authoritative, even if the current front
+    has since been re-rendered. Never infer a match from missing hashes.
+    """
+    if reference not in ('', 'face', 'front'):
+        raise ValueError('Invalid face reference choice')
+    problem = None
+    # The render lock covers minutes of GPU work. Certify the published pair
+    # by content instead, then freeze only the bytes that passed this check.
+    for attempt in range(3):
+        path = photo_path(character, signature, meta, 'face')
+        try:
+            face_meta = read_meta(path)
+            raw = path.read_bytes()
+            published_hash = face_meta.get('image_sha256')
+            if not published_hash:
+                problem = {'code': 'face_unverified', 'message': 'The face view has no image hash.',
+                           'fix': 'Regenerate the face view (T-pose set) for this outfit'}
+                break
+            if hashlib.sha256(raw).hexdigest() != published_hash:
+                problem = {'code': 'face_rendering', 'message': 'The face view is being re-rendered.',
+                           'fix': 'Wait for the render to finish or regenerate the face view'}
+                continue
+            image = flatten_photo(raw)
+        except (OSError, ValueError, Image.DecompressionBombError):
+            problem = {'code': 'no_face_photo', 'message': 'No usable face view.',
+                       'fix': 'Render the face view (T-pose set) for this outfit'}
+        else:
+            expected = meta.get('source_image_sha256')
+            if not expected or face_meta.get('reference_sha256') != expected:
+                problem = {'code': 'face_stale', 'message': 'The face view does not match the mesh.',
+                           'fix': 'The face view was rendered from an older T-pose; regenerate it'}
+            else:
+                problem = None
+                if _snapshot is not None:
+                    _snapshot['image'] = image
+        break
+    selected = reference or ('front' if problem else 'face')
+    return {'reference': selected, 'face_available': problem is None,
+            'face_problem': problem, 'problems': [problem] if selected == 'face' and problem else []}
+
+
+def check(character: str, signature: str, reference: str = '', *,
+          _snapshot: dict | None = None) -> dict:
     """Report permanent asset properties without probing any backend."""
     from app.core import model3d
     from app.models.character import get_character_dir
@@ -71,6 +130,8 @@ def check(character: str, signature: str) -> dict:
     if model3d.required_rig(character) != 'mixamo':
         problem('not_humanoid', 'This character is not humanoid.', 'Face retexture only works on humanoid (mixamo) character models.')
     source = root / 'unrigged' / f'{signature}.glb'
+    choice = reference_info(character, signature, read_meta(source), reference, _snapshot=_snapshot)
+    problems.extend(choice['problems'])
     if not source.is_file():
         problem('no_source', 'No retained unrigged mesh source.', "This model predates the mesh/rig split and has no retained unrigged mesh. Regenerate this outfit's model.")
     else:
@@ -82,20 +143,22 @@ def check(character: str, signature: str) -> dict:
                 problem('bad_source', 'The retained mesh does not meet the input contract.', "Regenerate this outfit's model.")
                 problems[-1]['detail'] = '; '.join(verdict['errors'])
         meta = read_meta(source)
-        try:
-            raw = photo_path(character, signature, meta).read_bytes()
-            flatten_photo(raw)
-        except (OSError, ValueError, Image.DecompressionBombError):
-            problem('no_photo', 'No usable reference photo.', 'No T-pose render for this outfit. Render it, then regenerate the model so photo and mesh match.')
-        else:
-            expected = meta.get('source_image_sha256')
-            if expected and expected != hashlib.sha256(raw).hexdigest():
-                problem('photo_changed', 'The reference photo has changed.', 'The T-pose was re-rendered after this mesh was made, so photo and mesh no longer match. Regenerate the model.')
-            elif not expected:
-                warnings.append({'code': 'photo_unverified', 'message': 'Older model — the photo cannot be verified against the mesh.'})
+        if choice['reference'] == 'front':
+            try:
+                raw = photo_path(character, signature, meta).read_bytes()
+                flatten_photo(raw)
+            except (OSError, ValueError, Image.DecompressionBombError):
+                problem('no_photo', 'No usable reference photo.', 'No T-pose render for this outfit. Render it, then regenerate the model so photo and mesh match.')
+            else:
+                expected = meta.get('source_image_sha256')
+                if expected and expected != hashlib.sha256(raw).hexdigest():
+                    problem('photo_changed', 'The reference photo has changed.', 'The T-pose was re-rendered after this mesh was made, so photo and mesh no longer match. Regenerate the model.')
+                elif not expected:
+                    warnings.append({'code': 'photo_unverified', 'message': 'Older model — the photo cannot be verified against the mesh.'})
     if read_meta(root / f'{signature}.glb').get('face_retexture', {}).get('status') == 'applied':
         warnings.append({'code': 'applied', 'message': 'Already corrected — a new run starts again from the original mesh.'})
-    return {'ok': not problems, 'problems': problems, 'warnings': warnings}
+    return {'ok': not problems, 'problems': problems, 'warnings': warnings,
+            **{k: choice[k] for k in ('reference', 'face_available', 'face_problem')}}
 
 
 def runnable(character: str, backend_glob: str = '') -> dict:

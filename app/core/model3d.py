@@ -1919,6 +1919,8 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
             from app.core.model_refs import enabled_tpose_views, is_humanoid
             view_images = {}
             for _view in enabled_tpose_views(character_name):
+                if _view == "face":
+                    continue  # Close-up texture reference, never reconstruction input.
                 _vp = find_ref_image(character_name, f"tpose_{_view}", signature)
                 if _vp:
                     view_images[_view] = str(_vp)
@@ -1949,15 +1951,21 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
             if rig == "mixamo" and get_model3d_options(character_name)["face_before_rig"]:
                 from app.core import face_retexture
                 ready = face_retexture.runnable(character_name)
-                face_inputs = {"face_before_rig": True, "controls": face_retexture.validated_params(None),
-                               "face_backend_glob": "", "upscale": True, "upscale_backend_glob": "",
+                face_snapshot = {}
+                face_choice = face_retexture.reference_info(character_name, signature, {
+                    "source_image": src.name, "source_image_sha256": hashlib.sha256(source_bytes).hexdigest()},
+                    _snapshot=face_snapshot)
+                face_reference = face_choice["reference"]
+                face_inputs = {"reference": face_reference, "face_before_rig": True, "controls": face_retexture.validated_params(None),
+                               "face_backend_glob": "", "upscale": face_retexture.use_upscale(face_reference, None), "upscale_backend_glob": "",
                                "source_kind": "facefix"}
                 if not ready["ok"]:
                     face_inputs["face_retexture"] = {"status": "skipped", "reason": "; ".join(
                         problem["message"] for problem in ready["problems"])}
                 else:
                     try:
-                        face_photo = face_retexture.flatten_photo(source_bytes)
+                        face_photo = (face_snapshot['image'] if face_reference == 'face'
+                                      else face_retexture.flatten_photo(source_bytes))
                     except Exception as exc:
                         face_inputs["face_retexture"] = {"status": "failed", "error": str(exc), "at": utc_now_iso()}
             op = hub_ops.create(_OP_MESH, _op_subject(character_name, signature), {
@@ -2693,7 +2701,7 @@ def _model_revision_unlocked(path: Optional[Path]) -> str:
 
 
 def face_retexture_model(character_name: str, signature: Optional[str] = None, *,
-                         backend_glob: str = "", params=None, upscale: bool = True,
+                         backend_glob: str = "", params=None, upscale: Optional[bool] = None, reference: str = "",
                          upscale_backend_glob: str = "", track_id: str = "") -> Dict[str, Any]:
     """Project the original photo, then rebuild every derived asset in the stage.
 
@@ -2706,13 +2714,13 @@ def face_retexture_model(character_name: str, signature: Optional[str] = None, *
             character_name, op.inputs["signature"], _op_ctx={"op": op}), character_name)
     return hub_ops.run_new(lambda ctx: _face_retexture_model(
         character_name, signature, backend_glob=backend_glob, params=params,
-        upscale=upscale, upscale_backend_glob=upscale_backend_glob, track_id=track_id,
+        upscale=upscale, reference=reference, upscale_backend_glob=upscale_backend_glob, track_id=track_id,
         _op_ctx=ctx))
 
 
 @_serial_model
 def _face_retexture_model(character_name: str, signature: Optional[str] = None, *,
-                          backend_glob: str = "", params=None, upscale: bool = True,
+                          backend_glob: str = "", params=None, upscale: Optional[bool] = None, reference: str = "",
                           upscale_backend_glob: str = "", track_id: str = "",
                           _op_ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The staged half: checks + record (fresh run), then the stages. A
@@ -2724,20 +2732,24 @@ def _face_retexture_model(character_name: str, signature: Optional[str] = None, 
     op = (_op_ctx or {}).get("op")
     if op is None:
         controls = face_retexture.validated_params(params)
-        eligibility = face_retexture.check(character_name, signature)
+        face_snapshot = {}
+        eligibility = face_retexture.check(character_name, signature, reference, _snapshot=face_snapshot)
         ready = face_retexture.runnable(character_name, backend_glob)
         problems = eligibility['problems'] + ready['problems']
         if problems:
             return {'ok': False, 'problems': problems, 'error': '; '.join(p['message'] for p in problems)}
         original = root / 'unrigged' / f'{signature}.glb'
         meta = _read_sidecar(original)
-        image = face_retexture.flatten_photo(face_retexture.photo_path(character_name, signature, meta).read_bytes())
+        reference = eligibility['reference']
+        upscale = face_retexture.use_upscale(reference, upscale)
+        image = (face_snapshot['image'] if reference == 'face' else
+                 face_retexture.flatten_photo(face_retexture.photo_path(character_name, signature, meta, reference).read_bytes()))
         if upscale and upscale_backend_glob:
             from app.core.upscale_reference import require_upscale_backend
             require_upscale_backend(upscale_backend_glob, character_name)
         op = hub_ops.create(_OP_FACE, _op_subject(character_name, signature), {
             "character": character_name, "signature": signature, "controls": controls,
-            "backend_glob": backend_glob, "upscale": bool(upscale),
+            "backend_glob": backend_glob, "upscale": bool(upscale), "reference": reference,
             "upscale_backend_glob": upscale_backend_glob, "source_kind": "facefix",
             "rig": required_rig(character_name),
             "rig_options": _character_rig_options(character_name),
@@ -2777,7 +2789,7 @@ def _face_source_stages(character_name: str, op) -> Dict[str, Any]:
     image = op.abs("inputs/photo.png").read_bytes()
 
     if not op.done("upscale"):
-        upscale_meta = {'status': 'off'}
+        upscale_meta = {'status': 'off', **({'reason': 'face view'} if inputs.get('reference') == 'face' else {})}
         if inputs["upscale"]:
             from app.imagegen.base import GenerationCancelled, GpuTaskCancelled, HubJobLost, MediaGenerationDisabled, BackendBusyError
             publication = getattr(_staging, 'source_publications', {}).get(character_name)
@@ -2832,7 +2844,7 @@ def _face_source_stages(character_name: str, op) -> Dict[str, Any]:
             return {'ok': False, 'error': str(exc)}
         if len(raw) > face_retexture.MAX_BYTES:
             return {'ok': False, 'error': 'Baked mesh exceeds the 64 MB rig upload limit'}
-        face_meta = {'status': 'applied', 'at': utc_now_iso(),
+        face_meta = {'status': 'applied', 'at': utc_now_iso(), 'reference': inputs.get('reference', 'front'),
                      'backend': result.get('backend', ''), 'job_id': result.get('job_id', ''),
                      'params': controls, 'upscale': upscale_meta, 'baked': baked, 'result_sha256': result.get('result_sha256', ''),
                      'result_url': result.get('result_url', ''),
@@ -2907,7 +2919,7 @@ def _revert_face_retexture(character_name: str, signature: Optional[str] = None,
 
 
 def trigger_face_retexture(character_name: str, signature: str, *,
-                           backend_glob: str = '', params=None, upscale: bool = True,
+                           backend_glob: str = '', params=None, upscale: Optional[bool] = None, reference: str = "",
                            upscale_backend_glob: str = '') -> Dict[str, Any]:
     """Track orchestration on the character's shared generation guard."""
     from app.core.task_queue import get_task_queue
@@ -2934,7 +2946,7 @@ def trigger_face_retexture(character_name: str, signature: str, *,
             with _char_lock(character_name):
                 result = face_retexture_model(character_name, signature,
                                                backend_glob=backend_glob, params=controls,
-                                               upscale=upscale, upscale_backend_glob=upscale_backend_glob,
+                                               upscale=upscale, reference=reference, upscale_backend_glob=upscale_backend_glob,
                                                track_id=task_id)
         except Exception as exc:
             result = {'ok': False, 'error': str(exc)}
