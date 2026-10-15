@@ -123,6 +123,9 @@ const BADGE_STYLE: CSSProperties = {
   pointerEvents: 'none',
 }
 
+/** Badge overrides for the small view tiles. */
+const COMPACT_BADGE: CSSProperties = { bottom: 3, padding: '0 3px', fontSize: 10, lineHeight: '14px' }
+
 function RefImage({
   src,
   height,
@@ -131,6 +134,7 @@ function RefImage({
   label,
   caption,
   action,
+  compact = false,
 }: {
   src: string
   height: number
@@ -142,6 +146,8 @@ function RefImage({
   caption?: string
   /** Control in the upper right corner (e.g. the regenerate button). */
   action?: ReactNode
+  /** Small tile: smaller badges, a long caption is cut with an ellipsis. */
+  compact?: boolean
 }) {
   const [size, setSize] = useState('')
   const [hidden, setHidden] = useState(false)
@@ -171,13 +177,16 @@ function RefImage({
         onError={() => setHidden(true)}
       />
       {showSize && size && !hidden ? (
-        <span style={{ ...BADGE_STYLE, right: 6 }}>{size}</span>
+        <span style={{ ...BADGE_STYLE, ...(compact ? COMPACT_BADGE : {}), right: compact ? 3 : 6 }}>{size}</span>
       ) : null}
       {caption && !hidden ? (
-        <span style={{ ...BADGE_STYLE, left: 6 }}>{caption}</span>
+        <span title={caption} style={{ ...BADGE_STYLE, left: compact ? 3 : 6,
+          ...(compact ? { ...COMPACT_BADGE, maxWidth: '48%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } : {}) }}>
+          {caption}
+        </span>
       ) : null}
       {action ? (
-        <div style={{ position: 'absolute', top: 6, right: 6 }}>{action}</div>
+        <div style={{ position: 'absolute', top: compact ? 3 : 6, right: compact ? 3 : 6 }}>{action}</div>
       ) : null}
     </div>
   )
@@ -435,20 +444,36 @@ export function FieldModelRefs({
                               height={110}
                               radius={6}
                               showSize
+                              compact
                               label={viewLabel(view)}
+                              caption={vi.created_at ? formatDateTime(vi.created_at, clockSettings()) : undefined}
+                              action={(
+                                <button
+                                  type="button"
+                                  className="ga-btn ga-btn-sm"
+                                  style={{ fontSize: 10, padding: '1px 5px' }}
+                                  disabled={blocked || !info.tpose}
+                                  onClick={() => generate(view)}
+                                  aria-label={`${t('Regenerate')} · ${viewLabel(view)}`}
+                                >
+                                  {t('Regenerate')}
+                                </button>
+                              )}
                             />
                           ) : (
-                            <div className="ga-hint">{t('No render yet')}</div>
+                            <>
+                              <div className="ga-hint">{t('No render yet')}</div>
+                              <button
+                                type="button"
+                                className="ga-btn ga-btn-sm"
+                                disabled={blocked || !info.tpose}
+                                onClick={() => generate(view)}
+                                aria-label={`${t('Regenerate')} · ${viewLabel(view)}`}
+                              >
+                                {t('Regenerate')}
+                              </button>
+                            </>
                           )}
-                          <button
-                            type="button"
-                            className="ga-btn ga-btn-sm"
-                            disabled={blocked || !info.tpose}
-                            onClick={() => generate(view)}
-                            aria-label={`${t('Regenerate')} · ${viewLabel(view)}`}
-                          >
-                            {t('Regenerate')}
-                          </button>
                         </div>
                       )
                     },
