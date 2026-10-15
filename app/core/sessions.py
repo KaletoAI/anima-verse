@@ -98,6 +98,27 @@ def create_session(user_id: str) -> str:
     return token
 
 
+def peek_session(token: str) -> Optional[Dict[str, Any]]:
+    """The session row if the token is valid NOW — without sliding it.
+
+    A long-lived stream re-checks its session every minute; sliding there would
+    keep a session alive for as long as a tab stays open, without any user
+    activity. Expired rows are left for get_session's cleanup."""
+    if not token:
+        return None
+    row = get_connection().execute(
+        "SELECT token, user_id, created_at, expires_at, last_activity "
+        "FROM user_sessions WHERE token=?", (token,)).fetchone()
+    if not row:
+        return None
+    try:
+        if _now() >= parse_iso(row["expires_at"]):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return dict(row)
+
+
 def get_session(token: str) -> Tuple[Optional[Dict[str, Any]], bool]:
     """Loads the session if the token is valid, sliding the TTL.
 

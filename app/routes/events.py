@@ -97,8 +97,8 @@ async def state_event_stream(
     ``activity_changed {character, activity, animation}``.
 
     Admin-only because the stream is NOT fog-filtered and exposes every
-    character's state changes. Players use /play/worldmap and will later
-    get a separate fog-filtered push channel.
+    character's state changes. Players use /play/worldmap and the fog-filtered
+    /events/sync channel (app/core/sync_stream.py).
     Unauthenticated: 401.
     """
     from app.core.state_events import subscribe as _subscribe_state

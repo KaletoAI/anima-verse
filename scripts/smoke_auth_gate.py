@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Smoke: the default-deny auth gate, the character filter and the login throttle.
 
+P4 B-T1 cases: REGRESSION against a241a8aa: player GET /events/sync
+passes the gate (200 on the catch-all), anonymous GET returns 401. The real
+stream is NEU and covered by smoke_sync_stream.py; this checks gate policy.
+
 Covers the 2026-09-20 security review findings SEC-2, SEC-6 and SEC-5 (b)+(c).
 Nothing here needs a server or a world: the gate is mounted on a throwaway
 Starlette app built inside this script, and the session lookup is stubbed, so
@@ -197,9 +201,9 @@ def check(label, got, expected):
 # Stubbed session lookup: the test client sends the role in a header instead
 # of a cookie, so no DB, no sessions table, no users table is involved.
 _USERS = {
-    "user": {"id": "u_user", "username": "player", "role": "user",
+    "user": {"id": "u_user", "username": "demo", "role": "user",
              "allowed_characters": ["Mara"]},
-    "admin": {"id": "u_admin", "username": "boss", "role": "admin",
+    "admin": {"id": "u_admin", "username": "demo", "role": "admin",
               "allowed_characters": []},
 }
 
@@ -243,6 +247,8 @@ def location(method, path, accept):
 
 print("A) default-deny gate (SEC-2)")
 check("anon GET /characters/list", status("GET", "/characters/list"), 401)
+check("anon GET /events/sync", status("GET", "/events/sync"), 401)
+check("user GET /events/sync", status("GET", "/events/sync", "user"), 200)
 check("anon GET /events/state-stream", status("GET", "/events/state-stream"), 401)
 check("user GET /events/state-stream", status("GET", "/events/state-stream", "user"), 403)
 check("admin GET /events/state-stream", status("GET", "/events/state-stream", "admin"), 200)

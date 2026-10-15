@@ -60,11 +60,11 @@ async def switch_character(request: Request) -> Dict[str, Any]:
     if not character_name:
         raise HTTPException(status_code=400, detail="character_name required")
 
-    # Zugriffsrecht pruefen (Admin darf alle, User nur allowed_characters)
+    # Check access: admins can use all, players only allowed_characters.
     if not user_can_access_character(request, character_name):
         raise HTTPException(
             status_code=403,
-            detail=f"Kein Zugriff auf Character '{character_name}'")
+            detail=f"No access to character '{character_name}'")
 
     # Verify character exists AND is playable as avatar
     available = list_available_characters()
@@ -76,13 +76,14 @@ async def switch_character(request: Request) -> Dict[str, Any]:
     if not is_feature_enabled(character_name, "playable_avatar"):
         raise HTTPException(
             status_code=400,
-            detail=f"Character '{character_name}' ist kein Avatar (Template-Flag playable_avatar=false)")
-
-    previous = get_active_character()
-    set_active_character(character_name)
+            detail=f"Character '{character_name}' is not an avatar (template flag playable_avatar=false)")
 
     from app.core.auth_dependency import get_current_user_optional
+    from app.core import sync_topics
     user = get_current_user_optional(request)
+    previous = get_active_character()
+    set_active_character(character_name)
+    sync_topics.rebind_user(user["id"])
     username = (user or {}).get("username", "(unknown)")
     logger.info(
         "Player %s switched from '%s' to '%s'",

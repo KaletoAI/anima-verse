@@ -162,8 +162,10 @@ def get_user_language_instruction() -> str:
 
 
 def _current_user_settings() -> Optional[Dict[str, Any]]:
-    """Settings-Dict des aktuell eingeloggten Users (aus Middleware-Context).
-    None wenn kein Request-Context (Background-Task)."""
+    """Settings of the logged-in user from the middleware context.
+
+    None without a request context (background tasks).
+    """
     try:
         from app.core.auth_dependency import get_current_user_from_ctx
         user = get_current_user_from_ctx()
@@ -275,33 +277,42 @@ def apply_presence_transition(old_avatar: str, new_avatar: str) -> None:
                                          old_avatar or "-", new_avatar or "-")
 
 
-def get_active_character() -> str:
-    """Return the character currently controlled by this player.
-
-    Fuer eingeloggte User: aus user.settings.active_character.
-    Fallback (Background / kein Request): aus account-Profile.
-    """
-    us = _current_user_settings()
-    if us is not None:
-        ac = us.get("active_character") or us.get("current_character") or ""
-        if ac:
-            return ac
-        # Fallback fuer User ohne gesetzten active_character: erster allowed
-        try:
-            from app.core.auth_dependency import get_current_user_from_ctx
-            user = get_current_user_from_ctx()
-            allowed = (user or {}).get("allowed_characters") or []
-            if allowed:
-                return allowed[0]
-        except Exception:
-            pass
-
+def _active_for_user(user: Optional[dict]) -> str:
+    """Resolve settings, legacy settings, allowed characters, then account profile."""
+    settings = user.get("settings", {}) if user else None
+    if settings is not None:
+        active = settings.get("active_character") or settings.get("current_character") or ""
+        if active:
+            return active
+        allowed = (user or {}).get("allowed_characters") or []
+        if allowed:
+            return allowed[0]
     profile = get_user_profile()
-    return (
-        profile.get("active_character")
-        or profile.get("current_character")
-        or ""
-    )
+    return profile.get("active_character") or profile.get("current_character") or ""
+
+
+def get_active_character() -> str:
+    """Return the controlled character using the request's resolved user."""
+    try:
+        from app.core.auth_dependency import get_current_user_from_ctx
+        user = get_current_user_from_ctx()
+    except Exception:
+        user = None
+    return _active_for_user(user)
+
+
+def get_active_character_for_user(user_id: str) -> str:
+    """Resolve a fresh user's allowed character for stream binding.
+
+    Stream binding must never borrow the shared account profile: it could
+    expose another user's private avatar and location topics, even to admins.
+    """
+    from app.core.users import get_user_by_id
+    user = get_user_by_id(user_id)
+    if not user:
+        return ""
+    active = _active_for_user(user)
+    return active if active in (user.get("allowed_characters") or []) else ""
 
 
 def set_active_character(character_name: str):
