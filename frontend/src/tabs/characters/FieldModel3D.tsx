@@ -98,7 +98,8 @@ interface Model3DInfo {
     landmark_fallback?: string[]
     clips?: Record<string, { stretch_p999: number; contact_err_max: number; tail_min_z: number; ik_unreachable: number }>
   }
-  face_retexture?: { status: string; at?: string; backend?: string; job_id?: string; face_texture_lost?: boolean; upscale?: { status: string; backend?: string; in?: number[]; out?: number[]; cached?: boolean; busy?: boolean; error?: string } }
+  face_retexture?: { status: string; reason?: string; error?: string; at?: string; backend?: string; job_id?: string; face_texture_lost?: boolean; upscale?: { status: string; backend?: string; in?: number[]; out?: number[]; cached?: boolean; busy?: boolean; error?: string } }
+  face_retexture_revert?: 'snapshot' | 'rerig' | null
   face_retexture_snapshot?: { ok: boolean; created_at?: string; error?: string }
   face_retexture_compare_url?: string
   model_rev?: string
@@ -156,7 +157,7 @@ interface Model3DStatus {
   rig?: string
   has_input?: boolean
   model?: Model3DInfo | null
-  options?: { auto_generate?: boolean;
+  options?: { auto_generate?: boolean; face_before_rig?: boolean;
     extension_rig_models?: Record<string, Record<string, { enabled?: boolean; flip?: boolean }>>;
     extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }> }
   extension_groups?: ExtensionRigDeclaration[]
@@ -510,14 +511,13 @@ export function FieldModel3D({ character }: { character: string }) {
     [busy, enc, jobId, load, t, toast],
   )
 
-  // Opt-in: generate the mesh automatically (cheapest backend) once a new
-  // outfit combination's T-pose render succeeded.
-  const setAutoGenerate = useCallback(
-    async (value: boolean) => {
-      setSt((prev) => ({ ...prev, options: { ...(prev.options || {}), auto_generate: value } }))
+  // Independent per-character generation options.
+  const setModelOption = useCallback(
+    async (key: 'auto_generate' | 'face_before_rig', value: boolean) => {
+      setSt((prev) => ({ ...prev, options: { ...(prev.options || {}), [key]: value } }))
       try {
         const d = await apiPost<{ options: Model3DStatus['options'] }>(
-          `/characters/${enc}/model3d/options`, { auto_generate: value })
+          `/characters/${enc}/model3d/options`, { [key]: value })
         setSt((prev) => ({ ...prev, options: d.options }))
         toast(t('Saved'))
       } catch (e) {
@@ -846,7 +846,7 @@ export function FieldModel3D({ character }: { character: string }) {
     : `${model?.rig_backend || '–'}${fixedTwist != null ? ` · ${t('head {n}° fixed').replace('{n}', String(Math.abs(Math.round(fixedTwist))))}` : ''}`
   const face = model?.face_retexture
   const up = face?.upscale
-  const faceText = face?.status === 'failed' ? t('Failed') : face?.face_texture_lost ? t('Face texture lost')
+  const faceText = face?.status === 'failed' ? t('Failed') : face?.status === 'skipped' ? t('Skipped') : face?.face_texture_lost ? t('Face texture lost')
     : face?.status === 'applied' ? (up?.status === 'applied' && up.backend
       ? `${up.backend}${up.in?.[0] && up.out?.[0] ? ` ×${+(up.out[0] / up.in[0]).toFixed(1)}` : ''}` : t('applied')) : '–'
   const statusPanel = <div className="ga-model3d-status">
@@ -856,7 +856,7 @@ export function FieldModel3D({ character }: { character: string }) {
       t('T-pose source freshness'))}
     {statusRow(t('Mesh'), model?.mesh_backend || '–', model?.mesh_backend ? 'green' : 'grey', model?.mesh_backend || t('unknown'))}
     {statusRow(t('Rig'), rigText, model?.rig_error ? 'red' : turned ? 'yellow' : model?.rig_backend && currentTwist != null ? 'green' : 'grey', model?.rig_error || rigText)}
-    {statusRow(t('Face'), faceText, face?.status === 'failed' ? 'red' : face?.face_texture_lost ? 'yellow' : face?.status === 'applied' ? 'green' : 'grey', faceText)}
+    {statusRow(t('Face'), faceText, face?.status === 'failed' ? 'red' : face?.face_texture_lost ? 'yellow' : face?.status === 'applied' ? 'green' : 'grey', face?.error || face?.reason || faceText)}
   </div>
   const rigMetrics = model?.rig_metrics
   const hasRigMetrics = rigMetrics && (typeof rigMetrics.sym_max_pct === 'number'
@@ -1079,9 +1079,16 @@ export function FieldModel3D({ character }: { character: string }) {
         <input
           type="checkbox"
           checked={!!st.options?.auto_generate}
-          onChange={(e) => setAutoGenerate(e.target.checked)}
+          onChange={(e) => setModelOption('auto_generate', e.target.checked)}
         />
         <span>{t('Auto-generate 3D model (cheapest backend)')}</span>
+      </label>
+      <label className="ga-check-row"
+        title={st.rig && st.rig !== 'mixamo' ? t('Humanoid models only.') : t('New meshes get the face correction (upscaler + face retexture) before the first rig, so the rigger runs once. Independent of auto-generate. Humanoid models only.')}>
+        <input type="checkbox" checked={!!st.options?.face_before_rig}
+          disabled={!!st.rig && st.rig !== 'mixamo'}
+          onChange={e => setModelOption('face_before_rig', e.target.checked)} />
+        <span>{t('Improve face before rigging')}</span>
       </label>
       {st.extension_groups?.length ? (
         <fieldset className="ga-form">
@@ -1146,7 +1153,8 @@ export function FieldModel3D({ character }: { character: string }) {
         {st.face_retexture_result.ok ? t('Face retexture completed') : `${t('Face retexture failed')}: ${st.face_retexture_result.error || t('Error')}`}
       </div> : null}
       {model?.face_retexture ? <div className="ga-hint" role="status">
-        {model.face_retexture.status === 'applied' ? t('Face retexture applied') : t('Face retexture reverted')}
+        {model.face_retexture.status === 'applied' ? t('Face retexture applied') : model.face_retexture.status === 'failed' ? t('Face retexture failed') : model.face_retexture.status === 'skipped' ? t('Skipped') : t('Face retexture reverted')}
+        {model.face_retexture.error || model.face_retexture.reason ? ` · ${model.face_retexture.error || model.face_retexture.reason}` : ''}
         {model.face_retexture.backend ? ` · ${model.face_retexture.backend}` : ''}
         {model.face_retexture.job_id ? ` · ${model.face_retexture.job_id}` : ''}
         {model.face_retexture.at ? ` · ${formatDateTime(model.face_retexture.at, clockSettings())}` : ''}
@@ -1246,12 +1254,14 @@ export function FieldModel3D({ character }: { character: string }) {
             style={{ maxWidth: 520 }} onClick={e => e.stopPropagation()}>
             <div className="ga-modal-header">{t('Revert face retexture')}</div>
             <div className="ga-modal-body">
+              {model?.face_retexture_revert === 'rerig' ? <p>{t('Re-rig the original mesh without face correction? This starts a rigging job and rebuilds the model.')}</p> : <>
               <p>{t('Restore the model snapshot from {time}?').replace('{time}', model?.face_retexture_snapshot?.created_at ? formatDateTime(model.face_retexture_snapshot.created_at, clockSettings()) : t('Unknown'))}</p>
               <p>{t('This also resets all later changes to this model, including re-rigging, extension bones and distance meshes. No generation job is started.')}</p>
+              </>}
             </div>
             <div className="ga-modal-footer">
               <button type="button" className="ga-btn" disabled={busy} onClick={() => setRevertFaceOpen(false)}>{t('Cancel')}</button>
-              <button type="button" className="ga-btn ga-btn-primary" disabled={pending || !model?.face_retexture_snapshot?.ok} onClick={revertFaceRetexture}>{t('Revert face retexture')}</button>
+              <button type="button" className="ga-btn ga-btn-primary" disabled={pending || !model?.face_retexture_revert} onClick={revertFaceRetexture}>{t('Revert face retexture')}</button>
             </div>
           </div>
         </div>, document.body) : null}
@@ -1323,7 +1333,7 @@ export function FieldModel3D({ character }: { character: string }) {
             onClick={() => { setUpscaleFirst(!!st.upscale_runnable); setUpscaleBackend(''); setFaceBackend(''); setFaceCheck(null); setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 }); setFaceOpen(true) }}>
             {t('Face retexture…')}
           </button>
-          {model?.face_retexture_snapshot?.ok ? <button type="button" className="ga-btn ga-btn-sm" disabled={pending}
+          {model?.face_retexture_revert ? <button type="button" className="ga-btn ga-btn-sm" disabled={pending}
             onClick={() => setRevertFaceOpen(true)}>{t('Revert face retexture…')}</button> : null}
           <button type="button" className="ga-btn ga-btn-sm"
             disabled={pending || !model?.has_unrigged_source}

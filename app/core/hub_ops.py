@@ -75,6 +75,10 @@ class Kind:
     guards of a THREAD resume synchronously — before the AgentLoop and the
     queue workers start — and returns the function that releases them.
 
+    ``optional_stage(op, name)`` identifies stages whose recoverable early
+    collection errors must be replayed to the pipeline instead of failing the
+    operation. Cancellation, disabled media and lost jobs remain terminal.
+
     The guards are taken on the resumer's thread and released on the resume
     thread: they must be plain sets or ``threading.Lock`` — never a
     ``keyed_lock`` (an RLock refuses a release from another thread)."""
@@ -82,14 +86,16 @@ class Kind:
     resume: Callable[["Op"], Any]
     track_type: str
     reserve: Optional[Callable[["Op"], Callable[[], None]]] = None
+    optional_stage: Optional[Callable[["Op", str], bool]] = None
 
 
 _KINDS: Dict[str, Kind] = {}
 
 
 def register_kind(name: str, *, resume: Callable[["Op"], Any], track_type: str,
-                  reserve: Optional[Callable[["Op"], Callable[[], None]]] = None) -> None:
-    _KINDS[name] = Kind(name, resume, track_type, reserve)
+                  reserve: Optional[Callable[["Op"], Callable[[], None]]] = None,
+                  optional_stage: Optional[Callable[["Op", str], bool]] = None) -> None:
+    _KINDS[name] = Kind(name, resume, track_type, reserve, optional_stage)
 
 
 def get_kind(name: str) -> Optional[Kind]:
@@ -357,7 +363,7 @@ class HubStage:
 
         def update(job: Dict[str, Any]) -> None:
             earlier = job.get("pid") != _PROCESS_ID
-            if job.get("collected") or (job.get("job_id") and earlier):
+            if job.get("collection_error") or job.get("collected") or (job.get("job_id") and earlier):
                 verdict["v"] = "attach"
                 return
             if earlier and job.get("phase") == "posting":
@@ -432,6 +438,8 @@ class HubStage:
         """The raw result fetched by an earlier collection, or None."""
         self.op.reload()
         job = self.job
+        if job.get("collection_error"):
+            raise RuntimeError(job["collection_error"])
         if not job.get("collected"):
             return None
         directory = self._job_dir()
@@ -536,7 +544,8 @@ def _in_flight(op: Op) -> Dict[str, Dict[str, Any]]:
     collected, and the stage not done yet (a done stage keeps the id of the
     job it was made from — that job is finished and used)."""
     return {name: job for name, job in op.jobs().items()
-            if job.get("job_id") and not job.get("collected") and not op.done(name)}
+            if job.get("job_id") and not job.get("collected")
+            and not job.get("collection_error") and not op.done(name)}
 
 
 def _cancel_jobs(op: Op) -> None:
@@ -841,8 +850,11 @@ def _collect_ahead(op: Op) -> None:
     """The collection path for a task-owned operation: fetch its submitted
     stage now — also while the task's queue is paused — so the gateway's 24 h
     retention cannot run out under it. The handler does the rest. A failure
-    is stored on the record (``keep``): the handler reports it."""
-    from app.imagegen.base import HubJobLost
+    is stored on the record (``keep``): the handler reports it. Optional
+    stage errors are replayed when the handler attaches, letting the pipeline
+    apply the same fallback as a live run."""
+    from app.imagegen.base import (HubJobLost, GenerationCancelled,
+                                   GpuTaskCancelled, MediaGenerationDisabled)
     from app.core.task_queue import get_task_queue
     owner = op.owner
     op.should_cancel = lambda: get_task_queue().task_status(owner) == "cancelled"
@@ -850,6 +862,16 @@ def _collect_ahead(op: Op) -> None:
         try:
             op.stage(name).collect()
         except Exception as e:  # noqa: BLE001
+            kind = get_kind(op.kind)
+            if (not isinstance(e, (HubJobLost, GenerationCancelled, GpuTaskCancelled,
+                                   MediaGenerationDisabled))
+                    and kind is not None and kind.optional_stage is not None
+                    and kind.optional_stage(op, name)):
+                # Replay the failure through the service's attachment path so
+                # the pipeline applies its normal optional-stage fallback.
+                op.stage(name)._set_job(lambda j: j.update(
+                    phase="failed", collection_error=str(e) or type(e).__name__))
+                continue
             fresh = get(op.op_id)
             if fresh is not None and fresh.status == RUNNING:
                 fail(fresh, str(e) or type(e).__name__,

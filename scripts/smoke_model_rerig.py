@@ -174,7 +174,7 @@ def lod(name, signature=None, ratio=0.25):
     return {'ok': True}
 
 with patch('app.models.character.get_character_profile', return_value={'model3d_opts': {'no_fingers': True, 'auto_generate': True}}):
-    assert model3d.get_model3d_options('demo') == {'auto_generate': True, 'extension_rig_models': {}, 'extension_motion': {}}
+    assert model3d.get_model3d_options('demo') == {'auto_generate': True, 'face_before_rig': False, 'extension_rig_models': {}, 'extension_motion': {}}
 
 real_normalize=model3d._auto_normalize
 with ExitStack() as stack:

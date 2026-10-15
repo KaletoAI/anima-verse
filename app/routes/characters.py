@@ -1792,7 +1792,7 @@ def start_character_face_retexture(character_name: str, signature: str = "",
 @router.post("/{character_name}/model3d/face-retexture/revert")
 def revert_character_face_retexture(character_name: str, signature: str = "", lang: str = "en",
                                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Restore a verified local snapshot, serialized against character jobs."""
+    """Restore a snapshot or re-rig the original, serialized against character jobs."""
     from app.core.model3d import revert_face_retexture, _char_lock, _generating, _lock
     signature = _face_retexture_signature(character_name, signature)
     with _lock:
@@ -1915,8 +1915,8 @@ def queue_character_extension_rigs(
 async def set_character_model3d_options(character_name: str, request: Request,
         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Per-character overrides for the mesh generation.
-    Body: {"auto_generate": true|false} (generate the mesh automatically on the
-    cheapest backend once a new combination's T-pose render succeeded)."""
+    Body: {"auto_generate": bool, "face_before_rig": bool}; each is optional.
+    Auto-generation uses the cheapest backend after the new T-pose succeeds."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_set_character_model3d_options_sync,
@@ -1931,10 +1931,14 @@ def _set_character_model3d_options_sync(character_name: str,
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
     if not isinstance(body, dict) or not (
-            "auto_generate" in body or "extension_rig" in body):
+            "auto_generate" in body or "face_before_rig" in body or "extension_rig" in body):
         raise HTTPException(status_code=400,
                             detail="model options missing")
     updates = {}
+    if "face_before_rig" in body:
+        if type(body["face_before_rig"]) is not bool:
+            raise HTTPException(400, "face_before_rig must be a boolean")
+        updates["face_before_rig"] = body["face_before_rig"]
     if "auto_generate" in body:
         updates["auto_generate"] = bool(body["auto_generate"])
     if "extension_rig" in body:

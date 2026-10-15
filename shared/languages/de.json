@@ -8,6 +8,10 @@
     }
   },
   "translations": {
+    "Re-rig the original mesh without face correction? This starts a rigging job and rebuilds the model.": "Das ursprüngliche Mesh ohne Gesichtskorrektur neu riggen? Dies startet einen Rigging-Auftrag und baut das Modell neu auf.",
+    "Humanoid models only.": "Nur für humanoide Modelle.",
+    "New meshes get the face correction (upscaler + face retexture) before the first rig, so the rigger runs once. Independent of auto-generate. Humanoid models only.": "Neue Meshes erhalten die Gesichtskorrektur (Upscaler + Gesichtstextur) vor dem ersten Riggen, sodass der Rigger nur einmal läuft. Unabhängig von der automatischen Erzeugung. Nur für humanoide Modelle.",
+    "Improve face before rigging": "Gesicht vor dem Riggen verbessern",
     "Clothing images": "Kleidungsbilder",
     "Loading characters…": "Figuren werden geladen…",
     "Preparing the arrival…": "Ankunft wird vorbereitet…",
