@@ -1,0 +1,400 @@
+/**
+ * All cases NEU: pollCore.ts and syncHub.ts are absent on a241a8aa.
+ * Hand-derived oracles (fetch duration = 100 ms):
+ * dirty: initial + one pending signal = 2 requests. intervals: connected scene
+ * waits 20s, disconnected waits 5s. budget: starts 0,3000,6000 for signals
+ * 0,300,3500; one_endpoint: presence+scene is one signal, no poll before 20s.
+ * trailing_consumed: refresh at 1000 consumes the timer due at 3000.
+ * first_connect: generation 0, initial 0 + resync trailing at 5000.
+ * reconnect/resync_in_stream/resync_idle: each later resync increments once,
+ * signals once, and an idle scene starts once (no extra before 20s).
+ * untopiced_entry: only state signals it, once per binding change.
+ * gen_inflight: old completion is dropped, exactly one new fetch reaches both.
+ * strict_mode: unsubscribe/resubscribe shares the running request, only live cb.
+ * hidden_burst: five signals yield zero hidden fetches and one visible fetch.
+ * gen_replay: invalidated cached data cannot reach a new subscriber.
+ * bye: no reconnect in 120s, fallback interval 5s. closed_reconnect: new source
+ * after 5s. refresh_inflight: resolves after request 2, never after request 1.
+ * interval_raise: removing the 5s subscriber leaves the 30s interval.
+ * Additional NEU guards: latest fetcher, synchronous failures, error backoff,
+ * runHidden, restart with a pending retry, malformed frames and listener cleanup.
+ * listener_cleanup: a two-topic listener fires once per matching frame, zero
+ * after unsubscribe. bye_restart: an explicit restart opens exactly one source.
+ */
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+const unhandled = [];
+process.on("unhandledRejection", error => unhandled.push(error));
+const require_ = createRequire(import.meta.url);
+const esbuild = require_("../frontend/node_modules/esbuild");
+async function load(n) {
+  const r = await esbuild.build({ entryPoints: [`packages/player-ui/src/${n}.ts`], bundle: true, write: false, format: "esm", platform: "neutral", logLevel: "silent" });
+  return import(`data:text/javascript;base64,${Buffer.from(r.outputFiles[0].text).toString("base64")}`);
+}
+const { createPollCore } = await load("pollCore");
+const { createSyncHub } = await load("syncHub");
+const { SYNC_ENDPOINTS: S } = await load("syncEndpoints");
+function fixture() {
+  let t = 0, hidden = false, id = 0;
+  const timers = new Map(), sources = [], starts = [], data = [];
+  const timer = (fn, ms) => {
+    timers.set(++id, { fn, at: t + ms });
+    return id;
+  };
+  const flush = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+  async function advance(ms) {
+    const end = t + ms;
+    await flush();
+    for (; ; ) {
+      const n = [...timers].filter(([, v]) => v.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!n) break;
+      t = n[1].at;
+      timers.delete(n[0]);
+      n[1].fn();
+      await flush();
+    }
+    t = end;
+    await flush();
+  }
+  class Source {
+    readyState = 0;
+    onopen = null;
+    onerror = null;
+    onmessage = null;
+    listener = null;
+    addEventListener(_, fn) {
+      this.listener = fn;
+    }
+    close() {
+      this.readyState = 2;
+    }
+    open() {
+      this.readyState = 1;
+      this.onopen?.({});
+    }
+    msg(o) {
+      this.onmessage?.({ data: JSON.stringify(o) });
+    }
+    bye() {
+      this.listener?.();
+    }
+    fail(closed) {
+      this.readyState = closed ? 2 : 0;
+      this.onerror?.({});
+    }
+  }
+  const hub = createSyncHub({ open: (url) => {
+    assert.equal(url, "/events/sync");
+    const s = new Source();
+    sources.push(s);
+    return s;
+  }, setTimeout: timer });
+  const core = createPollCore({ now: () => t, hidden: () => hidden, setTimeout: timer, clearTimeout: (h) => timers.delete(h) }, hub);
+  const fetcher = () => {
+    const n = starts.push(t);
+    return new Promise((r) => timer(() => r(n), 100));
+  };
+  const sub = (spec = S.scene, cb = (d, e) => data.push([d, e]), fetch = fetcher) => core.subscribe("x", fetch, spec, cb);
+  return { hub, core, starts, data, sources, sub, advance, hidden: (v) => hidden = v, source: () => sources.at(-1) };
+}
+async function test(n, fn) {
+  await fn(fixture());
+  console.log("PASS " + n);
+}
+// NEU / REGRESSION hand-derived oracles: remounts start at the 5s budget, not the 30s poll.
+// A throwing callback cannot suppress delivery, refresh settlement or request 3.
+// Inactive refreshes resolve void even before a stale running request completes.
+await test("remount_after_invalidate", async f => {
+  const off = f.sub(S.self);
+  await f.advance(100);
+  off();
+  f.hub.invalidateBinding();
+  f.sub(S.self);
+  await f.advance(4899);
+  assert.deepEqual(f.starts, [0]);
+  await f.advance(101);
+  assert.deepEqual(f.starts, [0, 5000]);
+  assert.equal(f.data.at(-1)[0], 2);
+});
+await test("remount_trailing", async f => {
+  const off = f.sub(S.self);
+  await f.advance(100);
+  f.core.signal("x");
+  off();
+  await f.advance(900);
+  f.sub(S.self);
+  await f.advance(3999);
+  assert.deepEqual(f.starts, [0]);
+  await f.advance(101);
+  assert.deepEqual(f.starts, [0, 5000]);
+});
+await test("subscriber_throws", async f => {
+  const original = console.error;
+  const errors = [];
+  console.error = (...args) => errors.push(args);
+  try {
+    f.sub({ intervalMs: 5000 }, () => { throw Error("subscriber failure"); });
+    f.sub({ intervalMs: 5000 });
+    let done = false;
+    f.core.refresh("x").then(() => done = true);
+    await f.advance(100);
+    f.core.signal("x");
+    await f.advance(100);
+    assert.equal(done, true);
+    assert.deepEqual(f.starts, [0, 100, 200]);
+    await f.advance(100);
+    assert.deepEqual(f.data.map(x => x[0]), [1, 2, 3]);
+    assert.equal(errors.length, 3);
+    // Cached replay is isolated too.
+    const off = f.sub({ intervalMs: 5000 }, () => { throw Error("replay failure"); });
+    off();
+    assert.equal(errors.length, 4);
+  } finally { console.error = original; }
+});
+await test("refresh_orphaned", async f => {
+  const off = f.sub(S.self);
+  await f.advance(100);
+  let captured = false, queued = false;
+  f.core.refresh("x").then(() => captured = true);
+  f.core.refresh("x").then(() => queued = true);
+  off();
+  await f.advance(0);
+  assert.deepEqual([captured, queued], [true, true]);
+  f.hub.invalidateBinding();
+  await f.advance(100);
+  assert.deepEqual(f.starts, [0, 100]);
+});
+await test("dirty", async (f) => {
+  f.sub({ intervalMs: 5e3 });
+  f.core.signal("x");
+  f.core.signal("x");
+  await f.advance(200);
+  assert.deepEqual(f.starts, [0, 100]);
+});
+await test("intervals", async (f) => {
+  f.sub();
+  f.source().open();
+  await f.advance(5e3);
+  f.core.tick();
+  assert.deepEqual(f.starts, [0]);
+  await f.advance(15e3);
+  f.core.tick();
+  await f.advance(100);
+  f.source().fail(false);
+  await f.advance(4900);
+  f.core.tick();
+  assert.deepEqual(f.starts, [0, 2e4, 25e3]);
+});
+await test("budget", async (f) => {
+  f.sub(S.worldmap3d);
+  await f.advance(300);
+  f.core.signal("x");
+  await f.advance(3200);
+  f.core.signal("x");
+  await f.advance(2500);
+  assert.deepEqual(f.starts, [0, 3e3, 6e3]);
+});
+await test("one_endpoint", async (f) => {
+  f.sub();
+  f.source().open();
+  await f.advance(1e4);
+  f.source().msg({ topics: ["presence", "scene"], resync: false });
+  await f.advance(19999);
+  f.core.tick();
+  assert.deepEqual(f.starts, [0, 1e4]);
+});
+await test("trailing_consumed", async (f) => {
+  f.sub(S.worldmap3d);
+  await f.advance(300);
+  f.core.signal("x");
+  await f.advance(700);
+  const p = f.core.refresh("x");
+  await f.advance(100);
+  await p;
+  await f.advance(1900);
+  assert.deepEqual(f.starts, [0, 1e3]);
+});
+await test("first_connect", async (f) => {
+  f.sub();
+  f.source().open();
+  f.source().msg({ resync: true });
+  assert.equal(f.hub.generation(), 0);
+  await f.advance(5100);
+  assert.deepEqual(f.starts, [0, 5e3]);
+});
+for (const n of ["reconnect", "resync_in_stream", "resync_idle"]) await test(n, async (f) => {
+  f.sub();
+  f.source().open();
+  f.source().msg({ resync: true });
+  await f.advance(3e4);
+  if (n === "reconnect") {
+    f.source().fail(false);
+    f.source().open();
+  }
+  f.source().msg({ resync: true });
+  assert.equal(f.hub.generation(), 1);
+  await f.advance(19999);
+  f.core.tick();
+  assert.deepEqual(f.starts, [0, 5e3, 3e4]);
+});
+await test("untopiced_entry", async (f) => {
+  f.sub({ intervalMs: 5e3 });
+  f.hub.invalidateBinding();
+  await f.advance(200);
+  assert.deepEqual(f.starts, [0, 100]);
+  f.hub.start();
+  f.source().msg({ resync: true });
+  await f.advance(100);
+  f.source().msg({ resync: true });
+  await f.advance(100);
+  assert.deepEqual(f.starts, [0, 100, 300]);
+});
+await test("gen_inflight", async (f) => {
+  f.sub({ intervalMs: 5e3 });
+  f.hub.invalidateBinding();
+  f.sub({ intervalMs: 5e3 });
+  await f.advance(100);
+  assert.deepEqual(f.data, []);
+  assert.deepEqual(f.starts, [0, 100]);
+  await f.advance(100);
+  assert.deepEqual(f.data, [[2, null], [2, null]]);
+});
+await test("strict_mode", async (f) => {
+  let old = 0, live = 0;
+  const off = f.sub(S.scene, () => old++);
+  off();
+  f.sub(S.scene, () => live++);
+  await f.advance(100);
+  assert.deepEqual([f.starts.length, old, live], [1, 0, 1]);
+});
+await test("hidden_burst", async (f) => {
+  f.sub();
+  await f.advance(1e4);
+  f.hidden(true);
+  for (let i = 0; i < 5; i++) f.core.signal("x");
+  f.core.tick();
+  assert.deepEqual(f.starts, [0]);
+  f.hidden(false);
+  f.core.visible();
+  await f.advance(100);
+  assert.deepEqual(f.starts, [0, 1e4]);
+});
+await test("gen_replay", async (f) => {
+  f.sub();
+  await f.advance(100);
+  f.hub.invalidateBinding();
+  const d = [];
+  f.sub(S.scene, (x) => d.push(x));
+  assert.deepEqual(d, []);
+  await f.advance(5e3);
+  assert.deepEqual(d, [2]);
+});
+await test("bye", async (f) => {
+  f.sub();
+  f.source().open();
+  f.source().bye();
+  await f.advance(5e3);
+  f.core.tick();
+  assert.deepEqual(f.starts, [0, 5e3]);
+  await f.advance(115e3);
+  assert.equal(f.sources.length, 1);
+  assert.equal(f.hub.connected(), false);
+});
+await test("closed_reconnect", async (f) => {
+  f.sub();
+  f.source().fail(true);
+  await f.advance(4999);
+  assert.equal(f.sources.length, 1);
+  await f.advance(1);
+  assert.equal(f.sources.length, 2);
+});
+await test("refresh_inflight", async (f) => {
+  f.sub();
+  let done = false;
+  const p = f.core.refresh("x").then(() => done = true);
+  await f.advance(100);
+  assert.equal(done, false);
+  await f.advance(100);
+  await p;
+  assert.equal(f.data.at(-1)[0], 2);
+});
+await test("interval_raise", async (f) => {
+  const off = f.sub({ intervalMs: 5e3 });
+  f.sub({ intervalMs: 3e4 });
+  off();
+  await f.advance(5e3);
+  f.core.tick();
+  assert.deepEqual(f.starts, [0]);
+  await f.advance(25e3);
+  f.core.tick();
+  assert.deepEqual(f.starts, [0, 3e4]);
+});
+await test("latest_fetcher", async (f) => {
+  f.sub();
+  f.sub(S.scene, () => {
+  }, async () => 99);
+  await f.advance(100);
+  await f.core.refresh("x");
+  assert.equal(f.data.at(-1)[0], 99);
+});
+await test("runHidden", async (f) => {
+  f.hidden(true);
+  f.sub(S.worldmap3d);
+  await f.advance(3e3);
+  f.core.tick();
+  assert.deepEqual(f.starts, [0, 3e3]);
+});
+await test("restart_pending_retry", async (f) => {
+  f.sub();
+  const old = f.source();
+  old.fail(true);
+  f.hub.restart();
+  const current = f.source();
+  old.open();
+  old.bye();
+  current.open();
+  await f.advance(12e4);
+  assert.equal(f.sources.length, 2);
+  assert.equal(f.hub.connected(), true);
+  current.onmessage({ data: "invalid" });
+});
+await test("sync_error_backoff", async (f) => {
+  let calls = 0;
+  f.sub({ intervalMs: 5e3 }, () => {
+  }, () => {
+    calls++;
+    throw Error("offline");
+  });
+  await f.advance(5e3);
+  f.core.tick();
+  assert.equal(calls, 1);
+  await f.advance(5e3);
+  f.core.tick();
+  await f.advance(0);
+  assert.equal(calls, 2);
+});
+await test("listener_cleanup", async f => {
+  let calls = 0;
+  const off = f.hub.onTopics(["presence", "scene"], () => calls++);
+  f.source().msg({ topics: ["presence", "scene"] });
+  assert.equal(calls, 1);
+  off();
+  f.source().msg({ resync: true });
+  f.source().msg({ topics: ["presence"] });
+  assert.equal(calls, 1);
+});
+await test("bye_restart", async f => {
+  f.sub();
+  f.source().open();
+  f.source().bye();
+  f.hub.restart();
+  f.source().open();
+  await f.advance(120000);
+  assert.equal(f.sources.length, 2);
+  assert.equal(f.hub.connected(), true);
+});
+await new Promise(resolve => setImmediate(resolve));
+assert.deepEqual(unhandled, [], "no unhandledRejection");
+console.log("sync client: all cases passed");

@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom'
 import { useI18n } from './I18nProvider'
 import { ApiError, apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
+import { SYNC_ENDPOINTS } from './syncEndpoints'
 import { EmptyState } from './EmptyState'
 import { useEnlarge } from './ZoomButton'
 import { thumbUrl, thumbWidth, transparentPortraitUrl } from './thumbs'
@@ -200,7 +201,7 @@ export function OthersPanel() {
   const { t } = useI18n()
   const enlarge = useEnlarge()
   const { data, refresh } = usePoll<Others>(
-    'play-others', () => apiGet<Others>('/play/others'), { intervalMs: 5000 })
+    'play-others', () => apiGet<Others>('/play/others'), SYNC_ENDPOINTS.others)
   // The world's two-person actions — fetched once; the clip library does not
   // change while a scene is being played.
   const [pairPoses, setPairPoses] = useState<PairPose[] | null>(null)

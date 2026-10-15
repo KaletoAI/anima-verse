@@ -5,6 +5,7 @@
  * A notification is marked read with a click (POST /notifications/{id}/read);
  * "Mark all as read" clears them in one go (POST /notifications/read-all).
  */
+import { SYNC_ENDPOINTS } from '@anima/player-ui'
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
@@ -33,7 +34,7 @@ export function NoticeBanner() {
   const { t } = useI18n()
   const [n, setN] = useState<Notices>(EMPTY)
   const { data } = usePoll<Notices>(
-    'play-notices', () => apiGet<Notices>('/play/notices'), { intervalMs: 5000 })
+    'play-notices', () => apiGet<Notices>('/play/notices'), SYNC_ENDPOINTS.notices)
 
   // Polled state is authoritative; dismiss/leaveParty below patch it
   // optimistically until the next poll (same net behavior as before).
@@ -61,9 +62,9 @@ export function NoticeBanner() {
     || n.notifications.length > 0 || !!n.party
   if (!hasAny) return null
 
-  // Opaker Hintergrund + farbiger Rand-Streifen — damit die Szene-Schrift
-  // darunter nicht durchscheint. Explizite helle Textfarbe (nicht `inherit`),
-  // sonst ist die Schrift je nach Theme/Kontext auf dem dunklen Block unlesbar.
+  // Opaque background and coloured edge keep scene text from showing through.
+  // Theme and context can supply dark text, so use an explicit light colour
+  // to keep the dark block readable instead of inheriting its text colour.
   const row = (accent: string): CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
     borderRadius: 8, background: 'rgba(16,18,24,0.94)', color: 'var(--text, #e6edf3)',
@@ -75,11 +76,10 @@ export function NoticeBanner() {
   const hasLeftItems = !!n.leave_blocked || n.events.length > 0
     || n.notifications.length > 0 || !!n.party
 
-  // Overlay statt Inline-Fluss: der Banner-Container ist 0px hoch und lässt seinen
-  // Inhalt nach unten überlaufen, zentriert über den oberen Panel-Rand. So
-  // verschiebt er die UI-Verteilung NICHT, auch wenn mehrere Meldungen anliegen.
-  // Container ohne Pointer-Events (Panels darunter bleiben bedienbar), nur die
-  // interaktiven Elemente (×) fangen Klicks ab.
+  // Overlay: a zero-height container overflows downwards, centred over the
+  // top panel edge, preserving the layout even with multiple notices.
+  // The container passes pointer events through to the panels beneath;
+  // only interactive controls such as close buttons intercept clicks.
   return (
     <div style={{
       position: 'relative', height: 0, overflow: 'visible', zIndex: 60,

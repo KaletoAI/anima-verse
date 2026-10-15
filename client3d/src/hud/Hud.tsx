@@ -29,7 +29,7 @@
 import { getBootState, subscribeBoot } from '../game/boot';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
-  apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
+  SYNC_ENDPOINTS, apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
   ScenePanel, SelfPanel, OthersPanel, PartyStrip,
   BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
   GalleryPanel, InstagramPanel,
@@ -273,7 +273,7 @@ export function Hud({ avatar, username, role }: {
   }, []);
 
   /**
-   * The performance readout (Etappe 5) — a LOCAL view setting like the volumes
+   * The performance readout (stage 5) — a LOCAL view setting like the volumes
    * above, but with its own storage key: `PREFS_KEY` is versioned as the AUDIO
    * prefs (`av3d.audio.v1`), and a display switch has no business in there.
    *
@@ -289,7 +289,7 @@ export function Hud({ avatar, username, role }: {
   }, [perfOn]);
 
   /**
-   * The minimap (Etappe 5, task 3) — a local view setting like the readout
+   * The minimap (stage 5, task 3) — a local view setting like the readout
    * above, and stored the same way. The DEFAULT IS ON, which is why the reader
    * tests for "0" rather than for "1": a fresh browser has nothing stored, and
    * a map one has to go and switch on is a map nobody finds.
@@ -324,7 +324,7 @@ export function Hud({ avatar, username, role }: {
   }, []);
 
   /**
-   * "Show all locations" (Etappe 5) — the administrator's way past the
+   * "Show all locations" (stage 5) — the administrator's way past the
    * knowledge filter. A LOCAL switch like the two above, but it decides which VIEW the
    * client fetches (`/play/worldmap?all=1`).
    *
@@ -537,7 +537,7 @@ export function Hud({ avatar, username, role }: {
   }, []);
 
   const { data, refresh: refreshScene } = usePoll<SceneData>(
-    'play-scene', () => apiGet<SceneData>('/play/scene'), { intervalMs: 5000 });
+    'play-scene', () => apiGet<SceneData>('/play/scene'), SYNC_ENDPOINTS.scene);
 
   // Capability gating, same derivation as /play: a missing list (initial
   // load) shows everything — no flash-hiding.
@@ -555,7 +555,7 @@ export function Hud({ avatar, username, role }: {
     finally { setMoving(false); }
   }, [moving, refreshScene]);
 
-  // Leaving the party (Etappe 6): PartyStrip is presentational, so the post
+  // Leaving the party (stage 6): PartyStrip is presentational, so the post
   // and the refresh sit here. No optimistic UI — the strip goes away when the
   // next scene payload says the party is gone. Invitations stay in ScenePanel;
   // answering the same invite from two surfaces would resolve it twice.
@@ -956,7 +956,7 @@ export function Hud({ avatar, username, role }: {
   );
 
   // Two served storeys leave nothing to choose, so the chip names the one
-  // direction F leads and the picker never unfolds (Treppen v2 task 4).
+  // direction F leads and the picker never unfolds (Stairs v2 task 4).
   const soleFloor = game.elevator ? elevatorSoleOption(game.elevator) : null;
 
   // WHICH offer the bottom row shows: the NEAREST one standing, decided by the
@@ -967,11 +967,11 @@ export function Hud({ avatar, username, role }: {
 
   return (
     <>
-      {/* Performance readout (Etappe 5): shown while the menu switch is on,
+      {/* Performance readout (stage 5): shown while the menu switch is on,
           top-left and read-only — see PerfOverlay.tsx. */}
       {perfOn && <PerfOverlay />}
 
-      {/* Minimap (Etappe 5, task 3): as far as one can see, north up, top right.
+      {/* Minimap (stage 5, task 3): as far as one can see, north up, top right.
           Only in the embodied mode — in the overview one IS looking at the
           map, and a second small copy of it would say nothing. The switch in
           the game menu is the other half of the condition. */}
@@ -991,7 +991,7 @@ export function Hud({ avatar, username, role }: {
         </div>
       )}
 
-      {/* Party strip (Etappe 6): who travels with the avatar, top centre and
+      {/* Party strip (stage 6): who travels with the avatar, top centre and
           below the mode chip. Fed from THIS container's scene poll — no second
           request — and only present while there is a party at all. */}
       {data?.party && (
@@ -1257,7 +1257,7 @@ export function Hud({ avatar, username, role }: {
             per storey; the current one is not among them. Unlike the prompt
             these are operated, so they take the pointer back (hud.css). With
             only ONE storey to ride to there is nothing to unfold: the chip
-            says which way F leads and the press is the ride (Treppen v2
+            says which way F leads and the press is the ride (Stairs v2
             task 4). */}
         {offer === 'elevator' && game.elevator && (
           soleFloor !== null ? (
@@ -1293,7 +1293,7 @@ export function Hud({ avatar, username, role }: {
             </button>
           </div>
         )}
-        {/* Entering an adjacent location (Etappe 3): same prompt shape. The
+        {/* Entering an adjacent location (stage 3): same prompt shape. The
             vanilla side owns the rule of WHEN the offer stands (opening
             proximity / free rim) and performs the real server entry on F. */}
         {offer === 'enter' && game.enterOffer && (

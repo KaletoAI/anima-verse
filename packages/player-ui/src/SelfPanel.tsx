@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from './I18nProvider'
 import { ApiError, apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
+import { SYNC_ENDPOINTS } from './syncEndpoints'
 import { EmptyState } from './EmptyState'
 import { useEnlarge } from './ZoomButton'
 import { transparentPortraitUrl } from './thumbs'
@@ -28,7 +29,7 @@ export function SelfPanel() {
   const { t } = useI18n()
   const enlarge = useEnlarge()
   const { data, refresh } = usePoll<SelfData>(
-    'play-self', () => apiGet<SelfData>('/play/self'), { intervalMs: 5000 })
+    'play-self', () => apiGet<SelfData>('/play/self'), SYNC_ENDPOINTS.self)
   const [moodDraft, setMoodDraft] = useState('')
   const [activityDraft, setActivityDraft] = useState('')
   const [activityFocused, setActivityFocused] = useState(false)

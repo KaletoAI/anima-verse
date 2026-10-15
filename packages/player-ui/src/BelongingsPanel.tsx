@@ -1,10 +1,9 @@
 /**
- * BelongingsPanel — Inventar + Outfit als klassisches RPG-Paper-Doll (B Tier 1).
- *
- * Links: filterbare Item-Liste (Kategorie + bei Outfit zusätzlich Slot-Filter).
- * Rechts: die Figur des Avatars mit Slot-Spalte (head→feet); getragene Pieces
- * zeigen ihr Icon und sind per Klick ablegbar. Anziehen/Use/Set-Wechsel über die
- * Liste. Quelle: GET /play/belongings; Setter: /play/{equip,unequip,use-item},
+ * BelongingsPanel — inventory and outfit as a classic RPG paper doll (B tier 1).
+ * Left: filterable items by category and outfit slot.
+ * Right: the avatar with slots from head to feet; click worn icons to remove.
+ * Equip, use and switch sets from the list.
+ * Source: GET /play/belongings; setters: /play/{equip,unequip,use-item},
  * /play/self/outfit.
  *
  * A click on an item row opens the detail modal (GET /play/item/{id}) with the
@@ -22,6 +21,7 @@ import { createPortal } from 'react-dom'
 import { useI18n } from './I18nProvider'
 import { apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
+import { SYNC_ENDPOINTS } from './syncEndpoints'
 import { EmptyState } from './EmptyState'
 import { useToast } from './Toast'
 import { useEnlarge } from './ZoomButton'
@@ -31,17 +31,16 @@ import { thumbUrl, thumbWidth } from './thumbs'
  *  ORIGINAL file. */
 const DETAIL_W = thumbWidth(110)
 
-// Anker-Positionen (x%, y%) im KOORDINATENSYSTEM DES BILDES (silhouette.svg ist
-// 896×1216, die Figur liegt zentral). Hier werden die Symbole der getragenen
-// Outfitteile projiziert. Nur Figur + Symbole, KEINE farbigen Slot-Flächen.
+// Anchors (x%, y%) in image coordinates: silhouette.svg is 896×1216.
+// The figure is centred; worn item icons are projected onto it.
+// Only the figure and icons are drawn, without coloured slot areas.
 const SLOT_ANCHOR: Record<string, [number, number]> = {
   head: [50, 6], neck: [50, 19], outer: [33, 40], top: [50, 33],
   underwear_top: [66, 33], bottom: [50, 55], underwear_bottom: [66, 55],
   legs: [50, 73], feet: [50, 92],
 }
 
-/** Item-Icon mit Emoji-Fallback: zentriert, und bei fehlendem/kaputtem Bild
- *  (z.B. manche Spell-Items) wird sauber das Kategorie-Emoji gezeigt. */
+/** Centred item icon; missing or broken images fall back to the category emoji. */
 function ItemIcon({ itemId, hasImage, emoji, size }: { itemId: string; hasImage: boolean; emoji: string; size: number }) {
   const [failed, setFailed] = useState(false)
   return (
@@ -67,7 +66,7 @@ interface Item {
   image: boolean; rarity: string
 }
 
-// Rarität → Rand-Farbe (common dezent, rare blau, unique gold).
+// Rarity → border colour: subtle common, blue rare, gold unique.
 const RARITY_COLOR: Record<string, string> = {
   common: 'rgba(255,255,255,0.18)', rare: '#5b9cff', unique: '#e0a106',
 }
@@ -293,12 +292,12 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
       .catch(() => setOutfitTypes([]))
   }, [])
   const [busy, setBusy] = useState(false)
-  // Figurhöhe messen → Slot-Marker skalieren mit der Figur.
+  // Measure figure height so slot markers scale with it.
   const figRef = useRef<HTMLDivElement>(null)
   const [figH, setFigH] = useState(0)
-  // avatar in den Deps: die Figur (und damit figRef) wird erst gerendert, wenn
-  // ein Avatar geladen ist — sonst hinge der Observer am noch nicht existenten
-  // Element und figH bliebe 0 (Marker zu klein, skalieren nicht).
+  // Depend on avatar: the figure and figRef only exist after the avatar loads.
+  // Otherwise the observer would attach before the element exists, leaving
+  // figH at zero and the markers too small to scale.
   const avatarReady = data.avatar
   useEffect(() => {
     const el = figRef.current
@@ -310,7 +309,7 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
   }, [avatarReady])
 
   const { data: polled, refresh } = usePoll<Belongings>(
-    'play-belongings', () => apiGet<Belongings>('/play/belongings'), { intervalMs: 5000 })
+    'play-belongings', () => apiGet<Belongings>('/play/belongings'), SYNC_ENDPOINTS.belongings)
   useEffect(() => { if (polled) setData(polled) }, [polled])
 
   const act = useCallback(async (url: string, body: Record<string, unknown>, closeAfter = false) => {
@@ -339,7 +338,7 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
     return list
   }, [data.items, cat, slotFilter, typeFilter])
 
-  // Slot-Filter-Optionen aus den vorhandenen Outfit-Pieces ableiten
+  // Derive slot filter options from the available outfit pieces
   const slotOptions = useMemo(() => {
     const s = new Set<string>()
     data.items.forEach((it) => { if (it.is_outfit) it.slots.forEach((x) => s.add(x)) })
@@ -351,9 +350,9 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
   }
 
   const cats: Cat[] = ['all', 'outfit', 'consumable', 'spell', 'other']
-  // Marker-Größe skaliert mit der Figurhöhe (geclamped).
+  // Clamp marker size as it scales with figure height.
   const markerSize = Math.round(Math.max(22, Math.min(80, figH * 0.11)))
-  // Alle Slots mit Anker (in Anzeige-Reihenfolge) — leer ODER belegt darstellen.
+  // Draw all anchored slots in display order, empty or occupied.
   // Anchor positions: species package (slot_anchors) wins, core map is the default.
   const anchorOf = (s: string): [number, number] | undefined =>
     data.slot_anchors?.[s] || SLOT_ANCHOR[s]
@@ -361,7 +360,7 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
 
   return (
     <div style={{ display: 'flex', gap: 10, height: '100%', minHeight: 0, fontSize: '0.88em' }}>
-      {/* ── Links: Filter + Liste ──────────────────────────────── */}
+      {/* ── Left: filters and list ──────────────────────────────── */}
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
           {cats.map((c) => (
@@ -398,7 +397,7 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
           {filtered.length === 0 && <EmptyState small icon="inventory" title={t('Nothing here')} />}
           {filtered.map((it) => {
-            // Zweite Zeile: bevorzugt die Beschreibung; sonst Slot/Spruch/Kategorie.
+            // Second row: prefer description, otherwise slot/spell/category.
             const fallback = it.is_spell
               ? (it.incantation ? `„${it.incantation}"` : t('Spell'))
               : it.is_outfit
@@ -483,8 +482,8 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
         )}
       </div>
 
-      {/* ── Rechts: Figur + Outfit-Symbole — Spaltenbreite folgt der Bildhöhe,
-              so skaliert die Figur mit der Fensterhöhe ─ */}
+      {/* ── Right: figure and outfit icons; column width follows image height,
+              so the figure scales with window height ─ */}
       <div style={{ flex: '0 0 auto', maxWidth: '55%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4, minHeight: 0, overflow: 'hidden' }}>
         <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' }}>
           <div ref={figRef} style={{ position: 'relative', height: '100%', display: 'inline-flex' }}>
@@ -499,7 +498,7 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
                 borderRadius: 5, boxSizing: 'border-box' as const,
               }
               if (eq) {
-                // belegt: Item-Symbol (eckig) mit kräftigem, vollem Rand
+                // Occupied: square item icon with a strong solid border.
                 return (
                   <button key={slot} title={`${eq.name} — ${t('take off')}`}
                     onClick={() => act('/play/unequip', { slot })}
@@ -513,7 +512,7 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
                   </button>
                 )
               }
-              // leer: gestrichelter, dezenter eckiger Umriss als Slot-Markierung
+              // Empty: subtle dashed square outline marking the slot.
               return (
                 <div key={slot} title={`${t(data.slot_labels[slot] || slot)} (${t('empty')})`}
                   style={{

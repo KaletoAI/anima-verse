@@ -1,19 +1,17 @@
 /**
- * AvatarGate — Avatar-Auswahl für die Player-UI (nach Login). Prüft den aktiven
- * Avatar (GET /account/characters): ist keiner gesetzt und gibt es mehrere
- * spielbare Characters, erscheint eine Auswahl (Karten mit Profilbild + Name);
- * bei genau einem wird automatisch gewählt. Mit gesetztem Avatar (oder gar
- * keinem verfügbaren) rendert es direkt die App.
+ * AvatarGate — avatar selection after login. Checks GET /account/characters.
+ * Without an active avatar, multiple playable characters produce a chooser
+ * with portraits and names; a single character is selected automatically.
+ * With an active avatar or no available characters, render the app directly.
  *
- * Wrappt PlayerApp INNERHALB des AuthGate (player/main.tsx). Stellt über
- * useAvatarSwitch() ein chooseAvatar() bereit, damit die Toolbar den Avatar
- * auch im Spiel wechseln kann.
+ * Wraps PlayerApp inside AuthGate (player/main.tsx). useAvatarSwitch()
+ * exposes chooseAvatar() so the toolbar can switch avatars during play.
  */
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from '../lib/api'
 import { ZoomButton } from '../components/ZoomButton'
-import { thumbUrl, thumbWidth, transparentPortraitUrl } from '@anima/player-ui'
+import { syncHub, thumbUrl, thumbWidth, transparentPortraitUrl } from '@anima/player-ui'
 
 /** Avatar card portrait: 96 CSS px. The magnifier opens the full-size cutout. */
 const AVATAR_W = thumbWidth(96)
@@ -53,6 +51,7 @@ export function AvatarGate({ children }: { children: ReactNode }) {
     setBusy(name)
     try {
       await apiPost('/account/switch-character', { character_name: name })
+      syncHub().invalidateBinding()
       setActive(name)
       setStatus('ready')
     } catch { /* stay on chooser */ } finally { setBusy('') }

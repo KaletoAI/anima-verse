@@ -32,6 +32,7 @@
  * shown as it is — running it through `t()` would look up a sentence no
  * translation file has.
  */
+import { SYNC_ENDPOINTS } from '@anima/player-ui'
 import { useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../lib/api'
 import { useI18n } from '../i18n/I18nProvider'
@@ -96,7 +97,7 @@ export function TravelPanel({
   // its result, so the map below and this bar cost a single poll.
   const { data: world } = usePoll<WorldMapLite>(
     'play-worldmap', () => apiGet<WorldMapLite>('/play/worldmap'),
-    { intervalMs: 10000, enabled: !partyFollower })
+    { ...SYNC_ENDPOINTS.worldmapPlayer, enabled: !partyFollower })
 
   // What the player clicked on the map. Which outlines may be clicked at all
   // is the map's decision (`onPickLocation` + anchored footprint) — here only

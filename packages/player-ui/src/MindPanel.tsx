@@ -1,26 +1,27 @@
 /**
- * MindPanel — das Innenleben des Avatars (ersetzt das alte JournalPanel).
- * v1: Heute · Tagebuch · Erinnerungen — Beziehungen + Verlauf folgen als
- * eigene Sektionen (Navi ist darauf ausgelegt).
+ * MindPanel — the avatar’s inner life, replacing JournalPanel.
+ * v1: Today, Diary and Memories; navigation also supports future
+ * relationship and history sections.
  *
- * Quellen (read-only):
- *   Heute        GET /characters/{character}/memory/today + GET /diary/me/{character}
- *   Tagebuch     GET /diary/me/{character}?date&type&limit&offset, /dates
- *   Erinnerungen GET /characters/{character}/memory/list?q&tier&source&related&sort
- * Einzige Schreib-Aktion: POST /diary/me/{character}/summary (async → Poll).
- * Das user_id-Segment der Diary-Routen wird serverseitig ignoriert → "me".
+ * Read-only sources:
+ *   Today    GET /characters/{character}/memory/today + GET /diary/me/{character}
+ *   Diary    GET /diary/me/{character}?date&type&limit&offset, /dates
+ *   Memories GET /characters/{character}/memory/list?q&tier&source&related&sort
+ * Only write: POST /diary/me/{character}/summary (async, then poll).
+ * The server ignores the diary routes’ user_id segment, so use "me".
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from './I18nProvider'
 import { apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
+import { SYNC_ENDPOINTS } from './syncEndpoints'
 import { formatDate, formatDateTime, formatTime, sameZoneDay } from './clockFormat'
 import { clockSettings, useClockSettings } from './clockSettings'
 import { EmptyState } from './EmptyState'
 import { MindThoughtsSection } from './MindThoughtsSection'
 
 // ---------------------------------------------------------------------------
-// API-Shapes
+// API shapes
 // ---------------------------------------------------------------------------
 interface DiaryEntry {
   type: string
@@ -41,7 +42,7 @@ interface TodayStatus {
   location: string; location_id?: string; room?: string; room_id?: string
   activity: string; mood: string
   since?: { activity?: string | null; location?: string | null; mood?: string | null }
-  // Server liefert ein Objekt (oder null) — NICHT als String rendern (React #31).
+  // The server returns an object or null; do not render it as a string (React #31).
   last_warning?: { type: string; value: string; ts?: string } | null
 }
 interface ActiveMemory {
@@ -129,7 +130,7 @@ function stampOf(ts: string | null | undefined): string {
 function stars(n: number): string {
   return '★'.repeat(Math.max(0, Math.min(5, Math.round(n))))
 }
-/** Vorzeichenbehaftete Sentiment-Zahl mit Ampelfarbe. */
+/** Signed sentiment value with traffic-light colouring. */
 function SignedNum({ v }: { v: number }) {
   const color = v > 0.02 ? '#3fa45a' : v < -0.02 ? '#e05656' : 'inherit'
   return (
@@ -139,8 +140,8 @@ function SignedNum({ v }: { v: number }) {
   )
 }
 
-/** Gerichtete Zuneigung als farbiger Balken (-1..1 → 0..100%), mit Richtungs-
- *  Label und Zahl — wie die alte UI (deutlich lesbarer als reine Zahlen). */
+/** Directed affection as a coloured bar (-1..1 → 0..100%), with a direction
+ *  label and number, as in the old UI: easier to read than numbers alone. */
 function SentBar({ v, label }: { v: number; label: string }) {
   const pct = Math.round((Math.max(-1, Math.min(1, v)) + 1) * 50)
   const color = v > 0.2 ? '#3fa45a' : v < -0.2 ? '#e05656' : '#eab308'
@@ -160,8 +161,8 @@ function SentBar({ v, label }: { v: number; label: string }) {
   )
 }
 
-// Kompakt-Overrides zur Klasse ga-input (liefert soliden dunklen Hintergrund —
-// wichtig fuer native <option>-Listen, die sonst weiss aufklappen).
+// Compact overrides for ga-input, whose solid dark background also keeps
+// native option lists from opening in white.
 const inputStyle: React.CSSProperties = {
   padding: '3px 8px', fontSize: '0.82em', minWidth: 0,
 }
@@ -174,7 +175,7 @@ const sepStyle: React.CSSProperties = {
 }
 
 // ---------------------------------------------------------------------------
-// Zeitstrahl-Zeile (Tagebuch/Heute): Uhrzeit | Icon | Inhalt (+Meta)
+// Timeline row (Diary/Today): time | icon | content and metadata.
 // ---------------------------------------------------------------------------
 function TimelineRow({ e, icons }: { e: DiaryEntry; icons: Record<string, string> }) {
   const meta = e.metadata || {}
@@ -199,7 +200,7 @@ function TimelineRow({ e, icons }: { e: DiaryEntry; icons: Record<string, string
   )
 }
 
-/** Entries chronologisch (neueste zuerst) mit Tages-Trennern rendern. */
+/** Render entries newest first, separated by day. */
 function Timeline({ entries, icons, withDays }: {
   entries: DiaryEntry[]; icons: Record<string, string>; withDays: boolean
 }) {
@@ -217,9 +218,9 @@ function Timeline({ entries, icons, withDays }: {
 }
 
 // ---------------------------------------------------------------------------
-// 24h-Lanes — Zustands-Verlauf (Aktivität/Ort/Stimmung/Effekte) als Bänder
+// 24-hour lanes: activity, location, mood and effect history as bands.
 // ---------------------------------------------------------------------------
-/** Stabile Farbe pro Zustandswert (Hash → HSL). Leer = neutrales Grau. */
+/** Stable colour per state value (hash → HSL). Empty means neutral grey. */
 function laneColor(value: string): string {
   if (!value) return 'rgba(255,255,255,0.06)'
   let h = 0
@@ -285,7 +286,7 @@ function Lanes24h({ lanes, nowIso }: { lanes?: Lanes24h; nowIso: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Sektion „Heute“ — Status + 24h-Lanes + aktive Erinnerungen + Zeitstrahl
+// Today: status, 24-hour lanes, active memories and timeline.
 // ---------------------------------------------------------------------------
 function TodayView({ character, onOpenMemories }: { character: string; onOpenMemories?: () => void }) {
   const { t } = useI18n()
@@ -303,7 +304,7 @@ function TodayView({ character, onOpenMemories }: { character: string; onOpenMem
       ])
       return { today, diary }
     },
-    { intervalMs: 10000 })
+    SYNC_ENDPOINTS.mind)
   useEffect(() => {
     if (td) { setToday(td.today); setDiary(td.diary) }
   }, [td])
@@ -357,9 +358,9 @@ function TodayView({ character, onOpenMemories }: { character: string; onOpenMem
 
       <Lanes24h lanes={today.lanes_24h} nowIso={today.now} />
 
-      {/* „Im Kopf“ direkt beim Status (beides = aktueller Zustand), kompakt
-          auf Top 6 — das volle Archiv ist einen Klick entfernt. Der Tages-
-          Zeitstrahl bekommt dadurch das untere, wachsende Ende. */}
+      {/* Active memories beside status: both describe the current state.
+          Show the top six, with the full archive one click away, leaving
+          the expanding lower area for the daily timeline. */}
       {today.active_memories && today.active_memories.length > 0 && (
         <div>
           <div style={{ ...sepStyle, display: 'flex', alignItems: 'baseline' }}
@@ -401,7 +402,7 @@ function TodayView({ character, onOpenMemories }: { character: string; onOpenMem
 }
 
 // ---------------------------------------------------------------------------
-// Sektion „Tagebuch“ — Datum/Typ-Filter, Suche, Zeitstrahl, Tagesrückblick
+// Diary: date/type filters, search, timeline and daily summary.
 // ---------------------------------------------------------------------------
 function DiaryView({ character }: { character: string }) {
   const { t, lang } = useI18n()
@@ -410,7 +411,7 @@ function DiaryView({ character }: { character: string }) {
   // Game days: `date` is the world-day key the server filters by, `date_label`
   // its readable world date. The client never derives one from the other.
   const [dates, setDates] = useState<DiaryDate[]>([])
-  const [date, setDate] = useState<string>('')        // '' = heute (Server-Default)
+  const [date, setDate] = useState<string>('')        // '' = today (server default)
   const [typeFilter, setTypeFilter] = useState<string>('')
   const [q, setQ] = useState('')
   const [data, setData] = useState<DiaryResponse | null>(null)
@@ -440,8 +441,8 @@ function DiaryView({ character }: { character: string }) {
   }
   useEffect(() => { load(0, false) }, [enc, date, typeFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Nach „Summary erzeugen“: pollen bis der daily_summary-Eintrag erscheint
-  // (max. 90s) — der Endpoint ist fire-&-forget.
+  // After generating a summary, poll for daily_summary for up to 90 seconds;
+  // the endpoint returns before generation finishes.
   useEffect(() => {
     if (genState !== 'generating') return
     let tries = 0
@@ -530,7 +531,7 @@ function DiaryView({ character }: { character: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Sektion „Erinnerungen“ — Facetten-Suche über memory/list
+// Memories: faceted search through memory/list.
 // ---------------------------------------------------------------------------
 function MemoriesView({ character, initialRelated = '' }: { character: string; initialRelated?: string }) {
   const { t } = useI18n()
@@ -728,7 +729,7 @@ function BondsView({ character, onOpenMemories }: {
 }
 
 // ---------------------------------------------------------------------------
-// Sektion „Verlauf“ — daily/weekly/monthly-Summaries, Gesamt, Evolution-Diffs
+// History: daily/weekly/monthly summaries, total and evolution diffs
 // ---------------------------------------------------------------------------
 function HistoryView({ character }: { character: string }) {
   const { t, lang } = useI18n()
@@ -758,7 +759,7 @@ function HistoryView({ character }: { character: string }) {
     { id: 'evolution', label: t('Evolution') },
   ]
   const total: number = resp?.total ?? 0
-  const paged = kind === 'daily'   // nur daily ist serverseitig paginiert
+  const paged = kind === 'daily'   // Only daily entries are paginated by the server.
 
   const evoDiffRows = (label: string, d?: { removed: string[]; added: string[] }) => {
     if (!d || (d.added.length === 0 && d.removed.length === 0)) return null
@@ -853,7 +854,7 @@ function HistoryView({ character }: { character: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Sektion „Tagesplan" — read-only, der Rhythmus des Avatars (R5)
+// Daily schedule: the avatar’s rhythm, read-only (R5).
 // ---------------------------------------------------------------------------
 /** The avatar's daily schedule as a plain hour → activity list. Read-only:
  *  editing lives in the Game-Admin scheduler, this is what the player sees. */
@@ -892,7 +893,7 @@ function ScheduleView({ data }: { data: ScheduleResponse | null }) {
 }
 
 // ---------------------------------------------------------------------------
-// Haupt-Panel: Navi links (schmal → nur Icons) + Sektions-Inhalt rechts
+// Main panel: navigation left (icons when narrow), section content right.
 // ---------------------------------------------------------------------------
 type SectionId = 'today' | 'diary' | 'memories' | 'bonds' | 'history' | 'thoughts' | 'schedule'
 
@@ -913,8 +914,8 @@ export function MindPanel({ character, alwaysLabels = false, withThoughts = fals
   const narrow = narrowRaw && !alwaysLabels
   const rootRef = useRef<HTMLDivElement | null>(null)
 
-  // Schmal-Erkennung: unter 340px Panel-Breite kollabiert die Navi auf Icons
-  // (im Game-Admin via alwaysLabels deaktiviert — dort sind Labels gewuenscht).
+  // Below 340px, navigation collapses to icons. Game-admin disables this
+  // through alwaysLabels because labels are wanted there.
   useEffect(() => {
     const el = rootRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
@@ -926,7 +927,7 @@ export function MindPanel({ character, alwaysLabels = false, withThoughts = fals
     return () => ro.disconnect()
   }, [])
 
-  // Vorbelegter Bezugsperson-Filter beim Sprung Beziehungen → Erinnerungen.
+  // Preselect the related character when navigating from Relationships to Memories.
   const [memRelated, setMemRelated] = useState('')
   const openMemories = (partner = '') => { setMemRelated(partner); setSection('memories') }
 

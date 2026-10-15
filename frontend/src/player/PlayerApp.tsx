@@ -2,10 +2,10 @@
  * PlayerApp — the in-world player surface (plan-room-conversation Phase 2).
  * A SEPARATE page at /play, distinct from the game-admin.
  *
- * Layout: react-grid-layout — frei verschieb-/größenveränderbare Panels
- * ("Fenster"), Optik komplett unsere (game-tauglich). Erste Panels: Szene
- * (wahrgenommene Raum-Szene + Composer) und ein Platzhalter (z.B. Karte).
- * Layout-Persistenz ins User-Profil + weitere Panels folgen als nächste Schritte.
+ * Layout: freely movable and resizable react-grid-layout panels,
+ * styled for the game. Initial panels: the perceived room scene with
+ * composer and a placeholder such as the map. Profile layout persistence
+ * and additional panels follow in later steps.
  */
 import { cloneElement, useCallback, useEffect, useRef, useState,
   type ReactElement, type ReactNode } from 'react'
@@ -27,7 +27,7 @@ import { TaskPanel } from './TaskPanel'
 import { NewsPanel } from './NewsPanel'
 // New in stage 6 and package-only from the start — no re-export stub needed,
 // the panel never lived in frontend/.
-import { QuestsPanel } from '@anima/player-ui'
+import { SYNC_ENDPOINTS, QuestsPanel } from '@anima/player-ui'
 import { LayoutsPanel } from './LayoutsPanel'
 import { SelfPanel } from './SelfPanel'
 import { OthersPanel } from './OthersPanel'
@@ -143,7 +143,7 @@ export function PlayerApp() {
       .finally(() => { layoutLoaded.current = true })
   }, [])
 
-  // Containerbreite messen → Spaltenzahl so wählen, dass Zellen quadratisch sind.
+  // Measure container width to choose a column count with square cells.
   useEffect(() => {
     const el = rootRef.current
     if (!el) return
@@ -156,14 +156,14 @@ export function PlayerApp() {
   }, [])
 
   const onLayoutChange = useCallback((current: Layout[]) => {
-    // `current` enthält nur die offenen Panels. Positionen GESCHLOSSENER Panels
-    // beibehalten, damit sie beim Wieder-Öffnen an ihrer letzten Stelle erscheinen.
+    // Current contains only open panels. Preserve closed panel positions
+    // so reopening restores their previous places.
     const seen = new Set(current.map((i) => i.i))
     const retained = layoutRef.current.filter((i) => !seen.has(i.i))
     const merged = [...current, ...retained]
     layoutRef.current = merged
     setLayout(merged)
-    if (!layoutLoaded.current) return  // initiales/geladenes Layout nicht zurückschreiben
+    if (!layoutLoaded.current) return  // Do not write back the initial or loaded layout.
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(persist, 800)
   }, [persist])
@@ -173,28 +173,33 @@ export function PlayerApp() {
     setOpen(next)
     if (layoutLoaded.current) persist()
   }, [persist])
-  // Badges pollen: Telefon-Unread (Server-Summe) + neue IG-Posts seit der zuletzt
-  // gesehenen id (localStorage). Ist das IG-Panel offen oder beim allerersten Lauf,
-  // gilt alles als gesehen → kein Badge.
-  const refreshBadges = useCallback(async () => {
-    try {
-      const m = await apiGet<{ conversations?: Array<{ unread?: number }> }>('/play/messages')
-      setPhoneUnread((m.conversations || []).reduce((s, c) => s + (c.unread || 0), 0))
-    } catch { /* ignore */ }
-    try {
-      const f = await apiGet<{ posts?: Array<{ id: string }> }>('/instagram/feed?limit=50')
-      const posts = f.posts || []
-      const newest = posts[0]?.id || null
-      if (openRef.current.includes('instagram') || !igSeenRef.current) {
-        igSeenRef.current = newest
-        if (newest) { try { localStorage.setItem('play.ig.seen', newest) } catch { /* ignore */ } }
-        setIgNew(0)
-      } else {
-        const idx = posts.findIndex((p) => p.id === igSeenRef.current)
-        setIgNew(idx < 0 ? Math.min(posts.length, 99) : idx)
-      }
-    } catch { /* ignore */ }
+  // Badges: remember the seen IG id once, then poll slowly (open topics).
+  useEffect(() => {
+    try { igSeenRef.current = localStorage.getItem('play.ig.seen') } catch { /* ignore */ }
   }, [])
+
+  // Fetch payloads only; usePoll validates their generation before applying them.
+  const fetchBadges = useCallback(async () => {
+    const messages = await apiGet<{ conversations?: Array<{ unread?: number }> }>('/play/messages').catch(() => null)
+    const feed = await apiGet<{ posts?: Array<{ id: string }> }>('/instagram/feed?limit=50').catch(() => null)
+    return { messages, feed }
+  }, [])
+  const { data: badges, refresh: refreshBadges } = usePoll('play-badges', fetchBadges, SYNC_ENDPOINTS.badges)
+  useEffect(() => {
+    if (!badges) return
+    if (badges.messages) setPhoneUnread((badges.messages.conversations || []).reduce((s, c) => s + (c.unread || 0), 0))
+    if (!badges.feed) return
+    const posts = badges.feed.posts || []
+    const newest = posts[0]?.id || null
+    if (openRef.current.includes('instagram') || !igSeenRef.current) {
+      igSeenRef.current = newest
+      if (newest) { try { localStorage.setItem('play.ig.seen', newest) } catch { /* ignore */ } }
+      setIgNew(0)
+    } else {
+      const idx = posts.findIndex(p => p.id === igSeenRef.current)
+      setIgNew(idx < 0 ? Math.min(posts.length, 99) : idx)
+    }
+  }, [badges])
   const togglePanel = useCallback((id: string) => {
     const isOpen = openRef.current.includes(id)
     setOpenAnd(isOpen
@@ -230,8 +235,8 @@ export function PlayerApp() {
     if (layoutLoaded.current) persist()
   }, [persist])
 
-  // Surroundings als Vollbild-Hintergrund: Panel verliert Kopf/Kachel, der
-  // Inhalt (inkl. Figuren-Drag) läuft als interaktiver Background weiter.
+  // Surroundings as a full-screen background: remove the panel header/tile;
+  // its content, including figure dragging, remains interactive.
   const setAsBackground = useCallback((id: string) => {
     bgPanelRef.current = id
     setBgPanel(id)
@@ -256,9 +261,9 @@ export function PlayerApp() {
     setToolbarAlign(a)
     if (layoutLoaded.current) persist()
   }, [persist])
-  // Einfrieren: aktuelle Breite als Referenz festhalten → das Grid skaliert
-  // fortan proportional mit der Fenstergröße (wie der Browser-Zoom), statt die
-  // Spaltenzahl zu ändern. Aufheben → wieder responsives Spalten-Verhalten.
+  // Freeze the current width as reference, scaling proportionally with the
+  // window like browser zoom instead of changing column count.
+  // Unfreezing restores responsive columns.
   const toggleFreeze = useCallback(() => {
     if (frozenRef.current) {
       frozenRef.current = false
@@ -282,12 +287,12 @@ export function PlayerApp() {
     setLayout(DEFAULT_LAYOUT)
     setOpen(INITIAL_OPEN)
     setAutosize([])
-    setFrozen(false)  // zurück in den responsiven Modus
-    setBgPanel('')    // Vollbild-Hintergrund aufheben
+    setFrozen(false)  // Return to responsive mode.
+    setBgPanel('')    // Clear the full-screen background.
     persist()
   }, [persist])
 
-  // Benannte Layout-Presets
+  // Named layout presets
   const [presets, setPresets] = useState<Record<string, { grid?: Layout[]; open?: string[]; autosize?: string[]; panelAlpha?: Record<string, number>; iconMode?: IconMode; toolbarAlign?: ToolbarAlign; frozen?: boolean; frozenWidth?: number; bg?: string }>>({})
   const refreshPresets = useCallback(async () => {
     try {
@@ -327,12 +332,12 @@ export function PlayerApp() {
       await apiPut('/play/layouts', { name: n, layout: {
         grid: layoutRef.current, open: openRef.current, autosize: autosizeRef.current,
         panelAlpha: panelAlphaRef.current,
-        // Toolbar-Position (links/rechts) + Labels (Icon/Icon+Text) gehoeren zum Preset.
+        // Toolbar side and labels (icon/icon+text) belong to the preset.
         iconMode: iconModeRef.current, toolbarAlign: toolbarAlignRef.current,
         frozen: frozenRef.current, frozenWidth: frozenWidthRef.current, bg: bgPanelRef.current,
       } })
       await refreshPresets()
-      closePanel('layouts')  // Dialog schließt nach Speichern/Überschreiben
+      closePanel('layouts')  // Close after saving or overwriting.
     } catch { /* ignore */ }
   }, [refreshPresets, closePanel])
 
@@ -344,14 +349,14 @@ export function PlayerApp() {
     } catch { /* ignore */ }
   }, [refreshPresets])
 
-  // Panel-Icon links im Kopf (dezent, erbt die Kopf-Textfarbe).
+  // Subtle left header icon inherits the header text colour.
   const headIcon = (id: string) =>
     ICON_BY_ID[id]
       ? <Icon name={ICON_BY_ID[id]} size={15} className="player-head-icon" />
       : null
-  // Kopf-Steuerung: Autosize · in den Hintergrund · schließen — rechtsbündig.
-  // marginRight (CSS) rückt die Buttons aus der Ecke, damit der RGL-Resize-Griff
-  // (ne) nicht den Klick auf × abfängt.
+  // Right-aligned header controls: autosize, background, close.
+  // CSS marginRight moves buttons away from the northeast RGL resize
+  // handle so it cannot intercept clicks on the close button.
   const headerControls = (id: string, withBack: boolean, withClose = true) => (
     <span className="player-head-ctrls">
       {withBack && (
@@ -409,7 +414,7 @@ export function PlayerApp() {
     </span>
   )
 
-  // Esc schließt das vergrößerte Panel-Overlay.
+  // Escape closes the enlarged panel overlay.
   useEffect(() => {
     if (!expanded) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setExpanded(null) }
@@ -447,7 +452,7 @@ export function PlayerApp() {
   // surface. `load` stays as a thin refresh wrapper for the remaining callers
   // (step, enter-room); ScenePanel receives the same `refreshScene` as a prop.
   const { data: sceneData, refresh: refreshScene } = usePoll<SceneData>(
-    'play-scene', () => apiGet<SceneData>('/play/scene'), { intervalMs: 5000 })
+    'play-scene', () => apiGet<SceneData>('/play/scene'), SYNC_ENDPOINTS.scene)
   useEffect(() => { if (sceneData) setData(sceneData) }, [sceneData])
   const load = refreshScene
 
@@ -462,11 +467,7 @@ export function PlayerApp() {
     return !req || hasCapability(req)
   }
 
-  // Badges: remember the seen IG id once, then poll slowly (open topics).
-  useEffect(() => {
-    try { igSeenRef.current = localStorage.getItem('play.ig.seen') } catch { /* ignore */ }
-  }, [])
-  usePoll('play-badges', refreshBadges, { intervalMs: 20000 })
+
 
   const [moving, setMoving] = useState(false)
   // Why the server refused a trip, in one player-facing sentence. An unknown
@@ -800,18 +801,17 @@ export function PlayerApp() {
     news: newsPanel, quests: questsPanel, settings: settingsPanel,
   }
 
-  // Spaltenzahl aus gemessener Breite: colWidth ≈ CELL → quadratische Zellen.
+  // Derive columns from measured width: colWidth ≈ CELL gives square cells.
   const cols = Math.max(1, Math.floor((width + MARGIN) / (CELL + MARGIN)))
-  // Sicherstellen, dass das Layout IMMER ein Item für jedes Panel hat (sonst
-  // erscheint ein wieder-geöffnetes Panel als winziges 1×1-Default).
+  // Always include a layout item for every panel so reopened panels
+  // cannot fall back to a tiny 1×1 box.
   const known = new Set(layout.map((l) => l.i))
   const fullLayout = DEFAULT_LAYOUT.some((d) => !known.has(d.i))
     ? [...layout, ...DEFAULT_LAYOUT.filter((d) => !known.has(d.i))]
     : layout
-  // Schutz gegen 0×0/1×1: react-grid-layout vergibt einem frisch gemounteten
-  // Panel manchmal eine Mini-Default-Box, die sich via onLayoutChange ins
-  // gespeicherte Layout "einbrennt". Faellt eine Box unter ihre Mindestgroesse,
-  // auf die Default-Groesse zwingen (groesseres/manuelles Resizing bleibt).
+  // Guard against 0×0/1×1 defaults assigned to newly mounted panels by RGL.
+  // onLayoutChange could otherwise persist those tiny boxes.
+  // Restore default size below the minimum; preserve larger manual sizes.
   const sizedLayout = fullLayout.map((l) => {
     const def = DEFAULT_BY_ID[l.i]
     if (!def) return l
@@ -820,22 +820,20 @@ export function PlayerApp() {
     }
     return l
   })
-  // Tatsächlich gerenderte Grid-Panels: am open-Set wie üblich; 'others' ist
-  // zusätzlich an Anwesenheit gegated (steht standardmäßig im open-Set, kein
-  // Effekt entfernt es → erscheint automatisch sobald jemand da ist, auch beim
-  // Location-Wechsel; verschwindet wenn man allein ist).
+  // Render open panels; 'others' additionally requires somebody present.
+  // It remains in the open set, appearing automatically when others arrive
+  // or the location changes, and disappearing when the avatar is alone.
   const renderedIds = GRID_PANELS.filter(
     (id) => byId[id] && open.includes(id) && id !== bgPanel
       && (id !== 'others' || hasOthers) && capOk(id))
-  // Vorderstes Panel (höchster z-index) = aktiv → bekommt einen dezenten
-  // Akzent-Streifen am Kopf + stärkeren Schatten, damit klar ist welches vorn liegt.
+  // The highest z-index panel is active: accent header stripe and stronger
+  // shadow identify the frontmost panel.
   const frontId = renderedIds.reduce<string | undefined>(
     (a, b) => (a == null || zOf(b) >= zOf(a) ? b : a), undefined)
-  // Eingefroren: Grid in fixer Referenzbreite/-Spaltenzahl rendern und per
-  // CSS-transform an die echte Breite skalieren (Browser-Zoom-Verhalten). Der
-  // Wrapper bekommt die *skalierte* Höhe, damit der Scrollbereich stimmt; RGL
-  // erhält `transformScale`, sodass Ziehen/Resize trotz CSS-Skalierung korrekt
-  // rechnen. Nicht eingefroren = unverändertes responsives Spalten-Verhalten.
+  // Frozen grids use reference width and columns, transformed to actual width.
+  // Give the wrapper the scaled height for correct scrolling and pass
+  // transformScale to RGL for correct drag/resize calculations.
+  // Unfrozen grids use responsive columns.
   const frozenActive = frozen && frozenWidth > 0
   const activeCols = frozenActive
     ? Math.max(1, Math.floor((frozenWidth + MARGIN) / (CELL + MARGIN)))
@@ -846,17 +844,15 @@ export function PlayerApp() {
     .filter((l) => renderedIds.includes(l.i))
     .reduce((m, l) => Math.max(m, (l.y || 0) + (l.h || 0)), 0)
   const gridContentH = renderedBottom * (CELL + MARGIN) + MARGIN
-  // Beim Öffnen/Schließen den GridLayout neu mounten, damit RGL seinen internen
-  // State frisch aus dem layout-Prop ableitet (sonst erscheint ein wieder-
-  // geöffnetes Panel als 1×1). Ziehen/Bring-to-front ändern `open` NICHT → kein
-  // Remount → keine Snap-backs.
+  // Remount GridLayout when panels open or close so RGL rebuilds its state
+  // from layout instead of reopening as 1×1. Dragging and bringing to front
+  // preserve open and therefore avoid remounts and snap-backs.
   const openKey = [...renderedIds].sort().join('|')
 
-  // Autosize: für jedes aktivierte (und gerenderte) Panel die natürliche
-  // Inhaltshöhe messen und als Grid-Rows (h) zurückspielen. Der Body ist via
-  // CSS (data-autosize) inhaltsgroß → seine offsetHeight = Inhaltshöhe; ein
-  // ResizeObserver feuert bei Inhaltsänderung (z.B. Others bei Character-Wechsel)
-  // und re-fittet automatisch. Breite (w) bleibt unangetastet.
+  // Autosize measures each enabled, rendered panel’s natural content height
+  // and writes grid rows (h). CSS data-autosize makes offsetHeight reflect
+  // content height; ResizeObserver refits after content changes.
+  // Width remains unchanged.
   const autosizeKey = autosize.filter((id) => renderedIds.includes(id)).sort().join('|')
   useEffect(() => {
     const root = rootRef.current
@@ -919,13 +915,12 @@ export function PlayerApp() {
       if (!body) return []
       const ro = new ResizeObserver(() => apply(id))
       ro.observe(body)
-      // Selbst-gemeldete Größe (data-content-w/h, z.B. Map) ändert sich bei
-      // Zoom OHNE Body-Resize → der ResizeObserver feuert nicht. Attribut-
-      // Mutationen separat beobachten, damit Autosize der Zoomstufe folgt.
+      // Zoom can change reported content size without resizing the body.
+      // Observe data-content-w/h mutations as well, so autosize follows zoom.
       const mo = new MutationObserver(() => apply(id))
       mo.observe(body, { attributes: true, subtree: true,
         attributeFilter: ['data-content-w', 'data-content-h'] })
-      apply(id)  // initiale Messung
+      apply(id)  // Initial measurement.
       return [ro, mo]
     })
     return () => observers.forEach((o) => o.disconnect())
@@ -934,15 +929,15 @@ export function PlayerApp() {
 
   // --- Toolbar (Launcher) -------------------------------------------------
   const tbBtn = (id: string, label: string, icon: IconName, isOpen: boolean, onClick: () => void, badge = 0, bg = false) => {
-    // bg-Modus (Surroundings als Hintergrund) behaelt seinen Accent-Look.
+    // Background Surroundings retains its accent appearance.
     const col = bg ? '' : PANEL_COLOR[id]
     return (
       <button key={id} onClick={onClick} title={t(label)} aria-label={t(label)} aria-pressed={isOpen}
         className={`play-tbtn${isOpen ? ' open' : ''}${bg ? ' bg' : ''}${iconMode === 'iconText' ? ' with-text' : ''}`}
         style={{
           position: 'relative',
-          // Duotone: gefuellter Farb-Chip (Akzent) + Linien-Icon in derselben
-          // Panel-Farbe. Aktiv kraeftiger + Rahmen.
+          // Duotone: filled accent chip and line icon in the panel colour.
+          // Active buttons use a stronger fill and border.
           ...(col ? { color: col, background: col + (isOpen ? '40' : '20') } : {}),
           ...(isOpen && col ? { borderColor: col } : {}),
         }}>
@@ -952,18 +947,18 @@ export function PlayerApp() {
       </button>
     )
   }
-  // Badge je Panel-id (offene Themen): Telefon-Unread, neue IG-Posts.
+  // Per-panel badges: unread phone messages and new Instagram posts.
   const badgeOf = (id: string) => (id === 'phone' ? phoneUnread : id === 'instagram' ? igNew : 0)
-  // Panel-Umschalter folgen der Position/Label-Einstellung. 'layouts' nicht hier:
-  // der Layouts-Button + Reset + Zahnrad bleiben fest rechts (Wunsch).
+  // Panel toggles follow toolbar position and label preferences. Layouts,
+  // Reset and Settings stay fixed on the right.
   const panelToggles = PANEL_META
     .filter((p) => p.kind !== 'dialog')
     .filter((p) => p.id !== 'others' || hasOthers)
     .filter((p) => capOk(p.id))  // skill-bound panels only with capability
-    .filter((p) => p.id !== 'tasks')  // Tasks = Ueberwachung -> rechts in den Werkzeug-Cluster
+    .filter((p) => p.id !== 'tasks')  // Monitoring belongs to the right tool cluster.
     .map((p) => {
-      // Surroundings im Background-Modus: Button anders darstellen, Klick stellt
-      // den normalen Panel-Zustand wieder her.
+      // Background Surroundings has a distinct button; clicking restores
+      // its normal panel state.
       if (p.id === bgPanel) {
         return tbBtn(p.id, 'Restore from background', p.icon, true, clearBackground, 0, true)
       }
@@ -1077,7 +1072,7 @@ export function PlayerApp() {
         </div>
       </div>
 
-      {/* Dialog-Panels als zentriertes Overlay */}
+      {/* Dialog panels as a centred overlay */}
       {DIALOG_PANELS.filter((id) => open.includes(id)).map((id) => (
         <div key={id} className="player-modal-backdrop" onMouseDown={() => closePanel(id)}>
           <div className="player-modal" onMouseDown={(e) => e.stopPropagation()}>

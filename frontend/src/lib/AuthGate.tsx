@@ -1,12 +1,12 @@
 /**
- * AuthGate — eigene Login/Logout-Schicht für die neuen React-UIs (Game-Admin +
- * Player). Ersetzt den alten Umweg „bei 401 → zur alten /-UI umleiten": prüft
- * GET /auth/status, zeigt bei fehlender Session ein eigenes Login-Formular und
- * rendert sonst die App. Stellt über useAuth() den User + logout() bereit.
+ * AuthGate — login/logout for the React game-admin and player UIs.
+ * Checks GET /auth/status and shows a login form without a session;
+ * otherwise renders the app. useAuth() exposes the user and logout().
  *
- * api.ts feuert bei 401/403(non-game) ein `auth:required`-Window-Event statt zur
- * alten UI zu springen — der Gate fängt es ab und zeigt das Login.
+ * On 401 or non-game 403, api.ts emits auth:required on window.
+ * The gate catches it and displays login instead of redirecting to the old UI.
  */
+import { syncHub } from '@anima/player-ui'
 import { createContext, useCallback, useContext, useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet, apiPost } from './api'
@@ -66,7 +66,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', opacity: 0.6 }}>{t('Loading…')}</div>
   }
   if (status === 'out') {
-    return <LoginForm onSuccess={(u) => { setUser(u); setStatus('in') }} />
+    return <LoginForm onSuccess={(u) => { syncHub().restart(); setUser(u); setStatus('in') }} />
   }
   return <AuthContext.Provider value={{ user, logout }}>{children}</AuthContext.Provider>
 }

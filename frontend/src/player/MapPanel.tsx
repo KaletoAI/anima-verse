@@ -83,7 +83,7 @@
  *     the target, never behind the walker.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { transparentPortraitUrl } from '@anima/player-ui'
+import { SYNC_ENDPOINTS, transparentPortraitUrl } from '@anima/player-ui'
 import { hillshadeImage, MAP_RELIEF_Z_FACTOR } from '@anima/scene-render'
 import type { WorldHeightField } from '@anima/scene-render'
 import { useI18n } from '../i18n/I18nProvider'
@@ -437,7 +437,7 @@ export function MapPanel({
   const { data } = usePoll<WorldmapPayload>(
     allView ? 'play-worldmap-all' : 'play-worldmap',
     () => apiGet<WorldmapPayload>(allView ? '/play/worldmap?all=1' : '/play/worldmap'),
-    { intervalMs: 10000 })
+    SYNC_ENDPOINTS.worldmapPlayer)
 
   // The painted ground is loaded ONCE and re-fetched only when the worldmap
   // poll reports a different signature (§ A1.5) — it is never fogged, so

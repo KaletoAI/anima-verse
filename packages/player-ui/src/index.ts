@@ -33,3 +33,7 @@ export * from './InstagramPanel';
 // ScenePhotoSubmit) already leave the package through ScenePanel, and a second
 // export path for the same names would collide (TS2308).
 export { PlayerPhotoDialog } from './PlayerPhotoDialog';
+
+export * from './pollCore';
+export * from './syncHub';
+export * from './syncEndpoints';
