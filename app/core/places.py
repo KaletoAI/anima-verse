@@ -431,7 +431,7 @@ def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
         with keyed_lock("character_profile", name):
             profile = get_character_profile(name) or {}
             profile["place"] = field
-            save_character_profile(name, profile)
+            stored = save_character_profile(name, profile)
         sx, sz = place["slots"][slot]
         # The point derives the location: a slot inside the room's own
         # location keeps the one the character has, and preserve_movement_
@@ -443,6 +443,9 @@ def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
             set_character_pos(name, sx, sz, preserve_movement_target=True)
         else:
             _warn_outside(loc, place, sx, sz)
+        from app.core import sync_topics
+        if stored:
+            sync_topics.changed_at(name)
         return field
 
 
@@ -471,8 +474,11 @@ def release(name: str) -> None:
         released = bool(old)
         if released:
             profile["place"] = None
-            save_character_profile(name, profile)
+            stored = save_character_profile(name, profile)
     if released:
+        from app.core import sync_topics
+        if stored:
+            sync_topics.changed_at(name)
         # The seat just left and the pose it was held for: the exit clip of
         # that pose may carry the figure off the seat, and the stand point
         # starts where it sets the figure down (``room_stand.stand_up``).
@@ -544,6 +550,7 @@ def assign_pair(actor: str, partner: str, pose_key: str) -> Optional[Tuple[Place
             mid = {"x": (pa["x"] + pb["x"]) / 2, "z": (pa["z"] + pb["z"]) / 2}
             fitting.sort(key=lambda p: _dist(mid, list(centre_of(p))))
         best = fitting[0]
+        stored_names = []
         for name in (actor, partner):
             # ONE profile lock at a time (never both partners' at once — two
             # threads seating the same pair from opposite ends would deadlock
@@ -553,7 +560,11 @@ def assign_pair(actor: str, partner: str, pose_key: str) -> Optional[Tuple[Place
                 prof = get_character_profile(name) or {}
                 prof["place"] = {"id": best["id"], "slot": PAIR_SLOT,
                                  "room_id": room}
-                save_character_profile(name, prof)
+                if save_character_profile(name, prof):
+                    stored_names.append(name)
+        from app.core import sync_topics
+        for name in stored_names:
+            sync_topics.changed_at(name)
         cx, cz = centre_of(best)
         if not inside(loc, cx, cz):
             _warn_outside(loc, best, cx, cz)
@@ -564,6 +575,8 @@ def release_pair(actor: str, partner: str) -> None:
     """Both partners stand up (:func:`release` each)."""
     release(actor)
     release(partner)
+
+    # release() emits each hook only after its own successful save.
 
 
 def place_of(name: str, profile: Optional[dict] = None) -> Optional[Place]:

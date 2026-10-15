@@ -730,6 +730,8 @@ def start_journey(character_name: str, target_id: str,
                        total_m=st["total_m"], eta_game=st["eta_game"])
     except Exception:
         pass
+    from app.core import sync_topics
+    sync_topics.travel_changed(character_name)
     logger.info("Journey started: %s -> %s (%.1f m, %d waypoints, %.2f m/s)",
                 character_name, target_id, st["total_m"], len(waypoints), speed)
     return journey, ""
@@ -820,7 +822,7 @@ def start_journey_to_point(character_name: str, x: float,
         # SAME write — ``clear_movement_target`` would drop the journey dict
         # with it.
         profile["movement_target"] = ""
-        save_character_profile(character_name, profile)
+        stored = save_character_profile(character_name, profile)
 
     st = journey_state(waypoints, journey["started_at_game"], game_time())
     try:
@@ -829,6 +831,9 @@ def start_journey_to_point(character_name: str, x: float,
                        total_m=st["total_m"], eta_game=st["eta_game"])
     except Exception:
         pass
+    from app.core import sync_topics
+    if stored:
+        sync_topics.travel_changed(character_name)
     logger.info("Journey started: %s -> (%.2f, %.2f) "
                 "(%.1f m, %d waypoints, %.2f m/s)", character_name, gx, gz,
                 st["total_m"], len(waypoints), speed)
@@ -856,12 +861,16 @@ def cancel_journey(character_name: str, *, journey_id: Optional[str] = None,
                 return
     else:
         from app.models.character import clear_movement_target
-        clear_movement_target(character_name)
+        if not clear_movement_target(character_name):
+            return
     try:
         from app.core.state_events import publish as _publish_state
         _publish_state("travel_cancelled", character_name)
     except Exception:
         pass
+
+    from app.core import sync_topics
+    sync_topics.travel_changed(character_name)
 
 
 # Lateral spacing of party followers next to their leader, in metres.
@@ -1384,6 +1393,9 @@ def _settle_arrival(name: str, journey: Dict[str, Any],
                            reason=reason)
         except Exception:
             pass
+        from app.core import sync_topics
+        if not get_journey(name):
+            sync_topics.travel_changed(name)
         logger.info("Journey blocked at the door: %s -> %s (%s)",
                     name, target_id, reason)
         return

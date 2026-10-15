@@ -103,10 +103,18 @@ def _cancel_joiner_journey(member: str) -> None:
 def add_to_party(leader: str, member: str) -> Optional[str]:
     """Add a present follower, creating a party if needed; reject conflicts."""
     with keyed_lock("party_membership", "world"):
+        from app.core import sync_topics
+        before = sync_topics.party_of(leader).names
+        stored_tx_1 = False
         with transaction() as conn:
             pid = _write_member(conn, (leader or "").strip(), (member or "").strip())
+            stored_tx_1 = True
         if pid:
             _cancel_joiner_journey(member)
+    if pid:
+        from app.core import sync_topics
+        if stored_tx_1:
+            sync_topics.avatars([*before, *sync_topics.party_of(leader).names, leader, member], ("presence", "notices"))
     return pid
 
 
@@ -118,12 +126,17 @@ def leave_party(character: str) -> Dict:
             return {"status": "not_in_party"}
         members = [m for m in p["members"] if m != character]
         disbanded = p["role"] == "leader" or not members
+        stored_tx_1 = False
         with transaction() as conn:
             if disbanded:
                 conn.execute("DELETE FROM parties WHERE party_id=?", (p["party_id"],))
             else:
                 conn.execute("UPDATE parties SET members=? WHERE party_id=?",
                              (json.dumps(members, ensure_ascii=False), p["party_id"]))
+            stored_tx_1 = True
+    from app.core import sync_topics
+    if stored_tx_1:
+        sync_topics.avatars([p["leader"], *p["members"]], ("presence", "notices"))
     emit("party_membership_changed", party=p, character=character, reason="left")
     return {"status": "ok", "party_id": p["party_id"], "disbanded": disbanded,
             "freed": [p["leader"], *p["members"]] if disbanded else [character]}
@@ -134,8 +147,13 @@ def disband_party(party_id: str) -> None:
         p = next((p for p in _all_parties() if p["party_id"] == party_id), None)
         if not p:
             return
+        stored_tx_1 = False
         with transaction() as conn:
             conn.execute("DELETE FROM parties WHERE party_id=?", (party_id,))
+            stored_tx_1 = True
+    from app.core import sync_topics
+    if stored_tx_1:
+        sync_topics.avatars([p["leader"], *p["members"]], ("presence", "notices"))
     emit("party_membership_changed", party=p, character=p["leader"], reason="disbanded")
 
 
@@ -168,6 +186,7 @@ def create_pending_invite(inviter: str, invitee: str, intent_id: str = "") -> Op
                 return inv["invite_id"]
             stale.append(inv)
         iid = "pinv_" + uuid.uuid4().hex[:10]
+        stored_tx_1 = False
         with transaction() as conn:
             conn.execute("UPDATE party_invites SET status='stale' "
                          "WHERE inviter=? AND invitee=? AND status='pending'", (inviter, invitee))
@@ -175,6 +194,10 @@ def create_pending_invite(inviter: str, invitee: str, intent_id: str = "") -> Op
                          "(invite_id, inviter, invitee, created_at, status, intent_id) "
                          "VALUES (?, ?, ?, ?, 'pending', ?)",
                          (iid, inviter, invitee, utc_now_iso(), intent_id))
+            stored_tx_1 = True
+    from app.core import sync_topics
+    if stored_tx_1:
+        sync_topics.avatars([inviter, invitee], ("presence", "notices"))
     for inv in stale:
         emit("party_invite_closed", invite=inv, reason="superseded")
     return iid
@@ -234,18 +257,30 @@ def settle_pending_invite(invite_id: str, accept: bool) -> Dict:
                 return {"status": inv["status"], **common,
                         "party_id": party.get("party_id", "")}
             return {"status": "not_found", **common}
+        from app.core import sync_topics
+        before = sync_topics.party_of(inv["inviter"]).names
         if not invite_is_fresh(inv):
+            stored_tx_1 = False
             with transaction() as conn:
                 conn.execute("UPDATE party_invites SET status='expired' WHERE invite_id=?", (invite_id,))
+                stored_tx_1 = True
+            from app.core import sync_topics
+            if stored_tx_1:
+                sync_topics.avatars([inv["inviter"], inv["invitee"]], ("presence", "notices"))
             return {"status": "expired", **common}
         if accept and not same_location(inv["inviter"], inv["invitee"]):
             return {"status": "not_present", **common}
+        stored_tx_2 = False
         with transaction() as conn:
             pid = _write_member(conn, inv["inviter"], inv["invitee"]) if accept else ""
             if accept and not pid:
                 return {"status": "join_conflict", **common}
             conn.execute("UPDATE party_invites SET status=? WHERE invite_id=? AND status='pending'",
                          ("accepted" if accept else "declined", invite_id))
+            stored_tx_2 = True
+        from app.core import sync_topics
+        if stored_tx_2:
+            sync_topics.avatars([*before, *sync_topics.party_of(inv["inviter"]).names, inv["inviter"], inv["invitee"]], ("presence", "notices"))
         if accept:
             _cancel_joiner_journey(inv["invitee"])
         return {"status": "accepted" if accept else "declined", "party_id": pid, **common}
@@ -266,9 +301,17 @@ def resolve_pending_invite(invite_id: str, accept: bool) -> Dict:
 
 def close_intent_invites(intent_id: str, status: str = "cancelled") -> None:
     """Close remaining questions without affecting unrelated invitations."""
+    stored_tx_1 = False
     with keyed_lock("party_membership", "world"), transaction() as conn:
+        affected = conn.execute(
+            "SELECT inviter, invitee FROM party_invites WHERE intent_id=? AND status='pending'",
+            (intent_id,)).fetchall()
         conn.execute("UPDATE party_invites SET status=? WHERE intent_id=? AND status='pending'",
                      (status, intent_id))
+        stored_tx_1 = True
+    from app.core import sync_topics
+    if stored_tx_1:
+        sync_topics.avatars([n for row in affected for n in row], ("presence", "notices"))
 
 
 def clear_invites_for(character: str) -> None:
@@ -276,7 +319,15 @@ def clear_invites_for(character: str) -> None:
     c = (character or "").strip()
     if not c:
         return
+    stored_tx_1 = False
     with keyed_lock("party_membership", "world"), transaction() as conn:
+        affected = conn.execute(
+            "SELECT inviter, invitee FROM party_invites WHERE status='pending' "
+            "AND (inviter=? OR invitee=?)", (c, c)).fetchall()
         conn.execute("UPDATE party_invites SET status='stale' WHERE status='pending' "
                      "AND (inviter=? OR invitee=?)", (c, c))
+        stored_tx_1 = True
+    from app.core import sync_topics
+    if stored_tx_1:
+        sync_topics.avatars([n for row in affected for n in row], ("presence", "notices"))
     emit("party_invites_cleared", character=c)

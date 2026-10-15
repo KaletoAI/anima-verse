@@ -897,11 +897,11 @@ def _prune_party_memberships(conn, character_name: str) -> None:
 
 
 def delete_character(character_name: str) -> bool:
-    """Entfernt einen Character vollstaendig: DB-Zeilen + Storage-Verzeichnis.
+    """Remove a character completely: database rows and storage directory.
 
-    Sweept alle Tabellen mit einer character_name-Spalte sowie die
-    Sonderfaelle (relationships.from_char/to_char, llm_call_stats.agent_name,
-    chat_messages.partner). Loescht anschliessend characters/<name>/.
+    Sweep tables with a character_name column and special references
+    (relationships.from_char/to_char, llm_call_stats.agent_name,
+    chat_messages.partner), then delete characters/<name>/.
 
     For a temporary NPC the OTHER characters' traces of it go too — a
     disposable NPC must not leave memory rows behind in the characters that
@@ -920,6 +920,10 @@ def delete_character(character_name: str) -> bool:
     """
     if not character_name or character_name.lower() in _RESERVED_NAMES:
         return False
+
+    from app.core import sync_topics
+    old_loc = get_character_current_location(character_name) or ""
+    old_party = sync_topics.party_of(character_name).names
 
     # 0) Foreign traces — only for temporary NPCs (template-gated)
     try:
@@ -962,6 +966,7 @@ def delete_character(character_name: str) -> bool:
 
     # 1) DB sweep
     try:
+        stored_tx_1 = False
         with transaction() as conn:
             tables = [r[0] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
@@ -970,7 +975,7 @@ def delete_character(character_name: str) -> bool:
                 cols = {c[1] for c in conn.execute(f"PRAGMA table_info({tbl})").fetchall()}
                 if "character_name" in cols:
                     conn.execute(f"DELETE FROM {tbl} WHERE character_name=?", (character_name,))
-            # Sonderspalten — Tabellen, deren Schluessel anders heisst:
+            # Special columns: tables whose character reference has another name:
             # characters.name, relationships.from_char/to_char,
             # llm_call_stats.agent_name, chat_messages.partner.
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name='characters'").fetchone():
@@ -1001,10 +1006,16 @@ def delete_character(character_name: str) -> bool:
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name='intents'").fetchone():
                 conn.execute("DELETE FROM intents WHERE owner=?", (character_name,))
             _prune_party_memberships(conn, character_name)
+            stored_tx_1 = True
     except Exception as e:
         logger.error("delete_character DB-Fehler fuer %s: %s", character_name, e)
         return False
 
+    from app.core import sync_topics
+    if stored_tx_1:
+        sync_topics.moved(character_name, old_loc, "")
+    if stored_tx_1:
+        sync_topics.avatars(old_party, ("presence", "notices"))
     # 2) Remove the storage directory — after the DB sweep. The cached
     #    thumbnails of its images go first (their key needs the live path).
     try:
@@ -1350,12 +1361,12 @@ def get_movement_target(character_name: str,
     return (profile.get("movement_target") or "").strip()
 
 
-def set_movement_target(character_name: str, location_id: str) -> None:
+def set_movement_target(character_name: str, location_id: str) -> bool:
     """Sets the travel target id. Clearing it (empty id) or pointing it at a
     different target than the stored journey's drops the journey dict —
-    target and journey always live and die together."""
+    target and journey always live and die together. Returns persistence success."""
     if not character_name:
-        return
+        return False
     from app.core.keyed_lock import keyed_lock
     # Read AND write under the per-character profile lock (DATA-3): ``journey``
     # is a profile_json key and the save writes the whole blob, so a stale read
@@ -1368,13 +1379,13 @@ def set_movement_target(character_name: str, location_id: str) -> None:
         j = profile.get("journey")
         if not new_target or (isinstance(j, dict) and j.get("target") != new_target):
             profile.pop("journey", None)
-        save_character_profile(character_name, profile)
+        return save_character_profile(character_name, profile)
 
 
-def clear_movement_target(character_name: str) -> None:
+def clear_movement_target(character_name: str) -> bool:
     """Clears the travel target — e.g. after arrival, a teleport override, or
-    when the path suddenly stops being walkable."""
-    set_movement_target(character_name, "")
+    when the path suddenly stops being walkable. Returns persistence success."""
+    return set_movement_target(character_name, "")
 
 
 def _room_name_for(room_id: str, location_id: str = "",
@@ -1435,7 +1446,7 @@ def _drag_party_followers_to_room(character_name: str, room_id: str) -> None:
 
 
 def _movement_trace(character_name: str, location_id: str, room_id: str,
-                    content: str) -> None:
+                    content: str, *, sync_stored: bool = True) -> None:
     """C1: movement trace as a storyteller line in the perception stream, so
     that room changes are visible in the /play chat + observer (gold/italic) —
     instead of a silent exit that mutes the conversation.
@@ -1450,7 +1461,7 @@ def _movement_trace(character_name: str, location_id: str, room_id: str,
         from app.core.perception import record_utterance, STORYTELLER_SPEAKER
         record_utterance(speaker=STORYTELLER_SPEAKER, content=content, volume="normal",
                          location_id=location_id, room_id=room_id or "",
-                         addressees=[], source="movement")
+                         addressees=[], source="movement", sync_stored=sync_stored)
     except Exception as _e:
         from app.core.log import get_logger
         get_logger("character_model").debug("movement trace failed: %s", _e)
@@ -1577,7 +1588,7 @@ def save_character_current_location(character_name: str = "", location: str = ""
         # deliberately empty slots from the chat ("undresses") applied to the OLD
         # location. At the new place the ordinary decency rule takes over again.
         # (Lifecycle per plan-outfit-system-rethink.md § 3)
-        save_character_profile(character_name, profile)
+        stored = save_character_profile(character_name, profile)
     # Seamless world (Aug 2026): the metre position is the truth for WHERE a
     # character stands, so a REAL location change drags it along — the
     # character lands at the centre of the target location. A target location
@@ -1631,6 +1642,10 @@ def save_character_current_location(character_name: str = "", location: str = ""
                                activity="", animation="")
         except Exception:
             pass
+    if location_changed:
+        from app.core import sync_topics
+        if stored:
+            sync_topics.moved(character_name, old_location, location)
     # C1: movement trace (storyteller) on a real location change — make the exit
     # from the old place + arrival in the new one visible. Off-map (sleep sentinel) excluded.
     if location_changed and old_location and old_location != OFFMAP_SLEEP_SENTINEL \
@@ -1640,9 +1655,9 @@ def save_character_current_location(character_name: str = "", location: str = ""
             _ol = _gln(old_location) or old_location
             _nl = _gln(location) or location
             _movement_trace(character_name, old_location, old_room,
-                            f"{character_name} verlässt {_ol} (Richtung {_nl}).")
+                            f"{character_name} verlässt {_ol} (Richtung {_nl}).", sync_stored=stored)
             _movement_trace(character_name, location, "",
-                            f"{character_name} betritt {_nl}.")
+                            f"{character_name} betritt {_nl}.", sync_stored=stored)
             _suggest_follow_after_move(character_name, old_location, old_room,
                                        location, "", _nl)
             # at_location intents (plan-intents-unified.md): fire the
@@ -1913,11 +1928,17 @@ def _clear_location_and_room(character_name: str) -> None:
     if not character_name:
         return
     try:
+        old_loc = get_character_current_location(character_name) or ""
+        stored_tx_1 = False
         with transaction() as conn:
             conn.execute(
                 "UPDATE character_state SET current_location='', "
                 "current_room='', location_changed_at=? WHERE character_name=?",
                 (utc_now_iso(), character_name))
+            stored_tx_1 = True
+        from app.core import sync_topics
+        if stored_tx_1:
+            sync_topics.moved(character_name, old_loc, "")
     except Exception as e:
         logger.error("_clear_location_and_room DB error for %s: %s",
                      character_name, e)
@@ -2097,6 +2118,7 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
     # the pose is written into a fresh copy afterwards — never over the
     # place they just stored.
     place = _seat_for_pose(character_name, key, prefer)
+    stored = (get_character_profile(character_name) or {}).get("place") == place
     if not unchanged:
         # Read AND write under the per-character profile lock (DATA-3). The
         # copy read at the top of this function is the DECISION read only —
@@ -2113,9 +2135,9 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
             profile = get_character_profile(character_name) or {}
             profile["pose_key"] = key
             profile["pose_flavor"] = flavor
-            save_character_profile(character_name, profile)
+            stored = save_character_profile(character_name, profile)
     _publish_activity_changed(character_name, flavor or key, old_display, key,
-                              place, old_place)
+                              place, old_place, stored=stored)
 
 
 def set_pose_key_detail(character_name: str, key: str, detail: str, *,
@@ -2205,6 +2227,7 @@ def clear_pose_intent(character_name: str) -> None:
     # Read AND write under the per-character profile lock (DATA-3): the save
     # writes the whole profile_json blob out. ``stand_up`` stays OUTSIDE — it
     # writes the profile itself and keyed_lock is a plain, non-re-entrant Lock.
+    stored = False
     changed = False
     old_display = ""
     old_place = None
@@ -2222,7 +2245,7 @@ def clear_pose_intent(character_name: str) -> None:
             profile["pose_key"] = ""
             profile["pose_flavor"] = ""
             profile["place"] = None          # the character stands up (§ 3.5)
-            save_character_profile(character_name, profile)
+            stored = save_character_profile(character_name, profile)
     if changed:
         if old_place:
             # The seat and the pose it was held for: the pose's exit clip may
@@ -2230,12 +2253,13 @@ def clear_pose_intent(character_name: str) -> None:
             # it sets the figure down.
             from app.core.room_stand import stand_up
             stand_up(character_name, from_place=old_place, from_pose_key=old_pose_key)
-        _publish_activity_changed(character_name, "", old_display, "", None, old_place)
+        _publish_activity_changed(character_name, "", old_display, "", None, old_place, stored=stored)
 
 
 def _publish_activity_changed(character_name: str, pose: str, old_pose: str,
                               pose_key: str, place: Optional[dict] = None,
-                              old_place: Optional[dict] = None) -> None:
+                              old_place: Optional[dict] = None, *,
+                              stored: bool = True) -> None:
     """AV3D-3: push an activity change to the SSE state stream — carries the
     animation kind the worldmap would deliver, so a streaming client swaps
     the figure's clip without waiting for its next poll. No-op when neither
@@ -2254,6 +2278,10 @@ def _publish_activity_changed(character_name: str, pose: str, old_pose: str,
                        place=place)
     except Exception:
         pass
+
+    from app.core import sync_topics
+    if stored:
+        sync_topics.changed_at(character_name)
 
 
 def get_effective_activity(character_name: str,
@@ -2345,7 +2373,7 @@ def save_character_current_room(character_name: str, room_id: str,
             # the room stands up from its seat — in the SAME profile write, so
             # no reader ever sees the lounge's armchair held from the kitchen.
             profile["place"] = None
-        save_character_profile(character_name, profile)
+        stored = save_character_profile(character_name, profile)
 
     # WHERE IN THE ROOM the character now stands is the server's word (T4):
     # the free point nearest the one it arrived on — the doorstep of a walk,
@@ -2372,6 +2400,10 @@ def save_character_current_room(character_name: str, room_id: str,
         except Exception:
             pass
 
+    if room_id != old_room:
+        from app.core import sync_topics
+        if stored:
+            sync_topics.changed_at(character_name, cur_loc)
     # state_history event on a real room change — otherwise room changes stay
     # invisible to the diary/activity evaluation (only the location used to be tracked).
     if room_id and room_id != old_room:
@@ -2389,9 +2421,9 @@ def save_character_current_room(character_name: str, room_id: str,
                 and _room_in_location(room_id, cur_loc):
             _old_rn = _room_name_for(old_room, cur_loc, _lang)
             _movement_trace(character_name, cur_loc, old_room,
-                            f"{character_name} verlässt {_old_rn} (Richtung {room_name}).")
+                            f"{character_name} verlässt {_old_rn} (Richtung {room_name}).", sync_stored=stored)
             _movement_trace(character_name, cur_loc, room_id,
-                            f"{character_name} betritt {room_name}.")
+                            f"{character_name} betritt {room_name}.", sync_stored=stored)
             _suggest_follow_after_move(character_name, cur_loc, old_room,
                                        cur_loc, room_id, room_name)
 
@@ -2431,7 +2463,11 @@ def save_character_current_feeling(character_name: str, feeling: str):
         profile = get_character_profile(character_name)
         old_feeling = profile.get("current_feeling", "")
         profile["current_feeling"] = feeling
-        save_character_profile(character_name, profile)
+        stored = save_character_profile(character_name, profile)
+    if feeling != old_feeling:
+        from app.core import sync_topics
+        if stored:
+            sync_topics.changed_at(character_name, topics=("presence", "self"))
     # Generate the background variant for the new mood so a current image is
     # ready by the time the character is switched to. Low-priority GPU task.
     if feeling and feeling != old_feeling:
@@ -3592,24 +3628,27 @@ def get_character_profile_image(character_name: str,
 
 
 def add_character_image(character_name: str, image_filename: str) -> bool:
-    """Setzt das Profilbild falls noch keins vorhanden.
+    """Set the initial profile image if none exists.
 
-    Die Galerie wird ueber das Dateisystem verwaltet — ein Bild ist in der Galerie
-    sobald es im images/ Verzeichnis liegt. Diese Funktion setzt nur noch das
-    initiale Profilbild.
+    Gallery membership is managed by the filesystem: an image belongs to
+    the gallery as soon as it is in images/. This only sets the initial image.
     """
+    changed = False
     from app.core.keyed_lock import keyed_lock
     # Read AND write under the per-character profile lock (DATA-3).
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name)
         if not profile.get("profile_image"):
             profile["profile_image"] = image_filename
-            save_character_profile(character_name, profile)
+            changed = save_character_profile(character_name, profile)
+    if changed:
+        from app.core import sync_topics
+        sync_topics.changed_at(character_name)
     return True
 
 
 def set_character_profile_image(character_name: str, image_filename: str) -> bool:
-    """Setzt das Profilbild"""
+    """Set the profile image."""
     from app.core.keyed_lock import keyed_lock
     images_dir = get_character_images_dir(character_name)
     if (images_dir / image_filename).exists():
@@ -3617,7 +3656,10 @@ def set_character_profile_image(character_name: str, image_filename: str) -> boo
         with keyed_lock("character_profile", character_name):
             profile = get_character_profile(character_name)
             profile["profile_image"] = image_filename
-            save_character_profile(character_name, profile)
+            stored = save_character_profile(character_name, profile)
+        from app.core import sync_topics
+        if stored:
+            sync_topics.changed_at(character_name)
         return True
     return False
 
@@ -4188,7 +4230,7 @@ def enter_offmap_sleep(character_name: str) -> bool:
         profile["_offmap_return_room"] = current_room
         profile["current_location"] = ""
         profile["current_room"] = ""
-        save_character_profile(character_name, profile)
+        stored = save_character_profile(character_name, profile)
     # Seamless world (§ A1.4): the worldmap reads "no location + a metre
     # point" as WILDERNESS. Leaving the old point behind would therefore put
     # the sleeper in the open field instead of off the map — so the point goes
@@ -4203,6 +4245,9 @@ def enter_offmap_sleep(character_name: str) -> bool:
                        from_id=current_loc, to_id="", room_id="")
     except Exception:
         pass
+    from app.core import sync_topics
+    if stored:
+        sync_topics.moved(character_name, current_loc, "")
     get_logger("character").info(
         "Offmap sleep: %s -> gone from the map (return: %s/%s)",
         character_name, current_loc or "-", current_room or "-")
@@ -4241,7 +4286,7 @@ def wake_from_offmap(character_name: str) -> bool:
         # without the pose reset of save_character_current_location).
         profile["pose_key"] = ""
         profile["pose_flavor"] = ""
-        save_character_profile(character_name, profile)
+        stored = save_character_profile(character_name, profile)
     # Seamless world: enter_offmap_sleep cleared the metre point, so waking has
     # to put one back — a character with a location but no point has no place
     # on the map. Replicated here instead of routing through
@@ -4264,6 +4309,9 @@ def wake_from_offmap(character_name: str) -> bool:
                        room_id=return_room or "")
     except Exception:
         pass
+    from app.core import sync_topics
+    if stored:
+        sync_topics.moved(character_name, "", return_loc)
     get_logger("character").info(
         "Offmap-Wake: %s -> zurueck nach %s/%s",
         character_name, return_loc, return_room or "-")
@@ -4271,13 +4319,11 @@ def wake_from_offmap(character_name: str) -> bool:
 
 
 def appear_in_world(character_name: str) -> bool:
-    """Bringt einen offmap-Character zurueck in die Welt (Avatar-Uebernahme).
+    """Bring an off-map character back into the world on avatar takeover.
 
-    Fallback-Kette: 1) letzter Steuer-Ort via :func:`wake_from_offmap`,
-    2) ``home_location`` aus der Config, 3) erste Welt-Location als Default.
-    Idempotent — steht der Character schon irgendwo, ist es ein no-op.
-
-    Returns True wenn der Character platziert wurde.
+    Try the last location via :func:`wake_from_offmap`, then the configured
+    home_location, then the first world location. A character already placed
+    is left alone. Return True when the character was placed.
     """
     if wake_from_offmap(character_name):
         return True
@@ -4290,7 +4336,7 @@ def appear_in_world(character_name: str) -> bool:
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
         if (profile.get("current_location") or "").strip():
-            return False  # steht schon irgendwo
+            return False  # Already placed.
         target = None
         try:
             from app.models.world import get_location, get_arrival_room_id, list_locations
@@ -4315,7 +4361,7 @@ def appear_in_world(character_name: str) -> bool:
             profile["current_room"] = room_id
         profile.pop("_offmap_return_location", None)
         profile.pop("_offmap_return_room", None)
-        save_character_profile(character_name, profile)
+        stored = save_character_profile(character_name, profile)
     # AV3D-3: bypass path — publish the placement explicitly.
     try:
         from app.core.state_events import publish as _publish_state
@@ -4323,6 +4369,9 @@ def appear_in_world(character_name: str) -> bool:
                        from_id="", to_id=loc_id, room_id=room_id or "")
     except Exception:
         pass
+    from app.core import sync_topics
+    if stored:
+        sync_topics.moved(character_name, "", loc_id)
     get_logger("character").info(
         "Appear-in-world: %s -> %s/%s", character_name, loc_id, room_id or "-")
     return True
@@ -4465,7 +4514,11 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
             # the place, not the pose, says where a body is. Same rule as
             # ``clear_pose_intent``: whoever gives up the pose stands up.
             profile["place"] = None
-        save_character_profile(character_name, profile)
+        stored = save_character_profile(character_name, profile)
+    if value != was:
+        from app.core import sync_topics
+        if stored:
+            sync_topics.changed_at(character_name)
     # Only on the transition awake -> asleep, and AFTER the save above:
     # places.assign writes profile["place"] itself, so an earlier call would
     # be overwritten by our own write. A failure here must not keep anyone
@@ -4578,7 +4631,7 @@ def delete_character_daily_schedule(character_name: str) -> bool:
 
 
 def delete_character_image(character_name: str, image_filename: str) -> bool:
-    """Loescht ein Bild, Metadaten und bereinigt Chat-Referenzen."""
+    """Delete an image and its metadata, and clean up chat references."""
     images_dir = get_character_images_dir(character_name)
     image_path = images_dir / image_filename
 
@@ -4587,7 +4640,8 @@ def delete_character_image(character_name: str, image_filename: str) -> bool:
 
     image_path.unlink()
 
-    # Profilbild zuruecksetzen falls noetig
+    changed = False
+    # Reset the profile image if needed.
     from app.core.keyed_lock import keyed_lock
     # Read AND write under the per-character profile lock (DATA-3).
     with keyed_lock("character_profile", character_name):
@@ -4595,9 +4649,12 @@ def delete_character_image(character_name: str, image_filename: str) -> bool:
         if profile.get("profile_image") == image_filename:
             remaining = get_character_images(character_name)
             profile["profile_image"] = remaining[0] if remaining else ""
-            save_character_profile(character_name, profile)
+            changed = save_character_profile(character_name, profile)
 
-    # Metadaten-Datei loeschen
+    if changed:
+        from app.core import sync_topics
+        sync_topics.changed_at(character_name)
+    # Delete the metadata file.
     meta_path = _get_image_meta_path(character_name, image_filename)
     if meta_path.exists():
         try:
@@ -4605,7 +4662,7 @@ def delete_character_image(character_name: str, image_filename: str) -> bool:
         except Exception:
             pass
 
-    # Zugehoeriges Video loeschen (gleicher Stem, .mp4)
+    # Delete the associated video with the same stem.
     stem = Path(image_filename).stem
     for video_ext in (".mp4", ".webm"):
         video_path = images_dir / f"{stem}{video_ext}"
@@ -4614,7 +4671,7 @@ def delete_character_image(character_name: str, image_filename: str) -> bool:
                 video_path.unlink()
             except Exception:
                 pass
-        # Auch Varianten mit _variant Suffix pruefen
+        # Also check variants with a _variant suffix.
         for variant in images_dir.glob(f"{stem}_*{video_ext}"):
             try:
                 variant.unlink()

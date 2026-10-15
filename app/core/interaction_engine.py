@@ -375,6 +375,7 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     # (DATA-3): each save rewrites a whole profile_json, so a concurrent
     # equip on either partner would otherwise be dropped — and the pair must
     # not be half-written, or the other half sees a partner that is not bound.
+    stored = True
     with pair_profile_locks(who_a, who_b):
         for name, role, other in halves:
             # Re-read: assign_pair just wrote the place into both profiles.
@@ -387,7 +388,8 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
             }
             if invite_id:
                 prof["interaction"]["invite_id"] = invite_id
-            save_character_profile(name, prof)
+            if not save_character_profile(name, prof):
+                stored = False
     # OUTSIDE the locks: both of these write the profile themselves and reach
     # the places-lock (``set_pose_intent`` -> ``places.assign``), which by the
     # documented order comes BEFORE ``character_profile``. Neither reads the
@@ -408,6 +410,9 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
         set_pose_intent(name, pose_key)
     publish("interaction_started", actor, partner=partner, kind=kind,
             interaction_id=inter_id, clip_duration_s=clip_duration)
+    from app.core import sync_topics
+    if stored:
+        sync_topics.changed_at(actor, loc_a)
     # The room has to SEE it. Without a line in the perception stream the
     # pair is a 3D animation nobody in the fiction ever noticed — including
     # the two doing it, who read the stream as their own memory of the scene.
@@ -463,6 +468,7 @@ def end_interaction(character_name: str, reason: str = "ended", *,
     # invert it.
     stand: list = []
     cleared = True
+    saved_names: list[str] = []
     ended_invite_id = ""
     with pair_profile_locks(character_name, partner):
         for name in (character_name, partner):
@@ -482,7 +488,9 @@ def end_interaction(character_name: str, reason: str = "ended", *,
                 # The pair seat goes with the interaction; with the pair pose
                 # still on, clear_pose_intent below stands the character up.
                 p["place"] = None
-            if not save_character_profile(name, p):
+            if save_character_profile(name, p):
+                saved_names.append(name)
+            else:
                 cleared = False
             stand.append((name, same_pose))
     for name, same_pose in stand:
@@ -492,6 +500,9 @@ def end_interaction(character_name: str, reason: str = "ended", *,
             stand_up(name)
     publish("interaction_ended", character_name, partner=partner,
             kind=inter["kind"], interaction_id=inter["id"], reason=reason)
+    from app.core import sync_topics
+    for name in saved_names:
+        sync_topics.changed_at(name)
     if stand and cleared:
         from app.core.hooks import emit
         emit("interaction.ended", character=character_name, partner=partner,
@@ -546,6 +557,7 @@ def _sweep_invites() -> None:
     """Remove old answered questions without losing a live pair's consent."""
     from app.core.db import transaction
     before = _sweep_before()
+    stored_tx_1 = False
     with transaction() as conn:
         conn.execute(
             "DELETE FROM interaction_invites WHERE status NOT IN ('pending', 'accepted') "
@@ -554,6 +566,7 @@ def _sweep_invites() -> None:
             "SELECT invite_id, inviter, invitee, pose_key, created_at, status "
             "FROM interaction_invites WHERE status='accepted' AND created_at < ?",
             (before,)).fetchall()
+        stored_tx_1 = True
     # Release the database write transaction BEFORE taking profile locks:
     # a pair write holds those locks while saving its profiles to the DB.
     for row in rows:
@@ -568,11 +581,16 @@ def _sweep_invites() -> None:
                     and partner["partner"] == inv["inviter"]
                     and actor.get("pose_key") == partner.get("pose_key") == inv["pose_key"]):
                 continue
+            stored_tx_2 = False
             with transaction() as conn:
                 conn.execute(
                     "DELETE FROM interaction_invites WHERE invite_id=? "
                     "AND status='accepted' AND created_at < ?",
                     (inv["invite_id"], before))
+                stored_tx_2 = True
+        from app.core import sync_topics
+        if stored_tx_2:
+            sync_topics.avatars([inv["inviter"], inv["invitee"]], "presence")
 
 
 def create_invite(inviter: str, invitee: str, pose_key: str, *,
@@ -600,6 +618,7 @@ def create_invite(inviter: str, invitee: str, pose_key: str, *,
     try:
         if request_id is None:
             _sweep_invites()
+        stored_tx_1 = False
         with transaction() as conn:
             if request_id is None:
                 # This write also serializes ordinary duplicate requests
@@ -637,9 +656,13 @@ def create_invite(inviter: str, invitee: str, pose_key: str, *,
                     "WHERE invite_id=?", (invite_id,)).fetchone()
                 if not row or tuple(row) != (inviter, invitee, pose_key):
                     return None
+            stored_tx_1 = True
     except Exception as e:
         logger.debug("create_invite failed: %s", e)
         return None
+    from app.core import sync_topics
+    if stored_tx_1:
+        sync_topics.avatars([inviter, invitee], "presence")
     if not created:
         return invite_id
     logger.info("interaction invite %s: %s asks %s for '%s'",
@@ -777,12 +800,20 @@ def _set_invite_status(invite_id: str, status: str, *,
                        expected_status: str = "answering") -> bool:
     """Move only the row still owned by this answer or approach."""
     from app.core.db import transaction
+    inv = get_invite(invite_id)
     try:
+        stored_tx_1 = False
         with transaction() as conn:
             cur = conn.execute(
                 "UPDATE interaction_invites SET status=? WHERE invite_id=? AND status=?",
                 (status, invite_id, expected_status))
-            return cur.rowcount == 1
+            changed = cur.rowcount == 1
+            stored_tx_1 = True
+        if changed and inv:
+            from app.core import sync_topics
+            if stored_tx_1:
+                sync_topics.avatars([inv["inviter"], inv["invitee"]], "presence")
+        return changed
     except Exception as e:
         logger.debug("invite %s -> %s failed: %s", invite_id, status, e)
         return False
@@ -796,12 +827,20 @@ def _claim_invite(invite_id: str, status: str = "pending") -> bool:
     already busy with someone" about the pair the winner has just started.
     """
     from app.core.db import transaction
+    inv = get_invite(invite_id)
     try:
+        stored_tx_1 = False
         with transaction() as conn:
             cur = conn.execute(
                 "UPDATE interaction_invites SET status='answering' "
                 "WHERE invite_id=? AND status=?", (invite_id, status))
-            return cur.rowcount == 1
+            changed = cur.rowcount == 1
+            stored_tx_1 = True
+        if changed and inv:
+            from app.core import sync_topics
+            if stored_tx_1:
+                sync_topics.avatars([inv["inviter"], inv["invitee"]], "presence")
+        return changed
     except Exception as e:
         logger.debug("claiming invite %s failed: %s", invite_id, e)
         return False
@@ -984,6 +1023,8 @@ def cancel_invite(invite_id: str) -> bool:
             cancel_journey(inv["invitee"])
         except Exception as e:
             logger.debug("cancelling the approach walk failed: %s", e)
+    from app.core import sync_topics
+    sync_topics.avatars([inv["inviter"], inv["invitee"]], "presence")
     return True
 
 
@@ -996,10 +1037,19 @@ def clear_invites_for(character: str) -> None:
     if not c:
         return
     try:
+        stored_tx_1 = False
         with transaction() as conn:
+            affected = conn.execute(
+                "SELECT inviter, invitee FROM interaction_invites "
+                "WHERE status IN ('pending', 'approaching') AND (inviter=? OR invitee=?)",
+                (c, c)).fetchall()
             conn.execute("UPDATE interaction_invites SET status='stale' "
                          "WHERE status IN ('pending', 'approaching') "
                          "AND (inviter=? OR invitee=?)", (c, c))
+            stored_tx_1 = True
+        from app.core import sync_topics
+        if stored_tx_1:
+            sync_topics.avatars([n for row in affected for n in row], "presence")
     except Exception as e:
         logger.debug("clear_invites_for(%s) failed: %s", c, e)
 

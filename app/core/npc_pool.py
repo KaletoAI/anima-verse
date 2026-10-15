@@ -89,10 +89,17 @@ def _unplace(name: str) -> None:
     """
     from app.core.db import transaction
     try:
+        from app.models.character import get_character_current_location
+        old_loc = get_character_current_location(name) or ""
+        stored_tx_1 = False
         with transaction() as conn:
             conn.execute(
                 "UPDATE character_state SET current_location='', current_room='',"
                 " pos_x=NULL, pos_z=NULL WHERE character_name=?", (name,))
+            stored_tx_1 = True
+        from app.core import sync_topics
+        if stored_tx_1:
+            sync_topics.moved(name, old_loc, "")
     except Exception as e:  # noqa: BLE001
         logger.warning("pool: could not unplace %s: %s", name, e)
 

@@ -1850,7 +1850,8 @@ def get_equipped_item_ids(character_name: str) -> List[str]:
 def _record_outfit_history(character_name: str, action: str,
                             item_ids: List[str], slots: List[str],
                             source: str,
-                            displaced: Optional[List[str]] = None) -> None:
+                            displaced: Optional[List[str]] = None,
+                            stored: bool = True) -> None:
     """Write one worn-state change into ``state_history`` (type ``outfit``).
 
     Until now only location/room/effects/sleep were logged, so "when and why
@@ -1892,7 +1893,8 @@ def _record_outfit_history(character_name: str, action: str,
 def _notify_outfit_changed(character_name: str, source: str, *,
                             action: str = "", item_ids: Optional[List[str]] = None,
                             slots: Optional[List[str]] = None,
-                            displaced: Optional[List[str]] = None) -> None:
+                            displaced: Optional[List[str]] = None,
+                            stored: bool = True) -> None:
     """Single funnel for "worn state changed": state-history entry + SSE
     outfit event + debounced 3D reference renders (T-pose + default pose,
     app/core/model_refs.py). All five worn-state mutations below go through
@@ -1902,6 +1904,9 @@ def _notify_outfit_changed(character_name: str, source: str, *,
     falls back to the mutation name; ``action`` + ``item_ids`` + ``slots``
     describe WHAT changed and only feed the history entry.
     """
+    from app.core import sync_topics
+    if stored:
+        sync_topics.changed_at(character_name, topics=("presence", "self"))
     if action:
         _record_outfit_history(character_name, action, item_ids or [],
                                 slots or [], source, displaced)
@@ -1987,13 +1992,13 @@ def equip_piece(character_name: str, item_id: str,
     # Dead key from the abolished per-slot colour override: drop it here so an
     # old profile blob cleans itself up on its next outfit change.
     profile.pop("equipped_pieces_meta", None)
-    save_character_profile(character_name, profile)
+    stored = save_character_profile(character_name, profile)
     logger.info("equip_piece [%s]: slots=%s item=%s%s",
                 character_name, slots, item_id,
                 f" (displaced {displaced})" if displaced else "")
     _notify_outfit_changed(character_name, source or "equip_piece",
                            action="equip", item_ids=[item_id], slots=slots,
-                           displaced=displaced)
+                           displaced=displaced, stored=stored)
     return {"status": "ok", "slots": slots, "displaced": displaced}
 
 
@@ -2030,12 +2035,12 @@ def unequip_piece(character_name: str,
     # Dead key from the abolished per-slot colour override: drop it here so an
     # old profile blob cleans itself up on its next outfit change.
     profile.pop("equipped_pieces_meta", None)
-    save_character_profile(character_name, profile)
+    stored = save_character_profile(character_name, profile)
     logger.info("unequip_piece [%s]: item=%s slots=%s",
                 character_name, removed, cleared_slots)
     _notify_outfit_changed(character_name, source or "unequip_piece",
                            action="unequip", item_ids=[removed],
-                           slots=cleared_slots)
+                           slots=cleared_slots, stored=stored)
     return {"status": "ok", "slot": target_slot, "item_id": removed,
             "cleared_slots": cleared_slots}
 
@@ -2061,10 +2066,10 @@ def equip_item(character_name: str, item_id: str,
         return {"status": "ok", "already_equipped": True}
     items.append(item_id)
     profile["equipped_items"] = items
-    save_character_profile(character_name, profile)
+    stored = save_character_profile(character_name, profile)
     logger.info("equip_item [%s]: %s", character_name, item_id)
     _notify_outfit_changed(character_name, source or "equip_item",
-                           action="equip", item_ids=[item_id])
+                           action="equip", item_ids=[item_id], stored=stored)
     return {"status": "ok"}
 
 
@@ -2079,10 +2084,10 @@ def unequip_item(character_name: str, item_id: str,
         return {"status": "error", "reason": "not_equipped"}
     items.remove(item_id)
     profile["equipped_items"] = items
-    save_character_profile(character_name, profile)
+    stored = save_character_profile(character_name, profile)
     logger.info("unequip_item [%s]: %s", character_name, item_id)
     _notify_outfit_changed(character_name, source or "unequip_item",
-                           action="unequip", item_ids=[item_id])
+                           action="unequip", item_ids=[item_id], stored=stored)
     return {"status": "ok"}
 
 
@@ -2232,7 +2237,7 @@ def apply_equipped_pieces(character_name: str, *,
         # Dead key from the abolished per-slot colour override: drop it here so
         # an old profile blob cleans itself up on its next outfit change.
         profile.pop("equipped_pieces_meta", None)
-        save_character_profile(character_name, profile)
+        stored = save_character_profile(character_name, profile)
         logger.info(
             "apply_equipped_pieces [%s] source=%s pieces=%d items=%d changed=1",
             character_name, source or "?", len(target_pieces), len(target_items))
@@ -2269,7 +2274,7 @@ def apply_equipped_pieces(character_name: str, *,
         _record_outfit_history(
             character_name, "equip", newly_on,
             [s for s, i in target_pieces.items() if i in newly_on], source)
-        _notify_outfit_changed(character_name, source)
+        _notify_outfit_changed(character_name, source, stored=stored)
 
     return {
         "status": "ok",

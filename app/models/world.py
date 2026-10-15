@@ -1463,7 +1463,11 @@ def evict_rooms_to_ground(location_id: str, room_ids: List[str]) -> Dict[str, in
     if not (location_id and ids):
         return counts
     marks = ",".join("?" for _ in ids)
+    stored_tx_1 = False
     with transaction() as conn:
+        affected = conn.execute(
+            f"SELECT character_name FROM character_state WHERE current_location=? "
+            f"AND current_room IN ({marks})", (location_id, *ids)).fetchall()
         cur = conn.execute(
             f"UPDATE character_state SET current_room=? "
             f"WHERE current_location=? AND current_room IN ({marks})",
@@ -1474,6 +1478,11 @@ def evict_rooms_to_ground(location_id: str, room_ids: List[str]) -> Dict[str, in
             f"WHERE location_id=? AND room_id IN ({marks})",
             (GROUND_ROOM_ID, location_id, *ids))
         counts["utterances"] = cur.rowcount or 0
+        stored_tx_1 = True
+    from app.core import sync_topics
+    for (name,) in affected:
+        if stored_tx_1:
+            sync_topics.changed_at(name, location_id)
     return counts
 
 

@@ -1943,6 +1943,7 @@ def _apply_profile_patch_data_sync(data: Any):
                     for fld in sec.get("fields", []):
                         if fld.get("source_file") and fld.get("key"):
                             soul_field_keys.add(fld["key"])
+        before = {k: profile.get(k) for k in fields}
         applied = {}
         for k, v in fields.items():
             if k in soul_field_keys:
@@ -1950,7 +1951,10 @@ def _apply_profile_patch_data_sync(data: Any):
                 continue
             profile[k] = v
             applied[k] = v
-        save_character_profile(char_name, profile)
+        stored = save_character_profile(char_name, profile)
+    if stored:
+        from app.core import sync_topics
+        sync_topics.profile_patched(char_name, {k: before[k] for k in applied}, applied)
     logger.info("WorldDev: profile patch for '%s' (%d fields)", char_name, len(applied))
     return {"status": "success", "character": char_name,
             "applied_fields": list(applied.keys())}

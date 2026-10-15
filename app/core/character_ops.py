@@ -1466,12 +1466,15 @@ def apply_profile_update(character_name: str, data: Dict[str, Any]) -> Dict[str,
                         or value < field.get("min", -math.inf)
                         or value > field.get("max", math.inf)):
                     raise HTTPException(status_code=400, detail=f"{key} outside allowed range")
+        before = {k: profile.get(k) for k in fields}
         profile.update(fields)
         stored = save_character_profile(character_name, profile)
     if not stored:
         # The admin form must not answer "saved" for a value that is gone
         # after the next reload.
         raise HTTPException(status_code=500, detail="profile not stored")
+    from app.core import sync_topics
+    sync_topics.profile_patched(character_name, before, {k: profile.get(k) for k in fields})
     return {"status": "success", "character": character_name,
             "updated_fields": list(fields.keys())}
 

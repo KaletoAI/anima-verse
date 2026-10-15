@@ -138,7 +138,11 @@ def _publish_signature(character_name: str, directory: Path, stage: Path,
         if changed or invalidate:
             key = (str(directory), signature)
             _publication_epochs[key] = _publication_epochs.get(key, 0) + 1
-        return _publication_token(directory, signature)
+        published = _publication_token(directory, signature)
+    if changed or invalidate:
+        from app.core import sync_topics
+        sync_topics.changed_at(character_name)
+    return published
 
 
 def _checkpoint_mesh(character_name: str, signature: str) -> None:
@@ -241,6 +245,7 @@ def _serial_model(function):
             # A rig failure never rolls back the already published new mesh,
             # nor publishes partially processed rig/LOD bytes from the stage.
             if name == "generate_for_current_outfit" and not result.get("ok"):
+                rig_error_published = False
                 if publication.get("mesh_published"):
                     with keyed_lock("model3d", f"{character_name}:{signature}"), \
                             keyed_lock("model3d_publication", str(directory)):
@@ -249,8 +254,12 @@ def _serial_model(function):
                             meta = _read_sidecar(path)
                             meta["rig_error"] = result.get("error") or "Rig generation failed"
                             _publish_sidecar(path, meta)
+                            rig_error_published = True
                             key = (str(directory), signature)
                             _publication_epochs[key] = _publication_epochs.get(key, 0) + 1
+                if rig_error_published:
+                    from app.core import sync_topics
+                    sync_topics.changed_at(character_name)
                 if generation_error is not None:
                     raise generation_error
                 return result

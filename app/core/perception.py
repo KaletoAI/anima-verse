@@ -613,7 +613,8 @@ def record_utterance(*, speaker: str, content: str,
                      ts: Optional[str] = None,
                      dedupe: bool = False,
                      perception_meta: Optional[Dict[str, Any]] = None,
-                     anchor: Optional[Anchor] = None) -> Optional[int]:
+                     anchor: Optional[Anchor] = None,
+                     sync_stored: bool = True) -> Optional[int]:
     """Records a speech act + distributes the perceptions (fan-out).
 
     Presence is resolved NOW. Returns the utterance id — or None on error, so
@@ -730,6 +731,11 @@ def record_utterance(*, speaker: str, content: str,
                 "meta": pmeta,
             })
         perception_store.insert_perceptions(uid, rows)
+        from app.core import sync_topics
+        # Movement narration retains legacy behavior on a failed parent save,
+        # but its sync hook must share the parent writer's success gate.
+        if sync_stored:
+            sync_topics.avatars([t.perceiver for t in targets], "scene")
         # Open/touch the room's scene (§7) — best-effort, never blocking.
         try:
             from app.core import scene_manager

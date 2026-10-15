@@ -9,7 +9,7 @@ world structure and the public Instagram feed only.
 Thread-safe: writers run on worker threads (skills, scheduler, agent loop,
 travel ticker). Matching a recipient and queueing happen under the
 connection's lock, so a rebind can never let a signal for the old avatar into
-the new queue. No I/O under any lock; ``notify`` never raises.
+the new queue. No I/O under bus/connection locks; ``notify`` never raises.
 """
 import threading
 import time
@@ -135,6 +135,7 @@ class Connection:
 
 _conns: List[Connection] = []
 _lock = threading.Lock()
+_move_locks: dict[str, threading.Lock] = {}
 _reaper: Optional[threading.Thread] = None
 
 
@@ -286,3 +287,105 @@ def bound_avatars() -> set:
 def connections() -> List[Connection]:
     with _lock:
         return list(_conns)
+
+
+# Fields exposed for other characters by scene, others, or the world map.
+# current_activity is derived on those routes, rather than shown directly.
+PUBLIC_PROFILE_KEYS = frozenset({
+    "current_location", "current_room", "pose_key", "pose_flavor",
+    "current_feeling", "place", "equipped_pieces", "equipped_items",
+    "profile_image", "interaction", "journey", "is_sleeping",
+    "movement_target", "status_effects", "active_conditions", "height",
+    "animation_set", "gender", "template", "motion_gravity_scale",
+    "body_slots", "model3d_opts",
+})
+
+
+def _current_location(character: str) -> str:
+    from app.models.character import get_character_current_location
+    return get_character_current_location(character) or ""
+
+
+def _refresh_binding(character: str) -> bool:
+    """Read committed location serially; never trust a delayed writer's target.
+
+    _lock only protects move-lock creation and is released before acquiring it.
+    Hold only the character move lock during the DB read. The sole nested
+    order is move lock -> bus/connection locks inside note_location; no caller
+    may acquire a move lock while holding a bus or connection lock.
+    """
+    try:
+        with _lock:
+            move_lock = _move_locks.setdefault(character, threading.Lock())
+        with move_lock:
+            fresh = _current_location(character)
+            note_location(character, fresh)
+        return True
+    except Exception as e:
+        logger.warning("refresh_binding(%s) failed: %s", character, e)
+        return False
+
+
+def moved(character: str, from_id: str, to_id: str) -> None:
+    """Update the binding, then invalidate both visible ends of a move."""
+    try:
+        if not _refresh_binding(character):
+            return
+        notify("presence", to=[AtLocation(from_id or ""), AtLocation(to_id or ""),
+                               Avatar(character)])
+    except Exception as e:
+        logger.warning("moved(%s) failed: %s", character, e)
+
+
+def changed_at(character: str, loc_id: Optional[str] = None,
+               topics=("presence",)) -> None:
+    """Invalidate a visible change at the supplied or current location."""
+    try:
+        loc = _current_location(character) if loc_id is None else (loc_id or "")
+        notify(topics, to=[AtLocation(loc), Avatar(character)])
+    except Exception as e:
+        logger.warning("changed_at(%s) failed: %s", character, e)
+
+
+def party_of(character: str) -> Avatars:
+    """Snapshot the leader and followers without leaking lookup failures."""
+    try:
+        from app.core.party_engine import get_party_of
+        party = get_party_of(character) or {}
+        names = [party.get("leader", ""), *(party.get("members") or [])]
+        return Avatars(tuple(n for n in dict.fromkeys(names) if n))
+    except Exception:
+        return Avatars(())
+
+
+def travel_changed(character: str) -> None:
+    """Journey start/cancel/blocked: notify the current side, never the goal."""
+    try:
+        notify("presence", to=[AtLocation(_current_location(character)),
+                               Avatar(character), party_of(character)])
+    except Exception as e:
+        logger.warning("travel_changed(%s) failed: %s", character, e)
+
+
+def avatars(names: Iterable[str], topics) -> None:
+    """Invalidate unique named avatars; malformed input must not break saves."""
+    try:
+        notify(topics, to=Avatars(tuple(n for n in dict.fromkeys(names) if n)))
+    except Exception as e:
+        logger.warning("avatars failed: %s", e)
+
+
+def profile_patched(character: str, before: dict, after: dict) -> None:
+    """Route a bulk profile patch according to the fields actually changed."""
+    try:
+        changed = {k for k in before.keys() | after.keys()
+                   if before.get(k) != after.get(k)}
+        if "current_location" in changed:
+            moved(character, before.get("current_location") or "",
+                  after.get("current_location") or "")
+        elif changed & PUBLIC_PROFILE_KEYS:
+            changed_at(character, topics=("presence", "self"))
+        else:
+            avatars([character], "self")
+    except Exception as e:
+        logger.warning("profile_patched(%s) failed: %s", character, e)
