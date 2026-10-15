@@ -2109,21 +2109,17 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
       {previewTilt ? <aside className="ga-model3d-toolbar">
         {statusPanel}
       <div className="ga-fieldset ga-model3d-tilt">
-        <div className="ga-model3d-slider-stack">
-          <label className="ga-model3d-slider">{t('Tilt forward/back')} {tiltForward}°
-            <input type="range" min={-90} max={90} value={tiltForward}
-              title={t('+90 = lying on the back')}
-              onChange={event => setTiltForward(Number(event.target.value))} />
-          </label>
-          <label className="ga-model3d-slider">{t('Tilt sideways')} {tiltSideways}°
-            <input type="range" min={-90} max={90} value={tiltSideways}
-              onChange={event => setTiltSideways(Number(event.target.value))} />
-          </label>
-        </div>
-        <div className="ga-model3d-toolbar-actions">
-          <button type="button" className="ga-btn ga-btn-sm"
-            onClick={() => { setTiltForward(0); setTiltSideways(0) }}>{t('Reset tilt')}</button>
-        </div>
+        <label className="ga-model3d-slider">{t('Tilt forward/back')} {tiltForward}°
+          <input type="range" min={-90} max={90} value={tiltForward}
+            title={t('+90 = lying on the back')}
+            onChange={event => setTiltForward(Number(event.target.value))} />
+        </label>
+        <label className="ga-model3d-slider">{t('Tilt sideways')} {tiltSideways}°
+          <input type="range" min={-90} max={90} value={tiltSideways}
+            onChange={event => setTiltSideways(Number(event.target.value))} />
+        </label>
+        <button type="button" className="ga-btn ga-btn-sm"
+          onClick={() => { setTiltForward(0); setTiltSideways(0) }}>{t('Reset tilt')}</button>
       </div>
         {motionToolbar}
       </aside> : null}

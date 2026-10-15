@@ -61,24 +61,18 @@ export function ExtensionMotionSliders({ overrides, disabled, onPreview, onSave 
     if (await onSave(values)) setDraft(makeDraft(values))
   }
   return <>
-    <div className="ga-model3d-slider-stack">
-      {['bounce', 'weight'].map(key => <label key={key} className="ga-model3d-slider">
-        <span className="ga-hint">{t(key === 'bounce' ? 'Bounce' : 'Weight')} <MotionPreviewHint field={key} /> · {Number(current.values[key]).toFixed(2)}</span>
-        <input type="range" min={0.5} max={1.5} step={0.05} disabled={disabled}
-          value={current.values[key]} onChange={event => {
-            const next = editDraft(current, key, event.target.value)
-            setDraft(next)
-            onPreview({ bounce: Number(next.values.bounce), weight: Number(next.values.weight) })
-          }} />
-      </label>)}
-    </div>
-    <div className="ga-model3d-save ga-model3d-toolbar-actions">
+    {['bounce', 'weight'].map(key => <label key={key} className="ga-model3d-slider">
+      <span className="ga-hint">{t(key === 'bounce' ? 'Bounce' : 'Weight')} <MotionPreviewHint field={key} /> · {Number(current.values[key]).toFixed(2)}</span>
+      <input type="range" min={0.5} max={1.5} step={0.05} disabled={disabled}
+        value={current.values[key]} onChange={event => {
+          const next = editDraft(current, key, event.target.value)
+          setDraft(next)
+          onPreview({ bounce: Number(next.values.bounce), weight: Number(next.values.weight) })
+        }} />
+    </label>)}
+    <div className="ga-model3d-save">
       <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={disabled || !changed} onClick={() => void save()}>{t('Save')}</button>
-      <span className={`ga-model3d-save-state${changed ? ' is-unsaved' : ''}`} role="status"
-        title={t(changed ? 'Unsaved changes' : 'Saved')}>
-        <span aria-hidden="true">●</span>
-        <span className="ga-model3d-save-state-text">{t(changed ? 'Unsaved changes' : 'Saved')}</span>
-      </span>
+      <span className="ga-tag" aria-live="polite">{t(changed ? 'Unsaved changes' : 'Saved')}</span>
     </div>
   </>
 }
