@@ -322,9 +322,9 @@ G5 neither build_imagegen_options nor get_outfit_lora_options reads
    variable, CLAUDE.md).
 G6-G9 the character LoRA list resolves the backend EXACTLY like the routed
    variant render (Task 11 review): the same occasion (expression, or tpose
-   for target "tpose"), the character's own match as position 0, the
-   character's backend switches, and the img2img preference of a render
-   that slots the profile image. The render side is the REAL string façade
+   for target "tpose"), the character's own match as position 0, and the
+   img2img preference of a render that slots the profile image. The render
+   side is the REAL string façade
    (generate_from_input with the payload keys the variant render sends:
    agent_name, occasion, profile_only, skip_gallery) whose
    generate_on_backend is replaced by a recorder of the backend name.
@@ -337,19 +337,18 @@ G6 Vela without a profile image: no reference -> "Own*" is position 0,
 G7 Vela WITH a profile image: the render slots it (has_ref) -> inside the
    glob the img2img backend is preferred -> LoRA scope ["Own-ref"], the
    render ran on "Own-ref" (without has_ref the list would say Own-txt).
-G8 Own-txt and Own-ref switched off for Vela (per-character backend
-   switches, skill config image_generation.instances) -> position 0 is
-   disabled_for_character, position 1 "Rule" resolves -> LoRA scope
-   ["Rule"], the render ran on "Rule"; /world/imagegen-options?occasion=
-   expression&character=Vela asked by an ADMIN says resolved "Rule" and its
-   chain[0] is the character's own entry (source "character", status
-   "disabled_for_character").
-G9 switches back on; target "tpose" with tpose_workflow "Rule" -> LoRA
+G8 Legacy image_generation.instances disabled flags for Own-txt and Own-ref
+   do not restrict globally enabled backends: position 0 still resolves
+   Own-ref -> LoRA scope ["Own-ref"], the render ran on "Own-ref";
+   /world/imagegen-options?occasion=expression&character=Vela asked by an
+   ADMIN says resolved "Own-ref" and its chain[0] is the character's own
+   entry (source "character", status "ok").
+G9 target "tpose" with tpose_workflow "Rule" -> LoRA
    scope ["Rule"], the tpose render ran on "Rule"; with tpose_workflow ""
    the tpose chain falls back to the workflow match -> ["Own-ref"] and the
    render on "Own-ref".
 G10 (fix round 1) the dialog preselection names the backend the façade
-   renders on: switches on, tpose_workflow "", Vela has her profile image.
+   renders on: tpose_workflow "", Vela has her profile image.
    build_imagegen_options("expression", "Vela") -> resolved "Own-ref" (a
    character render slots the portrait -> img2img preferred) and the façade
    render of occasion "expression" ran on "Own-ref"; a "profile" render
@@ -358,8 +357,8 @@ G10 (fix round 1) the dialog preselection names the backend the façade
    façade render with set_profile True ran on "Own-txt".
 G11 (fix round 1) ?character= on the open route is honoured only for an
    admin or a user with the character in allowed_characters; anyone else
-   gets the chain WITHOUT the character (no position 0 — its own match and
-   switches are per-character config). Route
+   gets the chain WITHOUT the character (no position 0 — its own match is
+   per-character config). Route
    get_imagegen_options("expression", "Vela"), chain[0].source:
    no user -> "rule"; user role "user" with allowed [] -> "rule";
    user with allowed ["Vela"] -> "character"; admin -> "character".
@@ -544,7 +543,7 @@ def install_pool(*backends):
     """A real ImageService whose pool holds the fakes; jobs run inline."""
     svc = service_mod.ImageService()
     svc.enabled = True
-    svc._pool = BackendPool(list(backends), agent_instances_provider=lambda n: {})
+    svc._pool = BackendPool(list(backends))
     service_mod._service = svc
     service_mod.get_image_service = lambda: svc
     return svc
@@ -1495,9 +1494,9 @@ def part_g():
           (["Own-ref"], ["Own-ref"]))
     save_character_skill_config("Vela", "image_generation", {"instances": {
         "Own-txt": {"enabled": False}, "Own-ref": {"enabled": False}}})
-    check("G8 switched off: LoRA scope / render",
+    check("G8 legacy flags ignored: LoRA scope / render",
           (lora_scope("Vela", "render"), render("expression")),
-          (["Rule"], ["Rule"]))
+          (["Own-ref"], ["Own-ref"]))
     from app.core.auth_dependency import current_user_ctx
 
     def as_user(user, fn):
@@ -1512,7 +1511,7 @@ def part_g():
     first = (d.get("chain") or [{}])[0]
     check("G8 options with character",
           (d.get("resolved"), first.get("source"), first.get("status")),
-          ("Rule", "character", "disabled_for_character"))
+          ("Own-ref", "character", "ok"))
     save_character_skill_config("Vela", "image_generation", {"instances": {}})
     set_override(tpose_workflow="Rule")
     check("G9 tpose match: LoRA scope / render",

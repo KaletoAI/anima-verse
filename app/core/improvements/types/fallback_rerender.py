@@ -153,9 +153,8 @@ class FallbackRerender(ImprovementType):
             if status in (STATUS_COOLDOWN, STATUS_UNAVAILABLE):
                 # Runtime: the backend comes back on its own — wait for it.
                 raise CandidateBusy(f"{spec} for {occasion} is not available ({text})")
-            # Configuration (no_match / wrong_kind / disabled /
-            # disabled_for_character): waiting fixes nothing — a failed
-            # attempt, skipped after the engine's attempts.
+            # Configuration (no_match / wrong_kind / disabled): waiting fixes
+            # nothing — a failed attempt, skipped after the engine's attempts.
             raise RuntimeError(
                 f"intended spec '{spec}' for {occasion} cannot render ({text}) — "
                 f"fix the routing or the backend configuration")

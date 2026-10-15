@@ -57,6 +57,12 @@ _migrate_config_file(_paths.get_config_path(), _paths.get_instance_config_path()
 from app.core.db import init_schema as _init_db_schema
 _init_db_schema()
 
+# Retire hidden per-character backend bans; profile render matches stay intact.
+from app.core.image_backend_flags_migration import remove_character_backend_flags
+_retired_backend_flags = remove_character_backend_flags()
+if _retired_backend_flags:
+    logger.info("Retired character backend flags removed: %d", _retired_backend_flags)
+
 # One-time migration (2026-09-08): the gitignored catalog overlay files
 # (<axis>_catalog.local.json, per installation) become the WORLD layer of the
 # pose/expression catalog in world.db. Each file is renamed to *.migrated, so

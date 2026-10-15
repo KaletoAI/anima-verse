@@ -219,7 +219,7 @@ check("A7 other 502: 2 POSTs, wait 2.0, RuntimeError",
 # ── [B] the cooldown decision in run_on_backend ─────────────────────────
 print("\n[B] BackendPool.run_on_backend")
 b = diffusion_backend()
-pool = BackendPool([b], agent_instances_provider=lambda _n: {})
+pool = BackendPool([b])
 posts, waits, res = drive(od, [R503()],
                           lambda: pool.run_on_backend(
                               b, lambda be: be._post_gateway("generations", json={})))
@@ -228,7 +228,7 @@ check("B1 backend on cooldown (available False)", b.available is False,
       str(b.runtime_status()))
 
 b = diffusion_backend()
-pool = BackendPool([b], agent_instances_provider=lambda _n: {})
+pool = BackendPool([b])
 posts, waits, res = drive(od, [R503RA(1)],
                           lambda: pool.run_on_backend(
                               b, lambda be: be._post_gateway("generations", json={})))

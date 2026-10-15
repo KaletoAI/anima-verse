@@ -308,7 +308,7 @@ def generate_frame(prompt: str, target: str = "") -> Dict[str, Any]:
                 shutil.rmtree(char_dir, ignore_errors=True)
         except Exception as _cleanup_err:
             logger.debug("Cleanup of _messaging_frame failed: %s", _cleanup_err)
-        # And the DB row, in case _ensure_agent_config created one
+        # Remove any pseudo-character row left by image publication.
         try:
             from app.core.db import get_connection as _conn
             with _conn() as _c:

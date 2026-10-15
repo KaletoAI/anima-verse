@@ -156,7 +156,7 @@ def main():
         fallback._available = True
         service = object.__new__(ImageService)
         service.enabled = True
-        service._pool = BackendPool([mesh, fallback], lambda name: {})
+        service._pool = BackendPool([mesh, fallback])
         service.run_on_backend_channel = lambda b, fn, **kwargs: fn()
         input_path, output_path = Path(tmp) / 'input.png', Path(tmp) / 'output.glb'
         input_path.write_bytes(image)

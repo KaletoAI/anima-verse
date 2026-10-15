@@ -289,7 +289,7 @@ def main():
                 return [delivered]
         first, second, generator, inpaint = Fake('first'), Fake('second'), Fake('generator', 'txt2img'), Fake('inpaint', 'inpaint')
         svc = object.__new__(ImageService)
-        svc._pool = BackendPool([first, second, generator, inpaint], lambda name: {})
+        svc._pool = BackendPool([first, second, generator, inpaint])
         svc.enabled = True
         svc.run_on_backend_channel = lambda b, fn, **kwargs: fn()
         for occasion, definition in OCCASIONS.items():

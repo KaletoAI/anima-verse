@@ -143,7 +143,6 @@ class Fake(ImageBackend):
 RULES = {}
 CHAR = {"spec": ""}
 routing._rules = lambda occasion: list(RULES.get(occasion, []))
-routing._character_switches = lambda character: {}
 routing._character_spec = lambda occ_def, character: (
     CHAR["spec"] if character and occ_def.get("character_scoped") else "")
 service_mod.render_has_reference_image = lambda *a, **k: False
@@ -162,7 +161,7 @@ CALLS = []
 def fresh_pool():
     fakes = [Fake("A", 1), Fake("B", 2), Fake("Busy", 1), Fake("Cool", 0)]
     fakes[3].mark_unhealthy("smoke", 300)
-    svc._pool = BackendPool(fakes, agent_instances_provider=lambda n: {})
+    svc._pool = BackendPool(fakes)
     CALLS.clear()
     META_WRITES.clear()
 

@@ -36,7 +36,6 @@ from app.models.character import (
     get_character_profile_image,
     get_character_config,
     get_character_skill_config,
-    save_character_skill_config,
     get_character_current_location,
     get_effective_activity,
     get_character_current_feeling,
@@ -386,8 +385,7 @@ class ImageService:
         # Load all configured instances and build the backend pool.
         # Round-robin state + all selection logic live in BackendPool now.
         backends = self._load_instances()
-        self._pool = BackendPool(
-            backends, agent_instances_provider=self._agent_instances)
+        self._pool = BackendPool(backends)
 
         if not self.backends:
             logger.warning("Keine Image-Generation Instanzen konfiguriert")
@@ -408,8 +406,7 @@ class ImageService:
         else:
             logger.info("%d/%d Instanz(en) verfuegbar", available_count, len(self.backends))
 
-        # Character overrides use _get_instance_config rather than the
-        # generic defaults exposed by get_config_fields().
+        # The character editor uses profile.outfit_imagegen for backend matches.
         self._defaults = {}
 
     @property
@@ -422,11 +419,6 @@ class ImageService:
     def pool(self) -> BackendPool:
         """The backend pool — the image routing resolves chains on it."""
         return self._pool
-
-    def _agent_instances(self, name: str) -> Dict[str, Any]:
-        """Provider injected into ``BackendPool``: returns the per-agent
-        instances dict, auto-creating the per-agent config on first access."""
-        return self._ensure_agent_config(name).get("instances", {})
 
     def get_config_fields(self) -> Dict[str, Dict[str, Any]]:
         """Top-level fields for the character editor.
@@ -517,37 +509,6 @@ class ImageService:
 
     def _select_backend(self) -> Optional[ImageBackend]:
         return self._pool._select_backend()
-
-    def _ensure_agent_config(self, character_name: str) -> Dict[str, Any]:
-        """Create per-character skill settings from backend defaults when absent."""
-        agent_config = get_character_skill_config(character_name, self.SKILL_ID)
-
-        if agent_config and "instances" in agent_config:
-            # Config existiert - pruefen ob neue Backends fehlen
-            changed = False
-            existing_names = set(agent_config["instances"].keys())
-            backend_names = {b.name for b in self.backends}
-            missing = backend_names - existing_names
-            if missing:
-                for b in self.backends:
-                    if b.name in missing:
-                        agent_config["instances"][b.name] = self._get_backend_defaults(b)
-                        logger.info("Auto-Config: Backend '%s' fuer %s hinzugefuegt", b.name, character_name)
-                changed = True
-            if changed:
-                save_character_skill_config(character_name, self.SKILL_ID, agent_config)
-            return agent_config
-
-        # Create missing settings for every backend.
-        agent_config = {
-            "instances": {}
-        }
-        for b in self.backends:
-            agent_config["instances"][b.name] = self._get_backend_defaults(b)
-
-        save_character_skill_config(character_name, self.SKILL_ID, agent_config)
-        logger.info("Auto-Config fuer %s erstellt: %s", character_name, list(agent_config["instances"].keys()))
-        return agent_config
 
     def _select_backend_for_agent(self, character_name: str,
                                   has_input_image: bool = False) -> Optional[ImageBackend]:
@@ -1675,9 +1636,7 @@ class ImageService:
     def _get_backend_defaults(self, backend: ImageBackend) -> Dict[str, Any]:
         """Read instance defaults for character overrides. Technical generation
         parameters stay on the backend and are not copied into character settings."""
-        defaults = {
-            "enabled": backend.instance_enabled,
-        }
+        defaults = {}
         if hasattr(backend, 'width'):
             defaults["width"] = backend.width
         if hasattr(backend, 'height'):
@@ -1686,87 +1645,28 @@ class ImageService:
         return defaults
 
     def _get_instance_config(self, character_name: str, backend: ImageBackend) -> Dict[str, Any]:
-        """Load character settings for one backend instance."""
+        """Read sizing overrides without persisting backend enable snapshots."""
         backend_defaults = self._get_backend_defaults(backend)
 
         if not character_name or not self.SKILL_ID:
             return backend_defaults
 
         agent_config = get_character_skill_config(character_name, self.SKILL_ID)
-
-        # Migrate flat settings to per-instance settings.
-        if agent_config and "instances" not in agent_config:
-            logger.info("Migriere %s Config zu per-Instanz Format...", character_name)
-            agent_config = self._migrate_flat_config(agent_config)
-            save_character_skill_config(character_name, self.SKILL_ID, agent_config)
-            logger.info("Migration abgeschlossen")
-
-        if agent_config and "instances" in agent_config:
-            migrated = False
-            # Load backend defaults for comparison (name to defaults).
-            backend_defaults_map = {b.name: self._get_backend_defaults(b) for b in self.backends}
-            for inst_name, inst_cfg in agent_config["instances"].items():
-                # workflow_file ist technischer Backend-Param, gehoert nicht in per-Agent Config
-                if "workflow_file" in inst_cfg:
-                    del inst_cfg["workflow_file"]
-                    migrated = True
-                # Remove values equal to the backend default.
-                defaults = backend_defaults_map.get(inst_name, {})
-                for key in list(inst_cfg.keys()):
-                    if key in defaults and inst_cfg[key] == defaults[key]:
-                        del inst_cfg[key]
-                        migrated = True
-            if migrated:
-                save_character_skill_config(character_name, self.SKILL_ID, agent_config)
-                logger.info("Config bereinigt fuer %s (nur Overrides gespeichert)", character_name)
-
-            instance_overrides = agent_config["instances"].get(backend.name, {})
-            if instance_overrides:
-                # Merge: Override > Backend-Default
-                result = dict(backend_defaults)
-                for key, default_val in result.items():
-                    if key in instance_overrides:
-                        val = instance_overrides[key]
-                        # bool VOR int pruefen (bool ist Subklasse von int)
-                        if isinstance(default_val, bool):
-                            result[key] = bool(val)
-                        elif isinstance(default_val, float):
-                            result[key] = float(val)
-                        elif isinstance(default_val, int):
-                            result[key] = int(val)
-                        else:
-                            result[key] = str(val).strip()
-                return result
-        else:
-            # Create per-character settings for all instances on first access.
-            new_config = self._build_initial_config()
-            save_character_skill_config(character_name, self.SKILL_ID, new_config)
-            logger.info("Per-Agent Config erstellt fuer %s: %s.json", character_name, self.SKILL_ID)
-
-        return backend_defaults
-
-    def _build_initial_config(self) -> Dict[str, Any]:
-        """Create empty character overrides for every backend instance.
-        Defaults remain on the backend; only differing overrides are stored."""
-        instances = {}
-        for backend in self.backends:
-            instances[backend.name] = {}
-        config: Dict[str, Any] = {"instances": instances}
-        return config
-
-    def _migrate_flat_config(self, old_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Migrate flat character settings to per-instance settings."""
-        instances = {}
-        for backend in self.backends:
-            backend_defaults = self._get_backend_defaults(backend)
-            instance_cfg = {}
-            for key, default_val in backend_defaults.items():
-                if key in old_config:
-                    instance_cfg[key] = old_config[key]
-                else:
-                    instance_cfg[key] = default_val
-            instances[backend.name] = instance_cfg
-        return {"instances": instances}
+        instance_overrides = (agent_config.get("instances") or {}).get(backend.name) or {}
+        result = dict(backend_defaults)
+        for key, default_val in result.items():
+            if key not in instance_overrides:
+                continue
+            val = instance_overrides[key]
+            if isinstance(default_val, bool):
+                result[key] = bool(val)
+            elif isinstance(default_val, float):
+                result[key] = float(val)
+            elif isinstance(default_val, int):
+                result[key] = int(val)
+            else:
+                result[key] = str(val).strip()
+        return result
 
     @staticmethod
     def _detect_media_extension(data: bytes) -> str:

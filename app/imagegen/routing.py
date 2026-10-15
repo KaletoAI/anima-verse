@@ -40,7 +40,6 @@ STATUS_OK = "ok"
 STATUS_COOLDOWN = "cooldown"
 STATUS_UNAVAILABLE = "unavailable"
 STATUS_DISABLED = "disabled"
-STATUS_DISABLED_FOR_CHARACTER = "disabled_for_character"
 STATUS_WRONG_KIND = "wrong_kind"
 STATUS_NO_MATCH = "no_match"
 
@@ -49,15 +48,13 @@ STATUS_TEXT: Dict[str, str] = {
     STATUS_COOLDOWN: "cooling down",
     STATUS_UNAVAILABLE: "offline",
     STATUS_DISABLED: "backend disabled",
-    STATUS_DISABLED_FOR_CHARACTER: "switched off for this character",
     STATUS_WRONG_KIND: "wrong kind of backend",
     STATUS_NO_MATCH: "matches no backend",
 }
 
 # Statuses that skip an entry for a CONFIGURATION reason — such an entry is
 # never the intended one and never marks a render as a fallback.
-CONFIG_SKIP_STATUSES = frozenset({STATUS_NO_MATCH, STATUS_WRONG_KIND,
-                                  STATUS_DISABLED, STATUS_DISABLED_FOR_CHARACTER})
+CONFIG_SKIP_STATUSES = frozenset({STATUS_NO_MATCH, STATUS_WRONG_KIND, STATUS_DISABLED})
 
 
 class NoRouteError(RuntimeError):
@@ -174,19 +171,6 @@ def _character_spec(occ_def: Dict[str, Any], character: str) -> str:
     return spec
 
 
-def _character_switches(character: str) -> Dict[str, Any]:
-    """The per-character backend switches, READ ONLY (the pool's provider
-    auto-creates the config file — a pure explain must not write)."""
-    if not character:
-        return {}
-    try:
-        from app.models.character import get_character_skill_config
-        return (get_character_skill_config(character, "image_generation")
-                or {}).get("instances") or {}
-    except Exception:
-        return {}
-
-
 # ── resolution ──────────────────────────────────────────────────────────
 
 def _pool(pool: Any = None) -> Any:
@@ -230,10 +214,6 @@ def intended_entry(chain_rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]
     return None
 
 
-def _allowed(b: Any, switches: Dict[str, Any]) -> bool:
-    return bool((switches.get(b.name) or {}).get("enabled", True))
-
-
 def _prefer_img2img(live: List[Any], has_ref: bool) -> List[Any]:
     if not has_ref:
         return live
@@ -241,10 +221,10 @@ def _prefer_img2img(live: List[Any], has_ref: bool) -> List[Any]:
     return img2img or live
 
 
-def _config_filter(occasion: str, spec: str, backends: List[Any],
-                   switches: Dict[str, Any]) -> Tuple[Optional[str], List[Any], List[str]]:
+def _config_filter(occasion: str, spec: str, backends: List[Any]
+                   ) -> Tuple[Optional[str], List[Any], List[str]]:
     """The CONFIGURATION filters of one chain entry, in order matched ->
-    fits -> enabled -> allowed. Returns ``(skip_status, allowed, names)``:
+    fits -> enabled. Returns ``(skip_status, enabled, names)``:
     ``skip_status`` is one of ``CONFIG_SKIP_STATUSES`` or None when the entry
     passes; ``names`` is every backend name the glob matched."""
     pl = spec.lower()
@@ -258,18 +238,15 @@ def _config_filter(occasion: str, spec: str, backends: List[Any],
     enabled = [b for b in fitting if getattr(b, "instance_enabled", True)]
     if not enabled:
         return STATUS_DISABLED, [], names
-    allowed = [b for b in enabled if _allowed(b, switches)]
-    if not allowed:
-        return STATUS_DISABLED_FOR_CHARACTER, [], names
-    return None, allowed, names
+    return None, enabled, names
 
 
 def _evaluate(occasion: str, spec: str, backends: List[Any],
-              switches: Dict[str, Any], exclude: set,
+              exclude: set,
               has_ref: bool) -> Tuple[str, List[Any], List[str]]:
     """Status of ONE chain entry plus its live candidates and every name the
     glob matched (for the admin page)."""
-    skip, allowed, names = _config_filter(occasion, spec, backends, switches)
+    skip, allowed, names = _config_filter(occasion, spec, backends)
     if skip is not None:
         return skip, [], names
     live = [b for b in allowed if b.name not in exclude and b.available]
@@ -289,10 +266,9 @@ def intended_spec_for(occasion: str, character: str = "", pool: Any = None) -> s
     the scene signature agree on."""
     get_occasion(occasion)                       # UnknownOccasionError
     backends = list(_pool(pool).backends)
-    switches = _character_switches(character)
     rows = []
     for spec, _source, pos in chain_for(occasion, character):
-        skip, _allowed_b, _names = _config_filter(occasion, spec, backends, switches)
+        skip, _enabled_b, _names = _config_filter(occasion, spec, backends)
         # A configuration-passing entry counts as ok here (availability ignored).
         rows.append({"spec": spec, "position": pos, "status": skip or STATUS_OK})
     row = intended_entry(rows)
@@ -303,13 +279,13 @@ def _cheapest_no_rotation(live: List[Any]) -> Any:
     return sorted(live, key=lambda b: b.effective_cost)[0] if live else None
 
 
-def _empty_chain_pick(occasion: str, backends: List[Any], switches: Dict[str, Any],
+def _empty_chain_pick(occasion: str, backends: List[Any],
                       exclude: set, has_ref: bool, pool: Any, rotate: bool) -> Any:
     if requires_chain(occasion):
         return None
     live = [b for b in backends
             if backend_fits(occasion, describe_backend(b))
-            and getattr(b, "instance_enabled", True) and _allowed(b, switches)
+            and getattr(b, "instance_enabled", True)
             and b.name not in exclude and b.available]
     live = _prefer_img2img(live, has_ref)
     if not live:
@@ -334,16 +310,14 @@ def resolve_image_route(occasion: str, *, character: str = "",
     p = _pool(pool)
     rejected = not_applicable or {}
     backends = [b for b in p.backends if b.name not in rejected]
-    switches = _character_switches(character)
     excl = set(exclude or ())
     entries = chain_for(occasion, character)
 
     if probe:
         for spec, _source, _pos in entries:
-            skip, allowed, _names = _config_filter(occasion, spec, backends, switches)
+            skip, allowed, _names = _config_filter(occasion, spec, backends)
             if skip is None:
-                # ``allowed`` already drops character-disabled backends; a
-                # backend that failed in this call or is cooling down is not
+                # A backend that failed in this call or is cooling down is not
                 # probed — after a failure the intended entry IS that backend,
                 # and every re-entry would wait on a dead endpoint.
                 for b in allowed:
@@ -353,7 +327,7 @@ def resolve_image_route(occasion: str, *, character: str = "",
                 break
 
     if not entries:
-        b = _empty_chain_pick(occasion, backends, switches, excl, has_ref, p, rotate=True)
+        b = _empty_chain_pick(occasion, backends, excl, has_ref, p, rotate=True)
         if b is None:
             raise NoRouteError(occasion, [])
         return Route(occasion, b, None, "", "", None, [])
@@ -361,7 +335,7 @@ def resolve_image_route(occasion: str, *, character: str = "",
     chain: List[Dict[str, Any]] = []
     chosen: Optional[Tuple[Any, int, str]] = None
     for spec, source, pos in entries:
-        status, live, names = _evaluate(occasion, spec, backends, switches, excl, has_ref)
+        status, live, names = _evaluate(occasion, spec, backends, excl, has_ref)
         row = {"spec": spec, "source": source, "position": pos, "status": status,
                "backend": "", "matches": names}
         if status == STATUS_OK:
@@ -395,7 +369,7 @@ def chain_candidates(occasion: str, pool: Any = None) -> List[Tuple[Any, int, st
     out: List[Tuple[Any, int, str]] = []
     seen = set()
     for spec, _source, pos in chain_for(occasion):
-        _skip, allowed, _names = _config_filter(occasion, spec, backends, {})
+        _skip, allowed, _names = _config_filter(occasion, spec, backends)
         for b in allowed:
             if b.name not in seen:
                 seen.add(b.name)
@@ -411,7 +385,7 @@ def resolve_spec(occasion: str, spec: str, *, character: str = "",
     spec = normalize_spec(spec)                  # one round-robin key per canonical spec
     p = _pool(pool)
     status, live, _names = _evaluate(occasion, spec, list(p.backends),
-                                     _character_switches(character), set(), has_ref)
+                                     set(), has_ref)
     if status != STATUS_OK:
         return status, None
     return status, p.pick_lowest_cost(live, rotation_key=f"route:{occasion}:{spec}")
@@ -422,13 +396,13 @@ def _pos_label(position: Optional[int]) -> str:
 
 
 def _explain_one(row: Dict[str, Any], character: str, backends: List[Any],
-                 switches: Dict[str, Any], p: Any,
+                 p: Any,
                  has_ref: bool = False) -> Dict[str, Any]:
     oid = row["id"]
     entries = chain_for(oid, character)
     chain, resolved, position = [], None, None
     for spec, source, pos in entries:
-        status, live, names = _evaluate(oid, spec, backends, switches, set(), has_ref)
+        status, live, names = _evaluate(oid, spec, backends, set(), has_ref)
         b = _cheapest_no_rotation(live) if status == STATUS_OK else None
         chain.append({"spec": spec, "source": source, "position": pos,
                       "status": status, "status_text": STATUS_TEXT[status],
@@ -436,7 +410,7 @@ def _explain_one(row: Dict[str, Any], character: str, backends: List[Any],
         if b is not None and resolved is None:
             resolved, position = b.name, pos
     if not entries:
-        b = _empty_chain_pick(oid, backends, switches, set(), has_ref, p, rotate=False)
+        b = _empty_chain_pick(oid, backends, set(), has_ref, p, rotate=False)
         via = "cheapest" if b else "none"
         resolved = b.name if b else None
         reason = (str(NoRouteError(oid, [])) if requires_chain(oid)
@@ -474,8 +448,7 @@ def explain_occasion(occasion: str, character: str = "", pool: Any = None, *,
     get_occasion(occasion)
     p = _pool(pool)
     row = next(r for r in catalog_payload() if r["id"] == occasion)
-    return _explain_one(row, character, list(p.backends),
-                        _character_switches(character), p, has_ref=has_ref)
+    return _explain_one(row, character, list(p.backends), p, has_ref=has_ref)
 
 
 def explain_image_routing(character: str = "", pool: Any = None) -> Dict[str, Any]:
@@ -483,9 +456,8 @@ def explain_image_routing(character: str = "", pool: Any = None) -> Dict[str, An
     use right now. Never probes, never advances the round-robin."""
     p = _pool(pool)
     backends = list(p.backends)
-    switches = _character_switches(character)
     return {"character": character,
-            "occasions": [_explain_one(row, character, backends, switches, p)
+            "occasions": [_explain_one(row, character, backends, p)
                           for row in catalog_payload()]}
 
 

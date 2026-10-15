@@ -340,7 +340,7 @@ def part_entry_points():
     mesh = _Stub("M_STUB")
     mesh.MEDIA_TYPE = "mesh"
     mesh.category = "img2mesh"
-    svc._pool = BackendPool([video, mesh], agent_instances_provider=lambda _n: {})
+    svc._pool = BackendPool([video, mesh])
 
     orig_pm = pm_mod.get_provider_manager
     rec = _RecordingManager()

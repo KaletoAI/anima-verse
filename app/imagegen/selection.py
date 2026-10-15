@@ -1,10 +1,7 @@
 """Backend pool for image generation: selection, matching, fallback.
 
-Extracted from ``ImageGenerationSkill`` (Abschnitt 2, Phase 2). The skill keeps
-thin delegators to a ``BackendPool`` instance for the external public API; the
-pool owns the round-robin state and all backend selection logic. Per-agent
-enabled overrides come via an injected ``agent_instances_provider`` so this
-module stays free of ``app.models`` / ``app.skills`` imports.
+The pool owns the round-robin state and all backend selection logic.
+Backend enablement comes exclusively from each backend's global configuration.
 """
 import re
 import threading
@@ -62,22 +59,17 @@ def is_generator_backend(b) -> bool:
 class BackendPool:
     """Backend pool: cost-based selection, glob matching and fallback chain.
 
-    Owns the round-robin state + lock. Per-agent enabled overrides come via an
-    injected ``agent_instances_provider(character_name) -> dict`` (the instances
-    dict) so this module needs no ``app.models`` / ``app.skills`` import. The
-    cooldown/availability logic stays on the backend instances (``b.available``,
-    ``b.mark_unhealthy``).
+    Owns the round-robin state + lock. The cooldown/availability logic stays
+    on the backend instances (``b.available``, ``b.mark_unhealthy``).
     """
 
-    def __init__(self, backends: List[ImageBackend],
-                 agent_instances_provider: Callable[[str], dict]):
+    def __init__(self, backends: List[ImageBackend]):
         self.backends: List[ImageBackend] = backends
         # Round-robin counter per rotation key. Spreads tasks across
         # equal-cost backends (e.g. two local backends with cost=0).
         # Replaces the old LOAD_COST_PENALTY approach.
         self._round_robin_counter: Dict[str, int] = {}
         self._round_robin_lock = threading.Lock()
-        self._agent_instances_provider = agent_instances_provider
 
     def pick_lowest_cost(
         self,
@@ -141,24 +133,9 @@ class BackendPool:
 
     def _select_backend_for_agent(self, character_name: str,
                                   has_input_image: bool = False) -> Optional[ImageBackend]:
-        """Picks the cheapest instance taking the per-agent enabled flags into account."""
-        agent_instances = self._agent_instances_provider(character_name)
-
-        available = []
-        for b in self.backends:
-            if not b.available:
-                continue
-            # The per-agent flag only ever RESTRICTS: a character may deselect
-            # a backend, but must not revive a globally disabled one. A frozen
-            # snapshot in the character's skill config would otherwise keep
-            # picking a backend that has no queue channel any more.
-            agent_inst = agent_instances.get(b.name) or {}
-            is_enabled = b.instance_enabled and bool(agent_inst.get("enabled", True))
-            if is_enabled:
-                # Inpaint + video backends never enter normal agent image render
-                if not is_generator_backend(b):
-                    continue
-                available.append(b)
+        """Picks the cheapest globally enabled image backend for this rotation key."""
+        available = [b for b in self.backends if b.available and b.instance_enabled
+                     and is_generator_backend(b)]
 
         available = self._prefer_img2img(available, has_input_image)
         return self.pick_lowest_cost(
@@ -243,27 +220,19 @@ class BackendPool:
         Filters:
         - b.available (live status; channel_health may set this False)
         - b.instance_enabled (global flag)
-        - per-agent override (agent_config.instances[name].enabled) — it can
-          only take a backend AWAY, never add a globally disabled one back
         - media kind (image/video) — image and video are never mixed
 
         Sorted ascending by effective_cost. NO round-robin here — the
         selector (or UI) takes care of distribution. This list is meant
         for display and engine use.
         """
-        agent_instances: Dict[str, Any] = {}
-        if character_name:
-            agent_instances = self._agent_instances_provider(character_name) or {}
-
         out: List[ImageBackend] = []
         for b in self.backends:
             if not b.available:
                 continue
             if self._media_of(b) != media or (media == "image" and not is_generator_backend(b)):
                 continue
-            # Per-agent flag restricts only — see _select_backend_for_agent.
-            agent_inst = agent_instances.get(b.name) or {}
-            if not (b.instance_enabled and bool(agent_inst.get("enabled", True))):
+            if not b.instance_enabled:
                 continue
             out.append(b)
 
@@ -412,20 +381,11 @@ class BackendPool:
         otherwise background threads (e.g. expression_regen) would each stall
         at a permanently impossible condition.
         """
-        agent_instances: Dict[str, Any] = {}
-        if character_name:
-            try:
-                agent_instances = self._agent_instances_provider(character_name) or {}
-            except Exception:
-                agent_instances = {}
         plausible = []
         for b in self.backends:
             if not b.instance_enabled:
                 continue
             if not is_generator_backend(b):
-                continue
-            agent_inst = agent_instances.get(b.name, {})
-            if "enabled" in agent_inst and not agent_inst["enabled"]:
                 continue
             plausible.append(b)
         if not plausible:

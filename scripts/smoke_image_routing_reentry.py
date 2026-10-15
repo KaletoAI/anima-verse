@@ -133,7 +133,6 @@ def behaviour(name):
 
 RULES = {}
 routing._rules = lambda occasion: list(RULES.get(occasion, []))
-routing._character_switches = lambda character: {}
 CHAR_SPEC = {"value": ""}
 routing._character_spec = lambda occ_def, character: (
     CHAR_SPEC["value"] if character and occ_def.get("character_scoped") else "")
@@ -147,7 +146,7 @@ def run(rules, names=None, nested_failure=None):
     for THAT backend (a failing helper step) instead of rendering."""
     names = names or sorted({n for n in rules} | {"cloud"})
     backends = [Fake(n, cost=9 if n == "cloud" else 1) for n in names]
-    pool = BackendPool(backends, agent_instances_provider=lambda n: {})
+    pool = BackendPool(backends)
     POOLS.append(pool)
     RULES.clear()
     if rules:

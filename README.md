@@ -218,6 +218,10 @@ stops acting autonomously).
   outfit decency/compliance system.
 - **Portrait controls:** *Game-Admin → Characters → Image* has separate render, portrait and T-pose
   backend matches in a compact responsive grid, with normal and T-pose LoRA overrides alongside.
+  Backend activation is global; character overrides select backend matches, not separate
+  enable/disable switches. Retired `skills/image_generation.json` backend `enabled` flags
+  are removed on world startup and no longer affect routing. Existing sizing settings,
+  skill activation and profile render/portrait/T-pose overrides stay unchanged.
   The portrait match takes precedence for portraits only; empty uses the global portrait routing
   chain directly, never the character's general render match. In *Characters → Gallery*, the
   star button on an image selects it as the profile image; the current portrait has a filled star.
@@ -304,7 +308,10 @@ stops acting autonomously).
   band that leaves the schedule where it is — and an expandable **Log** of its last runs in world
   time (time, outcome, message).
 - **Improvements queue:** the Game-Admin collects "this world could use X" findings as typed,
-  gated work items and runs them through the task queue.
+  gated work items and runs them through the task queue. Under **New improvement → Generate
+  missing assets → Clothing images**, fill missing images for the world's clothing items
+  (`outfit_piece`), including references to deleted files. Existing images and the cross-world
+  shared library stay untouched; one-shot and standing runs use the normal `item` image routing.
 - **Content marketplace:** install content and skill packages from one or more configured catalogs
   (each cached per world, optional auth token) — with a thumbnail and the pack's facts (size,
   variants, rooms, identity …) before you install. A catalog is a Git repository whose RELEASES hold

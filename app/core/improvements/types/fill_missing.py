@@ -19,6 +19,7 @@ SUBJECTS = [
     {"value": "building_model", "label": "Building models"},
     {"value": "prop_model", "label": "Prop models"},
     {"value": "character_expressions", "label": "Character expressions"},
+    {"value": "clothing_images", "label": "Clothing images"},
 ]
 
 
@@ -30,9 +31,8 @@ def _require_route(occasion: str, character: str = "") -> None:
     There is no per-entry backend choice here, so each candidate kind names
     its mesh occasion: a character the one of its rig (``mesh_humanoid`` /
     ``mesh_creature``), a building ``mesh_building``, a prop
-    ``mesh_object``.  ``character`` applies that character's backend
-    switches, so a passing check is one the producer's routing passes too
-    (otherwise the render would end in NoRouteError = a failed attempt)."""
+    ``mesh_object``. ``character`` applies that character's render-target
+    override, so a passing check uses the same routing context as the producer."""
     if not subjects.default_mesh_backend(occasion, character):
         raise CandidateBusy(f"no backend available for {occasion} right now")
 
@@ -72,6 +72,12 @@ def _missing_expressions() -> List[Candidate]:
             if subjects.expression_missing(n)]
 
 
+def _missing_clothing_images() -> List[Candidate]:
+    return [Candidate(f"item:{item['id']}", item.get("name") or item["id"])
+            for item in subjects.clothing_items()
+            if not subjects.clothing_image_done(item["id"])]
+
+
 #: subject → (the subjects still missing it, "does it have it now?", generate it)
 _HANDLERS: Dict[str, tuple] = {
     "character_model": (
@@ -97,6 +103,11 @@ _HANDLERS: Dict[str, tuple] = {
         _missing_expressions,
         lambda ident: not subjects.expression_missing(ident),
         subjects.generate_expression,
+    ),
+    "clothing_images": (
+        _missing_clothing_images,
+        subjects.clothing_image_done,
+        subjects.generate_clothing_image,
     ),
 }
 

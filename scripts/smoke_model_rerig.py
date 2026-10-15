@@ -129,7 +129,7 @@ class Fake(ImageBackend):
 
 def service(*backends):
     svc = object.__new__(ImageService)
-    svc._pool = BackendPool(list(backends), agent_instances_provider=lambda name: {})
+    svc._pool = BackendPool(list(backends))
     return svc
 
 
@@ -142,7 +142,6 @@ backup = Fake('backup', 'mesh2rig', 'mixamo')
 creature = Fake('creature', 'mesh2rig', 'generic')
 svc = service(mesh, rigger, backup, creature)
 routing._rules = lambda occasion: ['rigger', 'backup'] if occasion == 'rig_humanoid' else ['creature']
-routing._character_switches = lambda character: {}
 
 def seed(sig, ext='.glb'):
     (root/'unrigged'/f'{sig}.glb').write_bytes(fixture_glb())

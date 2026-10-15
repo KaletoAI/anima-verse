@@ -241,13 +241,12 @@ def assert_static(signature, *, error=False, routed=True):
 
 def service(*backends):
     svc = object.__new__(ImageService)
-    svc._pool = BackendPool(list(backends), agent_instances_provider=lambda name: {})
+    svc._pool = BackendPool(list(backends))
     return svc
 
 
 rules = {}
 routing._rules = lambda occasion: rules.get(occasion, [])
-routing._character_switches = lambda character: {}
 mesh = Fake('mesh', 'img2mesh', 'none')
 high = Fake('rig-high', 'mesh2rig', 'mixamo', 2)
 low = Fake('rig-low', 'mesh2rig', 'mixamo', 1)

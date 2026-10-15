@@ -153,7 +153,7 @@ def main():
         face = Fake('face', 'face_retexture')
         rig = Fake('rigger', 'mesh2rig')
         svc = object.__new__(ImageService)
-        svc._pool = BackendPool([face, rig], agent_instances_provider=lambda name: {})
+        svc._pool = BackendPool([face, rig])
         channels = []
         def channel(backend, fn, **kwargs):
             channels.append(backend.name)

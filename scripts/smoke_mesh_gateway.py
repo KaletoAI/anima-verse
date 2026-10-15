@@ -476,7 +476,7 @@ class _StubBackend:
         self.cooldowns.append((reason, seconds))
 
 
-pool = BackendPool([], lambda _n: {})
+pool = BackendPool([])
 
 
 def _run(exc):

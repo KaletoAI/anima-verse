@@ -216,7 +216,7 @@ def part_a():
                                 instance_enabled=True, effective_cost=0)
     with patch.object(routing, "_rules", return_value={}):
         try:
-            routing.resolve_image_route("pose_animation", pool=BackendPool([available], lambda _: {}))
+            routing.resolve_image_route("pose_animation", pool=BackendPool([available]))
             check("A8 empty animation chain raises", False, True)
         except routing.NoRouteError as e:
             check("A8 empty animation chain message", "chain is empty" in str(e), True)
@@ -494,7 +494,7 @@ def part_d():
     from app.imagegen import routing
 
     service = ImageService.__new__(ImageService)
-    service._pool = BackendPool([], lambda _: {})
+    service._pool = BackendPool([])
     calls = []
     cooled = []
     verdicts = [{"n": 0, "ok": True, "reason": ""}, {"n": 1, "ok": False, "reason": "missing sha256"}]
@@ -600,7 +600,7 @@ def part_e():
                            instance_enabled=True, effective_cost=0, in_cooldown=lambda: False,
                            check_availability=lambda: True)
     service = ImageService.__new__(ImageService)
-    service._pool = BackendPool([flux, kimodo, uni_a, uni_b], lambda _: {})
+    service._pool = BackendPool([flux, kimodo, uni_a, uni_b])
     rules = lambda occ: ["Kimodo", "UniMate*"] if occ == "pose_animation" else []
     with patch.object(routing, "_rules", side_effect=rules):
         listed = service.animation_backends()

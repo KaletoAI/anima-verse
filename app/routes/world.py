@@ -2986,7 +2986,7 @@ def get_gallery_image(
 
 def _routing_character_for_caller(character: str) -> str:
     """``character`` when the requesting user may see that character's image
-    routing (its own backend match, its per-character backend switches):
+    routing (including its own backend match):
     an admin, or a user who has it in allowed_characters. Anyone else gets
     "" — the options are then explained without the character."""
     from app.core import users

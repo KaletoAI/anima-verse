@@ -175,7 +175,7 @@ class _Fake(ImageBackend):
 
 def run_case(label, op, expect_type, expect_cooldowns, expect_available=True):
     fake = _Fake()
-    pool = BackendPool([fake], lambda n: {})
+    pool = BackendPool([fake])
     raised = None
     try:
         pool.run_on_backend(fake, op=op)
@@ -234,7 +234,7 @@ print("[4g] the failure carries its backend")
 _fk = _Fake()
 _failed = None
 try:
-    BackendPool([_fk], lambda n: {}).run_on_backend(
+    BackendPool([_fk]).run_on_backend(
         _fk, op=_raiser(RuntimeError("HTTP 500: boom")))
 except BackendFailedError as e:
     _failed = e
@@ -249,7 +249,7 @@ print("[4h] a cause that already names its backend is not prefixed twice")
 _fk2 = _Fake()
 _failed2 = None
 try:
-    BackendPool([_fk2], lambda n: {}).run_on_backend(
+    BackendPool([_fk2]).run_on_backend(
         _fk2, op=_raiser(RuntimeError("fake: HTTP 500: boom")))
 except BackendFailedError as e:
     _failed2 = e
@@ -344,7 +344,7 @@ class _CountingHandler(logging.Handler):
 _counter = _CountingHandler()
 selection_mod.logger.addHandler(_counter)
 try:
-    empty_pool = BackendPool([], lambda n: {})
+    empty_pool = BackendPool([])
     empty_pool._wait_for_explicit_backend("nope")
     check("explicit miss: warnings", len(_counter.warnings), 1)
     _counter.warnings.clear()

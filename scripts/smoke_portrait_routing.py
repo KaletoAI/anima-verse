@@ -43,8 +43,7 @@ def main():
                 raise AssertionError("This check must not generate images")
 
         pool = BackendPool([Backend(name, "", cost, "smoke", "PORTRAIT_SMOKE_") for name, cost in
-                            (("Normal", 0), ("Portrait", 1), ("TPose", 2))],
-                           agent_instances_provider=lambda name: {})
+                            (("Normal", 0), ("Portrait", 1), ("TPose", 2))])
         assert save_character_profile("demo", {"name": "demo"}, create_new=True)
         settings = config.get_all()
         settings["image_generation"] = {**settings["image_generation"],

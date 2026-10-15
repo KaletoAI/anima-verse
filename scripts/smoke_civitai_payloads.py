@@ -341,7 +341,7 @@ def run(http, **attrs):
     RESULT[0] = None
 
     def _go():
-        RESULT[0] = BackendPool([be], lambda n: {}).run_on_backend(
+        RESULT[0] = BackendPool([be]).run_on_backend(
             be, op=lambda bb: bb._generate("p", "n", {}))
 
     http.install()

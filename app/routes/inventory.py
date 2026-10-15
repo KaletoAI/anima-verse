@@ -1,4 +1,4 @@
-"""Inventory routes - Items, Raum-Items und Character-Inventar verwalten."""
+"""Inventory routes: manage items, room items and character inventories."""
 import io
 import time
 from pathlib import Path
@@ -20,12 +20,12 @@ router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 
 # ============================================================
-# ITEM-DEFINITIONEN (Welt-Level)
+# ITEM DEFINITIONS (world scope)
 # ============================================================
 
 @router.get("/items")
-def list_items_route(include_shared: int = Query(0, description="Shared-Items mit auflisten (1)")) -> Dict[str, Any]:
-    """Listet alle Item-Definitionen."""
+def list_items_route(include_shared: int = Query(0, description="Include shared items (1)")) -> Dict[str, Any]:
+    """List all item definitions."""
     items = list_items()
     if include_shared:
         from app.models.inventory import list_shared_items
@@ -36,7 +36,7 @@ def list_items_route(include_shared: int = Query(0, description="Shared-Items mi
 
 @router.get("/items-shared")
 def list_shared_items_route() -> Dict[str, Any]:
-    """Listet alle Shared-Library-Items (welt-uebergreifend)."""
+    """List all cross-world shared-library items."""
     from app.models.inventory import list_shared_items
     return {"items": list_shared_items()}
 
@@ -159,7 +159,7 @@ def _move_item_to_world_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
 @router.get("/items/{item_id}")
 def get_item_route(
     item_id: str) -> Dict[str, Any]:
-    """Gibt ein einzelnes Item zurueck."""
+    """Return a single item."""
     item = get_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -168,7 +168,7 @@ def get_item_route(
 
 @router.post("/items")
 async def create_item_route(request: Request) -> Dict[str, Any]:
-    """Erstellt ein neues Item."""
+    """Create a new item."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_create_item_route_sync, body)
@@ -201,9 +201,8 @@ def _create_item_route_sync(body: Any) -> Dict[str, Any]:
             item_id=(body.get("id") or "").strip())
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    # Sofort Magic-Felder via update_item nachziehen — add_item akzeptiert
-    # diese nicht direkt, update_item hat sie aber whitelisted (Anlegen-Pfad
-    # darf keine Felder verlieren).
+    # Apply magic fields immediately: add_item does not accept them directly,
+    # but update_item whitelists them. Creation must not lose these fields.
     _extras = {k: body[k] for k in (
         "incantation", "spell_mode", "clone_item_id",
         "success_chance", "copy_on_give",
@@ -218,7 +217,7 @@ def _create_item_route_sync(body: Any) -> Dict[str, Any]:
 
 @router.put("/items/{item_id}")
 async def update_item_route(item_id: str, request: Request) -> Dict[str, Any]:
-    """Aktualisiert ein Item."""
+    """Update an item."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_update_item_route_sync, item_id, body)
@@ -228,9 +227,8 @@ def _update_item_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
     """The blocking body of ``update_item_route`` — runs in the threadpool."""
     user_id = body.get("user_id", "")
 
-    # Altes prompt_fragment festhalten — Variant-Invalidierung nur wenn sich
-    # genau dieser Wert aendert (der Variant-Cache haengt am Prompt-Inhalt,
-    # nicht an Name/outfit_types/Bild etc.).
+    # Keep the old prompt_fragment: invalidate variants only when this value
+    # changes. Their cache depends on the prompt, not the name or image.
     prev = get_item(item_id) or {}
     prev_fragment = (prev.get("prompt_fragment") or "").strip()
 
@@ -248,20 +246,20 @@ def _update_item_route_sync(item_id: str, body: Any) -> Dict[str, Any]:
             from app.core.expression_regen import invalidate_variants_for_item
             invalidate_variants_for_item(item_id)
         except Exception as e:
-            logger.debug("Variant-Invalidierung fehlgeschlagen: %s", e)
+            logger.debug("Variant invalidation failed: %s", e)
     return {"ok": True, "item": updated}
 
 
 @router.delete("/items/{item_id}")
 def delete_item_route(
     item_id: str) -> Dict[str, Any]:
-    """Loescht ein Item."""
-    # Variants erst invalidieren waehrend das Item noch im Inventar auffindbar ist
+    """Delete an item."""
+    # Invalidate variants while the item can still be found in inventories.
     try:
         from app.core.expression_regen import invalidate_variants_for_item
         invalidate_variants_for_item(item_id)
     except Exception as e:
-        logger.debug("Variant-Invalidierung fehlgeschlagen: %s", e)
+        logger.debug("Variant invalidation failed: %s", e)
     deleted = delete_item(item_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -271,11 +269,11 @@ def delete_item_route(
 @router.get("/items/{item_id}/image")
 def get_item_image_route(
     item_id: str):
-    """Liefert das Bild eines Items."""
+    """Serve an item's image."""
     item = get_item(item_id)
     if not item or not item.get("image"):
-        raise HTTPException(status_code=404, detail="Kein Bild vorhanden")
-    # Shared-Items haben ihr Bild in shared/items/{id}/ — sonst world-items-Dir
+        raise HTTPException(status_code=404, detail="No image available")
+    # Shared images live in shared/items/<id>; others in the world item directory.
     if item.get("_shared"):
         from app.core.paths import get_shared_dir
         item_dir = get_shared_dir() / "items" / item_id
@@ -283,7 +281,7 @@ def get_item_image_route(
         item_dir = get_storage_dir() / "items" / item_id
     path = item_dir / item["image"]
     if not path.exists():
-        raise HTTPException(status_code=404, detail="Bilddatei nicht gefunden")
+        raise HTTPException(status_code=404, detail="Image file not found")
     suffix = path.suffix.lower()
     media_types = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp'}
     return FileResponse(
@@ -295,8 +293,8 @@ def get_item_image_route(
 @router.get("/items/{item_id}/owners")
 def get_item_owners_route(
     item_id: str) -> Dict[str, Any]:
-    """Listet alle Characters die ein bestimmtes Item im Inventar haben.
-    Rueckgabe: {owners: [{character: str, quantity: int, equipped: bool}]}
+    """List characters owning this item.
+    Returns: {owners: [{character: str, quantity: int, equipped: bool}]}
     """
     from app.models.character import list_available_characters
     from app.models.inventory import _load_inventory
@@ -313,8 +311,7 @@ def get_item_owners_route(
                 "character": char,
                 "quantity": int(entry.get("quantity", 1) or 1),
                 "equipped": bool(entry.get("equipped", False)),
-                # Schenkender/Uebergeber (von wem das Item kam) — fuer die
-                # Nachvollziehbarkeit des Charmed-/Effekt-Mechanismus.
+                # Giver: trace the origin for the charm/effect mechanism.
                 "obtained_from": (entry.get("obtained_from") or "").strip(),
             })
             break
@@ -324,10 +321,10 @@ def get_item_owners_route(
 
 @router.get("/ownership")
 def get_ownership_map_route() -> Dict[str, Any]:
-    """Map item_id -> Liste besitzender Characters (fuer den Items-Filter).
+    """Map item ids to owning characters for the item filter.
 
-    Ein Aufruf statt N x /items/{id}/owners. Items, die in keiner Liste
-    auftauchen, werden von niemandem besessen.
+    One request instead of N calls to /items/{id}/owners. Items missing from
+    the map have no owners.
     """
     from app.models.character import list_available_characters
     from app.models.inventory import _load_inventory
@@ -350,23 +347,23 @@ def get_ownership_map_route() -> Dict[str, Any]:
 
 
 def _alpha_coverage_too_low(image_path: Path, threshold_pct: float = 5.0) -> bool:
-    """True wenn weniger als threshold_pct der Pixel sichtbar (alpha > 32) sind.
+    """True when fewer than threshold_pct pixels are visible (alpha > 32).
 
-    Schutzschalter fuer rembg-Faelle in denen u2net das Subjekt nicht erkennt
-    und das Bild komplett transparent zurueckgibt.
+    Guard against rembg/u2net failing to recognize the subject and returning
+    a fully transparent image.
     """
     try:
         from PIL import Image
         img = Image.open(image_path)
         if img.mode != "RGBA":
-            return False  # kein Alpha-Channel — nichts geprueft
+            return False  # No alpha channel to check.
         alpha = img.getchannel("A")
         total = alpha.size[0] * alpha.size[1]
         if total == 0:
             return True
-        # Histogram: Anzahl Pixel pro Alpha-Wert (0..255)
+        # Histogram: pixel count per alpha value (0..255).
         hist = alpha.histogram()
-        visible = sum(hist[33:])  # alpha > 32 = sichtbar
+        visible = sum(hist[33:])  # alpha > 32 is visible.
         return (visible / total) * 100 < threshold_pct
     except Exception:
         return False
@@ -426,7 +423,8 @@ def _store_item_image(item_id: str, blob: bytes) -> str:
 
 def generate_item_image_sync(
     item_id: str,
-    overrides: Dict[str, Any] | None = None) -> bool:
+    overrides: Dict[str, Any] | None = None, *,
+    raise_errors: bool = False) -> bool:
     """Synchronous item-image generation (for background threads).
 
     Without a ``backend`` override the render is the ``item`` occasion of the
@@ -447,6 +445,9 @@ def generate_item_image_sync(
     backend composes the item's own subject for that backend and drops the
     model name; dialog LoRAs not associated with that backend are dropped
     with a warning (on an explicit pick they refuse the render instead).
+
+    ``raise_errors`` preserves generation exceptions for synchronous queue
+    consumers: load must remain typed, and failures must not look successful.
     """
     overrides = overrides or {}
     item = get_item(item_id)
@@ -568,6 +569,8 @@ def generate_item_image_sync(
         return False
     except Exception as e:
         logger.error("Item image [%s] failed: %s", item_id, e)
+        if raise_errors:
+            raise
         return False
 
     image_name = _store_item_image(item_id, images[0])
@@ -640,16 +643,16 @@ async def generate_item_image_route(item_id: str, request: Request) -> Dict[str,
 
 
 # ============================================================
-# RAUM-ITEMS
+# ROOM ITEMS
 # ============================================================
 
 @router.get("/rooms/{location_id}/{room_id}")
 def list_room_items_route(
     location_id: str,
     room_id: str) -> Dict[str, Any]:
-    """Items in einem Raum auflisten."""
+    """List items in a room."""
     room_items = get_room_items(location_id, room_id)
-    # Enrichment: Item-Details hinzufuegen
+    # Enrich with item details.
     enriched = []
     for ri in room_items:
         item = get_item(ri.get("item_id", ""))
@@ -668,7 +671,7 @@ async def add_room_item_route(
     location_id: str,
     room_id: str,
     request: Request) -> Dict[str, Any]:
-    """Platziert ein Item in einem Raum."""
+    """Place an item in a room."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_add_room_item_route_sync, location_id,
@@ -702,7 +705,7 @@ def remove_room_item_route(
     location_id: str,
     room_id: str,
     item_id: str) -> Dict[str, Any]:
-    """Entfernt ein Item aus einem Raum."""
+    """Remove an item from a room."""
     success = remove_item_from_room(location_id, room_id, item_id)
     if not success:
         raise HTTPException(status_code=404, detail="Item not found in room")
@@ -710,17 +713,17 @@ def remove_room_item_route(
 
 
 # ============================================================
-# CHARACTER-INVENTAR
+# CHARACTER INVENTORY
 # ============================================================
 
 @router.get("/characters/{character_name}")
 def get_inventory_route(
     character_name: str,
-    include_equipped: bool = Query(True, description="Equipped Items mit anzeigen")) -> Dict[str, Any]:
-    """Gibt das Inventar eines Characters zurueck.
+    include_equipped: bool = Query(True, description="Include equipped items")) -> Dict[str, Any]:
+    """Return a character's inventory.
 
-    include_equipped=False filtert Pieces/Items aus, die der Character
-    aktuell angelegt hat (fuer "Was kann ich noch anziehen"-Listen).
+    include_equipped=False excludes currently equipped pieces/items, for
+    lists of items the character can still put on.
     """
     return get_character_inventory(character_name, include_equipped=include_equipped)
 
@@ -729,7 +732,7 @@ def get_inventory_route(
 async def add_inventory_item_route(
     character_name: str,
     request: Request) -> Dict[str, Any]:
-    """Fuegt ein Item zum Character-Inventar hinzu."""
+    """Add an item to a character's inventory."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_add_inventory_item_route_sync,
@@ -761,7 +764,7 @@ async def update_inventory_item_route(
     character_name: str,
     item_id: str,
     request: Request) -> Dict[str, Any]:
-    """Aktualisiert einen Inventar-Eintrag (equipped, notes)."""
+    """Update an inventory entry (equipped, notes)."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_update_inventory_item_route_sync,
@@ -785,7 +788,7 @@ def _update_inventory_item_route_sync(character_name: str, item_id: str,
 def remove_inventory_item_route(
     character_name: str,
     item_id: str) -> Dict[str, Any]:
-    """Entfernt ein Item aus dem Character-Inventar."""
+    """Remove an item from a character's inventory."""
     success = remove_from_inventory(character_name, item_id)
     if not success:
         raise HTTPException(status_code=404, detail="Item not in inventory")
@@ -797,7 +800,7 @@ async def give_inventory_item_route(
     character_name: str,
     item_id: str,
     request: Request) -> Dict[str, Any]:
-    """Verschenkt ein Item an einen anderen Character.
+    """Give an item to another character.
 
     Body: { user_id, to_character }
     Returns: { ok, boost, item_name, rarity }
@@ -818,22 +821,22 @@ def _give_inventory_item_route_sync(character_name: str, item_id: str,
     if not to_character:
         raise HTTPException(status_code=400, detail="to_character required")
     if to_character == character_name:
-        raise HTTPException(status_code=400, detail="Character kann sich nicht selbst beschenken")
+        raise HTTPException(status_code=400, detail="A character cannot give items to itself")
     result = gift_item(character_name, to_character, item_id)
     if not result.get("success"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Verschenken fehlgeschlagen"))
+        raise HTTPException(status_code=400, detail=result.get("error", "Failed to give item"))
     return {"ok": True, **result}
 
 
 # ============================================================
-# EQUIPMENT (Outfit-Pieces + sonstige Ausruestung)
+# EQUIPMENT (outfit pieces and other equipment)
 # ============================================================
 
 @router.get("/characters/{character_name}/equipped")
 def get_equipped_route(
     character_name: str) -> Dict[str, Any]:
-    """Liefert den Equipped-Zustand eines Characters: Pieces (slot->item)
-    und sonstige Ausruestung (Liste).
+    """Return a character's equipped pieces (slot -> item)
+    and other equipped items (list).
     """
     from app.models.inventory import get_equipped_pieces, get_equipped_items
     return {
@@ -842,18 +845,18 @@ def get_equipped_route(
     }
 
 
-# POST /pieces/{slot}/color + set_equipped_piece_color wurden in Schritt 8
-# (May 2026, plan-outfit-system-rethink.md §5) entfernt — Items sind eindeutig,
-# Farbe steckt im prompt_fragment.
+# POST /pieces/{slot}/color and set_equipped_piece_color were removed in step 8
+# (May 2026, plan-outfit-system-rethink.md §5): item identity is unique and
+# color lives in prompt_fragment.
 
 
 @router.post("/characters/{character_name}/equip")
 async def equip_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Legt ein Outfit-Piece ODER ein anderes Item an.
+    """Equip an outfit piece or another item.
 
     Body: {"user_id": "...", "item_id": "..."}.
-    Pieces (category=outfit_piece) werden in ihren Slot equipped, alle
-    anderen Items in equipped_items.
+    Pieces (category=outfit_piece) fill their slots; all other items go into
+    equipped_items.
     """
     import asyncio
     body = await request.json()
@@ -899,12 +902,12 @@ def _equip_route_sync(character_name: str, body: Any) -> Dict[str, Any]:
 
 @router.post("/characters/{character_name}/unequip")
 async def unequip_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Entfernt ein Piece (per slot ODER item_id) oder ein equipped Item.
+    """Unequip a piece (by slot or item_id) or another equipped item.
 
-    Body-Varianten:
-      - {"user_id": "...", "slot": "outer"} — Slot leeren
-      - {"user_id": "...", "item_id": "..."} — gezielt das Item entfernen
-        (sucht erst in equipped_pieces, dann in equipped_items)
+    Body variants:
+      - {"user_id": "...", "slot": "outer"} — clear the slot
+      - {"user_id": "...", "item_id": "..."} — remove that item
+        (searches equipped_pieces first, then equipped_items)
     """
     import asyncio
     body = await request.json()
@@ -961,15 +964,15 @@ def list_outfit_types_route() -> Dict[str, Any]:
 
 @router.post("/characters/{character_name}/apply-equipped")
 async def apply_equipped_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Uebertraegt eine Piece-Kombination direkt aufs Profil.
+    """Apply a piece combination directly to the profile.
 
     Body:
         user_id: str
-        pieces: {slot: item_id}  — soll-Zustand pro Slot
-        remove_slots: [slot, ...] — diese Slots werden explizit geleert
+        pieces: {slot: item_id} — desired state per slot
+        remove_slots: [slot, ...] — slots explicitly cleared
 
-    Slots die belegt sind aber nicht in pieces auftauchen, werden ebenfalls
-    geleert (pieces ist der vollstaendige Soll-State).
+    Occupied slots absent from pieces are also cleared: pieces describes the
+    complete desired state.
     """
     import asyncio
     body = await request.json()
@@ -1007,11 +1010,11 @@ def _apply_equipped_route_sync(character_name: str,
 
 @router.post("/characters/{character_name}/apply-outfit-set")
 async def apply_outfit_set_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Wendet ein gespeichertes Outfit-Set (mit Piece-Liste) an.
+    """Apply a saved outfit set with a piece list.
 
-    Body: {"user_id": "...", "outfit_id": "..."} ODER {"name": "..."}.
+    Body: {"user_id": "...", "outfit_id": "..."} OR {"name": "..."}.
 
-    Equipped jedes Piece aus outfit.pieces[].
+    Equip every piece in outfit.pieces[].
     """
     import asyncio
     body = await request.json()
@@ -1032,8 +1035,8 @@ def _apply_outfit_set_route_sync(character_name: str,
     from app.models.inventory import apply_equipped_pieces, get_item
     outfit_id = (body.get("outfit_id") or "").strip()
     name = (body.get("name") or "").strip()
-    # user_id wird hier nicht verwendet — kein Pflicht-Guard (konsistent zu
-    # equip/unequip). Admin-Garderobe ruft ohne user_id.
+    # user_id is unused, so not required, matching equip/unequip. The admin
+    # wardrobe calls without user_id.
     if not outfit_id and not name:
         raise HTTPException(status_code=400, detail="outfit_id or name required")
 
@@ -1049,10 +1052,8 @@ def _apply_outfit_set_route_sync(character_name: str,
     if not target:
         raise HTTPException(status_code=404, detail="outfit not found")
 
-    # Preset-Pieces (Liste von item_ids) in slot->id mappen. Wir geben jedem
-    # Piece nur einen Slot mit (irgendeinen aus seiner slots-Liste) — die
-    # tatsaechliche Mirror-Belegung uebernimmt apply_equipped_pieces() ueber
-    # die Item-Definition.
+    # Map preset pieces (item ids) to slot -> id. Pass one declared slot per
+    # piece; apply_equipped_pieces handles all mirrored slots from its definition.
     pieces_by_slot: Dict[str, str] = {}
     for pid in (target.get("pieces") or []):
         it = get_item(pid) or {}

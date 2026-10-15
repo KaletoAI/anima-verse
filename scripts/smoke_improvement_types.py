@@ -248,10 +248,8 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
      both character kinds can regenerate with any img2mesh target.
  31. model_replace.validate accepts img2mesh targets for characters, locations
      and props and rejects a target that is not configured as img2mesh.
-     The fill_missing route check of case 6 carries the character
-     (explain_occasion is asked ("mesh_creature", "demo_b")), so that
-     character's backend switches apply to the check as they do to the
-     render.  Cases 29-31 and that call fail on commit 533ac655.
+     The fill_missing route check uses the same character render-target
+     override as the producer.
 
 The printed sections follow execution order, so expectations 9 and 10 are
 checked inside the sections whose fixtures they belong to.
@@ -704,8 +702,6 @@ check("the producer was never called", MESH_CALLS, [])
 ROUTED["mesh_creature"] = _saved
 EXPLAIN_CALLS.clear()
 FILL_MISSING.apply(CAND_B, FILL_MISSING.validate(FILL_CHAR), "task-4")
-check("the route check carries the character (its backend switches apply)",
-      EXPLAIN_CALLS, [("mesh_creature", "demo_b")])
 check("apply generates ROUTED (backend '')", MESH_CALLS,
       [{"name": "demo_b", "force": True, "backend_glob": "",
         "signature": None}])

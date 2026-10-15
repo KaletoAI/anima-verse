@@ -645,6 +645,46 @@ def regenerate_gallery_image(location_id: str, filename: str,
 
 
 # ---------------------------------------------------------------------------
+# Clothing item images
+# ---------------------------------------------------------------------------
+
+def clothing_items() -> List[Dict[str, Any]]:
+    """World-owned clothing definitions, not the cross-world shared library."""
+    from app.models.inventory import list_items
+    return [item for item in list_items()
+            if item.get("id") and item.get("category") == "outfit_piece"]
+
+
+def clothing_image_done(item_id: str) -> bool:
+    """A selected image must exist on disk. Gone/non-clothing items need no work."""
+    from app.models.inventory import get_item, get_item_image_path
+    item = get_item(item_id)
+    if not item or item.get("_shared") or item.get("category") != "outfit_piece":
+        return True
+    return bool(item.get("image") and get_item_image_path(item_id))
+
+
+def generate_clothing_image(item_id: str) -> None:
+    """Use the blocking item producer and preserve typed load/failure errors."""
+    from app.imagegen.routing import NoRouteError
+    from app.routes.inventory import generate_item_image_sync
+    # The queue may have waited while an admin filled the image or removed the
+    # item. Never overwrite that image or resurrect a deleted definition.
+    if clothing_image_done(item_id):
+        return
+    try:
+        ok = generate_item_image_sync(item_id, raise_errors=True)
+    except NoRouteError as exc:
+        # Exhausting a chain after a render failed is a failed attempt, not
+        # initial unavailability. Routing preserves that failure as the cause.
+        if exc.__cause__ is not None:
+            raise
+        raise CandidateBusy(str(exc)) from exc
+    if not ok:
+        raise RuntimeError(f"{item_id}: clothing image generation failed")
+
+
+# ---------------------------------------------------------------------------
 # Walkable surfaces
 # ---------------------------------------------------------------------------
 #
@@ -786,6 +826,6 @@ def is_img2mesh_backend(name: str) -> bool:
 def default_mesh_backend(occasion: str, character: str = "") -> str:
     """What the mesh OCCASION's chain resolves to right now (image routing),
     ``""`` when nothing is available. ``character`` applies that character's
-    backend switches (a character mesh renders with them)."""
+    render-target override, just as the mesh producer does."""
     from app.imagegen.routing import explain_occasion
     return str(explain_occasion(occasion, character).get("resolved") or "").strip()

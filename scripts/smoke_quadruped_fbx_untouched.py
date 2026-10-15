@@ -67,7 +67,7 @@ def main():
             def _generate(self,prompt,negative,params): return [fbx,texture]
         backend=Stub()
         svc=object.__new__(ImageService)
-        svc._pool=BackendPool([backend],agent_instances_provider=lambda _: {})
+        svc._pool=BackendPool([backend])
         calls=[]
         def channel(b,fn,**kwargs):
             calls.append(b.name)

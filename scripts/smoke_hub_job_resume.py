@@ -242,7 +242,7 @@ def fresh_service():
     video = OpenAIVideoBackend("hub-video", HUB_URL, 0, "HUBV_", model="Video-Alias")
     mesh = OpenAIMeshBackend("hub-mesh", HUB_URL, 0, "HUBM_", model="Mesh-Alias")
     svc = object.__new__(ImageService)
-    svc._pool = BackendPool([video, mesh], agent_instances_provider=lambda name: {})
+    svc._pool = BackendPool([video, mesh])
     svc.run_on_backend_channel = lambda backend, fn, **kw: fn()
     service_mod._service = svc
     return svc, video, mesh

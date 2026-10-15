@@ -529,8 +529,7 @@ def get_outfit_lora_options(character_name: str = "",
         from app.imagegen.routing import explain_occasion
         from app.imagegen.service import render_has_reference_image
         # The same backend the render would take: the occasion's chain with
-        # the character's own match as position 0 and the character's
-        # backend switches applied (image routing). Outfit/variant renders
+        # the character's own match as position 0. Outfit/variant renders
         # pin the profile image as identity reference, so the same img2img
         # preference inside a glob applies as in the render
         # (render_has_reference_image — one rule for both).

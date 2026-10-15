@@ -212,9 +212,8 @@ def part_b():
     big, cheap = Fake("Big A", 3), Fake("Cheap", 0)
     svc = service_mod.ImageService()
     svc.enabled = True
-    svc._pool = BackendPool([big, cheap], agent_instances_provider=lambda n: {})
+    svc._pool = BackendPool([big, cheap])
     service_mod._service = svc
-    routing._character_switches = lambda character: {}
 
     d = get_character_images_dir("Mara")
     (d / "c.png").write_bytes(b"\x89PNG fake")
