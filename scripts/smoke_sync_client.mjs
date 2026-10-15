@@ -1,4 +1,8 @@
 /**
+ * B-T4 NEU: client3d guards fail on a241a8aa: its separate timer doubles
+ * the core cadence and its fetch applies results before generation checks.
+ * apply_after_gen: resync during request 1 drops it; only request 2 applies,
+ * so the callback count is 1 and the applied result is 2 (hand-derived).
  * All cases NEU: pollCore.ts and syncHub.ts are absent on a241a8aa.
  * Hand-derived oracles (fetch duration = 100 ms):
  * dirty: initial + one pending signal = 2 requests. intervals: connected scene
@@ -21,6 +25,7 @@
  * listener_cleanup: a two-topic listener fires once per matching frame, zero
  * after unsubscribe. bye_restart: an explicit restart opens exactly one source.
  */
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 const unhandled = [];
@@ -395,6 +400,29 @@ await test("bye_restart", async f => {
   assert.equal(f.sources.length, 2);
   assert.equal(f.hub.connected(), true);
 });
+await test("apply_after_gen", async f => {
+  const applied = [];
+  f.sub(S.worldmap3d, (data, error) => {
+    if (error) throw error;
+    applied.push(data);
+  });
+  f.source().msg({ resync: true });
+  f.source().msg({ resync: true });
+  await f.advance(100);
+  assert.deepEqual(applied, []);
+  await f.advance(3000);
+  assert.deepEqual(applied, [2]);
+});
+const main = readFileSync("client3d/src/main.ts", "utf8");
+assert.doesNotMatch(main, /setInterval\([^;]*WORLDMAP_POLL_MS/);
+assert.match(main, /pollCore\(\)\.subscribe\('c3d-worldmap',\s*fetchWorldMap,\s*SYNC_ENDPOINTS\.worldmap3d/);
+assert.equal((main.match(/void pollCore\(\)\.refresh\('c3d-worldmap'\)/g) ?? []).length, 2);
+assert.doesNotMatch(main, /pollWorldMap\s*\(/);
+const fetchBody = main.match(/async function fetchWorldMap\(\)[^{]*\{([\s\S]*?)\n  \}/)?.[1];
+assert.ok(fetchBody, "side-effect-free fetchWorldMap exists");
+assert.doesNotMatch(fetchBody, /applyWorldMap|reconcileAvatarPos|lastMap\s*=|syncLocations/);
+assert.match(main, /if \(user\.username !== username\) \{[\s\S]*?location\.reload\(\);\s*\} else \{\s*syncHub\(\)\.restart\(\);/);
+console.log("PASS client3d_worldmap_guards");
 await new Promise(resolve => setImmediate(resolve));
 assert.deepEqual(unhandled, [], "no unhandledRejection");
 console.log("sync client: all cases passed");

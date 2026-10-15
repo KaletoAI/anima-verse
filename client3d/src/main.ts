@@ -2,6 +2,7 @@ import { installSkinnedNormalCorrection } from '@anima/scene-render';
 import * as THREE from 'three';
 installSkinnedNormalCorrection(THREE);
 import * as api from './api';
+import { pollCore, syncHub, SYNC_ENDPOINTS } from '@anima/player-ui';
 import { initDebug3d, initIsolation } from './debug3d';
 import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
@@ -85,7 +86,6 @@ import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } fr
 // machine in task 5 (free walking over `POST /play/pos`). The payload
 // types have carried metres only since task 2 — `pos_x`/`pos_z`/`yaw_deg`/
 // `world_bounds` — so a grid read would not even type-check today.
-const WORLDMAP_POLL_MS = 3000;
 const ROOMS_POLL_MS = 4000;
 /** How long the boot waits for the ground (terrain + relief) before framing
  *  the camera anyway. Long enough for a local request and far too short to
@@ -443,6 +443,8 @@ function installReloginGate(username: string): void {
         if (user.username !== username) {
           markResume();
           location.reload();
+        } else {
+          syncHub().restart();
         }
       },
       // Not reachable with `needsLogin` — the screen shows the form, not the
@@ -2208,18 +2210,18 @@ async function startApp(username: string, role: string) {
     }
   }
 
-  async function pollWorldMap() {
-    let map: WorldMap;
+  interface PolledMap { map: WorldMap; polledAt: number; viewRev: number }
+  async function fetchWorldMap(): Promise<PolledMap> {
     const rev = viewRev;
-    // WHEN this poll was asked, so a seat the avatar has just stood up from
-    // can be told apart from a payload that still shows it (`reconcileAvatarPlace`).
+    // Record request time so reconciliation can reject an older seat snapshot.
     const polledAt = performance.now();
+    return { map: await api.getWorldMap(showAll), polledAt, viewRev: rev };
+  }
+  function applyWorldMap(p: PolledMap): void {
+    // A show-all switch publishes its own snapshot; reject the previous view.
+    if (p.viewRev !== viewRev) return;
+    const { map, polledAt } = p;
     try {
-      map = await api.getWorldMap(showAll);
-      // The view was switched while this was in flight (the admin's "show all"):
-      // this payload belongs to the OTHER view and would re-reveal tiles the
-      // switch has just taken away. The switch published its own snapshot.
-      if (rev !== viewRev) return;
       if (map.locations_rev !== locationsRev) void syncLocations();
       lastMap = map;
       mapPolledAt = polledAt;
@@ -2241,12 +2243,9 @@ async function startApp(username: string, role: string) {
       reconcileAvatarPos(map, polledAt);   // server moved the avatar? (E4-T5)
       void syncPlaceGlyphs(map);  // free slots to sit down on (places § 4)
       announceSceneProblems(map); // what the composer found wrong (§ 4.3)
-    } catch (e) {
-      // An expired session is not an unreachable server: the dot stays as it
-      // was and the `auth:required` listener (boot) brings the login form up.
-      // Painting it red here is what made a lost login look like a dead
-      // backend.
-      if (!api.isAuthError(e)) hud.setOnline(false);
+    } catch (error) {
+      // Preserve the original poll's handling of failures during application.
+      if (!api.isAuthError(error)) hud.setOnline(false);
       return;
     }
     // The metre side of the payload: the world frame, the places as the
@@ -2286,7 +2285,16 @@ async function startApp(username: string, role: string) {
   }
   takeRoomsFrom(firstMap);
   updatePins(firstMap);
-  setInterval(pollWorldMap, WORLDMAP_POLL_MS);
+  // One subscription for the page lifetime; cadence and budget live in the table.
+  pollCore().subscribe('c3d-worldmap', fetchWorldMap, SYNC_ENDPOINTS.worldmap3d,
+    (data, error) => {
+      if (error) {
+        // An expired session opens the login gate without marking the server offline.
+        if (!api.isAuthError(error)) hud.setOnline(false);
+        return;
+      }
+      if (data) applyWorldMap(data as PolledMap);
+    });
 
   // Outfit/model swaps: the server may supply a different model per outfit.
   // The worldmap supplies its signature (§ A11a, MapCharacter.model_sig).
@@ -3993,9 +4001,9 @@ async function startApp(username: string, role: string) {
           // the stamp only makes the OLD payloads worthless, it does not
           // produce a new one, and everything the poll carries for the avatar
           // (the activity label above all) would otherwise lag by up to
-          // WORLDMAP_POLL_MS.
+          // the cadence in SYNC_ENDPOINTS.worldmap3d.
           ownSeatChangeAt = performance.now();
-          void pollWorldMap();
+          void pollCore().refresh('c3d-worldmap');
         })
         .catch((e) => { ownSeatChangeAt = 0; uiActions.toast?.(String(e)); });
     }
@@ -4012,8 +4020,8 @@ async function startApp(username: string, role: string) {
     // server here, the hold is local and lasts exactly one clip.
     // WHILE THE PLAYER STEERS, THE PLAYER'S INPUT DECIDES THE AVATAR'S CLIP —
     // not the worldmap poll. The poll still reports the pose the figure was in
-    // (up to WORLDMAP_POLL_MS old, and the server clears it only after the
-    // release), and putting `sit` back on a figure whose keys are down makes
+    // (up to the SYNC_ENDPOINTS.worldmap3d interval old; the server clears it
+    // only after the release), and putting `sit` back on a figure whose keys are down makes
     // the stand-up rule fire a SECOND time: the walk breaks off and the whole
     // thing starts over. This one line is what stops that loop. It only bites
     // while the figure stands still — the moving branch of `npcs.tick` asks
@@ -4554,7 +4562,7 @@ async function startApp(username: string, role: string) {
           seatedKey = '';
           ownSeatChangeAt = performance.now();
           cancelRoute();
-          void pollWorldMap();
+          void pollCore().refresh('c3d-worldmap');
         })
         .catch((e) => {
           if (api.isAuthError(e)) return;

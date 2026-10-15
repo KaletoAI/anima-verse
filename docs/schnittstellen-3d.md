@@ -32,6 +32,70 @@ JSON-Antworten können gzip-komprimiert mit schwachem ETag (`W/"…"`) kommen. C
 ETag beim Revalidieren unverändert in `If-None-Match` zurück; der Server vergleicht schwach
 (`http_files.etag_matches`).
 
+## Player sync: `GET /events/sync` (P4 B)
+
+This authenticated, same-origin SSE endpoint is implemented by the pure ASGI
+layer `app/core/sync_stream.py`, not a router route. It owns receive/send and
+disconnect cancellation, inside gzip and outside the BaseHTTPMiddleware layers.
+The stream carries invalidation topics, never game data; clients refetch the
+existing fog-filtered endpoints. `/events/state-stream` remains admin-only.
+
+Topics are `presence` (visible character changes), `scene` (perceived scene
+changes), `notices` (notifications and badges), `self` (own state and belongings),
+and `world` (world structure). Recipients follow perceivability: the avatar,
+avatars at the old/new location, explicit perceivers, or party members resolved
+to avatar names before fan-out. `AtLocation("")` matches nobody. `Everyone` is
+reserved for world structure and the public Instagram feed, never in-game
+activity. In-game location/room writers use `sync_world=False` and local signals;
+admin structure edits use `sync_world=True`. Phone changes notify their owners;
+all public feed saves/deletions emit `notices` to everyone. Rule edits compare
+old/new bindings, and world events notify affected old/new locations. Hidden
+room items do not signal other rooms; mind changes address their owners.
+
+Normal frames have the form `data: {"topics":["presence"],"resync":false}`.
+Changes are bundled in 250 ms windows. The first message has `resync: true`
+and all topics; queue overflow (limit 64 entries) and binding changes also
+produce a resync. Idle heartbeats are `: ping` every 15 s. Session validity and
+avatar/location binding are checked every 60 s without extending the session;
+an invalid session receives `event: bye` with `{}` and the stream closes.
+The initial connection may refresh the session cookie before headers are sent.
+Consumers lagging more than 30 s are disconnected (watchdog every 5 s).
+Headers include `Cache-Control: no-cache` and `X-Accel-Buffering: no`;
+the initial retry hint is 5000 ms.
+
+Each SPA shares one `syncHub` EventSource and one `pollCore`. Every resync
+signals all subscribers through their endpoint budget; all except the first
+resync also advance the binding generation. Old-generation results and errors
+are discarded and refetched, and cached data is cleared without blanking the
+current UI. Only current-generation worldmap results reach `applyWorldMap`,
+which also checks the show-all view revision. Same-name re-login restarts the
+hub after `bye`; changing users in client3d reloads the page.
+
+Intervals and minimum request spacing from `SYNC_ENDPOINTS` (seconds):
+
+| Key | Topics | Without stream | Connected | Minimum spacing |
+|---|---|---|---|---|
+| `scene` | presence, scene | 5 | 20 | 5 |
+| `others` | presence | 5 | 20 | 5 |
+| `notices` | notices | 5 | 30 | 5 |
+| `badges` | notices | 20 | 30 | 5 |
+| `self` | self | 5 | 30 | 5 |
+| `belongings` | self | 5 | 30 | 5 |
+| `mind` | self | 10 | 30 | 5 |
+| `worldmapPlayer` | presence, world | 10 | 20 | 3 |
+| `worldmap3d` | presence, world | 3 | 6 | 3 |
+
+Pushes and periodic polls share the budget; concurrent fetches are serialized,
+and signals during a fetch schedule one trailing fetch. Explicit refresh is
+immediate and loss-free, including in hidden tabs. Hidden tabs defer push and
+periodic work until visible, except client3d's worldmap (`runHidden: true`).
+The existing 120 s locations fallback remains;
+worldmap signatures trigger locations, terrain, height, exploration and world
+prop updates. Wilderness changes and rules whose force changes only with time
+remain covered by polling. `NewsPanel`, `PhonePanel` and `ScenesRecap` still
+have independent intervals. An actual SSE chunk through Vite is checked during
+user acceptance; the proxy smoke checks forwarding configuration only.
+
 ## Inhalt
 
 - [Präambel v6 — „Gebiete“ (2026-08-19)](#präambel-v6-gebiete-2026-08-19)
