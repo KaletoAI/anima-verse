@@ -335,7 +335,7 @@ function styleKind(raw: string | undefined): TileStyle | null {
 
 /** One placed model of the mounted scene, kept for tier swapping (Stage 3,
  *  plan-3d-lod-und-betreten.md): the spec, the URL that is actually standing
- *  and the object in the graph. `mountScene` writes the records,
+ *  and the object in the graph. `mountShell` / `mountDetail` write their layer's records,
  *  `setSceneModelTier` (sceneRecipe.ts) swaps them in place — the old mesh
  *  stays visible until the new one is in. */
 export interface PlacedSceneModel {
@@ -456,7 +456,7 @@ export interface SwingingDoor {
  * floor is the terrain and is asked of the height sampler point by point.
  *
  * There is no storey datum in here: a marker already arrives as its own lift
- * OVER that datum (`mountScene` writes `offsetY = y_world − levels[].floor_y`),
+ * OVER that datum (`mountShell` writes `offsetY = y_world − levels[].floor_y`),
  * so keeping the datum a second time would be one number in two places.
  */
 export interface RoomFloor {
@@ -729,7 +729,7 @@ export interface Tile {
   /** Rooms marked as outdoor (do not contribute a building floor colour). */
   roomOutdoor: Set<string>;
   /** This tile's scene uses a storey < 0 (derived from the payload, set by
-   *  mountScene). Read by the camera rule that opens a basement view. */
+   *  mountShell). Read by the camera rule that opens a basement view. */
   hasBasement?: boolean;
   /** Area location (plan-area-locations.md): the location model remains in
    *  the interior view and gets holes instead. The handle toggles them with
@@ -739,8 +739,8 @@ export interface Tile {
   /** Model placements of the mounted scene (tier swapping, Stage 3). */
   placedModels?: PlacedSceneModel[];
   /** The DOOR PROPS of the mounted scene (v5), one per `models[]` entry with a
-   *  `door` block. Pure view state and part of the mount: `unmountScene` drops
-   *  the list with the groups it points at. */
+   *  `door` block. Pure view state: `unmountDetail` drops indoor registrations;
+   *  `unmountShell` drops the rest with the groups they point at. */
   doorProps?: SwingingDoor[];
   /** 0..1 — Kachel ist als Kamera-Verdecker ausgeblendet */
   occl: number;
@@ -910,7 +910,7 @@ export function surfaceFor(
  *  § 3.1), painted per texel by the one terrain material. The procedural
  *  building shell died before it with the Prop-Welt programme (user decision
  *  2026-08-19). The interior (plates, walls, elevator, rooms, models) comes
- *  entirely from the scene recipe; `mountScene` (sceneRecipe.ts) builds it into
+ *  entirely from the scene recipe; `mountShell` (sceneRecipe.ts) builds it into
  *  these same tile fields. A location without a recipe (404) has, by server
  *  definition, neither a room layout nor an outline nor a building model —
  *  there is simply nothing to unfold. */
@@ -1068,7 +1068,7 @@ export function deriveRoomSpots(tile: Tile, roomId: string,
 
   // MARKER HEIGHTS sit on the room's floor plus their own lift over the storey
   // datum the composer measured them against — `offsetY` IS `y_world − datum`
-  // (`mountScene`), so this is the composed height with the room's real floor
+  // (`mountShell` / `mountDetail`), so this is the composed height with the room's real floor
   // put under it. On a built ground floor `floorY` is the storey datum and the
   // line reproduces the payload exactly; where the ROOM declares a floor of its
   // own (a podium, a sunken lounge, a hut in a lake, an upper storey's plate)

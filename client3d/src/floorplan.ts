@@ -17,7 +17,7 @@ import { Engine } from './scene/engine';
 import { applyTileFade, buildTile, setSurfaceTextures, type Tile } from './scene/tiles';
 import { setModelEnvironment } from './scene/glbMaterials';
 import { getSurfaceTextures } from './api';
-import { mountScene, SceneLibrary, unmountScene } from './scene/sceneRecipe';
+import { mountShell, mountDetail, detailVerifyReport, SceneLibrary, unmountShell } from './scene/sceneRecipe';
 void getSurfaceTextures().then(setSurfaceTextures);
 import { grassTexture } from './scene/textures';
 import type { WorldLocation } from './types';
@@ -86,7 +86,7 @@ function rebuild(loc: WorldLocation) {
     // tile's geometries, materials and texture clones leaked per rebuild
     // (review finding UI-3 neighbourhood; the ownership ledger of the scene
     // mount is what frees them).
-    unmountScene(tile);
+    unmountShell(tile);
   }
   // Remove old CSS2D labels; the renderer does not clear their DOM nodes.
   document.querySelectorAll('.room-label, .loc-label').forEach((el) => el.remove());
@@ -110,13 +110,20 @@ function rebuild(loc: WorldLocation) {
   }
   // The place is at the origin, so payload coordinates are world coordinates;
   // the verification table compares them directly against the spec.
-  void mountScene(tile, scene).then((report) => {
-    if (report) {
-      const models = `Modelle ${report.models.placed}/${report.models.total}`;
-      say(report.rows.length
-        ? `Verify: ${report.rows.length} Abweichung(en) von ${report.checked} Zahlen `
+  const mountedTile = tile;
+  void mountShell(mountedTile, scene).then(async (report) => {
+    if (tile !== mountedTile || !mountedTile.group.parent) return;
+    if (!await mountDetail(mountedTile, scene)) return;
+    const reports = [report, detailVerifyReport(mountedTile)].filter((r) => r !== null);
+    if (reports.length) {
+      const checked = reports.reduce((sum, r) => sum + r.checked, 0);
+      const deviations = reports.reduce((sum, r) => sum + r.rows.length, 0);
+      const models = `Modelle ${reports.reduce((sum, r) => sum + r.models.placed, 0)}`
+        + `/${reports.reduce((sum, r) => sum + r.models.total, 0)}`;
+      say(deviations
+        ? `Verify: ${deviations} Abweichung(en) von ${checked} Zahlen `
           + `(${models}) — siehe Konsole`
-        : `Verify: ${report.checked} Zahlen geprüft, keine Abweichung (${models})`);
+        : `Verify: ${checked} Zahlen geprüft, keine Abweichung (${models})`);
     }
   });
 }

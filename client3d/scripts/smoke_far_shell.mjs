@@ -6,6 +6,10 @@
  * decision into the mount (`client3d/src/scene/sceneRecipe.ts`, read as
  * source: § B5a says strings and numbers, never screenshots).
  *
+ * REGRESSION: existing A/B checks retain their original far-shell oracles.
+ * NEU: both recipe-shell decisions must lie inside mountShell (two calls);
+ * this is red on a241a8aa because that function is absent.
+ *
  * Usage:  node client3d/scripts/smoke_far_shell.mjs
  *
  * `shellPlan.ts` is pure and import-free like `game/walk.ts`, so a plain
@@ -66,7 +70,7 @@
  *      `roofParts`/`roofMats` (what `applyTileFade` fades), with the corridor
  *      fade on its materials like every other shell;
  *   B3 the handover is the one that already existed: `applySceneBuilding`
- *      drops it when a real model arrives, and `unmountScene` drops it with
+ *      drops it when a real model arrives, and `unmountShell` drops it with
  *      the scene whose primitives it copies.
  * A fourth: the copies are invisible to the raycaster, so a click keeps
  * selecting what it selected before the shell existed.
@@ -186,10 +190,7 @@ async function main() {
     recipe.includes('  if (!roofOnly) dropFarShell(tile);\n  tile.serverModel = model;'),
     true);
   check('B3 …and it dies with the scene it copies',
-    recipe.includes('if (prev && prev.name === SCENE_GROUP) tile.group.remove(prev);\n'
-      + '  // The far-view shell is a copy of THIS scene\'s primitives, so it dies with\n'
-      + '  // it — its geometries are the ones just taken out of the graph.\n'
-      + '  dropFarShell(tile);'),
+    recipe.slice(recipe.indexOf('export function unmountShell')).includes('dropFarShell(tile);'),
     true);
   // Scoped to the teardown itself: `geometry.dispose()` is legitimate
   // elsewhere in this file (the drape swaps a plate's geometry), it is only
@@ -212,6 +213,9 @@ async function main() {
     true);
   check('B5 …and the mount asks the plan exactly twice',
     recipe.split('wantsRecipeShell({').length - 1, 2);
+
+  const shellMount = recipe.slice(recipe.indexOf('export async function mountShell'), recipe.indexOf('export async function mountDetail'));
+  check('B5 both shell decisions belong to mountShell', shellMount.split('wantsRecipeShell({').length - 1, 2);
 
   // (B6) THE ONE EXCEPTION TO B3 — a `roof_only` building model
   // (§ B addendum 2026-08-20, docs/llm-blender-models.md). It is NOT the

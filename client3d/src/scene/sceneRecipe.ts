@@ -25,12 +25,23 @@ import {
   deriveCorridorCentres, deriveRoomSpots, preloadSurfaceTexture, surfaceFor,
   surfaceMaterialSpec, tileDirToWorld, tileToWorld, worldGroundSampler,
   worldWaterSampler,
-  type PlacedSceneModel, type RoomFloor, type StairWorldLink, type SwingingDoor,
+  type PlacedSceneModel as BasePlacedSceneModel, type RoomFloor, type StairWorldLink, type SwingingDoor,
   type Tile, type VerticalTarget,
 } from './tiles';
 import { SubmergedGhost } from './submergedGhost';
 import { ghostCutY, ghostWaterLevel } from '../game/walk';
 import { waterInside } from './waterShade';
+
+export type Layer = 'shell' | 'detail';
+export type PlacedSceneModel = BasePlacedSceneModel & { layer: Layer };
+const detailReports = new WeakMap<Tile, VerifyReport | null>();
+
+/** Verification for the currently mounted detail layer; null when disabled or absent. */
+export function detailVerifyReport(tile: Tile): VerifyReport | null {
+  return detailReports.get(tile) ?? null;
+}
+
+const shellDeclared = new WeakMap<Tile, Map<string, number | undefined>>();
 
 /** Which resolution tier a mount loads, per model group. `building` = the
  *  far-view shell/area model, `interior` = everything else (dioramas, props).
@@ -236,9 +247,15 @@ function dropPlacementGhost(rec: PlacedSceneModel): void {
  * player's own figure would keep the height the seat had when it sat down.
  */
 export function reliftScene(tile: Tile, datumDelta = 0): boolean {
-  const placements = tile.placedModels;
+  const placements = tile.placedModels as PlacedSceneModel[] | undefined;
   if (!placements) return false;
   if (datumDelta) {
+    for (const [id, declared] of shellDeclared.get(tile) ?? []) {
+      if (declared === undefined) continue;
+      shellDeclared.get(tile)!.set(id, declared + datumDelta);
+      const floor = tile.roomFloors.get(id);
+      if (floor?.declared !== undefined) floor.declared += datumDelta;
+    }
     for (const p of tile.roomDoors.values()) p.y += datumDelta;
     for (const p of tile.elevatorStops?.values() ?? []) p.y += datumDelta;
     for (const s of tile.stairs ?? []) { s.foot.pos.y += datumDelta; s.head.pos.y += datumDelta; }
@@ -270,7 +287,7 @@ export function reliftScene(tile: Tile, datumDelta = 0): boolean {
   // A prop marker is finished the moment it is composed and is never
   // re-derived — so it is moved here, once, by its own difference. The same
   // marker object hangs under BOTH the room id and the room name
-  // (`mountScene`), hence the identity set: a second pass over it would move
+  // (`mountShell`), hence the identity set: a second pass over it would move
   // it twice.
   // The lift is ONE number per place, measured at the place's OWN LIFT POINT
   // (`liftAt` — for a prop marker its placement's anchor, the point the mesh
@@ -303,6 +320,8 @@ export function reliftScene(tile: Tile, datumDelta = 0): boolean {
   }
   for (const [id, floor] of tile.roomFloors) {
     const declared = walkY.get(id);
+    const shellRec = placements.find((r) => r.layer === 'shell' && r.spec.role === 'room' && r.spec.room_id === id && r.spec.walk_y_world !== undefined);
+    if (shellRec) shellDeclared.get(tile)?.set(id, shellRec.spec.walk_y_world! + shellRec.lift);
     if (declared !== undefined) floor.declared = declared;
     // A room whose floor is DECLARED and whose placements did not move has
     // nothing to re-derive: its stands, its centre and its seats are all
@@ -342,7 +361,7 @@ export function reliftScene(tile: Tile, datumDelta = 0): boolean {
  *
  * What stays here is the MATERIAL of those primitives (the surface-texture
  * chain, the payload colour vocabulary) plus view and interaction state:
- * `mountScene` fills the tile fields of the interior view so that LOD,
+ * `mountShell` fills the tile fields of the interior view so that LOD,
  * crossfade, level switch, room focus, wall culling, NPC placement and
  * pathfinding keep running unchanged.
  *
@@ -711,12 +730,13 @@ function assertUnitScale(k: number): void {
  *  loading must not add anything afterwards. Per tile, not global — at startup
  *  every scene location mounts at once, and a global counter would declare
  *  every mount but the last one stale. */
-const mountSeq = new WeakMap<Tile, number>();
+const shellSeq = new WeakMap<Tile, number>();
+const detailSeq = new WeakMap<Tile, number>();
 
 /**
  * THE GPU RESOURCES ONE MOUNT BUILT ITSELF (review finding UI-2) — per tile,
- * beside `mountSeq` and for the same reason: a scene is re-fetched every
- * minute and remounted whenever its signature moves, and what `mountScene`
+ * beside `shellSeq` / `detailSeq` and for the same reason: a scene is re-fetched every
+ * minute and remounted whenever its signature moves, and what `mountShell`
  * builds here is built FRESH every time. There is no geometry or material
  * cache behind `buildPlate`/`buildWall`/`buildExtra` (each call is a new
  * `ExtrudeGeometry`/`BoxGeometry` and a new material), and `tiledTexture`
@@ -757,16 +777,17 @@ interface OwnedTag {
   textures: THREE.Texture[];
 }
 
-const sceneOwned = new WeakMap<Tile, SceneOwned>();
+const sceneOwned = new WeakMap<Tile, Record<Layer, SceneOwned>>();
 const ownedTag = new WeakMap<THREE.Object3D, OwnedTag>();
 
-function ownedOf(tile: Tile): SceneOwned {
+function ownedOf(tile: Tile, layer: Layer): SceneOwned {
   let owned = sceneOwned.get(tile);
   if (!owned) {
-    owned = { geometries: new Set(), materials: new Set(), textures: new Set() };
+    const empty = (): SceneOwned => ({ geometries: new Set(), materials: new Set(), textures: new Set() });
+    owned = { shell: empty(), detail: empty() };
     sceneOwned.set(tile, owned);
   }
-  return owned;
+  return owned[layer];
 }
 
 /** Register a primitive this mount built itself: its geometry, its material
@@ -774,8 +795,8 @@ function ownedOf(tile: Tile): SceneOwned {
  *  `map`, the ONE slot these materials ever get a texture in — a shared normal
  *  map that `surfaceMaterial` may hang on a water surface is not ours and is
  *  deliberately never read back out of the material. */
-function ownPrimitive(tile: Tile, mesh: THREE.Mesh): void {
-  const owned = ownedOf(tile);
+function ownPrimitive(tile: Tile, mesh: THREE.Mesh, layer: Layer): void {
+  const owned = ownedOf(tile, layer);
   owned.geometries.add(mesh.geometry);
   const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
   const textures: THREE.Texture[] = [];
@@ -796,11 +817,11 @@ function ownPrimitive(tile: Tile, mesh: THREE.Mesh): void {
  *  CREATION, not what hangs on the mesh now: the cut and the clip may since
  *  have put their own clones there, and those are freed by their own
  *  routines. */
-function releaseOwnedMesh(tile: Tile, mesh: THREE.Object3D): void {
+function releaseOwnedMesh(tile: Tile, mesh: THREE.Object3D, layer: Layer): void {
   const tag = ownedTag.get(mesh);
   if (!tag) return;
   ownedTag.delete(mesh);
-  const owned = sceneOwned.get(tile);
+  const owned = sceneOwned.get(tile)?.[layer];
   owned?.geometries.delete(tag.geometry);
   tag.geometry.dispose();
   for (const mat of tag.materials) {
@@ -817,10 +838,10 @@ function releaseOwnedMesh(tile: Tile, mesh: THREE.Object3D): void {
  *  shares its `source` with the library original; three counts the GPU upload
  *  per source, so disposing the clone frees this mount's handle and leaves the
  *  shared library image itself untouched. */
-function disposeSceneOwned(tile: Tile): void {
-  const owned = sceneOwned.get(tile);
+function disposeSceneOwned(tile: Tile, layer: Layer): void {
+  const owned = sceneOwned.get(tile)?.[layer];
   if (!owned) return;
-  sceneOwned.delete(tile);
+  sceneOwned.get(tile)![layer] = { geometries: new Set(), materials: new Set(), textures: new Set() };
   for (const geo of owned.geometries) geo.dispose();
   for (const mat of owned.materials) mat.dispose();
   for (const tex of owned.textures) tex.dispose();
@@ -984,26 +1005,19 @@ function roomProps(placements: readonly PlacedSceneModel[], roomId: string
   return out;
 }
 
-/**
- * Die komplette Innenansicht einer Location aus dem Payload bauen.
- *
- * Füllt die Tile-Felder der Innenansicht
- * (roomGroups/-Centers/-Exits/-Levels/-Rects/-Slots/-Markers, outlineWalls,
- * levelSlabs, levelWallMats, levelRoomPlateMats, elevatorStops, stairs,
- * alwaysVisibleRooms, interior,
- * interiorLabels) — der ganze Sicht- und Interaktionscode
- * darüber (LOD, Crossfade, Fokus, Culling, NPCs) bleibt unberührt.
- *
- * Modelle (Gebäudehülle, Raum-Dioramen, Props) laufen ALLE durch `placeModelSpec` (§ B2, geteiltes Paket);
- * sie trudeln asynchron ein und werden nachgetragen.
- */
-export async function mountScene(tile: Tile, scene: ScenePayload,
-                                 tiers: SceneTiers = { building: 'full', interior: 'full' }
+/** A model with no room, or in a room visible outdoors, belongs to the shell. */
+export function isOutdoorSpec(tile: Tile, spec: SceneModelSpec): boolean {
+  return !spec.room_id || tile.alwaysVisibleRooms.has(spec.room_id) || tile.roomOutdoor.has(spec.room_id);
+}
+
+export async function mountShell(tile: Tile, scene: ScenePayload,
+                                 building: ModelTier = 'full', outdoorTier: ModelTier = 'full'
 ): Promise<VerifyReport | null> {
-  const seq = (mountSeq.get(tile) ?? 0) + 1;
-  mountSeq.set(tile, seq);
-  // veraltet = diese Kachel wurde neu montiert ODER ganz aus der Szene genommen
-  const stale = () => mountSeq.get(tile) !== seq || tile.group.parent === null;
+  unmountShell(tile);
+  const tiers = { building, interior: outdoorTier };
+  const seq = (shellSeq.get(tile) ?? 0) + 1;
+  shellSeq.set(tile, seq);
+  const stale = () => shellSeq.get(tile) !== seq || tile.group.parent === null;
   const locId = tile.loc.id;
   const verify = new Verifier(verifyOn());
   // k IS 1 since E4 (§ B, task 1) — the field stays in the payload for the
@@ -1012,8 +1026,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // sending something else would otherwise draw a silently wrong-sized world.
   assertUnitScale(scene.k);
 
-  // Surface-Bilder FERTIG laden, bevor Platten/Wände sie klonen (Klone eines
-  // noch ladenden Bildes bleiben leer).
+  // Finish loading library images before primitives clone their textures.
   const kinds = new Set<string>(['floor']);
   for (const p of scene.plates) if (p.texture_kind) kinds.add(p.texture_kind);
   for (const w of scene.walls) if (w.texture_kind) kinds.add(w.texture_kind);
@@ -1021,8 +1034,6 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   await Promise.all([...kinds].map(preloadSurfaceTexture));
   if (stale()) return null;
 
-  // Vorherigen Aufbau entfernen (Remount bei Signatur-Wechsel).
-  unmountScene(tile);
   // Fresh placement ledger for the tier swap (Etappe 3): every model spec of
   // THIS mount registers below; an in-flight swap of the old mount finds its
   // record gone and drops its answer.
@@ -1030,17 +1041,14 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   tile.placedModels = placements;
   // The DOOR PROPS of this mount (v5) — filled below as the model specs land,
   // read by the frame loop that swings them, and dropped with the scene by
-  // `unmountScene`. Pure view state: nothing in here is ever persisted.
+  // `unmountShell`. Pure view state: nothing in here is ever persisted.
   const doorProps: SwingingDoor[] = [];
   tile.doorProps = doorProps;
 
   const g = new THREE.Group();
   g.name = SCENE_GROUP;
   g.visible = false;                      // the crossfade uncovers it
-  // NUR eine Szene mit INNEN-Inhalt ist eine Innenansicht: eine Location,
-  // deren Payload allein aus dem Gebäudemodell besteht (Mondscheinsee —
-  // Modell, aber keine Räume/Platten/Wände), darf beim Reinzoomen NICHT
-  // ausgeblendet werden; es gäbe nichts aufzudecken.
+  // Only scenes with interior content have an interior view to uncover.
   // …and since E5a a storey-0 room is DATA rather than a plate, so the floor
   // plan counts here exactly as its plates used to: a location made of nothing
   // but open zones still has an inside to uncover.
@@ -1065,11 +1073,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // Local relief is authored through the map's HEIGHT AREAS, and the one ground
   // under a location is the world field (§ A16).
   //
-  // Detail-Modus der LOCATION (v5.2 Nr. 10) — kommt als Payload-Flag und
-  // gilt auch OHNE Location-Modell (der Wald hat bewusst keins mehr): der
-  // Backstop rutscht UNTER die Etage-0-Platten, sonst begräbt er bei 0,04
-  // genau die Zonen-Texturen, die er stützen soll (User-Befund 2026-08-02).
-  // Ein vorhandenes Modell bestätigt das Flag nur (display shell_area).
+  // Area detail is a payload flag, including places with no building model.
   tile.modelIsShellArea = !!scene.area_detail;
   // THE BACKSTOP IS GONE ("Ein Boden" E3, plan § 3.1). A mounted scene used to
   // shove the tile's own ground plate under its storey-0 surfaces (−0.05, or
@@ -1119,8 +1123,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
       if (name) tile.roomOutdoor.add(name);
     }
   }
-  /** Zielgruppe eines Primitivs: der Raum (Fokus-Modus blendet ihn komplett
-   *  aus) oder die Innenansicht für alles Gebäudeweite. */
+  /** Primitives join their room group, or the shared interior group. */
   const parentFor = (roomId: string | undefined) =>
     (roomId && roomGroup.get(roomId)) || g;
 
@@ -1130,12 +1133,11 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // A room plate of such a storey is still where that room's floor is, which is
   // why its `top_y` travels into `roomFloors` below.
   const roomPlateTop = new Map<string, number>();
-  /** Gebaute Primitive für den Verify-Durchgang — vermessen wird erst, wenn
-   *  die Kachel-Matrizen stehen (sonst misst man Zwischenzustände). */
+  /** Retain primitives until their final matrices can be verified. */
   const builtPlates: { mesh: THREE.Mesh; plate: ScenePlate }[] = [];
   const builtWalls: { mesh: THREE.Mesh; wall: SceneWall }[] = [];
   // The floors of the PREVIOUS mount are gone with it (a remount arrives after
-  // `unmountScene`, but a tile built fresh never saw one) — the list below is
+  // `unmountShell`, but a tile built fresh never saw one) — the list below is
   // filled from this payload alone.
   tile.walkPlates = [];
   // The BAKED SURFACES (v6): collected synchronously from the payload, before
@@ -1144,12 +1146,12 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   // is on its ground; an entry whose mesh never loads keeps 0, which is the
   // composed height the payload itself states.
   tile.surfaces = scene.models
-    .filter((m) => m.surface)
+    .filter((m) => m.surface && (m.role === 'building' || isOutdoorSpec(tile, m)))
     .map((m) => ({ id: `${m.role}:${m.id}:${m.room_id ?? ''}`, spec: m, surface: m.surface!,
                    lift: 0, level: m.level, roomId: m.room_id ?? '' }));
   for (const plate of scene.plates) {
     const mesh = buildPlate(THREE, plate, plateMaterial(plate, style));
-    ownPrimitive(tile, mesh);
+    ownPrimitive(tile, mesh, 'shell');
     // THE FLOOR THE FIGURES STAND ON (§ B1 addendum 2026-08-20): every plate is
     // one, and `tileWalkY` takes the highest one under the point that is still
     // below the storey ceiling. Since E5a that list is a list of STOREYS.
@@ -1279,7 +1281,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     if (len < 1e-4) continue;
     const { mat: wallMat, tileM } = wallMaterial(wall, style);
     const mesh = buildWall(THREE, wall, wallMat, tileM);
-    ownPrimitive(tile, mesh);
+    ownPrimitive(tile, mesh, 'shell');
     // A leaf whose hole a DOOR PROP fills is not drawn INSIDE (v5) — the prop
     // in `models[]` IS the door there, and both of them in one hole is one
     // door too many. It is still BUILT and still hung in, invisible, for two
@@ -1318,7 +1320,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     }
   }
 
-  // ── Fernsicht-Hülle (finding 2026-08-20) ────────────────────────────────
+  // ── Far-view shell (finding 2026-08-20) ────────────────────────────────
   // A place without a server model showed a socle plate and a label from the
   // outside; its walls existed but only inside the crossfade. WHICH source a
   // far view has is decided in `shellPlan.ts` (pure, hand-checked in
@@ -1358,7 +1360,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
   for (const extra of scene.extras) {
     const { mat: extraMat, tileM: extraTile } = extraMaterial(extra, style);
     const box = buildExtra(THREE, extra, extraMat, extraTile);
-    ownPrimitive(tile, box);
+    ownPrimitive(tile, box, 'shell');
     const isStair = extra.kind.startsWith('stair_');
     if (extra.kind.startsWith('elevator_')) {
       liftGroup.add(box);
@@ -1531,6 +1533,7 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     });
   }
 
+  for (const [id] of tile.roomFloors) deriveRoomSpots(tile, id, []);
   // ── Room labels + storey switch (view state, stays in the client) ───────
   // Room labels only in BUILDINGS (`areaLoc` from above): on an area
   // location the rooms are zones like "Road"/"Forest", and their generic
@@ -1589,158 +1592,9 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     g.add(sw);
   }
 
-  // ── Modelle: ALLE durch placeModelSpec (§ B2, @anima/scene-render) ──────
-  // Gebäudehülle, Raum-Dioramen und Props sind derselbe Code — nur die Spec
-  // unterscheidet sie. Das Diorama koexistiert seit § A4 (2026-07-25) immer
-  // mit den Props des Raums; es ist einfach ein weiteres Modell im Raum.
-  const walkY = new Map<string, number>();
-  verify.total = scene.models.length;
-  await Promise.all(scene.models.map(async (spec) => {
-    // THE ONE PLACE this tile's terrain enters a placement (§ A16.9), and it
-    // is the SAME call the re-lift makes: the object is built on its composed
-    // `bottom_y`, its record starts at `lift: 0`, and `reliftPlacement` moves
-    // it onto the ground under its own anchor. Read ONCE per spec so mesh,
-    // placeholder, the room's declared floor and the verify row can never
-    // disagree about it.
-    let lift = 0;
-    let source: THREE.Object3D | null = null;
-    // Tier (§ B1 variants): the caller says which tier this mount loads —
-    // view state (camera distance / open detail view, Etappe 3 of
-    // plan-3d-lod-und-betreten.md); a missing tier falls back to the best
-    // existing one inside pickVariant. WELCHE Modell-Variante eines Props
-    // (E2.3) gilt, steht in der Spec (`variant`) — `pickModelVariant` wählt
-    // sie und danach die Stufe; ohne Varianten ist es dasselbe wie zuvor.
-    const url = pickModelVariant(spec, tierOf(spec, tiers));
-    if (url) {
-      const raw = await loadGlb(url, tile.center);
-      if (stale()) return;
-      source = raw ? raw.clone(true) : null;
-    }
-    if (!source && spec.placeholder_dims) {
-      // missing / has_model:false → Platzhalter in gelieferter Größe; die
-      // Platzierung wird NIE verworfen (§ A2).
-      const ph = buildPlaceholder(THREE, spec.placeholder_dims, placeholderMaterial());
-      ownPrimitive(tile, ph);
-      ph.receiveShadow = true;
-      ph.position.set(spec.anchor[0], spec.bottom_y, spec.anchor[1]);
-      // `+rad` since E4 — the same sign `placeModelSpec` turns a real mesh by
-      // (§ A1.1). A placeholder that turned the other way would stand mirrored
-      // against the mesh it stands in for.
-      ph.rotation.y = deg(spec.yaw_deg);
-      const parent = parentFor(spec.room_id);
-      parent.add(ph);
-      const rec: PlacedSceneModel = { spec, url, object: ph, parent,
-                                      placeholder: true, lift: 0 };
-      placements.push(rec);
-      lift = reliftPlacement(tile, rec);
-      // A stand-in for a CUT prop is cut too (§ B2 addendum 2026-08-23) —
-      // otherwise the missing half of the table reappears the moment its mesh
-      // fails to load. The plane is world space and needs the mounted object.
-      applyDepthCut(THREE, ph, spec.cut_plane);
-      verify.placed += 1;
-      // Auch der Platzhalter wird gegen seine Spec geprüft: er steht an
-      // derselben Stelle und hat dieselbe Zielgröße wie das fehlende Mesh
-      // (dims × k). Ohne diese Prüfung blieb ein Loch in der Abdeckung —
-      // an 526cf40b waren das 2 Props / 8 Prüfungen, und die Verify-Summe
-      // lag ohne Grund unter dem Soll.
-      verify.placement(ph, spec, tile, lift);
-      return;
-    }
-    if (stale()) return;
-    if (!source) {
-      // Mesh nach allen Versuchen nicht ladbar UND kein Platzhalter geliefert:
-      // hier fehlt ein Objekt in der Szene. Das wird GEZÄHLT (A3) — früher
-      // verschwand die Platzierung stillschweigend und die Verify-Tabelle
-      // meldete trotzdem „keine Abweichung". The ledger entry is still
-      // written: a later tier swap may try the mesh again.
-      placements.push({ spec, url, object: null,
-                        parent: parentFor(spec.room_id), lift: 0 });
-      verify.skip(spec);
-      return;
-    }
-    verify.placed += 1;
-    // clone:false — the client hands the object over for good (the admin
-    // preview places the same cached object several times and clones it).
-    // clip:false — we clip below ourselves, in WORLD coordinates around the
-    // tile centre; the spec carries the polygon relative to it.
-    const placed = placeModelSpec(THREE, source, spec,
-                                  { clone: false, clip: false });
-    if (spec.surface && spec.measure !== 'fit') {
-      // The one place a loader divergence Blender↔three would show: the
-      // spec's scale (max_m over the BAKED snapped extent) against the scale
-      // place() derived from the mesh it actually loaded. A `fit` spec is out
-      // — it is fitted to an opening instead of scaled to `max_m`, so neither
-      // side of this comparison is the factor it applied.
-      verify.check(`${spec.role}:${spec.id}`, 'surface_scale', placed.scale.x,
-                   surfaceScale(spec.surface, spec));
-      // …AND THE BOX ITSELF (fix wave B). `surface_scale` compares ONE number
-      // derived from `extent_snapped`, so it stays green whenever the two
-      // sides agree about the largest side — a mesh whose Blender box and
-      // three box differ in the OTHER axes, or in where its underside sits,
-      // passes it while every lattice reading is off by that difference. This
-      // row measures the exact box `place()` seated the model on against the
-      // one the bake wrote, in model units, and reports the worst of the four
-      // numbers (three sizes + the bottom edge).
-      const box = fixGroupBox(placed);
-      if (box) {
-        const size = box.getSize(new THREE.Vector3());
-        const [bx0, by0, bz0] = spec.surface.box_min;
-        const [bx1, by1, bz1] = spec.surface.box_max;
-        const dev = Math.max(Math.abs(size.x - (bx1 - bx0)),
-                             Math.abs(size.y - (by1 - by0)),
-                             Math.abs(size.z - (bz1 - bz0)),
-                             Math.abs(box.min.y - by0));
-        verify.check(`${spec.role}:${spec.id}`, 'surface_box', dev, 0);
-      }
-    }
-    if (spec.role === 'building') {
-      applyBuildingModel(tile, placed, spec);
-      placements.push({ spec, url, object: placed, lift: 0 });
-    } else {
-      const parent = parentFor(spec.room_id);
-      parent.add(placed);
-      const rec: PlacedSceneModel = { spec, url, object: placed, parent, lift: 0 };
-      placements.push(rec);
-      // THE TEXTURE SLOTS of this placement (§ B2 v5) — FIRST of the material
-      // passes: the cut, the clip and the ghost below all clone what they
-      // traverse, so a picture written here rides into their clones instead of
-      // having to be written again after each of them.
-      fillSlots(rec, placed);
-      // A DOOR PROP joins the swing list (v5). `placed`'s origin IS the hinge
-      // (`measure: "fit"`, § B2), so the entry needs nothing but the group and
-      // the threshold it belongs to — no geometry is computed here.
-      registerDoorProp(doorProps, scene, spec, placed);
-      // The DEPTH CUT of a placed prop (§ B2 addendum 2026-08-23): the server
-      // states the plane, this hangs it on the material clones. It runs after
-      // `parent.add`, because `Material.clippingPlanes` is world space and the
-      // payload's metres only become world metres through the tile group.
-      applyDepthCut(THREE, placed, spec.cut_plane);
-      // The storey-0 terrain lift (§ A16.9). It rides on the placed group's y
-      // AFTER `place()` has seated the mesh on `bottom_y`, so every step of
-      // § B2 keeps working on the composed numbers and only the finished
-      // object moves onto the ground under its own anchor.
-      lift = reliftPlacement(tile, rec);
-      if (spec.role === 'room' && spec.walk_y_world !== undefined && spec.room_id) {
-        // A diorama's declared floor moves WITH its mesh — otherwise the
-        // figures of that room would keep standing on the height the payload
-        // composed while the hut they belong to sits on the hillside (the
-        // Mondhütte finding, one relief further on).
-        walkY.set(spec.room_id, spec.walk_y_world + lift);
-      }
-      const clipped = applyModelClip(tile, placed, spec);
-      if (clipped) verify.clipped(spec, clipped);
-    }
-    verify.placement(placed, spec, tile, lift);
-  }));
+  // Place only building and outdoor model specs in the shell.
+  const walkY = await mountModels(tile, scene, scene.models.filter((m) => m.role === 'building' || isOutdoorSpec(tile, m)), tiers, 'shell', stale, verify);
   if (stale()) return null;
-
-  // THE UNDERWATER GHOSTS of this mount, once the whole ledger stands (user
-  // decision 2026-08-25). One pass instead of a call inside each of the three
-  // placement branches above: the gate needs nothing but the record, and a
-  // placeholder box standing in a lake has to be redrawn exactly like the mesh
-  // it stands in for.
-  for (const rec of placements) refreshPlacementGhost(tile, rec);
-
   // …and the second occasion for the far-view shell: a payload that DECLARED a
   // building model whose mesh never loaded (and brought no placeholder either).
   // The place would otherwise be exactly as shapeless as one with no model at
@@ -1803,14 +1657,219 @@ export async function mountScene(tile: Tile, scene: ScenePayload,
     }
   }
 
-  // Modelle als platziert/gesamt loggen — eine Lücke ist damit auch ohne
-  // Verify-Modus im Log sichtbar (A3).
-  console.info(`[scene] ${locId}: montiert — ${scene.plates.length} Platten, `
-    + `${scene.walls.length} Wandsegmente, `
-    + `${verify.placed}/${scene.models.length} Modelle, `
-    + `${scene.markers.length} Marker, Etagen ${levels.join('/')}`
-    + (verify.skipped ? ` — ${verify.skipped} Modell(e) NICHT ladbar` : ''));
+  // Report placement counts even when verification is disabled.
+  console.info(`[scene] ${locId}: mounted — ${scene.plates.length} plates, `
+    + `${scene.walls.length} wall segments, `
+    + `${verify.placed}/${verify.total} models, `
+    + `${scene.markers.length} markers, levels ${levels.join('/')}`
+    + (verify.skipped ? ` — ${verify.skipped} model(s) failed to load` : ''));
+  shellDeclared.set(tile, new Map([...tile.roomFloors].map(([id, f]) => [id, f.declared])));
   return verify.report(locId);
+}
+
+export async function mountDetail(tile: Tile, scene: ScenePayload,
+                                  interior: ModelTier = 'full'): Promise<boolean> {
+  unmountDetail(tile);
+  const shell = shellSeq.get(tile);
+  const detail = detailSeq.get(tile);
+  const stale = () => shellSeq.get(tile) !== shell || detailSeq.get(tile) !== detail || !tile.group.parent;
+  if (!tile.placedModels) return false;
+  const specs = scene.models.filter((m) => m.role !== 'building' && !isOutdoorSpec(tile, m));
+  tile.surfaces.push(...specs.filter((m) => m.surface).map((m) => ({
+    id: `${m.role}:${m.id}:${m.room_id ?? ''}`, spec: m, surface: m.surface!,
+    lift: 0, level: m.level, roomId: m.room_id ?? '',
+  })));
+  const verify = new Verifier(verifyOn());
+  const walkY = await mountModels(tile, scene, specs, { building: 'full', interior }, 'detail', stale, verify);
+  if (stale()) return false;
+  for (const room of scene.rooms) {
+    const top = walkY.get(room.room_id);
+    if (top !== undefined) tile.declaredFloors.push({ roomId: room.room_id, top, outline: room.outline });
+  }
+  for (const [id, floor] of tile.roomFloors) {
+    const declared = walkY.get(id);
+    if (declared !== undefined) floor.declared = declared;
+    deriveRoomSpots(tile, id, roomProps(tile.placedModels as PlacedSceneModel[], id));
+  }
+  deriveCorridorCentres(tile);
+  detailReports.set(tile, verify.report(tile.loc.id));
+  return true;
+}
+
+function dropLayerModels(tile: Tile, layer: Layer): void {
+  // Registrations follow their placement's layer and live object through tier swaps.
+  const objects = new Set((tile.placedModels ?? [])
+    .filter((rec) => (rec as PlacedSceneModel).layer === layer).map((rec) => rec.object));
+  tile.doorProps = tile.doorProps?.filter((door) => !objects.has(door.group));
+  for (const rec of (tile.placedModels ?? []) as PlacedSceneModel[]) {
+    if (rec.layer !== layer) continue;
+    dropPlacementGhost(rec);
+    disposeSlotMaterials(rec.slotMats);
+    rec.slotMats = undefined;
+    if (rec.object) {
+      rec.object.parent?.remove(rec.object);
+      disposeClipMaterials(rec.object);
+      disposeCutMaterials(rec.object);
+    }
+  }
+  tile.placedModels = tile.placedModels?.filter((rec) => (rec as PlacedSceneModel).layer !== layer);
+  disposeSceneOwned(tile, layer);
+}
+
+export function unmountDetail(tile: Tile): void {
+  detailSeq.set(tile, (detailSeq.get(tile) ?? 0) + 1);
+  dropLayerModels(tile, 'detail');
+  tile.surfaces = tile.surfaces.filter((e) => (e.spec as SceneModelSpec).role === 'building' || isOutdoorSpec(tile, e.spec as SceneModelSpec));
+  tile.declaredFloors = tile.declaredFloors.filter((e) => tile.alwaysVisibleRooms.has(e.roomId) || tile.roomOutdoor.has(e.roomId));
+  tile.roomSitSpots.clear();
+  tile.roomLieSpots.clear();
+  detailReports.delete(tile);
+  for (const [id, floor] of tile.roomFloors) {
+    floor.declared = shellDeclared.get(tile)?.get(id);
+    deriveRoomSpots(tile, id, roomProps((tile.placedModels ?? []) as PlacedSceneModel[], id));
+  }
+  deriveCorridorCentres(tile);
+}
+
+async function mountModels(tile: Tile, scene: ScenePayload, specs: SceneModelSpec[],
+                           tiers: SceneTiers, layer: Layer, stale: () => boolean,
+                           verify: Verifier): Promise<Map<string, number>> {
+  const placements = tile.placedModels as PlacedSceneModel[];
+  const doorProps = tile.doorProps!;
+  const parentFor = (id: string | undefined) => id && tile.roomGroups.get(id)
+    || (isOutdoorSpec(tile, { room_id: id } as SceneModelSpec) ? tile.group : tile.interior!);
+  const walkY = new Map<string, number>();
+  verify.total = specs.length;
+  await Promise.all(specs.map(async (spec) => {
+    // THE ONE PLACE this tile's terrain enters a placement (§ A16.9), and it
+    // is the SAME call the re-lift makes: the object is built on its composed
+    // `bottom_y`, its record starts at `lift: 0`, and `reliftPlacement` moves
+    // it onto the ground under its own anchor. Read ONCE per spec so mesh,
+    // placeholder, the room's declared floor and the verify row can never
+    // disagree about it.
+    let lift = 0;
+    let source: THREE.Object3D | null = null;
+    // Tier (§ B1 variants): the caller says which tier this mount loads —
+    // view state (camera distance / open detail view, Etappe 3 of
+    // plan-3d-lod-und-betreten.md); a missing tier falls back to the best
+    // existing one inside pickVariant; the spec selects the prop variant first.
+    const url = pickModelVariant(spec, tierOf(spec, tiers));
+    if (url) {
+      const raw = await loadGlb(url, tile.center);
+      if (stale()) return;
+      source = raw ? raw.clone(true) : null;
+    }
+    if (!source && spec.placeholder_dims) {
+      // A missing mesh retains its placement as a box of the supplied dimensions.
+      const ph = buildPlaceholder(THREE, spec.placeholder_dims, placeholderMaterial());
+      ownPrimitive(tile, ph, layer);
+      ph.receiveShadow = true;
+      ph.position.set(spec.anchor[0], spec.bottom_y, spec.anchor[1]);
+      // `+rad` since E4 — the same sign `placeModelSpec` turns a real mesh by
+      // (§ A1.1). A placeholder that turned the other way would stand mirrored
+      // against the mesh it stands in for.
+      ph.rotation.y = deg(spec.yaw_deg);
+      const parent = parentFor(spec.room_id);
+      parent.add(ph);
+      const rec: PlacedSceneModel = { layer, spec, url, object: ph, parent,
+                                      placeholder: true, lift: 0 };
+      placements.push(rec);
+      lift = reliftPlacement(tile, rec);
+      // A stand-in for a CUT prop is cut too (§ B2 addendum 2026-08-23) —
+      // otherwise the missing half of the table reappears the moment its mesh
+      // fails to load. The plane is world space and needs the mounted object.
+      applyDepthCut(THREE, ph, spec.cut_plane);
+      verify.placed += 1;
+      // Verify placeholder position and dimensions against the same spec.
+      verify.placement(ph, spec, tile, lift);
+      return;
+    }
+    if (stale()) return;
+    if (!source) {
+      // Count missing meshes, retaining a record so later tier swaps can retry.
+      placements.push({ layer, spec, url, object: null,
+                        parent: parentFor(spec.room_id), lift: 0 });
+      verify.skip(spec);
+      return;
+    }
+    verify.placed += 1;
+    // clone:false — the client hands the object over for good (the admin
+    // preview places the same cached object several times and clones it).
+    // clip:false — we clip below ourselves, in WORLD coordinates around the
+    // tile centre; the spec carries the polygon relative to it.
+    const placed = placeModelSpec(THREE, source, spec,
+                                  { clone: false, clip: false });
+    if (spec.surface && spec.measure !== 'fit') {
+      // The one place a loader divergence Blender↔three would show: the
+      // spec's scale (max_m over the BAKED snapped extent) against the scale
+      // place() derived from the mesh it actually loaded. A `fit` spec is out
+      // — it is fitted to an opening instead of scaled to `max_m`, so neither
+      // side of this comparison is the factor it applied.
+      verify.check(`${spec.role}:${spec.id}`, 'surface_scale', placed.scale.x,
+                   surfaceScale(spec.surface, spec));
+      // …AND THE BOX ITSELF (fix wave B). `surface_scale` compares ONE number
+      // derived from `extent_snapped`, so it stays green whenever the two
+      // sides agree about the largest side — a mesh whose Blender box and
+      // three box differ in the OTHER axes, or in where its underside sits,
+      // passes it while every lattice reading is off by that difference. This
+      // row measures the exact box `place()` seated the model on against the
+      // one the bake wrote, in model units, and reports the worst of the four
+      // numbers (three sizes + the bottom edge).
+      const box = fixGroupBox(placed);
+      if (box) {
+        const size = box.getSize(new THREE.Vector3());
+        const [bx0, by0, bz0] = spec.surface.box_min;
+        const [bx1, by1, bz1] = spec.surface.box_max;
+        const dev = Math.max(Math.abs(size.x - (bx1 - bx0)),
+                             Math.abs(size.y - (by1 - by0)),
+                             Math.abs(size.z - (bz1 - bz0)),
+                             Math.abs(box.min.y - by0));
+        verify.check(`${spec.role}:${spec.id}`, 'surface_box', dev, 0);
+      }
+    }
+    if (spec.role === 'building') {
+      applyBuildingModel(tile, placed, spec);
+      placements.push({ layer, spec, url, object: placed, lift: 0 });
+    } else {
+      const parent = parentFor(spec.room_id);
+      parent.add(placed);
+      const rec: PlacedSceneModel = { layer, spec, url, object: placed, parent, lift: 0 };
+      placements.push(rec);
+      // THE TEXTURE SLOTS of this placement (§ B2 v5) — FIRST of the material
+      // passes: the cut, the clip and the ghost below all clone what they
+      // traverse, so a picture written here rides into their clones instead of
+      // having to be written again after each of them.
+      fillSlots(rec, placed);
+      // A DOOR PROP joins the swing list (v5). `placed`'s origin IS the hinge
+      // (`measure: "fit"`, § B2), so the entry needs nothing but the group and
+      // the threshold it belongs to — no geometry is computed here.
+      registerDoorProp(doorProps, scene, spec, placed);
+      // The DEPTH CUT of a placed prop (§ B2 addendum 2026-08-23): the server
+      // states the plane, this hangs it on the material clones. It runs after
+      // `parent.add`, because `Material.clippingPlanes` is world space and the
+      // payload's metres only become world metres through the tile group.
+      applyDepthCut(THREE, placed, spec.cut_plane);
+      // The storey-0 terrain lift (§ A16.9). It rides on the placed group's y
+      // AFTER `place()` has seated the mesh on `bottom_y`, so every step of
+      // § B2 keeps working on the composed numbers and only the finished
+      // object moves onto the ground under its own anchor.
+      lift = reliftPlacement(tile, rec);
+      if (spec.role === 'room' && spec.walk_y_world !== undefined && spec.room_id) {
+        // A diorama's declared floor moves WITH its mesh — otherwise the
+        // figures of that room would keep standing on the height the payload
+        // composed while the hut they belong to sits on the hillside (the
+        // Mondhütte finding, one relief further on).
+        walkY.set(spec.room_id, spec.walk_y_world + lift);
+      }
+      const clipped = applyModelClip(tile, placed, spec);
+      if (clipped) verify.clipped(spec, clipped);
+    }
+    verify.placement(placed, spec, tile, lift);
+  }));
+  if (stale()) return walkY;
+
+  for (const rec of placements.filter((r) => r.layer === layer)) refreshPlacementGhost(tile, rec);
+  return walkY;
 }
 
 /**
@@ -2000,19 +2059,22 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
                                         tier: ModelTier,
                                         onSwapped?: (recs: PlacedSceneModel[]) => void
                                        ): Promise<void> {
-  const swapped: PlacedSceneModel[] = [];
-  const placements = tile.placedModels;
+  let swapped: PlacedSceneModel[] = [];
+  const generations = new Map<PlacedSceneModel, number | undefined>();
+  const placements = tile.placedModels as PlacedSceneModel[] | undefined;
   if (!placements) return;
   await Promise.all(placements.map(async (rec) => {
     if ((group === 'building') !== (rec.spec.role === 'building')) return;
     const url = pickModelVariant(rec.spec, tier);
     if (!url || url === rec.url) return;
     if (rec.wantUrl === url) return;            // same swap already in flight
+    const sequences = rec.layer === 'shell' ? shellSeq : detailSeq;
+    const generation = sequences.get(tile);
+    generations.set(rec, generation);
     rec.wantUrl = url;
     const raw = await loadGlb(url, tile.center);
-    // Superseded: a newer wish overwrote ours, or a remount replaced the
-    // whole ledger — either way this answer belongs to nobody.
-    if (rec.wantUrl !== url || tile.placedModels !== placements) return;
+    // Accept only the current URL wish of a live record in the same layer generation.
+    if (rec.wantUrl !== url || sequences.get(tile) !== generation || !tile.placedModels?.includes(rec)) return;
     rec.wantUrl = undefined;
     if (!raw) return;                            // keep what stands
     const placed = placeModelSpec(THREE, raw.clone(true), rec.spec,
@@ -2071,7 +2133,7 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
         // The grey box owns its geometry and its material (buildPlaceholder,
         // registered at the mount) — freed through the ledger, so the unmount
         // that follows some time later does not free it a second time.
-        if (rec.placeholder) releaseOwnedMesh(tile, old);
+        if (rec.placeholder) releaseOwnedMesh(tile, old, rec.layer);
       }
     }
     rec.object = placed;
@@ -2079,18 +2141,20 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
     rec.placeholder = false;
     swapped.push(rec);
   }));
-  if (tile.placedModels !== placements) return;
+  swapped = swapped.filter((rec) => tile.placedModels?.includes(rec)
+    && (rec.layer === 'shell' ? shellSeq : detailSeq).get(tile) === generations.get(rec));
+  const current = (tile.placedModels ?? []) as PlacedSceneModel[];
   // A swapped mesh changes the furniture boxes — re-derive the
   // affected rooms exactly the way the mount does, so figures keep standing
   // on what is actually visible.
   if (group === 'interior') {
     const roomsChanged = new Set<string>();
-    for (const rec of placements) {
+    for (const rec of current) {
       if (rec.spec.role === 'room' && rec.spec.room_id) roomsChanged.add(rec.spec.room_id);
     }
     for (const id of roomsChanged) {
       if (!tile.roomGroups.has(id)) continue;
-      const declaring = placements.find((r) => r.spec.role === 'room'
+      const declaring = current.find((r) => r.spec.role === 'room'
         && r.spec.room_id === id
         && r.spec.walk_y_world !== undefined);
       // The declared floor carries the SAME storey-0 terrain lift its mesh
@@ -2100,26 +2164,14 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
       const declared = declaring
         ? (declaring.spec.walk_y_world as number) + declaring.lift
         : undefined;
-      // …and without a declaring diorama the ROOM PLATE is the floor, exactly
-      // as in the mount above. The slot holder was placed on `plate.top_y` in
-      // the same loop that built the plate, so this IS that number.
-      //
-      // `tile.declaredFloors` needs NO update here, and that is a property of
-      // the swap and not an omission: a tier exchanges the URL inside the SAME
-      // spec object (`rec.spec` is untouched above), and `walk_y` is a dial of
-      // the SUBJECT, read off the default tier's sidecar for every tier
-      // (`location_model3d.get_client_meta`). `declared` is therefore the same
-      // number the mount already wrote.
-      //
-      // WHAT DOES CHANGE IS THE FURNITURE: a swapped mesh has its own bounding
-      // box, and the sit/lie targets are read off it (`deriveRoomSpots`). The
-      // FLOOR of the room is data and is unaffected by the swap — which is why
-      // the entry is left exactly as the mount wrote it.
       if (declared !== undefined) {
         const floor = tile.roomFloors.get(id);
         if (floor) floor.declared = declared;
+        if (declaring?.layer === 'shell') shellDeclared.get(tile)?.set(id, declared);
+        const walking = tile.declaredFloors.find((f) => f.roomId === id);
+        if (walking) walking.top = declared;
       }
-      deriveRoomSpots(tile, id, roomProps(placements, id));
+      deriveRoomSpots(tile, id, roomProps(current, id));
     }
   }
   // LAST, and once: the seats above have found the swapped mesh's floor, so
@@ -2127,22 +2179,9 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
   if (swapped.length) onSwapped?.(swapped);
 }
 
-/** Gebäudehülle aus der Szene einwechseln: ersetzt die prozedurale Hülle und
- *  verhält sich fürs Reinzoomen wie ein Dach (blendet aus, gibt den Blick auf
- *  die Räume frei). Ein `ground`-Modell bleibt stattdessen stehen.
- *
- *  Drei Modi, und die Spec sagt welcher (§ B6 Nr. 10): `shell` = Gebäude,
- *  `ground` = Fläche mit Löchern, `shell_area` = Fläche im Detail-Modus —
- *  fürs Ausblenden ist sie eine Hülle (Modell in roofParts/roofMats), ihre
- *  PLATZIERUNG bleibt die einer Fläche und wird hier so wenig angefasst wie
- *  bei den anderen beiden.
- *
- *  Hier wird an der Spec-Geometrie NICHTS mehr nachjustiert: die frühere
- *  Um-Verankerung samt Y-Morph zwischen Kachel- und Detail-Maßstab war eine
- *  reine Client-Erfindung und ließ dieselbe Location im Client bis zu 1,0 m
- *  anders hoch stehen als in der Admin-Vorschau (Kaxai Tower +0,97 m, Café
- *  −0,85 m). Seit die Spec nur noch EINEN Faktor liefert, gibt es auch nichts
- *  mehr zu blenden. */
+/** Replace the procedural shell with the spec building, ground, or area model.
+ * Geometry remains exactly as placed from the spec; roof-only models retain
+ * the recipe shell and join its fade. */
 function applySceneBuilding(tile: Tile, model: THREE.Group,
                             display: NonNullable<SceneModelSpec['display']> = 'shell',
                             roofOnly = false): void {
@@ -2156,14 +2195,10 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
   // instead of reset in that case.
   if (!roofOnly) dropFarShell(tile);
   tile.serverModel = model;
-  // `area` = das Modell bleibt stehen und bekommt Löcher; das gilt NUR für
-  // `ground`. Der Detail-Modus fadet und wird deshalb unten wie eine Hülle
-  // behandelt — sein Kachelboden folgt dafür dem Fade (applyTileFade).
+  // Ground models remain visible with cutouts; shell-area models fade.
   const area = display === 'ground';
   tile.modelIsGround = area;
-  // Nur SETZEN, nie löschen — das Payload-Flag `scene.area_detail` hat die
-  // Kachel schon markiert, wenn die Location auch ohne Modell im
-  // Detail-Modus ist.
+  // Preserve an area-detail flag already set by the payload.
   if (display === 'shell_area') tile.modelIsShellArea = true;
   // An area model used to have to hide the tile's own plate here — a client
   // invention that cut the model off at its own 4 cm (Mondscheinsee: lake bed
@@ -2216,10 +2251,12 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
   tile.labelObj?.position.set(0, tile.height + 2.2, 0);
 }
 
-/** Szenen-Aufbau einer Kachel entfernen (Remount bei Signatur-Wechsel).
- *  Räumt auch die Felder, die mountScene gefüllt hat — die Kachel selbst
- *  (Sockel, prozedurale Hülle, Label, Ring) bleibt stehen. */
-export function unmountScene(tile: Tile): void {
+/** Remove the scene, preserving tile-owned procedural objects and labels. */
+export function unmountShell(tile: Tile): void {
+  unmountDetail(tile);
+  shellSeq.set(tile, (shellSeq.get(tile) ?? 0) + 1);
+  dropLayerModels(tile, 'shell');
+  shellDeclared.delete(tile);
   // Found by NAME, not through tile.interior — a building-only scene (no
   // interior content) hangs in the graph as a group without being `interior`.
   const prev = tile.group.children.find((c) => c.name === SCENE_GROUP)
@@ -2239,31 +2276,6 @@ export function unmountScene(tile: Tile): void {
   // clones AND the picture loaded into them — nothing else in the graph
   // references either, so leaving them would leak one texture per filled slot
   // per mount.
-  for (const rec of tile.placedModels ?? []) {
-    dropPlacementGhost(rec);
-    disposeSlotMaterials(rec.slotMats);
-    rec.slotMats = undefined;
-    const obj = rec.object;
-    if (!obj) continue;
-    // …and the MATERIAL CLONES the mount hung on the placed mesh itself: the
-    // room clip and the depth cut each clone what they traverse, exactly the
-    // two the tier swap frees when it drops a mesh. Their textures belong to
-    // the loader cache and are deliberately left alone.
-    disposeClipMaterials(obj);
-    disposeCutMaterials(obj);
-    // The BUILDING model hangs straight off the tile (`applySceneBuilding`),
-    // not in the scene group taken out above — so it has to be unhooked by
-    // hand, or a remount would stand a second building inside the first. Only
-    // unhooked: geometry and base materials are the loader cache's.
-    if (rec.spec.role === 'building') obj.parent?.remove(obj);
-  }
-  // The plates, walls, extras and placeholder boxes this mount built itself,
-  // with their materials and their texture clones (the ledger beside
-  // `mountSeq`). Everything else in the graph above belongs to a cache or to
-  // the shared library and is only unhooked.
-  disposeSceneOwned(tile);
-  // Placement ledger of the old mount: gone with the scene — an in-flight
-  // tier swap compares against this list and drops its answer.
   tile.placedModels = undefined;
   // The swing list points at groups that just left the graph — it dies with
   // them, and the next mount builds its own (v5). Nothing to dispose: the
@@ -2284,6 +2296,8 @@ export function unmountScene(tile: Tile): void {
   // left here is exactly this mount's and is freed exactly once.
   for (const mat of tile.roofMats) mat.dispose();
   tile.roofParts = [];
+  tile.shellMats = [];
+  tile.facadeMats = [];
   tile.roofMats = [];
   // The floors of this scene leave with it: until the next mount the tile has
   // the world terrain under it, exactly as a place without a recipe.

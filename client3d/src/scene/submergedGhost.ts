@@ -88,7 +88,7 @@ let ghostOff = false;
  *  itself anyway; a PLACED object is gated once when it is mounted and would
  *  keep a ghost the switch has just turned off. Entries leave on `dispose`,
  *  which is why both owners of a ghost call it (`Figure.dispose`,
- *  `worldProps.drop`, `sceneRecipe.unmountScene` / the tier swap). */
+ *  `worldProps.drop`, `sceneRecipe.unmountDetail` / `unmountShell` for the owning layer, or the tier swap). */
 const live = new Set<SubmergedGhost>();
 
 /** Isolation toggle 22 — hide every underwater ghost in the world at once. */

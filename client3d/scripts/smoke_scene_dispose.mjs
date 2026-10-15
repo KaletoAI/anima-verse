@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Smoke check for the GPU-RESOURCE LIFETIME of a mounted LOCATION SCENE in the
- * 3D client (review finding UI-2): what `mountScene` builds itself, what it
- * only borrows, and what `unmountScene` has to hand back when the scene is
+ * 3D client (review finding UI-2): what `mountShell` / `mountDetail` build itself, what it
+ * only borrows, and what `unmountShell` has to hand back when the scene is
  * replaced (remount on a changed signature), rebuilt or dropped.
  *
  * Usage:  node client3d/scripts/smoke_scene_dispose.mjs
@@ -40,11 +40,12 @@
  * what this mount produced, and each of those must see EXACTLY ONE dispose
  * event — never two, which would mean two owners for one buffer.
  *
+ * REGRESSION: cases 1–5 keep the original d6bc7673^ leak baseline.
  * [1] unmount → every owned resource 1, every shared resource 0, and the
  *     building model no longer hangs on the tile.
- * [2] remount with a changed signature (`mountScene` unmounts first) → the
+ * [2] remount with a changed signature (`mountShell` unmounts first) → the
  *     first mount's resources 1, the second mount's still 0 while it stands.
- * [3] the DROP path, in the order `main.ts` uses it: `unmountScene` first, then
+ * [3] the DROP path, in the order `main.ts` uses it: `unmountShell` first, then
  *     the disposing traversal over `tile.group`. Neither may the traversal miss
  *     the scene (the pre-fix bug: the unmount had already unhooked the scene
  *     group, so the traversal never reached it) nor may the two together free
@@ -63,7 +64,7 @@ import { execFileSync } from 'node:child_process';
 // commit that introduced the ownership ledger (d6bc7673) — 'HEAD' would compare the
 // file with itself as soon as that commit is HEAD.
 const PRE_FIX_REV = 'd6bc7673^';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -135,8 +136,8 @@ async function loadClient(ref) {
   try {
     const src = join(ROOT, 'client3d/src/scene');
     const entry = [
-      `export { mountScene, unmountScene } from '${src}/sceneRecipe';`,
-      `export { buildTile, setSurfaceTextures, preloadSurfaceTexture } from '${src}/tiles';`,
+      ref ? `export { mountScene as mountShell, unmountScene as unmountShell } from '${src}/sceneRecipe'; export async function mountDetail() { return true; }` : `export { mountShell, mountDetail, unmountDetail, unmountShell, reliftScene, setSceneModelTier, detailVerifyReport } from '${src}/sceneRecipe';`,
+      `export { buildTile, setSurfaceTextures, preloadSurfaceTexture, setWorldGround, tileGroundY } from '${src}/tiles';`,
       `export { buildPlace } from '${src}/places';`,
     ].join('\n');
     const stubs = {
@@ -147,7 +148,7 @@ async function loadClient(ref) {
         build.onLoad({ filter: /scene[/\\]propAssets\.ts$/ }, () => ({
           contents: 'export function setPropLoadFocus() {}\n'
             + 'export function loadGlb(url) {\n'
-            + '  return Promise.resolve(globalThis.__smokeTemplates?.get(url) ?? null);\n'
+            + '  globalThis.__smokeUrls?.push(url); return globalThis.__smokeLoad ? globalThis.__smokeLoad(url) : Promise.resolve(globalThis.__smokeTemplates?.get(url) ?? null);\n'
             + '}\n',
           loader: 'ts',
         }));
@@ -313,12 +314,9 @@ const countOwned = (o) => o.geometries.size + o.materials.size + o.textures.size
  *  order: the scene's own unmount first, then the traversal that frees what
  *  `buildTile` made. The check is that the two together free every owned
  *  buffer exactly once. */
-function dropPath(tile, unmountScene) {
-  const cached = new Set();
-  for (const rec of tile.placedModels ?? []) if (rec.object) cached.add(rec.object);
-  unmountScene(tile);
+function dropPath(tile, unmountShell) {
+  unmountShell(tile);
   const free = (o) => {
-    if (cached.has(o)) return;
     const mesh = o;
     if (mesh.isMesh) {
       mesh.geometry.dispose();
@@ -337,7 +335,7 @@ function dropPath(tile, unmountScene) {
  * changed signature, or the drop path.
  */
 async function run(client, label, teardown, make = payload) {
-  const { mountScene, unmountScene, buildTile, buildPlace, setSurfaceTextures,
+  const { mountShell, mountDetail, unmountShell, buildTile, buildPlace, setSurfaceTextures,
           preloadSurfaceTexture } = client;
   console.log(`\n${label}`);
 
@@ -364,7 +362,9 @@ async function run(client, label, teardown, make = payload) {
   scene.add(place.anchor);
   scene.add(tile.group);                    // a tile without a parent is "stale"
 
-  await mountScene(tile, make('sig-a'));
+  const recipe = make('sig-a');
+  await mountShell(tile, recipe);
+  await mountDetail(tile, recipe);
   const owned = ownedOf(tile, shared);
   for (const set of Object.values(owned)) for (const res of set) w.watch(res);
   // The library IMAGE itself is not reachable from the tile — only clones of
@@ -385,7 +385,7 @@ async function run(client, label, teardown, make = payload) {
           `${tile.shell?.children.length ?? 0} copies`);
   }
 
-  const second = await teardown({ tile, mountScene, unmountScene });
+  const second = await teardown({ tile, mountShell, mountDetail, unmountShell });
 
   return { w, owned, shared, tile, second, sources };
 }
@@ -405,12 +405,221 @@ function report(prefix, res, expected) {
   }
 }
 
+/**
+ * NEU (red on a241a8aa: layer API absent), hand-derived oracles:
+ * detail_keeps_shell/shell_after_detail: subtraction of reachable shell resources
+ * from the full mount gives detail ownership; 0/1 disposals before/after teardown.
+ * shell_only/unmount_twice: one creation means exactly one disposal, even twice.
+ * outdoor_stays: O's prop and diorama survive, I's prop leaves the graph.
+ * surfaces_layer: two surface entries become precisely the outdoor entry.
+ * declared_restore: I's plate 2 is overridden by diorama 5, then restored to 2;
+ * centre = 2 + clearance .01; room marker = 2 + offset .25. No indoor seats remain.
+ * declared_relift: datum +.5 carries the shell declaration 2 to 2.5.
+ * declared_tier: new ground lift .3 makes O's 2 become 2.3, including walking
+ * height centre.y + 2.3 + .01. I returns to 2 after details are removed.
+ * labels_after_spots: square centred at (2,1) puts its label at x=2,z=1.
+ * far_low_urls: building and outdoor specs request /low URLs, no interior URL.
+ * detail_stale/swap_after_detail: removing the layer before resolution means
+ * no attachment or changed floor/seat state; mountDetail returns false.
+ * swap_mixed: outdoor response before teardown survives and finishes its height
+ * update; indoor response after teardown cannot reintroduce geometry or seats.
+ * free_after_detail: each owned resource gets one disposal, shared templates zero.
+ * verify_layers: six specs split into three shell and three detail specs,
+ * each report counts only its own three loaded placements.
+ * NEU outdoor_doors: one outdoor and one indoor door give 2 registrations after
+ * shell+detail mount; detail teardown leaves exactly the outdoor registration.
+ * Its low-tier replacement must be a new live object, retain the registration
+ * and swing angle .4; shell teardown leaves no registrations.
+ * NEU detail_objects: every captured detail object has parent null and is
+ * unreachable from tile.group after teardown, even though its room survives.
+ * buildDoorMarks guard: door rebuilding cannot remove the shell's boundary marks.
+ */
+async function layerCases(c) {
+  const { mountShell, mountDetail, unmountDetail, unmountShell } = c;
+  const shared = { geometries: new Set(), materials: new Set(), textures: new Set() };
+  const raw = template('model', shared);
+  globalThis.__smokeTemplates = new Map(['/building.glb', '/prop.glb', '/low.glb', '/full.glb'].map((url) => [url, raw]));
+  const mkTile = () => {
+    c.setWorldGround(() => 0);
+    const tile = c.buildTile(c.buildPlace({ ...LOCATION, rooms: [{ id: 'r1', name: 'Inside' }, { id: 'o', name: 'Outside' }] }));
+    new THREE.Scene().add(tile.group);
+    return tile;
+  };
+  const fixture = () => {
+    const p = payload('layers');
+    p.rooms[0].outline = square(2, 1, 3);
+    p.plates[1].top_y = 2;
+    p.plates[1].outline = square(2, 1, 3);
+    p.rooms.push({ room_id: 'o', level: 0, outline: square(10, 0, 2) });
+    p.floor_plan = [{ room_id: 'o', polygon_world: square(10, 0, 2) }];
+    p.outdoor_rooms = ['o'];
+    const dio = { ...p.models[1], role: 'room', cut_plane: undefined, level: 0, walk_y_world: 2, variants: { full: '/full.glb', low: '/low.glb' }, anchor: [10, 0] };
+    p.models.push({ ...dio, id: 'outside', room_id: 'o' }, { ...dio, id: 'inside', room_id: 'r1', level: 1, walk_y_world: 5 }, { ...p.models[1], id: 'outprop', room_id: 'o' });
+    p.models.find((m) => m.id === 'outprop').variants = { full: '/full.glb', low: '/low.glb' };
+    p.models[0].variants = { full: '/full.glb', low: '/low.glb' };
+    p.models[1].bottom_y = 5;
+    p.models[1].max_m = .5;
+    p.models[1].variants = { full: '/full.glb', low: '/low.glb' };
+    p.markers = [{ room_id: 'r1', id: 'mark', source: 'room', at_world: [2, 1], slots: [[2, 1]], y_world: 3.25 }];
+    return p;
+  };
+  const track = (resources) => {
+    const w = watcher();
+    for (const set of Object.values(resources)) for (const r of set) w.watch(r);
+    return w;
+  };
+  const expectResources = (name, resources, w, n) => {
+    for (const [kind, set] of Object.entries(resources)) for (const r of set) eq(`${name} ${kind}`, w.hits(r), n);
+  };
+  {
+    const tile = mkTile(), p = fixture();
+    p.models = p.models.filter((m) => m.role !== 'building');
+    await mountShell(tile, p);
+    const shell = ownedOf(tile, shared), sw = track(shell);
+    eq('labels_after_spots x', tile.interiorLabels[0].position.x, 2);
+    eq('labels_after_spots z', tile.interiorLabels[0].position.z, 1);
+    const outside = tile.placedModels.filter((r) => r.spec.room_id === 'o').map((r) => r.object);
+    await mountDetail(tile, p);
+    const all = ownedOf(tile, shared), aw = track(all);
+    eq('declared_restore mounted', tile.roomFloors.get('r1').declared, 5);
+    check('declared_restore has indoor seat before removal', (tile.roomSitSpots.get('r1')?.length ?? 0) > 0);
+    const detailObjects = tile.placedModels.filter((r) => r.layer === 'detail').map((r) => r.object).filter(Boolean);
+    unmountDetail(tile);
+    for (const object of detailObjects) {
+      eq('NEU detail_objects parent', object.parent, null);
+      check('NEU detail_objects unreachable', !tile.group.getObjectById(object.id));
+    }
+    expectResources('detail_keeps_shell', shell, sw, 0);
+    for (const kind of Object.keys(all)) for (const r of all[kind]) if (!shell[kind].has(r)) eq('detail owned freed', aw.hits(r), 1);
+    eq('declared_restore plate', tile.roomFloors.get('r1').declared, 2);
+    eq('declared_restore centre', tile.roomCenters.get('r1').y, tile.center.y + 2.01);
+    eq('declared_restore marker', tile.roomMarkers.get('r1').get('mark').slots[0].y, tile.center.y + 2.25);
+    eq('declared_restore seats', tile.roomSitSpots.get('r1')?.length ?? 0, 0);
+    check('outdoor_stays', outside.every((o) => o?.parent && tile.group.getObjectById(o.id)));
+    check('indoor props detached', !tile.placedModels.some((r) => r.layer === 'detail'));
+    unmountShell(tile); unmountShell(tile);
+    expectResources('shell_after_detail / unmount_twice', shell, sw, 1);
+    expectResources('combined ownership', all, aw, 1);
+  }
+  {
+    const tile = mkTile(); await mountShell(tile, fixture());
+    const owned = ownedOf(tile, shared), w = track(owned);
+    unmountShell(tile); expectResources('shell_only', owned, w, 1);
+  }
+  {
+    const tile = mkTile(), p = fixture(); await mountShell(tile, p); await mountDetail(tile, p);
+    c.reliftScene(tile, .5); unmountDetail(tile);
+    eq('declared_relift', tile.roomFloors.get('r1').declared, 2.5); unmountShell(tile);
+  }
+  {
+    const tile = mkTile(), p = fixture();
+    // The mount copies these surface entries synchronously; no lattice sample
+    // is needed for this ownership assertion.
+    p.models.find((m) => m.id === 'outside').surface = { extent_snapped: [2, 1, 2], box_min: [-1, 0, -1], box_max: [1, 1, 1], origin: [-1, -1], step: 1, cols: 3, rows: 3, values: Array(9).fill(null) };
+    p.models.find((m) => m.id === 'inside').surface = p.models.find((m) => m.id === 'outside').surface;
+    // Keep missing meshes away from verification of the synthetic lattice.
+    const keep = globalThis.__smokeTemplates; globalThis.__smokeTemplates = new Map();
+    await mountShell(tile, p); const outer = [...tile.surfaces];
+    await mountDetail(tile, p); eq('surfaces_layer mounted', tile.surfaces.length, 2);
+    unmountDetail(tile); check('surfaces_layer retains outdoor identity', tile.surfaces.length === 1 && tile.surfaces[0] === outer[0]);
+    unmountShell(tile); globalThis.__smokeTemplates = keep;
+  }
+  {
+    const tile = mkTile(), p = fixture(); globalThis.__smokeUrls = [];
+    await mountShell(tile, p, 'low', 'low');
+    // Give the outdoor prop variants too: all shell URLs must be low.
+    check('far_low_urls', globalThis.__smokeUrls.length === 3 && globalThis.__smokeUrls.every((u) => u === '/low.glb'));
+    unmountShell(tile); globalThis.__smokeUrls = undefined;
+  }
+  {
+    const tile = mkTile(), p = fixture(); await mountShell(tile, p);
+    await c.setSceneModelTier(tile, 'interior', 'low');
+    c.setWorldGround(() => .3);
+    await c.setSceneModelTier(tile, 'interior', 'full');
+    eq('declared_tier O', tile.roomFloors.get('o').declared, 2.3);
+    eq('declared_tier walking', c.tileGroundY(tile, new THREE.Vector3(10, 0, 0)), tile.center.y + 2.3 + .01);
+    await mountDetail(tile, p); unmountDetail(tile);
+    eq('declared_tier O restored', tile.roomFloors.get('o').declared, 2.3);
+    eq('declared_tier I restored', tile.roomFloors.get('r1').declared, 2); unmountShell(tile);
+  }
+  for (const name of ['detail_stale', 'swap_after_detail', 'swap_mixed']) {
+    const tile = mkTile(), p = fixture(); await mountShell(tile, p);
+    if (name !== 'detail_stale') await mountDetail(tile, p);
+    const waiting = [];
+    globalThis.__smokeLoad = (url) => new Promise((resolve) => waiting.push(() => resolve(raw)));
+    c.setWorldGround(() => .3);
+    const pending = name === 'detail_stale' ? mountDetail(tile, p) : c.setSceneModelTier(tile, 'interior', 'low');
+    if (name === 'swap_mixed') { waiting.shift()(); await Promise.resolve(); await Promise.resolve(); }
+    if (name === 'detail_stale') unmountShell(tile); else unmountDetail(tile);
+    const before = tile.roomFloors.get('r1')?.declared;
+    const children = [...(tile.roomGroups.get('r1')?.children ?? [])];
+    for (const done of waiting) done();
+    const result = await pending;
+    if (name === 'detail_stale') eq(name, result, false);
+    check(`${name} no late attachment`, (tile.roomGroups.get('r1')?.children ?? []).every((child) => children.includes(child)));
+    eq(`${name} indoor height unchanged`, tile.roomFloors.get('r1')?.declared, before);
+    eq(`${name} no indoor seats`, tile.roomSitSpots.get('r1')?.length ?? 0, 0);
+    check(`${name} no detail record`, !tile.placedModels?.some((r) => r.layer === 'detail'));
+    if (name === 'swap_mixed') eq('swap_mixed outdoor height', tile.roomFloors.get('o').declared, 2.3);
+    globalThis.__smokeLoad = undefined; unmountShell(tile);
+  }
+  {
+    const tile = mkTile(), p = fixture(); await mountShell(tile, p); await mountDetail(tile, p);
+    const owned = ownedOf(tile, shared), w = track(owned), borrowed = track(shared);
+    unmountDetail(tile); dropPath(tile, unmountShell);
+    expectResources('free_after_detail owned', owned, w, 1);
+    expectResources('free_after_detail shared', shared, borrowed, 0);
+  }
+  {
+    const tile = mkTile(), p = fixture();
+    globalThis.__verify3d = true;
+    const report = await mountShell(tile, p);
+    eq('verify_layers shell total', report.models.total, 3);
+    eq('verify_layers shell placed', report.models.placed, 3);
+    eq('verify_layers detail current', await mountDetail(tile, p), true);
+    check('verify_layers detail report exposed', c.detailVerifyReport(tile) === globalThis.__sceneVerify[tile.loc.id]);
+    eq('verify_layers detail total', globalThis.__sceneVerify[tile.loc.id].models.total, 3);
+    eq('verify_layers detail placed', globalThis.__sceneVerify[tile.loc.id].models.placed, 3);
+    globalThis.__verify3d = false; unmountShell(tile);
+  }
+  {
+    const tile = mkTile(), p = fixture();
+    p.doorways = [{ at_world: [10, 0], level: 0, rooms: ['o'] },
+                  { at_world: [1, 1], level: 1, rooms: ['r1'] }];
+    p.models.find((m) => m.id === 'outprop').door = { opening: 0, swing: 1, hinge: 'left' };
+    p.models.find((m) => m.id === 'p1').door = { opening: 1, swing: -1, hinge: 'right' };
+    await mountShell(tile, p);
+    const outdoor = tile.placedModels.find((r) => r.spec.id === 'outprop');
+    const old = outdoor.object;
+    await mountDetail(tile, p);
+    eq('NEU outdoor_doors mounted count', tile.doorProps.length, 2);
+    check('NEU outdoor_doors mounted live outdoor', tile.doorProps.some((d) => d.group === old));
+    unmountDetail(tile);
+    eq('NEU outdoor_doors detail removed count', tile.doorProps.length, 1);
+    check('NEU outdoor_doors outdoor retained', tile.doorProps[0]?.group === old && !!old.parent);
+    const registration = tile.doorProps.find((d) => d.group === old);
+    if (registration) registration.angle = .4;
+    await c.setSceneModelTier(tile, 'interior', 'low');
+    check('NEU outdoor_doors replacement live', outdoor.object !== old && !!outdoor.object.parent && !!tile.group.getObjectById(outdoor.object.id));
+    eq('NEU outdoor_doors old detached', old.parent, null);
+    eq('NEU outdoor_doors swap count', tile.doorProps.length, 1);
+    check('NEU outdoor_doors registration follows mesh', tile.doorProps[0]?.group === outdoor.object);
+    eq('NEU outdoor_doors swing survives', outdoor.object.rotation.y, .4);
+    unmountShell(tile);
+    eq('NEU outdoor_doors shell removed count', tile.doorProps?.length ?? 0, 0);
+  }
+  const mainSource = await readFile(join(ROOT, 'client3d/src/main.ts'), 'utf8');
+  const body = mainSource.slice(mainSource.indexOf('function buildDoorMarks'), mainSource.indexOf('function buildBoundaryMarks'));
+  check('buildDoorMarks preserves boundary marks', !body.includes('dropBoundaryMarks('));
+}
+
 async function main() {
   const fresh = await loadClient();
+  await layerCases(fresh);
 
   // ── [1] the plain unmount ────────────────────────────────────────────────
   const one = await run(fresh, '[1] unmount frees what the mount built',
-                        ({ tile, unmountScene }) => { unmountScene(tile); });
+                        ({ tile, unmountShell }) => { unmountShell(tile); });
   report('unmount', one, 1);
   check('the building model is unhooked from the tile',
         !one.tile.serverModel
@@ -420,8 +629,9 @@ async function main() {
 
   // ── [2] remount on a changed signature ───────────────────────────────────
   const two = await run(fresh, '[2] a remount frees the mount it replaces',
-                        async ({ tile, mountScene }) => {
-                          await mountScene(tile, payload('sig-b'));
+                        async ({ tile, mountShell, mountDetail }) => {
+                          await mountShell(tile, payload('sig-b'));
+                          await mountDetail(tile, payload('sig-b'));
                           return true;
                         });
   report('remount', two, 1);
@@ -440,12 +650,12 @@ async function main() {
 
   // ── [3] the drop path, in main.ts' order ─────────────────────────────────
   const three = await run(fresh, '[3] the drop path frees each buffer once',
-                          ({ tile, unmountScene }) => dropPath(tile, unmountScene));
+                          ({ tile, unmountShell }) => dropPath(tile, unmountShell));
   report('drop', three, 1);
 
   // ── [4] the far-view shell shares its geometry with the plates ───────────
   const shell = await run(fresh, '[4] the far shell shares geometry, owns its materials',
-                          ({ tile, unmountScene }) => { unmountScene(tile); },
+                          ({ tile, unmountShell }) => { unmountShell(tile); },
                           shellPayload);
   report('shell unmount', shell, 1);
   check('the shell is gone with the scene', !shell.tile.shell,
@@ -454,7 +664,7 @@ async function main() {
   // ── [5] RED counter-probe against the pre-fix source ─────────────────────
   const old = await loadClient(PRE_FIX_REV);
   const red = await run(old, '[5] RED: the pre-fix unmount frees nothing of it',
-                        ({ tile, unmountScene }) => { unmountScene(tile); });
+                        ({ tile, unmountShell }) => { unmountShell(tile); });
   report('pre-fix unmount', red, 0);
 
   console.log(`\n${failed ? 'FAILED' : 'PASSED'}: ${passed} ok, ${failed} failed`);

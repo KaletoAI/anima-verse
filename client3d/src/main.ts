@@ -61,8 +61,8 @@ import { setModelEnvironment } from './scene/glbMaterials';
 import { IMPOSTOR_MESH_NAME, setImpostorRenderer } from './scene/impostors';
 import { updateOcclusion } from './scene/occlusion';
 import { setPropLoadFocus } from './scene/propAssets';
-import { mountScene, reliftScene, SceneLibrary, setSceneModelTier,
-  unmountScene } from './scene/sceneRecipe';
+import { mountShell, mountDetail, reliftScene, SceneLibrary, setSceneModelTier,
+  unmountShell } from './scene/sceneRecipe';
 import { declaredFloorAt, WALK_CLEARANCE_M } from './game/ground';
 import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocation';
 import { figureTransition, pickablePlaceFor, PLACE_PICK_RADIUS_M, placementOf, pollIsStale,
@@ -862,7 +862,7 @@ async function startApp(username: string, role: string) {
   const places = new Map<string, PlaceRecord>();
   const residency = new Map<string, Resident>();
   const pins = new Map<string, THREE.Sprite>();
-  /** The running `mountScene` of each location, settled or not — see
+  /** The running `mountShell` of each location, settled or not — see
    *  `mountWithDoors`. Only ever awaited by the boot's arrival step; a later
    *  remount simply overwrites the entry. */
   const scenePending = new Map<string, Promise<unknown>>();
@@ -1195,12 +1195,11 @@ async function startApp(username: string, role: string) {
     locks: null, loc: '', room: '',
   };
 
-  /** Both threshold overlays of a tile — they are built together and a tile
-   *  that goes away takes both with it. Unhooked from whatever they hang in:
-   *  the door marks ride in `tile.group`, the boundary marks in `engine.scene`
-   *  (they lie on the WORLD ground of the neighbouring cell). */
-  function dropDoorMarks(locId: string) {
-    for (const map of [doorMarks, boundaryMarks]) {
+  /** Door marks belong to details; boundary marks belong to the shell. */
+  function dropDoorMarks(locId: string) { dropMarks(doorMarks, locId); }
+  function dropBoundaryMarks(locId: string) { dropMarks(boundaryMarks, locId); }
+  function dropMarks(marks: Map<string, THREE.Group>, locId: string) {
+    for (const map of [marks]) {
       const old = map.get(locId);
       if (!old) continue;
       old.parent?.remove(old);
@@ -1415,6 +1414,7 @@ async function startApp(username: string, role: string) {
    * "before you walk there".
    */
   function buildBoundaryMarks(tile: Tile, scene: ScenePayload) {
+    dropBoundaryMarks(tile.loc.id);
     const openings = scene.boundary_openings ?? [];
     if (!openings.length) return;
     const root = new THREE.Group();
@@ -1445,34 +1445,27 @@ async function startApp(username: string, role: string) {
     boundaryMarks.set(tile.loc.id, root);
   }
 
-  /** Mount a payload and lay its thresholds afterwards. `finally` and not
-   *  `then`: the markers come from the payload alone, so a mount that fell over
-   *  (a model that would not load) still gets its doors — and the rejection
-   *  stays unhandled exactly as it was before. The mount loads the tiers the
-   *  view wants RIGHT NOW (and pins the tier maps to them, so the 1 Hz tick
-   *  issues no redundant swap straight after).
-   *
-   *  IT HANDS THE MOUNT BACK, and `scenePending` remembers it per location:
-   *  a mount is where a tile gets its rooms — `roomCenters`, `roomFloors`,
-   *  the baked `surfaces`, the `declaredFloors` — and until it is through,
-   *  every height question about that location has the wrong answer. The boot
-   *  waits on exactly ONE of them (the avatar's own, see the arrival at the
-   *  end of `startApp`); nobody waits on the rest, which keeps the streaming
-   *  of the other locations exactly as it was. */
+  /** Mount shell, boundary marks, details and door marks in dependency order.
+   * The boot waits on this location's promise before placing the avatar; other
+   * locations continue streaming independently. Readiness is published only
+   * after the detail mount completes and the tile is still resident. */
   function mountWithDoors(tile: Tile, scene: ScenePayload): Promise<unknown> {
     const building = wantedBuildingTier(tile);
     const interior = wantedInteriorTier(tile.loc.id, scene);
     buildingTierByLoc.set(tile.loc.id, building);
     interiorTierByLoc.set(tile.loc.id, interior);
-    const mounted = mountScene(tile, scene, { building, interior }).finally(() => {
+    const mounted = (async () => {
+      await mountShell(tile, scene, building, interior);
+      if (residency.get(tile.loc.id)?.tile !== tile) return;
+      buildBoundaryMarks(tile, scene);
+      if (!await mountDetail(tile, scene, interior)) return;
       if (residency.get(tile.loc.id)?.tile !== tile) return;
       buildDoorMarks(tile, scene);
-      buildBoundaryMarks(tile, scene);
       const resident = residency.get(tile.loc.id)!;
       resident.ready = true;
       const place = places.get(tile.loc.id);
       if (place) place.height = tile.height;
-    });
+    })();
     // Never rejects for the WAITER: a model that would not load must not turn
     // the boot's one await into an unhandled rejection — the mount reports its
     // own gaps in the console and a half-mounted tile still has its rooms.
@@ -1700,35 +1693,15 @@ async function startApp(username: string, role: string) {
   const noteGeometry = (rows: typeof firstMap.locations) => {
     for (const row of rows) geomSig.set(row.id, footprintSignature(row));
   };
-  /**
-   * TAKE ONE TILE OUT OF THE WORLD AND GIVE ITS GPU RESOURCES BACK — the ONE
-   * teardown, used by the rebuild (a changed scene signature, a moved
-   * footprint) and by the drop (the place left the payload). Both used to do
-   * their own thing: the drop freed the tile's own primitives but reached the
-   * scene's only through a traversal that `unmountScene` had already unhooked,
-   * and the rebuild disposed nothing at all — it walked the old tile for its
-   * CSS2D labels and abandoned the rest (review finding UI-2).
-   *
-   * WHAT IS FREED AND WHAT IS NOT, in two halves that do not overlap:
-   * `unmountScene` frees what the scene MOUNT owns — its plates, walls, extras
-   * and placeholder boxes with their materials and texture clones, its
-   * material clones on placed meshes — and unhooks its groups; the traversal
-   * afterwards frees what `buildTile` itself made and still hangs off the
-   * tile. Two things are left deliberately: everything hanging off a placed
-   * server MODEL (geometries and base materials belong to the loader cache,
-   * see setSceneModelTier — freeing them would poison every later mount of the
-   * same URL) and every TEXTURE down here (the surface library is shared
-   * between tiles; a material's dispose does not touch its maps).
-   */
+  /** Detach all scene placements through their owner, then free the remaining
+   * tile-owned procedural meshes and DOM labels. Loader templates never reach
+   * this traversal; their resources remain shared. */
   function freeTile(tile: Tile): void {
     engine.scene.remove(tile.group);
-    // Captured BEFORE the unmount, which clears the ledger: these subtrees are
-    // the loader cache's and are only unhooked, never disposed.
-    const cached = new Set<THREE.Object3D>();
-    for (const rec of tile.placedModels ?? []) if (rec.object) cached.add(rec.object);
-    unmountScene(tile);
+    dropDoorMarks(tile.loc.id);
+    dropBoundaryMarks(tile.loc.id);
+    unmountShell(tile);
     const free = (o: THREE.Object3D) => {
-      if (cached.has(o)) return;
       // CSS2D labels live in the DOM — the renderer does not take them down.
       const label = o as { isCSS2DObject?: boolean; element?: HTMLElement };
       if (label.isCSS2DObject && label.element) label.element.remove();
@@ -1749,6 +1722,7 @@ async function startApp(username: string, role: string) {
     // (layout deleted) is never mounted again, so nothing else would clear
     // them and they would hang in the air over a procedural tile.
     dropDoorMarks(loc.id);
+    dropBoundaryMarks(loc.id);
     if (old) freeTile(old);
     const previous = places.get(loc.id);
     if (previous) {
@@ -3284,6 +3258,7 @@ async function startApp(username: string, role: string) {
     engine.scene.remove(place.anchor);
     place.labelObj?.element.remove();
     dropDoorMarks(id);
+    dropBoundaryMarks(id);
     wallCache.delete(id);
     locSig.delete(id);
     buildingTierByLoc.delete(id);
@@ -4787,7 +4762,7 @@ async function startApp(username: string, role: string) {
     let segments = byLevel.get(level);
     if (!segments) {
       // The payload is TILE-LOCAL, the figure position is absolute — so the
-      // footprint transform is applied here, exactly as `mountScene` applies
+      // footprint transform is applied here, exactly as `mountShell` applies
       // it to room centres, doorways, markers and the wall mids of the
       // culling. Without it the segments of a building 45 m away sit 45 m from
       // the figure and nothing ever blocks.
@@ -5175,7 +5150,7 @@ async function startApp(username: string, role: string) {
   // client3d/scripts/smoke_walk_math.mjs); everything here looks up its
   // arguments and rides the ONE room-request machine of the room walk.
   //
-  // `tile.stairs` carries the landings as WORLD points already (`mountScene`),
+  // `tile.stairs` carries the landings as WORLD points already (`mountShell`),
   // so the far landing goes straight to `setPlayerTarget` — and the RUN goes
   // with it as the figure's height for the whole climb (`stairRunOf`, task 3),
   // which is exactly the ride the NPC chain gets over the same two points.
