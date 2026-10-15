@@ -2532,6 +2532,17 @@
     "Long task max by phase (ms)": "Maximum langer Tasks pro Phase (ms)",
     "Long tasks after visible (5 s)": "Lange Tasks nach Sichtbarkeit (5 s)",
     "n/a": "n/v",
-    "max": "max."
+    "max": "max.",
+    "Embedded take": "Eingebettete Animation",
+    "Playback speed": "Abspieltempo",
+    "Rig metrics": "Rig-Messwerte",
+    "Leg fold": "Beinfaltung",
+    "Symmetry error": "Symmetriefehler",
+    "Stretch p99.9": "Dehnung p99,9",
+    "Contact error": "Kontaktfehler",
+    "Tail minimum": "Schwanzminimum",
+    "IK unreachable": "IK unerreichbar",
+    "Landmark fallback": "Gelenk-Messpunkt nicht eindeutig; Fuchs-Höhenverhältnis verwendet",
+    "Play": "Abspielen"
   }
 }

@@ -1416,6 +1416,15 @@ def apply_profile_update(character_name: str, data: Dict[str, Any]) -> Dict[str,
                     if loc_obj and loc_obj.get("id"):
                         fields["current_location"] = loc_obj["id"]
 
+        from app.models.character_template import get_template
+        template = get_template(profile.get("template", "")) or {}
+        for section in template.get("sections", []):
+            for field in section.get("fields", []):
+                if field.get("key") == "tail_motion" and "tail_motion" in fields:
+                    allowed = [option["value"] for option in field.get("options", [])]
+                    if fields["tail_motion"] not in allowed:
+                        raise HTTPException(status_code=400, detail="unknown tail_motion")
+
         # Filter out __custom__ sentinel values (UI placeholder for custom input)
         for k, v in list(fields.items()):
             if v == "__custom__":

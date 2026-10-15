@@ -547,7 +547,7 @@ p3_fbx = b'Kaydara FBX Binary\x00P3 unchanged'
 p3_metrics = {'fold': {'front_L': 1.1}, 'fold_mean': 1.1, 'takes': [],
               'sym_max_pct': 0.0, 'landmark_fallback': [], 'acceptance': {}, 'dims_m': [1, 2, 1]}
 p3_calls = []
-p3_expected_clips = []
+p3_expected_clips = json.loads((Path(__file__).resolve().parents[1]/'shared/models/quadruped/clips.json').read_text())
 p3_expected_timeout = 590
 p3_worker_result = {}
 def p3_channel(b, fn, **kwargs):
@@ -564,7 +564,7 @@ def p3_blender(script, *, inputs, params, out_dir, timeout_s):
     assert script == 'quadruped_rig' and timeout_s == p3_expected_timeout
     assert set(inputs) == {'mesh', 'texture', 'ref'}
     assert Path(inputs['ref']).name == 'fox-animations.glb'
-    assert params == {'clips': p3_expected_clips, 'tail_motion': 'calm'}
+    assert params == {'clips': p3_expected_clips, 'tail_motion': 'calm'}, params
     assert Path(inputs['texture']).read_bytes() == color_png(), 'local UVs need the original PNG, not gateway V correction'
     out_dir.mkdir(exist_ok=True)
     fbx, png, metrics = [out_dir/n for n in ('result.fbx', 'result_basecolor.png', 'metrics.json')]
@@ -600,7 +600,7 @@ with ExitStack() as stack:
             str(root/'unrigged/generic.glb'), str(root/'catalog.fbx'), 'generic',
             rig_options={'clips': ['idle']})
     assert catalog_result['ok'], catalog_result
-    p3_expected_clips = []
+    p3_expected_clips = json.loads((Path(__file__).resolve().parents[1]/'shared/models/quadruped/clips.json').read_text())
     stack.enter_context(patch('app.imagegen.service.get_image_service', return_value=p3_service))
     stack.enter_context(patch.object(model3d, 'get_model3d_dir', side_effect=lambda name: getattr(model3d._staging, 'directories', {}).get(name) or root))
     stack.enter_context(patch.object(model3d, 'find_ref_image', return_value=src))
@@ -817,3 +817,39 @@ assert route.backend.name == 'quadruped-local'
 assert not config.migrate_file(world_cfg, instance_path=inst/'config.json')
 assert (inst/'secrets.json').read_text() == secret_text
 print('PASS two actual boot migrations and separate secret layering')
+
+# P4 §6: empty uses backend default, three declared values survive a real
+# profile save and rig-options read; an unknown value must never be stored.
+from app.core.character_ops import apply_profile_update
+from app.models.character import get_character_profile
+from fastapi import HTTPException
+profile = get_character_profile('demo')
+profile['template'] = 'animal-default'
+assert save_character_profile('demo', profile)
+for value in ('', 'full', 'calm', 'still'):
+    apply_profile_update('demo', {'fields': {'tail_motion': value}})
+    assert get_character_profile('demo')['tail_motion'] == value
+    assert model3d._character_rig_options('demo') == {'tail_motion': value}
+for value in ('unknown', '__custom__'):
+    try:
+        apply_profile_update('demo', {'fields': {'tail_motion': value}})
+        raise AssertionError('unknown tail mode saved')
+    except HTTPException as exc:
+        assert exc.status_code == 400
+    assert get_character_profile('demo')['tail_motion'] == 'still'
+profile = get_character_profile('demo')
+profile['tail_motion'] = 'invalid-import'
+assert save_character_profile('demo', profile)
+try:
+    model3d._character_rig_options('demo')
+    raise AssertionError('invalid imported tail mode accepted at rig time')
+except ValueError as exc:
+    assert 'tail_motion' in str(exc)
+assert model3d._rig_result_validation_meta({'meta': {'takes': ['sit'], 'clips': {
+    'sit': {'loop': False, 'contact_err_max': 0, 'stretch_p999': 1}}}})['clips'] == {'sit': {'loop': False}}
+try:
+    local._generate('', '', {'rig_options': {'tail_motion': 'unknown'}})
+    raise AssertionError('backend accepted invalid tail mode')
+except ValueError as exc:
+    assert 'tail_motion' in str(exc)
+print('PASS P4 tail selection/save/rig validation and minimal loop sidecar')

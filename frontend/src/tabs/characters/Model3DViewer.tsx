@@ -248,7 +248,7 @@ export interface TilePlacement {
   figureHeightWorld?: number
 }
 
-export function Model3DViewer({ url, format, motion, motionToolbar, previewTilt = false, clipUrl = '', textureUrl = '', height = 320, rotation,
+export function Model3DViewer({ url, format, motion, motionToolbar, previewTilt = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
   placement, onBounds, markers, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
@@ -256,7 +256,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, previewTilt 
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox }:
-  { url: string; format: string; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
+  { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
     rotation?: { x?: number; y?: number; z?: number }
@@ -398,6 +398,12 @@ export function Model3DViewer({ url, format, motion, motionToolbar, previewTilt 
      *  before a door is placed anywhere. Model mode only. */
     leafBbox?: LeafBbox | null }) {
   const { t } = useI18n()
+  const [takes, setTakes] = useState<string[]>([])
+  const [take, setTake] = useState('')
+  const [takePlaying, setTakePlaying] = useState(true)
+  const [takeSpeed, setTakeSpeed] = useState(1)
+  const takeRef = useRef({ take, playing: takePlaying, speed: takeSpeed, loops: clipLoops })
+  takeRef.current = { take, playing: takePlaying, speed: takeSpeed, loops: clipLoops }
   const [secondaryOn, setSecondaryOn] = useState(true)
   const secondaryOnRef = useRef(secondaryOn)
   secondaryOnRef.current = secondaryOn
@@ -745,15 +751,18 @@ export function Model3DViewer({ url, format, motion, motionToolbar, previewTilt 
         })
 
         const ext = (format || url.split('.').pop() || '').toLowerCase()
+        let embedded: import('three').AnimationClip[] = []
         let object: Object3D
         let gltfParser: GltfParser | null = null
         if (ext === 'fbx') {
           const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
           object = await new FBXLoader().loadAsync(url)
+          embedded = object.animations
         } else if (ext === 'glb' || ext === 'gltf' || ext === 'vrm') {
           const { createGLTFLoader } = await import('../../lib/gltfLoader')
           const gltf = await createGLTFLoader().loadAsync(url)
           object = gltf.scene
+          embedded = gltf.animations
           // The parser is kept for ONE reason: it is the only place that still
           // knows which glTF NODE a loaded mesh came from (`associations`) and
           // what that node was really called (`json.nodes[i].name`, unsanitised).
@@ -950,6 +959,27 @@ export function Model3DViewer({ url, format, motion, motionToolbar, previewTilt 
         let secondaryRev = motionRef.current?.rev
         let secondaryEnabled = secondaryOnRef.current
         let mixer: InstanceType<typeof THREE.AnimationMixer> | null = null
+        let embeddedAction: import('three').AnimationAction | null = null
+        let activeTake = ''
+        let embeddedFinished = false
+        if (embeddedTakes) {
+          setTakes(embedded.map(clip => clip.name))
+          setTake(previous => embedded.some(clip => clip.name === previous)
+            ? previous : embedded[0]?.name || '')
+          mixer = new THREE.AnimationMixer(object)
+          const embeddedMixer = mixer
+          const onFinished = (event: { action: import('three').AnimationAction }) => {
+            if (event.action !== embeddedAction) return
+            embeddedFinished = true
+            takeRef.current.playing = false
+            setTakePlaying(false)
+          }
+          embeddedMixer.addEventListener('finished', onFinished)
+          disposers.push(() => {
+            embeddedMixer.removeEventListener('finished', onFinished)
+            embeddedMixer.stopAllAction()
+          })
+        } else setTakes([])
         if (clipUrl) {
           const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
           const clipObj = await new FBXLoader().loadAsync(clipUrl)
@@ -1847,7 +1877,27 @@ export function Model3DViewer({ url, format, motion, motionToolbar, previewTilt 
         const animate = () => {
           raf = requestAnimationFrame(animate)
           const realDelta = clock.getDelta()
-          if (mixer) mixer.update(realDelta)
+          if (embeddedTakes && mixer) {
+            const control = takeRef.current
+            if (activeTake !== control.take) {
+              embeddedAction?.stop()
+              const clip = embedded.find(candidate => candidate.name === control.take)
+              embeddedAction = clip ? mixer.clipAction(clip) : null
+              activeTake = control.take
+              embeddedFinished = false
+              embeddedAction?.reset().play()
+            }
+            if (embeddedAction) {
+              if (embeddedFinished && control.playing) {
+                embeddedAction.reset().play()
+                embeddedFinished = false
+              }
+              const loop = control.loops?.[activeTake]?.loop !== false
+              embeddedAction.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1)
+              embeddedAction.clampWhenFinished = !loop
+            }
+            mixer.update(control.playing ? realDelta * control.speed : 0)
+          } else if (mixer) mixer.update(realDelta)
           if (secondaryRev !== motionRef.current?.rev || secondaryEnabled !== secondaryOnRef.current) {
             secondaryEnabled = secondaryOnRef.current
             secondaryRev = motionRef.current?.rev
@@ -1886,10 +1936,21 @@ export function Model3DViewer({ url, format, motion, motionToolbar, previewTilt 
       disposed = true
       cleanup?.()
     }
-  }, [url, format, clipUrl, textureUrl, height])
+  }, [url, format, clipUrl, textureUrl, height, embeddedTakes])
 
   return (
     <div className={previewTilt ? 'ga-model3d-preview' : undefined}>
+      {embeddedTakes && takes.length > 0 ? (
+        <div className="ga-row">
+          <label>{t('Embedded take')} <select value={take} onChange={event => setTake(event.target.value)}>
+            {takes.map(name => <option key={name} value={name}>{name}</option>)}
+          </select></label>
+          <button type="button" onClick={() => setTakePlaying(value => !value)}>{t(takePlaying ? 'Pause' : 'Play')}</button>
+          <label>{t('Playback speed')} <select value={takeSpeed} onChange={event => setTakeSpeed(Number(event.target.value))}>
+            {[0.25, 0.5, 1, 1.5, 2].map(speed => <option key={speed} value={speed}>{speed}×</option>)}
+          </select></label>
+        </div>
+      ) : null}
       <div className={previewTilt ? 'ga-model3d-canvas' : undefined} style={{ position: 'relative' }}>
       <div
         ref={mountRef}

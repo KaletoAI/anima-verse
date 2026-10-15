@@ -771,6 +771,9 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
                 info["backend"] = meta.get("backend", "")
                 for key in ("mesh_backend", "rig_backend", "mesh_route_meta", "rig_route_meta"):
                     info[key] = meta.get(key, "" if key.endswith("backend") else {})
+                for key in ("clips", "rig_metrics"):
+                    if key in meta:
+                        info[key] = meta[key]
                 info["lod_error"] = meta.get("lod_error", "")
                 if isinstance(meta.get("refined"), dict):
                     info["refined"] = meta["refined"]
@@ -1841,7 +1844,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             mesh_path=str(source_target), output_path=str(staging / f"{signature}-rig.glb"),
             rig=rig, character_name=character_name,
             basecolor_path=str(source_target.with_suffix(".png")) if rig == "generic" else "",
-            rig_options={})
+            rig_options=_character_rig_options(character_name))
         if not res.get("ok"):
             error = str(res.get("error") or "rig generation failed")
             return {"ok": False, "error": error}
@@ -1945,12 +1948,21 @@ def rerig_model(character_name: str, signature: Optional[str] = None, *,
     return _rig_from_source(character_name, signature, source, rig_backend_glob=backend_glob)
 
 
+def _character_rig_options(character_name: str) -> dict:
+    from app.models.character import get_character_profile
+    value = (get_character_profile(character_name) or {}).get("tail_motion", "")
+    if value not in ("", "full", "calm", "still"):
+        raise ValueError(f"unknown tail_motion: {value}")
+    return {"tail_motion": value}
+
+
 def _rig_result_validation_meta(result: dict) -> dict:
     """Present backend metrics and declared clips to the FBX validator."""
     metrics = result.get("meta") or {}
     meta = {"rig_metrics": metrics}
     if "clips" in result or "clips" in metrics:
-        meta["clips"] = result.get("clips", metrics.get("clips"))
+        meta["clips"] = {take: {"loop": clip["loop"]}
+                         for take, clip in (result.get("clips") or metrics.get("clips") or {}).items()}
     return meta
 
 
@@ -1976,7 +1988,7 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
                 mesh_path=str(source), output_path=str(Path(tmp) / f"{signature}.glb"),
                 rig=rig, character_name=character_name, backend_glob=rig_backend_glob,
                 basecolor_path=str(source.with_suffix(".png")) if rig == "generic" else "",
-                rig_options={})
+                rig_options=_character_rig_options(character_name))
         except BackendNotApplicableError as exc:
             return {"ok": False, "error": str(exc), "reason": exc.reason}
         if not res.get("ok"):

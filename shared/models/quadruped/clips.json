@@ -1,0 +1,33 @@
+{
+  "idle": {
+    "src": "fox",
+    "action": "Idle",
+    "loop": true
+  },
+  "walk": {
+    "src": "fox",
+    "action": "Walk",
+    "loop": true
+  },
+  "run": {
+    "src": "fox",
+    "action": "Run",
+    "loop": true
+  },
+  "sit": {
+    "src": "fox",
+    "action": "Sit",
+    "loop": false,
+    "tail": {
+      "calm": "still"
+    }
+  },
+  "sit-ground": {
+    "src": "fox",
+    "action": "Sit",
+    "loop": false,
+    "tail": {
+      "calm": "still"
+    }
+  }
+}

@@ -55,13 +55,18 @@ class LocalQuadrupedRigBackend(ImageBackend):
         from app.core.paths import get_quadruped_dir
         self.last_result_files = []
         self.last_result_meta = {}
+        options = params.get('rig_options') or {}
+        tail_motion = options.get('tail_motion', '')
+        if tail_motion == '' or tail_motion is None:
+            tail_motion = self.tail_mode_default
+        if tail_motion not in ('full', 'calm', 'still'):
+            raise ValueError('unknown tail_motion: ' + str(tail_motion))
         texture = Path(params.get('basecolor_path') or '')
         if not texture.is_file():
             raise BackendNotApplicableError(self, 'missing basecolor texture PNG')
         if not runner.is_available():
             raise RuntimeError(runner.status().get('error') or 'Blender 5.2–5.x is unavailable')
         assets = get_quadruped_dir()
-        options = params.get('rig_options') or {}
         # Every catalog take is baked; backend config cannot select a subset.
         catalog = assets / 'clips.json'
         clips = json.loads(catalog.read_text()) if catalog.is_file() else []
@@ -70,7 +75,7 @@ class LocalQuadrupedRigBackend(ImageBackend):
                 'mesh': Path(params['source_model_path']), 'texture': texture,
                 'ref': assets / 'fox-animations.glb',
             }, params={'clips': clips,
-                       'tail_motion': options.get('tail_motion', self.tail_mode_default)},
+                       'tail_motion': tail_motion},
                 out_dir=Path(tmp), timeout_s=max(30, self.timeout - 10))
             if not result.get('ok'):
                 data = result.get('data') or {}

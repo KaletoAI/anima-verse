@@ -261,6 +261,35 @@
           "editor_visible": false,
           "hint": "What others perceive when meeting this animal — first impression and underlying vibe (more than appearance, less than personality). Used in BOTH self and partner blocks of the chat prompt.",
           "hint_de": "Was andere wahrnehmen, wenn sie diesem Tier begegnen — erster Eindruck und Ausstrahlung (mehr als Aussehen, weniger als Persönlichkeit). Wird in der Eigen- UND Partnerbeschreibung des Chat-Prompts verwendet."
+        },
+        {
+          "key": "tail_motion",
+          "label": "Tail motion",
+          "label_de": "Schwanzbewegung",
+          "type": "select",
+          "allow_custom": false,
+          "options": [
+            {
+              "value": "",
+              "label": "Backend default",
+              "label_de": "Backend-Vorgabe"
+            },
+            {
+              "value": "full",
+              "label": "Full",
+              "label_de": "Voll"
+            },
+            {
+              "value": "calm",
+              "label": "Calm",
+              "label_de": "Ruhig"
+            },
+            {
+              "value": "still",
+              "label": "Still",
+              "label_de": "Still"
+            }
+          ]
         }
       ]
     },

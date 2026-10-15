@@ -67,6 +67,12 @@ function setClipLoop(clip: THREE.AnimationClip, loop: boolean | undefined): void
   if (loop !== undefined) clipLoopFlags.set(clip, loop);
 }
 
+/** Apply server-owned loop declarations to a model's exact embedded takes. */
+export function applyEmbeddedClipLoops(clips: readonly THREE.AnimationClip[],
+    meta?: Record<string, { loop: boolean }>): void {
+  for (const clip of clips) setClipLoop(clip, meta?.[clip.name]?.loop);
+}
+
 /** Carries the flags of `from` onto the clips DERIVED from them — the clone
  *  per character, `adaptExternalClips`, `retargetClips`. Matched by name,
  *  which every one of those steps keeps; a derived clip whose origin carried
@@ -1628,6 +1634,7 @@ export class FigureLibrary {
       scale, height: rawHeight * scale, assignOnly: true, noClips: false, tier,
       libraryFits: false,
     };
+    applyEmbeddedClipLoops(model.clips, info.clips);
     // Clips along the character's set chain (female/male/animal/custom),
     // merged PER KIND: a clip embedded in the mesh wins for its own kind, the
     // library fills every kind the model does not carry (swim finding

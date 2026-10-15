@@ -669,6 +669,7 @@ export async function ttsSpeak(text: string, characterName: string,
 }
 
 export interface ApiModel {
+  clips?: Record<string, { loop: boolean }>;
   modelRev?: string;
   motion?: MotionPayload;
   url: string;
@@ -728,6 +729,7 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
     format: (m.format ?? 'glb') as 'glb' | 'fbx',
     rig: m.rig ?? data.rig ?? 'mixamo',
     textureUrl: m.texture_url ?? undefined,
+    clips: m.clips,
     normalized: !!m.normalized,
   };
 }

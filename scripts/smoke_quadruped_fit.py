@@ -97,6 +97,20 @@ else:
     bpy.ops.import_scene.fbx(filepath=str(folder/stage/'quadruped_rigged.fbx'))
     arm=next(o for o in bpy.data.objects if o.type=='ARMATURE')
     (folder/stage/'joints.json').write_text(json.dumps(joints(arm)))
+    deform_names={b.name for b in arm.data.bones if b.use_deform}
+    influences=[]; errors=[]
+    for body in (o for o in bpy.data.objects if o.type=='MESH'):
+        deform_groups={g.index for g in body.vertex_groups if g.name in deform_names}
+        for vertex in body.data.vertices:
+            weights=[g.weight for g in vertex.groups if g.group in deform_groups and g.weight>0]
+            influences.append(len(weights));errors.append(abs(sum(weights)-1))
+    assert influences, 'rigged result has no mesh vertices'
+    stats={'vertices':len(influences),'max_influences':max(influences),
+           'max_weight_sum_error':max(errors)}
+    print('Skin weights:', json.dumps(stats), flush=True)
+    assert stats['max_influences']<=4, stats
+    assert stats['max_weight_sum_error']<=1e-3, stats
+    (folder/stage/'weights.json').write_text(json.dumps(stats))
 '''
 
 
@@ -137,6 +151,7 @@ def main():
                 continue
             assert res['ok'],res
             helper_run(kind)
+            print('PASS',kind,'skin weights:',(out/'weights.json').read_text())
             results[kind]={'metrics':res['data'],'joints':json.loads((out/'joints.json').read_text())}
             assert (out/'quadruped_basecolor.png').read_bytes()==(root/'texture.png').read_bytes()
         import numpy as np

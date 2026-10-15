@@ -89,6 +89,13 @@ interface FaceRetextureCheck {
 }
 
 interface Model3DInfo {
+  clips?: Record<string, { loop: boolean }>
+  rig_metrics?: {
+    fold?: Record<string, number>
+    sym_max_pct?: number
+    landmark_fallback?: string[]
+    clips?: Record<string, { stretch_p999: number; contact_err_max: number; tail_min_z: number; ik_unreachable: number }>
+  }
   face_retexture?: { status: string; at?: string; backend?: string; job_id?: string; face_texture_lost?: boolean; upscale?: { status: string; backend?: string; in?: number[]; out?: number[]; cached?: boolean; busy?: boolean; error?: string } }
   face_retexture_snapshot?: { ok: boolean; created_at?: string; error?: string }
   face_retexture_compare_url?: string
@@ -837,9 +844,22 @@ export function FieldModel3D({ character }: { character: string }) {
             url={viewerUrl}
             format={model.format || 'fbx'}
             clipUrl={mixamo ? clipUrl : ''}
+            embeddedTakes={model.rig === 'generic'}
+            clipLoops={model.clips}
             textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
           />
           </div>
+          {model.rig_metrics ? (
+            <fieldset className="ga-fieldset">
+              <legend>{t('Rig metrics')}</legend>
+              {Object.entries(model.rig_metrics.fold || {}).map(([leg, fold]) => <div key={leg}>{t('Leg fold')}: {leg} — {fold.toFixed(3)}</div>)}
+              <div>{t('Symmetry error')}: {model.rig_metrics.sym_max_pct?.toFixed(3)} %</div>
+              {Object.entries(model.rig_metrics.clips || {}).map(([name, metrics]) => (
+                <div key={name}>{name}: {t('Stretch p99.9')} {metrics.stretch_p999.toFixed(3)} · {t('Contact error')} {metrics.contact_err_max.toFixed(3)} % · {t('Tail minimum')} {metrics.tail_min_z.toFixed(4)} m · {t('IK unreachable')} {metrics.ik_unreachable}</div>
+              ))}
+              {model.rig_metrics.landmark_fallback?.length ? <p className="ga-hint">{t('Landmark fallback')}: {model.rig_metrics.landmark_fallback.join(', ')}</p> : null}
+            </fieldset>
+          ) : null}
           {/* Shown whenever Blender is around, not only once a distance mesh
               exists: asking for one that is missing is what makes the server
               build it. The button says so, and a reload has it. */}
