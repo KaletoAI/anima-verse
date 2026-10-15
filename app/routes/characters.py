@@ -1831,14 +1831,15 @@ def compare_character_face_retexture(character_name: str, request: Request, sign
 
 @router.post("/{character_name}/model3d/fetch-job")
 def fetch_character_model3d_job(character_name: str, job: str = "",
-                                backend: str = "", force: bool = False,
+                                force: bool = False,
                                 _: Dict[str, Any] = Depends(require_admin)
                                 ) -> Dict[str, Any]:
-    """Collects a finished gateway mesh job by its id ("466a4e41b73d" or
-    "Job 466a4e41b73d" as the log prints it) and stores it as the model of
-    the current outfit — for a generation that outlived our own poll.
-    ``backend`` names the mesh backend whose gateway knows the job (empty =
-    ask each gateway in turn). A job that is not finished yet answers
+    """Collects a finished gateway mesh job by its full id
+    ("f3acdaed52ef428e881a51a9fadfd4bd", optionally prefixed with "Job ")
+    or a unique prefix of at least 8 hex characters (e.g. "f3acdaed52ef",
+    as shown on the gateway admin page) and stores it as the model of the
+    current outfit — for a generation that outlived our own poll.
+    A job that is not finished yet answers
     ``{"status": "queued"|"running", "progress"}`` and changes nothing;
     ``force=1`` stores a result that fails the model check."""
     from app.core.model3d import fetch_job_for_current_outfit, normalize_job_id
@@ -1848,7 +1849,6 @@ def fetch_character_model3d_job(character_name: str, job: str = "",
     if not job_id:
         raise HTTPException(status_code=400, detail="Not a job id")
     res = fetch_job_for_current_outfit(character_name, job_id,
-                                       backend_glob=(backend or "").strip(),
                                        force=force)
     status = res.get("status")
     if status in ("stored", "queued", "running"):

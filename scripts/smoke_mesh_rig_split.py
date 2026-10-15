@@ -474,7 +474,7 @@ with ExitStack() as stack:
         mesh.source = fixture_glb(revision=f'recovered {rig} source')
         with patch.object(model3d, 'required_rig', return_value=rig):
             result = model3d.fetch_job_for_current_outfit(
-                'demo', 'mesh-recovery-job', backend_glob='mesh', signature=signature)
+                'demo', 'mesh-recovery-job', signature=signature)
             assert result['status'] == 'stored', result
             assert_static(signature, routed=False)
         public_meta = read_sidecar(root/f'{signature}.glb')
@@ -489,7 +489,7 @@ with ExitStack() as stack:
         mesh.source = b'not a valid GLB'
         with patch.object(model3d, 'required_rig', return_value=rig):
             invalid = model3d.fetch_job_for_current_outfit(
-                'demo', 'invalid-mesh-job', backend_glob='mesh', signature=signature)
+                'demo', 'invalid-mesh-job', signature=signature)
         assert invalid['status'] != 'stored'
         assert (root/f'{signature}.glb').read_bytes() == previous_public
         assert (root/'unrigged'/f'{signature}.glb').read_bytes() == previous_source

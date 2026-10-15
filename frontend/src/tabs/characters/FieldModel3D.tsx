@@ -248,7 +248,6 @@ export function FieldModel3D({ character }: { character: string }) {
   // admin may override with "Store anyway".
   const [jobOpen, setJobOpen] = useState(false)
   const [jobId, setJobId] = useState('')
-  const [jobBackend, setJobBackend] = useState('')
   const [jobErrors, setJobErrors] = useState<string[]>([])
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -482,7 +481,6 @@ export function FieldModel3D({ character }: { character: string }) {
       setBusy(true)
       try {
         const q = new URLSearchParams({ job: id })
-        if (jobBackend) q.set('backend', jobBackend)
         if (force) q.set('force', '1')
         const d = await apiPost<{ status?: string; progress?: number | null; warnings?: string[] }>(
           `/characters/${enc}/model3d/fetch-job?${q.toString()}`, {})
@@ -509,7 +507,7 @@ export function FieldModel3D({ character }: { character: string }) {
         setBusy(false)
       }
     },
-    [busy, enc, jobBackend, jobId, load, t, toast],
+    [busy, enc, jobId, load, t, toast],
   )
 
   // Opt-in: generate the mesh automatically (cheapest backend) once a new
@@ -1419,21 +1417,6 @@ export function FieldModel3D({ character }: { character: string }) {
                 if (e.key === 'Enter') fetchJob(false)
               }}
             />
-            <select
-              className="ga-input"
-              style={{ flex: '0 1 auto' }}
-              value={jobBackend}
-              aria-label={t('Mesh backend')}
-              disabled={pending}
-              onChange={(e) => setJobBackend(e.target.value)}
-            >
-              <option value="">{t('— ask every gateway —')}</option>
-              {(st.backends || []).map((b) => (
-                <option key={b.name} value={b.name}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
             <button
               type="button"
               className="ga-btn ga-btn-sm ga-btn-primary"

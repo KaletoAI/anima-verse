@@ -1416,14 +1416,13 @@ class ImageService:
                 "stages": stage_out}
 
     def fetch_mesh_job(self, job_id: str, output_path: str,
-                       backend_glob: str = "", rig: str = "") -> Dict[str, Any]:
+                       rig: str = "") -> Dict[str, Any]:
         """Collects the result of an EXISTING gateway mesh job by its id — for
         a mesh whose run outlived our own poll (timeout, server restart) but
         finished on the gateway.
 
-        ``backend_glob`` names the mesh backend whose gateway knows the job;
-        empty = every available mesh backend is asked in cost order, each
-        gateway once. ``rig`` is what the caller
+        Every available mesh backend is asked in cost order, each gateway
+        once. ``rig`` is what the caller
         needs: a job that reports another skeleton is refused, because a
         wrong-rig mesh binds unusably.
 
@@ -1438,15 +1437,7 @@ class ImageService:
         text. ``forbidden`` (another gateway user's job) ends the search like
         a hit: the job exists on that gateway.
         """
-        candidates: List[ImageBackend] = []
-        if backend_glob.strip():
-            b = self._wait_for_explicit_backend(backend_glob, media="mesh")
-            if not b:
-                return {"status": "error",
-                        "error": f"mesh backend '{backend_glob}' unavailable"}
-            candidates = [b]
-        else:
-            candidates = self.list_available_backends(media="mesh")
+        candidates = self.list_available_backends(media="mesh")
         # Each gateway is asked once — several aliases usually share one.
         seen = set()
         tried: List[ImageBackend] = []

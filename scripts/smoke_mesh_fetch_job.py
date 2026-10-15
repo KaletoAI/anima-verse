@@ -92,7 +92,7 @@ ROUTES = {}                       # url -> _Resp
 CALLS = []
 
 
-def _fake_get(url, headers=None, timeout=None):
+def _fake_get(url, headers=None, timeout=None, **_kw):
     CALLS.append(url)
     return ROUTES.get(url, _Resp(404))
 
@@ -196,9 +196,6 @@ class _Pool:
 
     def list_available_backends(self, media="image", **_kw):
         return list(self.meshes)
-
-    def _wait_for_explicit_backend(self, name, media="image", **_kw):
-        return next((m for m in self.meshes if m.name == name), None)
 
 
 out_dir = Path(_TMP) / "out"

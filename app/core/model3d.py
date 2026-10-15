@@ -2382,7 +2382,6 @@ def normalize_job_id(raw: str) -> str:
 
 @_serial_model
 def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
-                                 backend_glob: str = "",
                                  force: bool = False,
                                  signature: Optional[str] = None) -> Dict[str, Any]:
     """Collects a finished gateway mesh job by its id and stores it as the
@@ -2422,8 +2421,7 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
             out_dir = get_model3d_dir(character_name)
             staging = Path(tempfile.mkdtemp(prefix=".fetch-", dir=out_dir))
             res = get_image_service().fetch_mesh_job(
-                job_id, str(staging / f"{signature}.fbx"),
-                backend_glob=backend_glob)
+                job_id, str(staging / f"{signature}.fbx"))
             if res.get("status") != "stored":
                 return res
             delivered_rig = res.get("rig", rig)
