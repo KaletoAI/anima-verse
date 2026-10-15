@@ -18,6 +18,7 @@
  * clock), so a quick equip/unequip never flashes a hint at all.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -109,12 +110,27 @@ function renderFingerprint(d: RefsInfo | null | undefined, kinds: RefKind[]): st
  * actually is, not what the config asked for. A click opens the render in
  * the shared Lightbox — the ONE place for all instances (T-pose + extra views).
  */
+/** The corner badges on a reference image (size, date). */
+const BADGE_STYLE: CSSProperties = {
+  position: 'absolute',
+  bottom: 6,
+  padding: '1px 5px',
+  borderRadius: 4,
+  background: 'rgba(0, 0, 0, 0.55)',
+  color: '#fff',
+  fontSize: 11,
+  lineHeight: '16px',
+  pointerEvents: 'none',
+}
+
 function RefImage({
   src,
   height,
   radius,
   showSize = false,
   label,
+  caption,
+  action,
 }: {
   src: string
   height: number
@@ -122,6 +138,10 @@ function RefImage({
   showSize?: boolean
   /** Lightbox alt text (which render this is). */
   label?: string
+  /** Text in the lower left corner, styled like the size badge. */
+  caption?: string
+  /** Control in the upper right corner (e.g. the regenerate button). */
+  action?: ReactNode
 }) {
   const [size, setSize] = useState('')
   const [hidden, setHidden] = useState(false)
@@ -151,22 +171,13 @@ function RefImage({
         onError={() => setHidden(true)}
       />
       {showSize && size && !hidden ? (
-        <span
-          style={{
-            position: 'absolute',
-            right: 6,
-            bottom: 6,
-            padding: '1px 5px',
-            borderRadius: 4,
-            background: 'rgba(0, 0, 0, 0.55)',
-            color: '#fff',
-            fontSize: 11,
-            lineHeight: '16px',
-            pointerEvents: 'none',
-          }}
-        >
-          {size}
-        </span>
+        <span style={{ ...BADGE_STYLE, right: 6 }}>{size}</span>
+      ) : null}
+      {caption && !hidden ? (
+        <span style={{ ...BADGE_STYLE, left: 6 }}>{caption}</span>
+      ) : null}
+      {action ? (
+        <div style={{ position: 'absolute', top: 6, right: 6 }}>{action}</div>
       ) : null}
     </div>
   )
@@ -379,14 +390,23 @@ export function FieldModelRefs({
                   radius={8}
                   showSize={kind === 'tpose'}
                   label={label(kind)}
+                  caption={ri.created_at ? formatDateTime(ri.created_at, clockSettings()) : undefined}
+                  action={kind === 'tpose' ? (
+                    <button
+                      type="button"
+                      className="ga-btn ga-btn-sm"
+                      disabled={blocked}
+                      onClick={() => generate('main')}
+                      aria-label={`${t('Regenerate')} · ${t('Main view')}`}
+                    >
+                      {t('Regenerate')}
+                    </button>
+                  ) : undefined}
                 />
               ) : (
                 <div className="ga-hint">{t('No render yet')}</div>
               )}
-              {ri?.created_at ? (
-                <div className="ga-hint">{formatDateTime(ri.created_at, clockSettings())}</div>
-              ) : null}
-              {kind === 'tpose' ? (
+              {kind === 'tpose' && !ri ? (
                 <button
                   type="button"
                   className="ga-btn ga-btn-sm"
