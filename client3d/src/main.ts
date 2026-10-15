@@ -1,3 +1,4 @@
+import { buildPlace, redatumPlace, type PlaceRecord, type Resident } from './scene/places';
 import { installSkinnedNormalCorrection } from '@anima/scene-render';
 import * as THREE from 'three';
 installSkinnedNormalCorrection(THREE);
@@ -97,7 +98,7 @@ const GROUND_BOOT_WAIT_MS = 2500;
  *  whole answer is a handful of string comparisons — no need to be clever. */
 const SOUNDTRACK_TICK_MS = 1000;
 
-// --- The ONE open detail view (Etappe 3, plan-3d-lod-und-betreten.md) --------
+// --- The ONE open detail view (Stage 3, plan-3d-lod-und-betreten.md) --------
 // `openLocationId` (in startApp) is the singleton the whole view keys off:
 // exactly ONE location shows its interior, and the crossfade (applyTileFade)
 // is the TRANSITION, driven by open/close events — never by camera distance.
@@ -138,7 +139,7 @@ const OCCLUDER_RADIUS_FACTOR = 1.05;
 /** "Hineinsehen" flies in to this distance — the old panel fly-to, kept. */
 const OPEN_FLY_DIST = 15;
 /** Far-view building models: hysteresis of the camera-distance tier choice
- *  (Nr. 5). Nearer than NEAR → `full`, farther than FAR → `low`; the 15 m
+ *  (No. 5). Nearer than NEAR → `full`, farther than FAR → `low`; the 15 m
  *  band between them keeps a camera hovering at the line from thrashing
  *  swaps. Boot overview distance is 70 (> FAR), so the map starts light. */
 const BUILDING_TIER_NEAR = 45;
@@ -171,18 +172,18 @@ const LOD_TICK_MS = 1000;
 const SCATTER_LOD_YAW_RAD = (10 * Math.PI) / 180;
 const SCATTER_LOD_MOVE_M = 8;
 const SCATTER_LOD_MIN_MS = 100;
-/** How often the performance readout is refreshed (Etappe 5). Three to four
+/** How often the performance readout is refreshed (Stage 5). Three to four
  *  updates a second: fast enough that a stutter shows up while it is felt,
  *  slow enough that the digits stay readable instead of blurring. */
 const PERF_UI_MS = 300;
-/** How often the minimap slice is reconsidered (Etappe 5, task 3). Four times
+/** How often the minimap slice is reconsidered (Stage 5, task 3). Four times
  *  a second: the picture only changes when the avatar has walked its follow
  *  step or the camera turns, both of which are slower than that — and a slice
  *  published per frame would re-render React sixty times a second for a window
  *  that has not moved. Nothing is published unless something changed. */
 const MINIMAP_MS = 250;
 /**
- * How far past an opening the "Betreten" walk-in aims, in world metres — far
+ * How far past an opening the "Entering" walk-in aims, in world metres — far
  * enough inside that the figure visibly crosses the boundary, and WELL under
  * the server's crossing tolerance of 1.5 m (`_POS_OPENING_TOLERANCE_M`).
  *
@@ -196,7 +197,7 @@ const MINIMAP_MS = 250;
  * more than a body width, and more than the walk-in's own arrival threshold.
  */
 const OPENING_WALK_IN_M = 0.5;
-/** Fallbacks for the two walk limits (§ A15 Nr. 9) when the worldmap payload
+/** Fallbacks for the two walk limits (§ A15 No. 9) when the worldmap payload
  *  carries none — the same numbers `app/core/relief.py` defaults to, so a
  *  client talking to an older server judges the ground the way that server
  *  does. */
@@ -652,7 +653,7 @@ async function startApp(username: string, role: string) {
   const detailById = new Map(allLocs.map((l) => [l.id, l]));
   /**
    * The placeable locations of a worldmap snapshot. ONE function, because
-   * since the knowledge filter (Etappe 5) locations arrive not only at boot: a
+   * since the knowledge filter (Stage 5) locations arrive not only at boot: a
    * place the avatar discovers appears in a later poll and has to become a tile
    * the very same way — same test, same merge of map entry and detail.
    */
@@ -858,13 +859,15 @@ async function startApp(username: string, role: string) {
   await primeP;
   reportBootStage('scenes');
 
-  const tiles = new Map<string, Tile>();
+  const places = new Map<string, PlaceRecord>();
+  const residency = new Map<string, Resident>();
+  const pins = new Map<string, THREE.Sprite>();
   /** The running `mountScene` of each location, settled or not — see
    *  `mountWithDoors`. Only ever awaited by the boot's arrival step; a later
    *  remount simply overwrites the entry. */
   const scenePending = new Map<string, Promise<unknown>>();
   // Numeric on-screen probe for remote diagnosis — inert without ?debug3d=1.
-  initDebug3d(engine, tiles);
+  initDebug3d(engine, residency);
   // …and its live sibling: the ISOLATION panel (Shift+I), which switches each
   // layer of the picture off one at a time. Always available, because the
   // defects it exists for are the ones nobody else can reproduce. It costs
@@ -875,10 +878,10 @@ async function startApp(username: string, role: string) {
     ground: terrainGround,
     backdrop: backdrop.group,
     figures: npcs.group,
-    tiles,
+    residency,
   });
 
-  // --- The open detail view: ONE explicit singleton (Etappe 3) --------------
+  // --- The open detail view: ONE explicit singleton (Stage 3) --------------
   // Every downstream consumer (interior visibility, labels, roof fade, door
   // thresholds, NPC room figures, ground hole, neighbour occlusion, elevator
   // prompt, figure scale) keeps reading `tile.fade`/`fadeTarget` — only the
@@ -893,13 +896,13 @@ async function startApp(username: string, role: string) {
    *  OVERVIEW. Embodied it stays hidden: there the avatar's location owns the
    *  state and an explicit close would be reopened the very next frame. */
   function refreshOpenBadge() {
-    const tile = openLocationId ? tiles.get(openLocationId) : null;
+    const tile = openLocationId ? places.get(openLocationId) : null;
     if (tile && getGameState().mode !== 'embodied') badge.show(tile.loc.name);
     else badge.hide();
   }
   function openLocation(id: string) {
     if (openLocationId === id) return;
-    const tile = tiles.get(id);
+    const tile = residency.get(id)?.tile;
     if (!tile || !openable(tile)) return;
     // Opening one location closes the current one — the crossfade of both
     // runs in the frame hook off their diverged fade targets.
@@ -914,7 +917,7 @@ async function startApp(username: string, role: string) {
   badge.onClose = () => closeOpenLocation();
   subscribeGameState(refreshOpenBadge);
 
-  // --- Resolution tiers (Etappe 3, Nr. 4 + 5) -------------------------------
+  // --- Resolution tiers (Stage 3, Nos. 4 + 5) -------------------------------
   // WHICH tier a model group shows is pure view state and decided HERE; the
   // resolution to a URL (missing tier → best existing) is pickVariant's, and
   // the in-place swap is setSceneModelTier's. Two drivers:
@@ -963,7 +966,8 @@ async function startApp(username: string, role: string) {
     // the label, the figure ladder and the entry offer read the same datum.
     const heightRev = terrainGround.heightRevision();
     const heightMoved = heightRev !== groundDrapedRev;
-    for (const tile of tiles.values()) {
+    if (heightMoved) for (const place of places.values()) redatumPlace(place);
+    for (const { tile } of residency.values()) {
       if (heightMoved) {
         const datumMove = redatumTile(tile);
         // AND THE SITTER FOLLOWS ITS SEAT (review finding 2026-08-28). Every
@@ -984,7 +988,11 @@ async function startApp(username: string, role: string) {
       const b = wantedBuildingTier(tile);
       if (buildingTierByLoc.get(tile.loc.id) !== b) {
         buildingTierByLoc.set(tile.loc.id, b);
-        void setSceneModelTier(tile, 'building', b);
+        void setSceneModelTier(tile, 'building', b, () => {
+          if (residency.get(tile.loc.id)?.tile !== tile) return;
+          const place = places.get(tile.loc.id);
+          if (place) place.height = tile.height;
+        });
       }
       const i = wantedInteriorTier(tile.loc.id, scenes.get(tile.loc.id));
       if (interiorTierByLoc.get(tile.loc.id) !== i) {
@@ -1037,7 +1045,7 @@ async function startApp(username: string, role: string) {
     terrainGround.setHeightAnchor(held ? held.x : engine.target.x,
                                   held ? held.z : engine.target.z);
   }
-  // --- Performance readout (Etappe 5, plan-3d-lod-und-betreten.md) ---------
+  // --- Performance readout (Stage 5, plan-3d-lod-und-betreten.md) ---------
   //
   // Three sources, three cadences, and the split is the whole point:
   //  - FPS is sampled EVERY frame (a rate averaged from anything slower is
@@ -1114,7 +1122,7 @@ async function startApp(username: string, role: string) {
   });
   function measurePerfHeavy() {
     const placed: TierSample[] = [];
-    for (const tile of tiles.values()) {
+    for (const { tile } of residency.values()) {
       for (const rec of tile.placedModels ?? []) {
         placed.push({ variants: rec.spec.variants, url: rec.url });
       }
@@ -1197,7 +1205,7 @@ async function startApp(username: string, role: string) {
       if (!old) continue;
       old.parent?.remove(old);
       // The tile's own material pair goes with it — unhooked before the tile is
-      // freed, so nothing else ever disposes it (`dropTile`).
+      // freed, so nothing else ever disposes it (`dropPlace`).
       const mats = old.userData.mats as DoorMarkMats | undefined;
       mats?.open.dispose();
       mats?.locked.dispose();
@@ -1303,7 +1311,7 @@ async function startApp(username: string, role: string) {
   function applyDoorLocks(locId: string) {
     const root = doorMarks.get(locId);
     if (!root) return;
-    const tile = tiles.get(locId);
+    const tile = residency.get(locId)?.tile;
     const state = getGameState();
     const locks = locId === state.lockedLoc ? state.lockedRooms : NO_LOCKS;
     const here = tile ? avatarRoomId(tile) ?? '' : '';
@@ -1358,7 +1366,7 @@ async function startApp(username: string, role: string) {
   function swingDoorProps(dt: number) {
     const me = npcs.positionOf(avatarName);
     const state = getGameState();
-    for (const tile of tiles.values()) {
+    for (const { tile } of residency.values()) {
       const doors = tile.doorProps;
       if (!doors?.length) continue;
       // No avatar anywhere: every door eases shut, none of them is "near".
@@ -1457,9 +1465,13 @@ async function startApp(username: string, role: string) {
     buildingTierByLoc.set(tile.loc.id, building);
     interiorTierByLoc.set(tile.loc.id, interior);
     const mounted = mountScene(tile, scene, { building, interior }).finally(() => {
-      if (tiles.get(tile.loc.id) !== tile) return;
+      if (residency.get(tile.loc.id)?.tile !== tile) return;
       buildDoorMarks(tile, scene);
       buildBoundaryMarks(tile, scene);
+      const resident = residency.get(tile.loc.id)!;
+      resident.ready = true;
+      const place = places.get(tile.loc.id);
+      if (place) place.height = tile.height;
     });
     // Never rejects for the WAITER: a model that would not load must not turn
     // the boot's one await into an unhandled rejection — the mount reports its
@@ -1470,9 +1482,29 @@ async function startApp(username: string, role: string) {
   }
 
   /** Build a location's tile and hang it in the scene. Boot walks every
-   *  placeable location through here, the reveal path (Etappe 5) the newly
+   *  placeable location through here, the reveal path (Stage 5) the newly
    *  discovered ones — the pickables are refreshed by the CALLER, once per
    *  batch. */
+  /** Scene construction writes `tile.height` before the full mount settles
+   *  (far shell, building swap). Every write is shared at once with the place
+   *  record and an existing event pin — but only while this tile is still the
+   *  place's resident, so a replaced tile cannot move the pin of its successor. */
+  function shareTileHeight(tile: Tile, place: PlaceRecord): void {
+    const id = place.loc.id;
+    let height = tile.height;
+    Object.defineProperty(tile, 'height', {
+      enumerable: true,
+      configurable: true,
+      get: () => height,
+      set: (value: number) => {
+        height = value;
+        if (residency.get(id)?.tile !== tile) return;
+        place.height = value;
+        pins.get(id)?.position.setY(value + 3.5);
+      },
+    });
+  }
+
   function addTile(loc: WorldLocation) {
     // Placed or not built at all (§ A1.1). `placeableOf` already filters on
     // this, so the guard is the second lock on the one door through which a
@@ -1483,8 +1515,12 @@ async function startApp(username: string, role: string) {
         + ' — no tile drawn');
       return;
     }
-    const tile = buildTile(loc);
-    tiles.set(loc.id, tile);
+    const place = buildPlace(loc);
+    places.set(loc.id, place);
+    engine.scene.add(place.anchor);
+    const tile = buildTile(place);
+    shareTileHeight(tile, place);
+    residency.set(loc.id, { tile, ring: 'near', gen: 0, ready: false });
     engine.scene.add(tile.group);
     const scene = scenes.get(loc.id);
     if (scene) void mountWithDoors(tile, scene);
@@ -1511,9 +1547,9 @@ async function startApp(username: string, role: string) {
   // would wait for nearly the whole queue. The focus goes back to the camera
   // as soon as the arrival is settled; a live vector either way, so the
   // reordering keeps following whatever it points at.
-  const arrivalTile = arrivalLocId ? tiles.get(arrivalLocId) : undefined;
+  const arrivalTile = arrivalLocId ? residency.get(arrivalLocId)?.tile : undefined;
   if (arrivalTile) setPropLoadFocus(arrivalTile.center);
-  engine.setPickables([...tiles.values()].map((t) => t.group));
+  engine.setPickables([...residency.values()].map(({ tile }) => tile.group));
 
   // --- THE VEIL (plan-fog-schleier-v2.md, § A12) -----------------------------
   //
@@ -1582,7 +1618,7 @@ async function startApp(username: string, role: string) {
    * The two WALK LIMITS of the world (§ A12): how high a step the figure
    * takes and how steep a slope it climbs. They are SERVER settings — the
    * height gate of `POST /play/pos` judges every reported point with exactly
-   * these two numbers (§ A15 Nr. 9) — and they ride along on the worldmap
+   * these two numbers (§ A15 No. 9) — and they ride along on the worldmap
    * poll, so an admin who changes them reaches a running client within one
    * poll instead of at the next reload. An older server sends neither, and
    * then the built-in defaults are the very ones `app/core/relief.py` falls
@@ -1624,7 +1660,7 @@ async function startApp(username: string, role: string) {
     // Fetch new scene recipes and refresh signatures. ONE signature covers
     // map3d, room layouts, model metadata and prop sidecars (§ B1).
     // Skip the first sweep because prime() just fetched those scenes.
-    for (const locId of tiles.keys()) scenes.request(locId);
+    for (const locId of residency.keys()) scenes.request(locId);
     if (!firstSweep) void scenes.sweep();
     firstSweep = false;
   };
@@ -1708,21 +1744,31 @@ async function startApp(username: string, role: string) {
     free(tile.group);
   }
 
-  function rebuildTile(old: Tile, loc: WorldLocation) {
+  function rebuildTile(old: Tile | undefined, loc: WorldLocation) {
     // The thresholds go with it, unconditionally: a scene that turned 404
     // (layout deleted) is never mounted again, so nothing else would clear
     // them and they would hang in the air over a procedural tile.
     dropDoorMarks(loc.id);
-    freeTile(old);
-    const tile = buildTile(loc);
+    if (old) freeTile(old);
+    const previous = places.get(loc.id);
+    if (previous) {
+      engine.scene.remove(previous.anchor);
+      previous.labelObj?.element.remove();
+    }
+    const place = buildPlace(loc);
+    places.set(loc.id, place);
+    engine.scene.add(place.anchor);
+    if (!old) return;
+    const tile = buildTile(place);
+    shareTileHeight(tile, place);
     tile.fade = old.fade;
     tile.fadeTarget = old.fadeTarget;
     tile.levelFilter = old.levelFilter;   // preserve the selected storey across rebuilds
-    tiles.set(loc.id, tile);
+    residency.set(loc.id, { tile, ring: 'near', gen: 0, ready: false });
     engine.scene.add(tile.group);
     const scene = scenes.get(loc.id);
     if (scene) void mountWithDoors(tile, scene);
-    engine.setPickables([...tiles.values()].map((t) => t.group));
+    engine.setPickables([...residency.values()].map(({ tile }) => tile.group));
   }
   // A changed scene signature (layout, map3d, model metadata, prop sidecar)
   // rebuilds the tile. A 404 (deleted layout) leaves only the procedural
@@ -1731,7 +1777,7 @@ async function startApp(username: string, role: string) {
    *  (game/collide.ts). The payload is TILE-LOCAL, so the cached segments are
    *  world lines derived from the tile's centre AND its turn — which means it
    *  is invalidated wherever the tile is rebuilt, not only where its payload
-   *  changes: `onScene` (a moved scene signature), `dropTile` (the place is
+   *  changes: `onScene` (a moved scene signature), `dropPlace` (the place is
    *  gone) and `rebuildMovedTiles` (the place was moved or turned in the
    *  editor — finding B13's other half: the tile followed, the walls did not,
    *  and the avatar went on clamping against the old building's outline). */
@@ -1739,7 +1785,7 @@ async function startApp(username: string, role: string) {
 
   scenes.onScene = (locId) => {
     wallCache.delete(locId);
-    const tile = tiles.get(locId);
+    const tile = residency.get(locId)?.tile;
     if (tile) rebuildTile(tile, tile.loc);
   };
   function applyLocations(fresh: WorldLocation[]) {
@@ -1749,8 +1795,8 @@ async function startApp(username: string, role: string) {
     // ground between the places is the painted terrain of `/play/terrain`
     // now, and a changed `terrain`/`surface_kind` simply repaints the one
     // tile it belongs to, through the ordinary signature rebuild.
-    const dirty: [Tile, WorldLocation][] = [];
-    for (const [id, tile] of tiles) {
+    const dirty: [Tile | undefined, WorldLocation][] = [];
+    for (const [id, place] of places) {
       const detail = freshById.get(id);
       if (!detail) continue;
       const sig = sigOf(detail);
@@ -1759,15 +1805,15 @@ async function startApp(username: string, role: string) {
       // map3d from the detail record, but without losing the DERIVED floors:
       // only the worldmap variant carries those (the tile came from boot) —
       // otherwise the procedural shell shrank on the first real rebuild.
-      const m3 = detail.map3d ?? tile.loc.map3d;
-      const floors = detail.map3d?.floors ?? tile.loc.map3d?.floors;
-      dirty.push([tile, {
-        ...tile.loc,
+      const m3 = detail.map3d ?? place.loc.map3d;
+      const floors = detail.map3d?.floors ?? place.loc.map3d?.floors;
+      dirty.push([residency.get(id)?.tile, {
+        ...place.loc,
         rooms: detail.rooms ?? [],
         map3d: m3 && floors !== undefined ? { ...m3, floors } : m3,
-        entry_room: detail.entry_room ?? tile.loc.entry_room,
-        terrain: detail.terrain ?? tile.loc.terrain,
-        surface_kind: detail.surface_kind ?? tile.loc.surface_kind,
+        entry_room: detail.entry_room ?? place.loc.entry_room,
+        terrain: detail.terrain ?? place.loc.terrain,
+        surface_kind: detail.surface_kind ?? place.loc.surface_kind,
       }]);
     }
     for (const [tile, loc] of dirty) rebuildTile(tile, loc);
@@ -1799,9 +1845,9 @@ async function startApp(username: string, role: string) {
   engine.dist = engine.targetDist = fitDistance(firstMap.world_bounds);
 
   // --- Hover & click -------------------------------------------------------
-  let hovered: Tile | null = null;
+  let hovered: PlaceRecord | null = null;
   engine.onHover = (id) => {
-    const tile = id ? tiles.get(id) ?? null : null;
+    const tile = id ? places.get(id) ?? null : null;
     if (tile === hovered) return;
     // The yellow highlight ring died with the drawn boundaries (user decision
     // 2026-08-19) — the polygon plate itself shows what a place covers, and
@@ -1822,11 +1868,11 @@ async function startApp(username: string, role: string) {
       panel.hide();
       return;
     }
-    const tile = tiles.get(id);
+    const tile = places.get(id);
     if (!tile) return;
     const chars = (lastMap?.characters ?? []).filter((c) => c.location_id === id);
     panel.show(tile.loc, chars, lastMap?.events_by_location?.[id] ?? [], roomOf,
-      { openable: openable(tile), open: openLocationId === id });
+      { openable: !!residency.get(id) && openable(residency.get(id)!.tile), open: openLocationId === id });
   };
   /** Fly-in distance of the panel buttons: never FARTHER than where the camera
    *  already stands. `flyTo` sets the distance unconditionally, so a fixed
@@ -1834,13 +1880,13 @@ async function startApp(username: string, role: string) {
    *  inside" would zoom OUT. */
   const flyInDist = () => Math.min(engine.targetDist, OPEN_FLY_DIST);
   panel.onZoomTo = (id) => {
-    const tile = tiles.get(id);
+    const tile = places.get(id);
     if (tile) engine.flyTo(tile.center.clone(), flyInDist());
   };
   // "Look inside" (stage 3): the old fly-to stays part of it — fly in AND
   // open the detail view. Pure view state, no server call.
   panel.onLookInside = (id) => {
-    const tile = tiles.get(id);
+    const tile = places.get(id);
     if (!tile) return;
     engine.flyTo(tile.center.clone(), flyInDist());
     openLocation(id);
@@ -1970,7 +2016,7 @@ async function startApp(username: string, role: string) {
     }
     pendingTakeControl = false;
     const me = lastMap?.characters.find((c) => c.name === lastMap!.avatar);
-    const tile = me ? tiles.get(me.location_id) : undefined;
+    const tile = me ? places.get(me.location_id) : undefined;
     // WILDERNESS IS A PLACE (E4 task 5). An avatar without a tile used to be
     // refused here — in the grid world it meant "no cell, nothing to fly to".
     // On the metre plane a location is not required to stand somewhere: an
@@ -2041,8 +2087,7 @@ async function startApp(username: string, role: string) {
     uiActions.toggleMenu?.();
   });
 
-  // --- Event-Pins ----------------------------------------------------------
-  const pins = new Map<string, THREE.Sprite>();
+  // --- Event pins ----------------------------------------------------------
   function makePinTexture(emoji: string): THREE.CanvasTexture {
     const c = document.createElement('canvas');
     c.width = c.height = 96;
@@ -2058,7 +2103,7 @@ async function startApp(username: string, role: string) {
   function updatePins(map: WorldMap) {
     const wanted = new Map<string, string>();
     for (const [locId, evs] of Object.entries(map.events_by_location ?? {})) {
-      if (!evs.length || !tiles.has(locId)) continue;
+      if (!evs.length || !places.has(locId)) continue;
       wanted.set(locId, evs.some((e) => e.category === 'danger') ? '🔥' : '❗');
     }
     for (const [locId, pin] of pins) {
@@ -2069,7 +2114,7 @@ async function startApp(username: string, role: string) {
     }
     for (const [locId, emoji] of wanted) {
       if (pins.has(locId)) continue;
-      const tile = tiles.get(locId)!;
+      const tile = places.get(locId)!;
       const pin = new THREE.Sprite(new THREE.SpriteMaterial({ map: makePinTexture(emoji), depthTest: false }));
       pin.scale.setScalar(3);
       pin.position.copy(tile.center).setY(tile.height + 3.5);
@@ -2185,7 +2230,7 @@ async function startApp(username: string, role: string) {
    */
   function rebuildMovedTiles(map: WorldMap): void {
     for (const row of map.locations) {
-      const tile = tiles.get(row.id);
+      const tile = places.get(row.id);
       if (!tile) continue;
       const sig = footprintSignature(row);
       const before = geomSig.get(row.id);
@@ -2199,7 +2244,7 @@ async function startApp(username: string, role: string) {
       // see `wallCache`. They go with the tile, or the avatar keeps colliding
       // with the outline of a building that has moved away underneath it.
       wallCache.delete(row.id);
-      rebuildTile(tile, {
+      rebuildTile(residency.get(row.id)?.tile, {
         ...tile.loc,
         pos_x: row.pos_x,
         pos_z: row.pos_z,
@@ -2270,14 +2315,14 @@ async function startApp(username: string, role: string) {
     rebuildMovedTiles(map);
     // KNOWLEDGE MOVES WHILE ONE PLAYS: a place the avatar has just discovered
     // is simply in the payload from one poll to the next, and the reveal below
-    // builds its tile. Nothing is un-covered — since v6 Nr. 8 there is no veil
+    // builds its tile. Nothing is un-covered — since v6 No. 8 there is no veil
     // to cut a hole into, only a location that was not there before.
     //
     // The trigger asks the SAME question the reveal answers — `placeableOf`,
     // not a hand-written filter next to it. A cheaper test that drifted from
     // it would fire on polls that reveal nothing, and each shot would refetch
     // all of /world/locations to build nothing.
-    if (placeableOf(map, detailById).some((l) => !tiles.has(l.id))) {
+    if (placeableOf(map, detailById).some((l) => !places.has(l.id))) {
       // Deliberately not awaited: the reveal fetches and mounts, and the poll
       // must not be held up by it (it guards itself against a second run).
       void revealLocations(map);
@@ -2306,7 +2351,7 @@ async function startApp(username: string, role: string) {
    *  simply lights the windows. */
   let updateSoundtrack: (() => void) | null = null;
   engine.onDayNight = (night) => {
-    for (const tile of tiles.values()) applyNightGlow(tile, night);
+    for (const { tile } of residency.values()) applyNightGlow(tile, night);
     // The far range takes the time of day from the SAME hook (§ A17): its
     // material is unlit, so without this it would keep its daylight rock
     // colour and glow over a dark world. The engine has just set the sky it is
@@ -2329,7 +2374,7 @@ async function startApp(username: string, role: string) {
 
   // Fallback for backends without room_id in the worldmap (pre-AV3D-8).
   async function pollRooms() {
-    const zoomed = [...tiles.values()].filter((t) => t.fadeTarget === 1 && t.loc.rooms.length);
+    const zoomed = [...residency.values()].map((r) => r.tile).filter((t) => t.fadeTarget === 1 && t.loc.rooms.length);
     for (const tile of zoomed) {
       const charsHere = (lastMap?.characters ?? []).filter((c) => c.location_id === tile.loc.id);
       if (charsHere.every((c) => c.room_id)) continue;
@@ -2442,7 +2487,7 @@ async function startApp(username: string, role: string) {
       // under — the old `continue` dropped it from the list and `npcs.update`
       // removed its figure, the player's own included. `pos` is the whole
       // answer then, on the open ground plane like a traveller's.
-      const placement = placementOf(tiles.has(c.location_id), c.pos);
+      const placement = placementOf(residency.has(c.location_id), c.pos);
       if (placement.kind === 'free') {
         // Straight out of a ROOM into the open is a snap, not a walk: the
         // straight line from a room spot to a point outside the building runs
@@ -2465,7 +2510,7 @@ async function startApp(username: string, role: string) {
       (byLoc.get(c.location_id) ?? byLoc.set(c.location_id, []).get(c.location_id)!).push(c);
     }
     for (const [locId, chars] of byLoc) {
-      const tile = tiles.get(locId)!;
+      const tile = residency.get(locId)!.tile;
       chars.sort((a, b) => a.name.localeCompare(b.name));
       const roomMates = new Map<string, string[]>();
       for (const c of chars) {
@@ -2655,7 +2700,7 @@ async function startApp(username: string, role: string) {
         // journey did not): no line — that belongs to the ROUTE now — but the
         // figure still looks the way it means to go, or its standing animation
         // points at a random neighbour.
-        const targetTile = c.movement_target_id ? tiles.get(c.movement_target_id) : undefined;
+        const targetTile = c.movement_target_id ? places.get(c.movement_target_id) : undefined;
         if (targetTile && c.movement_target_id !== locId && !face) {
           face = targetTile.center.clone().sub(pos).setY(0);
         }
@@ -2707,7 +2752,7 @@ async function startApp(username: string, role: string) {
     updateTalkTarget();
     updateElevator();   // standing at the lift is a second-scale event too
     updateStairs();     // …and so is standing at a flight of stairs
-    updateEnterOffer(); // …and so is standing at a location entry (Etappe 3)
+    updateEnterOffer(); // …and so is standing at a location entry (Stage 3)
     // All four offers are fresh now, so this is where "which one does F
     // answer" can be asked — and an unfolded storey choice that has lost the
     // key gets folded away.
@@ -2728,7 +2773,7 @@ async function startApp(username: string, role: string) {
    * `app/core/world_geometry.location_at_point`, and the successor of the
    * cell lookup that used to answer this.
    *
-   * The SMALLEST AREA wins (contract v6 Nr. 6, decision E1.2): overlaps are
+   * The SMALLEST AREA wins (contract v6 No. 6, decision E1.2): overlaps are
    * legal (a hut on a village square) and the smallest enclosed area is the
    * most specific answer, exactly as the server resolves it — the polygon
    * successor of the smallest-width rule, and identical to it wherever both
@@ -2738,7 +2783,7 @@ async function startApp(username: string, role: string) {
    */
   function tileAt(x: number, z: number): Tile | null {
     let best: Tile | null = null;
-    for (const tile of tiles.values()) {
+    for (const { tile } of residency.values()) {
       if (!tileContains(tile, x, z)) continue;
       if (!best || tile.area < best.area) best = tile;
     }
@@ -2968,7 +3013,7 @@ async function startApp(username: string, role: string) {
   }
 
   /**
-   * Does the HEIGHT between two points stop the figure (§ A15 Nr. 9)?
+   * Does the HEIGHT between two points stop the figure (§ A15 No. 9)?
    *
    * The rule is `walk.slopeBlocks`, the two heights are `gateStandAt` — the
    * server's own standing ladder — and the limits are the world's
@@ -3020,7 +3065,7 @@ async function startApp(username: string, role: string) {
    * second source, anchoring `map3d.boundary_openings` itself, existed to
    * patch over. Nothing here anchors, rotates or normalizes anything.
    */
-  function openingsOf(tile: Tile): Opening[] {
+  function openingsOf(tile: Pick<PlaceRecord, 'loc'>): Opening[] {
     return tile.loc.openings ?? [];
   }
 
@@ -3031,7 +3076,7 @@ async function startApp(username: string, role: string) {
    * gates still judge it). One WITH openings is entered at them and nowhere
    * else, within the server's 1.5 m.
    */
-  function freeBoundary(tile: Tile): boolean {
+  function freeBoundary(tile: Pick<PlaceRecord, 'loc'>): boolean {
     return openingsOf(tile).length === 0;
   }
 
@@ -3041,7 +3086,7 @@ async function startApp(username: string, role: string) {
     return blockedFor(p ? tileAt(p.x, p.z) : null, x, z);
   }
 
-  // --- Minimap slice (Etappe 5 task 3; metre world since E4 task 2) ----------
+  // --- Minimap slice (Stage 5 task 3; metre world since E4 task 2) ----------
   //
   // The HUD draws the map, this publishes what it draws — and it publishes ONLY
   // ON A CHANGE. The signature below is the whole rule: the ground revision,
@@ -3139,7 +3184,7 @@ async function startApp(username: string, role: string) {
   }, MINIMAP_MS);
 
   /**
-   * A place the avatar has just discovered joins the map (Etappe 5).
+   * A place the avatar has just discovered joins the map (Stage 5).
    *
    * KNOWLEDGE GROWS DURING PLAY — the server starts delivering a location the
    * moment it becomes known — so this walks a newcomer through everything the
@@ -3150,13 +3195,13 @@ async function startApp(username: string, role: string) {
    * so a newcomer forced its neighbours to be rebuilt — footprints have no
    * neighbours, § A1.1) and the pathfinding grid with the passability map
    * (task 5: the server judges the reported point, the client walks freely).
-   * The veil went with contract v6 Nr. 8 and takes its bookkeeping along.
+   * The veil went with contract v6 No. 8 and takes its bookkeeping along.
    *
    * The rooms come from a FRESH `/world/locations`: the boot snapshot was
    * taken while this place was still unknown, and a location created after boot
    * would not be in it at all. That endpoint is unfiltered, one call covers
    * however many appeared at once, and a failed call simply leaves the work to
-   * the next poll — `tiles` is what says "already built", so nothing is done
+   * the next poll — `places` is what says "already known", so nothing is done
    * twice.
    *
    * ONE DIRECTION ONLY, and that is the whole of it: in play a place once
@@ -3167,7 +3212,7 @@ async function startApp(username: string, role: string) {
   let revealBusy = false;
   async function revealLocations(map: WorldMap): Promise<void> {
     // One reveal at a time: the run awaits twice, and two overlapping runs
-    // would both pass the `tiles.has` filter and mount the same location
+    // would both pass the `places.has` filter and mount the same location
     // twice. Whatever a skipped run would have found is found by the next
     // poll — three seconds later, and the payload says it again.
     if (revealBusy) return;
@@ -3194,7 +3239,7 @@ async function startApp(username: string, role: string) {
     }
     if (rev !== viewRev) return;
     for (const [id, loc] of details) detailById.set(id, loc);
-    const fresh = placeableOf(map, details).filter((l) => !tiles.has(l.id));
+    const fresh = placeableOf(map, details).filter((l) => !places.has(l.id));
     if (!fresh.length) return;
     placeable.push(...fresh);
     // The scene recipes before the tiles, exactly as at boot: a tile built
@@ -3212,7 +3257,7 @@ async function startApp(username: string, role: string) {
     // The geometry of the payload these tiles were just built from (B13) —
     // without it the next poll would read every fresh tile as "moved".
     noteGeometry(map.locations);
-    engine.setPickables([...tiles.values()].map((t) => t.group));
+    engine.setPickables([...residency.values()].map(({ tile }) => tile.group));
   }
 
   /**
@@ -3222,24 +3267,28 @@ async function startApp(username: string, role: string) {
    *
    * What it frees, and what it deliberately does not, is `freeTile`'s to say.
    */
-  function dropTile(id: string): void {
-    const tile = tiles.get(id);
-    if (!tile) return;
+  function dropPlace(id: string): void {
+    const tile = residency.get(id)?.tile;
+    const place = places.get(id);
+    if (!place) return;
     if (openLocationId === id) closeOpenLocation();
-    if (hovered === tile) {
+    if (hovered === place) {
       // Including the cursor: `onHover` bails out early when the id it gets is
       // the one it already knows, so a pointer left on a vanished tile would
       // keep the hand shape over empty ground.
       hovered = null;
       document.body.style.cursor = 'default';
     }
-    tiles.delete(id);
+    places.delete(id);
+    residency.delete(id);
+    engine.scene.remove(place.anchor);
+    place.labelObj?.element.remove();
     dropDoorMarks(id);
     wallCache.delete(id);
     locSig.delete(id);
     buildingTierByLoc.delete(id);
     interiorTierByLoc.delete(id);
-    freeTile(tile);
+    if (tile) freeTile(tile);
   }
 
   /**
@@ -3255,9 +3304,9 @@ async function startApp(username: string, role: string) {
     const keep = new Set(placeableOf(map, detailById).map((l) => l.id));
     const here = map.characters.find((c) => c.name === map.avatar)?.location_id;
     if (here) keep.add(here);
-    const gone = [...tiles.keys()].filter((id) => !keep.has(id));
+    const gone = [...places.keys()].filter((id) => !keep.has(id));
     if (!gone.length) return false;
-    for (const id of gone) dropTile(id);
+    for (const id of gone) dropPlace(id);
     for (let i = placeable.length - 1; i >= 0; i -= 1) {
       if (!keep.has(placeable[i].id)) placeable.splice(i, 1);
     }
@@ -3265,7 +3314,7 @@ async function startApp(username: string, role: string) {
     // location of its own to compare, and a view switch is a fine moment to
     // close it either way.
     panel.hide();
-    engine.setPickables([...tiles.values()].map((t) => t.group));
+    engine.setPickables([...residency.values()].map(({ tile }) => tile.group));
     return true;
   }
 
@@ -3274,7 +3323,7 @@ async function startApp(username: string, role: string) {
    *
    * It changes which VIEW is fetched (`/play/worldmap?all=1`, § A12), and the
    * world is reconciled against the new payload in place: what the other view
-   * adds goes through the reveal path of Etappe 5, what it takes away through
+   * adds goes through the reveal path of Stage 5, what it takes away through
    * `dropVanished`. No reload — the switch is a view, not a new session.
    *
    * The flag moves BEFORE anything is built, and `viewRev` invalidates the
@@ -4321,7 +4370,7 @@ async function startApp(username: string, role: string) {
     if (getGameState().mode !== 'embodied') { seatedKey = ''; return; }
     const key = `${place.id}#${place.slot}`;
     if (key === seatedKey) return;
-    const tile = me?.location_id ? tiles.get(me.location_id) : undefined;
+    const tile = me?.location_id ? residency.get(me.location_id)?.tile : undefined;
     const held = tile?.roomMarkers.get(place.room_id)?.get(place.id);
     // Scene not mounted yet (the interior opens on approach): the next poll
     // tries again, `seatedKey` stays empty on purpose. A marker without a
@@ -4407,7 +4456,7 @@ async function startApp(username: string, role: string) {
     placeEntries = undefined;
     if (getGameState().mode !== 'embodied' || !placeOffersRoom) return;
     const me = lastMap?.characters.find((c) => c.name === avatarName);
-    const tile = me?.location_id ? tiles.get(me.location_id) : undefined;
+    const tile = me?.location_id ? residency.get(me.location_id)?.tile : undefined;
     const entries = tile?.roomMarkers.get(placeOffersRoom);
     if (!entries) return;
     placeEntries = entries;
@@ -4675,7 +4724,7 @@ async function startApp(username: string, role: string) {
    * follows the slope. Taking the zone's single height there would float the
    * figure downhill and sink it uphill.
    *
-   * ONE SOURCE SINCE "Ein Boden" E5b, and this reads it: the room's centre is
+   * ONE SOURCE SINCE "One ground" E5b, and this reads it: the room's centre is
    * put on the room's own floor by `deriveRoomSpots` — a declared `walk_y`, a
    * storey plate, or the terrain at that point — so the avatar's interior
    * height and the room's NPC stands cannot be two numbers. The mesh raycast
@@ -5399,7 +5448,7 @@ async function startApp(username: string, role: string) {
     hoverSeq = -1;   // probe again whatever the pointer does
   });
 
-  // --- Entering a location (Etappe 3, "Betreten"; metres since E4 task 5) ---
+  // --- Entering a location (Stage 3, "Entering"; metres since E4 task 5) ---
   // The offer is view logic, the ENTRY is the server's — and since free
   // walking it is not a step but the next POSITION REPORT: pressing F walks
   // the figure THROUGH the authored opening, and the report taken on the way
@@ -5409,7 +5458,7 @@ async function startApp(username: string, role: string) {
   //
   // The rule of WHEN the offer stands is pure (`game/enterLocation.ts`,
   // numbers in client3d/scripts/smoke_enter_math.mjs): within ENTER_RADIUS of
-  // an authored boundary opening (§ B1 Nr. 13) of a location one is not in,
+  // an authored boundary opening (§ B1 No. 13) of a location one is not in,
   // exactly as the server refuses the crossing anywhere else (2026-08-04). A
   // location with NO authored opening has a free boundary, and since contract
   // v6 its whole DRAWN RIM is the offer — the polygon successor of "anywhere
@@ -5442,7 +5491,7 @@ async function startApp(username: string, role: string) {
     if (!pos) return clear();
     const myLoc = tileAt(pos.x, pos.z)?.loc.id ?? '';
     const candidates: EntryTile[] = [];
-    for (const t of tiles.values()) {
+    for (const t of places.values()) {
       // WHO IS WORTH AN OFFER. A location with a detail view to enter always
       // is — and since E5 so is one the walker CANNOT get into by walking:
       // a place with authored openings is not a free boundary, so its
@@ -5453,7 +5502,7 @@ async function startApp(username: string, role: string) {
       // entered — its openings come off the worldmap row all the same.
       // Skipped is only what is BOTH: nothing to open and free to walk into —
       // there the offer would just duplicate ordinary walking.
-      if (!openable(t) && freeBoundary(t)) continue;
+      if (!(residency.get(t.loc.id) && openable(residency.get(t.loc.id)!.tile)) && freeBoundary(t)) continue;
       candidates.push({
         locId: t.loc.id,
         footprint: { x: t.center.x, z: t.center.z, yaw: t.yaw },
@@ -5480,7 +5529,7 @@ async function startApp(username: string, role: string) {
       if (state.enterOffer) setGameState({ enterOffer: null });
       return;
     }
-    const name = tiles.get(offer.locId)?.loc.name ?? '';
+    const name = places.get(offer.locId)?.loc.name ?? '';
     // The distance travels with the name: it is what decides this offer
     // against the other three (`game/offers.nearestOffer`).
     if (state.enterOffer?.name !== name || state.enterOffer?.dist !== offer.dist) {
@@ -5521,7 +5570,7 @@ async function startApp(username: string, role: string) {
     if (roomRequestInFlight || verticalRide || walkIn) return;
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
-    if (!tiles.get(offer.locId)) return;
+    if (!places.get(offer.locId)) return;
     cancelRoute();
     // ONE normal, the one `entryOfferNear` already picked: the authored
     // opening's (server-computed, world metres) or the rim's on a free
@@ -5676,7 +5725,7 @@ async function startApp(username: string, role: string) {
     if (state.mode === 'overview' && state.selected?.isAvatar) gameActions.enterEmbodied?.();
   });
 
-  // `relevelTiles` ran here every frame until 2026-08-21 ("Ein Boden" E3, plan
+  // `relevelTiles` ran here every frame until 2026-08-21 ("One ground" E3, plan
   // § 3.1): whenever the height revision moved it re-read every tile's pin AND
   // the world ground under all 49² points of its plate's drape lattice
   // (`plateGroundSamples`), and rebuilt any tile whose reading had shifted by a
@@ -5688,7 +5737,7 @@ async function startApp(username: string, role: string) {
   // --- Frame hook: detail view (singleton), NPC animation, pin bobbing ---
   let bob = 0;
   engine.addFrameHook((dt) => {
-    // Who owns the open view this frame (Etappe 3):
+    // Who owns the open view this frame (Stage 3):
     //  - EMBODIED, the avatar's own location IS it — auto-open on entering
     //    (embody start included), auto-close on stepping out. The camera
     //    cannot close it: the wheel stops at EMBODY_MAX_DIST 34, which is
@@ -5705,7 +5754,7 @@ async function startApp(username: string, role: string) {
         else closeOpenLocation();
       }
     } else if (openLocationId) {
-      const t = tiles.get(openLocationId);
+      const t = residency.get(openLocationId)?.tile;
       const off = t
         ? Math.hypot(engine.target.x - t.center.x, engine.target.z - t.center.z)
         : Infinity;
@@ -5716,15 +5765,15 @@ async function startApp(username: string, role: string) {
 
     let open: Tile | null = null;
     let basementOpen: Tile | null = null;
-    for (const tile of tiles.values()) {
-      // A detail-scene area location (`display: 'shell_area'`, § B6 Nr. 10)
+    for (const { tile } of residency.values()) {
+      // A detail-scene area location (`display: 'shell_area'`, § B6 No. 10)
       // fades like a building although its cell is PASSABLE — `isBuilding` is
       // false there by definition, so gating on it alone kept the interior of
       // exactly those locations shut, the one place the fade is supposed to
       // reveal something.
       if (tile.interior && (tile.isBuilding || tile.modelIsShellArea)) {
         // The fade TARGET comes from the singleton — never from camera
-        // geometry (Etappe 3). A tile that just lost the state keeps fading
+        // geometry (Stage 3). A tile that just lost the state keeps fading
         // out here over the same crossfade the opening one fades in on.
         tile.fadeTarget = tile.loc.id === openLocationId ? 1 : 0;
         applyTileFade(tile, dt);
@@ -5782,7 +5831,7 @@ async function startApp(username: string, role: string) {
     // In an open interior view, hide neighbouring tiles between the camera
     // and the revealed tile (XZ corridor).
     const cam = engine.camera.position;
-    for (const tile of tiles.values()) {
+    for (const { tile } of residency.values()) {
       let hide = false;
       if (open && tile !== open && tile.height > 1.5) {
         const tx = open.center.x - cam.x, tz = open.center.z - cam.z;
@@ -5801,7 +5850,7 @@ async function startApp(username: string, role: string) {
     // Room visibility depends only on the selected storey. Camera-based
     // room focus was removed: its moving target made rooms, dioramas and
     // props disappear depending on the viewing angle.
-    for (const tile of tiles.values()) {
+    for (const { tile } of residency.values()) {
       if (tile.roomGroups.size) applyRoomVisibility(tile);
     }
 
@@ -5835,7 +5884,7 @@ async function startApp(username: string, role: string) {
     // on the storey the tile displays, exactly like its walls and slabs. Built
     // once per tile, so a frame only flips visibility.
     for (const [locId, root] of doorMarks) {
-      const tile = tiles.get(locId);
+      const tile = residency.get(locId)?.tile;
       const on = !!tile && tile.fade > 0.5;
       root.visible = on;
       if (!tile || !on) continue;
@@ -5928,7 +5977,7 @@ async function startApp(username: string, role: string) {
       .find((c) => c.name === avatarName)?.location_id ?? '';
     await awaitArrivalMount();
     if (!locId) return;
-    const tile = tiles.get(locId);
+    const tile = residency.get(locId)?.tile;
     // No tile (an unplaced location): the pre-opened id names nothing, so it
     // must not stay the open one — the badge would offer to close a place
     // that is not on the map.

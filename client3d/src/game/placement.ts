@@ -43,7 +43,7 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
  * The placement of a character that is not on a journey.
  *
  * @param hasTile whether the client has BUILT a tile for its `location_id`
- *                (`tiles.has`) — the location placement needs one, and a
+ *                (`residency.has`) — the location placement needs one, and a
  *                location that is only known but not yet mounted has none.
  * @param pos     the payload's free metre point, or null/absent.
  *

@@ -1,17 +1,17 @@
-// Grundriss-Vorschau (AV3D-2) für den Game-Admin:
-//   /floorplan.html?location=<id-oder-name>[&verify=1]
-// Zeigt EINE Location isoliert mit aufgedeckter Innenansicht und pollt sie —
-// Änderungen im Grundriss-Editor erscheinen ohne Reload. Gedacht als iframe
-// rechts neben dem Editor; Voraussetzung ist eine bestehende Anmeldung im
-// 3D-Client.
+import { buildPlace, type PlaceRecord } from './scene/places';
+// Floor-plan preview (AV3D-2) for the game admin:
+//   /floorplan.html?location=<id-or-name>[&verify=1]
+// Shows ONE isolated location with its interior revealed and polls it —
+// floor-plan editor changes appear without reloading. Intended as an iframe
+// beside the editor; requires an existing login in the 3D client.
 //
-// Die Vorschau rendert AUSSCHLIESSLICH aus dem Szenen-Rezept (Vertrag § B1)
-// und zeigt damit zwangsläufig dasselbe Bild wie die Game-Admin-Vorschau, die
-// denselben Composer über /play/scene-preview liest (§ B3). Ohne Rezept (404)
-// gibt es per Server-Definition weder Raum-Layout noch Grundriss noch
-// Gebäudemodell — dann bleibt die nackte Kachel mit Hinweis.
-// `&verify=1` schaltet den Verify-Modus nach § B5a ein: Welt-BBox je Objekt
-// gegen die Spec, ε = 0,01 m, Ausgabe als Konsolen-Tabelle.
+// The preview renders EXCLUSIVELY from the scene recipe (contract § B1),
+// producing the same view as the game-admin preview, which reads the same
+// composer through /play/scene-preview (§ B3). Without a recipe (404), the
+// server defines no room layout, floor plan or building model — only the
+// bare tile and a notice remain.
+// `&verify=1` enables verification per § B5a: compare each object's world BBox
+// against the spec, ε = 0.01 m, with results in a console table.
 import * as THREE from 'three';
 import { Engine } from './scene/engine';
 import { applyTileFade, buildTile, setSurfaceTextures, type Tile } from './scene/tiles';
@@ -37,13 +37,13 @@ const say = (t: string) => {
 
 const engine = new Engine(document.body);
 setModelEnvironment(engine.modelEnv);
-(window as unknown as { __engine: Engine }).__engine = engine;   // Debug-Hook (wie main)
+(window as unknown as { __engine: Engine }).__engine = engine;   // Debug hook (as in main)
 engine.setGameHour(11);
 engine.target.set(0, 0, 0);
 engine.dist = engine.targetDist = 22;
 engine.pitchOffset = 28;
 
-// dezenter Wiesen-Untergrund, damit die Kachel nicht im Himmel schwebt
+// Subtle meadow ground so the tile does not float in the sky
 const groundTex = grassTexture();
 groundTex.repeat.set(8, 8);
 const ground = new THREE.Mesh(
@@ -75,7 +75,10 @@ async function fetchLocation(): Promise<WorldLocation | null> {
   return loc ?? null;
 }
 
+let previewPlace: PlaceRecord | null = null;
+
 function rebuild(loc: WorldLocation) {
+  if (previewPlace) engine.scene.remove(previewPlace.anchor);
   if (tile) {
     engine.scene.remove(tile.group);
     // …and give back what the old scene allocated. The editor polls every
@@ -85,7 +88,7 @@ function rebuild(loc: WorldLocation) {
     // mount is what frees them).
     unmountScene(tile);
   }
-  // CSS2D-Label-Reste des alten Baus entfernen (der Renderer räumt sie nicht ab)
+  // Remove old CSS2D labels; the renderer does not clear their DOM nodes.
   document.querySelectorAll('.room-label, .loc-label').forEach((el) => el.remove());
 
   // The preview shows ONE location, at the world origin: `buildTile` places it
@@ -93,9 +96,11 @@ function rebuild(loc: WorldLocation) {
   // — so the payload coordinates below are already world coordinates and the
   // verify table can compare them 1:1 against the spec.
   const shown: WorldLocation = { ...loc, pos_x: 0, pos_z: 0, rooms: loc.rooms ?? [] };
-  tile = buildTile(shown);
+  const place = previewPlace = buildPlace(shown);
+  tile = buildTile(place);
+  engine.scene.add(place.anchor);
   tile.fade = 1;
-  tile.fadeTarget = 1;   // Innenansicht dauerhaft aufgedeckt
+  tile.fadeTarget = 1;   // Keep the interior permanently open.
   engine.scene.add(tile.group);
   const scene = scenes.get(loc.id);
   if (!scene) {
@@ -103,8 +108,8 @@ function rebuild(loc: WorldLocation) {
       + 'Grundriss, kein Gebäudemodell) — es gibt nichts aufzuklappen.');
     return;
   }
-  // Kachel steht auf Grid 0/0 → Payload-Koordinaten sind hier direkt
-  // Weltkoordinaten; die Verify-Tabelle vergleicht damit 1:1 gegen die Spec.
+  // The place is at the origin, so payload coordinates are world coordinates;
+  // the verification table compares them directly against the spec.
   void mountScene(tile, scene).then((report) => {
     if (report) {
       const models = `Modelle ${report.models.placed}/${report.models.total}`;
@@ -120,9 +125,9 @@ async function poll() {
   const loc = await fetchLocation();
   if (!loc) return;
 
-  // EINE Signatur deckt map3d, ALLE Raum-Layouts, die Modell-Metas und die
-  // Prop-Sidecars ab (§ B1) — ein Poll, ein Vergleich, kein Meta-Sammeln mehr.
-  // Genau EIN Fetch je Poll: beim ersten Mal holen, danach die Signatur prüfen.
+  // ONE signature covers map3d, ALL room layouts, model metadata and prop
+  // sidecars (§ B1) — one poll, one comparison, no metadata collection.
+  // Exactly ONE fetch per poll: retrieve initially, then check the signature.
   if (scenes.get(loc.id) === undefined) await scenes.prime([loc.id]);
   else await scenes.sweep();
   const sig = scenes.get(loc.id)?.signature ?? '(keine Szene)';

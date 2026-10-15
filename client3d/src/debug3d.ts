@@ -32,6 +32,7 @@ import { setSurfaceSky } from '@anima/scene-render';
 import { isTypingTarget, type Engine } from './scene/engine';
 import type { Ground } from './scene/ground';
 import type { Tile } from './scene/tiles';
+import type { Resident } from './scene/places';
 import { setLayerCompositorFlat, setLayerSurfaceFiltering } from './scene/layerGround';
 import { setFogVeilDebugOff, setFogVeilSky } from './scene/fogVeil';
 import { IMPOSTOR_MESH_NAME } from './scene/impostors';
@@ -57,7 +58,7 @@ interface MeshRow {
 
 const params = new URLSearchParams(location.search);
 
-export function initDebug3d(engine: Engine, tiles: Map<string, Tile>): void {
+export function initDebug3d(engine: Engine, residency: Map<string, Resident>): void {
   if (params.get('debug3d') !== '1') return;
   const el = document.createElement('pre');
   el.id = 'debug3d';
@@ -145,7 +146,7 @@ export function initDebug3d(engine: Engine, tiles: Map<string, Tile>): void {
 
   const findTile = (): Tile | null => {
     if (targetName) {
-      for (const t of tiles.values()) {
+      for (const { tile: t } of residency.values()) {
         const loc = (t as unknown as { loc?: { id?: string; name?: string } }).loc;
         if ((loc?.name || '').toLowerCase().includes(targetName)
             || (loc?.id || '').toLowerCase() === targetName) return t;
@@ -154,7 +155,7 @@ export function initDebug3d(engine: Engine, tiles: Map<string, Tile>): void {
     }
     let best: Tile | null = null;
     let bd = Infinity;
-    for (const t of tiles.values()) {
+    for (const { tile: t } of residency.values()) {
       const d = Math.hypot(engine.target.x - t.center.x,
                            engine.target.z - t.center.z);
       if (d < bd) { bd = d; best = t; }
@@ -214,7 +215,7 @@ export interface IsolationDeps {
   figures: THREE.Object3D;
   /** the location tiles, read live — tiles are built and torn down as the
    *  player travels, so this is the map itself and never a snapshot of it */
-  tiles: Map<string, Tile>;
+  residency: Map<string, Resident>;
 }
 
 /** The colour toggle 1 paints the sky in. Pure magenta is chosen for the one
@@ -425,7 +426,10 @@ export function initIsolation(deps: IsolationDeps): void {
     }
     if (on(14)) force(deps.backdrop);
     if (on(15)) force(deps.figures);
-    if (on(16)) for (const tile of deps.tiles.values()) force(tile.group);
+    if (on(16)) for (const { tile } of deps.residency.values()) {
+      force(tile.group);
+      if (tile.labelObj) force(tile.labelObj);
+    }
   }
 
   // ── the readout ─────────────────────────────────────────────────────────

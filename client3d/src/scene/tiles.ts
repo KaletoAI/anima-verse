@@ -1,3 +1,4 @@
+import type { PlaceRecord } from './places';
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { highestSurfaceAt, tileDatumStep, worldToLocalXZ } from '@anima/scene-render';
@@ -7,7 +8,7 @@ import type { WorldLocation } from '../types';
 import { declaredFloorAt, furnitureUse, plateCeiling, polygonCentroid,
   recipeFloorAt, roomSpotGrid, standY, WALK_CLEARANCE_M,
   type DeclaredFloor, type GroundModelInfo, type WalkPlate } from '../game/ground';
-import { pointInPolygon, polygonArea, polygonBounds, sanitizePolygon } from '../game/polygon';
+import { pointInPolygon, polygonBounds, sanitizePolygon } from '../game/polygon';
 import type { SubmergedGhost } from './submergedGhost';
 import type { PlaceEntry } from './placeSlot';
 import { storeyPieceOpacity } from './storeyDisplay';
@@ -26,7 +27,7 @@ import { storeyPieceOpacity } from './storeyDisplay';
  *  and a tile is rebuilt on every layout change. */
 const widthWarned = new Set<string>();
 
-// THE GROUND RAYCAST IS GONE ("Ein Boden" E5b). `RAY_START_FALLBACK_M` /
+// THE GROUND RAYCAST IS GONE ("One ground" E5b). `RAY_START_FALLBACK_M` /
 // `RAY_START_MARGIN_M` / `setWorldRayStart` existed to start a downward ray
 // above the world's relief so it could hit a location model's baked-in ground
 // skin. The height ladder reads DATA now — a declaration, a storey plate, the
@@ -127,11 +128,11 @@ export function worldWaterSampler(
  * Two sources and no third: the worldmap row (the server hoists the EFFECTIVE
  * boundary out of `map3d`, synthesizing the four corners of a legacy square)
  * and the detail record's own `map3d.boundary` for a location the map row says
- * nothing about. `null` is a real state — v6 Nr. 1 struck the "without an
+ * nothing about. `null` is a real state — v6 No. 1 struck the "without an
  * anchor, a 10 m square" fallback without replacement, so such a place is a
  * pin: it claims no point on the plane and says so once.
  */
-function footprintBoundary(loc: WorldLocation): [number, number][] | null {
+export function footprintBoundary(loc: WorldLocation): [number, number][] | null {
   const pts = sanitizePolygon(loc.boundary ?? loc.map3d?.boundary);
   if (pts) return pts;
   if (!widthWarned.has(loc.id)) {
@@ -143,10 +144,10 @@ function footprintBoundary(loc: WorldLocation): [number, number][] | null {
 }
 
 /** Width of the footprint's BOUNDING BOX in world metres — derived from the
- *  boundary (v6 Nr. 2), with the server's own `plan_width_m` as the fallback
+ *  boundary (v6 No. 2), with the server's own `plan_width_m` as the fallback
  *  for a location that has a width but no outline. Everything that needs ONE
  *  length reads it: the texture repeat, the selection ring, the load radius. */
-function footprintWidth(loc: WorldLocation): number {
+export function footprintWidth(loc: WorldLocation): number {
   const b = polygonBounds(loc.boundary ?? loc.map3d?.boundary);
   if (b) return Math.max(b.maxX - b.minX, b.maxZ - b.minZ);
   const w = loc.plan_width_m ?? loc.map3d?.plan_width_m;
@@ -197,7 +198,7 @@ export function footprintCentre(
  * right and left the BUILDING — the one thing § A16.9 does not lift, because it
  * IS the plot — hanging in the air by exactly the datum's error.
  *
- * The probe existed until "Ein Boden" E3: `main.relevelTiles` compared
+ * The probe existed until "One ground" E3: `main.relevelTiles` compared
  * `footprintCentre(loc).y` against `tile.center.y` every frame and rebuilt the
  * tile when it moved. It was deleted with the ground plate whose drape its
  * SECOND clause watched. This is its first clause, without the rebuild.
@@ -224,7 +225,7 @@ export function redatumTile(tile: Tile): number {
 
 /** Footprint rotation in RADIANS, the world-map convention of § A1.1 — the
  *  same sign the tile group is turned by (`rotation.y = +rad(yaw_deg)`). */
-function footprintYaw(loc: WorldLocation): number {
+export function footprintYaw(loc: WorldLocation): number {
   const y = loc.yaw_deg;
   return typeof y === 'number' && Number.isFinite(y) ? (y * Math.PI) / 180 : 0;
 }
@@ -264,7 +265,7 @@ export function worldToTile(tile: Tile, x: number, z: number
 }
 
 /**
- * Does this tile's FOOTPRINT cover a world point (contract v6 Nr. 6)?
+ * Does this tile's FOOTPRINT cover a world point (contract v6 No. 6)?
  *
  * The point is turned into the tile's own frame first (`worldToTile`, the
  * inverse of § A1.1) and then ray-cast against the drawn polygon — the client's
@@ -321,7 +322,7 @@ function terrainKind(raw: string | undefined): TileStyle | null {
   return null;
 }
 
-/** AV3D-1: map3d.style -> Gebäudestil. Leer/unbekannt -> null. */
+/** AV3D-1: map3d.style -> building style. Empty/unknown -> null. */
 function styleKind(raw: string | undefined): TileStyle | null {
   const s = (raw || '').toLowerCase().trim();
   if (!s) return null;
@@ -332,7 +333,7 @@ function styleKind(raw: string | undefined): TileStyle | null {
   return terrainKind(s); // erlaubt auch style: "lake"/"forest"
 }
 
-/** One placed model of the mounted scene, kept for tier swapping (Etappe 3,
+/** One placed model of the mounted scene, kept for tier swapping (Stage 3,
  *  plan-3d-lod-und-betreten.md): the spec, the URL that is actually standing
  *  and the object in the graph. `mountScene` writes the records,
  *  `setSceneModelTier` (sceneRecipe.ts) swaps them in place — the old mesh
@@ -567,10 +568,10 @@ export interface Tile {
    *  this tile claims no point on the plane. */
   boundary: [number, number][] | null;
   /** Enclosed area of `boundary` in m². THE tie-breaker where footprints
-   *  overlap: the smallest area wins (v6 Nr. 6). 0 without a boundary. */
+   *  overlap: the smallest area wins (v6 No. 6). 0 without a boundary. */
   area: number;
   /** Width of the footprint's BOUNDING BOX in world metres (derived from
-   *  `boundary`, v6 Nr. 2). The ONE length this tile is scaled by: texture
+   *  `boundary`, v6 No. 2). The ONE length this tile is scaled by: texture
    *  repeat, selection ring, the occlusion corridor and the basement hole all
    *  come off it — containment and specificity come off `boundary`/`area`. */
   width: number;
@@ -587,25 +588,25 @@ export interface Tile {
   height: number;
   interior: THREE.Group | null;
   interiorLabels: CSS2DObject[];
-  /** prozedurale Außenhülle — wird durch ein Server-Modell (AV3D-9) ersetzt */
+  /** Procedural outer shell — replaced by a server model (AV3D-9). */
   shell?: THREE.Group;
-  /** bereits eingewechseltes Server-Gebäudemodell */
+  /** Server building model already swapped in. */
   serverModel?: THREE.Group;
-  /** `display: 'ground'` — das Modell IST die Location (Fläche, Dorf, See):
-   *  es blendet beim Reinzoomen nie weg, sondern bekommt Löcher. Kommt aus
-   *  der Spec, nicht aus dem Vorhandensein von cutouts. */
+  /** `display: 'ground'` — the model IS the location (area, village, lake):
+   *  zooming in never fades it out; instead it gets holes. Comes from the
+   *  spec, independently of whether cutouts exist. */
   modelIsGround?: boolean;
-  /** `display: 'shell_area'` (§ B6 Nr. 10) — Flächen-Location im Detail-Modus:
-   *  Anker wie `ground`, aber das Modell blendet beim Reinzoomen aus wie eine
-   *  Hülle und gibt die komponierte Detailszene darunter frei. Der Kachelboden
-   *  folgt dabei dem Fade, statt fest sichtbar oder fest weg zu sein. */
+  /** `display: 'shell_area'` (§ B6 No. 10) — area location in detail mode:
+   *  anchored like `ground`, but zooming in fades the model like a shell,
+   *  revealing the composed detail scene below. The tile floor follows the
+   *  fade instead of remaining permanently visible or hidden. */
   modelIsShellArea?: boolean;
-  /** `walk_y_world` des Location-Modells (§ B) — die vom Server DEKLARIERTE
-   *  Standhöhe. `tileGroundY` misst den Dachschutz eines Gebäudes daran statt
-   *  an einer festen Marke; bei Flächen-Modellen spielt sie keine Rolle. */
+  /** `walk_y_world` of the location model (§ B) — standing height DECLARED
+   *  by the server. `tileGroundY` measures a building's roof protection against
+   *  it instead of a fixed threshold; it is irrelevant for area models. */
   modelWalkY?: number;
-  /** prozedurale Deko (Bäume) — weicht einem Server-Modell */
-  /** Namens-Label — Höhe wird beim Modell-Tausch nachgeführt */
+  /** Procedural decoration (trees) — gives way to a server model. */
+  /** Name label — height follows model swaps. */
   labelObj?: CSS2DObject;
   shellMats: THREE.MeshStandardMaterial[];
   roofParts: THREE.Object3D[];
@@ -618,7 +619,7 @@ export interface Tile {
    *  foot the payload names and is not lifted afterwards. */
   roomDoors: Map<string, THREE.Vector3>;
   /** THE STOREY-0 FLOORS of the mounted scene, as the spot derivation reads
-   *  them (§ A16.9, "Ein Boden" E5b): the room hull in TILE-LOCAL metres
+   *  them (§ A16.9, "One ground" E5b): the room hull in TILE-LOCAL metres
    *  plus the floor the payload DECLARES for it, where it declares one. Filled
    *  from `floor_plan` (level 0), from the storey plate (level != 0) and from
    *  the overlay block (a zone on an area model); `deriveRoomSpots` turns each
@@ -644,12 +645,12 @@ export interface Tile {
   /** Room rectangles in TILE-LOCAL metres (E4: a turned rectangle is not a
    *  rectangle, so readers turn their query point with `worldToTile` instead) */
   roomRects: Map<string, { x: number; z: number; w: number; d: number }>;
-  /** Etage je Raum (Schlüssel: ID und Name) */
+  /** Storey per room (keys: ID and name). */
   roomLevels: Map<string, number>;
-  /** dauerhaft sichtbare Räume (layout.always_visible; Figuren stehen dort
-   *  auch in der Übersicht) */
+  /** Permanently visible rooms (layout.always_visible; figures stand there
+   *  in the overview as well). */
   alwaysVisibleRooms: Set<string>;
-  /** Fahrstuhl-Haltepunkte je Etage (Welt-Koordinaten), AV3D-12 */
+  /** Elevator stops per storey (world coordinates), AV3D-12. */
   elevatorStops?: Map<number, THREE.Vector3>;
   /** Staircases of this scene, one entry per COMPLETE foot/head pair of the
    *  payload (world coordinates). The second vertical connection next to the
@@ -658,9 +659,9 @@ export interface Tile {
   /** The lift and the flights as HOVER/CLICK targets — one group of extras
    *  each (`VerticalTarget`). Undefined while the scene has neither. */
   verticalTargets?: VerticalTarget[];
-  /** Grundriss-Wandstücke mit Außennormale (Welt-XZ) — fürs Blickrichtungs-Culling */
+  /** Floor-plan wall segments with outward normals (world XZ), for view culling. */
   outlineWalls: { mesh: THREE.Mesh; level: number; mid: THREE.Vector2; normal: THREE.Vector2 }[];
-  /** Etagen-Bodenplatten des Grundrisses (für Boden-Farbübernahme) */
+  /** Storey floor slabs of the floor plan (for adopting floor colours). */
   levelSlabs: Map<number, THREE.Mesh>;
   /** THE PLATE OUTLINE PER STOREY, in TILE-LOCAL metres (§ A13b): the contour
    *  of the storey's OWN plate — the one without a `room_id`, never a room's
@@ -725,17 +726,17 @@ export interface Tile {
    *  the lift, the avatar changing storey — calls this with it; a tile without
    *  a scene or with a single storey has no switch. */
   levelSwitch?: () => void;
-  /** als outdoor markierte Räume (liefern keine Boden-Farbe fürs Gebäude) */
+  /** Rooms marked as outdoor (do not contribute a building floor colour). */
   roomOutdoor: Set<string>;
   /** This tile's scene uses a storey < 0 (derived from the payload, set by
    *  mountScene). Read by the camera rule that opens a basement view. */
   hasBasement?: boolean;
-  /** Flächen-Location (plan-area-locations.md): das Location-Modell bleibt in
-   *  der Innenansicht stehen und bekommt stattdessen Löcher. Das Handle
-   *  schaltet sie mit dem Crossfade — Fernsicht intaktes Modell, Innenansicht
-   *  Löcher — und gibt beim Remount seine Material-Klone frei. */
+  /** Area location (plan-area-locations.md): the location model remains in
+   *  the interior view and gets holes instead. The handle toggles them with
+   *  the crossfade — intact model at a distance, holes in the interior view —
+   *  and releases its material clones on remount. */
   cutouts?: CutoutHandle;
-  /** Modell-Platzierungen der montierten Szene (Stufen-Tausch, Etappe 3) */
+  /** Model placements of the mounted scene (tier swapping, Stage 3). */
   placedModels?: PlacedSceneModel[];
   /** The DOOR PROPS of the mounted scene (v5), one per `models[]` entry with a
    *  `door` block. Pure view state and part of the mount: `unmountScene` drops
@@ -755,7 +756,7 @@ export interface Tile {
 // left once the double scale went. The payload's `storey_m` is read where it
 // is needed, in `sceneRecipe.ts`, out of the payload itself.
 
-function detectStyle(loc: WorldLocation): TileStyle {
+export function detectStyle(loc: WorldLocation): TileStyle {
   // Priority: map3d.style (AV3D-1) > terrain (AV3D-7) > name heuristic. The
   // area vocabulary (forest/road/grass) is only ever guessed for an AREA
   // location — a built place never wears a ground look because its name says
@@ -797,7 +798,7 @@ const loader = new THREE.TextureLoader();
 
 /** The server's global surface library (kind -> surface). A new ground kind is
  *  a new library entry, NOT a client change. The built-in procedural stand-ins
- *  went with the footprint plate ("Ein Boden" E3): the only reader left is the
+ *  went with the footprint plate ("One ground" E3): the only reader left is the
  *  scene recipe, and a payload primitive names a kind the library has. */
 interface SurfaceEntry {
   url?: string; sizeM: number;
@@ -833,14 +834,14 @@ export function hasSurfaceTexture(kind: string): boolean {
 // with it: `setTerrainGrid`, `gridSurfaceKind`, the noise/zone baker and the
 // canvas compositing.
 
-// Die Boden-Kachelung der Etagen-/Raumplatten läuft seit dem Szenen-Rezept
-// über `surfaceFor` (Kind kommt als `texture_kind` mit dem Primitiv, Maßstab
-// als size_m × k) — die beiden früheren Sonder-Caches dafür sind entfallen.
+// Since scene recipes, storey/room slab floor tiling uses `surfaceFor`
+// (kind arrives as `texture_kind` on the primitive, scale as size_m × k).
+// The two previous dedicated caches have been removed.
 
-/** Surface-Texturen für die Szenen-Primitive (jedes Stück klont sie und setzt
- *  eigene repeat-Werte): Klone eines noch ladenden Bildes blieben leer,
- *  daher gibt surfaceFor nur FERTIG geladene Texturen heraus — der Mount
- *  ruft vorher preloadSurfaceTexture für die benötigten Kinds. */
+/** Surface textures for scene primitives (each piece clones them and sets
+ *  its own repeat values): clones of an image still loading stayed empty,
+ *  so surfaceFor only returns FULLY loaded textures — the mount calls
+ *  preloadSurfaceTexture for the required kinds first. */
 const recipeSurfaceCache = new Map<string, THREE.Texture>();
 const recipeSurfacePending = new Map<string, Promise<void>>();
 export function preloadSurfaceTexture(kind: string | undefined): Promise<void> {
@@ -855,17 +856,17 @@ export function preloadSurfaceTexture(kind: string | undefined): Promise<void> {
         tex.colorSpace = THREE.SRGBColorSpace;
         recipeSurfaceCache.set(key, tex);
       })
-      .catch(() => { /* Fallback-Farben der Hülle */ })
+      .catch(() => { /* Shell fallback colours */ })
       .finally(() => recipeSurfacePending.delete(key));
     recipeSurfacePending.set(key, pending);
   }
   return pending;
 }
 
-/** Aktive Surface-Textur eines Kinds für Platten und Wände der Szene.
- *  Ohne eigenen Eintrag fällt der Boden auf das globale "floor"-Kind zurück
- *  (Vertrag: „ohne Eintrag/Textur wie bisher"); Wände haben kein globales
- *  Kind -> null = Farb-Fallback aus `style`. */
+/** Active surface texture of a kind for scene slabs and walls.
+ *  Without its own entry, a floor falls back to the global "floor" kind
+ *  (contract: without an entry/texture, behave as before); walls have no
+ *  global kind -> null = colour fallback from `style`. */
 export function surfaceFor(
   kind: string | undefined,
   use: 'floor' | 'wall'
@@ -880,7 +881,7 @@ export function surfaceFor(
   return null;
 }
 
-// THE TILE'S OWN GROUND DIED HERE ("Ein Boden" E3, plan § 3.1). Until 2026-08-21
+// THE TILE'S OWN GROUND DIED HERE ("One ground" E3, plan § 3.1). Until 2026-08-21
 // every tile drew a second ground of its own: a footprint plate draped over the
 // world field (`plateGeometry`/`groundPlate`, y 0.04), a socle under a building
 // model (0.045), a backstop ladder that shoved that plate under a mounted scene
@@ -895,14 +896,15 @@ export function surfaceFor(
 // rooms, scene primitives, models.
 
 
-// `makeTree` stand hier bis 2026-08-02: prozedurale Kegel-Bäume auf
-// forest-Kacheln. Seit Wald & Co. ihre Detailszene aus GESTREUTEN
-// Bibliotheks-Props beziehen (plan-area-detail-scenes.md), sind generische
-// Deko-Elemente für ALLE Geländearten gestrichen (User-Vorgabe) — das
-// Gelände sagt nur noch die Bodentextur, was drauf steht, sagt die Welt.
+// `makeTree` lived here until 2026-08-02: procedural cone trees on forest
+// tiles. Since forests and similar locations get detail scenes from SCATTERED
+// library props (plan-area-detail-scenes.md), generic decoration for ALL
+// terrain types has been removed (user requirement). Terrain specifies only
+// the ground texture; the world specifies what stands on it.
 
 
-/** The tile builds only the OUTSIDE, and since "Ein Boden" E3 that is the LABEL
+/** The resident shares the persistent place label and its reading height.
+ *  Since "One ground" E3 the outside is only the LABEL
  *  and the reading height it hangs at — nothing else. The tile draws no ground
  *  of its own any more: the terrain under it IS the ground of the place (plan
  *  § 3.1), painted per texel by the one terrain material. The procedural
@@ -912,34 +914,17 @@ export function surfaceFor(
  *  these same tile fields. A location without a recipe (404) has, by server
  *  definition, neither a room layout nor an outline nor a building model —
  *  there is simply nothing to unfold. */
-export function buildTile(loc: WorldLocation): Tile {
-  const style = detectStyle(loc);
-  const isArea = isAreaLocation(loc);
-  const isBuilding = !isArea;
-  // THE footprint (contract v6, § A1.1): the drawn polygon `boundary` in local
-  // metres, pinned at (pos_x, pos_z) and turned by `yaw_deg`. Position AND
-  // rotation sit on the group, so every child is placed in tile-local metres —
-  // the same frame the scene payload speaks. The callers filter on
-  // `footprintCentre` (`placeableOf`, `addTile`), so an unplaced location never
-  // gets this far; if one ever does it says so rather than joining a silent
-  // heap on the origin.
-  const boundary = footprintBoundary(loc);
-  const width = footprintWidth(loc);
-  const yaw = footprintYaw(loc);
-  const placed = footprintCentre(loc);
-  if (!placed) {
-    console.warn(`[tiles] ${loc.name || loc.id}: built without a position`
-      + ' (pos_x/pos_z) — the tile stands on the world origin (§ A1.1)');
-  }
-  const center = placed ?? new THREE.Vector3(0, 0, 0);
+export function buildTile(place: PlaceRecord): Tile {
+  const { loc, boundary, area, width, yaw, isBuilding, isArea, natureSite, height, labelObj } = place;
+  const center = place.center.clone();
   const group = new THREE.Group();
   group.position.copy(center);
   group.rotation.y = yaw;
   group.userData.locationId = loc.id;
 
   const tile: Tile = {
-    loc, group, center, boundary, area: polygonArea(boundary),
-    width, yaw, isBuilding, isArea, height: 0,
+    loc, group, center, boundary, area,
+    width, yaw, isBuilding, isArea, natureSite, height, labelObj,
     interior: null, interiorLabels: [], shellMats: [], roofParts: [], roofMats: [],
     roomCenters: new Map(), roomDoors: new Map(),
     roomFloors: new Map(),
@@ -953,35 +938,6 @@ export function buildTile(loc: WorldLocation): Tile {
     levelFilter: 0, roomOutdoor: new Set(),
     fade: 0, fadeTarget: 0, occl: 0,
   };
-
-  // Benannte Natur-Location (z.B. See, Waldlichtung): kein Gebäude, aber Label/Räume
-  const natureSite = isBuilding && (style === 'water' || style === 'forest' || style === 'grass' || style === 'road');
-  tile.natureSite = natureSite;
-
-  const addLabel = () => {
-    const el = document.createElement('div');
-    el.className = 'loc-label';
-    el.textContent = loc.name;
-    const label = new CSS2DObject(el);
-    label.position.set(0, tile.height + 2.2, 0);
-    group.add(label);
-    tile.labelObj = label;
-  };
-
-  // The three branches only set the READING HEIGHT of the label now: a
-  // transit place hangs it low, a named nature site a hand higher, a building
-  // at a fixed 4 m until its server model reports a real one
-  // (`applySceneBuilding`). The ground each branch used to draw for itself is
-  // the terrain (see the note above `buildTile`).
-  if (!isBuilding) {
-    tile.height = style === 'forest' ? 3 : 0.3;
-  } else if (natureSite) {
-    tile.height = style === 'forest' ? 3 : 0.6;
-    addLabel();
-  } else {
-    tile.height = 4;
-    addLabel();
-  }
 
   tile.facadeMats = tile.shellMats.filter((m) => !!m.emissiveMap);
   return tile;
@@ -1013,7 +969,7 @@ export function deriveCorridorCentres(tile: Tile): void {
 
 /**
  * THE STANDS OF ONE ROOM, derived from the payload — the successor of the
- * 6 x 6 raycast raster ("Ein Boden" E5b).
+ * 6 x 6 raycast raster ("One ground" E5b).
  *
  * WHAT IT REPLACES. Until E5b this shot 36 rays down at the room's plate mesh,
  * read the floor out of the dominant 7 cm height bin, repaired that with a
@@ -1258,13 +1214,14 @@ function tileWalkY(tile: Tile, at: THREE.Vector3): number {
   return lift;
 }
 
-/** Kachel als Kamera-Verdecker aus-/einblenden (weich). Nachbarn zwischen
- *  Kamera und einer geöffneten Innenansicht verdecken sonst den Blick. */
+/** Fade neighbours occluding the camera view of an open interior. */
 export function applyTileOcclusion(tile: Tile, hide: boolean, dt: number) {
-  if (tile.occl === 0 && !hide) return;            // Normalzustand — nichts zu tun
+  if (tile.occl === 0 && !hide) return;            // Already fully visible.
   tile.occl = THREE.MathUtils.lerp(tile.occl, hide ? 1 : 0, 1 - Math.exp(-8 * dt));
   if (tile.occl < 0.02 && !hide) tile.occl = 0;
-  tile.group.visible = tile.occl < 0.95;           // blendet auch die Labels aus
+  tile.group.visible = tile.occl < 0.95;
+  // The label now lives on the persistent place anchor, outside this group.
+  if (tile.labelObj) tile.labelObj.visible = tile.group.visible;
 
   tile.group.traverse((o) => {
     const mesh = o as THREE.Mesh;
@@ -1286,9 +1243,9 @@ export function applyTileOcclusion(tile: Tile, hide: boolean, dt: number) {
   });
 }
 
-/** Grundriss-Wände in Blickrichtung ausblenden: Wandstücke, deren
- *  Außenseite zur Kamera zeigt, stehen zwischen Kamera und Innenraum.
- *  Wände oberhalb der gewählten Etage bleiben aus. */
+/** Hide floor-plan walls along the viewing direction: segments whose
+ *  outside faces the camera stand between it and the interior.
+ *  Walls above the selected storey remain hidden. */
 export function applyWallCulling(tile: Tile, camX: number, camZ: number) {
   for (const w of tile.outlineWalls) {
     const cullOk = (camX - w.mid.x) * w.normal.x + (camZ - w.mid.y) * w.normal.y <= 0;
@@ -1338,17 +1295,15 @@ export function applyLevelDisplay(tile: Tile) {
   }
 }
 
-/** Raum-Sichtbarkeit: NUR die Etage entscheidet. Räume der gewählten Etage
- *  sind sichtbar, dauerhaft sichtbare Outdoor-Räume immer.
+/** Room visibility: ONLY the storey decides. Rooms on the selected storey
+ *  are visible; permanently visible outdoor rooms always remain visible.
  *
- *  Bis v4 blendete diese Funktion zusätzlich alle Nachbarräume aus, sobald
- *  ein Raum das Bild füllte („Raum-Fokus"). Das ist ersatzlos gestrichen:
- *  der Zielpunkt der Kamera wandert beim Zoomen und Schwenken über den
- *  Boden, wodurch der Fokus bei kleinen Räumen zwischen Nachbarn hin- und
- *  herkippte und Räume samt Diorama und Props winkelabhängig verschwanden.
- *  Seit die Rezept-Wände ihr eigenes Blickrichtungs-Culling haben
- *  (applyWallCulling), braucht es das Ausblenden nicht mehr — auf einer
- *  Etage wird außer Wänden nichts versteckt. */
+ *  Until v4 this also hid all neighbouring rooms once one filled the view
+ *  ("room focus"). That behaviour was removed: zooming and panning move the
+ *  camera target across the floor, causing focus to jump between small rooms
+ *  and making rooms, dioramas and props disappear depending on the angle.
+ *  Recipe walls now have their own view culling (applyWallCulling), so this
+ *  hiding is unnecessary — nothing except walls is hidden on a storey. */
 export function applyRoomVisibility(tile: Tile) {
   for (const [id, rg] of tile.roomGroups) {
     rg.visible = tile.alwaysVisibleRooms.has(id)
@@ -1364,50 +1319,49 @@ export function applyNightGlow(tile: Tile, night: number) {
 }
 
 /** Rate of the crossfade below. Since the fade is EVENT-driven (open/close of
- *  the one detail view, Etappe 3) it is a deliberate transition, not a zoom
+ *  the one detail view, Stage 3) it is a deliberate transition, not a zoom
  *  side effect: τ = 1/4 s reaches 95 % in ~0.75 s — the "~0.8 s feel" of the
  *  plan. The old 6 (≈0.5 s) read as a snap once the camera no longer moved
  *  with it. */
 const FADE_RATE = 4;
 
-/** Crossfade Außenansicht <-> Raumansicht (fade 0..1). */
+/** Crossfade exterior view <-> room view (fade 0..1). */
 export function applyTileFade(tile: Tile, dt: number) {
   tile.fade = THREE.MathUtils.lerp(tile.fade, tile.fadeTarget, 1 - Math.exp(-FADE_RATE * dt));
   const f = tile.fade;
-  // Kein Y-Morph mehr: die Spec liefert EINEN Maßstab, und der gilt in jeder
-  // Zoomstufe. Wer hier wieder etwas skaliert, erzeugt genau die Divergenz
-  // zur Admin-Vorschau, die 2026-07-28 vermessen wurde.
+  // No more Y morphing: the spec supplies ONE scale, valid at every zoom.
+  // Scaling anything here would recreate the divergence from the admin
+  // preview measured on 2026-07-28.
   const sm = tile.serverModel;
   if (!tile.interior) return;
 
-  // THE GROUND-PLATE BRANCHES OF THIS FADE ARE GONE ("Ein Boden" E3): the tile
+  // THE GROUND-PLATE BRANCHES OF THIS FADE ARE GONE ("One ground" E3): the tile
   // owns no ground any more, so there is nothing here to ghost for a basement
   // view and nothing to fade in behind a vanishing detail model. Both branches
   // only ever dealt with the tile's own second ground — the terrain below is
   // the world's and stays whole through the crossfade. (The basement's own
   // discard rides on the terrain material now, plan § 3.4.)
 
-  // Flächen-Location: statt das Modell wegzublenden werden seine Löcher
-  // geschaltet — derselbe Zustand, andere Wirkung. Fernsicht zeigt die
-  // Location intakt, die Innenansicht schneidet Grundriss und abseits
-  // stehende Räume heraus, damit das Rezept-Innenleben darin sichtbar wird.
-  // Der Detail-Modus hat keine Löcher (sein Innenleben komponiert wie ein
-  // Gebäude-Interieur) — dort deckt der Fade des Modells selbst auf.
+  // Area location: toggle model holes instead of fading the model away —
+  // the same state, a different effect. The distant view shows it intact;
+  // the interior view cuts out the floor plan and detached rooms to reveal
+  // the recipe interior. Detail mode has no holes (its interior is composed
+  // like a building interior), so the model's fade reveals it instead.
   if (!tile.modelIsShellArea) tile.cutouts?.setEnabled(f > 0.03);
-  // Bei EINGEBLENDETER Unter-Etage tritt das Area-Modell ganz beiseite
-  // (User-Befund 2026-07-28: die vergrößerte Boden-Öffnung war da, aber das
-  // nie fadende Location-Modell stand davor). Gleiche Semantik wie der
-  // Etagen-Umschalter für Platten (seit 2026-07-31: lv === filter) und die
-  // Admin-Solo-Ansicht: Level < 0 gewählt → das Modell (die Level-0+-Optik)
-  // verschwindet, bis eine Etage >= 0 oder die Fernsicht zurückkommt.
+  // When a basement storey is SHOWN, the area model disappears entirely
+  // (user finding 2026-07-28: the enlarged floor opening existed, but the
+  // never-fading location model blocked it). Same semantics as the slab
+  // storey switch (since 2026-07-31: lv === filter) and the admin solo view:
+  // selecting level < 0 hides the model (the level-0+ appearance) until a
+  // storey >= 0 or the distant view returns.
   if (tile.modelIsGround && sm) {
     sm.visible = !(f > 0.03 && tile.levelFilter < 0);
   }
 
   for (const m of tile.roofMats) m.opacity = Math.max(0, 1 - f * 1.4);
   for (const o of tile.roofParts) o.visible = f < 0.95;
-  // Aufgedeckter Innenraum: Hülle wirft keinen Schatten mehr, sonst stehen
-  // die Figuren im Dunkeln
+  // Revealed interior: the shell stops casting shadows so figures do not
+  // stand in the dark.
   const shellShadow = f < 0.4;
   tile.group.traverse((o) => {
     if ((o as THREE.Mesh).isMesh && o.castShadow !== shellShadow && tile.interior && !tile.interior.getObjectById(o.id)) {

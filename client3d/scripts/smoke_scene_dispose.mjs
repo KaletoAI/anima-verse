@@ -137,6 +137,7 @@ async function loadClient(ref) {
     const entry = [
       `export { mountScene, unmountScene } from '${src}/sceneRecipe';`,
       `export { buildTile, setSurfaceTextures, preloadSurfaceTexture } from '${src}/tiles';`,
+      `export { buildPlace } from '${src}/places';`,
     ].join('\n');
     const stubs = {
       name: 'smoke-stubs',
@@ -336,7 +337,7 @@ function dropPath(tile, unmountScene) {
  * changed signature, or the drop path.
  */
 async function run(client, label, teardown, make = payload) {
-  const { mountScene, unmountScene, buildTile, setSurfaceTextures,
+  const { mountScene, unmountScene, buildTile, buildPlace, setSurfaceTextures,
           preloadSurfaceTexture } = client;
   console.log(`\n${label}`);
 
@@ -358,7 +359,9 @@ async function run(client, label, teardown, make = payload) {
   for (const set of Object.values(shared)) for (const res of set) w.watch(res);
 
   const scene = new THREE.Scene();
-  const tile = buildTile(LOCATION);
+  const place = buildPlace(LOCATION);
+  const tile = buildTile(place);
+  scene.add(place.anchor);
   scene.add(tile.group);                    // a tile without a parent is "stale"
 
   await mountScene(tile, make('sig-a'));
