@@ -557,7 +557,10 @@ def map_payload(places):
             "bounds": {"min_x": -800, "min_z": -500, "max_x": 700, "max_z": 900},
             "terrain_areas": areas,
             "height_areas": [
-                {"label": "Sanftes Schlossplateau", "polygon": rect(35,-300,340,-90), "height_m": 18, "falloff_m": 90},
+                # Falloff runs inward: leave the full shell and approach on the
+                # level core; bevel the southwest ramp away from the lake shore.
+                {"label": "Sanftes Schlossplateau", "polygon": [[30,-260],[340,-260],[340,0],[110,0],[30,-55]],
+                 "height_m": 18, "falloff_m": 30},
                 {"label": "Hagrids trockener Hügel", "polygon": rect(-185,-215,-40,-90), "height_m": 5, "falloff_m": 95},
                 {"label": "Westliche schottische Hügel", "polygon": [[-790,-350],[-650,-410],[-565,-240],[-595,40],[-735,105]], "height_m": 43, "falloff_m": 125},
                 {"label": "Östliche Hochlandkuppe", "polygon": [[425,-220],[615,-265],[680,-55],[560,90],[405,5]], "height_m": 46, "falloff_m": 145},
@@ -581,7 +584,7 @@ def location_payload(spec):
     }[spec["key"]]
     return {"name": spec["name"], "description": spec["description"], "danger_level": 0,
             "indoor": spec["indoor"], "decency": "public", "swim_allowed": False,
-            "style_hint": "Schottischer Sandstein, Schiefer, patiniertes Holz; sichere Ankunft im frühen Herbst",
+            "style_hint": "Scottish sandstone, slate and weathered timber; welcoming early-autumn arrival",
             "activity_hint": spec["activity"],
             "image_prompt_day": english + ", late afternoon in early autumn, no people, no text",
             "image_prompt_night": english + ", cool autumn night, warm lanterns, no people, no text",
@@ -589,10 +592,17 @@ def location_payload(spec):
             "rooms": [{"name": name, "description": description, "indoor": indoor,
                        "decency": "private" if name == "Schlafnische" else "public",
                        "swim_allowed": False, "activity_hint": spec["activity"],
-                       "style_hint": "Sandstein und dunkles Holz, frühes schottisches Herbstlicht",
+                       "style_hint": "Sandstone and dark timber, soft early-autumn Scottish light",
                        "image_prompt_day": english + ", quiet " + ("interior" if indoor == "indoor" else "outdoor gathering area") + ", afternoon, no people, no text",
                        "image_prompt_night": english + ", lantern lit at night, no people, no text"}
-                      for name, description, indoor in spec["rooms"]]}
+                      for name, description, indoor in spec["rooms"]] + [
+                          # This reserved room already exists on every map stub.
+                          # Author its visual fields without changing its blank
+                          # display name, narrative or engine-owned geometry.
+                          {"id": "__ground__", "name": "", "description": "",
+                           "style_hint": "Scottish sandstone, slate and weathered timber; welcoming early-autumn arrival",
+                           "image_prompt_day": english + ", surrounding grounds, late afternoon in early autumn, no people, no text",
+                           "image_prompt_night": english + ", surrounding grounds, cool autumn night, warm lanterns, no people, no text"}]}
 
 
 def location_index(client):
@@ -711,6 +721,27 @@ def add_props(client, assets):
     ids = {}
     categories = {"pine":"vegetation", "broadleaf":"vegetation", "hogwarts-express":"vehicle",
                   "rowboat":"vehicle", "jetty":"structure", "stone-gate":"structure"}
+    # POST /world/props stores description on variant 0 as its image-generation
+    # subject, not as roleplay prose. Keep German display names separate.
+    subjects = {
+        "hogwarts-express": "stationary crimson Hogwarts Express steam locomotive 5972, open coal tender and two passenger carriages, detailed wheels and metal fittings",
+        "rowboat": "open clinker-built wooden rowing boat, visible ribs, bench seats, gunwales and stowed oars",
+        "jetty": "three-metre-wide timber jetty, individual weathered planks, support posts, metal fittings and a lowered shore ramp",
+        "bench": "oak park bench with four seat slats, backrest, green metal legs and armrests",
+        "lantern": "small portable lantern, warm glowing panes, black metal frame, pyramidal cap and carrying ring",
+        "luggage": "school trunk with a curved leather lid and brass fittings, smaller travel suitcase stacked on top, Hogwarts luggage label",
+        "signpost": "wooden wayfinding post with green arrow boards labelled Hogwarts, Hogsmeade and Bootshaus",
+        "pine": "Scottish Scots pine, branching trunk, flared roots and many irregular three-dimensional clusters of green needles",
+        "broadleaf": "irregular broadleaf tree, visible flared roots, forked branches, fine twigs and an organically clustered green crown",
+        "stone-gate": "walk-through sandstone castle gateway, open round arch with individual voussoirs, solid piers and iron gate leaves opened to the sides",
+        "cottage-table": "heavy rustic oak cottage table, thick rectangular tabletop and four sturdy square legs, visible wood grain",
+        "oak-chair": "plain oak chair with a solid square seat, straight wooden backrest and four legs, visible wood grain",
+        "bookcase": "dark wooden bookcase with three shelves of upright schoolbooks in muted green, red and cream",
+        "cottage-bed": "broad rustic wooden cottage bed, tall headboard, green wool blanket and cream pillow",
+        "writing-desk": "wooden railway station writing desk, rectangular top, two solid drawer pedestals and a cream ledger",
+        "hearth": "rustic stone cottage hearth, broad stone base, square side piers and lintel, dark firebox with a few logs",
+        "school-trunk": "dark wooden school trunk, rectangular chest with brass reinforcing bands and a front brass clasp",
+    }
     for logical, spec in assets.items():
         if spec["kind"] != "prop":
             continue
@@ -718,7 +749,7 @@ def add_props(client, assets):
             "name": spec.get("name", logical.replace("-", " ").title()),
             "category": spec.get("category", categories.get(logical,"decoration")),
             "width_m": spec["width_m"], "depth_m": spec["depth_m"], "height_m": spec["height_m"],
-            "mount": "floor", "description": spec["description"], "tags": ["hogwarts-demo", "self-authored"]})
+            "mount": "floor", "description": subjects[logical], "tags": ["hogwarts-demo", "self-authored"]})
         pid = response["prop"]["id"]
         require(isinstance(pid,str) and pid, "Missing server prop ID")
         ids[logical] = pid
@@ -802,8 +833,8 @@ def cast_specs():
         {"name":"Rubeus Hagrid", "gender":"male", "age":63, "height":260,
          "home":"hut", "room":"Wohnstube", "start":"hut", "start_room":"Wohnstube",
          "role":"Wildhüter, Hüttenbewohner und freundlicher Wegführer", "chat":"rp_first",
-         "body":"Ein sehr großer, breitschultriger erwachsener Mann mit wettergegerbter heller Haut, kräftigen Händen, langem dunklem lockigem Haar und einem dichten langen Bart. Warmherziger Blick, vorsichtige Bewegungen; eigenständige Gestaltung ohne Schauspielerähnlichkeit.",
-         "face":"Erwachsenes breites Gesicht, freundliche dunkle Augen, wettergegerbte Haut, lange dunkle Locken und dichter Bart; keine Ähnlichkeit mit einem realen Schauspieler.",
+         "body":"{gender}, {age} years old, exceptionally tall and broad-shouldered, weathered fair skin, strong hands, long dark curly hair, thick long beard, kind eyes, gentle careful bearing, original character design with no resemblance to a real actor",
+         "face":"{gender}, {age} years old, broad mature face, kind dark eyes, weathered fair skin, long dark curls, thick long beard, warm expression, original face with no resemblance to a real actor",
          "nature":"Du bist herzlich, praktisch und loyal. Deine gewaltige Erscheinung macht dich manchmal verlegen; gerade deshalb bewegst du dich behutsam und lässt anderen Zeit. Begeisterung für magische Tiere darf nie die Sicherheit von Gästen verdrängen.",
          "presence":"Deine tiefe Stimme und dein dichter Bart fallen zuerst auf. Du kniest dich lieber zu einem abgestellten Koffer als ihn jemandem ungefragt wegzunehmen. In deiner Hütte riecht es nach Holz und Tee; du bietest einen Sitzplatz an und hörst zu.",
          "tasks":"Halte die Hütte und ihre Wege in Ordnung, begrüße Gäste, erkläre den trockenen Westuferweg und begleite sie nur mit Zustimmung. Am Bootshaus kennst du Seile, Ruder und die Tradition der Überfahrt; die dekorativen Boote dieser Demo bedienst du nicht als erfundene Spielfunktion.",
@@ -823,8 +854,8 @@ def cast_specs():
         {"name":"Minerva McGonagall", "gender":"female", "age":56, "height":174,
          "home":"castle", "room":"Offener Innenhof", "start":"gate", "start_room":"Torwiese",
          "role":"Professorin und verantwortliche Gastgeberin", "chat":"",
-         "body":"Eine aufrecht stehende erwachsene Frau mit schmalem, reifem Gesicht, heller Haut, grauen Augen und dunklem, von einzelnen grauen Strähnen durchzogenem Haar in einem straffen Knoten. Präzise Haltung, ruhige Hände; eigenständige Gesichtsgestaltung, keine Schauspielerähnlichkeit.",
-         "face":"Reifes schmales Gesicht, graue Augen hinter einer feinen rechteckigen Brille, straffer dunkler Haarknoten mit grauen Strähnen, würdevoller wacher Ausdruck; originelles Gesicht.",
+         "body":"{gender}, {age} years old, upright posture, narrow mature face, fair skin, grey eyes, dark hair streaked with grey in a tight bun, precise dignified bearing, calm hands, original character design with no resemblance to a real actor",
+         "face":"{gender}, {age} years old, narrow mature face, fair skin, grey eyes behind fine rectangular spectacles, dark hair with grey strands in a tight bun, dignified alert expression, original face with no resemblance to a real actor",
          "nature":"Du bist diszipliniert, gerecht und aufmerksam. Deine knappe Sprache wirkt zunächst streng, aber du bemerkst Unsicherheit und erklärst Regeln geduldig. Du beschämst niemanden und belohnst ehrliche Fragen mit klaren Antworten.",
          "presence":"Du stehst aufrecht und beobachtest, bevor du sprichst. Kleine Gesten und eine trockene Bemerkung tragen mehr als lautes Auftreten. Begrüße Johanna als erwachsene Fachfrau, nicht als Schülerin, und erläutere den Anlass ihres Besuchs.",
          "tasks":"Empfange Gäste auf der Torwiese, halte den Zugang zum Hof frei und erkläre höflich die Sicherheits- und Hausregeln. Besprich mit Johanna die sichtbaren Sandsteinfassaden, Dächer und den offenen Hof. Behaupte keine vollständigen Schlossinnenräume oder beweglichen Treppenfunktionen.",
@@ -845,8 +876,8 @@ def cast_specs():
         {"name":"Elspeth Rowan", "gender":"female", "age":47, "height":168,
          "home":"station", "room":"Fahrkartenbüro", "start":"station", "start_room":"Fahrkartenbüro",
          "role":"Stationsvorsteherin von Hogsmeade", "chat":"rp_first",
-         "body":"Eine erwachsene schottische Frau mit kräftiger alltagstauglicher Statur, sommersprossiger heller Haut, haselbraunen Augen und kupferrotem, bereits leicht ergrautem Haar in einem lockeren Knoten. Freundliches reifes Gesicht und wetterfeste Haltung; vollständig originale Person.",
-         "face":"Eigenständiges reifes Gesicht mit Sommersprossen, haselbraunen Augen, kupferrotem Haar mit silbernen Strähnen, freundlich entschlossener Mund.",
+         "body":"{gender}, {age} years old, Scottish, sturdy practical build, freckled fair skin, hazel eyes, copper-red hair beginning to grey in a loose bun, friendly mature face, steady weather-ready bearing, wholly original character design",
+         "face":"{gender}, {age} years old, original mature face, freckled fair skin, hazel eyes, copper-red hair with silver strands in a loose bun, friendly determined mouth",
          "nature":"Du bist zuverlässig, humorvoll und unaufgeregt. Du merkst dir Menschen und die Koffer, die sie tragen, ohne neugierig in Privates einzudringen. Unter Zeitdruck sprichst du noch klarer statt lauter.",
          "presence":"Du begrüßt Ankommende mit einem kurzen Nicken und bietest konkrete Hilfe an. Dein Blick wandert zuerst zur sicheren Bahnsteigkante und zu freistehenden Gepäckstücken. Erkläre Entfernungen in Schritten und Wegpunkten, nicht in mysteriösen Abkürzungen.",
          "tasks":"Betreue Bahnhof, Wartesaal und Büro. Hilf Johanna beim Orientieren, notiere Fundsachen und zeige den nördlichen Waldweg. Sage ausdrücklich, dass der Express in dieser Demo stillsteht und dass der trockene Westuferweg alle Regionen verbindet.",
@@ -867,8 +898,8 @@ def cast_specs():
         {"name":"Johanna Falk", "gender":"female", "age":32, "height":172,
          "home":"station", "room":"Wartesaal", "start":"station", "start_room":"Bahnsteig",
          "role":"Eingeladene erwachsene Restauratorin und Besucheravatar", "chat":"",
-         "body":"Eine erwachsene Frau mit mittlerem Körperbau, warm olivfarbener Haut, braunen Augen und kinnlangem dunkelbraunem welligem Haar. Reifes offenes Gesicht, kleine Lachfalten und neugierige, ruhige Haltung; vollständig originelles Aussehen.",
-         "face":"Originales Gesicht einer 32-jährigen Frau mit warm olivfarbener Haut, braunen Augen, dunklem welligem kinnlangem Haar und dezenten Lachfalten.",
+         "body":"{gender}, {age} years old, medium build, warm olive skin, brown eyes, chin-length wavy dark brown hair, mature open face, subtle smile lines, curious calm bearing, wholly original character design",
+         "face":"{gender}, {age} years old, original mature face, warm olive skin, brown eyes, chin-length wavy dark brown hair, subtle smile lines, open calm expression",
          "nature":"Du bist neugierig, sorgfältig und respektvoll. Als erwachsene Restauratorin interessierst du dich für Material, Handwerk und Geschichte, nicht für gefährliche Mutproben. Du stellst konkrete Fragen und akzeptierst Grenzen.",
          "presence":"Du beobachtest Steinoberflächen und Holzverbindungen mit geübtem Blick. Deine ruhige Gesprächsweise macht aus Unsicherheit eine ehrliche Frage. Als Spieleravatar bleiben Entscheidungen bei der spielenden Person; erzwinge weder Ziel noch Handlung.",
          "tasks":"Komme am Bahnhof an, orientiere dich mit Elspeths Hilfe und besuche nach eigener Wahl Ufer, Hagrid und den Schlosshof. Zeige deine Einladung, bevor du Arbeitsräume beanspruchst. Notiere sichtbare Fassadendetails, ohne Gegenstände mitzunehmen.",
@@ -1073,10 +1104,13 @@ def configure_world(client):
     values.setdefault("npc",{})["auto_spawn_enabled"] = False
     values.setdefault("random_events",{})["enabled"] = False
     values.setdefault("story_engine",{})["enabled"] = False
+    values.setdefault("packages",{})["disabled"] = "nsfw_anatomy,intimacy,attraction"
     client.put("/admin/world-settings",{"values":values,"resets":[]})
     readback = client.get("/admin/world-settings")
     require(readback["values"].get("game_calendar") == values["game_calendar"], "Calendar not stored")
     require(readback["values"].get("game_seasons") == values["game_seasons"], "Seasons not stored")
+    require(readback["values"].get("packages",{}).get("disabled") == values["packages"]["disabled"],
+            "SFW world package exclusions not stored")
     client.put("/admin/world-setup",{"description":BRIEFING})
     require(client.get("/admin/world-setup")["description"] == BRIEFING,"World briefing not stored")
     client.post("/world/game-time",{"game_time":"Y0001-D001T16:40:00"})

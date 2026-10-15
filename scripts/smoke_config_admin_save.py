@@ -134,6 +134,7 @@ def setup(instance=None, world_data=None):
     config.save(config.get_all())
 
 # Reload side effects are tested by existing route smokes; this smoke isolates persistence.
+_apply_section_reloads = adm.apply_section_reloads
 adm.apply_section_reloads = lambda changed, scope: []
 f = SECTIONS["server"]["fields"]["log_level"]
 x = next(v for v in f["choices"] if v != f["default"])
@@ -275,5 +276,40 @@ except adm.LayerSaveError:
     check(True, "O commit maps guard")
 else:
     check(False, "O commit maps guard")
+adm.apply_section_reloads = _apply_section_reloads
+# Package activation is world-local, preserves absent IDs, and never hot-reloads
+# skills: removing its schema scope/restart marker breaks this save contract.
+setup({"server": {"log_level": "INFO"}})
+instance_before = [(p, p.read_bytes()) for p in inst.glob("*.json")]
+disabled = "nsfw_anatomy, temporarily_absent,Unknown-Exact_ID"
+check(config_scope.scope_of("packages.disabled") == "world", "P package scope is world")
+check("packages" not in config_scope.schema_for("instance"), "P no instance package control")
+try:
+    result = adm.save_layer("world", {"packages": {"disabled": disabled}})
+except adm.LayerSaveError as e:
+    check(False, "P world package save accepted: " + str(e))
+else:
+    check(read(world / "config.json").get("packages") == {"disabled": disabled},
+          "P exact package IDs persisted, including absent IDs")
+    check(adm.layer_view("world").get("packages") == {"disabled": disabled},
+          "P world settings view returns exact package string")
+    check(all(p.read_bytes() == data for p, data in instance_before),
+          "P package save leaves instance files untouched")
+    check(result["reloaded"] == [], "P package save does not hot-reload skills")
+    check("packages.disabled" in config.restart_pending_fields(),
+          "P package activation change requires restart")
+    config.load(world / "config.json", inst / "config.json")
+    check("packages.disabled" in config.restart_pending_fields(),
+          "P config reload cannot clear pending activation restart")
+    adm.save_layer("world", {"packages": {"disabled": disabled}}, resets=["packages"])
+    check("packages.disabled" not in config.restart_pending_fields(),
+          "P restoring boot activation clears restart indicator")
+try:
+    adm.save_layer("instance", {"packages": {"disabled": disabled}})
+except adm.LayerSaveError:
+    check(True, "P instance cannot change package activation")
+else:
+    check(False, "P instance cannot change package activation")
+
 print(f"{len(failures)} failure(s)")
 sys.exit(bool(failures))

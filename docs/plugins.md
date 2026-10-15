@@ -59,6 +59,24 @@ app/plugins/                      # Paket-Infrastruktur
 7. Der Skill hängt danach wie ein Built-in im SkillManager (Per-Character-Config,
    Tool-Formate, `reload_skills()` verhalten sich identisch).
 
+### Pakete pro Welt sperren
+
+**Game-Admin → Setup → Packages → Disabled packages** setzt `packages.disabled` in der
+`config.json` der geöffneten Welt. Der Wert ist eine kommaseparierte Liste exakter Paket-IDs
+(Ordnernamen), beispielsweise `nsfw_anatomy,intimacy,attraction`. Leer bedeutet: alle installierten
+Pakete sind grundsätzlich verfügbar. Auch noch nicht installierte IDs bleiben gespeichert.
+
+Die Sperre gilt **ab dem nächsten Serverstart**, nicht nach `reload_skills()`. Vor der
+Abhängigkeitsauflösung werden gesperrte Pakete ausgeschlossen; Pakete, die sie über `requires`
+benötigen, werden ebenfalls nicht aktiviert. Das betrifft auch `always_load`-Verben,
+Character-Fragmente, Anatomie, Prompt-Templates, State-Flags und `on_load`-Hooks. Gespeicherte
+Paket-Einstellungen bleiben ihrer bisherigen Welt-/Instanz-Schicht zugeordnet; ihre Metadaten
+zu lesen aktiviert kein Paket. Die globale Installation und andere Welten bleiben unverändert.
+
+Das ist unabhängig von `skills.<id>.enabled` (nur gewöhnliche Verben eines Pakets) und der
+Skill-Aktivierung pro Character. Diese beiden Schalter entfernen keine Paketbeiträge.
+
+
 ## plugin.yaml — Manifest-Referenz (Paketformat v1)
 
 ```yaml

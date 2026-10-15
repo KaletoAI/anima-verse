@@ -227,6 +227,11 @@ check(tw["game_seasons"] == default_seasons_config(), "C: seasons default")
 check(tw["chat"]["top_p"] == 0, "C: top_p default 0")
 check(set(tw["image_generation"]["use_cases"]) == set(config._DEFAULT_IMAGE_USE_CASES), "C: use cases")
 check("chat_retention_days" not in tw["memory"], "C: world memory without retention")
+check(tw.get("packages") == {"disabled": ""}, "C: all packages eligible by default")
+check("packages" not in ti, "C: package activation has no instance default")
+check(config_scope.split_by_scope({"packages": {"disabled": "absent_pack"}}) ==
+      ({}, {"packages": {"disabled": "absent_pack"}}, []),
+      "C: absent package IDs remain world-only during scope split")
 
 # Part D
 got = config_scope.override_paths({
@@ -254,6 +259,81 @@ for raw, expected, label in (
     config.load(world_file, instance_file)
     check(config.get("providers") == expected, f"E: {label}")
 check(config_scope.prune({"providers": config._DEFAULT_PROVIDERS}) == {}, "E: seed is pruned")
+
+# A disabled installed package still owns its dormant endpoint settings.
+# Losing manifest metadata after discovery would move that URL to world scope.
+from app.plugins import loader, registry
+synthetic_root = Path(_TMP.name) / "synthetic_plugins"
+synthetic_pack = synthetic_root / "installed" / "scope_dormant"
+synthetic_pack.mkdir(parents=True)
+(synthetic_pack / "plugin.yaml").write_text(json.dumps({
+    "name": "Dormant scope probe",
+    "on_load": "must_not_import.py",
+    "config_schema": {"scope_dormant": {"label": "Dormant probe", "fields": {
+        "url": {"type": "str", "scope": "instance", "default": ""},
+        "mood": {"type": "str", "default": ""},
+    }}},
+}), encoding="utf-8")
+marker = Path(_TMP.name) / "unexpected_package_import"
+(synthetic_pack / "must_not_import.py").write_text(
+    f"from pathlib import Path\nPath({str(marker)!r}).write_text('imported')\n",
+    encoding="utf-8")
+loader.PLUGIN_DIR = synthetic_root
+loader._manifest_schemas = None
+config_scope._view_cache = (None, None)
+world_file.write_text(json.dumps({
+    "packages": {"disabled": "scope_dormant,scope_later"},
+    "skills": {"scope_dormant": {"mood": "quiet"}},
+}), encoding="utf-8")
+instance_file.write_text(json.dumps({
+    "skills": {"scope_dormant": {"url": "https://private.invalid"}},
+}), encoding="utf-8")
+for phase in ("before discovery", "after discovery"):
+    if phase == "after discovery":
+        loader.discover_packages()
+        check("scope_dormant" not in {p.id for p in registry.packages()},
+              "G: disabled installed package is not activated")
+    check(config_scope.scope_of("skills.scope_dormant.url") == "instance",
+          f"G: dormant endpoint stays instance {phase}")
+    check(config_scope.scope_of("skills.scope_dormant.mood") == "world",
+          f"G: dormant simulation setting stays world {phase}")
+    check(not marker.exists(), f"G: scope inventory imports no package code {phase}")
+    config.load(world_file, instance_file)
+    config.save(config.get_all())
+    check(json.loads(instance_file.read_text()).get("skills", {}).get("scope_dormant") ==
+          {"url": "https://private.invalid"}, f"G: dormant endpoint persisted only instance {phase}")
+    check(json.loads(world_file.read_text()).get("skills", {}).get("scope_dormant") ==
+          {"mood": "quiet"}, f"G: dormant simulation value persisted only world {phase}")
+
+# Marketplace installation/removal followed by normal rediscovery refreshes
+# dormant metadata without importing or activating either disabled package.
+manifest = json.loads((synthetic_pack / "plugin.yaml").read_text())
+later_pack = synthetic_root / "installed" / "scope_later"
+later_pack.mkdir()
+manifest["config_schema"]["scope_later"] = manifest["config_schema"].pop("scope_dormant")
+(later_pack / "plugin.yaml").write_text(json.dumps(manifest), encoding="utf-8")
+(later_pack / "must_not_import.py").write_text(
+    f"from pathlib import Path\nPath({str(marker)!r}).write_text('imported')\n",
+    encoding="utf-8")
+loader.discover_packages(force=True)
+check(config_scope.scope_of("skills.scope_later.url") == "instance",
+      "H: newly installed disabled package endpoint gains instance ownership")
+check("scope_later" in config_scope.schema_for("world")["skills"]["subsections"],
+      "H: newly installed disabled package world settings join inventory")
+check("scope_later" not in {p.id for p in registry.packages()} and not marker.exists(),
+      "H: newly installed disabled package remains inactive")
+(synthetic_pack / "plugin.yaml").unlink()
+(synthetic_pack / "must_not_import.py").unlink()
+synthetic_pack.rmdir()
+loader.discover_packages(force=True)
+check("scope_dormant" not in
+      config_scope.schema_for("instance")["skills"].get("subsections", {}),
+      "H: removed disabled package loses stale instance schema")
+check("scope_dormant" not in
+      config_scope.schema_for("world")["skills"].get("subsections", {}),
+      "H: removed disabled package loses stale world schema")
+check(config_scope.scope_of("skills.scope_later.url") == "instance" and not marker.exists(),
+      "H: remaining disabled package scope survives removal without imports")
 
 print()
 print("FAILED: %d" % len(FAILS) if FAILS else "ALL OK")

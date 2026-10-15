@@ -25,10 +25,10 @@ Array indices in a path (``providers.0.api_key``, ``backends[2]``) are
 ignored — every item of an array shares the item schema.
 
 The skill packages' subsections are part of the schema view under
-``skills.subsections``. Before plugin discovery has run (config load at
-server boot) they come from the manifests alone
-(``loader.manifest_config_schemas()``, imports no package code); afterwards
-from the registry — so ``skills.searx.url`` is instance either way.
+``skills.subsections``. Installed manifest metadata remains available before
+and after discovery (``loader.manifest_config_schemas()``, imports no package
+code), even for disabled packages. Active registry schemas overlay that
+inventory — dormant endpoint settings therefore keep their instance scope.
 
 On top of the scope rules sit the two operations the config layers are
 written with: ``prune`` keeps only what differs from what ships
@@ -76,10 +76,9 @@ _view_cache: Tuple[Any, Optional[Dict[str, Any]]] = (None, None)
 def _schema_view() -> Dict[str, Any]:
     """The schema with the skill packages' subsections under ``skills``.
 
-    Like ``config_schema.get_schema()``, but before discovery the package
-    subsections come from the manifests (side-effect free) instead of the
-    still empty registry. Read-only: shared with the schema module, never
-    mutate it.
+    Installed manifests provide side-effect-free metadata even for packages
+    disabled in this world. Active registry subsections overlay that inventory
+    after discovery. Read-only: shared with the schema module, never mutate it.
     """
     global _view_cache
     # Lazy: the app.plugins package pulls in the loader and app.skills.base.
@@ -90,7 +89,9 @@ def _schema_view() -> Dict[str, Any]:
     if view is not None and cached_key == key:
         return view
     from app.core.config_schema import SECTIONS
-    subs = registry.config_subsections() if discovered else loader.manifest_config_schemas()
+    subs = loader.manifest_config_schemas()
+    if discovered:
+        subs.update(registry.config_subsections())
     view = dict(SECTIONS)
     if subs:
         skills = dict(view.get("skills") or {})

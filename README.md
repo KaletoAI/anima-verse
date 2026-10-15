@@ -547,6 +547,8 @@ stationary Hogwarts Express, the **Black Lake** with two landing places, and the
 with towers, the Great Hall exterior, an open courtyard, a stone gate and Hagrid's furnished hut.
 Seven connected locations sit in a metre-based landscape with water, shallows, woodland, hills and
 a dry west-shore walking route. This is a hand-authored world, not an S/M/L-sized generation.
+The complete castle shell and its approach stand on a level plateau. Image-generation subjects,
+appearance fields and style hints are English; names, narrative and dialogue remain German.
 
 ```bash
 ./start.sh --world demo --with-3d
@@ -568,11 +570,21 @@ client's existing standard figure rendering, not bespoke Hogwarts rigs. The cast
 limited to the arrival passages and open courtyard; train and boats are decorative, not transport.
 Chat and autonomous simulation still need your configured backends.
 
+The demo disables the optional `nsfw_anatomy`, `intimacy` and `attraction` packages for this world.
+**Game-Admin → Setup → Packages → Disabled packages** stores comma-separated package IDs in
+`worlds/demo/config.json` (`packages.disabled`); an empty value enables all installed packages.
+Changes take effect on the next server start, not a skill reload. Disabled packages and their
+required dependents contribute no skills, character fields, prompts or startup hooks; installation
+and other worlds are unchanged.
+
 Rebuild sources are included under `worlds/demo/source/`: run `castle_assets.py` and
 `arrival_assets.py` with Blender 4.2 (`--background --factory-startup --python <script> -- --output
 <asset-directory>`), then use `python worlds/demo/source/build_world.py --help` for the API import.
 Import only into a **separate, empty, paused world**, with media generation disabled, using that
 server's explicit origin and private credentials file. The importer refuses nonempty worlds and does not resume partial builds.
+For a rebuild, seed the empty target world's `config.json` with
+`{"packages":{"disabled":"nsfw_anatomy,intimacy,attraction"}}` **before starting its server**;
+the importer preserves and verifies these exclusions.
 
 ---
 

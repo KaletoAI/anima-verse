@@ -556,7 +556,7 @@ TABLE_INSTANCE = ["server", "providers", "llm_retry", "llm_routing", "lanes",
                   "content_marketplace", "ui", "image_generation"]
 TABLE_WORLD = ["extension_motion", "chat", "thoughts", "intents", "relationships", "social_reactions",
                "random_events", "npc", "story_engine", "game", "messaging_frame",
-               "game_calendar", "game_seasons", "memory"]
+               "game_calendar", "game_seasons", "memory", "packages"]
 TABLE_MIXED = ["skills"]
 TABLE_VIRTUAL = ["llm_simple"]
 
@@ -619,6 +619,7 @@ HAND_TABLE = [
     ("memory.max_messages", "world"),
     ("memory.chat_retention_days", "instance"),
     ("chat.chattiness", "world"),
+    ("packages.disabled", "world"),
     ("skills", "mixed"),
     ("skills.searx", "mixed"),
     ("skills.searx.url", "instance"),

@@ -61,11 +61,27 @@ WORLD_GROUPS = [
     {"id": "memory_chat", "label": "Memory & chat"},
     {"id": "calendar", "label": "Calendar & seasons"},
     {"id": "messaging", "label": "Messaging frame"},
+    {"id": "packages", "label": "Packages"},
     {"id": "skills", "label": "Skills (world)"},
     {"id": "image_styles", "label": "Image styles"},
 ]
 
 SECTIONS = {
+    "packages": {
+        "label": "Packages", "scope": "world", "world_group": "packages",
+        "fields": {
+            "disabled": {
+                "type": "str",
+                "label": "Disabled packages",
+                "default": "",
+                "requires_restart": True,
+                "description": "Comma-separated exact package IDs to exclude completely from this "
+                               "world, including packages that require them. Takes effect after "
+                               "restart. Empty enables all installed packages; unknown or "
+                               "temporarily absent IDs are retained.",
+            },
+        },
+    },
     "extension_motion": {
         "label": "Extension motion", "scope": "world", "world_group": "extension_motion",
         "fields": {"groups": {"type": "json_str", "label": "Group overrides", "default": {},

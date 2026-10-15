@@ -43,7 +43,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple, Type
 
 import yaml
 
@@ -63,6 +63,10 @@ PLUGIN_DIR = Path(__file__).resolve().parent.parent.parent / "plugins"
 INSTALLED_DIR_NAME = "installed"
 
 _discovered = False
+# Capture world activation only at runtime discovery, never during the pure
+# manifest scan used to bootstrap config scopes. Config saves require restart;
+# force skill reload must not apply only part of a pending activation change.
+_activation_disabled_ids: Optional[FrozenSet[str]] = None
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
@@ -257,8 +261,8 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
 
     # Content-only packages (no verbs) are allowed as long as they contribute
     # SOMETHING (templates, fragments, config, flags, species content).
-    # Contributions apply as soon as the package sits in the filesystem; the
-    # enabled gate only governs verb loading.
+    # Contributions apply whenever the package is active in this world; the
+    # skills.<id>.enabled gate only governs non-always_load verb loading.
     if not pkg.skills and not (pkg.llm_template_dir or pkg.character_fragments
                                or pkg.config_subsections or pkg.flags
                                or pkg.silhouette or pkg.body_slots
@@ -270,15 +274,17 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
     return pkg
 
 
-def _collect_packages(base: Path, *, warn: bool = True) -> List[Package]:
-    """Scan ``base`` and ``base/installed`` for manifests — no side effects.
+def _collect_packages(base: Path, *, warn: bool = True,
+                      disabled_ids: FrozenSet[str] = frozenset()) -> List[Package]:
+    """Scan ``base`` and ``base/installed`` for eligible manifests — no side effects.
 
     Parses every ``plugin.yaml`` (repo packages win over an installed one of
-    the same id) and drops the packages whose ``requires`` are not all
+    the same id), excluding ``disabled_ids`` before parsing, dependency pruning
+    and rig conflict resolution. Drops packages whose ``requires`` are not all
     present (F9), repeated until stable so dependency chains unwind. Reads
     files only: no package code is imported, no registry is touched.
-    ``warn=False`` keeps the shadow/inert warnings quiet for a second scan
-    that would only repeat them.
+    The default includes world-disabled packages for manifest/schema inventory.
+    ``warn=False`` keeps duplicate shadow/inert warnings quiet.
     """
     found: Dict[str, Package] = {}
 
@@ -290,6 +296,8 @@ def _collect_packages(base: Path, *, warn: bool = True) -> List[Package]:
         for entry in sorted(root.iterdir()):
             manifest = entry / "plugin.yaml"
             if not entry.is_dir() or not manifest.exists():
+                continue
+            if entry.name in disabled_ids:
                 continue
             if installed and entry.name in found:
                 if warn:
@@ -364,11 +372,12 @@ def manifest_config_schemas() -> Dict[str, Dict[str, Any]]:
 
     For code that needs the skills' settings schema BEFORE discovery has run
     (the config scope split at config load, app/core/config_scope.py).
-    Same roots and the same rules as ``discover_packages`` — repo wins over
-    installed, packages with missing ``requires`` contribute nothing — but
-    side-effect free: no package code is imported, no on_load runs, the
-    registry stays untouched. The manifests are static, so the result is
-    cached per process; the caller gets a copy.
+    Same roots as ``discover_packages`` — repo wins over installed, packages
+    with missing ``requires`` contribute nothing — but includes world-disabled
+    packages so their settings retain scope/default metadata. Side-effect free:
+    no package code is imported, no on_load runs, no activation snapshot is
+    captured, and the registry stays untouched. The result is cached until
+    runtime rediscovery refreshes installed inventory; the caller gets a copy.
     """
     global _manifest_schemas
     if _manifest_schemas is None:
@@ -385,15 +394,26 @@ def discover_packages(plugin_dir: Optional[Path] = None,
 
     Idempotent: subsequent calls return the registered packages unless
     ``force`` is set (skill reload). Wires cross-module contributions:
-    prompt-template search path and template caches.
+    prompt-template search path and template caches. Whole-package activation
+    is fixed at the first runtime discovery and changes only after restart.
     """
-    global _discovered
+    global _discovered, _activation_disabled_ids, _manifest_schemas
     if _discovered and not force and plugin_dir is None:
         return registry.packages()
 
+    # Installation/removal changes dormant settings metadata too. Invalidate
+    # only on a real rebuild, never on ordinary reads or cached discovery.
+    _manifest_schemas = None
     base = plugin_dir or PLUGIN_DIR
+    if _activation_disabled_ids is None:
+        from app.core import config
+        _activation_disabled_ids = frozenset(
+            package_id.strip()
+            for package_id in (config.get("packages.disabled", "") or "").split(",")
+            if package_id.strip()
+        )
     registry.clear_registry()
-    for pkg in _collect_packages(base):
+    for pkg in _collect_packages(base, disabled_ids=_activation_disabled_ids):
         registry.register_package(pkg)
 
     if plugin_dir is None:

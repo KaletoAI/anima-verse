@@ -63,5 +63,8 @@
   },
   "random_events": {
     "enabled": false
+  },
+  "packages": {
+    "disabled": "nsfw_anatomy,intimacy,attraction"
   }
 }
