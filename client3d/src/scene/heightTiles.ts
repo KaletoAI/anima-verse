@@ -1,3 +1,4 @@
+import { FOG_FAR_M } from './fogConstants';
 /**
  * WHICH FINE HEIGHT TILES THE CLIENT WANTS — the loading policy of § A16.3,
  * as pure arithmetic.
@@ -25,7 +26,7 @@ import { tileKeyAt } from '@anima/scene-render';
 /** How far around the anchor fine tiles are held, in metres. 560 = the fog end
  *  of 520 m plus one tile's diagonal of slack, so the seam sits inside the
  *  veil rather than at its edge. */
-export const HEIGHT_TILE_RADIUS_M = 560;
+export const HEIGHT_TILE_RADIUS_M = FOG_FAR_M + 40;
 
 /** How many tiles the client keeps at most. A full want set is ~25 tiles
  *  (a 560 m disc over a 256 m raster), so 96 is roughly three anchor positions

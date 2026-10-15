@@ -873,11 +873,17 @@ async function loadGameModules() {
   const esbuild = await import('esbuild');
   const dir = await mkdtemp(join(tmpdir(), 'walkmath-'));
   try {
-    for (const name of MODULES) {
-      const source = await readFile(join(SRC_DIR, `${name}.ts`), 'utf8');
+    // `scene/fogConstants.ts` is import-free too and is what `minimap.ts` reads
+    // its view radius from (P4 A-T4); it lands in the same flat directory, so
+    // its `../scene/` import is folded onto `./` like the sibling imports.
+    const sources = [...MODULES.map((name) => [name, join(SRC_DIR, `${name}.ts`)]),
+      ['fogConstants', join(ROOT, 'client3d/src/scene/fogConstants.ts')]];
+    for (const [name, path] of sources) {
+      const source = await readFile(path, 'utf8');
       const out = esbuild.transformSync(source, { loader: 'ts', format: 'esm' });
       await writeFile(join(dir, `${name}.mjs`),
-        out.code.replace(/(from\s*["'])(\.\/[\w-]+)(["'])/g, '$1$2.mjs$3'), 'utf8');
+        out.code.replace(/(from\s*["'])\.\.\/scene\/(fogConstants)(["'])/g, '$1./$2$3')
+          .replace(/(from\s*["'])(\.\/[\w-]+)(["'])/g, '$1$2.mjs$3'), 'utf8');
     }
     const loaded = {};
     for (const name of MODULES) loaded[name] = await import(`file://${join(dir, `${name}.mjs`)}`);

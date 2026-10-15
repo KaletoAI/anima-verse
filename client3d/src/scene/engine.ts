@@ -1,3 +1,4 @@
+import { FOG_NEAR_M, FOG_FAR_M } from './fogConstants';
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
@@ -216,7 +217,7 @@ export class Engine {
       .fromScene(new RoomEnvironment(), 0.04).texture;
 
     this.scene.background = new THREE.Color(0x9fc7e8);
-    this.scene.fog = new THREE.Fog(0x9fc7e8, 220, 520);
+    this.scene.fog = new THREE.Fog(0x9fc7e8, FOG_NEAR_M, FOG_FAR_M);
 
     this.hemi = new THREE.HemisphereLight(0xdfeeff, 0x8a9a78, 1.5);
     this.scene.add(this.hemi);

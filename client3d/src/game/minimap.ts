@@ -1,3 +1,4 @@
+import { FOG_FAR_M } from '../scene/fogConstants';
 /**
  * The minimap projection — world METRE to canvas pixel, camera yaw to compass
  * bearing (stage 5 task 3; put on the metre world in E4 task 2).
@@ -132,7 +133,7 @@ export const MINIMAP_MIN_SPAN_M = 10;
  * the file); `scene/heightTiles.ts` derives its own 560 m from the same 520 and
  * says so. All three move together or none does.
  */
-export const MINIMAP_VIEW_RADIUS_M = 520;
+export const MINIMAP_VIEW_RADIUS_M = FOG_FAR_M;
 
 /**
  * How far the avatar walks before the window is re-anchored — IN PIXELS OF THE

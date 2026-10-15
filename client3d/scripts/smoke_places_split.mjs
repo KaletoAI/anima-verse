@@ -101,16 +101,22 @@ assert.match(reveal, /!places\.has\(/);
 const offer = main.slice(main.indexOf('function updateEnterOffer'), main.indexOf('async function enterOfferedLocation'));
 assert.match(offer, /places\.values\(\)/);
 assert.match(main, /setSceneModelTier\(tile, 'building', b, \(\) => \{[\s\S]*?residency\.get\(tile\.loc\.id\)\?\.tile !== tile[\s\S]*?place\.height = tile\.height/);
-// Exercise the actual addTile path without booting the browser application.
-// `shareTileHeight` sits right above `addTile` and is the height binding it calls.
+// Exercise ensurePlace and the shared height binding used by the driver mount.
 const start = main.indexOf('function shareTileHeight(');
-const addAt = main.indexOf('function addTile(');
-const addTileSource = main.slice(start, main.indexOf('\n  }', addAt) + 4);
+const addAt = main.indexOf('function ensurePlace(');
+const source = main.slice(start, main.indexOf('\n  }', addAt) + 4);
 const testPlaces = new Map(), testResidency = new Map(), testPins = new Map();
-const add = new Function('buildPlace', 'buildTile', 'footprintCentre', 'places', 'residency', 'pins', 'engine', 'scenes', 'mountWithDoors',
-  transformSync(addTileSource + '; return addTile;', { loader: 'ts' }).code)(
-  current.buildPlace, current.buildTile, () => true, testPlaces, testResidency, testPins,
-  { scene: new THREE.Scene() }, new Map(), () => {});
+const bindings = new Function('buildPlace', 'footprintCentre', 'places', 'residency', 'eventPins', 'engine',
+  transformSync(source + '; return {ensurePlace, shareTileHeight};', { loader: 'ts' }).code)(
+  current.buildPlace, () => true, testPlaces, testResidency, testPins,
+  { scene: new THREE.Scene() });
+const add = loc => {
+  bindings.ensurePlace(loc);
+  const place = testPlaces.get(loc.id);
+  const tile = current.buildTile(place);
+  bindings.shareTileHeight(tile, place);
+  testResidency.set(loc.id, {tile});
+};
 add(fixtures[0]);
 const loadingTile = testResidency.get('f1').tile;
 loadingTile.height = 8;
@@ -122,12 +128,13 @@ assert.equal(eventPin.position.y, 11.5);
 loadingTile.height = 12;
 assert.equal(testPlaces.get('f1').height, 12);
 assert.deepEqual(eventPin.position.toArray(), [10, 15.5, 20]);
+testPlaces.delete('f1');
 add(fixtures[0]);
 loadingTile.height = 20;
 assert.equal(testPlaces.get('f1').height, 4);
 assert.equal(eventPin.position.y, 15.5, 'stale resident cannot reposition the pin');
 const drop = main.slice(main.indexOf('function dropPlace'), main.indexOf('function dropVanished'));
-assert.match(drop, /places\.delete\(/); assert.match(drop, /residency\.delete\(/);
+assert.match(drop, /places\.delete\(/); assert.match(drop, /driver\.drop\(/);
 const debug = await readFile(join(ROOT, 'client3d/src/debug3d.ts'), 'utf8');
 assert.match(debug, /if \(on\(16\)\)[\s\S]*?force\(tile\.group\)[\s\S]*?force\(tile\.labelObj\)/);
 console.log('places split: F1-F3, old-code equality, labels, datum, loading heights, pins and text guards PASS');

@@ -164,17 +164,16 @@ const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const MINIMAP_TS = join(ROOT, 'client3d/src/game/minimap.ts');
 const ENGINE_TS = join(ROOT, 'client3d/src/scene/engine.ts');
 
-/** `minimap.ts` is pure and its only imports are type-only, so a plain esbuild
- *  transpile (a Vite dependency; `tsx` is not installed) is enough to import
+/** `minimap.ts` is pure and its only runtime dependency is fogConstants, so an esbuild
+ *  bundle (a Vite dependency; `tsx` is not installed) is enough to import
  *  it here — the same trick `smoke_walk_math.mjs` uses. */
 async function loadMinimap() {
   const esbuild = await import('esbuild');
   const dir = await mkdtemp(join(tmpdir(), 'minimapmath-'));
   try {
-    const source = await readFile(MINIMAP_TS, 'utf8');
-    const out = esbuild.transformSync(source, { loader: 'ts', format: 'esm' });
+    const out = await esbuild.build({ entryPoints: [MINIMAP_TS], bundle: true, platform: 'node', format: 'esm', write: false });
     const file = join(dir, 'minimap.mjs');
-    await writeFile(file, out.code, 'utf8');
+    await writeFile(file, out.outputFiles[0].text, 'utf8');
     return await import(`file://${file}`);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -230,12 +229,15 @@ check('engine.ts still builds the scene fog', Boolean(fogCall), true);
 // The probe is a TEXT read of foreign source, so it has to say when it stopped
 // being able to read it at all — "expected 520, actual null" would send the
 // next reader looking for a broken map instead of a rewritten fog line.
-const fogEnd = fogCall ? Number((fogCall[1].split(',')[2] ?? '').trim()) : NaN;
+const fogSource = await readFile(resolve(MINIMAP_TS, '../../scene/fogConstants.ts'), 'utf8');
+const fogModule = (await import('esbuild')).transformSync(fogSource, { loader: 'ts', format: 'esm' });
+const { FOG_FAR_M } = await import(`data:text/javascript,${encodeURIComponent(fogModule.code)}`);
+const fogEnd = fogCall?.[1].split(',')[2]?.trim() === 'FOG_FAR_M' && /import \{ FOG_NEAR_M, FOG_FAR_M \} from '\.\/fogConstants'/.test(engineSrc) ? FOG_FAR_M : NaN;
 if (Number.isFinite(fogEnd)) {
   check('…and its FAR end is what the map shows', fogEnd, MINIMAP_VIEW_RADIUS_M);
 } else {
   failed += 1;
-  console.log('  FAIL the fog end is no longer a number literal in engine.ts —'
+  console.log('  FAIL engine.ts no longer uses the shared FOG_FAR_M —'
     + ' update this coupling probe (and check MINIMAP_VIEW_RADIUS_M by hand)');
 }
 

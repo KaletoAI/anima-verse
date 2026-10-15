@@ -390,64 +390,64 @@ function hex(c: string | undefined): THREE.Color {
  *  layouts, the model metas and the prop sidecars — polling is enough (§ B1). */
 export class SceneLibrary {
   private cache = new Map<string, ScenePayload | null>();
-  private pending = new Set<string>();
+  private pending = new Map<string, Promise<ScenePayload | null>>();
+  private epochs = new Map<string, number>();
   onScene?: (locationId: string, scene: ScenePayload | null) => void;
 
-  get(locationId: string): ScenePayload | null | undefined {
-    return this.cache.get(locationId);
+  private epoch(id: string): number { return this.epochs.get(id) ?? 0; }
+  get(id: string): ScenePayload | null | undefined { return this.cache.get(id); }
+  has(id: string): boolean { return !!this.cache.get(id); }
+
+  forget(id: string): void {
+    this.epochs.set(id, this.epoch(id) + 1);
+    this.cache.delete(id);
+    this.pending.delete(id);
   }
 
-  /** true = the scene path applies to this location (a payload exists). */
-  has(locationId: string): boolean {
-    return !!this.cache.get(locationId);
-  }
-
-  /** Fetch scenes BEFORE the first tile is built (no onScene, no remount):
-   *  the tile is then created in the right mode straight away instead of being
-   *  built legacy and thrown away again at once. Failures stay uncached — the
-   *  normal request/sweep cycle picks them up. */
-  async prime(locationIds: string[], distanceOf: (id: string) => number = () => 0): Promise<void> {
-    const queue = createFocusQueue({ max: 6 }); // Bound simultaneous scene requests.
-    await Promise.all(locationIds.map((id) => queue.push({
-      key: id,
-      distance: () => distanceOf(id),
-      run: async () => {
-        if (this.cache.has(id)) return;
+  async prime(ids: string[], distanceOf: (id: string) => number = () => 0): Promise<void> {
+    const queue = createFocusQueue({ max: 6 });
+    const snapshot = ids.map(id => [id, this.epoch(id)] as const);
+    await Promise.all(snapshot.map(([id, epoch]) => queue.push({
+      key: id, distance: () => distanceOf(id), run: async () => {
+        if (this.epoch(id) !== epoch || this.cache.has(id)) return;
         try {
-          this.cache.set(id, await getLocationScene(id));
-        } catch { /* the next cycle asks again */ }
+          const scene = await getLocationScene(id);
+          if (this.epoch(id) === epoch) this.cache.set(id, scene);
+        } catch { /* Leave failures uncached for the residency retry. */ }
       },
     })));
-    const n = [...this.cache.values()].filter(Boolean).length;
-    console.info(`[scene] ${n}/${locationIds.length} locations with a scene recipe`);
   }
 
-  request(locationId: string): void {
-    if (this.cache.has(locationId) || this.pending.has(locationId)) return;
-    this.pending.add(locationId);
-    getLocationScene(locationId)
-      .then((scene) => {
-        this.cache.set(locationId, scene);
-        if (scene) {
-          console.info(`[scene] ${locationId}: ${scene.plates.length} plates, `
-            + `${scene.walls.length} wall segments, ${scene.extras.length} extras, `
-            + `${scene.models.length} models (k=${scene.k}, storey=${scene.storey_m})`);
-        }
-        this.onScene?.(locationId, scene);
-      })
-      // Network/5xx: do NOT cache that as "no scene" — the next cycle retries
-      .catch((e) => console.warn(`[scene] ${locationId}: not loadable (yet) — a retry follows`, e))
-      .finally(() => this.pending.delete(locationId));
+  request(id: string): Promise<ScenePayload | null> {
+    if (this.cache.has(id)) return Promise.resolve(this.cache.get(id)!);
+    const pending = this.pending.get(id);
+    if (pending) return pending;
+    const epoch = this.epoch(id);
+    const promise = getLocationScene(id).then(scene => {
+      if (this.epoch(id) === epoch) {
+        this.cache.set(id, scene);
+        this.onScene?.(id, scene);
+      }
+      return scene;
+    }).finally(() => {
+      if (this.pending.get(id) === promise) this.pending.delete(id);
+    });
+    this.pending.set(id, promise);
+    return promise;
   }
 
-  async sweep(): Promise<void> {
-    for (const [locationId, prev] of [...this.cache]) {
+  // The standalone floorplan viewer owns every cached scene; main passes residents.
+  async sweep(ids: Iterable<string> = this.cache.keys()): Promise<void> {
+    const snapshot = [...ids].map(id => [id, this.epoch(id)] as const);
+    for (const [id, epoch] of snapshot) {
+      if (this.epoch(id) !== epoch) continue;
       try {
-        const fresh = await getLocationScene(locationId);
-        const changed = (prev?.signature ?? null) !== (fresh?.signature ?? null);
-        this.cache.set(locationId, fresh);
-        if (changed) this.onScene?.(locationId, fresh);
-      } catch { /* the server blinked -> the next sweep */ }
+        const fresh = await getLocationScene(id);
+        if (this.epoch(id) !== epoch) continue;
+        const changed = (this.cache.get(id)?.signature ?? null) !== (fresh?.signature ?? null);
+        this.cache.set(id, fresh);
+        if (changed) this.onScene?.(id, fresh);
+      } catch { /* A later sweep retries transient failures. */ }
     }
   }
 }

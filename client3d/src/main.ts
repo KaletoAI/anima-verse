@@ -1,3 +1,7 @@
+import { createFocusQueue } from './game/focusQueue';
+import { createResidencyDriver, type StepResult } from './game/residency';
+import { placeDistance, ringFor } from './game/streamRings';
+import { FOG_FAR_M } from './scene/fogConstants';
 import { buildPlace, redatumPlace, type PlaceRecord, type Resident } from './scene/places';
 import { installSkinnedNormalCorrection } from '@anima/scene-render';
 import * as THREE from 'three';
@@ -62,7 +66,7 @@ import { IMPOSTOR_MESH_NAME, setImpostorRenderer } from './scene/impostors';
 import { updateOcclusion } from './scene/occlusion';
 import { setPropLoadFocus } from './scene/propAssets';
 import { mountShell, mountDetail, reliftScene, SceneLibrary, setSceneModelTier,
-  unmountShell } from './scene/sceneRecipe';
+  unmountDetail, unmountShell } from './scene/sceneRecipe';
 import { declaredFloorAt, WALK_CLEARANCE_M } from './game/ground';
 import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocation';
 import { figureTransition, pickablePlaceFor, PLACE_PICK_RADIUS_M, placementOf, pollIsStale,
@@ -809,19 +813,8 @@ async function startApp(username: string, role: string) {
   // Scene recipe (contract part B): the server supplies the complete scene
   // as finished primitives and placement specs. When available, the client
   // derives no geometry, opening splits, constants or colours of its own.
-  // A 404 keeps the procedural path. Fetch before building the first tiles,
-  // so each tile starts in the correct mode.
+  // A 404 keeps the procedural path. Prime only the initial resident rings.
   const scenes = new SceneLibrary();
-  const arrivalId = firstMap.characters.find(c => c.name === firstMap.avatar)?.location_id;
-  const locationCentres = new Map(firstMap.locations.map(l => [l.id, footprintCentre(l)]));
-  const arrivalCentre = arrivalId ? locationCentres.get(arrivalId) : null;
-  const distanceToArrival = (id: string): number => {
-    if (id === arrivalId) return 0;
-    const p = locationCentres.get(id);
-    if (!p || !arrivalCentre) return Infinity;
-    return (p.x - arrivalCentre.x) ** 2 + (p.z - arrivalCentre.z) ** 2;
-  };
-  const primeP = withPhase('scene:fetch', () => scenes.prime(placeable.map(l => l.id), distanceToArrival));
 
   // THE FIRST SYNC IS AWAITED, with a deadline (E8 task 3): the world's
   // RELIEF comes with it, and the camera below is framed on the centre of the
@@ -856,16 +849,35 @@ async function startApp(username: string, role: string) {
   // with the plane it belongs to, because the metre world's ground is a base
   // plane PLUS the painted areas and every one of them would roof the cellar.
 
-  await primeP;
-  reportBootStage('scenes');
-
   const places = new Map<string, PlaceRecord>();
   const residency = new Map<string, Resident>();
-  const pins = new Map<string, THREE.Sprite>();
-  /** The running `mountShell` of each location, settled or not — see
-   *  `mountWithDoors`. Only ever awaited by the boot's arrival step; a later
-   *  remount simply overwrites the entry. */
-  const scenePending = new Map<string, Promise<unknown>>();
+  const eventPins = new Map<string, THREE.Sprite>();
+  type PinOwner = 'current' | 'travel' | 'open' | 'boot' | 'teleport';
+  const pins = new Map<string, Set<PinOwner>>();
+  function setPinOwner(owner: PinOwner, id: string | null | undefined): void {
+    for (const [key, owners] of pins) {
+      owners.delete(owner);
+      if (!owners.size) pins.delete(key);
+    }
+    if (id) {
+      const owners = pins.get(id) ?? new Set<PinOwner>();
+      owners.add(owner);
+      pins.set(id, owners);
+    }
+  }
+  let lastMap: WorldMap | null = firstMap;
+  const avatarName = firstMap.avatar;
+  let bootPin = firstMap.characters.find(c => c.name === avatarName)?.location_id ?? '';
+  let teleportPin: string | null = null;
+  let openLocationId: string | null = bootPin || null;
+  const promoting = new Set<string>();
+  engine.target.copy(center);
+  for (const loc of placeable) ensurePlace(loc);
+  syncStreamPins();
+  const residentIds = [...places.keys()].filter(id =>
+    ringFor(distanceOf(id), 'gone', pins.has(id), FOG_FAR_M) !== 'gone');
+  await withPhase('scene:fetch', () => scenes.prime(residentIds, distanceOf));
+  reportBootStage('scenes');
   // Numeric on-screen probe for remote diagnosis — inert without ?debug3d=1.
   initDebug3d(engine, residency);
   // …and its live sibling: the ISOLATION panel (Shift+I), which switches each
@@ -886,7 +898,6 @@ async function startApp(username: string, role: string) {
   // thresholds, NPC room figures, ground hole, neighbour occlusion, elevator
   // prompt, figure scale) keeps reading `tile.fade`/`fadeTarget` — only the
   // fade TARGET now comes from here instead of from camera geometry.
-  let openLocationId: string | null = null;
   /** A tile with something to reveal: a mounted interior on a building or a
    *  detail-mode area location — the same condition the fade loop gates on. */
   const openable = (tile: Tile) =>
@@ -927,7 +938,7 @@ async function startApp(username: string, role: string) {
   //    (they are invisible while closed — nothing to save).
   const buildingTierByLoc = new Map<string, ModelTier>();
   const interiorTierByLoc = new Map<string, ModelTier>();
-  function wantedBuildingTier(tile: Tile): ModelTier {
+  function nearBuildingTier(tile: Tile): ModelTier {
     // Distance to the FOOTPRINT, not to its centre (E4 task 3): footprints
     // have sizes now, and a camera standing on the edge of a 200 m forest is
     // 100 m from its centre — measured that way the one location filling the
@@ -943,8 +954,14 @@ async function startApp(username: string, role: string) {
     if (cur === 'full' && d > BUILDING_TIER_FAR) return 'low';
     return cur;
   }
-  function wantedInteriorTier(locId: string, scene: ScenePayload | null | undefined): ModelTier {
+  function nearInteriorTier(locId: string, scene = scenes.get(locId)): ModelTier {
     return scene?.area_detail && openLocationId !== locId ? 'low' : 'full';
+  }
+  function wantedBuildingTier(tile: Tile): ModelTier {
+    return residency.get(tile.loc.id)?.ring === 'far' ? 'low' : nearBuildingTier(tile);
+  }
+  function wantedInteriorTier(id: string, scene: ScenePayload | null | undefined): ModelTier {
+    return residency.get(id)?.ring === 'far' ? 'low' : nearInteriorTier(id, scene);
   }
   function tickModelTiers() {
     // THE RELIEF UNDER EVERY MOUNTED SCENE (user finding 2026-08-21, the
@@ -984,6 +1001,7 @@ async function startApp(username: string, role: string) {
           if (me?.location_id === tile.loc.id) seatedKey = '';
         }
       }
+      if (promoting.has(tile.loc.id)) continue;
       if (!tile.placedModels) continue;   // no mounted scene, nothing to swap
       const b = wantedBuildingTier(tile);
       if (buildingTierByLoc.get(tile.loc.id) !== b) {
@@ -1165,6 +1183,7 @@ async function startApp(username: string, role: string) {
   }, PERF_UI_MS);
 
   setInterval(() => {
+    tickStreamRings();
     tickModelTiers();
     if (perfEnabled()) measurePerfHeavy();
   }, LOD_TICK_MS);
@@ -1175,7 +1194,7 @@ async function startApp(username: string, role: string) {
    *  own plateau (`footprintCentre`), so anything anchored in world metres
    *  drifts by the plateau height the moment the ground is not flat. The MAP
    *  keeps its own bookkeeping all the same — the group is rebuilt from the
-   *  same payload as the tile but on its own occasion (`mountWithDoors`), and
+   *  same payload as the tile but on its own occasion (`upResident`), and
    *  the lock look is repainted by id. */
   const doorMarks = new Map<string, THREE.Group>();
   /** Thresholds at the AUTHORED BOUNDARY OPENINGS of a location, one group per
@@ -1445,39 +1464,131 @@ async function startApp(username: string, role: string) {
     boundaryMarks.set(tile.loc.id, root);
   }
 
-  /** Mount shell, boundary marks, details and door marks in dependency order.
-   * The boot waits on this location's promise before placing the avatar; other
-   * locations continue streaming independently. Readiness is published only
-   * after the detail mount completes and the tile is still resident. */
-  function mountWithDoors(tile: Tile, scene: ScenePayload): Promise<unknown> {
-    const building = wantedBuildingTier(tile);
-    const interior = wantedInteriorTier(tile.loc.id, scene);
-    buildingTierByLoc.set(tile.loc.id, building);
-    interiorTierByLoc.set(tile.loc.id, interior);
-    const mounted = (async () => {
-      await mountShell(tile, scene, building, interior);
-      if (residency.get(tile.loc.id)?.tile !== tile) return;
-      buildBoundaryMarks(tile, scene);
-      if (!await mountDetail(tile, scene, interior)) return;
-      if (residency.get(tile.loc.id)?.tile !== tile) return;
-      buildDoorMarks(tile, scene);
-      const resident = residency.get(tile.loc.id)!;
+  /** Mount one upward stage, publishing readiness only after all near tiers settle. */
+  async function upResident(id: string, place: PlaceRecord, from: 'gone' | 'far',
+                            alive: () => boolean): Promise<StepResult> {
+    if (from === 'gone') {
+      const aborted = (): StepResult => {
+        // An aborted first stage has no achieved shell to drive down later.
+        if (driver.target(id) === 'gone') scenes.forget(id);
+        return 'aborted';
+      };
+      let scene: ScenePayload | null | undefined;
+      try { scene = scenes.get(id) ?? await scenes.request(id); }
+      catch { return alive() ? 'failed' : aborted(); }
+      if (!alive()) return aborted();
+      const tile = buildTile(place);
+      shareTileHeight(tile, place);
+      residency.set(id, { tile, ring: 'far', gen: 0, ready: false });
+      engine.scene.add(tile.group);
+      try {
+        if (scene) await mountShell(tile, scene, 'low', 'low');
+        if (!alive()) {
+          freeTile(tile);
+          residency.delete(id);
+          return aborted();
+        }
+        if (scene) buildBoundaryMarks(tile, scene);
+        buildingTierByLoc.set(id, 'low');
+        interiorTierByLoc.set(id, 'low');
+        engine.setPickables([...residency.values()].map(r => r.tile.group));
+        return 'ok';
+      } catch (e) {
+        freeTile(tile);
+        residency.delete(id);
+        console.warn('[scene] shell failed', id, e);
+        return alive() ? 'failed' : aborted();
+      }
+    }
+    const resident = residency.get(id);
+    if (!resident) return 'aborted';
+    const tile = resident.tile;
+    const scene = scenes.get(id);
+    promoting.add(id);
+    let success = false;
+    try {
+      const interior = nearInteriorTier(id);
+      const building = nearBuildingTier(tile);
+      const ok = scene ? await mountDetail(tile, scene, interior) : true;
+      if (!ok || !alive()) { unmountDetail(tile); return 'aborted'; }
+      if (scene && buildingTierByLoc.get(id) !== building) {
+        await setSceneModelTier(tile, 'building', building);
+        if (!alive()) { unmountDetail(tile); return 'aborted'; }
+      }
+      if (scene && interiorTierByLoc.get(id) !== interior) {
+        await setSceneModelTier(tile, 'interior', interior);
+        if (!alive()) { unmountDetail(tile); return 'aborted'; }
+      }
+      if (scene) buildDoorMarks(tile, scene);
+      resident.ring = 'near';
       resident.ready = true;
-      const place = places.get(tile.loc.id);
-      if (place) place.height = tile.height;
-    })();
-    // Never rejects for the WAITER: a model that would not load must not turn
-    // the boot's one await into an unhandled rejection — the mount reports its
-    // own gaps in the console and a half-mounted tile still has its rooms.
-    // The original promise keeps its unhandled rejection exactly as before.
-    scenePending.set(tile.loc.id, mounted.catch(() => undefined));
-    return mounted;
+      place.height = tile.height;
+      buildingTierByLoc.set(id, building);
+      interiorTierByLoc.set(id, interior);
+      success = true;
+      return 'ok';
+    } catch (e) {
+      unmountDetail(tile);
+      console.warn('[scene] details failed', id, e);
+      return alive() ? 'failed' : 'aborted';
+    } finally {
+      if (!success) {
+        buildingTierByLoc.delete(id);
+        interiorTierByLoc.delete(id);
+      }
+      promoting.delete(id);
+    }
+  }
+  function downResident(id: string, _place: PlaceRecord, from: 'near' | 'far'): void {
+    const resident = residency.get(id);
+    if (from === 'near') {
+      if (!resident) return;
+      dropDoorMarks(id);
+      unmountDetail(resident.tile);
+      resident.ready = false;
+      resident.ring = 'far';
+    } else {
+      if (resident) freeTile(resident.tile);
+      residency.delete(id);
+      scenes.forget(id);
+      buildingTierByLoc.delete(id);
+      interiorTierByLoc.delete(id);
+      engine.setPickables([...residency.values()].map(r => r.tile.group));
+    }
+  }
+  const driver = createResidencyDriver<PlaceRecord>({ up: upResident, down: downResident },
+    createFocusQueue({ max: 2 }), {
+      setTimeout: (fn, ms) => setTimeout(fn, ms),
+      clearTimeout: h => clearTimeout(h as ReturnType<typeof setTimeout>),
+    });
+  function streamPoints(): { x: number; z: number }[] {
+    const map = lastMap ?? firstMap;
+    const me = map.characters.find(c => c.name === map.avatar);
+    const position = bootDone ? (npcs.positionOf(avatarName) ?? me?.pos) :
+      places.get(bootPin)?.center ?? me?.pos;
+    return position ? [position, engine.target] : [engine.target];
+  }
+  function distanceOf(id: string): number {
+    const place = places.get(id);
+    return place ? placeDistance(place, streamPoints()) : Infinity;
+  }
+  function syncStreamPins(): void {
+    const map = lastMap ?? firstMap;
+    const me = map.characters.find(c => c.name === map.avatar);
+    setPinOwner('current', me?.location_id);
+    setPinOwner('travel', me?.travel?.target_id);
+    setPinOwner('open', openLocationId);
+    setPinOwner('boot', bootDone ? null : bootPin);
+    setPinOwner('teleport', teleportPin);
+  }
+  function tickStreamRings(): void {
+    syncStreamPins();
+    for (const [id, place] of places) {
+      const ring = ringFor(distanceOf(id), driver.target(id), pins.has(id), FOG_FAR_M);
+      if (ring !== driver.target(id)) driver.want(id, place, ring, () => distanceOf(id));
+    }
   }
 
-  /** Build a location's tile and hang it in the scene. Boot walks every
-   *  placeable location through here, the reveal path (Stage 5) the newly
-   *  discovered ones — the pickables are refreshed by the CALLER, once per
-   *  batch. */
   /** Scene construction writes `tile.height` before the full mount settles
    *  (far shell, building swap). Every write is shared at once with the place
    *  record and an existing event pin — but only while this tile is still the
@@ -1493,30 +1604,20 @@ async function startApp(username: string, role: string) {
         height = value;
         if (residency.get(id)?.tile !== tile) return;
         place.height = value;
-        pins.get(id)?.position.setY(value + 3.5);
+        eventPins.get(id)?.position.setY(value + 3.5);
       },
     });
   }
 
-  function addTile(loc: WorldLocation) {
-    // Placed or not built at all (§ A1.1). `placeableOf` already filters on
-    // this, so the guard is the second lock on the one door through which a
-    // location without a point could reach the scene — and it SAYS so instead
-    // of quietly stacking such a place on the world origin.
+  function ensurePlace(loc: WorldLocation): void {
+    if (places.has(loc.id)) return;
     if (!footprintCentre(loc)) {
-      console.warn(`[map] ${loc.name || loc.id} has no position (pos_x/pos_z)`
-        + ' — no tile drawn');
+      console.warn(`[map] ${loc.id} has no position — no place drawn`);
       return;
     }
     const place = buildPlace(loc);
     places.set(loc.id, place);
     engine.scene.add(place.anchor);
-    const tile = buildTile(place);
-    shareTileHeight(tile, place);
-    residency.set(loc.id, { tile, ring: 'near', gen: 0, ready: false });
-    engine.scene.add(tile.group);
-    const scene = scenes.get(loc.id);
-    if (scene) void mountWithDoors(tile, scene);
   }
   // THE LOCATION THE PLAYER WAKES UP IN IS OPEN FROM THE FIRST MOUNT ON (user
   // finding 2026-09-06). Written straight to the singleton and not through
@@ -1532,7 +1633,12 @@ async function startApp(username: string, role: string) {
     ? firstMap.characters.find((c) => c.name === firstMap.avatar)?.location_id ?? ''
     : '';
   if (arrivalLocId) openLocationId = arrivalLocId;
-  for (const loc of placeable) addTile(loc);
+
+  // Queue arrival before the remaining residents; distance then orders the rest.
+  if (arrivalLocId && places.has(arrivalLocId)) {
+    driver.want(arrivalLocId, places.get(arrivalLocId)!, 'near', () => 0);
+  }
+  tickStreamRings();
   // …AND ITS MODELS ARE LOADED FIRST. The GLB queue picks the job nearest to
   // its focus (`propAssets.pump`), and the focus is the camera target — which
   // at boot is the centre of the WORLD, so an avatar living at the edge of the
@@ -1540,7 +1646,7 @@ async function startApp(username: string, role: string) {
   // would wait for nearly the whole queue. The focus goes back to the camera
   // as soon as the arrival is settled; a live vector either way, so the
   // reordering keeps following whatever it points at.
-  const arrivalTile = arrivalLocId ? residency.get(arrivalLocId)?.tile : undefined;
+  const arrivalTile = arrivalLocId ? places.get(arrivalLocId) : undefined;
   if (arrivalTile) setPropLoadFocus(arrivalTile.center);
   engine.setPickables([...residency.values()].map(({ tile }) => tile.group));
 
@@ -1637,7 +1743,7 @@ async function startApp(username: string, role: string) {
   }
   takeBackdrop(firstMap);
   // The map stands and can be clicked. The scene models behind the tiles keep
-  // streaming in afterwards (`mountWithDoors` is deliberately not awaited),
+  // streaming in afterwards through the driver,
   // and holding the screen until the LAST GLB of the LAST location is decoded
   // would mean staring at a bar over a world that is already finished enough
   // to look at.
@@ -1653,8 +1759,10 @@ async function startApp(username: string, role: string) {
     // Fetch new scene recipes and refresh signatures. ONE signature covers
     // map3d, room layouts, model metadata and prop sidecars (§ B1).
     // Skip the first sweep because prime() just fetched those scenes.
-    for (const locId of residency.keys()) scenes.request(locId);
-    if (!firstSweep) void scenes.sweep();
+    for (const locId of residency.keys()) {
+      void scenes.request(locId).catch(e => console.warn('[scene] fetch failed', locId, e));
+    }
+    if (!firstSweep) void scenes.sweep(residency.keys());
     firstSweep = false;
   };
   requestServerModels();
@@ -1717,13 +1825,7 @@ async function startApp(username: string, role: string) {
     free(tile.group);
   }
 
-  function rebuildTile(old: Tile | undefined, loc: WorldLocation) {
-    // The thresholds go with it, unconditionally: a scene that turned 404
-    // (layout deleted) is never mounted again, so nothing else would clear
-    // them and they would hang in the air over a procedural tile.
-    dropDoorMarks(loc.id);
-    dropBoundaryMarks(loc.id);
-    if (old) freeTile(old);
+  function rebuildTile(_old: Tile | undefined, loc: WorldLocation): void {
     const previous = places.get(loc.id);
     if (previous) {
       engine.scene.remove(previous.anchor);
@@ -1732,17 +1834,7 @@ async function startApp(username: string, role: string) {
     const place = buildPlace(loc);
     places.set(loc.id, place);
     engine.scene.add(place.anchor);
-    if (!old) return;
-    const tile = buildTile(place);
-    shareTileHeight(tile, place);
-    tile.fade = old.fade;
-    tile.fadeTarget = old.fadeTarget;
-    tile.levelFilter = old.levelFilter;   // preserve the selected storey across rebuilds
-    residency.set(loc.id, { tile, ring: 'near', gen: 0, ready: false });
-    engine.scene.add(tile.group);
-    const scene = scenes.get(loc.id);
-    if (scene) void mountWithDoors(tile, scene);
-    engine.setPickables([...residency.values()].map(({ tile }) => tile.group));
+    if (residency.has(loc.id) || driver.hasJob(loc.id)) driver.rebuild(loc.id, place);
   }
   // A changed scene signature (layout, map3d, model metadata, prop sidecar)
   // rebuilds the tile. A 404 (deleted layout) leaves only the procedural
@@ -1759,8 +1851,8 @@ async function startApp(username: string, role: string) {
 
   scenes.onScene = (locId) => {
     wallCache.delete(locId);
-    const tile = residency.get(locId)?.tile;
-    if (tile) rebuildTile(tile, tile.loc);
+    const place = places.get(locId);
+    if (place && (residency.has(locId) || driver.hasJob(locId))) driver.rebuild(locId, place);
   };
   function applyLocations(fresh: WorldLocation[]) {
     const freshById = new Map(fresh.map((l) => [l.id, l]));
@@ -2080,25 +2172,24 @@ async function startApp(username: string, role: string) {
       if (!evs.length || !places.has(locId)) continue;
       wanted.set(locId, evs.some((e) => e.category === 'danger') ? '🔥' : '❗');
     }
-    for (const [locId, pin] of pins) {
+    for (const [locId, pin] of eventPins) {
       if (!wanted.has(locId)) {
         engine.scene.remove(pin);
-        pins.delete(locId);
+        eventPins.delete(locId);
       }
     }
     for (const [locId, emoji] of wanted) {
-      if (pins.has(locId)) continue;
+      if (eventPins.has(locId)) continue;
       const tile = places.get(locId)!;
       const pin = new THREE.Sprite(new THREE.SpriteMaterial({ map: makePinTexture(emoji), depthTest: false }));
       pin.scale.setScalar(3);
       pin.position.copy(tile.center).setY(tile.height + 3.5);
       engine.scene.add(pin);
-      pins.set(locId, pin);
+      eventPins.set(locId, pin);
     }
   }
 
   // --- Polling: worldmap + room occupancy -----------------------------------
-  let lastMap: WorldMap | null = firstMap;
   /** counts successful worldmap polls — travel seg/frac reconciliation in the
    *  NpcManager only runs against a genuinely NEW payload (npcs.update is
    *  called at 1 Hz off the cached map, the poll refreshes every 3 s) */
@@ -2243,6 +2334,7 @@ async function startApp(username: string, role: string) {
     try {
       if (map.locations_rev !== locationsRev) void syncLocations();
       lastMap = map;
+      syncStreamPins();
       mapPolledAt = polledAt;
       mapStamp += 1;
       hud.setOnline(true);
@@ -2740,7 +2832,6 @@ async function startApp(username: string, role: string) {
   // impassable terrain and foreign footprints outdoors, walls inside an open
   // interior. The maths is in game/walk.ts + game/clickmove.ts and checked
   // numerically by client3d/scripts/smoke_walk_math.mjs; nothing here recomputes it.
-  const avatarName = firstMap.avatar;   // one avatar per session (as everywhere else)
 
   /**
    * The location whose footprint covers a world point — the client's mirror of
@@ -3219,10 +3310,13 @@ async function startApp(username: string, role: string) {
     // The scene recipes before the tiles, exactly as at boot: a tile built
     // without its payload would stand as the procedural shell and only swap
     // once the sweep noticed it.
-    await scenes.prime(fresh.map((l) => l.id));
+    for (const loc of fresh) ensurePlace(loc);
+    syncStreamPins();
+    await scenes.prime(fresh.map(l => l.id).filter(id =>
+      ringFor(distanceOf(id), driver.target(id), pins.has(id), FOG_FAR_M) !== 'gone'), distanceOf);
     if (rev !== viewRev) return;
     for (const loc of fresh) {
-      addTile(loc);
+      ensurePlace(loc);
       // Seeded from the SAME source the boot path seeds from: a signature
       // taken from the merged location would differ from the first poll's and
       // rebuild the fresh tile for nothing.
@@ -3231,18 +3325,18 @@ async function startApp(username: string, role: string) {
     // The geometry of the payload these tiles were just built from (B13) —
     // without it the next poll would read every fresh tile as "moved".
     noteGeometry(map.locations);
+    tickStreamRings();
     engine.setPickables([...residency.values()].map(({ tile }) => tile.group));
   }
 
   /**
-   * Give a tile back. The mirror image of `addTile`, and the only place that
+   * Give a tile back. The mirror image of `ensurePlace`, and the only place that
    * takes one down for good — a rebuild (`rebuildTile`) replaces a tile with a
    * fresh one and must NOT come through here.
    *
    * What it frees, and what it deliberately does not, is `freeTile`'s to say.
    */
   function dropPlace(id: string): void {
-    const tile = residency.get(id)?.tile;
     const place = places.get(id);
     if (!place) return;
     if (openLocationId === id) closeOpenLocation();
@@ -3253,8 +3347,10 @@ async function startApp(username: string, role: string) {
       hovered = null;
       document.body.style.cursor = 'default';
     }
+    driver.drop(id);
+    scenes.forget(id);
+    pins.delete(id);
     places.delete(id);
-    residency.delete(id);
     engine.scene.remove(place.anchor);
     place.labelObj?.element.remove();
     dropDoorMarks(id);
@@ -3263,7 +3359,6 @@ async function startApp(username: string, role: string) {
     locSig.delete(id);
     buildingTierByLoc.delete(id);
     interiorTierByLoc.delete(id);
-    if (tile) freeTile(tile);
   }
 
   /**
@@ -3318,6 +3413,7 @@ async function startApp(username: string, role: string) {
       showAll = on;
       viewRev += 1;
       lastMap = map;
+      syncStreamPins();
       mapPolledAt = askedAt;
       mapStamp += 1;
       // The frame comes over with the switch: `world_bounds` is unfiltered and
@@ -5870,7 +5966,7 @@ async function startApp(username: string, role: string) {
     npcs.tick(dt, engine.dist, (lastMap ?? firstMap).game_rate === 0,
       engine.firstPerson ? avatarName : null);
     bob += dt * 2.2;
-    for (const pin of pins.values()) {
+    for (const pin of eventPins.values()) {
       pin.position.y += Math.sin(bob) * 0.008;
     }
   });
@@ -5881,8 +5977,8 @@ async function startApp(username: string, role: string) {
    * 2026-09-06: "the avatar stands on the plot instead of in the room and is
    * put back into it if one is lucky").
    *
-   * WHAT WENT WRONG. `addTile` mounts a location's scene without awaiting it
-   * (`mountWithDoors`), and a mount is where a tile gets its rooms: the room
+   * The old boot placed the avatar before its scene mount settled. A mount
+   * (`upResident`) is where a tile gets its rooms: the room
    * CENTRES, the baked surfaces, the declared floors. The boot placed the
    * avatar right after building the tiles, so `computeNpcPlacements` found a
    * tile with no rooms — no `roomCenters` entry, `tile.fade` still 0 — took
@@ -5929,28 +6025,28 @@ async function startApp(username: string, role: string) {
     }
   }
 
-  async function awaitArrivalMount(): Promise<void> {
-    const locId = (lastMap ?? firstMap).characters
-      .find((c) => c.name === avatarName)?.location_id ?? '';
-    // No location = the wilderness (§ A11) or no avatar at all: the figure
-    // stands on the world relief, which the boot already awaited.
-    if (!locId) return;
-    // The mount, and any remount that replaced it while we waited — the map
-    // poll may rebuild a tile under us. Settling, not polling: the loop ends
-    // as soon as the entry stops changing.
-    let pending = scenePending.get(locId);
-    while (pending) {
-      await pending;
-      const next = scenePending.get(locId);
-      if (next === pending) break;
-      pending = next;
+  async function awaitArrivalMount(): Promise<string> {
+    for (;;) {
+      const currentId = () => (lastMap ?? firstMap).characters
+        .find(c => c.name === avatarName)?.location_id ?? '';
+      const id = currentId();
+      bootPin = id;
+      setPinOwner('boot', id);
+      openLocationId = id || null;
+      const place = places.get(id);
+      if (!place) return id;
+      driver.want(id, place, 'near', () => distanceOf(id));
+      await driver.settled(id);
+      if (currentId() === id) return id;
     }
   }
 
   async function placeAvatarOnArrival(): Promise<void> {
-    const locId = (lastMap ?? firstMap).characters
-      .find((c) => c.name === avatarName)?.location_id ?? '';
-    await awaitArrivalMount();
+    let locId: string;
+    do {
+      locId = await awaitArrivalMount();
+    } while (locId !== ((lastMap ?? firstMap).characters
+      .find(c => c.name === avatarName)?.location_id ?? ''));
     if (!locId) return;
     const tile = residency.get(locId)?.tile;
     // No tile (an unplaced location): the pre-opened id names nothing, so it
@@ -6017,6 +6113,7 @@ async function startApp(username: string, role: string) {
   }
   await settleArrival();
   bootDone = true;
+  setPinOwner('boot', null);
   if (npcs.positionOf(firstMap.avatar) && (firstMap.avatar || pendingTakeControl)
       && getGameState().mode !== 'embodied') gameActions.takeControl?.();
   pendingTakeControl = false;
