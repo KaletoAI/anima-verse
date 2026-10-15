@@ -93,6 +93,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 _tmp = tempfile.mkdtemp(prefix="smoke_pose_key_detail_")
 from app.core import paths  # noqa: E402
 paths.init(_tmp)
+_config_path = Path(_tmp) / "config.json"
+_config_path.write_text('{"packages":{"enabled":"set_pose"}}', encoding="utf-8")
+from app.core import config  # noqa: E402
+config.load(_config_path)
 
 from app.core import embedding as _emb  # noqa: E402
 _emb.embed = lambda text: None          # offline: alias equality only

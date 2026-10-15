@@ -129,10 +129,17 @@ def load_effective(name: str) -> dict:
 def main() -> None:
     import tempfile
     from app.core import paths
-    paths.init(tempfile.mkdtemp(prefix="anima_template_tokens_check_"))
-    # Species packages contribute template fragments (and could contribute
-    # replacement blocks), so the check runs against the merged template the
-    # resolver actually uses.
+    storage = Path(tempfile.mkdtemp(prefix="anima_template_tokens_check_"))
+    paths.init(storage)
+    config_path = storage / "config.json"
+    config_path.write_text(
+        '{"packages":{"enabled":"human,cat,rp,romantic_interests"}}',
+        encoding="utf-8",
+    )
+    from app.core import config
+    config.load(config_path)
+    # Public species/role packages contribute to the effective template;
+    # never include unrelated local private or marketplace packages.
     try:
         from app.plugins.loader import discover_packages
         discover_packages()

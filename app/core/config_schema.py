@@ -70,14 +70,15 @@ SECTIONS = {
     "packages": {
         "label": "Packages", "scope": "world", "world_group": "packages",
         "fields": {
-            "disabled": {
+            "enabled": {
                 "type": "str",
-                "label": "Disabled packages",
+                "label": "Enabled packages",
                 "default": "",
                 "requires_restart": True,
-                "description": "Comma-separated exact package IDs to exclude completely from this "
-                               "world, including packages that require them. Takes effect after "
-                               "restart. Empty enables all installed packages; unknown or "
+                "description": "Comma-separated exact package IDs to enable in this world. "
+                               "Empty enables no packages. Every required package must also "
+                               "be enabled and installed; packages with missing requirements "
+                               "remain inactive. Takes effect after restart. Unknown or "
                                "temporarily absent IDs are retained.",
             },
         },

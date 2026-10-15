@@ -1,4 +1,4 @@
-"""Check world package activation with temporary synthetic packages/processes.
+"""Check explicit world package activation with temporary packages/processes.
 
 Usage: .venv/bin/python scripts/smoke_world_package_activation.py
 No active world, private package, server, or installation config is touched.
@@ -16,11 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 PACKAGE_IDS = {
-    "disabled_probe", "content_probe", "dependent_probe", "transitive_probe",
-    "unrelated_probe", "disabled_probe_extra", "gated_probe", "mixed_probe",
+    "base_probe", "content_probe", "dependent_probe", "transitive_probe",
+    "unrelated_probe", "base_probe_extra", "gated_probe", "mixed_probe",
 }
-DISABLED = " disabled_probe , content_probe, ,future_probe,DISABLED_PROBE "
-EXCLUDED = {"disabled_probe", "content_probe", "dependent_probe", "transitive_probe"}
+ALL_ENABLED = ",".join(sorted(PACKAGE_IDS))
 
 
 def write_json(path, value):
@@ -81,37 +80,41 @@ def make_package(plugins, package_id, *, installed=False, content=False,
 
 def fixture(root, installed):
     plugins = root / "plugins"
-    make_package(plugins, "disabled_probe", installed=installed, shared_rig=True)
+    make_package(plugins, "base_probe", installed=installed)
     make_package(plugins, "content_probe", installed=not installed, content=True)
-    make_package(plugins, "dependent_probe", requires=("disabled_probe",))
-    make_package(plugins, "transitive_probe", installed=True, requires=("dependent_probe",))
+    make_package(plugins, "dependent_probe", installed=not installed, requires=("base_probe",))
+    make_package(plugins, "transitive_probe", installed=installed, requires=("dependent_probe",))
     make_package(plugins, "unrelated_probe", always=False,
                  enabled_default=True, shared_rig=True)
-    make_package(plugins, "disabled_probe_extra", installed=True)
+    make_package(plugins, "base_probe_extra", installed=True)
     make_package(plugins, "gated_probe", always=False)
     make_package(plugins, "mixed_probe")
     write_json(root / "templates/fixture.json", {"label": "fixture", "features": {}})
     write_json(root / "instance/config.json", {
         "server": {"port": 54321},
-        "packages": {"disabled": "unrelated_probe"},  # Wrong layer must not disable it.
-        "skills": {"disabled_probe": {"instance_probe": "retained-instance-value"}},
+        "packages": {"enabled": ALL_ENABLED},  # Wrong layer cannot opt packages in.
+        "skills": {"base_probe": {"instance_probe": "retained-instance-value"}},
     })
-    write_json(root / "world/config.json", {"packages": {"disabled": DISABLED}})
+    for world, enabled in {
+        "world": ALL_ENABLED,
+        "explicit-empty": "",
+        "dependency-missing": "dependent_probe,transitive_probe,content_probe",
+        "middle-missing": "base_probe,transitive_probe",
+        "dependent-only": "dependent_probe",
+        "base-only": "base_probe",
+        "exact": " base_probe_extra , BASE_PROBE,base_,missing_probe, ,base_probe_extra ",
+        "pre-discovery": "",
+    }.items():
+        write_json(root / world / "config.json", {"packages": {"enabled": enabled}})
     write_json(root / "other/config.json", {})
-    write_json(root / "explicit-empty/config.json", {"packages": {"disabled": ""}})
-    write_json(root / "pre-discovery/config.json", {})
 
 
-def assert_visible(root, skills, excluded):
+def assert_visible(root, skills, expected):
     from app.core import body_slots, hooks, prompt_templates
     from app.core.extension_rig import rig_groups_for
     from app.models import character_template
     from app.plugins import registry
 
-    expected = PACKAGE_IDS - excluded
-    if "disabled_probe" in excluded:
-        assert registry.get_package("disabled_probe") is None, (
-            "configured-disabled package still contributes to runtime registry")
     assert {p.id for p in registry.packages()} == expected, "activation/dependency set differs"
     expected_verbs = {p + "_verb" for p in expected - {"content_probe", "gated_probe"}}
     assert set(skills) == expected_verbs, "always_load/default-enabled/gated verbs differ"
@@ -128,12 +131,11 @@ def assert_visible(root, skills, excluded):
         p + "_slot" for p in expected}
     assert set(body_slots.prompt_fragments("fixture", profile=profile)["general"]) == {
         p + " body" for p in expected}, "body prompt contributions differ"
-    # Both active packages declare the same rig. Disabling one must leave the
-    # unrelated owner's valid rig, proving filtering precedes conflict resolution.
     assert {r["id"] for r in rig_groups_for("fixture", profile)} == (
-        {"shared_group"} if "disabled_probe" in excluded else set())
+        {"shared_group"} if "unrelated_probe" in expected else set())
     for package_id in PACKAGE_IDS:
         active = package_id in expected
+        assert (registry.get_package(package_id) is not None) == active
         assert prompt_templates.template_exists(package_id + ".md") == active
         if active:
             assert prompt_templates.render(package_id + ".md") == package_id + " template"
@@ -149,7 +151,7 @@ def assert_visible(root, skills, excluded):
         assert ("plugins." + package_id + ".skill" in sys.modules) == imported
 
 
-def run_child(root, world, disabled, mutate, before_discovery):
+def run_child(root, world, expected, mutate, before_discovery):
     from app.core import paths
     paths.init(root / world)
     paths.init_instance(root / "instance")
@@ -158,10 +160,11 @@ def run_child(root, world, disabled, mutate, before_discovery):
     from app.plugins import loader, registry
     loader.PLUGIN_DIR = root / "plugins"
     db.init_schema()
-    # Inventory is exercised before config load and must neither run package code
-    # nor freeze activation using an empty/unloaded config.
+    # Inventory before config loading must not import code or capture activation.
     schemas = loader.manifest_config_schemas()
     assert set(schemas) == PACKAGE_IDS
+    schemas.clear()
+    assert set(loader.manifest_config_schemas()) == PACKAGE_IDS, "inventory exposed mutable cache"
     assert registry.packages() == [] and not loader.is_discovered()
     assert not list((root / "plugins").glob("**/*-imported"))
     assert not any(name.startswith("plugins.") for name in sys.modules)
@@ -169,82 +172,87 @@ def run_child(root, world, disabled, mutate, before_discovery):
     assert config.get("server.port") == 54321
     if before_discovery:
         data = config.get_all()
-        data["packages"] = {"disabled": DISABLED}
+        data["packages"] = {"enabled": ALL_ENABLED}
         config.save(data)
-    excluded = EXCLUDED if disabled else set()
     with patch.object(character_template, "get_templates_dir", return_value=root / "templates"):
-        skills = loader.load_all_plugins()
-        assert_visible(root, skills, excluded)
-        assert set(loader.manifest_config_schemas()) == PACKAGE_IDS, "inventory lost disabled packages"
-        assert config_scope.scope_of("skills.disabled_probe.instance_probe") == "instance"
-        assert config.get("skills.disabled_probe.instance_probe") == "retained-instance-value"
+        assert_visible(root, loader.load_all_plugins(), expected)
+        assert set(loader.manifest_config_schemas()) == PACKAGE_IDS, "inventory lost inactive packages"
+        assert config_scope.scope_of("skills.base_probe.instance_probe") == "instance"
+        assert config.get("skills.base_probe.instance_probe") == "retained-instance-value"
         if mutate:
+            enabled = "" if expected else ALL_ENABLED
             data = config.get_all()
-            data["packages"] = {"disabled": "" if disabled else DISABLED}
+            data["packages"] = {"enabled": enabled}
             config.save(data)
             config.reload()
-            assert config.get("packages.disabled", "") == ("" if disabled else DISABLED)
+            assert config.get("packages.enabled", "") == enabled
             assert "packages" not in json.loads((root / "instance/config.json").read_text())
-            assert_visible(root, loader.load_all_plugins(), excluded)
+            assert_visible(root, loader.load_all_plugins(), expected)
             print("PASS force reload keeps activation after real config save/reload")
-        if disabled:
-            make_package(root / "plugins", "future_probe", installed=True)
-            assert "future_probe_verb" not in loader.load_all_plugins(), (
-                "unknown disabled ID was forgotten before later installation")
-            assert registry.get_package("future_probe") is None
-            assert not list((root / "plugins/installed/future_probe").glob("*-imported"))
-    print("PASS", world, "disabled" if disabled else "default/empty activation")
+        # Late installation must not bypass an empty/explicit startup allowlist.
+        make_package(root / "plugins", "future_probe", installed=True)
+        assert "future_probe_verb" not in loader.load_all_plugins()
+        assert registry.get_package("future_probe") is None
+        assert not list((root / "plugins/installed/future_probe").glob("*-imported"))
+        assert "future_probe" in loader.manifest_config_schemas()
+        # Merely loading another world's settings cannot partially reconfigure
+        # the running process; a fresh child below uses that world's selection.
+        config.load(root / "other/config.json", instance_path=root / "instance/config.json")
+        assert config.get("packages.enabled", "") == ""
+        assert_visible(root, loader.load_all_plugins(), expected)
+    print("PASS", world, "active:", sorted(expected))
 
 
-def spawn(root, world, *, disabled=False, mutate=False, before_discovery=False):
-    # Remove only synthetic import markers between child processes. This makes
-    # each child's absence assertions independent of earlier activation states.
+def spawn(root, world, expected=(), *, mutate=False, before_discovery=False):
+    # Each child's absence assertions are independent of earlier activation.
     for marker in (root / "plugins").glob("**/*-imported"):
         marker.unlink()
-    command = [sys.executable, str(Path(__file__).resolve()), "--child", str(root), "--world", world]
-    if disabled:
-        command.append("--disabled")
+    command = [sys.executable, str(Path(__file__).resolve()), "--child", str(root),
+               "--world", world, "--expected", ",".join(sorted(expected))]
     if mutate:
         command.append("--mutate")
     if before_discovery:
         command.append("--before-discovery")
     environment = dict(os.environ)
-    # Synthetic gates must not inherit legacy enable switches from the caller.
     for key in list(environment):
         if key.startswith("SKILL_") and key.endswith("_ENABLED"):
             environment.pop(key)
     subprocess.run(command, check=True, cwd=ROOT, env=environment)
     future = root / "plugins/installed/future_probe"
     if future.exists():
-        # Entirely synthetic package, created only to test absent IDs.
         import shutil
-        shutil.rmtree(future)
+        shutil.rmtree(future)  # Synthetic package only.
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--child", type=Path)
     parser.add_argument("--world", default="world")
-    parser.add_argument("--disabled", action="store_true")
+    parser.add_argument("--expected", default="")
     parser.add_argument("--mutate", action="store_true")
     parser.add_argument("--before-discovery", action="store_true")
     args = parser.parse_args()
     if args.child:
-        run_child(args.child, args.world, args.disabled, args.mutate, args.before_discovery)
+        expected = set(filter(None, args.expected.split(",")))
+        run_child(args.child, args.world, expected, args.mutate, args.before_discovery)
         return
     with tempfile.TemporaryDirectory(prefix="world-package-activation-") as tmp:
         for installed in (False, True):
             root = Path(tmp) / ("installed-root" if installed else "repo-root")
             fixture(root, installed)
-            spawn(root, "world", disabled=True, mutate=True)
-            # Same files/instance in a new process now honor the saved enable.
+            spawn(root, "world", PACKAGE_IDS, mutate=True)
+            # Fresh processes honor both directions of the persisted change.
             spawn(root, "world", mutate=True)
-            # Next process honors the inverse saved disable too.
-            spawn(root, "world", disabled=True)
+            spawn(root, "world", PACKAGE_IDS)
             spawn(root, "other")
             spawn(root, "explicit-empty")
-            spawn(root, "pre-discovery", disabled=True, before_discovery=True)
-    print("PASS world package activation: repo/installed, contributions, dependencies, restart and scope")
+            spawn(root, "dependency-missing", {"content_probe"})
+            spawn(root, "middle-missing", {"base_probe"})
+            spawn(root, "dependent-only")
+            spawn(root, "base-only", {"base_probe"})
+            spawn(root, "exact", {"base_probe_extra"})
+            spawn(root, "pre-discovery", PACKAGE_IDS, before_discovery=True)
+    print("PASS world package opt-in: repo/installed, contributions, dependencies, restart and scope")
 
 
 if __name__ == "__main__":

@@ -695,6 +695,11 @@ def main():
     with tempfile.TemporaryDirectory(prefix='extension-p1-') as tmp:
         root=Path(tmp)
         paths.init(root/'world')
+        paths.get_config_path().write_text(json.dumps({
+            'packages': {'enabled': 'example'},
+        }))
+        from app.core import config
+        config.load(paths.get_config_path(), instance_path=root/'instance/config.json')
         os.environ['ANIMATION_CLIPS_DIR']=str(root/'clips')
         os.environ['ANIMATION_RIG_FILE']=str(root/'reference.fbx')
         from app.blender import refine, runner

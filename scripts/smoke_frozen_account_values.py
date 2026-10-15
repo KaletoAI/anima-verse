@@ -133,9 +133,14 @@ os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="frozen-account-clip
 
 from app.core import paths  # noqa: E402
 
-paths.init(Path(tempfile.mkdtemp(prefix="frozen-account-storage-")))
+_STORAGE = Path(tempfile.mkdtemp(prefix="frozen-account-storage-"))
+paths.init(_STORAGE)
+_CONFIG_PATH = _STORAGE / "config.json"
+_CONFIG_PATH.write_text('{"packages":{"enabled":"talk_to"}}', encoding="utf-8")
 
-from app.core import db  # noqa: E402
+from app.core import config, db  # noqa: E402
+
+config.load(_CONFIG_PATH)
 
 db.init_schema()
 

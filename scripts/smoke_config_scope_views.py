@@ -227,10 +227,9 @@ check(tw["game_seasons"] == default_seasons_config(), "C: seasons default")
 check(tw["chat"]["top_p"] == 0, "C: top_p default 0")
 check(set(tw["image_generation"]["use_cases"]) == set(config._DEFAULT_IMAGE_USE_CASES), "C: use cases")
 check("chat_retention_days" not in tw["memory"], "C: world memory without retention")
-check(tw.get("packages") == {"disabled": ""}, "C: all packages eligible by default")
 check("packages" not in ti, "C: package activation has no instance default")
-check(config_scope.split_by_scope({"packages": {"disabled": "absent_pack"}}) ==
-      ({}, {"packages": {"disabled": "absent_pack"}}, []),
+check(config_scope.split_by_scope({"packages": {"enabled": "absent_pack"}}) ==
+      ({}, {"packages": {"enabled": "absent_pack"}}, []),
       "C: absent package IDs remain world-only during scope split")
 
 # Part D
@@ -260,7 +259,7 @@ for raw, expected, label in (
     check(config.get("providers") == expected, f"E: {label}")
 check(config_scope.prune({"providers": config._DEFAULT_PROVIDERS}) == {}, "E: seed is pruned")
 
-# A disabled installed package still owns its dormant endpoint settings.
+# An inactive installed package still owns its dormant endpoint settings.
 # Losing manifest metadata after discovery would move that URL to world scope.
 from app.plugins import loader, registry
 synthetic_root = Path(_TMP.name) / "synthetic_plugins"
@@ -282,7 +281,7 @@ loader.PLUGIN_DIR = synthetic_root
 loader._manifest_schemas = None
 config_scope._view_cache = (None, None)
 world_file.write_text(json.dumps({
-    "packages": {"disabled": "scope_dormant,scope_later"},
+    "packages": {"enabled": ""},
     "skills": {"scope_dormant": {"mood": "quiet"}},
 }), encoding="utf-8")
 instance_file.write_text(json.dumps({
@@ -292,7 +291,7 @@ for phase in ("before discovery", "after discovery"):
     if phase == "after discovery":
         loader.discover_packages()
         check("scope_dormant" not in {p.id for p in registry.packages()},
-              "G: disabled installed package is not activated")
+              "G: installed package without opt-in is not activated")
     check(config_scope.scope_of("skills.scope_dormant.url") == "instance",
           f"G: dormant endpoint stays instance {phase}")
     check(config_scope.scope_of("skills.scope_dormant.mood") == "world",
@@ -306,7 +305,7 @@ for phase in ("before discovery", "after discovery"):
           {"mood": "quiet"}, f"G: dormant simulation value persisted only world {phase}")
 
 # Marketplace installation/removal followed by normal rediscovery refreshes
-# dormant metadata without importing or activating either disabled package.
+# dormant metadata without importing or activating either unlisted package.
 manifest = json.loads((synthetic_pack / "plugin.yaml").read_text())
 later_pack = synthetic_root / "installed" / "scope_later"
 later_pack.mkdir()
@@ -315,25 +314,32 @@ manifest["config_schema"]["scope_later"] = manifest["config_schema"].pop("scope_
 (later_pack / "must_not_import.py").write_text(
     f"from pathlib import Path\nPath({str(marker)!r}).write_text('imported')\n",
     encoding="utf-8")
+check("scope_later" not in loader.manifest_config_schemas(),
+      "H: inventory remains cached until normal rediscovery")
+check("scope_later" not in
+      config_scope.schema_for("instance")["skills"].get("subsections", {}),
+      "H: cached scope view does not invent unscanned ownership")
 loader.discover_packages(force=True)
 check(config_scope.scope_of("skills.scope_later.url") == "instance",
-      "H: newly installed disabled package endpoint gains instance ownership")
+      "H: newly installed unlisted package endpoint gains instance ownership")
 check("scope_later" in config_scope.schema_for("world")["skills"]["subsections"],
-      "H: newly installed disabled package world settings join inventory")
+      "H: newly installed unlisted package world settings join inventory")
 check("scope_later" not in {p.id for p in registry.packages()} and not marker.exists(),
-      "H: newly installed disabled package remains inactive")
+      "H: newly installed unlisted package remains inactive")
 (synthetic_pack / "plugin.yaml").unlink()
 (synthetic_pack / "must_not_import.py").unlink()
 synthetic_pack.rmdir()
+check("scope_dormant" in loader.manifest_config_schemas(),
+      "H: removal does not mutate cached inventory before rediscovery")
 loader.discover_packages(force=True)
 check("scope_dormant" not in
       config_scope.schema_for("instance")["skills"].get("subsections", {}),
-      "H: removed disabled package loses stale instance schema")
+      "H: removed inactive package loses stale instance schema")
 check("scope_dormant" not in
       config_scope.schema_for("world")["skills"].get("subsections", {}),
-      "H: removed disabled package loses stale world schema")
+      "H: removed inactive package loses stale world schema")
 check(config_scope.scope_of("skills.scope_later.url") == "instance" and not marker.exists(),
-      "H: remaining disabled package scope survives removal without imports")
+      "H: remaining inactive package scope survives removal without imports")
 
 print()
 print("FAILED: %d" % len(FAILS) if FAILS else "ALL OK")

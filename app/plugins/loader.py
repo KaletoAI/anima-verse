@@ -66,7 +66,7 @@ _discovered = False
 # Capture world activation only at runtime discovery, never during the pure
 # manifest scan used to bootstrap config scopes. Config saves require restart;
 # force skill reload must not apply only part of a pending activation change.
-_activation_disabled_ids: Optional[FrozenSet[str]] = None
+_activation_enabled_ids: Optional[FrozenSet[str]] = None
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
@@ -275,16 +275,18 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
 
 
 def _collect_packages(base: Path, *, warn: bool = True,
-                      disabled_ids: FrozenSet[str] = frozenset()) -> List[Package]:
+                      enabled_ids: Optional[FrozenSet[str]] = None) -> List[Package]:
     """Scan ``base`` and ``base/installed`` for eligible manifests — no side effects.
 
-    Parses every ``plugin.yaml`` (repo packages win over an installed one of
-    the same id), excluding ``disabled_ids`` before parsing, dependency pruning
-    and rig conflict resolution. Drops packages whose ``requires`` are not all
-    present (F9), repeated until stable so dependency chains unwind. Reads
-    files only: no package code is imported, no registry is touched.
-    The default includes world-disabled packages for manifest/schema inventory.
-    ``warn=False`` keeps duplicate shadow/inert warnings quiet.
+    With ``enabled_ids`` supplied, only those exact directory IDs are eligible,
+    including when the set is empty. Filter both roots before parsing,
+    dependency pruning and rig conflict resolution; repo packages win over an
+    installed one of the same id. Packages whose ``requires`` are not all
+    present are dropped repeatedly until dependency chains unwind.
+    The default, ``None``, scans all packages for manifest/schema inventory,
+    regardless of world activation. Reads files only: no package code is
+    imported, no registry is touched. ``warn=False`` silences duplicate
+    shadow/inert warnings.
     """
     found: Dict[str, Package] = {}
 
@@ -297,7 +299,7 @@ def _collect_packages(base: Path, *, warn: bool = True,
             manifest = entry / "plugin.yaml"
             if not entry.is_dir() or not manifest.exists():
                 continue
-            if entry.name in disabled_ids:
+            if enabled_ids is not None and entry.name not in enabled_ids:
                 continue
             if installed and entry.name in found:
                 if warn:
@@ -373,8 +375,8 @@ def manifest_config_schemas() -> Dict[str, Dict[str, Any]]:
     For code that needs the skills' settings schema BEFORE discovery has run
     (the config scope split at config load, app/core/config_scope.py).
     Same roots as ``discover_packages`` — repo wins over installed, packages
-    with missing ``requires`` contribute nothing — but includes world-disabled
-    packages so their settings retain scope/default metadata. Side-effect free:
+    with missing ``requires`` contribute nothing — but includes packages not
+    enabled in the world so their settings retain scope/default metadata. Side-effect free:
     no package code is imported, no on_load runs, no activation snapshot is
     captured, and the registry stays untouched. The result is cached until
     runtime rediscovery refreshes installed inventory; the caller gets a copy.
@@ -390,14 +392,14 @@ def manifest_config_schemas() -> Dict[str, Dict[str, Any]]:
 
 def discover_packages(plugin_dir: Optional[Path] = None,
                       force: bool = False) -> List[Package]:
-    """Discover all packages and (re)populate the registry.
+    """Discover explicitly enabled packages and (re)populate the registry.
 
     Idempotent: subsequent calls return the registered packages unless
     ``force`` is set (skill reload). Wires cross-module contributions:
     prompt-template search path and template caches. Whole-package activation
     is fixed at the first runtime discovery and changes only after restart.
     """
-    global _discovered, _activation_disabled_ids, _manifest_schemas
+    global _discovered, _activation_enabled_ids, _manifest_schemas
     if _discovered and not force and plugin_dir is None:
         return registry.packages()
 
@@ -405,15 +407,15 @@ def discover_packages(plugin_dir: Optional[Path] = None,
     # only on a real rebuild, never on ordinary reads or cached discovery.
     _manifest_schemas = None
     base = plugin_dir or PLUGIN_DIR
-    if _activation_disabled_ids is None:
+    if _activation_enabled_ids is None:
         from app.core import config
-        _activation_disabled_ids = frozenset(
+        _activation_enabled_ids = frozenset(
             package_id.strip()
-            for package_id in (config.get("packages.disabled", "") or "").split(",")
+            for package_id in (config.get("packages.enabled", "") or "").split(",")
             if package_id.strip()
         )
     registry.clear_registry()
-    for pkg in _collect_packages(base, disabled_ids=_activation_disabled_ids):
+    for pkg in _collect_packages(base, enabled_ids=_activation_enabled_ids):
         registry.register_package(pkg)
 
     if plugin_dir is None:

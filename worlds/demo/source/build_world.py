@@ -1004,8 +1004,8 @@ def configure_skills(client, name):
                 "consume_item","interact","send_message","notify_user",
                 "invite_to_party","join_party","leave_party"}
     require(required.issubset(skills), f"{name}: required standard character skills missing")
-    # Turn OFF every inherited nonessential skill, notably render/network and
-    # intimacy skills. No optional/private skill package is needed by this cast.
+    # Turn off inherited nonessential skills. This cast uses only its selected
+    # public capabilities.
     enabled = required | ({"sleep","wakeup"} & skills.keys())
     for skill_id,row in skills.items():
         desired = skill_id in enabled
@@ -1104,13 +1104,13 @@ def configure_world(client):
     values.setdefault("npc",{})["auto_spawn_enabled"] = False
     values.setdefault("random_events",{})["enabled"] = False
     values.setdefault("story_engine",{})["enabled"] = False
-    values.setdefault("packages",{})["disabled"] = "nsfw_anatomy,intimacy,attraction"
+    values.setdefault("packages",{})["enabled"] = "act,consume_item,human,interact,movement,notify_user,party,rp,send_message,sleep,talk_to"
     client.put("/admin/world-settings",{"values":values,"resets":[]})
     readback = client.get("/admin/world-settings")
     require(readback["values"].get("game_calendar") == values["game_calendar"], "Calendar not stored")
     require(readback["values"].get("game_seasons") == values["game_seasons"], "Seasons not stored")
-    require(readback["values"].get("packages",{}).get("disabled") == values["packages"]["disabled"],
-            "SFW world package exclusions not stored")
+    require(readback["values"].get("packages",{}).get("enabled") == values["packages"]["enabled"],
+            "World package activation not stored")
     client.put("/admin/world-setup",{"description":BRIEFING})
     require(client.get("/admin/world-setup")["description"] == BRIEFING,"World briefing not stored")
     client.post("/world/game-time",{"game_time":"Y0001-D001T16:40:00"})

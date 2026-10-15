@@ -40,6 +40,9 @@ def main():
         os.environ['ANIMATION_RIG_FILE'] = str(root / 'rig.fbx')
         from app.core import db, config, config_admin, config_scope
         db.init_schema()
+        paths.get_config_path().write_text(json.dumps({
+            'packages': {'enabled': 'sample'},
+        }))
         config.load(paths.get_config_path(), instance_path=root / 'instance/config.json')
         from app.plugins.loader import discover_packages
         from app.plugins import registry

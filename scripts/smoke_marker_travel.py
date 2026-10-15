@@ -51,6 +51,8 @@ STORAGE = Path(tempfile.mkdtemp(prefix="marker-travel-smoke-"))
 from app.core import paths  # noqa: E402
 
 paths.init(STORAGE)
+(STORAGE / "config.json").write_text(
+    '{"packages":{"enabled":"movement,party"}}', encoding="utf-8")
 
 from app.core import config, db  # noqa: E402
 

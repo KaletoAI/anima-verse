@@ -4,9 +4,9 @@
 Usage:  ./.venv/bin/python scripts/smoke_config_scope.py
 
 No server, no world DB. The storage root is a throwaway temp dir (set before
-any app import); the plugin packages are discovered so their config
-subsections are part of the schema (``config_schema.get_schema()`` injects
-them under ``skills``). Nothing under ``worlds/`` or ``instance/`` is read or
+any app import); two bundled public packages are explicitly enabled for the
+runtime schema checks. Installed manifest inventory supplies dormant settings'
+scope ownership too. Nothing under ``worlds/`` or ``instance/`` is read or
 written.
 
 WHY
@@ -77,8 +77,8 @@ C) ENDPOINT RULE (E5): every field of a plugin config subsection whose name
    is ``url``, ``*_url``, ``api_key``, ``*token*`` or ``endpoint*``, or whose
    type is ``password``, declares ``scope: instance``. A host address or a key
    is the server's business even when the package's other settings are
-   world settings. Covers every discovered package — repo, ``installed/`` and
-   the symlinked private packs (whose fix would belong in the packs repo).
+   world settings. Covers every inventoried package, whether or not enabled
+   in the temporary world.
 
 D) HAND TABLE for ``scope_of`` — each row derived from the four rules of the
    plan, not from running the code:
@@ -589,18 +589,15 @@ def part_b(schema, has_searx):
 # ---------------------------------------------------------------------------
 
 def part_c():
-    from app.plugins.registry import packages
-    pkgs = packages()
-    check(len(pkgs) > 0, "C: no plugin package discovered — the endpoint rule would be vacuous")
-    for pkg in pkgs:
-        for sub, sdef in (pkg.config_subsections or {}).items():
-            for fname, fdef in ((sdef or {}).get("fields") or {}).items():
-                if is_endpoint_field(fname, fdef):
-                    where = f"{pkg.id}: skills.{sub}.{fname}"
-                    if pkg.dir.is_symlink():
-                        where += " (private pack — fix in anima-verse-packs)"
-                    check((fdef or {}).get("scope") == "instance",
-                          f"C: {where} is an endpoint/key field without scope: instance")
+    from app.plugins.loader import manifest_config_schemas
+    schemas = manifest_config_schemas()
+    check(bool(schemas), "C: no package schema inventoried — the endpoint rule would be vacuous")
+    for subsection, sdef in schemas.items():
+        for fname, fdef in ((sdef or {}).get("fields") or {}).items():
+            if is_endpoint_field(fname, fdef):
+                where = f"skills.{subsection}.{fname}"
+                check((fdef or {}).get("scope") == "instance",
+                      f"C: {where} is an endpoint/key field without scope: instance")
 
 
 # ---------------------------------------------------------------------------
@@ -619,7 +616,7 @@ HAND_TABLE = [
     ("memory.max_messages", "world"),
     ("memory.chat_retention_days", "instance"),
     ("chat.chattiness", "world"),
-    ("packages.disabled", "world"),
+    ("packages.enabled", "world"),
     ("skills", "mixed"),
     ("skills.searx", "mixed"),
     ("skills.searx.url", "instance"),
@@ -1468,6 +1465,11 @@ def main():
     had_searx = part_p_before_discovery()
     part_2_before_discovery()
     from app.plugins.loader import discover_packages
+    from app.core import config
+    boot_world, boot_instance = _layers(Path(_TMP) / "boot")
+    _write(boot_world, {"packages": {"enabled": "searx,outfit_change"}})
+    _write(boot_instance, {})
+    config.load(boot_world, boot_instance)
     discover_packages()
     part_p_after_discovery(had_searx)
     from app.core.config_schema import get_schema

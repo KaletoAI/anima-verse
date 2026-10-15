@@ -122,6 +122,18 @@ from app.core import paths  # noqa: E402
 
 paths.init(_TMP)
 
+# Keep the public packages' schema coverage under default-deny activation.
+# These are the repository manifests that contribute config subsections.
+from app.core import config  # noqa: E402
+
+_CONFIG_PATH = Path(_TMP) / "config.json"
+_CONFIG_PATH.write_text(
+    '{"packages":{"enabled":"instagram,interact,markdown_writer,searx,'
+    'send_message,set_pose,talk_to,wet"}}',
+    encoding="utf-8",
+)
+config.load(_CONFIG_PATH)
+
 from app.core.config_schema import field_default  # noqa: E402
 
 # Paths whose consumer default deliberately differs from the schema default.

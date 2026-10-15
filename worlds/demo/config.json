@@ -65,6 +65,6 @@
     "enabled": false
   },
   "packages": {
-    "disabled": "nsfw_anatomy,intimacy,attraction"
+    "enabled": "act,consume_item,human,interact,movement,notify_user,party,rp,send_message,sleep,talk_to"
   }
 }

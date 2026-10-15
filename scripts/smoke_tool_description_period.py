@@ -4,8 +4,8 @@
 Usage:  ./.venv/bin/python scripts/smoke_tool_description_period.py
 
 No server, no network, no real world: a throwaway storage root (``paths.init``
-BEFORE the first app import) whose config switches EVERY discovered package
-on, so gated verbs (search, n8n, markdown writer, photo, …) load as well.
+BEFORE the first app import) whose config explicitly enables the public
+packages under test, including gated verbs (search, n8n, writer, photo, …).
 
 THE RULE (plan-befundrunde-2026-09-29, B4.4 + the binding review note)
 ---------------------------------------------------------------------------
@@ -47,10 +47,17 @@ os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="tool-desc-clips-")
 from app.core import paths  # noqa: E402
 paths.init(STORAGE)
 
-from app.plugins.loader import discover_packages  # noqa: E402
-_pkgs = discover_packages(force=True)
-(STORAGE / "config.json").write_text(json.dumps(
-    {"skills": {p.id: {"enabled": True} for p in _pkgs}}), encoding="utf-8")
+# Pin public fixture packages before any runtime discovery takes its snapshot.
+_PACKAGE_IDS = (
+    "act", "cat", "consume_item", "decency_exempt", "human", "instagram",
+    "interact", "knowledge", "markdown_writer", "movement", "n8n",
+    "notify_user", "party", "retrospect", "romantic_interests", "rp", "searx",
+    "send_message", "set_pose", "sleep", "take_photo", "talk_to", "undress", "wet",
+)
+(STORAGE / "config.json").write_text(json.dumps({
+    "packages": {"enabled": ",".join(_PACKAGE_IDS)},
+    "skills": {package_id: {"enabled": True} for package_id in _PACKAGE_IDS},
+}), encoding="utf-8")
 
 from app.core import config, db  # noqa: E402
 config.load(STORAGE / "config.json")
