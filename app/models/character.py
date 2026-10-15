@@ -3269,14 +3269,29 @@ def _get_rembg_session():
     return _REMBG_SESSION
 
 
+# rembg/u2net leaves near-transparent background specks; ignore alpha <= 16 (~6%).
+OUTFIT_TRIM_ALPHA_THRESHOLD = 16
+
+
+def trim_transparent_sides(img):
+    """Crop horizontal alpha bounds while preserving original pixels and height."""
+    if img.mode != "RGBA":
+        return img
+    alpha = img.getchannel("A")
+    bbox = alpha.point(lambda value: 255 if value > OUTFIT_TRIM_ALPHA_THRESHOLD else 0).getbbox()
+    if bbox:
+        return img.crop((bbox[0], 0, bbox[2], img.height))
+    return img
+
+
 def postprocess_outfit_image(image_path: Path) -> Path:
-    """Entfernt Hintergrund (rembg) und schneidet transparente Raender links/rechts ab.
+    """Remove the background (rembg) and trim transparent margins on the sides.
 
     Args:
-        image_path: Pfad zum Outfit-Bild.
+        image_path: Path to the outfit image.
 
     Returns:
-        Pfad zum verarbeiteten Bild (ggf. neuer Name als .png).
+        Path to the processed image (possibly renamed to .png).
     """
     try:
         from rembg import remove
@@ -3285,28 +3300,23 @@ def postprocess_outfit_image(image_path: Path) -> Path:
         session = _get_rembg_session()
         img_data = image_path.read_bytes()
         result_data = remove(img_data, session=session)
-        # Als PNG speichern
+        # Save as PNG
         png_path = image_path.with_suffix(".png")
         png_path.write_bytes(result_data)
 
-        # Transparenten Rand links/rechts abschneiden
+        # Trim transparent margins on the sides
         try:
             _img = Image.open(png_path)
-            if _img.mode == "RGBA":
-                _alpha = _img.getchannel("A")
-                _bbox = _alpha.getbbox()  # (left, top, right, bottom)
-                if _bbox:
-                    _orig_w, _orig_h = _img.size
-                    # Nur links/rechts croppen, Hoehe beibehalten
-                    _crop_box = (_bbox[0], 0, _bbox[2], _orig_h)
-                    _cropped = _img.crop(_crop_box)
-                    _cropped.save(png_path)
-                    logger.info("Outfit-Bild gecroppt: %dx%d -> %dx%d",
-                                _orig_w, _orig_h, _cropped.size[0], _cropped.size[1])
+            _cropped = trim_transparent_sides(_img)
+            if _cropped is not _img:
+                _orig_w, _orig_h = _img.size
+                _cropped.save(png_path)
+                logger.info("Outfit-Bild gecroppt: %dx%d -> %dx%d",
+                            _orig_w, _orig_h, _cropped.size[0], _cropped.size[1])
         except Exception as _crop_err:
             logger.warning("Outfit-Crop fehlgeschlagen: %s", _crop_err)
 
-        # Original loeschen wenn anderer Name
+        # Delete the original if the name changed
         if image_path != png_path and image_path.exists():
             image_path.unlink()
 
