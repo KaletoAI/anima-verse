@@ -154,7 +154,7 @@ async def _serve(scope, receive, send) -> None:
                         next_beat = clock() + sync_topics.HEARTBEAT_S
                         continue
                 if clock() >= next_beat:
-                    await body(b": ping\n\n")
+                    await body(b"event: ping\ndata: {}\n\n")
                     next_beat = clock() + sync_topics.HEARTBEAT_S
 
         async def watch_disconnect() -> None:

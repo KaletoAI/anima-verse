@@ -91,7 +91,7 @@ class Call:
         body = message.get('body', b'')
         if ((self.block == 'header' and message['type'] == 'http.response.start')
                 or (self.block == 'second' and self.bodies == 2)
-                or (self.block == 'ping' and body.startswith(b': ping'))
+                or (self.block == 'ping' and body.startswith(b'event: ping'))
                 or (self.block == 'bye' and body.startswith(b'event: bye'))):
             self.blocked.set()
             await self.never.wait()
@@ -102,7 +102,7 @@ class Call:
 
     def data(self):
         return [json.loads(m['body'].split(b'data: ', 1)[1]) for m in self.bodies_list()
-                if b'data: ' in m.get('body', b'') and b'event: bye' not in m['body']]
+                if b'data: ' in m.get('body', b'') and b'event: ' not in m['body']]
 
     async def until(self, predicate, seconds=1):
         async def wait():
@@ -225,7 +225,7 @@ async def run_case(version, name):
             assert b'retry: 5000\n' in c.bodies_list()[0]['body']
             assert c.bodies_list()[0]['more_body'] is True and not c.task.done()
         elif name == 'heartbeat':
-            await c.until(lambda: any(m['body'] == b': ping\n\n' for m in c.bodies_list()))
+            await c.until(lambda: any(m['body'] == b'event: ping\ndata: {}\n\n' for m in c.bodies_list()))
         elif name == 'batch':
             b.notify('presence', to=b.Avatar('Ava'))
             await asyncio.wait_for(batch_entered.wait(), 1)

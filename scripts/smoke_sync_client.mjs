@@ -68,9 +68,9 @@ function fixture() {
     onopen = null;
     onerror = null;
     onmessage = null;
-    listener = null;
-    addEventListener(_, fn) {
-      this.listener = fn;
+    listeners = new Map();
+    addEventListener(type, fn) {
+      this.listeners.set(type, fn);
     }
     close() {
       this.readyState = 2;
@@ -83,7 +83,7 @@ function fixture() {
       this.onmessage?.({ data: JSON.stringify(o) });
     }
     bye() {
-      this.listener?.();
+      this.listeners.get("bye")?.();
     }
     fail(closed) {
       this.readyState = closed ? 2 : 0;
@@ -181,16 +181,17 @@ await test("dirty", async (f) => {
 await test("intervals", async (f) => {
   f.sub();
   f.source().open();
+  f.source().msg({ resync: true });
   await f.advance(5e3);
   f.core.tick();
-  assert.deepEqual(f.starts, [0]);
+  assert.deepEqual(f.starts, [0, 5000]);
   await f.advance(15e3);
   f.core.tick();
   await f.advance(100);
   f.source().fail(false);
   await f.advance(4900);
   f.core.tick();
-  assert.deepEqual(f.starts, [0, 2e4, 25e3]);
+  assert.deepEqual(f.starts, [0, 5000, 25000]);
 });
 await test("budget", async (f) => {
   f.sub(S.worldmap3d);
@@ -204,11 +205,12 @@ await test("budget", async (f) => {
 await test("one_endpoint", async (f) => {
   f.sub();
   f.source().open();
+  f.source().msg({ resync: true });
   await f.advance(1e4);
   f.source().msg({ topics: ["presence", "scene"], resync: false });
   await f.advance(19999);
   f.core.tick();
-  assert.deepEqual(f.starts, [0, 1e4]);
+  assert.deepEqual(f.starts, [0, 5000, 1e4]);
 });
 await test("trailing_consumed", async (f) => {
   f.sub(S.worldmap3d);
@@ -360,7 +362,8 @@ await test("restart_pending_retry", async (f) => {
   old.open();
   old.bye();
   current.open();
-  await f.advance(12e4);
+  current.msg({ resync: true });
+  for (let i = 0; i < 8; i++) { current.listeners.get("ping")(); await f.advance(15000); }
   assert.equal(f.sources.length, 2);
   assert.equal(f.hub.connected(), true);
   current.onmessage({ data: "invalid" });
@@ -396,7 +399,8 @@ await test("bye_restart", async f => {
   f.source().bye();
   f.hub.restart();
   f.source().open();
-  await f.advance(120000);
+  f.source().msg({ resync: true });
+  for (let i = 0; i < 8; i++) { f.source().listeners.get("ping")(); await f.advance(15000); }
   assert.equal(f.sources.length, 2);
   assert.equal(f.hub.connected(), true);
 });
@@ -412,6 +416,61 @@ await test("apply_after_gen", async f => {
   assert.deepEqual(applied, []);
   await f.advance(3000);
   assert.deepEqual(applied, [2]);
+});
+// NEU review oracles: restart clears replay synchronously; headers are insufficient.
+await test("restart_generation", async f => {
+  f.sub(S.self);
+  await f.advance(100);
+  f.hub.restart();
+  assert.equal(f.hub.generation(), 1);
+  const replay = [];
+  f.sub(S.self, x => replay.push(x));
+  assert.deepEqual(replay, []);
+  await f.advance(5000);
+  assert.deepEqual(replay, [2]);
+});
+// NEU: a request from the previous identity never delivers after restart.
+await test("restart_inflight", async f => {
+  f.sub(S.self);
+  f.hub.restart();
+  await f.advance(100);
+  assert.deepEqual(f.data, []);
+  await f.advance(5000);
+  assert.deepEqual(f.data, [[2, null]]);
+});
+const authGate = readFileSync("frontend/src/lib/AuthGate.tsx", "utf8");
+assert.match(authGate, /onSuccess=\{\(u\) => \{ syncHub\(\)\.restart\(\); setUser\(u\)/);
+await test("delivery_deadline", async f => {
+  f.sub();
+  const old = f.source();
+  old.open();
+  assert.equal(f.hub.connected(), false);
+  old.msg({ resync: true });
+  assert.equal(f.hub.connected(), true);
+  await f.advance(34000);
+  old.open(); // Headers alone must not extend the last-frame deadline.
+  await f.advance(999);
+  assert.equal(f.hub.connected(), true);
+  await f.advance(1);
+  assert.equal(f.hub.connected(), false);
+  assert.equal(old.readyState, 2);
+  await f.advance(5000);
+  assert.equal(f.sources.length, 2);
+  await f.advance(35000 + 10000);
+  assert.equal(f.sources.length, 3);
+});
+// NEU: [0,60000) has at most 60000/oldInterval starts under 100ms signals.
+for (const [key, spec] of Object.entries(S)) await test("sustained_" + key, async f => {
+  assert.ok(spec.minSpacingMs >= spec.intervalMs);
+  f.sub(spec);
+  f.source().msg({ resync: true });
+  for (let t = 100; t < 60000; t += 100) {
+    await f.advance(100);
+    f.source().listeners.get("ping")();
+    f.source().msg({ topics: spec.topics });
+    f.core.tick();
+  }
+  assert.ok(f.starts.length <= Math.ceil(60000 / spec.intervalMs), JSON.stringify(f.starts));
 });
 const main = readFileSync("client3d/src/main.ts", "utf8");
 assert.doesNotMatch(main, /setInterval\([^;]*WORLDMAP_POLL_MS/);

@@ -968,6 +968,6 @@ def _rules_changed(old_rules, new_rules) -> None:
                     to = sync_topics.AtLocation(location)
                 else:
                     to = sync_topics.Everyone()
-                sync_topics.notify("notices", to=to)
+                sync_topics.notify(("notices", "scene", "world"), to=to)
     except Exception as e:
         logger.debug("rule sync failed: %s", e)

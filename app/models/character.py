@@ -2407,6 +2407,7 @@ def save_character_current_room(character_name: str, room_id: str,
         from app.core import sync_topics
         if stored:
             sync_topics.changed_at(character_name, cur_loc)
+            sync_topics.avatars([character_name], "notices")
     # state_history event on a real room change — otherwise room changes stay
     # invisible to the diary/activity evaluation (only the location used to be tracked).
     if room_id and room_id != old_room:
@@ -3646,7 +3647,7 @@ def add_character_image(character_name: str, image_filename: str) -> bool:
             changed = save_character_profile(character_name, profile)
     if changed:
         from app.core import sync_topics
-        sync_topics.changed_at(character_name)
+        sync_topics.changed_at(character_name, topics=("presence", "self"))
     return True
 
 
@@ -3662,7 +3663,7 @@ def set_character_profile_image(character_name: str, image_filename: str) -> boo
             stored = save_character_profile(character_name, profile)
         from app.core import sync_topics
         if stored:
-            sync_topics.changed_at(character_name)
+            sync_topics.changed_at(character_name, topics=("presence", "self"))
         return True
     return False
 
@@ -4658,7 +4659,7 @@ def delete_character_image(character_name: str, image_filename: str) -> bool:
 
     if changed:
         from app.core import sync_topics
-        sync_topics.changed_at(character_name)
+        sync_topics.changed_at(character_name, topics=("presence", "self"))
     # Delete the metadata file.
     meta_path = _get_image_meta_path(character_name, image_filename)
     if meta_path.exists():

@@ -620,6 +620,6 @@ def _events_changed(locations) -> None:
     try:
         from app.core import sync_topics
         for loc in set(locations):
-            sync_topics.notify("notices", to=sync_topics.AtLocation(loc) if loc else sync_topics.Everyone())
+            sync_topics.notify(("notices", "scene", "world"), to=sync_topics.AtLocation(loc) if loc else sync_topics.Everyone())
     except Exception as e:
         logger.debug("event sync failed: %s", e)

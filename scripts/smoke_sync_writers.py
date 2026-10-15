@@ -12,7 +12,7 @@ never b at its destination; arrival then reaches a/b. Utterance reaches a
 with scene. Outfit reaches a with presence+self. Party reaches a with
 presence+notices. Private npc patches reach nobody; private a reaches only
 a with self. Public npc patches reach a with presence+self. Delete,
-model_checkpoint and profile_image reach only a with presence. The twin
+model_checkpoint reaches a with presence; profile_image reaches a with presence+self. The twin
 world_dev_patch follows the same private/public rule. Inventory is NEU:
 the old writers have no sync calls. Helper failures are NEU because the
 helpers did not exist; injected lookup/notification failures must escape
@@ -29,6 +29,7 @@ A repeated model checkpoint is a no-op and must produce no second signal.
 import ast
 from contextlib import contextmanager
 import os
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -404,7 +405,7 @@ def behaviour(case):
     elif case == "profile_image":
         (ch.get_character_images_dir("npc") / "demo.png").write_bytes(b"demo")
         assert ch.set_character_profile_image("npc", "demo.png")
-        expect(conns, ["presence"])
+        expect(conns, ["presence", "self"])
     elif case == "model_checkpoint":
         directory = Path(TEMP.name) / case / "model"
         stage = Path(TEMP.name) / case / "stage"
@@ -434,7 +435,7 @@ def behaviour(case):
         with patch.object(party_engine, "get_party_of", side_effect=RuntimeError("demo party")):
             assert sync_topics.party_of("npc") == sync_topics.Avatars(())
         with patch.object(sync_topics, "note_location", side_effect=RuntimeError("demo binding")):
-            sync_topics.moved("npc", loc["X"], loc["Y"])
+            sync_topics.moved("a", loc["X"], loc["Y"])
         with patch.object(sync_topics, "notify", side_effect=RuntimeError("demo notify")):
             sync_topics.moved("npc", loc["X"], loc["Y"])
             sync_topics.changed_at("npc", loc["X"])
@@ -512,12 +513,12 @@ def behaviour_part3(case):
     elif case.startswith("event_"):
         events.add_event("demo", location_id=loc["Y"] if case == "event_local" else None)
         if case == "event_local":
-            expect(conns, b=["notices"])
+            expect(conns, b=["notices", "scene", "world"])
         else:
-            expect(conns, ["notices"], ["notices"], ["notices"])
+            expect(conns, ["notices", "scene", "world"], ["notices", "scene", "world"], ["notices", "scene", "world"])
     elif case == "rule_local":
         rules.save_rules([{"id": "demo", "target": {"scope": "location", "location_id": loc["Z"]}}])
-        expect(conns, c=["notices"])
+        expect(conns, c=["notices", "scene", "world"])
     elif case == "force_status":
         # NEU: clearing an admin-forced activity changes presence and self.
         profile = ch.get_character_profile("npc")
@@ -589,16 +590,16 @@ def scope_changes():
     rules.save_rules([{"id": "demo", "target": {"scope": "location", "location_id": loc["X"]}}])
     drain(conns)
     rules.save_rules([{"id": "demo", "target": {"scope": "location", "location_id": loc["Y"]}}])
-    expect(conns, ["notices"], ["notices"])
+    expect(conns, ["notices", "scene", "world"], ["notices", "scene", "world"])
     rules.save_rules([])
-    expect(conns, b=["notices"])
+    expect(conns, b=["notices", "scene", "world"])
     event = events.add_event("demo", location_id=loc["X"])
     drain(conns)
     event["location_id"] = loc["Y"]
     assert events._update_event(event)
-    expect(conns, ["notices"], ["notices"])
+    expect(conns, ["notices", "scene", "world"], ["notices", "scene", "world"])
     assert events._delete_event_row(event["id"])
-    expect(conns, b=["notices"])
+    expect(conns, b=["notices", "scene", "world"])
     nid = notifications.create_notification("npc", "demo", metadata={"to": "a"})
     drain(conns)
     assert notifications.delete_notification(nid)
@@ -629,7 +630,7 @@ def rule_editor_scope():
             target["rooms"] = rooms
         rules.save_rules([{"id": "demo", "name": "demo", "type": "block",
                            "condition": "", "message": "demo", "target": target}])
-        expect(conns, ["notices"])
+        expect(conns, ["notices", "scene", "world"])
 
 
 def rule_character_scope():
@@ -642,12 +643,12 @@ def rule_character_scope():
     rule = {"id": "demo", "character": "a",
             "target": {"scope": "location", "location_id": loc["Y"]}}
     rules.save_rules([rule])
-    expect(conns, ["notices"])
+    expect(conns, ["notices", "scene", "world"])
     rule["message"] = "changed"
     rules.save_rules([rule])
-    expect(conns, ["notices"])
+    expect(conns, ["notices", "scene", "world"])
     rules.save_rules([])
-    expect(conns, ["notices"])
+    expect(conns, ["notices", "scene", "world"])
 
 
 def relationship_mixed_decay():
@@ -680,14 +681,80 @@ def relationship_mixed_decay():
     assert npc_pair["strength"] == 19
 
 
+def review_endpoint_gaps():
+    """NEU: hand-derived endpoint keys from actual received writer topics.
+
+    Rule/event => scene, both maps, notices, badges; own movement => notices;
+    relationship => others for the pair only; image => self for the owner.
+    """
+    source = (ROOT / "packages/player-ui/src/syncEndpoints.ts").read_text()
+    endpoints = {key: set(re.findall(r"'([^']+)'", topics))
+                 for key, topics in re.findall(r"(\w+): \{[^\n]*topics: \[([^\]]+)\]", source)}
+    assert len(endpoints) == 9
+    def keys(conn):
+        topics = drain([conn])[0]
+        return {key for key, wanted in endpoints.items() if topics & wanted}
+    loc, conns = fixture("review_endpoint_gaps")
+    from app.models import rules, events, relationship, account
+    expected = {"scene", "worldmapPlayer", "worldmap3d", "notices", "badges"}
+    rules.save_rules([{"id": "demo", "character": "a"}])
+    assert keys(conns[0]) == expected
+    assert keys(conns[1]) == keys(conns[2]) == set()
+    event = events.add_event("demo", location_id=loc["X"])
+    assert keys(conns[0]) == expected
+    assert keys(conns[1]) == keys(conns[2]) == set()
+    assert events._delete_event_row(event["id"])
+    assert keys(conns[0]) == expected
+    drain(conns)
+    ch.save_character_current_location("a", loc["Y"])
+    assert keys(conns[0]) == set(endpoints)
+    drain(conns)
+    room = world.add_room(loc["Y"], "demo room", sync_world=True)["id"]
+    drain(conns)
+    ch.save_character_current_room("a", room)
+    assert keys(conns[0]) == set(endpoints)
+    assert "notices" not in keys(conns[1])
+    drain(conns)
+    relationship.record_interaction("a", "b", "demo")
+    pair = {"scene", "others", "self", "belongings", "mind", "worldmapPlayer", "worldmap3d"}
+    assert keys(conns[0]) == keys(conns[1]) == pair
+    assert keys(conns[2]) == set()
+    images = ch.get_character_images_dir("a")
+    images.mkdir(parents=True, exist_ok=True)
+    (images / "demo.png").write_bytes(b"demo")
+    assert ch.set_character_profile_image("a", "demo.png")
+    assert keys(conns[0]) == pair
+    drain(conns)
+    with patch("app.core.users.get_user_by_id", return_value={"role": "admin", "settings": {"active_character": "a"}, "allowed_characters": []}):
+        assert account.get_active_character_for_user("demo") == "a"
+        admin_conn = sync_topics.register("demo", "demo", "", "")
+        assert sync_topics.reconcile(admin_conn)
+        assert admin_conn.binding()[:2] == ("a", loc["Y"])
+        drain([admin_conn])
+        sync_topics.notify("self", to=sync_topics.Avatar("a"))
+        assert keys(admin_conn) == {"self", "belongings", "mind"}
+        sync_topics.unregister(admin_conn)
+        drain(conns)
+    with patch("app.core.users.get_user_by_id", return_value={"role": "user", "settings": {"active_character": "npc"}, "allowed_characters": ["a"]}):
+        assert account.get_active_character_for_user("demo") == "a"
+    with patch("app.core.users.get_user_by_id", return_value={"role": "admin", "settings": {}, "allowed_characters": []}), patch.object(account, "get_user_profile", side_effect=AssertionError("shared fallback")):
+        assert account.get_active_character_for_user("demo") == ""
+    assert len(sync_topics._move_locks) == 64
+    with patch.object(sync_topics, "_current_location", side_effect=AssertionError("unbound DB read")):
+        for i in range(1000):
+            assert sync_topics._refresh_binding(f"demo-unbound-{i}")
+    assert len(sync_topics._move_locks) == 64
+
+
 if __name__ == "__main__":
     failures = []
     cases = "move own_move wilderness room travel_start utterance outfit party private_profile public_profile delete model_checkpoint profile_image world_dev_patch helper_failures stale_move_hook failed_location failed_wake partial_interaction_end failed_cancel inventory_self_check inventory".split()
     cases += ["part3_" + c for c in "notification mark_all_global phone inventory room_item room_item_cold room_item_hidden world_admin background_skill terrain height event_local event_global rule_local mind force_status".split()]
     cases += ["commit_failures", "scope_changes", "rule_editor_scope", "rule_character_scope", "relationship_mixed_decay"]
+    cases += ["review_endpoint_gaps"]
     for case in cases:
         try:
-            if case in ("commit_failures", "scope_changes", "rule_editor_scope", "rule_character_scope", "relationship_mixed_decay"):
+            if case in ("review_endpoint_gaps", "commit_failures", "scope_changes", "rule_editor_scope", "rule_character_scope", "relationship_mixed_decay"):
                 globals()[case]()
             elif case.startswith("part3_"):
                 behaviour_part3(case[6:])

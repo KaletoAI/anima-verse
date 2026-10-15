@@ -322,7 +322,7 @@ def _save_relationship(rel: Dict[str, Any]):
     if changed:
         try:
             from app.core import sync_topics
-            sync_topics.avatars([a, b], "self")
+            sync_topics.avatars([a, b], ("self", "presence"))
         except Exception as e:
             logger.debug("relationship sync failed: %s", e)
 

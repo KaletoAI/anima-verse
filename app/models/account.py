@@ -311,8 +311,12 @@ def get_active_character_for_user(user_id: str) -> str:
     user = get_user_by_id(user_id)
     if not user:
         return ""
-    active = _active_for_user(user)
-    return active if active in (user.get("allowed_characters") or []) else ""
+    settings = user.get("settings") or {}
+    active = settings.get("active_character") or settings.get("current_character") or ""
+    allowed = user.get("allowed_characters") or []
+    if active and (user.get("role") == "admin" or active in allowed):
+        return active
+    return allowed[0] if allowed else ""
 
 
 def set_active_character(character_name: str):

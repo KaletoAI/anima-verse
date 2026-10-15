@@ -135,7 +135,7 @@ class Connection:
 
 _conns: List[Connection] = []
 _lock = threading.Lock()
-_move_locks: dict[str, threading.Lock] = {}
+_move_locks = tuple(threading.Lock() for _ in range(64))
 _reaper: Optional[threading.Thread] = None
 
 
@@ -243,15 +243,22 @@ def reconcile(conn: Connection) -> bool:
     """Bring the binding in line with the DB: read the revision, read the DB,
     compare-and-set; a binding that moved meanwhile means READ AGAIN (fresh
     revision, fresh DB), never overwrite. Runs in a thread (DB reads)."""
-    from app.models.account import get_active_character_for_user
-    from app.models.character import get_character_current_location
-    for _ in range(RECONCILE_TRIES):
-        rev = conn.binding()[2]
-        avatar = get_active_character_for_user(conn.user_id)
-        location = (get_character_current_location(avatar) if avatar else "") or ""
-        if rebind(conn, avatar, location, expect_rev=rev):
-            return True
-    logger.warning("reconcile(%s): binding kept moving, next check retries", conn.user_id)
+    try:
+        from app.models.account import get_active_character_for_user
+        from app.models.character import get_character_current_location
+        for _ in range(RECONCILE_TRIES):
+            rev = conn.binding()[2]
+            avatar = get_active_character_for_user(conn.user_id)
+            move_lock = _move_locks[hash(avatar) % len(_move_locks)]
+            # Lock order: character stripe -> connection lock, as in _refresh_binding.
+            # Each retry uses the stripe of the avatar read in that attempt.
+            with move_lock:
+                location = (get_character_current_location(avatar) if avatar else "") or ""
+                if rebind(conn, avatar, location, expect_rev=rev):
+                    return True
+        logger.warning("reconcile(%s): binding kept moving, next check retries", conn.user_id)
+    except Exception as e:
+        logger.warning("reconcile(%s) failed: %s", conn.user_id, e)
     return False
 
 
@@ -307,17 +314,13 @@ def _current_location(character: str) -> str:
 
 
 def _refresh_binding(character: str) -> bool:
-    """Read committed location serially; never trust a delayed writer's target.
-
-    _lock only protects move-lock creation and is released before acquiring it.
-    Hold only the character move lock during the DB read. The sole nested
-    order is move lock -> bus/connection locks inside note_location; no caller
-    may acquire a move lock while holding a bus or connection lock.
-    """
+    """Refresh subscribed bindings under a bounded stripe, outside bus locks."""
     try:
-        with _lock:
-            move_lock = _move_locks.setdefault(character, threading.Lock())
+        move_lock = _move_locks[hash(character) % len(_move_locks)]
+        # Lock order: character stripe -> connection lock, as in reconcile.
         with move_lock:
+            if character not in bound_avatars():
+                return True
             fresh = _current_location(character)
             note_location(character, fresh)
         return True
@@ -333,6 +336,7 @@ def moved(character: str, from_id: str, to_id: str) -> None:
             return
         notify("presence", to=[AtLocation(from_id or ""), AtLocation(to_id or ""),
                                Avatar(character)])
+        notify("notices", to=Avatar(character))
     except Exception as e:
         logger.warning("moved(%s) failed: %s", character, e)
 

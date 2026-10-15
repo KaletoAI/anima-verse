@@ -3,7 +3,7 @@ export interface EventSourceLike {
   onopen: ((e: unknown) => void) | null;
   onerror: ((e: unknown) => void) | null;
   onmessage: ((e: { data: string }) => void) | null;
-  addEventListener(type: 'bye', fn: () => void): void;
+  addEventListener(type: 'bye' | 'ping', fn: () => void): void;
   close(): void;
   readonly readyState: number;
 }
@@ -29,25 +29,35 @@ export function createSyncHub(deps: {
     state();
     for (const l of [...listeners]) l.fn();
   };
+  let deliveryToken = 0;
+  function armDeadline(s: EventSourceLike) {
+    const token = ++deliveryToken;
+    deps.setTimeout(() => {
+      if (token !== deliveryToken || source !== s) return;
+      source = null;
+      s.close();
+      setConnected(false);
+      scheduleRetry();
+    }, 35_000);
+  }
   function start() {
     if (stopped || source || retryPending) return;
     let s: EventSourceLike;
     try { s = deps.open(deps.url ?? '/events/sync'); }
     catch { scheduleRetry(); return; }
     source = s;
-    s.onopen = () => {
-      if (source !== s) return;
-      retryMs = 5000;
-      setConnected(true);
-    };
+    armDeadline(s);
     s.onmessage = e => {
       if (source !== s) return;
       let frame: { topics?: unknown; resync?: unknown };
       try { frame = JSON.parse(e.data); } catch { return; }
       if (!frame || typeof frame !== 'object') return;
+      armDeadline(s);
       if (frame.resync === true) {
         if (seenResync) invalidate();
         else { seenResync = true; for (const l of [...listeners]) l.fn(); }
+        retryMs = 5000;
+        setConnected(true);
       } else if (Array.isArray(frame.topics)) {
         const topics = frame.topics;
         for (const l of [...listeners]) if (l.topics.some(t => topics.includes(t))) l.fn();
@@ -62,6 +72,9 @@ export function createSyncHub(deps: {
         scheduleRetry();
       }
     };
+    s.addEventListener('ping', () => {
+      if (source === s) armDeadline(s);
+    });
     s.addEventListener('bye', () => {
       if (source !== s) return;
       stopped = true; retryToken++; retryPending = false;
@@ -91,6 +104,7 @@ export function createSyncHub(deps: {
     onState(fn) { states.add(fn); return () => { states.delete(fn); }; },
     start,
     restart() {
+      invalidate();
       stopped = false; retryToken++; retryPending = false; retryMs = 5000;
       const old = source; source = null; old?.close();
       setConnected(false); start();
