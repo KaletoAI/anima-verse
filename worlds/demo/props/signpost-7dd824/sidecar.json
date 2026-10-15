@@ -1,0 +1,97 @@
+{
+  "name": "Signpost",
+  "category": "decoration",
+  "model_variants": [
+    {
+      "stem": "model",
+      "active": true,
+      "description": "Hölzerner Wegweiser mit lesbaren grünen Pfeilschildern Hogwarts, Hogsmeade und Bootshaus.",
+      "width_m": 2.86,
+      "depth_m": 0.55,
+      "height_m": 2.92,
+      "dims_estimated": false
+    }
+  ],
+  "sway_factor": 0.0,
+  "tags": [
+    "hogwarts-demo",
+    "self-authored"
+  ],
+  "created_at": "2026-10-15T15:13:43+00:00",
+  "source": "manual",
+  "prompt": "",
+  "mount": "floor",
+  "bbox": [
+    2.86,
+    2.92,
+    0.54724
+  ],
+  "measured": {
+    "format": "glb",
+    "file_bytes": 144912,
+    "objects": 1,
+    "tris": 3016,
+    "verts": 3576,
+    "materials": [
+      "cream",
+      "gold",
+      "green",
+      "wood"
+    ],
+    "images": [
+      {
+        "name": "cream",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "gold",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "green",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "wood",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 0,
+    "bone_names": [],
+    "mixamo_bones": 0,
+    "finger_bones": 0,
+    "finger_bones_weighted": 0,
+    "finger_verts": 0,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      2.86,
+      0.5472,
+      2.92
+    ],
+    "center_xy": [
+      0.0,
+      0.0
+    ],
+    "min_z": 0.0,
+    "at": "2026-10-15T15:13:44+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "name": "Lantern",
+  "category": "decoration",
+  "model_variants": [
+    {
+      "stem": "model",
+      "active": true,
+      "description": "Kleine tragbare Laterne mit warmen Scheiben, schwarzem Metallrahmen, Pyramidenhaube und Tragering; ohne exportierte Lichtquelle.",
+      "width_m": 0.3,
+      "depth_m": 0.3,
+      "height_m": 0.6,
+      "dims_estimated": false
+    }
+  ],
+  "sway_factor": 0.0,
+  "tags": [
+    "hogwarts-demo",
+    "self-authored"
+  ],
+  "created_at": "2026-10-15T15:13:41+00:00",
+  "source": "manual",
+  "prompt": "",
+  "mount": "floor",
+  "bbox": [
+    0.3,
+    0.599,
+    0.3
+  ],
+  "measured": {
+    "format": "glb",
+    "file_bytes": 35580,
+    "objects": 1,
+    "tris": 392,
+    "verts": 756,
+    "materials": [
+      "black",
+      "gold",
+      "lamp"
+    ],
+    "images": [
+      {
+        "name": "black",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "gold",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "lamp",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 0,
+    "bone_names": [],
+    "mixamo_bones": 0,
+    "finger_bones": 0,
+    "finger_bones_weighted": 0,
+    "finger_verts": 0,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      0.3,
+      0.3,
+      0.599
+    ],
+    "center_xy": [
+      0.0,
+      0.0
+    ],
+    "min_z": 0.0,
+    "at": "2026-10-15T15:13:42+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}

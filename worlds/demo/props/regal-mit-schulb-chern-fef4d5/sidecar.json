@@ -1,0 +1,73 @@
+{
+  "name": "Regal mit Schulbüchern",
+  "category": "furniture",
+  "model_variants": [
+    {
+      "stem": "model",
+      "active": true,
+      "description": "Regal mit Schulbüchern; eigenständig modellierte Holz-/Steinmöbel, eingebettete eigene Textur.",
+      "width_m": 1.3,
+      "depth_m": 0.42,
+      "height_m": 1.9,
+      "dims_estimated": false
+    }
+  ],
+  "sway_factor": 0.0,
+  "tags": [
+    "hogwarts-demo",
+    "self-authored"
+  ],
+  "created_at": "2026-10-15T15:13:49+00:00",
+  "source": "manual",
+  "prompt": "",
+  "mount": "floor",
+  "bbox": [
+    1.3,
+    1.9,
+    0.42
+  ],
+  "measured": {
+    "format": "glb",
+    "file_bytes": 30652,
+    "objects": 1,
+    "tris": 372,
+    "verts": 744,
+    "materials": [
+      "cream",
+      "green",
+      "red",
+      "wood"
+    ],
+    "images": [
+      {
+        "name": "Image_0",
+        "size": [
+          64,
+          64
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 0,
+    "bone_names": [],
+    "mixamo_bones": 0,
+    "finger_bones": 0,
+    "finger_bones_weighted": 0,
+    "finger_verts": 0,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      1.3,
+      0.42,
+      1.9
+    ],
+    "center_xy": [
+      0.0,
+      0.0
+    ],
+    "min_z": 0.0,
+    "at": "2026-10-15T15:13:50+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}

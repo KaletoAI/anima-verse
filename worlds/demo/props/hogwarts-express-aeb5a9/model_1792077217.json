@@ -1,0 +1,32 @@
+{
+  "created_at": "2026-10-15T15:13:37+00:00",
+  "source": "areas",
+  "format": "glb",
+  "rig": "none",
+  "tier": "full",
+  "source_file": "model_1792077216.glb",
+  "areas_mode": "adopt",
+  "areas": [
+    {
+      "id": "glass_1",
+      "kind": "glass",
+      "size_m": [
+        3.1,
+        60.78511
+      ],
+      "normal": [
+        0.0,
+        1.0,
+        0.00012
+      ],
+      "source": "adopt",
+      "faces": 552,
+      "centroid": [
+        0.0,
+        3.11913,
+        -9.92391
+      ]
+    }
+  ],
+  "areas_run_at": "2026-10-15T15:13:37+00:00"
+}

@@ -1,0 +1,88 @@
+{
+  "name": "Bench",
+  "category": "decoration",
+  "model_variants": [
+    {
+      "stem": "model",
+      "active": true,
+      "description": "Eichenholzbank mit vier Sitzlatten, Rückenlehne, grünen Metallfüßen und Armstützen.",
+      "width_m": 1.9,
+      "depth_m": 0.71,
+      "height_m": 1.2,
+      "dims_estimated": false
+    }
+  ],
+  "sway_factor": 0.0,
+  "tags": [
+    "hogwarts-demo",
+    "self-authored"
+  ],
+  "created_at": "2026-10-15T15:13:40+00:00",
+  "source": "manual",
+  "prompt": "",
+  "mount": "floor",
+  "bbox": [
+    1.9,
+    1.2029,
+    0.71
+  ],
+  "measured": {
+    "format": "glb",
+    "file_bytes": 47356,
+    "objects": 1,
+    "tris": 608,
+    "verts": 1068,
+    "materials": [
+      "gold",
+      "green",
+      "oak"
+    ],
+    "images": [
+      {
+        "name": "gold",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "green",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "oak",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 0,
+    "bone_names": [],
+    "mixamo_bones": 0,
+    "finger_bones": 0,
+    "finger_bones_weighted": 0,
+    "finger_verts": 0,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      1.9,
+      0.71,
+      1.2029
+    ],
+    "center_xy": [
+      0.0,
+      0.0
+    ],
+    "min_z": 0.0,
+    "at": "2026-10-15T15:13:41+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}

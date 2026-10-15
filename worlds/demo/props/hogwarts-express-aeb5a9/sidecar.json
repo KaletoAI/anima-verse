@@ -1,0 +1,140 @@
+{
+  "name": "Hogwarts Express",
+  "category": "vehicle",
+  "model_variants": [
+    {
+      "stem": "model",
+      "active": true,
+      "description": "Stationärer karminroter Hogwarts Express: Dampflokomotive 5972, offener Kohletender und zwei Reisezugwagen; Längsachse lokales glTF-Z, kein Fahrmechanismus.",
+      "width_m": 3.67,
+      "depth_m": 72.44,
+      "height_m": 4.56,
+      "dims_estimated": false
+    }
+  ],
+  "sway_factor": 0.0,
+  "tags": [
+    "hogwarts-demo",
+    "self-authored"
+  ],
+  "created_at": "2026-10-15T15:13:36+00:00",
+  "source": "manual",
+  "prompt": "",
+  "mount": "floor",
+  "slots": [
+    {
+      "name": "glass_1",
+      "kind": "material"
+    }
+  ],
+  "slots_auto": true,
+  "bbox": [
+    3.67,
+    4.56,
+    72.44
+  ],
+  "measured": {
+    "format": "glb",
+    "file_bytes": 2348520,
+    "objects": 1,
+    "tris": 36198,
+    "verts": 65844,
+    "materials": [
+      "black",
+      "coal",
+      "crimson",
+      "gold",
+      "lamp",
+      "slot_glass_1",
+      "steel",
+      "stone"
+    ],
+    "images": [
+      {
+        "name": "black",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "coal",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "crimson",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "glass",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "gold",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "lamp",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "steel",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "stone",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 0,
+    "bone_names": [],
+    "mixamo_bones": 0,
+    "finger_bones": 0,
+    "finger_bones_weighted": 0,
+    "finger_verts": 0,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      3.67,
+      72.44,
+      4.56
+    ],
+    "center_xy": [
+      0.0,
+      0.0
+    ],
+    "min_z": 0.0,
+    "at": "2026-10-15T15:13:38+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}

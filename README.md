@@ -540,27 +540,39 @@ The repository ships a pre-populated `demo/` world as a starter; `worlds/demo/` 
 git. Pass `--world <new-name>` to begin from a clean slate — the directory is created on first
 start.
 
-### The bundled world: Tidehaven
+### The bundled world: Hogwarts arrival
 
-A small terraced town on a west-facing shore, a few decades from now, after people stopped throwing
-things away. Four places — **Salt Quay** at the water, **Market Terrace** above it, **The Terrace
-House** on the second terrace and **Wend Light** out on the headland, a 637 m walk along the coast
-path. Seven characters live there: five people, a harbour dog and one visitor off the noon ferry.
+An unofficial, German-language fan interpretation of film Hogwarts: **Hogsmeade station** with a
+stationary Hogwarts Express, the **Black Lake** with two landing places, and the **castle grounds**
+with towers, the Great Hall exterior, an open courtyard, a stone gate and Hagrid's furnished hut.
+Seven connected locations sit in a metre-based landscape with water, shallows, woodland, hills and
+a dry west-shore walking route. This is a hand-authored world, not an S/M/L-sized generation.
 
-It is built to exercise the system rather than to look pretty in a screenshot. Between them the
-seven cover both chat modes (`single` and `rp_first`), all three importance levels, an
-avatar-playable character, a non-humanoid on the second mesh contract, and the temporary-NPC
-template. The town carries a story arc, a danger event with its own temporary access rule, two
-different kinds of locked room (one by rule, one by item), a travelling party, daily schedules,
-scheduler jobs and a knowledge source of local files. The map is painted in metres with two terraces
-and a raised headland; every room has a floor plan, so the 3D client and the floor-plan preview have
-real geometry to render.
+```bash
+./start.sh --world demo --with-3d
+```
 
-**No images or 3D models ship with it** — those need your own backends. Every prompt field is
-filled in, so generating them is a matter of pressing the buttons in the admin UI. The visual style
-is set per use case in `config.json`: a painterly gouache look for everything on screen, while the
-mesh-source renders keep their neutral, shadowless framing, because image-to-3D needs that more than
-it needs the style.
+On first start, log in with the random bootstrap-admin password printed by the server and change
+it under **`/admin/users` → Change my password**. Under **Edit → Assigned characters**, grant your
+account access to **Johanna Falk** (or all four characters), then select Johanna in the player as the adult visitor
+avatar starting at the station. Hagrid, McGonagall and stationmistress Elspeth Rowan have German
+profiles, soul sections, portraits, owned clothing and personal belongings. The initial simulation
+is **paused**, at 16:40 on the first day of the school year; resume it when ready. For an unobscured
+overview, an administrator can enable
+**Menu → Administration → Show all locations (admin)** in the 3D client.
+
+The world database, portraits and **21 textured environment/furniture models** ship in
+`worlds/demo/`; viewing them needs no generation backend. These are self-created models and
+textures, not extracted film/game assets or an official architectural survey. Characters use the
+client's existing standard figure rendering, not bespoke Hogwarts rigs. The castle interior is
+limited to the arrival passages and open courtyard; train and boats are decorative, not transport.
+Chat and autonomous simulation still need your configured backends.
+
+Rebuild sources are included under `worlds/demo/source/`: run `castle_assets.py` and
+`arrival_assets.py` with Blender 4.2 (`--background --factory-startup --python <script> -- --output
+<asset-directory>`), then use `python worlds/demo/source/build_world.py --help` for the API import.
+Import only into a **separate, empty, paused world**, with media generation disabled, using that
+server's explicit origin and private credentials file. The importer refuses nonempty worlds and does not resume partial builds.
 
 ---
 

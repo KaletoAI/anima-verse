@@ -1,0 +1,71 @@
+{
+  "name": "Stationsschreibtisch",
+  "category": "furniture",
+  "model_variants": [
+    {
+      "stem": "model",
+      "active": true,
+      "description": "Stationsschreibtisch; eigenständig modellierte Holz-/Steinmöbel, eingebettete eigene Textur.",
+      "width_m": 1.7,
+      "depth_m": 0.8,
+      "height_m": 0.86,
+      "dims_estimated": false
+    }
+  ],
+  "sway_factor": 0.0,
+  "tags": [
+    "hogwarts-demo",
+    "self-authored"
+  ],
+  "created_at": "2026-10-15T15:13:51+00:00",
+  "source": "manual",
+  "prompt": "",
+  "mount": "floor",
+  "bbox": [
+    1.7,
+    0.86,
+    0.8
+  ],
+  "measured": {
+    "format": "glb",
+    "file_bytes": 6820,
+    "objects": 1,
+    "tris": 48,
+    "verts": 96,
+    "materials": [
+      "cream",
+      "wood"
+    ],
+    "images": [
+      {
+        "name": "Image_0",
+        "size": [
+          64,
+          64
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 0,
+    "bone_names": [],
+    "mixamo_bones": 0,
+    "finger_bones": 0,
+    "finger_bones_weighted": 0,
+    "finger_verts": 0,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      1.7,
+      0.8,
+      0.86
+    ],
+    "center_xy": [
+      0.0,
+      0.0
+    ],
+    "min_z": 0.0,
+    "at": "2026-10-15T15:13:52+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}

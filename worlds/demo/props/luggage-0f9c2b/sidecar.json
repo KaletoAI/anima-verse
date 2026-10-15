@@ -1,0 +1,106 @@
+{
+  "name": "Luggage",
+  "category": "decoration",
+  "model_variants": [
+    {
+      "stem": "model",
+      "active": true,
+      "description": "Schulkoffer mit gewölbtem Lederdeckel, Messingbeschlägen und aufgesetztem Reisekoffer mit Hogwarts-Etikett.",
+      "width_m": 0.95,
+      "depth_m": 0.63,
+      "height_m": 1.11,
+      "dims_estimated": false
+    }
+  ],
+  "sway_factor": 0.0,
+  "tags": [
+    "hogwarts-demo",
+    "self-authored"
+  ],
+  "created_at": "2026-10-15T15:13:42+00:00",
+  "source": "manual",
+  "prompt": "",
+  "mount": "floor",
+  "bbox": [
+    0.95,
+    1.11,
+    0.63
+  ],
+  "measured": {
+    "format": "glb",
+    "file_bytes": 84040,
+    "objects": 1,
+    "tris": 1274,
+    "verts": 1908,
+    "materials": [
+      "black",
+      "cream",
+      "gold",
+      "leather",
+      "wood"
+    ],
+    "images": [
+      {
+        "name": "black",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "cream",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "gold",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "leather",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "wood",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 0,
+    "bone_names": [],
+    "mixamo_bones": 0,
+    "finger_bones": 0,
+    "finger_bones_weighted": 0,
+    "finger_verts": 0,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      0.95,
+      0.63,
+      1.11
+    ],
+    "center_xy": [
+      0.0,
+      0.0
+    ],
+    "min_z": 0.0,
+    "at": "2026-10-15T15:13:43+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}

@@ -1,0 +1,1 @@
+{"areas": [{"id": "glass_1", "kind": "glass", "size_m": [3.1, 60.78511], "normal": [0.0, 1.0, 0.00012], "source": "adopt", "faces": 552, "centroid": [0.0, 3.11913, -9.92391], "edges": []}], "mesh_layout": [{"name": "hogwarts-express", "tri_count": 36198}], "run_at": "2026-10-15T15:13:37+00:00"}

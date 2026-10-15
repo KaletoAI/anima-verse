@@ -1,0 +1,88 @@
+{
+  "name": "Rowboat",
+  "category": "vehicle",
+  "model_variants": [
+    {
+      "stem": "model",
+      "active": true,
+      "description": "Offenes hölzernes Klinker-Ruderboot mit Rippen, Sitzbänken, Dollborden und verstauten Rudern; dekorativ, ohne Fahrmechanik.",
+      "width_m": 1.57,
+      "depth_m": 4.07,
+      "height_m": 0.72,
+      "dims_estimated": false
+    }
+  ],
+  "sway_factor": 0.0,
+  "tags": [
+    "hogwarts-demo",
+    "self-authored"
+  ],
+  "created_at": "2026-10-15T15:13:38+00:00",
+  "source": "manual",
+  "prompt": "",
+  "mount": "floor",
+  "bbox": [
+    1.56999,
+    0.72204,
+    4.06817
+  ],
+  "measured": {
+    "format": "glb",
+    "file_bytes": 150548,
+    "objects": 1,
+    "tris": 2112,
+    "verts": 3988,
+    "materials": [
+      "oak",
+      "steel",
+      "wood"
+    ],
+    "images": [
+      {
+        "name": "oak",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "steel",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "wood",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 0,
+    "bone_names": [],
+    "mixamo_bones": 0,
+    "finger_bones": 0,
+    "finger_bones_weighted": 0,
+    "finger_verts": 0,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      1.57,
+      4.0682,
+      0.722
+    ],
+    "center_xy": [
+      0.0,
+      0.0
+    ],
+    "min_z": 0.0,
+    "at": "2026-10-15T15:13:39+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}

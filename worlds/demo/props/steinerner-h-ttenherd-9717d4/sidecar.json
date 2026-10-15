@@ -1,0 +1,72 @@
+{
+  "name": "Steinerner Hüttenherd",
+  "category": "furniture",
+  "model_variants": [
+    {
+      "stem": "model",
+      "active": true,
+      "description": "Steinerner Hüttenherd; eigenständig modellierte Holz-/Steinmöbel, eingebettete eigene Textur.",
+      "width_m": 1.55,
+      "depth_m": 0.65,
+      "height_m": 1.4,
+      "dims_estimated": false
+    }
+  ],
+  "sway_factor": 0.0,
+  "tags": [
+    "hogwarts-demo",
+    "self-authored"
+  ],
+  "created_at": "2026-10-15T15:13:52+00:00",
+  "source": "manual",
+  "prompt": "",
+  "mount": "floor",
+  "bbox": [
+    1.55,
+    1.4,
+    0.65
+  ],
+  "measured": {
+    "format": "glb",
+    "file_bytes": 9260,
+    "objects": 1,
+    "tris": 72,
+    "verts": 144,
+    "materials": [
+      "black",
+      "stone",
+      "wood"
+    ],
+    "images": [
+      {
+        "name": "Image_0",
+        "size": [
+          64,
+          64
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 0,
+    "bone_names": [],
+    "mixamo_bones": 0,
+    "finger_bones": 0,
+    "finger_bones_weighted": 0,
+    "finger_verts": 0,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      1.55,
+      0.65,
+      1.4
+    ],
+    "center_xy": [
+      0.0,
+      0.0
+    ],
+    "min_z": 0.0,
+    "at": "2026-10-15T15:13:53+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}

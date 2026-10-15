@@ -1,0 +1,79 @@
+{
+  "name": "Pine",
+  "category": "vegetation",
+  "model_variants": [
+    {
+      "stem": "model",
+      "active": true,
+      "description": "Schottische Waldkiefer mit verzweigtem Stamm, Wurzelanläufen und vielen räumlichen Nadelkronen statt flacher Pyramiden.",
+      "width_m": 6.21,
+      "depth_m": 6.04,
+      "height_m": 13.09,
+      "dims_estimated": false
+    }
+  ],
+  "sway_factor": 0.0,
+  "tags": [
+    "hogwarts-demo",
+    "self-authored"
+  ],
+  "created_at": "2026-10-15T15:13:44+00:00",
+  "source": "manual",
+  "prompt": "",
+  "mount": "floor",
+  "bbox": [
+    6.20819,
+    13.08708,
+    6.04045
+  ],
+  "measured": {
+    "format": "glb",
+    "file_bytes": 617340,
+    "objects": 1,
+    "tris": 8032,
+    "verts": 17549,
+    "materials": [
+      "bark",
+      "pine"
+    ],
+    "images": [
+      {
+        "name": "bark",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "pine",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 0,
+    "bone_names": [],
+    "mixamo_bones": 0,
+    "finger_bones": 0,
+    "finger_bones_weighted": 0,
+    "finger_verts": 0,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      6.2082,
+      6.0404,
+      13.0871
+    ],
+    "center_xy": [
+      0.0,
+      0.0
+    ],
+    "min_z": 0.0,
+    "at": "2026-10-15T15:13:45+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}
