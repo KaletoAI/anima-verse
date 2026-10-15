@@ -230,7 +230,8 @@ stops acting autonomously).
   Portraits never use room or item references.
   Generated portraits follow a few basic rules, since they serve as the identity reference for
   later renders: front view, neutral expression, no clothing, accessories or objects, no
-  background, head and neck only (shoulders only for long hair). The rules also apply to custom
+  background, head and neck only (shoulders only for long hair), the face evenly lit from the
+  front without shadows (they would bake into the 3D face texture). The rules also apply to custom
   styles without changing the Face Prompt or other render occasions.
   The player and 3D clients display identity portraits as background-free cutouts with the full
   hairstyle visible. Existing portraits are processed on first display; PNG variants live in

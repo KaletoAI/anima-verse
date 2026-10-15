@@ -528,17 +528,20 @@ _DEFAULT_IMAGE_USE_CASES = {
     # darker, shadows under nose and brows — and the face retexture projects
     # the reference photo onto the mesh, shadows included). Its failure modes
     # sit in _NEG_TPOSE; the back view has no face and keeps the plain text.
+    # The render slots the profile portrait as its identity reference, and an
+    # edit model copies that portrait's light along with the face — hence the
+    # explicit "relit instead of keeping the reference's lighting" (2026-10-15).
     # The medium is a REALISTIC 3D FIGURE, not a photo (user decision
     # 2026-09-01): the render feeds a mesher, and a clean 3D-character look
     # with lifelike textures reconstructs better than photographic depth.
     "tpose": {
         "keywords": {
-            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, both feet fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, both feet fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame, both feet entirely inside the frame, and margin around the figure, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame, both feet entirely inside the frame, and margin around the figure, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
@@ -594,12 +597,12 @@ _DEFAULT_IMAGE_USE_CASES = {
     # visible span would only fight the view.
     "tpose_side": {
         "keywords": {
-            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, both feet fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, both feet fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE_SIDE,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, both feet entirely inside the frame, margin around the figure, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, both feet entirely inside the frame, margin around the figure, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_SIDE,
             "prompt_instruction": "Describe the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
@@ -723,17 +726,26 @@ def get_use_case_prompts(use_case: str, image_model: str = "",
         out[f] = text.replace("{fabric}", fabric)
     if uc == "profile":
         # Basic rules of an identity reference; first, so they outweigh the style.
+        # Even, shadow-free face light (2026-10-15): the portrait is the
+        # identity reference of the T-pose render, whose face the face
+        # retexture projects onto the mesh — a key-light shadow here ends up
+        # baked into the 3D texture. "Relit" also covers a portrait made from
+        # the current one as reference.
         rules = ("front view, facing the camera, neutral expression, "
                  "head and neck only, shoulders only if the hair is long, "
                  "complete hairstyle inside the frame, no clothing, "
                  "no accessories, no jewelry, no headwear, no glasses, no objects, "
-                 "no background")
+                 "no background, face evenly lit from the front, no shadows on "
+                 "the face, relit instead of keeping the lighting and shadows "
+                 "of the reference image")
         out["prompt_style"] = f"{rules}, {out['prompt_style']}"
         out["prompt_negative"] = (
             f"{out['prompt_negative']}, side view, three-quarter view, looking away, "
             "smiling, open mouth, cropped hair, cut off top of head, chest, torso, "
             "clothing, jewelry, earrings, necklace, hat, glasses, hands, objects, "
-            "background scenery, room, landscape"
+            "background scenery, room, landscape, shadows on the face, "
+            "one side of the face darker, shadow under the nose, "
+            "directional key light, dramatic lighting"
         )
         out["prompt_instruction"] = f"{out['prompt_instruction']} Rules: {rules}."
     return out
