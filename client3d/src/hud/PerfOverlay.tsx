@@ -50,6 +50,7 @@ export function PerfOverlay() {
   return (
     <div className="hud-perf" aria-live="off">
       <Row label={t('FPS')} value={stats ? String(Math.round(stats.fps)) : dash} />
+      <Row label={t('Worst frame')} value={stats ? `${num(stats.worstFrameMs)} ms` : dash} />
       <Row label={t('Draw calls')} value={stats ? num(stats.calls) : dash} />
       <Row label={t('Triangles')} value={stats ? num(stats.triangles) : dash} />
       <Row label={t('Vertices')} value={stats ? num(stats.vertices) : dash} />

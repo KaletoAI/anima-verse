@@ -32,6 +32,20 @@ JSON-Antworten können gzip-komprimiert mit schwachem ETag (`W/"…"`) kommen. C
 ETag beim Revalidieren unverändert in `If-None-Match` zurück; der Server vergleicht schwach
 (`http_files.etag_matches`).
 
+## Near loading (P4 A) — client only
+
+Known places (`places`) retain metadata, labels, entry offers and panel data from
+worldmap and `/world/locations`, independently of mounted scenes (`residency`).
+The client alone chooses `near`, `far` and `gone`; no server payload changes.
+`far` retains a low shell without indoor details; `gone` has no client scene.
+Walking, offered entry, boot arrival and teleports wait for `near` readiness.
+A pending teleport blocks movement and position reports; a fresh server point
+replaces it before echo/distance suppression. Pins have independent owners.
+Seat markers/surfaces are read only in `near`; the server remains authoritative
+for seated state. GLB leases release GPU resources at zero holders and retain
+CPU templates within a bounded LRU; character templates are outside this pool.
+The optional performance overlay reports the worst raw frame interval since reset.
+
 ## Player sync: `GET /events/sync` (P4 B)
 
 This authenticated, same-origin SSE endpoint is implemented by the pure ASGI

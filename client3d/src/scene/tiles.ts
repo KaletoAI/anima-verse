@@ -259,7 +259,7 @@ export function tileToWorld(tile: Tile, lx: number, lz: number,
  *  (`worldToLocalXZ`): the map editor needs the same turn for its footprints,
  *  and the scatter's footprint exclusion (finding B18) is the third caller —
  *  three copies of one mapping is exactly how the two renderers drift apart. */
-export function worldToTile(tile: Tile, x: number, z: number
+export function worldToTile(tile: Pick<Tile, 'center' | 'yaw'>, x: number, z: number
 ): { x: number; z: number } {
   return worldToLocalXZ(tile.center.x, tile.center.z, tile.yaw, x, z);
 }
@@ -273,7 +273,7 @@ export function worldToTile(tile: Tile, x: number, z: number
  * so the two sides never disagree about which place a metre belongs to. A tile
  * without a boundary has no area and covers nothing.
  */
-export function tileContains(tile: Tile, x: number, z: number): boolean {
+export function tileContains(tile: Pick<Tile, 'boundary' | 'center' | 'yaw'>, x: number, z: number): boolean {
   if (!tile.boundary) return false;
   const p = worldToTile(tile, x, z);
   return pointInPolygon(p.x, p.z, tile.boundary);

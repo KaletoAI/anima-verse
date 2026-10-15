@@ -106,10 +106,14 @@ const start = main.indexOf('function shareTileHeight(');
 const addAt = main.indexOf('function ensurePlace(');
 const source = main.slice(start, main.indexOf('\n  }', addAt) + 4);
 const testPlaces = new Map(), testResidency = new Map(), testPins = new Map();
+// `placeLifecycles` is the per-place lifecycle token map ensurePlace stamps
+// (A-T5 H5: an entry wait aborts when the place was removed or rediscovered).
+const testLifecycles = new Map();
 const bindings = new Function('buildPlace', 'footprintCentre', 'places', 'residency', 'eventPins', 'engine',
+  'placeLifecycles',
   transformSync(source + '; return {ensurePlace, shareTileHeight};', { loader: 'ts' }).code)(
   current.buildPlace, () => true, testPlaces, testResidency, testPins,
-  { scene: new THREE.Scene() });
+  { scene: new THREE.Scene() }, testLifecycles);
 const add = loc => {
   bindings.ensurePlace(loc);
   const place = testPlaces.get(loc.id);

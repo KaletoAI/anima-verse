@@ -23,6 +23,12 @@ const { createFocusQueue } = await load('client3d/src/game/focusQueue.ts');
 const flush = async () => { for (let i = 0; i < 100; i++)
     await Promise.resolve(); };
 const deferred = () => { let resolve; const promise = new Promise(r => resolve = r); return { promise, resolve }; };
+function assertBefore(source, first, second) {
+    const firstIndex = source.indexOf(first), secondIndex = source.indexOf(second);
+    assert.ok(firstIndex >= 0, `missing first marker: ${first}`);
+    assert.ok(secondIndex >= 0, `missing second marker: ${second}`);
+    assert.ok(firstIndex < secondIndex, `${first} must precede ${second}`);
+}
 function fixture() {
     const calls = [], live = new Map(), wait = [], timers = [];
     let active = 0, max = 0, rollback = 0, fail = false;
@@ -204,7 +210,7 @@ const ts = await import('typescript');
 const ast = ts.createSourceFile('main.ts', main, ts.ScriptTarget.Latest, true);
 function fn(name) { let found; function visit(n) { if (ts.isFunctionDeclaration(n) && n.name?.text === name)
     found = n.getText(ast); ts.forEachChild(n, visit); } visit(ast); assert.ok(found, `main function ${name} exists`); return found; }
-function compile(names, deps, tail = '') { return new Function(...Object.keys(deps), transformSync(names.map(fn).join('\n') + '\n' + tail + '\nreturn {' + names.join(',') + '};', { loader: 'ts' }).code)(...Object.values(deps)); }
+function compile(names, deps, tail = '') { deps = { restoreStorey() {}, ...deps }; return new Function(...Object.keys(deps), transformSync(names.map(fn).join('\n') + '\n' + tail + '\nreturn {' + names.join(',') + '};', { loader: 'ts' }).code)(...Object.values(deps)); }
 for (const name of ['no_scene', 'retarget_far_near', 'open_arrival_tiers', 'tick_during_promotion']) {
     const residency = new Map(), promoting = new Set(), buildingTierByLoc = new Map(), interiorTierByLoc = new Map();
     const log = [];
@@ -237,8 +243,8 @@ for (const name of ['no_scene', 'retarget_far_near', 'open_arrival_tiers', 'tick
             assert.equal(promoting.has('X'), true);
             assert.equal(residency.get('X').ready, false);
             const body = fn('tickModelTiers');
-            assert.ok(body.indexOf('promoting.has(') > body.indexOf('reliftScene('));
-            assert.ok(body.indexOf('promoting.has(') < body.indexOf('const b ='));
+            assertBefore(body, 'reliftScene(', 'promoting.has(');
+            assertBefore(body, 'promoting.has(', 'const b =');
             gate.resolve();
         }
         assert.equal(await p, 'ok');
@@ -274,7 +280,7 @@ for (const name of ['no_scene', 'retarget_far_near', 'open_arrival_tiers', 'tick
     assert.deepEqual(placed, ['Y']);
     assert.equal(state.open(), 'Y');
     const placement = fn('placeAvatarOnArrival');
-    assert.ok(placement.indexOf('await awaitArrivalMount()') < placement.indexOf('residency.get(locId)'));
+    assertBefore(placement, 'await awaitArrivalMount()', 'residency.get(locId)');
     console.log('PASS arrival_moves');
 }
 // The promoting guard must skip only tier selection: execute a real LOD tick
@@ -376,4 +382,275 @@ for (const change of ['target', 'rebuild', 'drop', 'rediscover']) {
   assert.equal(driver.hasJob('X'), false);
   await driver.settled('X');
   console.log('PASS queue completion '+change);
+}
+
+// NEU A-T5: readiness.ts absent on a241a8aa. Hand oracles: hold only
+// unready footprints; release owners independently; entry waits twice for
+// far then near, once after drop, always releases its entry pin once.
+const { holdFor, trySnap, holdSnap, clearSnap, enterWhenReady } = await load('client3d/src/game/readiness.ts');
+{
+    const pins = new Map(), state = { approachPin: null, pendingSnap: null };
+    let ready = false, point = 'A';
+    const deps = { placeAt: () => point, isReady: () => ready,
+        pin(id, owner) { const s = pins.get(id) ?? new Set(); s.add(owner); pins.set(id, s); },
+        release(id, owner) { pins.get(id)?.delete(owner); if (!pins.get(id)?.size)
+            pins.delete(id); } };
+    assert.equal(holdFor(deps, state, 1, 2), true);
+    console.log('PASS walk_hold');
+    holdSnap(deps, state, { id: 'A', x: 1, z: 2 });
+    assert.equal(trySnap(deps, state.pendingSnap), false);
+    ready = true;
+    assert.equal(trySnap(deps, state.pendingSnap), true);
+    console.log('PASS teleport_hold');
+    assert.equal(holdFor(deps, state, 1, 2), false);
+    assert.deepEqual([...pins.get('A')], ['teleport']);
+    console.log('PASS approach_released_ready / owners_independent');
+    ready = false;
+    holdFor(deps, state, 1, 2);
+    point = 'B';
+    holdFor(deps, state, 3, 4);
+    assert.deepEqual([...pins.get('A')], ['teleport']);
+    assert.ok(pins.get('B').has('approach'));
+    console.log('PASS approach_moved');
+    holdSnap(deps, state, { id: 'B', x: 3, z: 4 });
+    assert.equal(pins.has('A'), false);
+    assert.equal(state.pendingSnap.id, 'B');
+    ready = true;
+    const executed = [];
+    if (trySnap(deps, state.pendingSnap)) executed.push(state.pendingSnap.id);
+    assert.deepEqual(executed, ['B']);
+    console.log('PASS snap_replaced');
+    point = null;
+    assert.equal(holdFor(deps, state, 0, 0), false);
+    clearSnap(deps, state);
+    assert.equal(pins.size, 0);
+}
+// A teleport ends the old approach even if A never becomes ready and
+// the avatar never supplies another walk input. Other owners survive.
+{
+    const pins = new Map(), state = { approachPin: null, pendingSnap: null };
+    const deps = { placeAt: () => 'A', isReady: () => false,
+        pin(id, owner) { const owners = pins.get(id) ?? new Set(); owners.add(owner); pins.set(id, owners); },
+        release(id, owner) { pins.get(id)?.delete(owner); if (!pins.get(id)?.size) pins.delete(id); } };
+    holdFor(deps, state, 1, 2);
+    deps.pin('A', 'current');
+    deps.pin('B', 'teleport');
+    holdSnap(deps, state, { id: 'B', x: 100, z: 0 });
+    assert.equal(state.approachPin, null);
+    assert.deepEqual([...pins.get('A')], ['current']);
+    assert.deepEqual([...pins.get('B')], ['teleport']);
+    assert.equal(trySnap(deps, state.pendingSnap), false);
+    assert.equal(pins.get('A').has('approach'), false);
+    console.log('PASS teleport_ends_approach while stopped / owners_independent');
+}
+for (const name of ['entry_settled_far', 'entry_same_offer', 'entry_offer_gone', 'entry_dropped', 'entry_no_progress']) {
+    let waits = 0, released = 0, requested = false, ready = false, offer = { key: 'A#door' };
+    const result = await enterWhenReady({ requestNear() { requested = true; }, release(id, owner) { assert.equal(owner, 'entry'); released++; },
+        sleep: () => new Promise(() => {}),
+        async settled() {
+            assert.ok(requested);
+            waits++;
+            if (name === 'entry_same_offer')
+                offer = { key: 'A#door' };
+            if (name === 'entry_offer_gone')
+                offer = null;
+            ready = name !== 'entry_settled_far' || waits === 2;
+            if (name === 'entry_no_progress')
+                ready = false;
+        },
+        isReady: () => ready, stillValid: key => offer?.key === key, exists: () => name !== 'entry_dropped', canProgress: () => name !== 'entry_no_progress' }, 'A', 'A#door');
+    assert.equal(result, ['entry_settled_far', 'entry_same_offer'].includes(name));
+    assert.equal(waits, name === 'entry_settled_far' ? 2 : 1);
+    assert.equal(released, 1);
+    console.log('PASS', name, '/ entry_pin_released');
+}
+// Source guards ensure the pure rules precede movement in real renderer paths.
+{
+    assertBefore(fn('correctTo'), 'clearApproach(', 'npcs.positionOf(');
+    const snapTick = main.slice(main.indexOf('if (pendingSnap && trySnap('));
+    assertBefore(snapTick, 'clearApproach(', 'npcs.snapPlayerTo(');
+    const body = fn('reconcileAvatarPos');
+    assertBefore(body, 'pollIsStale(', 'clearSnap(');
+    assertBefore(body, 'clearSnap(', 'if (reportedPos');
+    assertBefore(body, 'holdSnap(', 'correctTo(me.pos)');
+    const entry = fn('enterOfferedLocation'), guard = entry.indexOf('if (!(await enterWhenReady(');
+    assert.ok(guard >= 0);
+    assertBefore(entry.slice(guard), 'return;', 'setPlayerTarget(');
+    assertBefore(entry.slice(guard), 'return;', 'walkIn =');
+    assert.match(fn('tickPosReport'), /\{\s*if \(pendingSnap\) return;/);
+    const walk = main.slice(main.indexOf('({ x, z } = slideBlocked'));
+    assertBefore(walk, 'holdFor(', 'walkGoal.set(');
+    const seat = fn('reconcileAvatarPlace');
+    assertBefore(seat, 'avatarSeated = true', "?.ring !== 'near'");
+    assertBefore(seat, "?.ring !== 'near'", 'roomMarkers');
+    console.log('PASS main readiness path guards');
+}
+for (const name of ['snap_superseded_free', 'snap_superseded_ready', 'snap_superseded_here']) {
+    const pins = new Set(['A']), state = { pendingSnap: { id: 'A', x: 100, z: 0 } }, corrected = [];
+    const point = name.endsWith('here') ? { x: 0, z: 0 } : { x: 20, z: 0 };
+    const deps = { isReady: () => true, placeAt: () => name.endsWith('free') ? null : 'B', pin() { }, release(id) { pins.delete(id); } };
+    const api = compile(['reconcileAvatarPos'], { getGameState: () => ({ mode: 'embodied' }), pollIsStale: () => false, ownSeatChangeAt: 0,
+        avatarSeated: false, posInFlight: false, walkIn: null, verticalRide: null, correction: null, npcs: { positionOf: () => ({ x: 0, z: 0 }) },
+        avatarName: 'avatar', reportedPos: null, POS_SNAP_M: 1, CORRECT_WALK_M: 8, clearSnap: () => clearSnap(deps, state),
+        holdSnap, readinessDeps: deps, readinessState: state, correctTo: p => corrected.push(p), THREE: { Vector3: class {
+            } }, groundY: () => 0, engine: { flyTo() { } } }, 'let pendingSnap=readinessState.pendingSnap;');
+    api.reconcileAvatarPos({ characters: [{ name: 'avatar', pos: point }] }, 1);
+    assert.equal(state.pendingSnap, null);
+    assert.equal(pins.size, 0);
+    assert.equal(corrected.length, name.endsWith('here') ? 0 : 1);
+    console.log('PASS', name);
+}
+
+// A stopped walker still releases an approach pin on the next ring tick.
+{
+    const state = { approachPin: 'A' }, released = [];
+    const { tickStreamRings } = compile(['tickStreamRings'], {
+        readinessState: state,
+        readinessDeps: { isReady: () => true, release: (...args) => released.push(args) },
+        places: new Map(), syncStreamPins() {},
+    });
+    tickStreamRings();
+    assert.equal(state.approachPin, null);
+    assert.deepEqual(released, [['A', 'approach']]);
+    console.log('PASS approach_released_ready while stopped');
+}
+
+// NEU review: payload-only X holds a teleport until a ready record exists.
+{
+    const places = new Map(), map = { locations: [{ id: 'X' }] };
+    const { placeAt } = compile(['placeAt'], { places, lastMap: map, firstMap: map,
+        footprintCentre: () => ({ x: 100, z: 0 }), footprintBoundary: () => [[-5,-5],[5,-5],[5,5],[-5,5]],
+        footprintYaw: () => 0, polygonArea: () => 100,
+        tileContains: (p, x, z) => Math.abs(x - p.center.x) <= 5 && Math.abs(z - p.center.z) <= 5 });
+    const state = { approachPin: null, pendingSnap: null }, pins = [], corrected = [];
+    let ready = false;
+    const deps = { placeAt, isReady: id => places.has(id) && ready, pin: (...p) => pins.push(p), release() {} };
+    const id = placeAt(100, 0);
+    assert.equal(id, 'X');
+    if (id && !deps.isReady(id)) holdSnap(deps, state, { id, x: 100, z: 0 });
+    else corrected.push('incorrect early correction');
+    assert.deepEqual(corrected, []);
+    assert.deepEqual(pins, [['X', 'teleport']]);
+    assert.equal(trySnap(deps, state.pendingSnap), false);
+    places.set('X', { loc: { id: 'X' }, center: { x: 100, z: 0 }, area: 100 });
+    assert.equal(trySnap(deps, state.pendingSnap), false);
+    ready = true;
+    assert.equal(trySnap(deps, state.pendingSnap), true);
+    console.log('PASS payload_only_teleport NEU');
+}
+// NEU review: a failed load never settles; cancellation after two timed rounds releases once.
+{
+    let sleeps = 0, released = 0;
+    const result = await Promise.race([enterWhenReady({ requestNear() {}, release() { released++; },
+        settled: () => new Promise(() => {}), sleep: async ms => { assert.equal(ms, 1000); sleeps++; },
+        exists: () => true, stillValid: () => sleeps < 2, isReady: () => false, canProgress: () => true,
+    }, 'X', 'offer'), new Promise(resolve => setTimeout(() => resolve('stuck'), 100))]);
+    assert.equal(result, false);
+    assert.equal(sleeps, 2);
+    assert.equal(released, 1);
+    console.log('PASS entry_cancelled_unsettled NEU');
+}
+{
+    const apply = fn('applyWorldMap');
+    assertBefore(apply, 'rebuildMovedTiles(map)', 'reconcileAvatarPlace(');
+    assertBefore(apply, 'ensurePlace(loc)', 'reconcileAvatarPos(');
+    const placement = fn('computeNpcPlacements');
+    assertBefore(placement, 'avatarWaitsForPlace(', 'travellerState(');
+    assert.match(placement, /hidden: true/);
+    const start = main.indexOf('} else if (openLocationId) {');
+    assert.ok(start >= 0);
+    const end = main.indexOf('let open: Tile', start);
+    assert.ok(end >= 0);
+    assert.ok(start < end);
+    const frame = main.slice(start, end);
+    assert.match(frame, /places.get\(openLocationId\)/);
+    assert.doesNotMatch(frame, /residency.get/);
+    assert.match(fn('downResident'), /storeyByPlace.set\(id, resident.tile.levelFilter\)/);
+    assertBefore(fn('upResident'), 'restoreStorey(tile)', 'resident.ready = true');
+    console.log('PASS review integration guards NEU');
+}
+const { avatarWaitsForPlace } = await load('client3d/src/game/readiness.ts');
+for (const resident of [undefined, { ring: 'far', ready: true }, { ring: 'near', ready: false }, { ring: 'near', ready: true }]) {
+    assert.equal(avatarWaitsForPlace(true, 'X', resident), resident?.ring !== 'near' || resident?.ready !== true);
+    assert.equal(avatarWaitsForPlace(false, 'X', resident), false);
+    assert.equal(avatarWaitsForPlace(true, '', resident), false);
+}
+console.log('PASS avatar_arrival_readiness NEU');
+
+// NEU review: readiness is revoked synchronously, even while rebuild work is queued.
+{
+    const resident = { ready: true }, residency = new Map([['X', resident]]);
+    const { rebuildTile } = compile(['rebuildTile'], { places: new Map(), residency,
+        engine: { scene: { add() {} } }, buildPlace: loc => ({ loc, anchor: {} }),
+        driver: { hasJob: () => false, rebuild() { assert.equal(resident.ready, false); } } });
+    rebuildTile(undefined, { id: 'X' });
+    console.log('PASS queued_rebuild_revokes_ready NEU');
+}
+
+// Every control entry must respect the same arrival hold as hidden placement.
+{
+    const action = name => {
+        const start = main.indexOf(`gameActions.${name} = () => {`);
+        assert.ok(start >= 0);
+        const end = main.indexOf('\n  };', start);
+        assert.ok(end >= 0);
+        assert.ok(start < end);
+        return main.slice(start, end);
+    };
+    const entry = action('enterEmbodied');
+    assertBefore(entry, 'avatarWaitsForPlace(', 'enterEmbodied(embody)');
+    assertBefore(entry, "toastQuiet('Loading this place…')", 'enterEmbodied(embody)');
+    assert.match(entry, /pendingArrivalTakeControl = true/);
+    assert.match(entry, /pendingArrivalTakeControl = false/);
+    const control = action('takeControl');
+    assert.doesNotMatch(control, /avatarWaitsForPlace\(/);
+    assert.match(control, /gameActions\.enterEmbodied\?\.\(\)/);
+    const retryStart = main.indexOf('if (bootDone && pendingArrivalTakeControl) {');
+    assert.ok(retryStart >= 0);
+    const retryEnd = main.indexOf('\n    }', retryStart);
+    assert.ok(retryEnd >= 0);
+    assert.ok(retryStart < retryEnd);
+    const retry = main.slice(retryStart, retryEnd);
+    assertBefore(retry, "getGameState().mode === 'overview'", 'gameActions.enterEmbodied?.()');
+    assert.doesNotMatch(retry, /gameActions\.takeControl/);
+    assertBefore(retry, 'pendingArrivalTakeControl', 'gameActions.enterEmbodied?.()');
+    assert.doesNotMatch(retry, /pendingArrivalTakeControl = false/);
+    const escapeStart = main.indexOf("if (e.key !== 'Escape'");
+    assert.ok(escapeStart >= 0);
+    const escapeEnd = main.indexOf('\n  }, true);', escapeStart);
+    assert.ok(escapeEnd >= 0);
+    assert.ok(escapeStart < escapeEnd);
+    const escape = main.slice(escapeStart, escapeEnd);
+    assertBefore(escape, 'cancelPendingControl(', "getGameState().mode === 'embodied'");
+    const plaque = await readFile('client3d/src/hud/CharacterPlaque.tsx', 'utf8');
+    assert.match(plaque, /gameActions\.enterEmbodied\?\.\(\)/);
+    const keyStart = main.indexOf("if (e.key.toLowerCase() !== 'f'");
+    assert.ok(keyStart >= 0);
+    const keyEnd = main.indexOf('\n  });', keyStart);
+    assert.ok(keyEnd >= 0);
+    assert.ok(keyStart < keyEnd);
+    const key = main.slice(keyStart, keyEnd);
+    assert.match(key, /gameActions\.enterEmbodied\?\.\(\)/);
+    for (const source of [plaque, key]) {
+        assert.doesNotMatch(source, /setGameState\s*\(\s*\{[^}]*\bmode\s*:/);
+        assert.doesNotMatch(source, /(?<!\.)\benterEmbodied\s*\(/);
+    }
+    // Only the gated action may invoke the mode setter in embody.ts.
+    assert.equal((main.match(/\benterEmbodied\(embody\)/g) ?? []).length, 1);
+    assert.doesNotMatch(main, /setGameState\s*\(\s*\{\s*mode\s*:\s*['"]embodied['"]/);
+    console.log('PASS enter_embodied_arrival_guard');
+}
+
+// Cancellation also stops the model-readiness retry and clears its loading note.
+{
+    const notes = [];
+    compile(['cancelPendingControl'], { setBootNote: note => notes.push(note), assert }, `
+        let pendingArrivalTakeControl = true, pendingTakeControl = true;
+        cancelPendingControl();
+        assert.equal(pendingArrivalTakeControl, false);
+        assert.equal(pendingTakeControl, false);
+        cancelPendingControl();
+    `);
+    assert.deepEqual(notes, [null, null]);
+    console.log('PASS cancel_pending_control');
 }

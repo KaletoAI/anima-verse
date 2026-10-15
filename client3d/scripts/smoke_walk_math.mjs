@@ -4322,6 +4322,17 @@ async function main() {
   // and returns samples.length / sum.
   // All frame times below are exact binary fractions (1/16 = 0.0625), so the
   // sums are exact and the expected values are plain division.
+  // NEU H1: absent on a241a8aa. Raw 516 - 16 = 500 ms, independent
+  // of the engine's 100 ms cap; a fresh meter gives 1016 - 1000 = 16 ms.
+  {
+    let state = { lastFrameAt: null, worstFrameMs: 0 };
+    for (const now of [0, 16, 516]) perfstats.pushWorstFrame(state, now);
+    check('worst frame uses the raw clock', state.worstFrameMs, 500);
+    state = { lastFrameAt: null, worstFrameMs: 0 };
+    for (const now of [1000, 1016]) perfstats.pushWorstFrame(state, now);
+    check('reset forgets the previous stall', state.worstFrameMs, 16);
+  }
+
   console.log('perfstats — the fps window');
   const { newFpsMeter, pushFrame, fpsOf, visibleVertices, tierCounts,
     scatterCosts, emptyScatterCounts } = perfstats;

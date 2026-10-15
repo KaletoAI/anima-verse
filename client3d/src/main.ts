@@ -1,3 +1,4 @@
+import { avatarWaitsForPlace, holdFor, holdSnap, clearApproach, clearSnap, trySnap, enterWhenReady, type PendingSnap, type ReadinessDeps } from './game/readiness';
 import { createFocusQueue } from './game/focusQueue';
 import { createResidencyDriver, type StepResult } from './game/residency';
 import { placeDistance, ringFor } from './game/streamRings';
@@ -35,13 +36,13 @@ import { elevatorAt, elevatorLevels, elevatorSoleOption, elevatorTargetRoom,
 import { nearestRoomAt, stairChain, stairLegTo, stairLegs, stairsAt,
   type StairLink, type StairPrompt } from './game/stairs';
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
-import { pointInPolygon } from './game/polygon';
+import { polygonArea, pointInPolygon } from './game/polygon';
 import { doorMarkers, doorwayBetween, roomDoor, type DoorMarker } from './game/doors';
 import { doorwayLock, isLocked, lockReason, unlockedRooms, NO_LOCKS } from './game/locks';
 import { doorDistance, doorTargetAngle, easeAngle, DOOR_SWING_RATE } from './game/doorSwing';
 import { getAudio } from './game/audio';
 import {
-  emptyScatterCounts, newFpsMeter, pushFrame, scatterCosts, tierCounts,
+  emptyScatterCounts, newFpsMeter, pushFrame, pushWorstFrame, scatterCosts, tierCounts,
   visibleVertices,
   type ScatterCounts, type TierCounts, type TierSample,
 } from './game/perfstats';
@@ -58,7 +59,7 @@ import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintCentre, redatumTile, roomFloorAt, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile, type VerticalTarget } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintBoundary, footprintYaw, footprintCentre, redatumTile, roomFloorAt, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile, type VerticalTarget } from './scene/tiles';
 import { setFogVeilCameraHeight, setFogVeilCells, setFogVeilFogged,
   tickFogVeil } from './scene/fogVeil';
 import { setModelEnvironment } from './scene/glbMaterials';
@@ -125,7 +126,7 @@ const CLOSE_CAM_DIST = 60;
  *  nudge of the mouse. */
 const CLOSE_TARGET_FOOTPRINTS = 3;
 const CLOSE_TARGET_MIN_M = 12;
-const closeTargetDist = (tile: Tile) =>
+const closeTargetDist = (tile: Pick<PlaceRecord, 'width'>) =>
   Math.max(CLOSE_TARGET_MIN_M, tile.width * CLOSE_TARGET_FOOTPRINTS);
 
 /** Radius around the NEIGHBOUR's centre inside which it counts as standing
@@ -541,6 +542,12 @@ async function startApp(username: string, role: string) {
   let bootDone = false;
   let avatarReady = false;
   let pendingTakeControl = false;
+  let pendingArrivalTakeControl = false;
+  function cancelPendingControl(): void {
+    pendingArrivalTakeControl = false;
+    pendingTakeControl = false;
+    setBootNote(null);
+  }
   let avatarReadiness: Promise<void> | null = null;
   function trackAvatarReadiness(): Promise<void> {
     return avatarReadiness ??= figures.avatarFigureReady(firstMap.avatar).then(() => {
@@ -634,6 +641,7 @@ async function startApp(username: string, role: string) {
   // no loss either, the reload lands on the title screen with the session it
   // still has.
   const backToTitle = async () => {
+    cancelPendingControl();
     try {
       await api.logout();
     } finally {
@@ -850,9 +858,11 @@ async function startApp(username: string, role: string) {
   // plane PLUS the painted areas and every one of them would roof the cellar.
 
   const places = new Map<string, PlaceRecord>();
+  // Rebuilds preserve this token; removal and rediscovery start a new lifetime.
+  const placeLifecycles = new Map<string, object>();
   const residency = new Map<string, Resident>();
   const eventPins = new Map<string, THREE.Sprite>();
-  type PinOwner = 'current' | 'travel' | 'open' | 'boot' | 'teleport';
+  type PinOwner = 'current' | 'travel' | 'open' | 'boot' | 'teleport' | 'approach' | 'entry';
   const pins = new Map<string, Set<PinOwner>>();
   function setPinOwner(owner: PinOwner, id: string | null | undefined): void {
     for (const [key, owners] of pins) {
@@ -868,8 +878,14 @@ async function startApp(username: string, role: string) {
   let lastMap: WorldMap | null = firstMap;
   const avatarName = firstMap.avatar;
   let bootPin = firstMap.characters.find(c => c.name === avatarName)?.location_id ?? '';
-  let teleportPin: string | null = null;
+  let pendingSnap: PendingSnap | null = null;
+  const readinessState = {
+    approachPin: null as string | null,
+    get pendingSnap() { return pendingSnap; },
+    set pendingSnap(value: PendingSnap | null) { pendingSnap = value; },
+  };
   let openLocationId: string | null = bootPin || null;
+  const storeyByPlace = new Map<string, number>();
   const promoting = new Set<string>();
   engine.target.copy(center);
   for (const loc of placeable) ensurePlace(loc);
@@ -1077,8 +1093,14 @@ async function startApp(username: string, role: string) {
   // a display nobody looks at may not cost a frame.
   let fpsMeter = newFpsMeter();
   let fpsNow = 0;
+  let worstFrame = { lastFrameAt: null as number | null, worstFrameMs: 0 };
   engine.addFrameHook((dt) => {
-    if (perfEnabled()) { fpsNow = pushFrame(fpsMeter, dt); return; }
+    if (perfEnabled()) {
+      fpsNow = pushFrame(fpsMeter, dt);
+      pushWorstFrame(worstFrame, performance.now());
+      return;
+    }
+    worstFrame = { lastFrameAt: null, worstFrameMs: 0 };
     // Switched off: throw the window away once, so switching it on again
     // starts measuring now instead of showing a second from another minute.
     if (fpsMeter.samples.length) { fpsMeter = newFpsMeter(); fpsNow = 0; }
@@ -1169,6 +1191,7 @@ async function startApp(username: string, role: string) {
     const info = engine.renderer.info;
     setPerfStats({
       fps: fpsNow,
+      worstFrameMs: worstFrame.worstFrameMs,
       // Read outside the frame hook, so these are the counters of the frame
       // that was last rendered — which is exactly what should be displayed.
       triangles: info.render.triangles,
@@ -1184,6 +1207,15 @@ async function startApp(username: string, role: string) {
 
   setInterval(() => {
     tickStreamRings();
+    if (pendingSnap && trySnap(readinessDeps, pendingSnap)) {
+      clearApproach(readinessDeps, readinessState);
+      const snap = pendingSnap;
+      const p = new THREE.Vector3(snap.x, groundY(snap.x, snap.z), snap.z);
+      npcs.snapPlayerTo(avatarName, p);
+      engine.flyTo(p, engine.targetDist);
+      clearSnap(readinessDeps, readinessState);
+      posDirty = true;
+    }
     tickModelTiers();
     if (perfEnabled()) measurePerfHeavy();
   }, LOD_TICK_MS);
@@ -1478,6 +1510,7 @@ async function startApp(username: string, role: string) {
       catch { return alive() ? 'failed' : aborted(); }
       if (!alive()) return aborted();
       const tile = buildTile(place);
+      restoreStorey(tile);
       shareTileHeight(tile, place);
       residency.set(id, { tile, ring: 'far', gen: 0, ready: false });
       engine.scene.add(tile.group);
@@ -1520,6 +1553,7 @@ async function startApp(username: string, role: string) {
         if (!alive()) { unmountDetail(tile); return 'aborted'; }
       }
       if (scene) buildDoorMarks(tile, scene);
+      restoreStorey(tile);
       resident.ring = 'near';
       resident.ready = true;
       place.height = tile.height;
@@ -1539,8 +1573,13 @@ async function startApp(username: string, role: string) {
       promoting.delete(id);
     }
   }
+  function restoreStorey(tile: Tile): void {
+    tile.levelFilter = storeyByPlace.get(tile.loc.id) ?? tile.levelFilter;
+    tile.levelSwitch?.();
+  }
   function downResident(id: string, _place: PlaceRecord, from: 'near' | 'far'): void {
     const resident = residency.get(id);
+    if (resident) storeyByPlace.set(id, resident.tile.levelFilter);
     if (from === 'near') {
       if (!resident) return;
       dropDoorMarks(id);
@@ -1561,6 +1600,22 @@ async function startApp(username: string, role: string) {
       setTimeout: (fn, ms) => setTimeout(fn, ms),
       clearTimeout: h => clearTimeout(h as ReturnType<typeof setTimeout>),
     });
+  const readinessDeps: ReadinessDeps = {
+    placeAt,
+    isReady: id => places.has(id) && residency.get(id)?.ring === 'near' && residency.get(id)?.ready === true,
+    pin: (id, owner) => {
+      const owners = pins.get(id) ?? new Set<PinOwner>();
+      owners.add(owner);
+      pins.set(id, owners);
+      const place = places.get(id);
+      if (place && driver.target(id) !== 'near') driver.want(id, place, 'near', () => distanceOf(id));
+    },
+    release: (id, owner) => {
+      const owners = pins.get(id);
+      owners?.delete(owner);
+      if (!owners?.size) pins.delete(id);
+    },
+  };
   function streamPoints(): { x: number; z: number }[] {
     const map = lastMap ?? firstMap;
     const me = map.characters.find(c => c.name === map.avatar);
@@ -1579,9 +1634,14 @@ async function startApp(username: string, role: string) {
     setPinOwner('travel', me?.travel?.target_id);
     setPinOwner('open', openLocationId);
     setPinOwner('boot', bootDone ? null : bootPin);
-    setPinOwner('teleport', teleportPin);
   }
   function tickStreamRings(): void {
+    // A stopped walker no longer reaches holdFor; release once ready anyway.
+    const approach = readinessState.approachPin;
+    if (approach && (readinessDeps.isReady(approach) || !places.has(approach))) {
+      readinessDeps.release(approach, 'approach');
+      readinessState.approachPin = null;
+    }
     syncStreamPins();
     for (const [id, place] of places) {
       const ring = ringFor(distanceOf(id), driver.target(id), pins.has(id), FOG_FAR_M);
@@ -1617,6 +1677,7 @@ async function startApp(username: string, role: string) {
     }
     const place = buildPlace(loc);
     places.set(loc.id, place);
+    placeLifecycles.set(loc.id, {});
     engine.scene.add(place.anchor);
   }
   // THE LOCATION THE PLAYER WAKES UP IN IS OPEN FROM THE FIRST MOUNT ON (user
@@ -1834,7 +1895,9 @@ async function startApp(username: string, role: string) {
     const place = buildPlace(loc);
     places.set(loc.id, place);
     engine.scene.add(place.anchor);
-    if (residency.has(loc.id) || driver.hasJob(loc.id)) driver.rebuild(loc.id, place);
+    const resident = residency.get(loc.id);
+    if (resident) resident.ready = false;
+    if (resident || driver.hasJob(loc.id)) driver.rebuild(loc.id, place);
   }
   // A changed scene signature (layout, map3d, model metadata, prop sidecar)
   // rebuilds the tile. A 404 (deleted layout) leaves only the procedural
@@ -1852,7 +1915,11 @@ async function startApp(username: string, role: string) {
   scenes.onScene = (locId) => {
     wallCache.delete(locId);
     const place = places.get(locId);
-    if (place && (residency.has(locId) || driver.hasJob(locId))) driver.rebuild(locId, place);
+    if (place && (residency.has(locId) || driver.hasJob(locId))) {
+      const resident = residency.get(locId);
+      if (resident) resident.ready = false;
+      driver.rebuild(locId, place);
+    }
   };
   function applyLocations(fresh: WorldLocation[]) {
     const freshById = new Map(fresh.map((l) => [l.id, l]));
@@ -1885,10 +1952,10 @@ async function startApp(username: string, role: string) {
     for (const [tile, loc] of dirty) rebuildTile(tile, loc);
   }
 
-  async function syncLocations() {
+  async function syncLocations(force = false) {
     try {
       const { etag, locations } = await api.getLocations3d();
-      if (etag !== appliedEtag) {
+      if (force || etag !== appliedEtag) {
         applyLocations(locations);
         appliedEtag = etag;
       }
@@ -2012,6 +2079,7 @@ async function startApp(username: string, role: string) {
       }
       return false;
     }
+    if (name !== firstMap.avatar) cancelPendingControl();
     const char = lastMap?.characters.find((c) => c.name === name) ?? null;
     setGameState({ selected: char ? { char, isAvatar: name === lastMap!.avatar } : null });
     return true;
@@ -2056,8 +2124,22 @@ async function startApp(username: string, role: string) {
     uiActions.toast?.('That is as far out as you can look while in control — '
       + 'press Esc to leave control.', true);
   };
-  gameActions.enterEmbodied = () => { zoomCapHinted = false; enterEmbodied(embody); };
-  gameActions.exitEmbodied = () => exitEmbodied(embody);
+  gameActions.enterEmbodied = () => {
+    const map = lastMap ?? firstMap;
+    const me = map.characters.find(c => c.name === map.avatar);
+    if (me && avatarWaitsForPlace(true, me.location_id, residency.get(me.location_id))) {
+      pendingArrivalTakeControl = true;
+      toastQuiet('Loading this place…');
+      return;
+    }
+    pendingArrivalTakeControl = false;
+    zoomCapHinted = false;
+    enterEmbodied(embody);
+  };
+  gameActions.exitEmbodied = () => {
+    cancelPendingControl();
+    exitEmbodied(embody);
+  };
   // "Take control" from the HUD's Self panel: the way back into the avatar that
   // does NOT need a clickable figure. Since a character in a closed room is not
   // drawn at all (see `computeNpcStates`) — the avatar included — the plaque
@@ -2081,7 +2163,8 @@ async function startApp(username: string, role: string) {
       return;
     }
     pendingTakeControl = false;
-    const me = lastMap?.characters.find((c) => c.name === lastMap!.avatar);
+    const map = lastMap ?? firstMap;
+    const me = map.characters.find(c => c.name === map.avatar);
     const tile = me ? places.get(me.location_id) : undefined;
     // WILDERNESS IS A PLACE (E4 task 5). An avatar without a tile used to be
     // refused here — in the grid world it meant "no cell, nothing to fly to".
@@ -2107,7 +2190,7 @@ async function startApp(username: string, role: string) {
     // No figure on the map yet (the model is still loading): entering is a
     // no-op then, and the view has already flown in — the same message says
     // what happened, and pressing again once the figure is there works.
-    if (getGameState().mode !== 'embodied') {
+    if (getGameState().mode !== 'embodied' && !pendingArrivalTakeControl) {
       uiActions.toast?.('Your avatar is not on the map yet.', true);
     }
   };
@@ -2124,7 +2207,9 @@ async function startApp(username: string, role: string) {
   // React may already have unmounted the node by the time a second bubble
   // listener sees the event.
   window.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || isTypingTarget(e)) return;
+    if (e.key !== 'Escape') return;
+    if (pendingArrivalTakeControl || pendingTakeControl) cancelPendingControl();
+    if (isTypingTarget(e)) return;
     if (document.querySelector(
       '.lb-overlay, .ga-modal-backdrop, .player-gallery-overlay')) return;
     // The storey choice comes FIRST: it is part of the HUD's bottom stack and
@@ -2334,6 +2419,7 @@ async function startApp(username: string, role: string) {
     try {
       if (map.locations_rev !== locationsRev) void syncLocations();
       lastMap = map;
+      if (!map.characters.some(c => c.name === firstMap.avatar)) cancelPendingControl();
       syncStreamPins();
       mapPolledAt = polledAt;
       mapStamp += 1;
@@ -2350,6 +2436,18 @@ async function startApp(username: string, role: string) {
       takeRoomsFrom(map);
       updatePins(map);
       refreshSelection(map);
+      rebuildMovedTiles(map);
+      const fresh = placeableOf(map, detailById).filter(loc => !places.has(loc.id));
+      for (const loc of fresh) {
+        placeable.push(loc);
+        ensurePlace(loc);
+      }
+      if (fresh.length) {
+        noteGeometry(map.locations);
+        // Discovery needs details even when the endpoint revision has not changed.
+        void syncLocations(true);
+      }
+      syncStreamPins();
       reconcileAvatarPlace(map, polledAt); // server seated the avatar? (places § 4)
       reconcileAvatarPos(map, polledAt);   // server moved the avatar? (E4-T5)
       void syncPlaceGlyphs(map);  // free slots to sit down on (places § 4)
@@ -2378,7 +2476,6 @@ async function startApp(username: string, role: string) {
     worldPropsLayer.sync(map.world_props, map.world_props_sig ?? '');
     takeWalkLimits(map);
     takeBackdrop(map);
-    rebuildMovedTiles(map);
     // KNOWLEDGE MOVES WHILE ONE PLAYS: a place the avatar has just discovered
     // is simply in the payload from one poll to the next, and the reveal below
     // builds its tile. Nothing is un-covered — since v6 No. 8 there is no veil
@@ -2538,6 +2635,13 @@ async function startApp(username: string, role: string) {
     hiddenChars.clear();
     const states: NpcState[] = [];
     for (const c of map.characters) {
+      if (avatarWaitsForPlace(c.name === avatarName, c.location_id, residency.get(c.location_id))) {
+        hiddenChars.add(c.name);
+        const center = places.get(c.location_id)?.center;
+        states.push({ char: c, hidden: true, snap: true,
+          pos: new THREE.Vector3(c.pos?.x ?? center?.x ?? 0, center?.y ?? 0, c.pos?.z ?? center?.z ?? 0) });
+        continue;
+      }
       // Travellers FIRST, and outside the grouping by location: on its way a
       // character stands in the WILDERNESS (`location_id: ""`, § A11), which
       // is no tile — grouping by location would drop it off the map for the
@@ -2616,12 +2720,13 @@ async function startApp(username: string, role: string) {
           // payload point cannot answer: a sitting or lying figure without a
           // marker is put on a surface sampled off the furniture itself.
           const kind = c.activity_animation || '';
-          const held = c.place ? tile.roomMarkers.get(inRoom)?.get(c.place.id) : undefined;
+          const near = residency.get(locId)?.ring === 'near';
+          const held = near && c.place ? tile.roomMarkers.get(inRoom)?.get(c.place.id) : undefined;
           // The seat point itself — `undefined` for a marker that named no
           // slots, which then falls down the ladder like a missing marker.
           const seat = held && c.place ? slotFor(held, c.place.slot) : undefined;
-          const sit = tile.roomSitSpots.get(inRoom);
-          const lieDown = tile.roomLieSpots.get(inRoom);
+          const sit = near ? tile.roomSitSpots.get(inRoom) : undefined;
+          const lieDown = near ? tile.roomLieSpots.get(inRoom) : undefined;
           // The surface choice runs over the FAMILY — `sit-cmu` is a sitting
           // and belongs on the sit surfaces.
           const family = animFamily(kind);
@@ -2811,6 +2916,12 @@ async function startApp(username: string, role: string) {
 
   setInterval(() => {
     if (lastMap && figures.state !== 'loading') npcs.update(computeNpcStates(lastMap), npcUpdateOpts());
+    if (bootDone && pendingArrivalTakeControl) {
+      const map = lastMap ?? firstMap;
+      if (getGameState().mode === 'overview' && map.avatar
+          && map.characters.some(c => c.name === map.avatar)
+          && npcs.positionOf(map.avatar)) gameActions.enterEmbodied?.();
+    }
     // Talk target (E3-T5): the same 1 Hz tick, and deliberately not a frame
     // hook — walking up to someone is a second-scale event, and
     // `shownPlacement` is only rewritten here anyway. See the section further
@@ -2846,6 +2957,29 @@ async function startApp(username: string, role: string) {
    * turns the point into the tile's own frame and ray-casts the drawn outline,
    * so a rotated or concave footprint is tested as the shape it is.
    */
+  function placeAt(x: number, z: number): string | null {
+    let best: PlaceRecord | null = null;
+    for (const place of places.values()) {
+      if (tileContains(place, x, z) && (!best || place.area < best.area)) best = place;
+    }
+    let id = best?.loc.id ?? null;
+    let area = best?.area ?? Infinity;
+    // Payload-only footprints hold movement before discovery creates a record.
+    for (const loc of (lastMap ?? firstMap).locations) {
+      if (places.has(loc.id)) continue;
+      const center = footprintCentre(loc);
+      if (!center) continue;
+      const footprint = { ...loc, rooms: [] };
+      const boundary = footprintBoundary(footprint);
+      const candidateArea = polygonArea(boundary);
+      if (candidateArea < area && tileContains({ center, boundary, yaw: footprintYaw(footprint) }, x, z)) {
+        id = loc.id;
+        area = candidateArea;
+      }
+    }
+    return id;
+  }
+
   function tileAt(x: number, z: number): Tile | null {
     let best: Tile | null = null;
     for (const { tile } of residency.values()) {
@@ -3339,6 +3473,11 @@ async function startApp(username: string, role: string) {
   function dropPlace(id: string): void {
     const place = places.get(id);
     if (!place) return;
+    if (readinessState.approachPin === id) {
+      readinessDeps.release(id, 'approach');
+      readinessState.approachPin = null;
+    }
+    if (pendingSnap?.id === id) clearSnap(readinessDeps, readinessState);
     if (openLocationId === id) closeOpenLocation();
     if (hovered === place) {
       // Including the cursor: `onHover` bails out early when the id it gets is
@@ -3348,9 +3487,11 @@ async function startApp(username: string, role: string) {
       document.body.style.cursor = 'default';
     }
     driver.drop(id);
+    storeyByPlace.delete(id);
     scenes.forget(id);
     pins.delete(id);
     places.delete(id);
+    placeLifecycles.delete(id);
     engine.scene.remove(place.anchor);
     place.labelObj?.element.remove();
     dropDoorMarks(id);
@@ -3413,6 +3554,7 @@ async function startApp(username: string, role: string) {
       showAll = on;
       viewRev += 1;
       lastMap = map;
+      if (!map.characters.some(c => c.name === firstMap.avatar)) cancelPendingControl();
       syncStreamPins();
       mapPolledAt = askedAt;
       mapStamp += 1;
@@ -3689,6 +3831,14 @@ async function startApp(username: string, role: string) {
   /** Reason of the last refusal and until when it stays quiet. */
   let quietReason = '';
   let quietUntil = 0;
+  // Loading hints have their own throttle, so they cannot hide a refusal.
+  let loadingQuietUntil = 0;
+  function toastQuiet(msg: string): void {
+    const now = performance.now();
+    if (now < loadingQuietUntil) return;
+    loadingQuietUntil = now + REFUSAL_QUIET_MS;
+    uiActions.toast?.(msg, true);
+  }
   /** The location/room the SERVER last confirmed for the avatar through a
    *  report. Adopted immediately, exactly as the step answer used to be: it is
    *  the server's own word, up to three seconds before the poll repeats it,
@@ -3724,6 +3874,7 @@ async function startApp(username: string, role: string) {
    * because it is not a correction at all but a move the player did not make.
    */
   function correctTo(point: { x: number; z: number }): void {
+    clearApproach(readinessDeps, readinessState);
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
     const target = new THREE.Vector3(point.x, groundY(point.x, point.z), point.z);
@@ -3747,6 +3898,7 @@ async function startApp(username: string, role: string) {
   /** Send ONE report. Never throws: every refusal is either a correction plus
    *  a toast, or (the throttle) nothing at all. */
   async function reportPos(x: number, z: number): Promise<void> {
+    if (pendingSnap) { posDirty = true; return; }
     posInFlight = true;
     const sentAt = performance.now();
     lastReportAt = sentAt;
@@ -3831,6 +3983,7 @@ async function startApp(username: string, role: string) {
    *    report, so a standing figure sends nothing at all.
    */
   function tickPosReport(pos: { x: number; z: number }): void {
+    if (pendingSnap) return;
     if (posInFlight) return;
     if (!posDirty) return;
     // A SEATED avatar reports nothing (plan-posen-plaetze.md § 4), for the
@@ -3915,7 +4068,10 @@ async function startApp(username: string, role: string) {
     // those either — a goal planned from the old position would walk the
     // figure back out of the opening it just came through.
     if (state.mode !== 'embodied' || state.movementLocked
-      || verticalRide || walkIn) return false;
+      || verticalRide || walkIn || pendingSnap) {
+      if (pendingSnap) toastQuiet('Loading this place…');
+      return false;
+    }
     const pos = npcs.positionOf(avatarName);
     if (!pos) return false;
     // OUT IN THE OPEN the click is read against the DRAPED GROUND itself
@@ -3962,7 +4118,12 @@ async function startApp(username: string, role: string) {
     // only authority, so a storey picked there would face a memory that
     // already holds the avatar's — the edge would not fire on re-entry and the
     // view would stay on the wrong floor, which IS the finding.
-    if (!embodied) followedStorey.clear();
+    if (!embodied) {
+      followedStorey.clear();
+      if (readinessState.approachPin) readinessDeps.release(readinessState.approachPin, 'approach');
+      readinessState.approachPin = null;
+      clearSnap(readinessDeps, readinessState);
+    }
   });
 
   // --- The view corridor camera -> avatar (`scene/occlusion.ts`) ------------
@@ -3999,6 +4160,7 @@ async function startApp(username: string, role: string) {
       correction = null;     // …and for a correction of a figure nobody steers
       return;
     }
+    if (pendingSnap) { toastQuiet('Loading this place…'); return; }
     // THE STAND-UP'S TRAVEL (rule 4 of `Figure.travelBase`): a bridge clip
     // with root motion carried the body out of the seat along its own travel
     // while the root stayed put. Once it has ended, the root takes that
@@ -4254,6 +4416,10 @@ async function startApp(username: string, role: string) {
       routeStalled = walkStalled(from, { x, z }) ? routeStalled + 1 : 0;
       if (routeStalled >= STALL_FRAMES) cancelRoute();
     }
+    if (holdFor(readinessDeps, readinessState, x, z)) {
+      x = pos.x; z = pos.z;
+      toastQuiet('Loading this place…');
+    }
     walkGoal.set(x, roomFloorY(here, x, z) ?? groundY(x, z), z);
     npcs.setPlayerTarget(avatarName, walkGoal, pace);
     // The report is about where the figure IS, not where it is being sent:
@@ -4317,6 +4483,8 @@ async function startApp(username: string, role: string) {
     // figure back onto it for up to CORRECT_MS, swallowing the steering input
     // all the while (plan-aufstehen.md).
     if (pollIsStale(polledAt, ownSeatChangeAt)) return;
+    const me = map.characters.find((c) => c.name === avatarName);
+    if (me) clearSnap(readinessDeps, readinessState);
     // A SEATED avatar stands where `reconcileAvatarPlace` put it: on the
     // payload's slot point, the server's word. The row's `pos` need not be
     // that point (a pair's centre, a report that landed before the seat), and
@@ -4327,7 +4495,6 @@ async function startApp(username: string, role: string) {
     if (posInFlight || walkIn || verticalRide || correction) return;
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
-    const me = map.characters.find((c) => c.name === avatarName);
     // No point in the payload = the server has no position for the avatar at
     // all (an unplaced location). Nothing to reconcile against.
     if (!me?.pos) return;
@@ -4350,6 +4517,13 @@ async function startApp(username: string, role: string) {
     // real teleport. The camera follows only in the second case: a jump across
     // the map must not leave the view behind, while a two-metre correction
     // would fly the camera for nothing.
+    const id = readinessDeps.placeAt(me.pos.x, me.pos.z);
+    if (d > CORRECT_WALK_M && id && !readinessDeps.isReady(id)) {
+      holdSnap(readinessDeps, readinessState, { ...me.pos, id });
+      cancelRoute();
+      npcs.setPlayerTarget(avatarName, pos.clone());
+      return;
+    }
     correctTo(me.pos);
     if (d > CORRECT_WALK_M) {
       const p = new THREE.Vector3(me.pos.x, groundY(me.pos.x, me.pos.z), me.pos.z);
@@ -4439,6 +4613,7 @@ async function startApp(username: string, role: string) {
     // `takeOver` clears the figure's facing, and a poll repeating the same
     // seat would otherwise leave the sitter staring at its neighbours.
     if (getGameState().mode !== 'embodied') { seatedKey = ''; return; }
+    if (residency.get(me?.location_id ?? '')?.ring !== 'near') { seatedKey = ''; return; }
     const key = `${place.id}#${place.slot}`;
     if (key === seatedKey) return;
     const tile = me?.location_id ? residency.get(me.location_id)?.tile : undefined;
@@ -5472,7 +5647,10 @@ async function startApp(username: string, role: string) {
   function walkAvatarTo(x: number, z: number): void {
     const state = getGameState();
     if (state.mode !== 'embodied' || state.movementLocked
-      || verticalRide || walkIn) return;
+      || verticalRide || walkIn || pendingSnap) {
+      if (pendingSnap) toastQuiet('Loading this place…');
+      return;
+    }
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
     const goal = planClickWalk({ x: pos.x, z: pos.z }, { x, z },
@@ -5628,8 +5806,11 @@ async function startApp(username: string, role: string) {
    *  A locked place is answered instead of entered: the server's own sentence,
    *  passed through untranslated (it is localized already), so the key is never
    *  silent at a barred gate. */
+  function offerKey(offer: NonNullable<typeof enterOffer>): string {
+    return JSON.stringify([offer.locId, offer.point.x, offer.point.z, offer.inward.x, offer.inward.z]);
+  }
   async function enterOfferedLocation() {
-    const offer = enterOffer;
+    let offer = enterOffer;
     const state = getGameState();
     if (!offer || state.mode !== 'embodied' || state.movementLocked) return;
     if (offer.locked) {
@@ -5638,10 +5819,33 @@ async function startApp(username: string, role: string) {
     }
     // Nothing may overlap a guided movement or a room request — the same
     // interlocks the walking hook honours.
-    if (roomRequestInFlight || verticalRide || walkIn) return;
+    if (roomRequestInFlight || verticalRide || walkIn || correction || pendingSnap) {
+      if (pendingSnap) toastQuiet('Loading this place…');
+      return;
+    }
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
-    if (!places.get(offer.locId)) return;
+    const record = places.get(offer.locId);
+    if (!record) return;
+    const lifecycle = placeLifecycles.get(offer.locId);
+    const key = offerKey(offer);
+    if (!(await enterWhenReady({
+      requestNear: id => readinessDeps.pin(id, 'entry'),
+      release: readinessDeps.release,
+      settled: id => driver.settled(id),
+      sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+      isReady: readinessDeps.isReady,
+      exists: id => places.has(id) && placeLifecycles.get(id) === lifecycle,
+      canProgress: id => driver.hasJob(id) || driver.target(id) !== driver.ring(id),
+      stillValid: k => {
+        const state = getGameState();
+        return state.mode === 'embodied' && !state.movementLocked
+          && !roomRequestInFlight && !verticalRide && !walkIn && !correction && !pendingSnap
+          && !!enterOffer && !enterOffer.locked && offerKey(enterOffer) === k;
+      },
+    }, offer.locId, key))) return;
+    offer = enterOffer;
+    if (!offer || !npcs.positionOf(avatarName)) return;
     cancelRoute();
     // ONE normal, the one `entryOfferNear` already picked: the authored
     // opening's (server-computed, world metres) or the rim's on a free
@@ -5825,7 +6029,7 @@ async function startApp(username: string, role: string) {
         else closeOpenLocation();
       }
     } else if (openLocationId) {
-      const t = residency.get(openLocationId)?.tile;
+      const t = places.get(openLocationId);
       const off = t
         ? Math.hypot(engine.target.x - t.center.x, engine.target.z - t.center.z)
         : Infinity;

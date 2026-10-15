@@ -35,6 +35,8 @@ import type { ModelTier } from '@anima/scene-render';
 export interface PerfStats {
   /** frames per second, smoothed over the last second (`pushFrame`) */
   fps: number;
+  /** Largest raw frame interval since the overlay was enabled/reset. */
+  worstFrameMs: number;
   /** triangles DRAWN in the last frame (`renderer.info.render.triangles`) */
   triangles: number;
   /** draw calls of the last frame — the cost centre of scattered props, where
@@ -273,4 +275,12 @@ export function scatterCosts(nodes: Iterable<DrawableNode> | null | undefined,
     bucket.triangles += Math.floor(verts / 3) * instances;
   }
   return out;
+}
+
+export interface WorstFrameState { lastFrameAt: number | null; worstFrameMs: number }
+/** Use raw monotonic timestamps: simulation dt may be clamped. */
+export function pushWorstFrame(state: WorstFrameState, nowMs: number): number {
+  if (state.lastFrameAt !== null) state.worstFrameMs = Math.max(state.worstFrameMs, nowMs - state.lastFrameAt);
+  state.lastFrameAt = nowMs;
+  return state.worstFrameMs;
 }

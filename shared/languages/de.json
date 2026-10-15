@@ -615,6 +615,7 @@
     "LLM-composed": "LLM-komponiert",
     "LLM-composed (cached)": "LLM-komponiert (aus dem Cache)",
     "Loading the world": "Die Welt wird geladen",
+    "Loading this place…": "Dieser Ort lädt noch …",
     "Loading…": "Lade…",
     "Location": "Ort",
     "Location copied": "Ort kopiert",
@@ -1131,6 +1132,7 @@
     "wavy": "gewellt",
     "What grows on this area — props, how many per 100 m², how tall": "Was auf dieser Fläche wächst — Props, wie viele je 100 m², wie hoch",
     "World states": "Welt-Zustände",
+    "Worst frame": "Langsamster Frame",
     "You are following the party of": "Du folgst der Party von",
     "You are part of a party and your leader takes you along — you cannot move on your own.": "Du bist Teil einer Party und wirst vom Leader mitgenommen — eigene Bewegung gesperrt.",
     "The ground within sight in the top right corner, north up, with your position and heading. Only while you are in the world.": "Die Umgebung in Sichtweite oben rechts, Norden oben, mit deiner Position und Blickrichtung. Nur solange du in der Welt bist.",
@@ -2558,6 +2560,13 @@
     "Face": "Gesicht",
     "Mesh": "Mesh",
     "Re-rig": "Neu riggen",
-    "Reset tilt": "Neigung zurücksetzen"
+    "Reset tilt": "Neigung zurücksetzen",
+    "Face view": "Gesichtsansicht",
+    "Front view (T-pose)": "Frontansicht (T-Pose)",
+    "Render a face close-up for face retexture": "Nahaufnahme für die Gesichtstextur rendern",
+    "No usable face view.": "Keine nutzbare Gesichtsansicht.",
+    "Render the face view (T-pose set) for this outfit": "Gesichtsansicht im T-Pose-Set für dieses Outfit rendern",
+    "The face view does not match the mesh.": "Die Gesichtsansicht passt nicht zum Mesh.",
+    "The face view was rendered from an older T-pose; regenerate it": "Die Gesichtsansicht stammt von einer älteren T-Pose; bitte neu rendern"
   }
 }
