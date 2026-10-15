@@ -151,6 +151,86 @@ def reconcile_race():
     assert c.take() == ([], False)
 
 
+def reconcile_vs_move():
+    """NEU: serialize initial binding with moves to prevent old-location leaks.
+
+    Barriers cover both orders; a lock-attempt event avoids timing sleeps.
+    """
+    for first in ('reconcile', 'move'):
+        c = fresh('', '')
+        account, character = ModuleType('app.models.account'), ModuleType('app.models.character')
+        account.get_active_character_for_user = lambda uid: 'Ava'
+        committed = ['old']
+        paused, release = threading.Barrier(2), threading.Barrier(2)
+        attempted_or_done = threading.Event()
+        errors, results = [], []
+        stripe = b._move_locks[hash('Ava') % len(b._move_locks)]
+
+        class ObservedStripe:
+            def __enter__(self):
+                if threading.current_thread().name == 'second':
+                    attempted_or_done.set()
+                stripe.acquire()
+
+            def __exit__(self, *args):
+                stripe.release()
+
+        def location(avatar):
+            value = committed[0]
+            if first == 'reconcile' and threading.current_thread().name == 'first':
+                paused.wait(2)
+                release.wait(2)
+            return value
+
+        original_bound = b.bound_avatars
+        def bound():
+            if first == 'move' and threading.current_thread().name == 'first':
+                paused.wait(2)
+                release.wait(2)
+            return original_bound()
+
+        def run(fn):
+            try:
+                results.append(fn())
+            except Exception as error:
+                errors.append(error)
+            finally:
+                if threading.current_thread().name == 'second':
+                    attempted_or_done.set()
+
+        character.get_character_current_location = location
+        locks = tuple(ObservedStripe() if lock is stripe else lock for lock in b._move_locks)
+        reconcile = lambda: b.reconcile(c)
+        move = lambda: b.moved('Ava', 'old', 'new')
+        one, two = (reconcile, move) if first == 'reconcile' else (move, reconcile)
+        threads = [threading.Thread(target=lambda: run(one), name='first'),
+                   threading.Thread(target=lambda: run(two), name='second')]
+        with patch.dict(sys.modules, {'app.models.account': account, 'app.models.character': character}), \
+                patch.object(b, '_move_locks', locks), patch.object(b, 'bound_avatars', bound):
+            try:
+                if first == 'move':
+                    committed[0] = 'new'
+                threads[0].start()
+                paused.wait(2)
+                committed[0] = 'new'
+                threads[1].start()
+                assert attempted_or_done.wait(2), 'competing operation did not run'
+            finally:
+                release.wait(2)
+                for th in threads:
+                    if th.ident is not None:
+                        th.join(2)
+            assert all(not th.is_alive() for th in threads)
+            assert not errors, errors
+            assert True in results
+            assert c.binding()[:2] == ('Ava', 'new'), (first, c.binding())
+            c.take()
+            c.delivered()
+            b.notify('scene', to=b.AtLocation('old'))
+            assert c.take() == ([], False), first
+        b.unregister(c)
+
+
 def location_case(stale=False):
     c = fresh()
     r = c.binding()[2]
@@ -231,7 +311,7 @@ case('thread', thread)
 case('bundle', bundle)
 for name in ['fog_move', 'perceivers', 'owner', 'world']:
     case(name, lambda name=name: recipients(name))
-for name in ['wilderness', 'overflow', 'rebind_drops_queue', 'rebind_race', 'stale_recheck', 'reconcile_race', 'never_raises']:
+for name in ['wilderness', 'overflow', 'rebind_drops_queue', 'rebind_race', 'stale_recheck', 'reconcile_race', 'reconcile_vs_move', 'never_raises']:
     case(name, globals()[name])
 case('stale_location', lambda: location_case(True))
 case('note_location', location_case)
