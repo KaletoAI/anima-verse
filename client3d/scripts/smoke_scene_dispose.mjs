@@ -143,13 +143,25 @@ async function loadClient(ref) {
     const stubs = {
       name: 'smoke-stubs',
       setup(build) {
-        // The GLB loader is the ONE thing this check must own: `loadGlb`
-        // caches its templates, and a template is what must survive an unmount.
+        // Lease stubs count consumer ownership without disposing shared resources.
         build.onLoad({ filter: /scene[/\\]propAssets\.ts$/ }, () => ({
-          contents: 'export function setPropLoadFocus() {}\n'
-            + 'export function loadGlb(url) {\n'
-            + '  globalThis.__smokeUrls?.push(url); return globalThis.__smokeLoad ? globalThis.__smokeLoad(url) : Promise.resolve(globalThis.__smokeTemplates?.get(url) ?? null);\n'
-            + '}\n',
+          contents: `export function setPropLoadFocus() {}
+            async function load(url) {
+              globalThis.__smokeUrls?.push(url);
+              return globalThis.__smokeLoad ? globalThis.__smokeLoad(url) : globalThis.__smokeTemplates?.get(url) ?? null;
+            }
+            ${ref ? 'export { load as loadGlb };' : ''}
+            export async function leaseGlb(url) {
+              const template = await load(url); if (!template) return null;
+              const counts = globalThis.__leaseCounts ??= new Map();
+              counts.set(url, (counts.get(url) ?? 0) + 1);
+              let released = false;
+              return { template, release() {
+                if (released) throw new Error('lease released twice: ' + url);
+                globalThis.__beforeLeaseRelease?.(url);
+                released = true; counts.set(url, counts.get(url) - 1);
+              } };
+            }`,
           loader: 'ts',
         }));
         if (oldSource) {
@@ -242,7 +254,7 @@ const LOCATION = {
   map3d: { style: 'building' },
 };
 
-/** One shared GLB template, exactly as `loadGlb` caches it. */
+/** One shared GLB template, retained by the lease pool. */
 function template(tag, store) {
   const group = new THREE.Group();
   const geo = new THREE.BoxGeometry(1, 1, 1);
@@ -607,6 +619,123 @@ async function layerCases(c) {
     eq('NEU outdoor_doors swing survives', outdoor.object.rotation.y, .4);
     unmountShell(tile);
     eq('NEU outdoor_doors shell removed count', tile.doorProps?.length ?? 0, 0);
+  }
+  /** NEU on a241a8aa: no lease API. Hand counts: building + outdoor diorama
+   * + outdoor prop = 3 shell leases; indoor prop + diorama = 2 detail leases;
+   * placeholder = 0. Total 5: /full=5. Interior swap changes four
+   * /full URLs to /low: /full=1, /low=4. Rejection returns all new
+   * leases. Repeated detail teardown leaves 3; shell teardown leaves 0.
+   * Building material clones must be disposed before their lease is released.
+   */
+  for (const name of ['swap_releases_old', 'swap_rejected_releases', 'swap_then_unmount', 'layer_leases']) {
+    globalThis.__leaseCounts = new Map();
+    const tile = mkTile(), p = fixture();
+    await mountShell(tile, p); await mountDetail(tile, p);
+    const counts = globalThis.__leaseCounts;
+    const initial = [...counts.values()].reduce((a, b) => a + b, 0);
+    eq(`NEU ${name} one lease per loaded rec`, initial, 5);
+    if (name === 'layer_leases') {
+      unmountDetail(tile); unmountDetail(tile);
+      eq('NEU unmountDetail releases every detail lease exactly once', [...counts.values()].reduce((a,b) => a+b,0), 3);
+    } else if (name === 'swap_rejected_releases') {
+      const waiting = []; globalThis.__smokeLoad = () => new Promise(resolve => waiting.push(() => resolve(raw)));
+      const pending = c.setSceneModelTier(tile, 'interior', 'low');
+      unmountShell(tile); waiting.forEach(done => done()); await pending;
+      globalThis.__smokeLoad = undefined;
+      eq('NEU swap_rejected_releases', counts.get('/low.glb'), 0);
+    } else {
+      await c.setSceneModelTier(tile, 'interior', 'low');
+      eq(`NEU ${name} old freed`, counts.get('/full.glb'), 1);
+      eq(`NEU ${name} new held`, counts.get('/low.glb'), 4);
+      check(`NEU ${name} new lease attached`, tile.placedModels.filter(r => r.url === '/low.glb').every(r => r.lease?.template === raw));
+    }
+    const roofCounts = new Map(tile.roofMats.map(mat => [mat, 0]));
+    for (const mat of roofCounts.keys()) mat.addEventListener('dispose', () => roofCounts.set(mat, roofCounts.get(mat) + 1));
+    globalThis.__beforeLeaseRelease = () => {
+      if (name === 'layer_leases') check('NEU building clones disposed before lease release', [...roofCounts.values()].every(n => n === 1));
+    };
+    unmountShell(tile); unmountShell(tile);
+    globalThis.__beforeLeaseRelease = undefined;
+    check(`NEU ${name} unmountShell releases building and all other leases`, [...counts.values()].every(n => n === 0));
+  }
+  // NEU hand-derived: failed mount => 0; failed swap => full=1, low=0,
+  // old object still attached. A reversal likewise retains full=1, low=0.
+  for (const phase of ['mount', 'mount_place', 'swap', 'swap_place', 'swap_attach', 'tier_reversal']) {
+    globalThis.__leaseCounts = new Map();
+    const tile = mkTile(), p = fixture();
+    p.models = [p.models.find(m => m.id === 'outprop')];
+    if (!phase.startsWith('mount')) await mountShell(tile, p);
+    const rec = tile.placedModels?.[0], old = rec?.object;
+    if (phase === 'tier_reversal') {
+      const waiting = [];
+      globalThis.__smokeLoad = () => new Promise(resolve => waiting.push(() => resolve(raw)));
+      const pending = c.setSceneModelTier(tile, 'interior', 'low');
+      let done = false;
+      const duplicate = c.setSceneModelTier(tile, 'interior', 'low').then(() => { done = true; });
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      eq('NEU pending wish waits', done, false);
+      await c.setSceneModelTier(tile, 'interior', 'full');
+      waiting.forEach(resolve => resolve()); await pending; await duplicate;
+      globalThis.__smokeLoad = undefined;
+    } else {
+      const clone = raw.clone;
+      raw.clone = function () {
+        if (phase.endsWith('_place')) {
+          const obj = clone.call(this, true);
+          obj.updateMatrixWorld = () => { throw new Error('NEU injected placement failure'); };
+          return obj;
+        }
+        if (phase === 'swap_attach') return clone.call(this, true);
+        throw new Error('NEU injected clone failure');
+      };
+      const parent = rec?.parent, add = parent?.add;
+      if (phase === 'swap_attach') parent.add = function (obj) {
+        add.call(this, obj); throw new Error('NEU injected attach failure');
+      };
+      let failed = false;
+      try { await (phase.startsWith('mount') ? mountShell(tile, p) : c.setSceneModelTier(tile, 'interior', 'low')); }
+      catch (error) { failed = error.message.includes('NEU injected'); }
+      finally { raw.clone = clone; if (parent) parent.add = add; }
+      check(`NEU ${phase}_throws rejects`, failed);
+    }
+    eq(`NEU ${phase} new lease released`, globalThis.__leaseCounts.get(phase.startsWith('mount') ? '/full.glb' : '/low.glb'), 0);
+    if (old) {
+      check(`NEU ${phase} old attached`, rec.object === old && !!old.parent);
+      eq(`NEU ${phase} old lease held`, globalThis.__leaseCounts.get('/full.glb'), 1);
+    }
+    unmountShell(tile);
+  }
+  // NEU hand-derived: A waits for its building; B replaces A and installs
+  // its building. A's stale completion owes only its lease, never B's clones.
+  {
+    globalThis.__leaseCounts = new Map();
+    const tile = mkTile(), a = fixture(), b = fixture();
+    a.models = [{ ...a.models[0], variants: { full: '/building-a.glb' } }];
+    b.models = [{ ...b.models[0], variants: { full: '/building-b.glb' } }];
+    let resolveA;
+    const started = new Promise(resolve => {
+      globalThis.__smokeLoad = url => url === '/building-a.glb'
+        ? new Promise(done => { resolveA = done; resolve(); }) : raw;
+    });
+    try {
+      const pendingA = mountShell(tile, a);
+      await started;
+      await mountShell(tile, b);
+      const buildingB = tile.serverModel, matsB = [...tile.roofMats];
+      const w = watcher();
+      for (const mat of matsB) w.watch(mat);
+      check('NEU stale_building B has roof materials', matsB.length > 0);
+      resolveA(raw);
+      await pendingA;
+      check('NEU stale_building B remains attached', tile.serverModel === buildingB && buildingB.parent === tile.group);
+      check('NEU stale_building B roof ledger retained', matsB.every(mat => tile.roofMats.includes(mat)));
+      for (const mat of matsB) eq('NEU stale_building B material not disposed', w.hits(mat), 0);
+      eq('NEU stale_building A lease released', globalThis.__leaseCounts.get('/building-a.glb'), 0);
+      eq('NEU stale_building B lease held', globalThis.__leaseCounts.get('/building-b.glb'), 1);
+    } finally {
+      globalThis.__smokeLoad = undefined;
+      unmountShell(tile);
+    }
   }
   const mainSource = await readFile(join(ROOT, 'client3d/src/main.ts'), 'utf8');
   const body = mainSource.slice(mainSource.indexOf('function buildDoorMarks'), mainSource.indexOf('function buildBoundaryMarks'));

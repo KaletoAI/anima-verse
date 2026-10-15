@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /**
+ * REGRESSION: Existing impostor math and render wiring retain their original baselines.
  * Smoke check for the FAR IMPOSTORS of the ground scatter — the render stage
  * that draws a wood beyond the cull line as billboards
  * (`client3d/src/scene/scatterLod.ts`, the `IMPOSTOR_*` half; the GPU side is
@@ -176,7 +177,7 @@
  *
  *   baked       -> store    (there is a texture)
  *   unbakeable  -> refuse   (the file arrived, there is nothing to render)
- *   load-failed -> retry    (the file did not arrive — `loadGlb` had already
+ *   load-failed -> retry    (the file did not arrive — `leaseGlb` had already
  *                            tried three times, so this is a backend that went
  *                            away, not a broken prop)
  *   no-renderer -> retry    (the tick ran before `setImpostorRenderer`;
@@ -451,6 +452,23 @@ async function main() {
   const groundSrc = await readFile(GROUND_SRC, 'utf8');
   const impSrc = await readFile(IMP_SRC, 'utf8');
   const mainSrc = await readFile(MAIN_SRC, 'utf8');
+  // NEU on a241a8aa: no lease API. Bake owns one lease only until render
+  // returns or throws; both paths must leave held=0, with exactly one release.
+  {
+    const { transformSync } = await import('esbuild');
+    const bakeSource = impSrc.slice(impSrc.indexOf('async function bake('), impSrc.indexOf('/** The lights'));
+    const code = transformSync(bakeSource + '\nreturn bake;', { loader: 'ts' }).code;
+    for (const throws of [false, true]) {
+      let held = 0, releases = 0;
+      const leaseGlb = async () => { held++; return { template: {}, release() { held--; releases++; } }; };
+      const bake = new Function('renderer', 'leaseGlb', 'render', 'impostorBakeVerdict', 'cache', 'evict', code)(
+        {}, leaseGlb, () => { if (throws) throw new Error('render failed'); return null; },
+        impostorBakeVerdict, new Map(), () => {});
+      await bake('test');
+      check(`NEU bake lease released (throw=${throws})`, [held, releases], [0, 1]);
+    }
+  }
+
   check('F the far half is binned BEFORE the entry-wide early-out',
     groundSrc.indexOf('binImpostors(prop, cam, cfg);')
       < groundSrc.indexOf('if (cam.distanceTo(prop.sphere.center) - prop.sphere.radius > cfg.cullM) {'),

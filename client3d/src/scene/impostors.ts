@@ -41,7 +41,7 @@
  * never fire.
  */
 import * as THREE from 'three';
-import { loadGlb } from './propAssets';
+import { leaseGlb, type GlbLease } from './propAssets';
 import { IMPOSTOR_ELEV_RAD, impostorBakeVerdict, impostorFrame } from './scatterLod';
 import type { ImpostorBakeAttempt, ImpostorFrame } from './scatterLod';
 
@@ -189,7 +189,7 @@ export function releaseImpostor(url: string): void {
 /**
  * Render one prop into a render target — the offscreen pass.
  *
- * THE LOADED FILE IS READ, NEVER CHANGED. `loadGlb` caches it, so the very
+ * THE LOADED FILE IS READ, NEVER CHANGED. `leaseGlb` caches it, so the very
  * object the scatter takes its geometry from is what arrives here: its
  * materials are left exactly as they are (patching one would set every placed
  * copy of that prop in every scene alight), it is hung into a scene of ours
@@ -211,25 +211,27 @@ async function bake(url: string, near?: THREE.Vector3): Promise<void> {
   let attempt: ImpostorBakeAttempt = 'no-renderer';
   let baked: CacheEntry | null = null;
   if (gl) {
-    let obj: THREE.Object3D | null = null;
+    let lease: GlbLease | null = null;
     try {
-      obj = await loadGlb(url, near);
+      lease = await leaseGlb(url, near);
     } catch {
-      obj = null;   // it answers null itself; a throw is the same accident
+      lease = null;   // it answers null itself; a throw is the same accident
     }
-    if (!obj) {
-      // `loadGlb` has already retried three times with backoff before it says
+    if (!lease) {
+      // `leaseGlb` has already retried three times with backoff before it says
       // this, so it is the backend that went away, not a broken prop.
       attempt = 'load-failed';
     } else {
       try {
-        baked = render(gl, obj);
+        baked = render(gl, lease.template);
         attempt = baked ? 'baked' : 'unbakeable';
       } catch {
         // The file is HERE and measuring or drawing it still failed — that is a
         // property of this model, so it stays a refusal rather than a job the
         // tick re-queues every second for the rest of the session.
         attempt = 'unbakeable';
+      } finally {
+        lease.release();
       }
     }
   }

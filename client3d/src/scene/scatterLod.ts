@@ -810,7 +810,7 @@ export function impostorCorners(cx: number, cy: number, cz: number,
  *  - `baked` — there is a texture.
  *  - `unbakeable` — the file ARRIVED and there is still nothing to render: no
  *    mesh in it, an empty box, a degenerate frame (`impostorFrame` → null).
- *  - `load-failed` — the GLB did not arrive. `loadGlb` already retried it three
+ *  - `load-failed` — the GLB did not arrive. the lease pool’s `deps.load` retried it three
  *    times with backoff before it answered null, so this is a backend that went
  *    away, not a broken prop.
  *  - `no-renderer` — the tick ran before `setImpostorRenderer`. Nothing was

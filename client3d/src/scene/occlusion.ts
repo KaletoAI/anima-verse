@@ -156,7 +156,7 @@ const ANCHOR_FRAG = '#include <clipping_planes_fragment>';
  * already in the slot, so the previous callback runs FIRST and the keys are
  * combined.
  *
- * THE CALLER OWNS THE MATERIAL. `loadGlb` caches the loaded file, so a material
+ * THE CALLER OWNS THE MATERIAL. the lease pool shares the loaded template, so a material
  * that came out of it belongs to every other user of that prop — patching it
  * would make a placed tree in a scene dissolve too. The scatter path therefore
  * clones per entry (`mountUrl`), the tile shells are built per tile anyway, and

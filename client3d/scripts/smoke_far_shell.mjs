@@ -226,7 +226,9 @@ async function main() {
     recipe.includes("scene.models.some((m) => m.role === 'building' && !m.roof_only)"),
     true);
   check('B6 …the spec decides, the renderer only executes',
-    recipe.includes("applySceneBuilding(tile, placed, spec.display ?? 'shell', !!spec.roof_only);"),
+    // the trailing argument (this mount attempt's own roof materials, A-T3) is
+    // ledger plumbing; the contract is the two spec-driven arguments before it
+    recipe.includes("applySceneBuilding(tile, placed, spec.display ?? 'shell', !!spec.roof_only"),
     true);
   check('B6 …shell and roof fade TOGETHER (appended, not reset)',
     [recipe.includes('tile.roofMats = roofOnly ? [...tile.roofMats] : [];'),

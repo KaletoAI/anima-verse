@@ -110,7 +110,7 @@ import { applyTerrainLayers, disposeLayerGround, layerIndexOfKind, layerTable,
 import { applyFogVeil } from './fogVeil';
 import { applyNaturalGround, setNaturalGroundField } from './naturalGround';
 import { applyOcclusionFade } from './occlusion';
-import { loadGlb } from './propAssets';
+import { leaseGlb, type GlbLease } from './propAssets';
 import { horizontalFovRad, IMPOSTOR_FAR_M, impostorQuad, impostorVisible,
   impostorYaw, instanceTier, instanceVisible, inViewCone,
   SCATTER_LOD_DEFAULTS, scatterGroundOffset, scatterSway, scatterTargetH,
@@ -423,7 +423,7 @@ export function applySway(mat: THREE.Material, swayM: number,
  * instance only ever takes the geometry.
  *
  * So: bake the mesh's own world matrix within the GLB into a CLONE, then lift
- * the clone until its lowest point is 0. The clone is essential — `loadGlb`
+ * the clone until its lowest point is 0. The clone is essential — `leaseGlb`
  * CACHES the loaded file, and every other user of that prop (a placement in a
  * scene, a second area scattering the same tree) would inherit a mutation.
  * `updateWorldMatrix` only recomputes matrices from what the nodes already
@@ -584,7 +584,7 @@ interface ScatterProp {
   /** the whole entry is currently hidden by that sphere test, so a tick that
    *  finds it hidden again does nothing at all */
   hidden: boolean;
-  /** the area is gone (`clearAreas`) — the mark a pending `loadGlb` reads
+  /** the area is gone (`clearAreas`) — the mark a pending `leaseGlb` reads
    *  before it writes into a mesh that is no longer in the scene */
   disposed: boolean;
   /** tier URLs from the payload (`{}` when the answer carried none) */
@@ -611,7 +611,7 @@ interface ScatterProp {
    *  stand still in a meadow whose ferns bend fully. It is kept here because
    *  `mountUrl` has to bend the material of every mesh it mounts. */
   sway: number;
-  /** area centre, handed to `loadGlb` so the download queue serves the props
+  /** area centre, handed to `leaseGlb` so the download queue serves the props
    *  the camera is looking at first */
   near: THREE.Vector3;
   /** the URL each of the two meshes has been ASKED for. It is the wish and the
@@ -641,6 +641,8 @@ interface ScatterProp {
    *  camera corridor; the wind alone used to spare a still prop that clone, the
    *  corridor fade patches every scatter material and no longer can. */
   mats: Map<string, THREE.Material>;
+  /** One template lease per URL while its cloned material shares textures. */
+  leases: Map<string, GlbLease>;
 }
 
 /**
@@ -2065,6 +2067,7 @@ export function createGround(): Ground {
           shownHigh: '',
           owned: new Map(),
           mats: new Map(),
+          leases: new Map(),
           // The far half is grown on demand, by the very tick that finds an
           // instance of this entry beyond the cull line (`binImpostors`).
           impostor: null,
@@ -2158,59 +2161,71 @@ export function createGround(): Ground {
     // a simplified one. `near` puts this download into the distance queue of
     // `propAssets.ts` instead of at its end: the wood being walked into is
     // fetched before the one across the map.
-    void loadGlb(url, prop.near).then((obj) => {
-      // A terrain refetch between request and answer took this entry out of
-      // the scene and disposed it — writing into it would resurrect nothing
-      // and hold the loaded mesh alive. The test is the DISPOSED mark
-      // `clearAreas` leaves, not the parent: since the build-then-swap a mesh
-      // is legitimately parentless for as long as its rebuild takes, and
-      // reading that as "gone" would drop the model of every prop whose file
-      // arrives before the swap.
-      if (!obj) { abandon(); return; }
-      if (prop.disposed) return;
-      let src: THREE.Mesh | null = null;
-      obj.traverse((o) => { if (!src && (o as THREE.Mesh).isMesh) src = o as THREE.Mesh; });
-      if (!src) { abandon(); return; }
-      const mesh = src as THREE.Mesh;
-      // `targetH` is the TARGET height since B17: the prop is scaled until
-      // its bounding box is that tall, and grounded either way (B16). The
-      // model is never instanced at its file size — that number survived no
-      // normalisation (`scatterTargetH`).
-      const geometry = prop.owned.get(url) ?? groundedGeometry(mesh, prop.targetH);
-      // The mesh is grounded and scaled — so this is the moment its real width
-      // is known, and the clearance the scatter keeps from a placed location
-      // stops being an estimate (finding 2026-08-20).
-      noteSpread(url, geometry);
-      // The clone is OURS and nothing else disposes it — the owned bag of
-      // this rebuild was drained into `areaOwned` long before this answer
-      // arrived (the load is asynchronous, the swap is not). So it rides on
-      // the prop and `clearAreas` frees it with the meshes. One per URL, and
-      // the map is the ledger of what has to be freed — it covers BOTH tiers
-      // of the entry, which is why the two meshes need no ledger of their own.
-      prop.owned.set(url, geometry);
-      // THE MATERIAL OF A SCATTERED PROP IS ALWAYS A CLONE. `loadGlb` caches
-      // the file, so `mesh.material` belongs to every area that scatters this
-      // tree and to every scene that places it; patching it here would set them
-      // all waving and dissolve a placed tree in a room the moment the player
-      // walks past a wood. Until the corridor fade only a SWAYING prop had to
-      // be cloned (a still one was patched by nobody); the corridor patch
-      // applies to every scatter material, so the shared cache material can no
-      // longer be handed out at all. The clone keeps the same cache key, so the
-      // extra material costs no extra program.
-      // Whatever this URL already has wins, exactly as the geometry above:
-      // two loads of one URL can be in flight at once (a band crossed twice
-      // while the first was travelling), and a second clone would replace the
-      // first in the ledger with nobody left to free it.
-      const material = prop.mats.get(url) ?? (mesh.material as THREE.Material).clone();
-      // CENTRAL, in the ONE place a tier is mounted: a mount replaces the
-      // material of a mesh, so a patch applied anywhere else would be lost the
-      // first time an entry loaded its second tier. BOTH meshes of an entry
-      // come through here, so both bend — and both open up for the camera.
-      applySway(material, prop.sway, prop.targetH);
-      applyOcclusionFade(material);
-      prop.mats.set(url, material);
-      if ((high ? prop.wantHigh : prop.wantLow) !== url) return;  // superseded
-      place(prop, url, high, geometry, material);
+    void leaseGlb(url, prop.near).then((lease) => {
+      let handedOff = false;
+      try {
+        const obj = lease?.template;
+        // A terrain refetch between request and answer took this entry out of
+        // the scene and disposed it — writing into it would resurrect nothing
+        // and hold the loaded mesh alive. The test is the DISPOSED mark
+        // `clearAreas` leaves, not the parent: since the build-then-swap a mesh
+        // is legitimately parentless for as long as its rebuild takes, and
+        // reading that as "gone" would drop the model of every prop whose file
+        // arrives before the swap.
+        if (!obj) { abandon(); return; }
+        if (prop.disposed) return;
+        if ((high ? prop.wantHigh : prop.wantLow) !== url) return;
+        if (prop.mats.has(url)) {
+          place(prop, url, high, prop.owned.get(url)!, prop.mats.get(url)!);
+          return;
+        }
+        let src: THREE.Mesh | null = null;
+        obj.traverse((o) => { if (!src && (o as THREE.Mesh).isMesh) src = o as THREE.Mesh; });
+        if (!src) { abandon(); return; }
+        const mesh = src as THREE.Mesh;
+        // `targetH` is the TARGET height since B17: the prop is scaled until
+        // its bounding box is that tall, and grounded either way (B16). The
+        // model is never instanced at its file size — that number survived no
+        // normalisation (`scatterTargetH`).
+        const geometry = prop.owned.get(url) ?? groundedGeometry(mesh, prop.targetH);
+        // The mesh is grounded and scaled — so this is the moment its real width
+        // is known, and the clearance the scatter keeps from a placed location
+        // stops being an estimate (finding 2026-08-20).
+        noteSpread(url, geometry);
+        // The clone is OURS and nothing else disposes it — the owned bag of
+        // this rebuild was drained into `areaOwned` long before this answer
+        // arrived (the load is asynchronous, the swap is not). So it rides on
+        // the prop and `clearAreas` frees it with the meshes. One per URL, and
+        // the map is the ledger of what has to be freed — it covers BOTH tiers
+        // of the entry, which is why the two meshes need no ledger of their own.
+        prop.owned.set(url, geometry);
+        // THE MATERIAL OF A SCATTERED PROP IS ALWAYS A CLONE. `leaseGlb` caches
+        // the file, so `mesh.material` belongs to every area that scatters this
+        // tree and to every scene that places it; patching it here would set them
+        // all waving and dissolve a placed tree in a room the moment the player
+        // walks past a wood. Until the corridor fade only a SWAYING prop had to
+        // be cloned (a still one was patched by nobody); the corridor patch
+        // applies to every scatter material, so the shared cache material can no
+        // longer be handed out at all. The clone keeps the same cache key, so the
+        // extra material costs no extra program.
+        // Whatever this URL already has wins, exactly as the geometry above:
+        // two loads of one URL can be in flight at once (a band crossed twice
+        // while the first was travelling), and a second clone would replace the
+        // first in the ledger with nobody left to free it.
+        const material = prop.mats.get(url) ?? (mesh.material as THREE.Material).clone();
+        // CENTRAL, in the ONE place a tier is mounted: a mount replaces the
+        // material of a mesh, so a patch applied anywhere else would be lost the
+        // first time an entry loaded its second tier. BOTH meshes of an entry
+        // come through here, so both bend — and both open up for the camera.
+        applySway(material, prop.sway, prop.targetH);
+        applyOcclusionFade(material);
+        prop.mats.set(url, material);
+        prop.leases.set(url, lease!);
+        handedOff = true;
+        place(prop, url, high, geometry, material);
+      } finally {
+        if (!handedOff) lease?.release();
+      }
     }).catch(() => {
       // The tuft stands; a missing prop is not a broken world — but the wish
       // is released all the same, see `abandon`.
@@ -2557,7 +2572,7 @@ export function createGround(): Ground {
       // BOTH meshes, and the full one only exists where it was deserved.
       group.remove(prop.low);
       if (prop.high) group.remove(prop.high);
-      // The mark a pending `loadGlb` reads — see `mountUrl`.
+      // The mark a pending `leaseGlb` reads — see `mountUrl`.
       prop.disposed = true;
       // The grounded CLONES of the loaded tiers, however many arrived (see
       // there). `InstancedMesh.dispose` frees the instance buffers, never
@@ -2571,6 +2586,8 @@ export function createGround(): Ground {
       // admin painting terrain rebuilds this every few seconds.
       for (const m of prop.mats.values()) m.dispose();
       prop.mats.clear();
+      for (const lease of prop.leases.values()) lease.release();
+      prop.leases.clear();
       prop.low.dispose();
       prop.high?.dispose();
       // …and the far half, where one was ever grown. Its MATERIAL is the

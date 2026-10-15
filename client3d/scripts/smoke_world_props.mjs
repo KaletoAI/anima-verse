@@ -1,4 +1,5 @@
 /**
+ * REGRESSION: Existing LOD, placement and ghost arithmetic keep their original baselines.
  * Smoke: the AUTHORED props of the world plane (§ A9a) on the client side.
  *
  * Usage: direct node call, self-bundling via esbuild:
@@ -67,7 +68,6 @@
  *   assertion.
  */
 
-import { spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
@@ -76,24 +76,14 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 async function main() {
-  if (!process.env.SMOKE_BUNDLED) {
+  if (!globalThis.__worldPropsSmokeBundled) {
+    await leaseCases()
+    const { build } = await import('esbuild')
     const bundlePath = '/tmp/smoke_world_props_bundled.mjs'
-    const needsBundle = !fs.existsSync(bundlePath) || process.env.REBUNDLE
-    if (needsBundle) {
-      const esbuildResult = spawnSync('node_modules/.bin/esbuild', [
-        __filename,
-        '--bundle',
-        '--platform=node',
-        '--format=esm',
-        `--outfile=${bundlePath}`,
-      ], { cwd: path.join(__dirname, '../../'), stdio: 'inherit' })
-      if (esbuildResult.status !== 0) process.exit(esbuildResult.status)
-    }
-    const runResult = spawnSync('node', [bundlePath], {
-      stdio: 'inherit',
-      env: { ...process.env, SMOKE_BUNDLED: '1' },
-    })
-    process.exit(runResult.status)
+    await build({ entryPoints: [__filename], bundle: true, platform: 'node', format: 'esm', outfile: bundlePath })
+    globalThis.__worldPropsSmokeBundled = true
+    await import(bundlePath)
+    return
   }
 
   const THREE = await import('three')
@@ -335,4 +325,56 @@ async function main() {
   process.exit(FAILED.length ? 1 : 0)
 }
 
-void main()
+await main()
+
+/** NEU on a241a8aa: no lease API. One live mount holds one lease; a swap
+ * returns the old one after ghost disposal and detach. Drop leaves zero.
+ * Late responses after removal or a changed wish return their new lease.
+ * Shared clone geometry/materials receive zero dispose events. */
+async function leaseCases() {
+  const { transformSync } = await import('esbuild')
+  const THREE = await import('three')
+  const assert = (await import('node:assert/strict')).default
+  const source = fs.readFileSync(path.join(__dirname, '../src/scene/worldProps.ts'), 'utf8')
+  const drop = source.slice(source.indexOf('  function drop('), source.indexOf('  /** Request a tier.'))
+  const mount = source.slice(source.indexOf('  function mount('), source.indexOf('  function sync('))
+  const code = transformSync(drop + mount + '\nreturn { mount, drop };', { loader: 'ts' }).code
+  let held = 0, releases = 0
+  const waiting = []
+  const template = new THREE.Group(), geo = new THREE.BoxGeometry(), mat = new THREE.MeshBasicMaterial()
+  template.add(new THREE.Mesh(geo, mat))
+  let disposedResources = 0
+  geo.addEventListener('dispose', () => disposedResources++)
+  mat.addEventListener('dispose', () => disposedResources++)
+  const group = new THREE.Group(), records = new Map()
+  const leaseGlb = () => new Promise(resolve => waiting.push(() => {
+    held++; let released = false
+    resolve({ template, release() {
+      assert.equal(released, false); released = true; held--; releases++
+    } })
+  }))
+  let waterThrows = false
+  const api = new Function('THREE', 'group', 'records', 'disposed', 'leaseGlb', 'heightAt', 'worldPropBottom', 'worldPropSceneSpec', 'placeModelSpec', 'SubmergedGhost', 'ghostLevelOf', code)(
+    THREE, group, records, false, leaseGlb, () => 0, () => 0, () => ({}),
+    (_three, obj) => obj.clone(true), class { set() {} dispose() {} }, () => { if (waterThrows) throw new Error("NEU water failure"); return null })
+  const rec = { spec: { id: 'one', x: 0, z: 0 }, node: null, ghost: null, tier: 0 }
+  records.set('one', rec)
+  const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
+  api.mount(rec, 'A'); waiting.shift()(); await flush(); assert.equal(held, 1)
+  const old = rec.node
+  api.mount(rec, 'B'); waiting.shift()(); await flush()
+  assert.equal(old.parent, null); assert.equal(held, 1); assert.equal(releases, 1)
+  api.drop(rec); api.drop(rec); assert.equal(held, 0); assert.equal(disposedResources, 0)
+  api.mount(rec, 'C'); records.delete('one'); waiting.shift()(); await flush(); assert.equal(held, 0)
+  records.set('one', rec); api.mount(rec, 'D'); rec.wantedUrl = 'E'; waiting.shift()(); await flush(); assert.equal(held, 0)
+  // NEU hand-derived: failed ghost => held=0, no node; same URL retry => held=1.
+  waterThrows = true
+  api.mount(rec, 'F'); waiting.shift()(); await flush()
+  assert.equal(held, 0); assert.equal(rec.node, null); assert.equal(rec.wantedUrl, '')
+  waterThrows = false
+  api.mount(rec, 'F'); assert.equal(waiting.length, 1)
+  waiting.shift()(); await flush(); assert.equal(held, 1)
+  assert.equal(rec.node.parent, group)
+  api.drop(rec); assert.equal(held, 0)
+  console.log('NEU world prop lease swap/drop/stale: PASS')
+}

@@ -28,7 +28,7 @@
 import * as THREE from 'three';
 import { pickModelVariant, placeModelSpec } from '@anima/scene-render';
 import type { SceneModelSpec } from '@anima/scene-render';
-import { loadGlb } from './propAssets';
+import { leaseGlb, type GlbLease } from './propAssets';
 import { instanceTier, SCATTER_LOD_DEFAULTS } from './scatterLod';
 import type { InstanceTier, ScatterLodCfg } from './scatterLod';
 import { SubmergedGhost } from './submergedGhost';
@@ -82,6 +82,7 @@ interface PropRecord {
   spec: WorldPropSpec;
   /** Das eingehängte Objekt (null, solange nichts geladen ist). */
   node: THREE.Group | null;
+  lease?: GlbLease;
   /** Unterkante, mit der `node` platziert wurde — Basis der Relief-Nachführung. */
   placedBottom: number;
   /** URL, die `node` zeigt, und die zuletzt GEWÜNSCHTE (siehe `mount`). */
@@ -182,60 +183,61 @@ export function createWorldProps(
   }
 
   function drop(rec: PropRecord): void {
-    if (!rec.node) return;
-    group.remove(rec.node);
-    // The ghost first: its materials are its own, and its registration is what
-    // isolation toggle 22 walks. Its GEOMETRY is the node's and is disposed
-    // with the node below.
+    // Ghost materials belong to this placement; geometry and base materials
+    // belong to the leased template and are shared by all clones.
     rec.ghost?.dispose();
     rec.ghost = null;
-    // Die Quelle kommt aus dem GLB-Cache und wird von `placeModelSpec`
-    // geklont — hier hängt also eine eigene Kopie, deren Geometrien und
-    // Materialien niemand sonst benutzt.
-    rec.node.traverse((o) => {
-      const m = o as THREE.Mesh;
-      if (!m.isMesh) return;
-      m.geometry?.dispose();
-      const mat = m.material;
-      if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
-      else mat?.dispose();
-    });
+    rec.node?.parent?.remove(rec.node);
     rec.node = null;
+    rec.lease?.release();
+    rec.lease = undefined;
     rec.shownUrl = '';
   }
 
-  /** Eine Stufe anfordern. „Der letzte WUNSCH gewinnt, nie die letzte
-   *  ANTWORT": zwei schnelle Distanzwechsel dürfen nicht dazu führen, dass das
-   *  spät eintreffende erste Mesh das späte zweite überschreibt. */
+  /** Request a tier. The latest wish wins even if responses arrive out of order. */
   function mount(rec: PropRecord, url: string): void {
     if (!url || rec.wantedUrl === url) return;
     rec.wantedUrl = url;
     const near = new THREE.Vector3(rec.spec.x, 0, rec.spec.z);
-    void loadGlb(url, near).then((obj) => {
-      if (disposed || !obj) return;
-      // Steht die Zeile noch, und ist DIESE URL noch die gewünschte?
-      if (records.get(rec.spec.id) !== rec || rec.wantedUrl !== url) return;
-      const bottom = worldPropBottom(rec.spec, heightAt(rec.spec.x, rec.spec.z));
-      // `clone: true`, weil `loadGlb` seine Szene über den URL-Cache teilt;
-      // `clip: false`, weil ein Welt-Prop in keiner Raumhülle steht.
-      const node = placeModelSpec(THREE, obj, worldPropSceneSpec(rec.spec, bottom),
-        { clone: true, clip: false });
-      drop(rec);
-      // Wo die Routine das Objekt hingesetzt hat — Bezugspunkt jeder späteren
-      // Verschiebung (`redrapeOne` addiert Differenzen, statt neu zu messen).
-      node.userData.anchorX = rec.spec.x;
-      node.userData.anchorZ = rec.spec.z;
-      rec.node = node;
-      rec.placedBottom = bottom;
-      rec.shownUrl = url;
-      // …and here is where a SUNKEN prop gets its second draw. Right after the
-      // seat, on the very bottom that was just computed: a crate on a lake bed
-      // is invisible without it, because the water surface IS the opaque
-      // terrain since K-A. Dry ground builds nothing at all.
-      rec.ghost = new SubmergedGhost(node);
-      rec.ghost.set(ghostLevelOf(rec, bottom));
-      node.visible = rec.tier !== 2;
-      group.add(node);
+    void leaseGlb(url, near).then((lease) => {
+      if (!lease) return;
+      if (disposed || records.get(rec.spec.id) !== rec || rec.wantedUrl !== url) {
+        lease.release(); return;
+      }
+      let handedOff = false;
+      try {
+        const bottom = worldPropBottom(rec.spec, heightAt(rec.spec.x, rec.spec.z));
+        // Clone the leased template; world props do not use room clipping.
+        const node = placeModelSpec(THREE, lease.template, worldPropSceneSpec(rec.spec, bottom),
+          { clone: true, clip: false });
+        drop(rec);
+        // Keep the anchor for later terrain shifts; redrapeOne adds differences.
+        node.userData.anchorX = rec.spec.x;
+        node.userData.anchorZ = rec.spec.z;
+        rec.node = node;
+        rec.lease = lease;
+        rec.placedBottom = bottom;
+        rec.shownUrl = url;
+        // …and here is where a SUNKEN prop gets its second draw. Right after the
+        // seat, on the very bottom that was just computed: a crate on a lake bed
+        // is invisible without it, because the water surface IS the opaque
+        // terrain since K-A. Dry ground builds nothing at all.
+        rec.ghost = new SubmergedGhost(node);
+        rec.ghost.set(ghostLevelOf(rec, bottom));
+        node.visible = rec.tier !== 2;
+        group.add(node);
+        handedOff = true;
+      } finally {
+        if (!handedOff) {
+          if (rec.lease === lease) drop(rec);
+          else lease.release();
+        }
+      }
+    }).catch(() => {
+      if (rec.wantedUrl === url) {
+        rec.wantedUrl = '';
+        loadedSig = '';
+      }
     });
   }
 
