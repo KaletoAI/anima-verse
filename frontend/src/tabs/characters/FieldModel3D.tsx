@@ -872,6 +872,7 @@ export function FieldModel3D({ character }: { character: string }) {
           <div ref={previewRef}>
           <Model3DViewer
             previewTilt
+            height={352}
             statusPanel={statusPanel}
             motion={rigless ? undefined : previewMotion}
             motionToolbar={rigless ? undefined : motionToolbar}
