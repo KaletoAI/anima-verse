@@ -1761,6 +1761,7 @@ def check_character_face_retexture(character_name: str, signature: str = "",
     ready = face_retexture.runnable(character_name, backend)
     return {**_face_retexture_localize(eligibility, lang), "signature": signature,
             "runnable": ready["ok"],
+            "photo_controls": "hub" if face_retexture.photo_controls_supported(character_name, backend) else "local",
             "runnable_problems": _face_retexture_localize(ready, lang)["problems"],
             "snapshot": _face_retexture_localize(snapshot, lang)}
 
@@ -1770,7 +1771,7 @@ def preview_character_face_photo(character_name: str, signature: str = "",
                                  reference: str = Query("face", pattern="^(face|front)$"),
                                  balance: float = Query(0, ge=0, le=1),
                                  brightness: float = Query(1, ge=0.5, le=1.5),
-                                 _: Dict[str, Any] = Depends(require_admin)):
+                                 _: Dict[str, Any] = Depends(require_admin), backend: str = ""):
     """Preview certified source bytes without taking the render lock."""
     import io
     from PIL import Image
@@ -1789,23 +1790,40 @@ def preview_character_face_photo(character_name: str, signature: str = "",
             raise HTTPException(409, '; '.join(p['message'] for p in eligibility['problems']))
         try:
             photo = validated_params({'balance': balance, 'brightness': brightness})
-            if reference == 'front' and balance:
+            hub = face_retexture.photo_controls_supported(character_name, backend)
+            preview_reason = ''
+            if hub:
+                # Tone match requires the mesh. Local balance is only an
+                # approximation and cannot handle a full front/opaque source.
+                if reference == 'front':
+                    photo['balance'] = 0.
+                    preview_reason = 'Brightness-only approximation; light balance and tone match run on the hub.'
+            elif reference == 'front' and balance:
                 raise ValueError(PROBLEM)
-            raw = face_retexture.flatten_photo(snapshot['rgba'], photo, max_size=512)
+            try:
+                raw = face_retexture.flatten_photo(snapshot['rgba'], photo, max_size=512)
+            except ValueError as exc:
+                if not hub or str(exc) != PROBLEM:
+                    raise
+                photo['balance'] = 0.
+                preview_reason = 'Brightness-only approximation; light balance and tone match run on the hub.'
+                raw = face_retexture.flatten_photo(snapshot['rgba'], photo, max_size=512)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
         image = Image.open(io.BytesIO(raw))
         image.thumbnail((512, 512), Image.Resampling.LANCZOS)
         output = io.BytesIO()
         image.save(output, 'PNG')
-        return Response(output.getvalue(), media_type='image/png', headers={'Cache-Control': 'no-store'})
+        return Response(output.getvalue(), media_type='image/png', headers={
+            'Cache-Control': 'no-store', **({'X-Face-Photo-Preview': preview_reason} if preview_reason else {})})
 
 @router.post("/{character_name}/model3d/face-retexture")
 def start_character_face_retexture(character_name: str, signature: str = "",
                                    backend: str = "", strength: float = Query(1, ge=0, le=1),
                                    feather: float = Query(0.18, ge=0, le=0.5),
                                    render_resolution: int = Query(768, ge=256, le=2048),
-                                   balance: float = Query(0, ge=0, le=1),
+                                   balance: float = Query(1, ge=0, le=1),
+                                   tone_match: float = Query(1, ge=0, le=1),
                                    brightness: float = Query(1, ge=0.5, le=1.5),
                                    yaw: float = Query(0, ge=-180, le=180), lang: str = "en",
                                    upscale: Optional[bool] = None, upscale_backend: str = "",
@@ -1828,10 +1846,11 @@ def start_character_face_retexture(character_name: str, signature: str = "",
         return _face_retexture_localize({"ok": False, "problems": eligibility["problems"] + ready["problems"]}, lang)
     from app.core.face_photo_adjust import validated_params as photo_params, PROBLEM, FIX
     try:
-        photo = photo_params({'balance': balance, 'brightness': brightness})
-        if eligibility['reference'] == 'front' and balance:
+        photo = photo_params({'balance': balance, 'tone_match': tone_match, 'brightness': brightness})
+        hub = face_retexture.photo_controls_supported(character_name, backend)
+        if not hub and eligibility['reference'] == 'front' and balance:
             raise ValueError(PROBLEM)
-        face_retexture.flatten_photo(snapshot['rgba'], photo)
+        face_retexture.flatten_photo(snapshot['rgba'], None if hub else photo)
     except ValueError as exc:
         return _face_retexture_localize({'ok': False, 'problems': [
             {'code': 'face_photo', 'message': str(exc), 'fix': FIX}]}, lang)
@@ -1843,7 +1862,7 @@ def start_character_face_retexture(character_name: str, signature: str = "",
         except ValueError as exc:
             raise HTTPException(503, str(exc)) from exc
     return trigger_face_retexture(character_name, signature, backend_glob=backend, params=controls,
-                                  photo={"balance": balance, "brightness": brightness},
+                                  photo=photo,
                                   upscale=upscale, reference=eligibility["reference"], upscale_backend_glob=upscale_backend)
 
 

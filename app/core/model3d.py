@@ -1968,13 +1968,14 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                 face_reference = face_choice["reference"]
                 from app.core.face_photo_adjust import validated_params as photo_params, PROBLEM
                 photo = photo_params(get_model3d_options(character_name)['face_photo'])
+                photo_mode = 'hub' if face_retexture.photo_controls_supported(character_name) else 'local'
                 photo_reason = ''
-                if face_reference == 'front' and photo['balance']:
+                if photo_mode == 'local' and face_reference == 'front' and photo['balance']:
                     photo['balance'] = 0.
                     photo_reason = PROBLEM
                 face_inputs = {"reference": face_reference, "face_before_rig": True, "controls": face_retexture.validated_params(None),
                                "face_backend_glob": "", "upscale": face_retexture.use_upscale(face_reference, None), "upscale_backend_glob": "",
-                               "source_kind": "facefix", "photo": photo, "photo_reason": photo_reason}
+                               "source_kind": "facefix", "photo": photo, "photo_mode": photo_mode, "photo_reason": photo_reason}
                 if not ready["ok"]:
                     face_inputs["face_retexture"] = {"status": "skipped", "reason": "; ".join(
                         problem["message"] for problem in ready["problems"])}
@@ -1982,7 +1983,8 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                     try:
                         photo_raw = face_snapshot['rgba'] if face_reference == 'face' else source_bytes
                         try:
-                            face_photo = (face_snapshot['image'] if face_reference == 'face' and photo == {'balance': 0., 'brightness': 1.}
+                            face_photo = (face_snapshot['image'] if face_reference == 'face' and (photo_mode == 'hub' or (photo['balance'] == 0 and photo['brightness'] == 1))
+                                          else face_retexture.flatten_photo(photo_raw) if photo_mode == 'hub'
                                           else face_retexture.flatten_photo(photo_raw, photo))
                         except ValueError as exc:
                             # A face view without a cut-out (background removal
@@ -2763,6 +2765,7 @@ def _face_retexture_model(character_name: str, signature: Optional[str] = None, 
         explicit_photo = photo is not None
         remembered = photo_params(get_model3d_options(character_name)['face_photo'])
         photo = photo_params(photo) if explicit_photo else dict(remembered)
+        photo_mode = 'hub' if face_retexture.photo_controls_supported(character_name, backend_glob) else 'local'
         photo_reason = ''
         controls = face_retexture.validated_params(params)
         face_snapshot = {}
@@ -2774,15 +2777,15 @@ def _face_retexture_model(character_name: str, signature: Optional[str] = None, 
         original = root / 'unrigged' / f'{signature}.glb'
         reference = eligibility['reference']
         upscale = face_retexture.use_upscale(reference, upscale)
-        if reference == 'front' and photo['balance'] and not explicit_photo:
+        if photo_mode == 'local' and reference == 'front' and photo['balance'] and not explicit_photo:
             # A remembered balance never blocks a front-view run: brightness only.
             photo['balance'] = 0.
             photo_reason = PROBLEM
         try:
-            if reference == 'front' and photo['balance']:
+            if photo_mode == 'local' and reference == 'front' and photo['balance']:
                 raise ValueError(PROBLEM)
             try:
-                image = (face_snapshot['image'] if photo == {'balance': 0., 'brightness': 1.}
+                image = (face_snapshot['image'] if photo_mode == 'hub' or (photo['balance'] == 0 and photo['brightness'] == 1)
                          else face_retexture.flatten_photo(face_snapshot['rgba'], photo))
             except ValueError as exc:
                 # Remembered values never block a run on a photo without a
@@ -2798,13 +2801,13 @@ def _face_retexture_model(character_name: str, signature: Optional[str] = None, 
             # A front-view run cannot express a balance (the dialog disables
             # it): keep the remembered one instead of overwriting it with 0.
             set_model3d_options(character_name, {'face_photo': {
-                'balance': remembered['balance'] if reference == 'front' else photo['balance'],
-                'brightness': photo['brightness']}})
+                'balance': remembered['balance'] if photo_mode == 'local' and reference == 'front' else photo['balance'],
+                'tone_match': photo['tone_match'], 'brightness': photo['brightness']}})
         if upscale and upscale_backend_glob:
             from app.core.upscale_reference import require_upscale_backend
             require_upscale_backend(upscale_backend_glob, character_name)
         op = hub_ops.create(_OP_FACE, _op_subject(character_name, signature), {
-            "character": character_name, "signature": signature, "controls": controls, "photo": photo,
+            "character": character_name, "signature": signature, "controls": controls, "photo": photo, "photo_mode": photo_mode,
             **({"photo_reason": photo_reason} if photo_reason else {}),
             "backend_glob": backend_glob, "upscale": bool(upscale), "reference": reference,
             "upscale_backend_glob": upscale_backend_glob, "source_kind": "facefix",
@@ -2875,9 +2878,13 @@ def _face_source_stages(character_name: str, op) -> Dict[str, Any]:
         image = op.abs("upscale/image.png").read_bytes()
 
     if not op.done("face"):
+        request = dict(controls)
+        if inputs.get('photo_mode', 'local') == 'hub':
+            photo = inputs['photo']
+            request.update(light_balance=photo['balance'], tone_match=photo['tone_match'], brightness=photo['brightness'])
         result = get_image_service().generate_face_retexture(
             str(original_file), image, str(op.path("face", "x").parent),
-            controls, (inputs.get("face_backend_glob") if inputs.get("face_before_rig") else inputs.get("backend_glob")) or "", character_name,
+            request, (inputs.get("face_backend_glob") if inputs.get("face_before_rig") else inputs.get("backend_glob")) or "", character_name,
             hub_stage=op.stage("face"))
         if not result.get('ok'):
             return {'ok': False, 'error': result.get('error') or 'Face retexture failed'}
@@ -2901,9 +2908,22 @@ def _face_source_stages(character_name: str, op) -> Dict[str, Any]:
             return {'ok': False, 'error': str(exc)}
         if len(raw) > face_retexture.MAX_BYTES:
             return {'ok': False, 'error': 'Baked mesh exceeds the 64 MB rig upload limit'}
+        from app.core.face_photo_adjust import TONE_MATCH_UNSUPPORTED
+        photo_meta = dict(inputs.get('photo', {'balance': 0., 'brightness': 1.}))
+        # Old operations already contain locally adjusted bytes; never reapply them.
+        photo_meta.setdefault('tone_match', 0.)
+        if inputs.get('photo_mode', 'local') == 'hub':
+            photo_meta.update(result.get('photo_application') or {
+                'applied_on': 'none', 'reason': 'The running face backend did not confirm photo controls.'})
+        else:
+            photo_meta['applied_on'] = 'local'
+            if inputs.get('photo_reason'):
+                photo_meta['reason'] = inputs['photo_reason']
         face_meta = {'status': 'applied', 'at': utc_now_iso(), 'reference': inputs.get('reference', 'front'),
                      'backend': result.get('backend', ''), 'job_id': result.get('job_id', ''),
-                     'params': controls, 'photo': inputs.get('photo', {'balance': 0., 'brightness': 1.}),
+                     'params': controls, 'photo': photo_meta,
+                     **({'tone_match': {'status': 'unsupported', 'reason': TONE_MATCH_UNSUPPORTED}}
+                        if inputs.get('photo_mode', 'local') == 'local' else {}),
                      **({'photo_reason': inputs['photo_reason']} if inputs.get('photo_reason') else {}), 'upscale': upscale_meta, 'baked': baked, 'result_sha256': result.get('result_sha256', ''),
                      'result_url': result.get('result_url', ''),
                      'route_meta': {k: result[k] for k in ('routing', 'fallback_from') if k in result}}

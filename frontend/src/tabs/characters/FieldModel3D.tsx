@@ -81,6 +81,7 @@ interface FaceRetextureFinding {
   detail?: string
 }
 interface FaceRetextureCheck {
+  photo_controls: 'hub' | 'local'
   reference: 'face' | 'front'
   face_available: boolean
   face_problem?: FaceRetextureFinding | null
@@ -101,7 +102,7 @@ interface Model3DInfo {
     landmark_fallback?: string[]
     clips?: Record<string, { stretch_p999: number; contact_err_max: number; tail_min_z: number; ik_unreachable: number }>
   }
-  face_retexture?: { photo?: { balance: number; brightness: number }; reference?: 'face' | 'front'; status: string; reason?: string; error?: string; at?: string; backend?: string; job_id?: string; face_texture_lost?: boolean; upscale?: { status: string; backend?: string; in?: number[]; out?: number[]; cached?: boolean; busy?: boolean; error?: string } }
+  face_retexture?: { photo?: { balance: number; tone_match?: number; brightness: number; applied_on?: 'hub' | 'local' | 'none'; reason?: string }; reference?: 'face' | 'front'; status: string; reason?: string; error?: string; at?: string; backend?: string; job_id?: string; face_texture_lost?: boolean; upscale?: { status: string; backend?: string; in?: number[]; out?: number[]; cached?: boolean; busy?: boolean; error?: string } }
   face_retexture_revert?: 'snapshot' | 'rerig' | null
   face_retexture_snapshot?: { ok: boolean; created_at?: string; error?: string }
   face_retexture_compare_url?: string
@@ -160,7 +161,7 @@ interface Model3DStatus {
   rig?: string
   has_input?: boolean
   model?: Model3DInfo | null
-  options?: { auto_generate?: boolean; face_before_rig?: boolean; face_photo?: { balance?: number; brightness?: number };
+  options?: { auto_generate?: boolean; face_before_rig?: boolean; face_photo?: { balance?: number; tone_match?: number; brightness?: number };
     extension_rig_models?: Record<string, Record<string, { enabled?: boolean; flip?: boolean }>>;
     extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }> }
   extension_groups?: ExtensionRigDeclaration[]
@@ -234,7 +235,7 @@ export function FieldModel3D({ character }: { character: string }) {
   // Bumped on every Analyze run and on a character switch: a run whose token is
   // no longer current must not write results into another character's panel.
   const analysisRunRef = useRef(0)
-  const [facePhoto, setFacePhoto] = useState({ balance: 1, brightness: 1 })
+  const [facePhoto, setFacePhoto] = useState({ balance: 1, tone_match: 1, brightness: 1 })
   const [photoPreviewResult, setPhotoPreview] = useState<{ key?: string; original?: string; adjusted?: string; error?: string }>({})
   const photoPreviewRequest = useRef(0)
   const [faceOpen, setFaceOpen] = useState(false)
@@ -424,7 +425,8 @@ export function FieldModel3D({ character }: { character: string }) {
   }
 
   const faceSignature = st.signature || ''
-  const photoPreviewKey = JSON.stringify([faceOpen, enc, faceSignature, faceReference, facePhoto])
+  const hubPhotoControls = faceCheck?.photo_controls === 'hub'
+  const photoPreviewKey = JSON.stringify([faceOpen, enc, faceSignature, faceReference, facePhoto, faceBackend, hubPhotoControls])
   const photoPreview = photoPreviewResult.key === photoPreviewKey ? photoPreviewResult : {}
   const photoPreviewReady = !!photoPreview.adjusted && !photoPreview.error
   useEffect(() => {
@@ -454,7 +456,7 @@ export function FieldModel3D({ character }: { character: string }) {
     const urls: string[] = []
     const timer = window.setTimeout(async () => {
       const load = async (balance: number, brightness: number) => {
-        const q = new URLSearchParams({ signature: faceSignature, reference: faceReference, balance: String(balance), brightness: String(brightness) })
+        const q = new URLSearchParams({ signature: faceSignature, reference: faceReference, backend: faceBackend, balance: String(balance), brightness: String(brightness) })
         const response = await fetch(`/characters/${enc}/model3d/face-photo-preview?${q}`, { signal: controller.signal })
         if (!response.ok) {
           const body = await response.json()
@@ -468,14 +470,14 @@ export function FieldModel3D({ character }: { character: string }) {
       }
       try {
         const original = await load(0, 1)
-        const adjusted = await load(faceReference === 'front' ? 0 : facePhoto.balance, facePhoto.brightness)
+        const adjusted = await load(faceReference === 'front' && !hubPhotoControls ? 0 : facePhoto.balance, facePhoto.brightness)
         if (!controller.signal.aborted && request === photoPreviewRequest.current) setPhotoPreview({ key: photoPreviewKey, original, adjusted })
       } catch (error) {
         if (!controller.signal.aborted && request === photoPreviewRequest.current) setPhotoPreview({ key: photoPreviewKey, error: (error as Error).message })
       }
     }, 300)
     return () => { photoPreviewRequest.current = request + 1; window.clearTimeout(timer); controller.abort(); urls.forEach(URL.revokeObjectURL) }
-  }, [faceOpen, faceReference, faceSignature, facePhoto, enc, photoPreviewKey])
+  }, [faceOpen, faceReference, faceSignature, facePhoto, faceBackend, hubPhotoControls, enc, photoPreviewKey])
 
   const applyFaceRetexture = async () => {
     if (busy || st.pending || !faceCheck?.ok || !faceCheck.runnable || !photoPreviewReady) return
@@ -484,8 +486,9 @@ export function FieldModel3D({ character }: { character: string }) {
     query.set('reference', faceReference || faceCheck.reference)
     query.set('upscale', String(upscaleFirst))
     query.set('upscale_backend', upscaleBackend)
-    query.set('balance', String(faceReference === 'front' ? 0 : facePhoto.balance))
+    query.set('balance', String(faceReference === 'front' && !hubPhotoControls ? 0 : facePhoto.balance))
     query.set('brightness', String(facePhoto.brightness))
+    query.set('tone_match', String(facePhoto.tone_match))
     for (const [key, value] of Object.entries(faceControls)) query.set(key, String(value))
     setBusy(true)
     try {
@@ -900,7 +903,7 @@ export function FieldModel3D({ character }: { character: string }) {
   const faceText = face?.status === 'failed' ? t('Failed') : face?.status === 'skipped' ? t('Skipped') : face?.face_texture_lost ? t('Face texture lost')
     : face?.status === 'applied' ? (face.reference === 'face' ? t('Face view') : up?.status === 'applied' && up.backend
       ? `${up.backend}${up.in?.[0] && up.out?.[0] ? ` ×${+(up.out[0] / up.in[0]).toFixed(1)}` : ''}` : t('applied')) : '–'
-  const photoText = face?.status === 'applied' && face.photo ? `${face.photo.balance ? ` · ${t('Light balance')} ${Math.round(face.photo.balance * 100)} %` : ''}${face.photo.brightness !== 1 ? ` · ${t('Face brightness')} ${Math.round(face.photo.brightness * 100)} %` : ''}` : ''
+  const photoText = face?.status === 'applied' && face.photo ? `${face.photo.balance ? ` · ${t('Light balance')} ${Math.round(face.photo.balance * 100)} %` : ''}${face.photo.tone_match != null && face.photo.tone_match !== 1 ? ` · ${t('Skin tone match')} ${Math.round(face.photo.tone_match * 100)} %` : ''}${face.photo.brightness !== 1 ? ` · ${t('Face brightness')} ${Math.round(face.photo.brightness * 100)} %` : ''}${face.photo.applied_on === 'hub' ? ' (hub)' : face.photo.applied_on === 'none' ? '' : ' (local)'}` : ''
   const statusPanel = <div className="ga-model3d-status">
     {statusRow(t('T-pose'), tp === 'current' ? t('current') : tp === 'changed' ? t('re-rendered')
       : tp === 'other_outfit' ? t('other outfit') : t('unknown'),
@@ -1253,9 +1256,16 @@ export function FieldModel3D({ character }: { character: string }) {
                 <Field label={`${t('Light balance')} ${Math.round(facePhoto.balance * 100)} %`}
                   tip={t('Evens out broad brightness between the left and right half of the face (side light). Faces are never symmetric — use only as much as needed.')}>
                   <input type="range" min={0} max={100} step={5} value={facePhoto.balance * 100}
-                    disabled={busy || faceReference !== 'face'}
-                    title={faceReference !== 'face' ? t('Light balance needs the face view (a cut-out head)') : undefined}
+                    disabled={busy || (!hubPhotoControls && faceReference !== 'face')}
+                    title={!hubPhotoControls && faceReference !== 'face' ? t('Light balance needs the face view (a cut-out head)') : undefined}
                     onChange={e => setFacePhoto(v => ({ ...v, balance: e.target.valueAsNumber / 100 }))} />
+                </Field>
+                <Field label={`${t('Skin tone match')} ${Math.round(facePhoto.tone_match * 100)} %`}
+                  tip={t("Pulls the face's overall skin colour and brightness toward the model's existing skin around the face, so it blends into neck and forehead. Runs on the hub (needs GLBFaceRetexture 1.1).")}>
+                  <input type="range" min={0} max={100} step={5} value={facePhoto.tone_match * 100}
+                    disabled={busy || !hubPhotoControls}
+                    title={!hubPhotoControls ? t('the face retexture backend does not support tone match (needs node GLBFaceRetexture >= 1.1)') : undefined}
+                    onChange={e => setFacePhoto(v => ({ ...v, tone_match: e.target.valueAsNumber / 100 }))} />
                 </Field>
                 <Field label={`${t('Face brightness')} ${Math.round(facePhoto.brightness * 100)} %`}
                   tip={t("Scales the photo's brightness before projection — lower it when the face looks too bright on the model.")}>
@@ -1266,6 +1276,7 @@ export function FieldModel3D({ character }: { character: string }) {
                   <div>{t('Original')}{photoPreview.original ? <img src={photoPreview.original} alt={t('Original')} style={{ display: 'block', maxWidth: 160, maxHeight: 160 }} /> : null}</div>
                   <div>{t('Adjusted')}{photoPreview.adjusted ? <img src={photoPreview.adjusted} alt={t('Adjusted')} style={{ display: 'block', maxWidth: 160, maxHeight: 160 }} /> : null}</div>
                 </div>}
+                {hubPhotoControls ? <div className="ga-field-hint">{t('Light balance and tone match run on the hub with face landmarks; the preview is an approximation without tone match.')}</div> : null}
                 {faceCheckError ? <div className="ga-status-danger" role="alert">✗ {faceCheckError}</div> : null}
                 {!faceCheck && !faceCheckError ? <div className="ga-hint" role="status">{t('Checking face retexture eligibility…')}</div> : null}
                 {faceCheck ? <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1415,7 +1426,7 @@ export function FieldModel3D({ character }: { character: string }) {
         <div className="ga-form-section-label">{t('Improve')}</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <button type="button" className="ga-btn ga-btn-sm" disabled={pending}
-            onClick={() => { setFacePhoto({ balance: st.options?.face_photo?.balance ?? 1, brightness: st.options?.face_photo?.brightness ?? 1 }); setFaceReference(''); setUpscaleFirst(!!st.upscale_runnable); setUpscaleBackend(''); setFaceBackend(''); setFaceCheck(null); setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 }); setFaceOpen(true) }}>
+            onClick={() => { setFacePhoto({ balance: st.options?.face_photo?.balance ?? 1, tone_match: st.options?.face_photo?.tone_match ?? 1, brightness: st.options?.face_photo?.brightness ?? 1 }); setFaceReference(''); setUpscaleFirst(!!st.upscale_runnable); setUpscaleBackend(''); setFaceBackend(''); setFaceCheck(null); setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 }); setFaceOpen(true) }}>
             {t('Face retexture…')}
           </button>
           {model?.face_retexture_revert ? <button type="button" className="ga-btn ga-btn-sm" disabled={pending}

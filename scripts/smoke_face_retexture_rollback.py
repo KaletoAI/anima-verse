@@ -447,7 +447,7 @@ def main():
                         finally:
                             finished.set()
                     with patch.object(queue, 'track_finish', side_effect=track_finish):
-                        response = await client.post(url, headers=headers, params={'signature': sig})
+                        response = await client.post(url, headers=headers, params={'signature': sig, 'balance': 0})
                         assert response.status_code == 200 and response.json()['task_id']
                         for _ in range(500):
                             with model3d._lock:
@@ -638,7 +638,7 @@ def main():
                 up._available = False
                 async def explicit_upscale_route():
                     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
-                        response = await client.post(url, headers=headers, params={'signature': sig, 'upscale_backend': up.name})
+                        response = await client.post(url, headers=headers, params={'signature': sig, 'balance': 0, 'upscale_backend': up.name})
                         assert response.status_code == 503
                 async def explicit_with_heartbeat():
                     async def heartbeat():

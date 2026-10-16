@@ -895,8 +895,11 @@ class ImageService:
                 raise GatewayRejectedError("Face retexture results have incomplete metadata")
             result = {"files": [dict(f, blob=raw) for f, raw in zip(files, blobs)],
                       "job_id": attached.get("job_id", "")}
-            return self._store_face_retexture(result, output_dir, attached.get("backend", ""),
-                                              attached.get("route") or {})
+            stored = self._store_face_retexture(result, output_dir, attached.get("backend", ""),
+                                               attached.get("route") or {})
+            if hub_stage is not None:
+                stored['photo_application'] = hub_stage.op.state.get('face_photo_application') or {}
+            return stored
         primary = None
         if backend_glob.strip():
             _, primary = resolve_spec("face_retexture", backend_glob,
@@ -907,7 +910,21 @@ class ImageService:
         def render(b):
             def op(bb):
                 def generate():
-                    blobs = bb.generate("", "", request,
+                    actual_request = dict(request)
+                    photo_keys = {'light_balance', 'tone_match', 'brightness'}
+                    application = {}
+                    if photo_keys & request.keys():
+                        supports = getattr(bb, 'photo_controls_supported', None)
+                        if callable(supports) and supports():
+                            application = {'applied_on': 'hub'}
+                        else:
+                            for key in photo_keys:
+                                actual_request.pop(key, None)
+                            application = {'applied_on': 'none', 'reason':
+                                           'The running face backend does not declare all hub photo controls.'}
+                        if hub_stage is not None:
+                            hub_stage.op.update_state(lambda st: st.update(face_photo_application=application))
+                    blobs = bb.generate("", "", actual_request,
                                         log_meta={"agent_name": character_name, "media": "mesh"})
                     if not blobs:
                         raise GatewayRejectedError("Face retexture job returned no corrected mesh")
@@ -915,7 +932,8 @@ class ImageService:
                     if len(files) != len(blobs):
                         raise GatewayRejectedError("Face retexture results have incomplete metadata")
                     return {"files": [dict(f, blob=raw) for f, raw in zip(files, blobs)],
-                            "job_id": getattr(bb, "last_job_id", "")}
+                            "job_id": getattr(bb, "last_job_id", ""),
+                            'photo_application': getattr(bb, 'last_photo_application', {}) or application}
                 return self.run_on_backend_channel(bb, generate, task_type="mesh_generation",
                                                    agent_name=character_name)
             return self.run_on_backend(b, op, character_name=character_name)
@@ -926,7 +944,9 @@ class ImageService:
             (result, used), route = run_routed("face_retexture", render,
                                               character=character_name, pool=self.pool,
                                               on_route=self._hub_route_hook(hub_stage))
-        return self._store_face_retexture(result, output_dir, used.name, route_meta(route))
+        stored = self._store_face_retexture(result, output_dir, used.name, route_meta(route))
+        stored['photo_application'] = result.get('photo_application') or {}
+        return stored
 
     def _store_face_retexture(self, result: Dict[str, Any], output_dir: str,
                               backend_name: str, route: Dict[str, Any]) -> Dict[str, Any]:

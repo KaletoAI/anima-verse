@@ -109,6 +109,7 @@ def main():
             stack.enter_context(patch.object(model3d, '_auto_extension_rig', return_value={'ok': True}))
             stack.enter_context(patch.object(model3d, '_auto_lod_enabled', return_value=False))
             ready = stack.enter_context(patch.object(face_retexture, 'runnable', return_value={'ok': True, 'problems': []}))
+            stack.enter_context(patch.object(face_retexture, 'photo_controls_supported', return_value=False))
             assert save_character_profile('demo', {})
             assert model3d.get_model3d_options('demo')['face_before_rig'] is False
             from app.routes.characters import _set_character_model3d_options_sync

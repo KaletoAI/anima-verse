@@ -8,7 +8,7 @@ gain equalizes the cheeks; half gain leaves sqrt(1.34907)=1.16150.
 Brightness .5 halves linear luminance; identity preserves exact bytes.
 Storage checks use temporary roots before importing DB modules. Frozen .5/.85
 controls must survive changed resume arguments, reach sidecars and never join
-the four hub controls. A front fallback must freeze 0/.85 with a reason.
+the four hub controls in local mode. Tone match defaults to 1 and is unsupported locally. A front fallback must freeze 0/.85 with a reason.
 Preview is PNG <=512 with no-store; front+balance is HTTP 409.
 """
 import sys
@@ -113,8 +113,9 @@ def integration(a):
         with ExitStack() as stack:
             stack.enter_context(patch.object(model3d,'required_rig',return_value='mixamo'))
             stack.enter_context(patch.object(face,'runnable',return_value={'ok':True,'problems':[]}))
+            stack.enter_context(patch.object(face,'photo_controls_supported',return_value=False))
             stack.enter_context(patch.object(hub_ops,'create',side_effect=capture))
-            params={'balance':.5,'brightness':.85}
+            params={'balance':.5,'brightness':.85,'tone_match':1.}
             with patch.object(model3d,'_face_source_stages',side_effect=Stop):
                 try: model3d.face_retexture_model('demo',sig,photo=params)
                 except Stop: pass
@@ -122,7 +123,7 @@ def integration(a):
             assert op.inputs['photo']==params
             expected=face.flatten_photo(raw,params)
             assert op.abs('inputs/photo.png').read_bytes()==expected
-            assert model3d.get_model3d_options('demo')['face_photo']==params
+            assert model3d.get_model3d_options('demo')['face_photo']=={'balance':.5,'brightness':.85}
             resumed=hub_ops.get(op.op_id)
             with patch.object(model3d,'_face_source_stages',side_effect=Stop) as stages:
                 try: hub_ops.resume(resumed,lambda:model3d._face_retexture_model('demo',sig,photo={'balance':0,'brightness':1},_op_ctx={'op':resumed}))
@@ -138,8 +139,9 @@ def integration(a):
             with patch('app.imagegen.service.get_image_service',return_value=Service()):
                 result = model3d._face_source_stages('demo',resumed)
                 assert result['ok'], result
-                assert resumed.result('bake')['face_meta']['photo'] == params
-                assert face.read_meta(Path(result['source']))['face_retexture']['photo'] == params
+                assert resumed.result('bake')['face_meta']['photo'] == {**params, 'applied_on':'local'}
+                assert resumed.result('bake')['face_meta']['tone_match']['status'] == 'unsupported'
+                assert face.read_meta(Path(result['source']))['face_retexture']['photo'] == {**params, 'applied_on':'local'}
             hub_ops.delete(op)
             from app.routes.characters import preview_character_face_photo
             # A 1024px certified cut-out must reach adjust at <=512px.
@@ -170,7 +172,7 @@ def integration(a):
                     try: model3d.generate_for_current_outfit('demo',signature=sig,force=True)
                     except Stop: pass
                     generated=captured[-1]
-                    assert generated.inputs['photo']=={'balance':.5 if use_face else 0.,'brightness':.85}
+                    assert generated.inputs['photo']=={'balance':.5 if use_face else 0.,'brightness':.85,'tone_match':1.}
                     assert bool(generated.inputs['photo_reason']) is (not use_face)
                     hub_ops.delete(generated)
             # Defaults are full balance (user decision 2026-10-16): only a deviation
@@ -179,21 +181,21 @@ def integration(a):
             assert model3d.get_model3d_options('demo')['face_photo']=={'balance':0.0}
             model3d.set_model3d_options('demo',{'face_photo':{'balance':1,'brightness':1}})
             assert model3d.get_model3d_options('demo')['face_photo']=={}
-            assert validated_params(model3d.get_model3d_options('demo')['face_photo'])=={'balance':1.0,'brightness':1.0}
+            assert validated_params(model3d.get_model3d_options('demo')['face_photo'])=={'balance':1.0,'brightness':1.0,'tone_match':1.0}
             # Automatic correction (Improvements: photo=None) uses the remembered values.
             face_path.write_bytes(raw)
             face_path.with_suffix('.json').write_text(json.dumps({'image_sha256':hashlib.sha256(raw).hexdigest(),'reference_sha256':hashlib.sha256(photo()).hexdigest()}))
-            model3d.set_model3d_options('demo',{'face_photo':{'balance':.7,'brightness':.9}})
+            model3d.set_model3d_options('demo',{'face_photo':{'balance':.7,'brightness':.9,'tone_match':1.}})
             def run(**kw):
                 with patch.object(model3d,'_face_source_stages',side_effect=Stop):
                     try: model3d.face_retexture_model('demo',sig,**kw)
                     except Stop: pass
                 op=captured[-1]; hub_ops.delete(op); return op.inputs
             inputs=run()
-            assert inputs['reference']=='face' and inputs['photo']=={'balance':.7,'brightness':.9} and 'photo_reason' not in inputs
+            assert inputs['reference']=='face' and inputs['photo']=={'balance':.7,'brightness':.9,'tone_match':1.} and 'photo_reason' not in inputs
             # Front source with a remembered balance: brightness only, reason recorded.
             inputs=run(reference='front')
-            assert inputs['photo']=={'balance':0.,'brightness':.9} and inputs['photo_reason']
+            assert inputs['photo']=={'balance':0.,'brightness':.9,'tone_match':1.} and inputs['photo_reason']
             # An explicit front run (dialog sends balance 0) keeps the remembered balance.
             run(reference='front',photo={'balance':0,'brightness':.8})
             assert model3d.get_model3d_options('demo')['face_photo']=={'balance':.7,'brightness':.8}
@@ -206,7 +208,7 @@ def integration(a):
             face_path.write_bytes(opaque.getvalue())
             face_path.with_suffix('.json').write_text(json.dumps({'image_sha256':hashlib.sha256(opaque.getvalue()).hexdigest(),'reference_sha256':hashlib.sha256(photo()).hexdigest()}))
             inputs=run()
-            assert inputs['reference']=='face' and inputs['photo']=={'balance':0.,'brightness':.8} and inputs['photo_reason']
+            assert inputs['reference']=='face' and inputs['photo']=={'balance':0.,'brightness':.8,'tone_match':1.} and inputs['photo_reason']
             before=len(captured)
             refused=model3d.face_retexture_model('demo',sig,photo={'balance':.4,'brightness':.8})
             assert refused['ok'] is False and refused['problems'][0]['code']=='face_photo' and len(captured)==before
@@ -218,7 +220,7 @@ def integration(a):
                 try: model3d.generate_for_current_outfit('demo',signature=sig,force=True)
                 except Stop: pass
                 generated=captured[-1]
-                assert generated.inputs['photo']=={'balance':0.,'brightness':.8} and generated.inputs['photo_reason']
+                assert generated.inputs['photo']=={'balance':0.,'brightness':.8,'tone_match':1.} and generated.inputs['photo_reason']
                 assert 'face_retexture' not in generated.inputs, generated.inputs
                 hub_ops.delete(generated)
     print('PASS: default full balance, remembered controls (dialog, Improvements, front keeps balance), frozen photo/resume, sidecar and isolated hub controls, generation face/front fallback, PNG preview and 409')

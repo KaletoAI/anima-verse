@@ -234,6 +234,11 @@ class OpenAIMeshBackend(ImageBackend):
         return [dict(f) for f in (getattr(self._tls, "result_files", []) or [])]
 
     @property
+    def last_photo_application(self) -> Dict[str, Any]:
+        """Photo-control verdict from the exact schema used for this worker's payload."""
+        return dict(getattr(self._tls, 'photo_application', {}) or {})
+
+    @property
     def last_job_id(self) -> str:
         """The separate generation job ID, captured on its worker thread."""
         return getattr(self._tls, "job_id", "")
@@ -537,6 +542,12 @@ class OpenAIMeshBackend(ImageBackend):
             faces = self.face_num_max
         return max(0, faces)
 
+    def photo_controls_supported(self, *, schema=None) -> bool:
+        """Only a verified alias declaring the complete v1.1 control set qualifies."""
+        verified, _, _, names = schema or self._face_schema
+        return (self.category == "face_retexture" and verified
+                and {"light_balance", "tone_match", "brightness"} <= names)
+
     def build_alias_params(self, params: Dict[str, Any], *,
                            inputs_cut_out: bool = False, schema=None) -> Dict[str, Any]:
         """The ``params`` block of the generation request — every key a public
@@ -551,8 +562,12 @@ class OpenAIMeshBackend(ImageBackend):
         if self.category == "face_retexture":
             verified, _, _, names = schema or self._face_schema
             defaults = {"strength": 1, "feather": 0.18, "render_resolution": 768, "yaw": 0}
-            return {key: params.get(key, value) for key, value in defaults.items()
-                    if verified and key in names}
+            result = {key: params.get(key, value) for key, value in defaults.items()
+                      if verified and key in names}
+            if self.photo_controls_supported(schema=schema):
+                result.update({key: params[key] for key in ("light_balance", "tone_match", "brightness")
+                               if key in params})
+            return result
         if self.category == "mesh2rig":
             return {"input_no_fingers": bool(params.get("no_fingers", self.no_fingers))}
         # input_name is ALWAYS set: it decides the delivered file names, and an
@@ -619,6 +634,7 @@ class OpenAIMeshBackend(ImageBackend):
     def _generate(self, prompt: str, negative_prompt: str,
                   params: Dict[str, Any]) -> List[bytes]:
         self._tls.result_files = []
+        self._tls.photo_application = {}
         self._tls.result_rig = None
         self._tls.input_sha256s = []
         self._tls.job_id = ""
@@ -695,6 +711,15 @@ class OpenAIMeshBackend(ImageBackend):
         alias_params = self.build_alias_params(params,
                                                inputs_cut_out=inputs_cut_out, schema=schema)
         payload["params"] = alias_params
+        if self.category == "face_retexture" and {'light_balance', 'tone_match', 'brightness'} & params.keys():
+            application = ({'applied_on': 'hub'}
+                           if {'light_balance', 'tone_match', 'brightness'} <= alias_params.keys()
+                           else {'applied_on': 'none', 'reason':
+                                 'The running face backend does not declare all hub photo controls.'})
+            self._tls.photo_application = application
+            stage = params.get('hub_stage')
+            if stage is not None:
+                stage.op.update_state(lambda st: st.update(face_photo_application=application))
 
         url = f"{self.api_url}{self.mesh_endpoint}"
         # Read the detail count back out of the params: an alias may declare
@@ -746,6 +771,7 @@ class OpenAIMeshBackend(ImageBackend):
         result. Fills ``last_result_files`` / ``last_result_rig`` /
         ``last_job_id`` on THIS thread like a fresh run."""
         self._tls.result_files = []
+        self._tls.photo_application = {}
         self._tls.result_rig = None
         self._tls.input_sha256s = [str(h) for h in (params or {}).get("input_sha256s") or []]
         self._tls.single_view = bool((params or {}).get("single_view"))
@@ -838,6 +864,7 @@ class OpenAIMeshBackend(ImageBackend):
         it could not be read or downloaded.
         """
         self._tls.result_files = []
+        self._tls.photo_application = {}
         self._tls.result_rig = None
         self._tls.input_sha256s = []
         out: Dict[str, Any] = {"status": "error", "job_id": job_id}

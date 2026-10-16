@@ -56,7 +56,7 @@ def flatten_photo(raw: bytes, photo: dict | None = None, *, max_size: int | None
         rgba.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
     if photo is not None:
         from app.core.face_photo_adjust import adjust
-        rgba = Image.fromarray(adjust(rgba, **photo))
+        rgba = Image.fromarray(adjust(rgba, balance=photo['balance'], brightness=photo['brightness']))
     white = Image.new('RGBA', rgba.size, 'white')
     white.alpha_composite(rgba)
     out = io.BytesIO()
@@ -177,19 +177,37 @@ def check(character: str, signature: str, reference: str = '', *,
             **{k: choice[k] for k in ('reference', 'face_available', 'face_problem')}}
 
 
+def _primary_backend(character: str, backend_glob: str = ''):
+    from app.imagegen.service import get_image_service
+    from app.imagegen.routing import NoRouteError, resolve_image_route, resolve_spec
+    service = get_image_service()
+    if backend_glob:
+        _, backend = resolve_spec('face_retexture', backend_glob, character=character, pool=service.pool)
+        if backend is None:
+            raise NoRouteError('face_retexture', [])
+        return backend
+    return resolve_image_route('face_retexture', character=character, probe=True, pool=service.pool).backend
+
+
+def photo_controls_supported(character: str, backend_glob: str = '') -> bool:
+    """Whether the selected face route can apply all photo controls on the hub."""
+    from app.imagegen.routing import NoRouteError
+    try:
+        backend = _primary_backend(character, backend_glob)
+    except NoRouteError:
+        return False
+    supports = getattr(backend, 'photo_controls_supported', None)
+    return bool(callable(supports) and supports())
+
+
 def runnable(character: str, backend_glob: str = '') -> dict:
     """Keep temporary routing/availability separate from asset eligibility."""
     from app.imagegen.service import get_image_service
-    from app.imagegen.routing import NoRouteError, resolve_image_route, resolve_spec, chain_candidates
+    from app.imagegen.routing import NoRouteError, chain_candidates
     service = get_image_service()
     problems = []
     try:
-        if backend_glob:
-            _, backend = resolve_spec('face_retexture', backend_glob, character=character, pool=service.pool)
-            if backend is None:
-                raise NoRouteError('face_retexture', [])
-        else:
-            resolve_image_route('face_retexture', character=character, probe=True, pool=service.pool)
+        _primary_backend(character, backend_glob)
     except NoRouteError:
         problems.append({'code': 'no_backend', 'message': 'No face retexture backend is available.',
                          'fix': 'Configure a face_retexture backend in /admin/settings → Media Generation.'})

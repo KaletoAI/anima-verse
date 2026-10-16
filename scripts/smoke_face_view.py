@@ -444,6 +444,7 @@ def integration(tmp, refs, sig, front, meta):
         stack.enter_context(patch.object(hub_ops, 'create', side_effect=capture))
         stack.enter_context(patch.object(model3d, 'required_rig', return_value='mixamo'))
         stack.enter_context(patch.object(face, 'runnable', return_value={'ok': True, 'problems': []}))
+        stack.enter_context(patch.object(face, 'photo_controls_supported', return_value=False))
         stack.enter_context(patch.object(mr, 'enabled_tpose_views', return_value=('face',)))
         stack.enter_context(patch.object(model3d, '_ref_manifest', return_value={'pieces': {}, 'items': []}))
         for name in ('_auto_retexture', '_auto_normalize', '_attach_measurement', 'request_lod'):
