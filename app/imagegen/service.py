@@ -924,6 +924,14 @@ class ImageService:
                                            'The running face backend does not declare all hub photo controls.'}
                         if hub_stage is not None:
                             hub_stage.op.update_state(lambda st: st.update(face_photo_application=application))
+                    if 'skin_recolor' in actual_request:
+                        supports_skin = getattr(bb, 'skin_recolor_supported', None)
+                        if not (application.get('applied_on') == 'hub' and callable(supports_skin) and supports_skin()):
+                            from app.core.face_photo_adjust import SKIN_RECOLOR_UNSUPPORTED
+                            actual_request.pop('skin_recolor', None)
+                            application['skin_recolor'] = {'status': 'unsupported', 'reason': SKIN_RECOLOR_UNSUPPORTED}
+                        if hub_stage is not None:
+                            hub_stage.op.update_state(lambda st: st.update(face_photo_application=application))
                     blobs = bb.generate("", "", actual_request,
                                         log_meta={"agent_name": character_name, "media": "mesh"})
                     if not blobs:

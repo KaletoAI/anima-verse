@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hand-derived bake expectations (plan section 15), without external assets.
 
-The source has two triangles, using seven interleaved POSITION/UV vertices; the body is at (12,12).
+The source has three triangles (two body, one face), using seven interleaved POSITION/UV vertices; the body is at (12,12).
 The face triangle's UV pixel corners on a 16x16 atlas are (4,4),(8,4),(4,8).
 Its interior (5,5) and dilation ring (3,5) become red; (0,0) stays blue.
 Transparent face texel (4,4) stays blue, and every base alpha stays 123.
@@ -59,12 +59,12 @@ def fixture(hub=False, size=16, transparent=False):
         views.append({'buffer': 0, 'byteOffset': len(binary), 'byteLength': len(raw), **extra})
         binary.extend(raw)
         return len(views) - 1
-    add(struct.pack('<6H', 0, 1, 2, 4, 5, 6))
+    add(struct.pack('<9H', 0, 1, 2, 4, 5, 6, 4, 5, 6))
     add(b''.join(struct.pack('<5f', *row) for row in
                 [(0,0,0,.25,.25), (1,0,0,.5,.25), (0,1,0,.25,.5), (1,1,0,.75,.75), (2,0,0,.75,.75), (3,0,0,.875,.75), (2,1,0,.75,.875)]), byteStride=20)
     add(png((10, 20, 200, 123)))
     doc = {'asset': {'version': '2.0'}, 'bufferViews': views,
-           'accessors': [{'bufferView': 0, 'componentType': 5123, 'type': 'SCALAR', 'count': 6},
+           'accessors': [{'bufferView': 0, 'componentType': 5123, 'type': 'SCALAR', 'count': 9},
                          {'bufferView': 1, 'componentType': 5126, 'type': 'VEC3', 'count': 7},
                          {'bufferView': 1, 'byteOffset': 12, 'componentType': 5126, 'type': 'VEC2', 'count': 7}],
            'meshes': [{'primitives': [{'indices': 0, 'attributes': {'POSITION': 1, 'TEXCOORD_0': 2}, 'material': 0}]}],
@@ -76,7 +76,7 @@ def fixture(hub=False, size=16, transparent=False):
         doc['textures'].append({'source': 1})
         doc['materials'].append({'pbrMetallicRoughness': {'baseColorTexture': {'index': 1}}})
         doc['accessors'][0]['count'] = 3
-        doc['accessors'].append({'bufferView': 0, 'byteOffset': 6, 'componentType': 5123, 'type': 'SCALAR', 'count': 3})
+        doc['accessors'].append({'bufferView': 0, 'byteOffset': 6, 'componentType': 5123, 'type': 'SCALAR', 'count': 6})
         face = doc['meshes'][0]['primitives'][0]
         body = copy.deepcopy(face)
         face['material'] = 1

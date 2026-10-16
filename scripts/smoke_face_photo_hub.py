@@ -14,7 +14,7 @@ from app.imagegen.backends.openai_mesh import OpenAIMeshBackend
 
 
 def main():
-    assert validated_params({}) == {'balance': 1., 'tone_match': 1., 'brightness': 1.}
+    assert validated_params({}) == {'balance': 1., 'tone_match': 1., 'skin_recolor': 1., 'brightness': 1.}
     for value in (False, float('nan'), -.01, 1.01):
         try:
             validated_params({'tone_match': value})
@@ -80,8 +80,8 @@ def integration():
                              (root / 'unrigged' / f'{sig}.glb', fixture())):
             target.write_bytes(blob)
             target.with_suffix('.json').write_text(json.dumps(meta))
-        photo_params = {'balance': .4, 'tone_match': .65, 'brightness': .85}
-        public = {'light_balance': .4, 'tone_match': .65, 'brightness': .85}
+        photo_params = {'balance': .4, 'tone_match': .65, 'skin_recolor': .35, 'brightness': .85}
+        public = {'light_balance': .4, 'tone_match': .65, 'skin_recolor': .35, 'brightness': .85}
         neutral = face.flatten_photo(raw)
         captured = []
         create = hub_ops.create
@@ -161,7 +161,8 @@ def integration():
                 assert sent[-1]['reference_image_bytes'] == neutral
                 assert {k: sent[-1][k] for k in public if k in sent[-1]} == (public if supported else {})
                 photo_meta = resumed.result('bake')['face_meta']['photo']
-                assert {k: photo_meta[k] for k in photo_params} == photo_params
+                assert {k: photo_meta[k] for k in photo_params if k != 'skin_recolor'} == {k: v for k, v in photo_params.items() if k != 'skin_recolor'}
+                assert photo_meta['skin_recolor'] == (.35 if supported else {'status': 'unsupported', 'reason': 'needs GLBFaceRetexture >= 1.3'})
                 assert photo_meta['applied_on'] == ('hub' if supported else 'none')
                 assert bool(photo_meta.get('reason')) is (not supported)
                 assert resumed.state['face_photo_application']['applied_on'] == photo_meta['applied_on']
@@ -177,28 +178,34 @@ def integration():
                 hub_ops.delete(op)
             # Availability can refresh the schema between service preflight
             # and backend execution. The exact payload must decide provenance.
-            backend._face_schema = (True, (), '', frozenset(public))
-            race_op = new_op(reference='front', photo=photo_params)
-            payloads = []
-            def downgrade(_prompt, _negative, request, **kwargs):
-                backend._face_schema = (True, (), '', frozenset())
-                return backend._generate('', '', request)
-            def submit(_backend, _url, payload, _label, **kwargs):
-                payloads.append(payload)
-                return 'race-job'
-            def collect(*args, **kwargs):
-                backend._tls.result_files = [{'name': 'corrected.glb', 'mime': 'model/gltf-binary'}]
-                return [fixture(corrected=True)]
-            with (patch.object(backend, 'generate', side_effect=downgrade),
-                  patch.object(backend, 'build_input_files', return_value={'mesh': 'encoded'}),
-                  patch.object(backend, 'select_slot_images', return_value={'image': 'reference'}),
-                  patch.object(backend, '_collect', side_effect=collect),
-                  patch('app.imagegen.backends.openai_mesh.submit_job', side_effect=submit)):
-                assert model3d._face_source_stages('demo', race_op)['ok']
-            assert not public.keys() & payloads[-1]['params'].keys()
-            assert race_op.result('bake')['face_meta']['photo']['applied_on'] == 'none'
-            assert race_op.state['face_photo_application']['applied_on'] == 'none'
-            hub_ops.delete(race_op)
+            for race_names in (set(), set(public) - {'skin_recolor'}):
+                backend._face_schema = (True, (), '', frozenset(public))
+                automatic = new_op(reference='front')
+                assert automatic.inputs['photo']['skin_recolor'] == .35, 'Improvements must use remembered correction'
+                hub_ops.delete(automatic)
+                race_op = new_op(reference='front', photo=photo_params)
+                payloads = []
+                def downgrade(_prompt, _negative, request, **kwargs):
+                    backend._face_schema = (True, (), '', frozenset(race_names))
+                    return backend._generate('', '', request)
+                def submit(_backend, _url, payload, _label, **kwargs):
+                    payloads.append(payload)
+                    return 'race-job'
+                def collect(*args, **kwargs):
+                    backend._tls.result_files = [{'name': 'corrected.glb', 'mime': 'model/gltf-binary'}]
+                    return [fixture(corrected=True)]
+                with (patch.object(backend, 'generate', side_effect=downgrade),
+                      patch.object(backend, 'build_input_files', return_value={'mesh': 'encoded'}),
+                      patch.object(backend, 'select_slot_images', return_value={'image': 'reference'}),
+                      patch.object(backend, '_collect', side_effect=collect),
+                      patch('app.imagegen.backends.openai_mesh.submit_job', side_effect=submit)):
+                    assert model3d._face_source_stages('demo', race_op)['ok']
+                assert 'skin_recolor' not in payloads[-1]['params']
+                application = race_op.result('bake')['face_meta']['photo']
+                assert application['applied_on'] == ('hub' if race_names else 'none')
+                assert application['skin_recolor'] == {'status': 'unsupported', 'reason': 'needs GLBFaceRetexture >= 1.3'}
+                assert race_op.state['face_photo_application']['skin_recolor']['status'] == 'unsupported'
+                hub_ops.delete(race_op)
             # Old operations: no mode and no tone_match, locally adjusted input.
             old_photo = {'balance': 0., 'brightness': .85}
             old = create(model3d._OP_FACE, model3d._op_subject('demo', sig), {
@@ -213,7 +220,7 @@ def integration():
             assert sent[-1]['reference_image_bytes'] == adjusted
             assert not public.keys() & sent[-1].keys()
             old_meta = old.result('bake')['face_meta']
-            assert old_meta['photo'] == {**old_photo, 'tone_match': 0., 'applied_on': 'local'}
+            assert old_meta['photo'] == {**old_photo, 'tone_match': 0., 'skin_recolor': {'status': 'unsupported', 'reason': 'needs GLBFaceRetexture >= 1.3'}, 'applied_on': 'local'}
             assert old_meta['tone_match']['status'] == 'unsupported'
             hub_ops.delete(old)
             # Check and preview agree with selected capability, front hub preview
@@ -230,7 +237,7 @@ def integration():
             with patch.object(model3d, 'trigger_face_retexture', return_value={'status': 'generating'}) as trigger:
                 started = start_character_face_retexture(
                     'demo', sig, strength=1, feather=.18, render_resolution=768,
-                    balance=.4, tone_match=.65, brightness=.85, yaw=0, reference='front', upscale=False)
+                    balance=.4, tone_match=.65, skin_recolor=.35, brightness=.85, yaw=0, reference='front', upscale=False)
                 assert started['status'] == 'generating'
                 assert trigger.call_args.kwargs['photo'] == photo_params
             # Remembered controls drive automatic face-before-rig hub mode, too.
@@ -250,8 +257,8 @@ def integration():
                 assert generated.inputs['photo'] == photo_params
                 assert generated.abs('inputs/photo.png').read_bytes() == neutral
                 hub_ops.delete(generated)
-            model3d.set_model3d_options('demo', {'face_photo': {'tone_match': .25}})
-            assert model3d.get_model3d_options('demo')['face_photo'] == {'tone_match': .25}
+            model3d.set_model3d_options('demo', {'face_photo': {'tone_match': .25, 'skin_recolor': .2}})
+            assert model3d.get_model3d_options('demo')['face_photo'] == {'tone_match': .25, 'skin_recolor': .2}
             model3d.set_model3d_options('demo', {'face_photo': {}})
             assert model3d.get_model3d_options('demo')['face_photo'] == {}
     print('PASS: neutral frozen hub inputs/front balance, remembered tone match, actual old-backend fallback + sidecar, old local resume, check/start/preview routes, face-before-rig')

@@ -548,6 +548,10 @@ class OpenAIMeshBackend(ImageBackend):
         return (self.category == "face_retexture" and verified
                 and {"light_balance", "tone_match", "brightness"} <= names)
 
+    def skin_recolor_supported(self, *, schema=None) -> bool:
+        verified, _, _, names = schema or self._face_schema
+        return bool(self.photo_controls_supported(schema=schema) and verified and 'skin_recolor' in names)
+
     def build_alias_params(self, params: Dict[str, Any], *,
                            inputs_cut_out: bool = False, schema=None) -> Dict[str, Any]:
         """The ``params`` block of the generation request — every key a public
@@ -567,6 +571,8 @@ class OpenAIMeshBackend(ImageBackend):
             if self.photo_controls_supported(schema=schema):
                 result.update({key: params[key] for key in ("light_balance", "tone_match", "brightness")
                                if key in params})
+            if self.skin_recolor_supported(schema=schema) and 'skin_recolor' in params:
+                result['skin_recolor'] = params['skin_recolor']
             return result
         if self.category == "mesh2rig":
             return {"input_no_fingers": bool(params.get("no_fingers", self.no_fingers))}
@@ -716,6 +722,9 @@ class OpenAIMeshBackend(ImageBackend):
                            if {'light_balance', 'tone_match', 'brightness'} <= alias_params.keys()
                            else {'applied_on': 'none', 'reason':
                                  'The running face backend does not declare all hub photo controls.'})
+            if 'skin_recolor' not in alias_params:
+                from app.core.face_photo_adjust import SKIN_RECOLOR_UNSUPPORTED
+                application['skin_recolor'] = {'status': 'unsupported', 'reason': SKIN_RECOLOR_UNSUPPORTED}
             self._tls.photo_application = application
             stage = params.get('hub_stage')
             if stage is not None:

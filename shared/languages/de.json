@@ -8,6 +8,9 @@
     }
   },
   "translations": {
+    "Skin colour correction": "Hautfarbe korrigieren",
+    "Recolours the model's own skin (face, neck, arms, hands) toward the photo's skin tone — for meshes that came out too red. Clothes and hair stay. Runs on the hub (needs GLBFaceRetexture 1.3).": "Gleicht die Haut des Modells (Gesicht, Hals, Arme, Hände) an den Fototon an, wenn sie zu rot ist. Kleidung und Haare bleiben. Läuft auf dem Hub (benötigt GLBFaceRetexture 1.3).",
+    "needs GLBFaceRetexture >= 1.3": "Benötigt GLBFaceRetexture >= 1.3",
     "Light balance": "Lichtausgleich",
     "Face brightness": "Gesichtshelligkeit",
     "Removes broad light from the face photo: side light and, on the hub (GLBFaceRetexture 1.2), the darker face edges that show as a shadow along the projection border. Features stay; nothing is mirrored.": "Entfernt großflächiges Licht aus dem Gesichtsfoto: Seitenlicht und, auf dem Hub (GLBFaceRetexture 1.2), die dunkleren Gesichtsränder, die als Schatten am Projektionsrand erscheinen. Gesichtszüge bleiben, nichts wird gespiegelt.",

@@ -21,8 +21,9 @@ FIX = 'Use the face view as source or switch light balance off'
 
 #: Defaults when a character has no remembered values (user decision
 #: 2026-10-16: full light balance). NEUTRAL is the byte-exact identity.
-DEFAULTS = {'balance': 1.0, 'tone_match': 1.0, 'brightness': 1.0}
-NEUTRAL = {'balance': 0.0, 'tone_match': 0.0, 'brightness': 1.0}
+DEFAULTS = {'balance': 1.0, 'tone_match': 1.0, 'skin_recolor': 1.0, 'brightness': 1.0}
+NEUTRAL = {'balance': 0.0, 'tone_match': 0.0, 'skin_recolor': 0.0, 'brightness': 1.0}
+SKIN_RECOLOR_UNSUPPORTED = 'needs GLBFaceRetexture >= 1.3'
 TONE_MATCH_UNSUPPORTED = ('the face retexture backend does not support tone match '
                           '(needs node GLBFaceRetexture >= 1.1)')
 
@@ -33,7 +34,7 @@ def validated_params(params=None) -> dict:
         raise ValueError('Unsupported face photo parameters')
     result = {**defaults, **(params or {})}
     for key, value in result.items():
-        low, high = (0, 1) if key in ('balance', 'tone_match') else (.5, 1.5)
+        low, high = (0, 1) if key in ('balance', 'tone_match', 'skin_recolor') else (.5, 1.5)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:
             raise ValueError(f'Invalid face photo parameter: {key}')
         result[key] = float(value)

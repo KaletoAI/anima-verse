@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """P1 publication and first-snapshot rollback, derived by hand from sections 5–6.
 
-Two source triangles split into two textured primitives preserve the triangle
+Three source triangles split into two textured primitives preserve the triangle
 count. Projection and rig run once each through separate channels; original
 mesh provenance stays in the full sidecar. A second run keeps the first
 snapshot byte-for-byte. Re-rig retains facefix and snapshot. Revert restores

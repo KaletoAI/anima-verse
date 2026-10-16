@@ -2374,6 +2374,7 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
             original_source = out_dir / "unrigged" / f"{signature}.glb"
             face_texture_lost = not face_texture_preserved(
                 source.read_bytes(), blob, replacement_mask=replacement_mask,
+                bake_meta=(face_meta or {}).get("baked"),
                 original_glb=original_source.read_bytes() if replacement_mask is None and original_source.is_file() else None)
         path = out_dir / f"{signature}{delivered.suffix.lower()}"
         _purge_combination(out_dir, signature, keep_model=path, preserve_sources=True)
@@ -2802,7 +2803,7 @@ def _face_retexture_model(character_name: str, signature: Optional[str] = None, 
             # it): keep the remembered one instead of overwriting it with 0.
             set_model3d_options(character_name, {'face_photo': {
                 'balance': remembered['balance'] if photo_mode == 'local' and reference == 'front' else photo['balance'],
-                'tone_match': photo['tone_match'], 'brightness': photo['brightness']}})
+                'tone_match': photo['tone_match'], 'skin_recolor': photo['skin_recolor'], 'brightness': photo['brightness']}})
         if upscale and upscale_backend_glob:
             from app.core.upscale_reference import require_upscale_backend
             require_upscale_backend(upscale_backend_glob, character_name)
@@ -2881,7 +2882,7 @@ def _face_source_stages(character_name: str, op) -> Dict[str, Any]:
         request = dict(controls)
         if inputs.get('photo_mode', 'local') == 'hub':
             photo = inputs['photo']
-            request.update(light_balance=photo['balance'], tone_match=photo['tone_match'], brightness=photo['brightness'])
+            request.update(light_balance=photo['balance'], tone_match=photo['tone_match'], brightness=photo['brightness'], skin_recolor=photo.get('skin_recolor', 0.))
         result = get_image_service().generate_face_retexture(
             str(original_file), image, str(op.path("face", "x").parent),
             request, (inputs.get("face_backend_glob") if inputs.get("face_before_rig") else inputs.get("backend_glob")) or "", character_name,
@@ -2908,7 +2909,7 @@ def _face_source_stages(character_name: str, op) -> Dict[str, Any]:
             return {'ok': False, 'error': str(exc)}
         if len(raw) > face_retexture.MAX_BYTES:
             return {'ok': False, 'error': 'Baked mesh exceeds the 64 MB rig upload limit'}
-        from app.core.face_photo_adjust import TONE_MATCH_UNSUPPORTED
+        from app.core.face_photo_adjust import TONE_MATCH_UNSUPPORTED, SKIN_RECOLOR_UNSUPPORTED
         photo_meta = dict(inputs.get('photo', {'balance': 0., 'brightness': 1.}))
         # Old operations already contain locally adjusted bytes; never reapply them.
         photo_meta.setdefault('tone_match', 0.)
@@ -2919,6 +2920,8 @@ def _face_source_stages(character_name: str, op) -> Dict[str, Any]:
             photo_meta['applied_on'] = 'local'
             if inputs.get('photo_reason'):
                 photo_meta['reason'] = inputs['photo_reason']
+        if inputs.get('photo_mode', 'local') == 'local':
+            photo_meta['skin_recolor'] = {'status': 'unsupported', 'reason': SKIN_RECOLOR_UNSUPPORTED}
         face_meta = {'status': 'applied', 'at': utc_now_iso(), 'reference': inputs.get('reference', 'front'),
                      'backend': result.get('backend', ''), 'job_id': result.get('job_id', ''),
                      'params': controls, 'photo': photo_meta,

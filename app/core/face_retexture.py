@@ -200,6 +200,16 @@ def photo_controls_supported(character: str, backend_glob: str = '') -> bool:
     return bool(callable(supports) and supports())
 
 
+def skin_recolor_supported(character: str, backend_glob: str = '') -> bool:
+    from app.imagegen.routing import NoRouteError
+    try:
+        backend = _primary_backend(character, backend_glob)
+    except NoRouteError:
+        return False
+    supports = getattr(backend, 'skin_recolor_supported', None)
+    return bool(callable(supports) and supports())
+
+
 def runnable(character: str, backend_glob: str = '') -> dict:
     """Keep temporary routing/availability separate from asset eligibility."""
     from app.imagegen.service import get_image_service
@@ -377,9 +387,19 @@ def bake_face_texture(source_glb: bytes, hub_glb: bytes, *, dilate_px: int = 4,
                 raise ValueError('Face bake does not support baseColorTexture KHR_texture_transform')
         check_coordinates(source, primitive)
         _, base_raw = _primitive_basecolor(source, primitive)
+        counts = [len(t) for t in hub_triangles]
+        largest = max(counts)
+        if counts.count(largest) != 1 or len(primitives) < 2:
+            raise ValueError('Face bake requires exactly one body primitive with the most triangles')
+        body_index = counts.index(largest)
+        body = primitives[body_index]
+        check_coordinates(hub, body)
+        body_raw = _primitive_basecolor(hub, body)[1]
         faces = [(p, indices, _primitive_basecolor(hub, p)[1])
-                 for p, indices in zip(primitives, hub_triangles)
-                 if _primitive_basecolor(hub, p)[1] != base_raw]
+                 for i, (p, indices) in enumerate(zip(primitives, hub_triangles))
+                 if i != body_index]
+        if any(raw == body_raw for _, _, raw in faces):
+            raise ValueError('The hub result contains no face texture distinct from the body')
     except (KeyError, IndexError, TypeError) as exc:
         raise ValueError(f'Invalid face bake geometry or basecolor reference: {exc}') from exc
     if not faces:
@@ -392,7 +412,16 @@ def bake_face_texture(source_glb: bytes, hub_glb: bytes, *, dilate_px: int = 4,
             raise ValueError('Face triangle UVs are outside [0, 1]')
     base = Image.open(io.BytesIO(base_raw)).convert('RGBA')
     width, height = base.size
+    body_recolored = body_raw != base_raw
     composite = np.asarray(base).copy()
+    body_texels_recolored = 0
+    if body_recolored:
+        body_atlas = Image.open(io.BytesIO(body_raw)).convert('RGBA')
+        if body_atlas.size != base.size:
+            body_atlas = body_atlas.resize(base.size, Image.Resampling.LANCZOS)
+        body_pixels = np.asarray(body_atlas)
+        body_texels_recolored = int(np.count_nonzero(np.any(body_pixels != composite, axis=2)))
+        composite = body_pixels.copy()
     replaced = np.zeros((height, width), dtype=bool)
     def coverage(indices):
         mask = Image.new('L', base.size, 0)
@@ -541,18 +570,27 @@ def bake_face_texture(source_glb: bytes, hub_glb: bytes, *, dilate_px: int = 4,
         raise ValueError('Baked mesh exceeds the 64 MB rig upload limit')
     if replacement_masks is not None:
         replacement_masks.append(replaced)
-    return baked, {'face_primitives': len(faces), 'face_triangles': sum(len(t) for _, t, _ in faces),
+    recolor_meta = {}
+    if body_recolored:
+        # Retain the FACE-only mask for later re-rigs, where diffing against
+        # the old atlas would incorrectly include every recoloured body texel.
+        import base64
+        import zlib
+        recolor_meta = {'body_recolored': True, 'body_texels_recolored': body_texels_recolored,
+                        'face_mask': base64.b64encode(zlib.compress(np.packbits(replaced).tobytes())).decode('ascii')}
+    return baked, {**recolor_meta, 'face_primitives': len(faces), 'face_triangles': sum(len(t) for _, t, _ in faces),
                    'texels_replaced': int(replaced.sum()), 'dilate_px': dilate_px}
 
 
 def face_texture_preserved(baked_glb: bytes, rigged_glb: bytes, *,
-                           replacement_mask=None, original_glb: bytes | None = None) -> bool:
+                           replacement_mask=None, original_glb: bytes | None = None, bake_meta: dict | None = None) -> bool:
     """Compare RGB only inside the face mask using bounded integer row tiles.
 
     Later re-rigs reconstruct the effective changed texels from retained textures;
     unchanged replacement texels cannot lose a correction and need no comparison.
     """
     import numpy as np
+    import zlib
     from app.core.model_validate import parse_glb
     try:
         def decode(parsed, primitive):
@@ -561,6 +599,13 @@ def face_texture_preserved(baked_glb: bytes, rigged_glb: bytes, *,
         primitive = baked['gltf']['meshes'][0]['primitives'][0]
         base = decode(baked, primitive)
         base_pixels = np.asarray(base)
+        if replacement_mask is None and (bake_meta or {}).get('body_recolored'):
+            import base64
+            packed = zlib.decompressobj().decompress(
+                base64.b64decode(bake_meta['face_mask'], validate=True), (base.width * base.height + 7) // 8 + 1)
+            if len(packed) != (base.width * base.height + 7) // 8:
+                return False
+            replacement_mask = np.unpackbits(np.frombuffer(packed, dtype=np.uint8))[:base.width * base.height].reshape(base.height, base.width).astype(bool)
         if replacement_mask is None and original_glb is not None:
             original = parse_glb(original_glb)
             original_image = decode(original, original['gltf']['meshes'][0]['primitives'][0])
@@ -600,5 +645,5 @@ def face_texture_preserved(baked_glb: bytes, rigged_glb: bytes, *,
             if count and total > 2 * count:
                 return False
         return True
-    except (ValueError, OSError, KeyError, IndexError, TypeError):
+    except (ValueError, OSError, KeyError, IndexError, TypeError, zlib.error):
         return False

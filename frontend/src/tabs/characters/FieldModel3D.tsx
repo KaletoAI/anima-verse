@@ -82,6 +82,7 @@ interface FaceRetextureFinding {
 }
 interface FaceRetextureCheck {
   photo_controls: 'hub' | 'local'
+  skin_recolor_supported: boolean
   reference: 'face' | 'front'
   face_available: boolean
   face_problem?: FaceRetextureFinding | null
@@ -102,7 +103,7 @@ interface Model3DInfo {
     landmark_fallback?: string[]
     clips?: Record<string, { stretch_p999: number; contact_err_max: number; tail_min_z: number; ik_unreachable: number }>
   }
-  face_retexture?: { photo?: { balance: number; tone_match?: number; brightness: number; applied_on?: 'hub' | 'local' | 'none'; reason?: string }; reference?: 'face' | 'front'; status: string; reason?: string; error?: string; at?: string; backend?: string; job_id?: string; face_texture_lost?: boolean; upscale?: { status: string; backend?: string; in?: number[]; out?: number[]; cached?: boolean; busy?: boolean; error?: string } }
+  face_retexture?: { photo?: { balance: number; skin_recolor?: number | { status: string; reason: string }; tone_match?: number; brightness: number; applied_on?: 'hub' | 'local' | 'none'; reason?: string }; reference?: 'face' | 'front'; status: string; reason?: string; error?: string; at?: string; backend?: string; job_id?: string; face_texture_lost?: boolean; upscale?: { status: string; backend?: string; in?: number[]; out?: number[]; cached?: boolean; busy?: boolean; error?: string } }
   face_retexture_revert?: 'snapshot' | 'rerig' | null
   face_retexture_snapshot?: { ok: boolean; created_at?: string; error?: string }
   face_retexture_compare_url?: string
@@ -161,7 +162,7 @@ interface Model3DStatus {
   rig?: string
   has_input?: boolean
   model?: Model3DInfo | null
-  options?: { auto_generate?: boolean; face_before_rig?: boolean; face_photo?: { balance?: number; tone_match?: number; brightness?: number };
+  options?: { auto_generate?: boolean; face_before_rig?: boolean; face_photo?: { balance?: number; skin_recolor?: number; tone_match?: number; brightness?: number };
     extension_rig_models?: Record<string, Record<string, { enabled?: boolean; flip?: boolean }>>;
     extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }> }
   extension_groups?: ExtensionRigDeclaration[]
@@ -235,7 +236,7 @@ export function FieldModel3D({ character }: { character: string }) {
   // Bumped on every Analyze run and on a character switch: a run whose token is
   // no longer current must not write results into another character's panel.
   const analysisRunRef = useRef(0)
-  const [facePhoto, setFacePhoto] = useState({ balance: 1, tone_match: 1, brightness: 1 })
+  const [facePhoto, setFacePhoto] = useState({ balance: 1, tone_match: 1, skin_recolor: 1, brightness: 1 })
   const [photoPreviewResult, setPhotoPreview] = useState<{ key?: string; original?: string; adjusted?: string; error?: string }>({})
   const photoPreviewRequest = useRef(0)
   const [faceOpen, setFaceOpen] = useState(false)
@@ -489,6 +490,7 @@ export function FieldModel3D({ character }: { character: string }) {
     query.set('balance', String(faceReference === 'front' && !hubPhotoControls ? 0 : facePhoto.balance))
     query.set('brightness', String(facePhoto.brightness))
     query.set('tone_match', String(facePhoto.tone_match))
+    query.set('skin_recolor', String(facePhoto.skin_recolor))
     for (const [key, value] of Object.entries(faceControls)) query.set(key, String(value))
     setBusy(true)
     try {
@@ -903,7 +905,7 @@ export function FieldModel3D({ character }: { character: string }) {
   const faceText = face?.status === 'failed' ? t('Failed') : face?.status === 'skipped' ? t('Skipped') : face?.face_texture_lost ? t('Face texture lost')
     : face?.status === 'applied' ? (face.reference === 'face' ? t('Face view') : up?.status === 'applied' && up.backend
       ? `${up.backend}${up.in?.[0] && up.out?.[0] ? ` ×${+(up.out[0] / up.in[0]).toFixed(1)}` : ''}` : t('applied')) : '–'
-  const photoText = face?.status === 'applied' && face.photo ? `${face.photo.balance ? ` · ${t('Light balance')} ${Math.round(face.photo.balance * 100)} %` : ''}${face.photo.tone_match != null && face.photo.tone_match !== 1 ? ` · ${t('Skin tone match')} ${Math.round(face.photo.tone_match * 100)} %` : ''}${face.photo.brightness !== 1 ? ` · ${t('Face brightness')} ${Math.round(face.photo.brightness * 100)} %` : ''}${face.photo.applied_on === 'hub' ? ' (hub)' : face.photo.applied_on === 'none' ? '' : ' (local)'}` : ''
+  const photoText = face?.status === 'applied' && face.photo ? `${face.photo.balance ? ` · ${t('Light balance')} ${Math.round(face.photo.balance * 100)} %` : ''}${face.photo.tone_match != null && face.photo.tone_match !== 1 ? ` · ${t('Skin tone match')} ${Math.round(face.photo.tone_match * 100)} %` : ''}${typeof face.photo.skin_recolor === 'number' && face.photo.skin_recolor !== 1 ? ` · ${t('Skin colour correction')} ${Math.round(face.photo.skin_recolor * 100)} %` : ''}${face.photo.brightness !== 1 ? ` · ${t('Face brightness')} ${Math.round(face.photo.brightness * 100)} %` : ''}${face.photo.applied_on === 'hub' ? ' (hub)' : face.photo.applied_on === 'none' ? '' : ' (local)'}` : ''
   const statusPanel = <div className="ga-model3d-status">
     {statusRow(t('T-pose'), tp === 'current' ? t('current') : tp === 'changed' ? t('re-rendered')
       : tp === 'other_outfit' ? t('other outfit') : t('unknown'),
@@ -1267,6 +1269,13 @@ export function FieldModel3D({ character }: { character: string }) {
                     title={!hubPhotoControls ? t('the face retexture backend does not support tone match (needs node GLBFaceRetexture >= 1.1)') : undefined}
                     onChange={e => setFacePhoto(v => ({ ...v, tone_match: e.target.valueAsNumber / 100 }))} />
                 </Field>
+                <Field label={`${t('Skin colour correction')} ${Math.round(facePhoto.skin_recolor * 100)} %`}
+                  tip={t("Recolours the model's own skin (face, neck, arms, hands) toward the photo's skin tone — for meshes that came out too red. Clothes and hair stay. Runs on the hub (needs GLBFaceRetexture 1.3).")}>
+                  <input type="range" min={0} max={100} step={5} value={facePhoto.skin_recolor * 100}
+                    disabled={busy || !faceCheck?.skin_recolor_supported}
+                    title={!faceCheck?.skin_recolor_supported ? t('needs GLBFaceRetexture >= 1.3') : undefined}
+                    onChange={e => setFacePhoto(v => ({ ...v, skin_recolor: e.target.valueAsNumber / 100 }))} />
+                </Field>
                 <Field label={`${t('Face brightness')} ${Math.round(facePhoto.brightness * 100)} %`}
                   tip={t("Scales the photo's brightness before projection — lower it when the face looks too bright on the model.")}>
                   <input type="range" min={50} max={150} step={5} value={facePhoto.brightness * 100} disabled={busy}
@@ -1426,7 +1435,7 @@ export function FieldModel3D({ character }: { character: string }) {
         <div className="ga-form-section-label">{t('Improve')}</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <button type="button" className="ga-btn ga-btn-sm" disabled={pending}
-            onClick={() => { setFacePhoto({ balance: st.options?.face_photo?.balance ?? 1, tone_match: st.options?.face_photo?.tone_match ?? 1, brightness: st.options?.face_photo?.brightness ?? 1 }); setFaceReference(''); setUpscaleFirst(!!st.upscale_runnable); setUpscaleBackend(''); setFaceBackend(''); setFaceCheck(null); setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 }); setFaceOpen(true) }}>
+            onClick={() => { setFacePhoto({ balance: st.options?.face_photo?.balance ?? 1, tone_match: st.options?.face_photo?.tone_match ?? 1, skin_recolor: st.options?.face_photo?.skin_recolor ?? 1, brightness: st.options?.face_photo?.brightness ?? 1 }); setFaceReference(''); setUpscaleFirst(!!st.upscale_runnable); setUpscaleBackend(''); setFaceBackend(''); setFaceCheck(null); setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 }); setFaceOpen(true) }}>
             {t('Face retexture…')}
           </button>
           {model?.face_retexture_revert ? <button type="button" className="ga-btn ga-btn-sm" disabled={pending}

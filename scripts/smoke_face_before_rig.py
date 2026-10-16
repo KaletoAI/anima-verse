@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generation-time face correction, expectations derived from the brief.
 
-A two-triangle mesh must keep two triangles after baking. Frozen controls are
+A three-triangle mesh must keep three triangles after baking. Frozen controls are
 strength=1, feather=.18, resolution=768, yaw=0; both face/upscale picks are
 empty (routing), even with an explicit mesh backend. Off: zero face,
 upscale or bake stages and exactly one rig of original bytes. On: one face

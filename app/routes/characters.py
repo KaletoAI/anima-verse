@@ -1762,6 +1762,7 @@ def check_character_face_retexture(character_name: str, signature: str = "",
     return {**_face_retexture_localize(eligibility, lang), "signature": signature,
             "runnable": ready["ok"],
             "photo_controls": "hub" if face_retexture.photo_controls_supported(character_name, backend) else "local",
+            "skin_recolor_supported": face_retexture.skin_recolor_supported(character_name, backend),
             "runnable_problems": _face_retexture_localize(ready, lang)["problems"],
             "snapshot": _face_retexture_localize(snapshot, lang)}
 
@@ -1824,6 +1825,7 @@ def start_character_face_retexture(character_name: str, signature: str = "",
                                    render_resolution: int = Query(768, ge=256, le=2048),
                                    balance: float = Query(1, ge=0, le=1),
                                    tone_match: float = Query(1, ge=0, le=1),
+                                   skin_recolor: float = 1.,
                                    brightness: float = Query(1, ge=0.5, le=1.5),
                                    yaw: float = Query(0, ge=-180, le=180), lang: str = "en",
                                    upscale: Optional[bool] = None, upscale_backend: str = "",
@@ -1846,7 +1848,7 @@ def start_character_face_retexture(character_name: str, signature: str = "",
         return _face_retexture_localize({"ok": False, "problems": eligibility["problems"] + ready["problems"]}, lang)
     from app.core.face_photo_adjust import validated_params as photo_params, PROBLEM, FIX
     try:
-        photo = photo_params({'balance': balance, 'tone_match': tone_match, 'brightness': brightness})
+        photo = photo_params({'balance': balance, 'tone_match': tone_match, 'skin_recolor': skin_recolor, 'brightness': brightness})
         hub = face_retexture.photo_controls_supported(character_name, backend)
         if not hub and eligibility['reference'] == 'front' and balance:
             raise ValueError(PROBLEM)
