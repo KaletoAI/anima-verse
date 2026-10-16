@@ -8,6 +8,14 @@
     }
   },
   "translations": {
+    "Light balance": "Lichtausgleich",
+    "Face brightness": "Gesichtshelligkeit",
+    "Evens out broad brightness between the left and right half of the face (side light). Faces are never symmetric — use only as much as needed.": "Gleicht großflächige Helligkeitsunterschiede zwischen der linken und rechten Gesichtshälfte aus (Seitenlicht). Gesichter sind nie symmetrisch — nur so viel wie nötig verwenden.",
+    "Scales the photo's brightness before projection — lower it when the face looks too bright on the model.": "Passt die Helligkeit des Fotos vor der Projektion an — reduzieren, wenn das Gesicht auf dem Modell zu hell aussieht.",
+    "Light balance needs the face view (a cut-out head)": "Lichtausgleich benötigt die Gesichtsansicht (einen freigestellten Kopf)",
+    "Use the face view as source or switch light balance off": "Gesichtsansicht als Quelle verwenden oder Lichtausgleich ausschalten",
+    "Original": "Original",
+    "Adjusted": "Angepasst",
     "Re-rig the original mesh without face correction? This starts a rigging job and rebuilds the model.": "Das ursprüngliche Mesh ohne Gesichtskorrektur neu riggen? Dies startet einen Rigging-Auftrag und baut das Modell neu auf.",
     "Humanoid models only.": "Nur für humanoide Modelle.",
     "New meshes get the face correction (upscaler + face retexture) before the first rig, so the rigger runs once. Independent of auto-generate. Humanoid models only.": "Neue Meshes erhalten die Gesichtskorrektur (Upscaler + Gesichtstextur) vor dem ersten Riggen, sodass der Rigger nur einmal läuft. Unabhängig von der automatischen Erzeugung. Nur für humanoide Modelle.",

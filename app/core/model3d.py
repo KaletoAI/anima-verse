@@ -310,6 +310,7 @@ def get_model3d_options(character_name: str) -> Dict[str, Any]:
             # fresh T-pose render of a new outfit combination succeeds.
             "auto_generate": bool(raw.get("auto_generate")),
             "face_before_rig": bool(raw.get("face_before_rig")),
+            "face_photo": dict(raw.get("face_photo") or {}),
             "extension_rig_models": dict(raw.get("extension_rig_models") or {}),
             "extension_motion": dict(raw.get("extension_motion") or {})}
 
@@ -325,6 +326,14 @@ def set_model3d_options(character_name: str,
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
         opts = dict(profile.get("model3d_opts") or {})
+        if "face_photo" in updates:
+            from app.core.face_photo_adjust import validated_params as photo_params
+            photo = photo_params(updates["face_photo"])
+            cleaned = {k: v for k, v in photo.items() if v != {"balance": 0, "brightness": 1}[k]}
+            if cleaned:
+                opts["face_photo"] = cleaned
+            else:
+                opts.pop("face_photo", None)
         if "face_before_rig" in updates:
             if type(updates["face_before_rig"]) is not bool:
                 raise ValueError("face_before_rig must be a boolean")
@@ -1956,16 +1965,22 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                     "source_image": src.name, "source_image_sha256": hashlib.sha256(source_bytes).hexdigest()},
                     _snapshot=face_snapshot)
                 face_reference = face_choice["reference"]
+                from app.core.face_photo_adjust import validated_params as photo_params, PROBLEM
+                photo = photo_params(get_model3d_options(character_name)['face_photo'])
+                photo_reason = ''
+                if face_reference == 'front' and photo['balance']:
+                    photo['balance'] = 0.
+                    photo_reason = PROBLEM
                 face_inputs = {"reference": face_reference, "face_before_rig": True, "controls": face_retexture.validated_params(None),
                                "face_backend_glob": "", "upscale": face_retexture.use_upscale(face_reference, None), "upscale_backend_glob": "",
-                               "source_kind": "facefix"}
+                               "source_kind": "facefix", "photo": photo, "photo_reason": photo_reason}
                 if not ready["ok"]:
                     face_inputs["face_retexture"] = {"status": "skipped", "reason": "; ".join(
                         problem["message"] for problem in ready["problems"])}
                 else:
                     try:
-                        face_photo = (face_snapshot['image'] if face_reference == 'face'
-                                      else face_retexture.flatten_photo(source_bytes))
+                        face_photo = (face_snapshot['image'] if face_reference == 'face' and photo == {'balance': 0., 'brightness': 1.}
+                                      else face_retexture.flatten_photo(face_snapshot['rgba'] if face_reference == 'face' else source_bytes, photo))
                     except Exception as exc:
                         face_inputs["face_retexture"] = {"status": "failed", "error": str(exc), "at": utc_now_iso()}
             op = hub_ops.create(_OP_MESH, _op_subject(character_name, signature), {
@@ -2701,7 +2716,7 @@ def _model_revision_unlocked(path: Optional[Path]) -> str:
 
 
 def face_retexture_model(character_name: str, signature: Optional[str] = None, *,
-                         backend_glob: str = "", params=None, upscale: Optional[bool] = None, reference: str = "",
+                         backend_glob: str = "", params=None, photo=None, upscale: Optional[bool] = None, reference: str = "",
                          upscale_backend_glob: str = "", track_id: str = "") -> Dict[str, Any]:
     """Project the original photo, then rebuild every derived asset in the stage.
 
@@ -2713,14 +2728,14 @@ def face_retexture_model(character_name: str, signature: Optional[str] = None, *
         return _resume_entry(op, lambda: _face_retexture_model(
             character_name, op.inputs["signature"], _op_ctx={"op": op}), character_name)
     return hub_ops.run_new(lambda ctx: _face_retexture_model(
-        character_name, signature, backend_glob=backend_glob, params=params,
+        character_name, signature, backend_glob=backend_glob, params=params, photo=photo,
         upscale=upscale, reference=reference, upscale_backend_glob=upscale_backend_glob, track_id=track_id,
         _op_ctx=ctx))
 
 
 @_serial_model
 def _face_retexture_model(character_name: str, signature: Optional[str] = None, *,
-                          backend_glob: str = "", params=None, upscale: Optional[bool] = None, reference: str = "",
+                          backend_glob: str = "", params=None, photo=None, upscale: Optional[bool] = None, reference: str = "",
                           upscale_backend_glob: str = "", track_id: str = "",
                           _op_ctx: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The staged half: checks + record (fresh run), then the stages. A
@@ -2731,6 +2746,8 @@ def _face_retexture_model(character_name: str, signature: Optional[str] = None, 
     root = get_model3d_dir(character_name)
     op = (_op_ctx or {}).get("op")
     if op is None:
+        from app.core.face_photo_adjust import validated_params as photo_params, PROBLEM, FIX
+        photo = photo_params(photo)
         controls = face_retexture.validated_params(params)
         face_snapshot = {}
         eligibility = face_retexture.check(character_name, signature, reference, _snapshot=face_snapshot)
@@ -2739,16 +2756,21 @@ def _face_retexture_model(character_name: str, signature: Optional[str] = None, 
         if problems:
             return {'ok': False, 'problems': problems, 'error': '; '.join(p['message'] for p in problems)}
         original = root / 'unrigged' / f'{signature}.glb'
-        meta = _read_sidecar(original)
         reference = eligibility['reference']
         upscale = face_retexture.use_upscale(reference, upscale)
-        image = (face_snapshot['image'] if reference == 'face' else
-                 face_retexture.flatten_photo(face_retexture.photo_path(character_name, signature, meta, reference).read_bytes()))
+        try:
+            if reference == 'front' and photo['balance']:
+                raise ValueError(PROBLEM)
+            image = (face_snapshot['image'] if photo == {'balance': 0., 'brightness': 1.}
+                     else face_retexture.flatten_photo(face_snapshot['rgba'], photo))
+        except ValueError as exc:
+            return {'ok': False, 'problems': [{'code': 'face_photo', 'message': str(exc), 'fix': FIX}], 'error': str(exc)}
+        set_model3d_options(character_name, {'face_photo': photo})
         if upscale and upscale_backend_glob:
             from app.core.upscale_reference import require_upscale_backend
             require_upscale_backend(upscale_backend_glob, character_name)
         op = hub_ops.create(_OP_FACE, _op_subject(character_name, signature), {
-            "character": character_name, "signature": signature, "controls": controls,
+            "character": character_name, "signature": signature, "controls": controls, "photo": photo,
             "backend_glob": backend_glob, "upscale": bool(upscale), "reference": reference,
             "upscale_backend_glob": upscale_backend_glob, "source_kind": "facefix",
             "rig": required_rig(character_name),
@@ -2846,7 +2868,8 @@ def _face_source_stages(character_name: str, op) -> Dict[str, Any]:
             return {'ok': False, 'error': 'Baked mesh exceeds the 64 MB rig upload limit'}
         face_meta = {'status': 'applied', 'at': utc_now_iso(), 'reference': inputs.get('reference', 'front'),
                      'backend': result.get('backend', ''), 'job_id': result.get('job_id', ''),
-                     'params': controls, 'upscale': upscale_meta, 'baked': baked, 'result_sha256': result.get('result_sha256', ''),
+                     'params': controls, 'photo': inputs.get('photo', {'balance': 0., 'brightness': 1.}),
+                     **({'photo_reason': inputs['photo_reason']} if inputs.get('photo_reason') else {}), 'upscale': upscale_meta, 'baked': baked, 'result_sha256': result.get('result_sha256', ''),
                      'result_url': result.get('result_url', ''),
                      'route_meta': {k: result[k] for k in ('routing', 'fallback_from') if k in result}}
         if result.get('compare_path'):
@@ -2919,13 +2942,15 @@ def _revert_face_retexture(character_name: str, signature: Optional[str] = None,
 
 
 def trigger_face_retexture(character_name: str, signature: str, *,
-                           backend_glob: str = '', params=None, upscale: Optional[bool] = None, reference: str = "",
+                           backend_glob: str = '', params=None, photo=None, upscale: Optional[bool] = None, reference: str = "",
                            upscale_backend_glob: str = '') -> Dict[str, Any]:
     """Track orchestration on the character's shared generation guard."""
     from app.core.task_queue import get_task_queue
     from app.core.face_retexture import safe_signature, validated_params
     safe_signature(signature)
     controls = validated_params(params)
+    from app.core.face_photo_adjust import validated_params as photo_params
+    photo = photo_params(photo)
     with _lock:
         if character_name in _generating:
             return {'status': 'already_running'}
@@ -2945,7 +2970,7 @@ def trigger_face_retexture(character_name: str, signature: str, *,
         try:
             with _char_lock(character_name):
                 result = face_retexture_model(character_name, signature,
-                                               backend_glob=backend_glob, params=controls,
+                                               backend_glob=backend_glob, params=controls, photo=photo,
                                                upscale=upscale, reference=reference, upscale_backend_glob=upscale_backend_glob,
                                                track_id=task_id)
         except Exception as exc:

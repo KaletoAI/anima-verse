@@ -1765,11 +1765,48 @@ def check_character_face_retexture(character_name: str, signature: str = "",
             "snapshot": _face_retexture_localize(snapshot, lang)}
 
 
+@router.get("/{character_name}/model3d/face-photo-preview")
+def preview_character_face_photo(character_name: str, signature: str = "",
+                                 reference: str = Query("face", pattern="^(face|front)$"),
+                                 balance: float = Query(0, ge=0, le=1),
+                                 brightness: float = Query(1, ge=0.5, le=1.5),
+                                 _: Dict[str, Any] = Depends(require_admin)):
+    """Preview certified source bytes without taking the render lock."""
+    import io
+    from PIL import Image
+    from fastapi.responses import Response
+    from app.core import face_retexture
+    from app.core.face_photo_adjust import validated_params, PROBLEM
+    from app.core.keyed_lock import keyed_lock
+    # keyed_lock keeps its entries: never allocate one for an unknown name.
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(status_code=404, detail="Character not found")
+    with keyed_lock('face_photo_preview', character_name):
+        signature = _face_retexture_signature(character_name, signature)
+        snapshot = {}
+        eligibility = face_retexture.check(character_name, signature, reference, _snapshot=snapshot)
+        if not eligibility['ok']:
+            raise HTTPException(409, '; '.join(p['message'] for p in eligibility['problems']))
+        try:
+            photo = validated_params({'balance': balance, 'brightness': brightness})
+            if reference == 'front' and balance:
+                raise ValueError(PROBLEM)
+            raw = face_retexture.flatten_photo(snapshot['rgba'], photo, max_size=512)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        image = Image.open(io.BytesIO(raw))
+        image.thumbnail((512, 512), Image.Resampling.LANCZOS)
+        output = io.BytesIO()
+        image.save(output, 'PNG')
+        return Response(output.getvalue(), media_type='image/png', headers={'Cache-Control': 'no-store'})
+
 @router.post("/{character_name}/model3d/face-retexture")
 def start_character_face_retexture(character_name: str, signature: str = "",
                                    backend: str = "", strength: float = Query(1, ge=0, le=1),
                                    feather: float = Query(0.18, ge=0, le=0.5),
                                    render_resolution: int = Query(768, ge=256, le=2048),
+                                   balance: float = Query(0, ge=0, le=1),
+                                   brightness: float = Query(1, ge=0.5, le=1.5),
                                    yaw: float = Query(0, ge=-180, le=180), lang: str = "en",
                                    upscale: Optional[bool] = None, upscale_backend: str = "",
                                    reference: str = Query("", pattern="^(face|front)?$"),
@@ -1784,10 +1821,20 @@ def start_character_face_retexture(character_name: str, signature: str = "",
         face_retexture.validated_params(controls)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    eligibility = face_retexture.check(character_name, signature, reference)
+    snapshot = {}
+    eligibility = face_retexture.check(character_name, signature, reference, _snapshot=snapshot)
     ready = face_retexture.runnable(character_name, backend)
     if not eligibility["ok"] or not ready["ok"]:
         return _face_retexture_localize({"ok": False, "problems": eligibility["problems"] + ready["problems"]}, lang)
+    from app.core.face_photo_adjust import validated_params as photo_params, PROBLEM, FIX
+    try:
+        photo = photo_params({'balance': balance, 'brightness': brightness})
+        if eligibility['reference'] == 'front' and balance:
+            raise ValueError(PROBLEM)
+        face_retexture.flatten_photo(snapshot['rgba'], photo)
+    except ValueError as exc:
+        return _face_retexture_localize({'ok': False, 'problems': [
+            {'code': 'face_photo', 'message': str(exc), 'fix': FIX}]}, lang)
     upscale = face_retexture.use_upscale(eligibility["reference"], upscale)
     if upscale and upscale_backend:
         from app.core.upscale_reference import require_upscale_backend
@@ -1796,6 +1843,7 @@ def start_character_face_retexture(character_name: str, signature: str = "",
         except ValueError as exc:
             raise HTTPException(503, str(exc)) from exc
     return trigger_face_retexture(character_name, signature, backend_glob=backend, params=controls,
+                                  photo={"balance": balance, "brightness": brightness},
                                   upscale=upscale, reference=eligibility["reference"], upscale_backend_glob=upscale_backend)
 
 
@@ -1941,10 +1989,12 @@ def _set_character_model3d_options_sync(character_name: str,
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
     if not isinstance(body, dict) or not (
-            "auto_generate" in body or "face_before_rig" in body or "extension_rig" in body):
+            "auto_generate" in body or "face_before_rig" in body or "face_photo" in body or "extension_rig" in body):
         raise HTTPException(status_code=400,
                             detail="model options missing")
     updates = {}
+    if "face_photo" in body:
+        updates["face_photo"] = body["face_photo"]
     if "face_before_rig" in body:
         if type(body["face_before_rig"]) is not bool:
             raise HTTPException(400, "face_before_rig must be a boolean")

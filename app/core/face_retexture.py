@@ -43,13 +43,20 @@ def photo_path(character: str, signature: str, meta: dict, reference: str = "fro
     return path
 
 
-def flatten_photo(raw: bytes) -> bytes:
+def flatten_photo(raw: bytes, photo: dict | None = None, *, max_size: int | None = None) -> bytes:
     """Decode the original photo and flatten alpha onto white as RGB PNG."""
     if len(raw) > MAX_BYTES:
         raise ValueError('Reference photo exceeds the 64 MB upload limit')
     image = Image.open(io.BytesIO(raw))
+    from app.core.face_photo_adjust import check_size
+    check_size(image.size)
     image.load()
     rgba = image.convert('RGBA')
+    if max_size is not None:
+        rgba.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+    if photo is not None:
+        from app.core.face_photo_adjust import adjust
+        rgba = Image.fromarray(adjust(rgba, **photo))
     white = Image.new('RGBA', rgba.size, 'white')
     white.alpha_composite(rgba)
     out = io.BytesIO()
@@ -111,6 +118,7 @@ def reference_info(character: str, signature: str, meta: dict, reference: str = 
                 problem = None
                 if _snapshot is not None:
                     _snapshot['image'] = image
+                    _snapshot['rgba'] = raw
         break
     selected = reference or ('front' if problem else 'face')
     return {'reference': selected, 'face_available': problem is None,
@@ -151,7 +159,10 @@ def check(character: str, signature: str, reference: str = '', *,
         if choice['reference'] == 'front':
             try:
                 raw = photo_path(character, signature, meta).read_bytes()
-                flatten_photo(raw)
+                image = flatten_photo(raw)
+                if _snapshot is not None:
+                    _snapshot['image'] = image
+                    _snapshot['rgba'] = raw
             except (OSError, ValueError, Image.DecompressionBombError):
                 problem('no_photo', 'No usable reference photo.', 'No T-pose render for this outfit. Render it, then regenerate the model so photo and mesh match.')
             else:
