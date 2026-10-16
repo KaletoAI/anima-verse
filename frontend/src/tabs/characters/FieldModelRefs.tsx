@@ -45,6 +45,7 @@ interface KindStatus {
 }
 
 interface RefsInfo {
+  face_view?: { exists: boolean; stale: boolean; rendering: boolean; created_at?: string; width?: number; height?: number; url: string }
   signature?: string
   tpose?: RefInfo | null
   pose?: RefInfo | null
@@ -84,7 +85,7 @@ function ageSeconds(now?: string, since?: string | null): number {
 }
 
 const anyRunning = (d: RefsInfo | null | undefined, kinds: RefKind[]) =>
-  kinds.some((k) => !!d?.status?.[k]?.running)
+  kinds.some((k) => !!d?.status?.[k]?.running) || (kinds.includes('tpose') && !!d?.face_view?.rendering)
 const anyScheduled = (d: RefsInfo | null | undefined, kinds: RefKind[]) =>
   kinds.some((k) => !!d?.status?.[k]?.scheduled)
 
@@ -96,6 +97,7 @@ const anyScheduled = (d: RefsInfo | null | undefined, kinds: RefKind[]) =>
 function renderFingerprint(d: RefsInfo | null | undefined, kinds: RefKind[]): string {
   return JSON.stringify([
     d?.signature || '',
+    d?.face_view?.created_at || '',
     kinds.map((k) => [d?.[k]?.filename || '', d?.[k]?.created_at || '']),
     VIEW_ORDER.map((v) => [
       d?.views?.[v]?.info?.filename || '',
@@ -437,10 +439,15 @@ export function FieldModelRefs({
                       return (
                         <div key={view} style={{ flex: 1, minWidth: 0 }}>
                           <div className="ga-hint">{viewLabel(view)}</div>
+                          {view === 'face' ? <div className="ga-hint">
+                            {t('from profile picture')}
+                            {info.face_view?.stale ? <span title={t('The profile picture changed — regenerate')}> · {t('stale')}</span> : null}
+                            {info.face_view?.rendering ? <span> · {t('Generating…')}</span> : null}
+                          </div> : null}
                           {vi ? (
                             <RefImage
                               key={`${view}-${bust}`}
-                              src={`/characters/${enc}/model-refs/tpose_${view}?v=${bust}`}
+                              src={`${view === 'face' ? info.face_view?.url : `/characters/${enc}/model-refs/tpose_${view}`}?v=${bust}`}
                               height={110}
                               radius={6}
                               showSize
@@ -452,7 +459,7 @@ export function FieldModelRefs({
                                   type="button"
                                   className="ga-btn ga-btn-sm"
                                   style={{ fontSize: 10, padding: '1px 5px' }}
-                                  disabled={blocked || !info.tpose}
+                                  disabled={view === 'face' ? busy || !!info.face_view?.rendering : blocked || !info.tpose}
                                   onClick={() => generate(view)}
                                   aria-label={`${t('Regenerate')} · ${viewLabel(view)}`}
                                 >
@@ -466,7 +473,7 @@ export function FieldModelRefs({
                               <button
                                 type="button"
                                 className="ga-btn ga-btn-sm"
-                                disabled={blocked || !info.tpose}
+                                disabled={view === 'face' ? busy || !!info.face_view?.rendering : blocked || !info.tpose}
                                 onClick={() => generate(view)}
                                 aria-label={`${t('Regenerate')} · ${viewLabel(view)}`}
                               >

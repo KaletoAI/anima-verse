@@ -161,24 +161,21 @@ TPOSE_SIDE_PROMPT_TEMPLATE = (
 TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
 TPOSE_RIGHT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="right")
 
-TPOSE_FACE_PROMPT_DEFAULT = (
-    "the same person, close-up portrait of the head and shoulders seen "
-    "straight from the front, face centred and filling most of the frame, head "
-    "level and facing the camera directly, looking straight into the camera, "
-    "eyes open, neutral relaxed expression, mouth closed, the same hairstyle "
-    "as the reference, hair arranged exactly as in the reference, face evenly "
-    "lit from the front by soft diffuse light, no shadows on the face, no hair "
-    "shadows across the forehead or eyes"
+FACE_VIEW_PROMPT_DEFAULT = (
+    "the same person as the reference, close-up of the head only, the face seen straight from the front and "
+    "filling most of the frame, head level and facing the camera directly, looking straight into the camera, "
+    "eyes open, neutral relaxed expression, mouth closed, completely bald head with no hair at all, smooth bare "
+    "scalp, the same eyebrows and eyelashes as the reference, ears visible, face evenly lit from the front by "
+    "soft diffuse light, no shadows on the face"
 )
 
 TPOSE_VIEW_PROMPT_DEFAULTS = {
-    "face": TPOSE_FACE_PROMPT_DEFAULT,
     "back": TPOSE_BACK_PROMPT_DEFAULT,
     "left": TPOSE_LEFT_PROMPT_DEFAULT,
     "right": TPOSE_RIGHT_PROMPT_DEFAULT,
 }
 TPOSE_VIEWS_BY_BODY = {
-    "humanoid": ("back", "left", "right", "face"),
+    "humanoid": ("back", "left", "right"),
     "animal": ("front", "back", "right"),
 }
 # Extra views have per-character toggles and tiles, but share the T-pose
@@ -188,7 +185,6 @@ VIEW_KINDS = tuple(f"tpose_{v}" for v in dict.fromkeys(
 # Framing/lighting/negatives per view. Both profiles share one use case: the
 # framing question ("does the arm span fit") is identical for left and right.
 TPOSE_VIEW_USE_CASES = {
-    "face": "tpose_face",
     "back": "tpose_back",
     "left": "tpose_side",
     "right": "tpose_side",
@@ -230,6 +226,8 @@ _char_locks: Dict[tuple, threading.Lock] = {}
 # is the ONE source of "generation in progress" — the UI polls until it
 # clears instead of holding the button for a fixed timeout.
 _running: Dict[tuple, datetime] = {}
+# Reserve before starting a face thread, including while it waits on its lock.
+_face_workers: Dict[str, int] = {}
 
 
 def _iso(dt: Optional[datetime]) -> Optional[str]:
@@ -263,7 +261,9 @@ def get_tpose_view_prompt(view: str) -> str:
 
 def tpose_views_for_character(character_name: str) -> tuple:
     """Allowed extra views in display/render order for the body form."""
-    return TPOSE_VIEWS_BY_BODY["humanoid" if is_humanoid(character_name) else "animal"]
+    if is_humanoid(character_name):
+        return (*TPOSE_VIEWS_BY_BODY["humanoid"], "face")
+    return TPOSE_VIEWS_BY_BODY["animal"]
 
 
 def get_animal_view_prompt(view: str) -> str:
@@ -391,19 +391,21 @@ def get_model_refs_dir(character_name: str) -> Path:
 
 def checked_reference_override(character_name: str, raw: str) -> str:
     """``raw`` as an absolute path when it names an existing file inside the
-    character's model_refs directory, else "" (logged). The image service
+    character's model_refs directory or its current profile, else "" (logged). The image service
     takes a reference override only through this gate — the value arrives in
     a JSON tool input, and a path outside would upload any server file to a
     backend."""
     from app.models.character import get_character_dir
     try:
-        refs_dir = (get_character_dir(character_name) / "model_refs").resolve()
+        root = get_character_dir(character_name).resolve()
+        refs_dir = root / "model_refs"
         path = Path(raw).resolve()
-        if path.is_file() and path.is_relative_to(refs_dir):
+        if path.is_file() and (path.is_relative_to(refs_dir) or (
+                path.is_relative_to(root / "images") and path == current_profile_image(character_name))):
             return str(path)
     except (OSError, ValueError):
         pass
-    logger.warning("Reference override for %s ignored (not in model_refs): %s",
+    logger.warning("Reference override for %s ignored (not a model ref or current profile): %s",
                    character_name, raw)
     return ""
 
@@ -523,6 +525,9 @@ def find_ref_image(character_name: str, kind: str,
     not rendered yet. An EXPLICIT signature is matched exactly — the
     generation skip-check must not mistake the neutral render for the
     state variant it is about to produce."""
+    if kind == "face_view":
+        path = get_model_refs_dir(character_name) / "face_view.png"
+        return path if path.is_file() else None
     if kind not in REF_KINDS and kind not in VIEW_KINDS:
         return None
     if kind != "pose" and (is_state_fork(signature) or "-p" in (signature or "")):
@@ -578,6 +583,8 @@ def invalidate_refs_for_item(character_name: str, item_id: str) -> Set[str]:
     if not refs_dir.exists():
         return out
     for sidecar in sorted(refs_dir.glob("*.json")):
+        if sidecar.stem == "face_view":
+            continue
         manifest = read_manifest(sidecar)
         if manifest is None:
             continue  # nothing recorded — never delete on a guess
@@ -633,7 +640,8 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
     ``views`` carries ALL extra T-pose views of the character body form as
     ``{"enabled": bool, "info": <info|None>}``: the
     UI needs every view to render its checkbox, the switched-off ones
-    included. The views have no own status lane — they ride with "tpose"."""
+    included. Mesh views ride with "tpose"; the profile-based face view has
+    its own status lane and the outfit-independent ``face_view`` payload."""
     try:
         _, _, signature = current_outfit_state(character_name)
     except Exception:
@@ -645,9 +653,16 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
     views: Dict[str, Any] = {}
     enabled = set(enabled_tpose_views(character_name))
     for view in tpose_views_for_character(character_name):
+        if view == "face":
+            continue
         path = (find_ref_image(character_name, f"tpose_{view}", signature)
                 if signature else None)
         views[view] = {"enabled": view in enabled, "info": _ref_info(path)}
+    if is_humanoid(character_name):
+        face = face_view_info(character_name)
+        out["face_view"] = face
+        views["face"] = {"enabled": "face" in enabled,
+                         "info": _ref_info(find_ref_image(character_name, "face_view"))}
     out["views"] = views
     out["auto"] = get_auto_kinds(character_name)
     out["status"] = get_render_status(character_name)
@@ -672,7 +687,7 @@ def get_render_status(character_name: str) -> Dict[str, Dict[str, Any]]:
     must not lock the other tab's button, hence per kind."""
     status: Dict[str, Dict[str, Any]] = {}
     with _lock:
-        for kind in REF_KINDS:
+        for kind in (*REF_KINDS, "face_view"):
             key = (character_name, kind)
             started = _running.get(key)
             sched = _pending_timers.get(key)
@@ -712,8 +727,8 @@ def generate_model_ref_images(character_name: str,
 
     The "tpose" kind additionally renders the extra views switched on for
     this character (views depend on its body form) as
-    ``tpose_<view>_<signature>``: multi-view mesh inputs, except the face
-    close-up which is used only for face retexture.
+    ``tpose_<view>_<signature>``: multi-view mesh inputs. The optional
+    face view uses its own per-character profile-based lane.
     They ride along with the main render — the kind counts as cached only
     once every enabled view exists too, and an already rendered main image
     is then reused instead of being generated again. A failing view is
@@ -754,7 +769,13 @@ def generate_model_ref_images(character_name: str,
     # renderer fall back to the animal's own anatomy. Read BEFORE the cache
     # skip: it decides whether the extra views count into it.
     humanoid = is_humanoid(character_name)
-    views = enabled_tpose_views(character_name)
+    if tpose_view == "face":
+        face_path = generate_face_view(character_name, force=force)
+        return {"face_view": str(face_path) if face_path else None}
+    if "tpose" in kinds and humanoid and tpose_view is None and get_view_kinds(character_name).get("face"):
+        # Independent lane: queued GPU work or a face failure cannot delay the T-pose.
+        _start_face_view(character_name, force=False)
+    views = tuple(v for v in enabled_tpose_views(character_name) if v != "face")
     if tpose_view is not None:
         views = () if tpose_view == "main" else (tpose_view,)
         if tpose_view != "main" and (
@@ -874,8 +895,7 @@ def generate_model_ref_images(character_name: str,
                             # camera, and the main render carries exactly the
                             # figure, outfit and proportions the views must
                             # match for multi-view img2mesh.
-                            reference_image=path,
-                            record_provenance=view == "face")
+                            reference_image=path)
                     except Exception as e:
                         view_path = None
                         logger.warning(
@@ -1002,6 +1022,9 @@ def trigger_now(character_name: str, kinds: Optional[tuple] = None, *,
     own, so wardrobe and 3D generate independently); None = the per-image
     auto toggles decide, like the automatic trigger. ``tpose_view`` narrows
     the T-pose pass to one view while retaining its lock and status lane."""
+    if tpose_view == "face":
+        _start_face_view(character_name, force=True)
+        return
     auto = get_auto_kinds(character_name)
     auto_kinds = tuple(k for k in REF_KINDS if auto.get(k))
     if kinds is None:
@@ -1017,3 +1040,106 @@ def trigger_now(character_name: str, kinds: Optional[tuple] = None, *,
         _fire_kinds(character_name, kinds, force=True)
     else:
         _fire_kinds(character_name, kinds, force=True, tpose_view=tpose_view)
+
+
+def current_profile_image(character_name: str) -> Optional[Path]:
+    """Resolve only the current profile file inside this character's images."""
+    from app.models.character import get_character_dir, get_character_profile_image
+    filename = get_character_profile_image(character_name)
+    if not isinstance(filename, str) or not filename or Path(filename).name != filename:
+        return None
+    try:
+        character_dir = get_character_dir(character_name).resolve()
+        root = (character_dir / "images").resolve()
+        path = root / filename
+        if root.is_relative_to(character_dir) and path.resolve().is_relative_to(root) and path.is_file():
+            return path
+    except (OSError, RuntimeError):
+        pass
+    return None
+
+
+def face_view_info(character_name: str) -> dict:
+    import hashlib
+    from urllib.parse import quote
+    from PIL import Image
+    from app.core.face_retexture import read_meta
+    path = find_ref_image(character_name, "face_view")
+    profile = current_profile_image(character_name)
+    meta = read_meta(path) if path else {}
+    try:
+        profile_hash = hashlib.sha256(profile.read_bytes()).hexdigest() if profile else ""
+    except OSError:
+        profile_hash = ""
+    info = {"exists": path is not None,
+            "stale": bool(path and (not profile_hash or meta.get("reference_sha256") != profile_hash)),
+            "rendering": get_render_status(character_name)["face_view"]["running"],
+            "created_at": meta.get("created_at", ""), "width": None, "height": None,
+            "url": f"/characters/{quote(character_name, safe='')}/model-refs/face_view"}
+    if path:
+        try:
+            with Image.open(path) as image:
+                info["width"], info["height"] = image.size
+        except OSError:
+            pass
+    return info
+
+
+def generate_face_view(character_name: str, force: bool = False) -> Optional[Path]:
+    """One profile-based, bare head render per character, serialized independently."""
+    import hashlib
+    from app.core.expression_regen import generate_expression_image
+    from app.core.face_retexture import read_meta
+    from app.core.timeutils import utc_now
+    key = (character_name, "face_view")
+    with _kind_lock(key):
+        profile = current_profile_image(character_name)
+        if profile is None:
+            logger.warning("Face view for %s: No profile picture.", character_name)
+            return None
+        path = find_ref_image(character_name, "face_view")
+        if (not force and path and read_meta(path).get("reference_sha256") ==
+                hashlib.sha256(profile.read_bytes()).hexdigest()):
+            return path
+        with _lock:
+            _running[key] = utc_now()
+        try:
+            return generate_expression_image(
+                character_name, mood="", pose_key="", equipped_pieces={}, equipped_items=[],
+                bare_prompt=str(_cfg("face_view_prompt", "") or "").strip() or FACE_VIEW_PROMPT_DEFAULT,
+                image_use_case="face_view", occasion="tpose_view",
+                override_width=1024, override_height=1024,
+                output_stem=get_model_refs_dir(character_name) / "face_view",
+                apply_state_modifiers=False, reference_image=profile, record_provenance=True)
+        finally:
+            with _lock:
+                _running.pop(key, None)
+
+
+def _start_face_view(character_name: str, force: bool) -> None:
+    with _lock:
+        if not force and (_face_workers.get(character_name, 0) or
+                          (character_name, "face_view") in _running):
+            return
+        _face_workers[character_name] = _face_workers.get(character_name, 0) + 1
+
+    def release():
+        with _lock:
+            remaining = _face_workers[character_name] - 1
+            if remaining:
+                _face_workers[character_name] = remaining
+            else:
+                _face_workers.pop(character_name)
+
+    def run():
+        try:
+            generate_face_view(character_name, force)
+        except Exception as exc:
+            logger.warning("Face view for %s failed: %s", character_name, exc)
+        finally:
+            release()
+    try:
+        threading.Thread(target=run, daemon=True).start()
+    except Exception as exc:
+        release()
+        logger.warning("Face view for %s could not be scheduled: %s", character_name, exc)

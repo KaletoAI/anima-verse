@@ -2564,9 +2564,8 @@
     "Face view": "Gesichtsansicht",
     "Front view (T-pose)": "Frontansicht (T-Pose)",
     "Render a face close-up for face retexture": "Nahaufnahme für die Gesichtstextur rendern",
-    "No usable face view.": "Keine nutzbare Gesichtsansicht.",
-    "Render the face view (T-pose set) for this outfit": "Gesichtsansicht im T-Pose-Set für dieses Outfit rendern",
-    "The face view does not match the mesh.": "Die Gesichtsansicht passt nicht zum Mesh.",
-    "The face view was rendered from an older T-pose; regenerate it": "Die Gesichtsansicht stammt von einer älteren T-Pose; bitte neu rendern"
+    "from profile picture": "aus dem Profilbild",
+    "The profile picture changed — regenerate": "Profilbild geändert — neu rendern",
+    "stale": "veraltet"
   }
 }

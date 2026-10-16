@@ -260,7 +260,8 @@ stops acting autonomously).
   only that image, even with Auto off. Back/left/right reuse the existing front reference;
   generate the front first if it is missing. The general Generate button still renders the
   front together with all enabled extra views. Humanoids can also render a face close-up for
-  face retexture; it preserves the hairstyle and never feeds mesh generation.
+  face retexture: one head-only, hairless view per character rendered from the current profile
+  picture, independent of outfit. It never feeds mesh generation.
 - **Local quadruped rig:** five base takes with a per-animal tail mode.
 - **Location and prop models** are generated from gallery images, with front/back/left/right views
   feeding multi-view mesh aliases.

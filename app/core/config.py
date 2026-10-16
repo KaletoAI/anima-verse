@@ -575,21 +575,20 @@ _DEFAULT_IMAGE_USE_CASES = {
     },
     # Optional extra humanoid references (enabled per
     # character on the character editor's 3D tab, default off). The face
-    # close-up serves face retexture; the others feed multi-view img2mesh. Framing/lighting stay identical to
-    # "tpose" so the views compose into one consistent set; only the
-    # negatives differ, because a back or profile render fails in its own way.
+    # close-up is rendered from the profile for face retexture; the others
+    # feed multi-view img2mesh with the main T-pose framing and lighting.
     # _seed_default_use_cases backfills both into existing worlds
     # automatically — no migration needed.
-    "tpose_face": {
+    "face_view": {
         "keywords": {
-            "prompt_style": "realistic 3D character portrait, lifelike skin texture, head and shoulders, entire head visible, face filling the frame, straight frontal view, plain neutral background, soft diffuse frontal light, even shadowless illumination, sharp focus, high detail",
-            "prompt_negative": "shadows on the face, hair shadows, one side darker, directional key light, smiling, open mouth, teeth, tilted head, three-quarter view, profile, looking away, closed eyes, hands near the face, cropped head, sunglasses",
-            "prompt_instruction": "Write comma-separated tags describing the character's head and shoulders with the reference hairstyle and accessories. Do not mention pose or expression.",
+            "prompt_style": "realistic 3D character portrait, lifelike skin texture, head only, entire head visible, face filling the frame, straight frontal view, plain neutral background, soft diffuse frontal light, even shadowless illumination, sharp focus, high detail",
+            "prompt_negative": "hair, bangs, fringe, hair strands, ponytail, hat, cap, headscarf, hood, shoulders, chest, clothing, jewelry, necklace, choker, earrings, shadows on the face, one side darker, directional key light, smiling, open mouth, teeth, tilted head, three-quarter view, profile, looking away, closed eyes, hands, cropped head",
+            "prompt_instruction": "Write comma-separated tags describing the character's head only with a completely bald bare scalp, no hair or accessories. Do not mention pose or expression.",
         },
         "natural": {
-            "prompt_style": "a realistic 3D portrait of the character with lifelike skin texture, framed closely around the head and shoulders with the entire head visible and the face filling most of the frame, seen straight from the front against a plain neutral background, soft diffuse frontal light evenly illuminating the face without shadows, sharp focus and high detail",
-            "prompt_negative": "shadows on the face, hair shadows, one side darker, directional key light, smiling, open mouth, teeth, tilted head, three-quarter view, profile, looking away, closed eyes, hands near the face, cropped head, sunglasses",
-            "prompt_instruction": "Describe the character's head and shoulders with the reference hairstyle and accessories. Do not mention pose or expression.",
+            "prompt_style": "a realistic 3D portrait of the character with lifelike skin texture, framed closely around the head only with the entire head visible and the face filling most of the frame, seen straight from the front against a plain neutral background, soft diffuse frontal light evenly illuminating the face without shadows, sharp focus and high detail",
+            "prompt_negative": "hair, bangs, fringe, hair strands, ponytail, hat, cap, headscarf, hood, shoulders, chest, clothing, jewelry, necklace, choker, earrings, shadows on the face, one side darker, directional key light, smiling, open mouth, teeth, tilted head, three-quarter view, profile, looking away, closed eyes, hands, cropped head",
+            "prompt_instruction": "Describe the character's head only with a completely bald bare scalp, no hair or accessories. Do not mention pose or expression.",
         },
     },
     "tpose_back": {

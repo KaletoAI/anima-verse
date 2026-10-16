@@ -33,7 +33,7 @@ logger = get_logger(__name__)
 # T-pose (humanoid / animal) plus the extra back and profile views. They are
 # the ones a per-character T-pose backend match applies to; every other use
 # case keeps the normal render match. Set in ``app/core/model_refs.py``.
-TPOSE_USE_CASES = ("tpose", "tpose_animal", "tpose_back", "tpose_side", "tpose_face", "tpose_animal_view")
+TPOSE_USE_CASES = ("tpose", "tpose_animal", "tpose_back", "tpose_side", "tpose_animal_view")
 
 # In-flight generation tracking (character:cache_key)
 _generating: Set[str] = set()
@@ -870,7 +870,8 @@ def generate_expression_image(character_name: str,
                               back_view: bool = False,
                               reference_image: Optional[Path] = None,
                               occasion: str = "",
-                              record_provenance: bool = False) -> Optional[Path]:
+                              record_provenance: bool = False,
+                              bare_prompt: Optional[str] = None) -> Optional[Path]:
     """Generate an expression/pose variant.
 
     Character + equipped items + pose + expression -> text-prompt-based
@@ -906,6 +907,8 @@ def generate_expression_image(character_name: str,
     - ``occasion``: the image routing occasion — empty = "tpose" for the
       T-pose use cases, else "expression".
 
+    - ``bare_prompt`` bypasses all content layers and character/slot LoRAs;
+      only the service use-case style is prepended.
     - ``record_provenance`` freezes the explicit reference for the backend
       and certifies its hash and the final processed image bytes in the sidecar.
 
@@ -934,7 +937,7 @@ def generate_expression_image(character_name: str,
     # are passed in so set previews work (override against the profile state).
     from app.models.character import get_character_profile as _gcp_render
     _render_profile = _gcp_render(character_name) or {}
-    _rendered = render_outfit(
+    _rendered = {} if bare_prompt is not None else render_outfit(
         profile=_render_profile,
         equipped_pieces=equipped_pieces,
         equipped_items=equipped_items,
@@ -1004,12 +1007,15 @@ def generate_expression_image(character_name: str,
     # additive fragments AND "A -> B" replacements, tag- or
     # condition-triggered alike.
 
-    _expr_builder = PromptBuilder(character_name,
-                                  apply_state_modifiers=apply_state_modifiers,
-                                  back_view=back_view)
-    persons = _expr_builder.detect_persons("", character_names=[character_name])
-    appearance = persons[0].appearance if persons else get_character_appearance(character_name)
-    actor_label = persons[0].actor_label if persons else character_name
+    if bare_prompt is not None:
+        appearance, actor_label = "", character_name
+    else:
+        _expr_builder = PromptBuilder(character_name,
+                                      apply_state_modifiers=apply_state_modifiers,
+                                      back_view=back_view)
+        persons = _expr_builder.detect_persons("", character_names=[character_name])
+        appearance = persons[0].appearance if persons else get_character_appearance(character_name)
+        actor_label = persons[0].actor_label if persons else character_name
 
     # Prompt prefix: only passed for an explicit preview (wardrobe); it stays
     # empty for automatic expression regens.
@@ -1096,7 +1102,7 @@ def generate_expression_image(character_name: str,
         parts.append(outfit_prompt)
     parts.append(pose_prompt)
     parts.append(expression_prompt)
-    full_prompt = ", ".join(p for p in parts if p)
+    full_prompt = bare_prompt if bare_prompt is not None else ", ".join(p for p in parts if p)
     payload = {
         "prompt": full_prompt,
         "input": full_prompt,
@@ -1132,7 +1138,7 @@ def generate_expression_image(character_name: str,
         if str(_sl.get("name")) not in _have:
             _merged_loras.append(_sl)
             _have.add(str(_sl.get("name")))
-    if _merged_loras:
+    if _merged_loras and bare_prompt is None:
         payload["loras"] = _merged_loras
     payload["image_use_case"] = image_use_case
     # Fabric only exists in the picture when something is actually worn —
@@ -1145,7 +1151,7 @@ def generate_expression_image(character_name: str,
     try:
         if record_provenance:
             import tempfile
-            from app.core.model_refs import checked_reference_override
+            from app.core.model_refs import checked_reference_override, get_model_refs_dir
             checked = checked_reference_override(character_name, str(reference_image or ""))
             if not checked:
                 raise ValueError("Provenance requires a valid explicit reference image")
@@ -1154,11 +1160,12 @@ def generate_expression_image(character_name: str,
             reference_bytes = Path(checked).read_bytes()
             reference_sha256 = hashlib.sha256(reference_bytes).hexdigest()
             provenance_workspace = tempfile.TemporaryDirectory(
-                prefix=".provenance_", dir=Path(checked).parent)
+                prefix=".provenance_", dir=get_model_refs_dir(character_name))
             workspace = Path(provenance_workspace.name)
             frozen_reference = workspace / ("reference" + Path(checked).suffix)
             frozen_reference.write_bytes(reference_bytes)
             payload["reference_image_override"] = str(frozen_reference)
+            payload["record_provenance"] = True
         img_result = image_skill.generate_from_input(json.dumps(payload))
 
         # Extract filename from result
@@ -1206,6 +1213,17 @@ def generate_expression_image(character_name: str,
         except Exception as pp_err:
             logger.warning("Post-processing failed, using the original: %s", pp_err)
             final_tmp = tmp_path
+
+        if image_use_case == "face_view":
+            # This per-character asset has a fixed PNG filename, including when
+            # background removal falls back to a backend's JPEG/WebP output.
+            from PIL import Image
+            png_path = staging_dir / ".face_view.png"
+            with Image.open(final_tmp) as image:
+                image.save(png_path, "PNG")
+            if final_tmp != tmp_path:
+                final_tmp.unlink(missing_ok=True)
+            final_tmp = png_path
 
         if record_provenance:
             image_sha256 = hashlib.sha256(final_tmp.read_bytes()).hexdigest()
@@ -1267,6 +1285,8 @@ def generate_expression_image(character_name: str,
         if record_provenance:
             _expr_meta.update(reference_sha256=reference_sha256,
                               image_sha256=image_sha256)
+            if bare_prompt is not None:
+                _expr_meta["profile_image"] = reference_image.name
         try:
             _meta_path = final_path.with_suffix(".json")
             if record_provenance:

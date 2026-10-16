@@ -32,9 +32,7 @@ def photo_path(character: str, signature: str, meta: dict, reference: str = "fro
     if reference not in ('face', 'front'):
         raise ValueError('Invalid face reference choice')
     if reference == 'face':
-        from app.core.model_refs import find_ref_image
-        found = find_ref_image(character, 'tpose_face', signature)
-        name = found.name if found is not None else f'tpose_face_{signature}.png'
+        name = 'face_view.png'
     else:
         name = meta.get('source_image') or f'tpose_{signature}.png'
     if not isinstance(name, str) or Path(name).name != name or '\\' in name:
@@ -69,13 +67,21 @@ def use_upscale(reference: str, upscale: bool | None) -> bool:
 
 def reference_info(character: str, signature: str, meta: dict, reference: str = '', *,
                    _snapshot: dict | None = None) -> dict:
-    """Select a usable close-up only when it belongs to the mesh's front image.
-
-    The unrigged source metadata is authoritative, even if the current front
-    has since been re-rendered. Never infer a match from missing hashes.
-    """
+    """Select a self-verified close-up of the current profile, independent of outfit."""
     if reference not in ('', 'face', 'front'):
         raise ValueError('Invalid face reference choice')
+    from app.core.model_refs import current_profile_image
+    profile = current_profile_image(character)
+    try:
+        expected = hashlib.sha256(profile.read_bytes()).hexdigest() if profile else ""
+    except OSError:
+        expected = ""
+    if not expected:
+        problem = {'code': 'no_profile_image', 'message': 'No profile picture.',
+                   'fix': 'Set a profile picture, then render the face view'}
+        selected = reference or 'front'
+        return {'reference': selected, 'face_available': False, 'face_problem': problem,
+                'problems': [problem] if selected == 'face' else []}
     problem = None
     # The render lock covers minutes of GPU work. Certify the published pair
     # by content instead, then freeze only the bytes that passed this check.
@@ -87,7 +93,7 @@ def reference_info(character: str, signature: str, meta: dict, reference: str = 
             published_hash = face_meta.get('image_sha256')
             if not published_hash:
                 problem = {'code': 'face_unverified', 'message': 'The face view has no image hash.',
-                           'fix': 'Regenerate the face view (T-pose set) for this outfit'}
+                           'fix': 'Regenerate the face view'}
                 break
             if hashlib.sha256(raw).hexdigest() != published_hash:
                 problem = {'code': 'face_rendering', 'message': 'The face view is being re-rendered.',
@@ -95,13 +101,12 @@ def reference_info(character: str, signature: str, meta: dict, reference: str = 
                 continue
             image = flatten_photo(raw)
         except (OSError, ValueError, Image.DecompressionBombError):
-            problem = {'code': 'no_face_photo', 'message': 'No usable face view.',
-                       'fix': 'Render the face view (T-pose set) for this outfit'}
+            problem = {'code': 'no_face_photo', 'message': 'No face view.',
+                       'fix': 'Render the face view from the profile picture'}
         else:
-            expected = meta.get('source_image_sha256')
             if not expected or face_meta.get('reference_sha256') != expected:
-                problem = {'code': 'face_stale', 'message': 'The face view does not match the mesh.',
-                           'fix': 'The face view was rendered from an older T-pose; regenerate it'}
+                problem = {'code': 'face_stale', 'message': 'The profile picture changed after the face view was rendered.',
+                           'fix': 'Regenerate the face view'}
             else:
                 problem = None
                 if _snapshot is not None:

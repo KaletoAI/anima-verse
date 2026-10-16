@@ -46,6 +46,8 @@ sys.path.insert(0, str(ROOT))
 _tmp = tempfile.mkdtemp(prefix="smoke_tpose_back_")
 from app.core import paths  # noqa: E402
 paths.init(_tmp)
+from app.core import db  # noqa: E402
+db.init_schema()
 
 from app.core.prompt_builder import _FACE_TERMS_RE, strip_face_terms  # noqa: E402
 from app.core import model_refs  # noqa: E402
@@ -140,12 +142,11 @@ check("[4] reference per render (kind, reference_image)",
       [("tpose", None),
        ("tpose_back", main_render),
        ("tpose_left", main_render),
-       ("tpose_right", main_render),
-       ("tpose_face", main_render)])
-# One main occasion plus four independent reference-view occasions.
+       ("tpose_right", main_render)])
+# One main occasion plus three independent reference-view occasions.
 check("[4] main and extra-view occasions", occasions,
       {"tpose": "tpose", "tpose_back": "tpose_view",
-       "tpose_left": "tpose_view", "tpose_right": "tpose_view", "tpose_face": "tpose_view"})
+       "tpose_left": "tpose_view", "tpose_right": "tpose_view"})
 # [5] Palms DOWN in every view (user decision 2026-09-24, the Mixamo bind
 #     pose) — the front, the back and both profiles, nothing facing forward.
 for _label, _text in (("main", model_refs.TPOSE_PROMPT_DEFAULT),

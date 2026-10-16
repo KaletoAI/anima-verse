@@ -1991,6 +1991,7 @@ class ImageService:
             # inside that character's model_refs directory — see the
             # reference loop in generate_from_input.
             "reference_image_override": ctx.get("reference_image_override", ""),
+            "record_provenance": bool(ctx.get("record_provenance", False)),
             "to_avatar_gallery": ctx.get("to_avatar_gallery", False),
             "gallery_character": ctx.get("gallery_character", ""),
             "image_use_case": ctx.get("image_use_case", ""),
@@ -2463,6 +2464,24 @@ class ImageService:
             else:
                 logger.info("No person detected -> no reference images")
                 face_refs = {"reference_images": {}, "has_reference_slots": False}
+
+            # Certification is valid only when the explicit, frozen reference
+            # actually conditions THIS attempt, including routed re-runs.
+            if input_data.get("record_provenance"):
+                reference = str(input_data.get("reference_image_override") or "").strip()
+                # The slot holds the containment gate's RESOLVED path; compare
+                # resolved forms so a relative or symlinked storage dir matches.
+                slotted = set()
+                for _slot_path in (params.get("reference_images") or {}).values():
+                    try:
+                        slotted.add(Path(str(_slot_path)).resolve())
+                    except (OSError, RuntimeError, ValueError):
+                        pass
+                if (backend.ref_slot_count < 1 or not reference or
+                        Path(reference).resolve() not in slotted):
+                    from app.imagegen.base import BackendNotApplicableError
+                    raise BackendNotApplicableError(
+                        backend, "The routed backend takes no reference image; the face view needs one")
 
             # Post-processing happens externally (pull model, see
             # postprocess_trigger.py + /api/images). The generation itself

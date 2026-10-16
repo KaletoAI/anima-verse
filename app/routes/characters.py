@@ -1384,7 +1384,7 @@ async def generate_character_model_refs(character_name: str,
         if kinds is not None and kinds != ["tpose"]:
             raise HTTPException(status_code=422, detail="view requires kinds ['tpose']")
         kinds = ["tpose"]
-        if view != "main":
+        if view not in ("main", "face"):
             _, _, signature = current_outfit_state(character_name)
             if not find_ref_image(
                     character_name, "tpose", signature):
@@ -1397,6 +1397,11 @@ async def generate_character_model_refs(character_name: str,
         if not kinds:
             raise HTTPException(status_code=422,
                                 detail=f"kinds must contain one of {list(REF_KINDS)}")
+    if view == "face":
+        from app.core.model_refs import current_profile_image
+        if current_profile_image(character_name) is None:
+            raise HTTPException(status_code=409,
+                                detail="No profile picture. Set a profile picture, then render the face view")
     trigger_now(character_name, kinds=kinds, tpose_view=view)
     return {"status": "generating"}
 
@@ -1453,15 +1458,15 @@ def _set_character_model_refs_views_sync(character_name: str,
 def get_character_model_ref_image(character_name: str, kind: str, request: Request):
     """Serves the reference render of the CURRENT outfit combination; 404
     when absent. ``kind`` is ``tpose``/``pose`` or one of the extra T-pose
-    view kinds (``tpose_front``/``tpose_back``/``tpose_left``/``tpose_right``/``tpose_face``). ETag so a
+    view kinds (``tpose_front``/``tpose_back``/``tpose_left``/``tpose_right``/``face_view``). ETag so a
     re-render of the same combination (or an outfit switch) is picked up
     instead of a stale cached image."""
     from fastapi.responses import Response
     from app.core.model_refs import REF_KINDS, VIEW_KINDS, find_ref_image
-    if kind not in REF_KINDS and kind not in VIEW_KINDS:
+    if kind not in REF_KINDS and kind not in VIEW_KINDS and kind != "face_view":
         raise HTTPException(
             status_code=400,
-            detail=f"kind must be one of {', '.join(REF_KINDS + VIEW_KINDS)}")
+            detail=f"kind must be one of {', '.join(REF_KINDS + VIEW_KINDS + ('face_view',))}")
     path = find_ref_image(character_name, kind)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})

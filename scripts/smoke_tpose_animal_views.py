@@ -60,10 +60,10 @@ def main():
               patch.object(character, "save_character_profile", side_effect=save),
               patch.object(expression_regen, "generate_expression_image", side_effect=render)):
             check("body-form views", mr.TPOSE_VIEWS_BY_BODY == {
-                "humanoid": ("back", "left", "right", "face"),
+                "humanoid": ("back", "left", "right"),
                 "animal": ("front", "back", "right")})
-            check("five extra file kinds", set(mr.VIEW_KINDS) == {
-                "tpose_front", "tpose_back", "tpose_left", "tpose_right", "tpose_face"})
+            check("four extra file kinds", set(mr.VIEW_KINDS) == {
+                "tpose_front", "tpose_back", "tpose_left", "tpose_right"})
             check("animal default on", mr.enabled_tpose_views("animal") == ("front", "back", "right"))
             check("humanoid default off", mr.enabled_tpose_views("humanoid") == ())
             for name, view in (("humanoid", "front"), ("animal", "left")):
@@ -149,7 +149,7 @@ def main():
             occ = occasions.get_occasion("tpose_view")
             check("new character occasion", occ["character_scoped"] and
                 occ["char_spec_field"] == "tpose_view_workflow" and occ["char_spec_fallback"] == "" and
-                occ["style_use_cases"] == ["tpose_back", "tpose_side", "tpose_face", "tpose_animal_view"])
+                occ["style_use_cases"] == ["tpose_back", "tpose_side", "face_view", "tpose_animal_view"])
             check("view styles removed from main occasion", not set(occ["style_use_cases"]) &
                 set(occasions.get_occasion("tpose")["style_use_cases"]))
             profiles["animal"]["outfit_imagegen"] = {"workflow": "Normal*", "tpose_workflow": "Main*"}
