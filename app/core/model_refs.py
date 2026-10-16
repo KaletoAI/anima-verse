@@ -165,8 +165,9 @@ FACE_VIEW_PROMPT_DEFAULT = (
     "the same person as the reference, close-up of the head only, the face seen straight from the front and "
     "filling most of the frame, head level and facing the camera directly, looking straight into the camera, "
     "eyes open, neutral relaxed expression, mouth closed, completely bald head with no hair at all, smooth bare "
-    "scalp, the same eyebrows and eyelashes as the reference, ears visible, face evenly lit from the front by "
-    "soft diffuse light, no shadows on the face"
+    "scalp, the same eyebrows and eyelashes as the reference, ears visible, lit by flat, perfectly uniform "
+    "neutral white ambient light from all sides like an unlit albedo texture, matte skin with an even tone "
+    "across the whole face"
 )
 
 TPOSE_VIEW_PROMPT_DEFAULTS = {

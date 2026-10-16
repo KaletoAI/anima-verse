@@ -91,6 +91,14 @@ def render_contract(refs, profile, sig, meta):
             assert payload['record_provenance'] is True
             assert payload['override_width'] == payload['override_height'] == 1024
             assert 'head only' in payload['prompt'] and 'completely bald' in payload['prompt']
+            # Albedo-like light (user decision 2026-10-16): uniform neutral light in the
+            # prompt, shadows AND highlights pushed away by the use-case negative.
+            assert 'perfectly uniform' in payload['prompt'] and 'neutral white ambient light' in payload['prompt']
+            assert 'no shadows' not in payload['prompt']
+            from app.core.config import get_use_case_prompts
+            for family in ('natural', 'keywords'):
+                negative = get_use_case_prompts('face_view', family)['prompt_negative']
+                assert all(w in negative for w in ('shadows', 'specular highlights', 'shiny skin', 'catchlights', 'rim light'))
             assert all(word not in raw for word in ('UNWANTED_APPEARANCE', 'UNWANTED_OUTFIT', 'medium blonde hair', 'UNWANTED_BODY_LORA'))
             assert not payload.get('loras')
             reference = Path(mr.checked_reference_override('demo', payload['reference_image_override']))
