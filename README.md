@@ -715,6 +715,26 @@ Everything is managed from two surfaces — no config-file editing needed:
 | **Game Admin**   | `/game-admin`     | Characters, locations/rooms, map, terrain, props, items, rules, states, events, scheduler, poses, improvements, marketplace, world-dev — the React management UI. |
 | **Server Admin** | `/admin/settings` | Providers & LLM routing, media backends, TTS, users & roles, model capabilities, prompt templates, agent loop, plus LLM stats and the call/image logs — the cross-linked server-side config & monitoring pages. |
 
+**Compare LLM responses:** In Server Admin → **LLM Log** (`/logs/llm`), expand a
+request and use **Replay with another model**. Choose a configured provider and a
+model (suggested or entered manually), then set temperature, max output tokens,
+and optionally top p / frequency penalty. Original logged sampling values are
+pre-filled where available; blank optional values use the provider default.
+**Run replay** sends the recorded system/user prompts and conversation history
+through the selected provider's queue, without executing response tools or
+changing game state. Each replay appends a persistent response under the original,
+with provider, model, parameters, timing, token usage and any provider error.
+Open **Full metadata** for the complete record. Model/provider/error filters also
+find matching comparisons while keeping the original request visible.
+
+New queued calls retain their exact request messages, including multimodal inputs.
+Historical streaming requests and unambiguous single-user queue requests can also
+be replayed; incomplete or ambiguous old records show why replay is unavailable.
+An unavailable provider fails explicitly rather than switching to another one.
+For OpenAI-compatible providers, a max output of `0` leaves the budget to the
+provider; Anthropic requires a positive limit and supports only temperature
+(`0`–`1`) among these sampling controls.
+
 The task queue can also be inspected **without the server** — `queue_cli.py` reads the SQLite DB
 directly:
 

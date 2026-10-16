@@ -1,11 +1,12 @@
 """Log viewer - LLM calls as a searchable web page."""
 import json
 from pathlib import Path
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query, Depends, Body, HTTPException
 from fastapi.responses import HTMLResponse
 from typing import Dict, Any
 from app.core.log import get_logger
 from app.core.auth_dependency import require_admin
+from app.core.llm_log_replay import ReplayError, group_entries, read_entries, replay_entry
 
 logger = get_logger("logs_route")
 
@@ -31,18 +32,11 @@ def llm_log_data(
     provider: str = Query("", description="Filter by provider"),
     errors_only: bool = Query(False, description="Failed calls only"),
     search: str = Query("", description="Full-text search")) -> Dict[str, Any]:
-    """JSON API for log entries.
+    """Return original calls with all persistent comparisons attached.
 
-    Entries are returned verbatim (no field whitelist), so the optional
-    ``trace_id``/``trace_kind`` fields reach the viewer untouched. Next to
-    the page, ``trace_totals`` reports how many calls each trace on this
-    page has in the WHOLE log — the viewer needs that number to render
-    "N of M calls" when a filter or the page boundary hides members.
+    Grouping precedes filtering and pagination. Comparisons never count as
+    standalone calls or trace members, including when a filter matches one.
     """
-    if not LOG_FILE.exists():
-        return {"entries": [], "total": 0, "tasks": [], "models": [],
-                "providers": [], "trace_totals": {}}
-
     entries = []
     all_tasks = set()
     all_models = set()
@@ -50,45 +44,35 @@ def llm_log_data(
     all_providers = set()
     trace_counts: Dict[str, int] = {}
 
-    with open(LOG_FILE, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-                all_tasks.add(obj.get("task", ""))
-                tid = obj.get("trace_id", "")
-                if tid:
-                    trace_counts[tid] = trace_counts.get(tid, 0) + 1
-                all_models.add(obj.get("model", ""))
-                svc = obj.get("service", "")
-                if svc:
-                    all_characters.add(svc)
-                prov = obj.get("provider", "")
-                if prov:
-                    all_providers.add(prov)
+    for obj in group_entries(read_entries(LOG_FILE)):
+        all_tasks.add(obj.get("task", ""))
+        tid = obj.get("trace_id", "")
+        if tid:
+            trace_counts[tid] = trace_counts.get(tid, 0) + 1
+        svc = obj.get("service", "")
+        if svc:
+            all_characters.add(svc)
+        variants = [obj, *obj["comparisons"]]
+        for variant in variants:
+            all_models.add(variant.get("model", ""))
+            prov = variant.get("provider", "")
+            if prov:
+                all_providers.add(prov)
 
-                if task and obj.get("task") != task:
-                    continue
-                if model and obj.get("model") != model:
-                    continue
-                if character and obj.get("service") != character:
-                    continue
-                if provider and obj.get("provider", "") != provider:
-                    continue
-                if errors_only and not obj.get("error"):
-                    continue
-                if search:
-                    haystack = json.dumps(obj, ensure_ascii=False).lower()
-                    if search.lower() not in haystack:
-                        continue
+        if task and obj.get("task") != task:
+            continue
+        if model and not any(v.get("model") == model for v in variants):
+            continue
+        if character and obj.get("service") != character:
+            continue
+        if provider and not any(v.get("provider") == provider for v in variants):
+            continue
+        if errors_only and not any(v.get("error") for v in variants):
+            continue
+        if search and search.lower() not in json.dumps(obj, ensure_ascii=False).lower():
+            continue
+        entries.append(obj)
 
-                entries.append(obj)
-            except json.JSONDecodeError:
-                continue
-
-    # Newest first
     entries.reverse()
     total = len(entries)
     page = entries[offset:offset + limit]
@@ -106,6 +90,29 @@ def llm_log_data(
         "providers": sorted(all_providers),
         "trace_totals": {t: trace_counts.get(t, 0) for t in page_traces},
     }
+
+
+@router.post("/llm/replay")
+def llm_log_replay(
+    entry_id: str = Body(..., min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"),
+    provider: str = Body(..., min_length=1, max_length=512),
+    model: str = Body(..., min_length=1, max_length=512),
+    temperature: float = Body(..., ge=0, le=2),
+    max_tokens: int = Body(..., ge=0),
+    top_p: float | None = Body(None, ge=0, le=1),
+    frequency_penalty: float | None = Body(None, ge=-2, le=2),
+) -> Dict[str, Any]:
+    """Replay a server-side log record; response tools are never executed."""
+    if not provider.strip() or not model.strip():
+        raise HTTPException(status_code=400, detail="Provider and model must not be blank.")
+    try:
+        comparison = replay_entry(
+            LOG_FILE, entry_id=entry_id, provider=provider, model=model,
+            temperature=temperature, max_tokens=max_tokens, top_p=top_p,
+            frequency_penalty=frequency_penalty)
+    except ReplayError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return {"comparison": comparison}
 
 
 IMAGE_LOG_FILE = Path("./logs/image_prompts.jsonl")

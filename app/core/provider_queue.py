@@ -991,6 +991,10 @@ class ProviderQueue:
                     self._history.append(task)
                     if len(self._history) > self._history_limit:
                         self._history = self._history[-self._history_limit:]
+                    if getattr(task._llm, "replay_id", None):
+                        _log_task_result(task, get_model_name(task._llm),
+                                         _get_max_tokens_safe(task._llm),
+                                         None, error=task.error)
                     task._done_event.set()
                     logger.info("[%s] Abgebrochen (pending): %s (%s) agent=%s",
                                 self._queue_name, task.task_id, task.task_type, task.agent_name)
@@ -1595,8 +1599,10 @@ class ProviderQueue:
                         with self._lock:
                             self._futures[task.task_id] = future
                         response = _wait_for_future(future, task, task_timeout)
-                    # Strip thinking tags from response (Qwen3.5 etc.)
-                    response = _strip_thinking(response)
+                    # Comparisons keep the provider response verbatim.
+                    is_replay = bool(getattr(task._llm, "replay_id", None))
+                    if not is_replay:
+                        response = _strip_thinking(response)
 
                     # Retry on an empty response. Two cases: with max_tokens
                     # set, the thinking probably ate the whole budget ->
@@ -1605,7 +1611,7 @@ class ProviderQueue:
                     # reports few completion tokens, content empty) — that is
                     # stochastic, an unchanged retry usually heals it.
                     resp_content = getattr(response, "content", None) or ""
-                    if not resp_content.strip():
+                    if not is_replay and not resp_content.strip():
                         from app.utils.llm_logger import extract_token_info
                         _hidden = extract_token_info(response).get("output_tokens", 0)
                         logger.warning(
@@ -1668,6 +1674,8 @@ class ProviderQueue:
                         _log_task_result(task, model_name, max_tokens, None, error=task.error)
                         cooldown_after_failure(self.provider, model_name, task.task_type, e)
                 finally:
+                    if task.status == "cancelled" and getattr(task._llm, "replay_id", None):
+                        _log_task_result(task, model_name, max_tokens, None, error=task.error)
                     with self._lock:
                         self._futures.pop(task.task_id, None)
 
@@ -1749,6 +1757,7 @@ def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,
     """
     try:
         from app.utils.llm_logger import log_llm_call, extract_token_info, estimate_tokens
+        from app.core.llm_client import to_openai_messages
 
         token_info = extract_token_info(response) if response is not None else {}
         response_text = getattr(response, "content", None)
@@ -1808,6 +1817,7 @@ def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,
                   if task._lane_handle is not None else None),
             cache_key=getattr(task, "_cache_key", "") or "",
             llm=task._llm,
+            request_messages=to_openai_messages(task._messages),
             error=error)
     except Exception as e:
         logger.error("Logging error: %s", e, exc_info=True)

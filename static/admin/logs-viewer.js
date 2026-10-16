@@ -233,6 +233,11 @@ function buildEntry(e, globalIdx, searchTerm) {
             ${buildSections(e, searchTerm)}
         </div>
     `;
+    const body = div.querySelector('.entry-body');
+    const initializeReplay = mountReplay(body, e, globalIdx, searchTerm);
+    div.querySelector('.entry-header').addEventListener('click', () => {
+        if (body.classList.contains('open')) initializeReplay();
+    });
     return div;
 }
 
@@ -253,23 +258,237 @@ function buildSections(e, searchTerm) {
     if (prompt.user) {
         html += buildSection('User / Input', formatText(prompt.user, searchTerm), !prompt.system);
     }
-    if (e.response) {
-        html += buildSection('Response', formatText(e.response, searchTerm), false);
-    }
+    html += buildSection('Responses', buildResponseCards(e, searchTerm), true);
     // Metadata
     const meta = {
         task: e.task, template: e.template || '', llm_role: e.llm_role || '',
         label: e.label || '',
-        model: e.model, service: e.service,
+        provider: e.provider, model: e.model, service: e.service,
         user_id: e.user_id,
         trace_id: e.trace_id || '', trace_kind: e.trace_kind || '',
         starttime: e.starttime, endtime: e.endtime,
-        duration_s: e.duration_s,
-        tokens: e.tokens
+        duration_s: e.duration_s, sampler: e.sampler,
+        tokens: e.tokens, finish_reason: e.finish_reason
     };
     html += buildSection('Meta', '<pre>' + escapeHtml(JSON.stringify(meta, null, 2)) + '</pre>', false);
 
     return html;
+}
+
+function buildResponseCard(entry, title, searchTerm) {
+    const meta = {
+        provider: entry.provider, model: entry.model, sampler: entry.sampler,
+        starttime: entry.starttime, endtime: entry.endtime, duration_s: entry.duration_s,
+        tokens: entry.tokens, finish_reason: entry.finish_reason, error: entry.error || null
+    };
+    const tokens = entry.tokens || {};
+    const summary = [
+        entry.starttime || '',
+        entry.duration_s != null ? Number(entry.duration_s).toFixed(2) + 's' : '',
+        `${tokens.input ?? '?'} input / ${tokens.output ?? '?'} output tokens`,
+        ...Object.entries(entry.sampler || {}).map(([key, value]) => key + ': ' + value),
+        tokens.max != null ? 'Max output: ' + (tokens.max || 'provider default') : '',
+        entry.finish_reason ? 'Finish: ' + entry.finish_reason : ''
+    ].filter(Boolean).join('\n');
+    return `<article class="response-card">
+        <h3>${escapeHtml(title)}</h3>
+        <div class="response-model" title="${escapeHtml((entry.provider || '') + ' / ' + (entry.model || ''))}">${escapeHtml(entry.provider || '?')} / ${escapeHtml(entry.model || '?')}</div>
+        <pre class="response-summary">${escapeHtml(summary)}</pre>
+        <details class="response-metadata"><summary>Full metadata</summary>
+            <pre class="response-meta">${escapeHtml(JSON.stringify(meta, null, 2))}</pre>
+        </details>
+        ${entry.error ? '<pre class="response-error">' + escapeHtml(entry.error) + '</pre>' : ''}
+        ${entry.response != null && entry.response !== '' ? formatText(entry.response, searchTerm) : '<p class="replay-hint">No response text was returned.</p>'}
+    </article>`;
+}
+
+function buildResponseCards(entry, searchTerm) {
+    return '<div class="response-grid">' + buildResponseCard(entry, 'Original response', searchTerm)
+        + (entry.comparisons || []).map((comparison, index) =>
+            buildResponseCard(comparison, 'Replay ' + (index + 1), searchTerm)).join('') + '</div>';
+}
+
+async function replayFetch(url, options) {
+    const response = await fetch(url, options);
+    const data = await response.json();
+    if (!response.ok || data.error) {
+        const detail = data.detail || data.error || ('HTTP ' + response.status);
+        throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    }
+    return data;
+}
+
+/** Mount once per entry; load provider/model choices only when it is expanded. */
+function mountReplay(body, entry, index, searchTerm) {
+    const panel = document.createElement('section');
+    panel.className = 'replay-panel';
+    const prefix = 'replay-' + index;
+    if (!entry.replay_available) {
+        panel.innerHTML = '<h3>Replay with another model</h3><p class="replay-hint">'
+            + escapeHtml(entry.replay_unavailable_reason || 'This log entry does not contain a replayable request.') + '</p>';
+        body.appendChild(panel);
+        return () => {};
+    }
+    const sampler = entry.sampler || {};
+    panel.innerHTML = `
+        <h3>Replay with another model</h3>
+        <p class="replay-hint" id="${prefix}-help">The request is unchanged, including its system prompt, user input and full logged history. Only the provider, model and sampling parameters change. Blank optional values use the provider default; 0 output tokens means no client limit.</p>
+        <form class="replay-form" aria-describedby="${prefix}-help">
+            <fieldset class="replay-fields">
+                <label for="${prefix}-provider">Provider
+                    <select id="${prefix}-provider" name="provider" required disabled><option value="">Loading providers…</option></select>
+                </label>
+                <label class="replay-model-field" for="${prefix}-model">Model
+                    <input id="${prefix}-model" name="model" list="${prefix}-models" required placeholder="Select or type a model" autocomplete="off">
+                    <datalist id="${prefix}-models"></datalist>
+                </label>
+                <label for="${prefix}-temperature">Temperature
+                    <input id="${prefix}-temperature" name="temperature" type="number" min="0" step="any" required>
+                </label>
+                <label for="${prefix}-max-tokens">Max output tokens
+                    <input id="${prefix}-max-tokens" name="max_tokens" type="number" min="0" step="1" required>
+                </label>
+                <label for="${prefix}-top-p">Top p (optional)
+                    <input id="${prefix}-top-p" name="top_p" type="number" min="0" max="1" step="any" placeholder="Provider default">
+                </label>
+                <label for="${prefix}-frequency">Frequency penalty (optional)
+                    <input id="${prefix}-frequency" name="frequency_penalty" type="number" step="any" placeholder="Provider default">
+                </label>
+            </fieldset>
+            <div class="replay-actions">
+                <button class="replay-run" type="submit" disabled>Run replay</button>
+                <button class="replay-load" type="button">Reload providers / models</button>
+            </div>
+            <p class="replay-model-status replay-hint" role="status" aria-live="polite"></p>
+            <p class="replay-status" role="status" aria-live="polite"></p>
+        </form>`;
+    body.appendChild(panel);
+    const form = panel.querySelector('form');
+    const fields = form.querySelector('fieldset');
+    const provider = form.elements.namedItem('provider');
+    const model = form.elements.namedItem('model');
+    const modelList = panel.querySelector('datalist');
+    const run = panel.querySelector('.replay-run');
+    const reload = panel.querySelector('.replay-load');
+    const status = panel.querySelector('.replay-status');
+    const modelStatus = panel.querySelector('.replay-model-status');
+    form.elements.namedItem('temperature').value = sampler.temperature ?? 0.7;
+    form.elements.namedItem('max_tokens').value = (entry.tokens || {}).max ?? 0;
+    form.elements.namedItem('top_p').value = sampler.top_p ?? '';
+    form.elements.namedItem('frequency_penalty').value = sampler.frequency_penalty ?? '';
+    model.value = entry.model || '';
+    let initialized = false;
+    let pending = false;
+    let modelGeneration = 0;
+    let providersLoading = false;
+
+    function setStatus(element, message, error = false) {
+        element.setAttribute('role', error ? 'alert' : 'status');
+        element.classList.toggle('replay-error', error);
+        element.textContent = message;
+    }
+
+    async function loadModels() {
+        const generation = ++modelGeneration;
+        const selected = provider.value;
+        modelList.replaceChildren();
+        if (!selected) {
+            setStatus(modelStatus, '');
+            return;
+        }
+        setStatus(modelStatus, 'Loading models for ' + selected + '… You can also type a model name.');
+        try {
+            const data = await replayFetch('/admin/settings/providers/' + encodeURIComponent(selected) + '/models');
+            if (generation !== modelGeneration) return;
+            (data.models || []).forEach(name => modelList.appendChild(new Option(name, name)));
+            setStatus(modelStatus, (data.models || []).length
+                ? 'Model suggestions loaded. You can also type a custom model name.'
+                : 'No model suggestions were returned. Type a model name to continue.');
+        } catch (error) {
+            if (generation !== modelGeneration) return;
+            setStatus(modelStatus, 'Could not load models: ' + error.message + '. Type a model name or reload the list.', true);
+        }
+    }
+
+    async function loadProviders() {
+        if (providersLoading || pending) return;
+        providersLoading = true;
+        reload.disabled = true;
+        run.disabled = true;
+        try {
+            const data = await replayFetch('/admin/settings/providers-list');
+            const selected = provider.value || entry.provider;
+            provider.replaceChildren(new Option('Select a provider', ''));
+            (data.providers || []).forEach(name => provider.add(new Option(name, name)));
+            provider.disabled = false;
+            if ([...provider.options].some(option => option.value === selected)) provider.value = selected;
+            setStatus(status, data.providers && data.providers.length ? '' : 'No providers are configured.', !(data.providers || []).length);
+            if (provider.value) await loadModels();
+        } catch (error) {
+            setStatus(status, 'Could not load providers: ' + error.message + '. Use Reload providers / models to retry.', true);
+        } finally {
+            providersLoading = false;
+            reload.disabled = false;
+            run.disabled = pending || !provider.value;
+        }
+    }
+
+    provider.addEventListener('change', () => {
+        model.value = provider.value === entry.provider ? (entry.model || '') : '';
+        run.disabled = pending || !provider.value;
+        loadModels();
+    });
+    reload.addEventListener('click', loadProviders);
+    form.addEventListener('submit', async event => {
+        event.preventDefault();
+        if (pending || providersLoading || !form.reportValidity()) return;
+        const nullableNumber = name => {
+            const value = form.elements.namedItem(name).value;
+            return value === '' ? null : Number(value);
+        };
+        const payload = {
+            entry_id: entry.entry_id, provider: provider.value, model: model.value.trim(),
+            temperature: Number(form.elements.namedItem('temperature').value),
+            max_tokens: Number(form.elements.namedItem('max_tokens').value),
+            top_p: nullableNumber('top_p'), frequency_penalty: nullableNumber('frequency_penalty')
+        };
+        if (!payload.model) {
+            setStatus(status, 'Enter a model name.', true);
+            model.focus();
+            return;
+        }
+        pending = true;
+        fields.disabled = true;
+        run.disabled = true;
+        reload.disabled = true;
+        form.setAttribute('aria-busy', 'true');
+        setStatus(status, 'Replay queued or running. Waiting for the provider response…');
+        try {
+            const data = await replayFetch('/logs/llm/replay', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+            });
+            entry.comparisons = entry.comparisons || [];
+            entry.comparisons.push(data.comparison);
+            const grid = body.querySelector('.response-grid');
+            grid.insertAdjacentHTML('beforeend', buildResponseCard(data.comparison, 'Replay ' + entry.comparisons.length, searchTerm));
+            grid.parentElement.classList.add('open');
+            grid.parentElement.previousElementSibling.querySelector('.arrow').classList.add('open');
+            setStatus(status, data.comparison.error ? 'Replay finished with a provider error. The result was saved alongside the original response.' : 'Replay saved. Compare the responses above.', !!data.comparison.error);
+        } catch (error) {
+            setStatus(status, 'Replay failed: ' + error.message + '. Adjust the selection or parameters and run it again.', true);
+        } finally {
+            pending = false;
+            fields.disabled = false;
+            run.disabled = !provider.value;
+            reload.disabled = false;
+            form.removeAttribute('aria-busy');
+        }
+    });
+    return () => {
+        if (initialized) return;
+        initialized = true;
+        loadProviders();
+    };
 }
 
 function buildSection(title, content, startOpen) {
@@ -277,7 +496,7 @@ function buildSection(title, content, startOpen) {
     return `
         <div class="section">
             <div class="section-header" onclick="toggleSection(this)">
-                <span class="arrow${openCls}">&#9654;</span> ${title}
+                <span class="arrow${openCls}">&#9654;</span> ${escapeHtml(title)}
             </div>
             <div class="section-content${openCls}">${content}</div>
         </div>

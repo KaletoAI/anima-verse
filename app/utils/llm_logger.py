@@ -88,7 +88,8 @@ def log_llm_call(
     finish_reason: str = "",
     lane: Optional[int] = None,
     cache_key: str = "",
-    llm: Any = None):
+    llm: Any = None,
+    request_messages: Optional[List[Dict[str, Any]]] = None):
     """Logs an LLM call as a JSONL line and prints a short line to stdout.
 
     Args:
@@ -113,6 +114,8 @@ def log_llm_call(
             out of the JSONL instead of written as 0, because "no report" and
             "cold cache" are different findings.
         messages: optional full message list for multi-message calls
+        request_messages: exact ordered provider input, including roles, tool
+            calls and multimodal content; ``messages`` keeps its existing meaning.
         llm_role: role of the LLM call (Tool-LLM, Chat-LLM, LLM)
         template: full path or file name of the rendered Jinja template
             (e.g. ``shared/templates/llm/tasks/classify_activity.md``).
@@ -148,8 +151,10 @@ def log_llm_call(
             (the archive keeps monthly buckets) stays honest about which lines
             carry the information at all.
         llm: the client instance the call was made with, if the caller has it.
-            Only its sampler values are read (temperature, frequency_penalty,
-            top_p) and written as ``sampler``. They matter because two of them
+            Its sampler values (temperature, frequency_penalty, top_p) are
+            written as ``sampler``. Replay correlation attributes are retained
+            as ``replay_of`` and ``replay_id``.
+            Sampler values matter because two of them
             are raised REACTIVELY per call by the anti-repetition net — without
             them in the line, a degenerated answer can only be traced back by
             correlating against ``main.log`` timestamps, which is how the
@@ -208,6 +213,10 @@ def log_llm_call(
         entry["trace_kind"] = trace_kind
     if error:
         entry["error"] = error
+    for attr in ("replay_of", "replay_id"):
+        value = getattr(llm, attr, None)
+        if isinstance(value, str) and value:
+            entry[attr] = value
 
     # Build prompt
     if system_prompt:
@@ -216,6 +225,8 @@ def log_llm_call(
         entry["prompt"]["user"] = user_input
     if messages:
         entry["prompt"]["messages"] = messages
+    if request_messages is not None:
+        entry["prompt"]["request_messages"] = request_messages
 
     # Write JSONL
     with _lock:

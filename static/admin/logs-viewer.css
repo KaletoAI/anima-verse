@@ -118,3 +118,56 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .pager button:disabled { opacity: 0.4; cursor: default; }
 
 .highlight { background: #6e40c966; border-radius: 2px; }
+
+/* Replay uses the same quiet panels and borders as the request inspector. */
+.response-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+    gap: 16px; align-items: start;
+}
+.response-card { min-width: 0; border: 1px solid #30363d; border-radius: 6px; padding: 12px; }
+.response-card h3, .replay-panel h3 { color: #e6edf3; font-size: 14px; margin-bottom: 8px; }
+.response-model { color: #56d364; font-size: 13px; overflow-wrap: anywhere; margin-bottom: 8px; }
+.response-card .response-summary { color: #8b949e; font-size: 12px; margin-bottom: 8px; }
+.response-metadata { margin-bottom: 12px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
+.response-metadata summary { color: #8b949e; cursor: pointer; font-size: 12px; }
+.response-metadata[open] summary { margin-bottom: 8px; }
+.response-card .response-meta {
+    color: #8b949e; font-size: 11px; margin-bottom: 12px; padding-bottom: 10px;
+    border-bottom: 1px solid #30363d;
+}
+.response-card pre { overflow-wrap: anywhere; }
+.response-card .response-error, .replay-error { color: #ff7b72; }
+.response-error { margin-bottom: 12px; }
+.replay-panel { border-top: 1px solid #30363d; padding: 14px; }
+.replay-hint { color: #8b949e; font-size: 12px; line-height: 1.5; }
+.replay-panel > .replay-hint { max-width: 85ch; margin-bottom: 12px; }
+.replay-fields {
+    border: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px; min-width: 0;
+}
+.replay-fields label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; min-width: 0; }
+.replay-fields input, .replay-fields select {
+    width: 100%; min-width: 0; padding: 7px 9px; border-radius: 6px;
+    background: #0d1117; color: #e6edf3; border: 1px solid #30363d; font: inherit;
+}
+.replay-fields input::placeholder { color: #8b949e; }
+.replay-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.replay-actions button {
+    background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+    padding: 7px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.replay-actions .replay-run { background: #1f6feb; color: #fff; border-color: #388bfd; }
+.replay-actions button:hover:not(:disabled) { border-color: #8b949e; }
+.replay-actions button:disabled, .replay-fields:disabled { opacity: 0.6; }
+.replay-actions button:disabled { cursor: default; }
+.replay-panel :is(input, select, button):focus-visible { outline: 2px solid #58a6ff; outline-offset: 3px; }
+.replay-status, .replay-model-status { font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.replay-status:not(:empty), .replay-model-status:not(:empty) { margin-top: 10px; }
+.replay-panel .replay-error { color: #ff7b72; }
+@media (max-width: 760px) {
+    .replay-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 480px) {
+    .replay-fields { grid-template-columns: minmax(0, 1fr); }
+    .replay-panel { padding: 12px; }
+}
