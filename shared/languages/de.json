@@ -10,7 +10,7 @@
   "translations": {
     "Light balance": "Lichtausgleich",
     "Face brightness": "Gesichtshelligkeit",
-    "Evens out broad brightness between the left and right half of the face (side light). Faces are never symmetric — use only as much as needed.": "Gleicht großflächige Helligkeitsunterschiede zwischen der linken und rechten Gesichtshälfte aus (Seitenlicht). Gesichter sind nie symmetrisch — nur so viel wie nötig verwenden.",
+    "Removes broad light from the face photo: side light and, on the hub (GLBFaceRetexture 1.2), the darker face edges that show as a shadow along the projection border. Features stay; nothing is mirrored.": "Entfernt großflächiges Licht aus dem Gesichtsfoto: Seitenlicht und, auf dem Hub (GLBFaceRetexture 1.2), die dunkleren Gesichtsränder, die als Schatten am Projektionsrand erscheinen. Gesichtszüge bleiben, nichts wird gespiegelt.",
     "Scales the photo's brightness before projection — lower it when the face looks too bright on the model.": "Passt die Helligkeit des Fotos vor der Projektion an — reduzieren, wenn das Gesicht auf dem Modell zu hell aussieht.",
     "Light balance needs the face view (a cut-out head)": "Lichtausgleich benötigt die Gesichtsansicht (einen freigestellten Kopf)",
     "Use the face view as source or switch light balance off": "Gesichtsansicht als Quelle verwenden oder Lichtausgleich ausschalten",

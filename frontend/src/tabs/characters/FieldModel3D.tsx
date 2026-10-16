@@ -1254,7 +1254,7 @@ export function FieldModel3D({ character }: { character: string }) {
                   </div> : null}
                 </Field>
                 <Field label={`${t('Light balance')} ${Math.round(facePhoto.balance * 100)} %`}
-                  tip={t('Evens out broad brightness between the left and right half of the face (side light). Faces are never symmetric — use only as much as needed.')}>
+                  tip={t('Removes broad light from the face photo: side light and, on the hub (GLBFaceRetexture 1.2), the darker face edges that show as a shadow along the projection border. Features stay; nothing is mirrored.')}>
                   <input type="range" min={0} max={100} step={5} value={facePhoto.balance * 100}
                     disabled={busy || (!hubPhotoControls && faceReference !== 'face')}
                     title={!hubPhotoControls && faceReference !== 'face' ? t('Light balance needs the face view (a cut-out head)') : undefined}
