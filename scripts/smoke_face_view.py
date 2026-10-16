@@ -93,12 +93,17 @@ def render_contract(refs, profile, sig, meta):
             assert 'head only' in payload['prompt'] and 'completely bald' in payload['prompt']
             # Albedo-like light (user decision 2026-10-16): uniform neutral light in the
             # prompt, shadows AND highlights pushed away by the use-case negative.
-            assert 'perfectly uniform' in payload['prompt'] and 'neutral white ambient light' in payload['prompt']
-            assert 'no shadows' not in payload['prompt']
+            # ... and the reference's skin tone and makeup kept (user, same day: "white
+            # light / matte / albedo" made the face pale and stripped the makeup).
+            assert 'perfectly uniform' in payload['prompt'] and 'colour-neutral ambient light' in payload['prompt']
+            assert 'skin tone' in payload['prompt'] and 'makeup as the reference' in payload['prompt']
+            assert all(w not in payload['prompt'] for w in ('no shadows', 'white', 'albedo', 'matte'))
             from app.core.config import get_use_case_prompts
             for family in ('natural', 'keywords'):
                 negative = get_use_case_prompts('face_view', family)['prompt_negative']
                 assert all(w in negative for w in ('shadows', 'specular highlights', 'shiny skin', 'catchlights', 'rim light'))
+                assert all(w in negative for w in ('pale skin', 'washed-out skin', 'desaturated colours'))
+                assert all(w not in negative for w in ('warm light', 'glossy skin', 'makeup'))
             assert all(word not in raw for word in ('UNWANTED_APPEARANCE', 'UNWANTED_OUTFIT', 'medium blonde hair', 'UNWANTED_BODY_LORA'))
             assert not payload.get('loras')
             reference = Path(mr.checked_reference_override('demo', payload['reference_image_override']))
