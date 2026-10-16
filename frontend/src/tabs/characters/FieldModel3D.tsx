@@ -1261,7 +1261,7 @@ export function FieldModel3D({ character }: { character: string }) {
                     onChange={e => setFacePhoto(v => ({ ...v, balance: e.target.valueAsNumber / 100 }))} />
                 </Field>
                 <Field label={`${t('Skin tone match')} ${Math.round(facePhoto.tone_match * 100)} %`}
-                  tip={t("Pulls the face's overall skin colour and brightness toward the model's existing skin around the face, so it blends into neck and forehead. Runs on the hub (needs GLBFaceRetexture 1.1).")}>
+                  tip={t("Pulls the face's overall skin colour and brightness toward the model's own face skin, so the projection blends in without a seam. Runs on the hub (needs GLBFaceRetexture 1.1.1).")}>
                   <input type="range" min={0} max={100} step={5} value={facePhoto.tone_match * 100}
                     disabled={busy || !hubPhotoControls}
                     title={!hubPhotoControls ? t('the face retexture backend does not support tone match (needs node GLBFaceRetexture >= 1.1)') : undefined}
