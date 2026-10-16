@@ -2894,9 +2894,10 @@ def _face_source_stages(character_name: str, op) -> Dict[str, Any]:
 
     if not op.done("bake"):
         import numpy as np
+        # No size cap on the hub result: it only donates its face texture and
+        # may exceed the upload limit (skin recolour ships a second full
+        # atlas). Only the baked mesh below goes to the rig upload.
         raw = Path(result['path']).read_bytes()
-        if len(raw) > face_retexture.MAX_BYTES:
-            return {'ok': False, 'error': 'Corrected mesh exceeds the 64 MB rig upload limit'}
         verdict = validate_face_source(raw)
         before = validate_face_source(original_bytes, original=True)
         if not verdict['ok'] or verdict['triangles'] != before['triangles']:

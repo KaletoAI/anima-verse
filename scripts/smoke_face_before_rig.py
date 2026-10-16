@@ -193,6 +193,15 @@ def main():
             with patch.object(face_retexture, 'MAX_BYTES', 1):
                 meta = run(True)
                 assert rig_inputs[-1] == fixture() and meta['face_retexture']['status'] == 'failed'
+            # Only the BAKED mesh goes to the rig upload; the hub result just
+            # donates its face texture and may be larger (skin recolour ships a
+            # second full atlas). Fixture: hub 1476 B > cap 1200 B > baked 996 B.
+            assert len(fixture(corrected=True)) > 1200 > len(face_retexture.bake_face_texture(
+                fixture(), fixture(corrected=True))[0])
+            with patch.object(face_retexture, 'MAX_BYTES', 1200):
+                meta = run(True)
+                assert meta['face_retexture']['status'] == 'applied', meta['face_retexture']
+                assert rig_inputs[-1] == (root / 'facefix' / f'{sig}.glb').read_bytes() != fixture()
             for attribute in ('face_raw', 'compare_raw'):
                 setattr(svc, attribute, b'invalid backend output')
                 meta = run(True)
