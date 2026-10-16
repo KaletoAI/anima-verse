@@ -98,11 +98,14 @@ def render_contract(refs, profile, sig, meta):
             assert 'perfectly uniform' in payload['prompt'] and 'colour-neutral ambient light' in payload['prompt']
             assert 'skin tone' in payload['prompt'] and 'makeup as the reference' in payload['prompt']
             assert all(w not in payload['prompt'] for w in ('no shadows', 'white', 'albedo', 'matte'))
+            # The reference's own side light is not inherited (user: light from the right).
+            assert 'NOT the lighting of the reference' in payload['prompt'] and 'equally bright' in payload['prompt']
             from app.core.config import get_use_case_prompts
             for family in ('natural', 'keywords'):
                 negative = get_use_case_prompts('face_view', family)['prompt_negative']
                 assert all(w in negative for w in ('shadows', 'specular highlights', 'shiny skin', 'catchlights', 'rim light'))
                 assert all(w in negative for w in ('pale skin', 'washed-out skin', 'desaturated colours'))
+                assert all(w in negative for w in ('side lighting', 'light from the right', 'half of the face in shadow', 'shoulders'))
                 assert all(w not in negative for w in ('warm light', 'glossy skin', 'makeup'))
             assert all(word not in raw for word in ('UNWANTED_APPEARANCE', 'UNWANTED_OUTFIT', 'medium blonde hair', 'UNWANTED_BODY_LORA'))
             assert not payload.get('loras')

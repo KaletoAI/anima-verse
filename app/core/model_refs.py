@@ -167,7 +167,9 @@ FACE_VIEW_PROMPT_DEFAULT = (
     "eyes open, neutral relaxed expression, mouth closed, completely bald head with no hair at all, smooth bare "
     "scalp, the same eyebrows and eyelashes as the reference, ears visible, exactly the same skin tone, "
     "complexion and makeup as the reference (eye makeup, lashes and lip colour unchanged), natural colour "
-    "saturation, lit by soft, perfectly uniform, colour-neutral ambient light from all sides at natural exposure"
+    "saturation, NOT the lighting of the reference: relit by soft, perfectly uniform, colour-neutral ambient "
+    "light from all sides at natural exposure, the left and the right half of the face exactly equally bright, "
+    "the image ends just below the chin"
 )
 
 TPOSE_VIEW_PROMPT_DEFAULTS = {
