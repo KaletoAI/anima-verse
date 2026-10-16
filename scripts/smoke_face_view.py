@@ -451,6 +451,10 @@ def integration(tmp, refs, sig, front, meta):
         stack.enter_context(patch.object(model3d, '_auto_extension_rig', return_value={'ok': True}))
         stack.enter_context(patch.object(model3d, '_auto_lod_enabled', return_value=False))
         model3d.set_model3d_options('demo', {'face_before_rig': True})
+        # This race check is about the frozen bytes, not photo adjustment
+        # (smoke_face_photo_adjust): pin the neutral identity values, since the
+        # default is full light balance and the fixture photo is opaque.
+        model3d.set_model3d_options('demo', {'face_photo': {'balance': 0, 'brightness': 1}})
         with (patch.object(face, 'flatten_photo', side_effect=swap_after_validation),
               patch.object(model3d, '_character_mesh_stages', side_effect=interrupted)):
             try:

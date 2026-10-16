@@ -173,9 +173,55 @@ def integration(a):
                     assert generated.inputs['photo']=={'balance':.5 if use_face else 0.,'brightness':.85}
                     assert bool(generated.inputs['photo_reason']) is (not use_face)
                     hub_ops.delete(generated)
+            # Defaults are full balance (user decision 2026-10-16): only a deviation
+            # from {balance 1, brightness 1} is remembered, so an explicit 0 stays.
             model3d.set_model3d_options('demo',{'face_photo':{'balance':0,'brightness':1}})
+            assert model3d.get_model3d_options('demo')['face_photo']=={'balance':0.0}
+            model3d.set_model3d_options('demo',{'face_photo':{'balance':1,'brightness':1}})
             assert model3d.get_model3d_options('demo')['face_photo']=={}
-    print('PASS: remembered controls, frozen photo/resume, sidecar and isolated hub controls, generation face/front fallback, PNG preview and 409')
+            assert validated_params(model3d.get_model3d_options('demo')['face_photo'])=={'balance':1.0,'brightness':1.0}
+            # Automatic correction (Improvements: photo=None) uses the remembered values.
+            face_path.write_bytes(raw)
+            face_path.with_suffix('.json').write_text(json.dumps({'image_sha256':hashlib.sha256(raw).hexdigest(),'reference_sha256':hashlib.sha256(photo()).hexdigest()}))
+            model3d.set_model3d_options('demo',{'face_photo':{'balance':.7,'brightness':.9}})
+            def run(**kw):
+                with patch.object(model3d,'_face_source_stages',side_effect=Stop):
+                    try: model3d.face_retexture_model('demo',sig,**kw)
+                    except Stop: pass
+                op=captured[-1]; hub_ops.delete(op); return op.inputs
+            inputs=run()
+            assert inputs['reference']=='face' and inputs['photo']=={'balance':.7,'brightness':.9} and 'photo_reason' not in inputs
+            # Front source with a remembered balance: brightness only, reason recorded.
+            inputs=run(reference='front')
+            assert inputs['photo']=={'balance':0.,'brightness':.9} and inputs['photo_reason']
+            # An explicit front run (dialog sends balance 0) keeps the remembered balance.
+            run(reference='front',photo={'balance':0,'brightness':.8})
+            assert model3d.get_model3d_options('demo')['face_photo']=={'balance':.7,'brightness':.8}
+            # The dialog's explicit face run overwrites both.
+            run(photo={'balance':.4,'brightness':.8})
+            assert model3d.get_model3d_options('demo')['face_photo']=={'balance':.4,'brightness':.8}
+            # A face view without a cut-out (opaque): remembered balance falls back to
+            # brightness only with the reason; an explicit dialog balance is refused.
+            opaque=io.BytesIO(); Image.new('RGB',(64,64),(150,120,100)).save(opaque,'PNG')
+            face_path.write_bytes(opaque.getvalue())
+            face_path.with_suffix('.json').write_text(json.dumps({'image_sha256':hashlib.sha256(opaque.getvalue()).hexdigest(),'reference_sha256':hashlib.sha256(photo()).hexdigest()}))
+            inputs=run()
+            assert inputs['reference']=='face' and inputs['photo']=={'balance':0.,'brightness':.8} and inputs['photo_reason']
+            before=len(captured)
+            refused=model3d.face_retexture_model('demo',sig,photo={'balance':.4,'brightness':.8})
+            assert refused['ok'] is False and refused['problems'][0]['code']=='face_photo' and len(captured)==before
+            with ExitStack() as generation:
+                generation.enter_context(patch.object(model3d,'find_ref_image',return_value=front))
+                generation.enter_context(patch('app.core.model_refs.enabled_tpose_views',return_value=[]))
+                generation.enter_context(patch.object(model3d,'_ref_manifest',return_value={'pieces':{},'items':[]}))
+                generation.enter_context(patch.object(model3d,'_character_mesh_stages',side_effect=Stop))
+                try: model3d.generate_for_current_outfit('demo',signature=sig,force=True)
+                except Stop: pass
+                generated=captured[-1]
+                assert generated.inputs['photo']=={'balance':0.,'brightness':.8} and generated.inputs['photo_reason']
+                assert 'face_retexture' not in generated.inputs, generated.inputs
+                hub_ops.delete(generated)
+    print('PASS: default full balance, remembered controls (dialog, Improvements, front keeps balance), frozen photo/resume, sidecar and isolated hub controls, generation face/front fallback, PNG preview and 409')
 
 if __name__ == '__main__':
     regressions()

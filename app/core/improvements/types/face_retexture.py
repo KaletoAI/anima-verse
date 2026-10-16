@@ -39,8 +39,10 @@ class FaceRetexture(ImprovementType):
             ParamField('character', 'Character', 'text', required=False),
             ParamField('backend', 'Face retexture backend', 'mesh_backend',
                        options('face_retexture', 'mesh'), required=False),
+            # Auto = like the dialog: upscale the T-pose front, never the face view.
             ParamField('upscale', 'Upscale reference first', 'enum',
-                       [{'value': 'yes', 'label': 'Yes'}, {'value': 'no', 'label': 'No'}], default='yes'),
+                       [{'value': 'auto', 'label': 'Auto (front view only)'},
+                        {'value': 'yes', 'label': 'Yes'}, {'value': 'no', 'label': 'No'}], default='auto'),
             ParamField('upscale_backend', 'Upscale backend', 'image_backend',
                        options('upscale', 'image'), required=False),
         ]
@@ -100,7 +102,7 @@ class FaceRetexture(ImprovementType):
                                        or 'Face retexture is not runnable')
             result = model3d.face_retexture_model(
                 name, signature, backend_glob=backend,
-                upscale=params.get('upscale', 'yes') != 'no',
+                upscale={'yes': True, 'no': False}.get(params.get('upscale', 'auto')),
                 upscale_backend_glob=params.get('upscale_backend', ''))
             if not result.get('ok'):
                 raise RuntimeError(result.get('error') or 'Face retexture failed')

@@ -234,7 +234,7 @@ export function FieldModel3D({ character }: { character: string }) {
   // Bumped on every Analyze run and on a character switch: a run whose token is
   // no longer current must not write results into another character's panel.
   const analysisRunRef = useRef(0)
-  const [facePhoto, setFacePhoto] = useState({ balance: 0, brightness: 1 })
+  const [facePhoto, setFacePhoto] = useState({ balance: 1, brightness: 1 })
   const [photoPreviewResult, setPhotoPreview] = useState<{ key?: string; original?: string; adjusted?: string; error?: string }>({})
   const photoPreviewRequest = useRef(0)
   const [faceOpen, setFaceOpen] = useState(false)
@@ -1415,7 +1415,7 @@ export function FieldModel3D({ character }: { character: string }) {
         <div className="ga-form-section-label">{t('Improve')}</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <button type="button" className="ga-btn ga-btn-sm" disabled={pending}
-            onClick={() => { setFacePhoto({ balance: st.options?.face_photo?.balance ?? 0, brightness: st.options?.face_photo?.brightness ?? 1 }); setFaceReference(''); setUpscaleFirst(!!st.upscale_runnable); setUpscaleBackend(''); setFaceBackend(''); setFaceCheck(null); setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 }); setFaceOpen(true) }}>
+            onClick={() => { setFacePhoto({ balance: st.options?.face_photo?.balance ?? 1, brightness: st.options?.face_photo?.brightness ?? 1 }); setFaceReference(''); setUpscaleFirst(!!st.upscale_runnable); setUpscaleBackend(''); setFaceBackend(''); setFaceCheck(null); setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 }); setFaceOpen(true) }}>
             {t('Face retexture…')}
           </button>
           {model?.face_retexture_revert ? <button type="button" className="ga-btn ga-btn-sm" disabled={pending}

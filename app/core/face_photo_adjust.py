@@ -19,8 +19,14 @@ def _mirror_columns(axis, width):
 FIX = 'Use the face view as source or switch light balance off'
 
 
+#: Defaults when a character has no remembered values (user decision
+#: 2026-10-16: full light balance). NEUTRAL is the byte-exact identity.
+DEFAULTS = {'balance': 1.0, 'brightness': 1.0}
+NEUTRAL = {'balance': 0.0, 'brightness': 1.0}
+
+
 def validated_params(params=None) -> dict:
-    defaults = {'balance': 0.0, 'brightness': 1.0}
+    defaults = dict(DEFAULTS)
     if params is not None and (not isinstance(params, dict) or set(params) - defaults.keys()):
         raise ValueError('Unsupported face photo parameters')
     result = {**defaults, **(params or {})}

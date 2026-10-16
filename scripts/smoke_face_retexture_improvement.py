@@ -7,7 +7,8 @@ source generation token is SHA256(created_at + job_id)[:12]; replacing that
 sidecar changes the key even with the same outfit signature. Busy readiness
 spends zero engine attempts and leaves pending; false core result raises and
 spends two attempts before skipped. Done, reverted, now-ineligible and stale
-source candidates are no-ops. Default upscale is yes; no and an explicit
+source candidates are no-ops. Default upscale is auto (None: the core upscales
+the front view only, never the face view); yes, no and an explicit
 upscaler reach the synchronous core separately from its default face params.
 A worked-off one_shot closes; standing stays open and rescans a regenerated
 model. Own empty options must remain distinguishable from global options.
@@ -66,7 +67,7 @@ def main():
             typ = FaceRetexture()
             assert registry.get('face_retexture') is not None
             params = typ.validate({})
-            assert params['upscale'] == 'yes' and params['character'] == ''
+            assert params['upscale'] == 'auto' and params['character'] == ''
             assert typ.validate({'character': 'demo'})['character'] == 'demo'
             for bad in [{'upscale': 'maybe'}, {'backend': 'mesh-fake'},
                         {'upscale_backend': 'mesh-fake'}, {'character': 'nobody'}]:
@@ -132,6 +133,9 @@ def main():
                 core.assert_called_once_with('demo', sigs[0], backend_glob='face-fake', upscale=False, upscale_backend_glob='up-fake')
                 core.reset_mock()
                 typ.apply(regenerated, params, '')
+                assert core.call_args.kwargs['upscale'] is None
+                core.reset_mock()
+                typ.apply(regenerated, typ.validate({'upscale': 'yes'}), '')
                 assert core.call_args.kwargs['upscale'] is True
                 once = store.create(typ.id, 'Smoke', params, 'one_shot')['id']
                 engine.scan(once)

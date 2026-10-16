@@ -329,7 +329,8 @@ def set_model3d_options(character_name: str,
         if "face_photo" in updates:
             from app.core.face_photo_adjust import validated_params as photo_params
             photo = photo_params(updates["face_photo"])
-            cleaned = {k: v for k, v in photo.items() if v != {"balance": 0, "brightness": 1}[k]}
+            from app.core.face_photo_adjust import DEFAULTS as photo_defaults
+            cleaned = {k: v for k, v in photo.items() if v != photo_defaults[k]}
             if cleaned:
                 opts["face_photo"] = cleaned
             else:
@@ -1979,8 +1980,18 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                         problem["message"] for problem in ready["problems"])}
                 else:
                     try:
-                        face_photo = (face_snapshot['image'] if face_reference == 'face' and photo == {'balance': 0., 'brightness': 1.}
-                                      else face_retexture.flatten_photo(face_snapshot['rgba'] if face_reference == 'face' else source_bytes, photo))
+                        photo_raw = face_snapshot['rgba'] if face_reference == 'face' else source_bytes
+                        try:
+                            face_photo = (face_snapshot['image'] if face_reference == 'face' and photo == {'balance': 0., 'brightness': 1.}
+                                          else face_retexture.flatten_photo(photo_raw, photo))
+                        except ValueError as exc:
+                            # A face view without a cut-out (background removal
+                            # fell back) cannot be balanced: brightness only.
+                            if str(exc) != PROBLEM or not photo['balance']:
+                                raise
+                            photo['balance'] = 0.
+                            face_inputs["photo_reason"] = PROBLEM
+                            face_photo = face_retexture.flatten_photo(photo_raw, photo)
                     except Exception as exc:
                         face_inputs["face_retexture"] = {"status": "failed", "error": str(exc), "at": utc_now_iso()}
             op = hub_ops.create(_OP_MESH, _op_subject(character_name, signature), {
@@ -2747,7 +2758,12 @@ def _face_retexture_model(character_name: str, signature: Optional[str] = None, 
     op = (_op_ctx or {}).get("op")
     if op is None:
         from app.core.face_photo_adjust import validated_params as photo_params, PROBLEM, FIX
-        photo = photo_params(photo)
+        # No explicit values (Improvements, any non-dialog caller): the
+        # character's remembered ones, exactly like face-before-rig.
+        explicit_photo = photo is not None
+        remembered = photo_params(get_model3d_options(character_name)['face_photo'])
+        photo = photo_params(photo) if explicit_photo else dict(remembered)
+        photo_reason = ''
         controls = face_retexture.validated_params(params)
         face_snapshot = {}
         eligibility = face_retexture.check(character_name, signature, reference, _snapshot=face_snapshot)
@@ -2758,19 +2774,38 @@ def _face_retexture_model(character_name: str, signature: Optional[str] = None, 
         original = root / 'unrigged' / f'{signature}.glb'
         reference = eligibility['reference']
         upscale = face_retexture.use_upscale(reference, upscale)
+        if reference == 'front' and photo['balance'] and not explicit_photo:
+            # A remembered balance never blocks a front-view run: brightness only.
+            photo['balance'] = 0.
+            photo_reason = PROBLEM
         try:
             if reference == 'front' and photo['balance']:
                 raise ValueError(PROBLEM)
-            image = (face_snapshot['image'] if photo == {'balance': 0., 'brightness': 1.}
-                     else face_retexture.flatten_photo(face_snapshot['rgba'], photo))
+            try:
+                image = (face_snapshot['image'] if photo == {'balance': 0., 'brightness': 1.}
+                         else face_retexture.flatten_photo(face_snapshot['rgba'], photo))
+            except ValueError as exc:
+                # Remembered values never block a run on a photo without a
+                # cut-out; an explicit dialog choice is refused instead.
+                if explicit_photo or str(exc) != PROBLEM or not photo['balance']:
+                    raise
+                photo['balance'] = 0.
+                photo_reason = PROBLEM
+                image = face_retexture.flatten_photo(face_snapshot['rgba'], photo)
         except ValueError as exc:
             return {'ok': False, 'problems': [{'code': 'face_photo', 'message': str(exc), 'fix': FIX}], 'error': str(exc)}
-        set_model3d_options(character_name, {'face_photo': photo})
+        if explicit_photo:
+            # A front-view run cannot express a balance (the dialog disables
+            # it): keep the remembered one instead of overwriting it with 0.
+            set_model3d_options(character_name, {'face_photo': {
+                'balance': remembered['balance'] if reference == 'front' else photo['balance'],
+                'brightness': photo['brightness']}})
         if upscale and upscale_backend_glob:
             from app.core.upscale_reference import require_upscale_backend
             require_upscale_backend(upscale_backend_glob, character_name)
         op = hub_ops.create(_OP_FACE, _op_subject(character_name, signature), {
             "character": character_name, "signature": signature, "controls": controls, "photo": photo,
+            **({"photo_reason": photo_reason} if photo_reason else {}),
             "backend_glob": backend_glob, "upscale": bool(upscale), "reference": reference,
             "upscale_backend_glob": upscale_backend_glob, "source_kind": "facefix",
             "rig": required_rig(character_name),
@@ -2950,7 +2985,7 @@ def trigger_face_retexture(character_name: str, signature: str, *,
     safe_signature(signature)
     controls = validated_params(params)
     from app.core.face_photo_adjust import validated_params as photo_params
-    photo = photo_params(photo)
+    photo = photo_params(photo) if photo is not None else None  # None = remembered
     with _lock:
         if character_name in _generating:
             return {'status': 'already_running'}
