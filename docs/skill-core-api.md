@@ -349,6 +349,19 @@ Managed, admin and other package origins are exempt. Core defaults: six self pla
 tasks, with zero meaning unlimited. Hold `keyed_lock("intents", owner)` across duplicate lookup,
 creation and cap enforcement. The return value counts successful expirations.
 
+`app.models.intents.cleanup_intents(owner="", *, merge_duplicates=True, set_deadlines=True,
+end_all=False, dry_run=True) -> Dict` previews or applies cleanup under each owner's
+`keyed_lock("intents", owner)`. Empty owner selects all owners; participant membership is
+not ownership. Marker/legacy rows merge by equal normalized title (newest creation stamp,
+then larger id wins; empty titles stay separate), and missing deadlines use
+`default_intent_expiry` from the current game clock. Admin, managed and package-origin rows
+are exempt. `end_all=True` requires an owner and expires every owned active row except
+managed actions. Caps run after cleanup, also in preview simulation. Returns
+`{"dry_run": bool, "items": [{"id", "owner", "title", "action"}], "counts": {action: n}}`;
+actions are `duplicate`, `deadline` (also includes `expires_at`), `cleanup`, or `cap`.
+Preview writes nothing. `expire_intent` additionally accepts `duplicate` and `cleanup`,
+preserving metadata as for the other reasons.
+
 Executable actions are package-provided capabilities on the existing intent row,
 not a second workflow store. Successful CRUD writes emit `intent_created`,
 `intent_changed` and `intent_deleted`; execution is serialized by

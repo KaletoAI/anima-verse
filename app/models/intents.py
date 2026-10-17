@@ -287,7 +287,7 @@ def auto_track_progress(character_name: str, tool_type: str,
 
 def expire_intent(intent_id: str, reason: str) -> bool:
     """Expire an active intent and preserve its metadata with the reason."""
-    if reason not in {"cap", "deadline", "replaced"}:
+    if reason not in {"cap", "deadline", "replaced", "duplicate", "cleanup"}:
         raise ValueError("Unknown intent expiry reason")
     with keyed_lock("intent_execution", intent_id):
         intent = get_intent(intent_id)
@@ -315,6 +315,21 @@ def _intent_setting(key: str, default: int) -> int:
         return default
 
 
+def _cap_victims(active: List[Dict[str, Any]], keep_ids=()) -> List[Dict[str, Any]]:
+    """Select cap evictions identically for enforcement and cleanup previews."""
+    victims = []
+    protected = set(keep_ids)
+    for cap_class, default in (("self", 6), ("player", 4)):
+        cap = _intent_setting(f"max_active_{cap_class}", default)
+        if not cap:
+            continue
+        candidates = [it for it in active if _cap_class(it) == cap_class]
+        candidates.sort(key=lambda it: (it["id"] in protected,
+                                        -it["priority"], it["created_at"], it["id"]))
+        victims.extend(candidates[:max(0, len(candidates) - cap)])
+    return victims
+
+
 def enforce_active_caps(owner: str, keep_ids=()) -> int:
     """Expire excess owned plans, worst priority and oldest first.
 
@@ -322,23 +337,86 @@ def enforce_active_caps(owner: str, keep_ids=()) -> int:
     A zero cap leaves that class unlimited; package-managed plans are exempt.
     """
     expired = 0
-    protected = set(keep_ids)
     with keyed_lock("intents", owner):
         active = [it for it in list_intents(owner=owner, status="active")
                   if it["owner"] == owner]
-        for cap_class, default in (("self", 6), ("player", 4)):
-            cap = _intent_setting(f"max_active_{cap_class}", default)
-            if not cap:
-                continue
-            candidates = [it for it in active if _cap_class(it) == cap_class]
-            candidates.sort(key=lambda it: (it["id"] in protected,
-                                            -it["priority"], it["created_at"], it["id"]))
-            for it in candidates[:max(0, len(candidates) - cap)]:
-                if expire_intent(it["id"], "cap"):
-                    expired += 1
-                    logger.info("Intent expired (cap): %s owner=%s title=%r",
-                                it["id"], owner, it["title"])
+        for it in _cap_victims(active, keep_ids):
+            if expire_intent(it["id"], "cap"):
+                expired += 1
+                logger.info("Intent expired (cap): %s owner=%s title=%r",
+                            it["id"], owner, it["title"])
     return expired
+
+
+def cleanup_intents(owner: str = "", *, merge_duplicates: bool = True,
+                    set_deadlines: bool = True, end_all: bool = False,
+                    dry_run: bool = True) -> Dict[str, Any]:
+    """Preview or apply cleanup of owned active plans, locked per owner.
+
+    Merge and deadline changes affect only marker/legacy rows. End-all also
+    expires admin/package rows, but always leaves managed actions alone.
+    Preview simulates caps after duplicate removal without writing anything.
+    """
+    if end_all and not owner:
+        raise ValueError("Ending all open plans requires an owner")
+    items: List[Dict[str, Any]] = []
+    counts: Dict[str, int] = {}
+
+    def record(intent, action, **extra):
+        items.append({"id": intent["id"], "owner": intent["owner"],
+                      "title": intent["title"], "action": action, **extra})
+        counts[action] = counts.get(action, 0) + 1
+
+    def expire(intent, reason):
+        # A row that stopped being active meanwhile (done in a turn, expired
+        # by the tick) is simply not reported; the rest of the run goes on.
+        if dry_run or expire_intent(intent["id"], reason):
+            record(intent, reason)
+
+    owners = [owner] if owner else sorted({it["owner"] for it in list_intents(status="active")})
+    for name in owners:
+        with keyed_lock("intents", name):
+            active = sorted((it for it in list_intents(owner=name, status="active")
+                             if it["owner"] == name), key=lambda it: it["id"])
+            removed = set()
+            if end_all:
+                for it in active:
+                    if not is_managed_intent(it):
+                        expire(it, "cleanup")
+                        removed.add(it["id"])
+            else:
+                eligible = [it for it in active if _cap_class(it)]
+                if merge_duplicates:
+                    groups: Dict[str, List[Dict[str, Any]]] = {}
+                    for it in eligible:
+                        title = _normalize_title(it["title"])
+                        if title:
+                            groups.setdefault(title, []).append(it)
+                    for group in groups.values():
+                        keep = max(group, key=lambda it: (it["created_at"], it["id"]))
+                        for it in group:
+                            if it["id"] != keep["id"]:
+                                expire(it, "duplicate")
+                                removed.add(it["id"])
+                if set_deadlines:
+                    for it in eligible:
+                        if it["id"] in removed or it.get("expires_at"):
+                            continue
+                        deadline = default_intent_expiry(it.get("trigger") or {}, it["source"])
+                        if deadline and (dry_run or update_intent(it["id"], expires_at=deadline)):
+                            record(it, "deadline", expires_at=deadline)
+            remaining = [it for it in active if it["id"] not in removed]
+            victims = _cap_victims(remaining)
+            if dry_run:
+                for it in victims:
+                    record(it, "cap")
+            else:
+                enforce_active_caps(name)
+                for it in victims:
+                    current = get_intent(it["id"])
+                    if current and current["status"] == "expired" and current["meta"].get("expired_reason") == "cap":
+                        record(it, "cap")
+    return {"dry_run": dry_run, "items": items, "counts": counts}
 
 
 def expire_overdue() -> int:

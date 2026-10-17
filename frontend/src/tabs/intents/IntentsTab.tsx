@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { CleanupDialog } from './CleanupDialog'
+import { cleanupCounts } from './cleanup'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api'
@@ -110,6 +112,8 @@ const EXPIRY_REASON_LABELS: Record<string, string> = {
   cap: 'limit reached',
   deadline: 'deadline passed',
   replaced: 'replaced by reflection',
+  duplicate: 'duplicate merged',
+  cleanup: 'ended by clean-up',
 }
 
 const TRIP_PHASE_LABELS: Record<string, string> = {
@@ -147,6 +151,7 @@ export function IntentsTab() {
   const [actionTypes, setActionTypes] = useState<string[]>([])
   const [sharedActivityOptions, setSharedActivityOptions] = useState<string[]>([])
   const [showAll, setShowAll] = useState(false)
+  const [cleanupOpen, setCleanupOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
   const [submitting, setSubmitting] = useState(false)
@@ -366,11 +371,25 @@ export function IntentsTab() {
 
   return (
     <div className="ga-page-scroll">
+      {cleanupOpen ? <CleanupDialog
+        owners={[...new Set((intents || []).map((it) => it.owner).filter(Boolean))].sort()}
+        ownerLabel={(owner) => characters.find((c) => c.name === owner)?.display_name || owner}
+        expiryLabel={expiresAtLabel}
+        onClose={() => setCleanupOpen(false)}
+        onApplied={(result) => {
+          setCleanupOpen(false)
+          toast(cleanupCounts(result, t))
+          void reload()
+        }}
+      /> : null}
       <h2 style={{ fontSize: 16, marginBottom: 6 }}>{t('Intents — Plans & Tasks')}</h2>
 
       <section className="ga-sched-section">
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <h3 style={{ margin: 0 }}>{t('All intents')}</h3>
+          <button type="button" className="ga-btn ga-btn-sm" onClick={() => setCleanupOpen(true)}>
+            {t('Clean up…')}
+          </button>
           <label className="ga-sched-muted" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
             {t('show inactive too')}

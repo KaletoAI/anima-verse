@@ -4,6 +4,8 @@ Replaces the old /assignments routes: human-set tasks and a character's own
 plans now live in one store (see
 development_instructions/plan-intents-unified.md).
 """
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Request
 from typing import Any, Dict, List, Optional
 
@@ -14,7 +16,7 @@ from app.core.hooks import get_provider
 from app.core.keyed_lock import keyed_lock
 from app.models.intents import (
     create_intent, get_intent, list_intents, update_intent,
-    delete_intent, apply_trigger_on_create)
+    delete_intent, apply_trigger_on_create, cleanup_intents)
 
 logger = get_logger("intents_route")
 
@@ -41,6 +43,32 @@ def list_route(owner: Optional[str] = None, status: Optional[str] = None,
     """List intents, optionally filtered by owner, status and/or source."""
     return list_intents(owner=owner or "", status=status or "",
                         source=source or "")
+
+
+@router.post("/cleanup")
+async def cleanup_route(request: Request) -> Dict[str, Any]:
+    """Preview or apply admin cleanup without blocking the event loop."""
+    data = await request.json()
+    return await asyncio.to_thread(_cleanup_route_sync, data)
+
+
+def _cleanup_route_sync(data: Any) -> Dict[str, Any]:
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Intent payload must be an object")
+    owner = data.get("owner", "")
+    if not isinstance(owner, str):
+        raise HTTPException(status_code=400, detail="owner must be a string")
+    options = {}
+    for field, default in (("merge_duplicates", True), ("set_deadlines", True),
+                           ("end_all", False), ("dry_run", True)):
+        value = data.get(field, default)
+        if not isinstance(value, bool):
+            raise HTTPException(status_code=400, detail=f"{field} must be a boolean")
+        options[field] = value
+    try:
+        return cleanup_intents(owner.strip(), **options)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{intent_id}")

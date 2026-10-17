@@ -2584,6 +2584,15 @@
     "Light balance and tone match run on the hub with face landmarks; the preview is an approximation without tone match.": "Licht- und Hautton-Abgleich laufen auf dem Hub anhand von Gesichtspunkten; die Vorschau ist nur angenähert, ohne Hautton-Abgleich.",
     "limit reached": "Limit erreicht",
     "deadline passed": "Frist abgelaufen",
-    "replaced by reflection": "Durch Reflexion ersetzt"
+    "replaced by reflection": "Durch Reflexion ersetzt",
+    "Clean up…": "Aufräumen…",
+    "Merge duplicate titles": "Doppelte Titel zusammenführen",
+    "Give plans without a deadline one": "Pläne ohne Frist mit einer Frist versehen",
+    "End all open plans of this character": "Alle offenen Pläne dieses Charakters beenden",
+    "duplicate merged": "Duplikat zusammengeführt",
+    "ended by clean-up": "durch Aufräumen beendet",
+    "deadline added": "Frist hinzugefügt",
+    "No plans need cleaning up.": "Keine Pläne müssen aufgeräumt werden.",
+    "All characters": "Alle Charaktere"
   }
 }
