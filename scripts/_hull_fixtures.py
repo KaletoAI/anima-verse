@@ -182,3 +182,38 @@ def rect_facts() -> dict:
         {"s0": 6.0, "s1": 7.2, "y0": 0.9, "y1": 2.1, "kind": "window"},
     ]
     return facts
+
+
+def l_shaped_house(*, rotated: bool = False) -> dict:
+    """Return a three-storey 20 by 14 L with 24 windows and two doors."""
+    import math
+
+    outline = [[0, 0], [20, 0], [20, 6], [8, 6], [8, 14], [0, 14]]
+    if rotated:
+        angle = math.radians(30)
+        outline = [[x * math.cos(angle) - z * math.sin(angle),
+                    x * math.sin(angle) + z * math.cos(angle)] for x, z in outline]
+    minimum_x = min(point[0] for point in outline)
+    minimum_z = min(point[1] for point in outline)
+    rooms = []
+    for level in range(3):
+        openings = [
+            {"edge": edge, "at": at, "width_m": 1.2, "height_m": 1.2,
+             "sill_m": 0.9, "type": "window"}
+            for edge, positions in ((0, (.2, .5, .8)), (2, (.25, .75)),
+                                    (4, (.5,)), (5, (.25, .75)))
+            for at in positions
+        ]
+        if level == 0:
+            openings.extend({"edge": edge, "at": .5, "width_m": 1.0,
+                             "height_m": 2.1, "type": "door", "to": "outside"}
+                            for edge in (1, 3))
+        rooms.append({"id": f"l-floor-{level}", "layout": {
+            "x": minimum_x, "y": minimum_z,
+            "w": max(point[0] for point in outline) - minimum_x,
+            "d": max(point[1] for point in outline) - minimum_z,
+            "outline": [[x - minimum_x, z - minimum_z] for x, z in outline],
+            "level": level, "openings": openings}})
+    return {"id": "hull-large-L", "map3d": {
+        "outline": outline, "boundary": outline, "storey_height_m": 3.0},
+        "rooms": rooms}
