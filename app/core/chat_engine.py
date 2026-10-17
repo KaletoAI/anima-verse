@@ -280,6 +280,9 @@ def _rp_tool_decision_input(user_input: str, rp_response: str,
         f"plan of its own. Set by= exactly as defined below — by=player only when the other "
         f"person explicitly asked for it; when in doubt, by=self:\n"
         f"{intent_marker_help(indent='  ')}"
+        f"If the character's text shows an open plan listed in this prompt is finished "
+        f"(goal reached, awaited person arrived, task carried out), output "
+        f"[INTENT_DONE: <id>] for exactly that plan: DONE, not PROGRESS.\n"
         f"{_open_plans}"
         f"If nothing applies, respond with: NONE")
 

@@ -1255,6 +1255,17 @@ class StreamingAgent:
                 "of moving there alone. Emotions and small gestures are carried by the "
                 "markers in step 3, never by tools.\n\n")
         _intent_marker_block = intent_marker_help(indent="   ")
+        # Open plan ids change per turn and belong only in this user part.
+        _open_plans = ""
+        if self.agent_name:
+            try:
+                from app.models.intents import build_open_intents_brief
+                _brief = build_open_intents_brief(self.agent_name)
+                if _brief:
+                    _open_plans = f"Open plans of this character (id | title):\n{_brief}\n"
+            except Exception as exc:  # noqa: BLE001 — the prompt works without it
+                logger.debug("open intents brief failed for %s: %s", self.agent_name, exc)
+
         # The pose the **I do** marker would overwrite + the rule that keeps
         # it. Per turn — this is the user message, never the system prompt.
         _pose_note = pose_keep_rule(self.agent_name)
@@ -1285,6 +1296,10 @@ class StreamingAgent:
             f"output a marker line. Set by= exactly as defined below — by=player only when "
             f"the other person explicitly asked for it; when in doubt, by=self:\n"
             f"{_intent_marker_block}"
+            f"   If the character's text shows an open plan listed in this prompt is finished "
+            f"(goal reached, awaited person arrived, task carried out), output "
+            f"[INTENT_DONE: <id>] for exactly that plan: DONE, not PROGRESS.\n"
+            f"{_open_plans}"
             f"   For anything the character can do NOW, use its <tool> tag from step 1 — "
             f"never write an [INTENT: ...] marker to run a tool.\n"
             f"   - Event resolved: If the character actively resolved/fixed a disruption or danger "

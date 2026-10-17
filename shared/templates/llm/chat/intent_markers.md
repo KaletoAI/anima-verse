@@ -18,5 +18,5 @@
   prio: 1=critical, 3=normal, 5=background
   by: player=the OTHER person explicitly asked the character to do it — the request stands in THEIR words. self=everything else, even when it concerns the other person. When in doubt: self. Left out it counts as self.
 Only for something still to be done AFTER this reply — never for hypothetical or past actions. What the reply itself already does (showing, handing over, answering, a feeling, a wish about how something should go) is never an intent.
-If an open plan listed in this prompt already covers it — even in other words — write [INTENT_PROGRESS: <id> | <note>] instead of a new [INTENT:], or [INTENT_DONE: <id>] once it is done.
+If an open plan listed in this prompt covers it, even in other words, never create a new [INTENT:]. Use [INTENT_PROGRESS: <id> | <note>] only for a real step towards a plan still open: one note for ONE plan, never the same note on several plans, never repeat a note already listed. Once its goal is reached, write [INTENT_DONE: <id>] instead.
 A time or day belongs in when=, never in the title or description: "tomorrow at 10" → when=at:tomorrow 10:00; "in two hours" → when=in:2h.

@@ -225,6 +225,10 @@ def add_progress(intent_id: str, character: str, note: str) -> Optional[Dict[str
     parts = dict(it.get("participants") or {})
     p = dict(parts.get(character) or {"role": "", "progress": []})
     prog = list(p.get("progress") or [])
+    normalized = _normalize_title(note)
+    if any(_normalize_title(entry.get("note", "")) == normalized for entry in prog):
+        logger.debug("Duplicate intent progress ignored: %s participant=%s", intent_id, character)
+        return it
     prog.append({"timestamp": utc_now_iso(), "note": note})
     p["progress"] = prog
     parts[character] = p
@@ -717,7 +721,9 @@ def _intent_hint(intent: Dict[str, Any]) -> str:
     d = intent.get("description", "")
     base = (f"Your plan '{t}' (id {intent.get('id', '')}) is due now"
             + (f": {d}" if d else "") + ".")
-    return base + " Decide for yourself whether and how you carry it out."
+    return (base + " Decide for yourself whether and how you carry it out."
+            + " If you carry it out this turn, end your response with "
+            + f"[INTENT_DONE: {intent.get('id', '')}].")
 
 
 def fire_location_intents(character_name: str, location_id: str) -> int:
