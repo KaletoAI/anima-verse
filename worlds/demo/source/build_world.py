@@ -63,6 +63,7 @@ MANIFEST_ASSETS = {
     "arrival-manifest.json": {
         "station": "building", "hogwarts-express": "prop", "boathouse": "building",
         "rowboat": "prop", "jetty": "prop", "bench": "prop", "lantern": "prop",
+        "street-lamp": "prop", "house-table": "prop",
         "luggage": "prop", "signpost": "prop", "pine": "prop",
         "broadleaf": "prop", "stone-gate": "prop",
     },
@@ -100,9 +101,10 @@ Schauspielergesichter. Wissen und Beziehungen stehen in ihren Seelenprofilen.
 Magie ist Teil des Alltags, keine Erlaubnis, technische Fähigkeiten zu erfinden.
 Man zeigt Wege, erklärt Schultraditionen, hilft mit Koffern, achtet auf den
 Abstand zum kalten Wasser und fragt, bevor fremdes Eigentum benutzt wird.
-Ausgearbeitete begehbare Schlosszonen sind Torweg, südlicher Kreuzgang und Hof;
-das vollständige Schlossinnere wird ausdrücklich nicht simuliert. Räume und
-Gegenstände sollen beim Namen genannt werden. Keine vorgetäuschten Geheimräume,
+Ausgearbeitete begehbare Schlosszonen sind Torweg, beide Kreuzgänge und Hof
+sowie die verbundene Eingangshalle, Verbindungsgalerie, Turmhalle und Große Halle
+mit vier langen Haustafeln und Bänken. Weitere Türme bleiben Außenarchitektur.
+Räume und Gegenstände sollen beim Namen genannt werden. Keine vorgetäuschten Geheimräume,
 keine erfundenen Fahr- oder Bootsaktionen. Die Welt bleibt zunächst eingefroren;
 erst der Betreiber entscheidet über den Beginn der autonomen Simulation.
 """.rstrip()
@@ -427,7 +429,7 @@ def place_specs(assets):
          "description": "Der ländliche Bahnhof Hogsmeade besteht aus warmem Sandstein, dunklen Giebeln und grün-cremefarbenem Holzwerk. Östlich des Gebäudes steht der rote Hogwarts-Express still am langen Bahnsteig. Unter dem Vordach riecht es nach feuchtem Holz und Kohle; vom nördlichen Ausgang führt der Waldweg zum See. Elspeth Rowan hilft mit Gepäck und erklärt den trockenen Weg zum Schloss.",
          "activity": "ankommen, Gepäck ordnen, nach dem Schlossweg fragen und auf der Bank warten",
          "rooms": [
-             ("Bahnsteig", "Der breite Bahnsteig zwischen Stationsgebäude und stehendem Express bietet Platz zum Ankommen. Der Bahnsteigrand bleibt frei; der Zug ist ein unbewegtes Ausstellungsstück.", "outdoor"),
+             ("Bahnsteig", "Der breite Bahnsteig zwischen Stationsgebäude und stehendem Express bietet Platz zum Ankommen. Der Bahnsteigrand bleibt frei; der Zug ist ein unbewegtes Ausstellungsstück. Schmiedeeiserne Straßenlaternen mit steinernen Sockeln stehen seitlich der Laufwege.", "outdoor"),
              ("Wartesaal", "Im geschützten Wartesaal stehen Holzbänke und Reisekoffer. Helle Fenster blicken auf den Bahnsteig; eine seitliche Tür führt in das kleine Fahrkartenbüro.", "indoor"),
              ("Fahrkartenbüro", "Elspeths kleines Büro enthält einen hölzernen Schreibtisch, Ablagen und das Stationsbuch. Hier werden Auskünfte gegeben und verlorene Koffer notiert, keine simulierten Zugfahrten verkauft.", "indoor")],
          "entry": "Bahnsteig"},
@@ -435,12 +437,12 @@ def place_specs(assets):
          "boundary": rect(-15,-17,15,17), "indoor": "outdoor",
          "description": "Eine trockene, kiesige Landzunge schiebt sich am Südufer zwischen Schilf und dunkles Wasser. Ein schmaler Holzsteg und festliegende Ruderboote erinnern an die traditionelle Ankunft über den See. Hinter den Booten ist die Silhouette von Hogwarts zu sehen. Der sichere Weg führt zu Fuß westlich um den See; Boote sind hier Dekoration, keine benutzbare Transportfunktion.",
          "activity": "Schlossblick genießen, die Ankunftstradition besprechen und auf dem trockenen Ufer bleiben",
-         "rooms": [("Uferplatz", "Der feste Kiesplatz am Steg bietet einen ruhigen Aussichtspunkt auf den Schwarzen See. Eine Bank und eine Laterne markieren den Treffpunkt; die nasse Kante ist kein Einstieg für einen erfundenen Fährdienst.", "outdoor")], "entry": "Uferplatz"},
+         "rooms": [("Uferplatz", "Der feste Kiesplatz am Steg bietet einen ruhigen Aussichtspunkt auf den Schwarzen See. Eine Bank und eine Straßenlaterne mit Eisenmast und steinernem Sockel markieren den Treffpunkt; die nasse Kante ist kein Einstieg für einen erfundenen Fährdienst.", "outdoor")], "entry": "Uferplatz"},
         {"key": "shore", "name": "Westlicher Uferweg", "pos": (-455,220),
          "boundary": rect(-14,-18,14,18), "indoor": "outdoor",
          "description": "Auf der trockenen Westseite des Schwarzen Sees läuft der Kiesweg zwischen Kiefern und Heide. Durch die Stämme glitzert Wasser; auf der anderen Seite zeichnen sich Schlossdächer ab. Eine Bank bietet eine Pause auf dem echten Landweg vom Bahnhof zu Hagrids Hütte. Der Weg ist sanft geneigt und bleibt abseits der steilen Hügel.",
          "activity": "eine Gehpause einlegen, sich orientieren und dem Uferweg folgen",
-         "rooms": [("Aussichtsbank", "Die Bank steht auf einer ebenen Wegaufweitung mit Blick zwischen zwei Kiefern. Ein Wegweiser zeigt nach Süden zum Bahnhof und nach Norden zu Hagrids Hütte und Hogwarts.", "outdoor")], "entry": "Aussichtsbank"},
+         "rooms": [("Aussichtsbank", "Die Bank steht auf einer ebenen Wegaufweitung mit Blick zwischen zwei Kiefern. Ein Wegweiser zeigt nach Süden zum Bahnhof und nach Norden zu Hagrids Hütte und Hogwarts. Eine schmiedeeiserne Straßenlaterne steht seitlich der freien Wegmitte.", "outdoor")], "entry": "Aussichtsbank"},
         {"key": "hut", "name": "Hagrids Hütte", "pos": (-90,-125),
          "boundary": rect(-5,-4.5,5,4.5), "asset": "hagrid-hut", "indoor": "indoor",
          "description": "Hagrids kleine Hütte liegt westlich des Schlosses am Rand einer Birken- und Kieferngruppe. Grober Stein, ein rauchloser Schornstein und eine südliche Holzveranda rahmen die schwere Eingangstür. Innen stehen übergroße, schlichte Möbel, ein Herd und Hagrids Bett. Vom Vorplatz führt ein trockener Pfad zum Schlosstor und westlich hinunter zum Seeufer.",
@@ -452,19 +454,24 @@ def place_specs(assets):
          "boundary": rect(-25,-14,40,17), "indoor": "outdoor",
          "description": "Ein steinernes Tor mit offenem Durchgang markiert den Zugang zur Schlosswiese. Nach Norden steigt der Weg sanft zum südlichen Schlosseingang; westlich liegt Hagrids Hütte, südwestlich das Bootshaus. Niedrige Mauersockel, Rasen und Laternen geben der freien Fläche einen erkennbaren Maßstab. Hier begrüßt McGonagall erwachsene Gäste und erklärt die Hausordnung.",
          "activity": "Gäste begrüßen, Schulregeln erklären und den weiteren Weg wählen",
-         "rooms": [("Torwiese", "Vor dem offenen Steintor ist genug trockener Platz, um anzuhalten. Bänke stehen seitlich des Wegs; die Mitte bleibt für Ankommende frei.", "outdoor")], "entry": "Torwiese"},
+         "rooms": [("Torwiese", "Vor dem offenen Steintor ist genug trockener Platz, um anzuhalten. Bänke und eine Straßenlaterne mit steinernem Sockel stehen seitlich des Wegs; die Mitte bleibt für Ankommende frei.", "outdoor")], "entry": "Torwiese"},
         {"key": "boathouse", "name": "Bootshaus am Nordufer", "pos": (85,-15),
          "boundary": rect(-9.5,-7.2,9.5,7.2), "asset": "boathouse", "indoor": "indoor",
          "description": "Das hölzerne und steinerne Bootshaus steht auf festem Grund am Nordufer. Seine zum Wasser gerichteten Tore sind offen; draußen ragt ein Steg nach Süden. Im geschützten Schuppen lagern Ruder, Seile und ein ruhendes Boot. Der tatsächliche Weg zum Schloss verläuft auf dem Land über das Steintor, nicht durch eine behauptete Bootsmechanik.",
          "activity": "Boote und Seile betrachten, Hagrids Arbeit kennenlernen und sicher am Ufer bleiben",
          "rooms": [("Bootsschuppen", "Der offene Bootsschuppen ist ein trockener Arbeitsraum mit breitem Tor zum südlichen Ufer. Ein ruhendes Ruderboot, Kisten und eine Laterne lassen die traditionelle Nutzung erkennen. Die mittlere Gasse zum Tor bleibt frei.", "indoor")], "entry": "Bootsschuppen"},
         {"key": "castle", "name": "Hogwarts Schloss", "pos": (170,-150),
-         "boundary": rect(-cw/2,-cd/2,cw/2,cd/2), "asset": "hogwarts-castle", "indoor": "outdoor",
-         "description": "Hogwarts erhebt sich mit großer Halle, kantigem Treppenturm, hohen Spitzdächern und ungleichen Türmen über dem nördlichen Seeufer. Sandstein, Strebepfeiler und schmale gotische Fenster geben dem Schloss seine vertraute Silhouette. Der südliche Torweg führt wirklich durch das offene Torhaus und den Kreuzgang in einen freien Innenhof. Diese Demo arbeitet Hof und Ankunftszonen aus; vollständige Schlossinnenräume und bewegliche Treppen werden nicht behauptet.",
-         "activity": "durch das Torhaus eintreten, den Innenhof erkunden und sich zum Schuljahrsbeginn orientieren",
-         "rooms": [("Torweg", "Der befestigte südliche Torweg läuft bei lokal x=30 durch den freien Torhausbogen. Seitlich stehen hohe Schlosswände, vor einem liegt der offene Durchgang zum Kreuzgang. Der Weg ist eine wirkliche offene Außenfläche, kein geschlossener Fantasieraum.", "outdoor"),
+         "boundary": rect(-cw/2,-cd/2,cw/2,cd/2), "asset": "hogwarts-castle", "indoor": "indoor",
+         "description": "Hogwarts erhebt sich mit großer Halle, kantigem Treppenturm, hohen Spitzdächern und ungleichen Türmen über dem nördlichen Seeufer. Der südliche Torweg führt durch das offene Torhaus und den Kreuzgang in den Innenhof. Vom nördlichen Kreuzgang führen echte Türen in die eingerichtete Eingangshalle, durch die steinerne Verbindungsgalerie und die Turmhalle in die Große Halle mit vier langen Haustafeln. Hof, Arkaden und die übrigen Schlossflügel bleiben auch beim Betreten sichtbar; die weiteren Türme sind Außenarchitektur, keine behaupteten vollständigen Innenräume.",
+         "activity": "durch Torhaus und Innenhof zur Eingangshalle gehen, die Verbindungsgalerie erkunden und die vier Haustafeln der Großen Halle besichtigen",
+         "rooms": [("Torweg", "Der befestigte südliche Torweg läuft bei lokal x=30 durch den freien Torhausbogen. Seitlich stehen hohe Schlosswände und Straßenlaternen auf festen Sockeln; der Durchgang zum Kreuzgang bleibt frei.", "outdoor"),
                    ("Südlicher Kreuzgang", "Unter dem südlichen Arkadenabschnitt verbindet eine freie Gasse den Torweg mit dem Hof. Sandsteinpfeiler rahmen den Blick auf Himmel und Türme; die Mitte bleibt unmöbliert und begehbar.", "outdoor"),
-                   ("Offener Innenhof", "Im gepflasterten Innenhof stehen Bänke und ein paar sorgfältig geordnete Schultruhen am Rand. Der Himmel bleibt offen, die Mitte frei. Von hier erkennt man die große Halle im Westen und den Treppenturm im Nordwesten, ohne ein vollständiges Schlossinneres vorauszusetzen.", "outdoor")], "entry": "Torweg"},
+                   ("Offener Innenhof", "Im gepflasterten Innenhof stehen Bänke, Schultruhen und eine schmiedeeiserne Straßenlaterne am Rand. Arkaden und Schlosswände umgeben den offenen Himmel. Der nördliche Kreuzgang führt zur eingerichteten Eingangshalle; die Hofmitte bleibt frei.", "outdoor"),
+                   ("Nördlicher Kreuzgang", "Die nördlichen Arkaden verbinden den offenen Hof mit der großen Tür der Eingangshalle. Zwischen den Sandsteinpfeilern bleibt der Durchgang frei; das Schloss verschwindet hier nicht hinter einer leeren Fläche.", "outdoor"),
+                   ("Eingangshalle", "Die hohe Eingangshalle besitzt einen Empfangstisch, Bücherregale, Sitzplätze und abgestellte Schultruhen an den Wänden. Die breite südliche Tür führt zum Kreuzgang, die westliche Tür in die steinerne Verbindungsgalerie.", "indoor"),
+                   ("Verbindungsgalerie", "Eine lange Sandsteingalerie mit Bücherregalen und Bänken verbindet die Eingangshalle im Osten mit der Turmhalle im Westen. Die breite mittlere Gasse und beide Türen bleiben begehbar.", "indoor"),
+                   ("Turmhalle", "Die eingerichtete Halle im Sockel des großen Treppenturms bietet Bänke, Regale und einen steinernen Herd. Die nördliche Tür führt zur Verbindungsgalerie, die südliche Tür in die Große Halle; eine bewegliche Treppe wird nicht vorgetäuscht.", "indoor"),
+                   ("Große Halle", "Vier lange dunkle Eichentafeln mit durchgehenden Bänken stehen in der hohen Großen Halle. Breite Gassen trennen die Haustafeln, vorn stehen ein Lehrertisch, Stühle und ein steinerner Herd. Die nördliche Tür verbindet die Halle wirklich mit der Turmhalle.", "indoor")], "entry": "Torweg"},
     ]
 
 
@@ -478,6 +485,8 @@ def terrain_types():
                         "speed_factor": .8, "surface": "", "meta": {"undergrowth": .40, "sway_m": .08}},
         "hw_gravel": {"name": "Trockener Kiesweg", "color": "#b4a48b", "passable": True,
                       "speed_factor": 1, "surface": "", "meta": {}},
+        "hw_stone": {"name": "Schlosssteinboden", "color": "#8a867b", "passable": True,
+                     "speed_factor": 1, "surface": "", "meta": {"undergrowth": 0}},
         "hw_shore": {"name": "Kiesiges Seeufer", "color": "#9c9786", "passable": True,
                      "speed_factor": .85, "surface": "", "meta": {}},
         "hw_shallows": {"name": "Flacher Ufersaum", "color": "#627e83", "passable": False,
@@ -498,8 +507,13 @@ def inside_polygon(x, z, polygon):
 
 
 def check_dry_geography(data):
-    """Reject an accidental dry causeway before any world mutation."""
+    """Reject wet roads and unintended castle shortcuts before world mutation."""
     water = [a["polygon"] for a in data["terrain_areas"] if a["kind"] in ("hw_shallows","hw_lake")]
+    castle = next(location for location in data["locations"] if location["name"] == "Hogwarts Schloss")
+    castle_x0 = castle["pos_x"] + min(x for x,z in castle["boundary"])
+    castle_x1 = castle["pos_x"] + max(x for x,z in castle["boundary"])
+    castle_z0 = castle["pos_z"] + min(z for x,z in castle["boundary"])
+    castle_z1 = castle["pos_z"] + max(z for x,z in castle["boundary"])
     for location in data["locations"]:
         require(not any(inside_polygon(location["pos_x"],location["pos_z"],poly) for poly in water),
                 f"Authored location pin is in water: {location['name']}")
@@ -515,6 +529,16 @@ def check_dry_geography(data):
             steps = max(1,math.ceil(length))
             nx,nz = (bz-az)/length,-(bx-ax)/length
             for i in range(steps+1):
+                cx,cz = ax + (bx-ax)*i/steps, az + (bz-az)*i/steps
+                half_width = stroke["width_m"]/2
+                if (castle_x0-half_width < cx < castle_x1+half_width
+                        and castle_z0-half_width < cz < castle_z1+half_width):
+                    # Only the final, south-facing entrance may touch the shell.
+                    # Its local x25..35 opening must fit the full road width.
+                    require(area["label"] == "Schlossauffahrt"
+                            and castle["pos_x"]+25+half_width <= cx <= castle["pos_x"]+35-half_width
+                            and cz >= castle_z1,
+                            f"Authored path clips the castle footprint: {area['label']}")
                 for side in (-.5,0,.5):
                     x = ax + (bx-ax)*i/steps + side*stroke["width_m"]*nx
                     z = az + (bz-az)*i/steps + side*stroke["width_m"]*nz
@@ -545,8 +569,8 @@ def map_payload(places):
     paths = [
         ("Bahnhof zum südlichen Ufer", [[-440,570],[-440,515],[-360,495],[-300,495],[-245,470],[-245,455]], 5),
         ("Trockener Westuferweg", [[-440,570],[-470,490],[-470,385],[-455,220],[-445,100],[-400,45],[-340,-30],[-235,-85],[-90,-125]], 6),
-        ("Hütte zum Steintor", [[-90,-125],[-30,-110],[50,-90],[125,-55],[170,-50]], 5),
-        ("Bootshaus zum Steintor", [[85,-15],[100,-25],[130,-40],[170,-50]], 5),
+        ("Hütte zum Steintor", [[-90,-125],[-30,-110],[30,-95],[45,-60],[110,-50],[170,-50]], 5),
+        ("Bootshaus zum Steintor", [[85,0],[110,0],[130,-40],[170,-50]], 5),
         ("Schlossauffahrt", [[170,-50],[200,-65],[200,-75]], 7),
     ]
     for label, points, width in paths:
@@ -557,10 +581,12 @@ def map_payload(places):
             "bounds": {"min_x": -800, "min_z": -500, "max_x": 700, "max_z": 900},
             "terrain_areas": areas,
             "height_areas": [
-                # Falloff runs inward: leave the full shell and approach on the
-                # level core; bevel the southwest ramp away from the lake shore.
-                {"label": "Sanftes Schlossplateau", "polygon": [[30,-260],[340,-260],[340,0],[110,0],[30,-55]],
-                 "height_m": 18, "falloff_m": 30},
+                # Falloff runs inward. The 3m/60m ramp caps authored grade at 5%;
+                # the complete x65..275,z-225..-75 shell has at least 62m inset.
+                # The extra 2m keeps fine-grid interpolation on the flat summit;
+                # the boathouse stays near the foot of the ramp, not on a cliff.
+                {"label": "Sanftes Schlossplateau", "polygon": rect(3,-287,337,-13),
+                 "height_m": 3, "falloff_m": 60},
                 {"label": "Hagrids trockener Hügel", "polygon": rect(-185,-215,-40,-90), "height_m": 5, "falloff_m": 95},
                 {"label": "Westliche schottische Hügel", "polygon": [[-790,-350],[-650,-410],[-565,-240],[-595,40],[-735,105]], "height_m": 43, "falloff_m": 125},
                 {"label": "Östliche Hochlandkuppe", "polygon": [[425,-220],[615,-265],[680,-55],[560,90],[405,5]], "height_m": 46, "falloff_m": 145},
@@ -646,12 +672,43 @@ def layout_payload(spec, location, prop_ids):
     if key == "castle":
         # Exact asset-author contract: x25..35,z13..75 is open through gatehouse;
         # quad x8..52,z-34..0 is unobstructed. Do not wall an outdoor passage.
+        entrance, gallery = room_id(location,"Eingangshalle"), room_id(location,"Verbindungsgalerie")
+        tower, hall = room_id(location,"Turmhalle"), room_id(location,"Große Halle")
         rooms = [
-            room("Torweg",25,13,10,62,outdoor=True, props=[prop("lantern",1.1,49),prop("lantern",8.9,49)]),
+            room("Torweg",25,13,10,62,outdoor=True, props=[prop("street-lamp",1.1,49),prop("street-lamp",8.9,49)]),
             room("Südlicher Kreuzgang",25,1,10,12,outdoor=True),
             room("Offener Innenhof",8,-34,44,34,outdoor=True,floor_y=.10,props=[
                 prop("bench",5,4),prop("bench",39,4,180),prop("bench",5,29),prop("bench",39,29,180),
-                prop("school-trunk",4,13),prop("school-trunk",4,15),prop("lantern",39,17)])]
+                prop("school-trunk",4,13),prop("school-trunk",4,15),prop("street-lamp",39,17)]),
+            room("Nördlicher Kreuzgang",40,-44.8,14,10.8,outdoor=True),
+            room("Eingangshalle",40,-65,14,20.2,
+                 props=[prop("writing-desk",3,4),prop("oak-chair",3,2),
+                        prop("bookcase",1.2,10),prop("bookcase",1.2,14),
+                        prop("bench",11.5,4,90),prop("school-trunk",11.5,14),
+                        prop("lantern",3.55,4.12,offset=.82)],
+                 openings=[opening(2,"outside",3,at=.5,height=3.5),
+                           opening(3,gallery,3,at=1-9/20.2,height=3.5)]),
+            room("Verbindungsgalerie",-40,-65,80,18,
+                 props=[prop("bookcase",x,1) for x in (6,20,34,48,60)]
+                       +[prop("bench",x,16,180) for x in (16,32,48)],
+                 openings=[opening(1,entrance,3,at=.5,height=3.5),
+                           opening(2,tower,3,at=1-8/80,height=3.5)]),
+            room("Turmhalle",-40,-47,16,35,
+                 props=[prop("bench",2,10,90),prop("bench",14,20,270),
+                        prop("bookcase",2,28),prop("hearth",14,28,270)],
+                 openings=[opening(0,gallery,3,at=.5,height=3.5),
+                           opening(2,hall,3,at=.75,height=3.5)]),
+            room("Große Halle",-64,-12,30,64,
+                 props=[prop("house-table",x,32,label=house+"-Haustafel")
+                        for x,house in ((3.75,"Gryffindor"),(11.25,"Hufflepuff"),
+                                        (18.75,"Ravenclaw"),(26.25,"Slytherin"))]
+                       +[prop("cottage-table",15,59),prop("oak-chair",13,61),
+                         prop("oak-chair",15,61),prop("oak-chair",17,61),
+                         prop("hearth",15,63,180)],
+                 openings=[opening(0,tower,3,at=28/30,height=3.5)]
+                          +[{**opening(edge,"outside",3,at=at,height=6),
+                             "type":"window","sill_m":3}
+                            for edge in (1,3) for at in (.20,.40,.60,.80)])]
         x0, x1 = spec["boundary"][0][0], spec["boundary"][1][0]
         boundary = [{"edge": 2, "at": (x1-30)/(x1-x0), "width_m": 8,
                      "room": room_id(location,"Torweg")}]
@@ -683,7 +740,7 @@ def layout_payload(spec, location, prop_ids):
                  props=[prop("bench",37.3,14,90),prop("bench",37.3,36,90),
                         prop("bench",37.3,70,90),prop("bench",9,57),
                         prop("luggage",39,32),prop("luggage",6,60),
-                        prop("lantern",36.1,8),prop("lantern",36.1,85),prop("signpost",41,4)]),
+                        prop("street-lamp",36.1,8),prop("street-lamp",36.1,85),prop("signpost",41,4)]),
             room("Wartesaal",-14.9,-4.48,14.9,6.75,floor_y=.30,
                  props=[prop("bench",3,1.1),prop("bench",3,5.5,180),
                         prop("luggage",12.9,1.2),prop("lantern",.4,3.3)],
@@ -706,7 +763,7 @@ def layout_payload(spec, location, prop_ids):
         x0,z0 = spec["boundary"][0]
         x1,z1 = spec["boundary"][2]
         w,d = x1-x0,z1-z0
-        props = [prop("bench",4,5),prop("lantern",2,5),prop("signpost",w-3,d-4)]
+        props = [prop("bench",4,5),prop("street-lamp",2,5),prop("signpost",w-3,d-4)]
         if key == "south":
             props += [prop("luggage",5,d-5)]
         if key == "gate":
@@ -729,6 +786,8 @@ def add_props(client, assets):
         "jetty": "three-metre-wide timber jetty, individual weathered planks, support posts, metal fittings and a lowered shore ramp",
         "bench": "oak park bench with four seat slats, backrest, green metal legs and armrests",
         "lantern": "small portable lantern, warm glowing panes, black metal frame, pyramidal cap and carrying ring",
+        "street-lamp": "traditional wrought-iron street lamp, grounded stone plinth, tall fluted tapered iron mast, supported warm glass lantern, pyramidal weather cap and pointed finial",
+        "house-table": "thirty-metre-long dark oak dining table with two continuous trestle-supported wooden benches, visible plank joinery, four house-table rows with clear aisles",
         "luggage": "school trunk with a curved leather lid and brass fittings, smaller travel suitcase stacked on top, Hogwarts luggage label",
         "signpost": "wooden wayfinding post with green arrow boards labelled Hogwarts, Hogsmeade and Bootshaus",
         "pine": "Scottish Scots pine, branching trunk, flared roots and many irregular three-dimensional clusters of green needles",
@@ -801,10 +860,11 @@ def outdoor_props(client, prop_ids):
         ("jetty",-245,436,0,.10), ("rowboat",-237,437,0,.08),
         ("rowboat",-253,437,0,.08), ("jetty",85,26,0,.10),
         ("rowboat",92,27,0,.08), ("bench",-270,480,25,0),
-        ("lantern",-447,515,0,0), ("lantern",-360,492,0,0),
-        ("lantern",-469,390,0,0), ("lantern",-449,110,0,0),
-        ("lantern",-340,-31,0,0), ("lantern",-25,-108,0,0),
-        ("lantern",120,-55,0,0), ("lantern",194,-72,0,0),
+        # Proper street lamps stand on their stone bases, outside the road widths.
+        ("street-lamp",-447,515,0,0), ("street-lamp",-360,492,0,0),
+        ("street-lamp",-465,390,0,0), ("street-lamp",-451,110,0,0),
+        ("street-lamp",-344,-35,0,0), ("street-lamp",-25,-108,0,0),
+        ("street-lamp",120,-55,0,0), ("street-lamp",194,-72,0,0),
         ("signpost",-440,510,0,0), ("signpost",-342,-31,0,0),
         ("signpost",104,-27,0,0), ("signpost",180,-47,0,0),
     ]
@@ -1191,6 +1251,25 @@ def build(args):
         body = {"location_id":location["id"],"layout_data":layout_payload(spec,location,prop_ids),"snapshot":False}
         client.post("/world-dev/preview-layout",body)
         client.post("/world-dev/apply-layout",body)
+        if spec["key"] == "castle":
+            # This is an architectural site around an open court, not one
+            # disposable building shell. Cut out only the actual Great Hall;
+            # the other enclosed rooms provide their own smaller cutouts.
+            map3d = copy.deepcopy(location_index(client)[spec["name"]].get("map3d") or {})
+            map3d.update(area_model=True, outline=rect(-64,-12,-34,52),
+                         storey_height_m=12)
+            client.put("/world/locations/"+location["id"], {"map3d":map3d})
+            # Storey zero uses the world terrain as its one floor. Paint the
+            # actual room outlines so detached halls reveal stone, not grass.
+            for room in body["layout_data"]["rooms"]:
+                if room.get("always_visible"):
+                    continue
+                name = next(r["name"] for r in location["rooms"] if r["id"] == room["id"])
+                polygon = [[spec["pos"][0]+room["x"]+p[0],
+                            spec["pos"][1]+room["y"]+p[1]] for p in room["outline"]]
+                client.post("/world/terrain-areas", {
+                    "kind":"hw_stone", "polygon":polygon, "z_order":7,
+                    "meta":{"source":"world_dev", "label":"Schlosssteinboden: "+name}})
         if spec.get("asset"):
             asset = assets[spec["asset"]]
             root = "/world/locations/"+location["id"]+"/model3d"

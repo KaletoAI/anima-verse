@@ -1,0 +1,106 @@
+{
+  "name": "Schmiedeeiserne Weglaterne",
+  "category": "structure",
+  "model_variants": [
+    {
+      "stem": "model",
+      "active": true,
+      "description": "Traditional wrought-iron street lamp, grounded stone plinth, tall fluted tapered iron mast, supported warm glass lantern, pyramidal weather cap and pointed finial, no carrying handle",
+      "width_m": 0.64,
+      "depth_m": 0.64,
+      "height_m": 4.08,
+      "dims_estimated": false
+    }
+  ],
+  "sway_factor": 0.0,
+  "tags": [
+    "hogwarts-demo",
+    "self-authored"
+  ],
+  "created_at": "2026-10-17T14:27:53+00:00",
+  "source": "manual",
+  "prompt": "",
+  "mount": "floor",
+  "bbox": [
+    0.64,
+    4.08,
+    0.64
+  ],
+  "measured": {
+    "format": "glb",
+    "file_bytes": 214932,
+    "objects": 1,
+    "tris": 2876,
+    "verts": 5694,
+    "materials": [
+      "black",
+      "granite",
+      "lamp",
+      "steel",
+      "stone"
+    ],
+    "images": [
+      {
+        "name": "black",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "granite",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "lamp",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "steel",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "stone",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 0,
+    "bone_names": [],
+    "mixamo_bones": 0,
+    "finger_bones": 0,
+    "finger_bones_weighted": 0,
+    "finger_verts": 0,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      0.64,
+      0.64,
+      4.08
+    ],
+    "center_xy": [
+      0.0,
+      0.0
+    ],
+    "min_z": 0.0,
+    "at": "2026-10-17T14:28:05+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}

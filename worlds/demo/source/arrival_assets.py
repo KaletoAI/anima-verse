@@ -592,6 +592,129 @@ def lantern(mesh):
     mesh.beam((0, 0, .08), (0, 0, .17), .025, "gold")
 
 
+def street_lamp(mesh):
+    """Grounded roadside iron standard: .64 m square footprint, 4.08 m tall."""
+    # Broad stone footing and stepped cast-iron shoe sit on, not above, ground.
+    mesh.box((0, 0, .08), (.64, .64, .16), "granite")
+    mesh.box((0, 0, .19), (.52, .52, .06), "stone")
+    mesh.box((0, 0, .25), (.42, .42, .06), "black")
+    mesh.beam((0, 0, .28), (0, 0, .55), .19, "black",
+              radius_end=.14, sides=16)
+    for x in (-.16, .16):
+        for y in (-.16, .16):
+            mesh.beam((x, y, .28), (x, y, .30), .022, "steel", sides=6)
+
+    # A substantial tapered mast, with twelve raised longitudinal iron flutes.
+    mesh.beam((0, 0, .50), (0, 0, 2.83), .13, "black",
+              radius_end=.075, sides=24)
+    for i in range(12):
+        angle = i * math.tau / 12
+        co, si = math.cos(angle), math.sin(angle)
+        mesh.beam((.126 * co, .126 * si, .57),
+                  (.077 * co, .077 * si, 2.73), .014, "black",
+                  radius_end=.009, sides=6)
+    for z, radius in ((.52, .145), (.61, .137), (2.71, .092), (2.81, .105)):
+        mesh.torus((0, 0, z), radius, .018, "black", segments=24)
+
+    # Four swept corbels visibly carry the wide lantern tray from the mast.
+    for i in range(4):
+        angle = math.pi / 4 + i * math.pi / 2
+        co, si = math.cos(angle), math.sin(angle)
+        profile = ((.075, 2.60), (.12, 2.69), (.20, 2.77),
+                   (.265, 2.85), (.265, 2.94))
+        for (r0, z0), (r1, z1) in zip(profile, profile[1:]):
+            mesh.beam((r0 * co, r0 * si, z0),
+                      (r1 * co, r1 * si, z1), .023, "black", sides=8)
+    mesh.beam((0, 0, 2.79), (0, 0, 2.95), .105, "black",
+              radius_end=.15, sides=16)
+    mesh.box((0, 0, 2.95), (.54, .54, .06), "black")
+
+    # Tall, outward-flared warm glass panes, not the portable lantern geometry.
+    lower = [(-.19, -.19, 2.98), (.19, -.19, 2.98),
+             (.19, .19, 2.98), (-.19, .19, 2.98)]
+    upper = [(-.25, -.25, 3.65), (.25, -.25, 3.65),
+             (.25, .25, 3.65), (-.25, .25, 3.65)]
+    mesh.face(list(reversed(lower)), "black")
+    mesh.face(upper, "black")
+    for i in range(4):
+        j = (i + 1) % 4
+        mesh.face((lower[i], lower[j], upper[j], upper[i]), "lamp")
+        mesh.beam(lower[i], upper[i], .023, "black", sides=8)
+        mesh.beam(lower[i], lower[j], .022, "black", sides=8)
+        mesh.beam(upper[i], upper[j], .025, "black", sides=8)
+        midpoint_low = tuple((lower[i][k] + lower[j][k]) / 2 for k in range(3))
+        midpoint_high = tuple((upper[i][k] + upper[j][k]) / 2 for k in range(3))
+        mesh.beam(midpoint_low, midpoint_high, .010, "black", sides=6)
+
+    # Overhanging weather cap, raised vent and solid pointed finial; no handle.
+    mesh.box((0, 0, 3.68), (.60, .60, .06), "black")
+    eaves = [(-.30, -.30, 3.71), (.30, -.30, 3.71),
+             (.30, .30, 3.71), (-.30, .30, 3.71)]
+    crown = [(-.07, -.07, 3.89), (.07, -.07, 3.89),
+             (.07, .07, 3.89), (-.07, .07, 3.89)]
+    for i in range(4):
+        j = (i + 1) % 4
+        mesh.face((eaves[i], eaves[j], crown[j], crown[i]), "black")
+    mesh.box((0, 0, 3.91), (.14, .14, .04), "black")
+    mesh.torus((0, 0, 3.945), .045, .015, "black", segments=16)
+    mesh.beam((0, 0, 3.93), (0, 0, 4.08), .045, "black",
+              radius_end=0, sides=12)
+
+
+def house_table(mesh):
+    """Dark oak house row, long axis Y: 2.90 × 30.00 × .86 m, grounded."""
+    # Four long planks with visible seams and cross-grain breadboard ends.
+    for x in (-.45, -.15, .15, .45):
+        for i in range(10):
+            y = -14.88 + (i + .5) * 2.976
+            mesh.box((x, y, .82), (.296, 2.972, .08), "wood")
+    for y in (-14.94, 14.94):
+        mesh.box((0, y, .82), (1.20, .12, .08), "wood")
+    for x in (-.46, .46):
+        mesh.box((x, 0, .71), (.10, 29.40, .14), "wood")
+
+    # Continuous two-plank seats leave generous sitting space beside the table.
+    for side in (-1, 1):
+        seat_x = side * 1.25
+        for offset in (-.096, .096):
+            mesh.box((seat_x + offset, 0, .44), (.188, 30, .08), "wood")
+        mesh.box((seat_x, 0, .33), (.10, 29.40, .14), "wood")
+
+    # Repeated stout trestles: grounded feet, splayed legs and transverse caps.
+    stations = (-14.1, -9.4, -4.7, 0, 4.7, 9.4, 14.1)
+    for y in stations:
+        mesh.box((0, y, .06), (1.12, .28, .12), "wood")
+        mesh.box((0, y, .74), (1.16, .22, .08), "wood")
+        for side in (-1, 1):
+            mesh.beam((side * .43, y, .12), (side * .31, y, .70),
+                      .085, "wood", sides=4)
+        mesh.box((0, y, .26), (.84, .14, .12), "wood")
+        for side in (-1, 1):
+            x = side * 1.25
+            mesh.box((x, y, .05), (.40, .25, .10), "wood")
+            mesh.box((x, y, .37), (.38, .20, .06), "wood")
+            for offset in (-.12, .12):
+                mesh.beam((x + offset, y, .10),
+                          (x + offset * .55, y, .34), .045, "wood", sides=4)
+            # Recessed wooden pegs show seat-to-trestle joinery, not ornaments.
+            for offset in (-.096, .096):
+                mesh.beam((x + offset, y, .475), (x + offset, y, .48),
+                          .012, "oak", sides=8)
+        for x in (-.45, .45):
+            mesh.beam((x, y, .855), (x, y, .86), .014, "oak", sides=8)
+
+    # Longitudinal stretchers and knee braces tie the trestles into real frames.
+    mesh.box((0, 0, .26), (.14, 28.40, .14), "wood")
+    for y0, y1 in zip(stations, stations[1:]):
+        for y, direction in ((y0, 1), (y1, -1)):
+            mesh.beam((0, y, .31), (0, y + direction * .65, .70),
+                      .055, "wood", sides=4)
+            for side in (-1, 1):
+                x = side * 1.25
+                mesh.beam((x, y, .13), (x, y + direction * .45, .34),
+                          .035, "wood", sides=4)
+
+
 def luggage(mesh):
     # Domed school trunk, brass corners/straps, leather suitcase on top.
     mesh.box((0, 0, .25), (.9, .55, .5), "leather")
@@ -733,6 +856,8 @@ BUILDERS = {
     "jetty": (jetty, "prop", "Drei Meter breiter Holzsteg mit einzeln modellierten Planken, Pfählen, Beschlägen und abgesenkter Landrampe."),
     "bench": (bench, "prop", "Eichenholzbank mit vier Sitzlatten, Rückenlehne, grünen Metallfüßen und Armstützen."),
     "lantern": (lantern, "prop", "Kleine tragbare Laterne mit warmen Scheiben, schwarzem Metallrahmen, Pyramidenhaube und Tragering; ohne exportierte Lichtquelle."),
+    "street-lamp": (street_lamp, "prop", "Bodenständige 4,08 Meter hohe Straßenlaterne mit steinernem Sockel, kanneliertem Eisenmast, vier Tragkonsolen, warmen Glasscheiben und spitzer Wetterhaube; ohne exportierte Lichtquelle."),
+    "house-table": (house_table, "prop", "30 Meter lange dunkle Eichentafel mit vier Plankenbahnen, Hirnleisten, kräftigen Böcken, Streben und zwei durchgehenden Sitzbänken; Längsachse lokales glTF-Z."),
     "luggage": (luggage, "prop", "Schulkoffer mit gewölbtem Lederdeckel, Messingbeschlägen und aufgesetztem Reisekoffer mit Hogwarts-Etikett."),
     "signpost": (signpost, "prop", "Hölzerner Wegweiser mit lesbaren grünen Pfeilschildern Hogwarts, Hogsmeade und Bootshaus."),
     "pine": (pine, "prop", "Schottische Waldkiefer mit verzweigtem Stamm, Wurzelanläufen und vielen räumlichen Nadelkronen statt flacher Pyramiden."),

@@ -914,10 +914,10 @@ async function startApp(username: string, role: string) {
   // thresholds, NPC room figures, ground hole, neighbour occlusion, elevator
   // prompt, figure scale) keeps reading `tile.fade`/`fadeTarget` — only the
   // fade TARGET now comes from here instead of from camera geometry.
-  /** A tile with something to reveal: a mounted interior on a building or a
-   *  detail-mode area location — the same condition the fade loop gates on. */
+  /** A mounted detail scene: shells fade away, persistent area models open
+   *  their authored cutouts without hiding the rest of the site. */
   const openable = (tile: Tile) =>
-    !!tile.interior && (tile.isBuilding || !!tile.modelIsShellArea);
+    !!tile.interior && (tile.isBuilding || !!tile.modelIsShellArea || !!tile.modelIsGround);
   const badge = new OpenViewBadge();
   /** The floating close control shows exactly while a view is open in the
    *  OVERVIEW. Embodied it stays hidden: there the avatar's location owns the
@@ -6041,12 +6041,9 @@ async function startApp(username: string, role: string) {
     let open: Tile | null = null;
     let basementOpen: Tile | null = null;
     for (const { tile } of residency.values()) {
-      // A detail-scene area location (`display: 'shell_area'`, § B6 No. 10)
-      // fades like a building although its cell is PASSABLE — `isBuilding` is
-      // false there by definition, so gating on it alone kept the interior of
-      // exactly those locations shut, the one place the fade is supposed to
-      // reveal something.
-      if (tile.interior && (tile.isBuilding || tile.modelIsShellArea)) {
+      // Use the same eligibility as the UI, including persistent area models:
+      // their existing fade path opens cutouts instead of hiding the model.
+      if (openable(tile)) {
         // The fade TARGET comes from the singleton — never from camera
         // geometry (Stage 3). A tile that just lost the state keeps fading
         // out here over the same crossfade the opening one fades in on.

@@ -1,0 +1,79 @@
+{
+  "name": "Lange Haustafel mit Bänken",
+  "category": "furniture",
+  "model_variants": [
+    {
+      "stem": "model",
+      "active": true,
+      "description": "Thirty-metre-long dark oak dining table with two continuous wooden benches, stout grounded trestles and braces, visible plank joinery, no people",
+      "width_m": 2.9,
+      "depth_m": 30.0,
+      "height_m": 0.86,
+      "dims_estimated": false
+    }
+  ],
+  "sway_factor": 0.0,
+  "tags": [
+    "hogwarts-demo",
+    "self-authored"
+  ],
+  "created_at": "2026-10-17T14:33:43+00:00",
+  "source": "manual",
+  "prompt": "",
+  "mount": "floor",
+  "bbox": [
+    2.9,
+    0.86,
+    30.0
+  ],
+  "measured": {
+    "format": "glb",
+    "file_bytes": 228504,
+    "objects": 1,
+    "tris": 3312,
+    "verts": 6288,
+    "materials": [
+      "oak",
+      "wood"
+    ],
+    "images": [
+      {
+        "name": "oak",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      },
+      {
+        "name": "wood",
+        "size": [
+          128,
+          128
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 0,
+    "bone_names": [],
+    "mixamo_bones": 0,
+    "finger_bones": 0,
+    "finger_bones_weighted": 0,
+    "finger_verts": 0,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      2.9,
+      30.0,
+      0.86
+    ],
+    "center_xy": [
+      0.0,
+      0.0
+    ],
+    "min_z": 0.0,
+    "at": "2026-10-17T14:34:50+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}

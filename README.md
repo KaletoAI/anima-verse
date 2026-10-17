@@ -555,11 +555,15 @@ start.
 
 An unofficial, German-language fan interpretation of film Hogwarts: **Hogsmeade station** with a
 stationary Hogwarts Express, the **Black Lake** with two landing places, and the **castle grounds**
-with towers, the Great Hall exterior, an open courtyard, a stone gate and Hagrid's furnished hut.
+with towers, an open courtyard, a stone gate and Hagrid's furnished hut. From the northern arcade,
+the furnished castle route connects **Eingangshalle → Verbindungsgalerie → Turmhalle → Große Halle**;
+the Great Hall contains four long house tables with benches.
 Seven connected locations sit in a metre-based landscape with water, shallows, woodland, hills and
 a dry west-shore walking route. This is a hand-authored world, not an S/M/L-sized generation.
-The complete castle shell and its approach stand on a level plateau. Image-generation subjects,
-appearance fields and style hints are English; names, narrative and dialogue remain German.
+The entire castle footprint rests on a level plateau with gentle approach paths; the gate approach
+stays outside the castle grounds. Outdoor street lamps have grounded plinths and iron masts.
+Image-generation subjects, appearance fields and style hints are English; names, narrative and
+dialogue remain German.
 
 ```bash
 ./start.sh --world demo --with-3d
@@ -573,12 +577,14 @@ profiles, soul sections, portraits, owned clothing and personal belongings. The 
 is **paused**, at 16:40 on the first day of the school year; resume it when ready. For an unobscured
 overview, an administrator can enable
 **Menu → Administration → Show all locations (admin)** in the 3D client.
+Select the castle and choose **Hineinsehen** to reveal its furnished rooms. The courtyard,
+arcades and remaining castle exterior stay visible rather than disappearing with the whole model.
 
-The world database, portraits and **21 textured environment/furniture models** ship in
+The world database, portraits and **23 textured environment/furniture models** ship in
 `worlds/demo/`; viewing them needs no generation backend. These are self-created models and
 textures, not extracted film/game assets or an official architectural survey. Characters use the
-client's existing standard figure rendering, not bespoke Hogwarts rigs. The castle interior is
-limited to the arrival passages and open courtyard; train and boats are decorative, not transport.
+client's existing standard figure rendering, not bespoke Hogwarts rigs. Other castle towers remain
+exterior architecture; train and boats are decorative, not transport.
 Chat and autonomous simulation still need your configured backends.
 
 **Game-Admin → Setup → Packages → Enabled packages** selects the packages used by each world.
