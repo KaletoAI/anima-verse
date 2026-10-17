@@ -1,0 +1,64 @@
+{
+  "name": "Stone house",
+  "description": "A sturdy stone style suited to rural houses, inns, and traditional urban dwellings.",
+  "materials": {
+    "wall": "fieldstone",
+    "wall_ground": "",
+    "plinth": "ashlar",
+    "roof": "slate_roof",
+    "trim": "ashlar",
+    "door": "door_planks",
+    "chimney": "fieldstone"
+  },
+  "palette": {
+    "glass": "#3a4a55",
+    "interior": "#4a443e"
+  },
+  "wall_thickness_m": 0.5,
+  "plinth_height_m": 0.35,
+  "cornice": true,
+  "corners": "quoins",
+  "frames": "stone",
+  "shutters": 0.3,
+  "timber_frame": "none",
+  "log_walls": false,
+  "jetty_m": 0,
+  "roof": {
+    "forms": [
+      "gable",
+      "hip"
+    ],
+    "pitch_deg": [
+      30,
+      45
+    ],
+    "overhang_m": [
+      0.2,
+      0.4
+    ],
+    "parapet": false
+  },
+  "crenellations": false,
+  "towers": {
+    "chance": 0,
+    "radius_m": [
+      1.4,
+      2.2
+    ],
+    "rise_m": [
+      2.5,
+      5
+    ],
+    "roof": [
+      "cone"
+    ]
+  },
+  "chimneys": [
+    1,
+    2
+  ],
+  "dormers": 0.2,
+  "porch": false,
+  "tint_jitter": 0.06,
+  "weathering": 0.5
+}

@@ -1,0 +1,64 @@
+{
+  "name": "Castle",
+  "description": "A fortified stone style suited to castles, keeps, and defensive strongholds.",
+  "materials": {
+    "wall": "castle_stone",
+    "wall_ground": "",
+    "plinth": "castle_stone",
+    "roof": "slate_roof",
+    "trim": "ashlar",
+    "door": "door_planks",
+    "chimney": "castle_stone"
+  },
+  "palette": {
+    "glass": "#3a4a55",
+    "interior": "#4a443e"
+  },
+  "wall_thickness_m": 0.9,
+  "plinth_height_m": 0.0,
+  "cornice": false,
+  "corners": "none",
+  "frames": "stone",
+  "shutters": 0,
+  "timber_frame": "none",
+  "log_walls": false,
+  "jetty_m": 0,
+  "roof": {
+    "forms": [
+      "flat"
+    ],
+    "pitch_deg": [
+      5,
+      5
+    ],
+    "overhang_m": [
+      0,
+      0
+    ],
+    "parapet": true
+  },
+  "crenellations": true,
+  "towers": {
+    "chance": 1.0,
+    "radius_m": [
+      1.4,
+      2.2
+    ],
+    "rise_m": [
+      2.5,
+      5
+    ],
+    "roof": [
+      "cone",
+      "crenel"
+    ]
+  },
+  "chimneys": [
+    0,
+    1
+  ],
+  "dormers": 0,
+  "porch": false,
+  "tint_jitter": 0.06,
+  "weathering": 0.5
+}

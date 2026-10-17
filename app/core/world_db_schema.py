@@ -667,6 +667,15 @@ SCHEMA_STATEMENTS = [
         PRIMARY KEY (axis, kind, key)
     )""",
 
+    # Building styles, WORLD layer: shared/building_styles/*.json is the seed.
+    # A row REPLACES the whole shared entry or adds a world-only style.
+    # Deleting the row restores the shared seed. See hull_styles.py STORES.
+    """CREATE TABLE IF NOT EXISTS building_styles_world (
+        id         TEXT PRIMARY KEY,
+        doc        TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""",
+
     # ── LLM call statistics (duration estimates + admin analysis) ──
     """CREATE TABLE IF NOT EXISTS llm_call_stats (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,

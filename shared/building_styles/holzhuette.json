@@ -1,0 +1,63 @@
+{
+  "name": "Log cabin",
+  "description": "A rustic log style suited to forest cabins and secluded mountain shelters.",
+  "materials": {
+    "wall": "log_wood",
+    "wall_ground": "",
+    "plinth": "fieldstone",
+    "roof": "wood_shingles",
+    "trim": "log_wood",
+    "door": "door_planks",
+    "chimney": "fieldstone"
+  },
+  "palette": {
+    "glass": "#3a4a55",
+    "interior": "#4a443e"
+  },
+  "wall_thickness_m": 0.3,
+  "plinth_height_m": 0.5,
+  "cornice": false,
+  "corners": "log_ends",
+  "frames": "timber",
+  "shutters": 0.4,
+  "timber_frame": "none",
+  "log_walls": true,
+  "jetty_m": 0,
+  "roof": {
+    "forms": [
+      "gable"
+    ],
+    "pitch_deg": [
+      20,
+      30
+    ],
+    "overhang_m": [
+      0.6,
+      0.9
+    ],
+    "parapet": false
+  },
+  "crenellations": false,
+  "towers": {
+    "chance": 0,
+    "radius_m": [
+      1.4,
+      2.2
+    ],
+    "rise_m": [
+      2.5,
+      5
+    ],
+    "roof": [
+      "cone"
+    ]
+  },
+  "chimneys": [
+    1,
+    1
+  ],
+  "dormers": 0,
+  "porch": true,
+  "tint_jitter": 0.06,
+  "weathering": 0.5
+}

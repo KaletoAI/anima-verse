@@ -1,0 +1,64 @@
+{
+  "name": "Half-timbered house",
+  "description": "A half-timbered style suited to medieval townhouses and traditional village homes.",
+  "materials": {
+    "wall": "plaster_infill",
+    "wall_ground": "fieldstone",
+    "plinth": "fieldstone",
+    "roof": "clay_roof_tiles",
+    "trim": "timber_beam",
+    "door": "door_planks",
+    "chimney": "brick"
+  },
+  "palette": {
+    "glass": "#3a4a55",
+    "interior": "#4a443e"
+  },
+  "wall_thickness_m": 0.3,
+  "plinth_height_m": 0.45,
+  "cornice": true,
+  "corners": "posts",
+  "frames": "timber",
+  "shutters": 0.5,
+  "timber_frame": "upper",
+  "log_walls": false,
+  "jetty_m": 0.25,
+  "roof": {
+    "forms": [
+      "gable",
+      "hip"
+    ],
+    "pitch_deg": [
+      45,
+      55
+    ],
+    "overhang_m": [
+      0.3,
+      0.5
+    ],
+    "parapet": false
+  },
+  "crenellations": false,
+  "towers": {
+    "chance": 0,
+    "radius_m": [
+      1.4,
+      2.2
+    ],
+    "rise_m": [
+      2.5,
+      5
+    ],
+    "roof": [
+      "cone"
+    ]
+  },
+  "chimneys": [
+    1,
+    2
+  ],
+  "dormers": 0.4,
+  "porch": false,
+  "tint_jitter": 0.06,
+  "weathering": 0.5
+}
