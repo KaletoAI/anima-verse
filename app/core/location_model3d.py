@@ -38,6 +38,7 @@ ALREADY STORED file mesh→mesh (``service.generate_mesh_variant``, gateway alia
 ``mesh-shrink``) instead of meshing the source image again. Same queue channel,
 same pending flag; the result is a new gallery file selected for ``low``.
 """
+from copy import deepcopy
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -1709,3 +1710,29 @@ def delete_building_model(location_id: str, room_id: str = "",
     if not owner:
         return False
     return _gallery(owner, room_id).delete(filename)
+
+
+def save_hull_model(location_id: str, full: bytes, low: bytes, *,
+                    placement_full: Dict, placement_low: Dict,
+                    description: Dict, fingerprint: str, style_id: str) -> Dict[str, Any]:
+    """Store separate hull tiers with their placement and pin both selections."""
+    owner = _owner_id(location_id)
+    if not owner:
+        raise ValueError("location not found")
+    saved = {}
+    for tier, contents, placement in ((DEFAULT_TIER, full, placement_full),
+                                       (LOW_TIER, low, placement_low)):
+        target = _gallery(owner).new_path()
+        target.write_bytes(contents)
+        meta = {"created_at": utc_now_iso(), "source": "hull_build", "format": "glb",
+                "rig": "none", "backend": "blender", "location": owner,
+                "tier": tier, "plan_hull": True,
+                "hull": {"description": deepcopy(description), "fingerprint": fingerprint,
+                         "style": style_id},
+                **{key: float(placement.get(key) or 0.0)
+                   for key in ("width_m", "offset_x", "offset_z", "offset_y")}}
+        write_sidecar(target, meta)
+        saved[tier] = {**meta, "filename": target.name}
+    for tier, meta in saved.items():
+        select_model(location_id, meta["filename"], "", tier)
+    return saved[DEFAULT_TIER]
