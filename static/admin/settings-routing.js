@@ -163,6 +163,9 @@ const RT_TEXT = {
     assignLlm: 'Assign LLM ▾', newLlm: '+ New LLM…', groupAssign: 'Assign LLM to all unassigned in this group ▾',
     noLlm: 'no LLM assigned', fallsBack: '→ falls back to', gateOff: 'feature off ({gate}) — no LLM required',
     entryDisabled: '(entry disabled)', providerMissing: 'provider "{name}" does not exist',
+    providerOff: 'provider "{name}" disabled',
+    providerOffHint: 'The provider is switched off under LLM Providers — this LLM is skipped '
+                   + 'until the provider is enabled again (the entry itself keeps its state).',
     notOnServer: '(not on server)', unknownTitle: 'Assignments to unknown tasks',
     unknownHint: 'These task ids are not in the catalog any more (removed or renamed). They have no effect — remove them.',
     active: 'active', preset: 'Runtime preset (not persistent):', presetNone: '— none (all tasks active) —',
@@ -207,7 +210,7 @@ const RT_TEXT = {
     ovError: 'Could not load the effective routing ({what}). After a code update the server needs a restart.',
     ovProviders: 'Providers', ovEntries: 'LLM entries', ovTasks: 'Tasks per category',
     colProvider: 'Provider', colType: 'Type', colEnabled: 'Enabled', colAvailable: 'Available',
-    ovProviderMissing: 'provider missing', ovUnavailable: 'unavailable', ovCooldown: 'cooldown {n}s',
+    ovProviderMissing: 'provider missing', ovProviderOff: 'provider disabled', ovUnavailable: 'unavailable', ovCooldown: 'cooldown {n}s',
     ovNoTasks: 'no tasks', ovLanesShared: 'shared with {names}', ovSkipped: 'skipped: {why}', ovViaFallback: 'via fallback ({task})',
     ovNone: 'none', ovGatedOff: 'gated off', ovDisabled: 'disabled',
     ovNoProviders: 'No providers configured.', ovNoEntries: 'No LLM entries configured.',
@@ -358,6 +361,7 @@ async function renderLlmRoutingTasksPage(content) {
             return {
                 entry: r.entry, order: r.order, cfg: e, capsKey: capsKey,
                 off: e.enabled === false,
+                providerOff: rtProviderOff(e.provider),
                 providerMissing: !!(e.provider && !providerNames.has(e.provider)) || !e.provider,
                 notOnServer: !!(known && known.length && e.model && !known.includes(e.model)),
                 mismatch: (match.missing || []).length > 0,
@@ -370,7 +374,7 @@ async function renderLlmRoutingTasksPage(content) {
         const problem = emptyProblem
             || rows.some(r => r.providerMissing)
             || rows.some(r => r.mismatch)
-            || (rows.length > 0 && rows.every(r => r.off));
+            || (rows.length > 0 && rows.every(r => r.off || r.providerOff));
         info[t.id] = { rows: rows, problem: problem, builtinEmbedding: builtinEmbedding };
     }
 
@@ -515,10 +519,14 @@ async function renderLlmRoutingTasksPage(content) {
         } else {
             html += '<div style="margin-top:4px;">';
             nfo.rows.forEach((r, i) => {
-                html += '<div class="rt-chain-row' + (r.off ? ' off' : '') + '">';
+                html += '<div class="rt-chain-row' + (r.off || r.providerOff ? ' off' : '') + '">';
                 html += '<span class="rt-muted" style="min-width:20px;">' + r.order + '.</span>';
                 html += '<span>' + esc(rtEntryLabel(r.cfg, r.entry)) + '</span>';
                 if (r.off) html += '<span class="rt-warn" style="text-decoration:none;">' + esc(RT_TEXT.entryDisabled) + '</span>';
+                if (r.providerOff) {
+                    html += '<span class="rt-warn" style="text-decoration:none;" title="' + esc(RT_TEXT.providerOffHint) + '">'
+                         + esc(rtFmt(RT_TEXT.providerOff, { name: r.cfg.provider })) + '</span>';
+                }
                 if (r.providerMissing) {
                     html += '<span class="rt-err" style="text-decoration:none;">'
                          + esc(rtFmt(RT_TEXT.providerMissing, { name: r.cfg.provider || '?' })) + '</span>';
@@ -535,7 +543,7 @@ async function renderLlmRoutingTasksPage(content) {
                 html += '</span>';
                 html += '</div>';
             });
-            if (nfo.rows.every(r => r.off)) {
+            if (nfo.rows.every(r => r.off || r.providerOff)) {
                 html += '<div class="desc rt-warn">' + esc(RT_TEXT.allDisabled) + '</div>';
             }
             html += '</div>';
@@ -811,13 +819,19 @@ function rtRenderEntryItem(def, fields, item, path, idx) {
     const label = _itemLabel(item, def.item_label_field, 'Item ' + idx);
     const openClass = OPEN_ITEMS.has(path) ? ' open' : '';
     const on = item.enabled !== false;
-    let html = '<div class="array-item rt-entry ' + (on ? 'rt-on' : 'rt-off') + openClass + '" id="item-' + path + '">';
+    const provOff = rtProviderOff(item.provider);
+    let html = '<div class="array-item rt-entry ' + (on ? 'rt-on' : 'rt-off') + (provOff ? ' rt-prov-off' : '')
+             + openClass + '" id="item-' + path + '">';
     html += '<div class="array-item-header" onclick="toggleArrayItem(this, \'' + path + '\')">';
     html += '<span class="chevron">▶</span> ';
     html += '<span class="title" style="margin-left:6px;">' + esc(label) + '</span>';
     html += '<button class="rt-toggle" title="' + esc(RT_TEXT.toggleHint) + '"'
          + ' onclick="event.stopPropagation(); rtToggleEntry(' + idx + ')">'
          + esc(on ? RT_TEXT.enabledToggle : RT_TEXT.disabledToggle) + '</button>';
+    // Always in the DOM (hidden while the provider is on), so a provider
+    // change in the accordion can show it without a re-render.
+    html += '<span class="rt-prov-badge" data-prov-off="' + idx + '" title="' + esc(RT_TEXT.providerOffHint) + '"'
+         + (provOff ? '' : ' hidden') + '>' + esc(rtFmt(RT_TEXT.providerOff, { name: item.provider || '' })) + '</span>';
     html += '<span class="rt-muted" style="margin-left:8px; font-size:11px;" data-pool-head="' + idx + '">'
          + esc(rtPoolHeadText(idx)) + '</span>';
     html += '<button class="btn btn-sm" style="margin-left:8px;" title="' + esc(RT_TEXT.duplicateEntry)
@@ -849,6 +863,30 @@ function rtToggleEntry(idx) {
         if (btn) btn.textContent = entry.enabled ? RT_TEXT.enabledToggle : RT_TEXT.disabledToggle;
     }
     rtRefreshPools();
+}
+
+// True when `name` is a provider switched off under LLM Providers — its
+// entries are skipped by the routing exactly like disabled entries
+// (llm_router.disabled_providers).
+function rtProviderOff(name) {
+    if (!name) return false;
+    return (CONFIG.providers || []).some(p => p && p.name === name && p.enabled === false);
+}
+
+// The provider of entry `path` changed: the header marker follows in place.
+function rtProviderStateChanged(path) {
+    const m = /^llm_routing\[(\d+)\]\./.exec(path || '');
+    if (!m) return;
+    const idx = parseInt(m[1], 10);
+    const entry = rtRouting()[idx] || {};
+    const off = rtProviderOff(entry.provider);
+    const el = document.getElementById('item-llm_routing[' + idx + ']');
+    if (el) el.classList.toggle('rt-prov-off', off);
+    const badge = document.querySelector('[data-prov-off="' + idx + '"]');
+    if (badge) {
+        badge.hidden = !off;
+        badge.textContent = rtFmt(RT_TEXT.providerOff, { name: entry.provider || '' });
+    }
 }
 
 // ── Lanes: one number per provider+model ───────────────────────────────
@@ -1097,7 +1135,7 @@ function rtOverviewBody(data) {
     }
     for (const e of entries) {
         const name = e.name || rtEntryLabel({ name: e.name, model: e.model, provider: e.provider }, e.index);
-        html += '<div class="rt-chain-row' + (e.enabled === false ? ' off' : '') + '">';
+        html += '<div class="rt-chain-row' + (e.enabled === false || e.provider_enabled === false ? ' off' : '') + '">';
         html += '<span class="rt-muted" style="min-width:20px;">' + ((Number(e.index) || 0) + 1) + '.</span>';
         html += '<span>' + esc(name) + '</span>';
         html += '<span class="rt-muted">' + esc(e.provider || '?') + ' / ' + esc(e.model || '?') + '</span>';
@@ -1112,6 +1150,8 @@ function rtOverviewBody(data) {
         }
         if (!e.provider_exists) {
             html += '<span class="rt-err" style="text-decoration:none;">' + esc(RT_TEXT.ovProviderMissing) + '</span>';
+        } else if (e.provider_enabled === false) {
+            html += '<span class="rt-warn" style="text-decoration:none;">' + esc(RT_TEXT.ovProviderOff) + '</span>';
         } else if (!e.provider_available) {
             html += '<span class="rt-warn" style="text-decoration:none;">' + esc(RT_TEXT.ovUnavailable) + '</span>';
         }

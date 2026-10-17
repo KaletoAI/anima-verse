@@ -1117,7 +1117,10 @@ function onRoutingModelChanged(path) {
     if (ACTIVE_SECTION === 'llm_routing' && ACTIVE_PAGE === 'tasks') renderLlmRoutingPage('tasks');
     // The entry may have joined another model's lane pool — no re-render,
     // only the lane fields and notes follow.
-    if (ACTIVE_SECTION === 'llm_routing' && ACTIVE_PAGE === 'llms') rtPoolMembershipChanged(path);
+    if (ACTIVE_SECTION === 'llm_routing' && ACTIVE_PAGE === 'llms') {
+        rtPoolMembershipChanged(path);
+        rtProviderStateChanged(path);
+    }
 }
 
 function toggleTaskPersistent(taskId, disable) {

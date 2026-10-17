@@ -135,6 +135,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .rt-on .rt-toggle { background: #23863633; border-color: #2ea043; color: #7ee787; }
 .rt-off .rt-toggle { background: #da363333; border-color: #da3633; color: #ff7b72; }
 .rt-toggle:hover { filter: brightness(1.3); }
+/* An enabled entry whose PROVIDER is switched off: header reads as off, the
+   toggle keeps showing the entry's own state. */
+.array-item.rt-on.rt-prov-off .array-item-header { background: #2a1618; border-left-color: #da3633; }
+.array-item.rt-prov-off .array-item-header .title { color: #8b949e; }
+.rt-prov-badge {
+    font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; margin-left: 8px;
+    border: 1px solid #d29922; color: #e3b341; background: #d2992222;
+}
+.rt-prov-badge[hidden] { display: none; }
 
 /* ── Master-detail (backends) ── */
 .md-grid { display: grid; grid-template-columns: minmax(280px, 38%) 1fr; gap: 16px; align-items: start; }
