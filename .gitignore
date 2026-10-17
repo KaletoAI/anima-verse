@@ -203,3 +203,6 @@ shared/models/figure/*.gltf
 
 # superpowers plans/specs/scratch — local only
 docs/superpowers/
+
+# runtime/build artifacts
+*.pid
