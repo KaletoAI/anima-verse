@@ -558,6 +558,8 @@ stationary Hogwarts Express, the **Black Lake** with two landing places, and the
 with towers, an open courtyard, a stone gate and Hagrid's furnished hut. From the northern arcade,
 the furnished castle route connects **Eingangshalle → Verbindungsgalerie → Turmhalle → Große Halle**;
 the Great Hall contains four long house tables with benches.
+The four rooms share their masonry footprint and **29 real glazed window openings** with the
+exterior model; window reveals no longer sit in front of solid wall blocks.
 Seven connected locations sit in a metre-based landscape with water, shallows, woodland, hills and
 a dry west-shore walking route. This is a hand-authored world, not an S/M/L-sized generation.
 The entire castle footprint rests on a level plateau with gentle approach paths; the gate approach
@@ -577,12 +579,14 @@ profiles, soul sections, portraits, owned clothing and personal belongings. The 
 is **paused**, at 16:40 on the first day of the school year; resume it when ready. For an unobscured
 overview, an administrator can enable
 **Menu → Administration → Show all locations (admin)** in the 3D client.
-Select the castle and choose **Hineinsehen** to reveal its furnished rooms. The courtyard,
-arcades and remaining castle exterior stay visible rather than disappearing with the whole model.
+In the overview, select the castle and choose **Hineinsehen** to reveal its furnished rooms. The
+courtyard, arcades and remaining castle exterior stay visible. While walking, the castle stays
+closed from outside; its interior cutaway opens only inside an enclosed room, not on the grounds.
 
 The world database, portraits and **23 textured environment/furniture models** ship in
-`worlds/demo/`; viewing them needs no generation backend. These are self-created models and
-textures, not extracted film/game assets or an official architectural survey. Characters use the
+`worlds/demo/`; viewing them needs no generation backend. The matching original castle-wall
+surface ships as `shared/surface_textures/hogwarts_sandstone.png`, tiled over four metres.
+These are self-created models and textures, not extracted film/game assets or an official architectural survey. Characters use the
 client's existing standard figure rendering, not bespoke Hogwarts rigs. Other castle towers remain
 exterior architecture; train and boats are decorative, not transport.
 Chat and autonomous simulation still need your configured backends.

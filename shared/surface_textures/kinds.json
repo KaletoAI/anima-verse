@@ -56,6 +56,10 @@
     "name": "grass",
     "description": "dense short lawn grass, natural fresh green blades"
   },
+  "hogwarts_sandstone": {
+    "name": "Schloss-Sandstein",
+    "description": "Seamless warm Scottish sandstone masonry with staggered ashlar blocks, recessed dark mortar and subtle natural grain; straight-on orthographic surface, no timber, no windows, no perspective."
+  },
   "non-woven_wallpaper": {
     "name": "non woven wallpaper",
     "description": "the surface of non woven wallpaper seen straight from above"

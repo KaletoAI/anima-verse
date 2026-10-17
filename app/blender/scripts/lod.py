@@ -20,6 +20,9 @@ interpolates them onto the surviving vertices. The joint count therefore does
 not change, which is what the humanoid validation checks; whether the skinning
 still deforms cleanly at a heavy reduction is a judgement call for whoever
 looks at the render.
+
+Meshes marked by the GLB node extra ``lod_preserve`` are kept intact: collapsing
+joined thin panes can remove whole windows, not merely simplify their shape.
 """
 import sys
 from pathlib import Path
@@ -68,6 +71,8 @@ def lod(args):
         _common.import_model(src)
         before = _tris()
         for obj in _mesh_objects():
+            if obj.get("lod_preserve"):
+                continue
             mod = obj.modifiers.new(name="LOD", type="DECIMATE")
             mod.decimate_type = "COLLAPSE"
             mod.ratio = ratio
@@ -80,7 +85,8 @@ def lod(args):
         after = _tris()
         name = f"{stem}_lod{after}.glb"
         path = out_dir / name
-        bpy.ops.export_scene.gltf(filepath=str(path), export_format="GLB")
+        # Geometry extras (such as interior cutout margins) must survive tier swaps.
+        bpy.ops.export_scene.gltf(filepath=str(path), export_format="GLB", export_extras=True)
         stages.append({
             "ratio": ratio,
             "tris_before": before,

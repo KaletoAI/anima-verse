@@ -25,8 +25,9 @@ Supported API limitations (source-checked):
 * World props are decorative, not transport/collision mechanics. Boats and the
   stationary train do not offer rides. The western shore is the real land route.
 * Surface-texture uploads write shared/surface_textures, so they are NOT used.
-  Native terrain uses world-local types, colors and water/relief metadata; room
-  materials are the engine's untextured defaults. Model textures are embedded.
+  Native terrain uses world-local types, colors and water/relief metadata.
+  Castle walls reference the repository-shipped hogwarts_sandstone surface;
+  model textures are embedded and use the same authored sandstone image.
 * The manifest contract has no humanoid meshes. Characters are real clothed
   human-roleplay records with eight soul files, inventory and own painted PNG
   portraits; this author does not pretend to upload a 52-joint character rig.
@@ -55,6 +56,8 @@ import urllib.parse
 import urllib.request
 import uuid
 import zlib
+
+from castle_assets import CASTLE_ROOMS, castle_room_openings
 
 
 PROVENANCE = "Self-authored procedural geometry/textures; no extracted/downloaded assets"
@@ -667,13 +670,16 @@ def layout_payload(spec, location, prop_ids):
             result["always_visible"] = True
             result["no_walls"] = True
         return result
+    def castle_room(name, *, props):
+        result = room(name, *CASTLE_ROOMS[name]["rect"], props=props,
+                      openings=castle_room_openings(name, lambda target: room_id(location, target)))
+        result["surfaces"] = {"wall": "hogwarts_sandstone"}
+        return result
     key = spec["key"]
     rooms, boundary = [], []
     if key == "castle":
         # Exact asset-author contract: x25..35,z13..75 is open through gatehouse;
         # quad x8..52,z-34..0 is unobstructed. Do not wall an outdoor passage.
-        entrance, gallery = room_id(location,"Eingangshalle"), room_id(location,"Verbindungsgalerie")
-        tower, hall = room_id(location,"Turmhalle"), room_id(location,"Große Halle")
         rooms = [
             room("Torweg",25,13,10,62,outdoor=True, props=[prop("street-lamp",1.1,49),prop("street-lamp",8.9,49)]),
             room("Südlicher Kreuzgang",25,1,10,12,outdoor=True),
@@ -681,34 +687,24 @@ def layout_payload(spec, location, prop_ids):
                 prop("bench",5,4),prop("bench",39,4,180),prop("bench",5,29),prop("bench",39,29,180),
                 prop("school-trunk",4,13),prop("school-trunk",4,15),prop("street-lamp",39,17)]),
             room("Nördlicher Kreuzgang",40,-44.8,14,10.8,outdoor=True),
-            room("Eingangshalle",40,-65,14,20.2,
+            castle_room("Eingangshalle",
                  props=[prop("writing-desk",3,4),prop("oak-chair",3,2),
                         prop("bookcase",1.2,10),prop("bookcase",1.2,14),
                         prop("bench",11.5,4,90),prop("school-trunk",11.5,14),
-                        prop("lantern",3.55,4.12,offset=.82)],
-                 openings=[opening(2,"outside",3,at=.5,height=3.5),
-                           opening(3,gallery,3,at=1-9/20.2,height=3.5)]),
-            room("Verbindungsgalerie",-40,-65,80,18,
+                        prop("lantern",3.55,4.12,offset=.82)]),
+            castle_room("Verbindungsgalerie",
                  props=[prop("bookcase",x,1) for x in (6,20,34,48,60)]
-                       +[prop("bench",x,16,180) for x in (16,32,48)],
-                 openings=[opening(1,entrance,3,at=.5,height=3.5),
-                           opening(2,tower,3,at=1-8/80,height=3.5)]),
-            room("Turmhalle",-40,-47,16,35,
+                       +[prop("bench",x,16,180) for x in (16,32,48)]),
+            castle_room("Turmhalle",
                  props=[prop("bench",2,10,90),prop("bench",14,20,270),
-                        prop("bookcase",2,28),prop("hearth",14,28,270)],
-                 openings=[opening(0,gallery,3,at=.5,height=3.5),
-                           opening(2,hall,3,at=.75,height=3.5)]),
-            room("Große Halle",-64,-12,30,64,
+                        prop("bookcase",2,28),prop("hearth",14,28,270)]),
+            castle_room("Große Halle",
                  props=[prop("house-table",x,32,label=house+"-Haustafel")
                         for x,house in ((3.75,"Gryffindor"),(11.25,"Hufflepuff"),
                                         (18.75,"Ravenclaw"),(26.25,"Slytherin"))]
                        +[prop("cottage-table",15,59),prop("oak-chair",13,61),
                          prop("oak-chair",15,61),prop("oak-chair",17,61),
-                         prop("hearth",15,63,180)],
-                 openings=[opening(0,tower,3,at=28/30,height=3.5)]
-                          +[{**opening(edge,"outside",3,at=at,height=6),
-                             "type":"window","sill_m":3}
-                            for edge in (1,3) for at in (.20,.40,.60,.80)])]
+                         prop("hearth",15,63,180)])]
         x0, x1 = spec["boundary"][0][0], spec["boundary"][1][0]
         boundary = [{"edge": 2, "at": (x1-30)/(x1-x0), "width_m": 8,
                      "room": room_id(location,"Torweg")}]
@@ -1257,7 +1253,8 @@ def build(args):
             # the other enclosed rooms provide their own smaller cutouts.
             map3d = copy.deepcopy(location_index(client)[spec["name"]].get("map3d") or {})
             map3d.update(area_model=True, outline=rect(-64,-12,-34,52),
-                         storey_height_m=12)
+                         storey_height_m=CASTLE_ROOMS["Große Halle"]["wall_top"],
+                         wall_kind="hogwarts_sandstone")
             client.put("/world/locations/"+location["id"], {"map3d":map3d})
             # Storey zero uses the world terrain as its one floor. Paint the
             # actual room outlines so detached halls reveal stone, not grass.

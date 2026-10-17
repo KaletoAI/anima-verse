@@ -404,7 +404,8 @@ export interface SceneModelSpec {
    *  model — the building's floor plan plus the outlines of placed indoor
    *  rooms outside it. The model stays standing in the interior view, and the
    *  recipe's own interior stands in the holes. Only on the building spec,
-   *  only with `map3d.area_model`. */
+   *  only with `map3d.area_model`. GLB mesh extras `interior_cutout_padding_m`
+   *  extend the cut around thick walls/frames, in scaled model metres. */
   cutouts?: [number, number][][]
   /** WHAT FILLS THIS PLACEMENT'S TEXTURE SLOTS (v5). The KEY is a SLOT NAME:
    *  a slot IS a material of the mesh, and its name is that material's name

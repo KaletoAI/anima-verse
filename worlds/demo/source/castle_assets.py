@@ -12,8 +12,8 @@ not an architectural survey, and not extracted film/game geometry or imagery.
 Coordinates inside Blender are metres, Z-up, +Y north. Exported glTF is Y-up,
 so world (x, y-up, z-south) = Blender (x, z-up, -y). The castle's open quad and
 south entrance are actual empty space, not a solid pedestal disguised by paint.
-Facade windows are modeled stone tracery over opaque inset-looking glass panels;
-full building interiors are deliberately outside this exterior asset's remit.
+The four authored rooms share their footprints and openings with build_world.py.
+Their textured masonry shells contain real revealed openings and separate glazing.
 """
 
 import argparse
@@ -31,6 +31,63 @@ PROVENANCE = (
     "no extracted/downloaded assets. Unofficial fictional fan depiction, "
     "not licensed commercial assets."
 )
+
+# Single source for native rooms and the persistent facade, in exported x/z metres.
+# Edge order follows [[0,0],[w,0],[w,d],[0,d]]; all opening heights use the 3m
+# world datum as their zero, not an extra per-room floor offset.
+CASTLE_ROOMS = {
+    "Eingangshalle": {
+        "rect": (40, -65, 14, 20.2), "wall_top": 24,
+        "openings": [
+            (2, .5, 3, 3.5, 0, "door", "outside"),
+            (3, 1 - 9 / 20.2, 3, 3.5, 0, "door", "Verbindungsgalerie"),
+            (0, .5, 2.4, 5.6, 3, "window", "outside"),
+            (1, .25, 2.4, 5.6, 3, "window", "outside"),
+            (1, .75, 2.4, 5.6, 3, "window", "outside"),
+        ],
+    },
+    "Verbindungsgalerie": {
+        "rect": (-40, -65, 80, 18), "wall_top": 24,
+        "openings": [
+            (1, .5, 3, 3.5, 0, "door", "Eingangshalle"),
+            (2, 1 - 8 / 80, 3, 3.5, 0, "door", "Turmhalle"),
+            *[(0, at, 2.4, 5.6, 3, "window", "outside")
+              for at in (.15, .325, .5, .675, .85)],
+            *[(2, at, 2.4, 5.6, 3, "window", "outside")
+              for at in (.25, .425, .6, .775)],
+            (3, .5, 2.4, 5.6, 3, "window", "outside"),
+        ],
+    },
+    "Turmhalle": {
+        "rect": (-40, -47, 16, 35), "wall_top": 24,
+        "openings": [
+            (0, .5, 3, 3.5, 0, "door", "Verbindungsgalerie"),
+            (2, .75, 3, 3.5, 0, "door", "Große Halle"),
+            *[(edge, at, 2.4, 5.6, 3, "window", "outside")
+              for edge in (1, 3) for at in (.3, .7)],
+        ],
+    },
+    "Große Halle": {
+        "rect": (-64, -12, 30, 64), "wall_top": 24,
+        "openings": [
+            (0, 28 / 30, 3, 3.5, 0, "door", "Turmhalle"),
+            *[(1, (z + 12) / 64, 3.2, 10, 10.8, "window", "outside")
+              for z in (-1, 8, 17, 26, 35, 44)],
+            *[(3, (52 - z) / 64, 3.2, 10, 10.8, "window", "outside")
+              for z in (-1, 8, 17, 26, 35, 44)],
+        ],
+    },
+}
+
+
+def castle_room_openings(name, resolve_room):
+    """Native authoring payload; reciprocal doors and facade windows never drift."""
+    return [
+        {"edge": edge, "at": at, "width_m": width, "height_m": height,
+         "sill_m": sill, "type": kind,
+         "to": target if target == "outside" else resolve_room(target)}
+        for edge, at, width, height, sill, kind, target in CASTLE_ROOMS[name]["openings"]
+    ]
 
 
 def write_texture(path, kind, size=256, tint=(1, 1, 1)):
@@ -86,6 +143,8 @@ class Geometry:
         self.bpy = bpy
         self.materials = materials
         self.parts = {name: [[], [], []] for name in materials}
+        self.interior_cutout_padding_m = 0
+        self.lod_preserve_materials = ()
 
     def mesh(self, material, vertices, faces, uv_faces=None):
         verts, polys, coords = self.parts[material]
@@ -189,6 +248,10 @@ class Geometry:
             obj = bpy.data.objects.new(f"{label}-{material}", mesh)
             bpy.context.collection.objects.link(obj)
             obj["provenance"] = PROVENANCE
+            if self.interior_cutout_padding_m:
+                obj["interior_cutout_padding_m"] = self.interior_cutout_padding_m
+            if material in self.lod_preserve_materials:
+                obj["lod_preserve"] = True
             objects.append(obj)
         return objects
 
@@ -239,6 +302,104 @@ def window(g, x, y, bottom, width, height, normal, door=False):
             g.beam("trim", p(u, 0), p(u, height * 0.84), 0.12)
 
 
+def room_edge(rect, edge):
+    """Blender edge origin, unit tangent, outward normal and length."""
+    x, z, width, depth = rect
+    corners = ((x, -z), (x + width, -z), (x + width, -z - depth), (x, -z - depth))
+    a, b = corners[edge], corners[(edge + 1) % 4]
+    length = math.dist(a, b)
+    tangent = ((b[0] - a[0]) / length, (b[1] - a[1]) / length)
+    return a, tangent, (-tangent[1], tangent[0]), length
+
+
+def shared_wall_spans(rect, edge, earlier_rooms):
+    """Keep one owner for each shared wall, including partially touching edges."""
+    origin, tangent, _, length = room_edge(rect, edge)
+    spans = []
+    for other in earlier_rooms:
+        for other_edge in range(4):
+            start, direction, _, span = room_edge(other["rect"], other_edge)
+            if abs(tangent[0] * direction[0] + tangent[1] * direction[1] + 1) > 1e-7:
+                continue
+            delta = (start[0] - origin[0], start[1] - origin[1])
+            if abs(delta[0] * tangent[1] - delta[1] * tangent[0]) > 1e-7:
+                continue
+            end = (start[0] + direction[0] * span - origin[0],
+                   start[1] + direction[1] * span - origin[1])
+            lo, hi = sorted((delta[0] * tangent[0] + delta[1] * tangent[1],
+                             end[0] * tangent[0] + end[1] * tangent[1]))
+            if min(length, hi) - max(0, lo) > 1e-7:
+                spans.append((max(0, lo), min(length, hi)))
+    return spans
+
+
+def revealed_window(g, center, normal, width, height, sill, depth):
+    """Transparent pane inside a real rectangular aperture, with dressed reveals."""
+    x, y = center
+    p = lambda u, h, offset=0: facade_point(x, y, normal, u, sill + h, offset)
+    pane = [p(-width / 2, 0), p(width / 2, 0),
+            p(width / 2, height), p(-width / 2, height)]
+    g.mesh("room-glass", pane, [(0, 1, 2, 3)],
+           [[(0, 0), (width / 2, 0), (width / 2, height / 2), (0, height / 2)]])
+    # Frames sit OUTSIDE the nominal aperture; no sill or cornice crosses a door.
+    tangent = (-normal[1], normal[0])
+    angle = math.atan2(tangent[1], tangent[0])
+    for u in (-width / 2 - .10, width / 2 + .10):
+        q = p(u, height / 2)
+        g.box("trim", q, (.20, depth + .12, height + .4), angle)
+    for h in (-.10, height + .10):
+        g.box("trim", p(0, h), (width, depth + .12, .20), angle)
+    # Fine lead and a pointed stone tracery arch, not an opaque infill panel.
+    for offset in (-depth / 2 - .04, depth / 2 + .04):
+        g.beam("metal", p(0, 0, offset), p(0, height, offset), .065)
+        g.beam("metal", p(-width / 2, height * .55, offset),
+               p(width / 2, height * .55, offset), .065)
+        curve = arch_outline(width - .18, height - .12, height * .62)[2:]
+        for a, b in zip(curve, curve[1:]):
+            g.beam("trim", p(*a, offset), p(*b, offset), .10)
+
+
+def room_envelopes(g):
+    """Perforated, metre-UV masonry; no boolean operators or backing solid boxes."""
+    depth = .60
+    earlier = []
+    for room in CASTLE_ROOMS.values():
+        rect, top = room["rect"], room["wall_top"]
+        # A thin ceiling closes the inhabited volume under the overhanging roofs;
+        # the decorative roof pitch alone would leave a gap over the wall heads.
+        x, z, width, length = rect
+        g.box("stone", (x + width / 2, -z - length / 2, top + .15),
+              (width + depth, length + depth, .30))
+        for edge in range(4):
+            origin, tangent, normal, length = room_edge(rect, edge)
+            shared = shared_wall_spans(rect, edge, earlier)
+            openings = [(at * length - width / 2, at * length + width / 2,
+                         sill, sill + height, kind)
+                        for e, at, width, height, sill, kind, _ in room["openings"] if e == edge]
+            horizontal = sorted({0, length, *(u for lo, hi in shared for u in (lo, hi)),
+                                 *(u for lo, hi, _, _, _ in openings for u in (lo, hi))})
+            vertical = sorted({0, top, *(h for _, _, low, high, _ in openings for h in (low, high))})
+            angle = math.atan2(tangent[1], tangent[0])
+            for lo, hi in zip(horizontal, horizontal[1:]):
+                mid = (lo + hi) / 2
+                if any(a < mid < b for a, b in shared):
+                    continue
+                for low, high in zip(vertical, vertical[1:]):
+                    h = (low + high) / 2
+                    if any(a < mid < b and c < h < d for a, b, c, d, _ in openings):
+                        continue
+                    center = (origin[0] + tangent[0] * mid,
+                              origin[1] + tangent[1] * mid, h)
+                    g.box("stone", center, (hi - lo, depth, high - low), angle)
+            for lo, hi, low, high, kind in openings:
+                mid = (lo + hi) / 2
+                if kind != "window" or any(a < mid < b for a, b in shared):
+                    continue
+                center = (origin[0] + tangent[0] * mid, origin[1] + tangent[1] * mid)
+                revealed_window(g, center, normal, hi - lo, high - low, low, depth)
+        earlier.append(room)
+
+
 def arcade(g, start, end, z=0, opening=5.0, spring=3.2, rise=3.2, top=7.0, depth=1.0):
     """True open arch: only piers and spandrels, no hidden face across passage."""
     from mathutils import Vector
@@ -270,11 +431,13 @@ def arcade(g, start, end, z=0, opening=5.0, spring=3.2, rise=3.2, top=7.0, depth
             g.beam("trim", point(u1, v, h1 + 0.1), point(u2, v, h2 + 0.1), 0.20)
 
 
-def tower(g, x, y, radius, wall_top, peak, sides=32, satellites=0, windows=True):
-    g.cylinder("stone", x, y, 0, wall_top, radius, radius * 0.94, sides)
+def tower(g, x, y, radius, wall_top, peak, sides=32, satellites=0, windows=True, bottom=0):
+    g.cylinder("stone", x, y, bottom, wall_top,
+               radius * (1 - .06 * bottom / wall_top), radius * .94, sides)
     for z, r, h in ((0.35, radius + 0.45, 0.7), (wall_top * 0.36, radius * 0.99 + 0.14, 0.42),
                     (wall_top * 0.70, radius * 0.97 + 0.12, 0.45), (wall_top - 0.55, radius * 0.95 + 0.4, 0.65)):
-        g.cylinder("trim", x, y, max(0, z - h / 2), z + h / 2, r, sides=sides)
+        if z - h / 2 >= bottom:
+            g.cylinder("trim", x, y, z - h / 2, z + h / 2, r, sides=sides)
     eave_radius = radius * 1.04
     g.cylinder("slate", x, y, wall_top, peak - 0.8, eave_radius, 0.16, sides)
     # Layered lead collars and delicate needle, without geometry-heavy shingle instances.
@@ -286,6 +449,8 @@ def tower(g, x, y, radius, wall_top, peak, sides=32, satellites=0, windows=True)
     if windows:
         # Align panes to the actual faceted shaft, not a tangent outside its corners.
         for z in (wall_top * 0.20, wall_top * 0.45, wall_top * 0.72):
+            if z < bottom:
+                continue
             for i in range(0, sides, max(1, sides // 8)):
                 theta = (i + 0.5) * math.tau / sides
                 t = (z + 2) / wall_top
@@ -305,16 +470,13 @@ def tower(g, x, y, radius, wall_top, peak, sides=32, satellites=0, windows=True)
 
 def hall(g):
     # Tall, narrow Great Hall, with an eastern aisle and exceptionally steep nave roof.
-    x, y, width, length, wall = -49, -20, 30, 64, 24
-    g.box("stone", (x, y, wall / 2), (width, length, wall))
-    for z in (0.5, 9.8, 22.8):
-        g.box("trim", (x, y, z), (width + 0.45, length + 0.45, 0.5))
+    room = CASTLE_ROOMS["Große Halle"]
+    left, north, width, length = room["rect"]
+    x, y, wall = left + width / 2, -north - length / 2, room["wall_top"]
     g.roof(x, y, width + 2, length + 2, wall, 43)
     for sign in (-1, 1):
-        nx = sign
         surface_x = x + sign * width / 2
         for yy in range(-44, 9, 9):
-            window(g, surface_x, yy, 10.8, 3.2, 10.0, (nx, 0))
             bx = surface_x + sign * 1.1
             g.box("stone", (bx, yy + 4.1, 9.5), (2.2, 1.5, 19))
             g.mesh("trim", [(bx - 1.1, yy + 3.3, 19), (bx + 1.1, yy + 3.3, 19),
@@ -324,16 +486,12 @@ def hall(g):
         # Stone crest pinnacles along the eaves.
         for yy in (-49, -31, -13, 5):
             g.cylinder("trim", surface_x, yy, 23.5, 26.5, 0.42, 0.13, 8)
-    window(g, x, y - length / 2, 11, 9.0, 19.0, (0, -1))
-    window(g, x, y - length / 2, 0.15, 4.5, 8, (0, -1), door=True)
-    window(g, x, y + length / 2, 11, 8, 18, (0, 1))
-    # Side aisle and roof steps preserve an asymmetrical ecclesiastical profile.
-    g.box("stone", (-70, -20, 5), (10, 58, 10))
-    g.roof(-70, -20, 11, 60, 10, 17)
-    for yy in (-42, -30, -18, -6, 6):
-        window(g, -75, yy, 3, 2.2, 5, (-1, 0))
+    # Open side aisle retains the stepped roof without backing the hall's glazing.
+    g.roof(-70, -20, 11, 60, 6, 10)
+    for yy in (-48, -35.5, -22, -8.5, 9):
+        g.box("stone", (-74.7, yy, 3), (.60, 1.2, 6))
     for sx, sy in ((-64, -52), (-34, -52), (-64, 12), (-34, 12)):
-        tower(g, sx, sy, 1.65, 26, 34, 16, windows=False)
+        tower(g, sx, sy, 1.65, 26, 34, 16, windows=False, bottom=24)
     # Vented roof lantern and stone chimney clusters.
     g.box("stone", (-49, -12, 44), (4, 6, 6))
     for sx in (-51.04, -46.96):
@@ -343,9 +501,38 @@ def hall(g):
 
 
 def build_castle(g):
+    # Clip the whole 0.60m wall plus projecting tracery when native rooms replace it.
+    g.interior_cutout_padding_m = .45
+    g.lod_preserve_materials = ("room-glass",)
+    room_envelopes(g)
     hall(g)
-    # The dominant Grand Staircase drum, high roof and its attached pencil turrets.
-    tower(g, -29, 36, 14.7, 67, 98, 48, satellites=5)
+    # Continuous north gallery and entrance roofs cover their actual room extents.
+    for name in ("Verbindungsgalerie", "Eingangshalle"):
+        room = CASTLE_ROOMS[name]
+        x, z, w, d = room["rect"]
+        if w > d:
+            g.roof(x + w / 2, -z - d / 2, d + 1.5, w + 1.5, 24, 38, angle=math.pi / 2)
+        else:
+            g.roof(x + w / 2, -z - d / 2, w + 1.5, d + 1.5, 24, 38)
+    # A corbelled transition supports the historic drum above the inhabited plinth.
+    # All of it starts at the ceiling: no solid cylinder occupies the native room.
+    x, z, w, d = CASTLE_ROOMS["Turmhalle"]["rect"]
+    base = CASTLE_ROOMS["Turmhalle"]["wall_top"]
+    shoulder = base + 6
+    lower, upper = [], []
+    for i in range(48):
+        dx, dy = math.cos(i * math.tau / 48), math.sin(i * math.tau / 48)
+        tx = ((x + w + 29) / dx if dx > 1e-8 else
+              (x + 29) / dx if dx < -1e-8 else math.inf)
+        ty = ((-z - 36) / dy if dy > 1e-8 else
+              (-z - d - 36) / dy if dy < -1e-8 else math.inf)
+        radius = min(tx, ty)
+        lower.append((-29 + dx * radius, 36 + dy * radius, base))
+        drum_radius = 14.7 * (1 - .06 * shoulder / 67)
+        upper.append((-29 + dx * drum_radius, 36 + dy * drum_radius, shoulder))
+    g.mesh("stone", lower + upper,
+           [(i, (i + 1) % 48, (i + 1) % 48 + 48, i + 48) for i in range(48)])
+    tower(g, -29, 36, 14.7, 67, 98, 48, satellites=5, bottom=shoulder)
     # Astronomy tower has an octagonal upper observatory and a lower attached turret.
     tower(g, 84, 44, 11.8, 55, 82, 32, satellites=3)
     g.cylinder("stone", 84, 44, 47, 59, 12.2, 11.8, 8, angle=math.pi / 8)
@@ -358,8 +545,8 @@ def build_castle(g):
     tower(g, -88, 43, 11, 39, 63, 32, satellites=2)
     tower(g, -83, -29, 7.1, 28, 47, 24)
     tower(g, 78, -32, 7.3, 29, 49, 24)
-    # North range, rear pitched cross-wing and east chapel enclose rather than fill the quad.
-    for x, y, w, d, h, ridge in ((32, 55, 62, 19, 24, 38), (-63, 53, 27, 25, 26, 41),
+    # Rear cross-wing and east chapel do not overlap any authored room footprint.
+    for x, y, w, d, h, ridge in ((-63, 53, 27, 25, 26, 41),
                                 (82, -3, 23, 38, 19, 33)):
         g.box("stone", (x, y, h / 2), (w, d, h))
         if w > d * 1.5:
@@ -414,8 +601,6 @@ def build_castle(g):
         tower(g, sx, -54, 4.6, 23, 37, 24)
         window(g, sx, -58.61, 11, 1.6, 4.5, (0, -1))
     # Narrow stone bridges attach ranges without obstructing the public approach.
-    g.box("stone", (-13, 48, 10), (10, 9, 20))
-    g.roof(-13, 48, 11, 10, 20, 29)
     g.box("stone", (65, 52, 9), (7, 10, 18))
     g.roof(65, 52, 8, 11, 18, 27)
     # Rear chimneys: distinct flues, not decorative cubes floating above a roof.
@@ -499,6 +684,7 @@ def create_materials(bpy, texture_dir):
         "slate": ("slate", (0.87, 0.94, 1.0, 1), 0.78, 0.0),
         "wood": ("wood", (1.0, 0.93, 0.80, 1), 0.86, 0.0),
         "glass": ("glass", (0.8, 0.9, 0.84, 1), 0.32, 0.12),
+        "room-glass": ("glass", (0.86, 0.94, 0.94, .32), 0.18, 0.05),
         "metal": ("slate", (0.36, 0.36, 0.34, 1), 0.57, 0.65),
     }
     materials = {}
@@ -516,6 +702,9 @@ def create_materials(bpy, texture_dir):
         bsdf = material.node_tree.nodes.get("Principled BSDF")
         bsdf.inputs["Roughness"].default_value = roughness
         bsdf.inputs["Metallic"].default_value = metallic
+        if name == "room-glass":
+            bsdf.inputs["Alpha"].default_value = tint[3]
+            material.surface_render_method = "BLENDED"
         tex = material.node_tree.nodes.new("ShaderNodeTexImage")
         tex.image = image
         tex.extension = "REPEAT"
@@ -579,7 +768,8 @@ def main(argv=None):
             bpy, output, "hogwarts-castle", materials, build_castle,
             "Eigenständig modellierte, inoffizielle Film-Hogwarts-Fanansicht: großer Treppenturm, "
             "Große Halle, Astronomieturm, Schieferdächer, Spitzbogenfenster, Strebepfeiler und "
-            "begehbarer offener Kreuzganghof mit echtem südlichem Tordurchgang. Keine vollständigen Innenräume.",
+            "begehbarer offener Kreuzganghof mit echtem südlichem Tordurchgang. Vier begehbare "
+            "Raumhüllen mit echten Fensteröffnungen, Laibungen und durchsichtiger Verglasung.",
             recenter=False,
         )
         hut = export_asset(
@@ -606,7 +796,10 @@ def main(argv=None):
                 "gatehouse_clear_height_m": 10,
                 "entry_boundary_xz": [30, 75],
                 "entry_recommended_center_xz": [30, 64],
-                "notes": "The courtyard and approach have no solid building bases. Facade glazing is opaque exterior detailing; full interiors are not provided.",
+                "authored_rooms": CASTLE_ROOMS,
+                "native_storey_height_m": 24,
+                "authored_wall_thickness_m": .6,
+                "notes": "The courtyard and approach have no solid building bases. Four inhabited room footprints have hollow masonry shells with real revealed windows and separate transparent glass; their exact openings also author the native layout.",
             },
             "hagrid-hut": {
                 "ground_origin": [0, 0, 0],

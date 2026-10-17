@@ -6013,9 +6013,9 @@ async function startApp(username: string, role: string) {
   let bob = 0;
   engine.addFrameHook((dt) => {
     // Who owns the open view this frame (Stage 3):
-    //  - EMBODIED, the avatar's own location IS it — auto-open on entering
-    //    (embody start included), auto-close on stepping out. The camera
-    //    cannot close it: the wheel stops at EMBODY_MAX_DIST 34, which is
+    //  - EMBODIED, a building auto-opens on entering its location. A persistent
+    //    area model opens only inside an indoor room, never out in its grounds.
+    //    The camera cannot close it: the wheel stops at EMBODY_MAX_DIST 34, which is
     //    inside CLOSE_CAM_DIST 60 (finding B12).
     //  - OVERVIEW, the explicit choice stands until the explicit close or an
     //    auto-close: camera beyond CLOSE_CAM_DIST, or the tile panned out of
@@ -6025,8 +6025,11 @@ async function startApp(username: string, role: string) {
       const pos = npcs.positionOf(avatarName);
       if (pos) {
         const t = tileAt(pos.x, pos.z);
-        if (t && openable(t)) openLocation(t.loc.id);
-        else closeOpenLocation();
+        const room = t?.modelIsGround ? roomAt(t, pos.x, pos.z) : null;
+        if (t && openable(t) &&
+            (!t.modelIsGround || (room !== null && !t.alwaysVisibleRooms.has(room)))) {
+          openLocation(t.loc.id);
+        } else closeOpenLocation();
       }
     } else if (openLocationId) {
       const t = places.get(openLocationId);

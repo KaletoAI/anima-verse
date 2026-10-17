@@ -70,9 +70,16 @@ const CUT_TEST = /* glsl */`
                         ( prev.y - cur.y ) + cur.x ) ) {
           inside = ! inside;
         }
+        #ifdef CUT_PADDING_SQ
+          vec2 edge = cur - prev;
+          float t = clamp( dot( cutP - prev, edge ) /
+                           max( dot( edge, edge ), 1e-8 ), 0.0, 1.0 );
+          vec2 delta = cutP - ( prev + t * edge );
+          if ( dot( delta, delta ) <= CUT_PADDING_SQ ) cutHit = true;
+        #endif
         prev = cur;
       }
-      if ( inside ) { cutHit = true; }
+      if ( inside || cutHit ) { cutHit = true; break; }
     }
     if ( cutHit ) discard;
   }
@@ -86,6 +93,9 @@ const CUT_TEST = /* glsl */`
  * Materials are CLONED before patching — the source shares them with the model
  * cache, and a patched cache material would keep cutting after the flag went
  * away.
+ * GLB mesh extras may declare `interior_cutout_padding_m` in model metres:
+ * thick masonry and projecting frames must disappear with the interior too.
+ * Unannotated assets keep the exact polygon test without extra fragment work.
  */
 export function applyCutouts(THREE: typeof import('three'),
                              obj: Object3D,
@@ -116,7 +126,7 @@ export function applyCutouts(THREE: typeof import('three'),
   // flash with holes for the frames before the fade state is applied.
   const uCutOn = { value: 0 }
 
-  const patch = (shader: WebGLProgramParametersWithUniforms) => {
+  const patch = (shader: WebGLProgramParametersWithUniforms, padding: number) => {
     shader.uniforms.uCut = uCut
     shader.uniforms.uCutOff = uCutOff
     shader.uniforms.uCutLen = uCutLen
@@ -126,6 +136,7 @@ export function applyCutouts(THREE: typeof import('three'),
         '#include <project_vertex>\n\tvCutWorld = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;')
     const head = `#define CUT_POLYS ${polys.length}\n`
       + `#define CUT_MAX_LEN ${maxLen}\n`
+      + (padding > 0 ? `#define CUT_PADDING_SQ ${(padding * padding).toExponential(12)}\n` : '')
       + `uniform vec2 uCut[ ${points.length} ];\n`
       + 'uniform int uCutOff[ CUT_POLYS ];\n'
       + 'uniform int uCutLen[ CUT_POLYS ];\n'
@@ -143,12 +154,18 @@ export function applyCutouts(THREE: typeof import('three'),
   obj.traverse((o: Object3D) => {
     const mesh = o as Mesh
     if (!mesh.isMesh) return
+    const declaredPadding = mesh.userData.interior_cutout_padding_m
+    let padding = 0
+    if (typeof declaredPadding === 'number' && Number.isFinite(declaredPadding) && declaredPadding > 0) {
+      mesh.updateWorldMatrix(true, false)
+      padding = declaredPadding * mesh.matrixWorld.getMaxScaleOnAxis()
+    }
     const cutOne = (src: Material): Material => {
       const mat = src.clone()
       mat.side = THREE.DoubleSide
       mat.userData = { ...mat.userData, __cutoutClone: true }
-      mat.onBeforeCompile = patch
-      mat.customProgramCacheKey = () => `cutout:${shape}`
+      mat.onBeforeCompile = (shader) => patch(shader, padding)
+      mat.customProgramCacheKey = () => `cutout:${shape}:${padding}`
       mat.needsUpdate = true
       clones.push(mat)
       return mat
