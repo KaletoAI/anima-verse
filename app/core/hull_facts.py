@@ -1,0 +1,130 @@
+"""Building footprints and contour holes read from the scene composer's walls."""
+import hashlib
+import json
+from typing import Any, Dict
+
+from app.core import scene_recipe as sr
+from app.core.location_model3d import derive_plan_width_m
+
+
+def _edge_openings(walls, level, a, frame, floor, height):
+    """Complement the union of solid wall rectangles within one facade band."""
+    ux, uz, length = frame
+    ceiling = floor + height
+    solid, leaves = [], []
+    breaks = {0.0, length}
+    for wall in walls:
+        if wall['level'] != level:
+            continue
+        span = sr._colinear_span(a, ux, uz, length, wall['from'], wall['to'])
+        if span is None:
+            continue
+        if wall.get('leaf'):
+            leaves.append(span)
+            continue
+        if wall.get('glass'):
+            continue
+        lo = max(floor, wall['base_y'])
+        hi = min(ceiling, wall['base_y'] + wall['height'])
+        if hi <= lo:
+            continue
+        s0, s1 = span
+        solid.append((s0, s1, lo, hi))
+        breaks.update(span)
+
+    holes = []
+    active = []
+    points = sorted(breaks)
+    for s0, s1 in zip(points, points[1:]):
+        middle = (s0 + s1) / 2
+        bands = sorted((lo, hi) for start, end, lo, hi in solid
+                       if start <= middle <= end)
+        cursor = floor
+        gaps = []
+        for lo, hi in bands:
+            if lo - cursor >= 0.05 - 1e-9:
+                gaps.append((cursor, lo))
+            cursor = max(cursor, hi)
+        if ceiling - cursor >= 0.05 - 1e-9:
+            gaps.append((cursor, ceiling))
+        following = []
+        for lo, hi in gaps:
+            previous = next((h for h in active
+                             if abs(h['y0'] - lo) <= 1e-3
+                             and abs(h['y1'] - hi) <= 1e-3), None)
+            if previous is None:
+                previous = dict(s0=s0, s1=s1, y0=lo, y1=hi)
+                holes.append(previous)
+            else:
+                previous['s1'] = s1
+            following.append(previous)
+        active = following
+
+    result = []
+    for hole in holes:
+        if hole['s1'] - hole['s0'] < sr.MIN_WALL_PIECE_M:
+            continue
+        kind = 'window' if hole['y0'] > floor + 0.05 else (
+            'door' if any(min(end, hole['s1']) > max(start, hole['s0'])
+                          for start, end in leaves) else 'passage')
+        result.append({**{key: sr._r(value) for key, value in hole.items()},
+                       'kind': kind})
+    return sorted(result, key=lambda h: (h['s0'], h['y0'], h['s1'], h['y1']))
+
+
+def hull_facts(location: Dict[str, Any], location_id: str = '') -> Dict[str, Any]:
+    """Return rounded per-storey hull facts and their geometry-only fingerprint.
+
+    A supplied dict is composed directly. Passing None with an id loads that
+    location lazily; missing records return ``not_found``.
+    """
+    if location is None and location_id:
+        from app.models.world import get_location_by_id
+        location = get_location_by_id(location_id)
+        if location is None:
+            return dict(ok=False, error='not_found', location_id=location_id)
+    location = location or {}
+    loc_id = location_id or str(location.get('id') or '')
+    map3d = location.get('map3d') or {}
+    width = derive_plan_width_m(loc_id, map3d)
+    scene = sr.compose_scene(location, plan_width_m=width)
+    extent, _, storey = sr.derive_scalars(map3d, width)
+    levels = []
+    for entry in sorted(scene['levels'], key=lambda item: item['level']):
+        level = entry['level']
+        outline = sr._outline_world(map3d, level)
+        if level < 0 or len(outline) < 3:
+            continue
+        floor = sr.storey_floor_y(level, storey)
+        ccw = sr._ring_ccw(outline)
+        edges = []
+        for index, a in enumerate(outline):
+            b = outline[(index + 1) % len(outline)]
+            frame = sr._edge_frame(a, b)
+            if frame is None:
+                continue
+            ux, uz, length = frame
+            normal = (uz, -ux) if ccw else (-uz, ux)
+            edges.append(dict(index=index, a=[sr._r(v) for v in a],
+                              b=[sr._r(v) for v in b], length=sr._r(length),
+                              normal=[sr._r(v) for v in normal],
+                              openings=_edge_openings(scene['walls'], level, a,
+                                                      frame, floor,
+                                                      sr._wall_height(storey))))
+        levels.append(dict(level=level, floor_y=sr._r(floor),
+                           top_y=sr._r(floor + sr._wall_height(storey)),
+                           outline=[[sr._r(v) for v in p] for p in outline],
+                           ccw=ccw, edges=edges))
+    if not levels:
+        return dict(ok=False, error='no_outline', location_id=loc_id)
+    for current, following in zip(levels, levels[1:]):
+        current['top_y'] = following['floor_y']
+    boundary = sr._boundary_local(map3d, extent)
+    center = [sr._r((min(p[i] for p in boundary) + max(p[i] for p in boundary))/2)
+              for i in (0, 1)]
+    encoded = json.dumps(dict(storey_m=sr._r(storey), levels=levels),
+                         sort_keys=True, separators=(',', ':'))
+    return dict(ok=True, error='', location_id=loc_id, storey_m=sr._r(storey),
+                eaves_y=levels[-1]['top_y'], boundary_center=center,
+                fingerprint=hashlib.sha256(encoded.encode('utf-8')).hexdigest()[:16],
+                levels=levels)
