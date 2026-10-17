@@ -149,3 +149,26 @@ def polygon_case_facts(outline):
                           normal=[uz,-ux] if ccw else [-uz,ux],openings=[]))
     return dict(ok=True,eaves_y=3,levels=[dict(level=0,floor_y=0,top_y=3,
                 outline=outline,ccw=ccw,edges=edges)])
+
+
+def roof_shapes() -> dict:
+    """Return direct facts for roof polygons; room/location data is unnecessary.
+
+    The existing stepped_house location still exercises hull_facts composition.
+    These polygons supply only geometry already represented by hull facts.
+    """
+    import math
+    outlines = {
+        "rectangle": [[0, 0], [10, 0], [10, 8], [0, 8]],
+        "L": [[0, 0], [10, 0], [10, 4], [4, 4], [4, 8], [0, 8]],
+        "T": [[0, 0], [10, 0], [10, 3], [7, 3], [7, 8], [3, 8], [3, 3], [0, 3]],
+        "U": [[0, 0], [10, 0], [10, 8], [7, 8], [7, 3], [3, 3], [3, 8], [0, 8]],
+        "triangle": [[0, 0], [10, 0], [3, 8]],
+        "concave": [[0, 0], [10, 0], [7, 3], [4, 2], [3, 8], [0, 8]],
+    }
+    angle = math.radians(30)
+    outlines["rotated_L"] = [
+        [x * math.cos(angle) - z * math.sin(angle),
+         x * math.sin(angle) + z * math.cos(angle)] for x, z in outlines["L"]
+    ]
+    return {name: polygon_case_facts(outline) for name, outline in outlines.items()}
