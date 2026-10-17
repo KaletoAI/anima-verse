@@ -34,3 +34,118 @@ def without_outline():
     loc["map3d"].pop("outline")
     loc["map3d"].pop("level_outlines")
     return loc
+
+
+def opening_edge_cases(facts):
+    """Independent fact copies exercising clipping and adjacent apertures."""
+    from copy import deepcopy
+    cases = []
+    for holes in (
+        [dict(s0=-0.3, s1=1, y0=0.9, y1=2.1, kind='window')],
+        [dict(s0=s, s1=s+1, y0=0.9, y1=2.1, kind='window') for s in (2, 3)],
+        [dict(s0=-2, s1=20, y0=0, y1=2.1, kind='door')],
+    ):
+        case = deepcopy(facts)
+        case['levels'][0]['edges'][0]['openings'] = holes
+        cases.append(case)
+    return cases
+
+
+def count(parts, *, tag):
+    return sum(p['tag'] == tag for p in parts)
+
+
+def total_openings(facts):
+    return sum(len(e['openings']) for l in facts['levels'] for e in l['edges'])
+
+
+def windows(facts):
+    return sum(h['kind'] == 'window' for l in facts['levels'] for e in l['edges'] for h in e['openings'])
+
+
+def doors(facts):
+    return sum(h['kind'] == 'door' for l in facts['levels'] for e in l['edges'] for h in e['openings'])
+
+
+def face_normal(points):
+    return [sum((a[(i+1)%3]-b[(i+1)%3])*(a[(i+2)%3]+b[(i+2)%3])
+                for a, b in zip(points, points[1:]+points[:1])) for i in range(3)]
+
+
+def no_degenerate_faces(parts):
+    import math
+    for part in parts:
+        for face in part['faces']:
+            pts = [part['vertices'][i] for i in face]
+            if not all(math.isfinite(v) for p in pts for v in p):
+                return False
+            normal = face_normal(pts)
+            length = math.sqrt(sum(v*v for v in normal))
+            if length < 2e-6:
+                return False
+            if any(abs(sum(normal[k]*(p[k]-pts[0][k]) for k in range(3))) > length*2e-4 for p in pts):
+                return False
+    return True
+
+
+def no_face_overlaps_openings(parts, facts):
+    """Check positive-area overlap on wall, plinth and interior facade planes."""
+    import math
+    for level in facts['levels']:
+        for edge in level['edges']:
+            a, b, n = edge['a'], edge['b'], edge['normal']
+            length = math.dist(a, b)
+            u = [(b[i]-a[i])/length for i in range(2)]
+            for part in parts:
+                if part['tag'] not in ('wall', 'plinth', 'interior'):
+                    continue
+                for face in part['faces']:
+                    pts = [part['vertices'][i] for i in face]
+                    normal = face_normal(pts)
+                    if abs(normal[1]) > 1e-5 or abs(normal[0]*u[0]+normal[2]*u[1]) > 1e-4:
+                        continue
+                    distances = [(p[0]-a[0])*n[0]+(p[2]-a[1])*n[1] for p in pts]
+                    if min(distances) < 0 or max(distances) > 1.3:
+                        continue
+                    ss = [(p[0]-a[0])*u[0]+(p[2]-a[1])*u[1] for p in pts]
+                    ys = [p[1] for p in pts]
+                    if min(ys) < level['floor_y']-0.141 or max(ys) > level['top_y']+1e-4:
+                        continue
+                    for hole in edge['openings']:
+                        if min(max(ss), hole['s1'], length)-max(min(ss), hole['s0'], 0) > 1e-4 and min(max(ys), hole['y1'])-max(min(ys), hole['y0']) > 1e-4:
+                            return False
+    return True
+
+
+def outer_face_distance(parts, facts):
+    edge = facts['levels'][0]['edges'][0]
+    a, n = edge['a'], edge['normal']
+    distances = []
+    for part in parts:
+        if part['tag'] != 'wall':
+            continue
+        for face in part['faces']:
+            pts = [part['vertices'][i] for i in face]
+            normal = face_normal(pts)
+            if normal[0]*n[0]+normal[2]*n[1] <= 1e-6:
+                continue
+            ds = [(p[0]-a[0])*n[0]+(p[2]-a[1])*n[1] for p in pts]
+            if max(ds)-min(ds) < 1e-4 and min(ds) > 0:
+                distances.append(ds[0])
+    return min(distances)
+
+
+def polygon_case_facts(outline):
+    """Synthetic supplied facts for generic mesh/offset stress checks."""
+    import math
+    area = sum(a[0]*b[1]-b[0]*a[1] for a,b in zip(outline,outline[1:]+outline[:1]))
+    ccw = area > 0
+    edges = []
+    for i,a in enumerate(outline):
+        b = outline[(i+1)%len(outline)]
+        length = math.dist(a,b)
+        ux,uz = (b[0]-a[0])/length,(b[1]-a[1])/length
+        edges.append(dict(index=i,a=a,b=b,length=length,
+                          normal=[uz,-ux] if ccw else [-uz,ux],openings=[]))
+    return dict(ok=True,eaves_y=3,levels=[dict(level=0,floor_y=0,top_y=3,
+                outline=outline,ccw=ccw,edges=edges)])
