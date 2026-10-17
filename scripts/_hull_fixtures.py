@@ -172,3 +172,13 @@ def roof_shapes() -> dict:
          x * math.sin(angle) + z * math.cos(angle)] for x, z in outlines["L"]
     ]
     return {name: polygon_case_facts(outline) for name, outline in outlines.items()}
+
+
+def rect_facts() -> dict:
+    """A supplied 10 by 8 metre storey with one door and one window."""
+    facts = polygon_case_facts([[0, 0], [10, 0], [10, 8], [0, 8]])
+    facts["levels"][0]["edges"][0]["openings"] = [
+        {"s0": 2.0, "s1": 3.2, "y0": 0.0, "y1": 2.1, "kind": "door"},
+        {"s0": 6.0, "s1": 7.2, "y0": 0.9, "y1": 2.1, "kind": "window"},
+    ]
+    return facts
