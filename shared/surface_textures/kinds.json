@@ -117,5 +117,49 @@
   "hogwarts_sandstone": {
     "name": "Schloss-Sandstein",
     "description": "Seamless warm Scottish sandstone masonry with staggered ashlar blocks, recessed dark mortar and subtle natural grain; straight-on orthographic surface, no timber, no windows, no perspective."
+  },
+  "plaster_infill": {
+    "name": "lime plaster infill",
+    "description": "whitewashed lime plaster wall, slightly uneven, seen straight on"
+  },
+  "timber_beam": {
+    "name": "oak timber",
+    "description": "weathered dark oak timber grain, seen straight on"
+  },
+  "clay_roof_tiles": {
+    "name": "clay roof tiles",
+    "description": "rows of overlapping red clay roof tiles, seen straight on"
+  },
+  "fieldstone": {
+    "name": "fieldstone masonry",
+    "description": "irregular grey fieldstone masonry with mortar joints, seen straight on"
+  },
+  "ashlar": {
+    "name": "ashlar blocks",
+    "description": "dressed sandstone ashlar blocks in regular courses, seen straight on"
+  },
+  "slate_roof": {
+    "name": "slate roof",
+    "description": "rows of dark grey slate roof shingles, seen straight on"
+  },
+  "log_wood": {
+    "name": "log wood",
+    "description": "horizontal round pine logs with bark patches, seen straight on"
+  },
+  "wood_shingles": {
+    "name": "wood shingles",
+    "description": "rows of weathered wooden roof shingles, seen straight on"
+  },
+  "castle_stone": {
+    "name": "castle stone",
+    "description": "large weathered grey castle stone blocks, seen straight on"
+  },
+  "door_planks": {
+    "name": "door planks",
+    "description": "vertical dark wooden door planks with iron studs, seen straight on"
+  },
+  "brick": {
+    "name": "brick",
+    "description": "red brick masonry in running bond, seen straight on"
   }
 }

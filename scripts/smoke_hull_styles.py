@@ -7,7 +7,8 @@ Hand-derived expectations: four shipped styles; 9 m clamps to 1.2 m;
 unsupported dome falls back to gable; deleting the 1.1 m castle override
 restores the shipped 0.9 m wall. Pitch 99 clamps to 60, seed -5 to 0,
 and #ABC expands each digit to #aabbcc. A partial world document gets
-schema defaults (0.4 m), never the castle seed's 0.9 m.
+schema defaults (0.4 m), never the castle seed's 0.9 m. Every non-empty
+material kind must resolve to a shared texture with a positive physical size.
 """
 import json
 import sqlite3
@@ -28,7 +29,14 @@ def main():
             load_styles, get_style, validate_style, validate_description,
             set_world_style, delete_world_style,
         )
+        from app.core.surface_textures import base_texture_file, texture_size_m
         s = load_styles()
+        for style in s.values():
+            for kind in style["materials"].values():
+                if kind:
+                    texture = base_texture_file(kind)
+                    assert texture is not None, kind
+                    assert texture_size_m(texture) > 0, kind
         assert set(s) == {"fachwerk", "steinhaus", "holzhuette", "burg"}
         assert all(v["origin"] == "shared" for v in s.values())
         assert s["fachwerk"]["materials"]["wall"] == "plaster_infill"

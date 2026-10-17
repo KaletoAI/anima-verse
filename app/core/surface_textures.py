@@ -292,6 +292,19 @@ def texture_file(kind: str) -> Optional[Path]:
     return files[0] if files else None
 
 
+def base_texture_file(kind: str) -> Optional[Path]:
+    """Resolve the seasonless selection or newest version without reading game time."""
+    kind = safe_kind(kind)
+    if not kind:
+        return None
+    slots = _selection_slots(_read_selection().get(kind))
+    selected = _pick_file(kind, slots.get("", ""))
+    if selected:
+        return selected
+    files = _files_by_kind().get(kind) or []
+    return files[0] if files else None
+
+
 def file_by_name(filename: str) -> Optional[Path]:
     """Resolve a served filename (path-escape safe, known extensions only)."""
     if "/" in filename or "\\" in filename or ".." in filename:
@@ -302,9 +315,10 @@ def file_by_name(filename: str) -> Optional[Path]:
     return p if _stem_kind(p.stem) else None
 
 
-def _size_m_of(p: Path) -> float:
+def texture_size_m(path: Path) -> float:
+    """Return the physical edge length from a sidecar, or the library default."""
     try:
-        v = float(_read_meta(p).get("size_m"))
+        v = float(_read_meta(path).get("size_m"))
         return v if v > 0 else DEFAULT_SIZE_M
     except (TypeError, ValueError):
         return DEFAULT_SIZE_M
@@ -510,7 +524,7 @@ def list_textures() -> List[Dict[str, Any]]:
                 "name": _name(kind),
                 "filename": p.name,
                 "url": f"/assets/surface-textures/{p.name}",
-                "size_m": _size_m_of(p),
+                "size_m": texture_size_m(p),
                 "size": p.stat().st_size,
             }
         mat = _material(kind)
@@ -600,7 +614,7 @@ def admin_list() -> List[Dict[str, Any]]:
             versions.append({
                 "filename": p.name,
                 "url": f"/assets/surface-textures/{p.name}",
-                "size_m": _size_m_of(p),
+                "size_m": texture_size_m(p),
                 "created_at": meta.get("created_at", ""),
                 "source": meta.get("source", ""),
                 "backend": meta.get("backend", ""),
