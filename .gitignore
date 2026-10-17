@@ -237,3 +237,6 @@ graphify-out/
 
 # superpowers plans/specs/scratch — local only
 docs/superpowers/
+
+# runtime/build artifacts
+*.pid
