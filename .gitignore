@@ -200,3 +200,6 @@ exports/
 shared/models/figure/*.fbx
 shared/models/figure/*.glb
 shared/models/figure/*.gltf
+
+# superpowers plans/specs/scratch — local only
+docs/superpowers/
