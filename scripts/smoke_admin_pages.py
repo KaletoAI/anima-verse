@@ -17,6 +17,10 @@ content is hand-built by a page script (the Tasks and Overview pages of
 therefore be empty, and it must not be the only page of a section, or the
 section's fields would have nowhere to go.
 
+`header_fields` (LLMs page of `llm_routing`) names fields a page renders in
+the collapsed item header instead of the item body — they count as assigned
+to that page like `fields`.
+
 `llm_routing` gets one check of its own, because its LLMs page is hand-built
 too and still renders the section's fields: `max_concurrent` — the LANE COUNT
 of an LLM entry (plan-cache-lanes.md § 5, phase 4 item 11) — has to be in that
@@ -75,11 +79,11 @@ def check_section(key: str, sec: dict) -> None:
         check(pid not in seen_ids, f"page id unique: {pid!r}")
         seen_ids.add(pid)
         check(bool(page.get("label")), f"page {pid!r} has a label")
-        for name in page.get("fields") or []:
+        for name in (page.get("fields") or []) + (page.get("header_fields") or []):
             seen_fields.append(name)
         for name in page.get("sub_arrays") or []:
             seen_arrays.append(name)
-        n_f = len(page.get("fields") or [])
+        n_f = len(page.get("fields") or []) + len(page.get("header_fields") or [])
         n_a = len(page.get("sub_arrays") or [])
         if page.get("custom"):
             custom_pages.append(pid)

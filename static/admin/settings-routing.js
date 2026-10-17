@@ -185,7 +185,9 @@ const RT_TEXT = {
     // LLMs page: the per-entry accordion.
     llmsIntro: 'Model parameters per entry. Assign tasks on the Tasks page.',
     addLlm: '+ Add LLM', duplicateEntry: 'Duplicate as a new entry', deleteEntry: 'Delete this LLM',
-    disabledBadge: 'disabled', tasksLabel: 'Tasks', noTaskAssigned: 'no task assigned',
+    enabledToggle: 'enabled', disabledToggle: 'disabled',
+    toggleHint: 'Click to enable/disable this LLM (task assignments stay)',
+    tasksLabel: 'Tasks', noTaskAssigned: 'no task assigned',
     assignOnTasksPage: 'Assign tasks on the Tasks page.', unknownTask: 'unknown task',
     deleteAsk: 'Delete "{name}"?', deleteLosing: 'These tasks would lose their only LLM: {tasks}',
     deleteNoLoss: 'No task loses its only LLM.', deleteConfirm: 'Delete',
@@ -788,14 +790,16 @@ async function renderLlmRoutingLlmsPage(content) {
 // (schema: llm_routing.pages[id=llms].fields). A field the page forgot is
 // appended instead of disappearing — the same safety net resolvePages() gives
 // the generic paged sections; scripts/smoke_admin_pages.py makes sure it never
-// has to catch anything.
+// has to catch anything. The page's `header_fields` (enabled) are left out:
+// they render as the click toggle in the entry header (rtRenderEntryItem).
 function rtEntryFields(def) {
     const all = def.fields || {};
     const page = ((def.pages || []).find(p => p && p.id === 'llms') || {});
     const listed = Array.isArray(page.fields) ? page.fields : [];
+    const inHeader = new Set(Array.isArray(page.header_fields) ? page.header_fields : []);
     const out = {};
     for (const key of listed) if (all[key]) out[key] = all[key];
-    for (const key of Object.keys(all)) if (!out[key]) out[key] = all[key];
+    for (const key of Object.keys(all)) if (!out[key] && !inHeader.has(key)) out[key] = all[key];
     return out;
 }
 
@@ -805,11 +809,14 @@ function rtEntryFields(def) {
 function rtRenderEntryItem(def, fields, item, path, idx) {
     const label = _itemLabel(item, def.item_label_field, 'Item ' + idx);
     const openClass = OPEN_ITEMS.has(path) ? ' open' : '';
-    let html = '<div class="array-item' + openClass + '" id="item-' + path + '">';
+    const on = item.enabled !== false;
+    let html = '<div class="array-item rt-entry ' + (on ? 'rt-on' : 'rt-off') + openClass + '" id="item-' + path + '">';
     html += '<div class="array-item-header" onclick="toggleArrayItem(this, \'' + path + '\')">';
     html += '<span class="chevron">▶</span> ';
     html += '<span class="title" style="margin-left:6px;">' + esc(label) + '</span>';
-    if (item.enabled === false) html += '<span class="badge">' + esc(RT_TEXT.disabledBadge) + '</span>';
+    html += '<button class="rt-toggle" title="' + esc(RT_TEXT.toggleHint) + '"'
+         + ' onclick="event.stopPropagation(); rtToggleEntry(' + idx + ')">'
+         + esc(on ? RT_TEXT.enabledToggle : RT_TEXT.disabledToggle) + '</button>';
     html += '<span class="rt-muted" style="margin-left:8px; font-size:11px;" data-pool-head="' + idx + '">'
          + esc(rtPoolHeadText(idx)) + '</span>';
     html += '<button class="btn btn-sm" style="margin-left:8px;" title="' + esc(RT_TEXT.duplicateEntry)
@@ -823,6 +830,24 @@ function rtRenderEntryItem(def, fields, item, path, idx) {
     html += renderFields(fields, item, path, true);
     html += '</div></div>';
     return html;
+}
+
+// Click on the header toggle: flips `enabled` in place — a re-render would
+// collapse the accordion and lose the scroll position. The lane texts follow,
+// because a disabled entry no longer counts toward its pool's lanes in force.
+function rtToggleEntry(idx) {
+    const entry = rtRouting()[idx];
+    if (!entry) return;
+    entry.enabled = entry.enabled === false;
+    touchPath('llm_routing');
+    const el = document.getElementById('item-llm_routing[' + idx + ']');
+    if (el) {
+        el.classList.toggle('rt-on', entry.enabled);
+        el.classList.toggle('rt-off', !entry.enabled);
+        const btn = el.querySelector('.rt-toggle');
+        if (btn) btn.textContent = entry.enabled ? RT_TEXT.enabledToggle : RT_TEXT.disabledToggle;
+    }
+    rtRefreshPools();
 }
 
 // ── Lanes: one number per provider+model ───────────────────────────────

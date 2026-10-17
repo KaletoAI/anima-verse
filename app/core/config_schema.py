@@ -270,9 +270,12 @@ SECTIONS = {
                 # Lanes sits with provider/model: it is a property of the model
                 # slot (how many prompt beginnings it holds at once), not a
                 # sampling setting.
-                "fields": ["name", "enabled", "preload_on_startup", "provider",
+                "fields": ["name", "preload_on_startup", "provider",
                            "model", "max_concurrent", "temperature",
                            "max_tokens", "chat_template", "tasks"],
+                # Rendered as a click toggle in the collapsed entry header
+                # instead of inside the accordion body.
+                "header_fields": ["enabled"],
                 "description": "The configured LLM entries: provider, model, lanes, sampling and which tasks they serve.",
             },
             {
