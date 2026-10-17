@@ -184,6 +184,8 @@ def _create_route_sync(data: Any) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="an at_time trigger needs run_in_minutes")
     expires_at = (data.get("expires_at") or "").strip()
 
+    meta = dict(data.get("meta") or {})
+    meta.setdefault("origin", "admin")
     it = create_intent(
         owner=owner, title=title,
         description=(data.get("description") or "").strip(),
@@ -194,7 +196,7 @@ def _create_route_sync(data: Any) -> Dict[str, Any]:
         location_id=location_id,
         outfit_hint=(data.get("outfit_hint") or "").strip(),
         target_count=data.get("target_count", 0),
-        expires_at=expires_at, action=action, meta=data.get("meta") or {})
+        expires_at=expires_at, action=action, meta=meta)
     if not it:
         raise HTTPException(status_code=500, detail="Intent creation failed")
     apply_trigger_on_create(it)

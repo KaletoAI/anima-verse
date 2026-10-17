@@ -8,3 +8,13 @@ skills:
 
 templates:
   llm: templates/llm
+
+config_schema:
+  retrospect:
+    label: Reflection goals
+    scope: world
+    fields:
+      max_goal_intents: {type: int, label: "Maximum goal intents", default: 3, min: 0, max: 50, description: "How many of the reflection's goals become open plans; goals of earlier reflections that the new one dropped expire. 0 = all goals."}
+      goal_ttl_short_days: {type: int, label: "Short-term goal lifetime (game days)", default: 2, min: 0, max: 365, description: "0 = never expires."}
+      goal_ttl_mid_days: {type: int, label: "Mid-term goal lifetime (game days)", default: 7, min: 0, max: 365, description: "0 = never expires."}
+      goal_ttl_long_days: {type: int, label: "Long-term goal lifetime (game days)", default: 30, min: 0, max: 365, description: "0 = never expires."}

@@ -41,8 +41,8 @@ HAND-DERIVED EXPECTATIONS
       ``datetime``: the whole comparison is done in GameTime seconds.
   [2] The SAME marker without "by=player" -> source "character".  Nothing
       else changes.
-  [3] "when=standing" -> trigger kind "standing" and expires_at "" — a
-      standing task never expires on its own.
+  [3] "when=standing" -> trigger kind "standing" and expires_at now +
+      seven GAME days (604800 seconds) for a player task.
   [4] The rp_first flow, at unit level and end to end:
         raw      = the RP prose, WITH the marker in it
         tool_txt = the tool LLM's decision text, with the SAME marker again
@@ -116,7 +116,7 @@ HAND-DERIVED EXPECTATIONS
         own plan when=standing  -> now + 3 * 86400 = 259200 (default TTL)
         with intents.self_intent_ttl_days = 5 -> now + 432000
         with intents.self_intent_ttl_days = 0 -> "" (never)
-        player task when=now    -> ""  (a player's task stays until done)
+        player task when=now    -> now + 86400 (one game day)
  [12] INTENT_DONE / INTENT_PROGRESS only for the owner or a participant:
         Mira on Other's intent            -> status stays "active", no progress
         Mira as participant of Other's    -> progress note recorded
@@ -220,15 +220,18 @@ check("source", (created[0] if created else {}).get("source"), "character")
 check("priority", (created[0] if created else {}).get("priority"), 2)
 drop_all()
 
-# -------------------------------------------- [3] standing has no deadline
+# -------------------------------------------- [3] standing player task has a deadline
 
-print("[3] a standing task carries no expiry")
+print("[3] a standing player task expires after seven game days")
+_before = game_time().total_seconds
 created = parse_and_apply_intent_markers(
     CHAR, "[INTENT: Watch the harbour | keep an eye out | when=standing | by=player]")
 check("intents created", len(created), 1)
 it = created[0] if created else {}
 check("trigger kind", (it.get("trigger") or {}).get("kind"), "standing")
-check("expires_at", it.get("expires_at"), "")
+_after = game_time().total_seconds
+_exp = GameTime.parse(it["expires_at"]).total_seconds if it.get("expires_at") else -1
+check_true("expires_at = now + 604800", _before + 604800 <= _exp <= _after + 604800, str(_exp))
 check("source", it.get("source"), "human")
 drop_all()
 
@@ -463,8 +466,9 @@ check_true("ttl 5 -> +432000", e is not None and b + 432000 <= e <= a + 432000, 
 config._CONFIG["intents"] = {"self_intent_ttl_days": 0}
 check("ttl 0 -> never", _expiry_after("[INTENT: Mend the net | when=standing]")[1], None)
 config._CONFIG.pop("intents", None)
-check("player task when=now -> never",
-      _expiry_after("[INTENT: Carry the crate | when=now | by=player]")[1], None)
+b, e, a = _expiry_after("[INTENT: Carry the crate | when=now | by=player]")
+check_true("player task when=now -> +86400",
+           e is not None and b + 86400 <= e <= a + 86400, f"{b} {e} {a}")
 drop_all()
 
 # ------------------------------- B5 [12] DONE / PROGRESS only for participants

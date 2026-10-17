@@ -2,7 +2,7 @@
 
 ONE entry for everything a character shall or wants to do — set by a human
 (``source=human``) or by the character itself (``source=character``: promises,
-retrospect goals). With a trigger condition (now/at_time/at_location/standing)
+long-term goals). With a trigger condition (now/at_time/at_location/standing)
 plus an optional action (usually empty = "bump with a hint", decision 4).
 
 Data model + CRUD live here; the engine (prompt block, character markers,
@@ -281,6 +281,62 @@ def auto_track_progress(character_name: str, tool_type: str,
     return result
 
 
+def expire_intent(intent_id: str, reason: str) -> bool:
+    """Expire an active intent and preserve its metadata with the reason."""
+    if reason not in {"cap", "deadline", "replaced"}:
+        raise ValueError("Unknown intent expiry reason")
+    with keyed_lock("intent_execution", intent_id):
+        intent = get_intent(intent_id)
+        if not intent or intent["status"] != "active":
+            return False
+        meta = dict(intent.get("meta") or {})
+        meta["expired_reason"] = reason
+        return update_intent(intent_id, status="expired", meta=meta) is not None
+
+
+def _cap_class(intent: Dict[str, Any]) -> str:
+    if is_managed_intent(intent):
+        return ""
+    origin = (intent.get("meta") or {}).get("origin")
+    if origin and origin != "marker":
+        return ""
+    return "player" if intent.get("source") == "human" else "self"
+
+
+def _intent_setting(key: str, default: int) -> int:
+    from app.core import config
+    try:
+        return max(0, int(config.get(f"intents.{key}", default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def enforce_active_caps(owner: str, keep_ids=()) -> int:
+    """Expire excess owned plans, worst priority and oldest first.
+
+    Protected ids are evicted only after all other candidates in their class.
+    A zero cap leaves that class unlimited; package-managed plans are exempt.
+    """
+    expired = 0
+    protected = set(keep_ids)
+    with keyed_lock("intents", owner):
+        active = [it for it in list_intents(owner=owner, status="active")
+                  if it["owner"] == owner]
+        for cap_class, default in (("self", 6), ("player", 4)):
+            cap = _intent_setting(f"max_active_{cap_class}", default)
+            if not cap:
+                continue
+            candidates = [it for it in active if _cap_class(it) == cap_class]
+            candidates.sort(key=lambda it: (it["id"] in protected,
+                                            -it["priority"], it["created_at"], it["id"]))
+            for it in candidates[:max(0, len(candidates) - cap)]:
+                if expire_intent(it["id"], "cap"):
+                    expired += 1
+                    logger.info("Intent expired (cap): %s owner=%s title=%r",
+                                it["id"], owner, it["title"])
+    return expired
+
+
 def expire_overdue() -> int:
     """Active intents whose ``expires_at`` has passed are set to ``expired``.
 
@@ -297,7 +353,7 @@ def expire_overdue() -> int:
             continue
         try:
             if GameTime.parse(exp) <= now:
-                if update_intent(it["id"], status="expired"):
+                if expire_intent(it["id"], "deadline"):
                     n += 1
         except Exception:
             pass
@@ -313,7 +369,10 @@ PRIORITY_LABELS = {1: "URGENT", 2: "HIGH", 3: "NORMAL", 4: "LOW", 5: "BACKGROUND
 import re as _re
 
 
-def build_intents_prompt_section(character_name: str, max_entries: int = 0) -> str:
+DEFAULT_PROMPT_MAX_ENTRIES = 12
+
+
+def build_intents_prompt_section(character_name: str, max_entries: Optional[int] = None) -> str:
     """Prompt block of a character's active intents, by priority.
 
     Every entry carries its ``(id <8-hex>)`` — the id is what
@@ -327,6 +386,8 @@ def build_intents_prompt_section(character_name: str, max_entries: int = 0) -> s
     active = list_intents(owner=character_name, status="active")
     if not active:
         return ""
+    if max_entries is None:
+        max_entries = DEFAULT_PROMPT_MAX_ENTRIES
     shown = active[:max_entries] if max_entries > 0 else active
     lines = ["\n== CURRENT PLANS & TASKS (by priority) =="]
     for it in shown:
@@ -404,6 +465,20 @@ def _when_to_trigger(when: str) -> Dict[str, Any]:
             run_at = game_time() + GameDuration.of(seconds=secs)
             return {"kind": "at_time", "run_date": run_at.canonical()}
         return {"kind": "standing"}
+    if low.startswith("at:"):
+        match = _re.fullmatch(r"at:(?:(tomorrow|\+(\d{1,2})d)\s+)?(\d{1,2}):(\d{2})", low)
+        if not match:
+            return {"kind": "standing"}
+        day, offset, hour, minute = match.groups()
+        hour, minute = int(hour), int(minute)
+        days = 1 if day == "tomorrow" else int(offset or 0)
+        if hour > 23 or minute > 59 or days > 30:
+            return {"kind": "standing"}
+        now = game_time()
+        run_at = now.start_of_day() + GameDuration.of(days=days, hours=hour, minutes=minute)
+        if day is None and run_at <= now:
+            run_at += GameDuration.of(days=1)
+        return {"kind": "at_time", "run_date": run_at.canonical()}
     if low.startswith("at_location:"):
         name = w.split(":", 1)[1].strip()
         loc_id = ""
@@ -490,8 +565,8 @@ def default_intent_expiry(trigger: Dict[str, Any], source: str) -> str:
 
     at_time (any source): run_date + one game hour of grace. A character's own
     plan (``source="character"``): now -> +1 game hour, standing/at_location ->
-    +``intents.self_intent_ttl_days`` game days. A task from the player stays
-    open until it is done.
+    +``intents.self_intent_ttl_days`` game days. Player tasks use configurable
+    lifetimes of one (now) or seven (standing/at_location) game days.
     """
     kind = trigger.get("kind", "standing")
     if kind == "at_time":
@@ -500,6 +575,10 @@ def default_intent_expiry(trigger: Dict[str, Any], source: str) -> str:
             return (GameTime.parse(run) + _AT_TIME_GRACE).canonical() if run else ""
         except Exception:
             return run
+    if source == "human":
+        key = "player_task_now_ttl_days" if kind == "now" else "player_task_ttl_days"
+        days = _intent_setting(key, 1 if kind == "now" else 7)
+        return (game_time() + GameDuration.of(days=days)).canonical() if days else ""
     if source != "character":
         return ""
     if kind == "now":
@@ -586,7 +665,9 @@ def parse_and_apply_intent_markers(character_name: str,
                 participants={character_name: {"role": "", "progress": []}},
                 trigger=trig, priority=prio,
                 location_id=trig.get("location_id", "") if trig.get("kind") == "at_location" else "",
-                expires_at=default_intent_expiry(trig, source))
+                expires_at=default_intent_expiry(trig, source), meta={"origin": "marker"})
+            if it:
+                enforce_active_caps(character_name, keep_ids=(it["id"],))
         apply_trigger_on_create(it)
         if it:
             created.append(it)

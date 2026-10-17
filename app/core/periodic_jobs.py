@@ -267,8 +267,10 @@ def _sub_force_rules():
 def _sub_assignment_expiry():
     # Unified intents: expire overdue plans.
     try:
-        from app.models.intents import expire_overdue
+        from app.models.intents import expire_overdue, enforce_active_caps, list_intents
         expire_overdue()
+        for owner in {it["owner"] for it in list_intents(status="active") if it["owner"]}:
+            enforce_active_caps(owner)
     except Exception as e:
         logger.debug("intent_expiry sub error: %s", e)
 

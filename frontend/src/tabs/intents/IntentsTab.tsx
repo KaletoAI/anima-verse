@@ -28,7 +28,7 @@ interface Intent {
   outfit_hint?: string
   expires_at?: string
   action?: { type?: string; destination?: { location_id: string; room_id?: string }; scope?: 'pair' | 'party'; after_arrival?: { type: 'pair'; pose_key: string } }
-  meta?: { travel?: { phase?: string; reason?: string; expected_members?: string[]; destination_label?: string } }
+  meta?: { expired_reason?: string; travel?: { phase?: string; reason?: string; expected_members?: string[]; destination_label?: string } }
 }
 
 type TriggerKind = 'standing' | 'now' | 'at_location' | 'at_time'
@@ -104,6 +104,12 @@ const PRIORITY_LABELS: Record<number, string> = {
   3: 'Normal',
   4: 'Low',
   5: 'Idle',
+}
+
+const EXPIRY_REASON_LABELS: Record<string, string> = {
+  cap: 'limit reached',
+  deadline: 'deadline passed',
+  replaced: 'replaced by reflection',
 }
 
 const TRIP_PHASE_LABELS: Record<string, string> = {
@@ -446,7 +452,12 @@ export function IntentsTab() {
                     <td className="ga-sched-muted" style={{ fontSize: 12 }}>
                       {expiresAtLabel(it.expires_at) || '—'}
                     </td>
-                    <td className={active ? 'ga-status-ok' : 'ga-status-paused'}>{t(it.status)}</td>
+                    <td className={active ? 'ga-status-ok' : 'ga-status-paused'}>
+                      {t(it.status)}
+                      {it.status === 'expired' && it.meta?.expired_reason
+                        ? ` — ${t(EXPIRY_REASON_LABELS[it.meta.expired_reason] || it.meta.expired_reason)}`
+                        : ''}
+                    </td>
                     <td className="ga-or-actions-col">
                       <button className="ga-btn ga-btn-sm" disabled={!!it.action?.type} onClick={() => handleEdit(it)}>
                         {t('Edit')}

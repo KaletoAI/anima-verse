@@ -684,14 +684,28 @@ class SchedulerManager:
             elif action_type == 'intent_bump':
                 # at_time intent (plan-intents-unified.md): bump the owner
                 # with a hint at the planned time — the character decides
-                # itself whether and how to act.
-                try:
-                    from app.core.agent_loop import get_agent_loop
-                    get_agent_loop().bump(agent, hint=action.get("hint", ""))
+                # itself whether and how to act. An intent that ended before
+                # its time (done, expired, deleted) bumps nobody; the run
+                # still falls through so the one-time job is removed.
+                intent_id = action.get("intent_id", "")
+                intent_live = True
+                if intent_id:
+                    from app.models.intents import get_intent
+                    _intent = get_intent(intent_id)
+                    intent_live = bool(_intent and _intent.get("status") == "active")
+                if not intent_live:
+                    logger.info("Job %s: intent %s no longer active, no bump",
+                                job_id, intent_id)
                     result = {"success": True, "action": "intent_bump",
-                              "intent_id": action.get("intent_id", "")}
-                except Exception as _ie:
-                    result = {"success": False, "error": str(_ie)}
+                              "intent_id": intent_id, "skipped": "intent_not_active"}
+                else:
+                    try:
+                        from app.core.agent_loop import get_agent_loop
+                        get_agent_loop().bump(agent, hint=action.get("hint", ""))
+                        result = {"success": True, "action": "intent_bump",
+                                  "intent_id": intent_id}
+                    except Exception as _ie:
+                        result = {"success": False, "error": str(_ie)}
             elif action_type == 'notify':
                 result = self._action_notify(action, agent)
             elif action_type == 'execute_tool':

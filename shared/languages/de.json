@@ -2581,6 +2581,9 @@
     "Skin tone match": "Hautton-Abgleich",
     "Pulls the face's overall skin colour and brightness toward the model's own face skin, so the projection blends in without a seam. Runs on the hub (needs GLBFaceRetexture 1.1.1).": "Gleicht Hautton und Helligkeit an die Gesichtshaut des Modells an, damit die Projektion ohne Kante übergeht. Läuft auf dem Hub (GLBFaceRetexture 1.1.1 nötig).",
     "the face retexture backend does not support tone match (needs node GLBFaceRetexture >= 1.1)": "Das Backend unterstützt keinen Hautton-Abgleich (GLBFaceRetexture ab 1.1 nötig).",
-    "Light balance and tone match run on the hub with face landmarks; the preview is an approximation without tone match.": "Licht- und Hautton-Abgleich laufen auf dem Hub anhand von Gesichtspunkten; die Vorschau ist nur angenähert, ohne Hautton-Abgleich."
+    "Light balance and tone match run on the hub with face landmarks; the preview is an approximation without tone match.": "Licht- und Hautton-Abgleich laufen auf dem Hub anhand von Gesichtspunkten; die Vorschau ist nur angenähert, ohne Hautton-Abgleich.",
+    "limit reached": "Limit erreicht",
+    "deadline passed": "Frist abgelaufen",
+    "replaced by reflection": "Durch Reflexion ersetzt"
   }
 }

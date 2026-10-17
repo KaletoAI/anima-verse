@@ -337,6 +337,14 @@ Titel ≥ 6 Zeichen), sonst `None`. Wer vor dem Anlegen prüft, hält
 `keyed_lock("intents", owner)` um `find_duplicate` UND `create_intent` — so legen zwei Turns
 derselben Figur kein Vorhaben doppelt an (Muster: `plugins/retrospect/skill.py`).
 
+`app.models.intents.expire_intent(intent_id, reason) -> bool` expires only an active intent,
+merging `meta.expired_reason` (`cap`, `deadline`, or `replaced`) into its existing metadata.
+`app.models.intents.enforce_active_caps(owner, keep_ids=()) -> int` expires excess owned
+marker/legacy intents by priority (5 first), then oldest creation stamp; protected ids go last.
+Managed, admin and other package origins are exempt. Core defaults: six self plans, four player
+tasks, with zero meaning unlimited. Hold `keyed_lock("intents", owner)` across duplicate lookup,
+creation and cap enforcement. The return value counts successful expirations.
+
 Executable actions are package-provided capabilities on the existing intent row,
 not a second workflow store. Successful CRUD writes emit `intent_created`,
 `intent_changed` and `intent_deleted`; execution is serialized by

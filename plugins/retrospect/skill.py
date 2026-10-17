@@ -119,33 +119,6 @@ class RetrospectSkill(PluginSkill):
                                              parsed.get("goals") or [], lang_code),
         }
 
-        # Goals → standing intents (plan-intents-unified.md): each goal becomes
-        # an intent set by the character. The core's duplicate rule (equal or
-        # contained title, also against goals created earlier in this loop —
-        # they are active by then) keeps repeated retrospects from stacking
-        # them. Retrospect goals get NO expiry: they would only churn.
-        try:
-            from app.core.keyed_lock import keyed_lock
-            from app.models.intents import create_intent, find_duplicate
-            for g in (parsed.get("goals") or []):
-                if not isinstance(g, dict):
-                    continue
-                title = (g.get("text") or "").strip()
-                if not title:
-                    continue
-                with keyed_lock("intents", character_name):
-                    dup = find_duplicate(character_name, title)
-                    if dup:
-                        self.ctx.logger.info(
-                            "retrospect goal %r skipped: duplicate of intent %s %r",
-                            title, dup.get("id"), dup.get("title"))
-                        continue
-                    create_intent(owner=character_name, title=title, source="character",
-                                  trigger={"kind": "standing"}, priority=3,
-                                  meta={"origin": "retrospect_goal"})
-        except Exception as _ge:
-            self.ctx.logger.debug("retrospect goals -> intents failed: %s", _ge)
-
         mark_retrospect_done(character_name)
 
         updated = [(k, v) for k, v in counts.items() if v is not None]
@@ -218,6 +191,42 @@ class RetrospectSkill(PluginSkill):
         except Exception:
             return None
 
+    def _sync_goal_intents(self, owner: str, goals: List[Dict[str, str]]) -> None:
+        """Reconcile owned goal intents with the successfully written goals."""
+        if not goals:
+            return
+        from app.core.game_time import GameDuration
+        from app.core.timeutils import game_time
+        from app.core.keyed_lock import keyed_lock
+        from app.models.intents import (
+            create_intent, find_duplicate, list_intents, update_intent, expire_intent)
+
+        limit = max(0, int(self.ctx.get_config("skills.retrospect.max_goal_intents", 3)))
+        ttl_fields = {"short_term": ("short", 2), "mid_term": ("mid", 7),
+                      "long_term": ("long", 30)}
+        now = game_time()
+        with keyed_lock("intents", owner):
+            kept = set()
+            for goal in (goals[:limit] if limit else goals):
+                field, default = ttl_fields.get(goal["category"], ttl_fields["mid_term"])
+                days = max(0, int(self.ctx.get_config(f"skills.retrospect.goal_ttl_{field}_days", default)))
+                expires_at = (now + GameDuration.of(days=days)).canonical() if days else ""
+                intent = find_duplicate(owner, goal["text"])
+                if intent:
+                    if (intent.get("meta") or {}).get("origin") == "retrospect_goal" and intent["owner"] == owner:
+                        update_intent(intent["id"], expires_at=expires_at)
+                else:
+                    intent = create_intent(owner=owner, title=goal["text"], source="character",
+                                           trigger={"kind": "standing"}, priority=3,
+                                           expires_at=expires_at, meta={"origin": "retrospect_goal"})
+                if intent:
+                    kept.add(intent["id"])
+            for intent in list_intents(owner=owner, status="active"):
+                if (intent["owner"] == owner
+                        and (intent.get("meta") or {}).get("origin") == "retrospect_goal"
+                        and intent["id"] not in kept):
+                    expire_intent(intent["id"], "replaced")
+
     def _replace_entries(self, character_name: str, file_id: str,
                          entries: List[Any], lang_code: str):
         """Replace a soul file with the LLM's consolidated set. Returns the
@@ -245,10 +254,16 @@ class RetrospectSkill(PluginSkill):
             return None  # nothing usable → keep the existing file
         try:
             from app.core.soul_writer import rewrite_file
-            return rewrite_file(character_name, file_id, cleaned, language=lang_code)
+            count = rewrite_file(character_name, file_id, cleaned, language=lang_code)
         except Exception as ex:
             self.ctx.logger.warning("rewrite_file failed [%s]: %s", file_id, ex)
             return None
+        if file_id == "goals":
+            try:
+                self._sync_goal_intents(character_name, cleaned)
+            except Exception as ex:
+                self.ctx.logger.warning("Goal intent sync failed [%s]: %s", character_name, ex)
+        return count
 
     def get_usage_instructions(self, format_name: str = "", **kwargs) -> str:
         from app.core.tool_formats import format_example
