@@ -629,6 +629,9 @@ def build_job(location_id: str, description: Any,
     (x, -z, y)); the glTF exporter turns them back on the way out, so the
     stored GLB speaks the scene frame like every other building model.
     """
+    if location is None:
+        from app.models.world import get_location_by_id
+        location = get_location_by_id(location_id) or {}
     facts = build_roof_description(location_id, location)
     if not facts.get("ok"):
         return facts
@@ -662,21 +665,13 @@ def build_job(location_id: str, description: Any,
         "materials": materials,
         "export": {"glb": "roof.glb"},
     }
-    # What the SIDECAR needs so the standard building-model placement puts the
-    # roof exactly where these vertices are (metric law, § B2): the mesh is
-    # measured by its widest XZ side, centred on its own AABB centre, and its
-    # lower edge lands on ``bottom_y = LEVEL_PLATE_TOP − walk_y + offset_y``.
-    # A generated roof declares no ``walk_y`` (nobody walks on it), so the
-    # anchor is the storey-0 floor plate — the § B2 addendum of 2026-08-20
-    # moved that pin by 0.02 m and this derivation moves WITH it, or the roof
-    # would sit two centimetres off its own walls.
-    from app.core.scene_recipe import LEVEL_PLATE_TOP
+    # The geometry is relative to the roof base; placement uses scene heights.
+    from app.core.scene_recipe import scene_mesh_placement
     base_y = facts["roof_base_y"]
+    scene_min = [box["min"][0], base_y + box["min"][1], box["min"][2]]
+    scene_max = [box["max"][0], base_y + box["max"][1], box["max"][2]]
     job["placement"] = {
-        "width_m": _r(max(box["size"][0], box["size"][2])),
-        "offset_x": box["center"][0],
-        "offset_z": box["center"][2],
-        "offset_y": _r(base_y + box["min"][1] - LEVEL_PLATE_TOP),
+        **scene_mesh_placement(location, scene_min, scene_max),
         "eaves_height_m": facts["eaves_height_m"],
         "roof_base_y": base_y,
         "ridge_y_world": _r(base_y + geo["ridge_y"]),

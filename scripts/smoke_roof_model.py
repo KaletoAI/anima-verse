@@ -44,16 +44,19 @@ overhang 0.40 m, ridge axis auto.
        AABB     x [−0.4, 10.4], z [−0.4, 8.4], y [−0.2309, 2.3094]
        body height = 2.309401 + 0.230940 = 2.540341 m
 
-4. PLACEMENT (the metric law, § B2). The mesh is measured by its widest XZ
-   side and centred on its own AABB centre, so the sidecar reads
-       width_m  = max(10.8, 8.8) = 10.80   → scale = 10.80 / 10.80 = 1.000
-       offset_x = 5.00, offset_z = 4.00    (the AABB centre)
-       offset_y = base + AABB min y − LEVEL_PLATE_TOP
-                = 5.90 + (−0.230940) − 0.08 = 5.589060
-   (the anchor is the storey-0 floor plate since the § B2 addendum of
-   2026-08-20 — a roof declares no walk_y, so its lower edge lands on
-   ``bottom_y = LEVEL_PLATE_TOP + offset_y``)
-   and the ridge lands at 5.90 + 2.309401 = 8.209401 m in the scene frame.
+4. PLACEMENT (the current building law, § B2). The mesh is measured by its
+   widest XZ side and centred on its own AABB centre:
+       width_m = max(10.8, 8.8) = 10.80 -> scale = 10.80 / 10.80 = 1.000
+   The fixture has no boundary, so its effective boundary is a pin-centred
+   fallback square with centre (0,0). Subtract that boundary centre:
+       offset_x = 5.00 - 0.00 = 5.00, offset_z = 4.00 - 0.00 = 4.00.
+   For an explicit boundary (-4,-2)..(16,10), centre (6,4), instead:
+       offset_x = 5.00 - 6.00 = -1.00, offset_z = 4.00 - 4.00 = 0.00.
+   In either case the building anchor restores the mesh centre (5,4).
+   A shell with walk_y 0 has bottom_y = 0 + offset_y, hence
+       offset_y = base + AABB min y = 5.90 - 0.230940 = 5.669060.
+   The body height is 2.540341, so its ridge lands at
+       5.669060 + 2.540341 = 8.209401 = 5.90 + 2.309401 m.
 
 5. HIP over the same box: all four planes carry the same pitch, so the ridge
    is shortened by the hip run at both ends —
@@ -91,7 +94,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core import roof_model as rm                              # noqa: E402
-from app.core.scene_recipe import LEVEL_PLATE_TOP                  # noqa: E402
+from app.core.scene_recipe import _building_model, derive_scalars  # noqa: E402
 
 failures = []
 
@@ -433,14 +436,24 @@ def part_placement():
           1.0, 1e-9)
     check("offset_x = AABB centre x", p["offset_x"], 5.0, 1e-4)
     check("offset_z = AABB centre z", p["offset_z"], 4.0, 1e-4)
-    check("offset_y = base + min y − storey-0 floor plate", p["offset_y"],
-          round(5.90 - 0.4 * TAN30 - LEVEL_PLATE_TOP, 4), 1e-3)
+    check("offset_y = base + min y", p["offset_y"], 5.6691, 1e-4)
     check("ridge in the scene frame", p["ridge_y_world"],
           round(5.90 + 4 * TAN30, 4), 1e-3)
     check("eaves height quoted", p["eaves_height_m"], 6.0, 1e-9)
     check("footprint source recorded", p["footprint_source"], "outline")
     check("vertex count recorded", p["vertex_count"], 6)
     check("face count recorded", p["face_count"], 5)
+
+    shifted = fixture_location()
+    shifted["map3d"]["boundary"] = [[-4, -2], [16, -2], [16, 10], [-4, 10]]
+    shifted_p = rm.build_job("roof-demo", gable_desc(), shifted)["placement"]
+    check("offset_x subtracts boundary centre", shifted_p["offset_x"], -1.0)
+    check("offset_z subtracts boundary centre", shifted_p["offset_z"], 0.0)
+    extent, _, _ = derive_scalars(shifted["map3d"], 0.0)
+    spec = _building_model(shifted, shifted["map3d"],
+                           {**shifted_p, "walk_y": 0}, extent)
+    check_vec("building law restores roof centre", spec["anchor"], [5.0, 4.0], 1e-4)
+    check("building law restores roof bottom", spec["bottom_y"], 5.6691, 1e-4)
 
     # The Blender frame conversion, once: (x, y, z)_scene -> (x, −z, y).
     scene_ridge_v = max(rm.roof_geometry(gable_desc(),

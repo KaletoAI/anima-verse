@@ -2741,6 +2741,27 @@ def _variants(base_url: str, tiers: Any) -> Dict[str, str]:
     return variant_urls(base_url, names)
 
 
+def scene_mesh_placement(location: Dict[str, Any], box_min: Sequence[float],
+                         box_max: Sequence[float], *,
+                         plan_width_m: float = 0.0) -> Dict[str, float]:
+    """Place a scene-frame mesh unchanged as a shell with ``walk_y = 0``.
+
+    Invert the building law: unit scale, AABB centre at its existing XZ
+    coordinates, and the lower edge at its existing scene-frame height.
+    """
+    map3d = location.get("map3d") or {}
+    extent, _, _ = derive_scalars(map3d, plan_width_m)
+    boundary = _boundary_local(map3d, extent)
+    cx = (min(p[0] for p in boundary) + max(p[0] for p in boundary)) / 2.0
+    cz = (min(p[1] for p in boundary) + max(p[1] for p in boundary)) / 2.0
+    return {
+        "width_m": _r(max(box_max[0] - box_min[0], box_max[2] - box_min[2])),
+        "offset_x": _r((box_min[0] + box_max[0]) / 2.0 - cx),
+        "offset_z": _r((box_min[2] + box_max[2]) / 2.0 - cz),
+        "offset_y": _r(box_min[1]),
+    }
+
+
 def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
                     meta: Dict[str, Any],
                     extent: float) -> Optional[Dict[str, Any]]:
