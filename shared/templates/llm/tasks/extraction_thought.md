@@ -34,6 +34,7 @@ Already stored memories (DO NOT repeat):
 IMPORTANT:
 - Extract ONLY what is literally in the thought above. Never infer, complete or embellish a fact, a motive or a relationship that is not stated there. When in doubt, leave it out.
 - Extract ONLY facts (semantic) and plans (commitment)
+- Semantic memories only for what the thought shows as DONE or LEARNED and still matters later: an action with a lasting result (something made, cleaned, posted, sent, given or taken, a place visited) or a fact found out about the world or a person. Never for gestures, poses or passing body movements (stretching, breathing, looking around), and never for intentions, plans, wishes, preparations, rehearsals, moods, worries, wondering or imagined events ("plans to", "wants to", "will", "is preparing", "is nervous about", "wonders whether"). This restricts semantic memories only; commitment rules below still apply.
 - Keep WHO did or said what exactly as the text has it, and never turn an intention into an accomplished action ("planned to warn her" is not "warned her").
 - NO episodic memories (experiences) — those are auto-consolidated from chat history
 - NEVER write "User", "Player", "Spieler", "the user", "I" or generic labels. A stand-in like "the narrator", "my conversation partner" or "the other one" is a generic label too.{{ lang_instruction }}

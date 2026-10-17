@@ -202,6 +202,7 @@ class AgentLoop:
         # external triggers (avatar enters room, message received,
         # access-denied, etc.). FIFO; deduplicated.
         self._bump_queue: List[str] = []
+        self._rut_rest_logged: Dict[str, datetime] = {}
         # Optional hints attached to a bump. Pop'd in _run_turn and passed
         # to run_thought_turn as context_hint so the agent sees a "you
         # planned to do X — decide now" prompt prefix. Multiple hints for
@@ -1447,6 +1448,8 @@ class AgentLoop:
                 return False
             if _in_chat_skip(name):
                 return False
+            if self._on_rut_rest(name, now):
+                return False
             return True
 
         # 2) Current round.
@@ -1459,6 +1462,31 @@ class AgentLoop:
         if not self._tickets:
             return None
         return self._take_from_tickets(_due)
+
+    def _on_rut_rest(self, name: str, now: datetime) -> bool:
+        """Defer regular turns from the last completed turn, never from polling."""
+        from app.core import config
+        from app.core.thought_rut import rut_hint, rut_here
+        from app.core.thought_context import _build_presence
+        from app.models.character import get_character_profile
+
+        minutes = max(0, int(config.get("thoughts.rut_rest_minutes", 20)))
+        last = self._last_real_turn_at.get(name)
+        if not minutes or not last or not rut_hint(name):
+            return False
+        if now - last >= timedelta(minutes=minutes):
+            return False
+        profile = get_character_profile(name)
+        location = profile.get("current_location", "") or ""
+        room = profile.get("current_room", "") or ""
+        if not rut_here(name, (location, room)):
+            return False
+        if not _build_presence(name, location, room)[2]:
+            return False
+        if self._rut_rest_logged.get(name) != last:
+            self._rut_rest_logged[name] = last
+            logger.info("Thought rut rest applied: %s (%d SYSTEM minutes)", name, minutes)
+        return True
 
     def _take_from_tickets(self,
                            is_due: Callable[[str], bool]) -> Optional[str]:

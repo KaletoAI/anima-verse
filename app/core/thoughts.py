@@ -369,7 +369,7 @@ class ThoughtRunner:
                 return wrapper
             tools_dict[t.name] = _make_ctx_wrapper(_orig_func)
 
-        # Tool-Format: auto-detect vom Router-Model
+        # Tool format: auto-detect from the routed model.
         tool_model_name = _tool_inst.model if _tool_inst else ""
         model_for_format = tool_model_name or (_thought_inst.model if _thought_inst else "")
         tool_format = get_format_for_model(model_for_format)
@@ -529,7 +529,7 @@ class ThoughtRunner:
             )
             tool_system_content = "\n\n".join(_ctx_parts)
 
-        # Tool-Kategorien
+        # Tool categories.
         _deferred_tools = set()
         _content_tools = set()
         if tools_dict:
@@ -542,8 +542,8 @@ class ThoughtRunner:
                 if _sk and getattr(_sk, 'CONTENT_TOOL', False):
                     _content_tools.add(_tname)
 
-        # Reply-Forced-Thoughts (Cascade-Brake aktiv) bekommen max 1 Iteration:
-        # genau 1 Tool-Call (= Reply), kein Tool-Loop. Sonst: bisherige Defaults.
+        # Reply-only thoughts (cascade brake) get at most one iteration:
+        # one reply call, no tool loop. Other turns keep the usual defaults.
         max_iter = 1 if (_is_fast or reply_only_to) else (2 if tools_dict else 1)
         agent = StreamingAgent(
             llm=llm,
@@ -586,7 +586,7 @@ class ThoughtRunner:
         # provide context; chat turns would introduce avatar bias and stale prose.
         recent_history: List[Dict[str, str]] = []
 
-        # Agent ausfuehren und Response sammeln
+        # Run the agent and collect its response.
         full_response = ""
         # Markers the rp_first tool LLM harvested from its own decision text
         # (ExtractionEvent). They are NOT part of the RP prose — without
@@ -596,12 +596,16 @@ class ThoughtRunner:
         extracted_markers = ""
         had_notification_tool = False
         notification_tool_content = ""
+        from app.core.thought_rut import rut_hint
         user_input = thought_user_input(context_hint)
+        _rut_hint = rut_hint(character_name)
+        if _rut_hint:
+            user_input += "\n\n" + _rut_hint
 
         logger.info("Starte Agent-Loop fuer %s (tools: %d, tool_llm: %s, history: %d)",
                     character_name, len(tools_dict), 'JA' if tool_llm else 'NEIN', len(recent_history))
 
-        _tool_exec_counts = {}  # Tool-Ausfuehrungszaehler
+        _tool_exec_counts = {}  # Tool execution counts.
         # (tool_name, raw_input) per executed tool — used by the intent
         # engine to detect and skip redundant [INTENT:...] markers that
         # duplicate a tool already executed in this turn.
@@ -743,7 +747,7 @@ class ThoughtRunner:
         except Exception:
             pass
 
-        # LLM-Logging erfolgt per-Iteration im StreamingAgent
+        # StreamingAgent logs each LLM iteration.
 
         # Tool-LLM markers onto the answer — after the hallucination cleanup
         # (so they cannot be mistaken for a narrated tool call) and after the
@@ -799,7 +803,7 @@ class ThoughtRunner:
         try:
             from app.models.intents import auto_track_progress, progress_type_for_tool
 
-            # 1. Echte Tool-Calls aus dem Stream + 2. narrative Tool-Calls
+            # Count both streamed and narrated tool calls.
             for _label, _counts in (("", _tool_exec_counts),
                                     (" (narrativ)", _narrative_exec_counts)):
                 for _tn, _tc in _counts.items():
@@ -823,6 +827,13 @@ class ThoughtRunner:
             _turn_info["skipped"] = True
             return _turn_info
 
+        from app.core.thought_rut import record_turn
+        _final_profile = get_character_profile(character_name)
+        record_turn(character_name,
+                    set(_tool_exec_counts) | set(_narrative_exec_counts),
+                    (_final_profile.get("current_location", "") or "",
+                     _final_profile.get("current_room", "") or ""))
+
         # Observer hints can quote someone else's content. Keep tool effects,
         # but do not journal their narration as this character's own thought.
         if suppress_notification:
@@ -844,10 +855,8 @@ class ThoughtRunner:
                 from app.models.thought_store import add_thought
                 from app.routes.chat import _strip_tool_hallucinations
                 from app.core.intent_engine import strip_intent_tags
-                # Derselbe Bereinigungspfad, den auch die Chat-History nimmt.
-                # Halluzinierte Tool-Calls sind oben schon raus
-                # (_clean_hallucinated_tools), hier fallen Intent-Marker und
-                # der Rest der Tool-Tags weg.
+                # Use the same cleanup as chat history. Hallucinated calls
+                # were removed above; strip intent markers and remaining tags.
                 _journal = strip_intent_tags(_strip_tool_hallucinations(full_response))
                 _journal = (_journal or "").strip()
                 if _journal and _journal.upper() != "SKIP":

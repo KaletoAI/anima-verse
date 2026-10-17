@@ -579,3 +579,73 @@ def find_stream_tool_call(format_name: str, text: str,
             return match
 
     return None
+
+
+def thought_handover(text: str) -> str:
+    """Remove call syntax and state markers from prompt-facing journal text.
+
+    Reuse the format patterns, retaining action labels when no prose remains.
+    Attribute-style calls are log output rather than a model's tool format.
+    """
+    calls = []
+
+    def remove_call(match):
+        calls.append((match.group(1), match.group(2)))
+        return ""
+
+    # Log-style calls carry JSON in an attribute instead of the tag body.
+    def remove_attribute_call(match):
+        calls.append((match.group(1), match.group(3)))
+        return ""
+
+    text = re.sub(
+        r'<tools-call\s+name=[\'"]([^\'"]+)[\'"]\s+args=([\'"])(.*?)\2\s*>\s*</tools-call>',
+        remove_attribute_call, text, flags=re.IGNORECASE | re.DOTALL)
+    for fmt in TOOL_FORMATS.values():
+        text = re.sub(fmt["pattern"], remove_call, text, flags=re.IGNORECASE)
+    # Match the parser's recovery for an unfinished final tag.
+    text = re.sub(r'<tool\s+name="(\w+)">([\s\S]*)$', remove_call,
+                  text, flags=re.IGNORECASE)
+    # Element-style calls no format parses (<activity><pose>…</pose>
+    # <detail>…</detail></activity>): the outer tag is the action, its child
+    # elements are the fields.
+    def remove_element_call(match):
+        fields = {k.lower(): v for k, v in
+                  re.findall(r'<(\w+)>\s*(.*?)\s*</\1>', match.group(2), re.DOTALL)}
+        calls.append((match.group(1), fields))
+        return ""
+
+    text = re.sub(r'<(\w+)>((?:\s*<(\w+)>.*?</\3>)+)\s*</\1>', remove_element_call,
+                  text, flags=re.DOTALL)
+    text = re.sub(r'\*\*I (?:feel|do)\b[^*]*\*\*', '', text, flags=re.IGNORECASE)
+    text = " ".join(text.split())
+    if text or not calls:
+        return text
+    actions = []
+    for name, raw in calls:
+        detail = ""
+        if isinstance(raw, dict):
+            fields = raw
+        else:
+            try:
+                fields = json.loads(raw)
+            except (ValueError, TypeError):
+                fields = {}
+        if isinstance(fields, dict):
+            for key, value in fields.items():
+                if (key in ("detail", "message", "target", "location", "room", "recipient")
+                        or key.startswith("target_")) and isinstance(value, str) and value.strip():
+                    detail = ": " + _cut_words(" ".join(value.split()), 60)
+                    break
+        actions.append(name + detail)
+    return "(actions) " + "; ".join(actions)
+
+
+def _cut_words(text: str, limit: int) -> str:
+    """``text`` cut to ``limit`` characters at a word boundary, marked with "…"."""
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    # The window ending right before a space keeps its last word whole.
+    cut = head if text[limit] == " " or " " not in head else head.rsplit(" ", 1)[0]
+    return cut.rstrip(" ,;:") + "…"

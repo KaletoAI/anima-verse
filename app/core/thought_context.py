@@ -818,10 +818,11 @@ def recent_thoughts_block(character_name: str) -> str:
         return ""
     if not rows:
         return ""
+    from app.core.tool_formats import thought_handover
     lines: List[str] = []
     # rows are newest first — flip at the end so the block reads oldest first.
     for row in rows:
-        text = " ".join((row.get("content") or "").split())
+        text = thought_handover(row.get("content") or "")
         if not text:
             continue
         lines.append(f"- {_closing_excerpt(text, THOUGHT_RECENT_TAIL_CHARS)}")
@@ -836,20 +837,17 @@ def _build_recent_chat_block(character_name: str, limit: int = 3) -> str:
     character is mid-conversation we want them to see the latest exchanges
     so a follow-up thought can refer to actual content. Newest first.
 
-    Partner-Aufloesung: wir verlassen uns NICHT auf ``get_active_character``
-    (im AgentLoop-Background-Kontext oft leer und greift bei NPC↔NPC-
-    TalkTo-Konversationen ohnehin nicht). Stattdessen lesen wir das
-    Gegenueber direkt aus dem letzten ``chat_messages``-Eintrag dieses
-    Characters — egal in welcher Storage-Richtung.
-
-    Anschliessend ``UnifiedChatManager.get_chat_history`` mergen beide
-    Storage-Richtungen (A,B)/(B,A) und dedupen Doppel-Eintraege.
+    Resolve the partner from this character's latest ``chat_messages`` row,
+    in either storage direction. ``get_active_character`` is often empty in
+    the background and cannot identify an NPC conversation partner.
+    ``UnifiedChatManager.get_chat_history`` then merges both storage
+    directions (A,B)/(B,A) and deduplicates repeated entries.
     """
     try:
         from app.core.db import get_connection
         from app.models.unified_chat import UnifiedChatManager
         conn = get_connection()
-        # Letzten Partner aus beiden Speicher-Richtungen finden
+        # Find the latest partner in either storage direction.
         row = conn.execute(
             "SELECT ts, partner, character_name FROM chat_messages "
             "WHERE character_name=? OR partner=? "

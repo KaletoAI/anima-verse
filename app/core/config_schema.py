@@ -1060,13 +1060,14 @@ SECTIONS = {
         },
     },
     "thoughts": {
-        "label": "Gedanken",
+        "label": "Thoughts",
         "icon": "🧠",
         "scope": "world",
         "world_group": "npcs",
         "fields": {
             "min_turn_gap_seconds": {"type": "int", "label": "Min Turn Gap (s)", "default": 30, "min": 0, "max": 600, "description": "Minimum pause (seconds) between two consecutive thought turns. Keeps the AgentLoop from over-pacing with few characters. Does not apply to in_chat_skip / errors (those have their own backoffs). SYSTEM time."},
             "min_per_char_cooldown_minutes": {"type": "int", "label": "Min Per-Char Cooldown (min)", "default": 5, "min": 0, "max": 240, "description": "Minimum wait (minutes) before the same character gets another real thought turn. Bumps (external triggers like avatar room entry) bypass the cooldown. SYSTEM time."},
+            "rut_rest_minutes": {"type": "int", "label": "Rut Rest (min)", "default": 20, "min": 0, "max": 240, "description": "When a character's last 3 thought turns were the same (same tools at the same place, or narration without any tool) and it is alone in its room, its next regular thought turn waits this long. Bumps (a message, a plan falling due, someone entering) bypass the rest, a changed place ends it. 0 = off. SYSTEM time."},
         },
     },
     "intents": {

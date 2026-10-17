@@ -178,4 +178,13 @@ If this turn starts something you will only carry out LATER, record it with a ma
 {{ lang_instruction }} Any spoken words, messages or narration you produce must be in that language.
 {% endif %}
 
+=== What to do now ===
+Take the FIRST that applies:
+1. Someone here speaks to you, or a message waits → answer.
+2. A plan is due or can be done here → do it now{% if intent_tracking_enabled %}; close it with [INTENT_DONE: <id>] when done{% endif %}.
+3. Your rhythm puts you elsewhere or at another activity now → go there or start it.
+4. Your general task → one concrete step leaving a result (a post, message, finished piece, item used), not preparation or thought.
+5. Otherwise something new, different from where you left off — or SKIP.
+Changing clothes, re-setting the same activity or thinking about a plan without acting is not a step.
+
 {{ action_instruction }}
