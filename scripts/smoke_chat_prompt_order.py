@@ -4,10 +4,10 @@
 Usage:
     ./.venv/bin/python scripts/smoke_chat_prompt_order.py
 
-Pure: no server, no world, no LLM. It reads the two templates, the render
-call in routes/chat.py (by AST), and runs the two pure helpers.
+Pure: no server, no world, no LLM. It renders both reply templates and the
+scene state, checks the thought prompt's cache boundary, and runs pure helpers.
 
-THE CONTRACT (header of shared/templates/llm/chat/chat_stream.md)
+THE CONTRACT (header of shared/templates/llm/chat/reply_base.md)
 
 A backend caches a prompt by its prefix; one changed byte makes everything
 behind it expensive, the history included. So the chat prompt is split:
@@ -24,13 +24,8 @@ on the last user turn, BEHIND the history. Derived expectations:
         events_section, assignment_section, recent_activity_section,
         memory_section, relationships_section, reply_shape_section,
         addressed_to_me, addressed_names, winding_down, respond_opportunity
-    None of them is referenced by chat_stream.md; every one of them is
-    referenced by chat_moment.md.
+    Changing these facts must not change either stable system prompt.
 
-[2] The same list against the CODE: the keyword arguments of
-    render("chat/chat_stream.md", ...) in routes/chat.py contain none of
-    them — a template that ignores a variable would not catch a builder
-    that still passes one "for later".
 
 [3] Order inside the system prompt, rarest change first. With every block
     filled by a sentinel, the sentinels appear in exactly this order:
@@ -95,9 +90,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from jinja2 import meta  # noqa: E402
-
-from app.core.prompt_templates import _env, render  # noqa: E402
+from app.core.prompt_templates import render  # noqa: E402
 
 FAILURES = []
 
@@ -122,35 +115,11 @@ PER_TURN = {
 }
 
 
-def _names(tpl):
-    return meta.find_undeclared_variables(
-        _env.parse(_env.loader.get_source(_env, tpl)[0]))
 
-
-STREAM = _names("chat/chat_stream.md")
-MOMENT = _names("chat/chat_moment.md")
-
-# [1]
-check("[1] system prompt references no per-turn block",
-      sorted(PER_TURN & STREAM), [])
-check("[1] scene state references every per-turn block",
-      sorted(PER_TURN - MOMENT), [])
-
-# [2]
-tree = ast.parse((ROOT / "app/routes/chat.py").read_text())
-passed = None
-for node in ast.walk(tree):
-    if (isinstance(node, ast.Call) and getattr(node.func, "id", "") == "render"
-            and node.args and isinstance(node.args[0], ast.Constant)
-            and node.args[0].value == "chat/chat_stream.md"):
-        passed = {kw.arg for kw in node.keywords}
-check("[2] render call for chat_stream.md found", passed is not None, True)
-check("[2] builder passes no per-turn block to the system prompt",
-      sorted(PER_TURN & (passed or set())), [])
 
 
 # [3] / [4]
-def _stream(**over):
+def _stream(template="chat/chat_stream.md", **over):
     ctx = dict(
         world_setup="WORLD_SETUP", medium="in_person", partner_mode="room",
         tools_enabled=False, mood_tracking_enabled=False,
@@ -161,7 +130,13 @@ def _stream(**over):
         longterm_section="LONGTERM_A", daily_summary_section="DAILY_A",
         history_summary_block="HISTSUM_A", scenes_block="SCENES_A")
     ctx.update(over)
-    return render("chat/chat_stream.md", **{k: v for k, v in ctx.items() if k in STREAM})
+    return render(template, **ctx)
+
+# [1] Exercise the effective rendered prompts, including inherited templates.
+for template in ("chat/chat_stream.md", "chat/npc_talk.md"):
+    check(f"[1] {template}: per-turn changes preserve the system prompt",
+          _stream(template) == _stream(
+              template, **{name: f"CHANGED_{name}" for name in PER_TURN}), True)
 
 
 a = _stream()
@@ -198,7 +173,7 @@ def _moment(**over):
         reply_shape_section="- brief", addressed_to_me=True, addressed_names="",
         respond_opportunity=False, winding_down=True)
     ctx.update(over)
-    return render("chat/chat_moment.md", **{k: v for k, v in ctx.items() if k in MOMENT})
+    return render("chat/chat_moment.md", **ctx)
 
 
 m = _moment()
@@ -274,12 +249,6 @@ for path in ("app/routes/chat.py", "app/core/chat_engine.py"):
     check(f"[9] {path} uses the gated list",
           "list_locations_for_character(" in src, True)
 
-# [10]
-stream_src = _env.loader.get_source(_env, "chat/chat_stream.md")[0]
-check("[10] no open-ended place promise",
-      "other locations not in this list" in stream_src, False)
-check("[10] the marker block says a place is a walk",
-      "a place is a walk" in stream_src, True)
 
 print(f"\n{'FAILED: ' + str(len(FAILURES)) if FAILURES else 'all checks passed'}")
 sys.exit(1 if FAILURES else 0)

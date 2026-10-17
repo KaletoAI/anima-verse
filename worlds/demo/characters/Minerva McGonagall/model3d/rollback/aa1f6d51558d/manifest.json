@@ -1,0 +1,25 @@
+{
+  "created_at": "2026-10-17T15:26:18+00:00",
+  "files": [
+    {
+      "path": "aa1f6d51558d.glb",
+      "size": 9535620,
+      "sha256": "b307c8932ecdd03009953aab6bc0066acd1ed3330e62365efa59d14914c76889"
+    },
+    {
+      "path": "aa1f6d51558d.json",
+      "size": 965,
+      "sha256": "c75b48bd6a480bd7f7f2cbf33dc670ba6a1104f4daca5ce9891cde775ea95217"
+    },
+    {
+      "path": "unrigged/aa1f6d51558d.glb",
+      "size": 9535620,
+      "sha256": "b307c8932ecdd03009953aab6bc0066acd1ed3330e62365efa59d14914c76889"
+    },
+    {
+      "path": "unrigged/aa1f6d51558d.json",
+      "size": 723,
+      "sha256": "db60cc427792ebf7feeeaf59307e411d5dde78838c5da39dbbff149fd53b4310"
+    }
+  ]
+}

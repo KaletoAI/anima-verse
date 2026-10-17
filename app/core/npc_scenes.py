@@ -131,6 +131,7 @@ def prompt_vars(location_id: str, room_id: str,
                 names: List[str]) -> Dict[str, Any]:
     """Every variable ``tasks/npc_scene.md`` needs."""
     from app.core import npc_actions
+    from app.core.hooks import emit
     from app.core.perception import STORYTELLER_SPEAKER
     from app.models import perception_store
     from app.models.character import get_character_profile, get_effective_activity
@@ -138,6 +139,8 @@ def prompt_vars(location_id: str, room_id: str,
                                   get_room_name)
     participants = []
     for name in names:
+        blocks = []
+        emit("character.prompt_context", character_name=name, mode=TASK, blocks=blocks)
         p = get_character_profile(name) or {}
         participants.append({
             "name": name,
@@ -147,6 +150,7 @@ def prompt_vars(location_id: str, room_id: str,
             "arrival_reason": str(p.get("arrival_reason") or "").strip(),
             "goals": str(p.get("npc_goals") or "").strip(),
             "activity": get_effective_activity(name) or "",
+            "context": "\n\n".join(blocks),
         })
     # The last SPOKEN lines: the storyteller's movement traces (every room
     # change writes one) would crowd out the conversation within a few

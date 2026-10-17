@@ -1,0 +1,36 @@
+{
+  "provider": "openai_diffusion",
+  "service": "Qwen2.1 Turbo",
+  "model": "Qwen2.1-Turbo",
+  "loras": [],
+  "prompt": "Rubeus Hagrid, Ein sehr großer, breitschultriger erwachsener Mann mit wettergegerbter heller Haut, kräftigen Händen, langem dunklem lockigem Haar und einem dichten langen Bart. Warmherziger Blick, vorsichtige Bewegungen; eigenständige Gestaltung ohne Schauspielerähnlichkeit., Rubeus Hagrid is wearing cream cotton undershirt, plain cotton boxer shorts, brown checked long-sleeved wool shirt, dark brown heavy work trousers, long patched dark umber wool coat, large weathered brown leather work boots, standing with one hand on hip, weight shifted to one leg, shoulder slightly raised, chin up, neutral relaxed facial expression",
+  "negative_prompt": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality",
+  "characters": [
+    "Rubeus Hagrid"
+  ],
+  "reference_images": {
+    "input_reference_image_1": "Rubeus Hagrid_1792085601_0b1efcf4_1.png"
+  },
+  "seed": 0,
+  "created_at": "2026-10-15T17:55:15+00:00",
+  "duration_s": 90.5,
+  "mood": "",
+  "expression_key": "neutral",
+  "activity": "",
+  "pose_key": "",
+  "equipped_pieces": {
+    "bottom": "item_hagrids_arbeitshose",
+    "top": "item_hagrids_wollhemd",
+    "underwear_top": "item_hagrids_unterhemd",
+    "underwear_bottom": "item_hagrids_unterhose",
+    "feet": "item_hagrids_lederstiefel",
+    "outer": "item_hagrids_mantel"
+  },
+  "equipped_items": [],
+  "state_fingerprint": "",
+  "routing": {
+    "occasion": "expression",
+    "position": 1,
+    "spec": "Qwen2.1 Turbo"
+  }
+}

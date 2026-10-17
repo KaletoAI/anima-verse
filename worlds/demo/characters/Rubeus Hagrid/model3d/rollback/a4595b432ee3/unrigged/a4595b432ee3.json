@@ -1,0 +1,21 @@
+{
+  "source_image": "tpose_a4595b432ee3.png",
+  "view_images": {},
+  "source_image_sha256": "f4a99778a92d2be7eb3cd41b7f8ea79d0c8f633ad4e00a5ea92525c0293d2ab4",
+  "view_images_sha256": {},
+  "pieces": {
+    "bottom": "item_hagrids_arbeitshose",
+    "top": "item_hagrids_wollhemd",
+    "underwear_top": "item_hagrids_unterhemd",
+    "underwear_bottom": "item_hagrids_unterhose",
+    "feet": "item_hagrids_lederstiefel",
+    "outer": "item_hagrids_mantel"
+  },
+  "items": [],
+  "created_at": "2026-10-17T13:58:58+00:00",
+  "rig": "none",
+  "signature": "a4595b432ee3",
+  "mesh_backend": "Trellis2-Low",
+  "mesh_route_meta": {},
+  "source_filename": "RubeusHagrid-r5ad69c_00001_.glb"
+}

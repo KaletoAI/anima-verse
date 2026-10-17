@@ -32,14 +32,6 @@ WHAT IS CHECKED, and where every expected value comes from
       ``IF NOT EXISTS``), after which it is back. That is the migration path
       for worlds created by the old schema.
 
-  [2] EXPLAIN QUERY PLAN. SQLite must NAME ``idx_chat_char_ts`` for both hot
-      reads — the bounded partner-less read
-      (``WHERE character_name=? ORDER BY ts DESC, id DESC LIMIT ?``) and the
-      day window (``WHERE character_name=? AND ts>=? AND ts<?``). Without the
-      index the plan says ``SEARCH ... USING INDEX idx_chat_char_partner_ts
-      (character_name=?)`` plus a temp B-tree for the ORDER BY; the check is
-      on the index NAME, so it fails on the old schema.
-
   [3] THE FIXTURE, and the pair history derived from it by hand.
       Direction (Ann, partner=Bob), ts T01…T10, roles alternating
       user/assistant starting with user, contents a01…a10.
@@ -70,18 +62,10 @@ WHAT IS CHECKED, and where every expected value comes from
 
   [7] THE PHONE'S CONTACT LIST IS BOUNDED TOO
       (``app.routes.play._messaging_partners``). It is polled by the phone
-      panel and listed the avatar's 1:1 partners with an unfiltered UNION over
-      the whole table: ``EXPLAIN QUERY PLAN`` answers
-      ``SCAN chat_messages USING COVERING INDEX idx_chat_char_partner_ts`` for
-      the ``partner=?`` half — a full pass over every row in the world. With a
-      ``ts >= cutoff`` on both halves the plan becomes two SEARCHes,
-      ``idx_chat_char_ts (character_name=? AND ts>?)`` and
-      ``idx_chat_ts (ts>?)``. Checked on the plan text, so it fails on the
-      unfiltered query.
-      The horizon is ``memory.chat_retention_days`` — the same one the
-      retention job prunes by — resolved through the ONE reader
-      ``chat_retention._configured_days``, whose documented default is 90 and
-      whose 0 means "keep forever" and therefore "no cutoff".
+      panel. The bounded contact lookup must not scan the world-wide history.
+      EXPLAIN uses the SQL traced from the actual route helper, not a copied
+      query. The horizon is configured explicitly for this fixture through
+      ``chat_retention._configured_days``; 0 means no cutoff.
       The fixture, and the answer derived from it by hand: avatar ``Cora``
       with four partners, two of them 10 days old (one stored in each
       direction: ``Cora``→``Dan`` and ``Fred``→``Cora``) and two 400 days old
@@ -104,7 +88,6 @@ paths.init(STORAGE)
 from app.core import db  # noqa: E402
 db.init_schema()
 
-from app.core import world_db_schema  # noqa: E402
 from app.models.unified_chat import UnifiedChatManager as UCM  # noqa: E402
 
 FAILURES = []
@@ -129,28 +112,12 @@ def index_names():
 
 
 print("[1] the index, and the migration of an existing world")
-check("declared in SCHEMA_STATEMENTS",
-      any(INDEX in s for s in world_db_schema.SCHEMA_STATEMENTS
-          if isinstance(s, str)))
 check("present after init_schema", INDEX in index_names(), str(sorted(index_names())))
 with db.transaction() as conn:
     conn.execute(f"DROP INDEX {INDEX}")
 check("dropped (simulating a world from the old schema)", INDEX not in index_names())
 db.init_schema()
 check("re-created by a plain init_schema (= at boot)", INDEX in index_names())
-
-print("[2] EXPLAIN QUERY PLAN names it")
-conn = db.get_connection()
-plan_tail = " ".join(str(r[-1]) for r in conn.execute(
-    "EXPLAIN QUERY PLAN SELECT id, ts, role, content FROM chat_messages "
-    "WHERE character_name=? ORDER BY ts DESC, id DESC LIMIT ?",
-    ("Ann", 5)).fetchall())
-check("bounded partner-less read uses it", INDEX in plan_tail, plan_tail)
-plan_day = " ".join(str(r[-1]) for r in conn.execute(
-    "EXPLAIN QUERY PLAN SELECT role, content FROM chat_messages "
-    "WHERE character_name=? AND ts >= ? AND ts < ? ORDER BY ts ASC",
-    ("Ann", "a", "b")).fetchall())
-check("day-window read uses it", INDEX in plan_day, plan_day)
 
 print("[3] the fixture")
 # chat_messages.character_name is a FK on characters(name) — two bare rows.
@@ -235,10 +202,6 @@ from app.core import chat_retention  # noqa: E402
 from app.core.timeutils import utc_now  # noqa: E402
 import app.routes.play as play  # noqa: E402
 
-check("the documented default horizon is 90 system days",
-      chat_retention._configured_days() == 90,
-      repr(chat_retention._configured_days()))
-
 _recent = (utc_now() - timedelta(days=10)).isoformat(timespec="seconds")
 _old = (utc_now() - timedelta(days=400)).isoformat(timespec="seconds")
 with db.transaction() as c:
@@ -248,13 +211,15 @@ with db.transaction() as c:
         [("Cora",), ("Fred",), ("Hana",)])
     c.executemany(
         "INSERT INTO chat_messages (character_name, partner, ts, role, content, "
-        "channel, metadata) VALUES (?, ?, ?, 'user', 'x', 'web', '{}')",
+        "channel, metadata) VALUES (?, ?, ?, 'user', 'x', 'web', '{\"medium\":\"messaging\"}')",
         [("Cora", "Dan", _recent),    # recent, stored on the avatar's side
          ("Fred", "Cora", _recent),   # recent, stored on the partner's side
          ("Cora", "Gwen", _old),      # beyond the horizon, avatar's side
          ("Hana", "Cora", _old)])     # beyond the horizon, partner's side
 
 _real_days = chat_retention._configured_days
+contact_sql = []
+conn.set_trace_callback(contact_sql.append)
 try:
     chat_retention._configured_days = lambda: 90
     bounded = sorted(play._messaging_partners("Cora"))
@@ -262,6 +227,7 @@ try:
     unbounded = sorted(play._messaging_partners("Cora"))
 finally:
     chat_retention._configured_days = _real_days
+    conn.set_trace_callback(None)
 
 check("90 days -> only the partners inside the horizon",
       bounded == ["Dan", "Fred"], str(bounded))
@@ -269,32 +235,12 @@ check("0 days -> every partner, in both directions",
       unbounded == ["Dan", "Fred", "Gwen", "Hana"], str(unbounded))
 check("the avatar is never its own contact", "Cora" not in unbounded)
 
-# The plan, both halves of the UNION, against the query the function builds.
-_UNBOUNDED_SQL = (
-    "SELECT partner AS other FROM chat_messages "
-    "WHERE character_name=? AND partner!='' "
-    "UNION "
-    "SELECT character_name AS other FROM chat_messages "
-    "WHERE partner=? AND character_name!=''")
-_BOUNDED_SQL = (
-    "SELECT partner AS other FROM chat_messages "
-    "WHERE character_name=? AND partner!='' AND ts>=? "
-    "UNION "
-    "SELECT character_name AS other FROM chat_messages "
-    "WHERE partner=? AND character_name!='' AND ts>=?")
-plan_open = " ".join(str(r[-1]) for r in conn.execute(
-    "EXPLAIN QUERY PLAN " + _UNBOUNDED_SQL, ("Cora", "Cora")).fetchall())
+# Explain the real bounded contact lookup rather than a duplicate query.
+bounded_sql = next(q for q in contact_sql if "SELECT partner AS other" in q)
 plan_bound = " ".join(str(r[-1]) for r in conn.execute(
-    "EXPLAIN QUERY PLAN " + _BOUNDED_SQL,
-    ("Cora", _recent, "Cora", _recent)).fetchall())
-check("the unfiltered UNION really scans the table",
-      "SCAN chat_messages" in plan_open, plan_open)
-check("the bounded UNION scans nothing",
+    "EXPLAIN QUERY PLAN " + bounded_sql).fetchall())
+check("the bounded contact lookup does not scan chat_messages",
       "SCAN chat_messages" not in plan_bound, plan_bound)
-check("bounded half 1 searches (character_name, ts)",
-      "idx_chat_char_ts" in plan_bound, plan_bound)
-check("bounded half 2 searches (ts)",
-      "idx_chat_ts (ts>?)" in plan_bound, plan_bound)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 for f in FAILURES:

@@ -1,0 +1,24 @@
+{
+  "created_at": "2026-10-17T15:29:52+00:00",
+  "source": "lod",
+  "format": "glb",
+  "rig": "mixamo",
+  "tier": "low",
+  "source_file": "b852a46d5ffc.glb",
+  "lod_ratio": 0.4,
+  "tris": 19840,
+  "tris_before": 49602,
+  "signature": "b852a46d5ffc",
+  "character": "Johanna Falk",
+  "extension_rig": {
+    "fingerprint": "b6defac5efd112d1bbd26b9d0643136c475b4f4b6fa327c22ce93889d5dcb4c6",
+    "groups": [],
+    "status": "none_applicable",
+    "reason": "",
+    "has_applied": false,
+    "attempted": true,
+    "attempted_at": "2026-10-17T15:29:50+00:00",
+    "metrics": {},
+    "inherited": true
+  }
+}

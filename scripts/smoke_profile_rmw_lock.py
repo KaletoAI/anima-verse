@@ -103,12 +103,6 @@ ALLOWLIST = {
     "app/models/character_template.py::migrate_prune_stale_stats_once":
         "boot migration, same window",
 
-    # --- the private pack: read-only from this repo ----------------------
-    "plugins/undress/skill.py::execute":
-        "SYMLINK into the private anima-verse-packs repo — read-only here. "
-        "Reported to the coordinator: its execute() reads the profile, edits "
-        "equipped_pieces and saves, and needs the same "
-        "keyed_lock('character_profile', <name>) span as the equip routes",
 }
 
 

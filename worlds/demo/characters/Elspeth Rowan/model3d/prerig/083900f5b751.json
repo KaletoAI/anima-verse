@@ -1,0 +1,41 @@
+{
+  "blender": {
+    "version": "5.2.2 LTS",
+    "steps": [
+      "normalize"
+    ],
+    "at": "2026-10-15T18:26:54+00:00",
+    "height_basis": "bbox",
+    "scale": 0.912205,
+    "target_height_m": 1.68,
+    "before": {
+      "dims_m": [
+        1.782,
+        0.4492,
+        1.8417
+      ],
+      "center_xy": [
+        0.0038,
+        0.0042
+      ],
+      "min_z": -0.9923,
+      "tris": 49099,
+      "joints": 52
+    },
+    "after": {
+      "dims_m": [
+        1.6255,
+        0.4098,
+        1.68
+      ],
+      "center_xy": [
+        0.0,
+        -0.0
+      ],
+      "min_z": -0.0,
+      "tris": 49099,
+      "joints": 52
+    }
+  },
+  "rig": "mixamo"
+}

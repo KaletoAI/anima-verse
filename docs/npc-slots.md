@@ -294,6 +294,31 @@ resolves its model through the task `npc_talk` (`chat_engine.chat_llm_task`).
 Route `npc_talk` and `npc_scene` at a fast model in `/admin/settings → LLM
 Routing`; unrouted, `npc_*` falls back to `chat_stream`, i.e. the RP model.
 
+NPC replies use `chat/npc_talk.md`, independently of the general RP template
+`chat/chat_stream.md`. Both share `chat/reply_base.md` for world context,
+identity, partner information, tools, intent/state markers and summaries.
+The NPC contract asks for a direct spoken reply rather than narration,
+profile recitals or both sides of a conversation. The ordinary perception
+history and per-turn scene state are retained; the reply is not shortened
+after generation, and spoken promises do not replace real actions.
+`chat/npc_reply_cue.md` adds a brief speech-format reminder to the scene state,
+after the history. Old narrated assistant turns remain available as context,
+but are explicitly not the format for the next reply.
+Edit the NPC template in `/admin/templates`; its real-data preview requires
+a temporary NPC. A general RP template override does not override NPC replies.
+
+The `npc_action` opener receives up to six chronological spoken lines from
+the NPC's latest 24 perceived stream records, so it can continue an existing
+exchange instead of repeating its goals or invitation. Movement traces and
+private whispered content the NPC did not hear are excluded. Outdoors,
+previously heard words remain available when the speaker walks away;
+unheard remote chatter cannot crowd that subjective history out.
+
+The `npc_scene` director must use the supplied participant names exactly,
+continue the latest applicable utterance and keep activities in the current
+room. Without an offered partner pose, `pair` must be `null`; a spoken
+invitation alone does not move either participant.
+
 With the avatar in the SAME room and active within
 `chat.avatar_floor_timeout_minutes`, the player-priority rule still holds: an
 opener gets one answer, then the stage is the player's. Next door the cascade

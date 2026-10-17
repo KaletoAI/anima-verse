@@ -1,0 +1,37 @@
+{
+  "provider": "openai_diffusion",
+  "service": "Qwen2.1 Turbo",
+  "model": "Qwen2.1-Turbo",
+  "loras": [],
+  "prompt": "Elspeth Rowan, Eine erwachsene schottische Frau mit kräftiger alltagstauglicher Statur, sommersprossiger heller Haut, haselbraunen Augen und kupferrotem, bereits leicht ergrautem Haar in einem lockeren Knoten. Freundliches reifes Gesicht und wetterfeste Haltung; vollständig originale Person., Elspeth Rowan is wearing plain cream cotton undershirt, plain full coverage cotton briefs, cream collared long-sleeved station shirt, dark green tailored work trousers, dark green practical station jacket with brass buttons, closed polished dark brown leather shoes, dark green railway peaked cap without a commercial logo, standing with one hand on hip, weight shifted to one leg, shoulder slightly raised, chin up, neutral relaxed facial expression",
+  "negative_prompt": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality",
+  "characters": [
+    "Elspeth Rowan"
+  ],
+  "reference_images": {
+    "input_reference_image_1": "Elspeth Rowan_1792085514_ca2f0ef4_1.png"
+  },
+  "seed": 0,
+  "created_at": "2026-10-15T17:54:39+00:00",
+  "duration_s": 62.5,
+  "mood": "",
+  "expression_key": "neutral",
+  "activity": "",
+  "pose_key": "",
+  "equipped_pieces": {
+    "underwear_top": "item_elspeths_unterhemd",
+    "underwear_bottom": "item_elspeths_unterw_sche",
+    "top": "item_elspeths_uniformhemd",
+    "bottom": "item_elspeths_uniformhose",
+    "feet": "item_elspeths_arbeitsschuhe",
+    "outer": "item_elspeths_stationsjacke",
+    "head": "item_elspeths_schirmm_tze"
+  },
+  "equipped_items": [],
+  "state_fingerprint": "",
+  "routing": {
+    "occasion": "expression",
+    "position": 1,
+    "spec": "Qwen2.1 Turbo"
+  }
+}

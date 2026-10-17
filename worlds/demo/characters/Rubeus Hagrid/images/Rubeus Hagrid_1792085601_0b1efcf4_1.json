@@ -1,0 +1,57 @@
+{
+  "image_filename": "Rubeus Hagrid_1792085601_0b1efcf4_1.png",
+  "prompt": "Erwachsenes breites Gesicht, freundliche dunkle Augen, wettergegerbte Haut, lange dunkle Locken und dichter Bart; keine Ähnlichkeit mit einem realen Schauspieler.",
+  "backend": "Qwen2.1",
+  "backend_type": "openai_diffusion",
+  "negative_prompt": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, side view, three-quarter view, looking away, smiling, open mouth, cropped hair, cut off top of head, chest, torso, clothing, jewelry, earrings, necklace, hat, glasses, hands, objects, background scenery, room, landscape",
+  "from_character": "",
+  "guidance_scale": null,
+  "num_inference_steps": 40,
+  "duration_s": 166.8,
+  "created_at": "2026-10-15T17:33:21+00:00",
+  "location": "51525929",
+  "room_id": "61c91814",
+  "seed": 0,
+  "loras": [],
+  "model": "Qwen2.1",
+  "reference_images": {},
+  "target_model": "qwen",
+  "canonical": {
+    "persons": [
+      {
+        "label": "Rubeus Hagrid",
+        "name": "Rubeus Hagrid",
+        "appearance": "Ein sehr großer, breitschultriger erwachsener Mann mit wettergegerbter heller Haut, kräftigen Händen, langem dunklem lockigem Haar und einem dichten langen Bart. Warmherziger Blick, vorsichtige Bewegungen; eigenständige Gestaltung ohne Schauspielerähnlichkeit.",
+        "gender": "male",
+        "is_agent": true
+      }
+    ],
+    "person_prompts": {},
+    "outfits": {
+      "1": "Rubeus Hagrid is wearing wearing: cream cotton undershirt, plain cotton boxer shorts, brown checked long-sleeved wool shirt, dark brown heavy work trousers, long patched dark umber wool coat, large weathered brown leather work boots"
+    },
+    "pose": "",
+    "expression": "",
+    "scene": "Erwachsenes breites Gesicht, freundliche dunkle Augen, wettergegerbte Haut, lange dunkle Locken und dichter Bart; keine Ähnlichkeit mit einem realen Schauspieler.",
+    "mood": "Aufmerksam und freundlich beim Schuljahrsbeginn.",
+    "activity": "",
+    "location": "Wohnstube, small rough stone Scottish gamekeeper cottage, slate roof, chimney and southern timber porch, quiet interior, afternoon, no people, no text",
+    "personality_hint": "",
+    "profile_image_hint": "",
+    "style": "front view, facing the camera, neutral expression, head and neck only, shoulders only if the hair is long, complete hairstyle inside the frame, no clothing, no accessories, no jewelry, no headwear, no glasses, no objects, no background, a photorealistic portrait, soft even lighting, sharp focus",
+    "negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, side view, three-quarter view, looking away, smiling, open mouth, cropped hair, cut off top of head, chest, torso, clothing, jewelry, earrings, necklace, hat, glasses, hands, objects, background scenery, room, landscape"
+  },
+  "template_prompt": "front view, facing the camera, neutral expression, head and neck only, shoulders only if the hair is long, complete hairstyle inside the frame, no clothing, no accessories, no jewelry, no headwear, no glasses, no objects, no background, a photorealistic portrait, soft even lighting, sharp focus Erwachsenes breites Gesicht, freundliche dunkle Augen, wettergegerbte Haut, lange dunkle Locken und dichter Bart; keine Ähnlichkeit mit einem realen Schauspieler.",
+  "prompt_method": "caller_provided",
+  "items_used": [],
+  "gallery_character": "Rubeus Hagrid",
+  "filenames": [
+    "Rubeus Hagrid_1792085601_0b1efcf4_1.png"
+  ],
+  "routing": {
+    "occasion": "profile",
+    "position": 1,
+    "spec": "Qwen2.1"
+  },
+  "image_analysis": "The image presents a close-up portrait of a single adult male, positioned centrally against a seamless, neutral off-white studio background. The lighting is soft and even, highlighting the natural texture of his skin and the wet, glossy appearance of his hair. The subject has a tanned complexion with visible pores and fine facial hair, including a full, well-groomed beard and mustache. His long, dark brown hair is wet and wavy, falling past his shoulders and framing his face. He has a strong, angular jawline and a neutral, direct gaze into the camera. The man is shirtless, revealing his bare shoulders and the upper part of his chest, with visible body hair on the sternum. The visual style is a high-resolution digital photograph, shot from a straight-on, eye-level perspective with a shallow depth of field that keeps the face in sharp focus while the background remains a flat, unobtrusive plane. The color palette is naturalistic, dominated by earthy skin tones, dark hair, and the bright, clean backdrop."
+}

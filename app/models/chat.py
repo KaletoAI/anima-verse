@@ -15,7 +15,8 @@ from app.models.channel import Message
 
 
 def get_chat_history(character_name: str = "", partner_name: str = "",
-                     limit: Optional[int] = None) -> List[Dict[str, str]]:
+                     limit: Optional[int] = None,
+                     medium: Optional[str] = None) -> List[Dict[str, str]]:
     """Loads the chat history. partner_name: explicit partner character (C2C).
 
     ``limit`` is handed straight to ``UnifiedChatManager.get_chat_history``,
@@ -25,11 +26,15 @@ def get_chat_history(character_name: str = "", partner_name: str = "",
     exactly a message count — a time window (``get_time_based_history``) is
     not the same thing and must not be approximated by one.
     Without it nothing changes: the full history is returned as before.
+
+    ``medium`` restricts the communication channel before deduplication and
+    limiting. The phone uses "messaging"; ordinary history callers keep all
+    channels by leaving it unset.
     """
     if not character_name:
         return []
     messages = UnifiedChatManager.get_chat_history(
-        character_name, partner_name=partner_name, limit=limit)
+        character_name, partner_name=partner_name, limit=limit, medium=medium)
     return [msg.to_dict() for msg in messages]
 
 

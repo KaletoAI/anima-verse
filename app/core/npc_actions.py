@@ -61,7 +61,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app.core import places
 from app.core.game_time import GameDuration, GameTime
-from app.core.hooks import get_provider
+from app.core.hooks import emit, get_provider
 from app.core.log import get_logger
 from app.core.timeutils import game_time
 
@@ -89,6 +89,10 @@ _MAX_ANSWER_TOKENS = 320
 
 # The longest opening line (`say.line`) we put into the perception stream.
 _MAX_LINE_CHARS = 300
+
+# Match the scene director's bounded spoken-history window.
+_RECENT_LINES = 6
+_RECENT_FETCH = 24
 
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.S)
 
@@ -322,6 +326,37 @@ def present_partners(name: str) -> List[Dict[str, str]]:
     return out
 
 
+def _recent_conversation(name: str) -> List[Dict[str, str]]:
+    """Recent spoken lines at the current place, oldest first.
+
+    Use the bounded subjective room stream, including already-perceived
+    addressed lines. Historical earshot is retained: moving away does not
+    erase words that were already heard.
+    """
+    from app.core.perception import STORYTELLER_SPEAKER
+    from app.models import perception_store
+    from app.models.character import (get_character_current_location,
+                                      get_character_current_room)
+
+    location_id = get_character_current_location(name) or ""
+    room_id = get_character_current_room(name) or ""
+    rows = perception_store.get_character_room_stream(
+        name, location_id, room_id, limit=_RECENT_FETCH, include_source=True)
+    recent = []
+    for row in rows:
+        if row.get("source") == "movement":
+            continue
+        speaker = (row.get("meta") or {}).get("speaker") or ""
+        line = row.get("content") or ""
+        if not line.strip():
+            continue
+        recent.append({
+            "speaker": "Narrator" if speaker == STORYTELLER_SPEAKER else speaker,
+            "line": line,
+        })
+    return recent[-_RECENT_LINES:]
+
+
 def talk_allowed(name: str, profile: Dict[str, Any]) -> bool:
     """May THIS turn open a conversation? Mode ``turns`` everywhere; mode
     ``scene`` only for an NPC with a home area (the director scene knows
@@ -514,7 +549,33 @@ def _with_action_context(name: str, variables: Dict[str, Any]) -> Dict[str, Any]
     provider = get_provider("npc_action_context")
     if provider:
         variables["extension_prompt"] = provider(name, variables) or ""
+    blocks = [variables["extension_prompt"]] if variables["extension_prompt"] else []
+    emit("character.prompt_context", character_name=name, mode=TASK, blocks=blocks)
+    variables["extension_prompt"] = "\n\n".join(blocks)
     return variables
+
+
+def _apply_solo_action(name: str, answer: Dict[str, Any],
+                       variables: Dict[str, Any]) -> Dict[str, Any]:
+    """Packages handle explicit solo actions independently of room speech."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import (get_character_profile, get_character_status,
+                                      get_character_current_location,
+                                      get_character_current_room)
+    action = answer.get("action")
+    result: Dict[str, Any] = {}
+    if isinstance(action, dict):
+        with keyed_lock("character_profile", name):
+            profile = get_character_profile(name) or {}
+            if (not profile or get_character_status(name) or profile.get("journey")
+                    or (get_character_current_location(name, profile=profile) or "") != variables["location_id"]
+                    or (get_character_current_room(name, profile=profile) or "") != variables["current_room_id"]
+                    or profile.get("npc_home") != variables["_home_origin"]):
+                result.update(handled=True, success=False,
+                              text="The action's placement is no longer current.")
+            else:
+                emit("npc.action_execute", character_name=name, action=action, result=result)
+    return result
 
 
 def prompt_vars(name: str) -> Dict[str, Any]:
@@ -529,7 +590,7 @@ def prompt_vars(name: str) -> Dict[str, Any]:
     ``home`` is the switch the template branches on, and a key that exists in
     only one branch is a crash waiting for the other one. The conversation
     keys (``npc_goals``, ``arrival_reason``, ``dialogue_style``,
-    ``talk_allowed``, ``present``, ``pair_keys``) are part of that set:
+    ``talk_allowed``, ``present``, ``pair_keys``, ``recent``) are part of that set:
     ``talk_allowed`` is the switch for the talk block, and it is only True
     when there is somebody to talk to (``present`` non-empty).
 
@@ -556,6 +617,7 @@ def prompt_vars(name: str) -> Dict[str, Any]:
         "talk_allowed": talk,
         "present": present,
         "pair_keys": _pair_pose_keys() if talk else [],
+        "recent": _recent_conversation(name) if talk else [],
     }
     home = profile.get("npc_home")
     if isinstance(home, dict) and home:
@@ -723,6 +785,15 @@ def _apply_home_answer(name: str, answer: Dict[str, Any],
         return None
     profile = get_character_profile(name) or {}
     home = profile.get("npc_home") or {}
+    solo = _apply_solo_action(name, answer, variables)
+    if solo.get("handled"):
+        if not solo.get("success"):
+            return None
+        pose = _pose_from_answer(answer, _solo_pose_keys())
+        if not force_set_status(name, activity=activity, pose=pose or None):
+            return None
+        return {"name": name, "room": "", "activity": activity, "moved": False,
+                "said_to": "", "invited": "", "action_result": solo}
     pose = _pose_from_answer(answer, _solo_pose_keys())
     from app.core.party_engine import is_party_follower
     follower = is_party_follower(name)
@@ -806,6 +877,8 @@ def run_action_for(name: str, *,
     if not variables:
         logger.debug("npc_action(%s): nowhere to act", name)
         return None
+    from app.models.character import get_character_profile
+    variables["_home_origin"] = (get_character_profile(name) or {}).get("npc_home")
 
     # The turn is spent from here on: the cooldown is stamped BEFORE the call,
     # so a model that errors or babbles costs one interval of quiet instead of
@@ -823,7 +896,8 @@ def run_action_for(name: str, *,
         return None
 
     if variables["home"]:
-        # The package rechecks real placement before executing a proposal.
+        # The solo-action guard rechecks placement and home before writing;
+        # pooling or an admin move may have happened during the model call.
         return _apply_home_answer(name, answer, variables)
 
     # THE PLACE MUST STILL BE THE PLACE. A turn takes seconds and the world
@@ -866,20 +940,25 @@ def run_action_for(name: str, *,
                         name, room, reason)
             return None
 
+    solo = _apply_solo_action(name, answer, variables)
+    if solo.get("handled") and not solo.get("success"):
+        return None
+
     from app.models.character import force_set_status
     written = force_set_status(name, room=room if moved else None,
                                activity=activity or None,
                                pose=pose or None)
     if not written:
         return None
-    talk = _apply_talk(name, answer, variables, moved=moved)
+    talk = {} if solo.get("handled") else _apply_talk(name, answer, variables, moved=moved)
     logger.debug("npc_action(%s): %s%s%s", name,
                  f"-> {room} " if moved else "",
                  f"[{pose}] " if pose else "", activity)
     return {"name": name, "room": room, "activity": activity, "moved": moved,
             "pose": pose, "said_to": talk.get("said_to", ""),
             "invited": talk.get("invited", ""),
-            **({"intent_id": talk["intent_id"]} if talk.get("intent_id") else {})}
+            **({"intent_id": talk["intent_id"]} if talk.get("intent_id") else {}),
+            **({"action_result": solo} if solo.get("handled") else {})}
 
 
 # ---------------------------------------------------------------------------

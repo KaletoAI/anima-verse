@@ -1,0 +1,57 @@
+{
+  "image_filename": "Minerva McGonagall_1792085575_66b55ca3_1.png",
+  "prompt": "Reifes schmales Gesicht, graue Augen hinter einer feinen rechteckigen Brille, straffer dunkler Haarknoten mit grauen Strähnen, würdevoller wacher Ausdruck; originelles Gesicht.",
+  "backend": "Qwen2.1",
+  "backend_type": "openai_diffusion",
+  "negative_prompt": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, side view, three-quarter view, looking away, smiling, open mouth, cropped hair, cut off top of head, chest, torso, clothing, jewelry, earrings, necklace, hat, glasses, hands, objects, background scenery, room, landscape",
+  "from_character": "",
+  "guidance_scale": null,
+  "num_inference_steps": 40,
+  "duration_s": 144.9,
+  "created_at": "2026-10-15T17:32:55+00:00",
+  "location": "ec49558f",
+  "room_id": "e8138fd7",
+  "seed": 0,
+  "loras": [],
+  "model": "Qwen2.1",
+  "reference_images": {},
+  "target_model": "qwen",
+  "canonical": {
+    "persons": [
+      {
+        "label": "Minerva McGonagall",
+        "name": "Minerva McGonagall",
+        "appearance": "Eine aufrecht stehende erwachsene Frau mit schmalem, reifem Gesicht, heller Haut, grauen Augen und dunklem, von einzelnen grauen Strähnen durchzogenem Haar in einem straffen Knoten. Präzise Haltung, ruhige Hände; eigenständige Gesichtsgestaltung, keine Schauspielerähnlichkeit.",
+        "gender": "female",
+        "is_agent": true
+      }
+    ],
+    "person_prompts": {},
+    "outfits": {
+      "1": "Minerva McGonagall is wearing wearing: plain ivory cotton camisole, plain full coverage cotton briefs, high-necked ivory blouse with long sleeves, ankle-length charcoal wool skirt, long forest green academic robe, closed black leather lace-up ankle boots, plain dark green pointed academic hat"
+    },
+    "pose": "",
+    "expression": "",
+    "scene": "Reifes schmales Gesicht, graue Augen hinter einer feinen rechteckigen Brille, straffer dunkler Haarknoten mit grauen Strähnen, würdevoller wacher Ausdruck; originelles Gesicht.",
+    "mood": "Aufmerksam und freundlich beim Schuljahrsbeginn.",
+    "activity": "",
+    "location": "Torwiese, open stone gateway on the grassy grounds of a Scottish gothic castle, low stone walls and gravel paths, quiet outdoor gathering area, afternoon, no people, no text",
+    "personality_hint": "",
+    "profile_image_hint": "",
+    "style": "front view, facing the camera, neutral expression, head and neck only, shoulders only if the hair is long, complete hairstyle inside the frame, no clothing, no accessories, no jewelry, no headwear, no glasses, no objects, no background, a photorealistic portrait, soft even lighting, sharp focus",
+    "negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, side view, three-quarter view, looking away, smiling, open mouth, cropped hair, cut off top of head, chest, torso, clothing, jewelry, earrings, necklace, hat, glasses, hands, objects, background scenery, room, landscape"
+  },
+  "template_prompt": "front view, facing the camera, neutral expression, head and neck only, shoulders only if the hair is long, complete hairstyle inside the frame, no clothing, no accessories, no jewelry, no headwear, no glasses, no objects, no background, a photorealistic portrait, soft even lighting, sharp focus Reifes schmales Gesicht, graue Augen hinter einer feinen rechteckigen Brille, straffer dunkler Haarknoten mit grauen Strähnen, würdevoller wacher Ausdruck; originelles Gesicht.",
+  "prompt_method": "caller_provided",
+  "items_used": [],
+  "gallery_character": "Minerva McGonagall",
+  "filenames": [
+    "Minerva McGonagall_1792085575_66b55ca3_1.png"
+  ],
+  "routing": {
+    "occasion": "profile",
+    "position": 1,
+    "spec": "Qwen2.1"
+  },
+  "image_analysis": "This is a close-up, front-facing studio portrait of a middle-aged woman, captured against a seamless, neutral light-gray background. The lighting is soft and even, likely from a large diffused source, which minimizes harsh shadows and highlights the natural texture of her skin and hair. The mood is calm, neutral, and direct, with the subject looking straight into the lens with a composed, expressionless gaze.\n\nThe subject is a single woman with a slender build, visible from the shoulders up. Her hair is long, wavy, and predominantly dark brown with significant streaks of gray, particularly at the temples and crown. It is loosely gathered in a messy, voluminous updo, with many loose strands framing her face and falling over her shoulders. Her skin tone is fair with visible age-related texture, including fine lines around the eyes and mouth. She wears rectangular, tortoiseshell-framed eyeglasses with thin metal accents. Her facial expression is neutral and direct, with relaxed lips and steady eye contact.\n\nNo clothing is visible on her shoulders, suggesting she may be wearing a strapless top or is unclothed from the shoulders down, though this is partially obscured by her hair. The visual style is a high-resolution, realistic photographic portrait, likely a digital capture with a shallow depth of field that keeps the face in sharp focus while the background remains uniformly soft. The color palette is muted and naturalistic, dominated by the grays of her hair, the warm tones of her skin, and the neutral backdrop."
+}

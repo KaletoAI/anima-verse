@@ -5,10 +5,10 @@
     {
       "stem": "model",
       "active": true,
-      "description": "oak park bench with four seat slats, backrest, green metal legs and armrests",
-      "width_m": 1.9,
-      "depth_m": 0.71,
-      "height_m": 1.2,
+      "description": "Eichenholzbank mit vier Sitzlatten, Rückenlehne, grünen Metallfüßen und Armstützen.",
+      "width_m": 0.93,
+      "depth_m": 1.639,
+      "height_m": 1.1,
       "dims_estimated": false
     }
   ],
@@ -18,47 +18,37 @@
     "self-authored"
   ],
   "created_at": "2026-10-15T15:13:40+00:00",
-  "source": "manual",
-  "prompt": "",
+  "source": "generated",
+  "prompt": "A high-quality 3D model of Eichenholzbank mit vier Sitzlatten, Rückenlehne, grünen Metallfüßen und Armstützen, designed for 3D asset generation, 8k resolution, presented as a single isolated object on a plain seamless light gray studio background, centered product shot, soft even studio lighting from above, fully in frame with generous margin, matte surfaces clearly readable",
   "mount": "floor",
   "bbox": [
-    1.9,
-    1.2029,
-    0.71
+    0.56721,
+    0.67122,
+    0.99999
   ],
   "measured": {
     "format": "glb",
-    "file_bytes": 47356,
+    "file_bytes": 2152432,
     "objects": 1,
-    "tris": 608,
-    "verts": 1068,
+    "tris": 51257,
+    "verts": 39693,
     "materials": [
-      "gold",
-      "green",
-      "oak"
+      "Material_0"
     ],
     "images": [
       {
-        "name": "gold",
+        "name": "Image_0",
         "size": [
-          128,
-          128
+          2048,
+          2048
         ],
         "packed": true
       },
       {
-        "name": "green",
+        "name": "Image_1",
         "size": [
-          128,
-          128
-        ],
-        "packed": true
-      },
-      {
-        "name": "oak",
-        "size": [
-          128,
-          128
+          2048,
+          2048
         ],
         "packed": true
       }
@@ -73,16 +63,19 @@
     "vertex_colors": 0,
     "actions": 0,
     "dims_m": [
-      1.9,
-      0.71,
-      1.2029
+      0.5672,
+      1.0,
+      0.6712
     ],
     "center_xy": [
       0.0,
       0.0
     ],
-    "min_z": 0.0,
-    "at": "2026-10-15T15:13:41+00:00",
+    "min_z": -0.3356,
+    "at": "2026-10-17T14:13:09+00:00",
     "blender": "5.2.2 LTS"
-  }
+  },
+  "backend_image": "Flux2-9B Normal",
+  "negative": "scene, environment, floor shadow, people, hands, text, watermark",
+  "source_generated_at": "2026-10-17T14:02:13+00:00"
 }

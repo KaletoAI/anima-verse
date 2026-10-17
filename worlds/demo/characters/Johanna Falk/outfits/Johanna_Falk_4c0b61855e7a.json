@@ -1,0 +1,38 @@
+{
+  "provider": "openai_diffusion",
+  "service": "Qwen2.1 Turbo",
+  "model": "Qwen2.1-Turbo",
+  "loras": [],
+  "prompt": "Johanna Falk, Eine erwachsene Frau mit mittlerem Körperbau, warm olivfarbener Haut, braunen Augen und kinnlangem dunkelbraunem welligem Haar. Reifes offenes Gesicht, kleine Lachfalten und neugierige, ruhige Haltung; vollständig originelles Aussehen., Johanna Falk is wearing plain grey cotton camisole, plain full coverage cotton briefs, oatmeal long-sleeved wool sweater, dark charcoal practical travel trousers, knee-length muted blue waxed travel coat, closed brown leather walking boots, standing with one hand on hip, weight shifted to one leg, shoulder slightly raised, chin up, calm neutral face, relaxed brow, soft mouth, attentive eyes",
+  "negative_prompt": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality",
+  "characters": [
+    "Johanna Falk"
+  ],
+  "reference_images": {
+    "input_reference_image_1": "Johanna Falk_1792085519_12dfff1d_1.png"
+  },
+  "seed": 0,
+  "created_at": "2026-10-17T19:10:08+00:00",
+  "duration_s": 30.4,
+  "mood": "Aufmerksam und freundlich beim Schuljahrsbeginn.",
+  "expression_key": "neutral",
+  "activity": "",
+  "pose_key": "",
+  "equipped_pieces": {
+    "underwear_top": "item_johannas_unterhemd",
+    "underwear_bottom": "item_johannas_unterw_sche",
+    "top": "item_johannas_wollpullover",
+    "bottom": "item_johannas_reisehose",
+    "feet": "item_johannas_wanderstiefel",
+    "outer": "item_johannas_regenmantel"
+  },
+  "equipped_items": [],
+  "state_fingerprint": "",
+  "routing": {
+    "occasion": "expression",
+    "position": 1,
+    "spec": "Qwen2.1 Turbo"
+  },
+  "last_used_at": 1792264212.9146051,
+  "use_count": 1
+}

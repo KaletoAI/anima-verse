@@ -1,0 +1,37 @@
+{
+  "provider": "openai_diffusion",
+  "service": "Qwen2.1 Turbo",
+  "model": "Qwen2.1-Turbo",
+  "loras": [],
+  "prompt": "T-pose, standing upright facing the camera, arms straight out to the sides at shoulder height, forming the letter T, palms facing down toward the floor, hands in natural proportion to the body, fingers straight, slender and slightly spread apart, legs clearly apart with open space visible between them, hair clear of the chest, Minerva McGonagall, Eine aufrecht stehende erwachsene Frau mit schmalem, reifem Gesicht, heller Haut, grauen Augen und dunklem, von einzelnen grauen Strähnen durchzogenem Haar in einem straffen Knoten. Präzise Haltung, ruhige Hände; eigenständige Gesichtsgestaltung, keine Schauspielerähnlichkeit., Minerva McGonagall is wearing plain ivory cotton camisole, plain full coverage cotton briefs, high-necked ivory blouse with long sleeves, ankle-length charcoal wool skirt, long forest green academic robe, closed black leather lace-up ankle boots, plain dark green pointed academic hat, neutral relaxed facial expression",
+  "negative_prompt": "illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, cropped feet, feet cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, palms facing the camera, palms facing up, clenched fists, curled fingers, fingers pressed together, splayed fingers, fanned fingers, oversized hands, large hands, thick fingers, chunky fingers, swollen fingers, fused fingers, mitten hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance",
+  "characters": [
+    "Minerva McGonagall"
+  ],
+  "reference_images": {
+    "input_reference_image_1": "Minerva McGonagall_1792085575_66b55ca3_1.png"
+  },
+  "seed": 0,
+  "created_at": "2026-10-15T17:56:05+00:00",
+  "duration_s": 24.4,
+  "mood": "",
+  "expression_key": "neutral",
+  "activity": "",
+  "pose_key": "",
+  "equipped_pieces": {
+    "bottom": "item_minervas_langer_rock",
+    "top": "item_minervas_hochgeschlossene_bluse",
+    "underwear_top": "item_minervas_unterhemd",
+    "underwear_bottom": "item_minervas_unterw_sche",
+    "feet": "item_minervas_schn_rstiefel",
+    "outer": "item_minervas_gr_ne_robe",
+    "head": "item_minervas_spitzhut"
+  },
+  "equipped_items": [],
+  "state_fingerprint": "",
+  "routing": {
+    "occasion": "tpose",
+    "position": 1,
+    "spec": "Qwen2.1 Turbo"
+  }
+}

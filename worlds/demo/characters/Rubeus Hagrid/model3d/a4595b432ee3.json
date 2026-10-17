@@ -1,0 +1,221 @@
+{
+  "source_image": "tpose_a4595b432ee3.png",
+  "view_images": {},
+  "source_image_sha256": "f4a99778a92d2be7eb3cd41b7f8ea79d0c8f633ad4e00a5ea92525c0293d2ab4",
+  "view_images_sha256": {},
+  "pieces": {
+    "bottom": "item_hagrids_arbeitshose",
+    "top": "item_hagrids_wollhemd",
+    "underwear_top": "item_hagrids_unterhemd",
+    "underwear_bottom": "item_hagrids_unterhose",
+    "feet": "item_hagrids_lederstiefel",
+    "outer": "item_hagrids_mantel"
+  },
+  "items": [],
+  "mesh_backend": "Trellis2-Low",
+  "mesh_route_meta": {},
+  "created_at": "2026-10-17T14:26:04+00:00",
+  "source": "generated",
+  "signature": "a4595b432ee3",
+  "character": "Rubeus Hagrid",
+  "rig": "mixamo",
+  "format": "glb",
+  "backend": "mesh-mia",
+  "rig_backend": "mesh-mia",
+  "rig_metrics": {},
+  "rig_route_meta": {
+    "routing": {
+      "occasion": "rig_humanoid",
+      "position": 1,
+      "spec": "mesh-mia"
+    }
+  },
+  "has_texture": false,
+  "source_filename": "gw_6fa8f68155a04862ae6ead8c7026e7bd_input_model_path_rigged.glb",
+  "face_retexture": {
+    "status": "applied",
+    "at": "2026-10-17T14:24:28+00:00",
+    "reference": "face",
+    "backend": "GLB-Face-Retexture",
+    "job_id": "0634b6c77e0649f3a05ebd61f9d7189a",
+    "params": {
+      "strength": 1.0,
+      "feather": 0.18,
+      "render_resolution": 768,
+      "yaw": 0.0
+    },
+    "photo": {
+      "balance": 1.0,
+      "tone_match": 1.0,
+      "skin_recolor": 1.0,
+      "brightness": 1.0,
+      "applied_on": "hub"
+    },
+    "upscale": {
+      "status": "off",
+      "reason": "face view"
+    },
+    "baked": {
+      "body_recolored": true,
+      "body_texels_recolored": 403268,
+      "face_mask": "eJzt3b+OK/d5x2FOxhBVGBmVCiB4ziUkVVIEYbpcRpIqbUoXgodGAKv0JeQ20plAALtLLkEMXJxS66jQGlnsL5wh95xVuQDPvKS/zwMIULV8P2fJmd/8Wc5mAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwG3qn6snqLXTH23SH639tnqCWv/3q+oJar3/rHqCWr8N7//pT6snqPX559UTAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8Gl0rT1sPqueos6pv+2rhyg097dWPUWd9P7NGN4/tJvdAnSPK7zI9nb7t2v0LxuAwwov9HbD0xqvcrv94yr90832/+Nq/cc1Xuitupbdv23Pa7zMzfaP4f3TOv3z9v9hjRd6o9OOObp/u9K6XP9t9g/r9Hfh/f2t9o/rHJctx39rHGi91Ur9w63279bpHy/9w639G6zZfzrQGEP7l/f/aaG1S+5v6f37zRTav+z/2vvb2wes2v+D/tD+Zf17i2sg/fr3n/5lOv369d/eOZD0/pXOf/T6b7N/1fOfXXb/cTPdXP9K1z8u/ePNXQNds/9wercdVnixt+jXuf55uf+rT+3/h3P/5of9Ci/2Fl1b5f6Xf2nrfM7ebKX+qf1unfsM3mydQ5Kp9TfaP63T/9Svc5/Zm62zJJkeVrrP7s126/Qfups79D8b11qSxvff2tL/bFhrruk2+/u1DklutL9bq3+30uu81XRc53Vutf9W5wIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA+BMzPFVPUGvX9tUjlPpNi34D9K21Q/UQhfTrP1QPUUi//kP1EIX0Z/cDAAAAAAAAAAAAAAAAAAAAAHBFXaueoFTfsvuH8P5deH/TXz1CpU6//mDp/b1+/cHS+7f60/ufq2eopF9/9QyV9OuvnqGS/X92fx/+/tcf/0ir6N9/+v5vCN/+69dfPUMl/fqrZ6iUfvyTvv7ZbNpj9QS1xofqCQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD4pPrn6glqDa0dqmeodOo/Vs9QqNu09lA9RKFuswvvb+2xeohK29aeqmeoNLYWvQdsJ9UzFOrn/n31FEW+WD7+uQugd+/mj3/uAujvf76Zkvs3T92cH7sA6tqy+UtdAH3Vt18v/ZkLoO5x2fi31AXQ+DBc+jMXQONxfOk/VM9SYfzlS37mDnD88OvP3AF8zM/cAXz5sT9xA9gdp4/9++pp1tftX/UfqqepsMvu7159/o/VwxR4tf2PPAIcXvUnLgC2r/oTFwCvP/+RR4Dp/a/2/5ELwFf5iQvA19v/xAXQTr9+/foz+/8svP/18j+x//Xu/7vA/vFV/+/y1n8fVr/vM/uHj7/71v4z7/jnw3v/m9N/vwzun2+B2FdPs76X/Mf5/6qHKfDSv8/s/3w65z/N/xKBZ7/+/NJ/nE+DBfYP08vb/9QfePZ7+PD2Px0HBvZfjn7m615j4tWfuf8358O+5P79Zv4oBF79nPv//bzj3yb2z2e/fv3SfyyepUI/H/k8n//vWDxLian923nH1wWe/NnMb/v9ecMf2r9p++nx8j+1g5QZEzf8AAAAAAAAdQJvy/gR/dmy+7vE27Je0a8/WXr/JvK2xFem9P5j9QS1dsfqCQAAAAAAAAAAAODTCPzm6h+ZqgcotqseoNIY+c3tHyzf4F09RJ3z44uqp6ijX398f+CTG17ob5nPbb7YnZ/eE0t/y3xu/cXu8vieVKP+xMd2fqA/88F9L9L7h+zDH/364/uDD3+XJ5jpz6U/+vTP/AA7/dVDFErv77JP/y2//+T+bXj/GN4/ZZ/+7sJP/2/D+9NP/0/h/emXv3bhlz/S+9Mvf4zhp3/1Z/fvwj//9v/Z63+3v2Wf/3T7d/YO4Nx/qB6jzHL7Q/AOsG/hO8D0/il8ATCGLwCG8L//2YYvgPrw/k5/dP8mvX8K79/pj+5PPwM+Zq//9Gcf/5z6n6fw/uhHZA7Rn379+vUn0/9f1SOU2sb3/6p6hFJ9fH/1BLW69P7s3V98/yb54H+W3h9888Mivf/r6gGKpfcDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFfRteoJavXtL6tHKLV9+tfqEUoNj9H9Q3t4qJ6h0thadP8U3r/L7v+rlt3/1+H9O/36q4copL89J69/0/tPb//k479+7v+76inqDKf+R/2x5v72s+op6iz9z9VT1Fn6v6ueoo7+k/fVU9QZ5/7fP1aPUWbp/0Nu/y68f5r7H8L7W27/vPoJ7u/mw78pvH/X/qN6jir9uf9vqueosp37x/D+Ibd/Of2xbT+vnqPKvPx7HHJPAM/Ln8cxtr9bFn9T7Anw7dLfnlIvgC1nP/7YHo/VgxRZjn6/b388Vg9S5Hz0174/VA9S5NL/w6F6kCLn/PZ+Xz1Ije7S/92+epIaL/3fVg9SpL/0Z/4BwHR46c+8/jsdL/2Pv6gepcT0sD33H7+uHqXE9HjpP4T2P13695mHP9PzpX+zrx6lxNTO/al3f0ztm6X/qXqQIlP77/D+76Ivfl4OfmPv/t5d+o/VgxR56T9UD1LkpX9fPUiRS3/q7v9861fu5v+l/1g9R5Vd9ubvpb96jDJT9OrXrX/Zq9/4/i589zf3j8G7v1P/cx+8+evmbX/u3n/uP27eVU9RpztOh+oZKnXH6glq6a+eAAAAAAAAAAAAAAAAAAAAAAAAAAAAALhbX1QPUOxn1QMUC+//SXj/Nry/j33A3Zn+6glqdfqz6c+W+4TDs6+rByiW3v+31QMUS+//qnqAYun9APCnJPvxrZsu99Hdi214/5D76PrFlN2/PL482Nha9Im91lryid3h1N+qhyg0zv376inqLP2H6inq7PS35AXgNPcHL4CW/uAF0NIfvABa+oMXQPqzF4D69RcdAEy38M/eVfbfwn63rv82Pni70v6SF/6RshMA3W0ceQ0V/f3Tpb/+yGtb0T+elpzdjRx57Ar653Mut9Lfr98/v+TT7kb659/Gft0XXLa5t9O/tqX8LLG/a9n9o379+vWH9n81Zvd/2Wf3fxHev9GvX39uf6c/un+jX7/+2P707V96/z2//8dr/JDd3fZ3V7liP95t/3CV/uFu+69zx8b2XvuH9odr/Ji77Z/at9f4Mf2d9m/bY/Tnf/d8ne3fne7/+na4zvZvus/+3eP2Ov0ff//3dOf5ae0zXae/u8v+8Thvt6/xk+6yv3tc3rdX+VH32D+cd9vX+FF32f/ufNhyjR+19H97Z/2X39q1ftLzcG/941X7H/p7629X7T9s7qx/uGr/83kVeEf92+v1n//0ZbzH/usMvDv/yfF0T/39FfuH8x9+DPfU313xgG17+cqF1P7+csf9eEf9myv2v5xGv6tnKixnLdK/KiG4fxfev6z/6/9gr0x6/3IAcKyeos5Wf3T/cgBwqJ6iTqf/Fr6woE56/6T/Br6wpM61Ln/dq/GuzldeX3z/D8nLv9MB0PfRH//N5i+Cj34BAAAAAEi2qx6gWPYFok3f/rd6hFJ92xyqZ6jUP2y+rJ6h0vZ50++rhyi0bccu+Rrptj1tflE9RKGhtf3uWD1FnVP/43BX3+lxXfMt8tvw/v8J738O77+v7/S5Lv369VdPAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwKfxWfUAtX6yrZ6g1rA9VI9QavjmoXqEUuPvn6pHKDV+36pHKLVr7VA9Q6VT/7F6hkpTa4/VM1Q69T9Xz1CpnVTPUKib+w/VU9Tpw/u3Lfrz/8WQ3f9uF94/Zff/U8vu/+el/1A9RpnWsvd/4f3duX9fPUeV9P7+3F89Rpn0/m3L3v+n9w9Lf+4JcP2z3POf+me5FwD1Rx/+bIbn6OX/ZnhKv/yzS979n4zhl383yR9/AAAAAJiNuVdIFlPuFcJZ+CnyTfIdQpvzTXL76iEKddGXSM83yR2qhyg09x+rhyi0jb5FQv82+hapc3/yAkh/9j0y+rMPAHr90QdA6f1b/dH96e//vh3H7P79Nrt//ieonqJOf1r8JvcDAAAA3JL/B+1Lr1M=",
+      "face_primitives": 1,
+      "face_triangles": 388,
+      "texels_replaced": 26384,
+      "dilate_px": 4
+    },
+    "result_sha256": "3ed86bd7a87488989a719e7d795d687a54d2b92d6076f4b172ae2404bed12064",
+    "result_url": "http://192.168.8.10:4000/v1/jobs/0634b6c77e0649f3a05ebd61f9d7189a/result/0",
+    "route_meta": {
+      "routing": {
+        "occasion": "face_retexture",
+        "position": 1,
+        "spec": "GLB-Face-Retexture"
+      }
+    },
+    "face_texture_lost": false
+  },
+  "routing": {
+    "occasion": "rig_humanoid",
+    "position": 1,
+    "spec": "mesh-mia"
+  },
+  "refined": {
+    "retexture": true,
+    "reason": "",
+    "bytes_saved": 7551072,
+    "at": "2026-10-17T14:26:05+00:00"
+  },
+  "blender": {
+    "version": "5.2.2 LTS",
+    "steps": [
+      "normalize"
+    ],
+    "at": "2026-10-17T14:26:06+00:00",
+    "height_basis": "bbox",
+    "scale": 1.417179,
+    "target_height_m": 2.6,
+    "before": {
+      "dims_m": [
+        1.9552,
+        0.8008,
+        1.8346
+      ],
+      "center_xy": [
+        0.0172,
+        -0.0202
+      ],
+      "min_z": -0.9481,
+      "tris": 48822,
+      "joints": 52
+    },
+    "after": {
+      "dims_m": [
+        2.7709,
+        1.1348,
+        2.6
+      ],
+      "center_xy": [
+        0.0,
+        -0.0
+      ],
+      "min_z": 0.0,
+      "tris": 48822,
+      "joints": 52
+    },
+    "head_twist": {
+      "before": {
+        "neck": 1.0,
+        "head": 0.2
+      },
+      "after": {
+        "neck": 1.0,
+        "head": 0.2
+      },
+      "applied": {},
+      "corrected": false,
+      "error": ""
+    }
+  },
+  "extension_rig": {
+    "fingerprint": "b6defac5efd112d1bbd26b9d0643136c475b4f4b6fa327c22ce93889d5dcb4c6",
+    "groups": [],
+    "status": "none_applicable",
+    "reason": "",
+    "has_applied": false,
+    "attempted": true,
+    "attempted_at": "2026-10-17T14:26:06+00:00",
+    "metrics": {},
+    "per_tier": {
+      "low": {
+        "fingerprint": "b6defac5efd112d1bbd26b9d0643136c475b4f4b6fa327c22ce93889d5dcb4c6",
+        "groups": [],
+        "status": "none_applicable",
+        "reason": "",
+        "has_applied": false,
+        "attempted": true,
+        "attempted_at": "2026-10-17T14:26:06+00:00",
+        "metrics": {},
+        "inherited": true
+      }
+    }
+  },
+  "measured": {
+    "format": "glb",
+    "file_bytes": 2912600,
+    "objects": 1,
+    "tris": 48822,
+    "verts": 42547,
+    "materials": [
+      "Material_0"
+    ],
+    "images": [
+      {
+        "name": "Image_0",
+        "size": [
+          2048,
+          2048
+        ],
+        "packed": true
+      },
+      {
+        "name": "Image_1",
+        "size": [
+          2048,
+          2048
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 52,
+    "bone_names": [
+      "mixamorig:Hips",
+      "mixamorig:LeftUpLeg",
+      "mixamorig:LeftLeg",
+      "mixamorig:LeftFoot",
+      "mixamorig:LeftToeBase",
+      "mixamorig:RightUpLeg",
+      "mixamorig:RightLeg",
+      "mixamorig:RightFoot"
+    ],
+    "mixamo_bones": 52,
+    "finger_bones": 30,
+    "finger_bones_weighted": 30,
+    "finger_verts": 983,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      2.7709,
+      1.1348,
+      2.6
+    ],
+    "center_xy": [
+      0.0,
+      -0.0
+    ],
+    "min_z": 0.0,
+    "at": "2026-10-17T14:26:06+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}

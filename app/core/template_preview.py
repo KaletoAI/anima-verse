@@ -344,7 +344,8 @@ def _drive_chat_stream(agent: str, avatar: str) -> PreviewResult:
 
     # Format the messages block
     gap_h = get_memory_thresholds().get("session_gap_hours", 4)
-    parts = [f"## task: chat_stream\n\n## system\n{prompt.system}"]
+    from app.core.chat_engine import chat_llm_task
+    parts = [f"## task: {chat_llm_task(agent)}\n\n## system\n{prompt.system}"]
     if recent:
         parts.append(
             f"\n\n## messages ({len(recent)} turn{'s' if len(recent) != 1 else ''} "
@@ -369,6 +370,15 @@ def _drive_chat_stream(agent: str, avatar: str) -> PreviewResult:
 
     return {"ok": True, "output": "".join(parts),
             "note": " ".join(note_lines)}
+
+
+def _drive_npc_talk(agent: str, avatar: str) -> PreviewResult:
+    """Preview the dedicated reply template with an actual temporary NPC."""
+    from app.models.character import is_temporary_npc
+    if not is_temporary_npc(agent):
+        return {"ok": False, "output": "",
+                "note": "Pick a temporary NPC to preview its conversation reply."}
+    return _drive_chat_stream(agent, avatar)
 
 
 # --- task drivers via capture ---------------------------------------------
@@ -825,6 +835,7 @@ _PREVIEW_DRIVERS: Dict[str, PreviewDriver] = {
     "chat/agent_thought.md": _drive_agent_thought,
     "chat/agent_thought_in_chat.md": _drive_agent_thought_in_chat,
     "chat/chat_stream.md": _drive_chat_stream,
+    "chat/npc_talk.md": _drive_npc_talk,
     "chat/chat_moment.md": _drive_chat_stream,
     "tasks/extraction_memory.md": _drive_extraction_memory,
     "tasks/extraction_chat_state.md": _drive_extraction_chat_state,

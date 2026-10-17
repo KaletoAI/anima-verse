@@ -5,10 +5,10 @@
     {
       "stem": "model",
       "active": true,
-      "description": "plain oak chair with a solid square seat, straight wooden backrest and four legs, visible wood grain",
-      "width_m": 0.56,
-      "depth_m": 0.58,
-      "height_m": 1.0,
+      "description": "Eichenstuhl; eigenständig modellierte Holz-/Steinmöbel, eingebettete eigene Textur.",
+      "width_m": 0.744,
+      "depth_m": 0.772,
+      "height_m": 1.41,
       "dims_estimated": false
     }
   ],
@@ -18,29 +18,37 @@
     "self-authored"
   ],
   "created_at": "2026-10-15T15:13:48+00:00",
-  "source": "manual",
-  "prompt": "",
+  "source": "generated",
+  "prompt": "A high-quality 3D model of Eichenstuhl; eigenständig modellierte Holz-/Steinmöbel, eingebettete eigene Textur, designed for 3D asset generation, 8k resolution, presented as a single isolated object on a plain seamless light gray studio background, centered product shot, soft even studio lighting from above, fully in frame with generous margin, matte surfaces clearly readable",
   "mount": "floor",
   "bbox": [
-    0.56,
-    1.0,
-    0.58
+    0.52734,
+    0.99998,
+    0.54732
   ],
   "measured": {
     "format": "glb",
-    "file_bytes": 7524,
+    "file_bytes": 2041300,
     "objects": 1,
-    "tris": 72,
-    "verts": 144,
+    "tris": 47295,
+    "verts": 35395,
     "materials": [
-      "wood"
+      "Material_0"
     ],
     "images": [
       {
         "name": "Image_0",
         "size": [
-          64,
-          64
+          2048,
+          2048
+        ],
+        "packed": true
+      },
+      {
+        "name": "Image_1",
+        "size": [
+          2048,
+          2048
         ],
         "packed": true
       }
@@ -55,16 +63,19 @@
     "vertex_colors": 0,
     "actions": 0,
     "dims_m": [
-      0.56,
-      0.58,
+      0.5273,
+      0.5473,
       1.0
     ],
     "center_xy": [
       0.0,
       0.0
     ],
-    "min_z": 0.0,
-    "at": "2026-10-15T15:13:49+00:00",
+    "min_z": -0.5,
+    "at": "2026-10-17T19:22:05+00:00",
     "blender": "5.2.2 LTS"
-  }
+  },
+  "backend_image": "Qwen2.1 Turbo",
+  "negative": "scene, environment, floor shadow, people, hands, text, watermark",
+  "source_generated_at": "2026-10-17T14:07:41+00:00"
 }

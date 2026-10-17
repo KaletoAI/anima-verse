@@ -3881,11 +3881,10 @@ def play_delete_layout(name: str, user=Depends(get_current_user)):
     return {"ok": True, "names": sorted(presets.keys())}
 
 
-# ---- Phone / Messaging (Säule B: 1:1-DMs, medium="messaging") -----------
-# Async-Modell: eine Avatar-DM landet als chat_messages-Zeile (= Inbox des
-# Charakters) und bumpt ihn. Er sieht sie auf seinem nächsten Turn und kann
-# per send_message-Maschinerie antworten — DARF aber ignorieren. Das Panel
-# pollt Verlauf + Status; Lesestand pro Konversation in world_kv.
+# ---- Phone / Messaging (pillar B: explicit DMs, medium="messaging") ----
+# An avatar DM enters the recipient's inbox and bumps its next turn.
+# Replying requires an explicit SendMessage call and remains optional.
+# The panel polls messaging history/status; read cursors live in world_kv.
 
 # How many of a conversation's most recent messages the phone reads. The panel
 # renders the whole thread at once and does not page (packages/player-ui/src/
@@ -3928,10 +3927,12 @@ def _messaging_partners(avatar: str) -> list:
     from app.core.timeutils import utc_now
     days = _configured_days()
     sql = ("SELECT partner AS other FROM chat_messages "
-           "WHERE character_name=? AND partner!=''{cut} "
+           "WHERE character_name=? AND partner!='' AND CASE WHEN json_valid(metadata) "
+           "THEN json_extract(metadata, '$.medium') END='messaging'{cut} "
            "UNION "
            "SELECT character_name AS other FROM chat_messages "
-           "WHERE partner=? AND character_name!=''{cut}")
+           "WHERE partner=? AND character_name!='' AND CASE WHEN json_valid(metadata) "
+           "THEN json_extract(metadata, '$.medium') END='messaging'{cut}")
     if days > 0:
         cutoff = (utc_now() - timedelta(days=days)).isoformat(timespec="seconds")
         params = (avatar, cutoff, avatar, cutoff)
@@ -3979,7 +3980,7 @@ def _phone_set_read(avatar: str, partner: str, ts: str) -> None:
 
 @router.get("/play/messages")
 def play_messages_list(user=Depends(get_current_user)):
-    """Kontaktliste: 1:1-Konversationen des Avatars mit Vorschau, Unread, Status."""
+    """Phone contacts with preview, unread count and availability."""
     from app.models.account import get_active_character
     from app.models.chat import get_chat_history
     from app.models.character import (is_character_sleeping,
@@ -3992,7 +3993,7 @@ def play_messages_list(user=Depends(get_current_user)):
     convs = []
     for partner in _messaging_partners(avatar):
         hist = [m for m in (get_chat_history(avatar, partner_name=partner,
-                                            limit=_PHONE_HISTORY_LIMIT) or [])
+                                            limit=_PHONE_HISTORY_LIMIT, medium="messaging") or [])
                 if (m.get("content") or "").strip()]
         if not hist:
             continue
@@ -4013,7 +4014,7 @@ def play_messages_list(user=Depends(get_current_user)):
             "location": loc.get("name", ""),
         })
     convs.sort(key=lambda c: c.get("last_ts") or "", reverse=True)
-    # Für "neue Konversation": alle Charaktere außer dem Avatar selbst.
+    # Every other character is available for a new conversation.
     try:
         available = sorted(c for c in (list_available_characters() or [])
                            if c and c != avatar)
@@ -4024,16 +4025,16 @@ def play_messages_list(user=Depends(get_current_user)):
 
 @router.post("/play/messages/read-all")
 def play_messages_read_all(user=Depends(get_current_user)):
-    """Markiert alle 1:1-Konversationen des Avatars als gelesen (Unread → 0)."""
+    """Mark all phone conversations as read."""
     from app.models.account import get_active_character
     from app.models.chat import get_chat_history
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=404, detail="Kein aktiver Avatar")
+        raise HTTPException(status_code=404, detail="No active avatar")
     count = 0
     for partner in _messaging_partners(avatar):
         hist = [m for m in (get_chat_history(avatar, partner_name=partner,
-                                            limit=_PHONE_HISTORY_LIMIT) or [])
+                                            limit=_PHONE_HISTORY_LIMIT, medium="messaging") or [])
                 if (m.get("content") or "").strip()]
         if not hist:
             continue
@@ -4044,17 +4045,17 @@ def play_messages_read_all(user=Depends(get_current_user)):
 
 @router.get("/play/messages/thread")
 def play_messages_thread(partner: str, user=Depends(get_current_user)):
-    """1:1-Verlauf mit einem Partner. Markiert die Konversation als gelesen."""
+    """Phone thread with one partner; marks only its messages as read."""
     from app.models.account import get_active_character
     from app.models.chat import get_chat_history
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=404, detail="Kein aktiver Avatar")
+        raise HTTPException(status_code=404, detail="No active avatar")
     partner = (partner or "").strip()
     if not partner:
-        raise HTTPException(status_code=400, detail="partner erforderlich")
+        raise HTTPException(status_code=400, detail="partner required")
     hist = [m for m in (get_chat_history(avatar, partner_name=partner,
-                                        limit=_PHONE_HISTORY_LIMIT) or [])
+                                        limit=_PHONE_HISTORY_LIMIT, medium="messaging") or [])
             if (m.get("content") or "").strip()
             or (m.get("metadata") or {}).get("image")]
     msgs = [{"mine": m.get("role") == "assistant",
@@ -4068,8 +4069,7 @@ def play_messages_thread(partner: str, user=Depends(get_current_user)):
 
 @router.post("/play/messages/send")
 async def play_messages_send(request: Request, user=Depends(get_current_user)):
-    """Avatar sendet eine DM: symmetrisch speichern (Empfänger-Inbox + Avatar-
-    History) und den Charakter bumpen — er darf antworten oder ignorieren."""
+    """Send an avatar DM to both histories and bump the recipient, who may ignore it."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_play_messages_send_sync, user, body)
@@ -4082,19 +4082,19 @@ def _play_messages_send_sync(user, body: Any):
     from app.core.timeutils import utc_now_iso
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        raise HTTPException(status_code=404, detail="Kein aktiver Avatar")
+        raise HTTPException(status_code=404, detail="No active avatar")
     partner = (body.get("partner") or "").strip()
     content = (body.get("content") or "").strip()
     if not partner or not content:
-        raise HTTPException(status_code=400, detail="partner + content erforderlich")
+        raise HTTPException(status_code=400, detail="partner + content required")
     if partner == avatar:
-        raise HTTPException(status_code=400, detail="Kein Selbstgespräch")
+        raise HTTPException(status_code=400, detail="Cannot message yourself")
     ts = utc_now_iso()
-    # Empfänger-Inbox: vom Avatar eingehend (role=user)
+    # Incoming in the recipient's inbox.
     _stored_out = save_message({"role": "user", "content": content, "timestamp": ts,
                   "speaker": avatar, "medium": "messaging"},
                  character_name=partner, partner_name=avatar)
-    # Avatar-eigene History (role=assistant aus Avatar-Sicht)
+    # Outgoing in the avatar's history.
     _stored_in = save_message({"role": "assistant", "content": content, "timestamp": ts,
                   "speaker": avatar, "medium": "messaging"},
                  character_name=avatar, partner_name=partner)
@@ -4103,14 +4103,14 @@ def _play_messages_send_sync(user, body: Any):
         # bump the recipient and must not be reported as sent.
         raise HTTPException(status_code=500, detail="message not stored")
     _phone_set_read(avatar, partner, ts)
-    # Charakter bumpen (antwortet in eigener Zeit, darf ignorieren)
+    # Prioritise the recipient; an explicit reply remains optional.
     try:
         from app.core.agent_loop import get_agent_loop
         get_agent_loop().bump(
             partner,
-            hint=f"{avatar} hat dir gerade eine Nachricht aufs Handy geschrieben "
-                 f"(Messaging, nicht persönlich): \"{content[:300]}\". Du kannst "
-                 f"{avatar} zurückschreiben (SendMessage) oder es lassen.")
+            hint=f'{avatar} just sent you a phone message '
+                 f'(messaging, not in person): "{content[:300]}". You may '
+                 f'reply to {avatar} with SendMessage or leave it unanswered.')
     except Exception as e:
         logger.debug("bump after phone send failed: %s", e)
     return {"ok": True, "ts": ts}

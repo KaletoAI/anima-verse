@@ -3,9 +3,8 @@
 Lets a character proactively send a system notification to the active
 avatar. Mainly used by the thought system, but callable in normal chat too.
 
-The notification is also stored as a chat message in the character's history
-with the active user avatar — so the character knows later, in context, what
-it announced.
+Notifications stay in the system feed. A phone message requires SendMessage;
+publishing a notification must not implicitly create a DM or spoken line.
 
 Cooldown: at most one notification per character every NOTIFY_COOLDOWN_MIN
 minutes (default 30) — prevents notification spam from repeated thought loops.
@@ -84,47 +83,6 @@ class NotifyUserSkill(PluginSkill):
                 return ("Error sending the notification: it could not be "
                         "stored and was not delivered.")
             _last_notification_ts[character_name] = now_mono
-
-            # IMPORTANT: also store as a chat message in the history so the
-            # character knows later what it announced. Previously the
-            # notification only existed in the notif panel; if the user clicked
-            # "→ chat" and wrote, the character had no history entry and reacted
-            # confused.
-            try:
-                from app.models.chat import save_message
-                from app.models.account import get_player_identity
-                from app.core.timeutils import utc_now_iso
-                avatar = get_player_identity("")
-                if avatar and avatar != character_name:
-                    ts = utc_now_iso()
-                    _mirrored = [
-                        save_message({
-                            "role": "assistant",
-                            "content": input_text,
-                            "timestamp": ts,
-                            "speaker": character_name,
-                            "medium": "messaging",
-                        }, character_name=character_name, partner_name=avatar),
-                        # Mirror into the avatar inbox so a reload shows the entry
-                        save_message({
-                            "role": "user",
-                            "content": input_text,
-                            "timestamp": ts,
-                            "speaker": character_name,
-                            "medium": "messaging",
-                        }, character_name=avatar, partner_name=character_name),
-                    ]
-                    # The notification itself IS stored at this point, so the
-                    # call does not fail — but the character would not
-                    # remember what it announced, which is exactly what this
-                    # mirror exists for (DATA-13).
-                    if not all(_mirrored):
-                        self.ctx.logger.error(
-                            "Notification → chat history for %s NOT stored "
-                            "(%d of 2 writes failed)",
-                            character_name, _mirrored.count(False))
-            except Exception as _se:
-                self.ctx.logger.debug("Notification → chat history failed: %s", _se)
 
             self.ctx.logger.info("Notification created: %s (%s -> %s)",
                                  nid, character_name, user_id)

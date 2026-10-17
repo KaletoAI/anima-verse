@@ -210,7 +210,8 @@ def last_shared_utterance_ts(character: str,
 
 def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
                               limit: int = 100,
-                              include_meta_lines: bool = False
+                              include_meta_lines: bool = False, *,
+                              include_source: bool = False
                               ) -> List[Dict[str, Any]]:
     """A character's perceptions, filtered to one room (for the player's
     scene view). Joins ``utterances`` only for the room metadata — never for
@@ -220,6 +221,9 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
     relationship-change notes) are for the PLAYER UI only — the default
     False keeps them out of every LLM-transcript consumer; only the
     /play/scene route opts in.
+
+    include_source: optionally expose the utterance metadata's ``source`` as
+    a top-level field (``None`` when absent), without changing perceived content.
 
     Plain room equality: the location's ground is a room like any other
     (``world.GROUND_ROOM_ID``), so it needs no rule of its own here.
@@ -250,9 +254,10 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
     # volume; the content itself stays filtered in p.content (whisper_meta = empty).
     # u.game_ts travels with it so a stream row carries the WORLD time it was
     # spoken at, not just the system stamp in p.ts.
+    source_column = ", json_extract(u.meta, '$.source') AS source" if include_source else ""
     if location_id:
         rows = conn.execute(
-            "SELECT p.*, u.volume AS volume, u.game_ts AS game_ts "
+            f"SELECT p.*, u.volume AS volume, u.game_ts AS game_ts{source_column} "
             "FROM perceptions p "
             "JOIN utterances u ON u.id = p.utterance_id "
             "WHERE p.perceiver=? AND (p.kind='addressed' "
@@ -261,7 +266,7 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
             (perceiver, location_id, room_id, limit)).fetchall()
     else:
         rows = conn.execute(
-            "SELECT p.*, u.volume AS volume, u.game_ts AS game_ts "
+            f"SELECT p.*, u.volume AS volume, u.game_ts AS game_ts{source_column} "
             "FROM perceptions p "
             "JOIN utterances u ON u.id = p.utterance_id "
             "WHERE p.perceiver=? AND (p.kind='addressed' OR u.location_id='') "

@@ -5,7 +5,7 @@
     {
       "stem": "model",
       "active": true,
-      "description": "broad rustic wooden cottage bed, tall headboard, green wool blanket and cream pillow",
+      "description": "Hagrids breites Hüttenbett; eigenständig modellierte Holz-/Steinmöbel, eingebettete eigene Textur.",
       "width_m": 1.8,
       "depth_m": 2.65,
       "height_m": 1.08,
@@ -19,7 +19,7 @@
   ],
   "created_at": "2026-10-15T15:13:50+00:00",
   "source": "manual",
-  "prompt": "",
+  "prompt": "A high-quality 3D model of Hagrids breites Hüttenbett; eigenständig modellierte Holz-/Steinmöbel, eingebettete eigene Textur, designed for 3D asset generation, 8k resolution, presented as a single isolated object on a plain seamless light gray studio background, centered product shot, soft even studio lighting from above, fully in frame with generous margin, matte surfaces clearly readable",
   "mount": "floor",
   "bbox": [
     1.8,
@@ -68,5 +68,8 @@
     "min_z": 0.0,
     "at": "2026-10-15T15:13:51+00:00",
     "blender": "5.2.2 LTS"
-  }
+  },
+  "backend_image": "Flux2-9B Normal",
+  "negative": "scene, environment, floor shadow, people, hands, text, watermark",
+  "source_generated_at": "2026-10-17T14:04:32+00:00"
 }

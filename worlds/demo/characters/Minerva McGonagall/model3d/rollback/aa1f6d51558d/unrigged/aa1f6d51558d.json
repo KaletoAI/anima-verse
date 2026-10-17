@@ -1,0 +1,21 @@
+{
+  "source_image": "tpose_aa1f6d51558d.png",
+  "view_images": {},
+  "source_image_sha256": "33f96e930850f722189c4ce774906e50e1815e6009bdfbd957c57f26955342f1",
+  "pieces": {
+    "bottom": "item_minervas_langer_rock",
+    "top": "item_minervas_hochgeschlossene_bluse",
+    "underwear_top": "item_minervas_unterhemd",
+    "underwear_bottom": "item_minervas_unterw_sche",
+    "feet": "item_minervas_schn_rstiefel",
+    "outer": "item_minervas_gr_ne_robe",
+    "head": "item_minervas_spitzhut"
+  },
+  "items": [],
+  "created_at": "2026-10-15T18:34:05+00:00",
+  "rig": "none",
+  "signature": "aa1f6d51558d",
+  "mesh_backend": "Trellis2-Low",
+  "mesh_route_meta": {},
+  "source_filename": "MinervaMcGonagall-r53535b_00001_.glb"
+}

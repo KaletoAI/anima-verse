@@ -1,0 +1,310 @@
+{
+  "created_at": "2026-10-15T18:26:52+00:00",
+  "source": "generated",
+  "mesh_backend": "Trellis2-Low",
+  "rig_backend": "mesh-mia",
+  "rig_metrics": {},
+  "mesh_route_meta": {},
+  "rig_route_meta": {
+    "routing": {
+      "occasion": "rig_humanoid",
+      "position": 1,
+      "spec": "mesh-mia"
+    }
+  },
+  "backend": "mesh-mia",
+  "format": "glb",
+  "rig": "mixamo",
+  "has_texture": false,
+  "source_filename": "gw_b3c521c3ac784e309f66f94870eb965f_input_model_path_rigged.glb",
+  "source_image": "tpose_083900f5b751.png",
+  "signature": "083900f5b751",
+  "character": "Elspeth Rowan",
+  "routing": {
+    "occasion": "rig_humanoid",
+    "position": 1,
+    "spec": "mesh-mia"
+  },
+  "pieces": {
+    "underwear_top": "item_elspeths_unterhemd",
+    "underwear_bottom": "item_elspeths_unterw_sche",
+    "top": "item_elspeths_uniformhemd",
+    "bottom": "item_elspeths_uniformhose",
+    "feet": "item_elspeths_arbeitsschuhe",
+    "outer": "item_elspeths_stationsjacke",
+    "head": "item_elspeths_schirmm_tze"
+  },
+  "items": [],
+  "refined": {
+    "retexture": true,
+    "reason": "",
+    "bytes_saved": 7592420,
+    "at": "2026-10-15T18:26:53+00:00"
+  },
+  "blender": {
+    "version": "5.2.2 LTS",
+    "steps": [
+      "normalize"
+    ],
+    "at": "2026-10-15T18:26:54+00:00",
+    "height_basis": "bbox",
+    "scale": 0.912205,
+    "target_height_m": 1.68,
+    "before": {
+      "dims_m": [
+        1.782,
+        0.4492,
+        1.8417
+      ],
+      "center_xy": [
+        0.0038,
+        0.0042
+      ],
+      "min_z": -0.9923,
+      "tris": 49099,
+      "joints": 52
+    },
+    "after": {
+      "dims_m": [
+        1.6255,
+        0.4098,
+        1.68
+      ],
+      "center_xy": [
+        0.0,
+        -0.0
+      ],
+      "min_z": -0.0,
+      "tris": 49099,
+      "joints": 52
+    }
+  },
+  "extension_rig": {
+    "fingerprint": "275a9448cf58ed2f610d3fed248ebb2a2866ccfd6ab4635c2e1e98aa291f7bde",
+    "groups": [
+      "breast_pair"
+    ],
+    "status": "applied",
+    "reason": "",
+    "has_applied": true,
+    "attempted": true,
+    "attempted_at": "2026-10-15T18:26:54+00:00",
+    "metrics": {
+      "breast_pair": {
+        "placement": [
+          {
+            "head": [
+              0.031978823244571686,
+              -0.15308180451393127,
+              1.186150074005127
+            ],
+            "tip": [
+              0.039973530918359756,
+              -0.19702793657779694,
+              1.1761500835418701
+            ],
+            "wall_y": -0.1930818110704422
+          },
+          {
+            "head": [
+              -0.102195143699646,
+              -0.1490597426891327,
+              1.2126178741455078
+            ],
+            "tip": [
+              -0.1277439296245575,
+              -0.20488184690475464,
+              1.202617883682251
+            ],
+            "wall_y": -0.18905974924564362
+          }
+        ],
+        "leak": false,
+        "verts_per_group": {
+          "mixamorig:LeftBreast": 93,
+          "mixamorig:RightBreast": 433
+        },
+        "weighted_verts": 526,
+        "edge_stretch_p01_p50_p99_max": [
+          0.616856077825227,
+          1.0272822214679667,
+          1.9515019098068571,
+          2.231546686288813
+        ],
+        "reason": ""
+      }
+    },
+    "per_tier": {
+      "full": {
+        "fingerprint": "275a9448cf58ed2f610d3fed248ebb2a2866ccfd6ab4635c2e1e98aa291f7bde",
+        "groups": [
+          "breast_pair"
+        ],
+        "status": "applied",
+        "reason": "",
+        "metrics": {
+          "breast_pair": {
+            "placement": [
+              {
+                "head": [
+                  0.031978823244571686,
+                  -0.15308180451393127,
+                  1.186150074005127
+                ],
+                "tip": [
+                  0.039973530918359756,
+                  -0.19702793657779694,
+                  1.1761500835418701
+                ],
+                "wall_y": -0.1930818110704422
+              },
+              {
+                "head": [
+                  -0.102195143699646,
+                  -0.1490597426891327,
+                  1.2126178741455078
+                ],
+                "tip": [
+                  -0.1277439296245575,
+                  -0.20488184690475464,
+                  1.202617883682251
+                ],
+                "wall_y": -0.18905974924564362
+              }
+            ],
+            "leak": false,
+            "verts_per_group": {
+              "mixamorig:LeftBreast": 93,
+              "mixamorig:RightBreast": 433
+            },
+            "weighted_verts": 526,
+            "edge_stretch_p01_p50_p99_max": [
+              0.616856077825227,
+              1.0272822214679667,
+              1.9515019098068571,
+              2.231546686288813
+            ],
+            "reason": ""
+          }
+        },
+        "attempted": true,
+        "attempted_at": "2026-10-15T18:26:54+00:00"
+      },
+      "low": {
+        "fingerprint": "275a9448cf58ed2f610d3fed248ebb2a2866ccfd6ab4635c2e1e98aa291f7bde",
+        "groups": [
+          "breast_pair"
+        ],
+        "status": "applied",
+        "reason": "",
+        "has_applied": true,
+        "attempted": true,
+        "attempted_at": "2026-10-15T18:26:54+00:00",
+        "metrics": {
+          "breast_pair": {
+            "placement": [
+              {
+                "head": [
+                  0.031978823244571686,
+                  -0.15308180451393127,
+                  1.186150074005127
+                ],
+                "tip": [
+                  0.039973530918359756,
+                  -0.19702793657779694,
+                  1.1761500835418701
+                ],
+                "wall_y": -0.1930818110704422
+              },
+              {
+                "head": [
+                  -0.102195143699646,
+                  -0.1490597426891327,
+                  1.2126178741455078
+                ],
+                "tip": [
+                  -0.1277439296245575,
+                  -0.20488184690475464,
+                  1.202617883682251
+                ],
+                "wall_y": -0.18905974924564362
+              }
+            ],
+            "leak": false,
+            "verts_per_group": {
+              "mixamorig:LeftBreast": 41,
+              "mixamorig:RightBreast": 249
+            },
+            "weighted_verts": 290,
+            "edge_stretch_p01_p50_p99_max": [
+              0.8131246410700564,
+              1.030523607290224,
+              1.8373306477358455,
+              2.0823053214884526
+            ],
+            "reason": ""
+          }
+        },
+        "inherited": true
+      }
+    }
+  },
+  "measured": {
+    "format": "glb",
+    "file_bytes": 3166008,
+    "objects": 1,
+    "tris": 49099,
+    "verts": 43997,
+    "materials": [
+      "Material_0"
+    ],
+    "images": [
+      {
+        "name": "Image_0",
+        "size": [
+          2048,
+          2048
+        ],
+        "packed": true
+      },
+      {
+        "name": "Image_1",
+        "size": [
+          2048,
+          2048
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 54,
+    "bone_names": [
+      "mixamorig:Hips",
+      "mixamorig:LeftUpLeg",
+      "mixamorig:LeftLeg",
+      "mixamorig:LeftFoot",
+      "mixamorig:LeftToeBase",
+      "mixamorig:RightUpLeg",
+      "mixamorig:RightLeg",
+      "mixamorig:RightFoot"
+    ],
+    "mixamo_bones": 54,
+    "finger_bones": 30,
+    "finger_bones_weighted": 30,
+    "finger_verts": 1254,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      1.6255,
+      0.4098,
+      1.68
+    ],
+    "center_xy": [
+      -0.0,
+      -0.0
+    ],
+    "min_z": -0.0,
+    "at": "2026-10-15T18:26:56+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}

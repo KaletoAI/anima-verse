@@ -1,0 +1,13 @@
+{
+  "created_at": "2026-10-17T19:22:05+00:00",
+  "source": "lod",
+  "format": "glb",
+  "rig": "none",
+  "tier": "low",
+  "source_file": "model_1792247074.glb",
+  "lod_ratio": 0.25,
+  "tris": 11823,
+  "tris_before": 47295,
+  "inherits_from": "model_1792247074.glb",
+  "areas": []
+}

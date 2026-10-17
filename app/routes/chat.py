@@ -22,6 +22,7 @@ from app.core.outfit_renderer import render_outfit, render_unworn_slots
 from app.models.character import (
     get_character_config,
     get_character_profile,
+    is_temporary_npc,
     get_character_appearance,
     get_character_language_instruction,
     get_character_current_location,
@@ -41,17 +42,17 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 def _strip_tool_hallucinations(text: str) -> str:
-    """Entfernt halluzinierte Tool-Tags aus LLM-Antworten.
+    """Remove hallucinated tool tags from LLM responses.
 
-    Chat-LLMs schreiben manchmal <tool name="..."> Tags als Text statt
-    echte Tool-Calls. Diese muessen bereinigt werden bevor die Antwort
-    gespeichert oder dem LLM als History praesentiert wird.
+    Chat LLMs sometimes write <tool name="..."> tags as text instead of
+    actual tool calls. Strip these before storing the response or presenting
+    it to the LLM as conversation history.
     """
     if not text:
         return text
 
-    # Send-Message-Template-Halluzination: "[Name, ]deine Antwort: '...'"
-    # vom alten Hint-Wording. Prefix abschneiden, den eigentlichen Inhalt behalten.
+    # Strip the prefix from old reply-template hallucinations such as
+    # "[Name, ]deine Antwort: '...'", preserving the actual content.
     _meta = re.match(
         r'^(?:[A-Z][\wÄÖÜäöüß \-]{0,30},\s*)?(?:deine|meine|seine|ihre)\s+Antwort:\s*[\'\"]?(.*)$',
         text, flags=re.IGNORECASE | re.DOTALL)
@@ -59,24 +60,23 @@ def _strip_tool_hallucinations(text: str) -> str:
         text = _meta.group(1).rstrip("'\"").strip()
 
     if "<tool" in text:
-        # <tool name="...">...</tool> (geschlossen)
+        # Closed <tool name="...">...</tool> tags.
         text = re.sub(r'<tool\s+name="[^"]*">[\s\S]*?</tool>', '', text)
-        # <tool name="...">... (ungeschlossen — bis naechstes <tool oder Textende)
+        # Unclosed tool tags, up to the next tag or end of the text.
         text = re.sub(r'<tool\s+name="[^"]*">[^<]*', '', text)
-    # *An:* / *Betreff:* / *Text:* Bloecke (Notification-Halluzinationen)
+    # *An:* / *Betreff:* / *Text:* blocks from hallucinated notifications.
     text = re.sub(r'\n\s*\*(?:An|Betreff|Text|Target|Message):\*\s*[^\n]*', '', text, flags=re.IGNORECASE)
-    # Intent-Marker ([INTENT: …] / [INTENT_DONE: …] / [INTENT_PROGRESS: …]) —
-    # interne Vorhaben-Metadaten, duerfen nicht im sichtbaren Text landen
-    # (plan-intents-unified.md). Werden vorher bereits ausgewertet.
+    # Intent markers are internal plan metadata, evaluated before rendering;
+    # they must not appear in the visible response (plan-intents-unified.md).
     try:
         from app.models.intents import strip_intent_markers
         text = strip_intent_markers(text)
     except Exception:
         pass
-    # LLM-Tokenizer-Artefakte (jedes <|...|>, auch lowercase, + <SPECIAL_N>)
+    # LLM tokenizer artifacts (any <|...|>, including lowercase, + <SPECIAL_N>)
     text = re.sub(r'<\|[^|>]{0,60}\|>', '', text)
     text = re.sub(r'<SPECIAL_\d+>', '', text)
-    # Mehrfache Leerzeilen
+    # Repeated blank lines
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -135,7 +135,7 @@ def _generate_image_prompt(
     an OPEN-AIR scene (``prompt_compose.outdoor_conditions``); it stays empty
     indoors and for story renders, which play in their own setting.
     """
-    # Character-Kontext fuer Pronomen-Aufloesung
+    # Character context for pronoun resolution.
     _agent_name = (agent_config or {}).get("name", "")
     _user_name = ""
     try:
@@ -160,7 +160,7 @@ def _generate_image_prompt(
     model_context = f"The target image model is: {image_model}. " if image_model else ""
     instruction_context = f"{prompt_instruction} " if prompt_instruction else ""
 
-    # Photographer-Kontext: Agent ist Fotograf, nicht im Bild
+    # In photographer mode the agent takes the picture, rather than appearing in it.
     _agent_name = (agent_config or {}).get("name", "")
     photographer_context = ""
     if photographer_mode and _agent_name:
@@ -176,9 +176,8 @@ def _generate_image_prompt(
         _agent_name = (agent_config or {}).get("name", "")
         characters_present_block = ""
         if appearances:
-            # Nur Namen senden – das LLM braucht sie fuer Pronomen-Aufloesung.
-            # Volle Appearance-Texte werden spaeter vom ImageGenerationSkill
-            # in den Prompt eingefuegt; hier wuerden sie vom LLM oft dupliziert.
+            # Names alone resolve pronouns. ImageGenerationSkill inserts full
+            # appearances later; including them here often causes duplication.
             app_names = ", ".join(p["name"] for p in appearances)
             characters_present_block = f"Characters present: {app_names}"
 
@@ -342,13 +341,13 @@ def _current_activity_hint(character_name: str, location_id: str) -> str:
 
 
 def _extract_mood(agent_name: str, response: str) -> Optional[str]:
-    """Extrahiert Mood aus LLM-Antwort. Returns mood string or None."""
+    """Extract mood from an LLM answer, or return None."""
     config = get_character_config(agent_name)
     if not config.get("mood_tracking", False):
         return None
-    # Primaer: **I feel <emotion>** ODER lokalisiert **Ich f\u00FChle <emotion>**
+    # Prefer **I feel <emotion>** or the localized equivalent.
     match = re.search(r'\*\*\s*(?:I\s+feel|Ich\s+f[\u00FCu]hle)\s+(.+?)\*\*', response, re.IGNORECASE)
-    # Fallback: letztes **<emotion>** am Ende der Antwort
+    # Fallback: the final **<emotion>** at the end of the answer.
     if not match:
         match = re.search(
             r'\*\*([A-Za-z\u00C0-\u00FF][a-z\u00E0-\u00FF]+(?:\s+[a-z\u00E0-\u00FF]+)*)[.?!]*\*\*\s*$',
@@ -357,11 +356,10 @@ def _extract_mood(agent_name: str, response: str) -> Optional[str]:
     if not match:
         return None
     mood = match.group(1).strip().rstrip('.!,')
-    # Falls der Fallback die ganze Phrase fing (\u201EIch f\u00FChle aggressiv"), den
-    # Gef\u00FChls-Vorsatz wegnormalisieren \u2192 nur die Emotion als State.
+    # Strip a feeling prefix if the fallback captured the whole phrase.
     mood = re.sub(r'^(?:I\s+feel|Ich\s+f[\u00FCu]hle)\s+', '', mood, flags=re.IGNORECASE).strip()
     save_character_current_feeling(agent_name, mood)
-    # Mood-History aufzeichnen
+    # Record mood history.
     try:
         record_mood_history(agent_name, mood)
     except Exception as mh_err:
@@ -406,10 +404,9 @@ def _may_travel_by_marker(agent_name: str) -> bool:
 
 
 def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]]:
-    """Extrahiert Location aus LLM-Antwort. Returns {'name': ..., 'id': ...} or None.
+    """Extract a place marker as {'name': ..., 'id': ...}, or None.
 
-    Wenn der Chat-Character den Ort wechselt, geht der Spieler-Avatar
-    automatisch mit (gemeinsam einen Ort besuchen).
+    The avatar may follow a room change within the current location.
     """
     from app.core.keyed_lock import keyed_lock
     from app.models.character import save_character_current_room
@@ -422,15 +419,12 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
     old_loc = get_character_current_location(agent_name)
 
     def _move_avatar_room(room_id: str):
-        """Avatar geht mit dem Chat-Character mit (Raum-Wechsel innerhalb
-        derselben Location). Location-Follow ist bewusst abgeschaltet."""
+        """Follow a room change at the same location, never a location change."""
         player = get_active_character()
         if player and player != agent_name:
             player_loc = get_character_current_location(player)
             agent_loc = get_character_current_location(agent_name)
-            # Nur mitgehen wenn sie an der gleichen Location sind — sonst
-            # wuerde der Avatar in einen Raum gesetzt, der nicht zu seiner
-            # Location gehoert.
+            # Follow only at the same location; a foreign room id is invalid.
             if player_loc and player_loc == agent_loc:
                 # THE AVATAR-STATE LOCK of this avatar (``core.keyed_lock``),
                 # the very one ``POST /play/enter-room`` and the position
@@ -444,7 +438,7 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
                     save_character_current_room(player, room_id)
                 logger.info("Avatar %s folgt %s -> Room %s", player, agent_name, room_id)
 
-    # 1. Raum-Match: Ist es ein Raum an der aktuellen Location?
+    # 1. Match a room at the current location.
     if old_loc:
         current_loc_data = get_location_by_id(old_loc)
         if current_loc_data:
@@ -453,8 +447,7 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
                 room_id = room.get("id", "")
                 old_room = get_character_current_room(agent_name)
                 if room_id != old_room:
-                    # Leave-Gate (Raum-Scope): Halluzinierter Raumwechsel
-                    # in der Narrative darf Pinning-Rules nicht umgehen.
+                    # Narrative room changes must respect room-scoped leave gates.
                     try:
                         from app.models.rules import check_leave as _chk_leave
                         _ok, _why = _chk_leave(agent_name, room_only=True,
@@ -483,9 +476,9 @@ def _extract_location(agent_name: str, response: str) -> Optional[Dict[str, str]
                     _move_avatar_room(room_id)
                     logger.info("Room %s: %s -> %s (%s)", agent_name, old_room, room_id, new_name)
                     return {"name": new_name, "room": room_id, "location_id": old_loc}
-                return None  # Schon im Raum
+                return None  # Already in this room.
 
-    # 2. Location match. The marker NEVER sets a place directly ("Lösung C",
+    # 2. Location match. The marker NEVER sets a place directly ("Solution C",
     # 2026-06): that bypassed the pathfinder and teleported the character to
     # places and along ways it does not know. A room change at the CURRENT
     # place (section 1 above) stays instant; a real jump is the teleport spell.
@@ -567,17 +560,16 @@ def _extract_activity(agent_name: str, response: str) -> Optional[str]:
 
 def _apply_removed_pieces(character_name: str,
                           removed_names: List[str]) -> List[str]:
-    """Equipped Pieces ablegen, deren Name in ``removed_names`` vorkommt.
+    """Unequip pieces whose names appear in ``removed_names``.
 
-    Match: case-insensitiver Vergleich gegen den Item-Namen. Pieces die nicht
-    angelegt sind, werden ignoriert. Erfundene Namen (nicht equipped) werden
-    ignoriert. Returns Liste der tatsaechlich abgelegten Eintraege "Name (slot)".
+    Match item names case-insensitively. Ignore pieces that are not equipped,
+    including invented names. Return the pieces actually removed as
+    "Name (slot)" entries.
 
-    Safety-Cap: wenn die Extraktion ALLE equipped Pieces gleichzeitig
-    entfernen wuerde, ist das praktisch immer ein Outfit-Wechsel-Wunsch der
-    via Tool laufen sollte — wir lassen das Outfit dann unveraendert (besser
-    als komplett nackt). Echte "kompletter Strip"-Szenen (Sex/Bath/Sleep)
-    machen die Pieces meist Stueck fuer Stueck ueber mehrere Antworten ab.
+    Safety cap: removing ALL equipped pieces at once almost always means an
+    outfit change that should use a tool. Leave the outfit unchanged rather
+    than stripping it completely. Full undressing scenes (sex/bath/sleep)
+    usually remove pieces one by one over several responses.
     """
     if not removed_names or not character_name:
         return []
@@ -617,20 +609,18 @@ def _apply_removed_pieces(character_name: str,
             if r.get("status") == "ok":
                 unequipped.append(f"{it.get('name', iid)} ({slot})")
 
-        # KEIN Auto-Equip durch den Extractor — das wuerde manuell abgelegte
-        # Pieces sofort wieder anziehen (Race-Condition mit Wardrobe-Aenderungen).
-        # Anziehen laeuft ausschliesslich ueber ChangeOutfit-Skill oder Wardrobe-UI.
+        # Never auto-equip here: it would undo deliberate wardrobe edits.
+        # Dressing belongs to ChangeOutfit or the wardrobe UI.
 
         if unequipped:
             logger.info("Chat-Extraktion [%s]: %d Piece(s) abgelegt: %s",
                          character_name, len(unequipped), ", ".join(unequipped))
-            # Intent.forbidden_slots: die abgelegten Slots bleiben "absichtlich
-            # leer" bis zum naechsten Location-Wechsel. Verhindert dass die
-            # Compliance/Auto-Fill sie sofort wieder anzieht.
+            # Removed slots stay intentionally empty until the next location
+            # change; compliance/auto-fill must not immediately re-equip them.
             try:
                 from app.models.character import add_forbidden_slot
                 for _u in unequipped:
-                    # _u ist "Name (slot)" — Slot extrahieren
+                    # Extract the slot from "Name (slot)".
                     _m = _u.rsplit("(", 1)
                     if len(_m) == 2:
                         _slot = _m[1].rstrip(")").strip()
@@ -721,7 +711,7 @@ def _extract_context_from_last_chat(agent_name: str,
         return re.sub(r'\n\s*\n\s*\n+', '\n\n', text).strip()
 
     # Sources strictly apart:
-    # - avatar changes come from the user input ("Ich ziehe die Jacke aus")
+    # - avatar changes come from the user input ("I take off my jacket")
     # - character changes come from the character's reply
     # Each call sees only its own source → no misattribution possible.
     # Only the NEWEST reply is extracted from (pose, outfit, stats of THIS
@@ -967,9 +957,10 @@ def _build_chat_prompt(character_name: str,
     """Build the chat-stream / talk-to prompt as system prompt + scene state.
 
     Loads all data sections (character/soul template, partner template,
-    memory, relationships, ...), then renders ``chat/chat_stream.md`` (the
-    stable system prompt) and ``chat/chat_moment.md`` (the per-turn scene
-    state). Which block goes where is decided by how often it changes — see
+    memory, relationships, ...), then renders ``chat/chat_stream.md`` (or
+    ``chat/npc_talk.md`` for temporary NPCs) as the stable system prompt and
+    ``chat/chat_moment.md`` as the per-turn scene state.
+    Which block goes where is decided by how often it changes — see
     the header of both templates. Pre-formatted blocks live in Python
     (``build_*_prompt_section``); static instruction text lives in the
     templates.
@@ -1525,8 +1516,12 @@ def _build_chat_prompt(character_name: str,
         addressed_to_me = bool(character_name in addressed_to)
         addressed_names = ", ".join(n for n in addressed_to if n != character_name)
 
+    system_template = (
+        "chat/npc_talk.md" if is_temporary_npc(character_name)
+        else "chat/chat_stream.md")
+
     system = render(
-        "chat/chat_stream.md",
+        system_template,
         character_name=character_name,
         world_setup=world_setup,
         lang_instruction=lang_instruction,
@@ -1546,6 +1541,10 @@ def _build_chat_prompt(character_name: str,
         daily_summary_section=daily_summary_section,
         scenes_block=scenes_block,
         history_summary_block=history_summary_block)
+    from app.core.hooks import emit
+    package_moment = []
+    emit("character.prompt_context", character_name=character_name, mode="chat",
+         blocks=package_moment)
     moment = render(
         "chat/chat_moment.md",
         character_name=character_name,
@@ -1558,7 +1557,7 @@ def _build_chat_prompt(character_name: str,
         situation_block=situation_block,
         self_state_lines=self_state_lines,
         condition_reminder=condition_reminder,
-        moment_notes=[n for n in (moment_notes or []) if n],
+        moment_notes=[n for n in (moment_notes or []) if n] + package_moment,
         self_wearing=self_wearing,
         partner_wearing=partner_wearing,
         inventory_carrying_section=inventory_carrying_section,
@@ -1575,4 +1574,8 @@ def _build_chat_prompt(character_name: str,
         addressed_names=addressed_names,
         respond_opportunity=respond_opportunity,
         winding_down=winding_down)
+    if system_template == "chat/npc_talk.md":
+        moment += "\n\n" + render(
+            "chat/npc_reply_cue.md",
+            skip_allowed=respond_opportunity or winding_down)
     return ChatPrompt(system=system, moment=moment)

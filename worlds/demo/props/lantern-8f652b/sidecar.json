@@ -5,7 +5,7 @@
     {
       "stem": "model",
       "active": true,
-      "description": "small portable lantern, warm glowing panes, black metal frame, pyramidal cap and carrying ring",
+      "description": "Kleine tragbare Laterne mit warmen Scheiben, schwarzem Metallrahmen, Pyramidenhaube und Tragering; ohne exportierte Lichtquelle.",
       "width_m": 0.3,
       "depth_m": 0.3,
       "height_m": 0.6,
@@ -18,47 +18,37 @@
     "self-authored"
   ],
   "created_at": "2026-10-15T15:13:41+00:00",
-  "source": "manual",
-  "prompt": "",
+  "source": "generated",
+  "prompt": "A high-quality 3D model of Kleine tragbare Laterne mit warmen Scheiben, schwarzem Metallrahmen, Pyramidenhaube und Tragering; ohne exportierte Lichtquelle, designed for 3D asset generation, 8k resolution, presented as a single isolated object on a plain seamless light gray studio background, centered product shot, soft even studio lighting from above, fully in frame with generous margin, matte surfaces clearly readable",
   "mount": "floor",
   "bbox": [
-    0.3,
-    0.599,
-    0.3
+    0.45471,
+    0.99999,
+    0.53731
   ],
   "measured": {
     "format": "glb",
-    "file_bytes": 35580,
+    "file_bytes": 1748908,
     "objects": 1,
-    "tris": 392,
-    "verts": 756,
+    "tris": 48363,
+    "verts": 35099,
     "materials": [
-      "black",
-      "gold",
-      "lamp"
+      "Material_0"
     ],
     "images": [
       {
-        "name": "black",
+        "name": "Image_0",
         "size": [
-          128,
-          128
+          2048,
+          2048
         ],
         "packed": true
       },
       {
-        "name": "gold",
+        "name": "Image_1",
         "size": [
-          128,
-          128
-        ],
-        "packed": true
-      },
-      {
-        "name": "lamp",
-        "size": [
-          128,
-          128
+          2048,
+          2048
         ],
         "packed": true
       }
@@ -73,16 +63,19 @@
     "vertex_colors": 0,
     "actions": 0,
     "dims_m": [
-      0.3,
-      0.3,
-      0.599
+      0.4547,
+      0.5373,
+      1.0
     ],
     "center_xy": [
       0.0,
       0.0
     ],
-    "min_z": 0.0,
-    "at": "2026-10-15T15:13:42+00:00",
+    "min_z": -0.5,
+    "at": "2026-10-17T20:04:47+00:00",
     "blender": "5.2.2 LTS"
-  }
+  },
+  "backend_image": "Flux2-9B Normal",
+  "negative": "scene, environment, floor shadow, people, hands, text, watermark",
+  "source_generated_at": "2026-10-17T14:05:28+00:00"
 }

@@ -228,10 +228,14 @@ hängt, räumt ihn über denselben Weg auf (Check:
 | Funktion | Semantik |
 |---|---|
 | `app.models.chat.save_message(message, character_name='', partner_name='') -> bool` | Eine Zeile in die Chat-History schreiben (Inbox-Modell: Sender als `assistant`, Empfänger als `user`). **Wirft nie** — `False` heißt: nicht gespeichert. Rückgabe prüfen, sonst verschwindet eine Nachricht lautlos |
-| `app.models.chat.get_chat_history(character_name='', partner_name='', limit=None) -> List[Dict]` | Verlauf; `limit` schneidet auf die letzten N Zeilen |
+| `app.models.chat.get_chat_history(character_name='', partner_name='', limit=None, medium=None) -> List[Dict]` | History; `medium` filters the communication channel **before** deduplication and the last-N limit. Phone readers use `"messaging"`; omitted means all channels. |
 | `app.core.pending_reports.add_report(reporter, initiator, initiator_type, target, trigger_type='talk_to_response', trigger_message_id='', ttl_hours=24) -> str` | Chain-of-Command-Follow-up anlegen |
 | `app.core.pending_reports.list_open(character_name)` / `mark_resolved(reporter, report_id) -> bool` | Offene Rückmeldungen lesen / schließen |
 | `app.models.notifications.create_notification(character, content, notification_type='message', metadata=None) -> str` | User-Notification anlegen |
+
+The phone and agent inbox consume only `medium="messaging"`. `talk_to` stores
+`"in_person"` and reaches room perception, never the phone. `notify_user`
+creates only a system notification; delivering a DM requires `send_message`.
 
 ## Party — `app.core.party_engine` ✅ (party-Paket)
 
@@ -260,7 +264,7 @@ Zustimmung ist immer ein Tool-Call, nie ein Keyword-Match auf Prosa.
 | `get_interaction(character_name, profile=None)` | Läuft gerade eine? |
 | `create_invite(inviter, invitee, pose_key, *, request_id=None) -> Optional[str]` | Ask through the ordinary consent flow. A supplied id atomically creates/reuses only the exact inviter/invitee/pose row, emits the offer once, and never replaces another pending question. A mismatching existing id is rejected. Ordinary same-pose repeats reuse the fresh question; replacements mark old questions cancelled instead of deleting their identity |
 | `resolve_invite(invite_id, accept) -> Dict` | Einladung beantworten. `status` `cannot` = gerade nicht möglich (schläft, reist, Platz besetzt), die Frage bleibt offen |
-| `get_invite(invite_id)` / `cancel_invite(invite_id) -> bool` / `clear_invites_for(character)` | Einladungen lesen/schließen |
+| `get_invite(invite_id)` / `cancel_invite(invite_id) -> bool` / `clear_invites_for(character)` | Read/close invitations. Cancellation conditionally claims only a pending/approaching row; an answer that already claimed it wins. A live pair's accepted invitation survives housekeeping |
 | `end_interaction(character_name, reason='ended', *, interaction_id='') -> bool` | End the pair for both participants. An optional ownership id is rechecked under the removal locks; a different live pair is never ended |
 | `pair_profile_locks(a, b)` | Der EINZIGE sanktionierte Weg, zwei Profil-Locks zu halten (sortierte Namensreihenfolge, siehe „Sperren") |
 
@@ -464,6 +468,8 @@ Events, die der Core heute feuert:
 | `interaction.invite_failed` | `invite_id`, `reason`; the pair package emits this before closing a temporary NPC's retryable failed answer, retaining the actual failure cause for an owned undertaking |
 | `instagram.post_created` | `poster_name`, `post` |
 | `instagram.user_comment` | `character_name`, `post_id`, `commenter_name`, `comment_text`, `comment_id`, `post` |
+| `character.prompt_context` | `character_name`, `mode` (`chat`, `npc_action`, `npc_scene`), mutable `blocks: List[str]`; packages append volatile state/policy text. Chat renders it only in the scene-state moment, never in the stable system prefix. |
+| `npc.action_execute` | `character_name`, `action: Dict`, mutable `result: Dict`; a package claims its namespaced solo action by setting `handled=True`, then `success` and `text`. Core checks placement, home, lifecycle and travel under the character profile lock before dispatch. Callbacks may update that profile, but must not take place/pair locks or call external services. A handled action does not speak, invite or start a home-area walk. Revalidate capability/state, check writes and ignore callbacks of removed/replaced skills; unhandled actions retain the existing party proposal path. |
 | `intent_created` / `intent_changed` / `intent_deleted` | `intent`; changed also supplies `previous`; successful durable writes only |
 | `world_tick` | —; ordinary periodic world gates apply |
 | `party_membership_changed` / `party_invites_cleared` | `character`; departure/removal invalidates affected plans |

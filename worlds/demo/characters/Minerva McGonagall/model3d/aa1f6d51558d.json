@@ -1,0 +1,221 @@
+{
+  "source_image": "tpose_aa1f6d51558d.png",
+  "view_images": {},
+  "source_image_sha256": "33f96e930850f722189c4ce774906e50e1815e6009bdfbd957c57f26955342f1",
+  "pieces": {
+    "bottom": "item_minervas_langer_rock",
+    "top": "item_minervas_hochgeschlossene_bluse",
+    "underwear_top": "item_minervas_unterhemd",
+    "underwear_bottom": "item_minervas_unterw_sche",
+    "feet": "item_minervas_schn_rstiefel",
+    "outer": "item_minervas_gr_ne_robe",
+    "head": "item_minervas_spitzhut"
+  },
+  "items": [],
+  "mesh_backend": "Trellis2-Low",
+  "mesh_route_meta": {},
+  "created_at": "2026-10-17T15:29:09+00:00",
+  "source": "generated",
+  "signature": "aa1f6d51558d",
+  "character": "Minerva McGonagall",
+  "rig": "mixamo",
+  "format": "glb",
+  "backend": "mesh-mia",
+  "rig_backend": "mesh-mia",
+  "rig_metrics": {},
+  "rig_route_meta": {
+    "routing": {
+      "occasion": "rig_humanoid",
+      "position": 1,
+      "spec": "mesh-mia"
+    }
+  },
+  "has_texture": false,
+  "source_filename": "gw_1a59d3427e81410bb03e445626e578e0_input_model_path_rigged.glb",
+  "face_retexture": {
+    "status": "applied",
+    "at": "2026-10-17T15:28:47+00:00",
+    "reference": "face",
+    "backend": "GLB-Face-Retexture",
+    "job_id": "3a9be43a33a34511b484c6c0b56b239b",
+    "params": {
+      "strength": 1.0,
+      "feather": 0.18,
+      "render_resolution": 768,
+      "yaw": 0.0
+    },
+    "photo": {
+      "balance": 1.0,
+      "tone_match": 1.0,
+      "skin_recolor": 1.0,
+      "brightness": 1.0,
+      "applied_on": "hub"
+    },
+    "upscale": {
+      "status": "off",
+      "reason": "face view"
+    },
+    "baked": {
+      "body_recolored": true,
+      "body_texels_recolored": 192034,
+      "face_mask": "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",
+      "face_primitives": 1,
+      "face_triangles": 419,
+      "texels_replaced": 20482,
+      "dilate_px": 4
+    },
+    "result_sha256": "dce77c6ab8570434148e5c8409e6d58530a93ef86f206a9d84f77a472ebc76b3",
+    "result_url": "http://192.168.8.10:4000/v1/jobs/3a9be43a33a34511b484c6c0b56b239b/result/0",
+    "route_meta": {
+      "routing": {
+        "occasion": "face_retexture",
+        "position": 1,
+        "spec": "GLB-Face-Retexture"
+      }
+    },
+    "face_texture_lost": false
+  },
+  "routing": {
+    "occasion": "rig_humanoid",
+    "position": 1,
+    "spec": "mesh-mia"
+  },
+  "refined": {
+    "retexture": true,
+    "reason": "",
+    "bytes_saved": 7466756,
+    "at": "2026-10-17T15:29:10+00:00"
+  },
+  "blender": {
+    "version": "5.2.2 LTS",
+    "steps": [
+      "normalize"
+    ],
+    "at": "2026-10-17T15:29:11+00:00",
+    "height_basis": "bbox",
+    "scale": 0.902601,
+    "target_height_m": 1.74,
+    "before": {
+      "dims_m": [
+        2.0447,
+        0.6214,
+        1.9278
+      ],
+      "center_xy": [
+        -0.0203,
+        -0.0435
+      ],
+      "min_z": -0.9776,
+      "tris": 50558,
+      "joints": 52
+    },
+    "after": {
+      "dims_m": [
+        1.8456,
+        0.5609,
+        1.74
+      ],
+      "center_xy": [
+        0.0,
+        -0.0
+      ],
+      "min_z": -0.0,
+      "tris": 50558,
+      "joints": 52
+    },
+    "head_twist": {
+      "before": {
+        "neck": 1.0,
+        "head": -0.7
+      },
+      "after": {
+        "neck": 1.0,
+        "head": -0.7
+      },
+      "applied": {},
+      "corrected": false,
+      "error": ""
+    }
+  },
+  "extension_rig": {
+    "fingerprint": "b6defac5efd112d1bbd26b9d0643136c475b4f4b6fa327c22ce93889d5dcb4c6",
+    "groups": [],
+    "status": "none_applicable",
+    "reason": "",
+    "has_applied": false,
+    "attempted": true,
+    "attempted_at": "2026-10-17T15:29:11+00:00",
+    "metrics": {},
+    "per_tier": {
+      "low": {
+        "fingerprint": "b6defac5efd112d1bbd26b9d0643136c475b4f4b6fa327c22ce93889d5dcb4c6",
+        "groups": [],
+        "status": "none_applicable",
+        "reason": "",
+        "has_applied": false,
+        "attempted": true,
+        "attempted_at": "2026-10-17T15:29:11+00:00",
+        "metrics": {},
+        "inherited": true
+      }
+    }
+  },
+  "measured": {
+    "format": "glb",
+    "file_bytes": 2748372,
+    "objects": 1,
+    "tris": 50558,
+    "verts": 39226,
+    "materials": [
+      "Material_0"
+    ],
+    "images": [
+      {
+        "name": "Image_0",
+        "size": [
+          2048,
+          2048
+        ],
+        "packed": true
+      },
+      {
+        "name": "Image_1",
+        "size": [
+          2048,
+          2048
+        ],
+        "packed": true
+      }
+    ],
+    "bones": 52,
+    "bone_names": [
+      "mixamorig:Hips",
+      "mixamorig:LeftUpLeg",
+      "mixamorig:LeftLeg",
+      "mixamorig:LeftFoot",
+      "mixamorig:LeftToeBase",
+      "mixamorig:RightUpLeg",
+      "mixamorig:RightLeg",
+      "mixamorig:RightFoot"
+    ],
+    "mixamo_bones": 52,
+    "finger_bones": 30,
+    "finger_bones_weighted": 30,
+    "finger_verts": 1192,
+    "uv_layers": 1,
+    "vertex_colors": 0,
+    "actions": 0,
+    "dims_m": [
+      1.8456,
+      0.5609,
+      1.74
+    ],
+    "center_xy": [
+      0.0,
+      0.0
+    ],
+    "min_z": -0.0,
+    "at": "2026-10-17T15:29:11+00:00",
+    "blender": "5.2.2 LTS"
+  }
+}

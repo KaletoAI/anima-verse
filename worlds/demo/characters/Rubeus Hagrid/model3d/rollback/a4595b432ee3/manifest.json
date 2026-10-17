@@ -1,0 +1,40 @@
+{
+  "created_at": "2026-10-17T14:23:42+00:00",
+  "files": [
+    {
+      "path": "a4595b432ee3.glb",
+      "size": 2910704,
+      "sha256": "46cdfc0a8977ef2835d075bedea4ad8f8bd6ae76f806c6c6e6fa3ca8ca62b108"
+    },
+    {
+      "path": "a4595b432ee3.json",
+      "size": 3836,
+      "sha256": "529eeeab1629745fe7a5ff1e8272164576999fb90312b0903507e032815c3399"
+    },
+    {
+      "path": "low/a4595b432ee3.json",
+      "size": 603,
+      "sha256": "6ae7b7c580f4e400534a59d211d1961716ced9b7836aec13b939b39f4b13a532"
+    },
+    {
+      "path": "low/a4595b432ee3.glb",
+      "size": 1729376,
+      "sha256": "1818ab1f05114e082817d4ff901ce20cc76ff4eb43261a32fde617844f0d1ab0"
+    },
+    {
+      "path": "raw/a4595b432ee3.glb",
+      "size": 10214756,
+      "sha256": "83a3fe79805ef303465d8e0074a555164fba1aa1485ec972482f79ed19a3405d"
+    },
+    {
+      "path": "unrigged/a4595b432ee3.glb",
+      "size": 9636264,
+      "sha256": "cd1712582427c0486f1dbafe2b9ee6354966322e2755b805072b990e37585883"
+    },
+    {
+      "path": "unrigged/a4595b432ee3.json",
+      "size": 681,
+      "sha256": "ac808771878cefc8f20db6535bfd94544bfaa45e7f0b9ae4f33bd754d6b0faf3"
+    }
+  ]
+}

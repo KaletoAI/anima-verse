@@ -1,0 +1,70 @@
+{
+  "created_at": "2026-10-15T18:26:58+00:00",
+  "source": "lod",
+  "format": "glb",
+  "rig": "mixamo",
+  "tier": "low",
+  "source_file": "083900f5b751.glb",
+  "lod_ratio": 0.4,
+  "tris": 19639,
+  "tris_before": 49099,
+  "signature": "083900f5b751",
+  "character": "Elspeth Rowan",
+  "extension_rig": {
+    "fingerprint": "275a9448cf58ed2f610d3fed248ebb2a2866ccfd6ab4635c2e1e98aa291f7bde",
+    "groups": [
+      "breast_pair"
+    ],
+    "status": "applied",
+    "reason": "",
+    "has_applied": true,
+    "attempted": true,
+    "attempted_at": "2026-10-15T18:26:54+00:00",
+    "metrics": {
+      "breast_pair": {
+        "placement": [
+          {
+            "head": [
+              0.031978823244571686,
+              -0.15308180451393127,
+              1.186150074005127
+            ],
+            "tip": [
+              0.039973530918359756,
+              -0.19702793657779694,
+              1.1761500835418701
+            ],
+            "wall_y": -0.1930818110704422
+          },
+          {
+            "head": [
+              -0.102195143699646,
+              -0.1490597426891327,
+              1.2126178741455078
+            ],
+            "tip": [
+              -0.1277439296245575,
+              -0.20488184690475464,
+              1.202617883682251
+            ],
+            "wall_y": -0.18905974924564362
+          }
+        ],
+        "leak": false,
+        "verts_per_group": {
+          "mixamorig:LeftBreast": 41,
+          "mixamorig:RightBreast": 249
+        },
+        "weighted_verts": 290,
+        "edge_stretch_p01_p50_p99_max": [
+          0.8131246410700564,
+          1.030523607290224,
+          1.8373306477358455,
+          2.0823053214884526
+        ],
+        "reason": ""
+      }
+    },
+    "inherited": true
+  }
+}

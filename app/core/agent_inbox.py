@@ -1,13 +1,13 @@
 """Agent inbox built on top of the unified chat_messages table.
 
-When character A sends a message to character B (TalkTo / SendMessage),
+When character A explicitly sends a phone message to character B (SendMessage),
 the message is recorded twice:
   - in B's chat history with partner=A, role='user'  (B's perspective: incoming)
   - in A's chat history with partner=B, role='assistant'  (A's perspective: outgoing)
 
-The "inbox" of B is then any chat_messages row with character_name=B,
-role='user', ts > last_thought_at(B). No separate table — the chat history
-IS the inbox, which keeps history consistent across UI and prompt.
+The inbox contains only incoming rows with medium="messaging" and a timestamp
+after last_thought_at(B). Spoken exchanges remain in the perception stream;
+they must not become remote messages merely because they share this table.
 
 `last_thought_at` lives in `character_state.last_thought_at` and is set to
 ``now()`` every time the agent loop completes a thought turn for that
@@ -92,15 +92,20 @@ def load_unread_messages(character_name: str,
     try:
         conn = get_connection()
         # Find senders with unread incoming messages (role='user') after cutoff.
+        # Spoken exchanges are already heard through perception, not an inbox.
         if cutoff:
             sender_rows = conn.execute("""
                 SELECT DISTINCT partner FROM chat_messages
                 WHERE character_name=? AND role='user' AND ts > ?
+                  AND CASE WHEN json_valid(metadata) THEN
+                      json_extract(metadata, '$.medium') END='messaging'
             """, (character_name, cutoff)).fetchall()
         else:
             sender_rows = conn.execute("""
                 SELECT DISTINCT partner FROM chat_messages
                 WHERE character_name=? AND role='user'
+                  AND CASE WHEN json_valid(metadata) THEN
+                      json_extract(metadata, '$.medium') END='messaging'
             """, (character_name,)).fetchall()
         senders = [r[0] for r in sender_rows if r[0]]
         if not senders:
@@ -112,6 +117,8 @@ def load_unread_messages(character_name: str,
             rows = conn.execute("""
                 SELECT ts, role, content FROM chat_messages
                 WHERE character_name=? AND partner=?
+                  AND CASE WHEN json_valid(metadata) THEN
+                      json_extract(metadata, '$.medium') END='messaging'
                 ORDER BY ts DESC
                 LIMIT ?
             """, (character_name, sender, max_per_sender + context_messages + 4)).fetchall()

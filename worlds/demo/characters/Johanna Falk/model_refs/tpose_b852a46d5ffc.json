@@ -1,0 +1,36 @@
+{
+  "provider": "openai_diffusion",
+  "service": "Qwen2.1 Turbo",
+  "model": "Qwen2.1-Turbo",
+  "loras": [],
+  "prompt": "T-pose, standing upright facing the camera, arms straight out to the sides at shoulder height, forming the letter T, palms facing down toward the floor, hands in natural proportion to the body, fingers straight, slender and slightly spread apart, legs clearly apart with open space visible between them, hair clear of the chest, Johanna Falk, Eine erwachsene Frau mit mittlerem Körperbau, warm olivfarbener Haut, braunen Augen und kinnlangem dunkelbraunem welligem Haar. Reifes offenes Gesicht, kleine Lachfalten und neugierige, ruhige Haltung; vollständig originelles Aussehen., Johanna Falk is wearing plain grey cotton camisole, plain full coverage cotton briefs, oatmeal long-sleeved wool sweater, dark charcoal practical travel trousers, knee-length muted blue waxed travel coat, closed brown leather walking boots, neutral relaxed facial expression",
+  "negative_prompt": "illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, cropped feet, feet cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, palms facing the camera, palms facing up, clenched fists, curled fingers, fingers pressed together, splayed fingers, fanned fingers, oversized hands, large hands, thick fingers, chunky fingers, swollen fingers, fused fingers, mitten hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance",
+  "characters": [
+    "Johanna Falk"
+  ],
+  "reference_images": {
+    "input_reference_image_1": "Johanna Falk_1792085519_12dfff1d_1.png"
+  },
+  "seed": 0,
+  "created_at": "2026-10-15T17:56:29+00:00",
+  "duration_s": 46.3,
+  "mood": "",
+  "expression_key": "neutral",
+  "activity": "",
+  "pose_key": "",
+  "equipped_pieces": {
+    "underwear_top": "item_johannas_unterhemd",
+    "underwear_bottom": "item_johannas_unterw_sche",
+    "top": "item_johannas_wollpullover",
+    "bottom": "item_johannas_reisehose",
+    "feet": "item_johannas_wanderstiefel",
+    "outer": "item_johannas_regenmantel"
+  },
+  "equipped_items": [],
+  "state_fingerprint": "",
+  "routing": {
+    "occasion": "tpose",
+    "position": 1,
+    "spec": "Qwen2.1 Turbo"
+  }
+}

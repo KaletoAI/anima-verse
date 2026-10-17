@@ -1,0 +1,21 @@
+{
+  "source_image": "tpose_083900f5b751.png",
+  "view_images": {},
+  "source_image_sha256": "2882c058cafd8db5b5db87246963524d70142a7e2b50ff05fc63dc9a64ec877d",
+  "pieces": {
+    "underwear_top": "item_elspeths_unterhemd",
+    "underwear_bottom": "item_elspeths_unterw_sche",
+    "top": "item_elspeths_uniformhemd",
+    "bottom": "item_elspeths_uniformhose",
+    "feet": "item_elspeths_arbeitsschuhe",
+    "outer": "item_elspeths_stationsjacke",
+    "head": "item_elspeths_schirmm_tze"
+  },
+  "items": [],
+  "created_at": "2026-10-15T18:24:41+00:00",
+  "rig": "none",
+  "signature": "083900f5b751",
+  "mesh_backend": "Trellis2-Low",
+  "mesh_route_meta": {},
+  "source_filename": "ElspethRowan-r38cd12_00001_.glb"
+}

@@ -1,0 +1,57 @@
+{
+  "image_filename": "Elspeth Rowan_1792085514_ca2f0ef4_1.png",
+  "prompt": "Eigenständiges reifes Gesicht mit Sommersprossen, haselbraunen Augen, kupferrotem Haar mit silbernen Strähnen, freundlich entschlossener Mund.",
+  "backend": "Qwen2.1",
+  "backend_type": "openai_diffusion",
+  "negative_prompt": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, side view, three-quarter view, looking away, smiling, open mouth, cropped hair, cut off top of head, chest, torso, clothing, jewelry, earrings, necklace, hat, glasses, hands, objects, background scenery, room, landscape",
+  "from_character": "",
+  "guidance_scale": null,
+  "num_inference_steps": 40,
+  "duration_s": 99.4,
+  "created_at": "2026-10-15T17:31:54+00:00",
+  "location": "8ed40b7a",
+  "room_id": "c24ae197",
+  "seed": 0,
+  "loras": [],
+  "model": "Qwen2.1",
+  "reference_images": {},
+  "target_model": "qwen",
+  "canonical": {
+    "persons": [
+      {
+        "label": "Elspeth Rowan",
+        "name": "Elspeth Rowan",
+        "appearance": "Eine erwachsene schottische Frau mit kräftiger alltagstauglicher Statur, sommersprossiger heller Haut, haselbraunen Augen und kupferrotem, bereits leicht ergrautem Haar in einem lockeren Knoten. Freundliches reifes Gesicht und wetterfeste Haltung; vollständig originale Person.",
+        "gender": "female",
+        "is_agent": true
+      }
+    ],
+    "person_prompts": {},
+    "outfits": {
+      "1": "Elspeth Rowan is wearing wearing: plain cream cotton undershirt, plain full coverage cotton briefs, cream collared long-sleeved station shirt, dark green tailored work trousers, dark green practical station jacket with brass buttons, closed polished dark brown leather shoes, dark green railway peaked cap without a commercial logo"
+    },
+    "pose": "",
+    "expression": "",
+    "scene": "Eigenständiges reifes Gesicht mit Sommersprossen, haselbraunen Augen, kupferrotem Haar mit silbernen Strähnen, freundlich entschlossener Mund.",
+    "mood": "Aufmerksam und freundlich beim Schuljahrsbeginn.",
+    "activity": "",
+    "location": "Fahrkartenbüro, rural Scottish sandstone railway station, green and cream trim, gabled canopy, stationary crimson steam train, long gravel platform, quiet interior, afternoon, no people, no text",
+    "personality_hint": "",
+    "profile_image_hint": "",
+    "style": "front view, facing the camera, neutral expression, head and neck only, shoulders only if the hair is long, complete hairstyle inside the frame, no clothing, no accessories, no jewelry, no headwear, no glasses, no objects, no background, a photorealistic portrait, soft even lighting, sharp focus",
+    "negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, side view, three-quarter view, looking away, smiling, open mouth, cropped hair, cut off top of head, chest, torso, clothing, jewelry, earrings, necklace, hat, glasses, hands, objects, background scenery, room, landscape"
+  },
+  "template_prompt": "front view, facing the camera, neutral expression, head and neck only, shoulders only if the hair is long, complete hairstyle inside the frame, no clothing, no accessories, no jewelry, no headwear, no glasses, no objects, no background, a photorealistic portrait, soft even lighting, sharp focus Eigenständiges reifes Gesicht mit Sommersprossen, haselbraunen Augen, kupferrotem Haar mit silbernen Strähnen, freundlich entschlossener Mund.",
+  "prompt_method": "caller_provided",
+  "items_used": [],
+  "gallery_character": "Elspeth Rowan",
+  "filenames": [
+    "Elspeth Rowan_1792085514_ca2f0ef4_1.png"
+  ],
+  "routing": {
+    "occasion": "profile",
+    "position": 1,
+    "spec": "Qwen2.1"
+  },
+  "image_analysis": "This is a close-up, studio-style portrait of a woman, captured from the shoulders up against a plain, light gray background. The lighting is soft and even, likely from a large diffused source, which minimizes harsh shadows and highlights the natural texture of her skin. The mood is calm, direct, and neutral, with the subject looking straight into the camera with a steady, unsmiling gaze. She has long, wavy, light brown hair with subtle blonde highlights, parted slightly off-center and falling naturally around her face and over her shoulders. Her skin is fair with a warm undertone, showing visible freckles across her nose and cheeks, as well as fine lines around her eyes and mouth, suggesting a mature age. Her eyes are a light hazel or amber color, framed by well-defined brows. She appears to be bare-shouldered, with no visible clothing, suggesting a strapless top or a state of undress. The composition is tightly cropped, focusing entirely on her facial features and expression. The image has a high-resolution, photographic quality, with a shallow depth of field that keeps her face in sharp focus while the background remains softly blurred. The color palette is natural and muted, dominated by warm skin tones, brown hair, and the neutral gray backdrop."
+}

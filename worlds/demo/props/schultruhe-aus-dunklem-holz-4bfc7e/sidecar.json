@@ -5,7 +5,7 @@
     {
       "stem": "model",
       "active": true,
-      "description": "dark wooden school trunk, rectangular chest with brass reinforcing bands and a front brass clasp",
+      "description": "Holztruhe (zum aufklappen) aus dunklem Holz; eigenständig modellierte Holz-/Steinmöbel, eingebettete eigene Textur.",
       "width_m": 1.0,
       "depth_m": 0.67,
       "height_m": 0.6,
@@ -18,30 +18,37 @@
     "self-authored"
   ],
   "created_at": "2026-10-15T15:13:53+00:00",
-  "source": "manual",
-  "prompt": "",
+  "source": "generated",
+  "prompt": "A high-quality 3D model of Holztruhe (zum aufklappen) aus dunklem Holz; eigenständig modellierte Holz-/Steinmöbel, eingebettete eigene Textur, designed for 3D asset generation, 8k resolution, presented as a single isolated object on a plain seamless light gray studio background, centered product shot, soft even studio lighting from above, fully in frame with generous margin, matte surfaces clearly readable",
   "mount": "floor",
   "bbox": [
-    1.0,
-    0.6,
-    0.6675
+    0.99999,
+    0.78669,
+    0.59527
   ],
   "measured": {
     "format": "glb",
-    "file_bytes": 6792,
+    "file_bytes": 2444980,
     "objects": 1,
-    "tris": 48,
-    "verts": 96,
+    "tris": 48255,
+    "verts": 53921,
     "materials": [
-      "brass",
-      "wood"
+      "Material_0"
     ],
     "images": [
       {
         "name": "Image_0",
         "size": [
-          64,
-          64
+          2048,
+          2048
+        ],
+        "packed": true
+      },
+      {
+        "name": "Image_1",
+        "size": [
+          2048,
+          2048
         ],
         "packed": true
       }
@@ -57,15 +64,18 @@
     "actions": 0,
     "dims_m": [
       1.0,
-      0.6675,
-      0.6
+      0.5953,
+      0.7867
     ],
     "center_xy": [
       0.0,
       0.0
     ],
-    "min_z": 0.0,
-    "at": "2026-10-15T15:13:54+00:00",
+    "min_z": -0.3933,
+    "at": "2026-10-17T20:05:01+00:00",
     "blender": "5.2.2 LTS"
-  }
+  },
+  "backend_image": "Flux2-9B Normal",
+  "negative": "scene, environment, floor shadow, people, hands, text, watermark",
+  "source_generated_at": "2026-10-17T14:09:33+00:00"
 }

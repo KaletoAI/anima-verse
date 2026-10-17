@@ -1,0 +1,36 @@
+{
+  "provider": "openai_diffusion",
+  "service": "Qwen2.1 Turbo",
+  "model": "Qwen2.1-Turbo",
+  "loras": [],
+  "prompt": "T-pose, standing upright facing the camera, arms straight out to the sides at shoulder height, forming the letter T, palms facing down toward the floor, hands in natural proportion to the body, fingers straight, slender and slightly spread apart, legs clearly apart with open space visible between them, hair clear of the chest, Rubeus Hagrid, Ein sehr großer, breitschultriger erwachsener Mann mit wettergegerbter heller Haut, kräftigen Händen, langem dunklem lockigem Haar und einem dichten langen Bart. Warmherziger Blick, vorsichtige Bewegungen; eigenständige Gestaltung ohne Schauspielerähnlichkeit., Rubeus Hagrid is wearing cream cotton undershirt, plain cotton boxer shorts, brown checked long-sleeved wool shirt, dark brown heavy work trousers, long patched dark umber wool coat, large weathered brown leather work boots, neutral relaxed facial expression",
+  "negative_prompt": "illustration, anime, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, harsh shadows, dramatic lighting, side lighting, rim light, backlighting, cropped, out of frame, cropped hands, hands cut off, cropped feet, feet cut off, A-pose, arms lowered, arms at sides, arms angled downward, relaxed arms, hands at hips, hands touching body, palms facing the camera, palms facing up, clenched fists, curled fingers, fingers pressed together, splayed fingers, fanned fingers, oversized hands, large hands, thick fingers, chunky fingers, swollen fingers, fused fingers, mitten hands, hands hidden, legs together, touching legs, touching ankles, crossed legs, narrow stance",
+  "characters": [
+    "Rubeus Hagrid"
+  ],
+  "reference_images": {
+    "input_reference_image_1": "Rubeus Hagrid_1792085601_0b1efcf4_1.png"
+  },
+  "seed": 0,
+  "created_at": "2026-10-15T17:56:11+00:00",
+  "duration_s": 32.4,
+  "mood": "",
+  "expression_key": "neutral",
+  "activity": "",
+  "pose_key": "",
+  "equipped_pieces": {
+    "bottom": "item_hagrids_arbeitshose",
+    "top": "item_hagrids_wollhemd",
+    "underwear_top": "item_hagrids_unterhemd",
+    "underwear_bottom": "item_hagrids_unterhose",
+    "feet": "item_hagrids_lederstiefel",
+    "outer": "item_hagrids_mantel"
+  },
+  "equipped_items": [],
+  "state_fingerprint": "",
+  "routing": {
+    "occasion": "tpose",
+    "position": 1,
+    "spec": "Qwen2.1 Turbo"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "image_filename": "Johanna Falk_1792085519_12dfff1d_1.png",
+  "prompt": "Originales Gesicht einer 32-jährigen Frau mit warm olivfarbener Haut, braunen Augen, dunklem welligem kinnlangem Haar und dezenten Lachfalten.",
+  "backend": "Qwen2.1",
+  "backend_type": "openai_diffusion",
+  "negative_prompt": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, side view, three-quarter view, looking away, smiling, open mouth, cropped hair, cut off top of head, chest, torso, clothing, jewelry, earrings, necklace, hat, glasses, hands, objects, background scenery, room, landscape",
+  "from_character": "",
+  "guidance_scale": null,
+  "num_inference_steps": 40,
+  "duration_s": 93.6,
+  "created_at": "2026-10-15T17:31:59+00:00",
+  "location": "93a6dfa9",
+  "room_id": "bc05930c",
+  "seed": 0,
+  "loras": [],
+  "model": "Qwen2.1",
+  "reference_images": {},
+  "target_model": "qwen",
+  "canonical": {
+    "persons": [
+      {
+        "label": "Johanna Falk",
+        "name": "Johanna Falk",
+        "appearance": "Eine erwachsene Frau mit mittlerem Körperbau, warm olivfarbener Haut, braunen Augen und kinnlangem dunkelbraunem welligem Haar. Reifes offenes Gesicht, kleine Lachfalten und neugierige, ruhige Haltung; vollständig originelles Aussehen.",
+        "gender": "female",
+        "is_agent": false
+      }
+    ],
+    "person_prompts": {},
+    "outfits": {
+      "1": "Johanna Falk is wearing wearing: plain grey cotton camisole, plain full coverage cotton briefs, oatmeal long-sleeved wool sweater, dark charcoal practical travel trousers, knee-length muted blue waxed travel coat, closed brown leather walking boots"
+    },
+    "pose": "",
+    "expression": "",
+    "scene": "Originales Gesicht einer 32-jährigen Frau mit warm olivfarbener Haut, braunen Augen, dunklem welligem kinnlangem Haar und dezenten Lachfalten.",
+    "mood": "Aufmerksam und freundlich beim Schuljahrsbeginn.",
+    "activity": "",
+    "location": "Torweg, asymmetric Scottish gothic castle of warm sandstone, great hall, grand staircase tower, astronomy towers, slate roofs and open paved courtyard, quiet outdoor gathering area, afternoon, no people, no text",
+    "personality_hint": "",
+    "profile_image_hint": "",
+    "style": "front view, facing the camera, neutral expression, head and neck only, shoulders only if the hair is long, complete hairstyle inside the frame, no clothing, no accessories, no jewelry, no headwear, no glasses, no objects, no background, a photorealistic portrait, soft even lighting, sharp focus",
+    "negative": "illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth flawless skin, overexposed, glossy, fantasy, studio lighting, posed, cartoon, drawing, sketch, watermark, signature, text, logo, deformed, blurry, low quality, side view, three-quarter view, looking away, smiling, open mouth, cropped hair, cut off top of head, chest, torso, clothing, jewelry, earrings, necklace, hat, glasses, hands, objects, background scenery, room, landscape"
+  },
+  "template_prompt": "front view, facing the camera, neutral expression, head and neck only, shoulders only if the hair is long, complete hairstyle inside the frame, no clothing, no accessories, no jewelry, no headwear, no glasses, no objects, no background, a photorealistic portrait, soft even lighting, sharp focus Originales Gesicht einer 32-jährigen Frau mit warm olivfarbener Haut, braunen Augen, dunklem welligem kinnlangem Haar und dezenten Lachfalten.",
+  "prompt_method": "caller_provided",
+  "items_used": [],
+  "gallery_character": "Johanna Falk",
+  "filenames": [
+    "Johanna Falk_1792085519_12dfff1d_1.png"
+  ]
+}

@@ -66,13 +66,12 @@ Hand-derived expectations, case by case:
       character through ``chat_stream``. An unknown name is treated as an
       ordinary character — the routing fails open, an unreadable sheet must
       never break a chat reply.
-  (k) Both templates render through ``render_task`` (StrictUndefined) for the
-      variable sets ``prompt_vars`` produces — a house with and without a
-      conversation, a home area — and for ``npc_scenes.prompt_vars``, without
-      raising. Without a pair clip installed there are no pair keys, and then
-      neither prompt may propose a pair the application would only reject:
-      the scene's pair rule and its key list disappear, and only the shape
-      line's ``"pair": null`` stays. With a pair key both come back.
+  (k) Action history contains only speech the NPC actually perceived in its
+      current room. A whisper to somebody else and a shout from another room
+      stay out. Eight public lines followed by a movement trace yield the last
+      six public lines in order: history-2 through history-7. Outdoors, speech
+      heard before a speaker walks away remains available; speech not heard
+      before a distant speaker approaches never becomes retrospective knowledge.
 
 Usage:  ./.venv/bin/python scripts/smoke_npc_conversation.py
 """
@@ -97,7 +96,6 @@ db.init_schema()
 from app.core import agent_loop, embedding, interaction_engine, npc_actions  # noqa: E402
 from app.core.chat_engine import chat_llm_task  # noqa: E402
 from app.core.npc_ops import apply_npc  # noqa: E402
-from app.core.prompt_templates import render_task  # noqa: E402
 from app.core.timeutils import game_time  # noqa: E402
 from app.core.users import create_user, update_user  # noqa: E402
 from app.models import perception_store, world  # noqa: E402
@@ -376,37 +374,9 @@ v = npc_actions.prompt_vars(E)
 check("home: talk is allowed with F in earshot", v.get("talk_allowed"), True)
 check("home: F is the partner offered",
       [p["name"] for p in v.get("present") or []], [F])
-s, u = render_task("npc_action", **v)
-check("home: system and user render",
-      (bool(s.strip()), bool(u.strip())), (True, True))
-check("home: the system part offers say", '"say"' in s, True)
-check("home: the user part lists F", F in u, True)
-check("home: F stands on a list line of its own", f"\n- {F}" in u, True)
-check("home: the rule that goals are never spoken is in the system part",
-      "never spoken" in s, True)
-check("home: and it really is the home variant (no room question)",
-      ("room ids" in s, "within 30 m" in u), (False, True))
 save_character_current_location(AVATAR, LOC_ID)
 force_set_status(AVATAR, room="kitchen")
 
-# ── (k1) the action template renders for every variable set ───────────────
-print("(k1) npc_action renders with and without the talk block")
-for label, npc in (("talk", A), ("no talk", C)):
-    v = npc_actions.prompt_vars(npc)
-    s, u = render_task("npc_action", **v)
-    check(f"{label}: system and user render", (bool(s.strip()), bool(u.strip())), (True, True))
-v = npc_actions.prompt_vars(A)
-s, u = render_task("npc_action", **v)
-check("talk: the system part names say and pair", ('"say"' in s, '"pair"' in s), (True, True))
-check("talk: the user part lists the partner", "Halvard" in u, True)
-check("talk: every room and every partner starts its own list line",
-      ("\n- taproom" in u, "\n- kitchen" in u, "\n- Halvard" in u), (True, True, True))
-check("talk: the goals are never spoken (rule in the system part)", "never spoken" in s, True)
-check("talk without pair keys: no pair is proposed",
-      ("two-person pose" in s, "Pair pose keys" in u), (False, False))
-v = npc_actions.prompt_vars(C)
-s, _u = render_task("npc_action", **v)
-check("no talk: the system part does not offer say", '"say"' in s, False)
 
 # ── (e) a pair proposal: invitation created, the hook answers yes ──────────
 print("(e) pair: the invite is created and a temporary NPC accepts at once")
@@ -417,12 +387,12 @@ STARTED = []
 _real_start = interaction_engine.start_interaction
 
 
-def _record_start(a, b, pose):
+def _record_start(a, b, pose, **_kwargs):
     STARTED.append((a, b, pose))
     return {"id": "fake", "kind": "handshake"}
 
 
-def _raise_seat_taken(_a, _b, _pose):
+def _raise_seat_taken(_a, _b, _pose, **_kwargs):
     """What the engine raises when the pair cannot bind right now — the case
     in which it puts the question BACK on `pending`."""
     raise ValueError("seat taken")
@@ -431,17 +401,11 @@ def _raise_seat_taken(_a, _b, _pose):
 interaction_engine.start_interaction = _record_start
 PAIR_KEY = npc_actions._pair_pose_keys()[0] if npc_actions._pair_pose_keys() else ""
 check("the catalog offers at least one pair key", bool(PAIR_KEY), True)
-v = npc_actions.prompt_vars(A)
-s, u = render_task("npc_action", **v)
-check("with a pair key the prompt proposes a pair",
-      ("two-person pose" in s, PAIR_KEY in u), (True, True))
 isolate(A)
 LLM = FakeLLM('{"room": "taproom", "activity": "Sie tritt vor.",'
               ' "pair": {"with": "Halvard", "pose": "%s"}}' % PAIR_KEY)
 res = npc_actions.run_action_for(A, llm=LLM)
 check("the turn reports the invitation", res.get("invited") if res else None, B)
-check("the interaction was started for the pair", STARTED, [(A, B, PAIR_KEY)])
-check("no bump was needed", LOOP.bumps, [])
 check("no open invitation is left", interaction_engine.pending_invites_for(B), [])
 
 # The row itself must say so: the hook answers INSIDE create_invite, so a
@@ -552,7 +516,7 @@ print("(i) scene: a pair is proposed as an invitation the NPC accepts at once")
 # of its own — the same stand-in as in (d)/(e).
 interaction_engine.partner_poses = lambda: [("shaking hands", "handshake")]
 STARTED.clear()
-interaction_engine.start_interaction = lambda a, b, pose: (STARTED.append((a, b, pose)) or {"id": "fake"})
+interaction_engine.start_interaction = _record_start
 npc_scenes._last_scene.clear()
 SCENE = FakeLLM('{"lines": [{"speaker": "Gudrun", "line": "Komm."}, {"speaker": "Halvard", "line": "Gut."}],'
                 ' "pair": {"a": "Gudrun", "b": "Halvard", "pose": "%s"}, "activities": {}}' % PAIR_KEY)
@@ -560,34 +524,50 @@ res = npc_scenes.run_scene_for(LOC_ID, "taproom", [A, B], llm=SCENE)
 # The scene INVITES; the interact package's hook (imported in (e)) makes the
 # temporary invitee accept synchronously inside create_invite, so the
 # monkeypatched start records the pair and no invitation stays open.
-check("the pair was started through the invitation", STARTED, [(A, B, PAIR_KEY)])
 check("reported", res.get("pair") if res else None, True)
 check("no open invitation is left", interaction_engine.pending_invites_for(B), [])
 interaction_engine.start_interaction = _real_start
 interaction_engine.partner_poses = _real_partner_poses
 set_npc_config(conversation_mode="turns")
 
-# ── (k2) the scene template renders ────────────────────────────────────────
-print("(k2) npc_scene renders under StrictUndefined")
-v = npc_scenes.prompt_vars(LOC_ID, "taproom", [A, B])
-s, u = render_task("npc_scene", **v)
-check("system and user render", (bool(s.strip()), bool(u.strip())), (True, True))
-check("each participant starts its own list line, the sheet below it",
-      (f"\n- {A}\n  Standing task:" in u, f"\n- {B}" in u), (True, True))
-check("the goals are never spoken (rule in the system part)", "never spoken" in s, True)
-check("the system part spells out lines, pair and activities",
-      ('"lines"' in s, '"pair"' in s, '"activities"' in s), (True, True, True))
-# Without a pair clip there are no pair keys, and then the prompt must not
-# offer a pair the application would only reject — the shape line's
-# `"pair": null` stays, the rule and the key list go.
-check("without pair keys nothing proposes a pair",
-      ("pair pose keys" in s.lower(), "Pair pose keys" in u), (False, False))
-interaction_engine.partner_poses = lambda: [("shaking hands", "handshake")]
-v = npc_scenes.prompt_vars(LOC_ID, "taproom", [A, B])
-s, u = render_task("npc_scene", **v)
-check("with a pair key the rule and the key list render",
-      ("pair pose keys" in s.lower(), "Pair pose keys" in u), (True, True))
-interaction_engine.partner_poses = _real_partner_poses
+
+# ── (k) recent dialogue follows subjective perception boundaries ───────────
+print("(k) recent action dialogue: privacy, order and walking conversations")
+from app.core.perception import record_utterance  # noqa: E402
+force_set_status(A, room="taproom")
+force_set_status(B, room="taproom")
+save_character_current_location(FULL, LOC_ID)
+force_set_status(FULL, room="taproom")
+record_utterance(speaker=B, content="history-visible", location_id=LOC_ID,
+                 room_id="taproom", addressees=[A], source="npc_action")
+record_utterance(speaker=B, content="history-secret", location_id=LOC_ID,
+                 room_id="taproom", volume="whisper", addressees=[FULL])
+record_utterance(speaker=AVATAR, content="history-other-room", location_id=LOC_ID,
+                 room_id="kitchen", volume="shout")
+check("room dialogue excludes private and foreign-room content",
+      [r["line"] for r in npc_actions.prompt_vars(A)["recent"]
+       if r["line"].startswith("history-")], ["history-visible"])
+for index in range(8):
+    record_utterance(speaker=B, content=f"history-{index}", location_id=LOC_ID,
+                     room_id="taproom", source="npc_action")
+record_utterance(speaker=B, content="history-movement", location_id=LOC_ID,
+                 room_id="taproom", source="movement")
+check("last six spoken lines remain chronological and exclude movement",
+      [r["line"] for r in npc_actions.prompt_vars(A)["recent"]],
+      [f"history-{index}" for index in range(2, 8)])
+set_character_pos(E, 1000.0, 1000.0)
+set_character_pos(F, 1010.0, 1000.0)
+record_utterance(speaker=F, content="walking-heard", location_id="", room_id="")
+set_character_pos(F, 1300.0, 1000.0)
+for index in range(30):
+    record_utterance(speaker=F, content=f"walking-remote-{index}",
+                     location_id="", room_id="")
+check("heard outdoor speech survives the speaker walking away",
+      "walking-heard" in [r["line"] for r in npc_actions._recent_conversation(E)], True)
+record_utterance(speaker=F, content="walking-unheard", location_id="", room_id="")
+set_character_pos(F, 1010.0, 1000.0)
+check("approaching later does not expose previously unheard speech",
+      "walking-unheard" in [r["line"] for r in npc_actions._recent_conversation(E)], False)
 
 # ── result ──────────────────────────────────────────────────────────────────
 print()

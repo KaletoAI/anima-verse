@@ -16,9 +16,8 @@ from app.core.db import get_connection, transaction
 
 logger = get_logger("unified_chat")
 
-# The account login name is deliberately not used here — it would otherwise count as
-# Partner-Key in chat_messages leaken. Stattdessen wird get_player_identity
-# in _resolve_partner_key benutzt (lazy import dort).
+# Account login names must never leak into chat_messages partner keys.
+# _resolve_partner_key lazily resolves the player's character identity.
 from app.models.channel import Message
 
 
@@ -30,7 +29,7 @@ class UnifiedChatManager:
 
     @staticmethod
     def get_chat_dir(character_name: str) -> Path:
-        """Legacy-Kompatibilitaet: Gibt das Chat-Verzeichnis zurueck (existiert noch fuer Backups)."""
+        """Legacy chat directory, still used by backup callers."""
         from app.core.paths import get_storage_dir
         chat_dir = get_storage_dir() / "characters" / character_name / "chats"
         chat_dir.mkdir(parents=True, exist_ok=True)
@@ -38,11 +37,7 @@ class UnifiedChatManager:
 
     @staticmethod
     def _resolve_partner_key(partner_name: str = "", character_name: str = "") -> str:
-        """Bestimmt den Partner-Key (fuer Logging und Legacy-Compat).
-
-        Neues System: Character-Name des Partners.
-        Fallback: aktiver Character des Users, dann Username.
-        """
+        """Resolve the partner's character identity for storage and logging."""
         if partner_name:
             return partner_name
         try:
@@ -52,14 +47,12 @@ class UnifiedChatManager:
                 return active
         except Exception:
             pass
-        # Login-Name (z.B. "admin") taugt nicht als Partner-Key — wuerde
-        # neue Chats unter dem Login speichern statt unter dem Avatar.
-        # Leerer String bedeutet hier: kein Partner-Filter.
-        return ""
+        # An account login is not a character identity.
+        return ""  # No partner filter.
 
     @staticmethod
     def _pair_cutoff_ts(conn, character_name: str, partner: str,
-                        limit: int) -> Optional[str]:
+                        limit: int, medium: Optional[str] = None) -> Optional[str]:
         """The oldest ``ts`` the last ``limit`` messages of the pair can have.
 
         The pair view merges BOTH storage directions and then drops duplicates
@@ -78,17 +71,21 @@ class UnifiedChatManager:
         simply yield the oldest ``ts``, which cuts nothing.
         """
         try:
+            medium_filter = (" AND CASE WHEN json_valid(metadata) THEN "
+                             "json_extract(metadata, '$.medium') END=?") if medium is not None else ""
+            direct = (character_name, partner) + ((medium,) if medium is not None else ())
+            flipped = (partner, character_name) + ((medium,) if medium is not None else ())
             row = conn.execute(
                 "SELECT MIN(ts) FROM ("
                 "  SELECT ts, role, content FROM chat_messages"
-                "   WHERE character_name=? AND partner=?"
+                "   WHERE character_name=? AND partner=?" + medium_filter +
                 "  UNION"
                 "  SELECT ts, CASE WHEN role='assistant' THEN 'user'"
                 "                  ELSE 'assistant' END, content"
-                "   FROM chat_messages WHERE character_name=? AND partner=?"
+                "   FROM chat_messages WHERE character_name=? AND partner=?" + medium_filter +
                 "  ORDER BY ts DESC LIMIT ?"
                 ")",
-                (character_name, partner, partner, character_name, limit),
+                direct + flipped + (limit,),
             ).fetchone()
         except Exception as e:
             logger.debug("_pair_cutoff_ts failed for %s/%s: %s",
@@ -99,13 +96,14 @@ class UnifiedChatManager:
     @staticmethod
     def get_chat_history(character_name: str = "",
         limit: Optional[int] = None,
-        partner_name: str = "") -> List[Message]:
+        partner_name: str = "", medium: Optional[str] = None) -> List[Message]:
         """Loads the chat history from the DB.
 
         Args:
             character_name: character whose history is loaded
             limit: maximum number of messages (the last N)
             partner_name: explicit partner character name (character-to-character)
+            medium: optional communication channel, filtered before the limit
 
         Returns:
             List of Message objects
@@ -124,43 +122,34 @@ class UnifiedChatManager:
 
         try:
             conn = get_connection()
+            medium_filter = (" AND CASE WHEN json_valid(metadata) THEN "
+                             "json_extract(metadata, '$.medium') END=?") if medium is not None else ""
+            medium_args = (medium,) if medium is not None else ()
             if partner:
-                # Konversation A↔B kann je nach damaligem Avatar als
-                # (A, partner=B) ODER (B, partner=A) gespeichert sein —
-                # je nachdem wer der "antwortende" Character war. Beim
-                # Avatar-Wechsel wuerde sonst die alte Richtung versteckt
-                # bleiben. Wir vereinen beide Richtungen und tauschen die
-                # Rollen im flipped-Batch, damit aus Sicht des aktuellen
-                # character_name role=assistant immer DIESEN Character
-                # bedeutet.
+                # Merge both storage directions, flipping roles so assistant
+                # always means the character whose history is being read.
                 base_q = (
                     "SELECT id, ts, role, content, channel, "
                     "channel_message_id, metadata FROM chat_messages "
-                    "WHERE character_name=? AND partner=?")
+                    "WHERE character_name=? AND partner=?" + medium_filter)
                 since = (UnifiedChatManager._pair_cutoff_ts(
-                    conn, character_name, partner, sql_limit)
+                    conn, character_name, partner, sql_limit, medium=medium)
                     if sql_limit else None)
                 tail = " AND ts >= ?" if since is not None else ""
-                args_direct = ((character_name, partner, since) if since is not None
-                               else (character_name, partner))
-                args_flipped = ((partner, character_name, since) if since is not None
-                                else (partner, character_name))
+                since_args = (since,) if since is not None else ()
+                args_direct = (character_name, partner) + medium_args + since_args
+                args_flipped = (partner, character_name) + medium_args + since_args
                 rows_direct = conn.execute(base_q + tail, args_direct).fetchall()
                 rows_flipped = conn.execute(base_q + tail, args_flipped).fetchall()
 
                 merged = list(rows_direct)
                 for r in rows_flipped:
-                    # role swap: was als (B,A) gespeichert wurde, sieht aus
-                    # A's Sicht andersrum aus.
+                    # Reverse the other character's perspective.
                     new_role = "user" if r[2] == "assistant" else "assistant"
                     merged.append((r[0], r[1], new_role, r[3], r[4], r[5], r[6]))
                 merged.sort(key=lambda x: (x[1] or "", x[0]))
-                # Dedup: TalkTo-Konversationen (NPC↔NPC) werden in BEIDE
-                # Buckets geschrieben, damit jeder Char eine vollstaendige
-                # eigene History hat. Nach role-swap kollidiert das im
-                # merged-View. Eindeutiger Schluessel: (ts, role, content).
-                # Avatar↔NPC-Messages haben unique ts/content kombiniert,
-                # werden also nicht entfernt.
+                # Symmetric writes collide after the role swap; keep one
+                # message per timestamp, role and content.
                 seen: set = set()
                 deduped: List[tuple] = []
                 for r in merged:
@@ -170,30 +159,22 @@ class UnifiedChatManager:
                     seen.add(key)
                     deduped.append(r)
                 rows = deduped
-                # Frueher gab es einen Fallback auf den Account-Login-Namen
-                # (the account login name) als Partner — der hat aber nur bestehende
-                # Admin-Chats sichtbar gemacht und neue Avatar-Chats blieben
-                # leer wenn jemand kurzzeitig keinen Avatar gewaehlt hatte.
-                # Entfernt: Login-Name ist kein gueltiger Partner-Key.
             elif sql_limit:
                 # Newest N in SQL (idx_chat_char_ts), turned back into
                 # chronological order — the same last N the Python tail below
                 # would have produced, without reading the rest.
-                rows = conn.execute("""
-                    SELECT id, ts, role, content, channel, channel_message_id, metadata
-                    FROM chat_messages
-                    WHERE character_name=?
-                    ORDER BY ts DESC, id DESC
-                    LIMIT ?
-                """, (character_name, sql_limit)).fetchall()
+                rows = conn.execute(
+                    "SELECT id, ts, role, content, channel, channel_message_id, metadata "
+                    "FROM chat_messages WHERE character_name=?" + medium_filter +
+                    " ORDER BY ts DESC, id DESC LIMIT ?",
+                    (character_name,) + medium_args + (sql_limit,)).fetchall()
                 rows.reverse()
             else:
-                rows = conn.execute("""
-                    SELECT id, ts, role, content, channel, channel_message_id, metadata
-                    FROM chat_messages
-                    WHERE character_name=?
-                    ORDER BY ts ASC
-                """, (character_name,)).fetchall()
+                rows = conn.execute(
+                    "SELECT id, ts, role, content, channel, channel_message_id, metadata "
+                    "FROM chat_messages WHERE character_name=?" + medium_filter +
+                    " ORDER BY ts ASC",
+                    (character_name,) + medium_args).fetchall()
 
             history: List[Message] = []
             for r in rows:

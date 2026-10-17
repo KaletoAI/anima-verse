@@ -1,19 +1,12 @@
-"""ThoughtRunner — Container fuer ``run_thought_turn``.
+"""Run one LLM-streamed thought turn through ``ThoughtRunner``.
 
-Hostet die LLM-Streaming-Logik fuer einen einzelnen Thought-Turn. Wer einen
-Char "denken" laesst (AgentLoop scheduling, Admin-Bump),
-ruft ``get_thought_runner().run_thought_turn(...)``.
-
-Scheduling laeuft im ``app.core.agent_loop.AgentLoop`` (importance-gewichtetes
-Round-Robin, Bumps, In-Chat-Gating, Cooldowns). Die hier frueher gepflegten
-Tick-Konditionen (THOUGHT_MIN_IDLE_MINUTES etc.) sind weg — Pacing
-konfiguriert man im Admin unter "Gedanken" (siehe agent_loop.py).
+Callers (the AgentLoop or an admin trigger) invoke
+``get_thought_runner().run_thought_turn(...)``.
+Scheduling, weighted round-robin, bumps, in-chat gating and cooldowns belong
+to ``app.core.agent_loop.AgentLoop``; this module only executes the turn.
 """
 import asyncio
-import os
-import random
 import re
-from datetime import datetime, timedelta
 
 from app.core.timeutils import game_time, utc_now
 from typing import Any, Dict, List, Optional
@@ -180,8 +173,7 @@ def _check_cascade_brake(tool_input, allowed_target: str) -> str:
         target = raw.split(",", 1)[0].strip()
     if not target:
         return ""
-    # case-insensitive Match (Vornamen-Verkuerzungen wie "Kira" vs "Kira Voss"
-    # tolerieren wir hier nicht — wer addressed werden soll, soll exakt matchen)
+    # Match full names case-insensitively; first-name abbreviations do not count.
     if target.lower() == allowed_target.strip().lower():
         return ""
     return target
@@ -197,15 +189,7 @@ def set_thought_runner(loop: "ThoughtRunner"):
 
 
 class ThoughtRunner:
-    """Container fuer ``run_thought_turn`` — die gemeinsame Einstiegsfunktion
-    fuer Gedanken-Turns. Scheduling laeuft im ``AgentLoop``, dieser Class
-    haelt nur noch die Turn-Ausfuehrung.
-
-    Name "Loop" ist historisch (frueher periodischer Tick); kein Background
-    Task mehr. Rename auf z.B. ``ThoughtRunner`` ist optional und wuerde
-    Anpassungen in agent_loop.py / chat_engine.py / memory_service.py /
-    world_dev.py erfordern.
-    """
+    """Execute individual thought turns; the AgentLoop owns scheduling."""
 
     def __init__(self):
         self._lock = asyncio.Lock()
@@ -217,24 +201,20 @@ class ThoughtRunner:
 
     @staticmethod
     def _clean_hallucinated_tools(text: str, real_tool_names: List[str]) -> str:
-        """Entfernt halluzinierte Tool-Calls aus der Chat-LLM-Antwort.
-
-        Das Chat-LLM schreibt manchmal Tool-Aufrufe als Prosa statt sie
-        tatsaechlich aufzurufen. Diese Fake-Calls werden hier entfernt.
-        """
+        """Remove tool calls that the chat LLM narrated without executing."""
         if not text:
             return text
 
-        # [ToolName](...) — Markdown-Link-artige Fake-Calls
+        # [ToolName](...) — fake calls written as Markdown links.
         text = re.sub(r'\[(?:' + '|'.join(re.escape(t) for t in real_tool_names) + r')\]\([^)]*\)', '', text)
 
-        # [ToolName: ...] — Bracket-Style Fake-Calls mit Beschreibung
+        # [ToolName: ...] — fake bracket-style calls with a description.
         text = re.sub(r'\[(?:' + '|'.join(re.escape(t) for t in real_tool_names) + r'):[^\]]*\]', '', text)
 
-        # [ToolName] allein stehend (ohne Link)
+        # [ToolName] on its own, without a link.
         text = re.sub(r'\[(?:' + '|'.join(re.escape(t) for t in real_tool_names) + r')\]', '', text)
 
-        # Nackte Tool-Namen als eigene Zeile (z.B. "WebSearch\n" oder "KnowledgeExtract\n")
+        # Bare tool names on their own line.
         for tn in real_tool_names:
             text = re.sub(rf'^\s*{re.escape(tn)}\s*$', '', text, flags=re.MULTILINE)
 
@@ -248,16 +228,16 @@ class ThoughtRunner:
             text = re.sub(rf'^[ \t]*(?:{_names})(?:\s+\w+)?[ \t]*\{{[\s\S]*?\n[ \t]*\}}[ \t]*$',
                           '', text, flags=re.MULTILINE)
 
-        # <tool name="...">...</tool> Tags (geschlossen)
+        # Closed <tool name="...">...</tool> tags.
         text = re.sub(r'<tool\s+name="[^"]*">[\s\S]*?</tool>', '', text)
 
-        # <tool name="...">... (ungeschlossen — bis Zeilenende oder naechstes <tool)
+        # Unclosed tool tags, up to the next tag.
         text = re.sub(r'<tool\s+name="[^"]*">[^<]*', '', text)
 
-        # (**An:** ...) / (**Generiere:** ...) — fake Parameter-Blöcke
+        # (**An:** ...) / (**Generiere:** ...) — fake parameter blocks.
         text = re.sub(r'\(\*\*[^)]{0,200}\*\*[^)]{0,500}\)', '', text)
 
-        # Mehrfache Leerzeilen zusammenfassen
+        # Collapse repeated blank lines.
         text = re.sub(r'\n{3,}', '\n\n', text)
 
         return text.strip()
@@ -268,27 +248,15 @@ class ThoughtRunner:
                                 llm_task: str = "thought",
                                 reply_only_to: str = "",
                                 system_prompt_override: str = ""):
-        """Fuehrt den Gedanken-LLM-Call mit Tool-Support aus.
+        """Run a thought with the same StreamingAgent as chat.
 
-        Nutzt den gleichen StreamingAgent wie der Chat, aber mit
-        einem speziellen System-Prompt der auf die Aufgabe fokussiert ist.
-
-        fast: Wenn True, laeuft der ganze Gedanke ueber das Tool-LLM
-            (schneller, fuer Kurz-Reaktionen wie Instagram-Kommentare).
-            Kein Dual-LLM-Pass — der Tool-LLM uebernimmt Prompt + Tool-Calls
-            in einem Durchgang.
-        tool_whitelist: Falls gesetzt (z.B. ["InstagramComment"]) werden
-            agent_tools hart auf diese Tool-Namen gefiltert. Alle anderen
-            Skills sind fuer diesen Call unerreichbar.
-        suppress_notification: Falls True wird der Narrativ-Text des LLM
-            NICHT als Notification/Chat-Message gespeichert. Nur Tool-Calls
-            haben Wirkung. Verhindert Halluzinations-Leaks in die History
-            bei passiven Observer-Gedanken.
-        reply_only_to: Cascade-Brake. Wenn gesetzt, blockt der Tool-Executor
-            jeden SendMessage/TalkTo-Aufruf an einen ANDEREN Empfaenger als
-            diesen. Verhindert dass der Empfaenger einer DM weitere DMs an
-            Dritte schickt (Diego→Luna→Enzo-Kette). Reply muss explizit an
-            den urspruenglichen Sender gehen.
+        fast: Let the tool LLM narrate and invoke tools in one pass, useful
+            for short reactions such as Instagram comments.
+        tool_whitelist: Restrict this turn to the supplied tool names.
+        suppress_notification: Keep tool effects but discard private prose
+            instead of journalling it, for passive observer turns.
+        reply_only_to: Limit messaging tools to the original sender so an
+            incoming DM cannot cause an unsolicited third-party cascade.
         """
         from app.models.character import (
             get_character_profile,
@@ -301,15 +269,11 @@ class ThoughtRunner:
         from app.core.streaming import (StreamingAgent, ContentEvent,
                                         ExtractionEvent, ToolResultEvent)
         from app.core.tool_formats import build_tool_instruction, get_format_for_model
-        from app.models.notifications import create_notification
-        from app.models.chat import save_message
 
         profile = get_character_profile(character_name)
         config = get_character_config(character_name)
         from app.models.account import get_active_character
-        # Avatar-Identitaet wenn aktiv, sonst leer — kein "user"/"Player"
-        # Sentinel mehr, der als Pseudo-Charakter in Prompts oder
-        # Relationship-Updates leakt.
+        # Use the active avatar identity, or empty: no pseudo-character sentinel.
         user_name = (get_active_character() or "").strip()
 
         # Turn summary for the agent loop / admin panel.
@@ -344,13 +308,11 @@ class ThoughtRunner:
             _turn_info["status"] = "no_llm"
             return _turn_info
 
-        # Skills laden und Modus bestimmen
+        # Load skills and determine the mode.
         sm = get_skill_manager()
         agent_tools = sm.get_agent_tools(character_name)
 
-        # Tool-Whitelist: haeltert agent_tools auf erlaubte Namen.
-        # Kommt bei Observer-Gedanken (z.B. Instagram-Reaction) zum Einsatz,
-        # um Rollenkonfusion im Tool-LLM zu verhindern.
+        # Observer turns restrict tools to prevent role confusion.
         if tool_whitelist:
             _allowed = set(tool_whitelist)
             _before = [t.name for t in agent_tools]
@@ -393,7 +355,7 @@ class ThoughtRunner:
                 def wrapper(raw_input):
                     import json
                     ctx = {"input": raw_input, "agent_name": _agent, "user_id": _uid}
-                    # JSON-Tool-Input mergen damit Felder direkt verfuegbar sind
+                    # Merge JSON tool fields into the execution context.
                     if isinstance(raw_input, str) and raw_input.strip().startswith("{"):
                         try:
                             parsed = json.loads(raw_input)
@@ -412,8 +374,7 @@ class ThoughtRunner:
         model_for_format = tool_model_name or (_thought_inst.model if _thought_inst else "")
         tool_format = get_format_for_model(model_for_format)
 
-        # Tools-Hint: Im Single-Modus muss das LLM die Tool-Calls SELBST schreiben.
-        # Im Dual-Modus (rp_first) uebernimmt das Tool-LLM die Tool-Entscheidung.
+        # Single mode writes its own calls; rp_first delegates tool decisions.
         available_tool_names = [t.name for t in agent_tools] if agent_tools else []
         tools_hint = ""
         if available_tool_names and mode != "rp_first":
@@ -444,7 +405,7 @@ class ThoughtRunner:
             logger.info("Thought fuer %s mit context_hint: %s",
                         character_name, context_hint[:100])
 
-        # arc_context fuer spaeteres Arc-Advancement (Zeile ~1214)
+        # Load arc context for later advancement.
         _arc_context_loaded = False
         try:
             from app.core.story_engine import get_story_engine
@@ -596,9 +557,8 @@ class ThoughtRunner:
             deferred_tools=_deferred_tools,
             content_tools=_content_tools,
             mode=mode,
-            # Bei tool_whitelist (z.B. forced_thought fuer Avatar-Eintritt):
-            # Tool-Decision-Prompt minimieren — keine EXTRACTION/FALLBACK-MARKER,
-            # nur Action-Mapping fuer die tatsaechlich erlaubten Tools.
+            # Whitelisted turns map only permitted actions, without extraction
+            # or fallback markers.
             constrained_tools=bool(tool_whitelist))
 
         # Tool executor (synchronous execution in a thread).
@@ -622,11 +582,8 @@ class ThoughtRunner:
             return await asyncio.to_thread(tool_func, tool_input)
         agent.tool_executor = _tool_executor
 
-        # Thoughts haben keine recent_history. Frischer Gespraechsfaden
-        # kommt ueber den Inbox-Block, Versprechen ueber Commitments,
-        # Fakten ueber Memory — alles im System-Prompt gebuendelt. Echte
-        # Conversation-Turns wuerden hier nur Avatar-zentrierten Bias und
-        # alte (stale) Wortlaute reinbringen.
+        # Thoughts have no recent chat history. Inbox, commitments and memory
+        # provide context; chat turns would introduce avatar bias and stale prose.
         recent_history: List[Dict[str, str]] = []
 
         # Agent ausfuehren und Response sammeln
@@ -650,8 +607,7 @@ class ThoughtRunner:
         # duplicate a tool already executed in this turn.
         _tool_executions: List = []
 
-        # Queue-Tracking: Gedanke als aktiv registrieren (wie Chat),
-        # damit der Task im Queue-Panel sichtbar ist und GPU-Routing greift.
+        # Register the thought for queue visibility and GPU routing.
         from app.core.llm_queue import get_llm_queue
         _llm_queue = get_llm_queue()
         _llm_inst = _thought_inst
@@ -668,8 +624,8 @@ class ThoughtRunner:
         # progress (admin queue panel shows "iter N/M" while streaming).
         agent.chat_task_id = _thought_task_id
 
-        # Tool-Executor: Queue waehrend Tool-Ausfuehrung freigeben.
-        # character_name/user_id werden bereits von _make_ctx_wrapper (Zeile ~778) injiziert.
+        # Release the queue while executing tools; the context wrapper already
+        # supplies character_name and user_id.
         _thought_state = {"task_id": _thought_task_id}
 
         def _set_thought_task(tid):
@@ -742,10 +698,8 @@ class ThoughtRunner:
         _turn_info["tool_response"] = (
             getattr(agent, "last_tool_response", "") or "").strip()
 
-        # Narrativ beschriebene Tool-Calls erkennen und ausfuehren BEVOR
-        # die Halluzinations-Bereinigung den Text entfernt.
-        # Chat-LLM schreibt z.B. "[ImageGeneration: prompt text]" als Text
-        # wenn das Tool-LLM versagt hat → Tool tatsaechlich ausfuehren.
+        # Execute narrated bracket calls before hallucination cleanup, if the
+        # tool phase did not already execute them.
         _narrative_exec_counts = {}
         try:
             if full_response and tools_dict:
@@ -753,7 +707,7 @@ class ThoughtRunner:
                     r'\[(\w+):\s*([^\]]+)\]', full_response
                 )
                 for _tn, _tinput in _narrative_pattern:
-                    # Nur ausfuehren wenn das Tool nicht bereits echt ausgefuehrt wurde
+                    # Do not execute a tool twice.
                     if _tn in tools_dict and _tn not in _tool_exec_counts:
                         logger.info("%s: Narrativer Tool-Call erkannt: %s -> fuehre aus",
                                     character_name, _tn)
@@ -769,7 +723,7 @@ class ThoughtRunner:
         except Exception as _nte:
             logger.debug("Narrative tool-call execution error: %s", _nte)
 
-        # Halluzinierte Tool-Calls aus der Antwort entfernen
+        # Remove hallucinated calls from the answer.
         if full_response and available_tool_names:
             cleaned = self._clean_hallucinated_tools(full_response, available_tool_names)
             if cleaned != full_response:
@@ -777,11 +731,10 @@ class ThoughtRunner:
                             character_name, len(full_response), len(cleaned))
                 full_response = cleaned
 
-        # Turn-Summary: Tools (Stream + Narrative) und Preview erfassen,
-        # damit das Admin-Panel sehen kann was tatsaechlich passiert ist.
+        # Report executed tools and the preview to the admin panel.
         try:
             _tool_names = list(_tool_exec_counts.keys()) + list(_narrative_exec_counts.keys())
-            # Dedup, Reihenfolge erhalten.
+            # Deduplicate while preserving order.
             _seen = set()
             _turn_info["tools"] = [t for t in _tool_names if not (t in _seen or _seen.add(t))]
             _preview_src = (full_response or "").strip()
@@ -842,8 +795,7 @@ class ThoughtRunner:
             except Exception as pp_err:
                 logger.error("%s: post_process_response failed: %s", character_name, pp_err)
 
-        # Auto-Progress: Tool-Ausfuehrungen als Intent-Fortschritt zaehlen
-        # (vereinheitlichte Intents, plan-intents-unified.md)
+        # Count tool executions as progress for unified intents.
         try:
             from app.models.intents import auto_track_progress, progress_type_for_tool
 
@@ -871,56 +823,22 @@ class ThoughtRunner:
             _turn_info["skipped"] = True
             return _turn_info
 
-        # Suppress-Notification: nur Tool-Effekte behalten, Narrativ-Text
-        # wird verworfen. Fuer Observer-Gedanken (Instagram-Reaction etc.)
-        # wo der Context-Hint fremden Inhalt traegt, der nicht als Kiras
-        # Gedanke in die Chat-History leaken darf.
+        # Observer hints can quote someone else's content. Keep tool effects,
+        # but do not journal their narration as this character's own thought.
         if suppress_notification:
             logger.info("%s: suppress_notification=True — "
                         "Narrativ wird verworfen, nur Tool-Effekte bleiben",
                         character_name)
             return _turn_info
 
-        # Notification-Inhalt bestimmen.
-        # Konzept-Aenderung: Notifications sind jetzt nur noch fuer System-
-        # Events (Random Events, Scheduler, Welt-Updates). Charakter-Gedanken
-        # erzeugen KEINE Notifications mehr automatisch — wenn der Character
-        # den User proaktiv ansprechen will, muss er explizit das Tool
-        # SendMessage benutzen (das laeuft als Chat-Nachricht in die Chat-
-        # Historie und triggert den Chat-Unread-Indikator).
-        # Frueher: jeder Thought-Output >10 Zeichen wurde als Notification
-        # gespeichert -> Notification-Spam, Inhalt nicht im Chat-Kontext.
-        notification_content = ""
-        if had_notification_tool:
-            # Nur wenn der Character explizit SendNotification (nur fuer
-            # System-zugewiesene Tasks aktiviert) gerufen hat.
-            if full_response:
-                notification_content = full_response
-            elif notification_tool_content:
-                _prefix = "Notification erfolgreich gesendet: "
-                if notification_tool_content.startswith(_prefix):
-                    notification_content = notification_tool_content[len(_prefix):]
-                else:
-                    notification_content = notification_tool_content
-            logger.info("%s: Notification via SendNotification Skill erstellt", character_name)
-        else:
-            # Narrative thought output without a tool. It is not DELIVERED
-            # anywhere — if the character wanted to say something it should
-            # have called SendMessage — but it is journalled below.
-            if full_response and len(full_response) > 10:
-                logger.info("%s: Thought-Narrativ ohne SendMessage (%d Zeichen) — "
-                            "wird journalisiert", character_name, len(full_response))
-            else:
-                logger.info("%s: Keine verwertbare Antwort", character_name)
+        # Tools own delivery. Thought prose is private even when this turn
+        # also called a system-notification tool.
+        if full_response and len(full_response) > 10:
+            logger.info("%s: private thought narrative (%d characters) — journalled",
+                        character_name, len(full_response))
 
-        # ── Gedanken-Journal (plan-thought-journal.md) ────────────────────
-        # Das Narrativ landet im privaten Journal, statt zu verschwinden —
-        # egal ob eine Notification daraus wurde oder nicht (der Gedanke
-        # existierte unabhaengig von der Zustellung). SKIP- und
-        # suppress_notification-Turns sind oben bereits raus.
-        # Speichern ist LAGERUNG, keine Zustellung: der Text erreicht nur den
-        # eigenen naechsten Thought-Prompt, die eigene Konsolidierung und das
-        # Admin-Panel.
+        # Store cognition in the private journal, never in chat history.
+        # SKIP and suppress_notification turns have already returned above.
         if full_response and len(full_response) > 10:
             try:
                 from app.models.thought_store import add_thought
@@ -934,8 +852,7 @@ class ThoughtRunner:
                 _journal = (_journal or "").strip()
                 if _journal and _journal.upper() != "SKIP":
                     if context_hint:
-                        # Der manuelle Admin-Trigger gibt den Anstoss mit ins
-                        # Journal — sonst steht der Gedanke ohne Anlass da.
+                        # Keep the manual admin trigger in the journal for context.
                         _journal = f"[trigger: {context_hint[:120]}]\n{_journal}"
                     _room = profile.get("current_room", "") or ""
                     # Who was there? — the same character_state query the
@@ -961,49 +878,10 @@ class ThoughtRunner:
             except Exception as _je:
                 logger.debug("Thought-Journal Fehler: %s", _je)
 
-        # In Chat-History speichern, damit der Character sich spaeter erinnern kann
-        if notification_content:
-            try:
-                # Halluzinierte Tool-Tags und Intent-Tags bereinigen bevor gespeichert wird
-                from app.routes.chat import _strip_tool_hallucinations
-                from app.core.intent_engine import strip_intent_tags
-                clean_content = _strip_tool_hallucinations(notification_content)
-                clean_content = strip_intent_tags(clean_content)
-                if not clean_content or clean_content.strip().upper() == "SKIP":
-                    logger.info("%s: Gedanken-Nachricht nach Bereinigung leer/SKIP — nicht gespeichert", character_name)
-                    return _turn_info
-                # Two clocks, two jobs: the stored ``timestamp`` orders the
-                # history and stays SYSTEM time, while the stamp INSIDE the
-                # message text is what the character reads back later — so it
-                # is the world's own date, not a real-world one.
-                ts = utc_now()
-                date_str = game_time().label(_char_lang(character_name))
-                from app.models.account import get_player_identity as _get_pi_save
-                _stored = save_message({
-                    "role": "assistant",
-                    "content": f"[Gedanken-Nachricht | {location_name} | {date_str}] {clean_content}",
-                    "timestamp": ts.isoformat(),
-                }, character_name, partner_name=_get_pi_save(""))
-                if _stored:
-                    logger.info("%s: In Chat-History gespeichert", character_name)
-                else:
-                    # The thought turn itself is done and its other effects
-                    # (the notification) already happened — there is
-                    # nothing to roll back. But the character will NOT
-                    # remember having said this, so it must not pass quietly
-                    # (DATA-13).
-                    logger.error("%s: thought message NOT stored in the chat "
-                                 "history — the character will not remember it",
-                                 character_name)
+        # No telepathic cross-memory: characters explicitly contact each other
+        # through speech or messaging tools.
 
-            except Exception as e:
-                logger.error("Chat-History Fehler: %s", e)
-
-        # Cross-Memory entfaellt: wenn der Character will dass andere etwas
-        # erfahren, soll er sie ueber TalkTo / SendMessage selbst kontaktieren —
-        # nicht per "telepathischer" LLM-Analyse.
-
-        # Story Arc Advancement triggern wenn Arc-Teilnehmer interagiert hat
+        # Advance story arcs after a participant has interacted.
         if arc_context and (full_response or had_notification_tool):
             try:
                 from app.models.story_arcs import get_active_arcs
@@ -1013,7 +891,7 @@ class ThoughtRunner:
                     get_task_queue().submit("story_arc_advance", {
                         "user_id": "",
                         "arc_id": arc["id"],
-                        "interaction_summary": (full_response or notification_content)[:300],
+                        "interaction_summary": (full_response or notification_tool_content)[:300],
                     })
                     logger.debug("Arc-Advancement getriggert: %s", arc["id"])
             except Exception as e:

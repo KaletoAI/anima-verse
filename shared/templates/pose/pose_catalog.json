@@ -904,6 +904,32 @@
       "animation": "sitting-at-the-table",
       "solo": true,
       "group": "seat"
+    },
+    "taking-off-tshirt": {
+      "prompt": "A person is in the middle of taking off a T-shirt, with arms raised above the head and the fabric pulled over the head.",
+      "synonyms": [
+        "t-shirt ausziehen",
+        "taking off a t-shirt",
+        "changing clothes"
+      ],
+      "animation": "taking-off-tshirt",
+      "solo": true,
+      "group": "stand"
+    },
+    "forehead-wiping": {
+      "prompt": "wiping the face with the back of the hand",
+      "synonyms": [
+        "gesicht abwischen",
+        "face wiping",
+        "wiping face",
+        "sweat wiping",
+        "face cleaning",
+        "wiping sweat",
+        "face wipe"
+      ],
+      "animation": "forehead-wiping",
+      "solo": true,
+      "group": "stand"
     }
   }
 }

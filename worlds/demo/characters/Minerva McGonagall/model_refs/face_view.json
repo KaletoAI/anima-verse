@@ -1,0 +1,32 @@
+{
+  "provider": "openai_diffusion",
+  "service": "Qwen2.1 Turbo",
+  "model": "Qwen2.1-Turbo",
+  "loras": [],
+  "prompt": "the same person as the reference, close-up of the head only, the face seen straight from the front and filling most of the frame, head level and facing the camera directly, looking straight into the camera, eyes open, neutral relaxed expression, mouth closed, completely bald head with no hair at all, smooth bare scalp, the same eyebrows and eyelashes as the reference, ears visible, exactly the same skin tone, complexion and makeup as the reference (eye makeup, lashes and lip colour unchanged), natural colour saturation, NOT the lighting of the reference: relit by soft, perfectly uniform, colour-neutral ambient light from all sides at natural exposure, the left and the right half of the face exactly equally bright, the image ends just below the chin",
+  "negative_prompt": "hair, bangs, fringe, hair strands, ponytail, hat, cap, headscarf, hood, neck below the chin, shoulders, collarbones, chest, bare torso, clothing, jewelry, necklace, choker, earrings, shadows, shadows on the face, shadows under the nose or chin, dark eye sockets, one side darker, half of the face in shadow, side lighting, light from the left, light from the right, split lighting, Rembrandt lighting, chiaroscuro, uneven lighting, directional key light, specular highlights, shiny skin, oily skin, sweat, wet skin, reflections, catchlights, rim light, backlight, dramatic lighting, high contrast, colored light, vignette, pale skin, washed-out skin, bleached skin, ashen skin, desaturated colours, overexposed, smiling, open mouth, teeth, tilted head, three-quarter view, profile, looking away, closed eyes, hands, cropped head",
+  "characters": [
+    "Minerva McGonagall"
+  ],
+  "reference_images": {
+    "input_reference_image_1": "reference.png"
+  },
+  "seed": 0,
+  "created_at": "2026-10-17T13:57:14+00:00",
+  "duration_s": 93.7,
+  "mood": "",
+  "expression_key": "neutral",
+  "activity": "",
+  "pose_key": "",
+  "equipped_pieces": {},
+  "equipped_items": [],
+  "state_fingerprint": "",
+  "routing": {
+    "occasion": "tpose_view",
+    "position": 1,
+    "spec": "Qwen2.1 Turbo"
+  },
+  "reference_sha256": "3f641487c293377117794d48fbfd39a54a6a337dd46ac982728e7cdc7eb548e4",
+  "image_sha256": "d60e2c80bec8bfb968d7f92cc8b306cdb1a83d197a35f7935da48fb2c53d87f1",
+  "profile_image": "Minerva McGonagall_1792085575_66b55ca3_1.png"
+}

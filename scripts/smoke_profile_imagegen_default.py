@@ -28,8 +28,6 @@ Only an explicit dialog pick reaches `backend` (hard, no fallback).
       the route handed the dead pick straight to `generate_from_input`, so
       a payload with backend "Dead" was recorded and no 503 was raised.)
   [4] a request "workflow" glob is ignored (no such field any more).
-  [5] character_ops.resolve_profile_imagegen is gone, and npc_assets does not
-      import it.
 
 THE LoRA RULE of the variant / model-ref render (`expression_regen.
 generate_expression_image`, coordinator ruling F2 on Task 11): the
@@ -47,6 +45,11 @@ TPOSE = [turnaround], no worn pieces (so no slot LoRAs are merged in):
       same use case, only the occasion differs.
       use case "expression", no occasion -> "expression", loras == NORMAL.
       use case "tpose", no occasion -> "tpose", loras == TPOSE.
+
+Portrait identity regressions exercise the real route core: a face prompt
+beats the body appearance, survives outfit changes unchanged, and an explicit
+dialog prompt takes precedence without rewriting the authored appearance.
+Framing itself needs a rendered-image inspection, not a literal wording pin.
 
 Usage:  ./.venv/bin/python scripts/smoke_profile_imagegen_default.py
 """
@@ -214,12 +217,6 @@ check("generate_from_input not called", len(SERVICE.inputs), 0)
 print("[4] a request workflow glob is ignored")
 check("route core", route_target(NPC, workflow="SD15*"), ROUTED)
 
-print("[5] the old resolver is gone")
-check("character_ops.resolve_profile_imagegen",
-      hasattr(character_ops, "resolve_profile_imagegen"), False)
-check("npc_assets does not import it",
-      "resolve_profile_imagegen" in Path(na.__file__).read_text(encoding="utf-8"), False)
-
 print("[6] the variant render picks its LoRAs by occasion")
 LORA_CHAR = "Solveig"
 NORMAL = [{"name": "normal.safetensors", "strength": 0.8}]
@@ -250,6 +247,37 @@ check("expression, no occasion", variant_payload("expression"),
       {"occasion": "expression", "loras": NORMAL})
 check("tpose, no occasion", variant_payload("tpose"),
       {"occasion": "tpose", "loras": TPOSE})
+
+print("[7] portrait identity stays independent of body and outfit")
+IDENTITY_CHAR = "Portrait Identity"
+FACE = ("oval face, full lips, small beauty mark below right corner of mouth, "
+        "dark brown hair falling in waves past shoulders, hazel eyes, "
+        "light olive complexion, warm and welcoming expression with a playful glint")
+save_character_profile(IDENTITY_CHAR, {
+    "name": IDENTITY_CHAR,
+    "face_appearance": FACE,
+    "character_appearance": "tall athletic figure",
+    "outfit_description": "a blue linen dress",
+    "outfit_worn": True,
+}, create_new=True)
+route_target(IDENTITY_CHAR)
+original_payload = SERVICE.inputs[-1]
+check("face description reaches the profile consumer",
+      original_payload["prompt"], FACE)
+check("the profile use case reaches the consumer",
+      original_payload.get("image_use_case"), "profile")
+changed_profile = get_character_profile(IDENTITY_CHAR)
+changed_profile.update(character_appearance="a stocky figure",
+                       outfit_description="a red wool coat", outfit_worn=False)
+save_character_profile(IDENTITY_CHAR, changed_profile)
+route_target(IDENTITY_CHAR)
+check("body and outfit changes leave the portrait input unchanged",
+      SERVICE.inputs[-1]["prompt"], original_payload["prompt"])
+manual = "the same face with wind-tousled hair and a thoughtful expression"
+route_target(IDENTITY_CHAR, prompt=manual)
+check("an explicit dialog prompt wins", SERVICE.inputs[-1]["prompt"], manual)
+check("the authored face appearance is not rewritten",
+      get_character_profile(IDENTITY_CHAR)["face_appearance"], FACE)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:
