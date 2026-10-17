@@ -234,3 +234,6 @@ shared/templates/*/*.local.json.migrated
 
 # graphify knowledge-graph output (generated)
 graphify-out/
+
+# superpowers plans/specs/scratch — local only
+docs/superpowers/
