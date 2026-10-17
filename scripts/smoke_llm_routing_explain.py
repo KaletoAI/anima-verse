@@ -50,6 +50,22 @@ Lane pools (one `max_concurrent` per provider+model — second config):
  15. explain_routing reports the POOL's number on every entry, not the
      entry's own field: lanes == [3, 3, 3, 2, 1] — the entry without a value
      and the disabled one both show the 3 their model runs with.
+
+Disabled provider (`enabled: false` on the provider — third config):
+  providers: C DISABLED (not loaded → provider_lookup(C) is None), D available
+  entries: #0 C/x tasks intent@1, consolidation@1 · #1 D/y tasks intent@2
+ 16. intent: via direct, resolved #1 order 2; chain[0].skipped ==
+     "provider disabled" — NOT "provider unavailable", although the lookup
+     finds nothing: the switch is checked before the live state; reason
+     mentions "order 1 skipped: provider disabled".
+ 17. providers row C has enabled False, entries[0].provider_enabled False,
+     entries[1].provider_enabled True; disabled_providers(cfg) == {"C"}.
+ 18. _flatten_to_env leaves C out and keeps the numbering contiguous:
+     PROVIDER_1_NAME == "D", no PROVIDER_2_NAME (the manager stops at a gap).
+ 19. config_validator: C without api_base raises no provider issue (never
+     loaded), and the routing check ignores entry #0 like a disabled entry:
+     consolidation (held only by #0) is reported as "has no LLM entry",
+     intent (also held by #1) is not.
 """
 from __future__ import annotations
 import os, sys
@@ -118,6 +134,34 @@ check([lane_count_in(R, "P", "gem"), lane_count_in(R, "P", "big"), lane_count_in
 res2 = explain_routing(POOLS, provider_lookup=lambda n: None, cooled_down=lambda p, m: None,
                        disabled=set(), runtime_disabled=set())
 check([e["lanes"] for e in res2["entries"]] == [3, 3, 3, 2, 1], "15. entries carry their pool's lanes")
+
+from app.core.llm_router import disabled_providers
+OFF = {"providers": [{"name": "C", "type": "openai", "enabled": False},
+                     {"name": "D", "type": "openai", "api_base": "http://d/v1"}],
+       "llm_routing": [
+    {"provider": "C", "model": "x", "tasks": [{"task": "intent", "order": 1},
+                                              {"task": "consolidation", "order": 1}]},
+    {"provider": "D", "model": "y", "tasks": [{"task": "intent", "order": 2}]}]}
+LIVE = {"D": SimpleNamespace(available=True, type="openai")}
+res3 = explain_routing(OFF, provider_lookup=LIVE.get, cooled_down=lambda p, m: None,
+                       disabled=set(), runtime_disabled=set())
+t = {r["task"]: r for r in res3["tasks"]}["intent"]
+check(t["via"] == "direct" and t["resolved"]["index"] == 1 and t["resolved"]["order"] == 2
+      and t["chain"][0]["skipped"] == "provider disabled"
+      and "order 1 skipped: provider disabled" in t["reason"], "16. entry on a disabled provider is skipped")
+E3 = res3["entries"]
+check(res3["providers"][0]["enabled"] is False and E3[0]["provider_enabled"] is False
+      and E3[1]["provider_enabled"] is True and disabled_providers(OFF) == {"C"}, "17. provider switch reported")
+
+from app.core import config as _config
+_config._flatten_to_env(OFF)
+check(os.environ.get("PROVIDER_1_NAME") == "D" and "PROVIDER_2_NAME" not in os.environ,
+      "18. a disabled provider is not bridged to the provider manager")
+
+from app.core.config_validator import _check_providers, _check_llm_routing
+gaps = {str(i) for i in _check_llm_routing(OFF) if "has no LLM entry" in str(i)}
+check(_check_providers(OFF) == [] and any("'consolidation'" in g for g in gaps)
+      and not any("'intent'" in g for g in gaps), "19. validator skips the disabled provider")
 
 print()
 if FAILS: print(f"{len(FAILS)} check(s) failed"); sys.exit(1)

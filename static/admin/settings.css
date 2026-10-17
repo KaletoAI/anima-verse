@@ -122,7 +122,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 .array-item-header .chevron { transition: transform 0.2s; color: #8b949e; }
 .array-item.open .array-item-header .chevron { transform: rotate(90deg); }
 
-/* LLM Routing › LLMs: the entry header shows and toggles `enabled`. */
+/* LLM Routing › LLMs and every section with `header_fields: ["enabled"]`
+   (LLM Providers): the item header shows and toggles `enabled`. */
 .array-item.rt-entry .array-item-header { border-left: 4px solid transparent; }
 .array-item.rt-on .array-item-header { background: #12261b; border-left-color: #2ea043; }
 .array-item.rt-off .array-item-header { background: #2a1618; border-left-color: #da3633; }

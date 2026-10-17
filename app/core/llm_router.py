@@ -185,6 +185,17 @@ def _load_routing() -> List[dict]:
     return routing if isinstance(routing, list) else []
 
 
+def disabled_providers(cfg: Optional[dict] = None) -> set:
+    """Names of the providers switched off in the admin (``enabled: false``).
+
+    Such a provider is not loaded by the provider manager at all, and every
+    routing entry on it is skipped as if the entry itself were disabled.
+    """
+    provs = cfg.get("providers") if cfg is not None else config.get("providers", [])
+    return {str(p.get("name") or "") for p in (provs or [])
+            if isinstance(p, dict) and p.get("enabled") is False}
+
+
 async def _warmup_one(entry: dict) -> None:
     """Sends a 1-token ping to a routing entry so the backend (e.g.
     llama-swap, vLLM) loads the model into memory. Errors are logged but
@@ -245,6 +256,8 @@ async def preload_models() -> None:
         and e.get("preload_on_startup") is True
         and e.get("enabled") is not False
     ]
+    off = disabled_providers()
+    targets = [e for e in targets if (e.get("provider") or "").strip() not in off]
     if not targets:
         return
     import asyncio
@@ -368,11 +381,15 @@ def resolve_llm(task: str, agent_name: str = "") -> Optional[LLMInstance]:
 
     candidates.sort(key=lambda x: x[0])
     pm = get_provider_manager()
+    off = disabled_providers()
 
     for order, entry in candidates:
         provider_name = (entry.get("provider") or "").strip()
         model = (entry.get("model") or "").strip()
         if not provider_name or not model:
+            continue
+        if provider_name in off:
+            # Switched off in the admin — not loaded, skipped without a warning.
             continue
         provider = pm.get_provider(provider_name)
         if not provider:
@@ -430,6 +447,7 @@ def explain_routing(cfg: dict, *, provider_lookup, cooled_down,
                               "enabled": p.get("enabled") is not False,
                               "available": bool(live and getattr(live, "available", False))})
     known = {r["name"] for r in provider_rows}
+    off = {r["name"] for r in provider_rows if not r["enabled"]}
 
     def _entry_status(entry):
         prov = (entry.get("provider") or "").strip()
@@ -437,6 +455,7 @@ def explain_routing(cfg: dict, *, provider_lookup, cooled_down,
         live = provider_lookup(prov) if prov else None
         return {
             "provider_exists": prov in known,
+            "provider_enabled": prov not in off,
             "provider_available": bool(live and getattr(live, "available", False)),
             "model_cooldown_s": cooled_down(prov, model) if prov and model else None,
         }
@@ -473,6 +492,8 @@ def explain_routing(cfg: dict, *, provider_lookup, cooled_down,
             st = _entry_status(entry)
             if not st["provider_exists"]:
                 skip = "provider missing"
+            elif not st["provider_enabled"]:
+                skip = "provider disabled"
             elif not st["provider_available"]:
                 skip = "provider unavailable"
             elif st["model_cooldown_s"] is not None:

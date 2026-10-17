@@ -1354,7 +1354,8 @@ function renderProviderSelect(val, path) {
     const providers = CONFIG.providers || [];
     let opts = '<option value="">— Auto —</option>';
     for (const p of providers) {
-        opts += '<option value="' + esc(p.name) + '"' + (p.name === val ? ' selected' : '') + '>' + esc(p.name) + ' (' + esc(p.type) + ')</option>';
+        opts += '<option value="' + esc(p.name) + '"' + (p.name === val ? ' selected' : '') + '>' + esc(p.name) + ' (' + esc(p.type) + ')'
+             + (p.enabled === false ? ' — disabled' : '') + '</option>';
     }
     return '<select id="f-' + esc(path) + '" onchange="setVal(\'' + sJs(path) + '\', this.value); refreshModelSelect(\'' + sJs(path) + '\'); onRoutingModelChanged(\'' + sJs(path) + '\')">' + opts + '</select>';
 }
@@ -1527,22 +1528,59 @@ function renderDictItems(def, items, path) {
     return html;
 }
 
+// A section's `header_fields` (schema) render in the collapsed item header
+// instead of the body. Only `enabled` is supported: the click toggle the LLM
+// entries have on LLM Routing › LLMs (rtRenderEntryItem).
+function _hasHeaderToggle(def) {
+    return Array.isArray(def.header_fields) && def.header_fields.includes('enabled');
+}
+
 function renderArrayItem(def, item, path, index, labelField) {
     const label = _itemLabel(item, labelField, 'Item ' + index);
     const openClass = OPEN_ITEMS.has(path) ? ' open' : '';
-    let html = '<div class="array-item' + openClass + '" id="item-' + esc(path) + '">';
+    const headerToggle = _hasHeaderToggle(def);
+    const on = item.enabled !== false;
+    const toggleClass = headerToggle ? ' rt-entry ' + (on ? 'rt-on' : 'rt-off') : '';
+    let html = '<div class="array-item' + toggleClass + openClass + '" id="item-' + esc(path) + '">';
     html += '<div class="array-item-header" onclick="toggleArrayItem(this, \'' + sJs(path) + '\')">';
     html += '<span class="chevron">▶</span> ';
     html += '<span class="title" style="margin-left:6px;">' + esc(label) + '</span>';
-    if (item.enabled === false) html += '<span class="badge">disabled</span>';
+    if (headerToggle) {
+        html += '<button class="rt-toggle" title="Click to enable/disable (settings stay)"'
+             + ' onclick="event.stopPropagation(); toggleItemEnabled(\'' + sJs(path) + '\')">'
+             + (on ? 'enabled' : 'disabled') + '</button>';
+    } else if (item.enabled === false) {
+        html += '<span class="badge">disabled</span>';
+    }
     if (item.type) html += '<span class="badge">' + esc(item.type || item.api_type || '') + '</span>';
     html += '<button class="btn btn-sm" style="margin-left:8px;" title="Duplicate as a new entry" onclick="event.stopPropagation(); duplicateItem(\'' + sJs(path) + '\')">⧉</button>';
     html += '<button class="btn btn-sm btn-danger" style="margin-left:4px;" onclick="event.stopPropagation(); removeItem(\'' + sJs(path) + '\')">✕</button>';
     html += '</div>';
     html += '<div class="array-item-body">';
-    html += renderFields(def.fields, item, path, true);
+    let fields = def.fields;
+    if (headerToggle) {
+        fields = Object.assign({}, def.fields);
+        for (const key of def.header_fields) delete fields[key];
+    }
+    html += renderFields(fields, item, path, true);
     html += '</div></div>';
     return html;
+}
+
+// Click on the header toggle: flips `enabled` in place — a re-render would
+// collapse the accordion and lose the scroll position.
+function toggleItemEnabled(path) {
+    const item = getVal(path);
+    if (!item || typeof item !== 'object') return;
+    const on = item.enabled === false;
+    setVal(path + '.enabled', on);
+    const el = document.getElementById('item-' + path);
+    if (el) {
+        el.classList.toggle('rt-on', on);
+        el.classList.toggle('rt-off', !on);
+        const btn = el.querySelector('.rt-toggle');
+        if (btn) btn.textContent = on ? 'enabled' : 'disabled';
+    }
 }
 
 // ── Master-detail (table left, editor right) ──

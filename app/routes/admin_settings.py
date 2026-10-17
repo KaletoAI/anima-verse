@@ -1514,9 +1514,12 @@ async def provider_models(provider_name: str, user=Depends(require_admin)):
 
 @router.get("/settings/providers-list")
 def providers_list(user=Depends(require_admin)):
-    """Return configured provider names for the suitability test picker."""
+    """Return enabled provider names for the suitability test picker.
+
+    A disabled provider is not loaded, so a test against it could not run.
+    """
     return {"providers": [p.get("name", "") for p in config.get("providers", [])
-                          if p.get("name")]}
+                          if p.get("name") and p.get("enabled") is not False]}
 
 
 @router.get("/settings/llm-suitability-cases")

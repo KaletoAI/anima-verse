@@ -2336,8 +2336,12 @@ def _flatten_to_env(config: dict) -> None:
     server = config.get("server", {})
     _set(env, "LOG_LEVEL", server.get("log_level", field_default("server", "log_level")))
 
-    # Providers (1-indexed)
-    for i, prov in enumerate(config.get("providers", []), start=1):
+    # Providers (1-indexed, contiguous — the provider manager stops at the
+    # first gap). A disabled provider is left out entirely: no channel, no
+    # health probe; routing skips its entries (llm_router.disabled_providers).
+    enabled_providers = [prov for prov in config.get("providers", [])
+                         if isinstance(prov, dict) and prov.get("enabled") is not False]
+    for i, prov in enumerate(enabled_providers, start=1):
         p = f"PROVIDER_{i}_"
         _set(env, f"{p}NAME", prov.get("name", ""))
         _set(env, f"{p}TYPE", prov.get("type", field_default("providers", "type")))

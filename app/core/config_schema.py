@@ -207,8 +207,12 @@ SECTIONS = {
         "scope": "instance",
         "is_array": True,
         "item_label_field": "name",
+        # Rendered as a click toggle in the collapsed item header (same as the
+        # LLM entries on LLM Routing › LLMs) instead of inside the item body.
+        "header_fields": ["enabled"],
         "fields": {
             "name": {"type": "str", "label": "Name", "required": True, "description": "Unique name — referenced by the task defaults and the GPU assignment"},
+            "enabled": {"type": "bool", "label": "Enabled", "default": True, "description": "Disable to take this provider out of service without removing it: it is not loaded (no channel, no health probe), and every LLM entry on it is skipped in routing as if it were disabled — the entries and their task assignments stay."},
             "type": {
                 "type": "select",
                 "label": "Type",

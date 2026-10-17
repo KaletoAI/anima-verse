@@ -586,7 +586,8 @@ function rtNewLlmForm(task) {
     html += '<label style="font-size:11px; color:#8b949e;">Provider</label>';
     html += '<select id="rt-new-provider" onchange="rtLoadModelsFor(\'rt-new-model\', this.value)">';
     html += '<option value="">' + esc(RT_TEXT.selectProvider) + '</option>';
-    for (const p of providers) html += '<option value="' + esc(p.name) + '">' + esc(p.name) + ' (' + esc(p.type || '') + ')</option>';
+    for (const p of providers) html += '<option value="' + esc(p.name) + '">' + esc(p.name) + ' (' + esc(p.type || '') + ')'
+         + (p.enabled === false ? ' — disabled' : '') + '</option>';
     html += '</select>';
     html += '<label style="font-size:11px; color:#8b949e;">Model</label>';
     html += '<div style="display:flex; gap:6px;"><select id="rt-new-model" style="flex:1;"><option value="">' + esc(RT_TEXT.selectModel) + '</option></select>';

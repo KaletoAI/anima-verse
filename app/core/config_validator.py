@@ -51,6 +51,11 @@ def _check_providers(config: dict) -> list:
             issues.append(_err("providers", f"Provider '{name}': duplicate name"))
         names.add(name)
 
+        # A disabled provider is never loaded — its connection settings may
+        # stay incomplete.
+        if p.get("enabled") is False:
+            continue
+
         if not api_base:
             issues.append(_err("providers", f"Provider '{name}': API base URL missing"))
 
@@ -77,6 +82,7 @@ def _check_llm_routing(config: dict) -> list:
 
     providers = config.get("providers", [])
     provider_names = {p.get("name", "") for p in providers}
+    disabled_provider_names = {p.get("name", "") for p in providers if p.get("enabled") is False}
 
     # Coverage: task -> [(order, entry_idx)]
     coverage: dict = {}
@@ -93,6 +99,9 @@ def _check_llm_routing(config: dict) -> list:
         if entry.get("enabled") is False:
             continue
         provider = (entry.get("provider") or "").strip()
+        # An entry on a disabled provider is skipped at runtime just the same.
+        if provider in disabled_provider_names:
+            continue
         model = (entry.get("model") or "").strip()
         label = model or f"#{idx+1}"
         if not provider:
