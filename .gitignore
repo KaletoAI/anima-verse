@@ -231,3 +231,6 @@ shared/models/figure/*.gltf
 # both names stay ignored so a not-yet-migrated file never gets committed).
 shared/templates/*/*.local.json
 shared/templates/*/*.local.json.migrated
+
+# graphify knowledge-graph output (generated)
+graphify-out/
