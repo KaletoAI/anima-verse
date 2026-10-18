@@ -485,7 +485,7 @@ clean prerig.
 `pair_tip` requires two one-link chains, parented side by side to a
 `pair_protrusion` group on the same slot. Geometry detection soft-skips the tip
 group; colour placement supplies `marker_area` in square metres and one shared
-radius R = sqrt((left_area + right_area)/(2*pi)). No lift is baked into the mesh.
+radius R = sqrt((left_area + right_area)/(2*pi)). A rounded stub is baked after source re-planning.
 
 | Required parameter | Example | Constraint / meaning |
 |---|---|---|
@@ -497,17 +497,16 @@ radius R = sqrt((left_area + right_area)/(2*pi)). No lift is baked into the mesh
 | `fill_depth` | `0.03` | Nonnegative depth in metres, ignores points behind the tip |
 | `fill_tolerance` | `0.012` | Positive distance to fitted surface in metres |
 | `fill_rms_max` | `0.0015` | Positive maximum fit residual in metres |
-| `head_depth` | `0.01` | Positive bone depth below the fitted tip, metres |
-| `tail_length` | `0.005` | Positive tail extent ahead of the tip, metres |
-| `tip_radius` | `0.5` | Positive core radius × R |
-| `tip_radius_max` | `0.006` | Positive core radius cap, metres |
-| `outer_level` | `0.35` | Outer weight in [0,1) |
-| `outer_radius` | `1.3` | Positive outer radius × R |
-| `outer_ramp` | `0.9` | Positive outer ramp width × R |
+| `tip_diameter` | `0.009` | Positive stub diameter, metres; rc = diameter/2 |
+| `tip_length` | `0.005` | Positive axial length including cap, metres |
+| `tip_round` | `0.6` | Cap height / rc in (0,1]; 1 is a hemisphere |
+| `tip_wall` | `0.0015` | Positive radial side-wall ramp width, metres |
+| `tip_band` | `0.009` | Positive radial weight band beyond wall, metres |
+| `tip_subdivide` | `0.009` | Nonnegative radius of one extra subdivision after fill; 0 disables it |
 | `weight_depth` | `0.015` | Nonnegative depth cutoff behind filled tip, metres |
 | `weight_min` | `0.003` | Weight threshold in [0,1) |
 | `test_rotation_deg` | `[0,0,0]` | Three finite degrees |
-| `test_scale` | `[1,1.4,1]` | Three positive factors; local Y is the axis |
+| `test_scale` | `[1.4,1.6,1.4]` | Three positive factors; local Y is the axis |
 
 The same required up, lateral and front reference parameters apply as above.
 Every subdivision selects edges by world midpoint distance to either tip,
@@ -518,19 +517,37 @@ Unique ring positions fit h=c0+c1*u+c2*w+c3*u²+c4*u*w+c5*w² by least squares.
 Fewer than 12 points or excessive RMS refuses fill while retaining the bone.
 Accepted inner points blend to the quadric with smoothstep, subject to depth
 and tolerance gates. Filled tip is t+n*c0, axis normalizes n-c1*a-c2*b;
-without fill these remain t,n. Head and tail offset along that axis.
+without fill these remain t,n. After fill, one extra subdivision selects world
+edge midpoints within `tip_subdivide` of either filled tip, with the same
+interpolation, triangulation and deform-sum checks. No stub is baked yet: source
+re-planning must ray-cast the filled surface with pinned markers.
 
-For radial distance r, core=smooth(1-r/min(tip_radius*R,tip_radius_max)),
-outer=smooth((outer_radius*R-r)/(outer_ramp*R)), and
-w=core+(1-core)*outer_level*outer. The tip takes T=w*S from the source;
-the source retains S*(1-w), preserving the extension total before top-four export.
-Empty tip weights soft-skip both tip bones and report that mesh edits remain.
+After source re-planning, let cap=min(tip_round*rc,tip_length) and
+lw=tip_length-cap. The baked axial height at perpendicular distance r is
+H(r)=lw+cap*sqrt(1-(r/rc)²) for r<=rc,
+H(r)=lw*smooth((rc+tip_wall-r)/tip_wall) through the wall, and 0 beyond.
+Every skinned vertex no further than `weight_depth` behind the base plane moves
+by axis*H(r). The positional rule preserves coincident copies and updates the
+working coordinates before all later metrics and unification. The bone head is
+the filled tip t' on the base plane; its tail is t'+axis*tip_length.
 
-Mesh changes precede weighting. Source groups are planned again on the modified
-surface with colour marker x,z positions, notes and areas pinned from the first
-pass. Bone creation and runtime particles follow dependency order. Metrics include
+Weight w=1 through rc+tip_wall, then
+w=smooth((rc+tip_wall+tip_band-r)/tip_band), zero beyond the band, subject to
+the same depth gate. The tip takes T=w*S from the source; the source retains
+S*(1-w), preserving the extension total before top-four export. Empty tip weights
+soft-skip both tip bones and report that mesh edits remain.
+
+Bone creation and runtime particles follow dependency order. Metrics include
 head, tail, axis, tip, radius, fill outcome/RMS/moved/tolerance counts, density
-within 5 mm, vertices before/after, and axial lift under the declared test pose.
+within 5 mm and vertices before/after. `stub_height` is the maximum baked axial
+offset from the base plane; `lift` measures test-pose displacement at the vertex
+nearest the stub top. `diameter` is twice the mean posed radial distance of the
+wall-top ring (|r-rc|<tip_wall/2 and H>lw/2).
+`girth_fold_free_max` reports 1+1/max(0,-min(w+r*w')), or null for infinity.
+The band uses the analytic smoothstep derivative sampled densely: with
+x=(r-rc-tip_wall)/tip_band, w=1-3x²+2x³ and w'=-6x(1-x)/tip_band.
+The example dimensions give 68/41, about 1.65854; above this factor the radial
+mapping can fold. These metrics describe the test pose, including actual skin weights.
 Absent groups in metrics-only inspection report `not_found`. GLB validation accepts
 each group complete or absent, and checks non-base parents by exact name.
 
@@ -1083,9 +1100,16 @@ representation, matching the browser's `JOINTS_0`/`WEIGHTS_0` consumption.
 
 ### Extension motion layers (P3)
 
-Package body-slot `rigs` declarations remain the base physics values. Core declares
+Package body-slot `rigs` declarations remain the base physics values.
+Declared `length` defaults to 1 in [0.5,3]; declared `girth` defaults to 1 in
+[0.5,2]. Both layer package → world → character, multiply state pose factors,
+and clamp effective values to [0.25,4]. `scale_axis` is declaration-only,
+`centroid` (default) or `bone`; it is copied to runtime payload groups and cannot
+be overridden as motion. A leaf using `bone` scales length along bind-frame +Y
+and girth perpendicular to it. Other leaves use their weighted centroid;
+links with a successor keep the axis toward that joint. Core declares
 `extension_motion.groups` as a **world** setting: arbitrary package group IDs map
-to partial overrides of `freq_hz`, `zeta`, `gravity`, `spill`, `flatten`, `stretch`, `spread`, `flatten_floor`, `translate`, `gain`,
+to partial overrides of `length`, `girth`, `freq_hz`, `zeta`, `gravity`, `spill`, `flatten`, `stretch`, `spread`, `flatten_floor`, `translate`, `gain`,
 `max_deg`, `sag_max_deg`, `spill_max_deg`, `head_sag`, `axis_gain`, `squash`, `rest_max_deg`, `straighten_deg` and `freetext_clothing_gain`. Missing values inherit the package; no group IDs are named in core.
 Game-Admin → Setup → Extension motion lists loaded declarations from the admin-only
 `GET /admin/world-settings/extension-motion` endpoint and saves through the existing

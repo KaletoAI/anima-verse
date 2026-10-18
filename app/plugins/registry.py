@@ -80,6 +80,8 @@ class RigSpec:
     depends_on: str | None = None
     external_parents: List[str] = field(default_factory=list)
     length: float = 1.0
+    girth: float = 1.0
+    scale_axis: str = "centroid"
     freq_hz: float = 2.2
     zeta: float = 0.15
     gravity: float = 0.35
@@ -161,7 +163,11 @@ class RigSpec:
         spec.external_parents = [chain[0]["parent"] for chain in result
                                  if norm_bone_name(chain[0]["parent"]) not in BASE_JOINT_KEYS]
         spec.templates = templates
-        bounds = {"length": (.5, 3), "freq_hz": (0, None), "zeta": (0, None),
+        axis = raw.get("scale_axis", spec.scale_axis)
+        if axis not in ("centroid", "bone"):
+            raise ValueError("rig.scale_axis must be centroid or bone")
+        spec.scale_axis = axis
+        bounds = {"length": (.5, 3), "girth": (.5, 2), "freq_hz": (0, None), "zeta": (0, None),
                   "gravity": (0, None), "head_sag": (0, 1), "spill": (0, 1), "translate": (0, 1), "flatten": (0, 1), "stretch": (0, 1), "spread": (0, 1), "gain": (0, 1),
                   "max_deg": (0, 180), "rest_max_deg": (0, 180),
                   "straighten_deg": (0, 180), "freetext_clothing_gain": (0, 1)}

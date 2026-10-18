@@ -5,10 +5,22 @@ At the marker (x=.15,z=1.41), y=-.044-sqrt(.106**2-.01**2).
 The omitted quadric term r^4/(8*.106^3) at r=.015 is .0054 mm;
 linear interpolation at spacing 2.5 mm contributes below .03 mm.
 The .3 mm tolerance covers fitting/interpolation, not a 4 mm crater.
-The fixture has R<.012, hence rn=.5*R. The core gives w(0)=1;
-w(.5*R)=.35*smooth(8/9)=.35*704/729; w(1.3*R)=0. Transfer T=w*S leaves S+T invariant. Scaling
-local Y by 1.4 moves a fully weighted surface point .4*.01=.004 m.
-Coincident copies receive identical positional fill and final weights.
+rc=.0045, cap=.6*rc=.0027, lw=.005-cap=.0023. H at r=0,
+rc/2, rc, rc+wall is .005, .0023+.0027*sqrt(3)/2, .0023, 0.
+Full weight extends through a=rc+wall=.006; band b=.009 has midpoint
+w=.5. With x=(r-a)/b, k=a/b=2/3, w+r*w'=1-4*x-5*x²+8*x³.
+Its minimum is at x=2/3, giving -41/27 and Gmax=1+27/41=68/41.
+Transfer T=w*S leaves S+T invariant. Test scale (1.4,1.6,1.4) gives
+lift=.6*.005=.003 and diameter=1.4*.009=.0126. Extra subdivision
+halves the 2.5 mm/8 spacing again to .15625 mm; the ring selection's
+.75 mm half-width bounds diameter error by 2*1.4*.00075=.0021 m.
+Top axial error includes sphere curvature and the .3 mm fit budget;
+lift error is at most .6*.3 mm=.18 mm (use .3 mm).
+Coincident copies receive identical positional fill, bake and weights.
+Float32 positions at z~1.4 have <.12 micrometre error. Band weight error
+is <1.5*.12e-6/.009=2e-5 (use 1e-4); at the cap edge the square
+root amplifies this to <.0027*sqrt(2*.12e-6/.0045)=.020 mm
+(use .025 mm for exact synthetic height probes).
 No expected value is recorded from a run.
 """
 import sys
@@ -32,13 +44,13 @@ validated.update(lateral_positive_bone='Positive',lateral_negative_bone='Negativ
 group.update(id='Pair',op='pair_protrusion',params=validated)
 tp={k:validated[k] for k in scope['PARAMETERS']['pair_tip'] if k in validated}
 tp.update(subdivide_radii=[2.4,1.8,1.],normal_radius=2.,fill_radius=1.7,fill_ring=.7,fill_blend=.3,
- fill_depth=.03,fill_tolerance=.012,fill_rms_max=.0015,head_depth=.01,tail_length=.005,tip_radius=.5,
- tip_radius_max=.006,outer_level=.35,outer_radius=1.3,outer_ramp=.9,weight_depth=.015,test_scale=[1,1.4,1])
+ fill_depth=.03,fill_tolerance=.012,fill_rms_max=.0015,tip_diameter=.009,tip_length=.005,tip_round=.6,
+ tip_wall=.0015,tip_band=.009,tip_subdivide=.009,weight_depth=.015,test_scale=[1.4,1.6,1.4])
 tip_group=dict(id='Tip',op='pair_tip',depends_on='Pair',params=tp,
  chains=[[dict(bone='TipLeft',parent='ExampleLeft')],[dict(bone='TipRight',parent='ExampleRight')]])
 scope['parameters'](tip_group)
 for key,value in [('subdivide_radii',[1,2]),('subdivide_radii',[1]*5),('subdivide_radii',[0]),
- ('fill_blend',1.7),('fill_depth',-1),('outer_level',1),('head_depth',0),('tip_radius_max',False)]:
+ ('fill_blend',1.7),('fill_depth',-1),('tip_round',0),('tip_round',1.01),('tip_diameter',0),('tip_subdivide',-1),('tip_band',False)]:
  try: scope['parameters'](dict(tip_group,params=dict(tp,**{key:value})))
  except ValueError: pass
  else: raise AssertionError(('must reject',key,value))
@@ -84,6 +96,12 @@ def capture_fit(*args,**kwargs):
  seam_groups.extend(indices for indices in groups.values() if len(indices)>1)
  return original_fit(*args,**kwargs)
 scope['np'].linalg.lstsq=capture_fit
+original_plan=scope['tip_plan']; captured={}
+def capture_plan(g,p,co,source,rows,before,meshes):
+ captured['co']=[v.copy() for v in co]
+ captured['source']={name:dict(values) for name,values in source[2][1].items()}
+ return original_plan(g,p,co,source,rows,before,meshes)
+scope['tip_plan']=capture_plan
 bad_tip=dict(tip_group,params=dict(tp,up_from_bone='Missing'))
 rejected,_=scope['extension_bones']({'params':{'groups':[bad_tip,group]},'inputs':{'model':'fixture'}})
 assert rejected['status']=='failed',rejected
@@ -92,6 +110,7 @@ if job['params'].get('descendant',False):
  groups.insert(0,dict(group,id='Marker',chains=[[dict(bone='MarkerLeft',parent='TipLeft')],[dict(bone='MarkerRight',parent='TipRight')]]))
 result,outputs=scope['extension_bones']({'params':{'groups':groups},'inputs':{'model':'fixture'},'out_dir':str(Path(job['result']).parent)})
 scope['np'].linalg.lstsq=original_fit
+scope['tip_plan']=original_plan
 assert result['status']=='applied',result
 if job['params'].get('descendant',False):
  assert arm.data.bones['MarkerLeft'].parent.name=='TipLeft'
@@ -109,55 +128,89 @@ else:
  assert metrics['vertices_after']>metrics['vertices_before']
  for side,(name,parent),row in zip((1,-1),(('TipLeft','ExampleLeft'),('TipRight','ExampleRight')),rows):
   t,axis=Vector(row['tip']),Vector(row['axis'])
-  assert (arm.data.bones[name].head_local-(t-axis*.01)).length<1e-4
+  assert (arm.data.bones[name].head_local-t).length<1e-4
+  assert (arm.data.bones[name].tail_local-(t+axis*.005)).length<1e-4
+  assert abs(row['girth_fold_free_max']-68/41)<1e-7
   assert arm.data.bones[name].parent.name==parent
   if job['params'].get('noise',False):
    assert row['fill'].startswith('skipped:'),row
    assert (t-Vector(placement[0 if side==1 else 1]['tip'])).length<1e-4
   else:
    assert row['fill']=='applied',row
-   assert abs(metrics['lift'][0 if side==1 else 1]-.004)<.0003,metrics
+   assert abs(metrics['lift'][0 if side==1 else 1]-.003)<.0003,metrics
+   assert abs(row['stub_height']-.005)<.0003,row
+   assert abs(row['diameter']-.0126)<.0021,row
    for v in obj.data.vertices:
-    delta=v.co-t; r=(delta-axis*delta.dot(axis)).length
+    point=captured['co'][v.index]
+    delta=point-t; axial=delta.dot(axis); r=(delta-axis*axial).length
+    height=scope['tip_height'](r,tp) if axial>=-tp['weight_depth'] else 0.
+    if r<.02:
+     assert (v.co-point-axis*height).length<1e-6,(v.index,list(v.co),list(point),height)
+    filled=v.co-axis*height
     if r<(tp['fill_radius']-tp['fill_blend'])*row['radius']:
-     r2=(v.co.x-side*.15)**2+(v.co.z-1.4)**2
+     r2=(filled.x-side*.15)**2+(filled.z-1.4)**2
      analytic=-.044-math.sqrt(.106**2-r2)
-     assert abs(v.co.y-analytic)<.0003,(list(v.co),analytic,row)
-  # Exact profile probes at core centre, core end and outer end.
+     assert abs(filled.y-analytic)<.0003,(list(v.co),analytic,row)
+  # Exported joint +Y must follow the planned axis after Y-up conversion.
+ import struct
+ from mathutils import Matrix,Quaternion
+ raw=Path(outputs['model']).read_bytes(); size=struct.unpack_from('<I',raw,12)[0]; doc=json.loads(raw[20:20+size])
+ parents={child:i for i,node in enumerate(doc['nodes']) for child in node.get('children',[])}
+ def world(index):
+  node=doc['nodes'][index]
+  if 'matrix' in node:
+   m=Matrix([node['matrix'][i:i+4] for i in range(0,16,4)]).transposed()
+  else:
+   q=node.get('rotation',[0,0,0,1]); m=Matrix.LocRotScale(Vector(node.get('translation',[0,0,0])),Quaternion((q[3],*q[:3])),Vector(node.get('scale',[1,1,1])))
+  return world(parents[index])@m if index in parents else m
+ for name,row in zip(('TipLeft','TipRight'),rows):
+  index=next(i for i,n in enumerate(doc['nodes']) if n.get('name')==name)
+  axis=Vector(row['axis']); converted=Vector((axis.x,axis.z,-axis.y))
+  assert (world(index).to_3x3()@Vector((0,1,0))).normalized().angle(converted)<math.radians(1)
+ # Exact height and transfer probes, independent of fixture vertex placement.
  synthetic=[]; source_weights={}; expected={}
  for j,(parent,row) in enumerate(zip(('ExampleLeft','ExampleRight'),rows)):
   t,axis=Vector(row['tip']),Vector(row['axis']); a=axis.orthogonal().normalized()
   source_weights[parent]={}
-  assert R<.012
-  for r,factor in ((0.,1.),(.5*R,.35*704/729),(1.3*R,0.)):
+  rc=.0045
+  for r,factor,height in ((0.,1.,.005),(rc/2,1.,.0023+.0027*math.sqrt(3)/2),(rc,1.,.0023),(.006,1.,0.),(.0105,.5,0.),(.015,0.,0.)):
    i=len(synthetic); synthetic.append(t+a*r); source_weights[parent][i]=.8
-   expected[i]=factor
- sample=scope['tip_plan'](tip_group,dict(tp,weight_min=0),synthetic,(group,tp,(None,source_weights)),[dict(row) for row in rows],len(synthetic))
+   expected[i]=(factor,t+a*r+axis*height)
+ # Two skinned meshes with different local frames share the global coordinates.
+ probes=[]
+ for start in (0,6):
+  data=bpy.data.meshes.new('Probe'); data.from_pydata([tuple(v-Vector((.02,0,0))) for v in synthetic[start:start+6]],[],[])
+  mesh=bpy.data.objects.new('Probe',data); bpy.context.collection.objects.link(mesh)
+  mesh.location.x=.02; mesh.vertex_groups.new(name='Base').add(list(range(6)),1.,'REPLACE')
+  mesh.modifiers.new('Skin','ARMATURE').object=arm
+  probes.append(mesh)
+ bpy.context.view_layer.update()
+ sample=scope['tip_plan'](tip_group,dict(tp,weight_min=0),synthetic,(group,tp,(None,source_weights)),[dict(row) for row in rows],len(synthetic),probes)
+ for offset,mesh in zip((0,6),probes):
+  assert all((mesh.matrix_world@v.co-synthetic[offset+v.index]).length<1e-7 for v in mesh.data.vertices)
+  bpy.data.objects.remove(mesh,do_unlink=True)
  for parent,name in (('ExampleLeft','TipLeft'),('ExampleRight','TipRight')):
   for i,retained in source_weights[parent].items():
    taken=sample[1][name].get(i,0)
    assert abs(retained+taken-.8)<1e-7
-   assert abs(taken/.8-expected[i])<1e-6
+   assert abs(taken/.8-expected[i][0])<1e-4,(i,taken/.8,expected[i][0],list(synthetic[i]))
+   assert (synthetic[i]-expected[i][1]).length<.000025
  assert abs(sample[1]['TipLeft'][0]-.8)<1e-7
  empty={'ExampleLeft':{0:.8},'ExampleRight':{}}
- assert scope['tip_plan'](tip_group,tp,synthetic,(group,tp,(None,empty)),[dict(row) for row in rows],0) is None
+ assert scope['tip_plan'](tip_group,tp,synthetic,(group,tp,(None,empty)),[dict(row) for row in rows],0,[]) is None
  assert empty['ExampleLeft'][0]==.8
- # Re-plan the source alone on the same modified geometry: no top-four cut.
- co,edges,owners,normals,faces=scope['mesh_arrays']([obj])
- base_bones={scope['bone_key'](b.name):b for b in arm.data.bones}
- baseline=scope['pair_plan'](group,validated,co,base_bones,scope['pair_surface']([obj]),owners,pinned=placement)
+ # Compare transfer to the pass-2 source weights before baking.
  for name,parent,row in zip(('TipLeft','TipRight'),('ExampleLeft','ExampleRight'),rows):
   t,axis=Vector(row['tip']),Vector(row['axis']); checked=0
   for v in obj.data.vertices:
    weights={obj.vertex_groups[g.group].name:g.weight for g in v.groups}
    S,T=weights.get(parent,0),weights.get(name,0)
-   expected=baseline[1][parent].get(v.index,0)
+   expected=captured['source'][parent].get(v.index,0)
    assert abs(S+T-expected)<1e-4,(S,T,expected)
    if S+T and T:
     q=v.co-t; r=(q-axis*q.dot(axis)).length
-    core=scope['smooth'](1-r/min(tp['tip_radius']*R,tp['tip_radius_max']))
-    outer=scope['smooth']((tp['outer_radius']*R-r)/(tp['outer_ramp']*R))
-    assert abs(T/(S+T)-(core+(1-core)*tp['outer_level']*outer))<1e-3
+    factor=1. if r<=.006 else scope['smooth']((.015-r)/.009)
+    assert abs(T/(S+T)-factor)<1e-3
     checked+=1
   assert checked>10
  if seam: assert len(seam_groups)>10

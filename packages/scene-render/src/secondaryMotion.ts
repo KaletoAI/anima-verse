@@ -17,6 +17,7 @@ export interface MotionGroup {
   flatten_floor: number
   length: number
   girth: number
+  scale_axis?: 'centroid' | 'bone'
   gravity_scale: number
   sag_max_deg: number
   spill_max_deg: number
@@ -34,7 +35,7 @@ export interface MotionGroup {
 /** Package metadata profiles are multipliers; runtime groups are already resolved. */
 export type MotionAttributeProfiles = Record<string, Record<string, Partial<Pick<MotionGroup,
   'freq_hz' | 'zeta' | 'gravity' | 'gain' | 'max_deg' | 'sag_max_deg' | 'spill_max_deg' | 'head_sag' | 'flatten' | 'stretch' | 'spread' | 'flatten_floor' | 'spill' | 'translate'>>>>
-export interface ExtensionRigDeclaration extends Omit<MotionGroup, 'bones' | 'gravity_scale' | 'rest_deg' | 'girth' | 'flatten_floor'> {
+export interface ExtensionRigDeclaration extends Omit<MotionGroup, 'bones' | 'gravity_scale' | 'rest_deg' | 'flatten_floor'> {
   flatten_floor: number | null
   id: string
   op: string
@@ -301,10 +302,11 @@ export function createSecondaryMotion(
       const roots = (chain as Bind[]).filter(b => !members.has(b.bone.parent as Bone))
       // A link with a successor scales along the axis to that joint, so girth
       // (perpendicular) never pushes the next link off its line; the last link
-      // uses its own centroid direction.
+      // uses its declared bind-frame axis.
       for (const b of chain as Bind[]) {
         const child = (chain as Bind[]).find(c => c.bone.parent === b.bone)
         if (child) b.scaleAxis.setFromMatrixPosition(child.local)
+        else if (params.scale_axis === 'bone') b.scaleAxis.set(0, 1, 0)
         else b.scaleAxis.copy(b.centroid)
         if (b.scaleAxis.lengthSq() < 1e-12) b.scaleAxis.copy(b.centroid)
         b.scaleAxis.normalize()

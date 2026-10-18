@@ -5,6 +5,7 @@ import { MotionPreviewHint } from './MotionPreviewHint'
 
 const fields: Record<string, string> = {
   length: 'Length factor (1 = as modelled)',
+  girth: 'Girth factor (1 = as modelled)',
   straighten_deg: 'Straightening rest angle (degrees, 0 = off)', freetext_clothing_gain: 'Free-text clothing gain',
   spill_max_deg: 'Maximum spill angle (degrees)', head_sag: 'Vertical static pull when not upright',
   freq_hz: 'Frequency (Hz)', zeta: 'Damping ratio', gravity: 'Gravity', gain: 'Gain',
@@ -19,8 +20,8 @@ export function ExtensionMotionDraft({ defaults, overrides, disabled, onSave }: 
 }) {
   const { t } = useI18n()
   const [draft, setDraft] = useState(() => makeDraft({ ...defaults, ...overrides }))
-  const valid = (key: string) => validNumber(draft.values[key] ?? '', key === 'length' ? .5 : key === 'squash_max' ? 1 : 0,
-    (key.startsWith('axis_gain_') || ['freetext_clothing_gain', 'gain', 'flatten', 'stretch', 'spread', 'flatten_floor', 'spill', 'translate', 'head_sag', 'squash_min'].includes(key)) ? 1 : key === 'length' ? 3 : key.endsWith('deg') ? 180 : undefined,
+  const valid = (key: string) => validNumber(draft.values[key] ?? '', ['length', 'girth'].includes(key) ? .5 : key === 'squash_max' ? 1 : 0,
+    (key.startsWith('axis_gain_') || ['freetext_clothing_gain', 'gain', 'flatten', 'stretch', 'spread', 'flatten_floor', 'spill', 'translate', 'head_sag', 'squash_min'].includes(key)) ? 1 : key === 'girth' ? 2 : key === 'length' ? 3 : key.endsWith('deg') ? 180 : undefined,
     key === 'freq_hz' || key === 'squash_min')
   const changed = draftChanged(draft)
   const allValid = Object.keys(fields).every(valid)

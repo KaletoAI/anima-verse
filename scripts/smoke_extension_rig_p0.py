@@ -199,7 +199,7 @@ def main():
         slot.rigs[0].applies_to = saved_conditions
         pkg.apply_to = saved_selector
         motion = motion_payload("demo", profile)
-        expected = {"bones": ["ExampleBone1", "ExampleBone2"], "freq_hz": 2.2,
+        expected = {"scale_axis": "centroid", "bones": ["ExampleBone1", "ExampleBone2"], "freq_hz": 2.2,
                     "zeta": 0.15, "gravity": 0.35, "gravity_scale": 1.0, "stretch": 0.0, "spread": 0.5, "flatten_floor": .6, "length": 1.0, "girth": 1.0, "spill": 0.0, "flatten": 0.0, "translate": 0.0, "sag_max_deg": 25.0, "spill_max_deg": 25.0, "head_sag": 1.0, "gain": 1.0, "max_deg": 25.0,
                     "axis_gain": [1, 1, 1], "squash": [0.6, 1.4], "rest_deg": 0, "rest_max_deg": 90.0, "straighten_deg": 0.0, "freetext_clothing_gain": 1.0}
         check(motion["groups"] == {"example_group": expected}, "motion defaults")

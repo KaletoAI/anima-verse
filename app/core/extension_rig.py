@@ -65,7 +65,7 @@ def extension_rig_fingerprint(groups, overrides=None):
     """Versioned identity of applicable declarations and model overrides."""
     geometry = [{key: group[key] for key in ("id", "op", "chains", "params", "enabled", "flip") if key in group}
                 for group in groups]
-    return _revision({"version": 14, "groups": sorted(geometry, key=lambda g: g["id"]),
+    return _revision({"version": 15, "groups": sorted(geometry, key=lambda g: g["id"]),
                       "overrides": overrides or {}})
 
 
@@ -132,7 +132,7 @@ def resolved_extension_groups(character_name, profile=None, signature=None):
 
 
 # sag_max_deg bounds the whole chain static droop for each root chain.
-MOTION_FIELDS = ("length", "freq_hz", "zeta", "gravity", "spill", "flatten", "stretch", "spread", "flatten_floor", "translate", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "squash", "axis_gain", "rest_max_deg", "straighten_deg", "freetext_clothing_gain")
+MOTION_FIELDS = ("length", "girth", "freq_hz", "zeta", "gravity", "spill", "flatten", "stretch", "spread", "flatten_floor", "translate", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "squash", "axis_gain", "rest_max_deg", "straighten_deg", "freetext_clothing_gain")
 
 
 def declared_motion_groups():
@@ -260,7 +260,6 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             elif targets.intersection(piece["partially_covers"]):
                 factor *= 1 - (1 - f) / 2
         values["gain"] *= factor
-        values["girth"] = 1.0
         rest = None
         for state in states:
             pose = state["bone_pose"].get(group["id"], {})
@@ -282,11 +281,12 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         for field, upper in {"freq_hz": 20, "zeta": 10, "gravity": 10,
                              "gain": 1, "flatten": 1, "stretch": 1, "spread": 1, "flatten_floor": 1, "spill": 1, "translate": 1, "head_sag": 1}.items():
             values[field] = max(0.0, min(float(upper), values[field]))
-        values["length"] = max(.25, min(4., values["length"]))
+        for field in ("length", "girth"):
+            values[field] = max(.25, min(4., values[field]))
         values["gravity_scale"] = scale
         groups[group["id"]] = {
             "bones": [link["bone"] for chain in group["chains"] for link in chain],
-            **values, "rest_deg": max(-values["rest_max_deg"], min(rest or 0, values["rest_max_deg"])),
+            **values, "scale_axis": group["scale_axis"], "rest_deg": max(-values["rest_max_deg"], min(rest or 0, values["rest_max_deg"])),
         }
     inputs = {"declarations": declarations, "world": world, "equipment": equipment,
               "pieces": pieces, "coverage": coverage, "attributes": attributes,

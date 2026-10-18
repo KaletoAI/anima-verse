@@ -140,8 +140,8 @@ PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
 PARAMETERS['pair_tip'] = {key:kind for key,kind in PARAMETERS['pair_protrusion'].items()
                           if key.startswith(('up_', 'lateral_positive_', 'lateral_negative_', 'front_from_', 'front_to_', 'front_distance_', 'test_')) or key=='weight_min'}
 PARAMETERS['pair_tip'].update({key:'number' for key in ('normal_radius','fill_radius','fill_ring','fill_blend',
-    'fill_depth','fill_tolerance','fill_rms_max','head_depth','tail_length','tip_radius','tip_radius_max',
-    'outer_level','outer_radius','outer_ramp','weight_depth')})
+    'fill_depth','fill_tolerance','fill_rms_max','tip_diameter','tip_length','tip_round',
+    'tip_wall','tip_band','tip_subdivide','weight_depth')})
 PARAMETERS['pair_tip']['subdivide_radii'] = 'fractions'
 
 
@@ -232,10 +232,10 @@ def parameters(group):
         radii = p['subdivide_radii']
         if not 1 <= len(radii) <= 4 or any(v <= 0 for v in radii) or radii != sorted(radii,reverse=True):
             raise ValueError('subdivide_radii requires up to four positive non-increasing values')
-        for key in ('normal_radius','fill_radius','fill_ring','fill_blend','fill_tolerance','fill_rms_max','head_depth','tail_length','tip_radius','tip_radius_max','outer_radius','outer_ramp'):
+        for key in ('normal_radius','fill_radius','fill_ring','fill_blend','fill_tolerance','fill_rms_max','tip_diameter','tip_length','tip_wall','tip_band'):
             if p[key] <= 0:
                 raise ValueError(key+' must be positive')
-        if p['fill_blend'] >= p['fill_radius'] or min(p['fill_depth'],p['weight_depth']) < 0 or not 0 <= p['outer_level'] < 1:
+        if p['fill_blend'] >= p['fill_radius'] or min(p['fill_depth'],p['weight_depth'],p['tip_subdivide']) < 0 or not 0 < p['tip_round'] <= 1:
             raise ValueError('invalid pair_tip fill or weight range')
     else:
         if not 0 <= p['contact_follow_weight'] < 1:
@@ -521,12 +521,12 @@ def tip_mesh(meshes, p, placement):
     tips = [Vector(row['tip']) for row in placement]
     radius = math.sqrt(sum(row['marker_area'] for row in placement)/(2*math.pi))
     before = sum(len(mesh.data.vertices) for mesh in meshes)
-    for mesh in meshes:
+    def subdivide(mesh, centres, radii):
         bm = bmesh.new()
         bm.from_mesh(mesh.data)
         original = set(bm.verts)
-        for level in p['subdivide_radii']:
-            selected = [e for e in bm.edges if any((mesh.matrix_world@((e.verts[0].co+e.verts[1].co)/2)-t).length <= level*radius for t in tips)]
+        for radius_limit in radii:
+            selected = [e for e in bm.edges if any((mesh.matrix_world@((e.verts[0].co+e.verts[1].co)/2)-t).length <= radius_limit for t in centres)]
             if selected:
                 bmesh.ops.subdivide_edges(bm,edges=selected,cuts=1,use_grid_fill=True,smooth=0.)
                 bmesh.ops.triangulate(bm,faces=[f for f in bm.faces if len(f.verts)>4])
@@ -540,6 +540,8 @@ def tip_mesh(meshes, p, placement):
         bm.to_mesh(mesh.data)
         bm.free()
         mesh.data.update()
+    for mesh in meshes:
+        subdivide(mesh,tips,[level*radius for level in p['subdivide_radii']])
     rows = []
     for tip in tips:
         normal = Vector()
@@ -598,15 +600,48 @@ def tip_mesh(meshes, p, placement):
         axis = (normal-a*float(coef[1])-b*float(coef[2])).normalized() if coef is not None else normal
         rows.append({'tip':list(filled),'axis':list(axis),'radius':radius,'fill':'applied' if coef is not None else 'skipped: '+reason,
                      'fill_rms':rms,'fill_moved':moved,'fill_kept_by_tolerance':kept})
+    if p['tip_subdivide'] > 0:
+        for mesh in meshes:
+            subdivide(mesh,[Vector(row['tip']) for row in rows],[p['tip_subdivide']])
     return rows, before
 
 
-def tip_plan(group, p, co, source, rows, before):
+def tip_height(r, p):
+    rc = p['tip_diameter']/2
+    cap = min(p['tip_round']*rc,p['tip_length'])
+    lw = p['tip_length']-cap
+    return lw+cap*math.sqrt(max(0.,1-(r/rc)**2)) if r <= rc else lw*smooth((rc+p['tip_wall']-r)/p['tip_wall'])
+
+
+def tip_plan(group, p, co, source, rows, before, meshes):
+    rc,wall,band = p['tip_diameter']/2,p['tip_wall'],p['tip_band']
+    minimum = min(1-3*x*x+2*x*x*x-6*((rc+wall)/band+x)*x*(1-x) for x in np.linspace(0.,1.,10001))
+    for row in rows:
+        tip,axis = Vector(row['tip']),Vector(row['axis'])
+        heights = []
+        for i,point in enumerate(co):
+            delta = point-tip
+            axial = delta.dot(axis)
+            if axial < -p['weight_depth']:
+                continue
+            r = (delta-axis*axial).length
+            height = tip_height(r,p)
+            if height > 0:
+                co[i] = point+axis*height
+                heights.append(axial+height)
+        row.update(stub_height=max(heights,default=0.),girth_fold_free_max=float(1+1/-minimum) if minimum < 0 else None)
+    offset = 0
+    for mesh in meshes:
+        inverse = mesh.matrix_world.inverted()
+        for vertex in mesh.data.vertices:
+            vertex.co = inverse@co[offset+vertex.index]
+        offset += len(mesh.data.vertices)
+        mesh.data.update()
     links,weights,transfers = [],{},[]
     for chain,source_chain,row in zip(group['chains'],source[0]['chains'],rows):
         link = chain[0]
         tip,axis = Vector(row['tip']),Vector(row['axis'])
-        head,tail = tip-axis*p['head_depth'],tip+axis*p['tail_length']
+        head,tail = tip,tip+axis*p['tip_length']
         source_weights = source[2][1][source_chain[0]['bone']]
         values,factors = {},{}
         for i,value in source_weights.items():
@@ -614,9 +649,7 @@ def tip_plan(group, p, co, source, rows, before):
             if delta.dot(axis) < -p['weight_depth']:
                 continue
             r = (delta-axis*delta.dot(axis)).length
-            core = smooth(1-r/min(p['tip_radius']*row['radius'],p['tip_radius_max']))
-            outer = smooth((p['outer_radius']*row['radius']-r)/(p['outer_ramp']*row['radius']))
-            factor = core+(1-core)*p['outer_level']*outer
+            factor = 1. if r <= rc+wall else smooth((rc+wall+band-r)/band)
             if factor*value > p['weight_min']:
                 values[i],factors[i] = factor*value,factor
         if not values:
@@ -1850,7 +1883,19 @@ def measure(arm, meshes, edges, plans):
         if g['op']=='pair_tip' and plan[2].get('placement'):
             lift = []
             for row in plan[2]['placement']:
-                nearest = min(range(len(rest)),key=lambda i:(rest[i]-Vector(row['tip'])).length_squared)
+                tip,axis = Vector(row['tip']),Vector(row['axis'])
+                nearest = min(range(len(rest)),key=lambda i:(rest[i]-(tip+axis*p['tip_length'])).length_squared)
+                rc = p['tip_diameter']/2
+                lw = p['tip_length']-min(p['tip_round']*rc,p['tip_length'])
+                ring = []
+                for i,point in enumerate(rest):
+                    delta = point-tip
+                    axial = delta.dot(axis)
+                    r = (delta-axis*axial).length
+                    if axial >= -p['weight_depth'] and abs(r-rc) < p['tip_wall']/2 and tip_height(r,p) > lw/2:
+                        moved = posed[i]-tip
+                        ring.append((moved-axis*moved.dot(axis)).length)
+                row['diameter'] = 2*statistics.mean(ring) if ring else None
                 value = float((posed[nearest]-rest[nearest]).dot(Vector(row['axis'])))
                 row['lift'] = value
                 lift.append(value)
@@ -2046,7 +2091,7 @@ def extension_bones(args):
                 source = next(row for row in plans if row[0]['id']==g['depends_on'])
                 p = parameters(g)
                 rows,before = prepared[g['id']]
-                plan = tip_plan(g,p,co,source,rows,before)
+                plan = tip_plan(g,p,co,source,rows,before,meshes)
                 if plan is None:
                     soft[g['id']] = {'status':'not_found','reason':'Empty tip weights; mesh remains modified'}
                 else:

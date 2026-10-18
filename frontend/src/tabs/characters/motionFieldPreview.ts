@@ -1,7 +1,7 @@
 import type { SecondaryMotionPayload } from '@anima/scene-render'
 
 type Category = 'live' | 'motion' | 'tilt' | 'rebuild'
-type MotionField = Exclude<keyof SecondaryMotionPayload['groups'][string], 'bones'>
+type MotionField = Exclude<keyof SecondaryMotionPayload['groups'][string], 'bones' | 'scale_axis'>
 export const motionFieldPreview = {
   bounce: 'motion', weight: 'tilt', spill_max_deg: 'tilt', head_sag: 'tilt',
   straighten_deg: 'live', freetext_clothing_gain: 'motion',
