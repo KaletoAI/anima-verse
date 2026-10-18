@@ -3281,3 +3281,34 @@ a.ga-btn {
 .ga-model3d-save, .ga-model3d-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .ga-model3d-controls > label { flex: 1 1 200px; min-width: 0; }
 .ga-model3d-controls .ga-input { min-width: 0; }
+
+/* Building hull: compact groups with captions above their controls. */
+.ga-hull-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+.ga-hull-grid > .ga-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+}
+.ga-hull-grid .ga-fieldset > label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ga-hull-grid label > span:first-child { flex-basis: 100%; }
+.ga-hull-grid .ga-input { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.ga-hull-grid label > select,
+.ga-hull-grid label > input[type="number"]:only-of-type { width: 100%; }
+.ga-hull-grid input[type="range"] { flex: 1; }
+.ga-hull-grid .ga-btn { white-space: normal; overflow-wrap: anywhere; }
+.ga-hull-grid .ga-hint { overflow-wrap: anywhere; }
+.ga-hull-colour { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.ga-hull-footer { display: flex; justify-content: flex-end; }

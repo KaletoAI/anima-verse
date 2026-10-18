@@ -45,6 +45,11 @@ outline, opening or height change marks the active hull stale, while moving
 furniture does not. The old model stays active. **Rebuild** submits its saved
 description, including seed; **Build hull** submits the edited fields.
 
+Per-building material overrides select surface-texture kinds for roof, trim and
+plinth; an empty selection uses the style default. Roof tint overrides the main
+tint for the roof. Storey wall textures come from the floor plan's Wall / Shell
+inspector. After changing textures, build the hull again.
+
 The display contract is `plan_hull: true` with `display: "shell"`: entering
 keeps the hull visible and cuts the interior along the recipe outlines, exposing
 the matching recipe walls. It is not roof-faded and does not participate in

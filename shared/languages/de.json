@@ -8,6 +8,17 @@
     }
   },
   "translations": {
+    "Shape": "Formgebung",
+    "Look": "Aussehen",
+    "Materials": "Materialien",
+    "Roof": "Dach",
+    "Trim": "Zierleisten",
+    "Plinth": "Sockel",
+    "Roof tint": "Dachfarbton",
+    "Overrides Tint for the roof.": "Überschreibt den Farbton für das Dach.",
+    "Style default ({kind})": "Stilvorgabe ({kind})",
+    "Wall textures per storey: floor plan → storey inspector (Wall / Shell).": "Wandtexturen pro Etage: Grundriss → Etagen-Inspektor (Wand / Shell).",
+    "Textures changed? Build the hull again.": "Texturen geändert? Die Hülle erneut bauen.",
     "Save the location first — furnishing works on the saved floor plan.": "Zuerst den Ort speichern — die Einrichtung verwendet den gespeicherten Grundriss.",
     "Filter by name or tag": "Nach Name oder Tag filtern",
     "Kit": "Möbelsatz",

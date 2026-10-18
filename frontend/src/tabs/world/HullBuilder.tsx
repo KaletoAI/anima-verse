@@ -4,13 +4,16 @@ import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { SliderInput } from '../../components/SliderInput'
 import type { BlenderStatus } from '../../components/ModelGallery'
+import { SurfaceKindSelect } from './SurfaceKindSelect'
+import type { SurfaceKind } from './worldTypes'
 import { HullStyleEditor, type HullStyle } from './HullStyleEditor'
 
+type HullMaterials = { roof?: string; trim?: string; plinth?: string }
 type RoofForm = 'gable' | 'hip' | 'shed' | 'flat'
 interface HullDescription {
   style: string
   seed: number
-  overrides: { storeys_total?: number; roof_form?: RoofForm; pitch_deg?: number; ornament_density: number; tint?: string }
+  overrides: { storeys_total?: number; roof_form?: RoofForm; pitch_deg?: number; ornament_density: number; tint?: string; roof_tint?: string; materials?: HullMaterials }
 }
 interface HullStatus {
   ok: boolean
@@ -22,7 +25,7 @@ interface HullStatus {
   description: HullDescription | null
   storeys_plan: number
   filler_levels: number
-  styles: HullStyle[]
+  styles: (HullStyle & { materials?: HullMaterials })[]
 }
 
 export function HullBuilder(props: {
@@ -44,6 +47,7 @@ function HullForm({ apiBase, pending, onStarted }: {
   const { toast } = useToast()
   const [status, setStatus] = useState<HullStatus | null>(null)
   const [desc, setDesc] = useState<HullDescription | null>(null)
+  const [surfaceKinds, setSurfaceKinds] = useState<SurfaceKind[]>([])
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState(false)
   const path = `/world/locations/${apiBase}/hull`
@@ -59,6 +63,20 @@ function HullForm({ apiBase, pending, onStarted }: {
     }).catch((e: Error) => { if (!cancelled) toast(t('Error') + ': ' + e.message, 'error') })
     return () => { cancelled = true }
   }, [path, pending, t, toast])
+
+  useEffect(() => {
+    let cancelled = false
+    void apiGet<SurfaceKind[]>('/assets/surface-textures').then((list) => {
+      const byKind = new Map<string, SurfaceKind>()
+      for (const entry of Array.isArray(list) ? list : []) {
+        const kind = (entry?.kind || '').trim()
+        if (!kind || byKind.has(kind)) continue
+        byKind.set(kind, { ...entry, kind, name: (entry.name || '').trim() || kind, url: entry.url || '' })
+      }
+      if (!cancelled) setSurfaceKinds([...byKind.values()].sort((a, b) => a.name.localeCompare(b.name)))
+    }).catch(() => { if (!cancelled) setSurfaceKinds([]) })
+    return () => { cancelled = true }
+  }, [])
 
   // A build that finishes before the panel's first poll never flips the
   // parent's `pending`, so the optimistic "Building…" set by `build` would
@@ -107,7 +125,7 @@ function HullForm({ apiBase, pending, onStarted }: {
     } finally { setBusy(false) }
   }
 
-  return <div className="ga-form" style={{ gap: 8, padding: 8, border: '1px solid var(--ga-border, #444)', borderRadius: 6 }}>
+  return <div className="ga-form ga-hull-builder" style={{ gap: 8, padding: 8, border: '1px solid var(--ga-border, #444)', borderRadius: 6 }}>
     <strong>{t('Building hull')}</strong>
     <span className="ga-hint" role="status">
       {pending || status?.pending ? t('Building…') : status?.active ? t('Active') : status?.has_hull ? t('Hull is not active') : t('No hull built')}
@@ -120,20 +138,21 @@ function HullForm({ apiBase, pending, onStarted }: {
         onClick={() => { if (status.description) void build(status.description) }}>{t('Rebuild')}</button>
     </div> : null}
     {desc && overrides ? <>
-      <fieldset disabled={locked} className="ga-form" style={{ border: 0, padding: 0, gap: 8 }}>
-        <label>{t('Hull style')}{' '}
+      <div className="ga-hull-grid">
+      <fieldset disabled={locked} className="ga-fieldset">
+        <legend className="ga-fieldset-title">{t('Style')}</legend>
+        <label><span>{t('Hull style')}</span>
           <select className="ga-input" value={desc.style} onChange={(e) => setDesc({ ...desc, style: e.target.value })}>
             {status?.styles.map((style) => <option key={style.id} value={style.id}>{style.name}</option>)}
           </select>
         </label>
         <span className="ga-hint">{selected?.description}</span>
         <button className="ga-btn ga-btn-sm" disabled={!selected} onClick={() => setEditing(true)}>{t('Edit hull style')}</button>
-        <SliderInput label={t('Seed')} value={desc.seed} min={0} max={2147483647} slider={false}
-          onChange={(seed) => setDesc({ ...desc, seed })}>
-          <button className="ga-btn ga-btn-sm" aria-label={t('Random seed')}
-            onClick={() => setDesc({ ...desc, seed: Math.floor(Math.random() * 2147483647) })}>🎲</button>
-        </SliderInput>
-        <label>{t('Storeys total')}{' '}<input className="ga-input" type="number" min={0} max={40} step={1}
+        <button className="ga-btn ga-btn-sm" onClick={() => { void propose() }}>{t('Suggest from description (LLM)')}</button>
+      </fieldset>
+      <fieldset disabled={locked} className="ga-fieldset">
+        <legend className="ga-fieldset-title">{t('Shape')}</legend>
+        <label><span>{t('Storeys total')}</span><input className="ga-input" type="number" min={0} max={40} step={1}
           value={overrides.storeys_total ?? 0} onChange={(e) => {
             const total = Math.max(0, Math.min(40, Math.trunc(Number(e.target.value) || 0)))
             setDesc((current) => {
@@ -148,27 +167,58 @@ function HullForm({ apiBase, pending, onStarted }: {
         {facadeStoreys > 0 ? <span className="ga-hint">
           {t('{n} facade storeys (not enterable)').replace('{n}', String(facadeStoreys))}
         </span> : null}
-        <label>{t('Form')}{' '}<select className="ga-input" value={overrides.roof_form ?? ''}
+        <label><span>{t('Form')}</span><select className="ga-input" value={overrides.roof_form ?? ''}
           onChange={(e) => patch({ roof_form: (e.target.value || undefined) as RoofForm | undefined })}>
           <option value="">{t('Style default')}</option>
           <option value="gable">{t('Gable')}</option><option value="hip">{t('Hip')}</option>
           <option value="shed">{t('Shed')}</option><option value="flat">{t('Flat')}</option>
         </select></label>
-        <SliderInput label={t('Pitch (°)')} min={5} max={60} step={1} fineStep={0.5}
+        <SliderInput style={{ display: 'flex', flexWrap: 'wrap' }} label={<span className="ga-hull-label">{t('Pitch (°)')}</span>} min={5} max={60} step={1} fineStep={0.5}
           value={overrides.pitch_deg} clearable placeholder={t('Style default')}
           disabled={overrides.roof_form === 'flat'} onChange={(pitch_deg) => patch({ pitch_deg })}
           onClear={() => patch({ pitch_deg: undefined })} />
-        <SliderInput label={t('Ornament density')} min={0} max={1} step={0.01}
-          value={overrides.ornament_density} onChange={(ornament_density) => patch({ ornament_density })} />
-        <label>{t('Tint')}{' '}<input type="color" value={overrides.tint ?? '#ffffff'}
-          onChange={(e) => patch({ tint: e.target.value })} />{' '}
-          <button className="ga-btn ga-btn-sm" onClick={() => patch({ tint: undefined })}>{t('none')}</button>
-          {!overrides.tint ? <span className="ga-hint"> {t('none')}</span> : null}
-        </label>
       </fieldset>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <button className="ga-btn ga-btn-sm" disabled={locked} onClick={() => { void propose() }}>{t('Suggest from description (LLM)')}</button>
-        <button className="ga-btn ga-btn-sm" disabled={locked || !selected} onClick={() => { void build(desc) }}>{t('Build hull')}</button>
+      <fieldset disabled={locked} className="ga-fieldset">
+        <legend className="ga-fieldset-title">{t('Look')}</legend>
+        <SliderInput style={{ display: 'flex', flexWrap: 'wrap' }} label={<span className="ga-hull-label">{t('Seed')}</span>} value={desc.seed} min={0} max={2147483647} slider={false}
+          onChange={(seed) => setDesc({ ...desc, seed })}>
+          <button className="ga-btn ga-btn-sm" aria-label={t('Random seed')}
+            onClick={() => setDesc({ ...desc, seed: Math.floor(Math.random() * 2147483647) })}>🎲</button>
+        </SliderInput>
+        <SliderInput style={{ display: 'flex', flexWrap: 'wrap' }} label={<span className="ga-hull-label">{t('Ornament density')}</span>} min={0} max={1} step={0.01}
+          value={overrides.ornament_density} onChange={(ornament_density) => patch({ ornament_density })} />
+        {(['tint', 'roof_tint'] as const).map((slot) => <label key={slot}>
+          <span>{slot === 'tint' ? t('Tint') : t('Roof tint')}</span>
+          <span className="ga-hull-colour">
+            <input type="color" value={overrides[slot] ?? '#ffffff'}
+              onChange={(e) => patch({ [slot]: e.target.value })} />
+            <button className="ga-btn ga-btn-sm" onClick={() => patch({ [slot]: undefined })}>{t('none')}</button>
+            {!overrides[slot] ? <span className="ga-hint">{t('none')}</span> : null}
+          </span>
+        </label>)}
+        <span className="ga-hint">{t('Overrides Tint for the roof.')}</span>
+      </fieldset>
+      <fieldset disabled={locked} className="ga-fieldset">
+        <legend className="ga-fieldset-title">{t('Materials')}</legend>
+        {(['roof', 'trim', 'plinth'] as const).map((slot) => {
+          const kind = selected?.materials?.[slot] ?? ''
+          const name = surfaceKinds.find((entry) => entry.kind === kind)?.name || kind || t('none')
+          return <SurfaceKindSelect key={slot} label={slot === 'roof' ? 'Roof' : slot === 'trim' ? 'Trim' : 'Plinth'}
+            labelWidth={72} kinds={surfaceKinds} value={overrides.materials?.[slot] ?? ''}
+            emptyLabel={t('Style default ({kind})').replace('{kind}', name)}
+            onChange={(value) => {
+              const materials = { ...overrides.materials }
+              if (value) materials[slot] = value
+              else delete materials[slot]
+              patch({ materials: Object.keys(materials).length ? materials : undefined })
+            }} />
+        })}
+        <span className="ga-hint">{t('Wall textures per storey: floor plan → storey inspector (Wall / Shell).')}</span>
+        <span className="ga-hint">{t('Textures changed? Build the hull again.')}</span>
+      </fieldset>
+      </div>
+      <div className="ga-hull-footer">
+        <button className="ga-btn ga-btn-primary" disabled={locked || !selected} onClick={() => { void build(desc) }}>{t('Build hull')}</button>
       </div>
     </> : null}
     {editing && selected ? <HullStyleEditor style={selected} onClose={() => setEditing(false)}
