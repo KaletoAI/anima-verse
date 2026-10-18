@@ -126,7 +126,7 @@ def create_improvement(body: CreateBody) -> Dict[str, Any]:
     params = _validated(body.type_id, body.params)
     improvement = store.create(body.type_id, body.label, params, body.mode)
     engine.scan(improvement["id"])
-    return store.get(improvement["id"]) or improvement
+    return store.get(improvement["id"]) or {**improvement, "removed": True}
 
 
 @router.post("/preview")
@@ -160,6 +160,17 @@ def put_settings(body: SettingsBody) -> Dict[str, Any]:
     show the value that is really in effect."""
     store.set_settings(body.enabled, body.idle_minutes)
     return store.get_settings()
+
+
+@router.post("/clear-finished")
+def clear_finished() -> Dict[str, int]:
+    removed = 0
+    for improvement in store.list_all():
+        if improvement["status"] == "done":
+            _cancel_in_flight(improvement["id"])
+            store.delete(improvement["id"])
+            removed += 1
+    return {"removed": removed}
 
 
 @router.delete("/{improvement_id}")
@@ -207,6 +218,9 @@ def list_steps(improvement_id: str) -> List[Dict[str, Any]]:
 
 @router.post("/{improvement_id}/steps/{candidate_key}/retry")
 def retry_step(improvement_id: str, candidate_key: str) -> Dict[str, Any]:
-    _improvement_or_404(improvement_id)
-    store.retry_step(improvement_id, candidate_key)
+    improvement = _improvement_or_404(improvement_id)
+    # Reopen only when a step really became runnable again — an open entry
+    # with nothing pending would never close.
+    if store.retry_step(improvement_id, candidate_key) and improvement["status"] == "done":
+        store.update(improvement_id, status="open")
     return {"ok": True}

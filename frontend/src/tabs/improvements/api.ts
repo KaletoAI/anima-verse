@@ -23,8 +23,8 @@ export function fetchStatus(): Promise<EngineStatus> {
 
 export function createImprovement(body: {
   type_id: string; label: string; mode: string; params: Record<string, string>
-}): Promise<Improvement> {
-  return apiPost<Improvement>('/improvements', body)
+}): Promise<Improvement & { removed?: boolean }> {
+  return apiPost<Improvement & { removed?: boolean }>('/improvements', body)
 }
 
 export function previewImprovement(
@@ -70,4 +70,8 @@ export function setOrder(ids: string[]): Promise<unknown> {
 export function saveSettings(enabled: boolean, idleMinutes: number): Promise<Settings> {
   return apiPut<Settings>('/improvements/settings',
     { enabled, idle_minutes: idleMinutes })
+}
+
+export function clearFinished(): Promise<{ removed: number }> {
+  return apiPost('/improvements/clear-finished', {})
 }

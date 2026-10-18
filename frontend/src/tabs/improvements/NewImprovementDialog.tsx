@@ -35,6 +35,11 @@ interface MeshBackendOption {
   name: string
 }
 
+function fieldVisible(field: ParamField, params: Record<string, string>): boolean {
+  return Object.entries(field.show_if || {})
+    .every(([key, values]) => values.includes((params[key] || '').trim()))
+}
+
 export function NewImprovementDialog({
   open,
   types,
@@ -126,14 +131,24 @@ export function NewImprovementDialog({
             ...list.filter((o) => o.available === false)]
   }, [imageOptions])
 
+  // Match schema order and clear hidden values before evaluating later fields.
+  const activeParams = useMemo(() => {
+    const out: Record<string, string> = {}
+    for (const field of type?.params_schema || []) {
+      out[field.key] = fieldVisible(field, out) ? (params[field.key] || '').trim() : ''
+    }
+    return out
+  }, [type, params])
+
   /** Type label plus the chosen values — a name the list can be read by. */
   const defaultLabel = useMemo(() => {
     if (!type) return ''
     const values = type.params_schema
-      .map((f) => params[f.key] || '')
+      .filter((f) => fieldVisible(f, activeParams))
+      .map((f) => activeParams[f.key] || '')
       .filter(Boolean)
     return values.length ? `${t(type.label)}: ${values.join(', ')}` : t(type.label)
-  }, [params, type, t])
+  }, [activeParams, type, t])
 
   const label = labelTouched ? labelDraft : defaultLabel
 
@@ -153,27 +168,27 @@ export function NewImprovementDialog({
   }, [types])
 
   const missing = (type?.params_schema || [])
-    .some((f) => f.required && !(params[f.key] || '').trim())
+    .some((f) => fieldVisible(f, activeParams) && f.required && !activeParams[f.key])
 
   const runPreview = useCallback(async () => {
     if (!type) return
     setBusy(true)
     try {
-      setPreview(await previewImprovement(type.id, params))
+      setPreview(await previewImprovement(type.id, activeParams))
     } catch (e) {
       setPreview(null)
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
       setBusy(false)
     }
-  }, [params, t, toast, type])
+  }, [activeParams, t, toast, type])
 
   const create = useCallback(async () => {
     if (!type) return
     setBusy(true)
     try {
-      await createImprovement({ type_id: type.id, label, mode, params })
-      toast(t('Improvement created'))
+      const result = await createImprovement({ type_id: type.id, label, mode, params: activeParams })
+      toast(result.removed ? t('Nothing to do — the entry was removed') : t('Improvement created'))
       onCreated()
     } catch (e) {
       // The server's message is the TYPE's own validation text ("source and
@@ -183,7 +198,7 @@ export function NewImprovementDialog({
     } finally {
       setBusy(false)
     }
-  }, [label, mode, onCreated, params, t, toast, type])
+  }, [label, mode, onCreated, activeParams, t, toast, type])
 
   if (!open) return null
 
@@ -266,7 +281,7 @@ export function NewImprovementDialog({
 
             {type ? (
               <>
-                {type.params_schema.map((field) => (
+                {type.params_schema.filter((field) => fieldVisible(field, activeParams)).map((field) => (
                   <Field key={field.key} label={t(field.label)}>
                     {renderField(field)}
                   </Field>

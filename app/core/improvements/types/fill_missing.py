@@ -18,6 +18,7 @@ SUBJECTS = [
     {"value": "character_model", "label": "Character models"},
     {"value": "building_model", "label": "Building models"},
     {"value": "prop_model", "label": "Prop models"},
+    {"value": "prop_images", "label": "Prop images"},
     {"value": "character_expressions", "label": "Character expressions"},
     {"value": "clothing_images", "label": "Clothing images"},
 ]
@@ -28,7 +29,7 @@ def _require_route(occasion: str, character: str = "") -> None:
     ROUTED (backend "") and falls back along the chain on a failure. Nothing
     available is load, not a defect — the step waits.
 
-    There is no per-entry backend choice here, so each candidate kind names
+    With automatic backend selection, each candidate kind names
     its mesh occasion: a character the one of its rig (``mesh_humanoid`` /
     ``mesh_creature``), a building ``mesh_building``, a prop
     ``mesh_object``. ``character`` applies that character's render-target
@@ -67,6 +68,23 @@ def _missing_prop_models() -> List[Candidate]:
     return out
 
 
+def _missing_prop_images() -> List[Candidate]:
+    out = []
+    for prop in subjects.props():
+        prop_id = prop.get("id") or ""
+        if not prop_id:
+            continue
+        variants = subjects.prop_variants(prop_id)
+        name = prop.get("name") or prop_id
+        for entry in variants:
+            index = int(entry.get("index") or 0)
+            ident = subjects.prop_ident(prop_id, index)
+            if not subjects.prop_has_source(ident):
+                label = name if len(variants) < 2 else f"{name} · variant {index + 1}"
+                out.append(Candidate(f"prop:{ident}", label))
+    return out
+
+
 def _missing_expressions() -> List[Candidate]:
     return [Candidate(f"character:{n}", n) for n in subjects.characters()
             if subjects.expression_missing(n)]
@@ -99,6 +117,8 @@ _HANDLERS: Dict[str, tuple] = {
         lambda ident: (_require_route("mesh_object"),
                        subjects.generate_prop_model(ident, "")),
     ),
+    "prop_images": (_missing_prop_images, subjects.prop_has_source,
+                    subjects.generate_prop_image),
     "character_expressions": (
         _missing_expressions,
         lambda ident: not subjects.expression_missing(ident),
@@ -115,7 +135,19 @@ _HANDLERS: Dict[str, tuple] = {
 class FillMissing(ImprovementType):
     id = "fill_missing"
     label = "Generate missing assets"
-    params_schema = [ParamField("subject", "Subject", "subject_kind", SUBJECTS)]
+
+    @property
+    def params_schema(self) -> List[ParamField]:
+        auto = [{"value": "", "label": "Auto (routing)"}]
+        return [
+            ParamField("subject", "Subject", "subject_kind", SUBJECTS),
+            ParamField("mesh_backend", "Mesh backend", "mesh_backend",
+                       auto + subjects.mesh_backend_options(), required=False,
+                       show_if={"subject": ["character_model", "building_model", "prop_model"]}),
+            ParamField("image_backend", "Image backend", "image_backend",
+                       auto + subjects.image_backend_options(), required=False,
+                       show_if={"subject": ["prop_images", "clothing_images"]}),
+        ]
 
     def find_candidates(self, params: Dict[str, Any]) -> List[Candidate]:
         find, _has, _generate = _HANDLERS[params["subject"]]
@@ -128,4 +160,15 @@ class FillMissing(ImprovementType):
     def apply(self, candidate: Candidate, params: Dict[str, Any],
               task_id: str) -> None:
         _find, _has, generate = _HANDLERS[params["subject"]]
-        generate(candidate.key.split(":", 1)[1])
+        ident = candidate.key.split(":", 1)[1]
+        subject = params["subject"]
+        backend = params.get("mesh_backend", "")
+        if subject in ("character_model", "building_model", "prop_model") and backend:
+            producer = {"character_model": subjects.generate_character_model,
+                        "building_model": subjects.generate_building_model,
+                        "prop_model": subjects.generate_prop_model}[subject]
+            producer(ident, backend)
+        elif subject in ("prop_images", "clothing_images"):
+            generate(ident, params.get("image_backend", ""))
+        else:
+            generate(ident)

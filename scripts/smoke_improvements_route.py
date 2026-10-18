@@ -85,6 +85,11 @@ recorded from a run.  A mini FastAPI app carries only this router, and
      activity → the stamp keeps its age too, so watching the queue panel cannot
      push away the idle window the panel is waiting for.
 
+Additional expectations: zero candidates delete a one-shot during create, so
+the response has removed=true and its id has no stored row. One skipped step
+keeps the entry done; retry reopens it. Clear-finished removes the single done
+entry and its steps, cancels its queued task, and preserves the open entry.
+
 Usage:  ./.venv/bin/python scripts/smoke_improvements_route.py
 """
 import os
@@ -224,7 +229,7 @@ check("the fake type is listed with its label",
 check("…and its param schema comes as ParamField.to_dict()",
       r.json()[0]["params_schema"],
       [{"key": "backend", "label": "Backend", "kind": "text", "options": [],
-        "required": True, "own_options": False, "default": ""}])
+        "required": True, "own_options": False, "default": "", "show_if": {}}])
 
 # ── 2. create + immediate scan ───────────────────────────────────────────────
 print("\n2. POST /improvements creates and scans")
@@ -413,6 +418,32 @@ check("…and neither is a write to the improvements admin API",
 check("a player's write resets the window",
       (client.post("/play/say").status_code,
        user_activity.seconds_since() < 1.0), (200, True))
+
+# Zero candidates delete the one-shot but return its created row with removed.
+FakeType.candidates = []
+r = client.post("/improvements", json={"type_id": "fake", "params": {"backend": "x"}})
+check("empty create returns removed", (r.status_code, r.json().get("removed")), (200, True))
+check("empty create row is absent", store.get(r.json()["id"]), None)
+FakeType.candidates = [("retry", "Retry")]
+row = client.post("/improvements", json={"type_id": "fake", "params": {"backend": "x"}}).json()
+entry_id = row["id"]
+store.mark_result(entry_id, "retry", status="skipped", error="failure", count_attempt=True)
+engine._close_if_finished(entry_id)
+check("skipped one-shot stays done", store.get(entry_id)["status"], "done")
+check("retry done succeeds", client.post(f"/improvements/{entry_id}/steps/retry/retry").status_code, 200)
+check("retry reopens entry", store.get(entry_id)["status"], "open")
+store.update(entry_id, status="done")
+# The step is pending now, not skipped: nothing is reset, so nothing reopens —
+# an open entry with no runnable step would never close again.
+client.post(f"/improvements/{entry_id}/steps/retry/retry")
+check("retry of a non-skipped step keeps done", store.get(entry_id)["status"], "done")
+queued = get_task_queue().submit(engine.TASK_TYPE,
+    {"improvement_id": entry_id, "candidate_key": "retry"}, deduplicate=False)
+other = store.create("fake", "Keep", {}, "standing")["id"]
+check("clear finished removes exactly one", client.post("/improvements/clear-finished").json(), {"removed": 1})
+check("clear finished cancels queued work", status_of(queued), "cancelled")
+check("clear finished deletes steps", store.list_steps(entry_id), [])
+check("clear finished preserves open entry", store.get(other)["status"], "open")
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

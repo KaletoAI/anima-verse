@@ -254,6 +254,14 @@ sidecar carrying `backend`), so the READERS stay real: `get_model3d_info` and
 The printed sections follow execution order, so expectations 9 and 10 are
 checked inside the sections whose fixtures they belong to.
 
+Additional queue expectations are derived directly from the feature contract:
+conditional fields are excluded unless their earlier selector matches; of two
+prop variants only the one without a front image is listed, labelled variant 2;
+explicit mesh picks reach each producer without routing; offline options remain
+selectable; image generation uses the exact indexed variant and clothing override;
+two stored face signatures yield two all-scope candidates and one current-scope
+candidate, or zero when the worn signature has no stored mesh.
+
 Usage:  ./.venv/bin/python scripts/smoke_improvement_types.py
 """
 import json
@@ -521,6 +529,9 @@ MESH_INVENTORY = [{"name": n} for n in ("hy", "tr", "px")]
 model3d.list_mesh_backends = lambda occasion="": {
     "backends": list(MESH_INVENTORY),
     "default": ""}
+real_mesh_backend_options = subjects.mesh_backend_options
+subjects.mesh_backend_options = lambda: [
+    {"value": b["name"], "label": b["name"]} for b in MESH_INVENTORY]
 model3d.required_rig = lambda name: RIGS.get(name, "mixamo")
 
 
@@ -535,6 +546,10 @@ routing.explain_occasion = fake_explain_occasion
 # model_replace target for characters, buildings and props.
 _cfg = config.get_all()
 _ig = dict(_cfg.get("image_generation") or {})
+# These tiny fake meshes verify queue persistence, not Blender processing.
+# Keep reader-triggered delivery/LOD workers away from the fake GLB bytes.
+_ig["blender_auto_lod"] = False
+_ig["blender_meshopt_delivery"] = False
 _ig["backends"] = list(_ig.get("backends") or []) + [
     {"name": n, "api_type": "openai_mesh", "category": "img2mesh",
      "api_url": "http://mesh.invalid", "enabled": True}
@@ -1210,6 +1225,127 @@ check("an img2mesh target validates for a prop",
       MODEL_REPLACE.validate({"subject": "prop", "source_backend": "px",
                               "target_backend": "pz"}),
       {"subject": "prop", "source_backend": "px", "target_backend": "pz"})
+
+# A configured offline mesh backend stays selectable; availability does not
+# change the schema's validation options.
+from types import SimpleNamespace
+from unittest.mock import patch
+with patch('app.imagegen.service.get_image_service', return_value=SimpleNamespace(backends=[
+        SimpleNamespace(name='offline_mesh', instance_enabled=True, available=False,
+                        MEDIA_TYPE='mesh', category='img2mesh')])):
+    check('offline mesh backend remains selectable', real_mesh_backend_options(),
+          [{'value': 'offline_mesh', 'label': 'offline_mesh'}])
+
+# Queue additions: two prop variants, only index 1 lacks a front image, so
+# exactly that indexed candidate is listed and its label says variant 2.
+# Explicit mesh picks bypass routing even when no occasion can resolve.
+from unittest.mock import patch
+from app.core.improvements.base import Candidate
+from app.core.improvements.types.face_retexture import FaceRetexture
+from app.core import face_retexture
+
+image_prop = props.create_prop(name='Sample prop')['id']
+props.add_variant(image_prop)
+variants = subjects.prop_variants(image_prop)
+check('image fixture has two variants', [v['index'] for v in variants], [0, 1])
+(props.prop_dir(image_prop, create=True) / props.source_name(variants[0]['stem'])).write_bytes(b'front')
+# A rear image does not satisfy the missing-front test for variant 1.
+(props.prop_dir(image_prop) / props.view_source_name(variants[1]['stem'], 'back')).write_bytes(b'back')
+params = {'subject': 'prop_images'}
+found = [c for c in FILL_MISSING.find_candidates(params) if c.key.startswith(f'prop:{image_prop}#')]
+check('only variant without front is a candidate', [(c.key, c.label) for c in found],
+      [(f'prop:{image_prop}#1', 'Sample prop · variant 2')])
+check('front source finishes the variant', FILL_MISSING.is_done(Candidate(f'prop:{image_prop}#0', ''), params), True)
+check('missing front is unfinished', FILL_MISSING.is_done(found[0], params), False)
+
+
+for subject, producer, ident in [('character_model', 'generate_character_model', 'demo_a'),
+                                 ('building_model', 'generate_building_model', 'sample_location'),
+                                 ('prop_model', 'generate_prop_model', 'sample_prop#1')]:
+    calls = []
+    with patch.object(subjects, producer, side_effect=lambda *args: calls.append(args)), \
+         patch.object(subjects, 'default_mesh_backend', side_effect=AssertionError('explicit pick routed')):
+        FILL_MISSING.apply(Candidate('subject:' + ident, ''),
+                           {'subject': subject, 'mesh_backend': 'explicit'}, '')
+    check('explicit backend reaches ' + subject, calls, [(ident, 'explicit')])
+
+# The image helper calls the blocking producer with an empty prompt, the
+# requested backend, image_only=True and the exact variant; failures release
+# the guard, a concurrently filled front avoids a second generation.
+image_calls = []
+def record_prop_image(*args, **kwargs):
+    image_calls.append((args, kwargs))
+    return {'ok': True}
+with patch.object(subjects, 'default_mesh_backend', return_value='routed'), \
+     patch.object(subjects, 'prop_has_source', return_value=False), \
+     patch.object(props, 'is_pending', return_value=False), \
+     patch.object(props, '_generate', side_effect=record_prop_image):
+    subjects.generate_prop_image('sample_prop#1', 'image_pick')
+check('prop image producer arguments', image_calls,
+      [(('sample_prop', '', '', 'image_pick', ''), {'image_only': True, 'variant': 1})])
+check('prop image slot released', props._gen_key('sample_prop', 1, 'image_pick') in props._generating, False)
+with patch.object(subjects, 'default_mesh_backend', return_value='routed'), \
+     patch.object(subjects, 'prop_has_source', return_value=True), \
+     patch.object(props, '_generate', side_effect=AssertionError('already filled')):
+    subjects.generate_prop_image('sample_prop#1', '')
+with patch.object(subjects, 'default_mesh_backend', return_value='routed'), \
+     patch.object(subjects, 'prop_has_source', return_value=False), \
+     patch.object(props, 'is_pending', return_value=False), \
+     patch.object(props, '_generate', return_value={'ok': False, 'error': 'render failed'}):
+    check_raises('prop image failure propagates', RuntimeError,
+                 lambda: subjects.generate_prop_image('sample_prop#1', ''), 'render failed')
+
+# Clothing forwards its image backend via the supported overrides argument.
+from app.routes import inventory as inventory_route
+clothing_calls = []
+with patch.object(subjects, 'clothing_image_done', return_value=False), \
+     patch.object(inventory_route, 'generate_item_image_sync',
+                  side_effect=lambda *args, **kwargs: clothing_calls.append((args, kwargs)) or True):
+    subjects.generate_clothing_image('sample_item', 'image_pick')
+check('clothing backend override reaches producer', clothing_calls,
+      [(('sample_item',), {'overrides': {'backend': 'image_pick'}, 'raise_errors': True})])
+
+# A no-route load leaves a prop pending; a route exhausted after a producer
+# defect remains a failed attempt. Both paths must release the generation slot.
+from app.imagegen.routing import NoRouteError
+with patch.object(subjects, 'default_mesh_backend', return_value='routed'), \
+     patch.object(subjects, 'prop_has_source', return_value=False), \
+     patch.object(props, 'is_pending', return_value=False), \
+     patch.object(props, '_generate', side_effect=NoRouteError('prop', [])):
+    check_raises('prop no-route maps to busy', CandidateBusy,
+                 lambda: subjects.generate_prop_image('sample_prop#1', ''))
+route_failure = NoRouteError('prop', [])
+route_failure.__cause__ = RuntimeError('render defect')
+with patch.object(subjects, 'default_mesh_backend', return_value='routed'), \
+     patch.object(subjects, 'prop_has_source', return_value=False), \
+     patch.object(props, 'is_pending', return_value=False), \
+     patch.object(props, '_generate', side_effect=route_failure):
+    check_raises('prop exhausted route stays failure', NoRouteError,
+                 lambda: subjects.generate_prop_image('sample_prop#1', ''))
+
+# Auto with nothing routable on the "prop" occasion is load: busy before the
+# producer runs, so no attempt is counted.
+with patch.object(subjects, 'default_mesh_backend', return_value=''), \
+     patch.object(subjects, 'prop_has_source', return_value=False), \
+     patch.object(props, '_generate', side_effect=AssertionError('unroutable auto rendered')):
+    check_raises('prop auto without route is busy', CandidateBusy,
+                 lambda: subjects.generate_prop_image('sample_prop#1', ''))
+
+# Two stored signatures, only 'worn' is current: all/legacy list two, current
+# lists one, and a current outfit without a stored mesh lists none.
+face = FaceRetexture()
+with patch.object(subjects, 'characters', return_value=['demo_scope']), \
+     patch.object(subjects, 'character_model_signatures', return_value={'worn', 'stored'}), \
+     patch.object(model_refs, 'current_outfit_state', return_value=([], [], 'worn')), \
+     patch.object(face_retexture, 'check', return_value={'ok': True}), \
+     patch.object(face, 'is_done', return_value=False):
+    check('face scope all includes both stored meshes',
+          sorted(c.key.split(':')[2] for c in face.find_candidates({'scope': 'all'})), ['stored', 'worn'])
+    check('legacy face scope means all', len(face.find_candidates({})), 2)
+    check('face scope current includes only worn mesh',
+          [c.key.split(':')[2] for c in face.find_candidates({'scope': 'current'})], ['worn'])
+    with patch.object(model_refs, 'current_outfit_state', return_value=([], [], 'absent')):
+        check('current scope intersects stored signatures', face.find_candidates({'scope': 'current'}), [])
 
 print()
 if FAILURES:

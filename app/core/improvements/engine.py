@@ -178,9 +178,14 @@ def tick() -> Dict[str, Any]:
             logger.info("improvements: %d orphaned step(s) made runnable again",
                         rescued)
 
-    # 2. Scans — independent of idleness, they only read.
+    # 2. Sweep finished one-shots and rescan standing entries, independent of idleness.
     scanned = 0
     for improvement in store.list_all():
+        if (improvement["mode"] == "one_shot" and improvement["status"] == "done"
+                and not improvement["skipped"] and not improvement["failed"]):
+            store.delete(improvement["id"])
+            logger.info("improvements: removed finished one-shot %s", improvement["id"])
+            continue
         if not _scan_due(improvement):
             continue
         try:
@@ -330,7 +335,11 @@ def _close_if_finished(improvement_id: str) -> None:
         return
     if (improvement["mode"] == "one_shot" and improvement["status"] == "open"
             and improvement["pending"] == 0 and improvement["running"] == 0):
-        store.update(improvement_id, status="done")
+        if not improvement["skipped"] and not improvement["failed"]:
+            store.delete(improvement_id)
+            logger.info("improvements: removed finished one-shot %s", improvement_id)
+        else:
+            store.update(improvement_id, status="done")
 
 
 def register_improvement_handler() -> None:

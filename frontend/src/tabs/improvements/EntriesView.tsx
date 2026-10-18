@@ -19,7 +19,7 @@ import { SortableList } from '../../components/SortableList'
 import { NewImprovementDialog } from './NewImprovementDialog'
 import { EntryDetail } from './EntryDetail'
 import {
-  deleteImprovement, fetchImprovements, fetchTypes, pauseImprovement,
+  clearFinished, deleteImprovement, fetchImprovements, fetchTypes, pauseImprovement,
   rescanImprovement, resumeImprovement, runNow, setOrder,
 } from './api'
 import { STEP_STATUS_LABELS } from './types'
@@ -50,6 +50,7 @@ export function EntriesView() {
   const [selectedId, setSelectedId] = useState('')
   const [creating, setCreating] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<Improvement | null>(null)
+  const [clearingFinished, setClearingFinished] = useState(false)
   const [busyId, setBusyId] = useState('')
   const [loadError, setLoadError] = useState('')
 
@@ -149,6 +150,12 @@ export function EntriesView() {
           onClick={() => setCreating(true)}>
           {t('New improvement')}
         </button>
+        {entries?.some((entry) => entry.status === 'done') ? (
+          <button type="button" className="ga-btn ga-btn-sm ga-btn-danger"
+            disabled={!!busyId} onClick={() => setClearingFinished(true)}>
+            {t('Remove finished')}
+          </button>
+        ) : null}
         <span className="ga-form-hint">
           {t('The engine works these top down — drag to reorder.')}
         </span>
@@ -243,6 +250,19 @@ export function EntriesView() {
 
       <NewImprovementDialog open={creating} types={types}
         onCreated={created} onClose={() => setCreating(false)} />
+
+      <ConfirmDialog
+        open={clearingFinished}
+        title={t('Remove finished')}
+        message={t('All finished entries and their steps are removed.')}
+        confirmLabel={t('Remove finished')}
+        danger
+        onConfirm={async () => {
+          setClearingFinished(false)
+          await act('clear-finished', clearFinished)
+        }}
+        onClose={() => setClearingFinished(false)}
+      />
 
       <ConfirmDialog
         open={!!pendingDelete}

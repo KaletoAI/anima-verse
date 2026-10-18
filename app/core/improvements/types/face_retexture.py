@@ -36,7 +36,12 @@ class FaceRetexture(ImprovementType):
                 and getattr(b, 'MEDIA_TYPE', 'image') == media]
 
         return [
-            ParamField('character', 'Character', 'text', required=False),
+            ParamField('character', 'Character', 'enum',
+                       [{'value': '', 'label': 'All characters'}] +
+                       [{'value': n, 'label': n} for n in subjects.characters()], required=False),
+            ParamField('scope', 'Meshes', 'enum',
+                       [{'value': 'all', 'label': 'All stored meshes'},
+                        {'value': 'current', 'label': 'Current mesh only'}], default='all'),
             ParamField('backend', 'Face retexture backend', 'mesh_backend',
                        options('face_retexture', 'mesh'), required=False),
             # Auto = like the dialog: upscale the T-pose front, never the face view.
@@ -61,7 +66,11 @@ class FaceRetexture(ImprovementType):
         names = [params['character']] if params.get('character') else subjects.characters()
         for name in names:
             root = get_model3d_dir(name)
-            for signature in subjects.character_model_signatures(name):
+            signatures = subjects.character_model_signatures(name)
+            if params.get('scope', 'all') == 'current':
+                from app.core.model_refs import current_outfit_state
+                signatures = signatures & {current_outfit_state(name)[2]}
+            for signature in signatures:
                 candidate = Candidate(
                     f'character:{name}:{signature}:{source_token(root, signature)}',
                     f'{name} · {signature[:8]}')

@@ -241,16 +241,18 @@ def mark_result(improvement_id: str, key: str, *, status: str,
         )
 
 
-def retry_step(improvement_id: str, key: str) -> None:
+def retry_step(improvement_id: str, key: str) -> bool:
     """The user's undo of a skip: a skipped step becomes runnable again, with a
-    clean slate (attempts back to 0, error and finish stamps gone)."""
+    clean slate (attempts back to 0, error and finish stamps gone).  True when
+    a skipped step was actually reset."""
     with transaction() as conn:
-        conn.execute(
+        cur = conn.execute(
             "UPDATE improvement_steps SET status='pending', attempts=0, "
             "error='', finished_at=NULL, duration_s=NULL "
             "WHERE improvement_id=? AND candidate_key=? AND status='skipped'",
             (improvement_id, key),
         )
+        return cur.rowcount > 0
 
 
 def reset_running_to_pending() -> int:

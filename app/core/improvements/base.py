@@ -18,11 +18,13 @@ class ParamField:
     required: bool = True
 
     default: str = ""
+    show_if: Optional[Dict[str, List[str]]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {"key": self.key, "label": self.label, "kind": self.kind,
                 "options": self.options or [], "required": self.required,
-                "own_options": self.options is not None, "default": self.default}
+                "own_options": self.options is not None, "default": self.default,
+                "show_if": self.show_if or {}}
 
 
 class ImprovementType:
@@ -34,6 +36,10 @@ class ImprovementType:
         """Return normalised params or raise ValueError(message)."""
         out: Dict[str, Any] = {}
         for f in self.params_schema:
+            if f.show_if and not all(out.get(key, "") in values
+                                     for key, values in f.show_if.items()):
+                out[f.key] = ""
+                continue
             v = params.get(f.key, f.default)
             v = str(v).strip() if v is not None else ""
             if f.required and not v:

@@ -18,6 +18,7 @@ export interface ParamField {
   options: Array<{ value: string; label: string }>
   own_options?: boolean
   default?: string
+  show_if?: Record<string, string[]>
   required: boolean
 }
 

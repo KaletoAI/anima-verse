@@ -602,11 +602,46 @@ implement four methods:
 
 | Member | Semantik |
 |---|---|
-| `params_schema: List[ParamField]` | The form the admin fills in when creating an entry. `ParamField(key, label, kind, options=None, required=True, default='')` (`default` = the value the form starts with); `kind` ∈ `mesh_backend` \| `image_backend` \| `subject_kind` \| `enum` \| `text` — `enum`/`subject_kind` carry their own `options` (`[{"value","label"}]`), the backend kinds fall back to the world's full list when they carry none. A backend field that MAY not use every backend fills its own `options` (`subjects.mesh_backend_options(rigs)`) — and then `params_schema` has to be a `@property`, so the offered list is read live instead of freezing at server start |
+| `params_schema: List[ParamField]` | The form the admin fills in when creating an entry. `ParamField(key, label, kind, options=None, required=True, default='', show_if=None)` (`default` = the value the form starts with); `kind` ∈ `mesh_backend` \| `image_backend` \| `subject_kind` \| `enum` \| `text` — `enum`/`subject_kind` carry their own `options` (`[{"value","label"}]`), the backend kinds fall back to the world's full list when they carry none. A backend field that MAY not use every backend fills its own `options` (`subjects.mesh_backend_options()`) — and then `params_schema` has to be a `@property`, so the offered list is read live instead of freezing at server start |
 | `validate(params) -> params` | Normalised parameters, or `ValueError(message)`. The base class checks required fields and option membership; override it (calling `super().validate`) for rules between fields — e.g. "source and target backend must differ" |
 | `find_candidates(params) -> List[Candidate]` | Every subject NOT yet done, in a stable order (`(label.lower(), key)`). `Candidate(key, label)`: the key is unique per type and is what a step row stores (`"character:<name>"`, `"location:<id>:<file>"`). A subject that could not be worked at all (nothing to generate FROM) is not a candidate |
 | `is_done(candidate, params) -> bool` | The type's own "is this subject finished" test — read the persisted asset, never a cached answer. The engine never calls it; `find_candidates` uses it to decide what to list, and a subject that drops off that list is closed as done |
 | `apply(candidate, params, task_id)` | Does the work SYNCHRONOUSLY: it returns only once whatever it made is persisted. It runs in a queue worker thread (no event loop of its own, and `user_activity` is suppressed for the duration), so it calls the blocking producer directly — never a `trigger_*` thread wrapper, which would report success while nothing had been generated |
+
+`ParamField.show_if` maps earlier parameter keys to allowed string values, for
+example `{"subject": ["prop_images"]}`. All conditions must match the already
+normalised values, so referenced fields must precede dependent fields in schema
+order. `to_dict()` emits `{}` when there is no condition. Hidden fields are stored
+as `""`, skip required/options validation, and do not render or contribute to the
+dialog's required-field check or generated label. The dialog stays type-agnostic.
+
+`fill_missing` has a live schema: `subject`, optional `mesh_backend` (character,
+building and prop models), and optional `image_backend` (prop and clothing images).
+Both backend fields default to `""` / **Auto (routing)**; explicit picks go directly
+to the producer without a route prerequisite or fallback. Stored entries without
+these keys keep automatic routing. Enabled configured mesh and image backends stay
+selectable while offline. **Prop images** (`prop_images`) scans every variant for a
+missing front source image, including index 0 in its candidate key. Multiple
+variants use `name · variant N`; a single variant uses the prop name. Image
+creation uses the variant's description (or prop name when empty) and the normal
+prop prompt composition. Clothing passes its explicit backend through the item
+producer's `overrides`. The prop producer currently converts unavailable routes
+and explicit offline picks to `ok: false`; those count as failed attempts. An
+escaping `NoRouteError` without an underlying render failure maps to
+`CandidateBusy`, while any `ok: false` result raises `RuntimeError`.
+
+`face_retexture` offers a live character dropdown with **All characters** as the
+empty selection. Its `scope` is `all` (**All stored meshes**, the default also for
+older entries) or `current` (**Current mesh only**): the currently worn outfit's
+signature intersected with stored character mesh signatures.
+
+A clean `one_shot` is deleted with its steps when its scan/work finishes, including
+zero-candidate creates. Skipped or failed steps retain the entry as `done` for
+inspection and retry; retry reopens a done entry. Each engine tick sweeps legacy
+clean done one-shots in its existing entry-list pass. Create returns the created
+row with `removed: true` when its initial scan deleted it. `POST
+/improvements/clear-finished` cancels queued tasks and deletes every done entry;
+the admin list exposes this through **Remove finished** with confirmation.
 
 **Failure vocabulary of `apply`.** A defect is a plain exception (its message lands in
 the step's `error`; the step is retried once, then skipped).
@@ -637,7 +672,8 @@ declaration.
 | Built-in | Was es tut |
 |---|---|
 | `model_replace` | Re-generates every model a given mesh backend made, on another one |
-| `fill_missing` | Generates the asset a subject has none of at all (model, expressions) |
+| `fill_missing` | Generates missing models, expressions, clothing images, and prop variant front images; optional explicit mesh/image backends |
+| `face_retexture` | Corrects stored character meshes for all or one character, scoped to all stored meshes or the current outfit |
 | `image_rerender` | Re-renders portraits/gallery images of one image backend on another |
 | `surface_bake` | Bakes the walkable-surface lattice of room and prop models |
 | `mesh_from_tpose` | Generates the character mesh of every stored outfit combination that has a T-pose render but no model |

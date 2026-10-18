@@ -2655,6 +2655,13 @@
     "This building is too large for one hull — split the outline or simplify it, or lower Storeys total.": "Dieses Gebäude ist zu groß für eine einzelne Gebäudehülle — teile den Umriss auf oder vereinfache ihn, oder reduziere die Gesamtzahl der Stockwerke.",
     "Storeys total": "Stockwerke insgesamt",
     "From floor plan": "Aus dem Grundriss",
-    "{n} facade storeys (not enterable)": "{n} Fassadengeschosse (nicht begehbar)"
+    "{n} facade storeys (not enterable)": "{n} Fassadengeschosse (nicht begehbar)",
+    "Prop images": "Prop-Bilder",
+    "Meshes": "Meshes",
+    "All stored meshes": "Alle gespeicherten Meshes",
+    "Current mesh only": "Nur aktuelles Mesh",
+    "Nothing to do — the entry was removed": "Nichts zu tun — der Eintrag wurde entfernt",
+    "Remove finished": "Abgeschlossene entfernen",
+    "All finished entries and their steps are removed.": "Alle abgeschlossenen Einträge und ihre Schritte werden entfernt."
   }
 }

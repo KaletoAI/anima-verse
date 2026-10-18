@@ -81,7 +81,7 @@ taken from the ``submit`` call.
 
  11. A one_shot closes itself.  C has both candidates; after two
      ``handle_step`` calls nothing is pending or running any more, so its
-     status is 'done' and it drops out of ``ordered_queue`` (which shows only
+     entry is deleted and it drops out of ``ordered_queue`` (which shows only
      'open' entries) — leaving A, whose k1 is still pending.
 
  12. A standing entry rescans on the clock.  B is scanned once with the single
@@ -130,7 +130,7 @@ taken from the ``submit`` call.
      spent there and then, so the tick after it reads the ordinary idle gate
      again — reason "active", not a second futile walk of the queue.
 
- 19. A one_shot whose scan finds NOTHING is done on the spot.  D is created
+ 19. A one_shot whose scan finds NOTHING is removed on the spot.  D is created
      and scanned against an empty candidate list: 0 added, 0 closed, no steps
      at all — so the "0 pending and 0 running" rule closes it right there.
      Without the close in ``scan`` it would sit 'open' 0/0 forever: the only
@@ -171,6 +171,11 @@ taken from the ``submit`` call.
      passed, and the tick submits ka again (label order, the first step).
      Run-now overrides a deferral: with ka and kb deferred again and the user
      active 60 s, ``request_run_now(H)`` makes the tick submit ka.
+
+Additional expectations: hidden required fields normalise to an empty string
+without checking stale options; a matching trimmed selector enforces required.
+A legacy clean finished one-shot is removed on tick, while one failed step keeps
+its finished entry. Clean successful and zero-candidate one-shots leave no row.
 
 Usage:  ./.venv/bin/python scripts/smoke_improvements.py
 """
@@ -394,6 +399,21 @@ raises("validate refuses a value outside the options", ValueError,
 raises("find_candidates is abstract", NotImplementedError,
        lambda: ImprovementType().find_candidates({}))
 
+# Hidden required fields pass and stale invalid values are cleared; the
+# normalised earlier subject activates the required check when it matches.
+class ConditionalType(ImprovementType):
+    params_schema = [ParamField("subject", "Subject", "text"),
+                    ParamField("target", "Target", "enum", [{"value": "x", "label": "X"}],
+                               show_if={"subject": ["model"]})]
+
+conditional = ConditionalType()
+check("hidden required field passes", conditional.validate({"subject": "image"}),
+      {"subject": "image", "target": ""})
+check("hidden invalid value is cleared", conditional.validate({"subject": "image", "target": "invalid"}),
+      {"subject": "image", "target": ""})
+raises("normalised condition enables required check", ValueError,
+       lambda: conditional.validate({"subject": " model "}), "target")
+
 # ── 7. update + delete ───────────────────────────────────────────────────────
 print("\n7. update + delete")
 store.update(A, label="A2", params={"backend": "x"}, status="paused")
@@ -558,7 +578,7 @@ engine.scan(C)
 for candidate_key in ("k2", "k1"):
     engine.handle_step({"improvement_id": C, "candidate_key": candidate_key,
                         "_task_id": ""})
-check("its status is done", store.get(C)["status"], "done")
+check("clean entry is removed", store.get(C), None)
 check("…and it leaves the queue view",
       [r["improvement_id"] for r in engine.ordered_queue()], [A])
 
@@ -651,7 +671,7 @@ engine.handle_step({"improvement_id": A, "candidate_key": "k1",
                     "_task_id": result["submitted"]})
 user_activity._set_for_test(60)
 check("the flag is spent after one step", engine.tick()["submitted"], "")
-check("…and A's last step closed it", store.get(A)["status"], "done")
+check("…and A's last step removed it", store.get(A), None)
 state = engine.status()
 check("status reports the settings and the gate",
       (state["enabled"], state["idle_minutes"], state["frozen"],
@@ -679,9 +699,8 @@ print("\n19. a one_shot whose scan finds nothing is done on the spot")
 FakeType.candidates = []
 D = store.create("fake", "D", {}, "one_shot")["id"]
 check("the scan adds nothing", engine.scan(D), {"added": 0, "closed": 0})
-check("…and it has no steps at all", counters(store.get(D)),
-      {"pending": 0, "running": 0, "done": 0, "failed": 0, "skipped": 0})
-check("…so it closed itself", store.get(D)["status"], "done")
+check("…and it has no steps at all", store.list_steps(D), [])
+check("…so it removed itself", store.get(D), None)
 
 # ── 20. the type is gone ─────────────────────────────────────────────────────
 print("\n20. a step whose type is gone clears the head of the queue")
@@ -785,6 +804,19 @@ check("run-now overrides the deferral",
       (result["submitted"] != "", step_tasks()[-1]["payload"]),
       (True, {"improvement_id": H, "candidate_key": "ka"}))
 worker_done(result["submitted"])
+
+# Tick sweeps exactly clean finished one-shots, retaining failed ones.
+legacy = store.create("fake", "Legacy", {}, "one_shot")["id"]
+store.update(legacy, status="done")
+failed = store.create("fake", "Failed", {}, "one_shot")["id"]
+store.replace_steps_scan(failed, [("bad", "Bad")])
+# mark_result only writes producer results; failed is a persisted legacy state.
+with db.transaction() as conn:
+    conn.execute("UPDATE improvement_steps SET status='failed' WHERE improvement_id=?", (failed,))
+store.update(failed, status="done")
+engine.tick()
+check("legacy clean finished entry swept", store.get(legacy), None)
+check("failed finished entry retained", store.get(failed)["status"], "done")
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

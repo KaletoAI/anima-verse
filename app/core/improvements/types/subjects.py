@@ -337,6 +337,41 @@ def generate_prop_model(ident: str, backend: str) -> None:
         raise RuntimeError(str(result.get("error") or "generation failed"))
 
 
+def generate_prop_image(ident: str, backend: str) -> None:
+    """Fill one variant's front image under the manual producer's job guard."""
+    from app.core import props as props_module
+    from app.imagegen.routing import NoRouteError
+    prop_id, variant = split_prop_ident(ident)
+    if prop_has_source(ident):
+        return
+    # The producer turns an unresolvable "prop" chain into ok=False, which
+    # would count as a failed attempt; nothing routable right now is load.
+    if not backend and not default_mesh_backend("prop"):
+        raise CandidateBusy("no backend available for prop right now")
+    if props_module.is_pending(prop_id):
+        raise CandidateBusy(f"{ident}: image generation already running")
+    key = props_module._gen_key(prop_id, variant, backend)
+    with props_module._lock:
+        if key in props_module._generating:
+            raise CandidateBusy(f"{ident}: image generation already running")
+        props_module._generating.add(key)
+    try:
+        if prop_has_source(ident):
+            return
+        try:
+            result = props_module._generate(prop_id, "", "", backend, "",
+                                            image_only=True, variant=variant)
+        except NoRouteError as exc:
+            if exc.__cause__ is not None:
+                raise
+            raise CandidateBusy(str(exc)) from exc
+        if not result.get("ok"):
+            raise RuntimeError(str(result.get("error") or "image generation failed"))
+    finally:
+        with props_module._lock:
+            props_module._generating.discard(key)
+
+
 # ---------------------------------------------------------------------------
 # Character expressions
 # ---------------------------------------------------------------------------
@@ -664,7 +699,7 @@ def clothing_image_done(item_id: str) -> bool:
     return bool(item.get("image") and get_item_image_path(item_id))
 
 
-def generate_clothing_image(item_id: str) -> None:
+def generate_clothing_image(item_id: str, backend: str = "") -> None:
     """Use the blocking item producer and preserve typed load/failure errors."""
     from app.imagegen.routing import NoRouteError
     from app.routes.inventory import generate_item_image_sync
@@ -673,7 +708,7 @@ def generate_clothing_image(item_id: str) -> None:
     if clothing_image_done(item_id):
         return
     try:
-        ok = generate_item_image_sync(item_id, raise_errors=True)
+        ok = generate_item_image_sync(item_id, overrides={"backend": backend}, raise_errors=True)
     except NoRouteError as exc:
         # Exhausting a chain after a render failed is a failed attempt, not
         # initial unavailability. Routing preserves that failure as the cause.
@@ -800,10 +835,12 @@ def image_backend_options() -> List[Dict[str, str]]:
 
 #: The rigs a CHARACTER mesh can be bound to (``model3d.required_rig``):
 def mesh_backend_options() -> List[Dict[str, str]]:
-    """Offer every live img2mesh backend, read afresh for each admin form."""
-    from app.core import model3d
-    return [{"value": b["name"], "label": b["name"]}
-            for b in model3d.list_mesh_backends()["backends"]]
+    """Offer enabled img2mesh backends, including configured offline picks."""
+    from app.imagegen.service import get_image_service
+    return [{"value": b.name, "label": b.name}
+            for b in get_image_service().backends
+            if b.instance_enabled and getattr(b, "MEDIA_TYPE", "image") == "mesh"
+            and b.category == "img2mesh"]
 
 
 def is_img2mesh_backend(name: str) -> bool:
@@ -824,7 +861,8 @@ def is_img2mesh_backend(name: str) -> bool:
 
 
 def default_mesh_backend(occasion: str, character: str = "") -> str:
-    """What the mesh OCCASION's chain resolves to right now (image routing),
+    """What the OCCASION's chain resolves to right now (image routing — any
+    occasion, the image ones included),
     ``""`` when nothing is available. ``character`` applies that character's
     render-target override, just as the mesh producer does."""
     from app.imagegen.routing import explain_occasion
