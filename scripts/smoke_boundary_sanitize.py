@@ -81,6 +81,11 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+import tempfile  # noqa: E402
+from app.core import paths  # noqa: E402
+# world_ops opens the world DB; keep any lazy reach in a throwaway world.
+_STORAGE = tempfile.TemporaryDirectory(prefix="boundary-sanitize-")
+paths.init(_STORAGE.name)
 from app.core import scene_recipe, world_geometry  # noqa: E402
 from app.core.world_ops import _sanitize_map3d  # noqa: E402
 

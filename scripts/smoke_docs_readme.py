@@ -64,6 +64,8 @@ QUEUE_CLI = REPO / "queue_cli.py"
 RUNTIME_PREFIXES = (
     "logs/", "models/", "voices/", "exports/", "storage/", ".venv/",
     "client3d/dist/", "plugins/installed/", "node_modules/",
+    # gitignored instance layer; per-character cache dirs inside a world
+    "instance/", ".cache/",
 )
 # Bare file names that are not repository paths (they live inside a world).
 NOT_REPO_FILES = {"world.db", "task_queue.db", "config.json", "secrets.json",

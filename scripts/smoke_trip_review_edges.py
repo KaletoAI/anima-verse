@@ -41,6 +41,9 @@ db.init_schema()
 cfg = config.get_all()
 cfg.setdefault("npc", {}).update(conversation_mode="turns", action_tick_enabled=True)
 cfg.setdefault("image_generation", {})["enabled"] = False
+# Packages are activated per world: party + movement carry the trip code,
+# interact the shared activities an undertaking ends with.
+cfg["packages"] = {"enabled": "movement,party,interact"}
 config.save(cfg)
 from app.core.dependencies import get_skill_manager
 from app.core.game_time import GameDuration, GameTime

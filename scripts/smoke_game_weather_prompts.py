@@ -109,7 +109,10 @@ def test_clock_fixture() -> None:
 # ── [1] suppliers ─────────────────────────────────────────────────────────
 # Past-day summaries: the day's own season IS known, but the summary must not
 # state weather that never appeared in the recorded events.
-EXEMPT = {"app/core/memory_service.py", "app/routes/diary.py"}
+# The decision-model state (decision_points) is a deliberately compact header
+# for typed decisions; adding a line would break comparability of shadow stats.
+EXEMPT = {"app/core/memory_service.py", "app/routes/diary.py",
+          "app/core/decision_points.py"}
 
 
 def test_suppliers() -> None:

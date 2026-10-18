@@ -25,7 +25,7 @@ def main():
         os.environ['INSTANCE_DIR'] = tmp+'/instance'
         from app.core import paths
         paths.init(os.environ['STORAGE_DIR'])
-        paths.init_instance(os.environ['INSTANCE_DIR'])
+        paths.init_instance(tmp+'/instance')
         from app.core import db, model3d
         db.init_schema()
         from PIL import Image

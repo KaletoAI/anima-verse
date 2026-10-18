@@ -28,6 +28,9 @@ from app.core import paths
 paths.init(ROOT / "world")
 paths.init_instance(ROOT / "instance")
 from app.core import config, db, hooks, prompt_templates, decision
+# Packages are activated per world; party + movement carry the trip code.
+(ROOT / "world").mkdir(parents=True, exist_ok=True)
+(ROOT / "world" / "config.json").write_text(json.dumps({"packages": {"enabled": "movement,party"}}))
 config.load(ROOT / "world" / "config.json")
 db.init_schema()
 from app.core import party_engine as P

@@ -30,7 +30,11 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _hull_fixtures import stepped_house, rect_facts
-from app.core import hull_geometry, hull_roofs, hull_model, hull_styles, paths
+from app.core import paths
+# hull_styles reads world overrides from the world DB: redirect before import.
+_STORAGE = tempfile.TemporaryDirectory(prefix="hull-clearance-")
+paths.init(_STORAGE.name)
+from app.core import hull_geometry, hull_roofs, hull_model, hull_styles
 from app.core.hull_facts import hull_facts
 from app.core.hull_ornaments import build_ornaments
 

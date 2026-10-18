@@ -23,6 +23,9 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _hull_fixtures import doors, l_shaped_house, no_degenerate_faces, windows
 from app.core import paths
+# hull_styles reads world overrides from the world DB: redirect before import.
+_STORAGE = tempfile.TemporaryDirectory(prefix="hull-geometry-import-")
+paths.init(_STORAGE.name)
 from app.core.hull_geometry import TRI_BUDGET, build_hull, cutout_padding_m
 from app.core.hull_mesh import PartBuilder, bounds, tri_count
 from app.core.hull_styles import validate_style

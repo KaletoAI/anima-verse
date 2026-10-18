@@ -220,7 +220,7 @@ stops acting autonomously).
 - **Portrait controls:** *Game-Admin → Characters → Image* has separate render, portrait and T-pose
   backend matches in a compact responsive grid, with normal and T-pose LoRA overrides alongside.
   Backend activation is global; character overrides select backend matches, not separate
-  enable/disable switches. Retired `skills/image_generation.json` backend `enabled` flags
+  enable/disable switches. Retired backend `enabled` flags of a world's old skills/image_generation.json
   are removed on world startup and no longer affect routing. Existing sizing settings,
   skill activation and profile render/portrait/T-pose overrides stay unchanged.
   The portrait match takes precedence for portraits only; empty uses the global portrait routing
