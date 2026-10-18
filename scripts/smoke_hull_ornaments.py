@@ -14,6 +14,12 @@ An L has five convex corners and one reentrant corner, in either winding.
 Padding is wall thickness + .2: 1.1 for burg and .5 for holzhuette.
 Porch outer depth .34+1.6=1.94 exceeds .5; tower caps/crowns also
 exceed their padding and must be preserved. Flat parapet crenels stay skin.
+Blind panes sit at outer+.005; timber spans outer..outer+.05 and logs
+outer..outer+.14, so a face with an overlapping s/y bounding box
+in front of outer+.005 covers the pane even with all vertices outside.
+Blanking filler openings must yield violations with the same test. Both filler storeys (1,2) must be clear. With rooms only on level 2,
+upper framing starts at level 1 floor 3.1+.08=3.18, leaving ground
+level framing absent just as for an occupied ground floor.
 All generated solids must have finite planar faces and outward winding.
 """
 import json
@@ -239,5 +245,64 @@ def main() -> None:
     print("PASS: hull ornaments — framing, logs, corners, battlements, towers, porches, tiers, determinism, solids")
 
 
+
+def check_blind_ornaments():
+    import tempfile
+    from app.core import paths
+    from app.core.hull_facts import hull_facts
+    from app.core.hull_geometry import prepare_facts
+    from app.core.hull_styles import validate_style
+    from _hull_fixtures import gap_house
+    with tempfile.TemporaryDirectory() as storage:
+        paths.init(storage)
+        for name in ('fachwerk','holzhuette'):
+            style = validate_style(json.loads(Path(f'shared/building_styles/{name}.json').read_text()),name)
+            desc = description(7,1)
+            facts = prepare_facts(hull_facts(gap_house()),style,desc,frozenset())
+            parts = build_ornaments(facts,style,desc,{},tier='full')
+            def violations(parts):
+                hits = 0
+                for level in facts['levels']:
+                    if not level.get('filler',False):
+                        continue
+                    outer = wall_offsets(style,level['level'])[1]
+                    for edge in level['edges']:
+                        u = [(edge['b'][k]-edge['a'][k])/edge['length'] for k in (0,1)]
+                        for part in parts:
+                            if part['tag'] not in ('timber','log'):
+                                continue
+                            for face in part['faces']:
+                                points = [part['vertices'][i] for i in face]
+                                spans = [(x-edge['a'][0])*u[0]+(z-edge['a'][1])*u[1] for x,y,z in points]
+                                heights = [y for x,y,z in points]
+                                depths = [(x-edge['a'][0])*edge['normal'][0]+(z-edge['a'][1])*edge['normal'][1] for x,y,z in points]
+                                if max(depths) <= outer+.0053 or min(depths) >= outer+.15:
+                                    continue
+                                for hole in edge['openings']:
+                                    if (min(max(spans),hole['s1'])-max(min(spans),hole['s0']) > 3e-4
+                                            and min(max(heights),hole['y1'])-max(min(heights),hole['y0']) > 3e-4):
+                                        hits += 1
+                return hits
+
+            assert any(e['openings'] for l in facts['levels'] if l.get('filler') for e in l['edges'])
+            assert violations(parts) == 0, name
+            blank = deepcopy(facts)
+            for level in blank['levels']:
+                if level.get('filler',False):
+                    for edge in level['edges']:
+                        edge['openings'] = []
+            hits = violations(build_ornaments(blank,style,desc,{},tier='full'))
+            assert hits > 0, (name,'clearance test missed blanked openings')
+            print(f'PASS: {name} face clearance, blanked openings detected {hits} overlaps')
+            if name == 'fachwerk':
+                loc = gap_house()
+                loc['rooms'] = [loc['rooms'][1]]
+                loc['rooms'][0]['layout']['level'] = 2
+                ground_filler = prepare_facts(hull_facts(loc),style,desc,frozenset())
+                framing_parts = [p for p in build_ornaments(ground_filler,style,desc,{},tier='full') if p['tag']=='timber']
+                assert framing_parts and all(v[1]>=3.18 for p in framing_parts for v in p['vertices'])
+    print('PASS: timber and logs clear blind pane rectangles')
+
 if __name__ == "__main__":
+    check_blind_ornaments()
     main()

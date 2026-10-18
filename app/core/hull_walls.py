@@ -56,7 +56,7 @@ def _span(ring, edge, distance):
 
 def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 uv_sizes: Optional[Dict[str, float]] = None, roof_info: Optional[Dict] = None) -> List[Part]:
-    """Build full or low shells; every source aperture remains a real hole."""
+    """Build full or low shells; real apertures cut shells while blind panes sit outside."""
     if tier not in ('full','low'):
         raise ValueError('tier must be full or low')
     parts = []
@@ -77,6 +77,7 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
     full = tier == 'full'
     for level in facts['levels']:
         number = level['level']
+        filler = level.get('filler', False)
         floor, top = level['floor_y'],level['top_y']
         bottom = -WALL_SINK_M if number == 0 else floor
         inner,outer = wall_offsets(style, number)
@@ -115,30 +116,33 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                         if clipped is not None:
                             parts.append(clipped)
 
+            lo,hi = _span(rings[outer],edge,outer)
             holes = []
             for index,h in enumerate(edge['openings']):
-                clipped = dict(h, s0=max(0,h['s0']),s1=min(length,h['s1']),
+                clipped = dict(h, s0=max(lo if h.get('blind') else 0,h['s0']),
+                               s1=min(hi if h.get('blind') else length,h['s1']),
                                y0=max(bottom,h['y0']),y1=min(top,h['y1']),index=index)
                 if clipped['s1']-clipped['s0'] > 1e-5 and clipped['y1']-clipped['y0'] > 1e-5:
                     holes.append(clipped)
-            lo,hi = _span(rings[outer],edge,outer)
-            for s0,s1,y0,y1 in _cells(lo,hi,bottom,top,holes,(plinth,)):
+            real_holes = [h for h in holes if not h.get('blind')]
+            for s0,s1,y0,y1 in _cells(lo,hi,bottom,top,real_holes,(plinth,)):
                 is_plinth = number == 0 and (y0+y1)/2 < plinth
                 face('plinth' if is_plinth else 'wall','plinth' if is_plinth else material,
                      s0,s1,y0,y1,outer)
-            if full:
+            if full and not filler:
                 ilo,ihi = _span(rings[inner],edge,inner)
-                for s0,s1,y0,y1 in _cells(ilo,ihi,bottom,top,holes):
+                for s0,s1,y0,y1 in _cells(ilo,ihi,bottom,top,real_holes):
                     face('interior','interior',s0,s1,y0,y1,inner,True)
                 # Horizontal wall closures, split at apertures reaching the band limits.
                 for y,sign in ((bottom,-1),(top,1)):
-                    touching = [h for h in holes if h['y0']-1e-6 <= y <= h['y1']+1e-6]
+                    touching = [h for h in real_holes if h['y0']-1e-6 <= y <= h['y1']+1e-6]
                     for s0,s1,_,_ in _cells(lo,hi,0,1,
                             [dict(s0=h['s0'],s1=h['s1'],y0=0,y1=1) for h in touching]):
                         i0 = ilo if s0 == lo else s0
                         i1 = ihi if s1 == hi else s1
                         emit('interior','interior',[point(i0,y,inner),point(i1,y,inner),
                              point(s1,y,outer),point(s0,y,outer)],[0,sign,0])
+            if full:
                 # Cornice and plinth ledges follow the same hole subtraction.
                 bands = []
                 if style.get('cornice'):
@@ -146,7 +150,7 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 if number == 0 and plinth > bottom:
                     bands.append(('plinth','plinth',plinth-.06,plinth,.04))
                 for tag,mat,y0,y1,depth in bands:
-                    for s0,s1,c,d in _cells(lo,hi,max(bottom,y0),min(top,y1),holes):
+                    for s0,s1,c,d in _cells(lo,hi,max(bottom,y0),min(top,y1),real_holes):
                         block(tag,mat,s0,s1,c,d,outer,outer+depth)
                 if outer > inner+style['wall_thickness_m']+1e-6:
                     # Jetty underside from the un-jettied outside to the outer edge.
@@ -157,18 +161,19 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 s0,s1,y0,y1 = [h[k] for k in ('s0','s1','y0','y1')]
                 kind = h['kind']
                 if kind in ('window','door'):
-                    depth = 0 if not full else (.10 if kind == 'window' else .08)
+                    depth = -.005 if h.get('blind') else (0 if not full else (.10 if kind == 'window' else .08))
                     face('glass' if kind == 'window' else 'door',
-                         'glass' if kind == 'window' else 'door',s0,s1,y0,y1,outer-depth)
-                if not full:
+                         'blind' if h.get('blind') else ('glass' if kind == 'window' else 'door'),s0,s1,y0,y1,outer-depth)
+                if not full or filler and desc.get('overrides',{}).get('ornament_density',.5) <= 0:
                     continue
-                # Each clipped aperture owns its four reveal polygons.
-                for s,normal in ((s0,[u[0],0,u[1]]),(s1,[-u[0],0,-u[1]])):
-                    emit('reveal',material,[point(s,y0,inner),point(s,y1,inner),
-                         point(s,y1,outer),point(s,y0,outer)],normal)
-                for y,normal in ((y0,[0,1,0]),(y1,[0,-1,0])):
-                    emit('reveal',material,[point(s0,y,inner),point(s1,y,inner),
-                         point(s1,y,outer),point(s0,y,outer)],normal)
+                if not h.get('blind'):
+                    # Each clipped aperture owns its four reveal polygons.
+                    for s,normal in ((s0,[u[0],0,u[1]]),(s1,[-u[0],0,-u[1]])):
+                        emit('reveal',material,[point(s,y0,inner),point(s,y1,inner),
+                             point(s,y1,outer),point(s,y0,outer)],normal)
+                    for y,normal in ((y0,[0,1,0]),(y1,[0,-1,0])):
+                        emit('reveal',material,[point(s0,y,inner),point(s1,y,inner),
+                             point(s1,y,outer),point(s0,y,outer)],normal)
                 frame = style.get('frames','none')
                 if frame == 'timber':
                     for c,d,e,f in ((s0-.12,s0,y0,y1),(s1,s1+.12,y0,y1),
@@ -187,7 +192,7 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
         # Beveled offset corners introduce segments absent from the source edges.
         # Close those segments explicitly, rather than leaving vertical cracks.
         for distance, ring in rings.items():
-            if distance == inner and not full:
+            if distance == inner and (not full or filler):
                 continue
             for index, a in enumerate(ring):
                 b = ring[(index+1)%len(ring)]
@@ -205,7 +210,7 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                     mat = 'interior' if distance == inner else ('plinth' if is_plinth else material)
                     emit(tag,mat,[[a[0],y0,a[1]],[b[0],y0,b[1]],
                                   [b[0],y1,b[1]],[a[0],y1,a[1]]],normal)
-        if full:
+        if full and not filler:
             # Offset bevels have matching topology at both distances.
             for i,a in enumerate(rings[outer]):
                 j = (i+1)%len(rings[outer])
@@ -217,6 +222,7 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                     emit('interior','interior',[[a[0],y,a[1]],[b[0],y,b[1]],
                          [d[0],y,d[1]],[c[0],y,c[1]]],[0,sign,0])
             emit('interior','interior',[[x,floor,z] for x,z in level['outline']],[0,1,0])
-            if top == facts['eaves_y']:
+            following = next((item for item in facts['levels'] if item['level'] == number+1), None)
+            if following is None or following.get('filler', False):
                 emit('interior','interior',[[x,top,z] for x,z in level['outline']],[0,-1,0])
     return parts

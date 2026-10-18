@@ -3,7 +3,7 @@ from copy import deepcopy
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.core import hull_mesh, hull_ornaments, hull_roofs, hull_walls
+from app.core import hull_facades, hull_facts, hull_mesh, hull_ornaments, hull_roofs, hull_walls
 from app.core.hull_mesh import Part
 from app.core.world_geometry import polygon_distance
 
@@ -17,6 +17,20 @@ def cutout_padding_m(style: Dict) -> float:
     """Return the wall, jetty and facade projection allowance in metres."""
     projection = 0.15 if style.get("log_walls") else 0.06
     return style["wall_thickness_m"] + style.get("jetty_m", 0) + projection + 0.05
+
+
+def prepare_facts(facts: Dict, style: Dict, desc: Dict, resolved: frozenset[str]) -> Dict:
+    """Copy facts, extend storeys and share blind openings with every builder."""
+    prepared = hull_facts.with_storeys(facts, desc.get("overrides", {}).get("storeys_total", 0))
+    for level in prepared["levels"]:
+        if not level.get("filler", False):
+            continue
+        outer = hull_walls.wall_offsets(style, level["level"])[1]
+        ring = hull_mesh.offset_ring(level["outline"], level["ccw"], outer)
+        for edge in level["edges"]:
+            lo, hi = hull_walls._span(ring, edge, outer)
+            edge["openings"] = hull_facades.blind_windows(level, edge, style, desc.get("seed", 0), lo, hi)
+    return prepared
 
 
 def _build_parts(facts: Dict, style: Dict, desc: Dict, tier: str,
@@ -75,6 +89,7 @@ def build_hull(facts: Dict, style: Dict, desc: Dict, *, tier: str,
     """Build one hull tier, preserving its footprint and enforcing its budget."""
     if tier not in TRI_BUDGET:
         raise ValueError("tier must be full or low")
+    facts = prepare_facts(facts, style, desc, resolved)
     parts, roof_info = _build_parts(facts, style, desc, tier, uv_sizes, resolved)
     full_parts = parts
     if tier == "low":
@@ -93,6 +108,7 @@ def build_hull(facts: Dict, style: Dict, desc: Dict, *, tier: str,
 def fit_budget(facts: Dict, style: Dict, desc: Dict, uv_sizes=None,
                resolved: frozenset[str] = frozenset()) -> Dict:
     """Fit both tiers using the same density, keeping the caller's description."""
+    facts = prepare_facts(facts, style, desc, resolved)
     density = desc.get("overrides", {}).get("ornament_density", .5)
     for value in (density, density/2, 0):
         candidate = desc if value == density else deepcopy(desc)

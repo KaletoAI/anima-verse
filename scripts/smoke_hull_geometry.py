@@ -1,5 +1,40 @@
 """Assembly checks. Usage: ./.venv/bin/python scripts/smoke_hull_geometry.py
 
+Identity literals: 2 fixtures * 4 styles * 2 tiers = 16 SHA256 digests.
+Reproduce from the repository root (export avoids writing .git):
+
+    mkdir -p /tmp/hull-task3-baseline
+    git archive 8b5f1124 | tar -x -C /tmp/hull-task3-baseline
+    STORAGE_DIR=$(mktemp -d) ./.venv/bin/python - <<'PY'
+    import sys,json,os
+    from pathlib import Path
+    root=Path('/tmp/hull-task3-baseline')
+    sys.path[:0]=[str(root/'scripts'),str(root)]
+    from smoke_hull_geometry import digest,description,STYLES
+    from _hull_fixtures import stepped_house,l_shaped_house
+    from app.core.hull_facts import hull_facts
+    from app.core.hull_styles import validate_style
+    from app.core.hull_geometry import build_hull
+    from app.core import paths
+    paths.init(os.environ['STORAGE_DIR'])
+    out={}
+    for fixture in (stepped_house,l_shaped_house):
+     for name in STYLES:
+      style=validate_style(json.loads((root/'shared/building_styles'/f'{name}.json').read_text()),name)
+      for tier in ('full','low'):
+       out[f'{fixture.__name__}:{name}:{tier}']=digest(build_hull(hull_facts(fixture()),style,description(name,7),tier=tier))
+    Path('/tmp/hull-task3-identity.json').write_text(json.dumps(out,indent=4))
+    print(json.dumps(out,indent=4))
+    PY
+
+Forty-storey blind-window bound: Modern outer offset .04+.30=.34 gives
+spans 30.68 and 20.68. Bay range [2.6,3.2] gives 30..36 windows per
+filler floor: 2*(9+6)..2*(11+7). Thus 39 filler floors give 1170..1404
+panes, 2340..2808 pane triangles; 40*4*2=320 shell triangles, plus
+8 ground plinth triangles. Roof/ground interior leave ample room below
+12000 low and 90000 full. This check uses no resolved module and adds
+none of Tasks 4/5's details. Density can only decrease from .5.
+
 Hand derivation: L corners (0,0),(20,0),(20,6),(8,6),(8,14),(0,14)
 span 20 by 14 m. Each of three floors has 3+2+1+2=8 windows;
 ground has two additional doors, hence 24 windows and 2 doors.
@@ -21,7 +56,7 @@ import tempfile
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _hull_fixtures import doors, l_shaped_house, no_degenerate_faces, windows
+from _hull_fixtures import stepped_house, doors, l_shaped_house, no_degenerate_faces, windows
 from app.core import paths
 # hull_styles reads world overrides from the world DB: redirect before import.
 _STORAGE = tempfile.TemporaryDirectory(prefix="hull-geometry-import-")
@@ -32,6 +67,36 @@ from app.core.hull_styles import validate_style
 from app.core.world_geometry import polygon_distance
 
 STYLES = ("fachwerk", "holzhuette", "burg", "steinhaus")
+
+
+IDENTITY = {
+    "stepped_house:fachwerk:full": "70679bb2431c51841eb5dc21f77783462bae0abb4cd4a525f13bb2d31b70bf54",
+    "stepped_house:fachwerk:low": "bbdd67458d31e68c85838a8e1b625dad6bcc22cc5eb9e4da387e0bb3cdbae96a",
+    "stepped_house:holzhuette:full": "3f5b3b269f38e602639fff04943ca3699581d4c5df333f1279fdb26f1f61728b",
+    "stepped_house:holzhuette:low": "868168549cf18f801f6260c4d145da8098ca2b37f837ab6d0889711e2b052742",
+    "stepped_house:burg:full": "8baf7d4939833f41dae46fb6e70e77a7012ba5522df833ba27848a680c7e2a74",
+    "stepped_house:burg:low": "1f268acef9a014d379b45766b1a97e9b9fab81ae85a1373c63ef0b56b30fccca",
+    "stepped_house:steinhaus:full": "44cf16d866edf552b7766aabf3938748d084b284decf30c7028009e73cd5f1da",
+    "stepped_house:steinhaus:low": "416fb42ee9764a473304b5b8a3ce760622d73c3b5a12ee17762e75926a72a2f6",
+    "l_shaped_house:fachwerk:full": "b9a43a043dd6df2c1c027767803989b8366d322de30b9531be1808d30a9bb4ed",
+    "l_shaped_house:fachwerk:low": "d023160d26aa730a3e923969d3a54bac2c29cb53acea4415d489bcc087b4f24c",
+    "l_shaped_house:holzhuette:full": "545907b1358772a89564491c4d317a34ae7cb7f92055bc8fd23233d73eeb38a4",
+    "l_shaped_house:holzhuette:low": "9424e28258074a0c3f9ef3b3747c789c23d9f36abc97e3b4aabe85abdb511bac",
+    "l_shaped_house:burg:full": "7b8d98b5706e2c7ce14735cde9404b222c764010309f6773106231574ef46786",
+    "l_shaped_house:burg:low": "95c2234bfadc26b68a46d349d33d4d9248f01bec79fd9a1beeb51033c69573d2",
+    "l_shaped_house:steinhaus:full": "eb284aa7554d855861977916d4ad48bad109fce8b0ccfb252631b4a522434066",
+    "l_shaped_house:steinhaus:low": "00aa3c403ac3b732e41fc500202d14556cc286bfdb45abd86e2c53b0143d6aa5"
+}
+
+
+def check_identity():
+    from app.core.hull_facts import hull_facts
+    for fixture in (stepped_house, l_shaped_house):
+        for name in STYLES:
+            style = validate_style(json.loads(Path(f"shared/building_styles/{name}.json").read_text()), name)
+            for tier in ("full", "low"):
+                assert digest(build_hull(hull_facts(fixture()), style, description(name, 7), tier=tier)) == IDENTITY[f"{fixture.__name__}:{name}:{tier}"]
+    print("PASS: 16 baseline byte-identity literals (8b5f1124)")
 
 
 def description(style: str, seed: int) -> dict:
@@ -118,6 +183,30 @@ def check_extremes_and_shades() -> None:
     assert math.isclose(cutout_padding_m({"wall_thickness_m": .3, "log_walls": True}), .5)
 
 
+
+def check_forty_storeys():
+    from copy import deepcopy
+    from _hull_fixtures import gap_house
+    from app.core.hull_facts import hull_facts
+    from app.core.hull_geometry import fit_budget
+    loc = gap_house()
+    loc['map3d']['outline'] = [[0,0],[30,0],[30,20],[0,20]]
+    loc['rooms'] = [loc['rooms'][0]]
+    loc['rooms'][0]['layout'].update(w=30,d=20,openings=[])
+    facts = hull_facts(loc)
+    original = deepcopy(facts)
+    style = validate_style(json.loads(Path('shared/building_styles/modern.json').read_text()),'modern')
+    desc = description('modern',7)
+    desc['overrides']['storeys_total'] = 40
+    fitted = fit_budget(facts,style,desc)
+    assert fitted['overrides']['ornament_density'] <= .5
+    for tier in ('full','low'):
+        result = build_hull(facts,style,fitted,tier=tier)
+        assert 1170 <= sum(p['material']=='blind' for p in result['parts']) <= 1404
+        assert result['tris'] <= TRI_BUDGET[tier]
+        print(f"PASS: 40 storeys {tier}={result['tris']} density={fitted['overrides']['ornament_density']}")
+    assert facts == original and desc['overrides']['ornament_density'] == .5
+
 def main() -> None:
     """Exercise all shipped styles, both tiers and assembly failure paths."""
     check_extremes_and_shades()
@@ -125,6 +214,8 @@ def main() -> None:
         paths.init(storage)
         from app.core.hull_facts import hull_facts
 
+        check_identity()
+        check_forty_storeys()
         facts = hull_facts(l_shaped_house())
         assert facts["ok"] and len(facts["levels"]) == 3
         assert windows(facts) == 24 and doors(facts) == 2

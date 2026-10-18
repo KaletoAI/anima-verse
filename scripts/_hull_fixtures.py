@@ -112,6 +112,8 @@ def no_face_overlaps_openings(parts, facts):
                     if min(ys) < level['floor_y']-0.141 or max(ys) > level['top_y']+1e-4:
                         continue
                     for hole in edge['openings']:
+                        if hole.get('blind'):
+                            continue
                         if min(max(ss), hole['s1'], length)-max(min(ss), hole['s0'], 0) > 1e-4 and min(max(ys), hole['y1'])-max(min(ys), hole['y0']) > 1e-4:
                             return False
     return True

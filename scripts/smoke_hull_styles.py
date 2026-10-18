@@ -12,8 +12,10 @@ Blind bay endpoints 0.5 and 9 clamp to 1.5 and 6; missing ranges use
 [2.4, 3.0], [0.9, 1.2], [1.3, 1.5] and sill 0.9 from spec 3.3.
 Only wall and trim get existing files in the resolver fixture, so exactly
 those two material keys resolve; a directory and missing file do not.
-Old styles emit 7 texture slots + glass + interior = 9 materials, since
-the empty new facade slot contributes zero. Modern emits 8 + 2 = 10.
+Old styles emit 7 texture slots + glass + interior + blind = 10 materials, since
+the empty new facade slot contributes zero. Modern emits 8 + 3 = 11.
+Blind uses palette.glass with roughness .1 and opaque alpha 1.0; glass
+retains alpha .6, so the two panes have identical colors but distinct opacity.
 Width -1/9 clamps to .4/4, height -1/9 to .6/3, sill 9 to 1.5.
 New texture scales are 2/2/1/1.5/1 metres (spec 3.8/brief).
 The module is 512 square: centre (256,256) is dark glass, while
@@ -124,7 +126,11 @@ def main():
             style = s[name]
             materials, _, _ = hull_model._materials(
                 style, desc, Path(tmp) / name, hull_model.resolved_materials(style))
-            assert len(materials) == (10 if name == "modern" else 9)
+            assert len(materials) == (11 if name == "modern" else 10)
+            by_name = {material["name"]: material for material in materials}
+            assert by_name["blind"] == dict(name="blind", texture=None,
+                color=by_name["glass"]["color"], roughness=.1, alpha=1.0)
+            assert by_name["glass"]["alpha"] == .6
 
 
         assert s["fachwerk"]["materials"]["wall"] == "plaster_infill"

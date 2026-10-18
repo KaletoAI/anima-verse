@@ -65,10 +65,10 @@ def _materials(style: Dict, desc: Dict, tex_dir: Path, resolved: frozenset[str])
                            material, style["materials"][material])
         materials.append({"name": material, "texture": key, "color": color,
                           "roughness": 0.8, "alpha": 1.0})
-    for material in ("glass", "interior"):
+    for material in ("glass", "interior", "blind"):
         materials.append({"name": material, "texture": None,
-                          "color": tone_to_linear(style["palette"][material]),
-                          "roughness": 0.1 if material == "glass" else 0.8,
+                          "color": tone_to_linear(style["palette"]["glass" if material == "blind" else material]),
+                          "roughness": 0.1 if material in ("glass", "blind") else 0.8,
                           "alpha": 0.6 if material == "glass" else 1.0})
     return materials, textures, sizes
 
