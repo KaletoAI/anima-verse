@@ -87,6 +87,7 @@ STYLES = ("fachwerk", "holzhuette", "burg", "steinhaus")
 
 
 # 1c-B Task 1: roof rise cap (fachwerk/steinhaus/holzhuette)
+# 1c-B Task 2: roof junctions (L/T/U)
 IDENTITY = {
     "stepped_house:fachwerk:full": "39165eb435f6b194b0d35900e74e76392e88d27ea1b9f43b5d23a4b484fba409",
     "stepped_house:fachwerk:low": "a426045405d0a2ab5d45e2ff582e0b4afd629d46f1c83370fb4f07a0f57365e5",
@@ -96,14 +97,14 @@ IDENTITY = {
     "stepped_house:burg:low": "1f268acef9a014d379b45766b1a97e9b9fab81ae85a1373c63ef0b56b30fccca",
     "stepped_house:steinhaus:full": "306117b41164991abedb61f893bb05b3e2ccf87fd57c0bc186bf90dcdbe1ff46",
     "stepped_house:steinhaus:low": "a97f16023e309ded74ce079b0b05f13cfe37bc20bc37e4b1fdc11ad099767e77",
-    "l_shaped_house:fachwerk:full": "6b20c12ab8d8da59911bc4219c6d4170e2ad997ff95343256d2f135ca12ddfed",
-    "l_shaped_house:fachwerk:low": "8da26057279099beed046f1fad9a01e628ce22950e74ac55eaf7d9322ba220e3",
-    "l_shaped_house:holzhuette:full": "4eb6094660cc518ed6a78b5b8b1cfca8f61cb5979a729bb380bed57406daa61c",
-    "l_shaped_house:holzhuette:low": "2341d19caf9067f80365c17ac44f21f60d389682b56f8abb04c0a44ef9ee6b29",
+    "l_shaped_house:fachwerk:full": "6d4b492e26fe9a4800f237ebb17a777e2eb6a384d636fd4b30cf46c6d5b355e1",
+    "l_shaped_house:fachwerk:low": "42d1ea00f5f5c99b37c548fea6d6421cd4c78cfc828c1775344a0d8061e19f13",
+    "l_shaped_house:holzhuette:full": "d7be966864019bd543d40bb46d0e001f91a4149faa4f702df4e45ca33899965a",
+    "l_shaped_house:holzhuette:low": "4e3e42c03706e93a5bdcc35b51e68bcc053a1929a3bccecf40182dd34494daf8",
     "l_shaped_house:burg:full": "7b8d98b5706e2c7ce14735cde9404b222c764010309f6773106231574ef46786",
     "l_shaped_house:burg:low": "95c2234bfadc26b68a46d349d33d4d9248f01bec79fd9a1beeb51033c69573d2",
-    "l_shaped_house:steinhaus:full": "6cde95395c3a86421df4c7190847a116f89985ef48b1ab831e8821536f2e0137",
-    "l_shaped_house:steinhaus:low": "b79f46d3bbceaa7c72ad06d783c3146cb16b2dd1a945b9999476069ab1bf61e5"
+    "l_shaped_house:steinhaus:full": "1e20804fcda55143b05e2121955a2b3928c04cc377f69a700c14eee837bf1d8a",
+    "l_shaped_house:steinhaus:low": "1cd21e3608ede692fd55fc600077bf3ca9c8dc30c90d77b4043b8929f5d3c8c1"
 }
 
 

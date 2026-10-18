@@ -64,7 +64,8 @@ def decompose(outline: List[List[float]], covered: Optional[List[List[float]]],
               angle_deg: float) -> List[Dict[str, Any]]:
     """Tile exposed cells with rectangles; covered_sides use x_min/x_max/z_min/z_max.
 
-    Side names refer to the rectangle's local frame. Ties prefer x runs.
+    Side names refer to the rectangle's local frame. Ties prefer shorter seams,
+    then x runs; covered partitions retain their original x-run preference.
     Coordinates are clustered at 1e-6 m to suppress rotation roundoff.
     """
     local = [_rotate(point, -angle_deg) for point in outline]
@@ -80,10 +81,18 @@ def decompose(outline: List[List[float]], covered: Optional[List[List[float]]],
             elif _point_in_polygon(x, z, local):
                 exposed.add((i, j))
     candidates = [_merge_cells(exposed, swap) for swap in (False, True)]
-    rectangles = min(candidates, key=len)
+    def partition_key(rectangles):
+        # Prefer shorter internal joins when equally many exposed wings tile
+        # the outline: an L then has a continuous main wing and an abutting
+        # ridge, rather than a short square behind one long eave.
+        perimeter = sum(2 * (xs[b]-xs[a]+zs[d]-zs[c]) for a,b,c,d in rectangles)
+        return len(rectangles), perimeter if not covered else 0
+    rectangles = sorted(min(candidates, key=partition_key))
+    owners = {(i,j): index for index,(a,b,c,d) in enumerate(rectangles)
+              for i in range(a,b) for j in range(c,d)}
     result = []
-    for first, last, bottom, top in sorted(rectangles):
-        sides = []
+    for first, last, bottom, top in rectangles:
+        sides, seams = [], []
         for name, neighbors in (
             ("x_min", [(first - 1, j) for j in range(bottom, top)]),
             ("x_max", [(last, j) for j in range(bottom, top)]),
@@ -92,10 +101,12 @@ def decompose(outline: List[List[float]], covered: Optional[List[List[float]]],
         ):
             if any(neighbor in occupied for neighbor in neighbors):
                 sides.append(name)
+            for neighbor in sorted({owners[cell] for cell in neighbors if cell in owners}):
+                seams.append({"side": name, "neighbor": neighbor})
         result.append({"rect": {
             "center": _rotate([(xs[first] + xs[last]) / 2, (zs[bottom] + zs[top]) / 2], angle_deg),
             "length": xs[last] - xs[first], "depth": zs[top] - zs[bottom],
-            "angle_deg": angle_deg}, "covered_sides": sides})
+            "angle_deg": angle_deg}, "covered_sides": sides, "seam_sides": seams})
     return result
 
 
@@ -105,13 +116,14 @@ def _builder(tag, material, uv_sizes):
                        protrudes=tag == "roof")
 
 
-def _slab(builder, points, thickness=0.15):
+def _slab(builder, points, thickness=0.15, *, vertical=False):
     """Extrude a planar upward polygon inward by its physical thickness."""
     if _normal(points)[1] < 0:
         points = points[::-1]
     normal = _normal(points)
     magnitude = math.sqrt(sum(value * value for value in normal))
-    delta = [value * thickness / magnitude for value in normal]
+    delta = ([0, thickness * magnitude / normal[1], 0] if vertical
+             else [value * thickness / magnitude for value in normal])
     bottom = [[point[axis] - delta[axis] for axis in range(3)] for point in points]
     builder.poly(points)
     builder.poly(bottom[::-1])
@@ -237,6 +249,10 @@ def roof_top_y(wing: Dict, x: float, z: float, style: Dict) -> Optional[float]:
     x, z = _rotate([x-rect["center"][0], z-rect["center"][1]], -rect["angle_deg"])
     low_x, high_x, low_z, high_z = wing["limits"]
     if not (low_x-1e-4 <= x <= high_x+1e-4 and low_z-1e-4 <= z <= high_z+1e-4):
+        return None
+    if "footprint_regions" in wing and not any(
+            a-1e-4 <= x <= b+1e-4 and c-1e-4 <= z <= d+1e-4
+            for a,b,c,d in wing["footprint_regions"]):
         return None
     height = _roof_height(wing, x, z, style, wing["pitch_deg"])
     return min(height, wing["ridge_y"]) if wing.get("flat_top") else height
@@ -380,7 +396,7 @@ def _cap_surfaces(surfaces, top):
     return surfaces
 
 
-def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, parts, *, explicit_pitch=False, max_rise=6.0):
+def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, parts, *, explicit_pitch=False, max_rise=6.0, seams=()):
     """Use wall-span pitch and shortened hip-ridge formulas."""
     original_angle = rect["angle_deg"]
     rect, high = _wing_axes(rect, sides, form)
@@ -401,6 +417,41 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
         half = rect["length" if index == 0 else "depth"] / 2
         limits[index + (1 if sign > 0 else 0)] = math.copysign(
             half - wall_offsets(style, number + 1)[0] - .01, sign)
+    seam_indices = set()
+    seam_regions = []
+    seam_bounds = {}
+    own_limits = list(limits)
+    for seam in seams:
+        axis, direction = seam["side"].split("_")
+        vector = _rotate([1,0] if axis == "x" else [0,1], original_angle-rect["angle_deg"])
+        index = 0 if abs(vector[0]) > .5 else 2
+        sign = (1 if direction == "max" else -1) * vector[index//2]
+        index += int(sign > 0)
+        seam_indices.add(index)
+        half = rect["length" if index < 2 else "depth"] / 2
+        own_limits[index] = math.copysign(half, sign)
+        bound = math.copysign(half + seam["extension"], sign)
+        seam_bounds[index] = (max if sign > 0 else min)(seam_bounds.get(index, bound), bound)
+        limits[index] = seam_bounds[index]
+        if seam["extension"]:
+            neighbor = seam["rect"]
+            corners = [_at(neighbor,x,0,z) for x in (-neighbor["length"]/2,neighbor["length"]/2)
+                       for z in (-neighbor["depth"]/2,neighbor["depth"]/2)]
+            local = [_rotate([p[0]-rect["center"][0],p[2]-rect["center"][1]], -rect["angle_deg"])
+                     for p in corners]
+            region = [min(p[0] for p in local)-outer-overhang,
+                      max(p[0] for p in local)+outer+overhang,
+                      min(p[1] for p in local)-outer-overhang,
+                      max(p[1] for p in local)+outer+overhang]
+            axis = 0 if index < 2 else 2
+            region[axis:axis+2] = sorted((math.copysign(half,sign),bound))
+            seam_regions.append(region)
+    regions = [own_limits]
+    for region in seam_regions:
+        region = [max(region[0], limits[0]), min(region[1], limits[1]),
+                  max(region[2], limits[2]), min(region[3], limits[3])]
+        if region[0] < region[1] and region[2] < region[3]:
+            regions.append(region)
     ridge_y = base + half_span * slope
     ridge_half = half_length
     surfaces = []
@@ -421,6 +472,21 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
                 surfaces.append([[side * end, low_y, -edge], [side * end, low_y, edge],
                                  [side * ridge_half, ridge_y, 0]])
         ridge = [_at(rect, x, ridge_y, 0) for x in (-ridge_half, ridge_half)]
+    if seams:
+        # Extend ridge-axis slopes before clipping. On transverse seams the
+        # same affine slope continues across the join into the other roof.
+        for surface in surfaces:
+            normal = _normal(surface)
+            for point in surface:
+                old_x, old_z = point[0], point[2]
+                for axis, index in ((0,0),(0,1),(2,2),(2,3)):
+                    bound = end if axis == 0 else edge
+                    if index in seam_indices and abs(point[axis] - (-bound if index % 2 == 0 else bound)) < 1e-8:
+                        point[axis] = limits[index]
+                point[1] -= (normal[0]*(point[0]-old_x)+normal[2]*(point[2]-old_z))/normal[1]
+        if form == "gable":
+            ridge = [_at(rect, max(limits[0], min(limits[1], x)), ridge_y, 0)
+                     for x in (limits[0], limits[1])]
     flat_top = ridge_y > base + max_rise + 1e-8
     if flat_top:
         ridge_y = base + max_rise
@@ -431,8 +497,16 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
                              [end, ridge_y, high * edge], [-end, ridge_y, high * edge]])
         for point in ridge:
             point[1] = ridge_y
+    if seams and form == "shed":
+        target_z = high * min(half_span, max(high * region[2 if high < 0 else 3] for region in regions))
+        if flat_top:
+            target_z = high * min(high * target_z, max_rise / slope - half_span)
+        intervals = [region[:2] for region in regions if region[2]-1e-8 <= target_z <= region[3]+1e-8]
+        ridge = [_at(rect, x, min(ridge_y, base+(half_span+high*target_z)*slope), target_z)
+                 for x in (max(-half_length,min(a for a,b in intervals)),
+                           min(half_length,max(b for a,b in intervals)))]
     original_ridge_y = ridge_y
-    if sides:
+    if sides or seams:
         ridge = [[*point] for point in ridge]
         for point in ridge:
             local = _rotate([point[0]-rect["center"][0], point[2]-rect["center"][1]], -rect["angle_deg"])
@@ -443,22 +517,27 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
         ridge_y = max(point[1] for point in ridge)
     first_part = len(parts)
     for surface in surfaces:
-        surface = _clip_polygon(surface, limits)
-        # A square hip collapses both ridge points to one apex.
-        points = []
-        for x, y, z in surface:
-            point = _at(rect, x, y, z)
-            if point not in points:
-                points.append(point)
-        if len(points) < 3:
-            continue
-        builder = _builder("roof", "roof", uv_sizes)
-        _slab(builder, points)
-        parts.append(builder.part())
+        for region in (regions if seams else [limits]):
+            clipped = _clip_polygon(surface, region)
+            # A square hip collapses both ridge points to one apex.
+            points = []
+            for x, y, z in clipped:
+                point = _at(rect, x, y, z)
+                if point not in points:
+                    points.append(point)
+            if len(points) < 3 or abs(_normal(points)[1]) < 1e-10:
+                continue
+            builder = _builder("roof", "roof", uv_sizes)
+            # Vertical extrusion preserves the clipped footprint and planar
+            # cut faces while keeping .15 m perpendicular slab thickness.
+            _slab(builder, points, vertical=bool(seams))
+            parts.append(builder.part())
     ridge_y = original_ridge_y
     if form == "gable":
         material = style.get("storey_slot", {}).get(number, "wall_ground" if number == 0 and style.get("materials", {}).get("wall_ground") else "wall")
         for side in (-1, 1):
+            if (0 if side < 0 else 1) in seam_indices:
+                continue
             builder = _builder("gable", material, uv_sizes)
             points = [_at(rect, max(limits[0], min(limits[1], side * half_length)), base, z) for z in (-half_span, half_span)]
             if flat_top:
@@ -480,6 +559,8 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
     if form == "shed":
         material = style.get("storey_slot", {}).get(number, "wall_ground" if number == 0 and style.get("materials", {}).get("wall_ground") else "wall")
         for side in (-1, 1):
+            if (0 if side < 0 else 1) in seam_indices:
+                continue
             builder = _builder("gable", material, uv_sizes)
             points = [_at(rect, max(limits[0], min(limits[1], side * half_length)), base, -high * half_span),
                       _at(rect, max(limits[0], min(limits[1], side * half_length)), base, high * half_span),
@@ -495,7 +576,7 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
                 local_points.append([x, point[1], z])
             builder.poly([_at(rect, *point) for point in _clip_polygon(local_points, limits)])
             parts.append(builder.part())
-        if not sides:
+        if not sides and (2 if high < 0 else 3) not in seam_indices:
             builder = _builder("gable", material, uv_sizes)
             points = [_at(rect, x, y, high * half_span) for x, y in (
                 (-half_length, base), (half_length, base),
@@ -510,7 +591,7 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
                 local_points.append([x, point[1], z])
             builder.poly([_at(rect, *point) for point in _clip_polygon(local_points, limits)])
             parts.append(builder.part())
-    if sides:
+    if sides or seams:
         ridge_y = max(point[1] for point in ridge)
         for part in parts[first_part:]:
             if part["tag"] != "roof":
@@ -525,7 +606,8 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
                 point[:] = [round(v, 4) for v in moved]
     for part in parts[first_part:]:
         part["roof_level"] = number
-    return {"rect": rect, "level": number, "form": form, "eaves_y": base,
+    return {**({"footprint_regions": regions} if seams else {}),
+            "rect": rect, "level": number, "form": form, "eaves_y": base,
             "ridge_y": ridge_y, "flat_top": flat_top, "ridge": ridge, "pitch_deg": pitch,
             "overhang_m": overhang, "limits": limits, "high": high}
 
@@ -766,7 +848,16 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
             else:
                 _flat(outline, number, base, style, overhang, uv_sizes, info, parts)
             continue
-        for wing in decompose(outline, covered, angle):
+        wings = decompose(outline, covered, angle)
+        rises = []
+        for wing in wings:
+            wf = "shed" if not topmost and wing["covered_sides"] and form != "flat" else form
+            wr, _ = _wing_axes(wing["rect"], wing["covered_sides"], wf)
+            span = wr["depth"]/2 + wall_offsets(style, number)[1]
+            wp = min(pitch,25) if not topmost and wing["covered_sides"] else pitch
+            wp = _cap_pitch(wp, span, style, explicit_pitch, max_rise)
+            rises.append(span * math.tan(math.radians(wp)) * (2 if wf == "shed" else 1))
+        for wing_index, wing in enumerate(wings):
             rect, sides = wing["rect"], wing["covered_sides"]
             wing_form = "shed" if not topmost and sides and form != "flat" else form
             if wing_form == "flat":
@@ -795,9 +886,16 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 # A lean-to under an upper storey stays at most 25° whatever the pitch —
                 # a steeper one would run into that storey's windows.
                 wing_pitch = min(pitch, 25) if not topmost and sides else pitch
+                seams = []
+                for seam in wing["seam_sides"]:
+                    neighbor = seam["neighbor"]
+                    dimension = "length" if seam["side"].startswith("x") else "depth"
+                    extension = (wings[neighbor]["rect"][dimension]/2
+                                 if (rises[wing_index], wing_index) < (rises[neighbor], neighbor) else 0)
+                    seams.append(dict(seam, extension=extension, rect=wings[neighbor]["rect"]))
                 info["wings"].append(_pitched(rect, sides, wing_form, number, base,
                                               wing_pitch, overhang, style, uv_sizes, parts,
-                                              explicit_pitch=explicit_pitch, max_rise=max_rise))
+                                              explicit_pitch=explicit_pitch, max_rise=max_rise, seams=seams))
     density = overrides.get("ornament_density", 0.5)
     _chimneys(info, style, desc, density, uv_sizes, parts)
     if tier == "full":

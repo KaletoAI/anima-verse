@@ -105,6 +105,94 @@ def check_modern_roofs():
     assert len(info['flat_tops'])==1
 
 
+def check_junctions():
+    """L: [0,8]x[0,14] and [8,20]x[0,6], so x_max/x_min.
+
+    Stepped T: [0,4]x[0,5], [4,8]x[0,9], [8,12]x[0,3].
+    Hence 0 x_max/1 x_min and 1 x_max/2 x_min, including two
+    seam sides on rectangle 1. Indices follow returned rectangle order.
+    """
+    from _hull_fixtures import l_shaped_house
+    from app.core.hull_facts import hull_facts
+    from app.core.hull_roofs import roof_top_y
+    facts = hull_facts(l_shaped_house())
+    wings = decompose(facts['levels'][-1]['outline'], None, 0)
+    assert [w['seam_sides'] for w in wings] == [
+        [{'side':'x_max','neighbor':1}], [{'side':'x_min','neighbor':0}]]
+    t = [[0,0],[12,0],[12,3],[8,3],[8,9],[4,9],[4,5],[0,5]]
+    wings = decompose(t, None, 0)
+    assert len(wings) == 3
+    assert [w['seam_sides'] for w in wings] == [
+        [{'side':'x_max','neighbor':1}],
+        [{'side':'x_min','neighbor':0},{'side':'x_max','neighbor':2}],
+        [{'side':'x_min','neighbor':1}]]
+    style = json.loads((Path(__file__).resolve().parents[1]/'shared/building_styles/fachwerk.json').read_text())
+    style['chimneys'] = [0,0]
+    style['dormers'] = 0
+    desc = {'seed':1, 'overrides':{'roof_form':'gable','pitch_deg':45}}
+    parts, info = build_roofs(facts, style, desc, tier='low')
+    higher, lower = info['wings']
+    assert lower['ridge_y'] < higher['ridge_y']
+    # Main wing rotates its ridge frame 90 degrees: original x_max is
+    # local z_min=-4. Lower x_min extends from -6 to -10 (8/2=4 m).
+    close(higher['limits'][2], -4)
+    close(lower['limits'][0], -10)
+    assert not any(p['tag']=='gable' and all(abs(v[0]-8)<1e-4 for v in p['vertices']) for p in parts)
+    end = min(lower['ridge'], key=lambda p:p[0])
+    top = roof_top_y(higher, end[0], end[2], style)
+    assert top is not None and end[1] <= top + .15, (end, top)
+    from app.core.hull_walls import wall_offsets
+    padding = wall_offsets(style, 2)[1] + info['overhang_m'] + .0002
+    for p in [p for p in parts if p['tag']=='roof'][2:]:
+        for x,y,z in p['vertices']:
+            assert (-padding<=x<=20+padding and -padding<=z<=6+padding or
+                    -padding<=x<=8+padding and 6-padding<=z<=14+padding), (x,y,z)
+    for name in ('T', 'U', 'rotated_L'):
+        case = roof_shapes()[name]
+        outline = case['levels'][0]['outline']
+        tiles = decompose(outline, None, orthogonal_frame(outline))
+        opposite = {'x_min':'x_max','x_max':'x_min','z_min':'z_max','z_max':'z_min'}
+        for index, tile in enumerate(tiles):
+            for seam in tile['seam_sides']:
+                assert {'side':opposite[seam['side']], 'neighbor':index} in tiles[seam['neighbor']]['seam_sides']
+        for form in ('gable', 'hip', 'shed'):
+            desc['overrides']['roof_form'] = form
+            built, metadata = build_roofs(case, style, desc, tier='low')
+            assert no_degenerate_faces(built), (name, form)
+            if name == 'U' and form == 'gable':
+                # All spans are 3 m, so equal rises use the smaller index:
+                # left 0 extends into base 1, base 1 into right 2 only.
+                left, bar, right = metadata['wings']
+                close(left['limits'][0], -4)
+                close(bar['limits'][3], 4)
+                close(right['limits'][0], -2.5)
+                assert roof_top_y(bar,5,4,style) is None, 'courtyard notch filled'
+
+            from app.core.hull_roofs import _rotate
+            padding = wall_offsets(style,0)[1] + metadata['overhang_m'] + .0002
+            for part in built:
+                if part['tag'] != 'roof':
+                    continue
+                for x,y,z in part['vertices']:
+                    assert any(
+                        abs(local[0]) <= tile['rect']['length']/2+padding and
+                        abs(local[1]) <= tile['rect']['depth']/2+padding
+                        for tile in tiles
+                        for local in [_rotate([x-tile['rect']['center'][0], z-tile['rect']['center'][1]],
+                                              -tile['rect']['angle_deg'])]), (name,form,x,y,z)
+            if form == 'shed':
+                for wing in metadata['wings']:
+                    for x,y,z in wing['ridge']:
+                        top = roof_top_y(wing,x,z,style)
+                        assert top is not None, (name,wing['limits'],x,y,z)
+                        close(top,y)
+
+            for part in built:
+                if part['tag'] == 'roof':
+                    closed(part)
+    print('PASS: reciprocal L/T/U seams, rotated junctions and lower-wing roof junction')
+
+
 def main() -> None:
     """Exercise decomposition, fallbacks, metrics, details and determinism."""
     from app.core.hull_facts import hull_facts
@@ -244,5 +332,6 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as temporary:
         from app.core import paths
         paths.init(temporary)
+        check_junctions()
         check_modern_roofs()
         main()
