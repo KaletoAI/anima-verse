@@ -1,4 +1,5 @@
 """Building footprints and contour holes read from the scene composer's walls."""
+from copy import deepcopy
 import hashlib
 import json
 from typing import Any, Dict
@@ -90,8 +91,9 @@ def hull_facts(location: Dict[str, Any], location_id: str = '') -> Dict[str, Any
     scene = sr.compose_scene(location, plan_width_m=width)
     extent, _, storey = sr.derive_scalars(map3d, width)
     levels = []
-    for entry in sorted(scene['levels'], key=lambda item: item['level']):
-        level = entry['level']
+    used = {entry['level'] for entry in scene['levels']}
+    for level in range(0, max(used, default=-1) + 1):
+        filler = level not in used
         outline = sr._outline_world(map3d, level)
         if level < 0 or len(outline) < 3:
             continue
@@ -108,10 +110,10 @@ def hull_facts(location: Dict[str, Any], location_id: str = '') -> Dict[str, Any
             edges.append(dict(index=index, a=[sr._r(v) for v in a],
                               b=[sr._r(v) for v in b], length=sr._r(length),
                               normal=[sr._r(v) for v in normal],
-                              openings=_edge_openings(scene['walls'], level, a,
+                              openings=[] if filler else _edge_openings(scene['walls'], level, a,
                                                       frame, floor,
                                                       sr._wall_height(storey))))
-        levels.append(dict(level=level, floor_y=sr._r(floor),
+        levels.append(dict(level=level, filler=filler, floor_y=sr._r(floor),
                            top_y=sr._r(floor + sr._wall_height(storey)),
                            outline=[[sr._r(v) for v in p] for p in outline],
                            ccw=ccw, edges=edges))
@@ -122,9 +124,33 @@ def hull_facts(location: Dict[str, Any], location_id: str = '') -> Dict[str, Any
     boundary = sr._boundary_local(map3d, extent)
     center = [sr._r((min(p[i] for p in boundary) + max(p[i] for p in boundary))/2)
               for i in (0, 1)]
-    encoded = json.dumps(dict(storey_m=sr._r(storey), levels=levels),
+    encoded = json.dumps(dict(storey_m=sr._r(storey),
+                              levels=[{k: v for k, v in level.items() if k != 'filler'}
+                                      for level in levels]),
                          sort_keys=True, separators=(',', ':'))
     return dict(ok=True, error='', location_id=loc_id, storey_m=sr._r(storey),
                 eaves_y=levels[-1]['top_y'], boundary_center=center,
+                elevator=map3d.get('elevator'),
                 fingerprint=hashlib.sha256(encoded.encode('utf-8')).hexdigest()[:16],
                 levels=levels)
+
+
+def with_storeys(facts: dict, total: int) -> dict:
+    """Copy facts and append facade storeys without changing their fingerprint."""
+    result = deepcopy(facts)
+    levels = result['levels']
+    if total <= len(levels):
+        return result
+    storey = result['storey_m']
+    template = deepcopy(levels[-1])
+    for level in range(template['level'] + 1, total):
+        floor = sr._r(sr.storey_floor_y(level, storey))
+        levels[-1]['top_y'] = floor
+        following = deepcopy(template)
+        following.update(level=level, floor_y=floor, filler=True,
+                         top_y=sr._r(floor + sr._wall_height(storey)))
+        for edge in following['edges']:
+            edge['openings'] = []
+        levels.append(following)
+    result['eaves_y'] = levels[-1]['top_y']
+    return result

@@ -159,6 +159,12 @@ def validate_description(raw: Any, styles: Dict[str, Dict[str, Any]]) -> Dict[st
         seed = 0
     source = _doc(raw.get("overrides"))
     overrides = {}
+    try:
+        total = max(0, min(40, int(source.get("storeys_total", 0))))
+    except (ValueError, TypeError, OverflowError):
+        total = 0
+    if total > 0:
+        overrides["storeys_total"] = total
     if isinstance(source.get("roof_form"), str) and source["roof_form"] in ROOF_FORMS:
         overrides["roof_form"] = source["roof_form"]
     if "pitch_deg" in source:

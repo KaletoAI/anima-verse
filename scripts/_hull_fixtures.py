@@ -217,3 +217,17 @@ def l_shaped_house(*, rotated: bool = False) -> dict:
     return {"id": "hull-large-L", "map3d": {
         "outline": outline, "boundary": outline, "storey_height_m": 3.0},
         "rooms": rooms}
+
+
+def gap_house():
+    """A rectangle with occupied levels 0 and 3 and an elevator."""
+    return {"id": "hull-gap", "map3d": {
+        "outline": [[0, 0], [10, 0], [10, 8], [0, 8]],
+        "storey_height_m": 3.1, "elevator": [5, 4]}, "rooms": [
+        {"id": "ground", "layout": {"x": 0, "y": 0, "w": 10, "d": 8,
+            "level": 0, "openings": [{"edge": 0, "at": .5, "width_m": 1,
+                "height_m": 2.1, "type": "door", "to": "outside"}]}},
+        {"id": "upper", "layout": {"x": 0, "y": 0, "w": 10, "d": 8,
+            "level": 3, "openings": [{"edge": 1, "at": .5, "width_m": 1.2,
+                "height_m": 1.2, "sill_m": .9, "type": "window"}]}},
+    ]}

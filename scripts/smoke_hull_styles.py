@@ -3,6 +3,9 @@
 
 Usage: ./.venv/bin/python scripts/smoke_hull_styles.py
 
+Hand-derived expectations: storeys_total 41 clamps to upper bound 40;
+0, missing, invalid "x", and negative values omit the optional key.
+Other positive values are converted to int before clamping (3.9 -> 3).
 Hand-derived expectations: four shipped styles; 9 m clamps to 1.2 m;
 unsupported dome falls back to gable; deleting the 1.1 m castle override
 restores the shipped 0.9 m wall. Pitch 99 clamps to 60, seed -5 to 0,
@@ -58,6 +61,14 @@ def main():
             "style": "steinhaus", "seed": 0, "overrides": {"ornament_density": 0.5}}
         assert validate_description({"seed": 2**40, "overrides": {
             "roof_form": "dome", "tint": "bad"}}, s)["seed"] == 2**31 - 1
+        for value, expected in ((41, 40), (0, None), ('x', None),
+                                (-1, None), (3.9, 3), ('10', 10)):
+            overrides = validate_description({'overrides': {
+                'storeys_total': value}}, s)['overrides']
+            if expected is None:
+                assert 'storeys_total' not in overrides
+            else:
+                assert overrides['storeys_total'] == expected
         raw = {"name": "n" * 250, "description": "d" * 650, "unknown": 1,
                "cornice": "false", "roof": {"pitch_deg": [70, -1]},
                "materials": {"wall": " New_Kind ", "door": "../bad"},

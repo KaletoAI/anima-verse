@@ -4372,7 +4372,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     area_model = bool(map3d.get("area_model")) \
         and not bool(map3d.get("area_detail"))
     if building and building.get("plan_hull") and not area_model:
-        building["cutouts"] = _hull_cutouts(map3d, levels)
+        building["cutouts"] = _hull_cutouts(map3d, range(0, max(levels, default=-1) + 1))
     overlay_rooms: Dict[str, Dict[str, Any]] = {}
     if area_model:
         outside_indoor: List[Tuple[str, List[List[float]]]] = []
