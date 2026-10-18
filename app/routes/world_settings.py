@@ -60,9 +60,15 @@ async def put_world_settings(request: Request):
 def _put_sync(body):
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="body must be a JSON object")
+    confirm_drop = body.get("confirm_drop", [])
+    if not isinstance(confirm_drop, list) or not all(isinstance(p, str) for p in confirm_drop):
+        raise HTTPException(status_code=400, detail="confirm_drop must be a list of strings")
     try:
         result = config_admin.save_layer(config_scope.WORLD, body.get("values"),
-                                         body.get("resets") or [])
+                                         body.get("resets") or [], confirm_drop)
+    except config_admin.LayerDropRefused as e:
+        raise HTTPException(status_code=409, detail={
+            "code": "would_drop", "paths": e.paths, "message": str(e)}) from e
     except config_admin.LayerSaveError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except config.ConfigWriteRefused as e:

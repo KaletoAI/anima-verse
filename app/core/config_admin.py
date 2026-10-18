@@ -7,7 +7,7 @@ hands it to ``config.save_part``, which takes the other part from memory.
 A world-scope path in an instance body (or the reverse) is a 400, never a
 silent drop.
 """
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List
 
 from app.core import config, config_scope
 from app.core.log import get_logger
@@ -17,6 +17,44 @@ logger = get_logger("config_admin")
 
 class LayerSaveError(ValueError):
     """The body cannot be saved as it is — the message goes to the admin (400)."""
+
+
+class LayerDropRefused(LayerSaveError):
+    """A save would silently remove stored settings (HTTP 409)."""
+
+    def __init__(self, paths: List[str]):
+        self.paths = list(paths)
+        super().__init__(
+            f"save would remove {len(self.paths)} stored setting(s): {self.paths}. "
+            "Reload the page if it is stale, or confirm the removal.")
+
+
+def find_dropped_paths(reference: dict, merged: dict, exempt: Iterable[str]) -> List[str]:
+    """Find omitted sections and emptied object lists, without entering lists."""
+    exemptions = set(exempt)
+    dropped = set()
+    missing = object()
+
+    def report(path):
+        if not any(path == parent or path.startswith(parent + ".")
+                   for parent in exemptions):
+            dropped.add(path)
+
+    def walk(node, candidate, prefix=""):
+        for key, value in node.items():
+            path = f"{prefix}.{key}" if prefix else key
+            new = candidate.get(key, missing) if isinstance(candidate, dict) else missing
+            if not prefix and new is missing and value is not None and value not in ("", [], {}):
+                report(path)
+            if isinstance(value, dict):
+                walk(value, new, path)
+            elif (isinstance(value, list) and value
+                  and all(isinstance(item, dict) for item in value)
+                  and (new is missing or new == [])):
+                report(path)
+
+    walk(reference, merged)
+    return sorted(dropped)
 
 
 def _other(scope: str) -> str:
@@ -424,7 +462,7 @@ def strip_materialized_item_defaults(merged: dict, current: dict, schema: dict) 
                             sub.get("fields", {}))
 
 
-def prepare_layer(scope: str, values: dict, resets=()) -> tuple[dict, dict]:
+def prepare_layer(scope: str, values: dict, resets=(), confirm_drop=()) -> tuple[dict, dict]:
     """Build the sole save candidate before route-specific validation."""
     schema = config_scope.schema_for(scope)
     if not isinstance(values, dict):
@@ -439,6 +477,8 @@ def prepare_layer(scope: str, values: dict, resets=()) -> tuple[dict, dict]:
 
     check_objects(values)
     resets = check_resets(scope, resets)
+    if not isinstance(confirm_drop, (list, tuple)) or not all(isinstance(p, str) for p in confirm_drop):
+        raise LayerSaveError("confirm_drop must be a list of strings")
     inst, world, unknown = config_scope.split_by_scope(values)
     own, other = (inst, world) if scope == config_scope.INSTANCE else (world, inst)
     if other or unknown:
@@ -453,6 +493,9 @@ def prepare_layer(scope: str, values: dict, resets=()) -> tuple[dict, dict]:
     if scope == config_scope.INSTANCE:
         _preserve_unsent_image_routing(merged, current)
     strip_materialized_item_defaults(merged, current, schema)
+    dropped = find_dropped_paths(config_scope.prune(current), merged, [*resets, *confirm_drop])
+    if dropped:
+        raise LayerDropRefused(dropped)
     apply_resets(merged, resets)
     if "extension_motion" in merged:
         from app.core.extension_rig import validate_motion_overrides
@@ -477,7 +520,7 @@ def commit_layer(scope: str, merged: dict, current: dict) -> dict:
             "reloaded": apply_section_reloads(changed, scope), "warnings": []}
 
 
-def save_layer(scope: str, body: dict, resets=()) -> dict:
+def save_layer(scope: str, body: dict, resets=(), confirm_drop=()) -> dict:
     """Prepare and commit one scope; instance routes validate between these steps."""
-    merged, current = prepare_layer(scope, body, resets)
+    merged, current = prepare_layer(scope, body, resets, confirm_drop)
     return commit_layer(scope, merged, current)

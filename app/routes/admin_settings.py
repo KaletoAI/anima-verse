@@ -830,13 +830,18 @@ async def settings_save(request: Request, user=Depends(require_admin)):
         raise HTTPException(400, "values must be a JSON object")
     if not isinstance(resets, list):
         raise HTTPException(400, "resets must be a list of paths")
-    return await asyncio.to_thread(_settings_save_sync, values, resets)
+    confirm_drop = body.get("confirm_drop", [])
+    if not isinstance(confirm_drop, list) or not all(isinstance(p, str) for p in confirm_drop):
+        raise HTTPException(400, "confirm_drop must be a list of strings")
+    return await asyncio.to_thread(_settings_save_sync, values, resets, confirm_drop)
 
 
-def _settings_save_sync(values: dict, resets: list):
+def _settings_save_sync(values: dict, resets: list, confirm_drop: list):
     """Prepare, validate and persist in the worker thread."""
+    if not isinstance(confirm_drop, list) or not all(isinstance(p, str) for p in confirm_drop):
+        raise HTTPException(400, "confirm_drop must be a list of strings")
     try:
-        merged, current = config_admin.prepare_layer(config_scope.INSTANCE, values, resets)
+        merged, current = config_admin.prepare_layer(config_scope.INSTANCE, values, resets, confirm_drop)
         err = _validate_llm_routing(merged.get("llm_routing"))
         if err:
             raise HTTPException(400, err)
@@ -845,6 +850,9 @@ def _settings_save_sync(values: dict, resets: list):
             stored_routing=(current.get("image_generation") or {}).get("routing"))
         if img_err:
             raise HTTPException(400, img_err)
+    except config_admin.LayerDropRefused as exc:
+        raise HTTPException(409, {"code": "would_drop", "paths": exc.paths,
+                                  "message": str(exc)}) from exc
     except config_admin.LayerSaveError as exc:
         raise HTTPException(400, str(exc)) from exc
     except config.ConfigWriteRefused as exc:

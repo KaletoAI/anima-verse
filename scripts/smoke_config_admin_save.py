@@ -151,7 +151,8 @@ for scope, body, text in [("instance", {"chat": {"top_p": 0.9}}, "chat"),
                           ("world", {"providers": [{"name": "x"}]}, "providers"),
                           ("instance", {"providers": [{"name": "local"}, {"name": "local"}]}, "duplicate name 'local'")]:
     try:
-        adm.save_layer(scope, body)
+        # The duplicate-only payload deliberately omits the stored server section.
+        adm.save_layer(scope, body, confirm_drop=["server"] if "duplicate name" in text else [])
     except adm.LayerSaveError as e:
         check(text in str(e), "B/D refusal " + text)
     else:
