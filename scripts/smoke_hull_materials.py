@@ -14,6 +14,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.core import paths
+
+_storage = tempfile.TemporaryDirectory(prefix="hull-materials-storage-")
+paths.init(Path(_storage.name))
+
 from smoke_hull_geometry import check_identity, digest, description
 from _hull_fixtures import l_shaped_house
 from app.core import hull_model, hull_styles

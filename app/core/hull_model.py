@@ -285,3 +285,44 @@ def propose_hull(location_id: str) -> Dict[str, Any]:
         logger.info("Hull design for %s: no LLM answer (%s) — defaults", location_id, error)
     return {"ok": True, "error": "", "location_id": location_id, "name": name,
             "styles": listing, "description_json": description, "llm": used_llm}
+
+
+def cleanup_wall_write_back() -> int:
+    """Remove only the exact legacy style write-back on active plan hulls once."""
+    from copy import deepcopy
+    from app.core import location_model3d
+    from app.core.model_store import DEFAULT_TIER, read_sidecar
+    from app.models.world import (get_world_setting, set_world_setting,
+                                  list_locations, upsert_location)
+    flag = "hull_wall_kinds_cleanup_v1"
+    if get_world_setting(flag) == "done":
+        return 0
+    changed = 0
+    for location in list_locations():
+        location_id = location.get("id", "")
+        try:
+            owner = location_model3d._owner_id(location_id)
+            gallery = location_model3d._gallery(owner) if owner else None
+            selected = gallery.find(DEFAULT_TIER, fallback=False) if gallery else None
+            meta = read_sidecar(selected) if selected else {}
+            if not meta.get("plan_hull"):
+                continue
+            style = hull_styles.get_style((meta.get("hull") or {}).get("style"))
+            if not style:
+                continue
+            materials = style["materials"]
+            plan = location.get("map3d") or {}
+            expected = {"0": materials["wall_ground"]} if materials.get("wall_ground") else {}
+            if (plan.get("wall_kind") != materials["wall"]
+                    or (plan.get("level_walls") or {}) != expected):
+                continue
+            updated = deepcopy(location)
+            updated["map3d"].pop("wall_kind", None)
+            updated["map3d"].pop("level_walls", None)
+            if not upsert_location(updated, sync_world=True):
+                raise RuntimeError("location write failed")
+            changed += 1
+        except Exception:
+            logger.exception("Hull wall write-back cleanup failed for %s", location_id)
+    set_world_setting(flag, "done")
+    return changed

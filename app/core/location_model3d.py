@@ -577,6 +577,11 @@ def get_client_meta(location_id: str, room_id: str = "",
     # enter instead of fading it out (docs/schnittstellen-3d.md, plan_hull).
     if meta.get("plan_hull"):
         out["plan_hull"] = True
+        # The storey wall kinds the hull was built with: the scene's contour
+        # walls fall back to them where the floor plan names none.
+        walls = (meta.get("hull") or {}).get("walls")
+        if isinstance(walls, dict) and walls:
+            out["hull_walls"] = {str(k): str(v) for k, v in walls.items()}
     return out
 
 

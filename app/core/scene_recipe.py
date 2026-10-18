@@ -1244,6 +1244,7 @@ def _door_outward(entry: Dict[str, Any]) -> List[float]:
 def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
                    doors: List[Dict[str, Any]],
                    room_hulls: Optional[Dict[int, List[List[List[float]]]]] = None,
+                   hull_walls: Optional[Dict[str, str]] = None,
                    ) -> List[Dict[str, Any]]:
     """The building contour as walls, per used level (§ A6).
 
@@ -1301,9 +1302,11 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
     """
     height = _wall_height(storey)
     # ONE kind per storey, resolved once (:func:`level_wall_kind`): the
-    # storey's own entry in ``level_walls``, else the shell-wide ``wall_kind``.
+    # storey's own entry in ``level_walls``, else the shell-wide ``wall_kind``,
+    # else the active plan hull's stored kind.
     wall_kinds = {lv: level_wall_kind(lv, (map3d or {}).get("level_walls"),
                                       str((map3d or {}).get("wall_kind") or ""))
+                      or (hull_walls or {}).get(str(lv), "")
                   for lv in levels}
     walls: List[Dict[str, Any]] = []
     # THE STOREY IS THE OUTER LOOP SINCE 2026-09-06, because the CONTOUR is a
@@ -4239,7 +4242,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     ``location_model3d.derive_plan_width_m``), ``building_meta`` the building
     model's client meta, ``room_metas`` the room models' client metas by
     room id and ``surface_kinds`` the ids the surface library holds — the
-    route loads all four, the composer only computes. Without the library
+    route loads all four, the composer only computes (the plan hull's storey
+    wall kinds ride in ``building_meta["hull_walls"]``). Without the library
     the location's ``terrain`` resolves to nothing and the ground keeps the
     default kind.
     """
@@ -4336,8 +4340,12 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                       "door_prop": bool((d.get("_door_prop") or {}).get("id"))}
                      for d in doorways if d.get("outside")]
 
+    # The active plan hull's storey wall kinds come with the building meta the
+    # route loaded (``get_client_meta``) — the composer reads no files.
+    hull_walls = (building_meta.get("hull_walls") or {}
+                  if building_meta.get("plan_hull") else {})
     walls: List[Dict[str, Any]] = _contour_walls(map3d, levels, storey,
-                                                 outside_doors, room_hulls)
+                                                 outside_doors, room_hulls, hull_walls)
     # WHICH SHAPE COUNTS AS "the floor plan" — the SAME fallback the level
     # plate is built on (``_plates``): the drawn building outline, else the
     # drawn boundary. Without the second half a boundary-only location had no

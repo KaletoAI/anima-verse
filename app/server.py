@@ -197,6 +197,14 @@ async def lifespan(app: FastAPI):
     except Exception as _sfe:
         logger.warning("scale-frame migration failed: %s", _sfe)
 
+    try:
+        from app.core.hull_model import cleanup_wall_write_back
+        _hw = cleanup_wall_write_back()
+        if _hw:
+            logger.info("Hull wall write-back cleaned: %s", _hw)
+    except Exception as _hwe:
+        logger.warning("hull wall write-back cleanup failed: %s", _hwe)
+
     # Location model sources carry a VIEW since 2026-09-02: the bare
     # "building" gallery image type becomes "building-front" once.
     try:
