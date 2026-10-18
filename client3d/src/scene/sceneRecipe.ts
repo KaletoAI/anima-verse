@@ -2023,7 +2023,7 @@ function dropFarShell(tile: Tile): void {
 function applyBuildingModel(tile: Tile, placed: THREE.Group,
                             spec: SceneModelSpec,
                             createdRoofMats?: THREE.MeshStandardMaterial[]): void {
-  applySceneBuilding(tile, placed, spec.display ?? 'shell', !!spec.roof_only, createdRoofMats);
+  applySceneBuilding(tile, placed, spec.display ?? 'shell', !!spec.roof_only, createdRoofMats, !!spec.plan_hull);
   // The declared standing height travels with it: `tileGroundY` measures the
   // roof guard against that instead of a fixed 1.2 m mark (finding B8,
   // game/ground.ts).
@@ -2141,7 +2141,7 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
           const oldMats = tile.roofMats.filter(m => rec.spec.roof_only || !shellMats.includes(m));
           tile.cutouts?.dispose();
           if (!rec.spec.roof_only) dropFarShell(tile);
-          for (const key of ['serverModel', 'modelIsGround', 'modelIsShellArea', 'shellMats',
+          for (const key of ['serverModel', 'modelIsGround', 'modelIsPlanHull', 'modelIsShellArea', 'shellMats',
             'roofMats', 'roofParts', 'facadeMats', 'height', 'modelWalkY', 'cutouts'] as const) {
             Object.assign(tile, { [key]: staged[key] });
           }
@@ -2262,7 +2262,8 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
 function applySceneBuilding(tile: Tile, model: THREE.Group,
                             display: NonNullable<SceneModelSpec['display']> = 'shell',
                             roofOnly = false,
-                            createdRoofMats?: THREE.MeshStandardMaterial[]): void {
+                            createdRoofMats?: THREE.MeshStandardMaterial[],
+                            planHull = false): void {
   // The handover: whatever stood in for the model — the far-view shell built
   // from the recipe's own primitives — goes when the real one arrives.
   //
@@ -2273,9 +2274,10 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
   // instead of reset in that case.
   if (!roofOnly) dropFarShell(tile);
   tile.serverModel = model;
-  // Ground models remain visible with cutouts; shell-area models fade.
-  const area = display === 'ground';
-  tile.modelIsGround = area;
+  // Ground models and plan hulls remain visible with cutouts.
+  const keep = display === 'ground' || planHull;
+  tile.modelIsGround = display === 'ground';
+  tile.modelIsPlanHull = planHull;
   // Preserve an area-detail flag already set by the payload.
   if (display === 'shell_area') tile.modelIsShellArea = true;
   // An area model used to have to hide the tile's own plate here — a client
@@ -2287,18 +2289,18 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
   // stay in the fade, the roof's clones are added to them below.
   tile.roofMats = roofOnly ? [...tile.roofMats] : [];
   const keptParts = roofOnly ? tile.roofParts : [];
-  // An AREA location: the model IS the location and stays visible — it does not
+  // Area models and plan hulls stay visible — the model does not
   // go into roofParts/roofMats, which the crossfade takes away. The cutouts do
   // the revealing instead (`setEnabled` on the same fade state). Without a fade
   // there is no need for material clones either; the cutout routine clones on
   // its own account anyway — which is why the corridor fade below reaches only
   // the shell branch.
-  tile.roofParts = area ? [] : [...keptParts, model];
+  tile.roofParts = keep ? [] : [...keptParts, model];
   tile.facadeMats = [];
   model.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh) return;
-    if (!area) {
+    if (!keep) {
       const clone = (m: THREE.Material) => {
         const c = m.clone();
         // Register immediately so a partial placement rolls back only its clones.
@@ -2308,9 +2310,9 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
         // like a tree is, so it takes part in the corridor fade
         // (`scene/occlusion.ts`). Patched on the CLONE this line just made —
         // the loaded model's own material belongs to the lease pool and to
-        // every other tile that shows the same building. An `area` model takes
-        // no clone and no patch: it IS the location's ground, which the fade
-        // deliberately leaves whole.
+        // every other tile that shows the same building. A kept model takes
+        // no clone and no patch: ground models and plan hulls deliberately
+        // take no corridor fade.
         applyOcclusionFade(c);
         tile.roofMats.push(c as THREE.MeshStandardMaterial);
         return c;
@@ -2363,6 +2365,7 @@ export function unmountShell(tile: Tile): void {
   tile.doorProps = undefined;
   tile.cutouts = undefined;
   tile.modelIsGround = false;
+  tile.modelIsPlanHull = false;
   tile.modelIsShellArea = false;
   tile.modelWalkY = undefined;
   // The building model of THIS mount is gone with the loop above; the fade

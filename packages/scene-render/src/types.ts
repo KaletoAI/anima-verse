@@ -292,6 +292,8 @@ export interface SceneModelSpec {
    *  without the flag a building model replaces the shell as before. Absent =
    *  false = the model IS the building. */
   roof_only?: boolean
+  /** Generated plan hull stays visible and opens through storey cutouts. */
+  plan_hull?: boolean
   id: string
   /** ETag endpoints per resolution tier (`full` = modelled quality, `low` =
    *  far-view mesh; a missing tier is absent from the object). EMPTY = no mesh

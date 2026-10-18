@@ -7616,6 +7616,26 @@ Der Server setzt das Flag aus dem Sidecar des Modells
 (`location_model3d` → `get_client_meta` → `scene_recipe._building_model`); es
 entsteht ausschließlich beim Dach-Bau, nie beim Meshen eines Bildes.
 
+### Grundriss-Hülle (`plan_hull`) (§ B1/B2, Nachtrag 2026-10-18)
+
+`plan_hull: true` am `models[]`-Spec der Rolle `building` kennzeichnet eine
+von `location_model3d.save_hull_model` gebaute Gebäudehülle. Der Server übernimmt
+das Flag aus dem Sidecar. `display: "shell"` und die normale Gebäude-Verankerung
+bleiben erhalten; das Modell bleibt beim Betreten sichtbar und wird wie ein
+Area-Modell durch `cutouts` geöffnet, statt mit dem Dach auszublenden.
+
+Die Cutouts kommen aus `_outline_world(map3d, level)` für alle benutzten
+Raumebenen ≥ 0. Gleiche Punktfolgen werden entfernt; `CUTOUT_MAX_POLYS` und
+`CUTOUT_MAX_POINTS` begrenzen die Polygone mit Warnung statt Abschneiden.
+Bei Area-Locations bleibt die bestehende Area-Cutout-Regel maßgeblich.
+Das Padding stammt aus den GLB-Extras `interior_cutout_padding_m`.
+Die Admin-Vorschau aktiviert bereits Cutouts für jede Spec mit `cutouts`.
+
+Im Embodied-Modus öffnet sich die Hülle nur, wenn der Avatar in einem
+Innenraum steht, der nicht `always_visible` ist. Die Hülle steht weder in
+`roofParts` noch in `roofMats`. Bewusste Grenze: eine `plan_hull`-Hülle nimmt
+wie ein Area-Modell NICHT am Korridor-Fade (Occlusion-Fade) teil.
+
 ### Ein Prop steht überall gleich tief — `ground_offset_m` (§ B2/§ A9/§ A9a)
 
 Ein Prop trägt seit heute eine eigene **Höhe über dem Boden**: `ground_offset_m`

@@ -280,7 +280,7 @@ OPTIONAL_SUB = {
                "variant", "model_variants", "walkable", "cut_plane",
                "leaf_bbox", "slots", "door", "hinge", "opening", "swing",
                "size_m", "at_world", "display", "walk_y_world",
-               "ground_offset_m"},
+               "ground_offset_m", "plan_hull"},
     "rooms": {"overlay"},
     "markers": {"facing", "tilt", "roll", "anchor", "diorama"},
     "corridors": set(),

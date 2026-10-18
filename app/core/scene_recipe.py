@@ -2906,6 +2906,8 @@ def _building_model(location: Dict[str, Any], map3d: Dict[str, Any],
         # Not calibrated yet: the location's own width stands in, and the spec
         # says so — same signal the diorama gives (§ B2a).
         spec["width_estimated"] = True
+    if meta.get("plan_hull"):
+        spec["plan_hull"] = True
     if meta.get("roof_only"):
         # A GENERATED ROOF (docs/llm-blender-models.md, § B addendum
         # 2026-08-20): the model is the roof and nothing else, so it does NOT
@@ -3014,6 +3016,29 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
         elif clip:
             spec["clip_outline"] = clip
     return spec
+
+
+def _hull_cutouts(map3d: Dict[str, Any],
+                  levels: List[int]) -> List[List[List[float]]]:
+    """Unique used above-ground storey contours, capped to shader limits."""
+    polys: List[List[List[float]]] = []
+    for level in levels:
+        if level < 0:
+            continue
+        outline = _outline_world(map3d, level)
+        if not outline or outline in polys:
+            continue
+        if len(outline) > CUTOUT_MAX_POINTS:
+            logger.warning("Plan hull level %s: outline has %d points (max %d) — "
+                           "not cut out", level, len(outline), CUTOUT_MAX_POINTS)
+            continue
+        if len(polys) >= CUTOUT_MAX_POLYS:
+            logger.warning("Plan hull: more than %d cutouts — level %s and "
+                           "any further ones are not cut out",
+                           CUTOUT_MAX_POLYS, level)
+            break
+        polys.append(outline)
+    return polys
 
 
 def _cutouts(contour: List[List[float]],
@@ -4346,6 +4371,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # rooms keep their texture-only plates) and this whole branch is skipped.
     area_model = bool(map3d.get("area_model")) \
         and not bool(map3d.get("area_detail"))
+    if building and building.get("plan_hull") and not area_model:
+        building["cutouts"] = _hull_cutouts(map3d, levels)
     overlay_rooms: Dict[str, Dict[str, Any]] = {}
     if area_model:
         outside_indoor: List[Tuple[str, List[List[float]]]] = []

@@ -1513,6 +1513,42 @@ def area_scene(area: bool = True, meta=None) -> dict:
                                       building_meta=meta or {})
 
 
+def test_plan_hull() -> None:
+    """10 m ground square and 6 m upper square give two holes; level 2 repeats 1.
+
+    Offsets (1, 2, 3) calibrate only the model, never these plan polygons.
+    Basement contours must not cut the above-ground hull.
+    """
+    loc = narrow_fixture()
+    meta = {**BUILDING_META, "plan_hull": True, "width_m": 10,
+            "offset_x": 1, "offset_y": 2, "offset_z": 3}
+
+    def building_for(meta: dict) -> dict:
+        """Compose the fixture with the supplied model metadata."""
+        return spec_of(scene_recipe.compose_scene(
+            loc, plan_width_m=PLAN_W, building_meta=meta), "building")
+
+    loc["map3d"]["level_outlines"]["-1"] = [
+        [-7, -7], [7, -7], [7, 7], [-7, 7]]
+    loc["rooms"].append({"id": "cellar", "layout": {
+        "x": -1, "y": -1, "w": 2, "d": 2, "level": -1}})
+    hull = building_for(meta)
+    check("plan hull retains shell placement", hull["display"] == "shell")
+    check("plan hull flag reaches the spec", hull.get("plan_hull") is True)
+    expected = [[[-5, -5], [5, -5], [5, 5], [-5, 5]],
+                [[-3, -3], [3, -3], [3, 3], [-3, 3]]]
+    check("hull cuts unique storey outlines in plan metres",
+          hull.get("cutouts") == expected, str(hull.get("cutouts")))
+    plain = building_for({k: v for k, v in meta.items() if k != "plan_hull"})
+    check("ordinary building gets no hull cutouts", "cutouts" not in plain)
+    check("hull keeps normal shell anchoring", hull["anchor"] == plain["anchor"]
+          and hull["bottom_y"] == plain["bottom_y"])
+    area = spec_of(area_scene(meta=meta), "building")
+    check("plan hull flag preserves area cutout rules",
+          area["display"] == "ground" and area["cutouts"]
+          == spec_of(area_scene(meta=BUILDING_META), "building")["cutouts"])
+
+
 def test_area_locations() -> None:
     print("\n[4c] area location — cutouts and overlay zones")
     plain = area_scene(area=False)
@@ -5559,6 +5595,7 @@ def main() -> int:
     test_openings_without_walls()
     test_wall_skirt()
     test_contour_wall_texture()
+    test_plan_hull()
     test_level_outlines()
     test_level_walls()
     test_area_locations()

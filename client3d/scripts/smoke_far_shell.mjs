@@ -233,11 +233,22 @@ async function main() {
   check('B6 …shell and roof fade TOGETHER (appended, not reset)',
     [recipe.includes('tile.roofMats = roofOnly ? [...tile.roofMats] : [];'),
       recipe.includes('const keptParts = roofOnly ? tile.roofParts : [];'),
-      recipe.includes('tile.roofParts = area ? [] : [...keptParts, model];')],
+      recipe.includes('tile.roofParts = keep ? [] : [...keptParts, model];')],
     [true, true, true]);
   check('B6 …and the tier swap frees only what it really replaced',
     recipe.includes('for (const m of oldMats) if (!tile.roofMats.includes(m)) m.dispose();'),
     true);
+
+  check('B7 plan hull stays visible without corridor fade',
+    [recipe.includes("const keep = display === 'ground' || planHull;"),
+      recipe.includes('if (!keep) {'),
+      recipe.includes('createdRoofMats, !!spec.plan_hull);'),
+      recipe.includes('tile.modelIsPlanHull = planHull;')], [true, true, true, true]);
+  const mainSrc = await readFile(new URL('../src/main.ts', import.meta.url), 'utf8');
+  check('B7 plan hull opens only in indoor rooms',
+    [mainSrc.includes('(t?.modelIsGround || t?.modelIsPlanHull) ? roomAt(t, pos.x, pos.z) : null'),
+      mainSrc.includes('(!(t.modelIsGround || t.modelIsPlanHull) || (room !== null && !t.alwaysVisibleRooms.has(room)))')],
+    [true, true]);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

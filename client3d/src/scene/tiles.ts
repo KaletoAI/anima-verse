@@ -596,6 +596,7 @@ export interface Tile {
    *  zooming in never fades it out; instead it gets holes. Comes from the
    *  spec, independently of whether cutouts exist. */
   modelIsGround?: boolean;
+  modelIsPlanHull?: boolean;
   /** `display: 'shell_area'` (§ B6 No. 10) — area location in detail mode:
    *  anchored like `ground`, but zooming in fades the model like a shell,
    *  revealing the composed detail scene below. The tile floor follows the

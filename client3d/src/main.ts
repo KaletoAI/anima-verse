@@ -6025,9 +6025,9 @@ async function startApp(username: string, role: string) {
       const pos = npcs.positionOf(avatarName);
       if (pos) {
         const t = tileAt(pos.x, pos.z);
-        const room = t?.modelIsGround ? roomAt(t, pos.x, pos.z) : null;
+        const room = (t?.modelIsGround || t?.modelIsPlanHull) ? roomAt(t, pos.x, pos.z) : null;
         if (t && openable(t) &&
-            (!t.modelIsGround || (room !== null && !t.alwaysVisibleRooms.has(room)))) {
+            (!(t.modelIsGround || t.modelIsPlanHull) || (room !== null && !t.alwaysVisibleRooms.has(room)))) {
           openLocation(t.loc.id);
         } else closeOpenLocation();
       }
