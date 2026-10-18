@@ -817,16 +817,10 @@ def lora_library_clear_discovered(user=Depends(require_admin)):
     stay). Reset helper — e.g. to re-test the per-backend LoRA filter with a
     clean discovery run. Persists server-side so a following sync works on
     the cleared state."""
-    data = config_admin.layer_part(config_scope.INSTANCE)
-    ig = data.setdefault("image_generation", {})
-    triggers = ig.get("lora_triggers") or []
-    kept = [e for e in triggers
-            if not (isinstance(e, dict) and (e.get("source") or "") == "discovered")]
-    removed = len(triggers) - len(kept)
-    if removed:
-        ig["lora_triggers"] = kept
-        config.save_part(config_scope.INSTANCE, data)
-    return {"removed": removed, "lora_triggers": kept}
+    from app.core import lora_library
+    removed = lora_library.clear_discovered()
+    items = lora_library.entries()
+    return {"removed": removed, "lora_triggers": items, "entries": items}
 
 
 @router.post("/settings/lora-library/sync")
@@ -838,7 +832,9 @@ async def lora_library_sync(user=Depends(require_admin)):
     import asyncio
     from app.core.lora_library import sync_lora_library
     result = await asyncio.to_thread(sync_lora_library)
-    result["lora_triggers"] = config.get("image_generation.lora_triggers", []) or []
+    from app.core import lora_library
+    result["entries"] = lora_library.entries()
+    result["lora_triggers"] = result["entries"]
     return result
 
 

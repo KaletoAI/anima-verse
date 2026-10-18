@@ -167,6 +167,9 @@ INTENTIONAL_REAL_WORLD = {
 # tools that need instance config (providers, routing, catalogs + tokens) take
 # ``--instance PATH`` with the default ``<repo>/instance`` set in the tool.
 INTENTIONAL_REAL_INSTANCE = {
+    "migrate_instance_config.py":
+        "migration CLI: initializes --instance only after dry-run and backups "
+        "to move the selected world's legacy LoRA library into its store",
     "review_presets.py":
         "CLI tool: calls the LLMs configured in the instance "
         "(providers, llm_routing); --instance, default <repo>/instance",

@@ -112,7 +112,7 @@ def _children(node: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         kids[name] = fdef
     for kind in ("sub_arrays", "subsections"):
         for name, cdef in (node.get(kind) or {}).items():
-            if isinstance(cdef, dict):
+            if isinstance(cdef, dict) and not cdef.get("virtual"):
                 kids[name] = cdef
     return kids
 
@@ -166,6 +166,9 @@ def _resolve_parts(parts) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     if scope not in (INSTANCE, WORLD, MIXED):
         raise ValueError(f"config section {root!r} declares no valid scope: {scope!r}")
     for seg in parts[1:]:
+        if any((node.get(kind) or {}).get(seg, {}).get("virtual")
+               for kind in ("sub_arrays", "subsections")):
+            return None, None
         child = _children(node).get(seg)
         if child is None:
             return None, _inherited(scope)
@@ -329,7 +332,25 @@ def _same(a: Any, b: Any) -> bool:
     return a == b
 
 
+def _is_virtual_path(parts: Tuple[str, ...]) -> bool:
+    """Virtual schema nodes have UI metadata but no config value."""
+    node = _schema_view().get(parts[0], {}) if parts else {}
+    if node.get("virtual"):
+        return True
+    for seg in parts[1:]:
+        node = next(((node.get(kind) or {})[seg]
+                     for kind in ("sub_arrays", "subsections", "fields")
+                     if seg in (node.get(kind) or {})), {})
+        if not isinstance(node, dict):
+            return False
+        if node.get("virtual"):
+            return True
+    return False
+
+
 def _prune_value(value: Any, parts: Tuple[str, ...]) -> Any:
+    if _is_virtual_path(parts):
+        return _DROP
     if isinstance(value, dict) and not value:
         return _DROP
     has, default = _shipped_default_parts(parts)
@@ -379,7 +400,15 @@ def _put(target: Dict[str, Any], parts: Tuple[str, ...], value: Any) -> None:
 
 def _split_into(parts: Tuple[str, ...], value: Any, instance: Dict[str, Any],
                 world: Dict[str, Any]) -> None:
+    if _is_virtual_path(parts):
+        return
     node, declared = _resolve_parts(list(parts))
+    if isinstance(value, dict) and node and any(
+            c.get("virtual") for kind in ("sub_arrays", "subsections")
+            for c in (node.get(kind) or {}).values() if isinstance(c, dict)):
+        for key, child in value.items():
+            _split_into(parts + (key,), child, instance, world)
+        return
     scope = _scope_at(node, declared)
     if scope == MIXED and isinstance(value, dict):
         for key, child in value.items():
@@ -476,6 +505,10 @@ def _filter_node(node: Dict[str, Any], path: str, declared: str,
         kept = {}
         for name, child in (node.get(kind) or {}).items():
             if not isinstance(child, dict):
+                continue
+            if child.get("virtual"):
+                if _inherited(declared) == scope:
+                    kept[name] = copy.deepcopy(child)
                 continue
             cpath = f"{path}.{name}"
             got = scope_of(cpath)

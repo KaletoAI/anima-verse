@@ -117,9 +117,7 @@ def rejects(fn) -> list:
 
 
 def main() -> int:
-    _real_get = cfg.get
-    cfg.get = lambda key, default=None: (
-        LIBRARY if key == "image_generation.lora_triggers" else _real_get(key, default))
+    lib.entries = lambda: LIBRARY
 
     flux = FakeBackend("flux-backend")
     filtered = FakeBackend("flux-filtered", lora_filter="flux*")

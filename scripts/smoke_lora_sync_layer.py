@@ -1,6 +1,6 @@
 """Regression: discovery saves world chat.top_p=0.9 before returning one LoRA.
 Hand-derived expectation: sync preserves that world override and writes the
-new discovered entry only to the instance, with added=1 and scanned=[fake].
+new discovered entry only to the instance library file, with added=1 and scanned=[fake].
 Temporary paths are initialized before any world-DB imports.
 """
 import json
@@ -44,7 +44,7 @@ with tempfile.TemporaryDirectory(prefix="lora-sync-layer-") as tmp:
     finally:
         service.get_image_service = previous
     assert json.loads((world / "config.json").read_text())["chat"]["top_p"] == 0.9
-    assert json.loads((instance / "config.json").read_text())["image_generation"]["lora_triggers"] == [
+    assert json.loads((instance / "lora_library.json").read_text())["entries"] == [
         {"lora": "new-lora", "word": "", "source": "discovered",
          "backends": ["fake"], "missing_on": []}]
     assert result == {"changed": True, "added": 1, "removed": 0, "missing": 0, "scanned": ["fake"]}

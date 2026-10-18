@@ -1,7 +1,7 @@
-"""Per-world LoRA library sync — the library is the single source for every
+"""Instance LoRA library store and sync — the library is the single source for every
 LoRA selection (game admin + player UI).
 
-The library lives in ``image_generation.lora_triggers``; ONE entry per unique
+The library lives in ``<instance>/lora_library.json``; ONE entry per unique
 LoRA name (user decision 2026-07-16, plan-lora-library.md):
 ``{lora, word, source, backends, missing_on}``:
 
@@ -30,15 +30,168 @@ Reconciliation rules per scanned backend B:
   mass-flagging them missing.
 """
 import copy
+import json
+import os
+import tempfile
 import threading
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
-from app.core import config, config_admin
+from app.core import config, paths
 from app.core.log import get_logger
 
 logger = get_logger("lora_library")
 
 _sync_lock = threading.Lock()
+
+
+LORA_HISTORY_DIRNAME = ".lora-history"
+LORA_HISTORY_KEEP = 50
+_store_lock = threading.RLock()
+_cache_key = None
+_cache_entries: List[dict] = []
+_invalid_logged = ""
+
+
+class LoraLibraryUnavailable(RuntimeError):
+    """An instance must be initialized before the library can be written."""
+
+
+class LoraLibraryConflict(ValueError):
+    """A library entry with this exact name already exists."""
+
+
+def _load() -> List[dict]:
+    """The stat-cached entries; raises ``ValueError`` for an unreadable file."""
+    global _cache_key, _cache_entries
+    with _store_lock:
+        if not paths.instance_initialised():
+            return []
+        path = paths.get_lora_library_path()
+        try:
+            st = path.stat()
+        except FileNotFoundError:
+            _cache_key, _cache_entries = None, []
+            return _cache_entries
+        key = (path, st.st_mtime_ns, st.st_size)
+        if key != _cache_key:
+            data = config._read_json_file(path)
+            if data.get("version") != 1 or not isinstance(data.get("entries"), list):
+                raise ValueError(f"Invalid LoRA library: {path}")
+            _cache_entries = data["entries"]
+            _cache_key = key
+        return _cache_entries
+
+
+def entries() -> List[dict]:
+    """Return the stat-cached library entries. Callers must not mutate them.
+
+    An unreadable file reads as empty (renders keep working without LoRAs)
+    and is logged; every writer refuses it instead, so it is never replaced."""
+    global _invalid_logged
+    try:
+        return _load()
+    except ValueError as exc:
+        if _invalid_logged != str(exc):
+            _invalid_logged = str(exc)
+            logger.error("%s — LoRA library reads as empty until the file is fixed", exc)
+        return []
+
+
+def _mutate(fn: Callable[[List[dict]], bool]) -> List[dict]:
+    """Serialize a read–modify–write, backing up only real changes."""
+    global _cache_key
+    with _store_lock:
+        if not paths.instance_initialised():
+            raise LoraLibraryUnavailable("LoRA library requires an initialized instance")
+        items = copy.deepcopy(_load())
+        if fn(items):
+            path = paths.get_lora_library_path()
+            config.snapshot_layer(path.parent, files=("lora_library.json",),
+                                  history_dirname=LORA_HISTORY_DIRNAME,
+                                  keep=LORA_HISTORY_KEEP)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, temporary = tempfile.mkstemp(dir=path.parent, suffix=".json.tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    os.fchmod(stream.fileno(), 0o600)
+                    json.dump({"version": 1, "entries": items}, stream,
+                              indent=2, ensure_ascii=False)
+                os.replace(temporary, path)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+            _cache_key = None
+            with _dropped_lock:
+                _dropped_logged.clear()
+        return items
+
+
+def add_manual_entry(lora: str, word: str = "", backends: Sequence[str] = ()) -> dict:
+    """Add a manual entry; names are unique, including names containing slashes."""
+    entry = {"lora": lora, "word": word, "source": "manual",
+             "backends": list(backends), "missing_on": []}
+    def add(items):
+        if any(e.get("lora") == lora for e in items):
+            raise LoraLibraryConflict(f"LoRA already exists: {lora}")
+        items.append(entry)
+        return True
+    _mutate(add)
+    return copy.deepcopy(entry)
+
+
+def update_entry(lora: str, *, word: Optional[str] = None,
+                 backends: Optional[Sequence[str]] = None,
+                 rename_to: Optional[str] = None) -> dict:
+    """Only actual edits make a discovered entry manual (the editor's ltTouch)."""
+    updated = {}
+    def update(items):
+        entry = next((e for e in items if e.get("lora") == lora), None)
+        if entry is None:
+            raise KeyError(lora)
+        if rename_to is not None and rename_to != lora and any(
+                e.get("lora") == rename_to for e in items):
+            raise LoraLibraryConflict(f"LoRA already exists: {rename_to}")
+        before = copy.deepcopy(entry)
+        for key, value in (("word", word), ("lora", rename_to),
+                           ("backends", list(backends) if backends is not None else None)):
+            if value is not None and (entry.get(key) or ([] if key == "backends" else "")) != value:
+                entry[key] = value
+        if entry != before:
+            if entry.get("source") == "discovered":
+                entry["source"] = "manual"
+            if backends is not None:
+                entry["missing_on"] = [b for b in entry.get("missing_on", [])
+                                       if b in entry["backends"]]
+        updated.update(entry)
+        return entry != before
+    _mutate(update)
+    return updated
+
+
+def delete_entry(lora: str) -> bool:
+    """Remove an entry, returning False for an unknown name."""
+    removed = False
+    def delete(items):
+        nonlocal removed
+        kept = [e for e in items if e.get("lora") != lora]
+        removed = len(kept) != len(items)
+        items[:] = kept
+        return removed
+    _mutate(delete)
+    return removed
+
+
+def clear_discovered() -> int:
+    """Remove discovered entries, preserving manual claims."""
+    removed = 0
+    def clear(items):
+        nonlocal removed
+        kept = [e for e in items if e.get("source") != "discovered"]
+        removed = len(items) - len(kept)
+        items[:] = kept
+        return bool(removed)
+    _mutate(clear)
+    return removed
 
 
 def _is_touched(entry: Dict[str, Any]) -> bool:
@@ -59,6 +212,8 @@ def sync_lora_library() -> Dict[str, Any]:
     """
     result: Dict[str, Any] = {"changed": False, "added": 0, "removed": 0,
                               "missing": 0, "scanned": []}
+    if not paths.instance_initialised():
+        return result
     try:
         from app.imagegen.service import get_image_service
         imagegen = get_image_service()
@@ -90,12 +245,7 @@ def sync_lora_library() -> Dict[str, Any]:
             result["scanned"].append(b.name)
             discoveries.append((b, names))
 
-        with config._LOCK:
-            part = copy.deepcopy(config_admin.layer_part("instance"))
-            ig = part.setdefault("image_generation", {})
-            triggers: List[Any] = ig.get("lora_triggers")
-            if not isinstance(triggers, list):
-                triggers = []
+        def reconcile(triggers):
             changed = False
 
             for b, names in discoveries:
@@ -155,7 +305,7 @@ def sync_lora_library() -> Dict[str, Any]:
                         kept.append(e)
                     else:
                         result["removed"] += 1  # last association gone — drop
-                triggers = kept
+                triggers[:] = kept
 
             # Missing count over the scanned backends (for the admin toast).
             for e in triggers:
@@ -165,8 +315,6 @@ def sync_lora_library() -> Dict[str, Any]:
                         if x in result["scanned"])
 
             if changed:
-                ig["lora_triggers"] = triggers
-                config.save_part("instance", part)
                 # A changed association must be able to warn again (and an
                 # obsolete warning must stop repeating) — see warn_dropped_loras.
                 with _dropped_lock:
@@ -175,6 +323,9 @@ def sync_lora_library() -> Dict[str, Any]:
                             "(scanned: %s)", result["added"], result["removed"],
                             result["missing"], ", ".join(result["scanned"]) or "-")
             result["changed"] = changed
+            return changed
+
+        _mutate(reconcile)
     return result
 
 

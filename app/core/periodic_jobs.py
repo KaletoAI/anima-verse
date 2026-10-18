@@ -431,7 +431,7 @@ def _sub_day_consolidation():
 
 
 def _sub_lora_library_sync():
-    """LoRA-library discovery: reconciles image_generation.lora_triggers
+    """LoRA-library discovery: reconciles the instance LoRA library
     against every backend with a LoRA listing (lora_url). Adds discovered
     LoRAs, flags manual ones as missing, drops vanished untouched discoveries.
     """

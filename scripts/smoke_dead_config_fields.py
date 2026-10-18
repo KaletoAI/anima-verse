@@ -190,7 +190,6 @@ LIVING = {
         "scene_prompt_multi_ref": "multi ref prompt",       # scene_render.py
         "scene_prompt_only_background": "bg only prompt",   # scene_render.py
         "backends": [{"name": "gpu-a", "enabled": True}],
-        "lora_triggers": [],
     },
     "chat": {"context_messages": 20},
     "random_events": {"enabled": True},

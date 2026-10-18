@@ -160,6 +160,8 @@ def apply_schema_defaults(data: dict, schema: dict) -> None:
         # item, honoring applicable_for/visible_when so type-specific fields
         # don't get materialized on items they never render for.
         for sub_key, sub_def in (section_def.get("sub_arrays") or {}).items():
+            if sub_def.get("virtual"):
+                continue
             sub_fields = (sub_def or {}).get("fields", {})
             section_data = data.get(section_key)
             items = section_data.get(sub_key) if isinstance(section_data, dict) else None
@@ -294,6 +296,8 @@ def _preserve_unsent_subarray_fields(merged: dict, current: dict, schema: dict) 
         if not isinstance(cur_sec, dict) or not isinstance(new_sec, dict):
             continue
         for sub_key, sub_def in sub_arrays.items():
+            if sub_def.get("virtual"):
+                continue
             field_keys = list((sub_def.get("fields") or {}).keys())
             if not field_keys:
                 continue
@@ -469,6 +473,8 @@ def strip_materialized_item_defaults(merged: dict, current: dict, schema: dict) 
         if section.get("is_array"):
             strip_items(new, cur, section.get("fields", {}))
         for sub_key, sub in (section.get("sub_arrays") or {}).items():
+            if sub.get("virtual"):
+                continue
             if isinstance(new, dict):
                 strip_items(new.get(sub_key), cur.get(sub_key) if isinstance(cur, dict) else None,
                             sub.get("fields", {}))
@@ -479,6 +485,10 @@ def prepare_layer(scope: str, values: dict, resets=(), confirm_drop=()) -> tuple
     schema = config_scope.schema_for(scope)
     if not isinstance(values, dict):
         raise LayerSaveError("body must be a JSON object")
+    if (scope == config_scope.INSTANCE
+            and isinstance(values.get("image_generation"), dict)
+            and "lora_triggers" in values["image_generation"]):
+        raise LayerSaveError("image_generation.lora_triggers moved to the LoRA library — reload the page")
     def check_objects(data, prefix=""):
         for key, value in data.items():
             path = f"{prefix}.{key}" if prefix else key

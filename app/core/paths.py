@@ -391,3 +391,8 @@ def get_schemas_dir() -> Path:
 
 def get_config_path() -> Path:
     return get_storage_dir() / "config.json"
+
+
+def get_lora_library_path() -> Path:
+    """The instance-owned LoRA library file."""
+    return get_instance_dir() / "lora_library.json"

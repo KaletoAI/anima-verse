@@ -765,14 +765,15 @@ def get_use_case_prompts(use_case: str, image_model: str = "",
 
 
 def get_lora_trigger_words(lora_names) -> list:
-    """Activation words for the active LoRAs (from the per-world library
-    ``image_generation.lora_triggers`` = [{lora, word, …}, …]). Matches by file
+    """Activation words for the active LoRAs (from the instance library
+    ``lora_library.json`` = [{lora, word, …}, …]). Matches by file
     name (basename too, in case path/extension differ slightly). Library order,
     duplicates removed.
     """
     if not lora_names:
         return []
-    triggers = get("image_generation.lora_triggers", []) or []
+    from app.core import lora_library
+    triggers = lora_library.entries()
     if not isinstance(triggers, list):
         return []
     want = set()
@@ -797,7 +798,7 @@ def get_lora_trigger_words(lora_names) -> list:
 
 def get_lora_options(backend_name: str, lora_filter: str = "") -> list:
     """LoRA options for ONE backend from the consolidated LoRA library
-    (``image_generation.lora_triggers`` = [{lora, word, source, backends,
+    (``lora_library.json`` entries = [{lora, word, source, backends,
     missing_on}, …]). Selection is backend-scoped (user decision 2026-07-16).
 
     Returns ``[{"name": str, "missing": bool}, …]``, sorted by name:
@@ -811,7 +812,8 @@ def get_lora_options(backend_name: str, lora_filter: str = "") -> list:
       of foreign model families don't leak into the dropdowns.
     """
     import fnmatch
-    triggers = get("image_generation.lora_triggers", []) or []
+    from app.core import lora_library
+    triggers = lora_library.entries()
     if not isinstance(triggers, list):
         return []
     _pat = (lora_filter or "").strip().lower()
@@ -1038,6 +1040,26 @@ def _migrate_backend_categories(config: dict) -> bool:
     if changed:
         logger.info("Backend categories migrated: 'generate' -> 'txt2img'")
     return changed
+
+
+def _migrate_lora_library_out(config: dict) -> bool:
+    """Move the legacy list once; an existing library wins after a crash."""
+    ig = config.get("image_generation") or {}
+    legacy = ig.get("lora_triggers")
+    if not isinstance(legacy, list) or not paths.instance_initialised():
+        return False
+    from app.core import lora_library
+    with lora_library._store_lock:
+        if paths.get_lora_library_path().exists():
+            logger.warning("LoRA library file exists; dropped %d entries still in the instance config",
+                           len(legacy))
+        else:
+            def migrate(items):
+                items[:] = copy.deepcopy(legacy)
+                return True
+            lora_library._mutate(migrate)
+        del ig["lora_triggers"]
+    return True
 
 
 def _migrate_lora_triggers(config: dict) -> bool:
@@ -1487,7 +1509,7 @@ def _migrate_mesh_rig_split(config: dict) -> bool:
 
 
 def _apply_file_migrations(config: dict) -> bool:
-    """Runs every load-time normalisation over ``config``, IN MEMORY.
+    """Normalize the config; the legacy LoRA move writes its dedicated file.
 
     ``config`` is the UNION of both layers (instance + world): a migration
     may read a field of one layer and write the other (the image routing
@@ -1529,6 +1551,8 @@ def _apply_file_migrations(config: dict) -> bool:
     if _migrate_mesh_rig_split(config):
         changed = True
     if _migrate_lora_triggers(config):
+        changed = True
+    if _migrate_lora_library_out(config):
         changed = True
     return changed
 
@@ -1626,10 +1650,23 @@ def _read_layer(path: Path, layer: str, strict: bool = False) -> dict:
     layer's scope are ignored with ONE warning per file (count, the first
     few names, what to do) — an unmigrated world carries dozens of them, and
     one line per key would bury the boot log; the single keys are logged at
-    DEBUG. The file is not changed here; the next save or ``migrate_file``
-    drops them from it.
+    DEBUG. Foreign keys are removed by the next save or ``migrate_file``.
+    The legacy instance LoRA list is moved and removed here before scope filtering.
     """
     data = _layer_with_secrets(path, strict)
+    if (layer == config_scope.INSTANCE and paths.instance_initialised()
+            and path == paths.get_instance_config_path()):
+        # Only this file migration persists during load: move the library first,
+        # then back up and remove its old key. All other normalization stays read-only.
+        legacy = copy.deepcopy(data)
+        _migrate_lora_triggers(legacy)
+        if _migrate_lora_library_out(legacy):
+            raw = _assert_readable(path)
+            if "lora_triggers" in (raw.get("image_generation") or {}):
+                del raw["image_generation"]["lora_triggers"]
+                snapshot_layer(path.parent)
+                _write_if_changed(path, raw)
+            data = legacy
     inst, world, unknown = config_scope.split_by_scope(data)
     own, foreign = (inst, world) if layer == config_scope.INSTANCE else (world, inst)
     for root in unknown:
@@ -1710,28 +1747,32 @@ CONFIG_HISTORY_DIRNAME: str = ".config-history"
 CONFIG_HISTORY_KEEP: int = 50
 
 
-def list_snapshots(layer_dir: Path) -> List[Path]:
+def list_snapshots(layer_dir: Path,
+                   history_dirname: str = CONFIG_HISTORY_DIRNAME) -> List[Path]:
     """Return a layer's snapshot directories in ascending name order."""
-    history = layer_dir / CONFIG_HISTORY_DIRNAME
+    history = layer_dir / history_dirname
     if not history.exists():
         return []
     return sorted(entry for entry in history.iterdir() if entry.is_dir())
 
 
-def _rotate_history(layer_dir: Path) -> None:
+def _rotate_history(layer_dir: Path, history_dirname: str = CONFIG_HISTORY_DIRNAME,
+                    keep: int = CONFIG_HISTORY_KEEP) -> None:
     """Remove only the oldest snapshots beyond the retention limit."""
-    snapshots = list_snapshots(layer_dir)
-    for snapshot in snapshots[:max(0, len(snapshots) - CONFIG_HISTORY_KEEP)]:
+    snapshots = list_snapshots(layer_dir, history_dirname)
+    for snapshot in snapshots[:max(0, len(snapshots) - keep)]:
         shutil.rmtree(snapshot)
 
 
-def snapshot_layer(layer_dir: Path) -> Optional[Path]:
+def snapshot_layer(layer_dir: Path, files=("config.json", "secrets.json"),
+                   history_dirname=CONFIG_HISTORY_DIRNAME,
+                   keep: int = CONFIG_HISTORY_KEEP) -> Optional[Path]:
     """Copy the existing layer files byte for byte into a private snapshot."""
-    sources = [layer_dir / name for name in ("config.json", "secrets.json")
+    sources = [layer_dir / name for name in files
                if (layer_dir / name).exists()]
     if not sources:
         return None
-    history = layer_dir / CONFIG_HISTORY_DIRNAME
+    history = layer_dir / history_dirname
     os.makedirs(history, mode=0o700, exist_ok=True)
     os.chmod(history, 0o700)
     stamp = utc_now().strftime("%Y%m%dT%H%M%S%fZ")
@@ -1756,7 +1797,7 @@ def snapshot_layer(layer_dir: Path) -> Optional[Path]:
     # The backup exists at this point; failing to prune old ones must not
     # block the write it protects.
     try:
-        _rotate_history(layer_dir)
+        _rotate_history(layer_dir, history_dirname, keep)
     except OSError as exc:
         logger.warning("Config backup rotation failed in %s: %s", layer_dir, exc)
     return snapshot
@@ -1822,7 +1863,12 @@ def _persist(data: dict, world_path: Path,
     for target in targets:
         for f in (target, target.parent / "secrets.json"):
             if f.exists():
-                _assert_readable(f)
+                existing = _assert_readable(f)
+                if isinstance((existing.get("image_generation") or {}).get("lora_triggers"), list):
+                    raise ConfigWriteRefused(
+                        f"legacy LoRA library still in {f} — initialize that instance "
+                        "and load it before saving; migrate legacy worlds with "
+                        "scripts/migrate_instance_config.py")
     wrote = False
     if instance_path is not None:
         wrote = _write_layer(Path(instance_path), inst_pruned)
@@ -1892,9 +1938,8 @@ def migrate_file(config_path: Optional[Path] = None,
                  instance_path: Optional[Path] = None) -> bool:
     """Applies the load-time normalisations TO DISK. Returns True if written.
 
-    `load()` is a pure READ path — it normalises only the in-memory config, so
-    that merely opening a world (a smoke script, a CLI, an export run) leaves
-    the files byte-identical. Persisting is this function's job, and the
+    `load()` normalizes config in memory except for the one-time LoRA library
+    move. Persisting all other normalizations is this function's job, and
     server boot calls it right after `load()`.
 
     Runs the pipeline of `load()` on FRESH reads of both layers (``_CONFIG``
@@ -1953,8 +1998,9 @@ def load(config_path: Optional[Path] = None,
     (scripts) logs the error and reads that file as empty; every writer then
     refuses to replace it (``_assert_readable``). `reload()` keeps the mode.
 
-    READ-ONLY: nothing is written here. `migrate_file()` persists the
-    normalisations.
+    Normalisations remain read-only except the one-time LoRA library move,
+    which writes its file before backing up and removing the old config key.
+    `migrate_file()` persists all other normalisations.
     """
     global _CONFIG, _CONFIG_PATH, _INSTANCE_PATH, _BOOT_RESTART_SNAPSHOT, _LOAD_STRICT
     with _LOCK:

@@ -102,9 +102,16 @@ with tempfile.TemporaryDirectory(prefix="admin-settings-instance-") as root:
     refused({"values": {}, "resets": []}, status=409)
     (instance / "config.json").write_text("{}")
     config.load(world / "config.json", instance / "config.json")
-    save({"image_generation": {"lora_triggers": [{"name": "manual"}, {"name": "found", "source": "discovered"}]}})
+    from app.core import lora_library
+    lora_library.add_manual_entry("manual")
+    def discover(items):
+        items.append({"lora": "found", "word": "", "source": "discovered", "backends": ["fake"], "missing_on": []})
+        return True
+    lora_library._mutate(discover)
     world_before = (world / "config.json").read_bytes()
     result = adm.lora_library_clear_discovered(user=None)
-    assert result == {"removed": 1, "lora_triggers": [{"name": "manual"}]}
+    manual = [{"lora": "manual", "word": "", "source": "manual", "backends": [], "missing_on": []}]
+    assert result == {"removed": 1, "lora_triggers": manual, "entries": manual}
+    assert json.loads((instance / "lora_library.json").read_text())["entries"] == manual
     assert (world / "config.json").read_bytes() == world_before
     print("PASS A–K instance admin routes")

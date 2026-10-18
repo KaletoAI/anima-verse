@@ -124,6 +124,7 @@ class World:
         self.original: dict = {}        # file name -> bytes as read
         self.raw: dict = {}             # config.json + own secrets, unmigrated
         self.migrated: dict = {}        # raw after _apply_file_migrations
+        self.lora_entries: Optional[list] = None
         self.inst_pruned: dict = {}
         self.world_pruned: dict = {}
         self.raw_instance_keys: list = []
@@ -264,6 +265,10 @@ def read_instance(inst: Instance) -> None:
     except ValueError as e:
         raise Refused(str(e)) from e
     inst.pruned = config_scope.prune(config_scope.split_by_scope(data)[0])
+    # A legacy library is still instance data even though its schema node is virtual.
+    legacy = (data.get("image_generation") or {}).get("lora_triggers")
+    if isinstance(legacy, list) and legacy:
+        inst.pruned.setdefault("image_generation", {})["lora_triggers"] = legacy
 
 
 def carries_instance_values(w: World) -> bool:
@@ -272,7 +277,7 @@ def carries_instance_values(w: World) -> bool:
     the load-time migrations (a legacy field that seeds the routing) is
     non-empty after pruning."""
     raw_inst = config_scope.split_by_scope(w.raw)[0]
-    return bool(w.inst_pruned) or bool(config_scope.prune(raw_inst))
+    return bool(w.lora_entries) or bool(w.inst_pruned) or bool(config_scope.prune(raw_inst))
 
 
 # ── 2. Plan ─────────────────────────────────────────────────────────────────
@@ -282,6 +287,12 @@ def plan_world(w: World) -> None:
     w.raw_instance_keys = config._split_keys(raw_inst)
 
     w.migrated = json.loads(json.dumps(w.raw))
+    # Planning, including --dry-run, must never create a library. Consolidate
+    # the selected source in memory and write it only after the file backups.
+    ig = w.migrated.get("image_generation") or {}
+    if isinstance(ig.get("lora_triggers"), list):
+        config._migrate_lora_triggers(w.migrated)
+        w.lora_entries = ig.pop("lora_triggers")
     config._apply_file_migrations(w.migrated)
     inst, world, _unknown = config_scope.split_by_scope(w.migrated)
     w.inst_pruned = config_scope.prune(inst)
@@ -332,6 +343,9 @@ def _dead_field(dotted_key: str) -> bool:
 def report(source: World, worlds: list, skipped: list, symlinked: list,
            inst_cfg: Path) -> None:
     src_raw_inst = config_scope.split_by_scope(source.raw)[0]
+    if source.lora_entries is not None:
+        print(f"  LoRA library: {len(source.lora_entries)} entries from '{source.name}' "
+              "to lora_library.json (an existing library wins)")
     for w in worlds:
         is_source = w is source
         print(f"\nWorld '{w.name}'{' (source of the instance)' if is_source else ''}"
@@ -433,7 +447,10 @@ def assert_unchanged(worlds: list, inst: Instance) -> None:
 def write(source: World, worlds: list, inst: Instance) -> None:
     assert_unchanged(worlds, inst)
     inst_cfg = inst.config_path
-    paths.make_private_dir(inst.dir)
+    paths.init_instance(inst.dir)
+    if source.lora_entries is not None:
+        config._migrate_lora_library_out(
+            {"image_generation": {"lora_triggers": source.lora_entries}})
     config._write_layer(inst_cfg, source.inst_pruned)
     print(f"  written: {inst_cfg}"
           + (f", {inst_cfg.parent / 'secrets.json'}"

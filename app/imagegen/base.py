@@ -475,7 +475,7 @@ class ImageBackend(ABC):
 
     def _inject_lora_triggers(self, prompt: str, params: Dict[str, Any]) -> str:
         """Prepends the activation words of the active LoRAs to the prompt
-        (from the per-world repository image_generation.lora_triggers). Cloud
+        (from the instance-owned lora_library.json). Cloud
         backends without LoRAs (lora_inputs popped) get nothing."""
         try:
             names = [str(l.get("name")).strip()
@@ -488,10 +488,10 @@ class ImageBackend(ABC):
             words = get_lora_trigger_words(names)
             if not words:
                 return prompt
-            logger.info("%s: LoRA-Trigger-Woerter ergaenzt: %s", self.name, ", ".join(words))
+            logger.info("%s: LoRA trigger words added: %s", self.name, ", ".join(words))
             return ", ".join(words) + ", " + prompt
         except Exception as e:
-            logger.debug("LoRA-Trigger-Injektion fehlgeschlagen: %s", e)
+            logger.debug("LoRA trigger injection failed: %s", e)
             return prompt
 
     def generate(self, prompt: str, negative_prompt: str, params: Dict[str, Any],

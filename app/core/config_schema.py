@@ -809,6 +809,7 @@ SECTIONS = {
             "lora_triggers": {
                 "label": "LoRA Library",
                 "lora_triggers_editor": True,
+                "virtual": True,
             },
             "backends": {
                 "label": "Backends",
