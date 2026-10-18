@@ -227,6 +227,8 @@ def list_models(location_id: str, room_id: str = "") -> List[Dict[str, Any]]:
             # thing a list has to state.
             "roof_only": bool(meta.get("roof_only")),
             "roof": meta.get("roof") or {},
+            # A hull built from the floor plan (hull_model) — the row says so.
+            "plan_hull": bool(meta.get("plan_hull")),
         })
     return out
 
@@ -570,6 +572,11 @@ def get_client_meta(location_id: str, room_id: str = "",
     # Absent = the model is the whole building, which is what it always was.
     if meta.get("roof_only"):
         out["roof_only"] = True
+    # A hull BUILT FROM THE FLOOR PLAN (hull_model): the scene spec carries it
+    # as `plan_hull`, and the renderers keep it standing and cut it open on
+    # enter instead of fading it out (docs/schnittstellen-3d.md, plan_hull).
+    if meta.get("plan_hull"):
+        out["plan_hull"] = True
     return out
 
 

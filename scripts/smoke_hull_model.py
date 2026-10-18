@@ -77,6 +77,16 @@ def main() -> None:
         selection = json.loads((full.parent / "selection.json").read_text())
         assert selection["building"] == {"full": full.name, "low": low_file.name}
         assert read_sidecar(full)["plan_hull"] is True
+        # Consumer check: the flag must reach the scene spec through the client meta.
+        from app.core.scene_recipe import compose_scene
+        from app.models.world import get_location_by_id
+        client = location_model3d.get_client_meta(loc_id)
+        assert client.get("plan_hull") is True, client
+        stored = get_location_by_id(loc_id)
+        scene = compose_scene(stored, plan_width_m=location_model3d.derive_plan_width_m(
+            loc_id, stored["map3d"]), building_meta=client)
+        building = next(m for m in scene["models"] if m["role"] == "building")
+        assert building.get("plan_hull") is True and building.get("cutouts"), building
         assert hull_model.hull_status(loc_id)["stale"] is False
         location["rooms"][0]["props"] = [{"id": "chair", "x": 3}]
         assert upsert_location(location, sync_world=False)
