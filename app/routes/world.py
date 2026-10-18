@@ -2798,6 +2798,20 @@ async def furnish_kit(room_id: str, request: Request,
     return await _furnish_call(start_kit, room_id, body)
 
 
+@router.post("/locations/{location_id}/furnish-kit")
+async def furnish_building_kit(location_id: str, request: Request,
+                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Keep deterministic building planning and its bulk write off the event loop."""
+    from app.core.furnish_kit_building import furnish_location
+    from app.core.room_furnish import FurnishError
+    body = await _furnish_body(request)
+    try:
+        return await asyncio.to_thread(furnish_location, location_id,
+                                       body.get("kit"), dry_run=bool(body.get("dry_run", False)))
+    except FurnishError as e:
+        raise HTTPException(status_code=e.status, detail=e.message)
+
+
 @router.post("/rooms/{room_id}/furnish/confirm")
 async def furnish_confirm(room_id: str, request: Request,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:

@@ -984,6 +984,43 @@ def append_room_props(location_id: str, room_id: str,
         return False
 
 
+def append_rooms_props(location_id: str,
+                       placements_by_room: Dict[str, List[Dict]]) -> Dict[str, bool]:
+    """Append a building's kit placements with one save and cache invalidation.
+
+    Emptiness is checked INSIDE the write lock so furniture added while the
+    planner was running is preserved. Missing rooms and layouts are refused;
+    the ground is never a building kit target.
+    """
+    from app.core.world_ops import _sanitize_room_layout
+    written = {room_id: False for room_id in placements_by_room}
+    with world_write_lock:
+        data = _load_world_data()
+        for loc in data.get("locations", []):
+            if loc.get("id") != location_id:
+                continue
+            for room in loc.get("rooms", []):
+                room_id = room.get("id")
+                if room_id == GROUND_ROOM_ID or room_id not in placements_by_room:
+                    continue
+                layout = room.get("layout")
+                if not isinstance(layout, dict) or layout.get("props"):
+                    continue
+                merged = dict(layout)
+                merged["props"] = list(layout.get("props") or []) + list(placements_by_room[room_id])
+                clean = _sanitize_room_layout(merged)
+                if not clean:
+                    continue
+                room["layout"] = clean
+                written[room_id] = True
+            if any(written.values()):
+                upsert_location(loc, sync_world=True)
+                from app.core import places
+                places.invalidate()
+            break
+    return written
+
+
 def clear_room_prompt_changed(location_id: str, room_id: str) -> bool:
     """Remove the prompt_changed flag from a room. Returns True on success."""
     with world_write_lock:

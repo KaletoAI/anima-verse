@@ -130,6 +130,63 @@ def main() -> None:
             assert all(not n["build"] for n in status["proposal"]["needs"])
             assert room_props()[:len(before)] == before
             room_furnish.discard("kit-bedroom")
+            building = add_location("Kit building", "Bulk fixture", rooms=[
+                {"id": "bulk-bedroom", "name": "Bedroom"},
+                {"id": "bulk-kitchen", "name": "Kitchen"},
+                {"id": "bulk-untyped", "name": "Raum 3"},
+                {"id": "bulk-job", "name": "Bedroom"},
+                {"id": "bulk-no-layout", "name": "Bedroom"},
+            ])
+            data = _load_world_data()
+            for loc in data["locations"]:
+                if loc["id"] != building["id"]:
+                    continue
+                for room in loc["rooms"]:
+                    if room["id"].startswith("bulk-") and room["id"] != "bulk-no-layout":
+                        room["layout"] = {"x": 0, "y": 0, "w": 6, "d": 6, "level": 0}
+                    if room["id"] == "bulk-kitchen":
+                        room["layout"]["props"] = [{"prop_id": ids["bed"], "at": [1, 1]}]
+            _save_world_data(data)
+            location_url = f"/world/locations/{building['id']}"
+            saved = get_location_by_id(building["id"])
+            get_room_by_id(saved, "bulk-bedroom")["room_type"] = "study"
+            response = client.put(location_url, json=saved)
+            assert response.status_code == 200, response.text
+            saved = get_location_by_id(building["id"])
+            assert get_room_by_id(saved, "bulk-bedroom")["room_type"] == "study"
+            get_room_by_id(saved, "bulk-bedroom")["room_type"] = ""
+            response = client.put(location_url, json=saved)
+            assert response.status_code == 200, response.text
+            saved = get_location_by_id(building["id"])
+            assert get_room_by_id(saved, "bulk-bedroom")["room_type"] == ""
+            assert furniture_kits.room_type_of(get_room_by_id(saved, "bulk-bedroom")) == "bedroom"
+            room_furnish._insert_row("bulk-job", building["id"])
+            bulk_url = location_url + "/furnish-kit"
+            snapshot = get_location_by_id(building["id"])
+            response = client.post(bulk_url, json={"kit": "rustic", "dry_run": True})
+            assert response.status_code == 200, response.text
+            preview = response.json()
+            assert [r["room_id"] for r in preview["rooms"]] == ["bulk-bedroom"]
+            assert preview["rooms"][0]["placed"] > 0
+            assert get_location_by_id(building["id"]) == snapshot
+            expected = {"bulk-kitchen": "has_furniture", "bulk-untyped": "no_room_type",
+                        "bulk-job": "job_open", "bulk-no-layout": "no_layout"}
+            assert {r["room_id"]: r["reason"] for r in preview["skipped"]} == expected
+            response = client.post(bulk_url, json={"kit": "rustic", "dry_run": False})
+            assert response.status_code == 200, response.text
+            written = response.json()
+            assert written == preview
+            saved = get_location_by_id(building["id"])
+            assert get_room_by_id(saved, "bulk-bedroom")["layout"]["props"] == written["rooms"][0]["placements"]
+            assert get_room_by_id(saved, "bulk-kitchen") == get_room_by_id(snapshot, "bulk-kitchen")
+            response = client.post(bulk_url, json={"kit": "rustic", "dry_run": False})
+            assert response.status_code == 200, response.text
+            assert response.json()["rooms"] == []
+            assert {r["room_id"]: r["reason"] for r in response.json()["skipped"]} == {
+                **expected, "bulk-bedroom": "has_furniture"}
+            assert client.post(bulk_url, json={"kit": "unknown"}).status_code == 400
+            assert client.post("/world/locations/missing/furnish-kit", json={"kit": "rustic"}).status_code == 404
+            room_furnish.discard("bulk-job")
             llm.assert_not_called()
         client.close()
     print("all kit route checks passed")
