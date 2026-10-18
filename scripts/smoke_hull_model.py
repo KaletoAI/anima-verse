@@ -100,14 +100,23 @@ def main() -> None:
         assert hull_model.build_job("missing", desc)["error"] == "not_found"
         assert hull_model.build_job(loc_id, desc, without_outline())["error"] == "no_outline"
         assert hull_model.build_job(loc_id, {"style": "missing"})["error"] == "unknown_style"
-        assert hull_model.apply_wall_kinds(loc_id, style)
-        written = get_location_by_id(loc_id)
-        assert written["map3d"]["wall_kind"] == style["materials"]["wall"]
-        assert written["map3d"]["outline"] == location["map3d"]["outline"]
-        assert written["map3d"]["level_walls"] == {"0": style["materials"]["wall_ground"]}
-        plain_style = {**style, "materials": {**style["materials"], "wall_ground": ""}}
-        assert hull_model.apply_wall_kinds(loc_id, plain_style)
-        assert "level_walls" not in get_location_by_id(loc_id)["map3d"]
+        # A build stores effective wall kinds in both sidecars, never in the location.
+        location["map3d"].update(wall_kind="concrete_panel", level_walls={"1": "dark_stone"})
+        assert upsert_location(location, sync_world=False)
+        before = get_location_by_id(loc_id)
+        fake_full, fake_low = root / "fake_full.glb", root / "fake_low.glb"
+        fake_full.write_bytes(b"glTF")
+        fake_low.write_bytes(b"glTF")
+        with patch.object(runner, "is_available", return_value=True), patch.object(
+                runner, "run", return_value={"ok": True, "outputs": {
+                    "full": str(fake_full), "low": str(fake_low)}}):
+            generated = hull_model.generate_hull(loc_id, desc)
+        assert generated["ok"], generated
+        assert get_location_by_id(loc_id) == before
+        expected_walls = {"0": "concrete_panel", "1": "dark_stone"}
+        assert generated["meta"]["hull"]["walls"] == expected_walls
+        for tier in ("full", "low"):
+            assert read_sidecar(location_model3d.find_building_model(loc_id, tier=tier))["hull"]["walls"] == expected_walls
         with patch.object(runner, "is_available", return_value=False):
             assert hull_model.generate_hull(loc_id, desc)["error"] == "blender_unavailable"
         queue = Mock()

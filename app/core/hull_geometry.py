@@ -80,7 +80,7 @@ def _finish_parts(parts: List[Part], facts: Dict, style: Dict) -> None:
         part["colors"] = [
             [1 - weathering * 0.25 * (1 - _smoothstep(0, 1.5, part["vertices"][index][1]))
              - weathering * 0.12 * _smoothstep(eaves_y - 0.8, eaves_y, part["vertices"][index][1])
-             if part["material"] in _WEATHERED_MATERIALS else 1.0 for index in face]
+             if (part["material"] in _WEATHERED_MATERIALS or part["material"].startswith("wall_l")) else 1.0 for index in face]
             for face in part["faces"]
         ]
 

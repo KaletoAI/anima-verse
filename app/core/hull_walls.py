@@ -84,7 +84,7 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
         bottom = -WALL_SINK_M if number == 0 else floor
         inner,outer = wall_offsets(style, number)
         rings = {d: offset_ring(level['outline'],level['ccw'],d) for d in (inner,outer)}
-        material = 'wall_ground' if number == 0 and style.get('materials',{}).get('wall_ground') else 'wall'
+        material = style.get("storey_slot", {}).get(number, 'wall_ground' if number == 0 and style.get('materials',{}).get('wall_ground') else 'wall')
         plinth = style.get('plinth_height_m',0) if number == 0 else bottom
         for edge in level['edges']:
             a,b = edge['a'],edge['b']

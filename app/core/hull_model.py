@@ -1,5 +1,4 @@
 """Build declarative hull jobs, run Blender and report saved-plan staleness."""
-from copy import deepcopy
 import json
 import secrets
 from pathlib import Path
@@ -7,7 +6,7 @@ import tempfile
 from typing import Any, Dict, Optional
 
 from app.core import hull_styles, surface_textures
-from app.core.hull_facts import hull_facts
+from app.core.hull_facts import hull_facts, with_storeys
 from app.core.hull_geometry import build_hull, fit_budget
 from app.core.hull_mesh import rng
 from app.core.log import get_logger
@@ -22,9 +21,27 @@ FALLBACK_TONES: Dict[str, str] = {
 }
 
 
+def material_kinds(style: Dict, desc: Dict, location: Dict, levels: list[int]) -> Dict:
+    """Resolve floor-plan precedence and stable material slots without mutation."""
+    slots = {key: style["materials"][key] for key in hull_styles.MATERIAL_KEYS}
+    overrides = desc.get("overrides", {}).get("materials", {})
+    slots.update({key: overrides[key] for key in ("roof", "trim", "plinth") if overrides.get(key)})
+    plan = location.get("map3d") or {}
+    upper = plan.get("wall_kind") or slots["wall"]
+    slots["wall"] = upper
+    storey_slot, walls = {}, {}
+    for n in levels:
+        kind = ((plan.get("level_walls") or {}).get(str(n)) or plan.get("wall_kind")
+                or (style["materials"]["wall_ground"] if n == 0 else "") or style["materials"]["wall"])
+        slot = "wall" if kind == upper else "wall_ground" if n == 0 else f"wall_l{n}"
+        slots[slot] = kind
+        storey_slot[n], walls[str(n)] = slot, kind
+    return {"slots": slots, "storey_slot": storey_slot, "walls": walls}
+
+
 def resolved_materials(style: Dict) -> frozenset[str]:
     """Return material slots whose non-empty kind resolves to a file on disk."""
-    return frozenset(key for key in hull_styles.MATERIAL_KEYS
+    return frozenset(key for key in style["materials"]
                      if style["materials"][key]
                      and (source := surface_textures.base_texture_file(style["materials"][key]))
                      and source.is_file())
@@ -35,17 +52,18 @@ def _materials(style: Dict, desc: Dict, tex_dir: Path, resolved: frozenset[str])
     from PIL import Image
     materials, textures, sizes = [], {}, {}
     tex_dir.mkdir(parents=True, exist_ok=True)
-    for material in hull_styles.MATERIAL_KEYS:
+    for material in style["materials"]:
         if material == "facade_module" and not style["materials"][material]:
             continue
         source = (surface_textures.base_texture_file(style["materials"][material])
                   if material in resolved else None)
         key = None
-        color = tone_to_linear(FALLBACK_TONES[material])
+        color = tone_to_linear(FALLBACK_TONES["wall" if material.startswith("wall_l") else material])
         if source and source.is_file():
             sizes[material] = surface_textures.texture_size_m(source)
-            generator = rng(desc["seed"], "tint:wall" if material == "facade_module" else f"tint:{material}")
-            tint = desc["overrides"].get("tint", "#ffffff").lstrip("#")
+            generator = rng(desc["seed"], "tint:wall" if material == "facade_module" or material.startswith("wall_l") else f"tint:{material}")
+            tint = (desc["overrides"].get("roof_tint") if material == "roof" else None) or desc["overrides"].get("tint", "#ffffff")
+            tint = tint.lstrip("#")
             factors = [int(tint[i:i + 2], 16) / 255 *
                        (1 + generator.uniform(-style["tint_jitter"], style["tint_jitter"]))
                        for i in (0, 2, 4)]
@@ -108,6 +126,9 @@ def build_job(location_id: str, description: Any, location: Optional[Dict] = Non
     if style is None:
         return {"ok": False, "error": "unknown_style"}
     directory = Path(tex_dir) if tex_dir is not None else Path(tempfile.mkdtemp(prefix="av-hull-textures-"))
+    levels = with_storeys(facts, desc["overrides"].get("storeys_total", 0))["levels"]
+    kinds = material_kinds(style, desc, location, [level["level"] for level in levels])
+    style = {**style, "materials": kinds["slots"], "storey_slot": kinds["storey_slot"]}
     resolved = resolved_materials(style)
     materials, textures, sizes = _materials(style, desc, directory, resolved)
     try:
@@ -130,28 +151,11 @@ def build_job(location_id: str, description: Any, location: Optional[Dict] = Non
             "tiers": tiers, "materials": materials, "textures": textures,
             "extras": {"interior_cutout_padding_m": padding},
             "export": {"full": "hull_full.glb", "low": "hull_low.glb"},
-            "placement": placement}
-
-
-def apply_wall_kinds(location_id: str, style: Dict) -> bool:
-    """Write facade texture kinds through the location update operation."""
-    from app.models.world import get_location_by_id
-    from app.core.world_ops import update_location_with_extras
-    location = get_location_by_id(location_id)
-    if location is None:
-        return False
-    map3d = deepcopy(location.get("map3d") or {})
-    map3d["wall_kind"] = style["materials"]["wall"]
-    if style["materials"].get("wall_ground"):
-        map3d["level_walls"] = {"0": style["materials"]["wall_ground"]}
-    else:
-        map3d.pop("level_walls", None)
-    update_location_with_extras(location_id, {"map3d": map3d})
-    return True
+            "placement": placement, "walls": kinds["walls"]}
 
 
 def generate_hull(location_id: str, description: Any) -> Dict[str, Any]:
-    """Build and pin both gallery tiers synchronously, then update wall kinds."""
+    """Build and pin both gallery tiers synchronously without changing the location."""
     from app.blender import runner
     from app.core.location_model3d import save_hull_model
     if not runner.is_available():
@@ -175,8 +179,7 @@ def generate_hull(location_id: str, description: Any) -> Dict[str, Any]:
             return {"ok": False, "error": "no glb produced"}
         meta = save_hull_model(location_id, files["full"].read_bytes(), files["low"].read_bytes(),
             placement_full=job["placement"]["full"], placement_low=job["placement"]["low"],
-            description=job["description"], fingerprint=job["fingerprint"], style_id=job["style_id"])
-        apply_wall_kinds(location_id, hull_styles.get_style(job["style_id"]))
+            description=job["description"], fingerprint=job["fingerprint"], style_id=job["style_id"], walls=job["walls"])
     return {"ok": True, "error": "", "meta": meta}
 
 

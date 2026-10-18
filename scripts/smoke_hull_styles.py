@@ -58,13 +58,22 @@ def main():
         assert set(s) == {"fachwerk", "steinhaus", "holzhuette", "burg", "modern"}
         assert all(v["origin"] == "shared" for v in s.values())
         from PIL import Image
+        # Regenerate deterministic fixtures in temporary storage: the live selected
+        # facade texture may have been replaced (including its old placeholder).
+        from make_hull_placeholder_textures import KINDS, make_texture
+        placeholders = Path(tmp) / "placeholders"
+        placeholders.mkdir()
+        for kind, (_, _, size) in KINDS.items():
+            texture = placeholders / f"{kind}.png"
+            make_texture(kind).save(texture)
+            texture.with_suffix(".json").write_text(json.dumps({"source": "placeholder", "size_m": size}))
         for kind, size in (("concrete_panel", 2.0), ("roof_gravel", 2.0),
                            ("brushed_metal", 1.0), ("metal_door", 1.5),
                            ("facade_module_modern", 1.0)):
-            texture = base_texture_file(kind)
+            texture = placeholders / f"{kind}.png"
             assert texture_size_m(texture) == size, kind
             assert json.loads(texture.with_suffix(".json").read_text())["source"] == "placeholder"
-        with Image.open(base_texture_file("facade_module_modern")) as image:
+        with Image.open(placeholders / "facade_module_modern.png") as image:
             assert image.size == (512, 512)
             assert sum(image.getpixel((256, 256))) < sum(image.getpixel((0, 0)))
             assert all(image.getpixel((0, i)) == image.getpixel((511, i))

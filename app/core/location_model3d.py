@@ -1670,7 +1670,8 @@ def delete_building_model(location_id: str, room_id: str = "",
 
 def save_hull_model(location_id: str, full: bytes, low: bytes, *,
                     placement_full: Dict, placement_low: Dict,
-                    description: Dict, fingerprint: str, style_id: str) -> Dict[str, Any]:
+                    description: Dict, fingerprint: str, style_id: str,
+                    walls: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """Store separate hull tiers with their placement and pin both selections."""
     owner = _owner_id(location_id)
     if not owner:
@@ -1684,7 +1685,7 @@ def save_hull_model(location_id: str, full: bytes, low: bytes, *,
                 "rig": "none", "backend": "blender", "location": owner,
                 "tier": tier, "plan_hull": True,
                 "hull": {"description": deepcopy(description), "fingerprint": fingerprint,
-                         "style": style_id},
+                         "style": style_id, "walls": deepcopy(walls or {})},
                 **{key: float(placement.get(key) or 0.0)
                    for key in ("width_m", "offset_x", "offset_z", "offset_y")}}
         write_sidecar(target, meta)

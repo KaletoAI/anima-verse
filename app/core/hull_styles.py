@@ -179,7 +179,12 @@ def validate_description(raw: Any, styles: Dict[str, Dict[str, Any]]) -> Dict[st
     if "pitch_deg" in source:
         overrides["pitch_deg"] = _number(source["pitch_deg"], 5, 60, 30)
     overrides["ornament_density"] = _number(source.get("ornament_density"), 0, 1, 0.5)
-    tint = tone(source.get("tint"), "")
-    if tint:
-        overrides["tint"] = tint
+    for key in ("tint", "roof_tint"):
+        tint = tone(source.get(key), "")
+        if tint:
+            overrides[key] = tint
+    materials = {key: safe_kind(value) for key, value in _doc(source.get("materials")).items()
+                 if key in ("roof", "trim", "plinth") and isinstance(value, str) and safe_kind(value)}
+    if materials:
+        overrides["materials"] = materials
     return {"style": style, "seed": seed, "overrides": overrides}

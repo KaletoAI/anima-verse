@@ -412,7 +412,7 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
         parts.append(builder.part())
     ridge_y = original_ridge_y
     if form == "gable":
-        material = "wall_ground" if number == 0 and style.get("materials", {}).get("wall_ground") else "wall"
+        material = style.get("storey_slot", {}).get(number, "wall_ground" if number == 0 and style.get("materials", {}).get("wall_ground") else "wall")
         for side in (-1, 1):
             builder = _builder("gable", material, uv_sizes)
             points = [_at(rect, max(limits[0], min(limits[1], side * half_length)), base, z) for z in (-half_span, half_span)]
@@ -428,7 +428,7 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
             builder.poly([_at(rect, *point) for point in _clip_polygon(local_points, limits)])
             parts.append(builder.part())
     if form == "shed":
-        material = "wall_ground" if number == 0 and style.get("materials", {}).get("wall_ground") else "wall"
+        material = style.get("storey_slot", {}).get(number, "wall_ground" if number == 0 and style.get("materials", {}).get("wall_ground") else "wall")
         for side in (-1, 1):
             builder = _builder("gable", material, uv_sizes)
             points = [_at(rect, max(limits[0], min(limits[1], side * half_length)), base, -high * half_span),
