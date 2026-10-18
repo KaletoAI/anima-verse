@@ -2,10 +2,13 @@
 
 Usage: .venv/bin/python scripts/smoke_extension_rig_p1.py
 
-Hand-derived fixture values (metres, Blender front -Y/up +Z): torso front
+Hand-derived fixture values (metres, Blender front -Y/up +Z): surface front
 is y=-.10. Two radius-.05 spheres centred at (+/-.10,-.18,1.40)
-have apex (+/-.10,-.23,1.40). A .12 wall drop samples z=1.28,
-so each bone head is (+/-.08,-.06,1.41). The cylinder has radius .03,
+have geometric apex (+/-.10,-.23,1.40), with no UV texture.
+Tangent slope (.13/s) is maximal at the first sample outside the
+sphere, s=.051 (1 mm beyond the sphere rim). All five non-lateral wall points have y=-.10.
+Their mean x offset is -(1+sqrt(2))*.051/5=-.02462498 per side,
+so heads are (+/-.07537502,-.06,1.40), depth=.13. The cylinder has radius .03,
 centre y=-.16, rings z=.80,.81,...,.98. The anchor z=.98 selects its
 UPPER end as attachment. A cut .15 along length .18 falls at z=.953:
 rings .80 through .95 remain connected; the attachment ring adds .96
@@ -21,8 +24,8 @@ LeftUpLeg=0. This interior blend probe has only the two extension influences.
 The separate radial probe verifies full surface weight independent of contact_ramp. At (.2,.1,1.1), outside both
 operation envelopes, the four original per-joint weights stay unchanged.
 At the pair apex (.1,-.23,1.4), envelope w=1 leaves only ExampleLeft=1.
-Probe (.14,-.23,1.4): R=.11, scaled R=.1265, d=.04/.11; inside .6 plateau, w=1.
-Probe (.20,-.23,1.4): radial t=(1-.10/.1265)/.4=265/506;
+Probe (.12,-.23,1.4): R=.051, scaled R=.05865, r=.02; inside .6 plateau, w=1.
+Probe (.14,-.23,1.4): radial t=(1-.04/.05865)/.4=1865/2346;
 w=t*t*(3-2*t), depth factor=1. Retain the new joint and the three
 largest source influences (.35,.25,.20), divide by w+.8*(1-w).
 A second source assigns five equal .20 weights outside both envelopes.
@@ -106,18 +109,24 @@ DECLARED_PARAMS = {'pair_protrusion': {'band_lower_bone': 'Spine1',
                      'band_upper_offset': -0.04,
                      'lateral_min': 0.03,
                      'lateral_max': 0.17,
-                     'wall_drop': 0.12,
-                     'wall_z_tolerance': 0.01,
-                     'wall_x_tolerance': 0.02,
-                     'wall_fallback_depth': 0.06,
-                     'head_x_scale': 0.8,
+                     'marker_search_radius': 0.07,
+                     'marker_grid_step': 0.0025,
+                     'marker_score_min': 6.0,
+                     'marker_yellow_weight': 0.5,
+                     'marker_dark_min': 0.55,
+                     'marker_light_max': 3.0,
+                     'marker_area_min': 0.0001,
+                     'marker_area_max': 0.003,
+                     'marker_spread_max': 0.02,
+                     'marker_pair_dz': 0.02,
+                     'marker_pair_dx': 0.03,
+                     'boundary_directions': 8,
+                     'boundary_s_min': 0.051,
+                     'boundary_s_max': 0.13,
+                     'boundary_step': 0.0025,
+                     'exclude_bones': [],
+                     'exclude_weight': 0.3,
                      'head_wall_depth': 0.04,
-                     'head_z_offset': 0.01,
-                     'radius_min': 0.06,
-                     'radius_max': 0.11,
-                     'radius_gain': 1.4,
-                     'radius_offset': 0.03,
-                     'radius_z_scale': 0.95,
                      'radius_plateau': 0.6,
                      'radius_scale': 1.15,
                      'side_margin': 0.005,
@@ -307,7 +316,7 @@ if p.get('under_contact'):
         for j in range(32):
             a=off+iz*32+j; b=off+iz*32+(j+1)%32
             faces.append((a,b,b+32,a+32))
-off=len(vertices); vertices.extend(((.14,-.23,1.4),(.20,-.23,1.4),(.20,-.23,1.401))); faces.append((off,off+1,off+2))
+off=len(vertices); vertices.extend(((.12,-.23,1.4),(.14,-.23,1.4),(.14,-.23,1.401))); faces.append((off,off+1,off+2))
 off=len(vertices); vertices.extend(((0,.23,0),(0,.23,1.7),(.001,.23,0))); faces.append((off,off+1,off+2))
 meshdata=bpy.data.meshes.new('Surface')
 meshdata.from_pydata(vertices,[],faces); meshdata.update()
@@ -921,7 +930,7 @@ def main():
         metrics=state['metrics']
         pair=metrics['example_pair']['placement']
         check(close(pair[0]['tip'],[.1,-.23,1.4]) and close(pair[1]['tip'],[-.1,-.23,1.4]),'hand-derived mirrored apex positions')
-        check(close(pair[0]['head'],[.08,-.06,1.41]) and close(pair[1]['head'],[-.08,-.06,1.41]),'hand-derived wall bone heads')
+        check(close(pair[0]['head'],[.0753750217,-.06,1.4]) and close(pair[1]['head'],[-.0753750217,-.06,1.4]),'hand-derived wall bone heads')
         chain=metrics['example_chain']
         check(abs(chain['attachment'][2]-.98)<.002,'attachment is nearer declared anchor')
         check(abs(chain['axis_length']-.175)<.004,'hand-derived chain length .175 m')
@@ -960,11 +969,11 @@ def main():
                              'connected tube surface has unit total weight independent of contact_ramp')
         assert_joint_weights(rows,[.2,1.1,-.1],{'mixamorig:Hips':.2,'mixamorig:Spine':.35,'mixamorig:Spine1':.25,'mixamorig:LeftUpLeg':.2},'unaffected mixed source weights by joint')
         assert_joint_weights(rows,[.1,1.4,.23],{'ExampleLeft':1.},'pair apex weight by joint')
-        assert_joint_weights(rows,[.14,1.4,.23],{'ExampleLeft':1.},'plateau full weight before reduction')
-        t=265/506; radial=t*t*(3-2*t)
+        assert_joint_weights(rows,[.12,1.4,.23],{'ExampleLeft':1.},'plateau full weight before reduction')
+        t=1865/2346; radial=t*t*(3-2*t)
         ramp={'ExampleLeft':radial,'mixamorig:Spine':.35*(1-radial),'mixamorig:Spine1':.25*(1-radial),'mixamorig:Hips':.20*(1-radial)}
         total=sum(ramp.values()); ramp={k:v/total for k,v in ramp.items()}
-        assert_joint_weights(rows,[.20,1.4,.23],ramp,'hand-derived radial ramp and reduction')
+        assert_joint_weights(rows,[.14,1.4,.23],ramp,'hand-derived radial ramp and reduction')
         after_doc=parse_glb(full.read_bytes())['gltf']
         after_frames={n['name']:{k:n.get(k) for k in ('translation','rotation','scale','matrix')} for n in after_doc['nodes'] if n.get('name','').startswith('mixamorig:')}
         defaults={'translation':[0,0,0],'rotation':[0,0,0,1],'scale':[1,1,1],'matrix':[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}

@@ -15,6 +15,8 @@ sys.path.insert(0, _SCRIPT_DIR)
 import _common
 sys.path.remove(_SCRIPT_DIR)
 import bpy
+import numpy as np
+from mathutils.geometry import barycentric_transform
 from mathutils import Matrix, Vector
 from mathutils.kdtree import KDTree
 from mathutils.bvhtree import BVHTree
@@ -29,18 +31,24 @@ PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'band_upper_offset': 'number',
                      'lateral_min': 'number',
                      'lateral_max': 'number',
-                     'wall_drop': 'number',
-                     'wall_z_tolerance': 'number',
-                     'wall_x_tolerance': 'number',
-                     'wall_fallback_depth': 'number',
-                     'head_x_scale': 'number',
+                     'marker_search_radius': 'number',
+                     'marker_grid_step': 'number',
+                     'marker_score_min': 'number',
+                     'marker_yellow_weight': 'number',
+                     'marker_dark_min': 'number',
+                     'marker_light_max': 'number',
+                     'marker_area_min': 'number',
+                     'marker_area_max': 'number',
+                     'marker_spread_max': 'number',
+                     'marker_pair_dz': 'number',
+                     'marker_pair_dx': 'number',
+                     'boundary_directions': 'number',
+                     'boundary_s_min': 'number',
+                     'boundary_s_max': 'number',
+                     'boundary_step': 'number',
+                     'exclude_weight': 'number',
+                     'exclude_bones': 'bones',
                      'head_wall_depth': 'number',
-                     'head_z_offset': 'number',
-                     'radius_min': 'number',
-                     'radius_max': 'number',
-                     'radius_gain': 'number',
-                     'radius_offset': 'number',
-                     'radius_z_scale': 'number',
                      'radius_plateau': 'number',
                      'radius_scale': 'number',
                      'side_margin': 'number',
@@ -154,7 +162,7 @@ def parameters(group):
         if kind == 'number':
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise ValueError(key + ' must be finite numeric')
-            if key in ('axis_iterations', 'segment_min_vertices', 'segment_passes', 'base_history_slices') and int(value) != value:
+            if key in ('boundary_directions', 'axis_iterations', 'segment_min_vertices', 'segment_passes', 'base_history_slices') and int(value) != value:
                 raise ValueError(key + ' must be an integer')
         elif kind == 'bone':
             if not isinstance(value, str) or not value:
@@ -170,8 +178,9 @@ def parameters(group):
                     raise ValueError(key + ' must contain finite numbers')
                 if kind == 'vector3' and len(value) != 3:
                     raise ValueError(key + ' must have three components')
-    positive = ('radius_scale', 'radius_min', 'radius_max', 'radius_z_scale', 'wall_z_tolerance',
-                'wall_x_tolerance', 'depth_ramp', 'slice_size', 'part_half_width',
+    positive = ('radius_scale', 'marker_search_radius', 'marker_grid_step', 'marker_area_min',
+                'marker_area_max', 'marker_spread_max', 'marker_pair_dz', 'marker_pair_dx',
+                'boundary_s_min', 'boundary_s_max', 'boundary_step', 'exclude_weight', 'depth_ramp', 'slice_size', 'part_half_width',
                 'candidate_lateral_max', 'protrusion_threshold', 'weld_distance',
                 'weight_ramp', 'leak_radius_limit', 'segment_radius_factor', 'segment_min_vertices', 'segment_passes', 'segment_radius_margin', 'segment_radius_growth_max', 'contact_ramp', 'fallback_half_width',
                 'fallback_front_ramp', 'fallback_side_ramp', 'fallback_top_ramp',
@@ -180,8 +189,7 @@ def parameters(group):
     for key in positive:
         if key in p and p[key] <= 0:
             raise ValueError(key + ' must be positive')
-    nonnegative = ('wall_drop', 'wall_fallback_depth', 'head_x_scale',
-                   'head_wall_depth', 'radius_gain', 'radius_offset',
+    nonnegative = ('marker_yellow_weight', 'marker_light_max', 'head_wall_depth',
                    'side_margin', 'front_margin', 'root_depth',
                    'root_wall_margin', 'window_margin', 'near_slice_margin',
                    'attachment_inset', 'fallback_z_margin',
@@ -201,8 +209,16 @@ def parameters(group):
     if op == 'pair_protrusion':
         if not 0 <= p['radius_plateau'] < 1:
             raise ValueError('radius_plateau must be in [0,1)')
-        if not 0 <= p['lateral_min'] < p['lateral_max'] or p['radius_min'] > p['radius_max']:
-            raise ValueError('invalid lateral or radius range')
+        if not 0 <= p['lateral_min'] < p['lateral_max']:
+            raise ValueError('invalid lateral range')
+        if not 0 < p['marker_dark_min'] < 1:
+            raise ValueError('marker_dark_min must be in (0,1)')
+        if p['marker_area_max'] <= p['marker_area_min']:
+            raise ValueError('marker_area_max must exceed marker_area_min')
+        if p['boundary_s_max'] <= p['boundary_s_min']:
+            raise ValueError('boundary_s_max must exceed boundary_s_min')
+        if p['boundary_directions'] < 4 or p['boundary_directions'] % 4:
+            raise ValueError('boundary_directions must be an integer multiple of four')
     else:
         if not 0 <= p['contact_follow_weight'] < 1:
             raise ValueError('contact_follow_weight must be in [0,1)')
@@ -234,43 +250,217 @@ def lookup(bones, name):
     return bones[key]
 
 
-def pair_plan(group, p, co, bones):
+def pair_surface(meshes):
+    """Cache world triangles and image pixels once for all pair groups."""
+    triangles,uvs,images,pixels = [],[],[],{}
+    for mesh in meshes:
+        data = mesh.data
+        data.calc_loop_triangles()
+        uv = data.uv_layers.active
+        for tri in data.loop_triangles:
+            triangles.append(tuple(mesh.matrix_world@data.vertices[i].co for i in tri.vertices))
+            uvs.append(tuple(Vector((*uv.data[i].uv,0)) for i in tri.loops) if uv else None)
+            image = None
+            mat = data.materials[tri.material_index] if tri.material_index < len(data.materials) else None
+            if mat and mat.use_nodes:
+                for node in mat.node_tree.nodes:
+                    if node.type == 'BSDF_PRINCIPLED' and node.inputs['Base Color'].links:
+                        src = node.inputs['Base Color'].links[0].from_node
+                        if src.type == 'TEX_IMAGE' and src.image:
+                            image = src.image
+                            break
+            key = image.as_pointer() if image else None
+            if image and key not in pixels:
+                w,h = image.size
+                if w and h:
+                    array = np.empty(w*h*4,np.float32)
+                    image.pixels.foreach_get(array)
+                    pixels[key] = array.reshape(h,w,4)
+            images.append(key)
+    bvh = BVHTree.FromPolygons([v for tri in triangles for v in tri],
+                              [(3*i,3*i+1,3*i+2) for i in range(len(triangles))],all_triangles=True)
+    def front(x,z,colour=False):
+        point,_,index,_ = bvh.ray_cast(Vector((x,-10.,z)),Vector((0,1,0)),20.)
+        if point is None:
+            return None
+        rgb = None
+        if colour and uvs[index] is not None and images[index] in pixels:
+            uv = barycentric_transform(point,*triangles[index],*uvs[index])
+            array = pixels[images[index]]
+            h,w,_ = array.shape
+            rgb = array[int(uv.y%1*h)%h,int(uv.x%1*w)%w,:3]
+        return point,rgb
+    return front
+
+
+def pair_plan(group, p, co, bones, front, owners):
     chains = group['chains']
     if len(chains) != 2 or any(len(c) != 1 for c in chains):
         raise ValueError('pair_protrusion requires two one-link chains')
-    lo = lookup(bones, p['band_lower_bone']).head_local.z + p['band_lower_offset']
-    hi = lookup(bones, p['band_upper_bone']).head_local.z + p['band_upper_offset']
+    lo = lookup(bones,p['band_lower_bone']).head_local.z+p['band_lower_offset']
+    hi = lookup(bones,p['band_upper_bone']).head_local.z+p['band_upper_offset']
     if lo >= hi:
         raise ValueError('empty height band')
-    links, weights, placements = [], {}, []
-    for chain, sign in zip(chains, (1, -1)):
-        candidates = [i for i, c in enumerate(co) if lo < c.z < hi and p['lateral_min'] < sign * c.x < p['lateral_max']]
-        if not candidates:
-            raise ValueError('no protrusion candidates on side ' + str(sign))
-        apex = co[min(candidates, key=lambda i: co[i].y)]
-        under = [c.y for c in co if abs(c.z - apex.z + p['wall_drop']) < p['wall_z_tolerance'] and abs(c.x - apex.x) < p['wall_x_tolerance']]
-        wall = min(under) if under else apex.y + p['wall_fallback_depth']
-        depth = wall - apex.y
-        if depth <= 0:
-            raise ValueError('apex does not protrude from wall')
-        radius = max(p['radius_min'], min(p['radius_max'], depth * p['radius_gain'] + p['radius_offset']))
-        head = Vector((apex.x * p['head_x_scale'], wall + p['head_wall_depth'], apex.z + p['head_z_offset']))
+    candidates,initial = [],[]
+    for sign in (1,-1):
+        side = [v for v in co if lo < v.z < hi and p['lateral_min'] < sign*v.x < p['lateral_max']]
+        if not side:
+            raise ValueError('no protrusion candidates on side '+str(sign))
+        candidates.append(side)
+        initial.append(min(side,key=lambda v:v.y).copy())
+    def marker(apex,sign):
+        step,radius = p['marker_grid_step'],p['marker_search_radius']
+        cells = {}
+        count = int(radius/step)
+        for j in range(-count,count+1):
+            for i in range(-count,count+1):
+                x,z = apex.x+i*step,apex.z+j*step
+                if math.hypot(i*step,j*step) > radius or sign*x <= p['side_margin']:
+                    continue
+                hit = front(x,z,True)
+                if hit and hit[1] is not None:
+                    cells[i,j] = (x,z,hit[1])
+        if len(cells) < 10:
+            return None,'no texture'
+        keys = sorted(cells)
+        rgb = np.array([cells[k][2] for k in keys])
+        linear = np.where(rgb<=.04045,rgb/12.92,((rgb+.055)/1.055)**2.4)
+        xyz = linear@np.array([[.4124,.2126,.0193],[.3576,.7152,.1192],[.1805,.0722,.9505]])
+        xyz /= np.array([.9505,1.,1.089])
+        f = np.where(xyz>.008856,np.cbrt(xyz),7.787*xyz+16/116)
+        lab = np.stack((116*f[:,1]-16,500*(f[:,0]-f[:,1]),200*(f[:,1]-f[:,2])),axis=1)
+        med = np.median(lab,axis=0)
+        score = lab[:,1]-med[1]-p['marker_yellow_weight']*(lab[:,2]-med[2])
+        ok = (score>p['marker_score_min'])&(lab[:,0]>p['marker_dark_min']*med[0])&(lab[:,0]<med[0]+p['marker_light_max'])
+        pending = {k for k,accepted in zip(keys,ok) if accepted}
+        best = []
+        while pending:
+            seed = min(pending)
+            pending.remove(seed)
+            component,stack = [seed],[seed]
+            while stack:
+                i,j = stack.pop()
+                for neighbour in ((i+1,j),(i-1,j),(i,j+1),(i,j-1)):
+                    if neighbour in pending:
+                        pending.remove(neighbour)
+                        component.append(neighbour)
+                        stack.append(neighbour)
+            if len(component) > len(best):
+                best = component
+        if not best:
+            return None,'no marker'
+        points = np.array([cells[k][:2] for k in best])
+        centre = points.mean(axis=0)
+        area = len(best)*step*step
+        note = 'area %.1f cm2'%(area*1e4)
+        if not p['marker_area_min'] <= area <= p['marker_area_max']:
+            return None,note
+        if math.sqrt(((points-centre)**2).sum(axis=1).mean()) > p['marker_spread_max']:
+            return None,'marker spread'
+        hit = front(*centre)
+        return (Vector((centre[0],hit[0].y,centre[1])),note) if hit else (None,'centroid miss')
+    markers = [marker(v,sign) for v,sign in zip(initial,(1,-1))]
+    colour = all(v is not None for v,_ in markers)
+    if colour:
+        a,b = [v for v,_ in markers]
+        colour = abs(a.z-b.z)<p['marker_pair_dz'] and abs(a.x+b.x)<p['marker_pair_dx']
+        if not colour:
+            markers = [(v,'pair mismatch; '+note) for v,note in markers]
+    K = int(p['boundary_directions'])
+    directions = [(math.sin(2*math.pi*k/K),math.cos(2*math.pi*k/K)) for k in range(K)]
+    def walls(apexes):
+        side_reach = []
+        for apex,sign in zip(apexes,(1,-1)):
+            reach = [None]*K
+            for k,(dx,dz) in enumerate(directions):
+                if dx > 1e-6:
+                    continue
+                best = None
+                steps = int(math.floor((p['boundary_s_max']-p['boundary_s_min'])/p['boundary_step']+1e-8))
+                for j in range(steps+1):
+                    distance = p['boundary_s_min']+j*p['boundary_step']
+                    x,z = apex.x+sign*dx*distance,apex.z+dz*distance
+                    if sign*x <= p['side_margin']:
+                        break
+                    hit = front(x,z)
+                    if hit:
+                        slope = (hit[0].y-apex.y)/distance
+                        if best is None or slope > best[0]:
+                            best = slope,distance
+                reach[k] = best[1] if best else None
+            for k,(dx,_) in enumerate(directions):
+                if dx > 1e-6:
+                    reach[k] = reach[(-k)%K]
+            side_reach.append(reach)
+        reach = [min((v for v in values if v is not None),default=None) for values in zip(*side_reach)]
+        offsets = []
+        for k,(dx,dz) in enumerate(directions):
+            values = []
+            if dx <= 1e-6 and reach[k] is not None:
+                for apex,sign in zip(apexes,(1,-1)):
+                    hit = front(apex.x+sign*dx*reach[k],apex.z+dz*reach[k])
+                    if hit:
+                        values.append(hit[0].y-apex.y)
+            offsets.append(max(values,default=None))
+        fitted = []
+        for apex,sign in zip(apexes,(1,-1)):
+            points = [Vector((apex.x+sign*dx*r,apex.y+dy,apex.z+dz*r))
+                      for (dx,dz),r,dy in zip(directions,reach,offsets) if dy is not None]
+            if len(points) < 3:
+                raise ValueError('fewer than three wall points')
+            array = np.array([list(v) for v in points])
+            centre = array.mean(axis=0)
+            _,_,vt = np.linalg.svd(array-centre)
+            normal = vt[-1]
+            if normal[1] > 0:
+                normal = -normal
+            c,n = Vector(centre),Vector(normal)
+            if (apex-c).dot(n) <= 0:
+                raise ValueError('apex does not protrude from wall')
+            fitted.append((c,n,points))
+        return reach,fitted
+    apexes = [v.copy() for v,_ in markers] if colour else initial
+    reach,fitted = walls(apexes)
+    if not colour:
+        apexes = [max((v for v in side if math.hypot(v.x-start.x,v.z-start.z)<=p['marker_search_radius']),
+                      key=lambda v:(v-c).dot(n)).copy()
+                  for side,start,(c,n,_) in zip(candidates,initial,fitted)]
+        reach,fitted = walls(apexes)
+    excluded = set()
+    for name in p['exclude_bones']:
+        bone = lookup(bones,name)
+        excluded.add(bone.name)
+        excluded.update(b.name for b in bone.children_recursive)
+    exclusion = [sum(ge.weight for ge in mesh.data.vertices[vi].groups if mesh.vertex_groups[ge.group].name in excluded)
+                 for mesh,vi in owners]
+    links,weights,placements = [],{},[]
+    for chain,sign,apex,(c,n,points),(_,note) in zip(chains,(1,-1),apexes,fitted,markers):
+        depth = (apex-c).dot(n)
+        base = sum(points,Vector())/len(points)
+        foot = base-n*((base-c).dot(n))
+        head = foot-n*p['head_wall_depth']
         link = chain[0]
-        lookup(bones, link['parent'])
-        links.append((link['bone'], head, apex.copy(), link['parent']))
+        lookup(bones,link['parent'])
+        links.append((link['bone'],head,apex.copy(),link['parent']))
         w = {}
-        for i, c in enumerate(co):
-            if sign * c.x < p['side_margin'] or c.y > wall + p['front_margin']:
+        for i,v in enumerate(co):
+            dist = (v-c).dot(n)
+            if sign*v.x < p['side_margin'] or dist < -p['front_margin']:
                 continue
-            d = math.sqrt(((c.x-apex.x)/radius)**2 + ((c.z-apex.z)/(radius*p['radius_z_scale']))**2)
-            value = smooth((1-d/p['radius_scale'])/(1-p['radius_plateau'])) * smooth((wall+p['front_margin']-c.y)/p['depth_ramp'])
+            rx,rz = (v.x-apex.x)*sign,v.z-apex.z
+            t = (math.atan2(rx,rz)%(2*math.pi))/(2*math.pi)*K
+            k = int(t)%K
+            f = t-int(t)
+            radius = (reach[k] if reach[k] is not None else p['boundary_s_min'])*(1-f)+(reach[(k+1)%K] if reach[(k+1)%K] is not None else p['boundary_s_min'])*f
+            value = smooth((1-math.hypot(rx,rz)/(radius*p['radius_scale']))/(1-p['radius_plateau']))*smooth((dist+p['front_margin'])/p['depth_ramp'])*max(0.,1-exclusion[i]/p['exclude_weight'])
             if value > p['weight_min']:
                 w[i] = value
         if not w:
             raise ValueError('empty pair weight region')
         weights[link['bone']] = w
-        placements.append({'head': list(head), 'tip': list(apex), 'wall_y': wall})
-    return links, weights, {'placement': placements, 'leak': False}, set(), []
+        placements.append({'head':list(head),'tip':list(apex),'apex_source':'colour' if colour else 'geometry',
+                           'marker_note':note,'reach':reach.copy(),'wall_centre':list(c),'wall_normal':list(n),'depth':depth})
+    return links,weights,{'placement':placements,'leak':False},set(),[]
 
 
 def unique_positions(indices, co):
@@ -1558,6 +1748,7 @@ def extension_bones(args):
                 return skip(str(e),status='failed')
         metrics=measure(arm,meshes,edges,plans)
         return {'status':'applied','reason':'','groups':metrics,'metrics':metrics},{}
+    surface = pair_surface(meshes) if any(g['op']=='pair_protrusion' for g in enabled) else None
     plans,failed,names = [],{},set()
     malformed = False
     for g in enabled:
@@ -1580,7 +1771,7 @@ def extension_bones(args):
             except (ValueError, KeyError, TypeError) as e:
                 malformed = True
                 raise ValueError(str(e)) from e
-            plan = pair_plan(g,p,co,bones) if g['op']=='pair_protrusion' else appendage_plan(g,p,co,edges,bones,normals,faces)
+            plan = pair_plan(g,p,co,bones,surface,owners) if g['op']=='pair_protrusion' else appendage_plan(g,p,co,edges,bones,normals,faces)
             if g['op']=='appendage_chain':
                 follow,count = contact_follow_weights(p,co,edges,faces,plan)
                 followers = {i for w in follow.values() for i in w}

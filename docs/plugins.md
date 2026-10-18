@@ -440,15 +440,32 @@ units use only generic numerical tolerances. The executable neutral declarations
 in `scripts/smoke_extension_rig_p1.py` supply every parameter.
 
 `pair_protrusion` requires two one-link chains: first `+X`, second `-X`.
-It chooses each side's smallest-Y vertex within the declared height/lateral
-band. The reference wall lies `wall_drop` below that apex. The bone begins
-inside the wall and ends at the apex; weights have smooth elliptical lateral/
-vertical plateau and a front-only depth ramp. For normalized elliptical distance
-`d`, radial weight is `smooth((1-d/radius_scale)/(1-radius_plateau))`: full
-through `radius_plateau*R*radius_scale`, zero at `R*radius_scale`. Both parameters
-are required: `0 <= radius_plateau < 1`, `radius_scale > 0`. The depth ramp
-retains its declared `depth_ramp` length. Parameter changes alter the fingerprint
-and rebuild from the clean prerig.
+It starts from each side's smallest-Y vertex within the declared height/lateral
+band. The tip comes from a colour marker when the texture shows one: a front
+ray grid (`marker_grid_step`, disc `marker_search_radius`) samples the base
+colour, converts it to CIE Lab and scores `(a-a_median) - marker_yellow_weight*(b-b_median)`;
+cells above `marker_score_min` with lightness between `marker_dark_min*L_median`
+and `L_median+marker_light_max` form 4-connected components. The largest one is
+accepted when its area lies in `[marker_area_min, marker_area_max]` (m²) and its
+RMS spread is at most `marker_spread_max`. Both sides must be accepted and
+mirror each other within `marker_pair_dz`/`marker_pair_dx`; otherwise both use
+geometry (`apex_source` in the metrics says which).
+The attachment wall is measured from the tip in `boundary_directions` frontal
+directions (a multiple of four; 0 = up): from `boundary_s_min` to `boundary_s_max`
+in `boundary_step` steps, the boundary is the tangent point (largest
+`(y - tip.y)/s`). Lateral directions mirror the medial ones. The pair uses
+the smaller reach per direction and the deeper wall offset (occluders such as
+hair lie in front of the surface), and a least-squares plane through the wall
+points is each side's wall. In geometry mode the tip is then the candidate
+farthest in front of that wall, and the wall is measured once more. The bone
+runs from `head_wall_depth` behind the wall (at the wall points' mean) to
+the tip. Weights combine a radial term over the star-shaped outline `R(angle)`
+(linear between the directions): `smooth((1-r/(R*radius_scale))/(1-radius_plateau))`,
+full through `radius_plateau*R*radius_scale`, zero at `R*radius_scale`; a depth
+ramp of `depth_ramp` that starts `front_margin` behind the wall; and
+`1 - w/exclude_weight` for a vertex's current weight `w` on `exclude_bones` and
+their descendants. Parameter changes alter the fingerprint and rebuild from the
+clean prerig.
 
 `pair_protrusion` declaration example values:
 
@@ -460,18 +477,24 @@ and rebuild from the clean prerig.
 | `band_upper_offset` | `-0.04` |
 | `lateral_min` | `0.03` |
 | `lateral_max` | `0.17` |
-| `wall_drop` | `0.12` |
-| `wall_z_tolerance` | `0.01` |
-| `wall_x_tolerance` | `0.02` |
-| `wall_fallback_depth` | `0.06` |
-| `head_x_scale` | `0.8` |
+| `marker_search_radius` | `0.07` |
+| `marker_grid_step` | `0.0025` |
+| `marker_score_min` | `6` |
+| `marker_yellow_weight` | `0.5` |
+| `marker_dark_min` | `0.55` |
+| `marker_light_max` | `3` |
+| `marker_area_min` | `0.0001` |
+| `marker_area_max` | `0.003` |
+| `marker_spread_max` | `0.02` |
+| `marker_pair_dz` | `0.02` |
+| `marker_pair_dx` | `0.03` |
+| `boundary_directions` | `8` |
+| `boundary_s_min` | `0.03` |
+| `boundary_s_max` | `0.13` |
+| `boundary_step` | `0.0025` |
+| `exclude_bones` | `[]` |
+| `exclude_weight` | `0.3` |
 | `head_wall_depth` | `0.04` |
-| `head_z_offset` | `0.01` |
-| `radius_min` | `0.06` |
-| `radius_max` | `0.11` |
-| `radius_gain` | `1.4` |
-| `radius_offset` | `0.03` |
-| `radius_z_scale` | `0.95` |
 | `radius_plateau` | `0.6` |
 | `radius_scale` | `1.15` |
 | `side_margin` | `0.005` |
