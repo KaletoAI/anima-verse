@@ -66,6 +66,8 @@ def validate_style(raw: Any, style_id: str) -> Dict[str, Any]:
             "forms": _subset(roof.get("forms"), ROOF_FORMS, ["gable"]),
             "pitch_deg": _range(roof.get("pitch_deg"), 5, 60, [30, 40]),
             "overhang_m": _range(roof.get("overhang_m"), 0, 1, [0.3, 0.5]),
+            "max_rise_m": _number(roof.get("max_rise_m"), 1.5, 12, 6.0),
+            "min_pitch_deg": _number(roof.get("min_pitch_deg"), 5, 60, 20),
             "parapet": roof.get("parapet") if isinstance(roof.get("parapet"), bool) else False,
         },
         "towers": {
@@ -176,6 +178,8 @@ def validate_description(raw: Any, styles: Dict[str, Dict[str, Any]]) -> Dict[st
         overrides["storeys_total"] = total
     if isinstance(source.get("roof_form"), str) and source["roof_form"] in ROOF_FORMS:
         overrides["roof_form"] = source["roof_form"]
+    if "max_rise_m" in source:
+        overrides["max_rise_m"] = _number(source["max_rise_m"], 1.5, 12, 6.0)
     if "pitch_deg" in source:
         overrides["pitch_deg"] = _number(source["pitch_deg"], 5, 60, 30)
     overrides["ornament_density"] = _number(source.get("ornament_density"), 0, 1, 0.5)

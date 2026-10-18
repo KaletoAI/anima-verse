@@ -115,7 +115,11 @@ def main():
                                 "shared/building_styles/modern.json").read_text())
         for key, value in modern.items():
             assert raw_modern[key] == value, key
-            assert s["modern"][key] == value, key
+            # A flat style never reads the rise cap; validation still fills
+            # its defaults (1c-B: max_rise_m 6.0, min_pitch_deg 20).
+            expected = ({**value, "max_rise_m": 6.0, "min_pitch_deg": 20}
+                        if key == "roof" else value)
+            assert s["modern"][key] == expected, key
         assert raw_modern["towers"]["chance"] == s["modern"]["towers"]["chance"] == 0
         from unittest.mock import patch
         from app.core import hull_model

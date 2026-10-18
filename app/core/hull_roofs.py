@@ -232,13 +232,14 @@ def roof_top_y(wing: Dict, x: float, z: float, style: Dict) -> Optional[float]:
             normal = _normal(plane)
             first = plane[0]
             heights.append(first[1] - (normal[0]*(x-first[0])+normal[2]*(z-first[2]))/normal[1])
-        return min(heights)
+        return min(min(heights), wing["ridge_y"]) if wing.get("flat_top") else min(heights)
     rect = wing["rect"]
     x, z = _rotate([x-rect["center"][0], z-rect["center"][1]], -rect["angle_deg"])
     low_x, high_x, low_z, high_z = wing["limits"]
     if not (low_x-1e-4 <= x <= high_x+1e-4 and low_z-1e-4 <= z <= high_z+1e-4):
         return None
-    return _roof_height(wing, x, z, style, wing["pitch_deg"])
+    height = _roof_height(wing, x, z, style, wing["pitch_deg"])
+    return min(height, wing["ridge_y"]) if wing.get("flat_top") else height
 
 
 def _detail_samples(wing, vertices):
@@ -346,13 +347,47 @@ def clip_detail(part, level, roof_info, style, *, diagonal=False):
     return part
 
 
-def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, parts):
+def _cap_pitch(pitch, span, style, explicit_pitch, max_rise):
+    """Lower only automatic pitch, respecting the style minimum."""
+    if not explicit_pitch and span * math.tan(math.radians(pitch)) > max_rise:
+        return max(style["roof"].get("min_pitch_deg", 20),
+                   math.degrees(math.atan(max_rise / span)))
+    return pitch
+
+
+def _clip_height(points, top):
+    """Clip a polygon below a horizontal plane."""
+    result = []
+    for a, b in zip(points, points[1:] + points[:1]):
+        if a[1] <= top:
+            result.append(a)
+        if (a[1] <= top) != (b[1] <= top):
+            t = (top - a[1]) / (b[1] - a[1])
+            result.append([a[k] + t * (b[k] - a[k]) for k in range(3)])
+    return result
+
+
+def _cap_surfaces(surfaces, top):
+    """Clip convex slopes and close their cut with a horizontal roof slab."""
+    surfaces = [_clip_height(surface, top) for surface in surfaces]
+    cut = {(round(p[0], 10), round(p[2], 10)) for surface in surfaces
+           for p in surface if abs(p[1] - top) < 1e-8}
+    if len(cut) >= 3:
+        cx = sum(p[0] for p in cut) / len(cut)
+        cz = sum(p[1] for p in cut) / len(cut)
+        ring = sorted(cut, key=lambda p: math.atan2(p[1] - cz, p[0] - cx))
+        surfaces.append([[x, top, z] for x, z in ring])
+    return surfaces
+
+
+def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, parts, *, explicit_pitch=False, max_rise=6.0):
     """Use wall-span pitch and shortened hip-ridge formulas."""
     original_angle = rect["angle_deg"]
     rect, high = _wing_axes(rect, sides, form)
     outer = wall_offsets(style, number)[1]
     half_length = rect["length"] / 2 + outer
     half_span = rect["depth"] / 2 + outer
+    pitch = _cap_pitch(pitch, half_span, style, explicit_pitch, max_rise)
     slope = math.tan(math.radians(pitch))
     end, edge = half_length + overhang, half_span + overhang
     # Covered limits use the upper shell's inner face; the pitch datum stays fixed.
@@ -386,6 +421,16 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
                 surfaces.append([[side * end, low_y, -edge], [side * end, low_y, edge],
                                  [side * ridge_half, ridge_y, 0]])
         ridge = [_at(rect, x, ridge_y, 0) for x in (-ridge_half, ridge_half)]
+    flat_top = ridge_y > base + max_rise + 1e-8
+    if flat_top:
+        ridge_y = base + max_rise
+        surfaces = _cap_surfaces(surfaces, ridge_y)
+        if form == "shed":
+            cut_z = high * (max_rise / slope - half_span)
+            surfaces.append([[-end, ridge_y, cut_z], [end, ridge_y, cut_z],
+                             [end, ridge_y, high * edge], [-end, ridge_y, high * edge]])
+        for point in ridge:
+            point[1] = ridge_y
     original_ridge_y = ridge_y
     if sides:
         ridge = [[*point] for point in ridge]
@@ -393,7 +438,7 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
             local = _rotate([point[0]-rect["center"][0], point[2]-rect["center"][1]], -rect["angle_deg"])
             x = max(limits[0], min(limits[1], local[0]))
             z = max(limits[2], min(limits[3], local[1]))
-            y = base + (half_span + high*z)*slope if form == "shed" else ridge_y
+            y = min(base + (half_span + high*z)*slope, original_ridge_y) if form == "shed" else ridge_y
             point[:] = _at(rect, x, y, z)
         ridge_y = max(point[1] for point in ridge)
     first_part = len(parts)
@@ -416,7 +461,12 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
         for side in (-1, 1):
             builder = _builder("gable", material, uv_sizes)
             points = [_at(rect, max(limits[0], min(limits[1], side * half_length)), base, z) for z in (-half_span, half_span)]
-            points.append(_at(rect, max(limits[0], min(limits[1], side * half_length)), ridge_y, 0))
+            if flat_top:
+                cap_half = max(0, half_span - max_rise / slope)
+                points.extend(_at(rect, max(limits[0], min(limits[1], side * half_length)), ridge_y, z)
+                              for z in (cap_half, -cap_half))
+            else:
+                points.append(_at(rect, max(limits[0], min(limits[1], side * half_length)), ridge_y, 0))
             outward = _rotate([side, 0], rect["angle_deg"])
             normal = _normal(points)
             if normal[0] * outward[0] + normal[2] * outward[1] < 0:
@@ -433,7 +483,8 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
             builder = _builder("gable", material, uv_sizes)
             points = [_at(rect, max(limits[0], min(limits[1], side * half_length)), base, -high * half_span),
                       _at(rect, max(limits[0], min(limits[1], side * half_length)), base, high * half_span),
-                      _at(rect, max(limits[0], min(limits[1], side * half_length)), ridge_y, high * half_span)]
+                      _at(rect, max(limits[0], min(limits[1], side * half_length)), base + 2 * half_span * slope, high * half_span)]
+            points = _clip_height(points, ridge_y)
             normal = _normal(points)
             outward = _rotate([side, 0], rect["angle_deg"])
             if normal[0] * outward[0] + normal[2] * outward[1] < 0:
@@ -475,7 +526,7 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
     for part in parts[first_part:]:
         part["roof_level"] = number
     return {"rect": rect, "level": number, "form": form, "eaves_y": base,
-            "ridge_y": ridge_y, "ridge": ridge, "pitch_deg": pitch,
+            "ridge_y": ridge_y, "flat_top": flat_top, "ridge": ridge, "pitch_deg": pitch,
             "overhang_m": overhang, "limits": limits, "high": high}
 
 
@@ -495,7 +546,7 @@ def _convex(outline):
     return all(turn >= -1e-8 for turn in turns) or all(turn <= 1e-8 for turn in turns)
 
 
-def _tent(level, base, pitch, overhang, style, uv_sizes, parts):
+def _tent(level, base, pitch, overhang, style, uv_sizes, parts, *, explicit_pitch=False, max_rise=6.0):
     """Put the apex over the area centroid and measure rise from outer walls."""
     outline = level["outline"]
     number = level["level"]
@@ -505,7 +556,9 @@ def _tent(level, base, pitch, overhang, style, uv_sizes, parts):
     center = _centroid(outline)
     distances = [abs(_cross(first, second, center)) / math.dist(first, second)
                  for first, second in zip(wall, wall[1:] + wall[:1])]
+    pitch = _cap_pitch(pitch, min(distances), style, explicit_pitch, max_rise)
     rise = min(distances) * math.tan(math.radians(pitch))
+    flat_top = rise > max_rise + 1e-8
     apex = [center[0], base + rise, center[1]]
     planes = []
     corner_heights = [[] for _ in ring]
@@ -520,14 +573,21 @@ def _tent(level, base, pitch, overhang, style, uv_sizes, parts):
         builder = _builder("roof", "roof", uv_sizes)
         plane = [[first[0], low, first[1]], [second[0], low, second[1]], apex]
         planes.append(plane)
-        _slab(builder, plane)
-        parts.append(builder.part())
+        if not flat_top:
+            _slab(builder, plane)
+            parts.append(builder.part())
+    if flat_top:
+        for surface in _cap_surfaces(planes, base + max_rise):
+            builder = _builder("roof", "roof", uv_sizes)
+            _slab(builder, surface)
+            parts.append(builder.part())
     for point, heights in zip(ring, corner_heights):
         if abs(heights[0] - heights[1]) < 1e-5:
             continue
         # Unequal tent slopes meet with a vertical corner facet beyond walls.
         points = [apex, [point[0], min(heights), point[1]],
                   [point[0], max(heights), point[1]]]
+        points = _clip_height(points, base + max_rise) if flat_top else points
         normal = _normal(points)
         magnitude = math.sqrt(sum(value * value for value in normal))
         delta = [value * 0.15 / magnitude for value in normal]
@@ -535,15 +595,15 @@ def _tent(level, base, pitch, overhang, style, uv_sizes, parts):
         builder = _builder("roof", "roof", uv_sizes)
         builder.poly(points)
         builder.poly(back[::-1])
-        for i in range(3):
-            following = (i + 1) % 3
+        for i in range(len(points)):
+            following = (i + 1) % len(points)
             builder.poly([points[i], back[i], back[following], points[following]])
         parts.append(builder.part())
     xs, zs = [list(point[axis] for point in outline) for axis in (0, 1)]
     return {"rect": {"center": center, "length": max(xs) - min(xs),
                      "depth": max(zs) - min(zs), "angle_deg": 0.0},
             "level": number, "form": "tent", "eaves_y": base,
-            "ridge_y": base + rise, "ridge": None, "pitch_deg": pitch,
+            "ridge_y": base + min(rise, max_rise), "flat_top": flat_top, "ridge": None, "pitch_deg": pitch,
             "overhang_m": overhang, "outline": ring, "planes": planes}
 
 
@@ -557,7 +617,8 @@ def _roof_height(wing, x, z, style, pitch):
         return wing["eaves_y"] + min(span - abs(z), end - abs(x)) * slope
     if wing["form"] == "shed":
         return wing["eaves_y"] + (span + z * wing["high"]) * slope
-    return wing["ridge_y"] - abs(z) * slope
+    return (wing["eaves_y"] + (span - abs(z)) * slope if wing.get("flat_top")
+            else wing["ridge_y"] - abs(z) * slope)
 
 
 def _chimneys(info, style, desc, density, uv_sizes, parts):
@@ -606,7 +667,7 @@ def _dormers(info, style, desc, density, pitch, uv_sizes, parts):
     """Add closed trim fronts with raised louvers and small closed roof caps."""
     probability = min(1, style.get("dormers", 0) * density * 2)
     for i, wing in enumerate(info["wings"]):
-        if wing["form"] not in ("gable", "hip"):
+        if wing["ridge_y"] - wing["eaves_y"] < 1.6 or wing["form"] not in ("gable", "hip"):
             continue
         rect = wing["rect"]
         outer = wall_offsets(style, wing["level"])[1]
@@ -616,7 +677,7 @@ def _dormers(info, style, desc, density, pitch, uv_sizes, parts):
             if rng(desc.get("seed", 0), f"dormer:{i}:{side}").random() >= probability:
                 continue
             z = side * (rect["depth"] / 2 + outer) * 0.55
-            base = _roof_height(wing, 0, z, style, pitch)
+            base = min(wing["ridge_y"], _roof_height(wing, 0, z, style, wing["pitch_deg"]))
             builder = _builder("dormer", "trim", uv_sizes)
             yaw = -math.radians(rect["angle_deg"])
             center = _at(rect, 0, base + 0.4, z)
@@ -677,6 +738,8 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
     seed, overrides = desc.get("seed", 0), desc.get("overrides", {})
     roof = style["roof"]
     form = overrides.get("roof_form") or rng(seed, "roof_form").choice(roof["forms"])
+    explicit_pitch = "pitch_deg" in overrides
+    max_rise = overrides.get("max_rise_m", roof.get("max_rise_m", 6.0))
     pitch = overrides.get("pitch_deg")
     if pitch is None:
         pitch = round(rng(seed, "roof_pitch").uniform(*roof["pitch_deg"]) * 2) / 2
@@ -699,7 +762,7 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
         angle = orthogonal_frame(outline)
         if angle is None or (covered and orthogonal_frame(covered) is None):
             if topmost and form != "flat" and _convex(outline):
-                info["wings"].append(_tent(level, base, pitch, overhang, style, uv_sizes, parts))
+                info["wings"].append(_tent(level, base, pitch, overhang, style, uv_sizes, parts, explicit_pitch=explicit_pitch, max_rise=max_rise))
             else:
                 _flat(outline, number, base, style, overhang, uv_sizes, info, parts)
             continue
@@ -729,9 +792,12 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 else:
                     _flat(ring, number, base, style, overhang, uv_sizes, info, parts)
             else:
+                # A lean-to under an upper storey stays at most 25° whatever the pitch —
+                # a steeper one would run into that storey's windows.
                 wing_pitch = min(pitch, 25) if not topmost and sides else pitch
                 info["wings"].append(_pitched(rect, sides, wing_form, number, base,
-                                              wing_pitch, overhang, style, uv_sizes, parts))
+                                              wing_pitch, overhang, style, uv_sizes, parts,
+                                              explicit_pitch=explicit_pitch, max_rise=max_rise))
     density = overrides.get("ornament_density", 0.5)
     _chimneys(info, style, desc, density, uv_sizes, parts)
     if tier == "full":

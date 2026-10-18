@@ -24,6 +24,8 @@
   "log_walls": false,
   "jetty_m": 0.25,
   "roof": {
+    "max_rise_m": 6.0,
+    "min_pitch_deg": 40,
     "forms": [
       "gable",
       "hip"

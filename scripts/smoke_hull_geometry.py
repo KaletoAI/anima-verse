@@ -86,23 +86,24 @@ from app.core.world_geometry import polygon_distance
 STYLES = ("fachwerk", "holzhuette", "burg", "steinhaus")
 
 
+# 1c-B Task 1: roof rise cap (fachwerk/steinhaus/holzhuette)
 IDENTITY = {
-    "stepped_house:fachwerk:full": "70679bb2431c51841eb5dc21f77783462bae0abb4cd4a525f13bb2d31b70bf54",
-    "stepped_house:fachwerk:low": "bbdd67458d31e68c85838a8e1b625dad6bcc22cc5eb9e4da387e0bb3cdbae96a",
-    "stepped_house:holzhuette:full": "3f5b3b269f38e602639fff04943ca3699581d4c5df333f1279fdb26f1f61728b",
-    "stepped_house:holzhuette:low": "868168549cf18f801f6260c4d145da8098ca2b37f837ab6d0889711e2b052742",
+    "stepped_house:fachwerk:full": "39165eb435f6b194b0d35900e74e76392e88d27ea1b9f43b5d23a4b484fba409",
+    "stepped_house:fachwerk:low": "a426045405d0a2ab5d45e2ff582e0b4afd629d46f1c83370fb4f07a0f57365e5",
+    "stepped_house:holzhuette:full": "46985ab445353d4ad0ba042a39d89cac40e1768ae5872b00ab85b72b134b5d41",
+    "stepped_house:holzhuette:low": "120778bfb414bcf9c5867d8316d19c0868e5140d84d60dcc7b05c8b32477cf9c",
     "stepped_house:burg:full": "8baf7d4939833f41dae46fb6e70e77a7012ba5522df833ba27848a680c7e2a74",
     "stepped_house:burg:low": "1f268acef9a014d379b45766b1a97e9b9fab81ae85a1373c63ef0b56b30fccca",
-    "stepped_house:steinhaus:full": "44cf16d866edf552b7766aabf3938748d084b284decf30c7028009e73cd5f1da",
-    "stepped_house:steinhaus:low": "416fb42ee9764a473304b5b8a3ce760622d73c3b5a12ee17762e75926a72a2f6",
-    "l_shaped_house:fachwerk:full": "b9a43a043dd6df2c1c027767803989b8366d322de30b9531be1808d30a9bb4ed",
-    "l_shaped_house:fachwerk:low": "d023160d26aa730a3e923969d3a54bac2c29cb53acea4415d489bcc087b4f24c",
-    "l_shaped_house:holzhuette:full": "545907b1358772a89564491c4d317a34ae7cb7f92055bc8fd23233d73eeb38a4",
-    "l_shaped_house:holzhuette:low": "9424e28258074a0c3f9ef3b3747c789c23d9f36abc97e3b4aabe85abdb511bac",
+    "stepped_house:steinhaus:full": "306117b41164991abedb61f893bb05b3e2ccf87fd57c0bc186bf90dcdbe1ff46",
+    "stepped_house:steinhaus:low": "a97f16023e309ded74ce079b0b05f13cfe37bc20bc37e4b1fdc11ad099767e77",
+    "l_shaped_house:fachwerk:full": "6b20c12ab8d8da59911bc4219c6d4170e2ad997ff95343256d2f135ca12ddfed",
+    "l_shaped_house:fachwerk:low": "8da26057279099beed046f1fad9a01e628ce22950e74ac55eaf7d9322ba220e3",
+    "l_shaped_house:holzhuette:full": "4eb6094660cc518ed6a78b5b8b1cfca8f61cb5979a729bb380bed57406daa61c",
+    "l_shaped_house:holzhuette:low": "2341d19caf9067f80365c17ac44f21f60d389682b56f8abb04c0a44ef9ee6b29",
     "l_shaped_house:burg:full": "7b8d98b5706e2c7ce14735cde9404b222c764010309f6773106231574ef46786",
     "l_shaped_house:burg:low": "95c2234bfadc26b68a46d349d33d4d9248f01bec79fd9a1beeb51033c69573d2",
-    "l_shaped_house:steinhaus:full": "eb284aa7554d855861977916d4ad48bad109fce8b0ccfb252631b4a522434066",
-    "l_shaped_house:steinhaus:low": "00aa3c403ac3b732e41fc500202d14556cc286bfdb45abd86e2c53b0143d6aa5"
+    "l_shaped_house:steinhaus:full": "6cde95395c3a86421df4c7190847a116f89985ef48b1ab831e8821536f2e0137",
+    "l_shaped_house:steinhaus:low": "b79f46d3bbceaa7c72ad06d783c3146cb16b2dd1a945b9999476069ab1bf61e5"
 }
 
 
