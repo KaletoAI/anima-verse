@@ -8,6 +8,9 @@ A world-scope path in an instance body (or the reverse) is a 400, never a
 silent drop.
 """
 import copy
+import hashlib
+import json
+from collections import OrderedDict
 from typing import Any, Dict, Iterable, List
 
 from app.core import config, config_scope
@@ -18,6 +21,95 @@ logger = get_logger("config_admin")
 
 class LayerSaveError(ValueError):
     """The body cannot be saved as it is — the message goes to the admin (400)."""
+
+
+class LayerStale(LayerSaveError):
+    """The submitted base is unknown or conflicts with current settings."""
+
+    def __init__(self, paths: List[str], reason: str):
+        self.paths = list(paths)
+        self.reason = reason
+        message = (
+            "this page's settings version is no longer known to the server. Reload the page."
+            if reason == "unknown_base" else
+            f"settings changed elsewhere since this page was loaded: {self.paths}. "
+            "Reload the page and redo these edits.")
+        super().__init__(message)
+
+
+REVISION_CACHE_SIZE: int = 32
+_REVISION_CACHE: Dict[str, OrderedDict] = {}
+
+
+def layer_revision(scope: str) -> str:
+    """Hash the layer's persisted meaning, independent of process state."""
+    return hashlib.sha256(json.dumps(
+        config_scope.prune(layer_part(scope)), sort_keys=True,
+        separators=(",", ":"), default=str).encode()).hexdigest()[:16]
+
+
+def issue_revision(scope: str) -> str:
+    """Remember an issued base; callers hold config._LOCK with their view read."""
+    revision = layer_revision(scope)
+    cache = _REVISION_CACHE.setdefault(scope, OrderedDict())
+    cache[revision] = copy.deepcopy(layer_part(scope))
+    cache.move_to_end(revision)
+    while len(cache) > REVISION_CACHE_SIZE:
+        cache.popitem(last=False)
+    return revision
+
+
+def change_units(tree: dict) -> Dict[str, Any]:
+    """Flatten one section level, keeping lists and nested subtrees atomic."""
+    units = {}
+    for key, value in tree.items():
+        if isinstance(value, dict):
+            units.update({f"{key}.{sub}": child for sub, child in value.items()})
+        else:
+            units[key] = value
+    return units
+
+
+def rebase_layer(scope: str, own: dict, base: dict, current: dict, resets=()) -> dict:
+    """Apply only our changed units, rejecting divergent concurrent edits.
+
+    A reset is an edit too: resetting a unit that changed elsewhere and still
+    holds a stored value conflicts instead of silently discarding that change."""
+    schema = config_scope.schema_for(scope)
+    mine = merge_sensitive(own, base)
+    _preserve_unsent_subarray_fields(mine, base, schema)
+    if scope == config_scope.INSTANCE:
+        _preserve_unsent_image_routing(mine, base)
+    strip_materialized_item_defaults(mine, base, schema)
+    m = change_units(config_scope.prune(mine))
+    b = change_units(config_scope.prune(base))
+    c = change_units(config_scope.prune(current))
+    mine_changed = {u for u in m.keys() | b.keys() if m.get(u) != b.get(u)}
+    theirs_changed = {u for u in c.keys() | b.keys() if c.get(u) != b.get(u)}
+    conflicts = {u for u in mine_changed & theirs_changed if m.get(u) != c.get(u)}
+    for path in resets:
+        top, _, rest = path.partition(".")
+        sub = rest.split(".")[0]
+        unit = f"{top}.{sub}" if sub and f"{top}.{sub}" in c.keys() | b.keys() else top
+        if unit in theirs_changed and unit in c:
+            conflicts.add(unit)
+    conflicts = sorted(conflicts)
+    if conflicts:
+        raise LayerStale(conflicts, "conflict")
+    result = copy.deepcopy(current)
+    raw = change_units(mine)
+    for unit in sorted(mine_changed):
+        parts = unit.split(".", 1)
+        node = result
+        if len(parts) == 2:
+            if not isinstance(node.get(parts[0]), dict):
+                node[parts[0]] = {}
+            node = node[parts[0]]
+        if unit in raw:
+            node[parts[-1]] = copy.deepcopy(raw[unit])
+        else:
+            node.pop(parts[-1], None)
+    return result
 
 
 class LayerDropRefused(LayerSaveError):
@@ -71,9 +163,10 @@ def set_media_switch(enabled: bool) -> bool:
     """Set the instance media master switch while preserving its whole layer."""
     if not isinstance(enabled, bool):
         raise TypeError("enabled must be true or false")
-    part = copy.deepcopy(layer_part(config_scope.INSTANCE))
-    part.setdefault("image_generation", {})["enabled"] = enabled
-    config.save_part(config_scope.INSTANCE, part)
+    with config._LOCK:
+        part = copy.deepcopy(layer_part(config_scope.INSTANCE))
+        part.setdefault("image_generation", {})["enabled"] = enabled
+        config.save_part(config_scope.INSTANCE, part)
     from app.imagegen.base import media_generation_enabled
     return media_generation_enabled()
 
@@ -480,7 +573,7 @@ def strip_materialized_item_defaults(merged: dict, current: dict, schema: dict) 
                             sub.get("fields", {}))
 
 
-def prepare_layer(scope: str, values: dict, resets=(), confirm_drop=()) -> tuple[dict, dict]:
+def prepare_layer(scope: str, values: dict, resets=(), confirm_drop=(), base_revision=None) -> tuple[dict, dict]:
     """Build the sole save candidate before route-specific validation."""
     schema = config_scope.schema_for(scope)
     if not isinstance(values, dict):
@@ -510,6 +603,11 @@ def prepare_layer(scope: str, values: dict, resets=(), confirm_drop=()) -> tuple
         raise LayerSaveError(f"{count} path(s) belong to the {_other(scope)} settings: "
                              + config._key_list(rejected, limit=5))
     current = layer_part(scope)
+    if base_revision is not None and base_revision != layer_revision(scope):
+        base = _REVISION_CACHE.get(scope, {}).get(base_revision)
+        if base is None:
+            raise LayerStale([], "unknown_base")
+        own = rebase_layer(scope, own, base, current, resets)
     merged = merge_sensitive(own, current)
     _preserve_unsent_subarray_fields(merged, current, schema)
     if scope == config_scope.INSTANCE:
@@ -531,18 +629,28 @@ def prepare_layer(scope: str, values: dict, resets=(), confirm_drop=()) -> tuple
     return merged, current
 
 
-def commit_layer(scope: str, merged: dict, current: dict) -> dict:
-    """Persist exactly the prepared candidate and reload affected services."""
+def _persist_layer(scope: str, merged: dict, current: dict) -> dict:
+    """Persist and issue a revision while the caller holds config._LOCK."""
     changed = diff_sections(current, merged)
     try:
         config.save_part(scope, merged)
     except ValueError as e:
         raise LayerSaveError(str(e)) from e
-    return {"changed_sections": changed,
-            "reloaded": apply_section_reloads(changed, scope), "warnings": []}
+    return {"changed_sections": changed, "revision": issue_revision(scope), "warnings": []}
 
 
-def save_layer(scope: str, body: dict, resets=(), confirm_drop=()) -> dict:
-    """Prepare and commit one scope; instance routes validate between these steps."""
-    merged, current = prepare_layer(scope, body, resets, confirm_drop)
-    return commit_layer(scope, merged, current)
+def commit_layer(scope: str, merged: dict, current: dict) -> dict:
+    """Persist a prepared candidate, then reload services outside the lock."""
+    with config._LOCK:
+        result = _persist_layer(scope, merged, current)
+    result["reloaded"] = apply_section_reloads(result["changed_sections"], scope)
+    return result
+
+
+def save_layer(scope: str, body: dict, resets=(), confirm_drop=(), base_revision=None) -> dict:
+    """Prepare and persist atomically, then reload services outside the lock."""
+    with config._LOCK:
+        merged, current = prepare_layer(scope, body, resets, confirm_drop, base_revision)
+        result = _persist_layer(scope, merged, current)
+    result["reloaded"] = apply_section_reloads(result["changed_sections"], scope)
+    return result
