@@ -32,7 +32,7 @@
         },
         {
           "role": "armchair",
-          "anchor": "around",
+          "anchor": "beside",
           "ref": "coffee_table",
           "count": 2
         },
@@ -76,8 +76,7 @@
         },
         {
           "role": "rug",
-          "anchor": "in_front_of",
-          "ref": "bed"
+          "anchor": "center"
         },
         {
           "role": "wardrobe",

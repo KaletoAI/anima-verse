@@ -178,3 +178,206 @@ def catalog(location_id: str = "", room_id: str = "", *, library: Dict[str, Dict
         "room_type_guess": (guess_room_type(room) or None) if room else None,
         "missing_roles": {kid: {tid: [role for role in roles[tid] if not kit_candidates(library, kid, role)] for tid in types} for kid in kits},
     }
+
+
+def wall_ranking(outline_m, openings, piece_height_m: float) -> List[Tuple[str, float]]:
+    """Rank usable wall lengths at this height so low pieces can use window walls.
+
+    Use the solver centroid and edge classes, including diagonal edges that
+    belong to two classes. Opening zones supply the same defaults and parsing
+    as placement; their widths include the solver clearance of 0.4 metres.
+    """
+    from app.core import furnish_geometry as fg
+
+    if not outline_m:
+        return [(wall, 0.0) for wall in ("n", "e", "s", "w")]
+    centroid = (sum(p[0] for p in outline_m) / len(outline_m),
+                sum(p[1] for p in outline_m) / len(outline_m))
+    openings = list(openings or [])
+    blocked = []
+    for zone in fg.opening_zones(outline_m, centroid, openings):
+        op = openings[zone.opening]
+        if str(op.get("type") or "door") == "window" and zone.y0 >= piece_height_m:
+            continue
+        edge = int(op.get("edge") or 0) % len(outline_m)
+        width = math.dist(zone.corners[0], zone.corners[3])
+        blocked.append((edge, width))
+    ranked = []
+    for wall in ("n", "e", "s", "w"):
+        edges = fg.wall_edges(outline_m, centroid, wall)
+        free = sum(fg.edge_geometry(outline_m, centroid, i)[3] for i in edges)
+        free -= sum(width for edge, width in blocked if edge in edges)
+        # Suppress floating arithmetic noise without changing geometric ordering.
+        ranked.append((wall, round(free, 10)))
+    return sorted(ranked, key=lambda row: -row[1])
+
+
+def plan_room(*, kit: str, room_type: str, geom: Dict, library: Dict,
+              room_id: str, template=None) -> Dict:
+    """Resolve each template entry separately so repeated props keep their anchors.
+
+    Drop dependencies to a fixed point before choosing main: otherwise a missing
+    bed would still choose the wall of a wardrobe that survives it. Counts use
+    plan instances only, and share the review count cap across repeated props.
+    """
+    from app.core.furnish_needs import MAX_COUNT
+    from app.core.furnish_solver import _CORNER_ANCHORS
+
+    template = (load_room_types()[room_type]["template"] if template is None else template)
+    roles = list(dict.fromkeys(entry["role"] for entry in template))
+    chosen = {role: pick_prop(kit_candidates(library, kit, role), room_id, role)
+              for role in roles}
+    missing = [role for role in roles if not chosen[role]]
+    surviving = [entry for entry in template if chosen[entry["role"]]]
+    while True:
+        present = {entry["role"] for entry in surviving}
+        kept = [entry for entry in surviving if not entry.get("ref") or entry["ref"] in present]
+        if len(kept) == len(surviving):
+            break
+        surviving = kept
+
+    counts, visiting = {}, set()
+
+    def count_at(index):
+        if index in counts:
+            return counts[index]
+        if index in visiting:
+            raise ValueError("Cyclic furniture count references")
+        visiting.add(index)
+        entry = surviving[index]
+        spec = entry.get("count", 1)
+        refs = 0
+        if isinstance(spec, dict) and "per_ref" in spec:
+            refs = sum(count_at(i) for i, other in enumerate(surviving)
+                       if other["role"] == entry.get("ref"))
+        value = resolve_count(spec, area_m2=geom["area_m2"], ref_instances=refs)
+        pid = chosen[entry["role"]]
+        used = sum(count_at(i) for i in range(index)
+                   if chosen[surviving[i]["role"]] == pid)
+        counts[index] = min(value, max(0, MAX_COUNT - used))
+        visiting.remove(index)
+        return counts[index]
+
+    resolved = [(entry, count_at(i)) for i, entry in enumerate(surviving)]
+    entries, needs = [], []
+    main, corners = None, set()
+    for raw, count in resolved:
+        # build_items normalises zero to one, so zero-count slots must disappear.
+        if count == 0:
+            continue
+        pid = chosen[raw["role"]]
+        prop = library[pid]
+        anchor = raw["anchor"]
+        slot = raw.get("wall") if anchor == "wall" else "corner" if anchor == "corner" else None
+        if anchor == "wall":
+            ranking = wall_ranking(geom["outline_m"], geom.get("openings"),
+                                   float(prop.get("height_m") or 0))
+            if main is None:
+                main = ranking[0][0]
+            wall = (main if slot == "main" else
+                    next(w for w, _ in ranking if slot != "other" or w != main))
+            anchor = f"wall_{wall}"
+        elif anchor == "corner":
+            anchor = next((c for c in _CORNER_ANCHORS if c not in corners),
+                          _CORNER_ANCHORS[0])
+            corners.add(anchor)
+        entry = {"prop": pid, "count": count, "anchor": anchor, "slot": slot}
+        for key in ("facing", "base_m"):
+            if key in raw:
+                entry[key] = raw[key]
+        if raw.get("ref"):
+            entry["ref"] = chosen[raw["ref"]]
+        entries.append(entry)
+        needs.append({
+            "key": f"n{len(needs) + 1}", "kind": str(prop.get("name") or pid),
+            "category": str(prop.get("category") or ""), "count": count,
+            "mount": str(prop.get("mount") or "floor"),
+            "width_m": prop.get("width_m"), "depth_m": prop.get("depth_m"),
+            "height_m": prop.get("height_m"), "style": "",
+            "description": str(prop.get("description") or ""),
+            "marker": None, "key_areas": [], "from_description": False,
+            "prop_id": pid, "build": False})
+    return {"entries": entries, "missing_roles": missing, "needs": needs}
+
+
+def solve_kit(*, kit: str, room_type: str, geom: Dict, library: Dict,
+              room_id: str, existing, storey_height_m: float, template=None) -> Dict:
+    """Solve and retry bounded alternatives without worsening any placement pass.
+
+    Replaying the whole plan keeps dependent pieces attached to moved supports.
+    Review items may merge props, but the solver always sees the separate slots.
+    """
+    from app.core import furnish_place as fp, furnish_solver as fs
+
+    planned = plan_room(kit=kit, room_type=room_type, geom=geom, library=library,
+                        room_id=room_id, template=template)
+    plan = [dict(entry) for entry in planned["entries"]]
+    items = fp.build_items(planned["needs"], library)
+    props = fp.solver_props(items, library)
+    mounts = {item["id"]: item["mount"] for item in items}
+
+    def solve(entries):
+        result = fs.solve(outline_m=geom["outline_m"], openings=geom.get("openings"),
+                          existing=existing, plan=entries, props=props,
+                          storey_height_m=storey_height_m)
+        result["phase_counts"] = fp.phase_counts(result, mounts)
+        return result
+
+    def has_unplaced(index, entries, result):
+        pid = entries[index]["prop"]
+        if not any(u["name"] == pid for u in result["unplaced"]):
+            return False
+        if sum(e["prop"] == pid for e in entries) == 1:
+            return True
+        # Failures name props, not template entries. Replay execution prefixes
+        # only for repeated props, so a failed sibling cannot move a fitted slot.
+        # Wall/corner floor entries precede center batches; wall entries follow
+        # the whole floor pass, so these prefixes preserve the solver state.
+        def execution_key(i):
+            mount = mounts[entries[i]["prop"]]
+            phase = fp.MOUNT_PASS.get(mount, "floor")
+            ranks = fs._FLOOR_RANK if phase == "floor" else fs._WALL_RANK
+            return (fp.PASSES.index(phase), ranks.get(entries[i]["anchor"], 3), i)
+
+        key = execution_key(index)
+        prefix = [e for i, e in enumerate(entries) if execution_key(i) < key]
+        before = solve(prefix)
+        after = solve(prefix + [entries[index]])
+        return (sum(u["name"] == pid for u in after["unplaced"])
+                > sum(u["name"] == pid for u in before["unplaced"]))
+
+    result = solve(plan)
+    for index, entry in enumerate(plan):
+        if entry["slot"] not in ("main", "other", "any", "corner"):
+            continue
+        if not has_unplaced(index, plan, result):
+            continue
+        if entry["slot"] == "corner":
+            used = {e["anchor"] for i, e in enumerate(plan) if i != index
+                    and e["anchor"] in fs._CORNER_ANCHORS}
+            alternatives = [a for a in fs._CORNER_ANCHORS
+                            if a not in used and a != entry["anchor"]]
+        else:
+            ranking = wall_ranking(geom["outline_m"], geom.get("openings"),
+                                   float(props[entry["prop"]].get("height_m") or 0))
+            anchors = [f"wall_{wall}" for wall, _ in ranking]
+            start = anchors.index(entry["anchor"])
+            alternatives = anchors[start + 1:] + anchors[:start]
+        for anchor in alternatives[:3]:
+            trial = [dict(e) for e in plan]
+            trial[index]["anchor"] = anchor
+            candidate = solve(trial)
+            before = fp.pass_summary(result["phase_counts"])
+            after = fp.pass_summary(candidate["phase_counts"])
+            # A move must GAIN a piece: an equal trade would shuffle the
+            # rest of the room for nothing and leave a still-failing slot.
+            gained = (sum(after[p]["placed"] for p in fp.PASSES)
+                      > sum(before[p]["placed"] for p in fp.PASSES))
+            if gained and all(after[p]["placed"] >= before[p]["placed"]
+                              and after[p]["unplaced"] <= before[p]["unplaced"]
+                              for p in fp.PASSES):
+                plan, result = trial, candidate
+            if not has_unplaced(index, plan, result):
+                break
+    return {"plan": plan, **result, "missing_roles": planned["missing_roles"],
+            "items": items, "needs": planned["needs"]}
