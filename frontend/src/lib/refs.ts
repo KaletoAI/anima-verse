@@ -67,6 +67,7 @@ export async function loadItems(): Promise<ItemRef[]> {
 }
 
 export interface PropRef {
+  tags?: string[]
   id: string
   name?: string
   category?: string

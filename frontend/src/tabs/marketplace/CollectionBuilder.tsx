@@ -28,6 +28,7 @@ import {
 type EntryType = 'location' | 'character' | 'prop' | 'item' | 'rule'
 
 interface Choice {
+  tags?: string[]
   id: string
   label: string
 }
@@ -50,6 +51,7 @@ export function CollectionBuilder({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('')
   const [sections, setSections] = useState<Section[] | null>(null)
   const [open, setOpen] = useState<Record<string, boolean>>({ location: true })
+  const [filters, setFilters] = useState<Record<string, string>>({})
   const [picked, setPicked] = useState<Record<string, boolean>>({})
   const [withStates, setWithStates] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -81,7 +83,7 @@ export function CollectionBuilder({ onClose }: { onClose: () => void }) {
           {
             type: 'prop',
             title: t('Props'),
-            choices: props.map((p) => ({ id: p.id, label: p.name || p.id })),
+            choices: props.map((p) => ({ id: p.id, label: p.name || p.id, tags: p.tags })),
           },
           {
             type: 'item',
@@ -122,10 +124,14 @@ export function CollectionBuilder({ onClose }: { onClose: () => void }) {
   const countIn = (section: Section) =>
     section.choices.filter((c) => picked[entryKey(section.type, c.id)]).length
 
+  const visible = (section: Section) => section.choices.filter((c) =>
+    (c.label + ' ' + (c.tags || []).join(' ')).toLowerCase()
+      .includes((filters[section.type] || '').toLowerCase()))
+
   const toggleAll = (section: Section, on: boolean) => {
     setPicked((prev) => {
       const next = { ...prev }
-      for (const c of section.choices) next[entryKey(section.type, c.id)] = on
+      for (const c of visible(section)) next[entryKey(section.type, c.id)] = on
       return next
     })
   }
@@ -235,6 +241,9 @@ export function CollectionBuilder({ onClose }: { onClose: () => void }) {
                     </button>
                     {isOpen ? (
                       <div style={{ padding: '0 8px 8px' }}>
+                        <input className="ga-input" placeholder={t('Filter by name or tag')}
+                          aria-label={t('Filter by name or tag')} value={filters[section.type] || ''}
+                          onChange={(e) => setFilters((prev) => ({ ...prev, [section.type]: e.target.value }))} />
                         {section.choices.length === 0 ? (
                           <div className="ga-hint">{t('Nothing exportable here.')}</div>
                         ) : (
@@ -266,7 +275,7 @@ export function CollectionBuilder({ onClose }: { onClose: () => void }) {
                                 overflowY: 'auto',
                               }}
                             >
-                              {section.choices.map((c) => {
+                              {visible(section).map((c) => {
                                 const key = entryKey(section.type, c.id)
                                 return (
                                   <label

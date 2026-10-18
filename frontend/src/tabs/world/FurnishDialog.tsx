@@ -24,7 +24,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { SurfaceKindSelect } from './SurfaceKindSelect'
-import type { RoomPropPlacement, SurfaceKind } from './worldTypes'
+import type { FurnitureKitCatalog, RoomPropPlacement, SurfaceKind } from './worldTypes'
 import { newId, usePoseCatalog } from './placeTypes'
 import { DescriptionSyncPanel } from './DescriptionSyncPanel'
 import { FurnishNeedsList } from './FurnishNeedsList'
@@ -135,6 +135,7 @@ export function useFurnishJob(roomId: string, open: boolean): FurnishJob {
 }
 
 interface FurnishDialogProps {
+  locationId?: string
   roomId: string
   roomName: string
   job: FurnishJob
@@ -163,7 +164,7 @@ interface FurnishDialogProps {
   onClose: () => void
 }
 
-export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
+export function FurnishDialog({ locationId = '', roomId, roomName, job, propInfo, placements,
   surfaceKinds, waterKinds, onClearRoom, onAccept, onDescriptionApplied,
   onClose }: FurnishDialogProps) {
   const { t } = useI18n()
@@ -178,6 +179,29 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
   const [applySurfaces, setApplySurfaces] = useState(true)
   const seededRef = useRef('')
   const [confirmClear, setConfirmClear] = useState(false)
+  const [kitMode, setKitMode] = useState(false)
+  const [kitCatalog, setKitCatalog] = useState<FurnitureKitCatalog | null>(null)
+  const [kit, setKit] = useState('')
+  const [roomType, setRoomType] = useState('')
+  useEffect(() => {
+    let stale = false
+    setKitMode(false)
+    setKitCatalog(null)
+    setKit('')
+    setRoomType('')
+    if (!roomId.startsWith('__ground__')) {
+      apiGet<FurnitureKitCatalog>(`/world/furniture-kits?${new URLSearchParams({ location_id: locationId, room_id: roomId })}`)
+        .then((data) => {
+          if (stale) return
+          setKitCatalog(data)
+          setKit(data.location_kit || '')
+          setRoomType(data.room_type || data.room_type_guess || '')
+        })
+        .catch((e) => { if (!stale) toast(t('Error') + ': ' + (e as Error).message, 'error') })
+    }
+    return () => { stale = true }
+  }, [locationId, roomId, t, toast])
+
   // Direct mode (skip LLM proposal + generation, user requirement
   // 2026-07-23): pick library props by hand, the job enters at placement.
   const [pickMode, setPickMode] = useState(false)
@@ -339,6 +363,28 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
         </div>
       </>
     )
+  } else if (!status && kitMode) {
+    const missing = kitCatalog?.missing_roles[kit]?.[roomType] || []
+    body = <div className="ga-form">
+      <label>{t('Kit')}
+        <select className="ga-input" value={kit} disabled={busy || !kitCatalog} onChange={(e) => setKit(e.target.value)}>
+          <option value="">—</option>
+          {kitCatalog?.kits.map((k) => <option key={k.id} value={k.id}>{k.name}</option>)}
+        </select>
+      </label>
+      <label>{t('Room type')}
+        <select className="ga-input" value={roomType} disabled={busy || !kitCatalog} onChange={(e) => setRoomType(e.target.value)}>
+          <option value="">—</option>
+          {kitCatalog?.room_types.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+        </select>
+      </label>
+      {missing.length > 0 && <div className="ga-hint">{t('Missing in this kit: {roles}').replace('{roles}', missing.join(', '))}</div>}
+      <div className="ga-furnish-actions">
+        <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy || !kit || !roomType}
+          onClick={() => { void run('kit', { kit, room_type: roomType }) }}>{t('Furnish')}</button>
+        <button className="ga-btn ga-btn-sm" disabled={busy} onClick={() => setKitMode(false)}>{t('Cancel')}</button>
+      </div>
+    </div>
   } else if (!status) {
     body = (
       <>
@@ -439,6 +485,8 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
                 title={t('Skip the LLM proposal and the generation — pick library props by hand, only the placement runs.')}>
                 📦 {t('Place from library')}
               </button>
+              {!roomId.startsWith('__ground__') && <button className="ga-btn ga-btn-sm" disabled={busy}
+                onClick={() => setKitMode(true)}>🧩 {t('Furnish from kit')}</button>}
               <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy}
                 onClick={() => {
                   const categories = Object.keys(exCats).filter((c) => exCats[c])
@@ -536,6 +584,7 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
     )
   } else if (state === 'review_ready') {
     const unplaced = status.placements?.unplaced || []
+    const missingRoles = (status.placements as (typeof status.placements & { missing_roles?: string[] }))?.missing_roles || []
     const counts = status.phase_counts || {}
     const byId = new Map((libProps || []).map((p) => [p.id, p]))
     // B18: a seat or a lying surface WITHOUT a place marker is furniture
@@ -598,6 +647,9 @@ export function FurnishDialog({ roomId, roomName, job, propInfo, placements,
             })}
           </>
         ) : null}
+        {missingRoles.length > 0 && <div className="ga-hint">
+          {t('Roles without a kit prop: {roles}').replace('{roles}', missingRoles.join(', '))}
+        </div>}
         {placeholders.length ? (
           <ul className="ga-furnish-list">
             {placeholders.map((propId) => (

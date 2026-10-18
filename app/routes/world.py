@@ -2751,6 +2751,18 @@ async def _furnish_body(request: Request) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+@router.get("/furniture-kits")
+async def furniture_kit_catalog(location_id: str = "", room_id: str = "") -> Dict[str, Any]:
+    """Read kit choices and missing roles off the event loop."""
+    from app.core import furniture_kits, room_furnish
+
+    def read_catalog():
+        return furniture_kits.catalog(location_id or "", room_id or "",
+                                      library=room_furnish._library())
+
+    return await asyncio.to_thread(read_catalog)
+
+
 @router.get("/rooms/{room_id}/furnish")
 def furnish_status(room_id: str,
                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:

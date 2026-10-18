@@ -218,7 +218,17 @@ export type HullOpening = Omit<RoomOpening, 'edge' | 'to' | 'type'> & {
   type: 'door' | 'passage'
 }
 
+export interface FurnitureKitCatalog {
+  kits: Array<{ id: string; name: string }>
+  room_types: Array<{ id: string; name: string; roles: string[] }>
+  location_kit: string | null
+  room_type: string | null
+  room_type_guess: string | null
+  missing_roles: Record<string, Record<string, string[]>>
+}
+
 export interface Room {
+  room_type?: string
   id?: string
   name?: string
   description?: string

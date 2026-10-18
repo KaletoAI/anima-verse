@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiPut } from '../../lib/api'
+import { apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { type ItemRef } from '../../lib/refs'
-import { GROUND_ROOM_ID, isFloorRoom, roomLabel, type Location, type Room } from './worldTypes'
+import { GROUND_ROOM_ID, isFloorRoom, roomLabel, type Location, type Room, type FurnitureKitCatalog } from './worldTypes'
 import { RoomItems } from './RoomItems'
 import { BuildingModelPanel } from './BuildingModelPanel'
 import { PromptChangedBadge } from './LocationEditor'
@@ -32,6 +32,16 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
   useEffect(() => {
     setDraft({ ...room })
   }, [room])
+
+  const [kitCatalog, setKitCatalog] = useState<FurnitureKitCatalog | null>(null)
+  useEffect(() => {
+    let stale = false
+    setKitCatalog(null)
+    apiGet<FurnitureKitCatalog>(`/world/furniture-kits?${new URLSearchParams({ location_id: location.id, room_id: room.id || '' })}`)
+      .then((data) => { if (!stale) setKitCatalog(data) })
+      .catch((e) => { if (!stale) toast(t('Error') + ': ' + (e as Error).message, 'error') })
+    return () => { stale = true }
+  }, [location.id, room.id, t, toast])
 
   const upd = useCallback(<K extends keyof Room>(k: K, v: Room[K]) => {
     setDraft((prev) => ({ ...prev, [k]: v }))
@@ -140,6 +150,16 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
             />
           </Field>
         </div>
+        {!isReserved && <Field label={t('Room type')}
+          hint={t('Used by Furnish from kit. Auto guesses from the room name.')}>
+          <select className="ga-input" disabled={!kitCatalog}
+            value={kitCatalog?.room_types.some((type) => type.id === draft.room_type) ? draft.room_type : ''}
+            onChange={(e) => upd('room_type', e.target.value)}>
+            <option value="">{t('Auto ({guess})').replace('{guess}',
+              kitCatalog?.room_types.find((type) => type.id === kitCatalog.room_type_guess)?.name || t('none'))}</option>
+            {kitCatalog?.room_types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
+          </select>
+        </Field>}
         <Field label={t('Description')}>
           <textarea
             className="ga-textarea"

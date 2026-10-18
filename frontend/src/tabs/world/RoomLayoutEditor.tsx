@@ -53,7 +53,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet } from '../../lib/api'
+import { apiGet, apiPost } from '../../lib/api'
+import type { FurnitureKitCatalog } from './worldTypes'
 import { useToast } from '../../lib/Toast'
 import {
   CLOSE_TOL_PX, MIN_ROOM_M, MIN_WINDOW_EDGE_M, OPENING_DEFAULT,
@@ -240,6 +241,35 @@ const NO_PREVIEW_POSES: Record<string, string> = {}
 export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, previewPose = NO_PREVIEW_POSES, onPreviewPose, unsaved = false, defaultDoorPropId = '', onDefaultDoorProp, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
+  const [kitCatalog, setKitCatalog] = useState<FurnitureKitCatalog | null>(null)
+  const [buildingKit, setBuildingKit] = useState('')
+  const [kitBusy, setKitBusy] = useState(false)
+  type KitResult = {
+    rooms: Array<{ room_id: string; name: string; placed: number; unplaced: number; missing_roles: string[]; placements: RoomPropPlacement[] }>
+    skipped: Array<{ room_id: string; name: string; reason: string }>
+  }
+  const [kitPreview, setKitPreview] = useState<KitResult | null>(null)
+  const [kitSummary, setKitSummary] = useState<KitResult | null>(null)
+  useEffect(() => {
+    let stale = false
+    setKitCatalog(null)
+    setBuildingKit('')
+    setKitPreview(null)
+    setKitSummary(null)
+    if (locationId) apiGet<FurnitureKitCatalog>(`/world/furniture-kits?${new URLSearchParams({ location_id: locationId })}`)
+      .then((data) => {
+        if (stale) return
+        setKitCatalog(data)
+        setBuildingKit(data.location_kit || '')
+      })
+      .catch((e) => { if (!stale) toast(t('Error') + ': ' + (e as Error).message, 'error') })
+    return () => { stale = true }
+  }, [locationId, t, toast])
+  const skipReason = (reason: string) => ({
+    has_furniture: t('already furnished'), no_room_type: t('no room type'),
+    job_open: t('a furnishing job is open'), no_layout: t('no floor plan'),
+  })[reason] || reason
+
   const [level, setLevel] = useState(0)
   // WHICH storey a running footprint draft belongs to (§ G). Recorded when the
   // 🏗 tool is armed, not read when it commits: switching storeys mid-draw
@@ -1326,6 +1356,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         || (roomId === GROUND_ROOM_ID ? {} : { level, x: -1.5, y: -1.5, w: 3, d: 3 })
       return { ...r, layout: { ...base, ...patch } }
     })
+    roomsRef.current = next
     onChange(next)
   }, [onChange, level])
   // Refs so `fitToModel` stays identity-stable (it sits in the toolbar props).
@@ -1698,6 +1729,36 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
   }, [selected, updateLayout, t, toast])
+
+  const furnishBuilding = async (dryRun: boolean) => {
+    if (unsaved || kitBusy || !buildingKit || !locationId) return
+    setKitBusy(true)
+    try {
+      const result = await apiPost<KitResult>(`/world/locations/${encodeURIComponent(locationId)}/furnish-kit`,
+        { kit: buildingKit, dry_run: dryRun })
+      if (dryRun && result.rooms.length) {
+        setKitPreview(result)
+        setKitSummary(null)
+        return
+      }
+      setKitPreview(null)
+      if (!dryRun) for (const furnished of result.rooms) {
+        const room = roomsRef.current.find((r) => r.id === furnished.room_id)
+        if (room) updateLayout(furnished.room_id,
+          { props: [...(room.layout?.props || []), ...furnished.placements] })
+      }
+      setKitSummary(result)
+      const message = result.rooms.length
+        ? t('{n} rooms furnished').replace('{n}', String(result.rooms.length))
+        : t('No empty room to furnish.')
+      toast(message + (result.skipped.length ? '\n' + result.skipped.map((r) =>
+        `${r.name || r.room_id}: ${skipReason(r.reason)}`).join('; ') : ''))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setKitBusy(false)
+    }
+  }
 
   // All prop indices whose TRUE-size footprint covers a point in the SHAPE's
   // own metres (from its min corner) — in render order (the last entry draws
@@ -2233,6 +2294,38 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   return (
     <div className="ga-form" style={{ gap: 6 }}>
       <div className="ga-form-section-label">{t('Room layout (floor plan)')}</div>
+      {locationId && <div className="ga-form">
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label>{t('Kit')} <select className="ga-input" value={buildingKit}
+            disabled={kitBusy || !!kitPreview || !kitCatalog}
+            onChange={(e) => { setBuildingKit(e.target.value); setKitSummary(null) }}>
+            <option value="">—</option>
+            {kitCatalog?.kits.map((kit) => <option key={kit.id} value={kit.id}>{kit.name}</option>)}
+          </select></label>
+          <button className="ga-btn ga-btn-sm" disabled={unsaved || kitBusy || !buildingKit || !!kitPreview}
+            onClick={() => { void furnishBuilding(true) }}>🧩 {t('Furnish empty rooms from kit')}</button>
+        </div>
+        {unsaved && <div className="ga-hint">{t('Save the location first — furnishing works on the saved floor plan.')}</div>}
+        {kitPreview && <div className="ga-form">
+          <div className="ga-hint">{t('Furnish {n} empty rooms with the {kit} kit?')
+            .replace('{n}', String(kitPreview.rooms.length))
+            .replace('{kit}', kitCatalog?.kits.find((k) => k.id === buildingKit)?.name || buildingKit)}</div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={unsaved || kitBusy}
+              onClick={() => { void furnishBuilding(false) }}>{t('Furnish')}</button>
+            <button className="ga-btn ga-btn-sm" disabled={kitBusy} onClick={() => setKitPreview(null)}>{t('Cancel')}</button>
+          </div>
+        </div>}
+        {(kitPreview || kitSummary)?.skipped.length ? <ul className="ga-hint">
+          {(kitPreview || kitSummary)!.skipped.map((room) => <li key={room.room_id}>
+            {room.name || room.room_id}: {skipReason(room.reason)}</li>)}
+        </ul> : null}
+        {kitSummary && <ul className="ga-hint">{kitSummary.rooms.map((room) => <li key={room.room_id}>
+          {t('{room}: {placed} placed, {unplaced} unplaced').replace('{room}', room.name || room.room_id)
+            .replace('{placed}', String(room.placed)).replace('{unplaced}', String(room.unplaced))}
+          {room.missing_roles.length > 0 && ' · ' + t('Roles without a kit prop: {roles}').replace('{roles}', room.missing_roles.join(', '))}
+        </li>)}</ul>}
+      </div>}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: '0.82em' }}
           title={t('0 = ground floor, negative = basement. Saved with the location.')}>
@@ -2765,6 +2858,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           it does not care that it is written inside the inspector pane. */}
       {furnishOpen && selectedRoom ? (
         <FurnishDialog
+          locationId={locationId}
           roomId={furnishTarget}
           roomName={groundSel ? yardName : (selectedRoom.name || selectedRoom.id || '')}
           job={furnish}
