@@ -96,10 +96,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 _TMP = tempfile.mkdtemp(prefix="routing-admin-")
+_INSTANCE = tempfile.mkdtemp(prefix="routing-admin-instance-")
 os.environ["STORAGE_DIR"] = _TMP
+os.environ["INSTANCE_DIR"] = _INSTANCE
 os.environ.setdefault("ANIMATION_CLIPS_DIR", tempfile.mkdtemp(prefix="routing-admin-clips-"))
 from app.core import paths  # noqa: E402
 paths.init(_TMP)
+paths.init_instance(_INSTANCE)
 from fastapi import HTTPException  # noqa: E402
 from app.routes import admin_settings as adm  # noqa: E402
 from app.imagegen import routing  # noqa: E402
@@ -192,7 +195,11 @@ class _Req:
         self._payload = payload
 
     async def json(self):
-        return {"values": copy.deepcopy(self._payload), "resets": []}
+        from fastapi import Response
+        response = Response()
+        adm.settings_raw(response, user=None)
+        return {"values": copy.deepcopy(self._payload), "resets": [],
+                "base_revision": response.headers["X-Config-Revision"]}
 
 
 def save(ig_extra, with_routing_key=True, backends=None, extra=None):

@@ -43,7 +43,8 @@ def main():
         from app.routes.world_settings import get_world_settings, _put_sync
         from fastapi import HTTPException
 
-        world_file, instance_file = world / "config.json", instance / "config.json"
+        world_file = world / "config.json"
+        instance_file = instance / "config.json"
         world_file.write_text("{}", encoding="utf-8")
         instance_file.write_text("{}", encoding="utf-8")
         config.load(world_file, instance_path=instance_file)
@@ -62,7 +63,12 @@ def main():
         assert payload["values"]["game_seasons"] == default_seasons_config()
         print("A: empty-world payload passed")
 
-        saved = _put_sync({"values": {"chat": {"top_p": 0.9}}})
+        def put(body):
+            if isinstance(body, dict):
+                body = {**body, "base_revision": get_world_settings()["revision"]}
+            return _put_sync(body)
+
+        saved = put({"values": {"chat": {"top_p": 0.9}}})
         assert json.loads(world_file.read_text()) == {"chat": {"top_p": 0.9}}
         assert saved["overrides"] == ["chat.top_p"]
         assert instance_file.read_bytes() == initial_instance
@@ -71,7 +77,7 @@ def main():
 
         def refused(body, code, detail=""):
             try:
-                _put_sync(body)
+                put(body)
             except HTTPException as exc:
                 assert exc.status_code == code
                 assert detail in exc.detail
@@ -86,12 +92,12 @@ def main():
         values = get_world_settings()["values"]
         assert values["game_seasons"] == default_seasons_config()
         mtimes = (world_file.stat().st_mtime_ns, instance_file.stat().st_mtime_ns)
-        _put_sync({"values": values})
+        put({"values": values})
         assert (world_file.stat().st_mtime_ns, instance_file.stat().st_mtime_ns) == mtimes
         assert json.loads(world_file.read_text()) == {"chat": {"top_p": 0.9}}
         assert instance_file.read_bytes() == initial_instance
         print("D: unchanged save and seasons pruning passed")
-        reset = _put_sync({"values": get_world_settings()["values"],
+        reset = put({"values": get_world_settings()["values"],
                            "resets": ["chat.top_p"]})
         assert json.loads(world_file.read_text()) == {}
         assert reset["overrides"] == []

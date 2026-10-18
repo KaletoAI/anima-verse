@@ -639,6 +639,7 @@ The instance API exposes `/admin/settings/raw`, `/admin/settings/schema`,
 (save body: `{values, resets}`).
 Tools and agents switch media only through `POST /admin/settings/media-switch`; `/admin/settings/save` replaces the whole instance layer and is for the settings page.
 
+Every settings save must send the `base_revision` it loaded (`X-Config-Revision` of `GET /admin/settings/raw`, `revision` of `GET /admin/world-settings`); a save based on a version that has changed in the same place since then is refused with 409 `stale`.
 Each changed layer keeps its latest 50 backups in `<layer>/.config-history/`; inspect them with `./.venv/bin/python scripts/config_history.py list` or `diff <stamp>` (use `--layer <dir>` for another layer). Restore only with the server stopped: `./.venv/bin/python scripts/config_history.py restore <stamp>` (default: `<repo>/instance`).
 
 For old worlds carrying server settings, stop the server before migrating. Prefer the exact

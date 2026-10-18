@@ -45,7 +45,7 @@ with tempfile.TemporaryDirectory(prefix="admin-settings-instance-") as root:
     paths.init_instance(instance)
     from app.core import config, config_admin, config_scope
     from app.routes import admin_settings as adm
-    from fastapi import HTTPException
+    from fastapi import HTTPException, Response
     config.load(world / "config.json", instance / "config.json")
     config_admin.apply_section_reloads = lambda keys, scope: []
 
@@ -53,10 +53,17 @@ with tempfile.TemporaryDirectory(prefix="admin-settings-instance-") as root:
         return [(p.read_bytes(), p.stat().st_mtime_ns)
                 for p in (world / "config.json", instance / "config.json")]
 
+    def revision():
+        response = Response()
+        adm.settings_raw(response, user=None)
+        return response.headers["X-Config-Revision"]
+
     def save(values, resets=None):
-        return asyncio.run(adm.settings_save(Request({"values": values, "resets": resets or []}), user=None))
+        return asyncio.run(adm.settings_save(Request({"values": values, "resets": resets or [], "base_revision": revision()}), user=None))
 
     def refused(body, status=400, detail=""):
+        if isinstance(body, dict):
+            body = {**body, "base_revision": revision()}
         before = snapshot()
         try:
             asyncio.run(adm.settings_save(Request(body), user=None))
@@ -66,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix="admin-settings-instance-") as root:
             raise AssertionError("Expected HTTP refusal")
         assert snapshot() == before
 
-    raw = adm.settings_raw(user=None)
+    raw = adm.settings_raw(Response(), user=None)
     assert "chat" not in raw and "server" in raw, "A raw must be instance-only"
     assert "game_calendar" not in adm.settings_schema(user=None)
     schema = adm.settings_schema(user=None)

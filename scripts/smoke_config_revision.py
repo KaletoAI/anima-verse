@@ -27,8 +27,18 @@ K A stale page resetting server.timezone after a foreign save stored UTC
   there conflicts on exactly server.timezone and leaves UTC; the same stale
   page resetting it when the foreign save touched only providers succeeds
   and drops the stored timezone (no shipped default stays in the file).
+L Raw's header equals the revision of the instance view it returns.
+M Missing revision refuses with the exact 428 contract, non-strings with 400.
+N Foreign UTC versus own Tokyo conflicts on server.timezone and writes nothing.
+O Success returns the content revision; equal revision needs no cached base.
+  Reads, validation and persistence must hold the lock; two independent
+  route edits from the same base retain both timezone and provider edits.
+P World GET returns its revision; missing base refuses with 428 and different
+  chat.top_p edits conflict with 409, preserving the foreign value.
+Route contract missing on Task 1 commit 5523db30.
 """
 import ast
+import asyncio
 import copy
 import json
 import os
@@ -38,6 +48,7 @@ import sys
 import subprocess
 import tempfile
 import threading
+from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -239,4 +250,104 @@ with tempfile.TemporaryDirectory(prefix="config-revision-") as root:
     assert "timezone" not in stored().get("server", {})
     assert [p["name"] for p in stored()["providers"]] == ["p1", "p9"]
     print("PASS K")
+    from fastapi import HTTPException, Response
+    from app.routes import admin_settings, world_settings
+
+    def locked(fn):
+        def call(*args, **kwargs):
+            assert config._LOCK._is_owned(), f"{fn.__name__} outside config lock"
+            return fn(*args, **kwargs)
+        return call
+
+    def raw():
+        response = Response()
+        with patch.object(adm, "layer_view", locked(adm.layer_view)), \
+                patch.object(adm, "issue_revision", locked(adm.issue_revision)):
+            view = admin_settings.settings_raw(response=response, user=None)
+        return response.headers["X-Config-Revision"], view
+
+    def http_error(fn, status, code=None, conflict_paths=None):
+        before = snapshot()
+        try:
+            fn()
+        except HTTPException as exc:
+            assert exc.status_code == status, (exc.status_code, exc.detail)
+            if code:
+                assert exc.detail["code"] == code, exc.detail
+            if conflict_paths is not None:
+                assert exc.detail["paths"] == conflict_paths and exc.detail["reason"] == "conflict"
+            if status == 428:
+                assert exc.detail["code"] == "revision_required"
+                assert exc.detail["message"].startswith(
+                    "base_revision missing — load the settings first (GET /admin/")
+        else:
+            raise AssertionError(f"expected HTTP {status}")
+        assert snapshot() == before
+
+    class Request:
+        def __init__(self, body):
+            self.body = body
+
+        async def json(self):
+            return self.body
+
+    load()
+    revision, view = raw()
+    assert revision == adm.layer_revision("instance")
+    print("PASS L")
+    http_error(lambda: admin_settings._settings_save_sync(view, [], []), 428, "revision_required")
+    http_error(lambda: asyncio.run(admin_settings.settings_save(
+        Request({"values": view, "resets": []}), user=None)), 428, "revision_required")
+    for invalid in (None, False, 1, [], {}):
+        http_error(lambda: asyncio.run(admin_settings.settings_save(
+            Request({"values": view, "resets": [], "base_revision": invalid}), user=None)), 400)
+        http_error(lambda: admin_settings._settings_save_sync(view, [], [], invalid), 400)
+    print("PASS M")
+    foreign_timezone("UTC")
+    view["server"]["timezone"] = "Asia/Tokyo"
+    http_error(lambda: admin_settings._settings_save_sync(view, [], [], revision),
+               409, "stale", ["server.timezone"])
+    print("PASS N")
+    load()
+    revision, view = raw()
+    view["server"]["timezone"] = "UTC"
+    with patch.object(adm, "prepare_layer", locked(adm.prepare_layer)), \
+            patch.object(adm, "_persist_layer", locked(adm._persist_layer)), \
+            patch.object(admin_settings, "_validate_llm_routing", locked(admin_settings._validate_llm_routing)), \
+            patch.object(admin_settings, "_validate_image_routing", locked(admin_settings._validate_image_routing)):
+        result = admin_settings._settings_save_sync(view, [], [], revision)
+    assert result["revision"] == adm.layer_revision("instance")
+    clear_cache()
+    result = admin_settings._settings_save_sync(view, [], [], result["revision"])
+    assert result["revision"] == adm.layer_revision("instance")
+    load()
+    revision, first = raw()
+    second = copy.deepcopy(first)
+    first["server"]["timezone"] = "UTC"
+    second["providers"].append({"name": "p3"})
+    barrier = threading.Barrier(2)
+    def route_save(view):
+        barrier.wait(timeout=10)
+        return admin_settings._settings_save_sync(view, [], [], revision)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert all(r["status"] == "success" for r in pool.map(route_save, [first, second]))
+    assert stored()["server"]["timezone"] == "UTC"
+    assert [p["name"] for p in stored()["providers"]] == ["p1", "p3"]
+    print("PASS O")
+    load()
+    with patch.object(adm, "layer_part", locked(adm.layer_part)), \
+            patch.object(adm, "issue_revision", locked(adm.issue_revision)):
+        payload = world_settings.get_world_settings()
+    assert payload["revision"] == adm.layer_revision("world")
+    http_error(lambda: world_settings._put_sync({"values": payload["values"]}), 428, "revision_required")
+    for invalid in (None, False, 1, [], {}):
+        http_error(lambda: world_settings._put_sync({"values": payload["values"], "base_revision": invalid}), 400)
+    foreign = copy.deepcopy(payload["values"])
+    foreign.setdefault("chat", {})["top_p"] = 0.37
+    result = world_settings._put_sync({"values": foreign, "base_revision": payload["revision"]})
+    assert result["revision"] == adm.layer_revision("world")
+    payload["values"].setdefault("chat", {})["top_p"] = 0.63
+    http_error(lambda: world_settings._put_sync({"values": payload["values"], "base_revision": payload["revision"]}),
+               409, "stale", ["chat.top_p"])
+    print("PASS P")
     print("ALL OK")

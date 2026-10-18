@@ -55,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix="config-drop-guard-") as root:
     paths.init_instance(instance)
     from app.core import config, config_admin as adm
     from app.routes import admin_settings, world_settings
-    from fastapi import HTTPException
+    from fastapi import HTTPException, Response
 
     adm.apply_section_reloads = lambda keys, scope: []
     seed = {
@@ -159,17 +159,22 @@ with tempfile.TemporaryDirectory(prefix="config-drop-guard-") as root:
             ["content_marketplace", "content_marketplace.catalogs"])
     print("PASS F stale tab advised to reload")
 
+    def revision():
+        response = Response()
+        admin_settings.settings_raw(response, user=None)
+        return response.headers["X-Config-Revision"]
+
     load()
     http_refused(lambda: admin_settings._settings_save_sync(
-        {"image_generation": {"enabled": False}}, [], []), 409)
-    http_refused(lambda: world_settings._put_sync({"values": {}, "resets": []}), 409)
+        {"image_generation": {"enabled": False}}, [], [], revision()), 409)
+    http_refused(lambda: world_settings._put_sync({"values": {}, "resets": [], "base_revision": world_settings.get_world_settings()["revision"]}), 409)
     print("PASS G both routes map would_drop to 409")
 
     for invalid in ("providers", None, {}, [1], False, 0, ("providers",)):
-        body = {"values": {}, "resets": [], "confirm_drop": invalid}
+        body = {"values": {}, "resets": [], "confirm_drop": invalid, "base_revision": revision()}
         http_refused(lambda: asyncio.run(admin_settings.settings_save(Request(body), user=None)), 400)
-        http_refused(lambda: admin_settings._settings_save_sync({}, [], invalid), 400)
-        http_refused(lambda: world_settings._put_sync(body), 400)
+        http_refused(lambda: admin_settings._settings_save_sync({}, [], invalid, revision()), 400)
+        http_refused(lambda: world_settings._put_sync({**body, "base_revision": world_settings.get_world_settings()["revision"]}), 400)
     print("PASS H both routes validate confirm_drop")
 
     reference = {"section": {"objects": [{"nested": [{"name": "n"}]}],

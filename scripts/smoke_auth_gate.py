@@ -170,11 +170,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 STORAGE = Path(tempfile.mkdtemp(prefix="authgate-smoke-"))
 os.environ["STORAGE_DIR"] = str(STORAGE)
-os.environ["INSTANCE_DIR"] = tempfile.mkdtemp(prefix="authgate-instance-")
+INSTANCE = Path(tempfile.mkdtemp(prefix="authgate-instance-"))
+os.environ["INSTANCE_DIR"] = str(INSTANCE)
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="authgate-clips-")
 
 from app.core import paths  # noqa: E402
 paths.init(STORAGE)
+paths.init_instance(INSTANCE)
 from app.core import config  # noqa: E402
 config.load(STORAGE / "config.json")
 

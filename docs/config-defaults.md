@@ -17,6 +17,7 @@ Die Instanz-Routen sind `/admin/settings/raw`, `/admin/settings/schema`,
 (Speichern mit `{values, resets}`). Die Welt nutzt `GET`/`PUT /admin/world-settings`.
 Tools und Agenten schalten Medien ausschließlich über `POST /admin/settings/media-switch`; `/admin/settings/save` ersetzt die gesamte Instanz-Schicht und ist für die Einstellungsseite bestimmt.
 
+Jeder Speichervorgang muss die geladene `base_revision` mitsenden (`X-Config-Revision` von `GET /admin/settings/raw`, `revision` von `GET /admin/world-settings`); wurde seit dieser Version dieselbe Stelle geändert, wird das Speichern mit 409 `stale` abgelehnt.
 Jede geänderte Schicht bewahrt die letzten 50 Sicherungen unter `<schicht>/.config-history/` auf; `./.venv/bin/python scripts/config_history.py list` und `diff <stamp>` zeigen sie an (`--layer <dir>` wählt eine andere Schicht). Wiederherstellen nur bei gestopptem Server: `./.venv/bin/python scripts/config_history.py restore <stamp>` (Standard: `<repo>/instance`).
 
 Die LoRA-Bibliothek liegt nicht in der Config, sondern in `instance/lora_library.json`; Besitzer ist `app/core/lora_library.py`.

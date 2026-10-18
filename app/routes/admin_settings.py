@@ -5,7 +5,7 @@ import os
 import tempfile
 from contextlib import contextmanager
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, File, Query
 from fastapi.responses import HTMLResponse
 from typing import Any, Dict, List, Tuple
 import httpx
@@ -780,12 +780,15 @@ async def prompt_filters_import(
 
 
 @router.get("/settings/raw")
-def settings_raw(user=Depends(require_admin)):
+def settings_raw(response: Response, user=Depends(require_admin)):
     """The instance config, unmasked, with bool/select defaults prefilled.
 
     World settings are edited in Game-Admin Setup (/admin/world-settings).
     """
-    return config_admin.layer_view(config_scope.INSTANCE)
+    with config._LOCK:
+        view = config_admin.layer_view(config_scope.INSTANCE)
+        response.headers["X-Config-Revision"] = config_admin.issue_revision(config_scope.INSTANCE)
+        return view
 
 
 @router.get("/settings/media-switch")
@@ -902,6 +905,18 @@ async def lora_library_sync(user=Depends(require_admin)):
     return result
 
 
+_MISSING_REVISION = object()
+
+
+def _require_revision(base_revision):
+    if base_revision is _MISSING_REVISION:
+        raise HTTPException(428, {"code": "revision_required", "message":
+            "base_revision missing — load the settings first (GET /admin/settings/raw, header X-Config-Revision)"})
+    if not isinstance(base_revision, str):
+        raise HTTPException(400, "base_revision must be a string")
+    return base_revision
+
+
 @router.post("/settings/save")
 async def settings_save(request: Request, user=Depends(require_admin)):
     """Save instance settings after validating the final prepared candidate."""
@@ -916,23 +931,32 @@ async def settings_save(request: Request, user=Depends(require_admin)):
     confirm_drop = body.get("confirm_drop", [])
     if not isinstance(confirm_drop, list) or not all(isinstance(p, str) for p in confirm_drop):
         raise HTTPException(400, "confirm_drop must be a list of strings")
-    return await asyncio.to_thread(_settings_save_sync, values, resets, confirm_drop)
+    return await asyncio.to_thread(_settings_save_sync, values, resets, confirm_drop,
+                                   _require_revision(body.get("base_revision", _MISSING_REVISION)))
 
 
-def _settings_save_sync(values: dict, resets: list, confirm_drop: list):
+def _settings_save_sync(values: dict, resets: list, confirm_drop: list,
+                        base_revision=_MISSING_REVISION):
     """Prepare, validate and persist in the worker thread."""
     if not isinstance(confirm_drop, list) or not all(isinstance(p, str) for p in confirm_drop):
         raise HTTPException(400, "confirm_drop must be a list of strings")
+    base_revision = _require_revision(base_revision)
     try:
-        merged, current = config_admin.prepare_layer(config_scope.INSTANCE, values, resets, confirm_drop)
-        err = _validate_llm_routing(merged.get("llm_routing"))
-        if err:
-            raise HTTPException(400, err)
-        img_err, img_warnings = _validate_image_routing(
-            merged.get("image_generation"),
-            stored_routing=(current.get("image_generation") or {}).get("routing"))
-        if img_err:
-            raise HTTPException(400, img_err)
+        with config._LOCK:
+            merged, current = config_admin.prepare_layer(
+                config_scope.INSTANCE, values, resets, confirm_drop, base_revision)
+            err = _validate_llm_routing(merged.get("llm_routing"))
+            if err:
+                raise HTTPException(400, err)
+            img_err, img_warnings = _validate_image_routing(
+                merged.get("image_generation"),
+                stored_routing=(current.get("image_generation") or {}).get("routing"))
+            if img_err:
+                raise HTTPException(400, img_err)
+            result = config_admin._persist_layer(config_scope.INSTANCE, merged, current)
+    except config_admin.LayerStale as exc:
+        raise HTTPException(409, {"code": "stale", "reason": exc.reason,
+                                  "paths": exc.paths, "message": str(exc)}) from exc
     except config_admin.LayerDropRefused as exc:
         raise HTTPException(409, {"code": "would_drop", "paths": exc.paths,
                                   "message": str(exc)}) from exc
@@ -960,12 +984,8 @@ def _settings_save_sync(values: dict, resets: list, confirm_drop: list):
     except Exception:
         pass
 
-    try:
-        result = config_admin.commit_layer(config_scope.INSTANCE, merged, current)
-    except config_admin.LayerSaveError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except config.ConfigWriteRefused as exc:
-        raise HTTPException(409, str(exc)) from exc
+    result["reloaded"] = config_admin.apply_section_reloads(
+        result["changed_sections"], config_scope.INSTANCE)
     changed_sections = result["changed_sections"]
     reloaded = result["reloaded"]
 
@@ -976,6 +996,7 @@ def _settings_save_sync(values: dict, resets: list, confirm_drop: list):
         msg += " Warnings: " + " ".join(img_warnings)
     return {
         "status": "success",
+        "revision": result["revision"],
         "message": msg,
         "warnings": img_warnings,
         "changed_sections": changed_sections,
