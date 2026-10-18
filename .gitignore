@@ -104,6 +104,7 @@ plugins/attraction
 plugins/installed/
 
 # Worlds (each world is a separate storage directory)
+.config-history/
 worlds/*
 !worlds/demo/
 

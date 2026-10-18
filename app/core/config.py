@@ -19,13 +19,15 @@ import copy
 import json
 import os
 import re
+import shutil
 import tempfile
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from app.core import config_scope, paths
 from app.core.log import get_logger
+from app.core.timeutils import utc_now
 
 logger = get_logger("config")
 
@@ -1701,6 +1703,62 @@ def _assert_readable(path: Path) -> dict:
         raise ConfigWriteRefused(f"refusing to overwrite unreadable config file — {e}") from e
 
 
+CONFIG_HISTORY_DIRNAME: str = ".config-history"
+CONFIG_HISTORY_KEEP: int = 50
+
+
+def list_snapshots(layer_dir: Path) -> List[Path]:
+    """Return a layer's snapshot directories in ascending name order."""
+    history = layer_dir / CONFIG_HISTORY_DIRNAME
+    if not history.exists():
+        return []
+    return sorted(entry for entry in history.iterdir() if entry.is_dir())
+
+
+def _rotate_history(layer_dir: Path) -> None:
+    """Remove only the oldest snapshots beyond the retention limit."""
+    snapshots = list_snapshots(layer_dir)
+    for snapshot in snapshots[:max(0, len(snapshots) - CONFIG_HISTORY_KEEP)]:
+        shutil.rmtree(snapshot)
+
+
+def snapshot_layer(layer_dir: Path) -> Optional[Path]:
+    """Copy the existing layer files byte for byte into a private snapshot."""
+    sources = [layer_dir / name for name in ("config.json", "secrets.json")
+               if (layer_dir / name).exists()]
+    if not sources:
+        return None
+    history = layer_dir / CONFIG_HISTORY_DIRNAME
+    os.makedirs(history, mode=0o700, exist_ok=True)
+    os.chmod(history, 0o700)
+    stamp = utc_now().strftime("%Y%m%dT%H%M%S%fZ")
+    suffix = 0
+    while True:
+        snapshot = history / (stamp if suffix == 0 else f"{stamp}-{suffix}")
+        try:
+            snapshot.mkdir(mode=0o700, exist_ok=False)
+            break
+        except FileExistsError:
+            suffix += 1
+    try:
+        os.chmod(snapshot, 0o700)
+        for source in sources:
+            target = snapshot / source.name
+            shutil.copy2(source, target)
+            os.chmod(target, 0o600)
+    except Exception:
+        shutil.rmtree(snapshot)
+        raise
+    logger.info("Config backup: %s", snapshot)
+    # The backup exists at this point; failing to prune old ones must not
+    # block the write it protects.
+    try:
+        _rotate_history(layer_dir)
+    except OSError as exc:
+        logger.warning("Config backup rotation failed in %s: %s", layer_dir, exc)
+    return snapshot
+
+
 def _write_layer(path: Path, pruned: dict) -> bool:
     """Persist one layer's pruned part: config.json + its secrets.json.
 
@@ -1708,8 +1766,24 @@ def _write_layer(path: Path, pruned: dict) -> bool:
     when any file was written or deleted.
     """
     clean, secrets = _split_secrets(pruned)
-    wrote = _write_if_changed(path, clean)
+    config_changed = (not path.exists()
+                      or not _json_equal(_assert_readable(path), clean))
     secrets_path = path.parent / "secrets.json"
+    secrets_exist = secrets_path.exists()
+    current_secrets = _assert_readable(secrets_path) if secrets_exist else None
+    if secrets:
+        secrets_changed = (not secrets_exist
+                           or not _json_equal(current_secrets, secrets))
+    else:
+        secrets_changed = secrets_exist
+    if not config_changed and not secrets_changed:
+        return False
+    try:
+        snapshot_layer(path.parent)
+    except Exception as exc:
+        raise ConfigWriteRefused(
+            f"refusing to write config without a backup — {exc}") from exc
+    wrote = _write_if_changed(path, clean)
     if secrets:
         wrote = _write_if_changed(secrets_path, secrets) or wrote
     elif secrets_path.exists():
