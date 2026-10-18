@@ -1349,3 +1349,19 @@ from `freetext_clothing_gain`; blank text supplies k=1. Item pieces override
 this fallback. Temporary NPCs use the same normalize → extension → LOD pipeline,
 rebuild route and Improvements batch; the 3D panel shows Extension bones whenever
 resolved groups exist, independently of inventory/outfit-system features.
+
+### Rig controls
+
+A rig may declare `controls`, a non-empty list of unique names from
+`extension_rig.MOTION_FIELDS` plus `bounce` and `weight`. Omitting it allows
+all controls. Invalid names, duplicates and empty lists reject the rig.
+This declaration does not affect the mesh fingerprint.
+
+The character toolbar, motion editors and States editor show only declared
+controls. Explicit declarations show character motion fields directly;
+otherwise they remain under Advanced. State `bone_pose` fields map `freq`
+to `freq_hz`, `rest_deg` to `rest_max_deg`, and other names to themselves.
+World and character overrides and state saves reject excluded fields for
+known groups. Unknown group ids retain their existing validation behavior.
+At runtime, excluded stored overrides and state fields are ignored, so a
+changed declaration takes effect without rewriting stored data.

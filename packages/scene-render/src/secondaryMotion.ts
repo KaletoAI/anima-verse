@@ -36,6 +36,7 @@ export interface MotionGroup {
 export type MotionAttributeProfiles = Record<string, Record<string, Partial<Pick<MotionGroup,
   'freq_hz' | 'zeta' | 'gravity' | 'gain' | 'max_deg' | 'sag_max_deg' | 'spill_max_deg' | 'head_sag' | 'flatten' | 'stretch' | 'spread' | 'flatten_floor' | 'spill' | 'translate'>>>>
 export interface ExtensionRigDeclaration extends Omit<MotionGroup, 'bones' | 'gravity_scale' | 'rest_deg' | 'flatten_floor'> {
+  controls?: string[] | null
   flatten_floor: number | null
   id: string
   op: string

@@ -66,6 +66,7 @@ export function previewMotionSliders(payload: SecondaryMotionPayload | undefined
     } as const
     for (const field of Object.keys(rules) as Array<keyof typeof rules>) {
       const [slider, power, limit] = rules[field]
+      if (!(slider in draft)) continue
       const raw = Number(saved[field] ?? base[field])
       const before = Math.min(limit, raw * Number(saved[slider] ?? 1) ** power)
       const after = Math.min(limit, raw * Number(draft[slider] ?? 1) ** power)

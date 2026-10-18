@@ -135,10 +135,16 @@ def resolved_extension_groups(character_name, profile=None, signature=None):
 MOTION_FIELDS = ("length", "girth", "freq_hz", "zeta", "gravity", "spill", "flatten", "stretch", "spread", "flatten_floor", "translate", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "squash", "axis_gain", "rest_max_deg", "straighten_deg", "freetext_clothing_gain")
 
 
+def control_allowed(group, field):
+    """Resolve state aliases against the optional control declaration."""
+    control = {"freq": "freq_hz", "rest_deg": "rest_max_deg"}.get(field, field)
+    return group.get("controls") is None or control in group["controls"]
+
+
 def declared_motion_groups():
     """All loaded declarations, including character-inapplicable groups."""
     from app.plugins import registry
-    return sorted([{"id": rig.id,
+    return sorted([{"id": rig.id, "controls": rig.controls,
                     "defaults": {key: (rig.squash[0] if key == "flatten_floor" and rig.flatten_floor is None else getattr(rig, key)) for key in MOTION_FIELDS}}
                    for package in registry.packages() for slot in package.body_slots
                    for rig in slot.rigs], key=lambda group: group["id"])
@@ -153,12 +159,16 @@ def validate_motion_overrides(section, *, character=False):
     groups = section.get("groups", {})
     if not isinstance(groups, dict):
         raise ValueError("extension_motion.groups must be an object")
+    declarations = {group["id"]: group for group in declared_motion_groups()}
     for group_id, values in groups.items():
         if not isinstance(group_id, str) or not group_id or not isinstance(values, dict):
             raise ValueError("motion group overrides must be objects with non-empty ids")
         allowed = set(MOTION_FIELDS) | ({"bounce", "weight"} if character else set())
         if set(values) - allowed:
             raise ValueError("unknown motion physics field")
+        for key in values:
+            if not control_allowed(declarations.get(group_id, {}), key):
+                raise ValueError(f"extension_motion.{group_id}.{key} is not allowed")
         for key in ("bounce", "weight"):
             if key in values:
                 value = values[key]
@@ -216,7 +226,8 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
     groups = {}
     for group in declarations:
         values = {key: group[key] for key in MOTION_FIELDS}
-        values.update(world.get(group["id"], {}))
+        values.update({key: value for key, value in world.get(group["id"], {}).items()
+                       if key in MOTION_FIELDS and control_allowed(group, key)})
         inherited_floor = values["flatten_floor"] is None
         if inherited_floor:
             values["flatten_floor"] = values["squash"][0]
@@ -235,6 +246,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         for key in ("max_deg", "sag_max_deg", "spill_max_deg"):
             values[key] = min(180.0, values[key])
         overrides = ((profile.get("model3d_opts") or {}).get("extension_motion") or {}).get(group["id"], {})
+        overrides = {key: value for key, value in overrides.items() if control_allowed(group, key)}
         values.update({key: value for key, value in overrides.items() if key in MOTION_FIELDS})
         if inherited_floor and "flatten_floor" not in overrides:
             values["flatten_floor"] = min(1.0, values["squash"][0] * floor_multiplier)
@@ -266,7 +278,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             if not isinstance(pose, dict):
                 continue
             for field, multiplier in pose.items():
-                if field not in BONE_POSE_FIELDS:
+                if field not in BONE_POSE_FIELDS or not control_allowed(group, field):
                     continue
                 if not valid_bone_pose_number(multiplier, signed=field == "rest_deg"):
                     continue

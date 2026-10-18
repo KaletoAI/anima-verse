@@ -445,12 +445,16 @@ def validate_bone_pose(value):
     """Validate sparse state angles and multipliers; preserve unloaded groups for packs."""
     if not isinstance(value, dict):
         raise ValueError("bone_pose must be an object")
+    from app.core.extension_rig import control_allowed, declared_motion_groups
+    groups = {group["id"]: group for group in declared_motion_groups()}
     for gid, fields in value.items():
         if not isinstance(gid, str) or not gid.strip() or not isinstance(fields, dict):
             raise ValueError("bone_pose groups must be objects with non-empty ids")
         if set(fields) - set(BONE_POSE_FIELDS):
             raise ValueError("unknown bone_pose field")
         for key, number in fields.items():
+            if not control_allowed(groups.get(gid, {}), key):
+                raise ValueError(f"bone_pose.{gid}.{key} is not allowed")
             if not valid_bone_pose_number(number, signed=key == "rest_deg"):
                 raise ValueError(f"bone_pose.{gid}.{key} must be finite" if key == "rest_deg" else f"bone_pose.{gid}.{key} must be finite and non-negative")
             if key in ("length", "girth") and not .5 <= number <= 2:

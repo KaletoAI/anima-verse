@@ -30,6 +30,15 @@ def main():
         from app.plugins.registry import RigSpec
         def rig(id,bone,parent,**values):
             return dict(id=id,op='fixture',chains=[[dict(bone=bone,parent=parent)]],templates='*',**values)
+        from app.core.extension_rig import MOTION_FIELDS
+        all_controls = [*MOTION_FIELDS, 'bounce', 'weight']
+        assert RigSpec.parse(rig('full','Full','Hips',controls=all_controls)).controls == all_controls
+        assert RigSpec.parse(rig('all','All','Hips')).controls is None
+        assert RigSpec.parse(rig('limited','Limited','Hips',controls=['length'])).controls == ['length']
+        for controls in ([], ['unknown'], ['length', 'length'], 'length', [1], [{}]):
+            try: RigSpec.parse(rig('invalid','Invalid','Hips',controls=controls))
+            except ValueError: pass
+            else: raise AssertionError('invalid controls accepted')
         source=rig('z_source','Source','Hips',length=1.4,girth=1.2,scale_axis='bone')
         assert RigSpec.parse(rig('default','Default','Hips')).scale_axis=='centroid'
         for invalid in ('other',None,1,[]):
@@ -74,6 +83,8 @@ def main():
         load(data)
         assert all(not slot.rigs for slot in registry.get_package('fixture').body_slots)
         load(manifest)
+        from app.core.extension_rig import validate_motion_overrides
+        validate_motion_overrides({'groups': {'z_source': {'gravity': 1, 'bounce': 1.2, 'weight': .8}}}, character=True)
         def payload(length=None,states=()):
             world={} if length is None else {'z_source':{'length':length}}
             with patch.object(config,'get',return_value=world),patch('app.core.prompt_filters.collect_bone_poses',return_value=list(states)):
@@ -101,6 +112,52 @@ def main():
             try: validate_motion_overrides({'groups':{'z_source':overrides}})
             except ValueError: pass
             else: raise AssertionError('invalid override accepted')
+        from app.core.extension_rig import declared_motion_groups, extension_rig_fingerprint
+        from app.core.prompt_filters import validate_bone_pose
+        before = extension_rig_fingerprint(rig_groups_for('fixture', profile))
+        data = copy.deepcopy(manifest)
+        data['body_slots'][0]['rigs'][2]['controls'] = ['length']
+        load(data)
+        assert extension_rig_fingerprint(rig_groups_for('fixture', profile)) == before
+        assert next(g for g in declared_motion_groups() if g['id'] == 'z_source')['controls'] == ['length']
+        assert next(g for g in declared_motion_groups() if g['id'] == 'a_child')['controls'] is None
+        validate_motion_overrides({'groups': {'unloaded': {'gravity': 1}}})
+        for character in (False, True):
+            validate_motion_overrides({'groups': {'z_source': {'length': 1.5}}}, character=character)
+            for field in (['gravity', 'bounce', 'weight'] if character else ['gravity']):
+                try: validate_motion_overrides({'groups': {'z_source': {field: 1}}}, character=character)
+                except ValueError as exc: assert 'z_source' in str(exc) and field in str(exc)
+                else: raise AssertionError('excluded override accepted')
+        from app.routes.admin_settings import _prompt_filters_save_sync
+        from fastapi import HTTPException
+        try:
+            _prompt_filters_save_sync({}, {'id': 'fixture', 'bone_pose': {'z_source': {'gravity': 1}}})
+        except HTTPException as exc:
+            assert exc.status_code == 400 and 'z_source.gravity' in exc.detail
+        else:
+            raise AssertionError('excluded state field saved')
+        validate_bone_pose({'z_source': {'length': 1.5}})
+        validate_bone_pose({'unloaded': {'freq': 1.5}})
+        for field in ('gravity', 'freq', 'rest_deg'):
+            try: validate_bone_pose({'z_source': {field: 1}})
+            except ValueError as exc: assert 'z_source' in str(exc) and field in str(exc)
+            else: raise AssertionError('excluded state field accepted')
+        profile['model3d_opts'] = {'extension_motion': {'z_source': {'gravity': 8, 'bounce': 1.5, 'weight': 1.5, 'length': 1.6}}}
+        states = [{'bone_pose': {'z_source': {'gravity': 0, 'freq': 0, 'rest_deg': 30, 'length': 1.5}}}]
+        with patch.object(config, 'get', return_value={'z_source': {'gravity': 9, 'length': 1.8}}), patch('app.core.prompt_filters.collect_bone_poses', return_value=states):
+            effective = motion_payload('fixture', profile, apply_clothing=False)['groups']['z_source']
+        # Only length acts: character 1.6 times state 1.5 = 2.4.
+        assert abs(effective['length'] - 2.4) < 1e-12
+        assert effective['gravity'] == .35 and effective['freq_hz'] == 2.2
+        assert effective['gain'] == 1 and effective['rest_deg'] == 0
+        data['body_slots'][0]['rigs'][2]['controls'] = ['freq_hz', 'rest_max_deg']
+        load(data)
+        validate_bone_pose({'z_source': {'freq': 1.5, 'rest_deg': 30}})
+        for invalid in ([], ['unknown'], ['length', 'length']):
+            data['body_slots'][0]['rigs'][2]['controls'] = invalid
+            load(data)
+            assert not registry.get_package('fixture').body_slots[0].rigs
+        load(manifest)
         from scripts.smoke_extension_rig_p0 import glb
         from app.core.rig_contract import BASE_JOINT_NAMES
         from app.core.model_validate import validate_glb
@@ -108,7 +165,7 @@ def main():
         from app.core.extension_rig import extension_bone_names
         verdict=validate_glb(glb(base+['Source'],{'Source':'mixamorig:Hips'}),extension_names=extension_bone_names('fixture',profile))
         assert verdict['ok'],verdict
-        print('PASS dependency pruning, ordering, enable, applicability, retired key, length/girth layers, scale axis, absent group GLB')
+        print('PASS dependency pruning, ordering, enable, applicability, retired key, length/girth layers, controls, state save, scale axis, absent group GLB')
 
 if __name__=='__main__':
     main()

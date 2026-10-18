@@ -103,6 +103,7 @@ class RigSpec:
     straighten_deg: float = 0.0
     freetext_clothing_gain: float = 1.0
     templates: Any = None
+    controls: Optional[List[str]] = None
 
     @classmethod
     def parse(cls, raw, attributes=None):
@@ -162,6 +163,14 @@ class RigSpec:
                    dict(params), dict(conditions))
         spec.external_parents = [chain[0]["parent"] for chain in result
                                  if norm_bone_name(chain[0]["parent"]) not in BASE_JOINT_KEYS]
+        from app.core.extension_rig import MOTION_FIELDS
+        controls = raw.get("controls")
+        if controls is not None and (
+                not isinstance(controls, list) or not controls
+                or any(not isinstance(name, str) or name not in (*MOTION_FIELDS, "bounce", "weight") for name in controls)
+                or len(set(controls)) != len(controls)):
+            raise ValueError("rig.controls requires unique known control names")
+        spec.controls = list(controls) if controls is not None else None
         spec.templates = templates
         axis = raw.get("scale_axis", spec.scale_axis)
         if axis not in ("centroid", "bone"):

@@ -755,9 +755,14 @@ export function FieldModel3D({ character }: { character: string }) {
     setBusy(true)
     try {
       const overrides = structuredClone(st.options?.extension_motion ?? {})
-      if (slidersOnly) overrides[id] = { ...overrides[id], bounce: Number(values?.bounce), weight: Number(values?.weight) }
+      if (slidersOnly) overrides[id] = { ...overrides[id], ...values }
       else if (values === undefined || !Object.keys(values).length) delete overrides[id]
       else overrides[id] = values
+      for (const group of st.extension_groups ?? []) {
+        if (group.controls != null && overrides[group.id]) {
+          overrides[group.id] = Object.fromEntries(Object.entries(overrides[group.id]).filter(([key]) => group.controls!.includes(key)))
+        }
+      }
       const result = await apiPost<{ options: Model3DStatus['options'] }>(
         `/characters/${enc}/model3d/extension-motion`, { extension_motion: overrides })
       setSt(previous => ({ ...previous, options: result.options }))
@@ -773,7 +778,7 @@ export function FieldModel3D({ character }: { character: string }) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
       return false
     } finally { setBusy(false) }
-  }, [enc, load, st.options?.extension_motion, t, toast])
+  }, [enc, load, st.extension_groups, st.options?.extension_motion, t, toast])
 
   const remove = useCallback(async () => {
     if (!confirmDelete) {
@@ -873,13 +878,20 @@ export function FieldModel3D({ character }: { character: string }) {
     : ''
   const hasLow = !!model?.tiers?.includes('low')
   const sliderContext = `${character}:${model?.signature || st.signature || ''}`
-  const previewMotion = useMemo(() => previewMotionSliders(st.motion, st.motion_defaults,
-    st.options?.extension_motion, sliderPreview.context === sliderContext ? sliderPreview.groups : {}),
-    [st.motion, st.motion_defaults, st.options?.extension_motion, sliderPreview, sliderContext])
-  const motionToolbar = st.extension_groups?.map(group => st.motion_defaults?.[group.id] ? (
+  const previewMotion = useMemo(() => {
+    const overrides = { ...st.options?.extension_motion }
+    for (const group of st.extension_groups ?? []) {
+      if (group.controls != null && overrides[group.id]) {
+        overrides[group.id] = Object.fromEntries(Object.entries(overrides[group.id]).filter(([key]) => group.controls!.includes(key)))
+      }
+    }
+    return previewMotionSliders(st.motion, st.motion_defaults,
+      overrides, sliderPreview.context === sliderContext ? sliderPreview.groups : {})
+  }, [st.motion, st.motion_defaults, st.extension_groups, st.options?.extension_motion, sliderPreview, sliderContext])
+  const motionToolbar = st.extension_groups?.map(group => st.motion_defaults?.[group.id] && (group.controls == null || group.controls.some(key => ['bounce', 'weight'].includes(key))) ? (
     <fieldset className="ga-fieldset" key={`${sliderContext}:${group.id}`}>
       <legend>{group.id}</legend>
-      <ExtensionMotionSliders overrides={st.options?.extension_motion?.[group.id] ?? {}}
+      <ExtensionMotionSliders controls={group.controls} overrides={st.options?.extension_motion?.[group.id] ?? {}}
         disabled={pending || rigless}
         onPreview={values => setSliderPreview(previous => ({ context: sliderContext,
           groups: { ...(previous.context === sliderContext ? previous.groups : {}), [group.id]: values } }))}
@@ -1187,6 +1199,7 @@ export function FieldModel3D({ character }: { character: string }) {
               ) : null}
               {st.motion_defaults?.[group.id] ? <ExtensionMotionDraft
                 key={`${character}:${st.model?.signature || st.signature || ''}:${group.id}`}
+                controls={group.controls}
                 defaults={st.motion_defaults[group.id] as unknown as Physics}
                 overrides={st.options?.extension_motion?.[group.id] ?? {}}
                 disabled={pending || busy || rigless}

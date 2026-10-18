@@ -14,7 +14,7 @@ import { ExportButton, ImportButton, PublishButton } from '../../components/Impo
 const POSE_FIELDS = ['rest_deg', 'gravity', 'freq', 'zeta', 'gain', 'flatten', 'spill', 'length', 'girth'] as const
 type PoseField = typeof POSE_FIELDS[number]
 type BonePose = Record<string, Partial<Record<PoseField, number>>>
-interface MotionGroup { id: string; defaults: { rest_max_deg: number } }
+interface MotionGroup { id: string; controls?: string[] | null; defaults: { rest_max_deg: number } }
 
 interface PromptFilter {
   id: string
@@ -154,6 +154,16 @@ export function StatesTab() {
       return
     }
     try {
+      const { groups } = await apiGet<{ groups: MotionGroup[] }>('/admin/world-settings/extension-motion')
+      const bonePose = structuredClone(draft.bone_pose)
+      for (const group of groups) {
+        if (group.controls != null && bonePose[group.id]) {
+          for (const field of POSE_FIELDS) {
+            const control = field === 'freq' ? 'freq_hz' : field === 'rest_deg' ? 'rest_max_deg' : field
+            if (!group.controls.includes(control)) delete bonePose[group.id][field]
+          }
+        }
+      }
       await apiPost('/admin/prompt-filters/save', {
         id,
         label: draft.label.trim(),
@@ -162,7 +172,7 @@ export function StatesTab() {
         drop_blocks: draft.drop_blocks,
         prompt_modifier: draft.prompt_modifier,
         image_modifier: draft.image_modifier,
-        bone_pose: draft.bone_pose,
+        bone_pose: bonePose,
         enabled: draft.enabled,
       })
       toast(t('Saved'))
@@ -383,7 +393,7 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
   const poseLabels: Record<PoseField, string> = {
     rest_deg: t('Rest angle (degrees)'), gravity: t('Gravity multiplier'),
     freq: t('Frequency multiplier'), zeta: t('Damping multiplier'),
-    length: t('Length multiplier'), girth: t('Girth multiplier'),
+    length: t('Length multiplier'), girth: t('Diameter multiplier'),
     gain: t('Gain multiplier'), flatten: t('Flatten multiplier'), spill: t('Spill multiplier'),
   }
   const selectedBlocks = useMemo(() => new Set(draft.drop_blocks), [draft.drop_blocks])
@@ -514,7 +524,7 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
           <fieldset key={group.id}>
             <legend>{group.id}</legend>
             <div className="ga-form-row">
-              {POSE_FIELDS.map(field => (
+              {POSE_FIELDS.filter(field => group.controls == null || group.controls.includes(field === 'freq' ? 'freq_hz' : field === 'rest_deg' ? 'rest_max_deg' : field)).map(field => (
                 <Field key={field} label={poseLabels[field]} hint={<>{field === 'rest_deg' && <span>{t('Clamped per character to its maximum rest angle.')} </span>}<MotionPreviewHint field={field} /></>} compact>
                   <MotionNumberInput value={draft.bone_pose[group.id]?.[field] ?? ''} optional
                     min={field === 'rest_deg' ? -180 : ['length', 'girth'].includes(field) ? .5 : 0}
