@@ -5,10 +5,12 @@ import { useToast } from '../../lib/Toast'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
-import { WorldSettingsGroup, type WorldSettings } from './WorldSettingsGroup'
+import { WorldSettingsGroup, type WorldSettings as WorldSettingsPayload } from './WorldSettingsGroup'
 import { UseCaseStyles } from './UseCaseStyles'
 import { ExtensionMotion } from './ExtensionMotion'
 import { deleteAt, getAt, originOf, setAt, type Json } from './schemaValues'
+
+type WorldSettings = WorldSettingsPayload & { revision: string }
 
 /**
  * Game-Admin "Setup" tab: world briefing and schema-driven world settings.
@@ -19,6 +21,8 @@ export function SetupTab() {
   const { t } = useI18n()
   const { toast } = useToast()
   const [ws, setWs] = useState<WorldSettings | null>(null)
+  const [revision, setRevision] = useState<string | null>(null)
+  const [stalePaths, setStalePaths] = useState<string[] | null>(null)
   const [values, setValues] = useState<Json>({})
   const [origValues, setOrigValues] = useState<Json>({})
   const [resets, setResets] = useState<string[]>([])
@@ -43,6 +47,7 @@ export function SetupTab() {
         apiGet<WorldSettings>('/admin/world-settings'),
       ])
       setWs(settings)
+      setRevision(settings.revision)
       setValues(settings.values)
       setOrigValues(settings.values)
       setOverrides(settings.overrides)
@@ -71,7 +76,7 @@ export function SetupTab() {
       if (JSON.stringify(values) !== JSON.stringify(origValues) || resets.length) {
         let settings: WorldSettings
         try {
-          settings = await apiPut<WorldSettings>('/admin/world-settings', { values, resets })
+          settings = await apiPut<WorldSettings>('/admin/world-settings', { values, resets, base_revision: revision })
         } catch (e) {
           const detail = e instanceof ApiError && e.status === 409
             && e.detail !== null && typeof e.detail === 'object'
@@ -83,10 +88,11 @@ export function SetupTab() {
             setDropConfirmation({ paths, resolve })
           })
           if (!confirmed) return
-          // Retry once; a second refusal goes to the normal error toast.
-          settings = await apiPut<WorldSettings>('/admin/world-settings', { values, resets, confirm_drop: paths })
+          // Retry once; the outer handler also handles a stale revision on retry.
+          settings = await apiPut<WorldSettings>('/admin/world-settings', { values, resets, base_revision: revision, confirm_drop: paths })
         }
         setWs(settings)
+        setRevision(settings.revision)
         setValues(settings.values)
         setOrigValues(settings.values)
         setOverrides(settings.overrides)
@@ -94,11 +100,18 @@ export function SetupTab() {
       }
       toast(t('Saved'))
     } catch (e) {
+      const detail = e instanceof ApiError && e.detail !== null && typeof e.detail === 'object'
+        ? e.detail as Record<string, unknown> : null
+      if (e instanceof ApiError && (e.status === 428 || (e.status === 409 && detail?.code === 'stale'))) {
+        setStalePaths(Array.isArray(detail?.paths)
+          ? detail.paths.filter((path): path is string => typeof path === 'string') : [])
+        return
+      }
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
       setSaving(false)
     }
-  }, [description, origDescription, values, origValues, resets, t, toast])
+  }, [description, origDescription, values, origValues, resets, revision, t, toast])
 
   const revert = useCallback(() => {
     setDescription(origDescription)
@@ -143,6 +156,18 @@ export function SetupTab() {
           dropConfirmation?.resolve(false)
           setDropConfirmation(null)
         }}
+      />
+      <ConfirmDialog
+        open={stalePaths !== null}
+        title={t('Settings changed elsewhere')}
+        message={t('Reload to see the current settings; your unsaved edits here are lost.')
+          + (stalePaths?.length ? ' ' + stalePaths.join(', ') : '')}
+        confirmLabel={t('Reload')}
+        onConfirm={() => {
+          setStalePaths(null)
+          void reload()
+        }}
+        onClose={() => setStalePaths(null)}
       />
       <DetailToolbar
         title={dirty ? t('Setup (unsaved)') : t('Setup')}

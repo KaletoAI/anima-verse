@@ -1,5 +1,6 @@
 
 let CONFIG = {};
+let CONFIG_REVISION = null;
 let LORA_ENTRIES = [];
 const RESETS = new Set();
 let SCHEMA = {};
@@ -49,6 +50,7 @@ async function init() {
             if (!response.ok) throw new Error('HTTP ' + response.status);
         }
         CONFIG = await dataResp.json();
+        CONFIG_REVISION = dataResp.headers.get('X-Config-Revision');
         SCHEMA = await schemaResp.json();
         OVERRIDES = new Set((await originResp.json()).overrides || []);
         SHIPPED = await shippedResp.json();
@@ -2312,7 +2314,7 @@ async function saveConfig() {
     const submittedResets = [...RESETS];
     try {
         // Snapshot the payload so confirmation resends exactly the same edits.
-        const body = JSON.stringify({ values: CONFIG, resets: submittedResets });
+        const body = JSON.stringify({ values: CONFIG, resets: submittedResets, base_revision: CONFIG_REVISION });
         const send = payload => fetch('/admin/settings/save', {
             method: 'POST',
             headers: authHeaders(),
@@ -2334,7 +2336,20 @@ async function saveConfig() {
         // The image routing Rules page keeps the outcome (a refused chain,
         // save warnings) on screen — a toast is gone after three seconds.
         if (typeof imageRoutingSaveResult === 'function') imageRoutingSaveResult(resp.ok, result);
+        if (!resp.ok && result.detail && (result.detail.code === 'stale'
+            || result.detail.code === 'revision_required')) {
+            const paths = Array.isArray(result.detail.paths) ? result.detail.paths : [];
+            const message = result.detail.code === 'revision_required'
+                ? 'This page has no settings version. Reload it.'
+                : 'Settings changed elsewhere since this page was loaded'
+                    + (paths.length ? ': ' + paths.join(', ') : '')
+                    + '. Reload to see them; your unsaved edits on this page are lost.';
+            if (await askConfirm(message, 'Reload')) location.reload();
+            else toast('Not saved — the page is out of date.', 'error');
+            return;
+        }
         if (resp.ok) {
+            CONFIG_REVISION = result.revision;
             OVERRIDES = new Set(result.overrides || []);
             // A newer edit or reset must remain pending, including a reset
             // repeated for a submitted path. Conservatively retain all resets
