@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPut } from '../../lib/api'
+import { ApiError, apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Field } from '../../components/Field'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { WorldSettingsGroup, type WorldSettings } from './WorldSettingsGroup'
@@ -29,6 +30,10 @@ export function SetupTab() {
   const [origDescription, setOrigDescription] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [dropConfirmation, setDropConfirmation] = useState<{
+    paths: string[]
+    resolve: (confirmed: boolean) => void
+  } | null>(null)
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -64,7 +69,23 @@ export function SetupTab() {
         setOrigDescription(description)
       }
       if (JSON.stringify(values) !== JSON.stringify(origValues) || resets.length) {
-        const settings = await apiPut<WorldSettings>('/admin/world-settings', { values, resets })
+        let settings: WorldSettings
+        try {
+          settings = await apiPut<WorldSettings>('/admin/world-settings', { values, resets })
+        } catch (e) {
+          const detail = e instanceof ApiError && e.status === 409
+            && e.detail !== null && typeof e.detail === 'object'
+            ? e.detail as Record<string, unknown> : null
+          if (detail?.code !== 'would_drop' || !Array.isArray(detail.paths)
+            || !detail.paths.every((path): path is string => typeof path === 'string')) throw e
+          const paths = detail.paths
+          const confirmed = await new Promise<boolean>(resolve => {
+            setDropConfirmation({ paths, resolve })
+          })
+          if (!confirmed) return
+          // Retry once; a second refusal goes to the normal error toast.
+          settings = await apiPut<WorldSettings>('/admin/world-settings', { values, resets, confirm_drop: paths })
+        }
         setWs(settings)
         setValues(settings.values)
         setOrigValues(settings.values)
@@ -107,6 +128,22 @@ export function SetupTab() {
 
   return (
     <div className="ga-page-scroll ga-setup">
+      <ConfirmDialog
+        open={dropConfirmation !== null}
+        title={t('Remove stored settings?')}
+        message={t('This save would remove: {paths}. If this page is stale, cancel and reload instead.')
+          .replace('{paths}', dropConfirmation?.paths.join(', ') ?? '')}
+        confirmLabel={t('Remove')}
+        danger
+        onConfirm={() => {
+          dropConfirmation?.resolve(true)
+          setDropConfirmation(null)
+        }}
+        onClose={() => {
+          dropConfirmation?.resolve(false)
+          setDropConfirmation(null)
+        }}
+      />
       <DetailToolbar
         title={dirty ? t('Setup (unsaved)') : t('Setup')}
         onSave={save}

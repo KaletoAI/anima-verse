@@ -2299,12 +2299,26 @@ async function saveConfig() {
     const submittedRevision = MUTATION_REVISION;
     const submittedResets = [...RESETS];
     try {
-        const resp = await fetch('/admin/settings/save', {
+        // Snapshot the payload so confirmation resends exactly the same edits.
+        const body = JSON.stringify({ values: CONFIG, resets: submittedResets });
+        const send = payload => fetch('/admin/settings/save', {
             method: 'POST',
             headers: authHeaders(),
-            body: JSON.stringify({ values: CONFIG, resets: submittedResets })
+            body: payload
         });
-        const result = await resp.json();
+        let resp = await send(body);
+        let result = await resp.json();
+        if (!resp.ok && result.detail && result.detail.code === 'would_drop') {
+            const paths = result.detail.paths;
+            const ok = await askConfirm('This save would remove: ' + paths.join(', ')
+                + '. If this page is older than your last change, cancel and reload instead.', 'Remove');
+            if (!ok) {
+                toast('Save cancelled — nothing was changed.');
+                return;
+            }
+            resp = await send(JSON.stringify({ ...JSON.parse(body), confirm_drop: paths }));
+            result = await resp.json();
+        }
         // The image routing Rules page keeps the outcome (a refused chain,
         // save warnings) on screen — a toast is gone after three seconds.
         if (typeof imageRoutingSaveResult === 'function') imageRoutingSaveResult(resp.ok, result);
@@ -2330,13 +2344,16 @@ async function saveConfig() {
             // After saving, check whether fields that need a restart changed.
             loadRestartPending();
         } else {
-            toast('Error: ' + (result.detail || result.message), 'error');
+            toast('Error: ' + ((typeof result.detail === 'object' && result.detail !== null
+                ? result.detail.message : result.detail) || result.message || resp.status), 'error');
         }
     } catch (e) {
         toast('Save failed: ' + e.message, 'error');
     }
-    btn.disabled = false;
-    btn.textContent = DIRTY ? 'Save*' : 'Save';
+    finally {
+        btn.disabled = false;
+        btn.textContent = DIRTY ? 'Save*' : 'Save';
+    }
 }
 
 async function loadRestartPending() {
