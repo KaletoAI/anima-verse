@@ -203,7 +203,7 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 s0,s1,y0,y1 = [h[k] for k in ('s0','s1','y0','y1')]
                 kind = h['kind']
                 if kind in ('window','door'):
-                    depth = -.005 if h.get('blind') else (0 if not full else (.10 if kind == 'window' else .08))
+                    depth = -.02 if h.get('blind') else (0 if not full else (.10 if kind == 'window' else .08))
                     face('glass' if kind == 'window' else 'door',
                          'blind' if h.get('blind') else ('glass' if kind == 'window' else 'door'),s0,s1,y0,y1,outer-depth)
                 if not full or filler and desc.get('overrides',{}).get('ornament_density',.5) <= 0:
@@ -225,10 +225,10 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 elif frame == 'metal' and kind in ('window','door'):
                     for c,d,e,f in ((s0-.05,s0,y0,y1),(s1,s1+.05,y0,y1),
                                     (s0-.05,s1+.05,y1,y1+.05),(s0-.05,s1+.05,y0-.05,y0)):
-                        block('frame','trim',c,d,e,f,outer,outer+.03)
+                        block('frame','trim',c,d,e,f,outer,outer+.03,cut_holes=e < y1 and f > y0)
                     if kind == 'window':
-                        block('frame','trim',s0-.05,s1+.05,y0-.05,y0,outer,outer+.06)
-                        d0,d1 = (outer+.005,outer+.03) if h.get('blind') else (outer-.10,outer)
+                        block('frame','trim',s0-.05,s1+.05,y0-.05,y0,outer,outer+.06,cut_holes=False)
+                        d0,d1 = (outer+.02,outer+.03) if h.get('blind') else (outer-.10,outer)
                         for centre in mullions(s0,s1):
                             block('frame','trim',centre-.025,centre+.025,y0,y1,d0,d1,cut_holes=False)
                 elif frame == 'stone':

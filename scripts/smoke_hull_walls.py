@@ -12,7 +12,7 @@ Each filler rectangle has 4 edges: 1 cornice block per edge gives
 4 blocks, each 6 quads / 12 triangles, hence 48 cornice triangles.
 Blind panes end at top-.25, below cornice bottom top-.12.
 Each filler rectangle has 4 shell quads, zero reveals/interiors, panes
-at stone outer .54+.005=.545. Top margin is .25. Density zero and
+at stone outer .54+.02=.56. Top margin is .25. Density zero and
 low tier have no filler frames/shutters. Ground sink remains -.14. Each timber blind window has 4 frame blocks
 and 2 shutters at density 1 (.5*1*2=1); density 0 removes both.
 
@@ -34,7 +34,8 @@ import math
 import sys
 import tempfile
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root))
 from _hull_fixtures import (stepped_house, opening_edge_cases, count, total_openings,
     windows, doors, polygon_case_facts, no_face_overlaps_openings, no_degenerate_faces, outer_face_distance)
 
@@ -45,7 +46,7 @@ def main():
     from app.core.hull_styles import validate_style
     from app.core.hull_mesh import PartBuilder, offset_ring, rng, bounds, tri_count
     from app.core.hull_walls import build_walls, wall_offsets
-    styles = {key: validate_style(json.loads(Path(f'shared/building_styles/{key}.json').read_text()), key)
+    styles = {key: validate_style(json.loads((root / "shared/building_styles" / f"{key}.json").read_text()), key)
               for key in ('steinhaus', 'fachwerk')}
     from app.core.hull_facts import hull_facts
     facts = hull_facts(stepped_house())
@@ -170,7 +171,7 @@ def check_facades():
     assert blind_raster(0,10,2.5,1) == [(.75,1.75),(3.25,4.25),(5.75,6.75),(8.25,9.25)]
     assert blind_raster(0,2,2.4,1) == []
     assert all(abs(b-a-2.2) < 1e-9 for a,b in blind_raster(0,5,2.5,2.4))
-    styles = {name: validate_style(json.loads(Path(f'shared/building_styles/{name}.json').read_text()),name)
+    styles = {name: validate_style(json.loads((root / "shared/building_styles" / f"{name}.json").read_text()),name)
               for name in ('steinhaus','fachwerk')}
     style = styles['steinhaus']
     random = rng(17,'blind_windows')
@@ -187,7 +188,7 @@ def check_facades():
     assert all(h['y1']==level['top_y']-.25 for h in holes)
     wide_parts = build_walls(dict(wide_facts,levels=[level]),wide,dict(seed=17),tier='low')
     assert any(p['material']=='blind' and min(v[0] for v in p['vertices'])==-.39
-               and all(v[2]==-.545 for v in p['vertices']) for p in wide_parts)
+               and all(v[2]==-.56 for v in p['vertices']) for p in wide_parts)
     assert wide_facts['levels'][3]['edges'][1]['openings'] == raw['levels'][3]['edges'][1]['openings']
     for total in (0,10):
         desc = dict(seed=17,overrides=dict(ornament_density=0,storeys_total=total))
@@ -219,7 +220,7 @@ def check_facades():
                 lo,hi = _span(offset_ring(level['outline'],level['ccw'],.54),edge,.54)
                 assert all(lo<=h['s0']<h['s1']<=hi and h['y1']<=level['top_y']-.25 for h in edge['openings'])
                 for p in panes:
-                    if all(abs((v[0]-edge['a'][0])*edge['normal'][0]+(v[2]-edge['a'][1])*edge['normal'][1]-.545)<1e-4 for v in p['vertices']):
+                    if all(abs((v[0]-edge['a'][0])*edge['normal'][0]+(v[2]-edge['a'][1])*edge['normal'][1]-.56)<1e-4 for v in p['vertices']):
                         break
                 else:
                     raise AssertionError('missing proud pane')
@@ -265,13 +266,16 @@ def check_modern():
     one sill x=1.95..7.05,y=.85...9,depth .34...40, and three
     mullions x=3.25,4.5,5.75 +/- .025,depth .24...34.
     Door gets four strips and no sill/mullions. Blind mullions
-    use depth .345...37. Module UVs cover n fields and v=0..1;
+    use depth .34+.02=.36 to .34+.03=.37; blind panes are at .36
+    in both tiers. Module UVs cover n fields and v=0..1;
     filler ground starts v=.15/top, without stretching the image.
     A 1x7 rectangle has short outer spans 1+2*.34=1.68<2.325;
     its two long edges carry modules and two short edges carry wall.
     Upper floor is 3.08: band y=2.93..3.23,depth .34...39.
     A lower hole y=2.9..3.08 removes band area below 3.08;
     upper hole y=3.08..3.3 removes area above 3.08.
+    Module fillers 1 and 2 each have four edges with no real holes:
+    one unsplit band per edge gives 4 blocks at full tier.
     With 40 storeys there are 39*4=156 band blocks when no real
     hole reaches a boundary; blind apertures add no subdivisions.
     Stepped gable: shed footprint starts x=6+.04+.01=6.05;
@@ -290,7 +294,7 @@ def check_modern():
     assert module_bays(4,3)==1
     assert mullions(0,5)==[1.25,2.5,3.75]
     assert mullions(0,1.5)==mullions(0,1.8)==[]
-    style=validate_style(json.loads(Path('shared/building_styles/modern.json').read_text()),'modern')
+    style=validate_style(json.loads((root/'shared/building_styles/modern.json').read_text()),'modern')
     desc=dict(seed=7,overrides=dict(ornament_density=1))
     resolved=frozenset({'facade_module'})
     raw=hull_facts(gap_house())
@@ -303,6 +307,8 @@ def check_modern():
             assert len(modules)==(4 if level['filler'] else 0)
             if not level['filler']:
                 continue
+            if tier == 'full' and level['level'] in (1,2):
+                assert count(isolated,tag='band') == 4
             assert not any(e['openings'] for e in level['edges'])
             assert not any(p['material']=='blind' or p['tag']=='frame' for p in isolated)
             for edge,part in zip(level['edges'],modules):
@@ -357,7 +363,10 @@ def check_modern():
     edge['openings'][0].update(kind='window',blind=True)
     frames=[bounds([p]) for p in build_walls(test,style,desc,tier='full') if p['tag']=='frame']
     for x in (3.25,4.5,5.75):
-        assert {'min':[x-.025,.9,-.37],'max':[x+.025,2.1,-.345]} in frames
+        assert {'min':[x-.025,.9,-.37],'max':[x+.025,2.1,-.36]} in frames
+    for tier in ('full','low'):
+        panes=[p for p in build_walls(test,style,desc,tier=tier) if p['material']=='blind']
+        assert len(panes)==1 and all(v[2]==-.36 for v in panes[0]['vertices'])
     tall_desc=dict(seed=7,overrides=dict(storeys_total=40,ornament_density=0))
     tall=prepare_facts(raw,style,tall_desc,frozenset())
     bands=[p for p in build_walls(tall,style,tall_desc,tier='full') if p['tag']=='band']

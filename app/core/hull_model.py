@@ -44,7 +44,7 @@ def _materials(style: Dict, desc: Dict, tex_dir: Path, resolved: frozenset[str])
         color = tone_to_linear(FALLBACK_TONES[material])
         if source and source.is_file():
             sizes[material] = surface_textures.texture_size_m(source)
-            generator = rng(desc["seed"], f"tint:{material}")
+            generator = rng(desc["seed"], "tint:wall" if material == "facade_module" else f"tint:{material}")
             tint = desc["overrides"].get("tint", "#ffffff").lstrip("#")
             factors = [int(tint[i:i + 2], 16) / 255 *
                        (1 + generator.uniform(-style["tint_jitter"], style["tint_jitter"]))

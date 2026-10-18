@@ -178,7 +178,7 @@ stops acting autonomously).
 - Locations → rooms, with an `entry_room`, per-room floor plans, indoor/outdoor, decency, swim rules,
   `known_locations` discovery and rule-based access control (**Block / Force / Discover** rules with
   free-text conditions such as `has_item:item_a1b2c3d4 OR courage>50`).
-- **Building hulls from floor plans** — four textured styles, editable seed/overrides and world style JSON in Game-Admin; deterministic full/low models with interior cutouts and explicit stale rebuilds ([details](docs/llm-blender-models.md#building-hull)).
+- **Building hulls from floor plans** — five textured styles including Modern, non-enterable facade storeys with blind windows, editable seed/overrides and world style JSON in Game-Admin; deterministic full/low models with interior cutouts and explicit stale rebuilds ([details](docs/llm-blender-models.md#building-hull)).
 - **Automatic NPCs:** slots on locations and painted areas, home areas, time windows and a pool of
   reusable profiles spawn short-lived NPCs that talk to each other and disappear again.
 - **Events:** disruption / danger events swap the room background, feed the player's news channel and

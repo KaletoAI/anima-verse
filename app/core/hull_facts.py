@@ -2,6 +2,7 @@
 from copy import deepcopy
 import hashlib
 import json
+import math
 from typing import Any, Dict
 
 from app.core import scene_recipe as sr
@@ -128,9 +129,13 @@ def hull_facts(location: Dict[str, Any], location_id: str = '') -> Dict[str, Any
                               levels=[{k: v for k, v in level.items() if k != 'filler'}
                                       for level in levels]),
                          sort_keys=True, separators=(',', ':'))
+    lift = map3d.get('elevator')
+    elevator = [sr._num(v, float('nan')) for v in lift] if isinstance(lift, (list, tuple)) and len(lift) == 2 else None
+    if elevator is not None and not all(math.isfinite(v) for v in elevator):
+        elevator = None
     return dict(ok=True, error='', location_id=loc_id, storey_m=sr._r(storey),
                 eaves_y=levels[-1]['top_y'], boundary_center=center,
-                elevator=map3d.get('elevator'),
+                elevator=elevator,
                 fingerprint=hashlib.sha256(encoded.encode('utf-8')).hexdigest()[:16],
                 levels=levels)
 

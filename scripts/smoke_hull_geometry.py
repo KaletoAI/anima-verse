@@ -33,16 +33,23 @@ Seed 7 draws bay 3.1248159131755635 m; outer offset .04+.30=.34 gives
 spans 30.68 and 20.68: floor(30.68/bay)=9, floor(20.68/bay)=6,
 so 2*(9+6)=30 blind windows/storey, or 39*30=1170 windows total.
 Drawn width 1.7413807505613947 <= 1.8 means no mullions. Per window,
-two jamb blocks plus three horizontal members (top, bottom, sill), each
-split into three blocks at the aperture sides: (2+3*3)*12=132 tris.
-Thus metal frames/sills/mullions at density .5 cost 39*30*132=154440
-tris; with bands, 156312 > 90000 before shell, panes and roof.
-Density .25 also fails: filler frames are dropped only at density <= 0,
-so only density 0 fits. Low omits frames and bands; 1170*2=2340 pane
-tris plus shell/roof stay below 12000. Resolved facade_module quads
-replace the windows and frames, keeping density .5.
+two jamb blocks plus three unsplit horizontal members (top, bottom, sill)
+make (2+3)*12=60 tris, so frames cost 39*30*60=70200 tris.
+Bands add 1872 and panes 2340. Other full geometry totals 564:
+320 wall + 56 plinth + 28 interior + 16 roof + 48 parapet + 48 cap
++ 24 housing + 24 rooftop = 564. Full .5 is 74976 < 90000.
+Every sill on an edge reaches that edge's global x/z extreme at outer+.06,
+so low copies ALL 1170 sill blocks, not just the corner windows:
+1170*12=14040. Low base is 2340 panes + 320 walls + 8 plinth + 16 roof
++ 48 parapet + 48 cap + 24 housing + 24 rooftop = 2828;
+thus low .5 is 16868 > 12000. Density .25 keeps filler frames, so fails
+likewise. Density 0 drops all 70200 frame tris and one rooftop box (12):
+full=74976-70200-12=4764. Low loses 14040 sill tris and that box, but
+now copies all 1872 band tris to preserve the facade extremes:
+low=16868-14040-12+1872=4688. Both tiers fit at density 0.
+Resolved facade_module quads replace windows and frames, keeping density .5.
 The bay range [2.6,3.2] independently bounds panes at 30..36 per facade
-floor, hence 1170..1404 across 39 floors (the existing assertion bound).
+floor, hence 1170..1404 across 39 floors; seed 7 pins the lower bound.
 
 Hand derivation: L corners (0,0),(20,0),(20,6),(8,6),(8,14),(0,14)
 span 20 by 14 m. Each of three floors has 3+2+1+2=8 windows;
@@ -64,7 +71,8 @@ import sys
 import tempfile
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root))
 from _hull_fixtures import stepped_house, doors, l_shaped_house, no_degenerate_faces, windows
 from app.core import paths
 # hull_styles reads world overrides from the world DB: redirect before import.
@@ -102,7 +110,7 @@ def check_identity():
     from app.core.hull_facts import hull_facts
     for fixture in (stepped_house, l_shaped_house):
         for name in STYLES:
-            style = validate_style(json.loads(Path(f"shared/building_styles/{name}.json").read_text()), name)
+            style = validate_style(json.loads((root / "shared/building_styles" / f"{name}.json").read_text()), name)
             for tier in ("full", "low"):
                 assert digest(build_hull(hull_facts(fixture()), style, description(name, 7), tier=tier)) == IDENTITY[f"{fixture.__name__}:{name}:{tier}"]
     print("PASS: 16 baseline byte-identity literals (8b5f1124)")
@@ -195,6 +203,28 @@ def check_extremes_and_shades() -> None:
 
 
 
+def check_material_tints():
+    """Equal source pixels times the same three wall jitter factors yield equal RGB.
+
+    A grey 128 pixel and tint #8090a0 keep every jittered channel below 255,
+    so equality cannot be caused by saturation. Modern jitter is .03; both
+    materials must use the wall seed tag for all three channel draws.
+    """
+    from PIL import Image
+    from app.core.hull_model import _materials
+    style = validate_style(json.loads((root/'shared/building_styles/modern.json').read_text()),'modern')
+    with tempfile.TemporaryDirectory(prefix='hull-tints-') as storage:
+        source = Path(storage)/'source.png'
+        Image.new('RGB',(1,1),(128,128,128)).save(source)
+        desc = description('modern',7)
+        desc['overrides']['tint'] = '#8090a0'
+        with patch('app.core.surface_textures.base_texture_file',return_value=source):
+            _, textures, _ = _materials(style,desc,Path(storage)/'tinted',frozenset({'wall','facade_module'}))
+        with Image.open(textures['texture_wall']) as wall, Image.open(textures['texture_facade_module']) as module:
+            assert wall.getpixel((0,0)) == module.getpixel((0,0))
+    print('PASS: Modern wall and facade_module share tint draws')
+
+
 def check_forty_storeys():
     from copy import deepcopy
     from _hull_fixtures import gap_house
@@ -206,16 +236,25 @@ def check_forty_storeys():
     loc['rooms'][0]['layout'].update(w=30,d=20,openings=[])
     facts = hull_facts(loc)
     original = deepcopy(facts)
-    style = validate_style(json.loads(Path('shared/building_styles/modern.json').read_text()),'modern')
+    style = validate_style(json.loads((root/'shared/building_styles/modern.json').read_text()),'modern')
     desc = description('modern',7)
     desc['overrides']['storeys_total'] = 40
+    full = build_hull(facts,style,desc,tier='full')
+    assert full['tris'] == 74976
+    assert sum(p['tag']=='frame' for p in full['parts']) == 1170*5
+    with patch.dict(TRI_BUDGET,low=20000):
+        low = build_hull(facts,style,desc,tier='low')
+    assert low['tris'] == 16868 > 12000
+    assert sum(p['tag']=='frame' for p in low['parts']) == 1170
+    print('PASS: unresolved density .5 full=74976; low=16868 exceeds 12000 (1170 preserved sills)')
     for resolved, density in ((frozenset(), 0), (frozenset({'facade_module'}), .5)):
         fitted = fit_budget(facts,style,desc,resolved=resolved)
         assert fitted['overrides']['ornament_density'] == density
         for tier in ('full','low'):
             result = build_hull(facts,style,fitted,tier=tier,resolved=resolved)
             if not resolved:
-                assert 1170 <= sum(p['material']=='blind' for p in result['parts']) <= 1404
+                assert sum(p['material']=='blind' for p in result['parts']) == 1170
+                assert result['tris'] == {'full':4764,'low':4688}[tier]
             else:
                 assert any(p['tag']=='facade_module' for p in result['parts'])
             assert result['tris'] <= TRI_BUDGET[tier]
@@ -226,6 +265,7 @@ def check_forty_storeys():
 
 def main() -> None:
     """Exercise all shipped styles, both tiers and assembly failure paths."""
+    check_material_tints()
     check_extremes_and_shades()
     with tempfile.TemporaryDirectory(prefix="hull-geometry-") as storage:
         paths.init(storage)

@@ -14,9 +14,9 @@ An L has five convex corners and one reentrant corner, in either winding.
 Padding is wall thickness + .2: 1.1 for burg and .5 for holzhuette.
 Porch outer depth .34+1.6=1.94 exceeds .5; tower caps/crowns also
 exceed their padding and must be preserved. Flat parapet crenels stay skin.
-Blind panes sit at outer+.005; timber spans outer..outer+.05 and logs
+Blind panes sit at outer+.02; timber spans outer..outer+.05 and logs
 outer..outer+.14, so a face with an overlapping s/y bounding box
-in front of outer+.005 covers the pane even with all vertices outside.
+in front of outer+.02 covers the pane even with all vertices outside.
 Blanking filler openings must yield violations with the same test. Both filler storeys (1,2) must be clear. With rooms only on level 2,
 upper framing starts at level 1 floor 3.1+.08=3.18, leaving ground
 level framing absent just as for an occupied ground floor.
@@ -29,7 +29,8 @@ from collections import Counter
 from copy import deepcopy
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root))
 from _hull_fixtures import (count, doors, no_degenerate_faces, opening_edge_cases,
                             polygon_case_facts, rect_facts, roof_shapes)
 from app.core.hull_ornaments import build_ornaments
@@ -415,7 +416,7 @@ def check_blind_ornaments():
     with tempfile.TemporaryDirectory() as storage:
         paths.init(storage)
         for name in ('fachwerk','holzhuette'):
-            style = validate_style(json.loads(Path(f'shared/building_styles/{name}.json').read_text()),name)
+            style = validate_style(json.loads((root / "shared/building_styles" / f"{name}.json").read_text()),name)
             desc = description(7,1)
             facts = prepare_facts(hull_facts(gap_house()),style,desc,frozenset())
             parts = build_ornaments(facts,style,desc,{},tier='full')
@@ -435,7 +436,7 @@ def check_blind_ornaments():
                                 spans = [(x-edge['a'][0])*u[0]+(z-edge['a'][1])*u[1] for x,y,z in points]
                                 heights = [y for x,y,z in points]
                                 depths = [(x-edge['a'][0])*edge['normal'][0]+(z-edge['a'][1])*edge['normal'][1] for x,y,z in points]
-                                if max(depths) <= outer+.0053 or min(depths) >= outer+.15:
+                                if max(depths) <= outer+.0203 or min(depths) >= outer+.15:
                                     continue
                                 for hole in edge['openings']:
                                     if (min(max(spans),hole['s1'])-max(min(spans),hole['s0']) > 3e-4

@@ -310,9 +310,9 @@ geometry helpers. Python builds the vertices, faces, UVs and material groups;
 Blender receives finished meshes, assigns textures and exports GLB. The LLM
 supplies clamped JSON, never executable code or a replacement floor plan.
 
-Four shipped styles live in `shared/building_styles/`: `fachwerk`, `steinhaus`,
-`holzhuette`, `burg`. A style document names material kinds (`wall`,
-`wall_ground`, `plinth`, `roof`, `trim`, `door`, `chimney`), glass/interior
+Five shipped styles live in `shared/building_styles/`: `fachwerk`, `steinhaus`,
+`holzhuette`, `burg`, `modern` (Modern). A style document names material kinds (`wall`,
+`wall_ground`, `plinth`, `roof`, `trim`, `door`, `chimney`, `facade_module`), glass/interior
 palette, wall thickness and plinth height, corner/frame treatments, timber
 framing, roof forms and pitch/overhang ranges, towers, chimneys and ornament
 switches/densities. `hull_styles.validate_style` clamps the schema. Texture
@@ -323,10 +323,16 @@ kinds resolve through the surface library, with fallback colours when missing.
 
 A build description is `{style, seed, overrides}`. Overrides support
 `roof_form` (`gable`, `hip`, `shed`, `flat`), `pitch_deg` (5–60),
-`ornament_density` (0–1), and optional hex `tint`. Empty pitch/form means the
+`ornament_density` (0–1), `storeys_total` (0–40), and optional hex `tint`. Empty pitch/form means the
 style default; **none** removes tint. The same facts, validated style and
 seed-bearing description produce the same job bytes. Random variation uses
 `hull_mesh.rng(seed, tag)`; changing the seed changes the ornament choices.
+
+**Storeys total** adds facade storeys above the plan (0 uses the plan height).
+Storeys without rooms, including gaps, get blind windows and are not enterable.
+Modern can use the `facade_module` texture for these storeys; missing textures
+fall back to blind windows. For its surface texture prompt, use **front view**
+instead of **top-down**.
 
 Generation stores **full** and **low** tiers and immediately records both in
 `selection.json`. Low retains the wall/opening geometry and roof but omits

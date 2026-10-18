@@ -65,6 +65,29 @@ from app.core import paths
 
 
 def check_storeys(hull_facts, gap_house, stepped_house, compose_scene):
+    """Two finite coordinates yield a fresh float pair; malformed lifts yield no housing.
+
+    A lift requires exactly two coordinates: lengths 1/3, mappings and strings
+    fail shape; None, NaN and infinities fail finite conversion. No lift means
+    zero housing parts, independently of the four rectangular roof edges.
+    """
+    from app.core.hull_geometry import build_hull
+    from app.core.hull_styles import validate_style
+    import json
+    style = validate_style(json.loads((Path(__file__).resolve().parents[1]/'shared/building_styles/modern.json').read_text()), 'modern')
+    for lift in ([5], 'x', [5,4,3], {'x':5,'z':4}, [None,4],
+                 [float('nan'),4], [5,float('inf')], [float('-inf'),4]):
+        malformed = gap_house()
+        malformed['map3d']['elevator'] = lift
+        clean = hull_facts(malformed)
+        assert clean['elevator'] is None, lift
+        result = build_hull(clean,style,dict(seed=7,overrides={}),tier='full')
+        assert not any(p['tag']=='housing' for p in result['parts'])
+    valid = gap_house()
+    valid['map3d']['elevator'] = ['5',4]
+    clean = hull_facts(valid)
+    assert clean['elevator'] == [5.,4.] and all(type(v) is float for v in clean['elevator'])
+    assert clean['elevator'] is not valid['map3d']['elevator']
     from app.core.hull_facts import with_storeys
     from app.core.scene_recipe import _hull_cutouts
     loc = gap_house()

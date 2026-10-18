@@ -59,7 +59,7 @@ import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import (Any, Dict, Iterator, List, Optional, Sequence, Set,
+from typing import (Any, Dict, Iterable, Iterator, List, Optional, Sequence, Set,
                     Tuple)
 
 from app.core.log import get_logger
@@ -3019,8 +3019,8 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
 
 
 def _hull_cutouts(map3d: Dict[str, Any],
-                  levels: List[int]) -> List[List[List[float]]]:
-    """Unique used above-ground storey contours, capped to shader limits."""
+                  levels: Iterable[int]) -> List[List[List[float]]]:
+    """Unique contours from levels 0..max, including facade storeys, capped to shader limits."""
     polys: List[List[List[float]]] = []
     for level in levels:
         if level < 0:
