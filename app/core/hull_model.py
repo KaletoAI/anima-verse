@@ -1,6 +1,7 @@
 """Build declarative hull jobs, run Blender and report saved-plan staleness."""
 from copy import deepcopy
 import json
+import secrets
 from pathlib import Path
 import tempfile
 from typing import Any, Dict, Optional
@@ -218,3 +219,44 @@ def hull_status(location_id: str) -> Dict[str, Any]:
             "active": active, "stale": active and built != current,
             "built_fingerprint": built, "current_fingerprint": current,
             "description": hull.get("description"), "pending": location_model3d.is_pending(location_id)}
+
+
+def propose_hull(location_id: str) -> Dict[str, Any]:
+    """Suggest a validated building style with one LLM call, or fresh defaults."""
+    from app.models.world import get_location_by_id
+    from app.core.roof_model import _parse_json, oriented_bbox
+    location = get_location_by_id(location_id)
+    facts = hull_facts(location, location_id)
+    if not facts["ok"]:
+        return facts
+    styles = hull_styles.load_styles()
+    listing = [{"id": key, "name": style["name"], "description": style["description"]}
+               for key, style in styles.items()]
+    name = str(location.get("name") or location_id)
+    description = {"style": "steinhaus", "seed": secrets.randbelow(2**31),
+                   "overrides": {"ornament_density": 0.5}}
+    used_llm = False
+    try:
+        from app.core.llm_router import llm_call
+        from app.core.prompt_templates import render_task
+        rectangle = oriented_bbox(facts["levels"][0]["outline"])
+        system_prompt, user_prompt = render_task(
+            "hull_design", name=name,
+            description=str(location.get("description") or ""),
+            style_hint=str(location.get("style_hint") or ""),
+            storeys=len(facts["levels"]), length_m=rectangle["length"],
+            depth_m=rectangle["depth"], styles=listing, forms=list(hull_styles.ROOF_FORMS))
+        response = llm_call(task="hull_design", system_prompt=system_prompt,
+                            user_prompt=user_prompt, agent_name="system",
+                            label=f"Hull design: {name}")
+        parsed = _parse_json(str(getattr(response, "content", "") or ""))
+        if (not parsed or not isinstance(parsed.get("style"), str)
+                or parsed["style"] not in styles or not isinstance(parsed.get("overrides"), dict)):
+            raise ValueError("Invalid hull design answer")
+        description = hull_styles.validate_description(
+            {**parsed, "seed": description["seed"]}, styles)
+        used_llm = True
+    except Exception as error:
+        logger.info("Hull design for %s: no LLM answer (%s) — defaults", location_id, error)
+    return {"ok": True, "error": "", "location_id": location_id, "name": name,
+            "styles": listing, "description_json": description, "llm": used_llm}

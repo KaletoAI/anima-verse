@@ -114,6 +114,7 @@ into "what does the room need" and "what does the library already have";
 | `furnish_place.md` | `furnish` (label `place`) | `furnish_place.run` (via `room_furnish._phase_place`) | Stage 2: relational placement plan per mount pass (anchors `around` / `under` / `wall_above` / `at_opening` / `above` / `on`), with one repair round per failing pass; `furnish_solver` turns it into metres |
 | `room_description_sync.md` | `room_description_sync` | `room_description_sync.propose` | Rewrite a room's description so it names the props that now stand in it — preview in the Furnish dialog, the admin decides |
 | `prop_mount_classify.md` | `prop_mount_classify` | `props_mount.classify_mounts` | Classify library props into `floor` / `wall` / `ceiling` / `surface` (batched); the guess lands as `mount_suggested` and the admin confirms it in the Props tab |
+| `hull_design.md` | `hull_design` | `hull_model` | Choose a building hull style and bounded overrides from floor plan facts |
 | `roof_design.md` | `roof_design` | `roof_model` | Pick form, pitch and overhang of a building's roof from its footprint |
 | `world_dev_validate.md` | the model chosen in the dialog (`routes/world_dev.py`); `npc_ops` uses `npc_generate` | `routes/world_dev.py`, `npc_ops` | Check a world-dev draft against its schema and list what is wrong |
 

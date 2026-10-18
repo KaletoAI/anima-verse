@@ -1233,6 +1233,102 @@ def _location_roof_generate_sync(location_id: str,
     return {"status": "generating", "description": desc}
 
 
+# Building hull proposals and explicit generation.
+
+_HULL_NO_OUTLINE = "This location has no building outline — draw one in the floor plan editor first."
+
+
+def _hull_check_result(result: Dict[str, Any]) -> None:
+    """Map hull domain failures to the admin HTTP contract."""
+    if result.get("ok", True):
+        return
+    error = result.get("error")
+    if error == "not_found":
+        raise HTTPException(status_code=404, detail="Location not found")
+    if error == "no_outline":
+        raise HTTPException(status_code=409, detail=_HULL_NO_OUTLINE)
+    raise HTTPException(status_code=400, detail=str(error))
+
+
+def _hull_style_list() -> List[Dict[str, Any]]:
+    """Return fresh style documents including ids and their storage origin."""
+    from app.core.hull_styles import load_styles
+    return [{"id": key, **style} for key, style in load_styles().items()]
+
+
+@router.get("/locations/{location_id}/hull")
+def location_hull_status(location_id: str) -> Dict[str, Any]:
+    """Report hull selection, staleness, pending state and available styles."""
+    from app.core.hull_model import hull_status
+    result = hull_status(location_id)
+    if result.get("error") == "not_found":
+        _hull_check_result(result)
+    return {**result, "styles": _hull_style_list()}
+
+
+@router.post("/locations/{location_id}/hull/propose")
+def location_hull_propose(location_id: str) -> Dict[str, Any]:
+    """Suggest an editable style using one LLM call or validated defaults."""
+    from app.core.hull_model import propose_hull
+    result = propose_hull(location_id)
+    _hull_check_result(result)
+    return result
+
+
+@router.post("/locations/{location_id}/hull/generate")
+async def location_hull_generate(location_id: str, request: Request) -> Dict[str, Any]:
+    """Validate and start a hull build with blocking work in the threadpool."""
+    data = await request.json()
+    return await asyncio.to_thread(_location_hull_generate_sync, location_id, data)
+
+
+def _location_hull_generate_sync(location_id: str, data: Any) -> Dict[str, Any]:
+    """Check geometry, style and Blender before claiming the background job."""
+    from app.blender import runner
+    from app.core import hull_model, hull_styles
+    from app.core.hull_facts import hull_facts
+    _hull_check_result(hull_facts(None, location_id))
+    if not isinstance(data, dict) or not isinstance(data.get("description"), dict):
+        raise HTTPException(status_code=400, detail="Body must contain a description object")
+    raw = data["description"]
+    styles = hull_styles.load_styles()
+    style = raw.get("style")
+    if style is not None and (not isinstance(style, str) or style not in styles):
+        raise HTTPException(status_code=400, detail="unknown_style")
+    description = hull_styles.validate_description(raw, styles)
+    if not runner.is_available():
+        raise HTTPException(status_code=503, detail="Blender is not available — the hull is built locally.")
+    if not hull_model.trigger_hull_generation(location_id, description):
+        raise HTTPException(status_code=409, detail="Hull generation is already running")
+    return {"ok": True, "started": True}
+
+
+@router.get("/hull-styles")
+def hull_style_list() -> Dict[str, Any]:
+    """List building styles with world overrides applied."""
+    return {"styles": _hull_style_list()}
+
+
+@router.put("/hull-styles/{style_id}")
+async def hull_style_override(style_id: str, request: Request) -> Dict[str, Any]:
+    """Store a validated world override for an existing shared style."""
+    from app.core import hull_styles
+    if style_id not in {path.stem for path in hull_styles.SHARED_DIR.glob("*.json")}:
+        raise HTTPException(status_code=404, detail="Style not found")
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be an object")
+    style = hull_styles.set_world_style(style_id, data)
+    return {"id": style_id, **style, "origin": "world"}
+
+
+@router.delete("/hull-styles/{style_id}")
+def hull_style_reset(style_id: str) -> Dict[str, Any]:
+    """Remove a world override, revealing the shared style again."""
+    from app.core.hull_styles import delete_world_style
+    return {"ok": delete_world_style(style_id)}
+
+
 # ── The EXTERIOR RENDER (plan-blender-aussenansicht.md) ──
 # ONE step, unlike the roof: nothing is decided here that the user would want
 # to edit first — the volume IS the location's own geometry and the roof form

@@ -104,6 +104,7 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # is clamped server-side and shown to the admin BEFORE anything is built,
     # so an unrouted task is not a broken feature — it is the default gable.
     "roof_design":        {"label": "Roof Design (Blender)",       "priority": Priority.LOW,    "category": "tool"},
+    "hull_design":        {"label": "Building Hull Design (Blender)", "priority": Priority.LOW, "category": "tool"},
 
     # Temporary NPCs, generated without a human in the loop
     # (plan-npc-auto-spawn.md): the same character sheet the manual dialog
@@ -432,6 +433,11 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "tools": False, "vision": False, "json": True, "min_context": 4096,
         "model_class": "medium", "arch": "any", "hallucination_risk": "low",
         "creative": False, "language_de": False, "latency_sensitive": True,
+    },
+    "hull_design": {
+        "tools": False, "vision": False, "json": True, "min_context": 2048,
+        "model_class": "small", "arch": "any", "hallucination_risk": "low",
+        "creative": True, "language_de": False, "latency_sensitive": True,
     },
     "roof_design": {
         # The smallest structured-output task in the catalog: a handful of

@@ -172,7 +172,7 @@ mutations of the UI model.
 
 ## Task catalog
 
-28 tasks, in the order they stand in
+29 tasks, in the order they stand in
 [`app/core/llm_tasks.py`](../app/core/llm_tasks.py).
 
 ### Streaming / RP
@@ -220,6 +220,7 @@ exist as routing tasks — only as template file names.
 
 | Task id | Label | Category | Caller | Purpose |
 |---|---|---|---|---|
+| `hull_design` | Building Hull Design (Blender) | tool | `core/hull_model.py` | One style proposal with validated overrides; an unrouted task returns editable defaults. |
 | `roof_design` | Roof Design (Blender) | tool | `core/roof_model.py` | The roof form of one building as a small declarative JSON object. Clamped server-side and shown to the admin first, so an unrouted task means the default gable, not a broken feature. |
 
 ### Temporary NPCs
