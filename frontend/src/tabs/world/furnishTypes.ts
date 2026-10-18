@@ -78,6 +78,8 @@ export interface FurnishPlacements {
   unplaced: Array<{ name: string; reason: string; pass?: string }>
   /** Set once `accept` has written the placements into the room. */
   accepted?: boolean
+  /** Kit jobs: template roles the kit has no tagged prop for. */
+  missing_roles?: string[]
 }
 
 export interface FurnishStatus {

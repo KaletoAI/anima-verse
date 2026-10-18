@@ -38,7 +38,8 @@ def furnish_location(location_id: str, kit: str, *, dry_run: bool) -> Dict:
                 reason = ""
                 try:
                     geom = room_furnish._geometry(loc, room)
-                except room_furnish.FurnishError:
+                except (room_furnish.FurnishError, ValueError, TypeError):
+                    # A corrupt x/y/w/d must cost this room, not the building.
                     reason = "no_layout"
             if reason:
                 skipped.append({**identity, "reason": reason})
@@ -47,6 +48,11 @@ def furnish_location(location_id: str, kit: str, *, dry_run: bool) -> Dict:
                 kit=kit, room_type=room_type, geom=geom, library=library,
                 room_id=room_id, existing=[], storey_height_m=height)
             placements = result.get("placed") or []
+            if not placements:
+                # Nothing to write: reporting it as furnished would also make
+                # every later run "furnish" it again with an empty list.
+                skipped.append({**identity, "reason": "nothing_placed"})
+                continue
             ox, oy = geom.get("origin") or [0, 0]
             for entry in placements:
                 if entry.get("on"):

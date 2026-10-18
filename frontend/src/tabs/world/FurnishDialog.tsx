@@ -381,7 +381,7 @@ export function FurnishDialog({ locationId = '', roomId, roomName, job, propInfo
       {missing.length > 0 && <div className="ga-hint">{t('Missing in this kit: {roles}').replace('{roles}', missing.join(', '))}</div>}
       <div className="ga-furnish-actions">
         <button className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy || !kit || !roomType}
-          onClick={() => { void run('kit', { kit, room_type: roomType }) }}>{t('Furnish')}</button>
+          onClick={() => { setKitMode(false); void run('kit', { kit, room_type: roomType }) }}>{t('Furnish')}</button>
         <button className="ga-btn ga-btn-sm" disabled={busy} onClick={() => setKitMode(false)}>{t('Cancel')}</button>
       </div>
     </div>
@@ -584,7 +584,7 @@ export function FurnishDialog({ locationId = '', roomId, roomName, job, propInfo
     )
   } else if (state === 'review_ready') {
     const unplaced = status.placements?.unplaced || []
-    const missingRoles = (status.placements as (typeof status.placements & { missing_roles?: string[] }))?.missing_roles || []
+    const missingRoles = status.placements?.missing_roles || []
     const counts = status.phase_counts || {}
     const byId = new Map((libProps || []).map((p) => [p.id, p]))
     // B18: a seat or a lying surface WITHOUT a place marker is furniture

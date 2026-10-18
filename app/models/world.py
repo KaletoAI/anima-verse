@@ -1001,7 +1001,8 @@ def append_rooms_props(location_id: str,
                 continue
             for room in loc.get("rooms", []):
                 room_id = room.get("id")
-                if room_id == GROUND_ROOM_ID or room_id not in placements_by_room:
+                if (room_id == GROUND_ROOM_ID or room_id not in placements_by_room
+                        or not placements_by_room[room_id]):
                     continue
                 layout = room.get("layout")
                 if not isinstance(layout, dict) or layout.get("props"):

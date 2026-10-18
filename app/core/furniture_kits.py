@@ -242,7 +242,10 @@ def plan_room(*, kit: str, room_type: str, geom: Dict, library: Dict,
         if index in counts:
             return counts[index]
         if index in visiting:
-            raise ValueError("Cyclic furniture count references")
+            # Only a prop tagged with two roles that count off each other
+            # (chair <-> table) gets here; the inner lookup counts as none
+            # instead of failing the whole room.
+            return 0
         visiting.add(index)
         entry = surviving[index]
         spec = entry.get("count", 1)
@@ -347,7 +350,9 @@ def solve_kit(*, kit: str, room_type: str, geom: Dict, library: Dict,
                 > sum(u["name"] == pid for u in before["unplaced"]))
 
     result = solve(plan)
-    for index, entry in enumerate(plan):
+    for index in range(len(plan)):
+        # `plan` is replaced by an accepted trial, so read the CURRENT entry.
+        entry = plan[index]
         if entry["slot"] not in ("main", "other", "any", "corner"):
             continue
         if not has_unplaced(index, plan, result):

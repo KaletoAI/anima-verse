@@ -268,6 +268,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
   const skipReason = (reason: string) => ({
     has_furniture: t('already furnished'), no_room_type: t('no room type'),
     job_open: t('a furnishing job is open'), no_layout: t('no floor plan'),
+    nothing_placed: t('nothing fit'),
   })[reason] || reason
 
   const [level, setLevel] = useState(0)
@@ -1356,6 +1357,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
         || (roomId === GROUND_ROOM_ID ? {} : { level, x: -1.5, y: -1.5, w: 3, d: 3 })
       return { ...r, layout: { ...base, ...patch } }
     })
+    // Advanced here, not only on the next render: the building furnish
+    // patches several rooms in one tick, and each call must build on the last.
     roomsRef.current = next
     onChange(next)
   }, [onChange, level])
