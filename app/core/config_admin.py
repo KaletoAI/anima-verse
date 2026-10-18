@@ -7,6 +7,7 @@ hands it to ``config.save_part``, which takes the other part from memory.
 A world-scope path in an instance body (or the reverse) is a 400, never a
 silent drop.
 """
+import copy
 from typing import Any, Dict, Iterable, List
 
 from app.core import config, config_scope
@@ -64,6 +65,17 @@ def _other(scope: str) -> str:
 def layer_part(scope: str) -> Dict[str, Any]:
     inst, world, _unknown = config_scope.split_by_scope(config.get_all())
     return inst if scope == config_scope.INSTANCE else world
+
+
+def set_media_switch(enabled: bool) -> bool:
+    """Set the instance media master switch while preserving its whole layer."""
+    if not isinstance(enabled, bool):
+        raise TypeError("enabled must be true or false")
+    part = copy.deepcopy(layer_part(config_scope.INSTANCE))
+    part.setdefault("image_generation", {})["enabled"] = enabled
+    config.save_part(config_scope.INSTANCE, part)
+    from app.imagegen.base import media_generation_enabled
+    return media_generation_enabled()
 
 
 def layer_view(scope: str) -> Dict[str, Any]:

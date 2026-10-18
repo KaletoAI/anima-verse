@@ -15,6 +15,7 @@ Abweichung, „Only my overrides“ filtert sie und „Shipped defaults“ zeigt
 Die Instanz-Routen sind `/admin/settings/raw`, `/admin/settings/schema`,
 `/admin/settings/origin`, `/admin/settings/shipped-defaults` und `/admin/settings/save`
 (Speichern mit `{values, resets}`). Die Welt nutzt `GET`/`PUT /admin/world-settings`.
+Tools und Agenten schalten Medien ausschließlich über `POST /admin/settings/media-switch`; `/admin/settings/save` ersetzt die gesamte Instanz-Schicht und ist für die Einstellungsseite bestimmt.
 
 Jede geänderte Schicht bewahrt die letzten 50 Sicherungen unter `<schicht>/.config-history/` auf; `./.venv/bin/python scripts/config_history.py list` und `diff <stamp>` zeigen sie an (`--layer <dir>` wählt eine andere Schicht). Wiederherstellen nur bei gestopptem Server: `./.venv/bin/python scripts/config_history.py restore <stamp>` (Standard: `<repo>/instance`).
 

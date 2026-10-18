@@ -788,6 +788,29 @@ def settings_raw(user=Depends(require_admin)):
     return config_admin.layer_view(config_scope.INSTANCE)
 
 
+@router.get("/settings/media-switch")
+def media_switch_get(user=Depends(require_admin)):
+    """Return the live instance media master switch."""
+    from app.imagegen.base import media_generation_enabled
+    return {"enabled": media_generation_enabled()}
+
+
+def _media_switch_set(body) -> dict:
+    """Validate and persist only the media master switch."""
+    if not isinstance(body, dict) or not isinstance(body.get("enabled"), bool):
+        raise HTTPException(400, "enabled must be true or false")
+    enabled = config_admin.set_media_switch(body["enabled"])
+    logger.info("media switch: enabled=%s", enabled)
+    return {"enabled": enabled}
+
+
+@router.post("/settings/media-switch")
+async def media_switch_post(request: Request, user=Depends(require_admin)):
+    """Save the instance media switch in a worker thread."""
+    body = await request.json()
+    return await asyncio.to_thread(_media_switch_set, body)
+
+
 @router.post("/settings/lora-library/clear-discovered")
 def lora_library_clear_discovered(user=Depends(require_admin)):
     """Removes every discovered entry from the LoRA library (manual entries
