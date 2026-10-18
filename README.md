@@ -242,6 +242,12 @@ stops acting autonomously).
 - **Consolidated LoRA library:** one entry per LoRA with its backends, synced hourly from each
   backend's LoRA URL; every dropdown is scoped to the selected backend and the server rejects a pick
   the library does not associate with it.
+  The library lives in `instance/lora_library.json`, owned by `app/core/lora_library.py`.
+  Its editor saves immediately through per-entry endpoints (`GET /admin/settings/lora-library`,
+  `POST`/`PATCH /admin/settings/lora-library/entry`, `POST /admin/settings/lora-library/entry/delete`),
+  independently of settings Save. Each change retains up to 50 backups in `instance/.lora-history/`.
+  Restore by hand with the server stopped: copy
+  `instance/.lora-history/<stamp>/lora_library.json` to `instance/lora_library.json`.
 - Automatic background removal (rembg/u2net), image downscaling and cached thumbnails under
   `/thumbs/…`.
 - Optional external **post-processing hand-off** — a separate service is notified, pulls the finished

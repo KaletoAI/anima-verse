@@ -811,16 +811,81 @@ async def media_switch_post(request: Request, user=Depends(require_admin)):
     return await asyncio.to_thread(_media_switch_set, body)
 
 
+@router.get("/settings/lora-library")
+def lora_library_get(user=Depends(require_admin)):
+    """Read the instance library independently of settings."""
+    from app.core import lora_library
+    return {"entries": lora_library.entries()}
+
+
+def _lora_body(body):
+    """Validate entry fields without treating names as filesystem paths."""
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Expected an entry object")
+    for key in ("lora", "rename_to"):
+        if key == "lora" or key in body:
+            if not isinstance(body.get(key), str) or not body[key].strip():
+                raise HTTPException(400, f"{key} must be a non-empty name")
+    if "word" in body and not isinstance(body["word"], str):
+        raise HTTPException(400, "word must be a string")
+    if "backends" in body and (not isinstance(body["backends"], list)
+                               or any(not isinstance(b, str) for b in body["backends"])):
+        raise HTTPException(400, "backends must be a list of names")
+    return body
+
+
+def _lora_write(action, body):
+    """Map store errors to HTTP errors inside the worker thread."""
+    from app.core import lora_library
+    body = _lora_body(body)
+    name = body["lora"]
+    try:
+        if action == "add":
+            return {"entry": lora_library.add_manual_entry(
+                name, body.get("word", ""), body.get("backends", []))}
+        if action == "update":
+            changes = {k: body[k] for k in ("word", "backends", "rename_to") if k in body}
+            return {"entry": lora_library.update_entry(name, **changes)}
+        return {"deleted": lora_library.delete_entry(name)}
+    except lora_library.LoraLibraryConflict as exc:
+        raise HTTPException(409, {"code": "duplicate", "message": str(exc)}) from exc
+    except KeyError as exc:
+        raise HTTPException(404, f"Unknown LoRA: {name}") from exc
+    except (lora_library.LoraLibraryUnavailable, ValueError, OSError) as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@router.post("/settings/lora-library/entry")
+async def lora_library_add(request: Request, user=Depends(require_admin)):
+    """Add one manual entry immediately."""
+    body = await request.json()
+    return await asyncio.to_thread(_lora_write, "add", body)
+
+
+@router.patch("/settings/lora-library/entry")
+async def lora_library_update(request: Request, user=Depends(require_admin)):
+    """Edit one entry, preserving other entries and concurrent discoveries."""
+    body = await request.json()
+    return await asyncio.to_thread(_lora_write, "update", body)
+
+
+@router.post("/settings/lora-library/entry/delete")
+async def lora_library_delete(request: Request, user=Depends(require_admin)):
+    """Delete by body name, including names containing slashes."""
+    body = await request.json()
+    return await asyncio.to_thread(_lora_write, "delete", body)
+
+
 @router.post("/settings/lora-library/clear-discovered")
-def lora_library_clear_discovered(user=Depends(require_admin)):
+async def lora_library_clear_discovered(user=Depends(require_admin)):
     """Removes every discovered entry from the LoRA library (manual entries
     stay). Reset helper — e.g. to re-test the per-backend LoRA filter with a
     clean discovery run. Persists server-side so a following sync works on
     the cleared state."""
     from app.core import lora_library
-    removed = lora_library.clear_discovered()
+    removed = await asyncio.to_thread(lora_library.clear_discovered)
     items = lora_library.entries()
-    return {"removed": removed, "lora_triggers": items, "entries": items}
+    return {"removed": removed, "entries": items}
 
 
 @router.post("/settings/lora-library/sync")
@@ -834,7 +899,6 @@ async def lora_library_sync(user=Depends(require_admin)):
     result = await asyncio.to_thread(sync_lora_library)
     from app.core import lora_library
     result["entries"] = lora_library.entries()
-    result["lora_triggers"] = result["entries"]
     return result
 
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""LoRA store contract A–J, using temporary storage only.
+"""LoRA store contract A–P, using temporary storage only.
 
 Hand-derived expectations: A's manual L-all applies to A and B, L-disc only
 A, L-other only B: options are [L-all,L-disc] and [L-all,L-other], all present.
@@ -12,12 +12,17 @@ hand edit. G no instance means empty reads, refused writes and harmless sync.
 H stale settings are refused without changing either file. I each real edit
 backs up once, no-op edits never do; permissions are 0700/0600 and config
 history stays unchanged. J an unreadable file reads as [] with one logged
-error, a writer raises ValueError and the file bytes stay as they were. Extra checks cover conflicts, backend removal,
+error, a writer raises ValueError and the file bytes stay as they were. K GET returns three migrated entries. L POST adds a manual entry visible in GET.
+M editing a discovered word makes it manual. N rename conflict returns 409
+with byte-identical storage. O unknown delete returns false with no snapshot;
+known delete returns true with one new snapshot. P slash names work in POST,
+PATCH and delete. Extra checks cover conflicts, backend removal,
 secrets preservation, refusal of unbound legacy targets, and the existing CLI:
 dry-run writes nothing; the selected source migrates three entries after backup.
 
 Old-code proof: at c822d24a, case A leaves lora_triggers in config.json and
 creates no lora_library.json; this assertion fails before any new API is used.
+At 60da557c, K fails because the per-entry library GET route does not exist.
 """
 import json
 import logging
@@ -251,6 +256,59 @@ with tempfile.TemporaryDirectory(prefix="lora-library-store-") as tmp:
     assert lp.read_bytes() == broken
     assert sum("Invalid LoRA library" in r for r in records) == 1, records
     print("PASS J unreadable library: empty reads, refused writes, one error")
+    import asyncio
+    from fastapi import HTTPException
+    from app.routes import admin_settings as adm
+    class Request:
+        def __init__(self, body):
+            self.body = body
+        async def json(self):
+            return self.body
+    def call(route, body):
+        return asyncio.run(route(Request(body), user=None))
+    def refused(route, body, status):
+        try:
+            call(route, body)
+        except HTTPException as exc:
+            assert exc.status_code == status
+            return exc.detail
+        raise AssertionError(f"Expected HTTP {status}: {body}")
+    # Re-run migration for the route fixture after J deliberately broke the file.
+    lp.unlink()
+    cp.write_text(json.dumps(legacy))
+    config.load(wp, cp)
+    assert hasattr(adm, "lora_library_get"), "K: missing library GET route"
+    assert adm.lora_library_get(user=None) == {"entries": initial}
+    print("PASS K GET migrated entries")
+    added = {"lora": "route-new", "word": "trigger", "source": "manual", "backends": ["A"], "missing_on": []}
+    assert call(adm.lora_library_add, {"lora": "route-new", "word": "trigger", "backends": ["A"]}) == {"entry": added}
+    assert adm.lora_library_get(user=None)["entries"] == initial + [added]
+    detail = refused(adm.lora_library_add, {"lora": "route-new"}, 409)
+    assert detail["code"] == "duplicate" and "route-new" in detail["message"]
+    refused(adm.lora_library_add, {"lora": " "}, 400)
+    print("PASS L POST manual entry and errors")
+    assert call(adm.lora_library_update, {"lora": "L-disc", "word": "edited"}) == {"entry": dict(initial[1], word="edited", source="manual")}
+    refused(adm.lora_library_update, {"lora": "unknown", "word": "x"}, 404)
+    print("PASS M PATCH discovered becomes manual")
+    before = lp.read_bytes()
+    snapshots = count()
+    detail = refused(adm.lora_library_update, {"lora": "L-disc", "rename_to": "L-all"}, 409)
+    assert detail["code"] == "duplicate" and "L-all" in detail["message"]
+    assert lp.read_bytes() == before and count() == snapshots
+    print("PASS N rename conflict: 409 and byte-identical file")
+    assert call(adm.lora_library_delete, {"lora": "unknown"}) == {"deleted": False}
+    assert count() == snapshots
+    shutil.rmtree(history)
+    assert call(adm.lora_library_delete, {"lora": "route-new"}) == {"deleted": True}
+    assert count() == 1
+    assert (next(history.iterdir()) / "lora_library.json").read_bytes() == before
+    print("PASS O delete results and one snapshot")
+    slash = "flux/a.safetensors"
+    assert call(adm.lora_library_add, {"lora": slash})["entry"]["lora"] == slash
+    assert call(adm.lora_library_update, {"lora": slash, "word": "flux"})["entry"]["word"] == "flux"
+    assert call(adm.lora_library_delete, {"lora": slash}) == {"deleted": True}
+    assert all(e["lora"] != slash for e in adm.lora_library_get(user=None)["entries"])
+    print("PASS P slash names in POST, PATCH and delete")
     alternate = root / "alternate-instance"
     alternate.mkdir()
     alternate_cp = alternate / "config.json"
@@ -283,4 +341,4 @@ with tempfile.TemporaryDirectory(prefix="lora-library-store-") as tmp:
     assert json.loads((cli_instance / "lora_library.json").read_text())["entries"] == initial
     assert "lora_triggers" not in json.loads(cli_cp.read_text()).get("image_generation", {})
     print("PASS migration safeguards: explicit target refused; CLI dry-run and legacy data preserved")
-    print("PASS A–J LoRA library store")
+    print("PASS A–P LoRA library store")

@@ -1,5 +1,6 @@
 
 let CONFIG = {};
+let LORA_ENTRIES = [];
 const RESETS = new Set();
 let SCHEMA = {};
 let OVERRIDES = new Set();
@@ -234,10 +235,10 @@ function activateIframe(key, url, title) {
 }
 
 // ── Render Section ──
-function renderLoraTriggersEditor(path) {
-    const items = getVal(path) || [];
+function renderLoraTriggersEditor() {
+    const items = LORA_ENTRIES;
     let html = '<p class="hint" style="opacity:.7;margin-bottom:12px">'
-             + 'Central LoRA library of the instance — <b>every LoRA dropdown</b> (game admin + player UI) '
+             + 'Changes here are saved immediately.</p><p class="hint">Central LoRA library of the instance — <b>every LoRA dropdown</b> (game admin + player UI) '
              + 'feeds from this list, scoped to the selected backend. One entry per LoRA with the backends '
              + 'that have it; one activation word per LoRA: whenever an image uses the LoRA, '
              + 'the word is automatically prepended to the prompt.</p>';
@@ -249,7 +250,7 @@ function renderLoraTriggersEditor(path) {
              + 'in the dialogs, marked "(missing)". Backends without a listing (CivitAI, Together): '
              + 'add entries manually; no backend assigned = offered on all backends.</p>';
     html += '<div style="margin-bottom:12px;display:flex;gap:8px">'
-          + '<button class="btn btn-sm" onclick="addLoraTrigger(\'' + sJs(path) + '\')">+ Add</button>'
+          + '<button class="btn btn-sm" onclick="addLoraTrigger()">+ Add</button>'
           + '<button class="btn btn-sm" onclick="syncLoraLibrary()">⟳ Discover now</button>'
           + '<button class="btn btn-sm btn-danger" onclick="clearDiscoveredLoras()">🗑 Delete discovered</button></div>';
     if (!items.length) {
@@ -257,7 +258,7 @@ function renderLoraTriggersEditor(path) {
     }
     for (let i = 0; i < items.length; i++) {
         const it = items[i] || {};
-        const ip = path + '[' + i + ']';
+        const ip = String(i);
         const isManual = (it.source || 'manual') !== 'discovered';
         const backends = Array.isArray(it.backends) ? it.backends : [];
         const missingOn = Array.isArray(it.missing_on) ? it.missing_on : [];
@@ -269,7 +270,7 @@ function renderLoraTriggersEditor(path) {
               + 'onchange="ltRename(\'' + sJs(ip) + '\', this)">';
         // Column 2: activation word.
         html += '<input type="text" value="' + esc(it.word || '') + '" placeholder="Activation word" '
-              + 'style="flex:2;min-width:0" onchange="ltTouch(\'' + sJs(ip) + '\', \'word\', this.value); setVal(\'' + sJs(ip + '.word') + '\', this.value)">';
+              + 'style="flex:2;min-width:0" onchange="ltTouch(\'' + sJs(ip) + '\', \'word\', this.value)">';
         // Column 3: backend associations. Discovered entries: sync-owned,
         // read-only. Manual entries: editable chips; empty = all backends.
         html += '<div style="flex:3;min-width:0;display:flex;flex-wrap:wrap;gap:4px;align-items:center;padding-top:4px">';
@@ -310,104 +311,103 @@ function renderLoraTriggersEditor(path) {
               + '<span class="badge" title="' + (src === 'discovered' ? 'Found by the backend scan' : 'Created/edited by hand') + '" '
               + 'style="font-size:10px;' + (src === 'discovered' ? 'background:#1f3a5f;color:#79c0ff;' : '') + '">' + src + '</span>'
               + '</span>';
-        html += '<button class="btn btn-sm btn-danger" title="Delete" onclick="removeItem(\'' + sJs(ip) + '\')">✕</button>';
+        html += '<button class="btn btn-sm btn-danger" title="Delete" onclick="ltDelete(\'' + sJs(ip) + '\')">✕</button>';
         html += '</div>';
     }
     return html;
 }
 
-function addLoraTrigger(path) {
-    touchPath(path);
-    const arr = _ensureContainer(path, 'array');
-    arr.push({ lora: '', word: '', source: 'manual', backends: [], missing_on: [] });
-    renderSection(ACTIVE_SECTION);
+// The library never participates in CONFIG or the settings save lifecycle.
+async function loraRequest(suffix = '', method = 'GET', body) {
+    const resp = await fetch('/admin/settings/lora-library' + suffix, {
+        method, headers: authHeaders(),
+        ...(body === undefined ? {} : {body: JSON.stringify(body)}),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+        const detail = data && data.detail;
+        throw new Error((detail && detail.message) || detail || ('HTTP ' + resp.status));
+    }
+    return data;
 }
 
-// Assign/remove a backend on a manual entry's chip list. Removing a backend
-// also clears its missing flag; an empty list means "all backends".
-function ltAddBackend(ip, name) {
+async function loadLoraLibrary() {
+    try {
+        LORA_ENTRIES = (await loraRequest()).entries;
+        return true;
+    } catch (e) {
+        toast('LoRA library: ' + e.message, 'error');
+        return false;
+    }
+}
+
+async function loraAction(suffix, method, body) {
+    try {
+        const data = await loraRequest(suffix, method, body);
+        if (data.entries) LORA_ENTRIES = data.entries;
+        else if (data.entry) {
+            const index = LORA_ENTRIES.findIndex(e => e.lora === body.lora);
+            if (index === -1) LORA_ENTRIES.push(data.entry);
+            else LORA_ENTRIES[index] = data.entry;
+        } else if (data.deleted) {
+            LORA_ENTRIES = LORA_ENTRIES.filter(e => e.lora !== body.lora);
+        }
+        renderSection(ACTIVE_SECTION, ACTIVE_PAGE, false);
+        return data;
+    } catch (e) {
+        toast('LoRA library: ' + e.message, 'error');
+        renderSection(ACTIVE_SECTION, ACTIVE_PAGE, false);
+        return null;
+    }
+}
+
+async function addLoraTrigger() {
+    const name = await askText('LoRA name (as the backend lists it):', '');
+    if (name === null || !name.trim()) return;
+    await loraAction('/entry', 'POST', {lora: name.trim()});
+}
+
+function ltAddBackend(index, name) {
     if (!name) return;
-    touchPath(ip);
-    const e = getVal(ip) || {};
-    if (!Array.isArray(e.backends)) e.backends = [];
-    if (e.backends.indexOf(name) === -1) e.backends.push(name);
-    renderSection(ACTIVE_SECTION);
+    const e = LORA_ENTRIES[index];
+    return loraAction('/entry', 'PATCH', {lora: e.lora, backends: [...new Set([...(e.backends || []), name])]});
 }
 
-function ltRemoveBackend(ip, name) {
-    touchPath(ip);
-    const e = getVal(ip) || {};
-    e.backends = (e.backends || []).filter(function (b) { return b !== name; });
-    e.missing_on = (e.missing_on || []).filter(function (b) { return b !== name; });
-    renderSection(ACTIVE_SECTION);
+function ltRemoveBackend(index, name) {
+    const e = LORA_ENTRIES[index];
+    return loraAction('/entry', 'PATCH', {lora: e.lora, backends: (e.backends || []).filter(b => b !== name)});
 }
 
-// Rename handler for the LoRA name — flips discovered -> manual and warns on
-// a duplicate name (entries are unique per LoRA; the sync and the dropdowns
-// only honor the first occurrence).
-function ltRename(ip, inp) {
-    touchPath(ip);
-    const v = inp.value;
-    ltTouch(ip, 'lora', v);
-    setVal(ip + '.lora', v);
-    if (!v) return;
-    const items = (CONFIG.image_generation && CONFIG.image_generation.lora_triggers) || [];
-    let count = 0;
-    for (const it of items) { if (it && (it.lora || '') === v) count++; }
-    if (count > 1) toast('Duplicate LoRA name — only the first entry counts', 'error');
+function ltRename(index, input) {
+    return ltTouch(index, 'rename_to', input.value);
 }
 
-// Editing a discovered entry turns it into a manual claim: the sync job then
-// flags it as missing instead of silently removing it when it vanishes.
-// Only flips when the value actually changed (focus/no-op edits don't count).
-function ltTouch(ip, field, newVal) {
-    if ((getVal(ip + '.' + field) || '') === (newVal || '')) return;
-    touchPath(ip);
-    if (getVal(ip + '.source') === 'discovered') setVal(ip + '.source', 'manual');
+function ltTouch(index, field, value) {
+    const e = LORA_ENTRIES[index];
+    if ((field === 'rename_to' ? e.lora : e[field]) === value) return;
+    return loraAction('/entry', 'PATCH', {lora: e.lora, [field]: value});
 }
 
-// Remove all discovered entries server-side (manual ones stay) — reset
-// helper to re-test the per-backend LoRA filter with a clean discovery run.
+// Library edits are saved at once, so the destructive ones ask first.
+async function ltDelete(index) {
+    const name = LORA_ENTRIES[index].lora;
+    if (!await askConfirm('Delete the LoRA entry "' + name + '"?', 'Delete')) return;
+    return loraAction('/entry/delete', 'POST', {lora: name});
+}
+
 async function clearDiscoveredLoras() {
-    try {
-        const resp = await fetch('/admin/settings/lora-library/clear-discovered', {
-            method: 'POST', headers: authHeaders(),
-        });
-        const d = await resp.json();
-        if (!resp.ok) throw new Error((d && d.detail) || ('HTTP ' + resp.status));
-        touchPath('image_generation.lora_triggers');
-        if (!CONFIG.image_generation) CONFIG.image_generation = {};
-        CONFIG.image_generation.lora_triggers = d.lora_triggers || [];
-        toast('Removed ' + (d.removed || 0) + ' discovered entr' + ((d.removed || 0) === 1 ? 'y' : 'ies'), 'success');
-        renderSection(ACTIVE_SECTION);
-    } catch (e) {
-        toast('Delete discovered failed: ' + e.message, 'error');
-    }
+    if (!await askConfirm('Delete every discovered LoRA entry? Manual entries stay.', 'Delete')) return;
+    const data = await loraAction('/clear-discovered', 'POST');
+    if (data) toast('Removed ' + data.removed + ' discovered entries', 'success');
 }
 
-// Run the server-side discovery sync and refresh the editor in place. The
-// server persists the result itself — CONFIG only mirrors it for rendering.
 async function syncLoraLibrary() {
-    try {
-        const resp = await fetch('/admin/settings/lora-library/sync', {
-            method: 'POST', headers: authHeaders(),
-        });
-        const d = await resp.json();
-        if (!resp.ok) throw new Error((d && d.detail) || ('HTTP ' + resp.status));
-        touchPath('image_generation.lora_triggers');
-        if (!CONFIG.image_generation) CONFIG.image_generation = {};
-        CONFIG.image_generation.lora_triggers = d.lora_triggers || [];
-        const scanned = (d.scanned || []).length;
-        toast('LoRA sync: ' + scanned + ' backend(s) scanned — '
-            + (d.added || 0) + ' added, ' + (d.removed || 0) + ' removed, '
-            + (d.missing || 0) + ' missing', 'success');
-        renderSection(ACTIVE_SECTION);
-    } catch (e) {
-        toast('LoRA sync failed: ' + e.message, 'error');
-    }
+    const data = await loraAction('/sync', 'POST');
+    if (data) toast('LoRA sync: ' + data.scanned.length + ' backend(s) scanned — '
+        + data.added + ' added, ' + data.removed + ' removed, ' + data.missing + ' missing', 'success');
 }
 
-async function renderSection(key, pageId) {
+async function renderSection(key, pageId, reloadLibrary = true) {
     const hint = document.getElementById('providers-hint');
     if (hint) hint.hidden = (CONFIG.providers || []).length > 0;
     if (!key) return;
@@ -421,7 +421,13 @@ async function renderSection(key, pageId) {
         return;
     }
     // Compound key "<section>::<subArray>" opens its own sub-array page.
-    if (key.indexOf('::') !== -1) { renderSubArrayPage(key); return; }
+    if (key.indexOf('::') !== -1) {
+        const [parent, arr] = key.split('::');
+        if (reloadLibrary && SCHEMA[parent]?.sub_arrays?.[arr]?.lora_triggers_editor) {
+            if (!await loadLoraLibrary() || ACTIVE_SECTION !== key) return;
+        }
+        renderSubArrayPage(key); return;
+    }
     // Simple category-based LLM page.
     if (key === 'llm_simple') { await renderLlmSimpleEditor(); return; }
     // Task-centric LLM routing editor — its own file (settings-routing.js),
@@ -452,6 +458,12 @@ async function renderSection(key, pageId) {
     }
     const sec = SCHEMA[key];
     if (!sec) return;
+    const loraPage = (pageId == null ? ACTIVE_PAGE : pageId);
+    const page = isPaged(sec) && resolvePages(sec).find(p => p.id === loraPage);
+    if (reloadLibrary && page && page.sub_arrays.some(k => sec.sub_arrays[k]?.lora_triggers_editor)) {
+        if (!await loadLoraLibrary()) return;
+        if (ACTIVE_SECTION !== key || ACTIVE_PAGE !== loraPage) return;
+    }
     // Paged section: the many renderSection(ACTIVE_SECTION) rerenders (field
     // edits, array add/remove) pass no page — stay on the current one.
     if (isPaged(sec)) {
@@ -535,7 +547,7 @@ function renderSubArrayBody(arrDef, parentData, parentKey, arrKey) {
     const items = (parentData && parentData[arrKey]) || (arrDef.is_dict ? {} : []);
     if (ONLY_OVERRIDES && originOf(path) !== 'instance') return '';
     const heading = '<div class="list-origin">' + originBadge(path) + '</div>';
-    if (arrDef.lora_triggers_editor) return heading + renderLoraTriggersEditor(path);
+    if (arrDef.lora_triggers_editor) return renderLoraTriggersEditor();
     if (arrDef.master_detail) return heading + renderMasterDetail(arrDef, items, path);
     let html = '<div style="margin-bottom:12px;"><button class="btn btn-sm" onclick="addArrayItem(\'' + sJs(path) + '\', \'' + (arrDef.is_dict ? 'dict' : 'array') + '\')">+ Add</button></div>';
     if (arrDef.is_dict) html += renderDictItems(arrDef, items, path);

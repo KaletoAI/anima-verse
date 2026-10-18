@@ -19,6 +19,13 @@ Tools und Agenten schalten Medien ausschließlich über `POST /admin/settings/me
 
 Jede geänderte Schicht bewahrt die letzten 50 Sicherungen unter `<schicht>/.config-history/` auf; `./.venv/bin/python scripts/config_history.py list` und `diff <stamp>` zeigen sie an (`--layer <dir>` wählt eine andere Schicht). Wiederherstellen nur bei gestopptem Server: `./.venv/bin/python scripts/config_history.py restore <stamp>` (Standard: `<repo>/instance`).
 
+Die LoRA-Bibliothek liegt nicht in der Config, sondern in `instance/lora_library.json`; Besitzer ist `app/core/lora_library.py`.
+Ihr Editor speichert jede Änderung sofort über eigene Endpoints (`GET /admin/settings/lora-library`,
+`POST`/`PATCH /admin/settings/lora-library/entry`, `POST /admin/settings/lora-library/entry/delete`),
+unabhängig vom Save-Knopf der Einstellungen. Jede Änderung legt eine Sicherung in `instance/.lora-history/` an (50 Stände).
+Wiederherstellen nur bei gestopptem Server, per Hand:
+`cp instance/.lora-history/<stamp>/lora_library.json instance/lora_library.json`.
+
 Eine frische Instanz bringt zwei Beispiel-Provider aus `config._DEFAULT_PROVIDERS` mit:
 `ollama-local` (`http://localhost:11434/v1`) und `openai-compatible-local`
 (`http://localhost:8080/v1`). Sie lassen sich unter LLM Providers anpassen oder ersetzen.

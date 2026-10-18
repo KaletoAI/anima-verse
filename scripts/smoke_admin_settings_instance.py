@@ -109,9 +109,9 @@ with tempfile.TemporaryDirectory(prefix="admin-settings-instance-") as root:
         return True
     lora_library._mutate(discover)
     world_before = (world / "config.json").read_bytes()
-    result = adm.lora_library_clear_discovered(user=None)
+    result = asyncio.run(adm.lora_library_clear_discovered(user=None))
     manual = [{"lora": "manual", "word": "", "source": "manual", "backends": [], "missing_on": []}]
-    assert result == {"removed": 1, "lora_triggers": manual, "entries": manual}
+    assert result == {"removed": 1, "entries": manual}
     assert json.loads((instance / "lora_library.json").read_text())["entries"] == manual
     assert (world / "config.json").read_bytes() == world_before
     print("PASS A–K instance admin routes")
