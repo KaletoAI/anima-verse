@@ -1,0 +1,630 @@
+{
+  "kits": {
+    "rustic": {
+      "name": "Rustic",
+      "hull_styles": [
+        "fachwerk",
+        "steinhaus",
+        "holzhuette"
+      ],
+      "props": [
+        {
+          "role": "bed",
+          "name": "Rustic Double Bed",
+          "prompt": "A rustic double bed of solid oak with a tall plank headboard, turned corner posts and a thick straw-filled mattress under a natural linen sheet and a wool blanket, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.6,
+          "depth_m": 2.1,
+          "height_m": 1.0,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "nightstand",
+          "name": "Rustic Nightstand",
+          "prompt": "A small rustic pine nightstand with one drawer, a wooden knob and slightly worn edges, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.5,
+          "depth_m": 0.45,
+          "height_m": 0.6,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "wardrobe",
+          "name": "Rustic Wardrobe",
+          "prompt": "A tall rustic two-door wardrobe of dark-stained pine with wrought iron hinges and simple carved panels, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.2,
+          "depth_m": 0.6,
+          "height_m": 2.0,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "chest",
+          "name": "Rustic Storage Chest",
+          "prompt": "A rustic wooden storage chest of oak planks with a domed lid, wrought iron bands and a plain hasp, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.9,
+          "depth_m": 0.5,
+          "height_m": 0.55,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "dining_table",
+          "name": "Rustic Farmhouse Table",
+          "prompt": "A long rustic farmhouse dining table of thick oak planks on sturdy square legs, scrubbed pale top, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.6,
+          "depth_m": 0.9,
+          "height_m": 0.76,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "chair",
+          "name": "Rustic Dining Chair",
+          "prompt": "A rustic wooden dining chair of oak with a woven rush seat and a ladder back, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.45,
+          "depth_m": 0.5,
+          "height_m": 0.9,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "sofa",
+          "name": "Rustic Settle",
+          "prompt": "A rustic wooden settle bench of oak with a high plank back, arm rests and loose natural linen cushions, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 2.0,
+          "depth_m": 0.85,
+          "height_m": 0.9,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "armchair",
+          "name": "Rustic Armchair",
+          "prompt": "A rustic wooden armchair of oak with a woven rush seat and a linen seat cushion, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.8,
+          "depth_m": 0.8,
+          "height_m": 0.95,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "coffee_table",
+          "name": "Rustic Coffee Table",
+          "prompt": "A low rustic coffee table of rough-sawn oak planks on short block legs, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.0,
+          "depth_m": 0.6,
+          "height_m": 0.45,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "desk",
+          "name": "Rustic Writing Desk",
+          "prompt": "A rustic writing desk of oak with two drawers, an inkwell tray and a plain slanted back board, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.2,
+          "depth_m": 0.65,
+          "height_m": 0.76,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "shelf",
+          "name": "Rustic Bookshelf",
+          "prompt": "A tall rustic open shelf of pine boards with four shelves holding a few clay jars and books, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.9,
+          "depth_m": 0.35,
+          "height_m": 1.8,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "cupboard",
+          "name": "Rustic Dresser",
+          "prompt": "A rustic kitchen dresser of painted pine, closed cupboard below, open plate rack above with a few plates, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.0,
+          "depth_m": 0.5,
+          "height_m": 1.6,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "counter",
+          "name": "Rustic Kitchen Counter",
+          "prompt": "A rustic kitchen work counter of oak with a thick butcher-block top and cupboard doors below, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.5,
+          "depth_m": 0.6,
+          "height_m": 0.9,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "stove",
+          "name": "Rustic Hearth Stove",
+          "prompt": "A rustic cast iron wood-burning cooking stove on short legs with a black chimney pipe stub and a brass rail, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.75,
+          "depth_m": 0.65,
+          "height_m": 1.0,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "washstand",
+          "name": "Rustic Washstand",
+          "prompt": "A rustic oak washstand with a white ceramic wash bowl and a water jug on top and a towel bar at the side, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.8,
+          "depth_m": 0.5,
+          "height_m": 0.85,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "bathtub",
+          "name": "Rustic Bathtub",
+          "prompt": "A rustic oval wooden bathtub made of oak staves held by iron hoops, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.7,
+          "depth_m": 0.75,
+          "height_m": 0.65,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "rug",
+          "name": "Rustic Rag Rug",
+          "prompt": "A flat rustic rag rug woven from faded linen and wool strips in muted brown and red tones, lying flat, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.8,
+          "depth_m": 1.2,
+          "height_m": 0.025,
+          "mount": "floor",
+          "category": "textile"
+        },
+        {
+          "role": "ceiling_light",
+          "name": "Rustic Ceiling Light",
+          "prompt": "A rustic wrought iron ring chandelier with six candle holders and short hanging chains, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.6,
+          "depth_m": 0.6,
+          "height_m": 0.35,
+          "mount": "ceiling",
+          "category": "lighting"
+        },
+        {
+          "role": "workbench",
+          "name": "Rustic Workbench",
+          "prompt": "A rustic carpenter's workbench of heavy oak with a wooden vise and a few hand tools on top, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.5,
+          "depth_m": 0.7,
+          "height_m": 0.9,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "bar_counter",
+          "name": "Rustic Bar Counter",
+          "prompt": "A rustic tavern bar counter of dark oak planks with a worn top, a foot rail and two small barrels at one end, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.8,
+          "depth_m": 0.65,
+          "height_m": 1.1,
+          "mount": "floor",
+          "category": "furniture"
+        }
+      ]
+    },
+    "castle": {
+      "name": "Castle",
+      "hull_styles": [
+        "burg"
+      ],
+      "props": [
+        {
+          "role": "bed",
+          "name": "Castle Canopy Bed",
+          "prompt": "A medieval castle four-poster canopy bed of dark carved oak with heavy red velvet curtains and fur blankets, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.8,
+          "depth_m": 2.2,
+          "height_m": 2.3,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "nightstand",
+          "name": "Castle Nightstand",
+          "prompt": "A small medieval bedside table of dark oak with iron corner fittings and a single candle holder on top, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.5,
+          "depth_m": 0.45,
+          "height_m": 0.6,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "wardrobe",
+          "name": "Castle Wardrobe",
+          "prompt": "A massive medieval armoire of dark oak with iron strap hinges, a heavy lock plate and carved gothic panels, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.4,
+          "depth_m": 0.7,
+          "height_m": 2.2,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "chest",
+          "name": "Castle Iron-Bound Chest",
+          "prompt": "A medieval castle treasure chest of dark oak bound with thick black iron bands and a large padlock, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.9,
+          "depth_m": 0.5,
+          "height_m": 0.55,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "dining_table",
+          "name": "Castle Banquet Table",
+          "prompt": "A long medieval trestle banquet table of heavy dark oak planks on carved trestle legs, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 2.4,
+          "depth_m": 1.0,
+          "height_m": 0.78,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "chair",
+          "name": "Castle Dining Chair",
+          "prompt": "A heavy medieval high-backed chair of dark carved oak with a red leather seat and iron studs, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.55,
+          "depth_m": 0.55,
+          "height_m": 1.2,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "sofa",
+          "name": "Castle Settle",
+          "prompt": "A medieval castle settle of dark carved oak with a tall gothic back panel and red velvet cushions, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 2.0,
+          "depth_m": 0.8,
+          "height_m": 1.3,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "armchair",
+          "name": "Castle High Chair",
+          "prompt": "A medieval throne-like armchair of dark carved oak with lion-head arm ends and a red velvet seat, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.8,
+          "depth_m": 0.8,
+          "height_m": 1.4,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "coffee_table",
+          "name": "Castle Coffee Table",
+          "prompt": "A low medieval table of dark oak on thick turned legs with iron corner fittings, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.0,
+          "depth_m": 0.6,
+          "height_m": 0.45,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "desk",
+          "name": "Castle Writing Desk",
+          "prompt": "A medieval scribe's writing desk of dark oak with a slanted top, a quill, parchment and a candle, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.2,
+          "depth_m": 0.65,
+          "height_m": 0.76,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "shelf",
+          "name": "Castle Bookshelf",
+          "prompt": "A tall medieval bookcase of dark oak holding leather-bound tomes, scrolls and a brass candlestick, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.0,
+          "depth_m": 0.4,
+          "height_m": 2.1,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "cupboard",
+          "name": "Castle Cupboard",
+          "prompt": "A medieval kitchen cupboard of dark oak with iron-studded doors and pewter plates on its open top shelf, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.2,
+          "depth_m": 0.55,
+          "height_m": 1.8,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "counter",
+          "name": "Castle Kitchen Counter",
+          "prompt": "A medieval castle kitchen worktable of thick scarred oak with iron hooks along the front edge and a stone mortar on top, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.5,
+          "depth_m": 0.6,
+          "height_m": 0.9,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "stove",
+          "name": "Castle Hearth",
+          "prompt": "A medieval stone hearth stove of rough grey stone blocks with an iron cooking grate and a black cauldron, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.2,
+          "depth_m": 0.8,
+          "height_m": 1.2,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "washstand",
+          "name": "Castle Washstand",
+          "prompt": "A medieval washstand of dark oak with a hammered brass wash basin and a pewter ewer, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.8,
+          "depth_m": 0.5,
+          "height_m": 0.85,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "bathtub",
+          "name": "Castle Bathtub",
+          "prompt": "A medieval wooden bathtub of oak staves bound with iron hoops and lined with white linen cloth, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.7,
+          "depth_m": 0.75,
+          "height_m": 0.65,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "rug",
+          "name": "Castle Rug",
+          "prompt": "A flat medieval woven carpet with a deep red field and a gold and dark blue heraldic border, lying flat, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 2.0,
+          "depth_m": 1.4,
+          "height_m": 0.03,
+          "mount": "floor",
+          "category": "textile"
+        },
+        {
+          "role": "ceiling_light",
+          "name": "Castle Ceiling Light",
+          "prompt": "A medieval black wrought iron wheel chandelier with eight thick candles and heavy hanging chains, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.9,
+          "depth_m": 0.9,
+          "height_m": 0.6,
+          "mount": "ceiling",
+          "category": "lighting"
+        },
+        {
+          "role": "workbench",
+          "name": "Castle Workbench",
+          "prompt": "A medieval blacksmith's workbench of heavy dark oak with an iron vise, tongs and hammers on top, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.5,
+          "depth_m": 0.7,
+          "height_m": 0.9,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "bar_counter",
+          "name": "Castle Tavern Counter",
+          "prompt": "A medieval castle tavern counter of heavy dark oak with iron bands, pewter tankards on top and a cask at one end, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 2.0,
+          "depth_m": 0.7,
+          "height_m": 1.1,
+          "mount": "floor",
+          "category": "furniture"
+        }
+      ]
+    },
+    "modern": {
+      "name": "Modern",
+      "hull_styles": [
+        "modern"
+      ],
+      "props": [
+        {
+          "role": "bed",
+          "name": "Modern Double Bed",
+          "prompt": "A modern low platform double bed with an upholstered light grey fabric headboard, white bedding and a grey throw, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.6,
+          "depth_m": 2.1,
+          "height_m": 0.95,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "nightstand",
+          "name": "Modern Nightstand",
+          "prompt": "A modern minimalist nightstand in matte white lacquer with one push-open drawer and slim oak legs, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.45,
+          "depth_m": 0.4,
+          "height_m": 0.5,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "wardrobe",
+          "name": "Modern Wardrobe",
+          "prompt": "A modern tall wardrobe with two flat handleless doors in matte white lacquer, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.2,
+          "depth_m": 0.6,
+          "height_m": 2.0,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "chest",
+          "name": "Modern Storage Ottoman",
+          "prompt": "A modern storage ottoman box upholstered in grey felt with a flat padded lid, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.9,
+          "depth_m": 0.45,
+          "height_m": 0.45,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "dining_table",
+          "name": "Modern Dining Table",
+          "prompt": "A modern dining table with a light oak top and slim black steel legs, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.6,
+          "depth_m": 0.9,
+          "height_m": 0.76,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "chair",
+          "name": "Modern Dining Chair",
+          "prompt": "A modern dining chair with a moulded light grey shell seat and thin black steel legs, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.48,
+          "depth_m": 0.52,
+          "height_m": 0.82,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "sofa",
+          "name": "Modern Sofa",
+          "prompt": "A modern three-seat sofa in charcoal grey fabric with low arms, slim black metal feet and two cushions, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 2.1,
+          "depth_m": 0.9,
+          "height_m": 0.8,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "armchair",
+          "name": "Modern Armchair",
+          "prompt": "A modern lounge armchair in mustard yellow fabric with a curved back and thin oak legs, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.8,
+          "depth_m": 0.8,
+          "height_m": 0.95,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "coffee_table",
+          "name": "Modern Coffee Table",
+          "prompt": "A modern low coffee table with a rectangular glass top on a brushed steel frame, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.1,
+          "depth_m": 0.6,
+          "height_m": 0.4,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "desk",
+          "name": "Modern Writing Desk",
+          "prompt": "A modern office desk with a white top, a thin black steel frame and a closed laptop on it, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.4,
+          "depth_m": 0.7,
+          "height_m": 0.75,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "shelf",
+          "name": "Modern Bookshelf",
+          "prompt": "A modern open shelving unit of light oak boards in a black steel frame with a few books and a plant pot, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.9,
+          "depth_m": 0.35,
+          "height_m": 1.9,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "cupboard",
+          "name": "Modern Sideboard",
+          "prompt": "A modern sideboard cabinet with flat handleless doors in matte grey lacquer on short black legs, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.6,
+          "depth_m": 0.45,
+          "height_m": 0.8,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "counter",
+          "name": "Modern Kitchen Counter",
+          "prompt": "A modern kitchen counter with a white quartz worktop, handleless grey cabinet fronts and an inset steel sink, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.8,
+          "depth_m": 0.65,
+          "height_m": 0.92,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "stove",
+          "name": "Modern Range Cooker",
+          "prompt": "A modern freestanding electric range cooker in brushed stainless steel with a black glass cooktop and an oven door, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.6,
+          "depth_m": 0.6,
+          "height_m": 0.9,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "washstand",
+          "name": "Modern Vanity Unit",
+          "prompt": "A modern bathroom vanity unit with a white rectangular ceramic washbasin, a chrome tap and a matte white cabinet, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.8,
+          "depth_m": 0.48,
+          "height_m": 0.85,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "bathtub",
+          "name": "Modern Bathtub",
+          "prompt": "A modern freestanding white acrylic bathtub with a smooth oval shape and a chrome floor-standing tap, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.7,
+          "depth_m": 0.75,
+          "height_m": 0.65,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "rug",
+          "name": "Modern Rug",
+          "prompt": "A flat modern rectangular rug in soft grey wool with a thin black geometric line pattern, lying flat, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 2.0,
+          "depth_m": 1.4,
+          "height_m": 0.02,
+          "mount": "floor",
+          "category": "textile"
+        },
+        {
+          "role": "ceiling_light",
+          "name": "Modern Pendant Lamp",
+          "prompt": "A modern pendant lamp with a matte black metal dome shade on a thin cable with a round ceiling canopy, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.45,
+          "depth_m": 0.45,
+          "height_m": 0.6,
+          "mount": "ceiling",
+          "category": "lighting"
+        },
+        {
+          "role": "bar_counter",
+          "name": "Modern Home Bar Counter",
+          "prompt": "A modern home bar counter with a white quartz top, a dark oak front panel and a brushed steel foot rail, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 1.8,
+          "depth_m": 0.65,
+          "height_m": 1.1,
+          "mount": "floor",
+          "category": "furniture"
+        },
+        {
+          "role": "toilet",
+          "name": "Modern Toilet",
+          "prompt": "A modern white ceramic toilet with a concealed cistern look, slim lid and chrome flush button, isolated on a plain white background, front three-quarter view, no people, no room, even lighting",
+          "width_m": 0.38,
+          "depth_m": 0.6,
+          "height_m": 0.8,
+          "mount": "floor",
+          "category": "furniture"
+        }
+      ]
+    }
+  }
+}

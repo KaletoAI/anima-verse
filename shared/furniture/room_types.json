@@ -1,0 +1,406 @@
+{
+  "room_types": {
+    "living": {
+      "name": "Living Room",
+      "keywords": [
+        "living room",
+        "living",
+        "wohnzimmer",
+        "wohnraum",
+        "salon",
+        "stube",
+        "lounge",
+        "wohnstube",
+        "kaminzimmer"
+      ],
+      "template": [
+        {
+          "role": "sofa",
+          "anchor": "wall",
+          "wall": "main",
+          "facing": "room"
+        },
+        {
+          "role": "coffee_table",
+          "anchor": "in_front_of",
+          "ref": "sofa"
+        },
+        {
+          "role": "rug",
+          "anchor": "under",
+          "ref": "coffee_table"
+        },
+        {
+          "role": "armchair",
+          "anchor": "around",
+          "ref": "coffee_table",
+          "count": 2
+        },
+        {
+          "role": "shelf",
+          "anchor": "wall",
+          "wall": "other"
+        },
+        {
+          "role": "ceiling_light",
+          "anchor": "center"
+        }
+      ]
+    },
+    "bedroom": {
+      "name": "Bedroom",
+      "keywords": [
+        "bedroom",
+        "schlafzimmer",
+        "schlafraum",
+        "schlafkammer",
+        "gästezimmer",
+        "gaestezimmer",
+        "kinderzimmer",
+        "sleeping",
+        "guest room",
+        "bedchamber"
+      ],
+      "template": [
+        {
+          "role": "bed",
+          "anchor": "wall",
+          "wall": "main",
+          "facing": "room"
+        },
+        {
+          "role": "nightstand",
+          "anchor": "beside",
+          "ref": "bed",
+          "count": 2
+        },
+        {
+          "role": "rug",
+          "anchor": "in_front_of",
+          "ref": "bed"
+        },
+        {
+          "role": "wardrobe",
+          "anchor": "wall",
+          "wall": "other"
+        },
+        {
+          "role": "ceiling_light",
+          "anchor": "center"
+        }
+      ]
+    },
+    "kitchen": {
+      "name": "Kitchen",
+      "keywords": [
+        "kitchen",
+        "küche",
+        "kueche",
+        "kochraum",
+        "kochnische",
+        "kitchenette"
+      ],
+      "template": [
+        {
+          "role": "counter",
+          "anchor": "wall",
+          "wall": "main"
+        },
+        {
+          "role": "stove",
+          "anchor": "wall",
+          "wall": "main"
+        },
+        {
+          "role": "cupboard",
+          "anchor": "wall",
+          "wall": "other"
+        },
+        {
+          "role": "dining_table",
+          "anchor": "center"
+        },
+        {
+          "role": "chair",
+          "anchor": "around",
+          "ref": "dining_table",
+          "count": {
+            "per_ref": 2
+          }
+        },
+        {
+          "role": "ceiling_light",
+          "anchor": "center"
+        }
+      ]
+    },
+    "dining": {
+      "name": "Dining Room",
+      "keywords": [
+        "dining",
+        "dining room",
+        "esszimmer",
+        "speisesaal",
+        "speiseraum"
+      ],
+      "template": [
+        {
+          "role": "dining_table",
+          "anchor": "center"
+        },
+        {
+          "role": "chair",
+          "anchor": "around",
+          "ref": "dining_table",
+          "count": {
+            "per_ref": 4
+          }
+        },
+        {
+          "role": "cupboard",
+          "anchor": "wall",
+          "wall": "main"
+        },
+        {
+          "role": "rug",
+          "anchor": "under",
+          "ref": "dining_table"
+        },
+        {
+          "role": "ceiling_light",
+          "anchor": "center"
+        }
+      ]
+    },
+    "bathroom": {
+      "name": "Bathroom",
+      "keywords": [
+        "bathroom",
+        "bath",
+        "bad",
+        "badezimmer",
+        "washroom",
+        "waschraum",
+        "toilet",
+        "wc"
+      ],
+      "template": [
+        {
+          "role": "bathtub",
+          "anchor": "wall",
+          "wall": "main"
+        },
+        {
+          "role": "washstand",
+          "anchor": "wall",
+          "wall": "other"
+        },
+        {
+          "role": "toilet",
+          "anchor": "wall",
+          "wall": "other"
+        },
+        {
+          "role": "ceiling_light",
+          "anchor": "center"
+        }
+      ]
+    },
+    "study": {
+      "name": "Study",
+      "keywords": [
+        "study",
+        "office",
+        "arbeitszimmer",
+        "büro",
+        "buero",
+        "studierzimmer",
+        "library",
+        "bibliothek",
+        "schreibstube"
+      ],
+      "template": [
+        {
+          "role": "desk",
+          "anchor": "wall",
+          "wall": "main"
+        },
+        {
+          "role": "chair",
+          "anchor": "in_front_of",
+          "ref": "desk"
+        },
+        {
+          "role": "shelf",
+          "anchor": "wall",
+          "wall": "other",
+          "count": 2
+        },
+        {
+          "role": "armchair",
+          "anchor": "corner"
+        },
+        {
+          "role": "ceiling_light",
+          "anchor": "center"
+        }
+      ]
+    },
+    "hall": {
+      "name": "Hall",
+      "keywords": [
+        "hall",
+        "lobby",
+        "flur",
+        "diele",
+        "eingangshalle",
+        "corridor",
+        "foyer",
+        "eingang",
+        "entrance",
+        "vestibule",
+        "vorraum"
+      ],
+      "template": [
+        {
+          "role": "rug",
+          "anchor": "center"
+        },
+        {
+          "role": "shelf",
+          "anchor": "wall",
+          "wall": "main"
+        },
+        {
+          "role": "ceiling_light",
+          "anchor": "center"
+        }
+      ]
+    },
+    "storage": {
+      "name": "Storage",
+      "keywords": [
+        "storage",
+        "storeroom",
+        "lager",
+        "abstellraum",
+        "vorratsraum",
+        "vorratskammer",
+        "speisekammer",
+        "pantry",
+        "keller",
+        "cellar",
+        "kammer"
+      ],
+      "template": [
+        {
+          "role": "shelf",
+          "anchor": "wall",
+          "wall": "main",
+          "count": 2
+        },
+        {
+          "role": "chest",
+          "anchor": "wall",
+          "wall": "other"
+        },
+        {
+          "role": "chest",
+          "anchor": "corner"
+        }
+      ]
+    },
+    "workshop": {
+      "name": "Workshop",
+      "keywords": [
+        "workshop",
+        "werkstatt",
+        "werkraum",
+        "schmiede",
+        "forge",
+        "atelier"
+      ],
+      "template": [
+        {
+          "role": "workbench",
+          "anchor": "wall",
+          "wall": "main"
+        },
+        {
+          "role": "shelf",
+          "anchor": "wall",
+          "wall": "other"
+        },
+        {
+          "role": "chest",
+          "anchor": "corner"
+        },
+        {
+          "role": "chair",
+          "anchor": "in_front_of",
+          "ref": "workbench"
+        },
+        {
+          "role": "ceiling_light",
+          "anchor": "center"
+        }
+      ]
+    },
+    "tavern": {
+      "name": "Tavern",
+      "keywords": [
+        "tavern",
+        "bar",
+        "taverne",
+        "schänke",
+        "schaenke",
+        "gasthaus",
+        "schankraum",
+        "schankstube",
+        "gaststube",
+        "schenke",
+        "pub",
+        "inn"
+      ],
+      "template": [
+        {
+          "role": "bar_counter",
+          "anchor": "wall",
+          "wall": "main"
+        },
+        {
+          "role": "shelf",
+          "anchor": "wall",
+          "wall": "main"
+        },
+        {
+          "role": "dining_table",
+          "anchor": "center",
+          "count": {
+            "base": 2,
+            "per_m2": 0.04,
+            "max": 6
+          }
+        },
+        {
+          "role": "chair",
+          "anchor": "around",
+          "ref": "dining_table",
+          "count": {
+            "per_ref": 4,
+            "max": 12
+          }
+        },
+        {
+          "role": "cupboard",
+          "anchor": "wall",
+          "wall": "other"
+        },
+        {
+          "role": "ceiling_light",
+          "anchor": "center"
+        }
+      ]
+    }
+  }
+}
