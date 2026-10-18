@@ -59,7 +59,8 @@ sys.path.insert(0, str(REPO))
 def main():
     with tempfile.TemporaryDirectory(prefix="config-history-") as tmp:
         root = Path(tmp)
-        world, instance = root / "world", root / "instance"
+        world = root / "world"
+        instance = root / "instance"
         os.environ.update(STORAGE_DIR=str(world), INSTANCE_DIR=str(instance))
         from app.core import paths
         paths.init(world)
