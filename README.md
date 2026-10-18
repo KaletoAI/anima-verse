@@ -277,7 +277,14 @@ stops acting autonomously).
   onto one reference rig, with pose presets, pair animations for two characters at one anchor and
   transition clips between them.
 - **Room furnishing** (needs → match → place) fills a room with props through a three-pass solver;
-  scatter strokes line a street with them.
+  scatter strokes line a street with them. **Furniture kits** furnish a room, or every empty room of
+  a building, in seconds and without an LLM: a room type's template (`shared/furniture/room_types.json`)
+  is filled with the props tagged `kit:<kit>` + `role:<role>`, and the kit follows the hull style.
+
+  To prepare a kit, run `.venv/bin/python scripts/create_kit_props.py --world demo`
+  (optionally `--kit rustic` or `--dry-run`), then generate an image and mesh for each prop in the
+  **Props** tab. Set the room types and use **Furnish from kit** or **Furnish empty rooms from kit**.
+  To export a kit as a marketplace collection, use the CollectionBuilder tag filter `kit:<id>`.
 - Optional **Blender refinement** of generated meshes (headless, no manual modelling).
 
 ### Text-to-speech
