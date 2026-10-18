@@ -60,6 +60,18 @@ function HullForm({ apiBase, pending, onStarted }: {
     return () => { cancelled = true }
   }, [path, pending, t, toast])
 
+  // A build that finishes before the panel's first poll never flips the
+  // parent's `pending`, so the optimistic "Building…" set by `build` would
+  // stand forever — this form asks the hull status itself until it is done.
+  const building = !!status?.pending
+  useEffect(() => {
+    if (!building) return
+    const id = setInterval(() => {
+      void apiGet<HullStatus>(path).then(setStatus).catch(() => { /* next tick */ })
+    }, 2000)
+    return () => clearInterval(id)
+  }, [building, path])
+
   const locked = busy || pending || !!status?.pending
   const selected = status?.styles.find((style) => style.id === desc?.style)
   const overrides = desc?.overrides
