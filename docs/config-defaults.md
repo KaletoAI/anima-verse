@@ -16,6 +16,8 @@ Die Instanz-Routen sind `/admin/settings/raw`, `/admin/settings/schema`,
 `/admin/settings/origin`, `/admin/settings/shipped-defaults` und `/admin/settings/save`
 (Speichern mit `{values, resets}`). Die Welt nutzt `GET`/`PUT /admin/world-settings`.
 
+Jede geänderte Schicht bewahrt die letzten 50 Sicherungen unter `<schicht>/.config-history/` auf; `./.venv/bin/python scripts/config_history.py list` und `diff <stamp>` zeigen sie an (`--layer <dir>` wählt eine andere Schicht). Wiederherstellen nur bei gestopptem Server: `./.venv/bin/python scripts/config_history.py restore <stamp>` (Standard: `<repo>/instance`).
+
 Eine frische Instanz bringt zwei Beispiel-Provider aus `config._DEFAULT_PROVIDERS` mit:
 `ollama-local` (`http://localhost:11434/v1`) und `openai-compatible-local`
 (`http://localhost:8080/v1`). Sie lassen sich unter LLM Providers anpassen oder ersetzen.

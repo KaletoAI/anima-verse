@@ -632,6 +632,8 @@ The instance API exposes `/admin/settings/raw`, `/admin/settings/schema`,
 `/admin/settings/origin`, `/admin/settings/shipped-defaults` and `/admin/settings/save`
 (save body: `{values, resets}`).
 
+Each changed layer keeps its latest 50 backups in `<layer>/.config-history/`; inspect them with `./.venv/bin/python scripts/config_history.py list` or `diff <stamp>` (use `--layer <dir>` for another layer). Restore only with the server stopped: `./.venv/bin/python scripts/config_history.py restore <stamp>` (default: `<repo>/instance`).
+
 For old worlds carrying server settings, stop the server before migrating. Prefer the exact
 command printed by the startup refusal: it includes the selected instance path and, when needed,
 the custom worlds directory. For example:

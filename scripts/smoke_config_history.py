@@ -27,9 +27,21 @@ I  An OSError during backup refuses the save with ConfigWriteRefused before
 J  git check-ignore -q worlds/demo/.config-history/x exits 0, because the
    history ignore rule also covers the tracked demo world.
 
+Task 2 expectations (baseline 62959789 lacks scripts/config_history.py):
+K  Removing provider b reports removed entries ['b']; adding c reports added
+   entries ['c']; removing a section also reports its nested named entries.
+   Secret changes expose paths only, never either key value.
+L  A PID file containing this process refuses restore with code 2 and the
+   stop-server instruction, leaving files and history unchanged.
+M  A stale PID permits restore: exact saved bytes return, a new snapshot
+   contains both overwritten files, and restored files have mode 0600.
+N  Restoring a config-only snapshot removes current secrets.json.
+
 Baseline without this feature: 8b5f1124b338f336c679a98ea7abc156f72d0f38
 fails in A because list_snapshots is absent.
 """
+import contextlib
+import io
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -158,7 +170,59 @@ def main():
                                  "worlds/demo/.config-history/x"], cwd=REPO, check=False)
         assert result.returncode == 0, "J: demo history must be gitignored"
         print("PASS J: demo history path is gitignored without creating it")
-    print("OK — config history: A-J passed")
+        from scripts import config_history
+        lines = config_history.diff_layers(
+            {"providers": [{"name": "a"}, {"name": "b"}]},
+            {"providers": {"b": {"api_key": "old-secret-value"}}},
+            {"providers": [{"name": "a"}, {"name": "c"}]},
+            {"providers": {"b": {"api_key": "new-secret-value"}}})
+        assert "providers: removed entries ['b']" in lines
+        assert "providers: added entries ['c']" in lines
+        assert "secret changed: providers.b.api_key" in lines
+        assert all("old-secret-value" not in line and "new-secret-value" not in line
+                   for line in lines)
+        assert "image_generation.backends: removed entries ['b']" in config_history.diff_layers(
+            {"image_generation": {"backends": [{"name": "b"}]}}, {}, {}, {})
+        print("PASS K: named entries and secret paths are diffed without values")
+
+        recovery = fixture("recovery")
+        saved = config.snapshot_layer(recovery)
+        current = (b'{"server":{"timezone":"UTC"}}', b'{"key":"current"}')
+        (recovery / "config.json").write_bytes(current[0])
+        (recovery / "secrets.json").write_bytes(current[1])
+        pid_file = root / "main.pid"
+        pid_file.write_text(str(os.getpid()))
+        snapshots_before = config.list_snapshots(recovery)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            assert config_history.restore(recovery, saved.name, pid_file) == 2
+        assert "stop the server first (./start.sh --stop)" in output.getvalue()
+        assert config.list_snapshots(recovery) == snapshots_before
+        assert ((recovery / "config.json").read_bytes(),
+                (recovery / "secrets.json").read_bytes()) == current
+        print("PASS L: live PID refuses restore without changing files or history")
+
+        child = subprocess.Popen(["timeout", "60", sys.executable, "-c", "pass"])
+        child.wait(timeout=60)
+        pid_file.write_text(str(child.pid))
+        assert config_history.restore(recovery, saved.name, pid_file) == 0
+        snapshots_after = config.list_snapshots(recovery)
+        overwritten = next(s for s in snapshots_after if s not in snapshots_before)
+        assert ((overwritten / "config.json").read_bytes(),
+                (overwritten / "secrets.json").read_bytes()) == current
+        for name, expected in zip(("config.json", "secrets.json"), before):
+            assert (recovery / name).read_bytes() == expected
+            assert stat.S_IMODE((recovery / name).stat().st_mode) == 0o600
+        print("PASS M: stale PID allows exact restore after backing up current files")
+
+        (recovery / "secrets.json").unlink()
+        config_only = config.snapshot_layer(recovery)
+        (recovery / "secrets.json").write_bytes(current[1])
+        assert config_history.restore(recovery, config_only.name, pid_file) == 0
+        assert not (recovery / "secrets.json").exists()
+        assert (recovery / "config.json").read_bytes() == before[0]
+        print("PASS N: config-only restore removes current secrets")
+    print("OK — config history: A-N passed")
 
 
 if __name__ == "__main__":
