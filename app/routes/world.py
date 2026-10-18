@@ -1287,7 +1287,8 @@ def _location_hull_generate_sync(location_id: str, data: Any) -> Dict[str, Any]:
     from app.blender import runner
     from app.core import hull_model, hull_styles
     from app.core.hull_facts import hull_facts
-    _hull_check_result(hull_facts(None, location_id))
+    facts = hull_facts(None, location_id)
+    _hull_check_result(facts)
     if not isinstance(data, dict) or not isinstance(data.get("description"), dict):
         raise HTTPException(status_code=400, detail="Body must contain a description object")
     raw = data["description"]
@@ -1298,6 +1299,13 @@ def _location_hull_generate_sync(location_id: str, data: Any) -> Dict[str, Any]:
     description = hull_styles.validate_description(raw, styles)
     if not runner.is_available():
         raise HTTPException(status_code=503, detail="Blender is not available — the hull is built locally.")
+    from app.core.hull_geometry import fit_budget
+    try:
+        fit_budget(facts, styles[description["style"]], description)
+    except ValueError as error:
+        if str(error) == "hull too large":
+            raise HTTPException(status_code=400, detail="too_large") from error
+        raise
     if not hull_model.trigger_hull_generation(location_id, description):
         raise HTTPException(status_code=409, detail="Hull generation is already running")
     return {"ok": True, "started": True}

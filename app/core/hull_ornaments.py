@@ -4,7 +4,9 @@ from typing import Dict, List, Optional
 
 from app.core.hull_mesh import Part, PartBuilder, _normal, offset_ring, rng
 from app.core.hull_walls import _axes, _cells, _span, wall_offsets
-from app.core.scene_recipe import WALL_SINK_M, _ring_ccw
+from app.core.scene_recipe import WALL_SINK_M, _ring_ccw, _point_in_polygon
+from app.core.world_geometry import polygon_distance
+from app.core.hull_roofs import clip_detail, roof_top_y, _detail_samples, detail_breaks
 
 
 def _builder(tag, material, uv_sizes, *, protrudes=False):
@@ -54,15 +56,17 @@ def _beam(edge, start, end, outer, uv_sizes, parts):
     builder = _builder("timber", "trim", uv_sizes)
     _extrude(builder, [_point(edge, span, height, outer) for span, height in corners],
              [_point(edge, span, height, outer + .05) for span, height in corners])
+    builder.part()["diagonal"] = True
     _append(parts, builder)
 
 
-def _timber_block(edge, bounds, outer, holes, uv_sizes, parts):
+def _timber_block(edge, bounds, outer, holes, uv_sizes, parts, roof_info=None, number=0):
     """Clip axis-aligned framing against all supplied aperture rectangles."""
     left, right, bottom, top = bounds
     touching = [hole for hole in holes if hole["s0"] < right and hole["s1"] > left
                 and hole["y0"] < top and hole["y1"] > bottom]
-    for start, end, low, high in _cells(*bounds, touching):
+    breaks = detail_breaks(roof_info, number, edge, (outer, outer + .05))
+    for start, end, low, high in _cells(*bounds, touching, extra_s=breaks):
         builder = _builder("timber", "trim", uv_sizes)
         _block(builder, edge, start, end, low, high, outer, outer + .05)
         _append(parts, builder)
@@ -82,7 +86,7 @@ def _posts(left, right, holes):
     return sorted(posts)
 
 
-def _timber(level, style, desc, density, uv_sizes, parts):
+def _timber(level, style, desc, density, uv_sizes, parts, roof_info=None):
     """Place bands, opening posts, window rails and seeded free-field braces."""
     number = level["level"]
     bottom = style.get("plinth_height_m", 0) if number == 0 else level["floor_y"]
@@ -94,9 +98,9 @@ def _timber(level, style, desc, density, uv_sizes, parts):
         holes = edge["openings"]
         posts = _posts(left, right, holes)
         for low, high in ((bottom, min(top, bottom + .16)), (max(bottom, top - .16), top)):
-            _timber_block(edge, (left, right, low, high), outer, holes, uv_sizes, parts)
+            _timber_block(edge, (left, right, low, high), outer, holes, uv_sizes, parts, roof_info, number)
         for post in posts:
-            _timber_block(edge, (post - .08, post + .08, bottom, top), outer, holes, uv_sizes, parts)
+            _timber_block(edge, (post - .08, post + .08, bottom, top), outer, holes, uv_sizes, parts, roof_info, number)
         for hole in holes:
             if hole["kind"] != "window":
                 continue
@@ -104,7 +108,7 @@ def _timber(level, style, desc, density, uv_sizes, parts):
             after = min((post for post in posts if post >= hole["s1"]), default=posts[-1])
             for low, high in ((hole["y0"] - .16, hole["y0"]), (hole["y1"], hole["y1"] + .16)):
                 _timber_block(edge, (before, after, max(bottom, low), min(top, high)),
-                              outer, holes, uv_sizes, parts)
+                              outer, holes, uv_sizes, parts, roof_info, number)
         for field, (start, end) in enumerate(zip(posts, posts[1:])):
             if any(hole["s0"] < end and hole["s1"] > start
                    and hole["y0"] < top and hole["y1"] > bottom for hole in holes):
@@ -149,7 +153,7 @@ def _log(builder, edge, left, right, height, outer, half):
              [_point(edge, right, y, depth) for y, depth in section])
 
 
-def _logs(level, style, full, uv_sizes, parts):
+def _logs(level, style, full, uv_sizes, parts, roof_info=None):
     """Interrupt wall rows at apertures and alternate corner log directions."""
     number = level["level"]
     bottom = style.get("plinth_height_m", 0) if number == 0 else level["floor_y"]
@@ -161,7 +165,7 @@ def _logs(level, style, full, uv_sizes, parts):
                 left, right = _span(ring, edge, outer)
                 holes = [dict(hole, y0=0, y1=1) for hole in edge["openings"]
                          if hole["y0"] < height + .14 and hole["y1"] > height - .14]
-                for start, end, _, _ in _cells(left, right, 0, 1, holes):
+                for start, end, _, _ in _cells(left, right, 0, 1, holes, extra_s=detail_breaks(roof_info, number, edge, (outer,outer+.14))):
                     builder = _builder("log", "wall", uv_sizes)
                     _log(builder, edge, start, end, height, outer, True)
                     _append(parts, builder)
@@ -171,12 +175,14 @@ def _logs(level, style, full, uv_sizes, parts):
             edge = level["edges"][i if row % 2 == 0 else (i - 1) % len(level["edges"])]
             left, right = _span(ring, edge, outer)
             start, end = (left - .35, left + .14) if row % 2 == 0 else (right - .14, right + .35)
-            builder = _builder("log_end", "wall", uv_sizes, protrudes=True)
-            _log(builder, edge, start, end, height, outer, False)
-            _append(parts, builder)
+            for left_piece, right_piece, _, _ in _cells(start, end, 0, 1, [],
+                    extra_s=detail_breaks(roof_info, number, edge, (outer-.14,outer+.14))):
+                builder = _builder("log_end", "wall", uv_sizes, protrudes=True)
+                _log(builder, edge, left_piece, right_piece, height, outer, False)
+                _append(parts, builder)
 
 
-def _corner_details(facts, style, uv_sizes, parts):
+def _corner_details(facts, style, uv_sizes, parts, roof_info=None):
     """Build quoins on each storey or standalone ground-floor corner posts."""
     for level in facts["levels"]:
         number = level["level"]
@@ -188,7 +194,7 @@ def _corner_details(facts, style, uv_sizes, parts):
                 edge = level["edges"][i]
                 left, _ = _span(ring, edge, outer)
                 _timber_block(edge, (left, left + .16, bottom, level["top_y"]),
-                              outer, edge["openings"], uv_sizes, parts)
+                              outer, edge["openings"], uv_sizes, parts, roof_info, number)
             if style.get("corners") != "quoins":
                 continue
             datum = style.get("plinth_height_m", 0)
@@ -196,15 +202,16 @@ def _corner_details(facts, style, uv_sizes, parts):
             while datum + row * .3 < min(level["top_y"], facts["eaves_y"]) - 1e-5:
                 low = max(bottom, datum + row * .3)
                 high = min(datum + (row + 1) * .3, level["top_y"], facts["eaves_y"])
-                builder = _builder("quoin", "trim", uv_sizes)
                 for side, index in enumerate(((i - 1) % len(level["edges"]), i)):
                     edge = level["edges"][index]
                     left, right = _span(ring, edge, outer)
                     length = .5 if (row + side) % 2 == 0 else .3
                     start, end = (right - length, right) if side == 0 else (left, left + length)
-                    for bounds in _cells(start, end, low, high, edge["openings"]):
+                    for bounds in _cells(start, end, low, high, edge["openings"],
+                            extra_s=detail_breaks(roof_info, number, edge, (outer,outer+.03))):
+                        builder = _builder("quoin", "trim", uv_sizes)
                         _block(builder, edge, *bounds, outer, outer + .03)
-                _append(parts, builder)
+                        _append(parts, builder)
                 row += 1
 
 
@@ -244,14 +251,24 @@ def _towers(facts, style, desc, density, tier, uv_sizes, parts):
     """Keep a shared seeded silhouette with tier-specific cylinder resolution."""
     towers = style.get("towers", {})
     chance = min(1, towers.get("chance", 0) * (.5 + density))
-    level = max(facts["levels"], key=lambda item: item["level"])
+    top_level = max(level["level"] for level in facts["levels"])
+    candidates = []
+    for level in sorted(facts["levels"], key=lambda item: -item["level"]):
+        for i, point in _corners(level):
+            if any(other is not level and _point_in_polygon(*point, other["outline"])
+                   and polygon_distance(*point, other["outline"]) > .05
+                   for other in facts["levels"]):
+                continue
+            if any(math.dist(point, candidate[2]) < .05 for candidate in candidates):
+                continue
+            candidates.append((level, i, point))
     sides = 16 if tier == "full" else 8
-    for i, point in _corners(level):
-        random = rng(desc.get("seed", 0), f"tower:{i}")
+    for level, i, point in candidates:
+        random = rng(desc.get("seed", 0), f"tower:{level['level']}:{i}")
         if random.random() >= chance:
             continue
         radius = random.uniform(*towers["radius_m"])
-        top = facts["eaves_y"] + random.uniform(*towers["rise_m"])
+        top = (facts["eaves_y"] if level["level"] == top_level else level["top_y"]) + random.uniform(*towers["rise_m"])
         roof = random.choice(towers["roof"])
         builder = _builder("tower", "wall", uv_sizes, protrudes=True)
         builder.cylinder(point[0], point[1], -WALL_SINK_M, top, radius, sides)
@@ -274,7 +291,7 @@ def _towers(facts, style, desc, density, tier, uv_sizes, parts):
         _append(parts, builder)
 
 
-def _porches(level, style, uv_sizes, parts):
+def _porches(level, style, uv_sizes, parts, roof_info=None):
     """Attach a closed shed slab and two .12 m posts to each ground door."""
     outer = wall_offsets(style, 0)[1]
     for edge in level["edges"]:
@@ -283,6 +300,7 @@ def _porches(level, style, uv_sizes, parts):
                 continue
             left, right = hole["s0"] - .6, hole["s1"] + .6
             low = hole["y1"] + .3
+            porch_start = len(parts)
             builder = _builder("porch", "trim", uv_sizes, protrudes=True)
             for span in (left + .06, right - .06):
                 _block(builder, edge, span - .06, span + .06, -WALL_SINK_M, low,
@@ -294,6 +312,37 @@ def _porches(level, style, uv_sizes, parts):
                        (right, outer + 1.6, low), (left, outer + 1.6, low)]
             _extrude(cap, [_point(edge, span, height, depth) for span, depth, height in corners],
                      [_point(edge, span, height + .12, depth) for span, depth, height in corners])
+            drop = 0.0
+            for wing in (roof_info or {}).get("wings", []):
+                if wing["level"] != level["level"]:
+                    continue
+                samples = _detail_samples(wing, cap.part()["vertices"])
+                if wing["form"] == "tent":
+                    # Fan slopes need not equal the requested pyramid pitch.
+                    normals = [_normal(plane) for plane in wing["planes"]]
+                    underside_drop = max(.15*math.sqrt(sum(v*v for v in n))/abs(n[1]) for n in normals)
+                else:
+                    underside_drop = .15 / math.cos(math.radians(wing["pitch_deg"]))
+                for x,_,z in samples:
+                    height = roof_top_y(wing,x,z,style)
+                    if height is None:
+                        continue
+                    # Porch top is a plane falling .4 over its 1.6 m depth.
+                    _, normal = _axes(edge)
+                    depth = (x-edge["a"][0])*normal[0]+(z-edge["a"][1])*normal[1]
+                    cap_top = low+.52-(depth-outer)*.25
+                    drop = max(drop, cap_top-height+underside_drop+.02)
+            if low-drop < hole["y1"]+.05-1e-8:
+                del parts[porch_start:]
+                continue
+            for part in parts[porch_start:]+[cap.part()]:
+                for point in part["vertices"]:
+                    # Post feet stay at ground while their heads follow the cap.
+                    if part["tag"] == "porch":
+                        point[1] = round(-WALL_SINK_M+(point[1]+WALL_SINK_M)*(low-drop+WALL_SINK_M)/(low+WALL_SINK_M),4)
+                    else:
+                        point[1] = round(point[1]-drop,4)
+                part["detail_level"] = level["level"]
             _append(parts, cap)
 
 
@@ -307,15 +356,32 @@ def build_ornaments(facts: Dict, style: Dict, desc: Dict, roof_info: Dict, *, ti
     parts = []
     levels = sorted(facts["levels"], key=lambda level: level["level"])
     for level in levels:
+        start = len(parts)
         timber = style.get("timber_frame", "none")
         if tier == "full" and (timber == "all" or timber == "upper" and (len(levels) == 1 or level["level"] != 0)):
-            _timber(level, style, desc, density, uv_sizes, parts)
+            _timber(level, style, desc, density, uv_sizes, parts, roof_info)
         if style.get("log_walls") or style.get("corners") == "log_ends":
-            _logs(level, style, tier == "full", uv_sizes, parts)
+            _logs(level, style, tier == "full", uv_sizes, parts, roof_info)
         if level["level"] == 0 and style.get("porch"):
-            _porches(level, style, uv_sizes, parts)
+            _porches(level, style, uv_sizes, parts, roof_info)
+        clipped = []
+        for part in parts[start:]:
+            if part["tag"] in ("porch", "roof"):
+                clipped.append(part)
+                continue
+            result = clip_detail(part, level["level"], roof_info, style,
+                                 diagonal=part.pop("diagonal", False))
+            if result is not None:
+                clipped.append(result)
+        parts[start:] = clipped
     if tier == "full":
-        _corner_details(facts, style, uv_sizes, parts)
+        for level in levels:
+            corners = []
+            _corner_details({**facts, "levels": [level]}, style, uv_sizes, corners, roof_info)
+            for part in corners:
+                result = clip_detail(part, level["level"], roof_info, style)
+                if result is not None:
+                    parts.append(result)
     if style.get("crenellations"):
         for flat in roof_info.get("flat_tops", []):
             if flat.get("parapet"):

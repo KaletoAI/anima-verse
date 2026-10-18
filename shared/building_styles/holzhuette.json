@@ -52,6 +52,7 @@
       "cone"
     ]
   },
+  "chimney_width_m": 0.9,
   "chimneys": [
     1,
     1

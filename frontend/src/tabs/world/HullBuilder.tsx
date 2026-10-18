@@ -84,7 +84,10 @@ function HullForm({ apiBase, pending, onStarted }: {
         onStarted()
       }
     } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      const message = (e as Error).message
+      toast(message.includes('too_large')
+        ? t('This building is too large for one hull — split the outline or simplify it.')
+        : t('Error') + ': ' + message, 'error')
     } finally { setBusy(false) }
   }
 

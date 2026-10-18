@@ -2,7 +2,7 @@
 
 The fixture has two levels and a 10 by 8 metre ground outline: prompt facts
 must therefore be 2 storeys, length 10, depth 8. Unknown styles are 400,
-missing records 404, missing outlines and busy jobs 409, absent Blender 503.
+oversize hulls 400, missing records 404, missing outlines and busy jobs 409, absent Blender 503.
 Usage: ./.venv/bin/python scripts/smoke_hull_routes.py
 """
 import os
@@ -82,6 +82,12 @@ def main() -> None:
         with patch("app.blender.runner.is_available", return_value=False):
             assert client.post(base + "/generate", json={"description": {"style": "burg"}}).status_code == 503
         with patch("app.blender.runner.is_available", return_value=True):
+            from app.core import hull_geometry
+            with patch.dict(hull_geometry.TRI_BUDGET, {"full": 0, "low": 0}), \
+                    patch.object(hull_model, "trigger_hull_generation") as trigger:
+                response = client.post(base + "/generate", json={"description": {"style": "burg"}})
+                assert response.status_code == 400 and response.json()["detail"] == "too_large"
+                trigger.assert_not_called()
             for started, status in ((False, 409), (True, 200)):
                 with patch.object(hull_model, "trigger_hull_generation", return_value=started) as trigger:
                     response = client.post(base + "/generate", json={"description": {"style": "burg"}})

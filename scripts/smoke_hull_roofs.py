@@ -6,6 +6,12 @@ rises (8+2*.34)/2=4.34 above y=3. With .40 overhang, eaves end at
 z=-.74 and y=2.60. Hip ridge length is (10+.68)-(8+.68)=2.
 Stone stepped house exposes a 4x8 strip beside its 6x8 upper storey;
 that strip gets a shed falling away from the covered side, capped at 25°.
+Upper inner=.07/2+.005=.04; the high edge stops at x=6+.04+.01=6.05,
+so its unchanged plane rises (4+.54-.05)*tan(25°), not (4+2*.54)*tan(25°).
+Stepped stone chimneys use only the upper roof: 5.93+(6/2+.54)+.9=10.37.
+Upper flat caps instead give 5.93+.25+.9=7.08. With no topmost candidate,
+the original shed fallback gives 3.08+4.49*tan(25)+.9.
+Chimney widths come from chimney_width_m, independent of description style.
 Triangle centroid=(13/3,8/3); nearest edge distance=80/(3*sqrt(113));
 its tent rise at 45° is that distance + .34 outer offset. Chimney top
 on the rectangle is 3+4.34+.9=8.24, width .6 (.9 for holzhuette).
@@ -109,9 +115,31 @@ def main() -> None:
     stepped = hull_facts(stepped_house())
     result, metadata = build_roofs(stepped, styles["steinhaus"], desc, tier="full")
     shed = next(wing for wing in metadata["wings"] if wing["form"] == "shed" and wing["level"] == 0)
-    close(shed["ridge_y"], stepped["levels"][0]["top_y"] + (4 + 2 * .54) * math.tan(math.radians(25)))
-    # The covered neighbor is left of the exposed strip: high edge x=6-.54.
-    assert all(abs(point[0] - (6 - .54)) < .0003 for point in shed["ridge"])
+    close(shed["ridge_y"], stepped["levels"][0]["top_y"] + (4 + .54 - .05) * math.tan(math.radians(25)))
+    # Inner upper face=.04; .01 clearance gives x=6.05; plane rise=(4+.54-.05)*tan(25).
+    assert all(abs(point[0] - (6 + .05)) < .0003 for point in shed["ridge"])
+    # Upper stone roof: short span=6+2*.54, rise=3.54 at 45 degrees.
+    # All chimneys must therefore end at 5.93+3.54+.9=10.37.
+    for chimney in (part for part in result if part['tag']=='chimney'):
+        close(max(v[1] for v in chimney['vertices']),10.37)
+    # Upper flat cap=5.93+.25=6.18; its chimney top=6.18+.9=7.08.
+    # A lower pitched wing must not take precedence over that upper flat top.
+    flat_desc=deepcopy(desc); flat_desc['overrides']['roof_form']='flat'
+    _,flat_info=build_roofs(stepped,styles['steinhaus'],flat_desc,tier='low')
+    flat_info['wings']=[shed]
+    from app.core.hull_roofs import _chimneys
+    flat_chimneys=[]
+    _chimneys(flat_info,styles['steinhaus'],desc,1,{},flat_chimneys)
+    assert len(flat_chimneys)==2
+    for chimney in flat_chimneys:
+        close(max(v[1] for v in chimney['vertices']),7.08)
+    # Only when neither topmost wings nor topmost flats exist, use old candidates.
+    fallback_info={**flat_info,'topmost_level':99}
+    fallback=[]
+    _chimneys(fallback_info,styles['steinhaus'],desc,1,{},fallback)
+    assert len(fallback)==2
+    for chimney in fallback:
+        close(max(v[1] for v in chimney['vertices']),3.08+4.49*math.tan(math.radians(25))+.9)
     # The .15 m slope slabs use perpendicular thickness, not vertical drop.
     from app.core.hull_mesh import _normal
     for part in result:

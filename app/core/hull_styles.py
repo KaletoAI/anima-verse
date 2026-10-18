@@ -78,6 +78,7 @@ def validate_style(raw: Any, style_id: str) -> Dict[str, Any]:
     for key in ("cornice", "log_walls", "crenellations", "porch"):
         result[key] = raw.get(key) if isinstance(raw.get(key), bool) else False
     for key, low, high, default in (
+        ("chimney_width_m", 0.3, 1.5, 0.6),
         ("wall_thickness_m", 0.2, 1.2, 0.4), ("plinth_height_m", 0, 1.5, 0.4),
         ("shutters", 0, 1, 0), ("jetty_m", 0, 0.3, 0), ("dormers", 0, 1, 0),
         ("tint_jitter", 0, 0.2, 0.06), ("weathering", 0, 1, 0.5),

@@ -2620,6 +2620,7 @@
     "proposed by the LLM": "Vom LLM vorgeschlagen",
     "default — no LLM answer": "Vorgabe — keine LLM-Antwort",
     "Form": "Form",
-    "Pitch (°)": "Neigung (°)"
+    "Pitch (°)": "Neigung (°)",
+    "This building is too large for one hull — split the outline or simplify it.": "Dieses Gebäude ist zu groß für eine einzelne Gebäudehülle — teile den Umriss auf oder vereinfache ihn."
   }
 }

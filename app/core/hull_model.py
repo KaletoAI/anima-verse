@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from app.core import hull_styles, surface_textures
 from app.core.hull_facts import hull_facts
-from app.core.hull_geometry import build_hull
+from app.core.hull_geometry import build_hull, fit_budget
 from app.core.hull_mesh import rng
 from app.core.log import get_logger
 from app.core.roof_model import _timeout_s, tone_to_linear
@@ -97,15 +97,22 @@ def build_job(location_id: str, description: Any, location: Optional[Dict] = Non
         return {"ok": False, "error": "unknown_style"}
     directory = Path(tex_dir) if tex_dir is not None else Path(tempfile.mkdtemp(prefix="av-hull-textures-"))
     materials, textures, sizes = _materials(style, desc, directory)
+    try:
+        fitted = fit_budget(facts, style, desc, uv_sizes=sizes)
+    except ValueError as error:
+        if str(error) == "hull too large":
+            return {"ok": False, "error": "too_large"}
+        raise
     tiers, placement = {}, {}
     for tier in ("full", "low"):
-        geometry = build_hull(facts, style, desc, tier=tier, uv_sizes=sizes)
+        geometry = build_hull(facts, style, fitted, tier=tier, uv_sizes=sizes)
         tiers[tier] = {"meshes": _meshes(geometry["parts"], tier)}
         placement[tier] = scene_mesh_placement(location, geometry["bounds"]["min"],
                                                geometry["bounds"]["max"])
         if tier == "full":
             padding = geometry["padding_m"]
     return {"kind": "hull", "location_id": location_id, "description": desc,
+            "ornament_density_used": fitted["overrides"]["ornament_density"],
             "style_id": desc["style"], "fingerprint": facts["fingerprint"],
             "tiers": tiers, "materials": materials, "textures": textures,
             "extras": {"interior_cutout_padding_m": padding},

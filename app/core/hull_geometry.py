@@ -22,8 +22,8 @@ def cutout_padding_m(style: Dict) -> float:
 def _build_parts(facts: Dict, style: Dict, desc: Dict, tier: str,
                  uv_sizes: Optional[Dict[str, float]]) -> Tuple[List[Part], Dict]:
     """Build the dependent roof and ornament payloads in stable order."""
-    parts = hull_walls.build_walls(facts, style, desc, tier=tier, uv_sizes=uv_sizes)
     roofs, roof_info = hull_roofs.build_roofs(facts, style, desc, tier=tier, uv_sizes=uv_sizes)
+    parts = hull_walls.build_walls(facts, style, desc, tier=tier, uv_sizes=uv_sizes, roof_info=roof_info)
     parts.extend(roofs)
     parts.extend(hull_ornaments.build_ornaments(
         facts, style, desc, roof_info, tier=tier, uv_sizes=uv_sizes))
@@ -87,3 +87,24 @@ def build_hull(facts: Dict, style: Dict, desc: Dict, *, tier: str,
     return {"parts": parts, "bounds": hull_mesh.bounds(parts), "tris": triangles,
             "padding_m": padding, "materials": sorted({part["material"] for part in parts}),
             "roof": roof_info}
+
+
+def fit_budget(facts: Dict, style: Dict, desc: Dict, uv_sizes=None) -> Dict:
+    """Fit both tiers using the same density, keeping the caller's description."""
+    density = desc.get("overrides", {}).get("ornament_density", .5)
+    for value in (density, density/2, 0):
+        candidate = desc if value == density else deepcopy(desc)
+        if candidate is not desc:
+            candidate.setdefault("overrides", {})["ornament_density"] = value
+        fits = True
+        full_parts = []
+        for tier in ("full", "low"):
+            parts, _ = _build_parts(facts, style, candidate, tier, uv_sizes)
+            if tier == "full":
+                full_parts = parts
+            else:
+                _preserve_extremes(parts, full_parts)
+            fits = fits and hull_mesh.tri_count(parts) <= TRI_BUDGET[tier]
+        if fits:
+            return candidate
+    raise ValueError("hull too large")

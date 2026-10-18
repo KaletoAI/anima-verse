@@ -13,11 +13,11 @@ def wall_offsets(style: Dict, level: int) -> Tuple[float, float]:
     return inner, outer
 
 
-def _cells(s0, s1, y0, y1, holes, extra_y=()):
+def _cells(s0, s1, y0, y1, holes, extra_y=(), extra_s=()):
     """Tile the complement of the union of clipped aperture rectangles."""
     if s1 <= s0 or y1 <= y0:
         return
-    xs = sorted({s0, s1, *(max(s0, min(s1, h[k])) for h in holes for k in ('s0','s1'))})
+    xs = sorted({s0, s1, *(v for v in extra_s if s0 < v < s1), *(max(s0, min(s1, h[k])) for h in holes for k in ('s0','s1'))})
     ys = sorted({y0, y1, *(v for v in extra_y if y0 < v < y1),
                  *(max(y0, min(y1, h[k])) for h in holes for k in ('y0','y1'))})
     for a,b in zip(xs, xs[1:]):
@@ -55,7 +55,7 @@ def _span(ring, edge, distance):
 
 
 def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
-                uv_sizes: Optional[Dict[str, float]] = None) -> List[Part]:
+                uv_sizes: Optional[Dict[str, float]] = None, roof_info: Optional[Dict] = None) -> List[Part]:
     """Build full or low shells; every source aperture remains a real hole."""
     if tier not in ('full','low'):
         raise ValueError('tier must be full or low')
@@ -99,14 +99,21 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
             def block(tag,mat,s0,s1,y0,y1,d0,d1):
                 if s1-s0 <= 1e-5 or y1-y0 <= 1e-5:
                     return
-                build = builder(tag,mat)
-                pieces = _cells(s0,s1,y0,y1,holes) if tag in ('frame','shutter') else [(s0,s1,y0,y1)]
-                for c,d,e,f in pieces:
-                    outline = [[point(s,e,depth)[k] for k in (0,2)]
-                               for s,depth in ((c,d0),(d,d0),(d,d1),(c,d1))]
-                    build.prism(outline,e,f)
-                if build.part()['faces']:
-                    parts.append(build.part())
+                from app.core.hull_roofs import clip_detail, detail_breaks
+                breaks = detail_breaks(roof_info, number, edge, (d0,d1))
+                spans = sorted({s0,s1,*(v for v in breaks if s0 < v < s1)})
+                for left,right in zip(spans,spans[1:]):
+                    build = builder(tag,mat)
+                    pieces = (_cells(left,right,y0,y1,holes) if tag in ('frame','shutter')
+                              else [(left,right,y0,y1)])
+                    for c,d,e,f in pieces:
+                        outline = [[point(s,e,depth)[k] for k in (0,2)]
+                                   for s,depth in ((c,d0),(d,d0),(d,d1),(c,d1))]
+                        build.prism(outline,e,f)
+                    if build.part()['faces']:
+                        clipped = clip_detail(build.part(), number, roof_info, style)
+                        if clipped is not None:
+                            parts.append(clipped)
 
             holes = []
             for index,h in enumerate(edge['openings']):

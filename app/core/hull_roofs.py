@@ -162,10 +162,10 @@ def _parapet(outline, y, style, uv_sizes):
     return parts
 
 
-def _flat(outline, level, base, style, overhang, uv_sizes, info, parts):
+def _flat(outline, level, base, style, overhang, uv_sizes, info, parts, *, expanded=False):
     """Emit the flat cap and report whether this top actually has a parapet."""
     outer = wall_offsets(style, level)[1]
-    ring = offset_ring(outline, _ring_ccw(outline), outer + overhang)
+    ring = outline if expanded else offset_ring(outline, _ring_ccw(outline), outer + overhang)
     # Individual triangular prisms are closed even for concave caps.
     for triangle in _triangles(ring):
         builder = _builder("roof", "roof", uv_sizes)
@@ -175,7 +175,7 @@ def _flat(outline, level, base, style, overhang, uv_sizes, info, parts):
     info["flat_tops"].append({"level": level, "outline": ring, "y": base + 0.25,
                               "parapet": parapet})
     if parapet:
-        wall_ring = offset_ring(outline, _ring_ccw(outline), outer + overhang - style["wall_thickness_m"] / 2)
+        wall_ring = offset_ring(outline, _ring_ccw(outline), (0 if expanded else outer + overhang) - style["wall_thickness_m"] / 2)
         parts.extend(_parapet(wall_ring, base + 0.25, style, uv_sizes))
 
 
@@ -199,14 +199,168 @@ def _wing_axes(rect, covered_sides, form):
     return result, -1 if side == "z_min" else 1
 
 
+def _clip_polygon(points, limits):
+    """Clip a 3D polygon to four local x/z half-planes, interpolating y."""
+    for axis, boundary, sign in ((0, limits[0], 1), (0, limits[1], -1),
+                                  (2, limits[2], 1), (2, limits[3], -1)):
+        output = []
+        for first, second in zip(points, points[1:] + points[:1]):
+            a, b = sign*(first[axis]-boundary), sign*(second[axis]-boundary)
+            if a >= -1e-10:
+                output.append(first)
+            if (a < 0) != (b < 0):
+                fraction = a/(a-b)
+                output.append([first[k]+fraction*(second[k]-first[k]) for k in range(3)])
+        points = output
+    return points
+
+
+def roof_top_y(wing: Dict, x: float, z: float, style: Dict) -> Optional[float]:
+    """Return the wing top at scene x/z, or None outside its slab footprint."""
+    if wing["form"] == "tent":
+        if not _point_in_polygon(x, z, wing["outline"]):
+            from app.core.world_geometry import polygon_distance
+            if polygon_distance(x, z, wing["outline"]) > 1e-4:
+                return None
+        heights = []
+        for plane in wing["planes"]:
+            normal = _normal(plane)
+            first = plane[0]
+            heights.append(first[1] - (normal[0]*(x-first[0])+normal[2]*(z-first[2]))/normal[1])
+        return min(heights)
+    rect = wing["rect"]
+    x, z = _rotate([x-rect["center"][0], z-rect["center"][1]], -rect["angle_deg"])
+    low_x, high_x, low_z, high_z = wing["limits"]
+    if not (low_x-1e-4 <= x <= high_x+1e-4 and low_z-1e-4 <= z <= high_z+1e-4):
+        return None
+    return _roof_height(wing, x, z, style, wing["pitch_deg"])
+
+
+def _detail_samples(wing, vertices):
+    """Return conservative footprint intersections, including interior roof ridges."""
+    rect = wing["rect"]
+    local = [_rotate([p[0]-rect["center"][0],p[2]-rect["center"][1]], -rect["angle_deg"])
+             for p in vertices]
+    # A bounding rectangle is conservative for rotated corner/log pieces.
+    bounds = [min(p[0] for p in local), max(p[0] for p in local),
+              min(p[1] for p in local), max(p[1] for p in local)]
+    if wing["form"] == "tent":
+        footprint = [_rotate([x-rect["center"][0],z-rect["center"][1]], -rect["angle_deg"])
+                     for x,z in wing["outline"]]
+        polygon = [[x,0,z] for x,z in footprint]
+    else:
+        a,b,c,d = wing["limits"]
+        polygon = [[a,0,c],[b,0,c],[b,0,d],[a,0,d]]
+    samples = _clip_polygon(polygon, bounds)
+    area = abs(sum(a[0]*b[2]-b[0]*a[2] for a,b in zip(samples,samples[1:]+samples[:1]))) / 2
+    if area <= 1e-8:
+        return []
+    # Roof maxima can lie on an interior ridge or tent apex.
+    if samples:
+        for axis in (0, 2):
+            for first, second in zip(samples[:], samples[1:]+samples[:1]):
+                if first[axis]*second[axis] < 0:
+                    fraction = first[axis]/(first[axis]-second[axis])
+                    samples.append([first[k]+fraction*(second[k]-first[k]) for k in range(3)])
+        if wing["form"] == "tent":
+            # Fan-plane intersections may meet the detail between its corners.
+            for corner in footprint:
+                for first, second in zip(samples[:], samples[1:]+samples[:1]):
+                    a = corner[0]*first[2]-corner[1]*first[0]
+                    b = corner[0]*second[2]-corner[1]*second[0]
+                    if a*b < 0:
+                        fraction = a/(a-b)
+                        samples.append([first[k]+fraction*(second[k]-first[k]) for k in range(3)])
+        if bounds[0] <= 0 <= bounds[1] and bounds[2] <= 0 <= bounds[3]:
+            samples.append([0,0,0])
+    return [_at(rect, point[0], 0, point[2]) for point in samples]
+
+
+def detail_breaks(roof_info, level, edge, depths):
+    """Return facade s coordinates where relevant wing footprints cross a strip.
+
+    Include both depth faces and boundary vertices within the depth range.
+    Callers emit independent cells at these breaks before vertical clipping.
+    """
+    from app.core.hull_walls import _axes
+    tangent, normal = _axes(edge)
+    back, front = sorted(depths)
+    breaks = set()
+    for wing in (roof_info or {}).get("wings", []):
+        if wing["level"] > level:
+            continue
+        if wing["form"] == "tent":
+            ring = wing["outline"]
+        else:
+            a,b,c,d = wing["limits"]
+            ring = [[_at(wing["rect"],x,0,z)[k] for k in (0,2)]
+                    for x,z in ((a,c),(b,c),(b,d),(a,d))]
+        local = [[sum((point[k]-edge["a"][k])*axis[k] for k in (0,1))
+                  for axis in (tangent,normal)] for point in ring]
+        for first, second in zip(local,local[1:]+local[:1]):
+            if back-1e-8 <= first[1] <= front+1e-8:
+                breaks.add(first[0])
+            delta = second[1]-first[1]
+            if abs(delta) < 1e-10:
+                continue
+            for depth in (back,front):
+                fraction = (depth-first[1])/delta
+                if -1e-8 <= fraction <= 1+1e-8:
+                    breaks.add(first[0]+fraction*(second[0]-first[0]))
+    return sorted(breaks)
+
+
+def clip_detail(part, level, roof_info, style, *, diagonal=False):
+    """Shorten facade details conservatively using one shared clearance rule.
+
+    The vertical affine map preserves closed planar solids, including log sections.
+    Footprint intersections include wing corners and crossing edges, so long bands
+    with endpoints outside a wing still receive clearance.
+    """
+    low = min(p[1] for p in part["vertices"])
+    high = max(p[1] for p in part["vertices"])
+    bottom, top = low, high
+    for wing in (roof_info or {}).get("wings", []):
+        if wing["level"] > level:
+            continue
+        heights = [roof_top_y(wing, point[0], point[2], style)
+                   for point in _detail_samples(wing, part["vertices"])]
+        heights = [y for y in heights if y is not None]
+        if not heights:
+            continue
+        if wing["level"] == level:
+            top = min(top, min(heights)-.02)
+        else:
+            bottom = max(bottom, max(heights)+.02)
+    if top-bottom <= 1e-5 or (diagonal and (bottom > low+1e-6 or top < high-1e-6)):
+        return None
+    if bottom != low or top != high:
+        for point in part["vertices"]:
+            point[1] = round(bottom+(point[1]-low)*(top-bottom)/(high-low), 4)
+    part["detail_level"] = level
+    return part
+
+
 def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, parts):
     """Use roof_model's wall-span pitch and shortened hip-ridge formulas."""
+    original_angle = rect["angle_deg"]
     rect, high = _wing_axes(rect, sides, form)
     outer = wall_offsets(style, number)[1]
     half_length = rect["length"] / 2 + outer
     half_span = rect["depth"] / 2 + outer
     slope = math.tan(math.radians(pitch))
     end, edge = half_length + overhang, half_span + overhang
+    # Covered limits use the upper shell's inner face; the pitch datum stays fixed.
+    limits = [-end, end, -edge, edge]
+    for side in sides:
+        axis, direction = side.split("_")
+        local_axis = _rotate([1, 0] if axis == "x" else [0, 1],
+                             - (rect["angle_deg"] - original_angle))
+        index = 0 if abs(local_axis[0]) > .5 else 2
+        sign = (1 if direction == "max" else -1) * (local_axis[0] if index == 0 else local_axis[1])
+        half = rect["length" if index == 0 else "depth"] / 2
+        limits[index + (1 if sign > 0 else 0)] = math.copysign(
+            half - wall_offsets(style, number + 1)[0] - .01, sign)
     ridge_y = base + half_span * slope
     ridge_half = half_length
     surfaces = []
@@ -227,40 +381,63 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
                 surfaces.append([[side * end, low_y, -edge], [side * end, low_y, edge],
                                  [side * ridge_half, ridge_y, 0]])
         ridge = [_at(rect, x, ridge_y, 0) for x in (-ridge_half, ridge_half)]
+    original_ridge_y = ridge_y
+    if sides:
+        ridge = [[*point] for point in ridge]
+        for point in ridge:
+            local = _rotate([point[0]-rect["center"][0], point[2]-rect["center"][1]], -rect["angle_deg"])
+            x = max(limits[0], min(limits[1], local[0]))
+            z = max(limits[2], min(limits[3], local[1]))
+            y = base + (half_span + high*z)*slope if form == "shed" else ridge_y
+            point[:] = _at(rect, x, y, z)
+        ridge_y = max(point[1] for point in ridge)
+    first_part = len(parts)
     for surface in surfaces:
+        surface = _clip_polygon(surface, limits)
         # A square hip collapses both ridge points to one apex.
         points = []
         for x, y, z in surface:
             point = _at(rect, x, y, z)
             if point not in points:
                 points.append(point)
+        if len(points) < 3:
+            continue
         builder = _builder("roof", "roof", uv_sizes)
         _slab(builder, points)
         parts.append(builder.part())
+    ridge_y = original_ridge_y
     if form == "gable":
         material = "wall_ground" if number == 0 and style.get("materials", {}).get("wall_ground") else "wall"
         for side in (-1, 1):
             builder = _builder("gable", material, uv_sizes)
-            points = [_at(rect, side * half_length, base, z) for z in (-half_span, half_span)]
-            points.append(_at(rect, side * half_length, ridge_y, 0))
+            points = [_at(rect, max(limits[0], min(limits[1], side * half_length)), base, z) for z in (-half_span, half_span)]
+            points.append(_at(rect, max(limits[0], min(limits[1], side * half_length)), ridge_y, 0))
             outward = _rotate([side, 0], rect["angle_deg"])
             normal = _normal(points)
             if normal[0] * outward[0] + normal[2] * outward[1] < 0:
                 points.reverse()
-            builder.poly(points)
+            local_points = []
+            for point in points:
+                x, z = _rotate([point[0]-rect["center"][0], point[2]-rect["center"][1]], -rect["angle_deg"])
+                local_points.append([x, point[1], z])
+            builder.poly([_at(rect, *point) for point in _clip_polygon(local_points, limits)])
             parts.append(builder.part())
     if form == "shed":
         material = "wall_ground" if number == 0 and style.get("materials", {}).get("wall_ground") else "wall"
         for side in (-1, 1):
             builder = _builder("gable", material, uv_sizes)
-            points = [_at(rect, side * half_length, base, -high * half_span),
-                      _at(rect, side * half_length, base, high * half_span),
-                      _at(rect, side * half_length, ridge_y, high * half_span)]
+            points = [_at(rect, max(limits[0], min(limits[1], side * half_length)), base, -high * half_span),
+                      _at(rect, max(limits[0], min(limits[1], side * half_length)), base, high * half_span),
+                      _at(rect, max(limits[0], min(limits[1], side * half_length)), ridge_y, high * half_span)]
             normal = _normal(points)
             outward = _rotate([side, 0], rect["angle_deg"])
             if normal[0] * outward[0] + normal[2] * outward[1] < 0:
                 points.reverse()
-            builder.poly(points)
+            local_points = []
+            for point in points:
+                x, z = _rotate([point[0]-rect["center"][0], point[2]-rect["center"][1]], -rect["angle_deg"])
+                local_points.append([x, point[1], z])
+            builder.poly([_at(rect, *point) for point in _clip_polygon(local_points, limits)])
             parts.append(builder.part())
         if not sides:
             builder = _builder("gable", material, uv_sizes)
@@ -271,10 +448,30 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
             normal = _normal(points)
             if normal[0] * outward[0] + normal[2] * outward[1] < 0:
                 points.reverse()
-            builder.poly(points)
+            local_points = []
+            for point in points:
+                x, z = _rotate([point[0]-rect["center"][0], point[2]-rect["center"][1]], -rect["angle_deg"])
+                local_points.append([x, point[1], z])
+            builder.poly([_at(rect, *point) for point in _clip_polygon(local_points, limits)])
             parts.append(builder.part())
+    if sides:
+        ridge_y = max(point[1] for point in ridge)
+        for part in parts[first_part:]:
+            if part["tag"] != "roof":
+                continue
+            normal = _normal([part["vertices"][i] for i in part["faces"][0]])
+            for point in part["vertices"]:
+                x, z = _rotate([point[0]-rect["center"][0], point[2]-rect["center"][1]], -rect["angle_deg"])
+                moved = _at(rect, max(limits[0], min(limits[1], x)), point[1],
+                            max(limits[2], min(limits[3], z)))
+                # Keep both parallel slab planes when trimming the extrusion.
+                moved[1] -= (normal[0]*(moved[0]-point[0])+normal[2]*(moved[2]-point[2]))/normal[1]
+                point[:] = [round(v, 4) for v in moved]
+    for part in parts[first_part:]:
+        part["roof_level"] = number
     return {"rect": rect, "level": number, "form": form, "eaves_y": base,
-            "ridge_y": ridge_y, "ridge": ridge}
+            "ridge_y": ridge_y, "ridge": ridge, "pitch_deg": pitch,
+            "overhang_m": overhang, "limits": limits, "high": high}
 
 
 def _centroid(outline):
@@ -305,6 +502,7 @@ def _tent(level, base, pitch, overhang, style, uv_sizes, parts):
                  for first, second in zip(wall, wall[1:] + wall[:1])]
     rise = min(distances) * math.tan(math.radians(pitch))
     apex = [center[0], base + rise, center[1]]
+    planes = []
     corner_heights = [[] for _ in ring]
     # Each fan plane passes through its outer wall edge. This also handles
     # bevel vertices: the matching wall distance is measured to its edge line.
@@ -315,7 +513,9 @@ def _tent(level, base, pitch, overhang, style, uv_sizes, parts):
         corner_heights[i].append(low)
         corner_heights[(i + 1) % len(ring)].append(low)
         builder = _builder("roof", "roof", uv_sizes)
-        _slab(builder, [[first[0], low, first[1]], [second[0], low, second[1]], apex])
+        plane = [[first[0], low, first[1]], [second[0], low, second[1]], apex]
+        planes.append(plane)
+        _slab(builder, plane)
         parts.append(builder.part())
     for point, heights in zip(ring, corner_heights):
         if abs(heights[0] - heights[1]) < 1e-5:
@@ -338,7 +538,8 @@ def _tent(level, base, pitch, overhang, style, uv_sizes, parts):
     return {"rect": {"center": center, "length": max(xs) - min(xs),
                      "depth": max(zs) - min(zs), "angle_deg": 0.0},
             "level": number, "form": "tent", "eaves_y": base,
-            "ridge_y": base + rise, "ridge": None}
+            "ridge_y": base + rise, "ridge": None, "pitch_deg": pitch,
+            "overhang_m": overhang, "outline": ring, "planes": planes}
 
 
 def _roof_height(wing, x, z, style, pitch):
@@ -350,10 +551,7 @@ def _roof_height(wing, x, z, style, pitch):
         end = wing["rect"]["length"] / 2 + outer
         return wing["eaves_y"] + min(span - abs(z), end - abs(x)) * slope
     if wing["form"] == "shed":
-        ridge = wing["ridge"][0]
-        local = _rotate([ridge[0] - wing["rect"]["center"][0],
-                         ridge[2] - wing["rect"]["center"][1]], -wing["rect"]["angle_deg"])
-        return wing["eaves_y"] + (span + z * (1 if local[1] > 0 else -1)) * slope
+        return wing["eaves_y"] + (span + z * wing["high"]) * slope
     return wing["ridge_y"] - abs(z) * slope
 
 
@@ -361,13 +559,17 @@ def _chimneys(info, style, desc, density, uv_sizes, parts):
     """Choose seeded ridge positions, falling back to flat roof triangles."""
     minimum, maximum = style.get("chimneys", [0, 0])
     count = round(minimum + (maximum - minimum) * density)
-    candidates = info["wings"] or info["flat_tops"]
+    top_level = info.get("topmost_level", max(
+        (target["level"] for target in info["wings"]+info["flat_tops"]), default=0))
+    candidates = ([wing for wing in info["wings"] if wing["level"] == top_level]
+                  or [top for top in info["flat_tops"] if top["level"] == top_level]
+                  or info["wings"] or info["flat_tops"])
     if not candidates:
         return
     for i in range(count):
         random = rng(desc.get("seed", 0), f"chimney:{i}")
         target = random.choice(candidates)
-        width = 0.9 if desc.get("style") == "holzhuette" else 0.6
+        width = style.get("chimney_width_m", 0.6)
         if "rect" in target:
             rect = target["rect"]
             ridge = target["ridge"]
@@ -446,6 +648,7 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
             "wings": [], "flat_tops": []}
     parts = []
     levels = sorted(facts["levels"], key=lambda level: level["level"])
+    info["topmost_level"] = levels[-1]["level"]
     for i, level in enumerate(levels):
         topmost = i == len(levels) - 1
         covered = None if topmost else levels[i + 1]["outline"]
@@ -469,7 +672,23 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 ring = [[point[0], point[2]] for point in (
                     _at(rect, x, base, z) for x, z in ((-half_length, -half_span),
                     (half_length, -half_span), (half_length, half_span), (-half_length, half_span)))]
-                _flat(ring, number, base, style, overhang, uv_sizes, info, parts)
+                if sides:
+                    outer = wall_offsets(style, number)[1]
+                    limits = [-half_length-outer-overhang, half_length+outer+overhang,
+                              -half_span-outer-overhang, half_span+outer+overhang]
+                    for side in sides:
+                        index = (0 if side.startswith("x") else 2) + (1 if side.endswith("max") else 0)
+                        half = half_length if index < 2 else half_span
+                        limits[index] = (1 if index % 2 else -1)*(half-wall_offsets(style, number+1)[0]-.01)
+                    a,b,c,d = limits
+                    ring = [[_at(rect,x,base,z)[k] for k in (0,2)] for x,z in ((a,c),(b,c),(b,d),(a,d))]
+                    # The ring is already expanded on exposed sides and trimmed on covered sides.
+                    first_part = len(parts)
+                    _flat(ring, number, base, style, 0, uv_sizes, info, parts, expanded=True)
+                    for part in parts[first_part:]:
+                        part["roof_level"] = number
+                else:
+                    _flat(ring, number, base, style, overhang, uv_sizes, info, parts)
             else:
                 wing_pitch = min(pitch, 25) if not topmost and sides else pitch
                 info["wings"].append(_pitched(rect, sides, wing_form, number, base,
