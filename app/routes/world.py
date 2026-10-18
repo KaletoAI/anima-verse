@@ -1301,7 +1301,9 @@ def _location_hull_generate_sync(location_id: str, data: Any) -> Dict[str, Any]:
         raise HTTPException(status_code=503, detail="Blender is not available — the hull is built locally.")
     from app.core.hull_geometry import fit_budget
     try:
-        fit_budget(facts, styles[description["style"]], description)
+        style = styles[description["style"]]
+        resolved = hull_model.resolved_materials(style)
+        fit_budget(facts, style, description, resolved=resolved)
     except ValueError as error:
         if str(error) == "hull too large":
             raise HTTPException(status_code=400, detail="too_large") from error

@@ -12,7 +12,7 @@ from app.core.surface_textures import safe_kind
 SHARED_DIR = get_shared_dir() / "building_styles"
 STORES = ("shared", "world")
 WORLD_TABLE = "building_styles_world"
-MATERIAL_KEYS = ("wall", "wall_ground", "plinth", "roof", "trim", "door", "chimney")
+MATERIAL_KEYS = ("wall", "wall_ground", "plinth", "roof", "trim", "door", "chimney", "facade_module")
 ROOF_FORMS = ("gable", "hip", "shed", "flat")
 logger = get_logger("hull_styles")
 
@@ -50,6 +50,7 @@ def validate_style(raw: Any, style_id: str) -> Dict[str, Any]:
     """Clamp the known schema; material IDs are sanitized without library lookup."""
     raw = _doc(raw)
     materials, palette = _doc(raw.get("materials")), _doc(raw.get("palette"))
+    blind = _doc(raw.get("blind_windows"))
     roof, towers = _doc(raw.get("roof")), _doc(raw.get("towers"))
     result = {
         "name": raw.get("name", style_id)[:200] if isinstance(raw.get("name", style_id), str) else style_id[:200],
@@ -59,7 +60,7 @@ def validate_style(raw: Any, style_id: str) -> Dict[str, Any]:
         "palette": {"glass": _tone(palette.get("glass"), "#3a4a55"),
                     "interior": _tone(palette.get("interior"), "#4a443e")},
         "corners": _choice(raw.get("corners"), ("none", "quoins", "posts", "log_ends"), "none"),
-        "frames": _choice(raw.get("frames"), ("none", "timber", "stone"), "timber"),
+        "frames": _choice(raw.get("frames"), ("none", "timber", "stone", "metal"), "timber"),
         "timber_frame": _choice(raw.get("timber_frame"), ("none", "upper", "all"), "none"),
         "roof": {
             "forms": _subset(roof.get("forms"), ROOF_FORMS, ["gable"]),
@@ -73,9 +74,17 @@ def validate_style(raw: Any, style_id: str) -> Dict[str, Any]:
             "rise_m": _range(towers.get("rise_m"), 0, 10, [2.5, 5]),
             "roof": _subset(towers.get("roof"), ("cone", "crenel"), ["cone"]),
         },
+        "blind_windows": {
+            "bay_m": _range(blind.get("bay_m"), 1.5, 6, [2.4, 3.0]),
+            "width_m": _range(blind.get("width_m"), 0.4, 4, [0.9, 1.2]),
+            "height_m": _range(blind.get("height_m"), 0.6, 3, [1.3, 1.5]),
+            "sill_m": _number(blind.get("sill_m"), 0, 1.5, 0.9),
+        },
+        "rooftop_units": _range(raw.get("rooftop_units"), 0, 4, [0, 0], integer=True),
         "chimneys": _range(raw.get("chimneys"), 0, 4, [0, 1], integer=True),
     }
-    for key in ("cornice", "log_walls", "crenellations", "porch"):
+    for key in ("cornice", "log_walls", "crenellations", "porch",
+                "storey_bands", "roof_housing", "entrance_canopy", "parapet_cap"):
         result[key] = raw.get(key) if isinstance(raw.get(key), bool) else False
     for key, low, high, default in (
         ("chimney_width_m", 0.3, 1.5, 0.6),

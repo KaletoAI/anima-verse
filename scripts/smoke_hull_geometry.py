@@ -135,7 +135,7 @@ def main() -> None:
             full = build_hull(facts, style, desc, tier="full")
             low = build_hull(facts, style, desc, tier="low")
             from app.core.hull_geometry import _build_parts
-            original_parts, _ = _build_parts(facts, style, desc, "full", None)
+            original_parts, _ = _build_parts(facts, style, desc, "full", None, frozenset())
             assert [part["protrudes"] for part in full["parts"]] == [part["protrudes"] for part in original_parts], "builder flags changed"
             drivers = sorted((
                 (max(min(polygon_distance(x, z, level["outline"]) for level in facts["levels"])

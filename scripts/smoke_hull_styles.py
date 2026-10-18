@@ -6,7 +6,20 @@ Usage: ./.venv/bin/python scripts/smoke_hull_styles.py
 Hand-derived expectations: storeys_total 41 clamps to upper bound 40;
 0, missing, invalid "x", and negative values omit the optional key.
 Other positive values are converted to int before clamping (3.9 -> 3).
-Hand-derived expectations: four shipped styles; 9 m clamps to 1.2 m;
+Hand-derived expectations: 4 old styles + modern = 5 shipped styles.
+New booleans default false; rooftop counts clamp 9 to 4 at both ends.
+Blind bay endpoints 0.5 and 9 clamp to 1.5 and 6; missing ranges use
+[2.4, 3.0], [0.9, 1.2], [1.3, 1.5] and sill 0.9 from spec 3.3.
+Only wall and trim get existing files in the resolver fixture, so exactly
+those two material keys resolve; a directory and missing file do not.
+Old styles emit 7 texture slots + glass + interior = 9 materials, since
+the empty new facade slot contributes zero. Modern emits 8 + 2 = 10.
+Width -1/9 clamps to .4/4, height -1/9 to .6/3, sill 9 to 1.5.
+New texture scales are 2/2/1/1.5/1 metres (spec 3.8/brief).
+The module is 512 square: centre (256,256) is dark glass, while
+(0,0) is concrete; matching opposite edge pixels ensure seamless tiling.
+Modern values below are literal spec 3.7 values, not sampled output.
+Hand-derived expectations: 9 m clamps to 1.2 m;
 unsupported dome falls back to gable; deleting the 1.1 m castle override
 restores the shipped 0.9 m wall. Pitch 99 clamps to 60, seed -5 to 0,
 and #ABC expands each digit to #aabbcc. A partial world document gets
@@ -40,8 +53,80 @@ def main():
                     texture = base_texture_file(kind)
                     assert texture is not None, kind
                     assert texture_size_m(texture) > 0, kind
-        assert set(s) == {"fachwerk", "steinhaus", "holzhuette", "burg"}
+        assert set(s) == {"fachwerk", "steinhaus", "holzhuette", "burg", "modern"}
         assert all(v["origin"] == "shared" for v in s.values())
+        from PIL import Image
+        for kind, size in (("concrete_panel", 2.0), ("roof_gravel", 2.0),
+                           ("brushed_metal", 1.0), ("metal_door", 1.5),
+                           ("facade_module_modern", 1.0)):
+            texture = base_texture_file(kind)
+            assert texture_size_m(texture) == size, kind
+            assert json.loads(texture.with_suffix(".json").read_text())["source"] == "placeholder"
+        with Image.open(base_texture_file("facade_module_modern")) as image:
+            assert image.size == (512, 512)
+            assert sum(image.getpixel((256, 256))) < sum(image.getpixel((0, 0)))
+            assert all(image.getpixel((0, i)) == image.getpixel((511, i))
+                       and image.getpixel((i, 0)) == image.getpixel((i, 511)) for i in range(512))
+
+        defaults = validate_style({}, "x")
+        assert defaults["blind_windows"] == {
+            "bay_m": [2.4, 3.0], "width_m": [0.9, 1.2],
+            "height_m": [1.3, 1.5], "sill_m": 0.9}
+        for key in ("storey_bands", "roof_housing", "entrance_canopy", "parapet_cap"):
+            assert defaults[key] is False
+            assert validate_style({key: "true"}, "x")[key] is False
+        assert defaults["rooftop_units"] == [0, 0]
+        assert defaults["materials"]["facade_module"] == ""
+        assert validate_style({"rooftop_units": [9, 9]}, "x")["rooftop_units"] == [4, 4]
+        assert validate_style({"blind_windows": {"bay_m": [0.5, 9]}}, "x")["blind_windows"]["bay_m"] == [1.5, 6]
+        assert validate_style({"blind_windows": {"width_m": [-1, 9], "height_m": [-1, 9],
+                                               "sill_m": 9}}, "x")["blind_windows"] == {
+            "bay_m": [2.4, 3.0], "width_m": [0.4, 4], "height_m": [0.6, 3], "sill_m": 1.5}
+        assert validate_style({"frames": "metal"}, "x")["frames"] == "metal"
+        assert validate_style({"frames": "chrome"}, "x")["frames"] == "timber"
+        modern = {
+            "name": "Modern", "materials": {
+                "wall": "concrete_panel", "wall_ground": "dark_stone", "plinth": "dark_stone",
+                "roof": "roof_gravel", "trim": "brushed_metal", "door": "metal_door",
+                "chimney": "brushed_metal", "facade_module": "facade_module_modern"},
+            "palette": {"glass": "#2f3d47", "interior": "#5a5a58"},
+            "wall_thickness_m": 0.3, "plinth_height_m": 0.15, "cornice": False,
+            "corners": "none", "frames": "metal", "shutters": 0, "timber_frame": "none",
+            "log_walls": False, "jetty_m": 0,
+            "roof": {"forms": ["flat"], "pitch_deg": [5, 5], "overhang_m": [0, 0], "parapet": True},
+            "crenellations": False, "chimneys": [0, 0], "dormers": 0, "porch": False,
+            "storey_bands": True, "rooftop_units": [1, 3], "roof_housing": True,
+            "entrance_canopy": True, "parapet_cap": True,
+            "blind_windows": {"bay_m": [2.6, 3.2], "width_m": [1.6, 2.2],
+                              "height_m": [1.6, 1.9], "sill_m": 0.6},
+            "tint_jitter": 0.03, "weathering": 0.15}
+        raw_modern = json.loads((Path(__file__).resolve().parents[1] /
+                                "shared/building_styles/modern.json").read_text())
+        for key, value in modern.items():
+            assert raw_modern[key] == value, key
+            assert s["modern"][key] == value, key
+        assert raw_modern["towers"]["chance"] == s["modern"]["towers"]["chance"] == 0
+        from unittest.mock import patch
+        from app.core import hull_model
+        existing = Path(tmp) / "existing.png"
+        existing.touch()
+        resolver_style = validate_style({"materials": {
+            "wall": "exists", "trim": "exists", "roof": "missing", "door": "directory"}}, "x")
+        def texture_file(kind):
+            return {"exists": existing, "missing": Path(tmp) / "absent",
+                    "directory": Path(tmp)}.get(kind)
+        with patch.object(hull_model.surface_textures, "base_texture_file", side_effect=texture_file):
+            assert hull_model.resolved_materials(resolver_style) == frozenset({"wall", "trim"})
+        from app.core.hull_styles import MATERIAL_KEYS
+        assert set(hull_model.FALLBACK_TONES) == set(MATERIAL_KEYS)
+        desc = {"seed": 0, "overrides": {}}
+        for name in ("fachwerk", "steinhaus", "holzhuette", "burg", "modern"):
+            style = s[name]
+            materials, _, _ = hull_model._materials(
+                style, desc, Path(tmp) / name, hull_model.resolved_materials(style))
+            assert len(materials) == (10 if name == "modern" else 9)
+
+
         assert s["fachwerk"]["materials"]["wall"] == "plaster_infill"
         assert s["burg"]["roof"]["forms"] == ["flat"]
         assert validate_style({"wall_thickness_m": 9}, "x")["wall_thickness_m"] == 1.2

@@ -161,5 +161,25 @@
   "brick": {
     "name": "brick",
     "description": "red brick masonry in running bond, seen straight on"
+  },
+  "concrete_panel": {
+    "name": "concrete panels",
+    "description": "light grey precast concrete facade panels with thin recessed joints, seen straight on"
+  },
+  "roof_gravel": {
+    "name": "roof gravel",
+    "description": "flat roof covered with fine light grey gravel, seen from above"
+  },
+  "brushed_metal": {
+    "name": "brushed metal",
+    "description": "brushed anthracite aluminium cladding, seen straight on"
+  },
+  "metal_door": {
+    "name": "metal door",
+    "description": "modern anthracite metal entrance door with a narrow vertical glass strip, front view"
+  },
+  "facade_module_modern": {
+    "name": "modern facade module",
+    "description": "front elevation of exactly one storey and one window bay of a modern apartment building: light grey precast concrete wall, one large dark window with a slim anthracite frame centred; flat orthographic view, no perspective, edges continue seamlessly left/right and top/bottom"
   }
 }

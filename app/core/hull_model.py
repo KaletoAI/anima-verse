@@ -18,16 +18,28 @@ logger = get_logger(__name__)
 FALLBACK_TONES: Dict[str, str] = {
     "wall": "#a99c86", "wall_ground": "#948774", "plinth": "#68635d",
     "roof": "#675b52", "trim": "#59432e", "door": "#654b32", "chimney": "#82776b",
+    "facade_module": "#b8babc",
 }
 
 
-def _materials(style: Dict, desc: Dict, tex_dir: Path) -> tuple:
+def resolved_materials(style: Dict) -> frozenset[str]:
+    """Return material slots whose non-empty kind resolves to a file on disk."""
+    return frozenset(key for key in hull_styles.MATERIAL_KEYS
+                     if style["materials"][key]
+                     and (source := surface_textures.base_texture_file(style["materials"][key]))
+                     and source.is_file())
+
+
+def _materials(style: Dict, desc: Dict, tex_dir: Path, resolved: frozenset[str]) -> tuple:
     """Tint texture copies deterministically and retain their physical UV sizes."""
     from PIL import Image
     materials, textures, sizes = [], {}, {}
     tex_dir.mkdir(parents=True, exist_ok=True)
     for material in hull_styles.MATERIAL_KEYS:
-        source = surface_textures.base_texture_file(style["materials"][material])
+        if material == "facade_module" and not style["materials"][material]:
+            continue
+        source = (surface_textures.base_texture_file(style["materials"][material])
+                  if material in resolved else None)
         key = None
         color = tone_to_linear(FALLBACK_TONES[material])
         if source and source.is_file():
@@ -96,16 +108,17 @@ def build_job(location_id: str, description: Any, location: Optional[Dict] = Non
     if style is None:
         return {"ok": False, "error": "unknown_style"}
     directory = Path(tex_dir) if tex_dir is not None else Path(tempfile.mkdtemp(prefix="av-hull-textures-"))
-    materials, textures, sizes = _materials(style, desc, directory)
+    resolved = resolved_materials(style)
+    materials, textures, sizes = _materials(style, desc, directory, resolved)
     try:
-        fitted = fit_budget(facts, style, desc, uv_sizes=sizes)
+        fitted = fit_budget(facts, style, desc, uv_sizes=sizes, resolved=resolved)
     except ValueError as error:
         if str(error) == "hull too large":
             return {"ok": False, "error": "too_large"}
         raise
     tiers, placement = {}, {}
     for tier in ("full", "low"):
-        geometry = build_hull(facts, style, fitted, tier=tier, uv_sizes=sizes)
+        geometry = build_hull(facts, style, fitted, tier=tier, uv_sizes=sizes, resolved=resolved)
         tiers[tier] = {"meshes": _meshes(geometry["parts"], tier)}
         placement[tier] = scene_mesh_placement(location, geometry["bounds"]["min"],
                                                geometry["bounds"]["max"])

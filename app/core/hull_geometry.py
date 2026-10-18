@@ -20,7 +20,7 @@ def cutout_padding_m(style: Dict) -> float:
 
 
 def _build_parts(facts: Dict, style: Dict, desc: Dict, tier: str,
-                 uv_sizes: Optional[Dict[str, float]]) -> Tuple[List[Part], Dict]:
+                 uv_sizes: Optional[Dict[str, float]], resolved: frozenset[str]) -> Tuple[List[Part], Dict]:
     """Build the dependent roof and ornament payloads in stable order."""
     roofs, roof_info = hull_roofs.build_roofs(facts, style, desc, tier=tier, uv_sizes=uv_sizes)
     parts = hull_walls.build_walls(facts, style, desc, tier=tier, uv_sizes=uv_sizes, roof_info=roof_info)
@@ -70,14 +70,15 @@ def _finish_parts(parts: List[Part], facts: Dict, style: Dict) -> None:
 
 
 def build_hull(facts: Dict, style: Dict, desc: Dict, *, tier: str,
-               uv_sizes: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
+               uv_sizes: Optional[Dict[str, float]] = None,
+               resolved: frozenset[str] = frozenset()) -> Dict[str, Any]:
     """Build one hull tier, preserving its footprint and enforcing its budget."""
     if tier not in TRI_BUDGET:
         raise ValueError("tier must be full or low")
-    parts, roof_info = _build_parts(facts, style, desc, tier, uv_sizes)
+    parts, roof_info = _build_parts(facts, style, desc, tier, uv_sizes, resolved)
     full_parts = parts
     if tier == "low":
-        full_parts, _ = _build_parts(facts, style, desc, "full", uv_sizes)
+        full_parts, _ = _build_parts(facts, style, desc, "full", uv_sizes, resolved)
         _preserve_extremes(parts, full_parts)
     padding = _geometry_padding_m(full_parts, facts, style)
     _finish_parts(parts, facts, style)
@@ -89,7 +90,8 @@ def build_hull(facts: Dict, style: Dict, desc: Dict, *, tier: str,
             "roof": roof_info}
 
 
-def fit_budget(facts: Dict, style: Dict, desc: Dict, uv_sizes=None) -> Dict:
+def fit_budget(facts: Dict, style: Dict, desc: Dict, uv_sizes=None,
+               resolved: frozenset[str] = frozenset()) -> Dict:
     """Fit both tiers using the same density, keeping the caller's description."""
     density = desc.get("overrides", {}).get("ornament_density", .5)
     for value in (density, density/2, 0):
@@ -99,7 +101,7 @@ def fit_budget(facts: Dict, style: Dict, desc: Dict, uv_sizes=None) -> Dict:
         fits = True
         full_parts = []
         for tier in ("full", "low"):
-            parts, _ = _build_parts(facts, style, candidate, tier, uv_sizes)
+            parts, _ = _build_parts(facts, style, candidate, tier, uv_sizes, resolved)
             if tier == "full":
                 full_parts = parts
             else:
