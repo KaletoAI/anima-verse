@@ -29,8 +29,7 @@ def prepare_facts(facts: Dict, style: Dict, desc: Dict, resolved: frozenset[str]
         ring = hull_mesh.offset_ring(level["outline"], level["ccw"], outer)
         for edge in level["edges"]:
             lo, hi = hull_walls._span(ring, edge, outer)
-            module = (style.get("materials", {}).get("facade_module") and "facade_module" in resolved
-                      and hull_facades.module_bays(hi-lo, prepared["storey_m"]) > 0)
+            module = hull_facades.module_count(level, style, resolved, hi-lo, prepared["storey_m"])
             edge["openings"] = ([] if module else
                                 hull_facades.blind_windows(level, edge, style, desc.get("seed", 0), lo, hi))
     return prepared
@@ -43,7 +42,7 @@ def _build_parts(facts: Dict, style: Dict, desc: Dict, tier: str,
     parts = hull_walls.build_walls(facts, style, desc, tier=tier, uv_sizes=uv_sizes, roof_info=roof_info, resolved=resolved)
     parts.extend(roofs)
     parts.extend(hull_ornaments.build_ornaments(
-        facts, style, desc, roof_info, tier=tier, uv_sizes=uv_sizes))
+        facts, style, desc, roof_info, tier=tier, uv_sizes=uv_sizes, resolved=resolved))
     return parts, roof_info
 
 

@@ -114,6 +114,165 @@ def rectangle_padding(parts: list, facts: dict, style: dict) -> None:
                 assert part["protrudes"], (part["tag"], distance, padding)
 
 
+def check_modern_ornaments():
+    """10x8 plate top=3.25. Housing at (5,4) spans x=3.8..6.2,
+    z=2.8..5.2 and y=3.25..5.85; .05 cap ends at 5.90.
+    Rooftop counts round(1+2*density) = 1,2,3. Door top 2.1 gives
+    canopy underside 2.35, top 2.50, width 1.2+1=2.2, depth 1.2.
+    For a horizontal pitched slab at y=2.6, underside=2.45, allowed
+    canopy top=2.43, so drop=2.50-2.43=.07 and underside=2.28.
+    At roof y=2.4 the required underside=2.08 is below 2.1+.05=2.15:
+    omit the canopy. A wall head of 2.4 caps its underside at 2.4-.15=2.25.
+    Housing clamped at (1.5,1.5) has minimum corners .3 from both edges.
+    U-notch x=3..7,z=3..8 rejects housing centred at (5,5): its
+    corners x=3.8/6.2,z=3.8/6.2 lie outside. An upper floor at y=6
+    places every roof box at 6+.25=6.25, never the ground top 3.25.
+    A 2x2 roof cannot fit a .8-wide unit plus two 1m margins (2.8>2).
+    A 2x2 roof cannot fit housing plus two .3 margins (3>2).
+    Module filler spans 11.18/9.18 at height 3 choose 4/3 bays;
+    zero timber on those edges; occupied upper edges retain framing.
+    """
+    root = Path(__file__).resolve().parents[1]
+    style=json.loads((root/'shared/building_styles/modern.json').read_text())
+    facts=rect_facts()
+    facts['elevator']=[5,4]
+    desc={'seed':1,'overrides':{'roof_form':'flat','ornament_density':1}}
+    _, info=build_roofs(facts,style,desc,tier='full')
+    parts=build_ornaments(facts,style,desc,info,tier='full')
+    housing=[p for p in parts if p['tag']=='housing']
+    assert len(housing)==2
+    wall=next(p for p in housing if p['material']=='wall')
+    for a,lo,hi in ((0,3.8,6.2),(1,3.25,5.85),(2,2.8,5.2)):
+        assert abs(min(v[a] for v in wall['vertices'])-lo)<.0003
+        assert abs(max(v[a] for v in wall['vertices'])-hi)<.0003
+    canopy=[p for p in parts if p['tag']=='canopy']
+    assert len(canopy)==1
+    assert canopy[0]['protrudes'] and canopy[0]['detail_level']==0
+    assert abs(min(v[1] for v in canopy[0]['vertices'])-2.35)<.0003
+    assert abs(max(v[1] for v in canopy[0]['vertices'])-2.50)<.0003
+    cap=next(p for p in housing if p['material']=='trim')
+    assert abs(min(v[1] for v in cap['vertices'])-5.85)<.0003
+    assert abs(max(v[1] for v in cap['vertices'])-5.90)<.0003
+    for axis,size in ((0,2.2),(1,.15),(2,1.2)):
+        assert abs(max(v[axis] for v in canopy[0]['vertices'])-min(v[axis] for v in canopy[0]['vertices'])-size)<.0003
+    for part in housing+canopy:
+        closed(part)
+        assert no_degenerate_faces([part])
+    from app.core.hull_ornaments import _canopies
+    for eaves,expected in ((2.6,2.28),(2.4,None)):
+        colliding=deepcopy(facts)
+        colliding['eaves_y']=eaves
+        overhanging=deepcopy(style); overhanging['roof']['overhang_m']=[.4,.4]
+        _, pitched=build_roofs(colliding,overhanging,{'overrides':{'roof_form':'gable','pitch_deg':0}},tier='low')
+        result=[]
+        _canopies(colliding['levels'][0],style,{},result,pitched)
+        if expected is None:
+            assert not result
+        else:
+            assert len(result)==1
+            assert abs(min(v[1] for v in result[0]['vertices'])-expected)<.0003
+            assert abs(max(v[1] for v in result[0]['vertices'])-expected-.15)<.0003
+    short=deepcopy(facts['levels'][0]); short['top_y']=2.4
+    result=[]
+    _canopies(short,style,{},result,{})
+    assert abs(min(v[1] for v in result[0]['vertices'])-2.25)<.0003
+    for point in ([0,0],[10,8]):
+        clamped=deepcopy(facts); clamped['elevator']=point
+        result=build_ornaments(clamped,style,desc,info,tier='low')
+        wall=next(p for p in result if p['tag']=='housing' and p['material']=='wall')
+        for axis,lo,hi in ((0,.3,2.7),(2,.3,2.7)) if point==[0,0] else ((0,7.3,9.7),(2,5.3,7.7)):
+            assert abs(min(v[axis] for v in wall['vertices'])-lo)<.0003
+            assert abs(max(v[axis] for v in wall['vertices'])-hi)<.0003
+    concave=deepcopy(roof_shapes()['U']); concave['elevator']=[5,5]
+    _, roof=build_roofs(concave,style,desc,tier='low')
+    assert not any(p['tag']=='housing' for p in build_ornaments(concave,style,desc,roof,tier='low'))
+    stacked=deepcopy(facts)
+    upper=deepcopy(stacked['levels'][0]); upper.update(level=1,floor_y=3,top_y=6)
+    for edge in upper['edges']:
+        edge['openings']=[]
+    stacked['levels'].append(upper); stacked['eaves_y']=6
+    _, roof=build_roofs(stacked,style,desc,tier='low')
+    result=build_ornaments(stacked,style,desc,roof,tier='low')
+    for part in result:
+        if part['tag'] in ('housing','rooftop') and part['material']!='trim':
+            assert abs(min(v[1] for v in part['vertices'])-6.25)<.0003
+    tiny=polygon_case_facts([[0,0],[2,0],[2,2],[0,2]])
+    tiny['elevator']=[1,1]
+    _, roof=build_roofs(tiny,style,desc,tier='low')
+    assert not any(p['tag'] in ('housing','rooftop') for p in build_ornaments(tiny,style,desc,roof,tier='low'))
+    _, pitched=build_roofs(facts,style,{'overrides':{'roof_form':'gable'}},tier='low')
+    assert not any(p['tag'] in ('housing','rooftop') for p in build_ornaments(facts,style,desc,pitched,tier='low'))
+    from app.core.world_geometry import point_segment_distance
+    boxes=[p for p in parts if p['tag'] in ('housing','rooftop') and p['material']!='trim']
+    for box in boxes:
+        if box['tag']=='rooftop':
+            assert box['material']=='chimney'
+            for axis,lo,hi in ((0,.8,1.6),(2,.8,1.6),(1,.8,1.4)):
+                size=max(v[axis] for v in box['vertices'])-min(v[axis] for v in box['vertices'])
+                assert lo-.0003<=size<=hi+.0003
+            for x,_,z in box['vertices']:
+                assert min(point_segment_distance(x,z,*a,*b) for a,b in
+                    zip(facts['levels'][0]['outline'],facts['levels'][0]['outline'][1:]+facts['levels'][0]['outline'][:1]))>=1-.0003
+        for other in boxes:
+            if box is other:
+                continue
+            assert any(max(v[a] for v in box['vertices'])<=min(v[a] for v in other['vertices'])
+                       or max(v[a] for v in other['vertices'])<=min(v[a] for v in box['vertices']) for a in (0,2))
+    for density,count in ((0,1),(.5,2),(1,3)):
+        desc['overrides']['ornament_density']=density
+        roomy=polygon_case_facts([[0,0],[40,0],[40,40],[0,40]])
+        _, roof=build_roofs(roomy,style,desc,tier='low')
+        result=build_ornaments(roomy,style,desc,roof,tier='low')
+        assert sum(p['tag']=='rooftop' for p in result)==count
+        assert not any(p['tag']=='housing' for p in result)
+        assert result==build_ornaments(roomy,style,desc,roof,tier='low')
+    style['porch']=True
+    assert not any(p['tag']=='canopy' for p in build_ornaments(facts,style,desc,info,tier='low'))
+    style=json.loads((root/'shared/building_styles/fachwerk.json').read_text())
+    style['materials']['facade_module']='test'
+    prepared=rect_facts()
+    prepared['storey_m']=3
+    for i in (1,2):
+        level=deepcopy(prepared['levels'][0])
+        level.update(level=i,floor_y=3*i,top_y=3*(i+1),filler=i==1)
+        for edge in level['edges']:
+            edge['openings']=[]
+        prepared['levels'].append(level)
+    prepared['eaves_y']=9
+    result=build_ornaments(prepared,style,desc,{},tier='full',resolved=frozenset({'facade_module'}))
+    assert not any(p['tag']=='timber' and p['detail_level']==1 for p in result)
+    assert any(p['tag']=='timber' and p['detail_level']==2 for p in result)
+    from app.core.hull_walls import build_walls
+    walls=build_walls(prepared,style,desc,tier='full',resolved=frozenset({'facade_module'}))
+    assert sum(p['tag']=='facade_module' for p in walls)==4
+    fallback=build_ornaments(prepared,style,desc,{},tier='full')
+    assert any(p['tag']=='timber' and p['detail_level']==1 for p in fallback)
+
+
+
+def check_housing_slit():
+    """A 10x8 roof has slit x=4.5..5.5, z=3.5..8.
+
+    Elevator (5,4) stays inside the bbox clamp x=1.5..8.5,z=1.5..6.5,
+    so the housing stays at x=3.8..6.2,z=2.8..5.2. All four corners
+    lie inside and at least .7 from slit edges, exceeding the .3 margin,
+    but its footprint crosses the slit for 5.2-3.5=1.7 m in z.
+    Clamping does not search for alternate positions: drop both housing
+    wall and cap. Expected housing count is zero in both tiers.
+    """
+    root=Path(__file__).resolve().parents[1]
+    style=json.loads((root/'shared/building_styles/modern.json').read_text())
+    facts=polygon_case_facts([[0,0],[10,0],[10,8],[5.5,8],
+                              [5.5,3.5],[4.5,3.5],[4.5,8],[0,8]])
+    facts['elevator']=[5,4]
+    desc={'seed':1,'overrides':{'roof_form':'flat'}}
+    for tier in ('full','low'):
+        _,roof=build_roofs(facts,style,desc,tier=tier)
+        parts=build_ornaments(facts,style,desc,roof,tier=tier)
+        assert not any(p['tag']=='housing' for p in parts), tier
+    print('PASS: lift housing crossing narrow roof slit is dropped in both tiers')
+
+
 def main() -> None:
     """Exercise every ornament family and both tiers with supplied facts."""
     root = Path(__file__).resolve().parents[1]
@@ -304,5 +463,7 @@ def check_blind_ornaments():
     print('PASS: timber and logs clear blind pane rectangles')
 
 if __name__ == "__main__":
+    check_housing_slit()
+    check_modern_ornaments()
     check_blind_ornaments()
     main()

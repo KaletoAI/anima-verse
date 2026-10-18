@@ -1,7 +1,7 @@
 """Wall shells and aperture details built exclusively from hull facts."""
 import math
 from typing import Dict, List, Optional, Tuple
-from app.core.hull_facades import module_bays, mullions
+from app.core.hull_facades import module_count, mullions
 from app.core.hull_mesh import Part, PartBuilder, offset_ring, rng, _normal
 from app.core.scene_recipe import WALL_THICKNESS, WALL_SINK_M
 
@@ -143,8 +143,7 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 if clipped['s1']-clipped['s0'] > 1e-5 and clipped['y1']-clipped['y0'] > 1e-5:
                     holes.append(clipped)
             real_holes = [h for h in holes if not h.get('blind')]
-            bays = (module_bays(hi-lo, facts['storey_m']) if filler
-                    and style.get('materials',{}).get('facade_module') and 'facade_module' in resolved else 0)
+            bays = module_count(level, style, resolved, hi-lo, facts.get('storey_m'))
             if bays:
                 start = max(floor,plinth) if number == 0 else floor
                 build = builder('facade_module','facade_module')

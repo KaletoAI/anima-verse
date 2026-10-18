@@ -54,3 +54,10 @@ def mullions(s0, s1):
         return []
     fields = math.ceil(width/1.6)
     return [s0+width*i/fields for i in range(1,fields)]
+
+
+def module_count(level, style, resolved, span, storey_m):
+    """Return module bays only on eligible, resolved facade edges."""
+    return (module_bays(span, storey_m) if level.get("filler", False)
+            and style.get("materials", {}).get("facade_module")
+            and "facade_module" in resolved else 0)

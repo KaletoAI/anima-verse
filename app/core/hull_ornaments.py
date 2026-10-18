@@ -2,11 +2,12 @@
 import math
 from typing import Dict, List, Optional
 
+from app.core.hull_facades import module_count
 from app.core.hull_mesh import Part, PartBuilder, _normal, offset_ring, rng
 from app.core.hull_walls import _axes, _cells, _span, wall_offsets
 from app.core.scene_recipe import WALL_SINK_M, _ring_ccw, _point_in_polygon
-from app.core.world_geometry import polygon_distance
-from app.core.hull_roofs import clip_detail, roof_top_y, _detail_samples, detail_breaks
+from app.core.world_geometry import polygon_distance, point_segment_distance
+from app.core.hull_roofs import clip_detail, roof_top_y, _detail_samples, detail_breaks, _fully_covered
 
 
 def _builder(tag, material, uv_sizes, *, protrudes=False):
@@ -86,7 +87,7 @@ def _posts(left, right, holes):
     return sorted(posts)
 
 
-def _timber(level, style, desc, density, uv_sizes, parts, roof_info=None):
+def _timber(level, style, desc, density, uv_sizes, parts, roof_info, resolved, storey_m):
     """Place bands, opening posts, window rails and seeded free-field braces."""
     number = level["level"]
     bottom = style.get("plinth_height_m", 0) if number == 0 else level["floor_y"]
@@ -95,6 +96,8 @@ def _timber(level, style, desc, density, uv_sizes, parts, roof_info=None):
     ring = offset_ring(level["outline"], level["ccw"], outer)
     for edge in level["edges"]:
         left, right = _span(ring, edge, outer)
+        if module_count(level, style, resolved, right-left, storey_m):
+            continue
         holes = edge["openings"]
         posts = _posts(left, right, holes)
         for low, high in ((bottom, min(top, bottom + .16)), (max(bottom, top - .16), top)):
@@ -291,6 +294,28 @@ def _towers(facts, style, desc, density, tier, uv_sizes, parts):
         _append(parts, builder)
 
 
+def _roof_drop(level, edge, vertices, top_at, roof_info, style):
+    """Return the rigid vertical drop needed below same-storey pitched roofs."""
+    drop = 0.0
+    for wing in (roof_info or {}).get("wings", []):
+        if wing["level"] != level["level"]:
+            continue
+        samples = _detail_samples(wing, vertices)
+        if wing["form"] == "tent":
+            # Fan slopes need not equal the requested pyramid pitch.
+            normals = [_normal(plane) for plane in wing["planes"]]
+            underside_drop = max(.15*math.sqrt(sum(v*v for v in n))/abs(n[1]) for n in normals)
+        else:
+            underside_drop = .15 / math.cos(math.radians(wing["pitch_deg"]))
+        for x,_,z in samples:
+            height = roof_top_y(wing,x,z,style)
+            if height is None:
+                continue
+            cap_top = top_at(x, z)
+            drop = max(drop, cap_top-height+underside_drop+.02)
+    return drop
+
+
 def _porches(level, style, uv_sizes, parts, roof_info=None):
     """Attach a closed shed slab and two .12 m posts to each ground door."""
     outer = wall_offsets(style, 0)[1]
@@ -312,26 +337,10 @@ def _porches(level, style, uv_sizes, parts, roof_info=None):
                        (right, outer + 1.6, low), (left, outer + 1.6, low)]
             _extrude(cap, [_point(edge, span, height, depth) for span, depth, height in corners],
                      [_point(edge, span, height + .12, depth) for span, depth, height in corners])
-            drop = 0.0
-            for wing in (roof_info or {}).get("wings", []):
-                if wing["level"] != level["level"]:
-                    continue
-                samples = _detail_samples(wing, cap.part()["vertices"])
-                if wing["form"] == "tent":
-                    # Fan slopes need not equal the requested pyramid pitch.
-                    normals = [_normal(plane) for plane in wing["planes"]]
-                    underside_drop = max(.15*math.sqrt(sum(v*v for v in n))/abs(n[1]) for n in normals)
-                else:
-                    underside_drop = .15 / math.cos(math.radians(wing["pitch_deg"]))
-                for x,_,z in samples:
-                    height = roof_top_y(wing,x,z,style)
-                    if height is None:
-                        continue
-                    # Porch top is a plane falling .4 over its 1.6 m depth.
-                    _, normal = _axes(edge)
-                    depth = (x-edge["a"][0])*normal[0]+(z-edge["a"][1])*normal[1]
-                    cap_top = low+.52-(depth-outer)*.25
-                    drop = max(drop, cap_top-height+underside_drop+.02)
+            _, normal = _axes(edge)
+            drop = _roof_drop(level, edge, cap.part()["vertices"],
+                              lambda x,z: low+.52-((x-edge["a"][0])*normal[0]
+                                  +(z-edge["a"][1])*normal[1]-outer)*.25, roof_info, style)
             if low-drop < hole["y1"]+.05-1e-8:
                 del parts[porch_start:]
                 continue
@@ -346,8 +355,80 @@ def _porches(level, style, uv_sizes, parts, roof_info=None):
             _append(parts, cap)
 
 
+def _canopies(level, style, uv_sizes, parts, roof_info):
+    """Fit rigid entrance plates below the wall head and nearby roof undersides."""
+    outer = wall_offsets(style, 0)[1]
+    for edge in level["edges"]:
+        for hole in edge["openings"]:
+            if hole["kind"] != "door":
+                continue
+            low = min(hole["y1"]+.25, level["top_y"]-.15)
+            builder = _builder("canopy", "trim", uv_sizes, protrudes=True)
+            _block(builder, edge, hole["s0"]-.5, hole["s1"]+.5, low, low+.15, outer, outer+1.2)
+            part = builder.part()
+            drop = _roof_drop(level, edge, part["vertices"], lambda x,z: low+.15, roof_info, style)
+            if low-drop < hole["y1"]+.05-1e-8:
+                continue
+            for point in part["vertices"]:
+                point[1] = round(point[1]-drop,4)
+            part["detail_level"] = level["level"]
+            _append(parts, builder)
+
+
+def _roof_units(facts, style, desc, roof_info, density, uv_sizes, parts):
+    """Place housing first, then independently seeded nonoverlapping roof boxes."""
+    if roof_info.get("form") != "flat":
+        return
+    top = next((t for t in roof_info.get("flat_tops", [])
+                if t["level"] == roof_info["topmost_level"]), None)
+    if top is None:
+        return
+    outline = next(l["outline"] for l in facts["levels"] if l["level"]==top["level"])
+    xs,zs = zip(*outline)
+    limits = [min(xs), max(xs), min(zs), max(zs)]
+    occupied = []
+
+    def fits(x,z,w,d,margin):
+        corners = [(x+sx*w/2,z+sz*d/2) for sx,sz in ((-1,-1),(1,-1),(1,1),(-1,1))]
+        return (_fully_covered(corners, outline)
+                and all(_point_in_polygon(a,b,outline) and min(point_segment_distance(a,b,*c,*e) for c,e in
+                        zip(outline,outline[1:]+outline[:1]))>=margin-1e-8
+                    for a,b in corners)
+                and not any(x+w/2>a and x-w/2<b and z+d/2>c and z-d/2<e
+                            for a,b,c,e in occupied))
+
+    def emit(tag,material,x,z,w,d,h):
+        builder = _builder(tag,material,uv_sizes)
+        builder.box([x,top["y"]+h/2,z],[w,h,d])
+        _append(parts,builder)
+        occupied.append((x-w/2,x+w/2,z-d/2,z+d/2))
+
+    if style.get("roof_housing") and facts.get("elevator") is not None:
+        x,z = facts["elevator"]
+        if limits[1]-limits[0]>=3 and limits[3]-limits[2]>=3:
+            x=max(limits[0]+1.5,min(limits[1]-1.5,x))
+            z=max(limits[2]+1.5,min(limits[3]-1.5,z))
+            if fits(x,z,2.4,2.4,.3):
+                emit("housing","wall",x,z,2.4,2.4,2.6)
+                cap=_builder("housing","trim",uv_sizes)
+                cap.box([x,top["y"]+2.625,z],[2.4,.05,2.4])
+                _append(parts,cap)
+    minimum,maximum = style.get("rooftop_units",[0,0])
+    for i in range(round(minimum+(maximum-minimum)*density)):
+        random = rng(desc.get("seed",0),f"rooftop:{i}")
+        w,d,h = random.uniform(.8,1.6),random.uniform(.8,1.6),random.uniform(.8,1.4)
+        if limits[1]-limits[0]<2 or limits[3]-limits[2]<2:
+            continue
+        for _ in range(8):
+            x,z = random.uniform(limits[0]+1,limits[1]-1),random.uniform(limits[2]+1,limits[3]-1)
+            if fits(x,z,w,d,1):
+                emit("rooftop","chimney",x,z,w,d,h)
+                break
+
+
 def build_ornaments(facts: Dict, style: Dict, desc: Dict, roof_info: Dict, *, tier: str,
-                    uv_sizes: Optional[Dict[str, float]] = None) -> List[Part]:
+                    uv_sizes: Optional[Dict[str, float]] = None,
+                    resolved: frozenset[str] = frozenset()) -> List[Part]:
     """Build style ornaments while preserving silhouette details in both tiers."""
     if tier not in ("full", "low"):
         raise ValueError("tier must be full or low")
@@ -359,14 +440,16 @@ def build_ornaments(facts: Dict, style: Dict, desc: Dict, roof_info: Dict, *, ti
         start = len(parts)
         timber = style.get("timber_frame", "none")
         if tier == "full" and (timber == "all" or timber == "upper" and (len(levels) == 1 or level["level"] != 0)):
-            _timber(level, style, desc, density, uv_sizes, parts, roof_info)
+            _timber(level, style, desc, density, uv_sizes, parts, roof_info, resolved, facts.get("storey_m"))
         if style.get("log_walls") or style.get("corners") == "log_ends":
             _logs(level, style, tier == "full", uv_sizes, parts, roof_info)
         if level["level"] == 0 and style.get("porch"):
             _porches(level, style, uv_sizes, parts, roof_info)
+        if level["level"] == 0 and style.get("entrance_canopy") and not style.get("porch"):
+            _canopies(level, style, uv_sizes, parts, roof_info)
         clipped = []
         for part in parts[start:]:
-            if part["tag"] in ("porch", "roof"):
+            if part["tag"] in ("porch", "roof", "canopy"):
                 clipped.append(part)
                 continue
             result = clip_detail(part, level["level"], roof_info, style,
@@ -386,5 +469,6 @@ def build_ornaments(facts: Dict, style: Dict, desc: Dict, roof_info: Dict, *, ti
         for flat in roof_info.get("flat_tops", []):
             if flat.get("parapet"):
                 _crenels(flat["outline"], flat["y"] + 1, style["wall_thickness_m"], uv_sizes, parts)
+    _roof_units(facts, style, desc, roof_info, density, uv_sizes, parts)
     _towers(facts, style, desc, density, tier, uv_sizes, parts)
     return parts

@@ -159,6 +159,11 @@ def _parapet(outline, y, style, uv_sizes):
         yaw = -math.atan2(second[1] - first[1], second[0] - first[0])
         builder.box(center, [math.dist(first, second) + thickness, 1.0, thickness], yaw)
         parts.append(builder.part())
+        if style.get("parapet_cap"):
+            cap = _builder("parapet_cap", "trim", uv_sizes)
+            cap.box([center[0], y+1.025, center[2]],
+                    [math.dist(first, second)+thickness+.06, .05, thickness+.06], yaw)
+            parts.append(cap.part())
     return parts
 
 
@@ -626,6 +631,38 @@ def _dormers(info, style, desc, density, pitch, uv_sizes, parts):
             parts.append(cap.part())
 
 
+def _fully_covered(outline, covered):
+    """Test containment, including boundary contact but excluding edge excursions."""
+    from app.core.world_geometry import polygon_distance
+    if outline == covered:
+        return True
+    if any(not _point_in_polygon(*p, covered) and polygon_distance(*p, covered)>1e-8 for p in outline):
+        return False
+    for a,b in zip(outline, outline[1:]+outline[:1]):
+        cuts = [0.,1.]
+        dx,dz = b[0]-a[0],b[1]-a[1]
+        for c,d in zip(covered,covered[1:]+covered[:1]):
+            ex,ez = d[0]-c[0],d[1]-c[1]
+            det = dx*ez-dz*ex
+            if abs(det)<1e-10:
+                # Collinear boundary vertices also split the segment.
+                if abs(_cross(a,b,c))<1e-8:
+                    cuts.extend(((p[0]-a[0])*dx+(p[1]-a[1])*dz)/(dx*dx+dz*dz)
+                                for p in (c,d))
+                continue
+            t=((c[0]-a[0])*ez-(c[1]-a[1])*ex)/det
+            u=((c[0]-a[0])*dz-(c[1]-a[1])*dx)/det
+            if 0<t<1 and -1e-8<=u<=1+1e-8:
+                cuts.append(t)
+        cuts=sorted(t for t in cuts if 0<=t<=1)
+        for lo,hi in zip(cuts,cuts[1:]):
+            t=(lo+hi)/2
+            p=[a[0]+dx*t,a[1]+dz*t]
+            if not _point_in_polygon(*p,covered) and polygon_distance(*p,covered)>1e-8:
+                return False
+    return True
+
+
 def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 uv_sizes: Optional[Dict[str, float]] = None) -> Tuple[List[Part], Dict[str, Any]]:
     """Build roofs and shared ornament metadata exclusively from supplied facts.
@@ -656,6 +693,8 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
         base = facts["eaves_y"] if topmost else level["top_y"]
         if topmost and form == "flat":
             _flat(outline, number, base, style, overhang, uv_sizes, info, parts)
+            continue
+        if covered and _fully_covered(outline, covered):
             continue
         angle = orthogonal_frame(outline)
         if angle is None or (covered and orthogonal_frame(covered) is None):

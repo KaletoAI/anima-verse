@@ -57,6 +57,54 @@ def closed(part: dict) -> None:
     assert volume > 0, (part["tag"], volume)
 
 
+def check_modern_roofs():
+    """Plate top=3+.25=3.25; parapet top=4.25; cap top=4.30.
+
+    Cap width=.30+.06=.36. Three identical triangular storeys expose
+    only the last plate: 3 candidates minus 2 covered plates = 1.
+    In the U notch x=3..7,z=3..8, the triangle edge (1,7)..(9,7)
+    leaves the polygon although all three triangle corners lie inside.
+    An inner triangle x=2..8,z=0..6 fits a 10x8 rectangular cover,
+    including its z=0 boundary; reversing the cover changes no area.
+    """
+    from _hull_fixtures import polygon_case_facts
+    root = Path(__file__).resolve().parents[1]
+    style = json.loads((root/'shared/building_styles/burg.json').read_text())
+    facts = polygon_case_facts([[0,0],[10,0],[10,8],[0,8]])
+    desc = {'overrides': {'roof_form':'flat'}}
+    old, _ = build_roofs(facts,style,desc,tier='full')
+    assert not any(p['tag']=='parapet_cap' for p in old)
+    style.update(parapet_cap=True, wall_thickness_m=.3)
+    parts, _ = build_roofs(facts,style,desc,tier='full')
+    caps = [p for p in parts if p['tag']=='parapet_cap']
+    assert len(caps)==4
+    for cap in caps:
+        closed(cap)
+        close(min(v[1] for v in cap['vertices']),4.25)
+        close(max(v[1] for v in cap['vertices']),4.30)
+        close(min(max(v[a] for v in cap['vertices'])-min(v[a] for v in cap['vertices']) for a in (0,2)),.36)
+    triangle = polygon_case_facts([[0,0],[10,0],[3,8]])
+    for i in (1,2):
+        level = deepcopy(triangle['levels'][0])
+        level.update(level=i, floor_y=3*i, top_y=3*(i+1))
+        triangle['levels'].append(level)
+    triangle['eaves_y']=9
+    _, info = build_roofs(triangle,style,desc,tier='low')
+    assert len(info['flat_tops'])==1
+
+    from app.core.hull_roofs import _fully_covered
+    u=[[0,0],[10,0],[10,8],[7,8],[7,3],[3,3],[3,8],[0,8]]
+    assert not _fully_covered([[1,7],[9,7],[5,1]],u)
+    inner=[[2,0],[8,0],[5,6]]
+    rectangle=[[0,0],[10,0],[10,8],[0,8]]
+    assert _fully_covered(inner,rectangle)
+    assert _fully_covered(inner,rectangle[::-1])
+    triangle['levels'][1]['outline']=rectangle
+    triangle['levels'][2]['outline']=rectangle
+    _, info=build_roofs(triangle,style,desc,tier='low')
+    assert len(info['flat_tops'])==1
+
+
 def main() -> None:
     """Exercise decomposition, fallbacks, metrics, details and determinism."""
     from app.core.hull_facts import hull_facts
@@ -196,4 +244,5 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as temporary:
         from app.core import paths
         paths.init(temporary)
+        check_modern_roofs()
         main()
