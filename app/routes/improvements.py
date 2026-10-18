@@ -186,7 +186,9 @@ def delete_improvement(improvement_id: str) -> Dict[str, Any]:
 @router.post("/{improvement_id}/pause")
 def pause(improvement_id: str) -> Dict[str, Any]:
     _improvement_or_404(improvement_id)
-    store.update(improvement_id, status="paused")
+    # A pause ends a "Run now" too — otherwise resuming would silently go on
+    # past the idle window.
+    store.update(improvement_id, status="paused", forced=False)
     return store.get(improvement_id) or {}
 
 
@@ -199,10 +201,20 @@ def resume(improvement_id: str) -> Dict[str, Any]:
 
 @router.post("/{improvement_id}/run-now")
 def run_now(improvement_id: str) -> Dict[str, Any]:
-    """Submits the entry's next step at once, past the idle window, the engine
-    switch and a freeze; ``reason`` says what happened (``engine.run_now``)."""
+    """Forces the entry and submits its next step at once; the rest follow
+    tick by tick, past the idle window, the engine switch, a freeze and a queue
+    pause. ``reason`` says what happened (``engine.run_now``)."""
     _improvement_or_404(improvement_id)
     return engine.run_now(improvement_id)
+
+
+@router.post("/{improvement_id}/stop-run")
+def stop_run(improvement_id: str) -> Dict[str, Any]:
+    """Ends a "Run now": the entry follows the normal gates again; a step
+    already in flight finishes."""
+    _improvement_or_404(improvement_id)
+    engine.stop_run_now(improvement_id)
+    return store.get(improvement_id) or {}
 
 
 @router.post("/{improvement_id}/rescan")

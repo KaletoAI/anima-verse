@@ -643,6 +643,13 @@ row with `removed: true` when its initial scan deleted it. `POST
 /improvements/clear-finished` cancels queued tasks and deletes every done entry;
 the admin list exposes this through **Remove finished** with confirmation.
 
+**Run now** forces an entry (`improvements.forced`): the click submits its next
+pending step at once, and every following tick submits the next one, past the
+idle window, the engine switch, a world freeze and a task-queue pause (the admin
+tick runs the engine through both). The media switch, an improvement step
+already in flight and a busy deferral still hold it back. The flag clears itself
+once the entry has nothing pending or running, and on **Pause** or **Stop run**.
+
 **Failure vocabulary of `apply`.** A defect is a plain exception (its message lands in
 the step's `error`; the step is retried once, then skipped).
 `app.imagegen.base.BackendBusyError` and `app.core.improvements.base.CandidateBusy`

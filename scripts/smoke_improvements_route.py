@@ -44,8 +44,9 @@ recorded from a run.  A mini FastAPI app carries only this router, and
      nothing to the queue, so only A's rows remain.
 
   8. ``POST /{id}/rescan`` reports the diff, ``POST /{id}/run-now`` submits
-     the entry's first pending step at once even with the engine off, and only
-     arms the next tick's flag (``engine._run_now``) while a step is in flight;
+     the entry's first pending step at once even with the engine off and
+     forces the entry (``forced``) so the ticks run the rest; while a step is in
+     flight it only forces; ``stop-run`` ends that, and so does a pause;
      ``POST /{id}/steps/{key}/retry`` un-skips a step: pending with attempts 0.
 
   9. ``GET /improvements/status`` is the panel head: the settings, the gate
@@ -311,7 +312,6 @@ FakeType.candidates = [("k1", "Zeta"), ("k3", "Beta")]
 check("rescan reports the diff",
       client.post(f"/improvements/{A}/rescan").json(),
       {"added": 1, "closed": 0})
-engine._run_now.clear()
 # The engine is still OFF here (section 9 reads the default) and nothing is in
 # flight: run-now submits at once instead of waiting for a tick. A's pending
 # steps are k1 "Zeta" and k3 "Beta"; the label order puts k3 first.
@@ -325,9 +325,14 @@ check("…the entry's first step by label",
 # With that step in flight a second click only arms the flag for the tick.
 r = client.post(f"/improvements/{A}/run-now")
 check("…a second click waits behind it",
-      (r.json()["reason"], sorted(engine._run_now), len(task_rows())),
-      ("queued", [A], 1))
-engine._run_now.clear()
+      (r.json()["reason"], store.get(A)["forced"], len(task_rows())),
+      ("queued", True, 1))
+check("stop-run ends the forced run",
+      client.post(f"/improvements/{A}/stop-run").json()["forced"], False)
+engine.request_run_now(A)
+client.post(f"/improvements/{A}/pause")
+check("…and so does a pause", store.get(A)["forced"], False)
+client.post(f"/improvements/{A}/resume")
 # Undo, so the later sections see the state they were written against.
 conn = sqlite3.connect(QUEUE_DB)
 conn.execute("DELETE FROM tasks WHERE task_type=?", (engine.TASK_TYPE,))

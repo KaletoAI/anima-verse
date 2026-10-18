@@ -232,10 +232,15 @@ export function QueueView() {
   }
 
   const gate = (() => {
+    // Mirrors engine.RUN_NOW_OVERRIDES: these gates do not hold a forced entry.
+    if (status.forced && ['active', 'disabled', 'frozen', 'paused'].includes(status.reason)) {
+      return t('Run now active')
+    }
     switch (status.reason) {
       case 'media_off': return t('Media generation off')
       case 'disabled': return t('Engine off')
       case 'frozen': return t('World frozen')
+      case 'paused': return t('Task queue paused')
       case 'busy': return t('Step running')
       case 'active':
         return `${t('Next step allowed in')} ${mmss(status.next_allowed_in_s)}`

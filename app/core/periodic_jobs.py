@@ -579,6 +579,11 @@ _SUB_TASKS: List[tuple] = [
 # Tick-Loop
 # ---------------------------------------------------------------------------
 
+#: Sub-tasks that run while the world is frozen or the task queue paused. The
+#: improvements engine applies both gates itself, and an entry the admin forced
+#: with "Run now" must go on through them.
+_RUNS_WHILE_PAUSED = {"improvements"}
+
 _tick_task: Optional[asyncio.Task] = None
 _last_run: Dict[str, float] = {}  # label -> unix-ts of last successful run
 
@@ -595,22 +600,24 @@ async def _world_admin_tick_loop():
     while True:
         try:
             interval = _get_tick_interval()
-            if not _is_paused():
-                now = utc_now().timestamp()
-                for func, min_iv, label in _SUB_TASKS:
-                    last = _last_run.get(label, 0.0)
-                    if min_iv and (now - last) < min_iv:
-                        continue
-                    started = utc_now()
-                    try:
-                        await asyncio.to_thread(func)
-                        _last_run[label] = utc_now().timestamp()
-                    except Exception as _se:
-                        logger.error("admin_tick sub %s error: %s",
-                                     label, _se, exc_info=True)
-                    duration = (utc_now() - started).total_seconds()
-                    if duration > 5:
-                        logger.info("admin_tick %s done in %.1fs", label, duration)
+            paused = _is_paused()
+            now = utc_now().timestamp()
+            for func, min_iv, label in _SUB_TASKS:
+                if paused and label not in _RUNS_WHILE_PAUSED:
+                    continue
+                last = _last_run.get(label, 0.0)
+                if min_iv and (now - last) < min_iv:
+                    continue
+                started = utc_now()
+                try:
+                    await asyncio.to_thread(func)
+                    _last_run[label] = utc_now().timestamp()
+                except Exception as _se:
+                    logger.error("admin_tick sub %s error: %s",
+                                 label, _se, exc_info=True)
+                duration = (utc_now() - started).total_seconds()
+                if duration > 5:
+                    logger.info("admin_tick %s done in %.1fs", label, duration)
         except asyncio.CancelledError:
             raise
         except Exception as e:

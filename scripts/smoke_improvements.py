@@ -115,7 +115,8 @@ taken from the ``submit`` call.
      the user active 60 s ago → (False, "active").  ``request_run_now(A)``
      makes the NEXT tick submit A's k1 anyway; while that row is owed the
      status reason is "busy" and ``running_step`` is k1.  After the step is
-     handled the flag is spent: with the user still 60 s active the next tick
+     handled A has nothing left (and is gone): with the user still 60 s active
+     the next tick
      submits "" again, and A — its last step done — has closed itself.
      ``next_allowed_in_s`` is 900 - 60 = 840, minus the test's own runtime,
      hence the 830..840 window.
@@ -126,9 +127,8 @@ taken from the ``submit`` call.
      and, the user still being active, queues nothing in the same breath.
 
  18. A run-now flag can never get stuck.  C is 'done' and has no pending step,
-     so the tick it overrides finds nothing: reason "empty".  The flag is
-     spent there and then, so the tick after it reads the ordinary idle gate
-     again — reason "active", not a second futile walk of the queue.
+     so the tick's sweep clears C's ``forced`` on the spot and reads the
+     ordinary idle gate — reason "active", not a futile walk of the queue.
 
  19. A one_shot whose scan finds NOTHING is removed on the spot.  D is created
      and scanned against an empty candidate list: 0 added, 0 closed, no steps
@@ -169,8 +169,8 @@ taken from the ``submit`` call.
      both are deferred: the next tick submits nothing, reason "deferred".
      With the engine's clock moved BUSY_DEFER_S + 1 s ahead the window has
      passed, and the tick submits ka again (label order, the first step).
-     Run-now overrides a deferral: with ka and kb deferred again and the user
-     active 60 s, ``request_run_now(H)`` makes the tick submit ka.
+     The click overrides a deferral: with ka and kb deferred again and the
+     user active 60 s, ``run_now(H)`` submits ka at once ("started").
 
 Additional expectations: hidden required fields normalise to an empty string
 without checking stale options; a matching trimmed selector enforces required.
@@ -690,9 +690,10 @@ check("…and nothing was queued in the same breath", result["submitted"], "")
 # ── 18. a run-now flag that can never fire ───────────────────────────────────
 print("\n18. a run-now flag on a stepless entry is spent, not stuck")
 engine.request_run_now(C)             # C is done — it has no pending step
-check("the tick finds nothing to run", engine.tick()["reason"], "empty")
-check("…and the flag is gone, so the idle rule reads normally again",
-      engine.tick()["reason"], "active")
+check("the tick reads the idle rule, not the flag", engine.tick()["reason"], "active")
+# C itself is a clean finished one-shot, so the same sweep removes it.
+check("…and no entry stays forced",
+      [i["id"] for i in store.list_all() if i["forced"]], [])
 
 # ── 19. a one_shot with nothing to do ────────────────────────────────────────
 print("\n19. a one_shot whose scan finds nothing is done on the spot")
@@ -798,12 +799,11 @@ try:
 finally:
     engine.utc_now = _real_now
 user_activity._set_for_test(60)
-engine.request_run_now(H)
-result = engine.tick()
+result = engine.run_now(H)
 check("run-now overrides the deferral",
-      (result["submitted"] != "", step_tasks()[-1]["payload"]),
-      (True, {"improvement_id": H, "candidate_key": "ka"}))
-worker_done(result["submitted"])
+      (result["reason"], step_tasks()[-1]["payload"]),
+      ("started", {"improvement_id": H, "candidate_key": "ka"}))
+worker_done(result["task_id"])
 
 # A run-now flag also passes the engine switch — but never a step in flight.
 # R owes one step "ra"; H leaves the queue view (paused) so R's is the only one.
@@ -818,7 +818,7 @@ engine.get_task_queue().submit(engine.TASK_TYPE, {"improvement_id": "other",
 engine.request_run_now(R)
 result = engine.tick()
 check("an in-flight step holds the flag back, engine off or not",
-      (result["submitted"], R in engine._run_now), ("", True))
+      (result["submitted"], store.get(R)["forced"]), ("", True))
 drop_step_tasks()
 result = engine.tick()
 check("with nothing in flight the flag passes the engine switch",
@@ -826,6 +826,34 @@ check("with nothing in flight the flag passes the engine switch",
       (True, {"improvement_id": R, "candidate_key": "ra"}))
 worker_done(result["submitted"])
 store.set_settings(True, 15)
+
+# The reported case: the world is frozen and "Run now" has to work off ALL of
+# the entry's steps, not just the first. S owes "sa" and "sb" (label order);
+# the click submits sa, the step is handled, and the next tick — world still
+# frozen, user active — submits sb. After sb nothing is left and S is gone.
+store.update(R, status="paused")
+set_world_frozen(True)
+user_activity._set_for_test(60)
+S = store.create("fake", "S", {}, "one_shot")["id"]
+store.replace_steps_scan(S, [("sa", "Sa"), ("sb", "Sb")])
+FakeType.behaviour = ""             # every step succeeds
+first = engine.run_now(S)
+check("frozen: the click starts the first step",
+      (first["reason"], step_tasks()[-1]["payload"]["candidate_key"]), ("started", "sa"))
+worker_done(first["task_id"])
+engine.handle_step({"improvement_id": S, "candidate_key": "sa", "_task_id": first["task_id"]})
+second = engine.tick()
+check("frozen: the next tick runs the second step",
+      (second["submitted"] != "", step_tasks()[-1]["payload"]["candidate_key"]), (True, "sb"))
+worker_done(second["submitted"])
+engine.handle_step({"improvement_id": S, "candidate_key": "sb", "_task_id": second["submitted"]})
+check("…and the worked-off entry removed itself", store.get(S), None)
+check("frozen without a forced entry: nothing runs", engine.tick()["reason"], "frozen")
+set_world_frozen(False)
+from app.core import periodic_jobs  # noqa: E402
+check("the admin tick runs the engine while frozen/paused",
+      [label for _f, _iv, label in periodic_jobs._SUB_TASKS
+       if label in periodic_jobs._RUNS_WHILE_PAUSED], ["improvements"])
 
 # Tick sweeps exactly clean finished one-shots, retaining failed ones.
 legacy = store.create("fake", "Legacy", {}, "one_shot")["id"]

@@ -17,7 +17,7 @@ DEFAULT_IDLE_MINUTES = 15
 # Columns `update()` accepts — everything else is either derived (counters) or
 # identity (id, type_id, created_at, position; the order has its own setter).
 _UPDATABLE = {"label", "params", "mode", "status", "last_scan_at",
-              "done_count", "failed_count"}
+              "done_count", "failed_count", "forced"}
 
 _STEP_STATUSES = ("pending", "running", "done", "failed", "skipped")
 
@@ -29,6 +29,7 @@ def _row_to_improvement(row) -> Dict[str, Any]:
         d["params"] = json.loads(d.get("params") or "{}")
     except (ValueError, TypeError):
         d["params"] = {}
+    d["forced"] = bool(d.get("forced"))
     for s in _STEP_STATUSES:
         d.setdefault(s, 0)
     return d
@@ -102,7 +103,8 @@ def list_all() -> List[Dict[str, Any]]:
 
 
 def update(improvement_id: str, **fields) -> None:
-    """label, params(json), mode, status, last_scan_at, done_count, failed_count."""
+    """label, params(json), mode, status, last_scan_at, done_count,
+    failed_count, forced (bool)."""
     sets: List[str] = []
     values: List[Any] = []
     for key, value in fields.items():
@@ -110,6 +112,8 @@ def update(improvement_id: str, **fields) -> None:
             raise ValueError(f"improvements.update: unknown field '{key}'")
         if key == "params":
             value = json.dumps(value or {}) if not isinstance(value, str) else value
+        elif key == "forced":
+            value = 1 if value else 0
         sets.append(f"{key}=?")
         values.append(value)
     if not sets:

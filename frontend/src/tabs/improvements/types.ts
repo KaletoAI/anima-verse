@@ -43,6 +43,8 @@ export interface Improvement {
   last_scan_at?: string | null
   done_count: number
   failed_count: number
+  /** "Run now" is active: the entry runs past idle window, engine switch and freeze. */
+  forced: boolean
   pending: number
   running: number
   done: number
@@ -90,8 +92,10 @@ export interface EngineStatus {
   idle_seconds: number
   next_allowed_in_s: number
   frozen: boolean
-  /** 'disabled' | 'frozen' | 'busy' | 'active' | 'ok' */
+  /** 'media_off' | 'disabled' | 'frozen' | 'paused' | 'busy' | 'active' | 'ok' */
   reason: string
+  /** An entry runs by "Run now" — past idle window, engine switch, freeze, pause. */
+  forced: boolean
   running_step: Step | null
   pending_total: number
   estimate_s: number | null

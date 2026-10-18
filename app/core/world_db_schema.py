@@ -940,6 +940,10 @@ SCHEMA_STATEMENTS = [
 # ALTER TABLE migrations run idempotently after all CREATE statements.
 # Add missing columns per table; OperationalError means the column exists.
 ALTER_MIGRATIONS = [
+    # improvements: the admin's "Run now" — the entry works off all its steps
+    # past the idle window, the engine switch, a freeze and a queue pause, and
+    # the engine clears the flag once nothing is left to run.
+    ("improvements", "forced", "INTEGER NOT NULL DEFAULT 0"),
     # Destination-bound invitations refer to the existing intent store.
     ("party_invites", "intent_id", "TEXT NOT NULL DEFAULT ''"),
     # thoughts: characters present at the time of the thought (JSON name list)

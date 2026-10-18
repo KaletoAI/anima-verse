@@ -20,7 +20,7 @@ import { NewImprovementDialog } from './NewImprovementDialog'
 import { EntryDetail } from './EntryDetail'
 import {
   clearFinished, deleteImprovement, fetchImprovements, fetchTypes, pauseImprovement,
-  rescanImprovement, resumeImprovement, runNow, setOrder,
+  rescanImprovement, resumeImprovement, runNow, setOrder, stopRun,
 } from './api'
 import { STEP_STATUS_LABELS } from './types'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
@@ -209,6 +209,7 @@ export function EntriesView() {
                 <span className={entry.status === 'open'
                   ? 'ga-status-ok' : 'ga-status-paused'}>
                   {entryStatusLabel(entry.status)}
+                  {entry.forced ? ` · ${t('Run now active')}` : ''}
                 </span>
                 <span className="ga-list-row-sub">
                   {entry.done}/{entry.done + entry.pending + entry.running}
@@ -230,15 +231,24 @@ export function EntriesView() {
                       : pauseImprovement(entry.id)))}>
                   {entry.status === 'paused' ? t('Resume') : t('Pause')}
                 </button>
-                <button type="button" className="ga-btn ga-btn-sm"
-                  disabled={busyId === entry.id}
-                  onClick={() => act(entry.id, async () => {
-                    const r = await runNow(entry.id)
-                    toast(t(RUN_NOW_MESSAGES[r.reason] || 'Nothing to run'),
-                      r.ok ? undefined : 'error')
-                  })}>
-                  {t('Run now')}
-                </button>
+                {entry.forced ? (
+                  <button type="button" className="ga-btn ga-btn-sm"
+                    disabled={busyId === entry.id}
+                    onClick={() => act(entry.id, () => stopRun(entry.id))}>
+                    {t('Stop run')}
+                  </button>
+                ) : (
+                  <button type="button" className="ga-btn ga-btn-sm"
+                    disabled={busyId === entry.id}
+                    title={t('Runs all steps of this entry now, without waiting for the idle time, even with the engine off or the world frozen.')}
+                    onClick={() => act(entry.id, async () => {
+                      const r = await runNow(entry.id)
+                      toast(t(RUN_NOW_MESSAGES[r.reason] || 'Nothing to run'),
+                        r.ok ? undefined : 'error')
+                    })}>
+                    {t('Run now')}
+                  </button>
+                )}
                 <button type="button" className="ga-btn ga-btn-sm"
                   disabled={busyId === entry.id}
                   onClick={() => rescan(entry)}>

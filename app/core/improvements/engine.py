@@ -29,17 +29,13 @@ SCAN_INTERVAL_S = 600         # how often a standing entry re-asks its type
 MAX_ATTEMPTS = 2              # a defect gets one retry, then the step is skipped
 BUSY_DEFER_S = 300            # a step that came back busy sits out this long
 
-# Improvement ids whose next step ignores the idle rule exactly once — the
-# admin's "run now" button when another step was still in flight and the click
-# could not submit at once (``run_now``). In-memory on purpose: a restart
-# forgets it.
-_run_now: Set[str] = set()
-
-#: The gates an explicit "run now" overrides: it is the admin asking for this
-#: entry, so neither the idle window nor the engine switch nor a world freeze
-#: (which stops autonomous work, not on-demand work) holds it back. The media
-#: switch and an in-flight step do.
-RUN_NOW_OVERRIDES = ("active", "disabled", "frozen")
+#: The gates a FORCED entry (the admin's "Run now", ``improvements.forced``)
+#: passes: it is the admin asking for this entry, so neither the idle window
+#: nor the engine switch nor a world freeze or task-queue pause (which stop
+#: autonomous work, not on-demand work) holds it back. The media switch and an
+#: in-flight step do. The flag is persisted, so it survives a restart, and the
+#: tick clears it once the entry has nothing left to run.
+RUN_NOW_OVERRIDES = ("active", "disabled", "frozen", "paused")
 
 # Steps that came back BUSY (BackendBusyError / CandidateBusy), keyed
 # (improvement_id, candidate_key) -> SYSTEM time until which ``tick`` passes
@@ -158,6 +154,10 @@ def submit_allowed() -> Tuple[bool, str]:
         return False, "disabled"
     if is_world_frozen():
         return False, "frozen"
+    # The admin tick runs this engine even while the task queue is paused (a
+    # forced entry must go on); everything else stops with the pause as before.
+    if get_task_queue().is_paused("default"):
+        return False, "paused"
     if get_task_queue().has_pending_task(TASK_TYPE):
         return False, "busy"
     if user_activity.seconds_since() < settings["idle_minutes"] * 60:
@@ -166,17 +166,24 @@ def submit_allowed() -> Tuple[bool, str]:
 
 
 def request_run_now(improvement_id: str) -> None:
-    """The next tick runs ONE step of this entry even while the user is here."""
-    _run_now.add(improvement_id)
+    """Force the entry: every tick runs its steps past the gates in
+    ``RUN_NOW_OVERRIDES`` until it has nothing left to run."""
+    store.update(improvement_id, forced=True)
+
+
+def stop_run_now(improvement_id: str) -> None:
+    """Back to the normal rules (idle window, engine switch, freeze)."""
+    store.update(improvement_id, forced=False)
 
 
 def run_now(improvement_id: str) -> Dict[str, Any]:
-    """The admin's "Run now": submit this entry's next pending step NOW,
-    whatever the idle window, the engine switch or a world freeze say.
+    """The admin's "Run now": force the entry and submit its next pending step
+    NOW — the following ones go out tick by tick, all past the idle window,
+    the engine switch, a freeze and a queue pause.
 
     Only the media switch stops it, and an improvement step already in flight
-    makes it wait: the flag is armed and the next tick submits the step as
-    soon as that one is done (one step at a time is the engine's rule).
+    makes it wait: the entry stays forced and the next tick submits its step
+    as soon as that one is done (one step at a time is the engine's rule).
     Reasons: ``started`` | ``queued`` | ``media_off`` | ``paused`` | ``done`` |
     ``empty``."""
     improvement = store.get(improvement_id)
@@ -191,10 +198,10 @@ def run_now(improvement_id: str) -> Dict[str, Any]:
                 and r["status"] == "pending"), None)
     if row is None:
         return {"ok": False, "reason": "empty"}
+    request_run_now(improvement_id)
     if get_task_queue().has_pending_task(TASK_TYPE):
-        _run_now.add(improvement_id)
         return {"ok": True, "reason": "queued"}
-    _run_now.discard(improvement_id)
+    # The click is an explicit "try this now" — a busy deferral does not hold it.
     _undefer(improvement_id, row["candidate_key"])
     task_id = _submit(row)
     if not task_id:
@@ -240,12 +247,21 @@ def tick() -> Dict[str, Any]:
 
     # 2. Sweep finished one-shots and rescan standing entries, independent of idleness.
     scanned = 0
+    forced: Set[str] = set()
     for improvement in store.list_all():
         if (improvement["mode"] == "one_shot" and improvement["status"] == "done"
                 and not improvement["skipped"] and not improvement["failed"]):
             store.delete(improvement["id"])
             logger.info("improvements: removed finished one-shot %s", improvement["id"])
             continue
+        if improvement["forced"]:
+            # Worked off (or no longer open): the run-now is over. A pending
+            # step a later scan adds belongs to the normal rules again.
+            if (improvement["status"] != "open"
+                    or improvement["pending"] + improvement["running"] == 0):
+                stop_run_now(improvement["id"])
+            else:
+                forced.add(improvement["id"])
         if not _scan_due(improvement):
             continue
         try:
@@ -257,38 +273,35 @@ def tick() -> Dict[str, Any]:
 
     # 3. One step.
     allowed, reason = submit_allowed()
-    # A run-now flag passes the gates it overrides — but never an in-flight
+    # A forced entry passes the gates it overrides — but never an in-flight
     # step, which ``submit_allowed`` does not reach when an earlier gate failed.
-    override = (not allowed and reason in RUN_NOW_OVERRIDES and bool(_run_now)
+    override = (not allowed and reason in RUN_NOW_OVERRIDES and bool(forced)
                 and not task_queue.has_pending_task(TASK_TYPE))
     if not allowed and not override:
         return {"scanned": scanned, "submitted": "", "reason": reason}
 
     now = utc_now()
     deferred = 0
-    for row in ordered_queue():
+    # Forced entries go first even when the gates are open: the admin asked
+    # for them. Stable sort, so each group keeps the queue order.
+    rows = sorted(ordered_queue(), key=lambda r: r["improvement_id"] not in forced)
+    for row in rows:
         if row["status"] != "pending":
             continue
-        if override and row["improvement_id"] not in _run_now:
+        if override and row["improvement_id"] not in forced:
             continue
         # A step that just came back busy waits out BUSY_DEFER_S so the steps
-        # behind it get their turn. The admin's run-now is an explicit "try
-        # this entry now" and overrides the wait.
-        if (row["improvement_id"] not in _run_now
-                and _deferred(row["improvement_id"], row["candidate_key"], now)):
+        # behind it get their turn — forced or not, or a dead backend would be
+        # hammered every tick.
+        if _deferred(row["improvement_id"], row["candidate_key"], now):
             deferred += 1
             continue
-        _run_now.discard(row["improvement_id"])
         _undefer(row["improvement_id"], row["candidate_key"])
         task_id = _submit(row)
         if not task_id:
             return {"scanned": scanned, "submitted": "", "reason": "dedup"}
         return {"scanned": scanned, "submitted": task_id, "reason": "ok"}
 
-    # Nothing runnable. A run-now flag that got this far names an entry with no
-    # pending step (its last one finished between the click and this tick) —
-    # it can never fire, so it is spent here instead of sticking forever.
-    _run_now.clear()
     # "deferred": pending steps exist, but every one of them came back busy
     # within the last BUSY_DEFER_S — nothing is submitted this tick.
     return {"scanned": scanned, "submitted": "",
@@ -391,7 +404,7 @@ def _close_if_finished(improvement_id: str) -> None:
             store.delete(improvement_id)
             logger.info("improvements: removed finished one-shot %s", improvement_id)
         else:
-            store.update(improvement_id, status="done")
+            store.update(improvement_id, status="done", forced=False)
 
 
 def register_improvement_handler() -> None:
@@ -424,6 +437,10 @@ def status() -> Dict[str, Any]:
             0, int(settings["idle_minutes"] * 60 - idle_seconds)),
         "frozen": is_world_frozen(),
         "reason": reason,
+        # A forced entry runs past the gates in RUN_NOW_OVERRIDES — the panel
+        # says so instead of a gate that does not hold it back.
+        "forced": any(i["forced"] and i["status"] == "open"
+                      for i in store.list_all()),
         "running_step": running[0] if running else None,
         "pending_total": sum(pending.values()),
         "estimate_s": estimate,
