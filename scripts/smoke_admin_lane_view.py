@@ -38,7 +38,10 @@ demands the changed number back.
     default of 1 lane. Nothing has run, so the view says so
     (``started: false``) instead of printing zeros that read like a
     measurement, and the ⚡ column says "no calls yet". A DISABLED entry
-    routes nothing and therefore has no lanes: it is not a pool.
+    routes nothing and therefore has no lanes: it is not a pool. Neither is
+    an ENABLED entry on a provider that is switched off (``providers[].enabled
+    false``) — the router skips it like a disabled entry, so the view shows
+    two pools, not three.
 
 [2] THE LIVE SIDE. A manager with 3 lanes and a clock the check steps:
 
@@ -244,6 +247,12 @@ def wait_for_waiters(m, count, pool=POOL):
 print("\n[1] pools from the routing config, before anything ran")
 
 _saved_routing = config._CONFIG.get("llm_routing")
+_saved_providers = config._CONFIG.get("providers")
+config._CONFIG["providers"] = [
+    {"name": "AI-Hub", "type": "openai"},
+    {"name": "DX10-01", "type": "openai"},
+    {"name": "DX10-02", "type": "openai", "enabled": False},
+]
 config._CONFIG["llm_routing"] = [
     {"name": "Darkside (chat)", "provider": "AI-Hub",
      "model": "for-her-darkside-12b", "max_concurrent": 2, "enabled": True},
@@ -252,6 +261,8 @@ config._CONFIG["llm_routing"] = [
     {"name": "Tool", "provider": "DX10-01", "model": "tool", "enabled": True},
     {"name": "Off", "provider": "DX10-01", "model": "disabled-model",
      "max_concurrent": 8, "enabled": False},
+    {"name": "On, provider off", "provider": "DX10-02", "model": "switched-off",
+     "max_concurrent": 6, "enabled": True},
 ]
 
 _empty, _ = manager(3)
@@ -266,6 +277,9 @@ check("both entries are named on the shared pool",
       pool_of(view, POOL)["entries"], ["Darkside (chat)", "Darkside (hot)"])
 check("a disabled entry is no pool",
       [row["pool_key"] for row in view["pools"] if "disabled-model" in row["pool_key"]],
+      [])
+check("an enabled entry on a switched-off provider is no pool",
+      [row["pool_key"] for row in view["pools"] if row["pool_key"].startswith("DX10-02/")],
       [])
 check("an unused pool says so instead of printing zeros",
       (pool_of(view, POOL)["started"], pool_of(view, POOL)["lane_count"],
@@ -585,6 +599,10 @@ if _saved_routing is None:
     config._CONFIG.pop("llm_routing", None)
 else:
     config._CONFIG["llm_routing"] = _saved_routing
+if _saved_providers is None:
+    config._CONFIG.pop("providers", None)
+else:
+    config._CONFIG["providers"] = _saved_providers
 
 print()
 if FAILED:

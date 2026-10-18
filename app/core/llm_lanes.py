@@ -1226,21 +1226,27 @@ def _routing_pools() -> Dict[str, Dict[str, Any]]:
     the first entry's.
 
     Disabled entries are left out: they route nothing, so they have no lanes.
+    The same holds for an enabled entry on a provider that is switched off —
+    the router skips it exactly like a disabled entry
+    (``llm_router.disabled_providers``), so the view must not list it as a
+    pool either.
     """
     pools: Dict[str, Dict[str, Any]] = {}
     try:
         from app.core import config
+        from app.core.llm_router import disabled_providers
 
         entries = config.get("llm_routing", []) or []
+        off = disabled_providers()
     except Exception as e:  # pragma: no cover - config must never break the view
         logger.debug("lane view: llm_routing not readable: %s", e)
-        entries = []
+        entries, off = [], set()
     for entry in entries:
         if not isinstance(entry, dict) or entry.get("enabled") is False:
             continue
         provider = (entry.get("provider") or "").strip()
         model = (entry.get("model") or "").strip()
-        if not provider or not model:
+        if not provider or not model or provider in off:
             continue
         key = pool_key_for(provider, model)
         row = pools.setdefault(key, {"provider": provider, "model": model,
