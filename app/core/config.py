@@ -1418,13 +1418,16 @@ def _migrate_image_routing(config: dict) -> bool:
     return changed
 
 
+_DEFAULT_RIG_CREATURE_CHAIN = ["quadruped-local", "mesh-rig-unirig"]
+
+
 def _migrate_tpose_view_routing(config: dict) -> bool:
     """Copy the main T-pose chain once; an existing view chain owns its value."""
     import copy
     routing = (config.get("image_generation") or {}).get("routing")
-    if not isinstance(routing, dict) or "tpose_view" in routing:
+    if not isinstance(routing, dict) or "tpose_view" in routing or "tpose" not in routing:
         return False
-    routing["tpose_view"] = copy.deepcopy(routing.get("tpose", []))
+    routing["tpose_view"] = copy.deepcopy(routing["tpose"])
     return True
 
 

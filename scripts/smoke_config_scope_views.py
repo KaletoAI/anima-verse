@@ -44,7 +44,7 @@ Part B — schema_for("world")
   llm_simple absent. Every section has a "world_group" that is one of the
   WORLD_GROUPS ids.
 
-Part C — shipped_tree (the four list defaults include E11 providers)
+Part C — shipped_tree (the five list defaults include E11 providers)
   shipped_tree("instance")["server"]["timezone"] == ""            (E10)
   shipped_tree("instance")["memory"] == {"chat_retention_days": 90}
   shipped_tree("instance")["content_marketplace"]["catalogs"]

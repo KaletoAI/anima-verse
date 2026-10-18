@@ -22,6 +22,10 @@ and a data-URI GLB in files.input_mesh_path, including with no alias schema.
 Recovery accepts valid unrigged gateway deliveries without force or automatic
 rigging, retaining their provenance; invalid deliveries leave the pair unchanged.
 A concurrent real upload before the source checkpoint wins without rig submission.
+The options fixture includes face_before_rig=False, added by ce5cd5e0.
+Delivery compression (d827b7b5) is isolated: serve the source GLB so this
+rigging smoke does not launch an external Blender meshopt worker.
+
 Usage: ./.venv/bin/python scripts/smoke_mesh_rig_split.py
 """
 import os
@@ -104,6 +108,8 @@ import struct
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
+_delivery_patch = patch("app.core.glb_delivery.delivery_path", side_effect=lambda path, **kwargs: path)
+_delivery_patch.start()
 from PIL import Image
 from app.core.rig_contract import BASE_JOINT_NAMES
 from app.imagegen.base import ImageBackend, BackendBusyError, MediaGenerationDisabled
@@ -370,7 +376,7 @@ with ExitStack() as stack:
     stack.enter_context(patch.object(llm_queue, 'get_llm_queue', return_value=Queue()))
     stack.enter_context(patch.object(model3d, 'get_model3d_dir', side_effect=lambda name: getattr(model3d._staging, 'directories', {}).get(name) or root))
     stack.enter_context(patch.object(model3d, 'find_ref_image', return_value=src))
-    stack.enter_context(patch.object(model3d, 'get_model3d_options', return_value={'no_fingers': False}))
+    stack.enter_context(patch.object(model3d, 'get_model3d_options', return_value={'no_fingers': False, 'face_before_rig': False}))
     stack.enter_context(patch.object(model3d, '_ref_manifest', return_value={'pieces': {'body': 'new-piece'}, 'items': ['new-item']}))
     stack.enter_context(patch.object(model_refs, 'enabled_tpose_views', return_value=[]))
     for fn in ('_auto_retexture', '_auto_normalize', '_auto_extension_rig', '_attach_measurement', 'request_lod'):
@@ -603,7 +609,7 @@ with ExitStack() as stack:
     stack.enter_context(patch('app.imagegen.service.get_image_service', return_value=p3_service))
     stack.enter_context(patch.object(model3d, 'get_model3d_dir', side_effect=lambda name: getattr(model3d._staging, 'directories', {}).get(name) or root))
     stack.enter_context(patch.object(model3d, 'find_ref_image', return_value=src))
-    stack.enter_context(patch.object(model3d, 'get_model3d_options', return_value={}))
+    stack.enter_context(patch.object(model3d, 'get_model3d_options', return_value={'face_before_rig': False}))
     stack.enter_context(patch.object(model3d, '_ref_manifest', return_value={}))
     stack.enter_context(patch.object(model_refs, 'enabled_tpose_views', return_value=[]))
     stack.enter_context(patch.object(model3d, 'required_rig', return_value='generic'))
@@ -852,3 +858,5 @@ try:
 except ValueError as exc:
     assert 'tail_motion' in str(exc)
 print('PASS P4 tail selection/save/rig validation and minimal loop sidecar')
+
+_delivery_patch.stop()

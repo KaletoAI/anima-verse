@@ -20,6 +20,11 @@ behaviour, calendar). ``mixed`` marks only a node whose children differ.
 dotted config path; the recursive split of a config (next task) is built on
 ``scope_of`` and ``child_scopes_differ``.
 
+Compatibility updates: d4aa4edd seeds the local quadruped entry even for
+custom/empty lists; dea4cf1f adds two upscalers outside the mesh tuples.
+The catalog has nine mesh tuples + one shrink + two upscalers = twelve.
+Index-format secret placeholders include the added local backend.
+
 PART 1 — what is checked, and where every expected value comes from
 -------------------------------------------------------------------
 
@@ -309,7 +314,7 @@ defaults (Part 2):
     the world's providers are foreign. ``save`` with ``server.log_level`` changed
     raises ``RuntimeError`` and writes nothing. ``save`` with only
     ``chat.chattiness`` changed to 0.7 writes the world (0.7 on disk) and
-    creates no other file. (Not 0.5: that is the schema default and would be
+    creates only the pre-save history backup (62959789). (Not 0.5: that is the schema default and would be
     pruned to an empty world file.)
 6.6 SECRETS PER LAYER. Instance config ``{"providers": [{"name": "i"}]}`` +
     instance secrets ``{"providers": [{"api_key": "k"}]}``:
@@ -319,10 +324,10 @@ defaults (Part 2):
     ``get("providers")``; after ``save`` ``w/secrets.json`` is gone.
 6.7 SEEDS. Instance ``{}``: ``content_marketplace.catalogs`` equals
     ``config._DEFAULT_MARKETPLACE_CATALOGS``, ``image_generation.backends``
-    has 13 entries (12 in ``_DEFAULT_MESH_BACKENDS`` + 1 shrink alias). After
+    has 12 entries (9 mesh tuples + 1 shrink alias + 2 upscalers). After
     ``migrate_file`` the instance file is still ``{}`` with the old mtime.
     Counter-check: an instance with ``image_generation.backends: []`` keeps
-    the empty list (the seed hangs on a MISSING key only).
+    only the local quadruped backend (d4aa4edd); gateway entries stay empty.
 6.8 RELOAD. ``load(w, i)``, then ``reload()``:
     ``get("server.log_level") == "DEBUG"`` — the instance path is remembered.
 6.9 ADMIN PAYLOAD. The settled 6.1 pair; the effective config goes through
@@ -413,7 +418,7 @@ dropped with one warning naming the secrets.json. Expectations by hand:
     {"backends": {"a": {"api_key": "KA"}}}}``: a still gets "KA" (its name is
     unique and non-empty), and ONE warning names ``i/secrets.json`` and says
     the list has entries without a unique name. The next ``save`` writes the
-    list in the index format (``[{"api_key": "KA"}, {}]``) — the key is kept.
+    list in the index format (``[{"api_key": "KA"}, {}, {}]``) — the key is kept.
 8.10 MASK WITHOUT PARTNER. current ``[a, b(KB), c(KC)]``, payload
     ``[a, c("***"), b2("***")]`` (rename b -> b2 plus a reorder in one save):
     c gets "KC"; b2 has no partner (its index 2 holds c, which the payload
@@ -1096,7 +1101,9 @@ def part_3():
         cfg.save(data)
         check(_read(w) == {"chat": {"chattiness": 0.7}}, f"6.5: world written ({_read(w)!r:.200})")
         files = sorted(str(f.relative_to(tmp)) for f in Path(tmp).rglob("*") if f.is_file())
-        check(files == ["w/config.json"], f"6.5: no other file created ({files})")
+        check(len(files) == 2 and "w/config.json" in files
+              and len([f for f in files if f.startswith("w/.config-history/") and f.endswith("/config.json")]) == 1,
+              f"6.5: only world config and its pre-save backup created ({files})")
 
     # 6.6 secrets per layer
     with tempfile.TemporaryDirectory() as tmp:
@@ -1125,8 +1132,8 @@ def part_3():
         check(cfg.get("content_marketplace.catalogs") == cfg._DEFAULT_MARKETPLACE_CATALOGS,
               "6.7: the marketplace catalog is seeded in memory")
         backends = cfg.get("image_generation.backends") or []
-        check(len(backends) == 13 == len(cfg._DEFAULT_MESH_BACKENDS) + 1,
-              f"6.7: 13 mesh backends seeded in memory (got {len(backends)})")
+        check(len(backends) == 12 == len(cfg._DEFAULT_MESH_BACKENDS) + 3,
+              f"6.7: 12 mesh backends seeded in memory (got {len(backends)})")
         _age(w, i)
         wrote = cfg.migrate_file(w, i)
         check(wrote is False, f"6.7: migrate_file writes nothing (got {wrote!r})")
@@ -1134,8 +1141,8 @@ def part_3():
         check(_untouched(w), "6.7: the world stays untouched")
         _write(i, {"image_generation": {"backends": []}})
         cfg.load(w, i)
-        check(cfg.get("image_generation.backends") == [],
-              "6.7: counter-check — an emptied backend list is not re-seeded")
+        check([b["name"] for b in cfg.get("image_generation.backends")] == ["quadruped-local"],
+              "6.7: an emptied list gets only the mandatory local quadruped backend")
 
     # 6.10 fresh state
     with tempfile.TemporaryDirectory() as tmp:
@@ -1233,7 +1240,7 @@ def part_4():
         _write(isec, {"image_generation": {"backends": [{}, {"api_key": "KB"}, {"api_key": "KC"}]}})
         cfg.load(w, i)
         got = _keys_by_name(cfg.get("image_generation.backends"))
-        check(got == {"a": None, "b": "KB", "c": "KC"}, f"8.1: index-format secrets are read ({got!r})")
+        check(got == {"a": None, "b": "KB", "c": "KC", "quadruped-local": None}, f"8.1: index-format secrets are read ({got!r})")
         data = copy.deepcopy(cfg.get_all())
         data["image_generation"]["backends"].insert(1, {"name": "x"})
         cfg.save(data)
@@ -1243,13 +1250,13 @@ def part_4():
         check("KB" not in itext and "KC" not in itext, "8.1: no key in i/config.json")
         cfg.load(w, i)
         got = _keys_by_name(cfg.get("image_generation.backends"))
-        check(got == {"a": None, "x": None, "b": "KB", "c": "KC"}, f"8.1: reload after insert ({got!r})")
+        check(got == {"a": None, "x": None, "b": "KB", "c": "KC", "quadruped-local": None}, f"8.1: reload after insert ({got!r})")
         conf = _read(i)
         conf["image_generation"]["backends"].insert(0, {"name": "y"})
         _write(i, conf)
         cfg.load(w, i)
         got = _keys_by_name(cfg.get("image_generation.backends"))
-        check(got == {"y": None, "a": None, "x": None, "b": "KB", "c": "KC"},
+        check(got == {"y": None, "a": None, "x": None, "b": "KB", "c": "KC", "quadruped-local": None},
               f"8.1: a hand insert in config.json keeps every key on its entry ({got!r})")
 
         # 8.2 unknown name
@@ -1259,7 +1266,7 @@ def part_4():
                                                         "zz": {"api_key": "ZZ"}}}})
         cfg.load(w, i)
         bes = cfg.get("image_generation.backends")
-        check([b.get("name") for b in bes] == ["a", "x", "b", "c"] and "ZZ" not in repr(bes),
+        check([b.get("name") for b in bes] == ["a", "x", "b", "c", "quadruped-local"] and "ZZ" not in repr(bes),
               f"8.2: an unknown name is ignored ({bes!r})")
         check(_keys_by_name(bes).get("b") == "KB", "8.2: the known name still gets its key")
 
@@ -1363,7 +1370,7 @@ def part_4():
                   "8.9: no misleading 'no entry named a' warning")
             cfg.save(cfg.get_all())
             got = _read(isec) if isec.exists() else None
-            check(got == {"image_generation": {"backends": [{"api_key": "KA"}, {}]}},
+            check(got == {"image_generation": {"backends": [{"api_key": "KA"}, {}, {}]}},
                   f"8.9: the next save keeps the key (index format) ({got!r})")
     finally:
         cfg.logger.removeHandler(grab)

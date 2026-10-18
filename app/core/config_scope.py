@@ -226,7 +226,7 @@ def _use_case_seed() -> Dict[str, Any]:
 
 
 def _list_default(parts: Tuple[str, ...]) -> Tuple[bool, Any]:
-    """The four list defaults that do not come from the schema."""
+    """The five list defaults that do not come from the schema."""
     if parts == ("providers",):
         from app.core.config import _DEFAULT_PROVIDERS
         return True, copy.deepcopy(_DEFAULT_PROVIDERS)
@@ -236,6 +236,9 @@ def _list_default(parts: Tuple[str, ...]) -> Tuple[bool, Any]:
     if parts == ("image_generation", "backends"):
         from app.core.config import _default_mesh_backend_entries
         return True, _default_mesh_backend_entries()
+    if parts == ("image_generation", "routing", "rig_creature"):
+        from app.core.config import _DEFAULT_RIG_CREATURE_CHAIN
+        return True, copy.deepcopy(_DEFAULT_RIG_CREATURE_CHAIN)
     if parts == ("game_seasons",):
         from app.core.game_time import default_seasons_config
         return True, default_seasons_config()
@@ -296,9 +299,10 @@ def shipped_default(path: str) -> Tuple[bool, Any]:
       skill packages' subsections included (from the manifests before
       discovery). Pseudo fields (``_`` name, ``note``/``group_header``) and
       fields inside array items never have one;
-    - the four list defaults outside the schema: ``providers`` (the example
+    - the five list defaults outside the schema: ``providers`` (the example
       seed), ``content_marketplace.catalogs``,
-      ``image_generation.backends`` (the mesh seed), ``game_seasons``;
+      ``image_generation.backends`` (the mesh seed),
+      ``image_generation.routing.rig_creature``, ``game_seasons``;
     - ``image_generation.use_cases.<uc>`` for a SHIPPED use case: the empty
       seed structure ``config._seed_default_use_cases`` writes. A custom use
       case has none — the seeding would not bring it back.
@@ -549,7 +553,7 @@ def _tree_fields(node: Dict[str, Any], parts: Tuple[str, ...],
 def shipped_tree(scope: str) -> Dict[str, Any]:
     """What ships for ``scope``, as one config-shaped dict.
 
-    Built only from ``shipped_default`` (schema defaults, the four list
+    Built only from ``shipped_default`` (schema defaults, the five list
     defaults, the use-case seed of every shipped use case), walked over
     ``schema_for(scope)``. A section or subsection without any default is
     absent; a list without a shipped default (``llm_routing``) is absent — the
@@ -570,6 +574,9 @@ def shipped_tree(scope: str) -> Dict[str, Any]:
         if root == "image_generation" and "use_cases" in (node.get("sub_arrays") or {}):
             part["use_cases"] = {uc: _shipped_default_parts((root, "use_cases", uc))[1]
                                  for uc in _DEFAULT_IMAGE_USE_CASES}
+        if root == "image_generation" and scope == INSTANCE:
+            part["routing"] = {"rig_creature": _shipped_default_parts(
+                (root, "routing", "rig_creature"))[1]}
         if part:
             out[root] = part
     return out

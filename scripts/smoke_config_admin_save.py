@@ -35,7 +35,8 @@ E  Unchanged save writes nothing (Review Focus 4): with one backend entry
    from layer_view("instance") (which materializes bool/select item
    defaults) is saved back unchanged -> mtime_ns of instance/config.json and
    of the world config.json are unchanged; the stored backend entry has no
-   new keys.
+   new keys. Since d4aa4edd the local quadruped backend is also seeded
+   into custom lists; its complete shipped entry remains unchanged.
 
 F  Masked secret survives: providers [{"name": "p", "api_key": "sk-1"}] on
    disk; body with api_key "***" -> instance/secrets.json still holds sk-1
@@ -164,7 +165,11 @@ setup({"image_generation": {"backends": [{"name": "b1", "api_type": api}]}})
 before = [(p.stat().st_mtime_ns, p.read_bytes()) for p in (inst / "config.json", world / "config.json")]
 adm.save_layer("instance", adm.layer_view("instance"))
 check(before == [(p.stat().st_mtime_ns, p.read_bytes()) for p in (inst / "config.json", world / "config.json")]
-      and read(inst / "config.json")["image_generation"]["backends"] == [{"name": "b1", "api_type": api}], "E unchanged files and entry")
+      and read(inst / "config.json")["image_generation"]["backends"] == [
+          {"name": "b1", "api_type": api},
+          {"name": "quadruped-local", "enabled": True, "api_type": "local_quadruped_rig",
+           "category": "mesh2rig", "cost": 0, "timeout": 600, "max_wait": 600,
+           "max_concurrent": 1, "tail_mode_default": "calm"}], "E unchanged files and entry")
 setup({"providers": [{"name": "p", "api_key": "sk-1"}]})
 body = adm.layer_view("instance")
 body["providers"][0]["api_key"] = "***"

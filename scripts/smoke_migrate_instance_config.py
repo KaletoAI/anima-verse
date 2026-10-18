@@ -28,7 +28,9 @@ EXPECTATIONS, derived by hand from the scope rules and the migrations:
     the legacy field by config._IMAGE_ROUTING_SEED, where "flux*" from
     outfit_imagegen_default lands in the chains of `expression` and `tpose`
     (both read expression_imagegen_default, then outfit_imagegen_default) —
-    so routing == {"expression": ["flux*"], "tpose": ["flux*"]}.
+    so expression and tpose both use ["flux*"]. Commit 861404c8 adds
+    tpose_view as a copy; d4aa4edd adds the local quadruped backend to
+    this custom list and seeds rig_creature = ["quadruped-local"].
   * instance/secrets.json holds the three keys in the by-NAME format
     (config._split_secrets on a named list); instance/config.json has the
     keys blanked.
@@ -175,7 +177,8 @@ EXPECTED_PROVIDERS = [
      "api_key": "sk-cloud"},
 ]
 EXPECTED_CHAT = {"chattiness": 0.8, "anti_rep_lookback": 9}
-EXPECTED_ROUTING = {"expression": ["flux*"], "tpose": ["flux*"]}
+EXPECTED_ROUTING = {"expression": ["flux*"], "tpose": ["flux*"],
+                    "tpose_view": ["flux*"], "rig_creature": ["quadruped-local"]}
 EXPECTED_INSTANCE_SECRETS = {
     "providers": {"Local": {"api_key": "sk-local"}, "Cloud": {"api_key": "sk-cloud"}},
     "image_generation": {"backends": {"flux-a": {"api_key": "img-key"}}},
@@ -272,7 +275,7 @@ def run_checks() -> None:
           json.dumps(inst.get("providers")))
     backends = (inst.get("image_generation") or {}).get("backends") or []
     check("instance has the image backend of src (key blanked)",
-          [b.get("name") for b in backends] == ["flux-a"] and backends[0]["api_key"] == "",
+          [b.get("name") for b in backends] == ["flux-a", "quadruped-local"] and backends[0]["api_key"] == "",
           json.dumps(backends))
     check("instance routing seeded from outfit_imagegen_default",
           (inst.get("image_generation") or {}).get("routing") == EXPECTED_ROUTING,
