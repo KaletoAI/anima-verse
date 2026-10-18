@@ -815,7 +815,8 @@ def _phase_place(room_id: str) -> None:
     room_name = _room_label(room)
     storey_height_m = _storey_height_m(loc)
 
-    if not items:
+    proposal = row.get("proposal") or {}
+    if not items and not proposal.get("kit"):
         _update_row(room_id, state=STATE_REVIEW_READY, error="",
                     placements=_empty_placements())
         return
@@ -839,46 +840,59 @@ def _phase_place(room_id: str) -> None:
                         "on": c["on"]}
                        for p, c in zip(placed_props, composed)]
 
-    def _name_of(prop_id: Any) -> str:
-        pid = str(prop_id or "")
-        return str((library.get(pid) or {}).get("name") or pid)
+    if proposal.get("kit"):
+        from app.core import furniture_kits
+        selection = proposal["kit"]
+        solved = furniture_kits.solve_kit(
+            kit=selection["kit"], room_type=selection["room_type"],
+            geom=geom, library=library, room_id=_target(room_id)[0],
+            existing=existing_solver, storey_height_m=storey_height_m)
+        result = {key: solved[key] for key in
+                  ("placed", "unplaced", "phase_counts", "missing_roles")}
+        # A restart may see a changed library: review must name the props
+        # this solve actually used, rather than those chosen at job start.
+        proposal = {**proposal, "needs": solved["needs"]}
+    else:
+        def _name_of(prop_id: Any) -> str:
+            pid = str(prop_id or "")
+            return str((library.get(pid) or {}).get("name") or pid)
 
-    by_place_id = {str(p.get("id") or ""): p for p in placed_props}
-    template_existing = [
-        {"id": str(p.get("id") or ""),
-         "name": _name_of(p.get("prop_id")),
-         "mount": _mount_of(library.get(str(p.get("prop_id") or "")) or {}),
-         # Told in the SOLVER's frame, so the model's "beside the table"
-         # refers to the same numbers the solver reasons about.
-         "x_m": round(c["at"][0] - ox, 2),
-         "y_m": round(c["at"][1] - oy, 2),
-         "yaw": round(float(c["yaw"] or 0.0), 1),
-         "on": _name_of((by_place_id.get(c["on"]) or {}).get("prop_id"))
-         if c["on"] else ""}
-        for p, c in zip(placed_props, composed)]
-    template_openings = [
-        {"index": i,
-         "type": op.get("type") or "door",
-         "wall": _edge_wall(geom["outline_m"], int(op.get("edge") or 0)),
-         "at_frac": round(float(op.get("at") or 0.5), 2),
-         "width_m": op.get("width_m"), "sill_m": op.get("sill_m") or 0,
-         "height_m": op.get("height_m") or 2.1}
-        for i, op in enumerate(geom["openings"])]
+        by_place_id = {str(p.get("id") or ""): p for p in placed_props}
+        template_existing = [
+            {"id": str(p.get("id") or ""),
+             "name": _name_of(p.get("prop_id")),
+             "mount": _mount_of(library.get(str(p.get("prop_id") or "")) or {}),
+             # Told in the SOLVER's frame, so the model's "beside the table"
+             # refers to the same numbers the solver reasons about.
+             "x_m": round(c["at"][0] - ox, 2),
+             "y_m": round(c["at"][1] - oy, 2),
+             "yaw": round(float(c["yaw"] or 0.0), 1),
+             "on": _name_of((by_place_id.get(c["on"]) or {}).get("prop_id"))
+             if c["on"] else ""}
+            for p, c in zip(placed_props, composed)]
+        template_openings = [
+            {"index": i,
+             "type": op.get("type") or "door",
+             "wall": _edge_wall(geom["outline_m"], int(op.get("edge") or 0)),
+             "at_frac": round(float(op.get("at") or 0.5), 2),
+             "width_m": op.get("width_m"), "sill_m": op.get("sill_m") or 0,
+             "height_m": op.get("height_m") or 2.1}
+            for i, op in enumerate(geom["openings"])]
 
-    def _ask(system_prompt: str, user_prompt: str, suffix: str) -> Dict[str, Any]:
-        # The re-plan rounds carry their own label — otherwise they are
-        # indistinguishable from the first attempt in the LLM log and read
-        # as duplicate submits.
-        return _llm_json("furnish", system_prompt, user_prompt,
-                         f"place: {room_name}{suffix}")
+        def _ask(system_prompt: str, user_prompt: str, suffix: str) -> Dict[str, Any]:
+            # The re-plan rounds carry their own label — otherwise they are
+            # indistinguishable from the first attempt in the LLM log and read
+            # as duplicate submits.
+            return _llm_json("furnish", system_prompt, user_prompt,
+                             f"place: {room_name}{suffix}")
 
-    result = furnish_place.run(
-        room_name=room_name, room_description=str(room.get("description") or ""),
-        geom=geom, storey_height_m=storey_height_m, items=items,
-        props=furnish_place.solver_props(items, library),
-        existing=existing_solver, template_existing=template_existing,
-        template_openings=template_openings, ask=_ask,
-        alive=lambda: _get_row(room_id) is not None)
+        result = furnish_place.run(
+            room_name=room_name, room_description=str(room.get("description") or ""),
+            geom=geom, storey_height_m=storey_height_m, items=items,
+            props=furnish_place.solver_props(items, library),
+            existing=existing_solver, template_existing=template_existing,
+            template_openings=template_openings, ask=_ask,
+            alive=lambda: _get_row(room_id) is not None)
 
     for entry in result.get("placed") or []:
         # A piece standing ON another one is stored in its SUPPORT's frame
@@ -892,7 +906,10 @@ def _phase_place(room_id: str) -> None:
 
     if not _get_row(room_id):
         return
-    _update_row(room_id, state=STATE_REVIEW_READY, error="", placements=result)
+    fields = {"state": STATE_REVIEW_READY, "error": "", "placements": result}
+    if proposal.get("kit"):
+        fields["proposal"] = proposal
+    _update_row(room_id, **fields)
     counts = furnish_place.pass_summary(result.get("phase_counts") or {})
     total_placed = len(result.get("placed") or [])
     total = total_placed + len(result.get("unplaced") or [])
@@ -1128,6 +1145,39 @@ def start_direct(room_id: str, proposal: Any) -> Dict[str, Any]:
     _insert_row(room_id, str(loc.get("id") or ""))
     _update_row(room_id, state=STATE_PLACING,
                 proposal={"needs": needs, "surfaces": None, "dropped": []})
+    _spawn(room_id, "place", _room_label(room))
+    return get_status(room_id) or {}
+
+
+def start_kit(room_id: str, body: Dict) -> Dict[str, Any]:
+    """Persist the kit selection so restarts place deterministically too.
+
+    Empty plans are refused before opening a row: without needs the resume
+    dispatcher would enter the LLM proposal phase instead of kit placement.
+    """
+    from app.core import furniture_kits
+    from app.models.world import GROUND_ROOM_ID
+
+    if _target(room_id)[0] == GROUND_ROOM_ID:
+        raise FurnishError("The yard is not a kit furnish target.", 400)
+    kit, room_type = body.get("kit"), body.get("room_type")
+    if not isinstance(kit, str) or kit not in furniture_kits.load_kits():
+        raise FurnishError("Unknown furniture kit.", 400)
+    if not isinstance(room_type, str) or room_type not in furniture_kits.load_room_types():
+        raise FurnishError("Unknown room type.", 400)
+    loc, room = _load_room(room_id)
+    geom = _geometry(loc, room)
+    if _get_row(room_id):
+        raise FurnishError("A furnishing job for this room is already open.", 409)
+    planned = furniture_kits.plan_room(
+        kit=kit, room_type=room_type, geom=geom, library=_library(),
+        room_id=_target(room_id)[0])
+    if not planned["needs"]:
+        raise FurnishError("No template entries resolve to kit props.", 400)
+    _insert_row(room_id, str(loc.get("id") or ""))
+    _update_row(room_id, state=STATE_PLACING, proposal={
+        "needs": planned["needs"], "surfaces": None, "dropped": [],
+        "kit": {"kit": kit, "room_type": room_type}})
     _spawn(room_id, "place", _room_label(room))
     return get_status(room_id) or {}
 

@@ -2789,6 +2789,15 @@ async def furnish_direct(room_id: str, request: Request,
     return await _furnish_call(start_direct, room_id, body.get("proposal") or body)
 
 
+@router.post("/rooms/{room_id}/furnish/kit")
+async def furnish_kit(room_id: str, request: Request,
+                      _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Place tagged kit props without an LLM; review and accept as usual."""
+    body = await _furnish_body(request)
+    from app.core.room_furnish import start_kit
+    return await _furnish_call(start_kit, room_id, body)
+
+
 @router.post("/rooms/{room_id}/furnish/confirm")
 async def furnish_confirm(room_id: str, request: Request,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
