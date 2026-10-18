@@ -28,6 +28,7 @@ import { Model3DViewer } from '../characters/Model3DViewer'
 import { notifyModel3dChanged } from './topDownSnapshot'
 import type { GalleryResponse, Map3D, ScenePayload } from './worldTypes'
 import { useActiveMeasure } from './measureKit'
+import { HullBuilder } from './HullBuilder'
 
 export interface ModelEntry extends GalleryModel {
   /** Persisted 90°-step orientation fix — the 3D client applies it too. */
@@ -550,6 +551,12 @@ export function BuildingModelPanel({
   const blenderTools = roomId ? null : (
     <>
       <ExteriorRenderButton
+        apiBase={enc}
+        blender={model3d?.blender}
+        pending={!!model3d?.pending}
+        onStarted={startPoll}
+      />
+      <HullBuilder
         apiBase={enc}
         blender={model3d?.blender}
         pending={!!model3d?.pending}

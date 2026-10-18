@@ -1,6 +1,6 @@
 # LLM-Blender models — parametric assets instead of image-to-3D
 
-**Status:** v1 shipped 2026-08-20 — **the roof, and only the roof.**
+**Status:** v1 shipped 2026-08-20 — **parametric roofs**; building hulls added 2026-10-18.
 Programme: `development_instructions/done/plan-assets-im-szenenkontext.md`, Etappe 4b.
 Numbers: `./.venv/bin/python scripts/smoke_roof_model.py` — every expectation is
 hand-derived in its docstring; its last section needs a Blender binary and is
@@ -296,6 +296,53 @@ that is not an object.
 Propose-then-build, no silent magic. The description is validated again on the
 way in: what the UI sends is a suggestion, not a contract.
 
+## Building hull
+
+Game-Admin → World → location → building models offers **Building hull** beside
+the roof builder when Blender is usable. Choose a style, optionally roll the
+seed and edit overrides, then **Build hull**. **Suggest from description (LLM)**
+fills the same fields; it does not start a build. No drawn outline means a
+readable 409; Blender unavailable means 503. Both details appear in a toast.
+
+The pipeline is `scene_recipe` facts → walls/roofs/ornaments → Blender.
+`hull_facts` takes the outline, openings and level heights from the recipe's
+geometry helpers. Python builds the vertices, faces, UVs and material groups;
+Blender receives finished meshes, assigns textures and exports GLB. The LLM
+supplies clamped JSON, never executable code or a replacement floor plan.
+
+Four shipped styles live in `shared/building_styles/`: `fachwerk`, `steinhaus`,
+`holzhuette`, `burg`. A style document names material kinds (`wall`,
+`wall_ground`, `plinth`, `roof`, `trim`, `door`, `chimney`), glass/interior
+palette, wall thickness and plinth height, corner/frame treatments, timber
+framing, roof forms and pitch/overhang ranges, towers, chimneys and ornament
+switches/densities. `hull_styles.validate_style` clamps the schema. Texture
+kinds resolve through the surface library, with fallback colours when missing.
+**Edit hull style** opens its JSON document. **Save as world override** uses
+`PUT /world/hull-styles/{id}` to replace that whole entry in the world DB;
+**Reset to shipped** deletes the override. Shipped files stay intact.
+
+A build description is `{style, seed, overrides}`. Overrides support
+`roof_form` (`gable`, `hip`, `shed`, `flat`), `pitch_deg` (5–60),
+`ornament_density` (0–1), and optional hex `tint`. Empty pitch/form means the
+style default; **none** removes tint. The same facts, validated style and
+seed-bearing description produce the same job bytes. Random variation uses
+`hull_mesh.rng(seed, tag)`; changing the seed changes the ornament choices.
+
+Generation stores **full** and **low** tiers and immediately records both in
+`selection.json`. Low retains the wall/opening geometry and roof but omits
+expensive ornaments. The resulting model becomes active through the ordinary
+building gallery and pending poll. There is no automatic rebuilding: an
+outline, opening or height change marks the active hull stale, while moving
+furniture does not. The old model stays active. **Rebuild** submits its saved
+description, including seed; **Build hull** submits the edited fields.
+
+The display contract is `plan_hull: true` with `display: "shell"`: entering
+keeps the hull visible and cuts the interior along the recipe outlines, exposing
+the matching recipe walls. It is not roof-faded and does not participate in
+corridor occlusion fade. See the **Grundriss-Hülle (`plan_hull`)** addendum in
+[schnittstellen-3d.md](schnittstellen-3d.md) for cutout limits, padding and the
+embodied-mode rule.
+
 ## 6. Prerequisites and settings
 
 Blender runs **locally**, not on a generation backend. Everything is configured
@@ -332,7 +379,7 @@ returns `{ok, error, data, outputs, seconds}`.
 
 ## 7. Other Blender jobs
 
-The roof is the only job an LLM designs; it is not the only Blender job.
+Roofs and building hulls accept LLM design suggestions; they are not the only Blender jobs.
 `app/blender/scripts/` holds the rest, each one the same "the server thinks,
 Blender builds" shape: geometry repair and measurement (`normalize.py`,
 `measure.py`, `diagnose.py`), texture work (`bake_vc.py`, `retexture.py`,
@@ -433,7 +480,7 @@ its height when sitting. Verification: `scripts/smoke_quadruped_fit.py`,
 `scripts/smoke_quadruped_clips.py` (also `--numpy-only`) and
 `client3d/scripts/smoke_quadruped_takes.mjs`.
 
-## 8. What v1 deliberately does NOT do
+## 8. What roof v1 deliberately does NOT do
 
 * no free-form Blender code — see the top of this file;
 * no roof over a concave polygon (rectangularized, § 2);
