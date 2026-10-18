@@ -127,7 +127,6 @@ THOUGHT_CTX = {
     "events_block": "- A cart lost a wheel by the well.",
     "assignments_block": "",
     "general_task": "",
-    "commitments_block": "- You promised Ren to fetch water before dusk.",
     "state_flags_block": "",
     "outfit_decision_block": "",
     "arc_block": "",
@@ -388,7 +387,7 @@ def t_perceive_action() -> None:
         # trigger-boilerplate note must be the very last thing in the prompt.
         task_at = out.find("=== Your task ===")
         last_ctx = max(out.find(h) for h in (
-            "=== Your open commitments", "=== Active events at your location ===",
+            "=== Active events at your location ===",
             "=== Your typical rhythm right now ==="))
         check("prod: task block comes after all context blocks",
               task_at > last_ctx > 0,
@@ -420,8 +419,8 @@ def t_perceive_action() -> None:
               and "You just witnessed an action" not in out)
 
     ctx = {**THOUGHT_CTX, **PERCEPTION_VARS_EMPTY,
-           "events_block": "", "commitments_block": "",
            "daily_schedule_block": "", "present_people_block": "",
+           "events_block": "",
            "lang_instruction": ""}
     out = try_render("empty", "tasks/perceive_action.md", **ctx)
     if out:

@@ -141,7 +141,7 @@ THOUGHT_CTX = {
     "present_people_block": "Ren (idle)",
 }
 _OPTIONAL = ("inbox_block", "events_block", "assignments_block",
-             "general_task", "commitments_block", "state_flags_block",
+             "general_task", "state_flags_block",
              "outfit_decision_block", "arc_block", "retrospective_block",
              "skill_context_blocks", "effects_block", "recent_chat_block",
              "recent_thoughts", "outfit_self_block", "outfit_avatar_block",

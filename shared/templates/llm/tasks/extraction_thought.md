@@ -5,7 +5,7 @@ placeholders:
   speaker_b: Name of the memory owner (the character whose thought this is)
   text_b: The thought itself
   existing_summary: Bullet list of recent existing memories ("(none yet)" if none)
-  commitments_block: Pre-formatted block of open commitments (empty string when none)
+  open_plans_block: Pre-formatted block of open plans (empty string when none)
   lang_instruction: Optional "\nWrite the memory contents in <Language>." or empty
 ---
 ## system
@@ -18,6 +18,7 @@ This is what {{ speaker_b }} thought to themselves. Nobody else was part of it. 
 
 Extract as a JSON array. For each memory:
 - memory_type: "semantic" (fact/info) or "commitment" (promise/plan)
+- title: ONLY for commitments — a short plan label, 2–6 words, in the language of the content, without the owner's name (e.g. "bake bread", "return the borrowed book").
 - content: short, compact sentence (max 1-2 sentences) — written about {{ speaker_b }} in third person. Every person in it is named, never only by role or relationship ("her brother", "the colleague") — this line is read months later without this thought. Use ONLY names that literally appear in the text above; never complete or resolve a name that is not written there.
 - related_character: the other person this memory is ABOUT, if the text names one. Leave it out entirely when the thought is only about {{ speaker_b }} — never invent an addressee.
 - importance: 1-5 (5=critical, 4=important, 3=medium, 2=minor, 1=trivial)
@@ -27,8 +28,8 @@ Extract as a JSON array. For each memory:
 Already stored memories (DO NOT repeat):
 {{ existing_summary }}
 
-{% if commitments_block %}
-{{ commitments_block }}
+{% if open_plans_block %}
+{{ open_plans_block }}
 {% endif %}
 
 IMPORTANT:
@@ -38,16 +39,16 @@ IMPORTANT:
 - Keep WHO did or said what exactly as the text has it, and never turn an intention into an accomplished action ("planned to warn her" is not "warned her").
 - NO episodic memories (experiences) — those are auto-consolidated from chat history
 - NEVER write "User", "Player", "Spieler", "the user", "I" or generic labels. A stand-in like "the narrator", "my conversation partner" or "the other one" is a generic label too.{{ lang_instruction }}
-- A thought is NOT automatically a promise. "commitment" needs either a concrete time hint or a named person the plan is directed at. An inner intention with neither is at most semantic.
+- A thought is NOT automatically a promise. "commitment" needs either a concrete time hint or a named person the plan is directed at. An inner intention with neither is not extracted at all.
 - MAXIMUM 2 commitments per extraction. If more plans appear, pick the most important ones.
-- If an open promise was fulfilled according to this thought, put the number shown in its [ID:…] bracket into "completed_ids" — the plain number, nothing else.
+- If an open plan was fulfilled, put its id into "completed_ids" exactly as shown (8 hex characters), never a number.
 - Ignore mood descriptions, scenery and smalltalk with oneself
 - If nothing new: empty arrays []
 
 Reply ONLY with valid JSON:
 {"memories": [
-    {"memory_type": "...", "content": "...", "related_character": "...", "importance": N, "tags": ["..."], "delay_minutes": N},
+    {"memory_type": "...", "title": "... (commitments only)", "content": "...", "related_character": "...", "importance": N, "tags": ["..."], "delay_minutes": N},
     ...
 ],
-"completed_ids": [<id from the [ID:…] bracket>, ...]
+"completed_ids": ["a1b2c3d4", ...]
 }

@@ -169,29 +169,6 @@ def _schedule_intent(intent: Intent, character_name: str,
         return False
 
 
-def _save_commitment(intent: Intent, character_name: str) -> None:
-    """Fallback: store intent as memory so character remembers it."""
-    try:
-        from app.models.memory import add_memory
-        content = f"Planned action: {intent.type}"
-        if intent.params:
-            content += f" — {json.dumps(intent.params, ensure_ascii=False)}"
-        if intent.delay_seconds:
-            h = intent.delay_seconds / 3600
-            content += f" (in {h:.1f}h)"
-        # importance=3 (kein Cleanup-Schutz): das ist ein automatisch erzeugter
-        # Plan, kein vom User markierter wichtiger Commitment. source=intent
-        # markiert die Provenance fuer spaeteren Event-Cleanup.
-        add_memory(
-            character_name=character_name,
-            content=content, memory_type="commitment", importance=3,
-            tags=["intent"],
-            extra_meta={"source": "intent"})
-        logger.info("Commitment → Memory: %s", intent.type)
-    except Exception as e:
-        logger.warning("Commitment Memory save: %s", e)
-
-
 # ---------------------------------------------------------------------------
 # TaskQueue handler registration + handlers
 # ---------------------------------------------------------------------------
@@ -234,21 +211,16 @@ def _dispatch_intent(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _handle_remind(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Store reminder in character memory."""
-    user_id = payload.get("user_id", "")
+    """Bump a thought turn with the reminder as its hint."""
     character_name = payload.get("agent_name", "")
     note = (payload.get("note") or payload.get("message") or "").strip()
     if not note:
-        logger.warning("Intent remind ohne note/message — kein Memory erzeugt (agent=%s)",
+        logger.warning("Intent remind missing note/message (agent=%s)",
                        character_name)
         return {"success": False, "error": "missing_note"}
     try:
-        from app.models.memory import add_memory
-        add_memory(
-            character_name=character_name,
-            content=f"Reminder: {note}", memory_type="commitment", importance=4,
-            tags=["reminder"],
-            extra_meta={"source": "intent"})
+        from app.core.agent_loop import get_agent_loop
+        get_agent_loop().bump(character_name, hint=f"Reminder: {note}")
         return {"success": True, "note": note}
     except Exception as e:
         return {"success": False, "error": str(e)}

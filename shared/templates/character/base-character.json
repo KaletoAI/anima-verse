@@ -827,18 +827,6 @@
           "placeholder_de": "globaler Default"
         },
         {
-          "key": "memory_max_commitments",
-          "label": "Max commitments",
-          "label_de": "Max. Commitments",
-          "type": "number",
-          "store": "config",
-          "llm_generable": false,
-          "hint": "Cap on commitment memories. 'important'/importance≥4 stay protected. Empty = global.",
-          "hint_de": "Mengen-Cap für Commitments. 'important'/Wichtigkeit≥4 bleiben geschützt. Leer = global.",
-          "placeholder": "global default",
-          "placeholder_de": "globaler Default"
-        },
-        {
           "key": "memory_max_episodic",
           "label": "Max episodics",
           "label_de": "Max. Episoden",

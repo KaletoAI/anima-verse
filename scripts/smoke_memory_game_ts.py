@@ -45,11 +45,6 @@ THE HAND VALUES
       "Y0002-D109T12:00:00". Running the migration a SECOND time converts
       nothing (counter stays at the first run's value) — idempotent by filter.
 
-  [5] ``_due_hint``: game_ts = NOW − 90 min ("Y0002-D109T12:30:00") with a
-      delay of 120 min is due at 14:30, i.e. 30 min from NOW → "in 30 min".
-      A promise 120 min old with a delay of 30 min is overdue → "overdue".
-      An empty/garbage game stamp → "" (no guessing).
-
   [6] Diary: ``add_summary`` dates the entry by GAME day — game_ts is that
       day's start ("Y0002-D109T00:00:00"), metadata.date is the day key
       ("Y0002-D109"), and ``has_daily_summary`` finds it by day key while a
@@ -85,7 +80,6 @@ from app.core.db import get_connection, transaction  # noqa: E402
 from app.core.game_calendar_migration import (  # noqa: E402
     migrate_game_calendar_once)
 from app.core.game_time import GameDuration, GameTime  # noqa: E402
-from app.core.thought_context import _due_hint  # noqa: E402
 from app.models.character import save_character_profile  # noqa: E402
 
 FAILURES = []
@@ -144,8 +138,8 @@ def main() -> int:
 
     # ---------------------------------------------------------------- [1]
     print("\n[1] add_memory writes a canonical game stamp")
-    entry = mem_mod.add_memory(CHAR, "the promise", memory_type="commitment",
-                               tags=["promise"])
+    entry = mem_mod.add_memory(CHAR, "the fact", memory_type="semantic",
+                               tags=["fact"])
     check("returned entry game_ts", entry.get("game_ts"), NOW)
     rows = get_connection().execute(
         "SELECT game_ts FROM memories WHERE character_name=?", (CHAR,)).fetchall()
@@ -155,7 +149,7 @@ def main() -> int:
     # retrieve_relevant_memories writes the entries back (access_count/decay).
     # That round trip must not wipe the game stamp — the easiest regression to
     # introduce and the hardest to notice.
-    mem_mod.retrieve_relevant_memories(CHAR, current_message="promise")
+    mem_mod.retrieve_relevant_memories(CHAR, current_message="fact")
     check("game_ts survives the retrieval write-back", [
         r[0] for r in get_connection().execute(
             "SELECT game_ts FROM memories WHERE character_name=?",
@@ -211,16 +205,6 @@ def main() -> int:
     check("second run leaves the stamp alone", get_connection().execute(
         "SELECT game_ts FROM memories WHERE content='an old memory'"
     ).fetchone()[0], row[0])
-
-    # ---------------------------------------------------------------- [5]
-    print("\n[5] _due_hint on the game clock")
-    pin_clock()
-    check("90 min old promise, 120 min delay",
-          _due_hint("Y0002-D109T12:30:00", 120), "in 30 min")
-    check("120 min old promise, 30 min delay",
-          _due_hint("Y0002-D109T12:00:00", 30), "overdue")
-    check("no game stamp", _due_hint("", 120), "")
-    check("garbage stamp", _due_hint(GARBAGE, 120), "")
 
     # ---------------------------------------------------------------- [6]
     print("\n[6] diary entries are dated by GAME day")

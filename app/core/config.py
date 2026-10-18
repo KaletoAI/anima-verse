@@ -2359,8 +2359,6 @@ def _flatten_to_env(config: dict) -> None:
     _set(env, "CHAT_HISTORY_MAX_MESSAGES", memory.get("max_messages", field_default("memory", "max_messages")))
     _set(env, "CHAT_SESSION_GAP_HOURS", memory.get("session_gap_hours", field_default("memory", "session_gap_hours")))
     _set(env, "MEMORY_MAX_SEMANTIC", memory.get("max_semantic", field_default("memory", "max_semantic")))
-    _set(env, "MEMORY_COMMITMENT_MAX_DAYS", memory.get("commitment_max_days", field_default("memory", "commitment_max_days")))
-    _set(env, "MEMORY_COMMITMENT_COMPLETED_DAYS", memory.get("commitment_completed_days", field_default("memory", "commitment_completed_days")))
 
     # Image Generation
     ig = config.get("image_generation", {})

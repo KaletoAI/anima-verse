@@ -136,11 +136,11 @@ _scheduler_manager = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifecycle Manager für Server-Start und Shutdown"""
+    """Lifecycle manager for server startup and shutdown"""
     global _scheduler_manager
 
     # Startup
-    # Temporaere Dateien loeschen
+    # Delete temporary files
     from app.routes.story import clear_story_tmp
     clear_story_tmp()
     clear_tts_tmp()
@@ -158,13 +158,20 @@ async def lifespan(app: FastAPI):
     except Exception as _le:
         logger.warning("Log retention at startup failed: %s", _le)
 
-    # Multiuser: Default-Admin bootstrappen falls noch kein User existiert
+    # Bootstrap a default admin when no user exists yet
     from app.core.users import ensure_default_admin
     ensure_default_admin()
 
-    # Migration: Persistente Location-IDs hinzufuegen, Filesystem bereinigen
+    # Migration: add persistent location ids and clean up filesystem storage
     from app.models.world import migrate_location_ids
     migrate_location_ids()
+
+    # Promises now live exclusively in intents; legacy memory rows are discarded.
+    try:
+        from app.models.memory import delete_commitment_memories
+        delete_commitment_memories()
+    except Exception as exc:
+        logger.warning("Obsolete promise memory cleanup failed: %s", exc)
 
     # World calendar: the game clock stopped being a datetime. Every persisted
     # GAME stamp (clock anchor, sleep starts, thought game_ts, condition /
@@ -179,10 +186,9 @@ async def lifespan(app: FastAPI):
     except Exception as _gce:
         logger.warning("game calendar migration failed: %s", _gce)
 
-    # 3D-Massstab: EIN Rahmen (das Bezugsquadrat = der Fussabdruck der
-    # Location, Kante map3d.plan_width_m) + EIN Skalierungsfaktor.
-    # Traegt plan_width_m/storey_height_m aus den alten Modell-Feldern
-    # heraus, bevor diese verschwinden (2026-07-28).
+    # 3D scale: one frame (the location footprint square, side
+    # map3d.plan_width_m) and one scale factor. Extract plan_width_m and
+    # storey_height_m before removing the old model fields (2026-07-28).
     try:
         from app.core.location_model3d import migrate_scale_frame_once
         _sf = migrate_scale_frame_once()
@@ -406,7 +412,7 @@ async def lifespan(app: FastAPI):
     if _orphan_stats.get("moved"):
         logger.info("Orphan-Bilder verschoben: %s", _orphan_stats)
 
-    # Migration: Variant-Dateinamen mit Character-Name prefixen
+    # Migration: prefix variant filenames with the character name
     from app.core.expression_regen import migrate_variant_filenames
     migrate_variant_filenames()
 
@@ -671,9 +677,9 @@ async def lifespan(app: FastAPI):
     except Exception as _hr:
         logger.error("Hub-job resumer failed: %s", _hr, exc_info=True)
 
-    # AgentLoop starten — kontinuierliche Gedanken-Schleife mit
-    # importance-gewichtetem Round-Robin. Ersetzt den alten periodischen
-    # Tick. Pause haengt am world-pause-Toggle (task_queue 'default').
+    # Start the continuous AgentLoop with importance-weighted round robin.
+    # Replaces the old periodic tick; pause follows the world pause toggle
+    # (task_queue 'default').
     from app.core.agent_loop import get_agent_loop
     _agent_loop = get_agent_loop()
     await _agent_loop.start()
@@ -683,8 +689,8 @@ async def lifespan(app: FastAPI):
     from app.core.travel_engine import get_travel_ticker
     await get_travel_ticker().start()
 
-    # Task-Queue Worker erst starten, wenn ALLE Handler registriert sind
-    # (sonst schlagen recovered persistierte Tasks beim Recovery fehl).
+    # Start task-queue workers only after all handlers are registered
+    # Otherwise recovered persisted tasks fail during recovery.
     from app.core.task_queue import get_task_queue
     get_task_queue().start()
     logger.info("Task-Queue Worker gestartet")
@@ -698,11 +704,11 @@ async def lifespan(app: FastAPI):
     except Exception as _se:
         logger.debug("startup hook failed: %s", _se)
 
-    # Memory-Konsolidierung: periodisch im Hintergrund
+    # Consolidate memories periodically in the background
     import asyncio as _aio
 
     async def _periodic_consolidation():
-        """Konsolidiert Memories alle 6h, unabhaengig von Server-Neustarts."""
+        """Consolidate memories every six hours, independently of server restarts."""
         from app.core.paths import get_storage_dir as _get_sd
         _ts_file = _get_sd() / ".last_consolidation"
 
@@ -721,7 +727,7 @@ async def lifespan(app: FastAPI):
             _ts_file.parent.mkdir(parents=True, exist_ok=True)
             _ts_file.write_text(_dt.now().isoformat())
 
-        await _aio.sleep(60)  # Kurz warten bis Server bereit
+        await _aio.sleep(60)  # Wait briefly for server readiness
         while True:
             hours = _hours_since_last()
             if hours >= 6:
@@ -731,7 +737,7 @@ async def lifespan(app: FastAPI):
                     _mark_done()
                 except Exception as ce:
                     logger.error("Memory consolidation error: %s", ce)
-            # Alle 30 Min pruefen ob 6h vergangen
+            # Check every 30 minutes whether six hours have elapsed
             await _aio.sleep(30 * 60)
 
     _consolidation_task = _aio.create_task(_periodic_consolidation())
@@ -767,7 +773,7 @@ async def lifespan(app: FastAPI):
         await get_agent_loop().stop()
     except Exception as _ae:
         logger.debug("AgentLoop stop failed: %s", _ae)
-    # ThoughtRunner hat keinen Background-Task mehr → kein stop() noetig
+    # ThoughtRunner no longer has a background task, so no stop() is needed
     if _scheduler_manager:
         logger.info("Fahre Scheduler herunter...")
         _scheduler_manager.shutdown()

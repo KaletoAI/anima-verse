@@ -124,10 +124,7 @@ def _score_memory_no_mutate(entry: Dict[str, Any], current_message: str = "") ->
     relevance = _keyword_overlap(search_text, current_message) if current_message else 0.0
     type_bonus = 0.0
     mtype = entry.get("memory_type")
-    if mtype == "commitment":
-        if "completed" not in entry.get("tags", []):
-            type_bonus = 0.3
-    elif mtype == "episodic":
+    if mtype == "episodic":
         type_bonus = 0.1
     try:
         ts = parse_iso(entry.get("timestamp", ""))
@@ -273,7 +270,6 @@ def build_memory_today(character_name: str) -> Dict[str, Any]:
 
     # --- Top-K active memories (score-based, without mutation) ---
     all_mem = load_memories(character_name)
-    # completed commitments excluded by default
     visible = [m for m in all_mem if "completed" not in (m.get("tags") or [])]
     scored = [(_score_memory_no_mutate(m), m) for m in visible]
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -2482,7 +2478,7 @@ def build_current_location_payload(character_name: str) -> Dict[str, Any]:
                             current_room_name = r.get("name", "")
                             break
                 break
-    # Detail-Beschreibung der Aktivitaet
+    # Detailed activity description
     from app.models.character import get_character_profile, get_movement_target
     profile = get_character_profile(character_name)
     activity_detail = ""  # current_activity_detail entfernt (Pose-Modell)
@@ -2539,8 +2535,8 @@ async def apply_current_location(character_name: str, request) -> Dict[str, Any]
     from app.models.account import get_active_character
     _is_avatar = (get_active_character() == character_name)
 
-    # Block-Regeln: Avatar darf nicht in geblockte Locations/Raeume.
-    # Gleiche Gates wie der SetLocation-Skill der NPCs durchlaeuft.
+    # Block rules: the avatar cannot enter blocked locations or rooms.
+    # Use the same gates as the NPC SetLocation skill.
     if _is_avatar and (location_to_save != old_loc or (room and room != old_room)):
         from app.models.rules import check_leave, check_access
         if old_loc and location_to_save != old_loc:
@@ -2571,10 +2567,9 @@ async def apply_current_location(character_name: str, request) -> Dict[str, Any]
             character_name,
             location_to_save != old_loc or bool(room and room != old_room))
 
-    # Avatar-Eintritts-Hook: andere Characters im neuen Raum bemerken den
-    # Eintritt und reagieren ggf. (forced_thought + TalkTo). Nur wenn:
-    # - es der Avatar ist (sonst ist's der Auto-Move eines NPCs)
-    # - tatsaechlich Raum oder Location gewechselt hat (nicht nur Re-Save)
+    # Avatar entry hook: characters in the new room notice the arrival
+    # and may react (forced_thought + TalkTo). Requires an avatar move
+    # and an actual room or location change, rather than a repeated save.
     new_room = room or ''
     room_changed = (location_to_save != old_loc) or (new_room and new_room != old_room)
     from app.core.log import get_logger as _gl_route
@@ -2582,8 +2577,8 @@ async def apply_current_location(character_name: str, request) -> Dict[str, Any]
         "current-location POST: char=%s is_avatar=%s old_loc=%s -> new_loc=%s old_room=%s -> new_room=%s room_changed=%s",
         character_name, _is_avatar, old_loc, location_to_save, old_room, new_room, room_changed)
     room_entry_result = {"reactor": "", "silent_noticers": []}
-    # Roll-on-Entry: bei echtem Cross-Location-Move sofort wuerfeln, ob ein
-    # Event fuer den Avatar entsteht. Nur fuer Avatar (nicht fuer NPC-Moves).
+    # Roll on entry after an actual location change by the avatar.
+    # NPC moves do not roll avatar events.
     if _is_avatar and location_to_save != old_loc and loc_obj:
         try:
             from app.core.random_events import try_roll_on_entry
@@ -2795,7 +2790,7 @@ async def apply_place_on_map(character_name: str, data: Dict[str, Any]) -> Dict[
 
 
 async def detect_characters_core(character_name: str, image_name: str, request) -> Dict[str, Any]:
-    """Erkennt im Bild verwendete Characters aus reference_images Metadaten."""
+    """Detect characters in an image from reference_images metadata."""
     from app.models.character import (list_available_characters, get_character_images_dir,
         get_character_outfits_dir, get_character_image_prompts, get_character_current_location)
     from app.models.account import get_user_profile, get_active_character
@@ -2806,22 +2801,21 @@ async def detect_characters_core(character_name: str, image_name: str, request) 
 
     all_chars = list_available_characters()
     user_profile = get_user_profile()
-    # user_name = Login-Name (z.B. "admin") — ist KEINE Person die in einem
-    # Bild auftauchen kann. Avatar ist der vom User gespielte Character.
+    # A login name is not a person that can appear in an image.
+    # The avatar is the character controlled by the user.
     avatar_name = (get_active_character() or "").strip()
-    user_name = avatar_name  # Fuer Detection (Filename-Match etc.) den Avatar nutzen
+    user_name = avatar_name  # Use the avatar for detection and filename matching
 
-    # 1. Primaer: explizit gespeicherte character_names aus vorheriger Auswahl
+    # 1. Prefer character_names explicitly stored by an earlier selection
     meta = get_single_image_meta(character_name, image_name)
     saved_names = (meta or {}).get("character_names")
     detected_names = []
     if saved_names and isinstance(saved_names, list):
         detected_names = saved_names
     else:
-        # 2. Fallback: canonical.persons aus dem Generate-Zeitpunkt — das ist
-        #    die zuverlaessigste Quelle, weil sie genau die Personen enthaelt
-        #    die der Prompt-Builder ins Bild gepackt hat. Nur Nicht-Agent
-        #    persons (= im Bild sichtbar, nicht der Photographer-Avatar).
+        # 2. Use canonical.persons from generation time: these are exactly
+        #    the visible people included by the prompt builder, excluding
+        #    the photographer avatar.
         canonical = (meta or {}).get("canonical") or {}
         canon_persons = canonical.get("persons") or []
         if isinstance(canon_persons, list):
@@ -2832,18 +2826,18 @@ async def detect_characters_core(character_name: str, image_name: str, request) 
                 if _n and _n not in detected_names:
                     detected_names.append(_n)
 
-        # 3. Fallback: aus reference_images ableiten — aber NUR Person-Slots,
-        #    keine Background-/Location-Refs (sonst wird der Avatar faelschlich
-        #    detected weil das BG-Bild zufaellig im User-Image-Dir liegt).
+        # 3. Derive names from person slots in reference_images. Exclude
+        #    background/location references: a background stored in the user
+        #    image directory must not be mistaken for the avatar.
         if not detected_names:
             ref_images = meta.get("reference_images", {}) if meta else {}
             _BG_SLOT_HINTS = ("background", "location", "scene", "_4", "room")
             for _slot, ref_filename in ref_images.items():
                 _slot_lower = (_slot or "").lower()
                 if any(h in _slot_lower for h in _BG_SLOT_HINTS):
-                    continue  # Background/Location-Slot, keine Person
+                    continue  # Background/location slot, not a person
                 matched = False
-                # a) Dateiname beginnt mit Character-Name
+                # a) Filename starts with a character name
                 for c in all_chars:
                     if ref_filename.startswith(c + "_"):
                         if c not in detected_names:
@@ -2852,7 +2846,7 @@ async def detect_characters_core(character_name: str, image_name: str, request) 
                         break
                 if matched:
                     continue
-                # b) Datei in Character-Verzeichnissen suchen (Images, Outfits, Variants)
+                # b) Search character directories (images, outfits, variants)
                 for c in all_chars:
                     _imgs_dir = get_character_images_dir(c)
                     _outfits_dir = get_character_outfits_dir(c)
@@ -2864,15 +2858,14 @@ async def detect_characters_core(character_name: str, image_name: str, request) 
                             detected_names.append(c)
                         matched = True
                         break
-                # c) User-Profilbild — nur wenn Slotname NICHT als BG identifiziert wurde
-                #    (oben schon abgefangen)
+                # c) User profile image, only for slots not identified as backgrounds above
                 if not matched and user_name and user_name not in detected_names:
                     from app.models.account import get_user_images_dir
                     _user_imgs = get_user_images_dir()
                     if (_user_imgs / ref_filename).exists():
                         detected_names.append(user_name)
 
-        # 4. Letzter Fallback: Prompt-basierte Erkennung
+        # 4. Last fallback: detect names in the prompt
         if not detected_names:
             prompts = get_character_image_prompts(character_name)
             prompt = prompts.get(image_name, "")
@@ -2883,13 +2876,13 @@ async def detect_characters_core(character_name: str, image_name: str, request) 
                 appearances = [{"name": p.name, "appearance": p.appearance} for p in _persons]
                 detected_names = [p["name"] for p in appearances]
 
-    # Underscore-Prefix-Filter (Sicherheitsnetz fuer System-Characters wie
-    # _messaging_frame, falls list_available_characters cached o.ae.)
+    # Exclude underscore-prefixed system characters such as _messaging_frame,
+    # even if list_available_characters returned a cached list.
     all_chars = [c for c in all_chars if not c.startswith("_")]
 
-    # "Agent" = der Charakter der das Bild ERSTELLT hat. Bei Bildern die ein
-    # NPC dem Avatar geschickt hat (gallery_character != ersteller), steht
-    # der Ersteller in meta.from_character. Sonst ist es der gallery_owner.
+    # The agent is the character that created the image. For an image sent
+    # by an NPC to the avatar, meta.from_character identifies its creator;
+    # otherwise the creator is the gallery owner.
     agent_name = (meta or {}).get("from_character") or character_name
     available = []
     if agent_name and agent_name in all_chars:
@@ -2900,7 +2893,7 @@ async def detect_characters_core(character_name: str, image_name: str, request) 
         if c != agent_name and c != user_name:
             available.append({"name": c, "type": "character"})
 
-    # Rooms der aktuellen Location (fuer Room-Auswahl im Dialog)
+    # Rooms at the current location for the dialog room selector
     rooms = []
     current_room_id = ""
     location_id = (meta or {}).get("location", "")
@@ -2913,7 +2906,7 @@ async def detect_characters_core(character_name: str, image_name: str, request) 
             for room in loc_data.get("rooms", []):
                 rooms.append({"id": room.get("id", ""), "name": room.get("name", "")})
         current_room_id = (meta or {}).get("room_id", "")
-        # Room aus Slot-4 Hintergrundbild ableiten wenn nicht explizit gespeichert
+        # Derive the room from the slot-four background unless explicitly stored
         if not current_room_id:
             ref_images = meta.get("reference_images", {}) if meta else {}
             slot4_filename = ref_images.get("input_reference_image_4", "")
@@ -2923,7 +2916,7 @@ async def detect_characters_core(character_name: str, image_name: str, request) 
                 _matched_room = _img_rooms.get(slot4_filename, "")
                 if _matched_room:
                     current_room_id = _matched_room
-        # Kein Fallback auf aktuellen Raum — wenn nicht bekannt, leer lassen
+        # Leave an unknown room empty instead of using the current room
 
     return {
         "detected": detected_names,

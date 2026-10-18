@@ -5,7 +5,7 @@
    and ``attach_moment`` writes the last user turn). Never into the system
    prompt, whose cached prefix has to stay byte-identical.
 
-   These are the character's own facts and open promises that came out closest
+   These are the character's own facts that came out closest
    to the incoming message by embedding similarity. They are already in the
    system prompt's memory section by importance and age; this block says
    "these ones are about what was just said".
@@ -15,13 +15,12 @@
    empty case.
 
    Required:
-     memories — list of {content, due, is_commitment}
-                due: "in 20 min" / "in 3 h" / "overdue" / "" (commitments only)
+     memories — list of {content}
 #}
 [You remember, and it bears on what was just said — use only what fits, never invent details:]
 {# The entry line deliberately ends in an expression, not in a block tag: the
    loader runs Jinja with trim_blocks, which eats the newline after a closing
    {% ... %} and would glue every entry onto the previous one. #}
 {% for m in memories %}
-- {{ "You promised: " if m.is_commitment else "" }}{{ m.content }}{{ " (due: " ~ m.due ~ ")" if m.due else "" }}
+- {{ m.content }}
 {% endfor %}

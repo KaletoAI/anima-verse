@@ -155,8 +155,6 @@ ENV_CONSUMERS = {
     "MEMORY_LONG_TERM_DAYS": [("app/utils/history_manager.py", "90")],
     "CHAT_HISTORY_MAX_MESSAGES": [("app/utils/history_manager.py", "100")],
     "CHAT_SESSION_GAP_HOURS": [("app/utils/history_manager.py", "4")],
-    "MEMORY_COMMITMENT_MAX_DAYS": [("app/core/memory_service.py", "5")],
-    "MEMORY_COMMITMENT_COMPLETED_DAYS": [("app/core/memory_service.py", "3")],
     "OUTFIT_IMAGE_WIDTH": [("app/core/expression_regen.py", "832")],
     "OUTFIT_IMAGE_HEIGHT": [("app/core/expression_regen.py", "1216")],
     "LOCATION_IMAGE_WIDTH": [("app/core/world_ops.py", "1280"),

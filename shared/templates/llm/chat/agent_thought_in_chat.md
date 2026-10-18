@@ -31,7 +31,6 @@
                               short closing excerpts (private)
      inbox_block            — unread messages from any sender
      events_block           — acute events at location
-     commitments_block      — open promises
      activity_hint_block    — the room's place offer: free places with their
                               poses, busy ones by name, the free-text hint as
                               the tail. In a chat too: a character that shifts
@@ -120,11 +119,6 @@ happened. Do not reuse a sentence, a phrase or an image from these lines.
 
 === Active events at your location ===
 {{ events_block }}
-{% endif %}
-{% if commitments_block %}
-
-=== Open promises ===
-{{ commitments_block }}
 {% endif %}
 {% if activity_hint_block %}
 

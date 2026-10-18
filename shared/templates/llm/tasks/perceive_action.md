@@ -25,7 +25,6 @@
      action_actor_room            — room within that location (may be empty)
      daily_schedule_block         — typical-rhythm hint for current hour
      events_block                 — acute events at location
-     commitments_block            — open promises (might conflict with reaction)
      tools_hint                   — tool-format hint for single-mode tool use
      lang_instruction             — which language this character speaks
 
@@ -70,11 +69,6 @@ If you decide to go there, use exactly that location{% if action_actor_room %} a
 {% endif %}
 {% if relationship_to_actor %}
 Your view of {{ action_actor }}: {{ relationship_to_actor }}
-{% endif %}
-{% if commitments_block %}
-
-=== Your open commitments (may conflict with any new intent) ===
-{{ commitments_block }}
 {% endif %}
 {% if events_block %}
 

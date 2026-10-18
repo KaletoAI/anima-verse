@@ -117,8 +117,6 @@ hier, sondern in `docs/llm-task-mapping.md`.
 | `CHAT_HISTORY_MAX_MESSAGES` | `memory.max_messages` → Memory | `100` | app/utils/history_manager.py |
 | `CHAT_SESSION_GAP_HOURS` | `memory.session_gap_hours` → Memory | `4` | app/utils/history_manager.py |
 | `MEMORY_MAX_SEMANTIC` | `memory.max_semantic` → Memory | `50` | app/models/memory.py |
-| `MEMORY_COMMITMENT_MAX_DAYS` | `memory.commitment_max_days` → Memory | `5` | app/core/memory_service.py |
-| `MEMORY_COMMITMENT_COMPLETED_DAYS` | `memory.commitment_completed_days` → Memory | `3` | app/core/memory_service.py |
 | `MOOD_HISTORY_MAX_ENTRIES` | — | `500` | app/models/memory.py |
 
 Die Zahl der Tages-Zusammenfassungen stand bis 2026-09-22 als `DAILY_SUMMARY_DAYS`

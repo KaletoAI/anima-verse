@@ -1,6 +1,6 @@
 """Pre-decision data loader for the AgentLoop's slim thought prompt.
 
-Gathers inbox / events / assignments / commitments / arc / outfit-trigger
+Gathers inbox / events / assignments / arc / outfit-trigger
 data and formats each as a ready-to-render block string. The slim template
 ``shared/templates/llm/chat/agent_thought.md`` only emits a section when
 its block is non-empty — so what we don't load here, the agent doesn't see.
@@ -124,7 +124,6 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "events_block": _build_events_block(location_id, character_name),
         "assignments_block": _build_assignments_block(character_name),
         "general_task": _build_general_task(profile),
-        "commitments_block": _build_commitments_block(character_name),
         "state_flags_block": _build_state_flags_block(character_name),
         "outfit_decision_block": _build_outfit_decision_block(character_name),
         "arc_block": _build_arc_block(character_name),
@@ -334,77 +333,6 @@ def _build_assignments_block(character_name: str) -> str:
 def _build_general_task(profile: Dict[str, Any]) -> str:
     """Static general task from the character profile (long-running purpose)."""
     return (profile.get("character_task", "") or "").strip()
-
-
-def _due_hint(game_ts: str, delay_minutes: int) -> str:
-    """Turns "promised at T, due T+minutes" into a short due hint.
-
-    Both ends are GAME time: a promise made in the world comes due in the
-    world. The memory row carries its own canonical game stamp
-    (``memories.game_ts``), and the delay is counted in world minutes off it.
-
-    Returns "" when the game stamp is missing or unreadable (pre-migration
-    rows) — a wrong due date is worse than none at all.
-    """
-    from app.core.game_time import GameDuration, GameTime
-    from app.core.timeutils import game_time
-    try:
-        due = GameTime.parse(game_ts) + GameDuration.of(minutes=int(delay_minutes))
-    except Exception:
-        return ""
-    try:
-        remaining = (due - game_time()).minutes
-    except Exception:
-        return ""
-    if remaining <= 0:
-        return "overdue"
-    if remaining < 90:
-        return f"in {int(remaining)} min"
-    if remaining < 48 * 60:
-        return f"in {int(remaining / 60)} h"
-    return f"in {int(remaining / 1440)} d"
-
-
-def _build_commitments_block(character_name: str) -> str:
-    """Open commitments — promises this character made and hasn't fulfilled."""
-    try:
-        from app.models.memory import load_memories
-        from app.models.character import character_exists
-        memories = load_memories(character_name)
-        # Dangling filter: hide commitments made towards a character that does
-        # not (or no longer) exist (related_character set but not in the world).
-        open_ones = [
-            m for m in memories
-            if m.get("memory_type") == "commitment"
-            and "completed" not in (m.get("tags") or [])
-            and not (m.get("related_character") and not character_exists(m.get("related_character")))
-        ]
-        if not open_ones:
-            return ""
-        # Newest first, cap at 5 to keep prompt slim.
-        open_ones.sort(key=lambda m: m.get("timestamp", ""), reverse=True)
-        lines = []
-        for m in open_ones[:5]:
-            content = (m.get("content") or "").strip()
-            if not content:
-                continue
-            # Due hint, stored as minutes from the moment of the promise.
-            # It used to read a "delay" field that the storage layer dropped,
-            # so this suffix has never once appeared.
-            suffix = ""
-            try:
-                minutes = int(m.get("delay_minutes") or 0)
-            except (TypeError, ValueError):
-                minutes = 0
-            if minutes > 0:
-                due = _due_hint(m.get("game_ts", ""), minutes)
-                if due:
-                    suffix = f" (due: {due})"
-            lines.append(f"- {content}{suffix}")
-        return "\n".join(lines)
-    except Exception as e:
-        logger.debug("commitments block failed for %s: %s", character_name, e)
-        return ""
 
 
 def _bare_slots_summary(character_name: str) -> str:

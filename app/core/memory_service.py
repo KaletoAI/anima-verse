@@ -112,7 +112,7 @@ def season_label(season_key: str, lang: str = "en") -> str:
 
 
 # ---------------------------------------------------------------------------
-# Memory Extraction (aus Chat-Austausch)
+# Memory extraction from chat exchanges
 # ---------------------------------------------------------------------------
 
 def extract_memories_from_exchange(character_name: str,
@@ -120,17 +120,17 @@ def extract_memories_from_exchange(character_name: str,
     partner_message: str,
     own_message: str,
     llm) -> List[Dict[str, Any]]:
-    """Extrahiert Memories aus einem Charakter-zu-Charakter-Austausch.
+    """Extract memories from a character-to-character exchange.
 
     Args:
-        character_name: Memory-Owner (Speaker B im Template)
+        character_name: Memory owner (speaker B in the template)
         partner_name:   Conversation partner (speaker A in the template) — an
                         avatar or another NPC name. EMPTY means a thought turn:
                         the monologue template is used, no addressee is
                         invented, and related_character stays empty unless the
                         text itself names someone.
-        partner_message: Was der Partner sagte (text_a)
-        own_message:    Was der Memory-Owner sagte (text_b)
+        partner_message: What the partner said (text_a)
+        own_message:    What the memory owner said (text_b)
 
     Returns list of extracted memory dicts.
     """
@@ -150,7 +150,7 @@ def extract_memories_from_exchange(character_name: str,
     partner_name = (partner_name or "").strip()
     monologue = not partner_name
 
-    # Existing memories for deduplication + commitment tracking.
+    # Existing memories for fact deduplication.
     # load_memories sorts ts DESC, so the NEWEST entries are at the front —
     # a [-15:] slice would hand the model the fifteen OLDEST memories as its
     # "do not repeat" context, which is the opposite of what it needs.
@@ -160,15 +160,12 @@ def extract_memories_from_exchange(character_name: str,
         f"- {e['content']}" for e in existing[:15]
     ) if existing else "(none yet)"
 
-    # Open commitments (for completion detection) — same order, same reason.
-    open_commitments = [
-        e for e in existing
-        if e.get("memory_type") == "commitment"
-        and "completed" not in e.get("tags", [])
-    ]
-    commitments_list = "\n".join(
-        f"- [ID:{c['id']}] {c['content']}" for c in open_commitments[:10]
-    ) if open_commitments else ""
+    from app.models.intents import build_open_intents_brief, complete_intent_as
+    plans = build_open_intents_brief(character_name)
+    open_plans_block = (
+        "Open plans (id | title) — do not extract one of these again; "
+        "if this thought finishes one, list its id in completed_ids:\n" + plans
+    ) if plans else ""
 
     # Clean own message (remove meta-tags)
     clean_own = re.sub(r'\*\*I\s+feel\s+[^*]+\*\*', '', own_message, flags=re.IGNORECASE)
@@ -176,11 +173,6 @@ def extract_memories_from_exchange(character_name: str,
     clean_own = re.sub(r'\*\*I\s+do\s+[^*]+\*\*', '', clean_own, flags=re.IGNORECASE)
     clean_own = re.sub(r'\[INTENT:[^\]]+\]', '', clean_own)
     clean_own = clean_own.strip()
-
-    commitments_block = (
-        "Open promises/plans (check if any was fulfilled by this exchange):\n"
-        + commitments_list
-    ) if commitments_list else ""
 
     try:
         from app.core.llm_router import llm_call
@@ -190,7 +182,7 @@ def extract_memories_from_exchange(character_name: str,
             speaker_b=character_name,
             text_b=clean_own[:1500],
             existing_summary=existing_summary,
-            commitments_block=commitments_block,
+            open_plans_block=open_plans_block,
             lang_instruction=_lang_instruction(character_name, "memory contents"))
         if monologue:
             sys_prompt, user_prompt = render_task("extraction_thought", **shared)
@@ -227,8 +219,8 @@ def extract_memories_from_exchange(character_name: str,
             if not mem_content:
                 continue
             if mem_type not in ("semantic", "commitment"):
-                # Episodische Erinnerungen werden nicht mehr extrahiert —
-                # sie kommen durch Tages-Konsolidierung aus der Chat-History
+                # Episodic memories come from daily chat-history consolidation,
+                # so they are no longer extracted here.
                 if mem_type == "episodic":
                     continue
                 mem_type = "semantic"
@@ -247,14 +239,12 @@ def extract_memories_from_exchange(character_name: str,
                 "importance": importance,
                 "tags": tags,
             }
-            # related_character: Adressat des Memories. LLM-Output bevorzugt,
-            # ansonsten Default = Konversationspartner. Damit Commitments
-            # nicht "dem Spieler/User" sondern dem echten Charakter zugeordnet
-            # werden.
+            # Prefer the model's named addressee, otherwise use the conversation
+            # partner so a promise is attributed to an actual character.
             related = (item.get("related_character") or "").strip()
             if not related and not monologue:
                 related = partner_name
-            # Generische Labels herausfiltern — niemals als Adressat speichern.
+            # Filter generic labels; never store them as addressees.
             if related.lower() in {"user", "player", "spieler", "the user",
                                     "assistant", "character"}:
                 related = partner_name  # empty in a monologue: no addressee
@@ -262,6 +252,7 @@ def extract_memories_from_exchange(character_name: str,
                 entry["related_character"] = related
             # Due hint for commitments — a number of minutes from now.
             if mem_type == "commitment":
+                entry["title"] = _plan_title(item.get("title"), mem_content)
                 try:
                     minutes = int(item.get("delay_minutes") or 0)
                 except (TypeError, ValueError):
@@ -270,10 +261,11 @@ def extract_memories_from_exchange(character_name: str,
                     entry["delay_minutes"] = minutes
             valid.append(entry)
 
-        # Erledigte Commitments markieren
+        # Complete plans named by their hex ids.
         completed_ids = parsed.get("completed_ids", [])
         if isinstance(completed_ids, list) and completed_ids:
-            _mark_commitments_completed(character_name, completed_ids)
+            for intent_id in completed_ids:
+                complete_intent_as(character_name, str(intent_id).strip())
 
         return valid
 
@@ -282,66 +274,29 @@ def extract_memories_from_exchange(character_name: str,
         return []
 
 
-def _mark_commitments_completed(character_name: str, commitment_ids: List[Any]
-):
-    """Marks commitments as done (adds the 'completed' tag).
-
-    The ids come from an LLM, so they arrive as numbers or as strings of
-    numbers depending on the day. The entry id is the integer row id, and the
-    prompt prints it as ``[ID:123]`` — a returned ``"123"`` used to match
-    nothing at all, silently. Both sides are compared as text.
-    """
-    from app.models.memory import load_memories, save_memories
-
-    wanted = {str(i).strip() for i in commitment_ids if str(i).strip()}
-    entries = load_memories(character_name)
-    changed = False
-    for entry in entries:
-        if str(entry.get("id")) in wanted and entry.get("memory_type") == "commitment":
-            tags = entry.get("tags", [])
-            if "completed" not in tags:
-                tags.append("completed")
-                entry["tags"] = tags
-                changed = True
-                logger.info("Commitment erledigt: %s — %s",
-                            entry["id"], entry.get("content", "")[:60])
-    if changed:
-        save_memories(character_name, entries)
-
-
-# Adressat-Heuristik fuer Background-Commitments: nur wenn das Plan-Memory
-# einen externen Empfaenger benennt, gilt es als echtes commitment. Innere
-# Plaene ohne Adressat werden zu semantic herabgestuft.
-_ADDRESSEE_RE = re.compile(
-    r"\b(verspricht|beauftragt|vereinbart|sagt\s+zu|erinnert|fragt|"
-    r"promises|tells|asks|requests|agrees\s+with|reminds)\b",
-    re.IGNORECASE,
-)
+def _plan_title(title: Any, content: str) -> str:
+    """Use an explicit title, or at most 60 characters ending at a word boundary."""
+    title = str(title or "").strip()
+    if title:
+        return title
+    content = content.strip()
+    if len(content) <= 60:
+        return content
+    boundary = re.match(r"^.{0,60}(?=\s|$)", content, flags=re.DOTALL)
+    return boundary.group(0).rstrip() if boundary else content[:60]
 
 
 def apply_extracted_memories(character_name: str,
     extracted: List[Dict[str, Any]],
     extraction_context: Optional[Dict[str, Any]] = None) -> int:
-    """Stores extracted memories. A commitment with a delay becomes an intent.
+    """Store facts as memories and promises as capped own intents.
 
-    Stamps are SYSTEM time: memories carry an aware ISO stamp written by
-    ``utc_now_iso()``, so the dedup window is built with ``utc_now()`` and read
-    back with ``parse_iso()``. A naive system-clock stamp here raised a
-    TypeError on the very first row and silently killed the whole extraction.
-
-    extraction_context (optional):
-      - source: "user_chat" | "thought" | "random_event" | "group_chat" — where
-        the extraction was triggered.
-      - is_background: bool — True on background paths (thoughts etc.). When
-        True a commitment without a delay AND without an external addressee is
-        reclassified as semantic, so the commitment protection does not apply.
-      - event_id: str — set when the extraction came from a random-event
-        context, for the later cleanup when the event is cancelled.
+    The semantic dedup window uses SYSTEM timestamps. Extraction context
+    supplies source/event provenance for memories.
     """
     from app.models.memory import add_memory, load_memories, _keyword_overlap
 
     ctx = extraction_context or {}
-    is_background = bool(ctx.get("is_background"))
     event_id = ctx.get("event_id") or ""
     source = ctx.get("source") or ""
 
@@ -353,18 +308,13 @@ def apply_extracted_memories(character_name: str,
             ts = parse_iso(e.get("timestamp", ""))
         except (ValueError, TypeError):
             continue
-        if ts >= recent_cutoff:
+        if e.get("memory_type") == "semantic" and ts >= recent_cutoff:
             recent_contents.append(e.get("content", ""))
 
     count = 0
     for item in extracted:
         tags = item.get("tags", [])
         mem_type = item.get("memory_type", "semantic")
-        # The model returns a number of minutes now, not prose. The old
-        # free-text hint could not be parsed reliably: the parser knew
-        # German words and bare "HH:MM", while the template asked for
-        # "tomorrow" and "at 14:00" — both yielded 0, so no commitment
-        # ever produced a reminder.
         try:
             delay_minutes = int(item.get("delay_minutes") or 0)
         except (TypeError, ValueError):
@@ -373,35 +323,34 @@ def apply_extracted_memories(character_name: str,
             delay_minutes = 0
         new_content = item.get("content", "")
 
-        # Dedup against every memory younger than 14 days: skip on more than
-        # 50% keyword overlap, so that every variation of the same plan does
-        # not get its own entry.
-        if new_content and any(_keyword_overlap(c, new_content) > 0.5 for c in recent_contents):
+        if mem_type == "commitment":
+            from app.models.intents import create_own_intent
+            from app.models.character import character_exists
+            trigger = ({"kind": "at_time", "run_date": (
+                game_time() + GameDuration.of(minutes=delay_minutes)).canonical()}
+                if delay_minutes > 0 else {"kind": "standing"})
+            related = (item.get("related_character") or "").strip()
+            participants = {}
+            if related and related != character_name:
+                if related.lower() not in {"user", "player", "spieler", "the user",
+                                           "assistant", "character"} and character_exists(related):
+                    participants[related] = {
+                        "role": f"{character_name} promised this to you", "progress": []}
+                else:
+                    logger.debug("Ignoring unknown plan addressee %r", related)
+            created = create_own_intent(
+                character_name, _plan_title(item.get("title"), new_content),
+                description=new_content, trigger=trigger, priority=3,
+                source="character", extra_participants=participants)
+            if created:
+                count += 1
             continue
 
-        # Background path: a commitment without a delay AND without an external
-        # addressee becomes semantic. It is kept as a fact, but falls under the
-        # 50-entry cap instead of the commitment protection.
-        if is_background and mem_type == "commitment" and not delay_minutes:
-            if not _ADDRESSEE_RE.search(new_content or ""):
-                mem_type = "semantic"
-
-        # A commitment with a due time creates an intent.
-        intent_created = False
-        if mem_type == "commitment" and delay_minutes:
-            _create_intent_from_commitment(character_name, item["content"],
-                                           delay_minutes)
-            tags = list(tags) + ["intent_created"]
-            intent_created = True
-
+        # Semantic facts alone use memory keyword deduplication.
+        if mem_type == "semantic" and new_content and any(
+                _keyword_overlap(c, new_content) > 0.5 for c in recent_contents):
+            continue
         importance = item.get("importance", 3)
-        # Plans auto-extracted from background generation (activities, thoughts,
-        # random events) are often rated importance 4-5 by the extraction LLM,
-        # because the story content sounds dramatic. That inflates the backlog
-        # and shields those entries from the auto-cleanup. Real importance comes
-        # from the user context, not from the LLM.
-        if intent_created and importance > 3:
-            importance = 3
 
         # Provenance into the meta — for the later event cleanup and debugging.
         extra_meta: Dict[str, Any] = {}
@@ -409,13 +358,8 @@ def apply_extracted_memories(character_name: str,
             extra_meta["source"] = source
         if event_id:
             extra_meta["event_id"] = event_id
-        # The due hint the model gave us. It used to end here: the meta
-        # whitelist knew no "delay", so it was dropped without a trace and no
-        # stored commitment in any world ever carried one — while the prompt
-        # block kept promising "(when: …)".
         if delay_minutes:
             extra_meta["delay_minutes"] = delay_minutes
-
         result = add_memory(
             character_name=character_name,
             content=item["content"],
@@ -426,47 +370,9 @@ def apply_extracted_memories(character_name: str,
             extra_meta=extra_meta or None)
         if result:
             count += 1
-            recent_contents.append(new_content)
+            if mem_type == "semantic":
+                recent_contents.append(new_content)
     return count
-
-
-def _create_intent_from_commitment(character_name: str, content: str,
-                                   delay_minutes: int):
-    """Creates a remind intent from a commitment that carries a due hint.
-
-    ``delay_minutes`` comes straight from the extraction template as a number.
-    It used to be free text that a German-centric parser tried to read while
-    the template asked for English hints — "tomorrow" and "at 14:00" both
-    parsed to zero, so no commitment ever produced a reminder.
-    """
-    try:
-        from app.core.intent_engine import Intent, execute_intent
-
-        delay_seconds = int(delay_minutes) * 60
-        if delay_seconds <= 0:
-            return
-
-        intent = Intent(
-            type="remind",
-            delay_seconds=delay_seconds,
-            params={"note": content, "message": content},
-            raw=f"[auto-commitment] {content}")
-
-        # The shared scheduler (registered by the lifespan). The old lookup
-        # read ThoughtRunner._scheduler, an attribute that no longer exists —
-        # so every commitment fired immediately instead of at its due time.
-        from app.scheduler.scheduler_manager import get_scheduler_manager
-        scheduler = get_scheduler_manager()
-
-        if execute_intent(intent, character_name, scheduler_manager=scheduler):
-            logger.info("Commitment → Intent: '%s' in %ds (game time) for %s",
-                        content[:60], delay_seconds, character_name)
-        else:
-            logger.warning("Commitment → Intent: '%s' for %s could not be "
-                           "scheduled", content[:60], character_name)
-
-    except Exception as e:
-        logger.warning("Commitment → Intent error: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -539,76 +445,42 @@ def cleanup_npc_traces(npc_name: str) -> Dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
-# Consolidation (Background-Worker)
+# Consolidation (background worker)
 # ---------------------------------------------------------------------------
 
 def consolidate_memories(character_name: str) -> int:
-    """Konsolidiert alte Memories: Decay anwenden, aehnliche zusammenfassen.
+    """Consolidate old memories: apply decay and merge duplicates.
 
-    Wird periodisch im Hintergrund aufgerufen.
-    Returns Anzahl entfernter/archivierter Entries.
+    Called periodically in the background.
+    Return the number of removed/archived entries.
     """
-    import os as _os
     from app.models.memory import (load_memories, save_memories, _compute_decay,
                                    memory_amount)
 
     entries = load_memories(character_name)
     if len(entries) < 30:
-        return 0  # Zu wenige zum Konsolidieren
+        return 0  # Too few entries to consolidate
 
     removed = 0
-    now = utc_now()
-
     # Configuration. Age thresholds are GLOBAL by design; the AMOUNT caps are
     # per NPC (character config → global memory.* → default), see
     # plan-memory-consolidation-npc-specific.md §4a.
-    commitment_max_days = int(_os.environ.get("MEMORY_COMMITMENT_MAX_DAYS", "5"))
-    completed_max_days = int(_os.environ.get("MEMORY_COMMITMENT_COMPLETED_DAYS", "3"))
     semantic_max = memory_amount(character_name, "memory_max_semantic",
                                  "memory.max_semantic", 50)
-    commitments_max = memory_amount(character_name, "memory_max_commitments",
-                                    "memory.max_commitments", 20)
     episodic_max = memory_amount(character_name, "memory_max_episodic",
                                  "memory.max_episodic", 60)
 
-    # 1. Commitments cleanup:
-    #    a) "completed" → nach 3 Tagen weg
-    #    b) ALTE Commitments ohne completion → nach commitment_max_days weg
-    #       (auto-generierte intent_created Plans sammeln sich sonst zu hunderten)
-    pre_commitment = []
-    for entry in entries:
-        if entry.get("memory_type") == "commitment":
-            tags = entry.get("tags", []) or []
-            try:
-                ts = parse_iso(entry.get("timestamp", ""))
-                age_days = (now - ts).total_seconds() / 86400
-                if "completed" in tags and age_days > completed_max_days:
-                    removed += 1
-                    logger.debug("Completed commitment entfernt (%.0f Tage): %s",
-                                 age_days, entry.get("content", "")[:60])
-                    continue
-                # Important-Tag schuetzt vor Auto-Cleanup
-                important = "important" in tags or entry.get("importance", 3) >= 4
-                if not important and age_days > commitment_max_days:
-                    removed += 1
-                    logger.debug("Stale commitment entfernt (%.0f Tage, ohne completion): %s",
-                                 age_days, entry.get("content", "")[:60])
-                    continue
-            except (ValueError, TypeError):
-                pass
-        pre_commitment.append(entry)
-
-    # 2. Decay berechnen und sehr schwache archivieren
+    # 1. Compute decay and archive very weak entries
     active = []
-    for entry in pre_commitment:
+    for entry in entries:
         decay = _compute_decay(entry)
         entry["decay_factor"] = round(decay, 3)
         if decay < 0.1 and entry.get("importance", 3) <= 2:
             removed += 1
-            continue  # Archivieren (entfernen)
+            continue  # Archive (remove)
         active.append(entry)
 
-    # 3. Duplikat-Erkennung (exakt gleicher Content)
+    # 2. Detect duplicate content
     seen_content = set()
     deduped = []
     for entry in active:
@@ -619,7 +491,7 @@ def consolidate_memories(character_name: str) -> int:
         seen_content.add(content_key)
         deduped.append(entry)
 
-    # 4. Amount-cap enforcement per memory type: backlog over cap → weakest
+    # 3. Amount-cap enforcement per memory type: backlog over cap → weakest
     #    out (score = importance × decay × (1 + access bonus)). The reactive
     #    cap check on add only sees new adds; this trues up old backlogs once
     #    per consolidation. Protected entries ('important' tag / importance
@@ -654,10 +526,6 @@ def consolidate_memories(character_name: str) -> int:
     # no protection: identical to the previous behavior).
     _enforce_cap(deduped, "semantic", semantic_max, "Semantic",
                  exclude=lambda e: "relationship" in (e.get("tags") or []))
-    # Commitments — count cap NEW (age rules above stay global); important /
-    # importance≥4 protected like the age cleanup.
-    _enforce_cap(deduped, "commitment", commitments_max, "Commitment",
-                 protect=_is_protected)
     # Episodics awaiting the daily rollup — protects prompt + rollup volume.
     _enforce_cap(deduped, "episodic", episodic_max, "Episodic",
                  protect=_is_protected)
@@ -670,14 +538,14 @@ def consolidate_memories(character_name: str) -> int:
 
 
 def handle_memory_consolidation(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Task-Queue Handler: 3-Stufen-Konsolidierung fuer einen Character.
+    """Task-queue handler for the character memory consolidation ladder.
 
     Pipeline:
-      Phase 1: Cleanup (Duplikate, erledigte Commitments, Decay)
-      Phase 2: Tages-Konsolidierung (Episodics → Tages-Summary, Originale loeschen)
-      Phase 3: Wochen-Konsolidierung (Tages-Summaries → Wochen-Summary)
-      Phase 4: Monats-Konsolidierung (Wochen-Summaries → Monats-Summary)
-      Phase 5: Tages-Summaries aktualisieren + Backfill
+      Phase 1: Cleanup (duplicates, decay)
+      Phase 2: Daily consolidation (episodes → day summary, delete originals)
+      Phase 3: Weekly consolidation (day summaries → week summary)
+      Phase 4: Season consolidation (week summaries → season summary)
+      Phase 5: Update daily summaries and backfill
     """
     character_name = payload.get("character_name", "")
     if not character_name:
@@ -692,28 +560,28 @@ def handle_memory_consolidation(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.error("Consolidation Phase 1 error %s: %s", character_name, e)
 
-    # Phase 2: Tages-Konsolidierung (Episodics → Tages-Summary)
+    # Phase 2: Daily consolidation (episodes → day summary)
     try:
         removed_daily = _consolidate_episodics_to_daily(character_name)
         total += removed_daily
     except Exception as e:
         logger.error("Consolidation Phase 2 error %s: %s", character_name, e)
 
-    # Phase 3: Wochen-Konsolidierung
+    # Phase 3: Weekly consolidation
     try:
         removed_weekly = _consolidate_daily_to_weekly(character_name)
         total += removed_weekly
     except Exception as e:
         logger.error("Consolidation Phase 3 error %s: %s", character_name, e)
 
-    # Phase 4: Monats-Konsolidierung
+    # Phase 4: Season consolidation
     try:
         removed_monthly = _consolidate_weekly_to_monthly(character_name)
         total += removed_monthly
     except Exception as e:
         logger.error("Consolidation Phase 4 error %s: %s", character_name, e)
 
-    # Phase 5: Tages-Summaries aktualisieren + Backfill (via Router/Task=consolidation)
+    # Phase 5: Update daily summaries and backfill (via Router/Task=consolidation)
     try:
         from app.utils.history_manager import _update_daily_summary, backfill_missing_daily_summaries
         _update_daily_summary(character_name)
@@ -786,7 +654,7 @@ def _llm_summarize(system_prompt: str, user_prompt: str, character_name: str) ->
             user_prompt=user_prompt,
             agent_name=character_name)
         result = (response.content or "").strip() if response else ""
-        # LLM-Artefakte bereinigen
+        # Clean up LLM artifacts
         result = re.sub(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>', '', result).strip()
         return result if len(result) >= 20 else ""
     except Exception as e:
@@ -795,7 +663,7 @@ def _llm_summarize(system_prompt: str, user_prompt: str, character_name: str) ->
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: Tages-Konsolidierung (Episodics → Tages-Summary)
+# Phase 2: Daily consolidation (episodes → day summary)
 # ---------------------------------------------------------------------------
 
 def _consolidate_episodics_to_daily(character_name: str) -> int:
@@ -896,7 +764,7 @@ def _consolidate_episodics_to_daily(character_name: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: Wochen-Konsolidierung (Tages-Summaries → Wochen-Summary)
+# Phase 3: Weekly consolidation (day summaries → week summary)
 # ---------------------------------------------------------------------------
 
 def load_weekly_summaries(character_name: str) -> Dict[str, str]:
@@ -1039,7 +907,7 @@ def _consolidate_daily_to_weekly(character_name: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Phase 4: Monats-Konsolidierung (Wochen-Summaries → Monats-Summary)
+# Phase 4: Season consolidation (week summaries → season summary)
 # ---------------------------------------------------------------------------
 
 def load_monthly_summaries(character_name: str) -> Dict[str, str]:

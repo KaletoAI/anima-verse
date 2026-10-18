@@ -126,7 +126,7 @@ stops acting autonomously).
 - Two chat modes per character: **`single`** (tool-capable model emits tool calls inline) and
   **`rp_first`** (RP model writes prose, a separate Tool LLM translates it into skill calls —
   recommended for RP fine-tunes).
-- Tiered memory consolidation (scene → day → week → month), commitments, semantic facts, per-partner
+- Tiered memory consolidation (scene → day → week → month), semantic facts, plans stored as intents, per-partner
   day summaries, relationship summaries and anti-repetition control (a repetition penalty that rises
   while a character loops).
 - Chat retention: raw chat lines older than `memory.chat_retention_days` (90 by default, `0` = keep

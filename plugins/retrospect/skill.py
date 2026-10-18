@@ -169,8 +169,7 @@ class RetrospectSkill(PluginSkill):
         except Exception:
             return ""
         sig = [m for m in mems
-               if (m.get("importance") or 0) >= 3
-               or m.get("memory_type") == "commitment"]
+               if (m.get("importance") or 0) >= 3]
         sig.sort(key=lambda m: m.get("timestamp", ""), reverse=True)
         out: List[str] = []
         for m in sig[:12]:

@@ -679,6 +679,41 @@ def _takes_part(intent: Optional[Dict[str, Any]], character_name: str) -> bool:
             or character_name in (intent.get("participants") or {}))
 
 
+def create_own_intent(character_name: str, title: str, *, description: str = "",
+                      trigger: Optional[Dict[str, Any]] = None, priority: int = 3,
+                      source: str = "character",
+                      extra_participants: Optional[Dict[str, Any]] = None
+                      ) -> Optional[Dict[str, Any]]:
+    """Create an own plan with duplicate protection, caps and trigger scheduling."""
+    trig = trigger or {"kind": "standing"}
+    with keyed_lock("intents", character_name):
+        dup = find_duplicate(character_name, title)
+        if dup:
+            logger.info("[%s] Intent not created, duplicate of %s %r: %r",
+                        character_name, dup.get("id"), dup.get("title"), title)
+            return None
+        it = create_intent(
+            owner=character_name, title=title, description=description, source=source,
+            participants={character_name: {"role": "", "progress": []},
+                          **(extra_participants or {})},
+            trigger=trig, priority=priority,
+            location_id=trig.get("location_id", "") if trig.get("kind") == "at_location" else "",
+            expires_at=default_intent_expiry(trig, source), meta={"origin": "marker"})
+        if it:
+            enforce_active_caps(character_name, keep_ids=(it["id"],))
+    apply_trigger_on_create(it)
+    return it
+
+
+def complete_intent_as(character_name: str, intent_id: str) -> bool:
+    """Complete an intent only as its owner or a participant."""
+    if _takes_part(get_intent(intent_id), character_name):
+        return complete_intent(intent_id)
+    logger.info("[%s] INTENT_DONE ignored: %s is not an intent of this character",
+                character_name, intent_id)
+    return False
+
+
 def parse_and_apply_intent_markers(character_name: str,
                                    text: str) -> List[Dict[str, Any]]:
     """Applies the character markers of an LLM answer.
@@ -703,11 +738,7 @@ def parse_and_apply_intent_markers(character_name: str,
     created: List[Dict[str, Any]] = []
     for m in _MARK_DONE.finditer(text or ""):
         iid = m.group(1)
-        if _takes_part(get_intent(iid), character_name):
-            complete_intent(iid)
-        else:
-            logger.info("[%s] INTENT_DONE ignored: %s is not an intent of this character",
-                        character_name, iid)
+        complete_intent_as(character_name, iid)
     for m in _MARK_PROG.finditer(text or ""):
         iid = m.group(1)
         if _takes_part(get_intent(iid), character_name):
@@ -736,21 +767,8 @@ def parse_and_apply_intent_markers(character_name: str,
             elif "=" not in p and not desc:
                 desc = p
         trig = _when_to_trigger(when)
-        with keyed_lock("intents", character_name):
-            dup = find_duplicate(character_name, title)
-            if dup:
-                logger.info("[%s] Intent not created, duplicate of %s %r: %r",
-                            character_name, dup.get("id"), dup.get("title"), title)
-                continue
-            it = create_intent(
-                owner=character_name, title=title, description=desc, source=source,
-                participants={character_name: {"role": "", "progress": []}},
-                trigger=trig, priority=prio,
-                location_id=trig.get("location_id", "") if trig.get("kind") == "at_location" else "",
-                expires_at=default_intent_expiry(trig, source), meta={"origin": "marker"})
-            if it:
-                enforce_active_caps(character_name, keep_ids=(it["id"],))
-        apply_trigger_on_create(it)
+        it = create_own_intent(character_name, title, description=desc,
+                               trigger=trig, priority=prio, source=source)
         if it:
             created.append(it)
     return created

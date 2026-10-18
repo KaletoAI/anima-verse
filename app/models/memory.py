@@ -1,7 +1,7 @@
 """Character memory system — long-term memory per character.
 
 Replaces the old knowledge system with context-based retrieval, natural decay
-and memory types (episodic, semantic, commitment).
+and memory types (episodic, semantic).
 
 Storage: world.db — tables ``memories``, ``mood_history``.
 
@@ -37,7 +37,7 @@ def memory_amount(character_name: str, config_key: str,
                   global_key: str, default: int) -> int:
     """Amount-cap resolution: per-character config (>0) → global ``memory.*``
     → built-in default. The ONE read path for all memory amount caps
-    (semantic/commitment/episodic counts, prompt top-K). Cadences and age
+    (semantic/episodic counts, prompt top-K). Cadences and age
     thresholds stay global by design — only AMOUNTS are per NPC."""
     try:
         from app.models.character import get_character_config
@@ -99,7 +99,7 @@ def _row_to_entry(row) -> Dict[str, Any]:
         entry["source_ids"] = json.loads(d.get("source_ids") or "[]")
     except Exception:
         pass
-    # Row-ID als Fallback-ID
+    # Use the row id as the fallback id
     if not entry.get("id"):
         entry["id"] = f"mem_{d.get('id', '')}"
     return entry
@@ -108,8 +108,7 @@ def _row_to_entry(row) -> Dict[str, Any]:
 # Everything an entry may carry into the `meta` JSON column. The list is a
 # whitelist on purpose — a memory row must not become a dumping ground — but it
 # used to be written out twice, and a key that was not in it vanished WITHOUT a
-# trace. That is how the due hint of a commitment died (handed in by
-# apply_extracted_memories, dropped here → 0 rows carrying one in any world).
+# trace. Unknown fields are therefore reported instead of silently dropped.
 #
 # The PROVENANCE fields below belong here too. ``add_memory`` takes them
 # through its ``extra_meta`` door and merges them into the column, so the
@@ -342,7 +341,7 @@ def add_memory(character_name: str,
     # first internal embedding loads an ONNX model, and add_memory runs inside
     # chat, thought and skill turns — none of them may wait for it. Only the
     # types the situational block considers are worth a vector.
-    if row_id and memory_type in ("semantic", "commitment"):
+    if row_id and memory_type == "semantic":
         try:
             from app.core.memory_situational import schedule_embedding
             schedule_embedding(row_id, content)
@@ -461,11 +460,11 @@ def upsert_relationship_memory(character_name: str,
 
 def delete_memories_by_source(character_name: str, tag: str, context: str = ""
 ) -> int:
-    """Loescht Memories mit passendem Tag (und optional context)."""
+    """Delete memories matching a tag and optional context."""
     try:
         conn = get_connection()
         if context:
-            # context ist in meta gespeichert — lade und filtere
+            # Context is stored in meta; load and filter it
             rows = conn.execute(
                 "SELECT id, tags, meta FROM memories WHERE character_name=?",
                 (character_name,),
@@ -534,45 +533,44 @@ def get_memories_by_tag(character_name: str,
 # ---------------------------------------------------------------------------
 
 def _recency_boost(age_days: float) -> float:
-    """Gibt einen Multiplikator fuer sehr aktuelle Memories zurueck.
+    """Return a multiplier for very recent memories.
 
-    Aktuelle Daten (< 2 Tage) bekommen einen deutlichen Boost,
-    damit sie gegenueber aelteren Eintraegen bevorzugt werden.
+    Recent data (< 2 days) receives a strong boost to outrank older entries.
 
-    Kurve:
-      0-1   Tage  ->  2.0  (doppelt gewichtet)
-      1-2   Tage  ->  1.5-2.0  (linear abfallend)
-      2-3   Tage  ->  1.0-1.5  (linear abfallend)
-      3+    Tage  ->  1.0  (kein Boost)
+    Curve:
+      0-1   days  ->  2.0  (double weight)
+      1-2   days  ->  1.5-2.0  (linearly decreasing)
+      2-3   days  ->  1.0-1.5  (linearly decreasing)
+      3+    days  ->  1.0  (no boost)
     """
     if age_days <= 1.0:
         return 2.0
     elif age_days <= 2.0:
-        # Linear von 2.0 auf 1.5
+        # Linear from 2.0 to 1.5
         return 2.0 - 0.5 * (age_days - 1.0)
     elif age_days <= 3.0:
-        # Linear von 1.5 auf 1.0
+        # Linear from 1.5 to 1.0
         return 1.5 - 0.5 * (age_days - 2.0)
     else:
         return 1.0
 
 
 def _compute_decay(entry: Dict[str, Any]) -> float:
-    """Berechnet aktuellen Decay basierend auf Alter und Access-Count."""
+    """Compute current decay from age and access count."""
     try:
         ts = parse_iso(entry.get("timestamp", ""))
     except (ValueError, TypeError):
         return 0.5
     age_days = max(0, (utc_now() - ts).total_seconds() / 86400)
-    # Base decay: halbes Leben nach 30 Tagen
+    # Base decay: half-life of 30 days
     base_decay = math.exp(-0.023 * age_days)
-    # Access-Bonus: haeufig abgerufene Memories zerfallen langsamer
+    # Access bonus: frequently retrieved memories decay more slowly
     access_bonus = min(0.3, entry.get("access_count", 0) * 0.05)
     return min(1.0, max(0.05, base_decay + access_bonus))
 
 
 def _keyword_overlap(text: str, query: str) -> float:
-    """Einfacher Keyword-Overlap-Score zwischen Text und Query."""
+    """Simple keyword overlap score between text and query."""
     if not text or not query:
         return 0.0
     text_words = set(text.lower().split())
@@ -624,13 +622,9 @@ def retrieve_relevant_memories(character_name: str,
         search_text = entry.get("content", "") + " " + " ".join(entry.get("tags", []))
         relevance = _keyword_overlap(search_text, current_message) if current_message else 0.0
 
-        # Type bonus: only OPEN commitments get one
+        # Episodic memories receive a small type bonus.
         type_bonus = 0.0
-        if entry.get("memory_type") == "commitment":
-            if "completed" not in entry.get("tags", []):
-                type_bonus = 0.3
-            # Completed commitments: no bonus, plain decay
-        elif entry.get("memory_type") == "episodic":
+        if entry.get("memory_type") == "episodic":
             type_bonus = 0.1
 
         # Recency boost: clearly prefer recent entries (< 2 days)
@@ -715,7 +709,7 @@ def build_memory_prompt_section(character_name: str,
     current_message: str = "") -> str:
     """Builds the memory section of the system prompt.
 
-    Grouped by type: episodic, semantic, commitment, relationships. Retrieved
+    Grouped by type: episodic, semantic, relationships. Retrieved
     by context instead of a static top-N.
 
     ``partner_name`` is the current conversation partner (a character name).
@@ -741,7 +735,6 @@ def build_memory_prompt_section(character_name: str,
     # Group by memory_type
     episodic = []
     semantic = []
-    commitments = []
     relationships = []
 
     try:
@@ -755,7 +748,7 @@ def build_memory_prompt_section(character_name: str,
         related = mem.get("related_character", "")
         content = mem.get("content", "")
 
-        # Dangling filter: a memory/commitment referencing a character that
+        # Dangling filter: a memory referencing a character that
         # does not (or no longer) exists in the world is kept in storage but
         # not pulled into the prompt. Only applies with related_character set.
         if related and character_exists is not None and not character_exists(related):
@@ -773,11 +766,6 @@ def build_memory_prompt_section(character_name: str,
         mtype = mem.get("memory_type", "semantic")
         if mtype == "episodic":
             episodic.append(f"- {recency_marker}{ts_prefix}{content}")
-        elif mtype == "commitment":
-            # Completed commitments nicht im Prompt anzeigen
-            if "completed" in mem.get("tags", []):
-                continue
-            commitments.append(f"- {recency_marker}{ts_prefix}{content}")
         elif related:
             relationships.append(f"- {recency_marker}{ts_prefix}(about {related}) {content}")
         else:
@@ -805,10 +793,6 @@ def build_memory_prompt_section(character_name: str,
         parts.append("\nFacts you remember:")
         parts.extend(semantic)
 
-    if commitments:
-        parts.append("\nOpen commitments & plans:")
-        parts.extend(commitments)
-
     if relationships:
         parts.append("\nAbout other characters:")
         parts.extend(relationships)
@@ -821,7 +805,7 @@ def build_memory_prompt_section(character_name: str,
 # ---------------------------------------------------------------------------
 
 def load_mood_history(character_name: str) -> List[Dict[str, Any]]:
-    """Laedt Mood-History eines Characters aus der DB."""
+    """Load a character's mood history from the DB."""
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -836,9 +820,9 @@ def load_mood_history(character_name: str) -> List[Dict[str, Any]]:
 
 
 def save_mood_history(character_name: str, entries: List[Dict[str, Any]]):
-    """Ersetzt Mood-History in der DB (max 500 Eintraege, aelteste werden geloescht)."""
+    """Replace mood history in the DB (max 500 entries, deleting the oldest)."""
     max_entries = int(os.environ.get("MOOD_HISTORY_MAX_ENTRIES", "500"))
-    # Nur letzte max_entries behalten — delete excess
+    # Keep only the last max_entries; delete the excess
     try:
         conn = get_connection()
         total = conn.execute(
@@ -892,3 +876,12 @@ def record_mood(character_name: str, mood: str, source: str = ""):
             conn.commit()
     except Exception as e:
         logger.error("record_mood Fehler fuer %s: %s", character_name, e)
+
+
+def delete_commitment_memories() -> int:
+    """Delete obsolete promise memories at boot; retain facts and episodes."""
+    with transaction() as conn:
+        count = conn.execute("DELETE FROM memories WHERE tier = ?", ("commitment",)).rowcount
+    if count:
+        logger.info("Deleted %d obsolete commitment memories", count)
+    return count

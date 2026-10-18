@@ -8,7 +8,7 @@ CURRENT user turn instead, behind the scene state: it is composed fresh per
 message, and the prefix above it never changes.
 
 Selection is similarity, nothing else: the current message is embedded, every
-candidate memory (facts + open commitments) is compared by cosine similarity
+candidate memory (facts) is compared by cosine similarity
 against its cached vector, and the best ``max_entries`` above the threshold
 are attached. Ties fall to the more recent memory. No importance, no decay, no
 type bonus — that ranking already runs in the system prompt, and mixing the
@@ -30,10 +30,8 @@ from app.core.log import get_logger
 
 logger = get_logger("memory_situational")
 
-# Only these two types are candidates. Episodics are the bulk of the store and
-# are what the day/scene summaries already carry into the prompt; facts and
-# promises are the sorts that go missing when nobody asks the right question.
-CANDIDATE_TYPES = ("semantic", "commitment")
+# Only facts are candidates; episodes already appear in day/scene summaries.
+CANDIDATE_TYPES = ("semantic",)
 
 # How many missing vectors one lookup may compute. A character with hundreds
 # of memories would otherwise embed the whole store on its first situational
@@ -238,12 +236,7 @@ def select_situational(message: str,
 # ---------------------------------------------------------------------------
 
 def load_candidates(character_name: str) -> List[Dict[str, Any]]:
-    """Facts and OPEN commitments of a character, newest first.
-
-    Same two exclusions the prompt sections apply: a completed commitment is
-    done with, and a memory about a character that no longer exists in the
-    world stays in storage but out of any prompt.
-    """
+    """Facts of a character, excluding references to missing characters."""
     from app.models.memory import load_memories
     try:
         from app.models.character import character_exists
@@ -253,8 +246,6 @@ def load_candidates(character_name: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for mem in load_memories(character_name):
         if mem.get("memory_type") not in CANDIDATE_TYPES:
-            continue
-        if "completed" in (mem.get("tags") or []):
             continue
         if not (mem.get("content") or "").strip():
             continue
@@ -284,25 +275,6 @@ def situational_memories(character_name: str, message: str,
         threshold=min_similarity())
 
 
-def _due_state(entry: Dict[str, Any]) -> str:
-    """Due hint of a commitment, rendered exactly like the thought block does.
-
-    One implementation, so the two blocks can never say different things about
-    the same promise. Anything but a commitment with a readable delay yields
-    "" and the entry renders bare.
-    """
-    if entry.get("memory_type") != "commitment":
-        return ""
-    try:
-        minutes = int(entry.get("delay_minutes") or 0)
-    except (TypeError, ValueError):
-        return ""
-    if minutes <= 0:
-        return ""
-    from app.core.thought_context import _due_hint
-    return _due_hint(entry.get("game_ts", "") or "", minutes)
-
-
 def render_block(entries: List[Dict[str, Any]]) -> str:
     """Renders the selected entries into the user-turn fragment ("" if none)."""
     if not entries:
@@ -311,8 +283,6 @@ def render_block(entries: List[Dict[str, Any]]) -> str:
     memories = [
         {
             "content": (e.get("content") or "").strip(),
-            "due": _due_state(e),
-            "is_commitment": e.get("memory_type") == "commitment",
         }
         for e in entries if (e.get("content") or "").strip()
     ]

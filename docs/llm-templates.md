@@ -186,7 +186,7 @@ history, and the block order is checked against the cache contract.
 The AgentLoop's slim system prompt. Pre-decision logic in
 [app/core/thought_context.py](../app/core/thought_context.py) builds a
 dict with only the blocks that have content (inbox, events,
-assignments, general task, commitments, outfit-decision, story arc,
+assignments, general task, intents, outfit-decision, story arc,
 retrospective). The template renders nothing for empty blocks.
 
 `birthday_today` is part of the always-present situation data: True
@@ -207,7 +207,7 @@ attention:
 3. Active events at location
 4. Active assignments
 5. General task (`character_task` from profile)
-6. Open commitments
+6. Open plans from the intents table (with ids)
 7. Outfit-decision (after location change or wake)
 8. Active story arc
 9. Retrospective (existing beliefs/improvements + boost hint when overdue)

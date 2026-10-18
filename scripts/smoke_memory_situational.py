@@ -53,8 +53,8 @@ plan-memory-facts-and-commitments.md, section "Situativer Memory-Block"):
    message.
 
 6. The template renders under StrictUndefined with EXACTLY the kwargs of its
-   production call site (`memory_situational.render_block`), and a commitment
-   carries its due state the way the thought block writes it.
+   production call site (`memory_situational.render_block`). Facts render as
+   plain content; old promise labels and due hints are absent.
 
 7. The block lands in the USER turn. `compose_messages` is the function the
    provider list is built with, so this is checked at the consumer: the block
@@ -252,16 +252,16 @@ check("identical scores", [round(p["score"], 6) for p in tie_pick], [1.0, 1.0])
 check("newer first", [p["id"] for p in tie_pick], [21, 20])
 
 print("7) the template renders with exactly the call-site kwargs")
-# render_block calls render(TEMPLATE, memories=[{content, due, is_commitment}]).
+# render_block calls render(TEMPLATE, memories=[{content}]).
 block = render(ms.TEMPLATE, memories=[
     {"content": "Der Bogen steht in der Kammer", "due": "", "is_commitment": False},
     {"content": "Ich bringe dir deinen Bogen zurueck", "due": "in 20 min", "is_commitment": True},
 ])
 check("the fact is in the block", "Der Bogen steht in der Kammer" in block, True)
-check("the commitment is marked as a promise",
-      "You promised: Ich bringe dir deinen Bogen zurueck" in block, True)
-check("the due state is rendered like the thought block",
-      "(due: in 20 min)" in block, True)
+check("no old promise prefix",
+      "You promised:" in block, False)
+check("no old due state",
+      "(due: in 20 min)" in block, False)
 check("a plain fact carries no due suffix",
       "Der Bogen steht in der Kammer (due" in block, False)
 check("the header names it as memory, not as user speech",
@@ -294,7 +294,7 @@ check("the user's own words come first",
 check("no suffix = the old message list", plain[-1]["content"], QUERY)
 check("message count unchanged", len(withblock), len(plain))
 
-print("10) only facts and open commitments are candidates")
+print("10) only facts are candidates")
 from app.models import memory as mem_mod  # noqa: E402
 store = [
     {"id": 1, "memory_type": "semantic", "content": "a fact", "tags": []},
@@ -309,7 +309,7 @@ try:
     ids = [c["id"] for c in ms.load_candidates("Alpha")]
 finally:
     mem_mod.load_memories = _orig_load
-check("fact and open commitment only", ids, [1, 2])
+check("only facts are candidates", ids, [1])
 
 print("11) the vector blob survives the round trip")
 vec = [0.5, -0.25, 0.125]

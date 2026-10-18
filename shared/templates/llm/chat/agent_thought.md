@@ -26,7 +26,6 @@
                                  (intents_enabled) and writes its own markers
                                  (not rp_first) — teaches the [INTENT:] grammar
      general_task              — Medium: static profile task
-     commitments_block         — Medium: open promises
      outfit_decision_block     — High when triggered (after location-change or wake)
      skill_context_blocks      — Medium: self-contained sections contributed by the character's active skills
      inventory_block           — what the character is carrying
@@ -139,11 +138,6 @@ If this turn starts something you will only carry out LATER, record it with a ma
 
 === Your general task ===
 {{ general_task }}
-{% endif %}
-{% if commitments_block %}
-
-=== Open promises ===
-{{ commitments_block }}
 {% endif %}
 {% if outfit_decision_block %}
 

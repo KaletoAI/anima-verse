@@ -7,7 +7,7 @@ placeholders:
   text_a: What speaker_a said
   text_b: What speaker_b said
   existing_summary: Bullet list of recent existing memories ("(none yet)" if none)
-  commitments_block: Pre-formatted block of open commitments (empty string when none)
+  open_plans_block: Pre-formatted block of open plans (empty string when none)
   lang_instruction: Optional "\nWrite the memory contents in <Language>." or empty
 ---
 ## system
@@ -21,6 +21,7 @@ Analyze this conversation exchange between two characters and extract important 
 
 Extract as a JSON array. For each memory:
 - memory_type: "semantic" (fact/info) or "commitment" (promise/plan)
+- title: ONLY for commitments — a short plan label, 2–6 words, in the language of the content, without the owner's name (e.g. "bake bread", "return the borrowed book").
 - content: short, compact sentence (max 1-2 sentences) — written from {{ speaker_b }}'s perspective in third person. Every person in it is named, never only by role or relationship ("her brother", "the colleague") — this line is read months later without this conversation. Use ONLY names that literally appear in the exchange above; never complete or resolve a name that is not written there.
 - related_character: the OTHER character involved in this memory — usually "{{ speaker_a }}". Use the exact name, never a generic label.
 - importance: 1-5 (5=critical, 4=important, 3=medium, 2=minor, 1=trivial)
@@ -30,8 +31,8 @@ Extract as a JSON array. For each memory:
 Already stored memories (DO NOT repeat):
 {{ existing_summary }}
 
-{% if commitments_block %}
-{{ commitments_block }}
+{% if open_plans_block %}
+{{ open_plans_block }}
 {% endif %}
 
 IMPORTANT:
@@ -46,14 +47,14 @@ IMPORTANT:
 - For commitments to a third party named in the text: set "related_character" to that name.
 - For commitments with a time hint: set "delay_minutes" to the number of minutes from now (in two hours = 120, tomorrow = 1440). A promise without a time gets 0.
 - MAXIMUM 2 commitments per extraction. If more plans appear in the text, pick the most important ones.
-- If an open promise was fulfilled by this exchange, put the number shown in its [ID:…] bracket into "completed_ids" — the plain number, nothing else.
+- If an open plan was fulfilled, put its id into "completed_ids" exactly as shown (8 hex characters), never a number.
 - Ignore meta-tags, trivia, smalltalk
 - If nothing new: empty arrays []
 
 Reply ONLY with valid JSON:
 {"memories": [
-    {"memory_type": "...", "content": "...", "related_character": "...", "importance": N, "tags": ["..."], "delay_minutes": N},
+    {"memory_type": "...", "title": "... (commitments only)", "content": "...", "related_character": "...", "importance": N, "tags": ["..."], "delay_minutes": N},
     ...
 ],
-"completed_ids": [<id from the [ID:…] bracket>, ...]
+"completed_ids": ["a1b2c3d4", ...]
 }

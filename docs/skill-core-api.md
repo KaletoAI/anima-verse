@@ -323,14 +323,13 @@ Manifest) und führen sie über `handle_intent(intent_type, payload)` aus (Defau
 JSON-Durchreichung an `execute()`). Die Methode `BaseSkill.tool_intent_payload(raw_input)`
 liefert den Vergleichs-Inhalt eines Tool-Aufrufs für den Redundanz-Skip.
 
-Die Engine kennt nur die Core-Typen `remind` und `execute_tool`; alles andere kommt aus
-den geladenen Skills — ein nicht geladener Skill macht seinen Intent-Typ unbekannt
-(→ Commitment-Memory statt Fehler-Handler). Einen LLM-Marker-Dialekt für diese Typen
-gibt es nicht mehr — Intents dieses Pfades entstehen programmatisch (z.B.
-`memory_service._create_intent_from_commitment`). Die LLM-Marker-Grammatik ist die
-vereinheitlichte (`[INTENT: <titel> | … | by=player]`, `app.models.intents`, Prompt-Text in
-`shared/templates/llm/chat/intent_markers.md`);
-`app.core.intent_engine.strip_intent_tags(text)` entfernt `[INTENT: …]` vor dem Speichern.
+The engine handles the core types `remind` and `execute_tool`; other types are
+provided by loaded skills. Unknown types are rejected. `remind` bumps the
+character's thought turn with `Reminder: <note>` as its hint; deferred reminders
+use the scheduler. Extracted promises use `app.models.intents.create_own_intent`
+and the intent's own trigger scheduling. The unified marker grammar lives in
+`shared/templates/llm/chat/intent_markers.md`.
+`app.core.intent_engine.strip_intent_tags(text)` removes markers before persistence.
 
 Vorhaben/Aufgaben als Datensatz: `app.models.intents.create_intent(*, owner, title, …)`,
 `app.models.intents.list_intents(owner, status, source)`,
@@ -340,6 +339,16 @@ Vorhaben/Aufgaben als Datensatz: `app.models.intents.create_intent(*, owner, tit
 Titel ≥ 6 Zeichen), sonst `None`. Wer vor dem Anlegen prüft, hält
 `keyed_lock("intents", owner)` um `find_duplicate` UND `create_intent` — so legen zwei Turns
 derselben Figur kein Vorhaben doppelt an (Muster: `plugins/retrospect/skill.py`).
+
+`app.models.intents.create_own_intent(character_name, title, *, description="", trigger=None, priority=3, source="character", extra_participants=None) -> Optional[Dict[str, Any]]`
+creates a plan under the owner's keyed lock, deduplicates its title, enforces owned
+caps and schedules its trigger outside the lock. Defaults to a standing trigger;
+returns `None` for a duplicate. Extra participants see and may complete the plan.
+`app.models.intents.complete_intent_as(character_name, intent_id) -> bool` completes
+only a plan owned by the character or one they participate in. Both extraction
+and the marker paths use these helpers.
+`app.models.memory.delete_commitment_memories() -> int` deletes obsolete promise
+memory rows at boot and returns the number removed; repeated calls return zero.
 
 `app.models.intents.expire_intent(intent_id, reason) -> bool` expires only an active intent,
 merging `meta.expired_reason` (`cap`, `deadline`, or `replaced`) into its existing metadata.

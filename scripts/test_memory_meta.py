@@ -10,7 +10,7 @@ function, and the slice fix is checked on a synthetic list.
 WHY these expectations (derived by hand from the defect, not recorded from
 current output):
 
-1. `delay_minutes` must survive. It is a commitment's due hint. The whitelist did not
+1. `delay_minutes` must survive. It is an allowed numeric metadata field. The whitelist did not
    know the key, so `apply_extracted_memories` handed it in and it vanished:
    0 rows with `meta.delay` in all three worlds, while the prompt block kept
    rendering "(when: …)" from a field that was never stored.
@@ -94,7 +94,7 @@ mem.logger.addHandler(handler)
 
 print("1) the fields that used to vanish now survive")
 entry = {
-    "memory_type": "commitment", "content": "x", "timestamp": "2026-08-03",
+    "memory_type": "semantic", "content": "x", "timestamp": "2026-08-03",
     "tags": ["a"], "importance": 4, "related_character": "Alpha",
     "delay_minutes": 120,
     # The seven provenance fields (see docstring point 5).
@@ -137,10 +137,10 @@ check("summary_stale not stored", "summary_stale" in meta, False)
 check("one warning for both", len(handler.records), 1)
 
 print("4) _entry_to_row uses the same builder")
-row = mem._entry_to_row({"memory_type": "commitment", "content": "c",
+row = mem._entry_to_row({"memory_type": "semantic", "content": "c",
                          "delay_minutes": 1440, "importance": 2})
 check("row carries the meta json", '"delay_minutes": 1440' in row["meta"], True)
-check("tier from memory_type", row["tier"], "commitment")
+check("tier from memory_type", row["tier"], "semantic")
 
 print("5) the dedup context takes the newest entries")
 # load_memories returns ts DESC → newest first.
@@ -151,70 +151,9 @@ check("slice starts at the newest", sliced[0]["content"], "mem-20")
 check("slice ends 15 entries later", sliced[-1]["content"], "mem-06")
 check("the old [-15:] would have started at", newest_first[-15:][0]["content"], "mem-15")
 
-print("6) the extraction actually hands the delay over")
-src = (Path(__file__).resolve().parents[1]
-       / "app/core/memory_service.py").read_text()
-check("apply_extracted_memories fills extra_meta['delay_minutes']",
-      'extra_meta["delay_minutes"] = delay_minutes' in src, True)
+print("6) the dedup context takes the newest memories")
+src = (Path(__file__).resolve().parents[1] / "app/core/memory_service.py").read_text()
 check("the dedup slice is fixed", "existing[:15]" in src, True)
-check("the commitment slice is fixed", "open_commitments[:10]" in src, True)
-
-print("7) completion accepts the id the prompt actually shows")
-# The prompt prints "[ID:123]" where 123 is the integer row id; an LLM returns
-# it as a number on one day and as a string on the next. Before the fix the
-# comparison was `entry["id"] in commitment_ids`, so "123" matched nothing —
-# silently. Result: 998 commitments in the worlds, none ever completed.
-from app.core import memory_service as ms  # noqa: E402
-from app.models import memory as mem_mod  # noqa: E402
-
-
-def _run_completion(ids, entry_id=123, mtype="commitment"):
-    saved = {}
-    entries = [{"id": entry_id, "memory_type": mtype, "tags": [], "content": "c"}]
-    orig_load, orig_save = mem_mod.load_memories, mem_mod.save_memories
-    mem_mod.load_memories = lambda name: entries
-    mem_mod.save_memories = lambda name, e: saved.update({"n": len(e)})
-    try:
-        ms._mark_commitments_completed("Demo", ids)
-    finally:
-        mem_mod.load_memories, mem_mod.save_memories = orig_load, orig_save
-    return "completed" in entries[0]["tags"]
-
-
-check("string id matches the integer row id", _run_completion(["123"]), True)
-check("integer id matches too", _run_completion([123]), True)
-check("a different id does not match", _run_completion(["999"]), False)
-check("a non-commitment is never touched",
-      _run_completion(["123"], mtype="semantic"), False)
-
-print("8) the due hint reads minutes, not prose")
-from app.core import thought_context as tc, timeutils  # noqa: E402
-from app.core.game_time import GameTime  # noqa: E402
-
-# Both ends of a due hint are GAME time: a promise made in the world comes due
-# in the world, so the stamp is the memory's canonical `game_ts` and the clock
-# pinned here is the GAME clock. `_due_hint` imports `game_time` inside the
-# function, so patching the module attribute is enough.
-NOW = GameTime.parse("Y0002-D215T12:00:00")
-orig_game_time = timeutils.game_time
-timeutils.game_time = lambda: NOW
-try:
-    # promised at 11:30 with 120 minutes → due 13:30 → 90 minutes left → hours
-    check("90 minutes out reads as hours",
-          tc._due_hint("Y0002-D215T11:30:00", 120), "in 1 h")
-    # promised at 11:50 with 30 minutes → due 12:20 → 20 minutes left
-    check("20 minutes out reads as minutes",
-          tc._due_hint("Y0002-D215T11:50:00", 30), "in 20 min")
-    # promised the game day before with 60 minutes → long past
-    check("past due says so",
-          tc._due_hint("Y0002-D214T11:00:00", 60), "overdue")
-    check("an unreadable game stamp yields nothing",
-          tc._due_hint("kaputt", 120), "")
-    check("a missing game stamp yields nothing",
-          tc._due_hint("", 120), "")
-finally:
-    timeutils.game_time = orig_game_time
-
 
 print()
 if failures:

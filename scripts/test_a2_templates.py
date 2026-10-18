@@ -56,11 +56,11 @@ DE = "\nWrite the summary in German."
 CALL_SITES = {
     "extraction_memory": dict(
         speaker_a="Alpha", speaker_b="Beta", text_a="a", text_b="b",
-        existing_summary="(none yet)", commitments_block="",
+        existing_summary="(none yet)", open_plans_block="",
         lang_instruction="\nWrite the memory contents in German."),
     "extraction_thought": dict(
         speaker_b="Beta", text_b="b", existing_summary="(none yet)",
-        commitments_block="",
+        open_plans_block="",
         lang_instruction="\nWrite the memory contents in German."),
     "consolidation_daily": dict(
         # Mirrors memory_service.py ~800: the game-calendar wave replaced
