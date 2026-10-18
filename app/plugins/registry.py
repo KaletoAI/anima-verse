@@ -77,6 +77,9 @@ class RigSpec:
     chains: List[List[Dict[str, str]]]
     params: Dict[str, Any] = field(default_factory=dict)
     applies_to: Dict[str, List[Any]] = field(default_factory=dict)
+    depends_on: str | None = None
+    external_parents: List[str] = field(default_factory=list)
+    length: float = 1.0
     freq_hz: float = 2.2
     zeta: float = 0.15
     gravity: float = 0.35
@@ -147,7 +150,7 @@ class RigSpec:
                 key = norm_bone_name(bone)
                 if not key or key in seen or key in BASE_JOINT_KEYS:
                     raise ValueError(f"duplicate or reserved bone: {bone}")
-                if norm_bone_name(parent) not in BASE_JOINT_KEYS and parent not in earlier:
+                if norm_bone_name(parent) not in BASE_JOINT_KEYS and parent not in earlier and clean:
                     raise ValueError(f"parent must be a base joint or earlier chain link: {parent}")
                 clean.append({"bone": bone, "parent": parent})
                 earlier.add(bone)
@@ -155,8 +158,10 @@ class RigSpec:
             result.append(clean)
         spec = cls(raw["id"].strip(), raw["op"].strip(), result,
                    dict(params), dict(conditions))
+        spec.external_parents = [chain[0]["parent"] for chain in result
+                                 if norm_bone_name(chain[0]["parent"]) not in BASE_JOINT_KEYS]
         spec.templates = templates
-        bounds = {"freq_hz": (0, None), "zeta": (0, None),
+        bounds = {"length": (.5, 3), "freq_hz": (0, None), "zeta": (0, None),
                   "gravity": (0, None), "head_sag": (0, 1), "spill": (0, 1), "translate": (0, 1), "flatten": (0, 1), "stretch": (0, 1), "spread": (0, 1), "gain": (0, 1),
                   "max_deg": (0, 180), "rest_max_deg": (0, 180),
                   "straighten_deg": (0, 180), "freetext_clothing_gain": (0, 1)}
@@ -232,7 +237,7 @@ class BodySlotSpec:
     prompt: Dict[str, str] = field(default_factory=dict)  # always | covered | exposed
     face: bool = False  # fragment also belongs into face/portrait prompts
     back: bool = False  # Include fragments in rear-view renders.
-    rig: Optional[RigSpec] = None
+    rigs: List[RigSpec] = field(default_factory=list)
 
 
 @dataclass
@@ -291,17 +296,16 @@ def register_package(pkg: Package) -> None:
     group_ids = {}
     for candidate in [p for p in packages() if p.id != pkg.id] + [pkg]:
         for slot in candidate.body_slots:
-            if slot.rig is None:
-                continue
-            if slot.rig.id in group_ids:
-                raise ValueError(f"duplicate rig group {slot.rig.id}: {group_ids[slot.rig.id]} and {candidate.id}")
-            group_ids[slot.rig.id] = candidate.id
-            for chain in slot.rig.chains:
-                for link in chain:
-                    key = norm_bone_name(link["bone"])
-                    if key in owners:
-                        raise ValueError(f"duplicate extension bone {link['bone']}: packages {owners[key]} and {candidate.id}")
-                    owners[key] = candidate.id
+            for rig in slot.rigs:
+                if rig.id in group_ids:
+                    raise ValueError(f"duplicate rig group {rig.id}: {group_ids[rig.id]} and {candidate.id}")
+                group_ids[rig.id] = candidate.id
+                for chain in rig.chains:
+                    for link in chain:
+                        key = norm_bone_name(link["bone"])
+                        if key in owners:
+                            raise ValueError(f"duplicate extension bone {link['bone']}: packages {owners[key]} and {candidate.id}")
+                        owners[key] = candidate.id
     _packages[pkg.id] = pkg
     _generation += 1
 

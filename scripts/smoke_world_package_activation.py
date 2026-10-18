@@ -39,8 +39,8 @@ def make_package(plugins, package_id, *, installed=False, content=False,
     })
     slot = {"id": package_id + "_slot", "prompt": {"always": package_id + " body"}}
     if shared_rig:
-        slot["rig"] = {"id": "shared_group", "op": "fixture_operation",
-                       "chains": [[{"bone": "FixtureExtension", "parent": "Hips"}]]}
+        slot["rigs"] = [{"id": "shared_group", "op": "fixture_operation",
+                       "chains": [[{"bone": "FixtureExtension", "parent": "Hips"}]]}]
     manifest = {
         "name": package_id,
         "enabled_default": enabled_default,

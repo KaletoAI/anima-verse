@@ -34,10 +34,11 @@ export interface MotionGroup {
 /** Package metadata profiles are multipliers; runtime groups are already resolved. */
 export type MotionAttributeProfiles = Record<string, Record<string, Partial<Pick<MotionGroup,
   'freq_hz' | 'zeta' | 'gravity' | 'gain' | 'max_deg' | 'sag_max_deg' | 'spill_max_deg' | 'head_sag' | 'flatten' | 'stretch' | 'spread' | 'flatten_floor' | 'spill' | 'translate'>>>>
-export interface ExtensionRigDeclaration extends Omit<MotionGroup, 'bones' | 'gravity_scale' | 'rest_deg' | 'length' | 'girth' | 'flatten_floor'> {
+export interface ExtensionRigDeclaration extends Omit<MotionGroup, 'bones' | 'gravity_scale' | 'rest_deg' | 'girth' | 'flatten_floor'> {
   flatten_floor: number | null
   id: string
   op: string
+  depends_on: string | null
   chains: { bone: string; parent: string }[][]
   params: Record<string, unknown>
   templates?: string[] | "*" | { feature: string } | null
@@ -469,7 +470,13 @@ export function createSecondaryMotion(
       restore(old.bind)
       old.bind.bone.updateWorldMatrix(false, true)
     }
-    particles = nextParticles.sort((a, b) => a.bind.depth - b.bind.depth)
+    const drivenBones = new Set(nextParticles.map(st => st.bind.bone))
+    const drivenDepth = (st: Particle) => {
+      let depth = 0
+      for (let parent = st.bind.bone.parent; parent; parent = parent.parent) if (drivenBones.has(parent as Bone)) depth++
+      return depth
+    }
+    particles = nextParticles.sort((a, b) => drivenDepth(a) - drivenDepth(b))
   }
   const reset = () => {
     for (const st of particles) { st.p = null; st.target = null; st.anchorRotation = null; st.v.set(0, 0, 0) }

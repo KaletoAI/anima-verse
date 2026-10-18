@@ -584,7 +584,7 @@ def publication_checks(root, model3d, rigged_source):
             assert entered.wait(10)
             try:
                 response=_model_asset_response('demo',Request())
-                check(asyncio.run(streamed_bytes(response))==b'old-final' and path.read_bytes()==b'old-final','concurrent route reader cannot see delivered or intermediate bytes')
+                check(run_async(streamed_bytes(response))==b'old-final' and path.read_bytes()==b'old-final','concurrent route reader cannot see delivered or intermediate bytes')
                 check(model3d.model_revision(path)==old_revision and json.loads(path.with_suffix('.json').read_text())['marker']=='old','processing leaves revision and metadata unchanged')
                 with keyed_lock('model3d',f'demo:{signature}'):
                     check(not future.done(),'long processing leaves publication lock available')
@@ -642,11 +642,11 @@ def publication_checks(root, model3d, rigged_source):
                     try:
                         response = _model_asset_response('demo', Request())
                         if label == 'generation':
-                            check(asyncio.run(streamed_bytes(response)) == unrigged_source and
+                            check(run_async(streamed_bytes(response)) == unrigged_source and
                                   json.loads(path.with_suffix('.json').read_text())['rig'] == 'none' and
                                   not low.exists(), 'generation serves the new static mesh, never partial rig output')
                         else:
-                            check(asyncio.run(streamed_bytes(response)) == b'old-final', 'job retrieval stages rigged delivery before processing')
+                            check(run_async(streamed_bytes(response)) == b'old-final', 'job retrieval stages rigged delivery before processing')
                     finally:
                         proceed.set()
                     outcome=future.result(timeout=10)
@@ -734,7 +734,7 @@ def main():
         package=root/'plugins'/'example'
         package.mkdir(parents=True)
         manifest={'name':'Example package','apply_to':['demo'],'body_slots':[
-            {'id':g['id'],'rig':{**g, 'templates':['npc-temporary']}} for g in groups]}
+            {'id':g['id'],'rigs':[{**g, 'templates':['npc-temporary']}]} for g in groups]}
         (package/'plugin.yaml').write_text(yaml.safe_dump(manifest))
         discover_packages(root/'plugins',force=True)
         check(save_character_profile('demo',{'template':'npc-temporary','outfit_worn':'plain outfit'},create_new=True),'isolated profile')
@@ -984,7 +984,7 @@ def main():
         check(full.read_bytes()==original,'same fingerprint is byte-identical no-op')
         clean=model_dir/'prerig'/'example.glb'
         check(clean.read_bytes()==source,'prerig retains clean source')
-        changed=registry.get_package('example').body_slots[0].rig
+        changed=registry.get_package('example').body_slots[0].rigs[0]
         changed.params['test_rotation_deg']=[-10,0,0]
         model3d.rebuild_extension_rig('demo','example')
         check(full.read_bytes()==original,'declaration change rebuilds without double attenuation')

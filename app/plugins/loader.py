@@ -212,13 +212,21 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
     for bdef in meta.get("body_slots") or []:
         if not isinstance(bdef, dict) or not bdef.get("id"):
             continue
-        rig = None
+        rigs = []
         if "rig" in bdef:
+            logger.error("Package %s slot %s: use rigs list; no rigs loaded", pkg.id, bdef["id"])
+        else:
             from app.plugins.registry import RigSpec
-            try:
-                rig = RigSpec.parse(bdef["rig"], attributes=bdef.get("attributes") or {})
-            except (ValueError, TypeError, OverflowError) as exc:
-                logger.warning("Package %s slot %s: rig dropped: %s", pkg.id, bdef["id"], exc)
+            entries = bdef.get("rigs", [])
+            if not isinstance(entries, list):
+                logger.warning("Package %s slot %s: rig dropped: rigs must be a list", pkg.id, bdef["id"])
+                entries = []
+            for entry in entries:
+                try:
+                    rigs.append(RigSpec.parse(entry, attributes=bdef.get("attributes") or {}))
+                except (ValueError, TypeError, OverflowError) as exc:
+                    logger.warning("Package %s slot %s: rig dropped: %s", pkg.id, bdef["id"], exc)
+            rigs = _resolve_rig_dependencies(rigs, pkg.id, bdef["id"])
         pkg.body_slots.append(BodySlotSpec(
             id=str(bdef["id"]).strip(),
             package_id=pkg.id,
@@ -231,7 +239,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
             prompt={str(k): str(v) for k, v in (bdef.get("prompt") or {}).items()},
             face=bool(bdef.get("face", False)),
             back=bool(bdef.get("back", False)),
-            rig=rig,
+            rigs=rigs,
         ))
     # piece_slots entries: plain string OR {id, label}
     for pdef in meta.get("piece_slots") or []:
@@ -339,16 +347,14 @@ def _collect_packages(base: Path, *, warn: bool = True,
     owners = {}
     for pkg in [found[k] for k in sorted(found)]:
         for slot in pkg.body_slots:
-            rig = slot.rig
-            if rig is None:
-                continue
-            index = len(declarations)
-            declarations.append((pkg.id, slot))
-            keys = [("bone", norm_bone_name(link["bone"]))
-                    for chain in rig.chains for link in chain]
-            keys.append(("group", rig.id))
-            for key in keys:
-                owners.setdefault(key, set()).add(index)
+            for rig in slot.rigs:
+                index = len(declarations)
+                declarations.append((pkg.id, slot, rig))
+                keys = [("bone", norm_bone_name(link["bone"]))
+                        for chain in rig.chains for link in chain]
+                keys.append(("group", rig.id))
+                for key in keys:
+                    owners.setdefault(key, set()).add(index)
     disabled = set()
     for (kind, key), indices in sorted(owners.items()):
         if len(indices) > 1:
@@ -357,7 +363,11 @@ def _collect_packages(base: Path, *, warn: bool = True,
             logger.error("Conflicting extension %s %s: rigs disabled for ALL owners: %s",
                          kind, key, ", ".join(names))
     for index in disabled:
-        declarations[index][1].rig = None
+        _, slot, rig = declarations[index]
+        slot.rigs.remove(rig)
+    for pkg in found.values():
+        for slot in pkg.body_slots:
+            slot.rigs = _resolve_rig_dependencies(slot.rigs, pkg.id, slot.id)
     return [found[k] for k in sorted(found)]
 
 
@@ -583,3 +593,30 @@ def load_all_plugins(plugin_dir: Optional[Path] = None) -> Dict[str, PluginSkill
         for skill_id, skill in load_plugin(pkg):
             results[skill_id] = skill
     return results
+
+
+def _resolve_rig_dependencies(rigs, package_id, slot_id):
+    owners = {}
+    for rig in rigs:
+        for chain in rig.chains:
+            for link in chain:
+                owners.setdefault(link["bone"], []).append(rig.id)
+    valid = []
+    for rig in rigs:
+        parents = [owners.get(name, []) for name in rig.external_parents]
+        dependencies = {row[0] for row in parents if len(row) == 1}
+        if any(len(row) != 1 for row in parents) or len(dependencies) > 1 or rig.id in dependencies:
+            logger.warning("Package %s slot %s: rig dropped: unresolved parent for %s", package_id, slot_id, rig.id)
+            continue
+        rig.depends_on = next(iter(dependencies), None)
+        valid.append(rig)
+    accepted = set()
+    while True:
+        ready = {rig.id for rig in valid if rig.depends_on is None or rig.depends_on in accepted}
+        if ready <= accepted:
+            break
+        accepted.update(ready)
+    for rig in valid:
+        if rig.id not in accepted:
+            logger.warning("Package %s slot %s: rig dropped: missing dependency or cycle for %s", package_id, slot_id, rig.id)
+    return [rig for rig in valid if rig.id in accepted]

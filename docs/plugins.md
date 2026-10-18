@@ -258,9 +258,9 @@ Werte pro Charakter liegen im Profil (`body_slots: {<slot>: {<attr>: <wert>}}`).
 Fragmente mit fehlenden Attribut-Werten entfallen komplett (kein halb gerendertes
 `{size}`). Die Fragmente gehen auch mit Referenzbild mit (F3).
 
-#### Optional `rig` declaration (P1)
+#### Optional `rigs` declaration (P1)
 
-A slot may carry one validated extension group. All identifiers and operation
+A slot may carry a list of validated extension groups under `rigs`. All identifiers and operation
 parameters come from the package. The core accepts any non-empty `op` string
 and stores `params` as a mapping. The mesh runner validates supported
 operations and parameters before changing geometry.
@@ -270,45 +270,46 @@ body_slots:
   - id: example_slot
     attributes:
       example_attribute: {type: select, options: [enabled, disabled]}
-    rig:
-      id: example_group
-      op: appendage_chain
-      chains:
-        - - {bone: ExampleBone1, parent: "<base Mixamo joint name>"}
-          - {bone: ExampleBone2, parent: ExampleBone1}
-      # Abbreviated: supply ALL operation and reference-frame params below.
-      params: {anchor_bone: "<base joint>", anchor_offset: [0, 0, -0.09], cut: 0.15}
-      applies_to:
-        example_profile_field: [enabled]
-        attributes.example_attribute: [enabled]
-      freq_hz: 2.2
-      zeta: 0.15
-      gravity: 0.35
-      spill: 0.0
-      flatten: 0.0
-      stretch: 0.0
-      spread: 0.5 # Transverse compensation, capped at 1.6.
-      flatten_floor: 0.6 # Omit to inherit effective squash_min.
-      translate: 0.0
-      sag_max_deg: 25 # Defaults to max_deg when omitted.
-      spill_max_deg: 25 # Defaults to sag_max_deg when omitted.
-      head_sag: 1.0
-      attribute_profiles:
-        example_attribute:
-          enabled: {freq_hz: 0.8, zeta: 1.2, gravity: 1.1}
-      gain: 1.0
-      max_deg: 25
-      axis_gain: [1, 1, 1]
-      squash: [0.6, 1.4]
-      rest_max_deg: 90
-      straighten_deg: 0 # Off; positive values remove bends as rest increases.
-      freetext_clothing_gain: 1 # Clothing factor without resolved item pieces.
+    rigs:
+      - id: example_group
+        op: appendage_chain
+        chains:
+          - - {bone: ExampleBone1, parent: "<base Mixamo joint name>"}
+            - {bone: ExampleBone2, parent: ExampleBone1}
+        # Abbreviated: supply ALL operation and reference-frame params below.
+        params: {anchor_bone: "<base joint>", anchor_offset: [0, 0, -0.09], cut: 0.15}
+        applies_to:
+          example_profile_field: [enabled]
+          attributes.example_attribute: [enabled]
+        freq_hz: 2.2
+        zeta: 0.15
+        gravity: 0.35
+        spill: 0.0
+        flatten: 0.0
+        stretch: 0.0
+        spread: 0.5 # Transverse compensation, capped at 1.6.
+        flatten_floor: 0.6 # Omit to inherit effective squash_min.
+        translate: 0.0
+        sag_max_deg: 25 # Defaults to max_deg when omitted.
+        spill_max_deg: 25 # Defaults to sag_max_deg when omitted.
+        head_sag: 1.0
+        attribute_profiles:
+          example_attribute:
+            enabled: {freq_hz: 0.8, zeta: 1.2, gravity: 1.1}
+        gain: 1.0
+        max_deg: 25
+        axis_gain: [1, 1, 1]
+        squash: [0.6, 1.4]
+        rest_max_deg: 90
+        straighten_deg: 0 # Off; positive values remove bends as rest increases.
+        freetext_clothing_gain: 1 # Clothing factor without resolved item pieces.
 ```
 
 Replace the base-joint placeholder with a name from
 `shared/models/rig/joints.json` (the optional `mixamorig:` prefix is accepted).
 Each chain is non-empty and ordered parent first: a link's parent must be a
-base joint or an earlier full name in that same chain. Extension names must
+base joint, an earlier full name in that same chain, or (first link only)
+a link bone of another rig on the same slot. Extension names must
 be non-empty and distinct after the same normalization as the base contract.
 Group IDs must also be unique across loaded declarations.
 
@@ -316,9 +317,9 @@ Group IDs must also be unique across loaded declarations.
 value lists. Profile-field keys inspect the profile. `attributes.<key>` keys
 inspect `profile.body_slots[<this slot>][<key>]`; a bare declared attribute key
 also selects that slot value. Explicit `attributes.` keys avoid ambiguity.
-These conditions are available both on the slot and inside `rig`; the rig
+These conditions are available both on the slot and inside each `rigs` entry; the rig
 must additionally pass the package/template and slot applicability filters
-unless its own `rig.templates` selector replaces those filters.
+unless its own `rigs[].templates` selector replaces those filters.
 An omitted condition map applies without further filtering. For both slot and
 rig conditions, YAML `null` in an allowed list matches a missing or explicitly
 null value only; it does not match `""` or the literal string `"none"`. Both
@@ -420,7 +421,7 @@ state compose independently through `motion` (see below).
 
 #### Required mesh-operation parameters
 
-Both operations take all operation settings from `rig.params`. Core supplies
+All operations take all operation settings from `rigs[].params`. Core supplies
 no anchors, shape thresholds, offsets, split positions or test poses. Every
 parameter listed below is required; missing parameters produce step status
 `failed` with a `missing required params` reason and no mesh output. The slot
@@ -438,6 +439,20 @@ Both operations additionally require declaration-driven reference checks:
 joint or size ratio is selected by core. Armature identity and metre scene
 units use only generic numerical tolerances. The executable neutral declarations
 in `scripts/smoke_extension_rig_p1.py` supply every parameter.
+
+A first link may name an exact link bone of another rig on the same slot.
+Later links must name a base joint or an earlier link in their own chain.
+The loader derives `depends_on`; packages do not declare it. Missing parents,
+cycles, and dependencies lost in conflict resolution drop the dependent rig.
+Applicable groups are ordered by dependency depth, then id. A dependent group
+is applicable only with its source, and enabled only when both overrides enable it.
+Slot attributes and clothing coverage apply to every rig on that slot.
+The retired singular manifest key is an error and loads no rigs for that slot.
+
+Declared `length` defaults to 1 and accepts [0.5,3]. World and character overrides
+replace it; state `bone_pose.length` values multiply it. The effective result is
+clamped to [0.25,4]. Girth starts at 1 before state factors. These are motion-only
+values; fingerprint version 14 identifies the new mesh operation contract.
 
 `pair_protrusion` requires two one-link chains: first `+X`, second `-X`.
 It starts from each side's smallest-Y vertex within the declared height/lateral
@@ -466,6 +481,58 @@ ramp of `depth_ramp` that starts `front_margin` behind the wall; and
 `1 - w/exclude_weight` for a vertex's current weight `w` on `exclude_bones` and
 their descendants. Parameter changes alter the fingerprint and rebuild from the
 clean prerig.
+
+`pair_tip` requires two one-link chains, parented side by side to a
+`pair_protrusion` group on the same slot. Geometry detection soft-skips the tip
+group; colour placement supplies `marker_area` in square metres and one shared
+radius R = sqrt((left_area + right_area)/(2*pi)). No lift is baked into the mesh.
+
+| Required parameter | Example | Constraint / meaning |
+|---|---|---|
+| `subdivide_radii` | `[2.4, 1.8, 1.0]` | 1–4 positive non-increasing radii × R, one flat subdivision each |
+| `normal_radius` | `2.0` | Positive face-centre radius × R for area-weighted normal |
+| `fill_radius` | `1.7` | Positive replacement radius × R |
+| `fill_ring` | `0.7` | Positive fit ring width × R |
+| `fill_blend` | `0.3` | Positive inner edge blend width × R, less than fill_radius |
+| `fill_depth` | `0.03` | Nonnegative depth in metres, ignores points behind the tip |
+| `fill_tolerance` | `0.012` | Positive distance to fitted surface in metres |
+| `fill_rms_max` | `0.0015` | Positive maximum fit residual in metres |
+| `head_depth` | `0.01` | Positive bone depth below the fitted tip, metres |
+| `tail_length` | `0.005` | Positive tail extent ahead of the tip, metres |
+| `tip_radius` | `0.5` | Positive core radius × R |
+| `tip_radius_max` | `0.006` | Positive core radius cap, metres |
+| `outer_level` | `0.35` | Outer weight in [0,1) |
+| `outer_radius` | `1.3` | Positive outer radius × R |
+| `outer_ramp` | `0.9` | Positive outer ramp width × R |
+| `weight_depth` | `0.015` | Nonnegative depth cutoff behind filled tip, metres |
+| `weight_min` | `0.003` | Weight threshold in [0,1) |
+| `test_rotation_deg` | `[0,0,0]` | Three finite degrees |
+| `test_scale` | `[1,1.4,1]` | Three positive factors; local Y is the axis |
+
+The same required up, lateral and front reference parameters apply as above.
+Every subdivision selects edges by world midpoint distance to either tip,
+interpolates UVs and deform weights (new sums must be within 1e-4 of one), and
+triangulates faces with more than four corners. Coincident seam copies remain aligned.
+An area-weighted normal points toward front (-Y); its orthogonal plane gives u,w,h.
+Unique ring positions fit h=c0+c1*u+c2*w+c3*u²+c4*u*w+c5*w² by least squares.
+Fewer than 12 points or excessive RMS refuses fill while retaining the bone.
+Accepted inner points blend to the quadric with smoothstep, subject to depth
+and tolerance gates. Filled tip is t+n*c0, axis normalizes n-c1*a-c2*b;
+without fill these remain t,n. Head and tail offset along that axis.
+
+For radial distance r, core=smooth(1-r/min(tip_radius*R,tip_radius_max)),
+outer=smooth((outer_radius*R-r)/(outer_ramp*R)), and
+w=core+(1-core)*outer_level*outer. The tip takes T=w*S from the source;
+the source retains S*(1-w), preserving the extension total before top-four export.
+Empty tip weights soft-skip both tip bones and report that mesh edits remain.
+
+Mesh changes precede weighting. Source groups are planned again on the modified
+surface with colour marker x,z positions, notes and areas pinned from the first
+pass. Bone creation and runtime particles follow dependency order. Metrics include
+head, tail, axis, tip, radius, fill outcome/RMS/moved/tolerance counts, density
+within 5 mm, vertices before/after, and axial lift under the declared test pose.
+Absent groups in metrics-only inspection report `not_found`. GLB validation accepts
+each group complete or absent, and checks non-base parents by exact name.
 
 `pair_protrusion` declaration example values:
 
@@ -1016,7 +1083,7 @@ representation, matching the browser's `JOINTS_0`/`WEIGHTS_0` consumption.
 
 ### Extension motion layers (P3)
 
-Package body-slot `rig` declarations remain the base physics values. Core declares
+Package body-slot `rigs` declarations remain the base physics values. Core declares
 `extension_motion.groups` as a **world** setting: arbitrary package group IDs map
 to partial overrides of `freq_hz`, `zeta`, `gravity`, `spill`, `flatten`, `stretch`, `spread`, `flatten_floor`, `translate`, `gain`,
 `max_deg`, `sag_max_deg`, `spill_max_deg`, `head_sag`, `axis_gain`, `squash`, `rest_max_deg`, `straighten_deg` and `freetext_clothing_gain`. Missing values inherit the package; no group IDs are named in core.
@@ -1215,24 +1282,24 @@ revision, leaving mesh fingerprints unchanged.
 
 ### Independent rig templates and rest-angle straightening
 
-A slot's `rig.templates` optionally selects templates independently of package
+A slot's `rigs[].templates` optionally selects templates independently of package
 `apply_to`: a non-empty name list, `"*"`, or `{feature: humanoid}` uses the same
 selector semantics. When present, it replaces the slot/package applicability
-for this rig only. `rig.applies_to` remains the condition map and still filters
+for this rig only. `rigs[].applies_to` remains the condition map and still filters
 profile fields and stored slot attributes (case-insensitive AND conditions).
-Without `rig.templates`, existing package and slot applicability remains.
+Without `rigs[].templates`, existing package and slot applicability remains.
 This never activates the owning slot's prompt fragments, attribute editor,
 coverage, silhouette or clothing topology on additional templates. Motion
 attribute profiles and item coverage are taken only from active slots.
-`rig.apply_to` is rejected to keep template selectors and conditions unambiguous.
+`rigs[].apply_to` is rejected to keep template selectors and conditions unambiguous.
 
 ```yaml
-rig:
-  # Add these keys to an existing declaration with id/op/chains/params.
-  templates: [example-template]
-  applies_to: {gender: [female]}
-  straighten_deg: 60
-  freetext_clothing_gain: 0.25
+rigs:
+  - # Add these keys to an existing declaration with id/op/chains/params.
+    templates: [example-template]
+    applies_to: {gender: [female]}
+    straighten_deg: 60
+    freetext_clothing_gain: 0.25
 ```
 
 `straighten_deg` is finite in [0,180], default 0 (off). For each non-root

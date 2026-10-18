@@ -10344,7 +10344,7 @@ inspected; a shared joint across skins counts once, while repeated entries
 within a skin are invalid.
 
 Additional skin joints are permitted only through the applicable package
-`rig` declarations. Extension full names match exactly; each declared group
+`rigs` declarations. Extension full names match exactly; each declared group
 must be present in full or absent, and each present link must have exactly
 one node parent in the skin rig matching its declaration. A base parent uses normalized
 identity; an extension parent uses its full declared name. Valid extended
@@ -10803,7 +10803,7 @@ the effective result is masked by another multiplier. `model_sig`/`model_rev` re
 reconfigure the secondary solver on motion revision changes without reloading
 mesh geometry. No motion input enters the scene recipe fingerprint.
 
-Package `rig.attribute_profiles: {attribute_key: {value: {field: multiplier}}}`
+Package `rigs[].attribute_profiles: {attribute_key: {value: {field: multiplier}}}`
 allows frequency, damping, gravity, gain, dynamic/static/spill angle limits, head_sag,
 flatten, stretch, spread, flatten_floor, spill and translate multipliers. Keys must name attributes of the same slot; scalar string
 values select by exact match. Unknown/missing values contribute nothing. Values
@@ -10930,24 +10930,24 @@ revision, leaving mesh fingerprints unchanged.
 
 ### Independent rig templates and rest-angle straightening
 
-A slot's `rig.templates` optionally selects templates independently of package
+A slot's `rigs[].templates` optionally selects templates independently of package
 `apply_to`: a non-empty name list, `"*"`, or `{feature: humanoid}` uses the same
 selector semantics. When present, it replaces the slot/package applicability
-for this rig only. `rig.applies_to` remains the condition map and still filters
+for this rig only. `rigs[].applies_to` remains the condition map and still filters
 profile fields and stored slot attributes (case-insensitive AND conditions).
-Without `rig.templates`, existing package and slot applicability remains.
+Without `rigs[].templates`, existing package and slot applicability remains.
 This never activates the owning slot's prompt fragments, attribute editor,
 coverage, silhouette or clothing topology on additional templates. Motion
 attribute profiles and item coverage are taken only from active slots.
-`rig.apply_to` is rejected to keep template selectors and conditions unambiguous.
+`rigs[].apply_to` is rejected to keep template selectors and conditions unambiguous.
 
 ```yaml
-rig:
-  # Add these keys to an existing declaration with id/op/chains/params.
-  templates: [example-template]
-  applies_to: {gender: [female]}
-  straighten_deg: 60
-  freetext_clothing_gain: 0.25
+rigs:
+  - # Add these keys to an existing declaration with id/op/chains/params.
+    templates: [example-template]
+    applies_to: {gender: [female]}
+    straighten_deg: 60
+    freetext_clothing_gain: 0.25
 ```
 
 `straighten_deg` is finite in [0,180], default 0 (off). For each non-root
@@ -10973,3 +10973,19 @@ from `freetext_clothing_gain`; blank text supplies k=1. Item pieces override
 this fallback. Temporary NPCs use the same normalize → extension → LOD pipeline,
 rebuild route and Improvements batch; the 3D panel shows Extension bones whenever
 resolved groups exist, independently of inventory/outfit-system features.
+
+### Pair tip groups and declared length
+
+Body slots declare `rigs` lists. First links may reference exact link names of
+another rig on the same slot; the loader derives `depends_on`, prunes missing or
+cyclic dependencies, and propagates applicability and model enable switches.
+Fingerprint version 14 covers the pair tip operation. See `docs/plugins.md` for
+its required parameters and quadric fill, subdivision and source-weight transfer.
+A detection skip is `groups[id].status = "not_found"`; other groups still apply.
+Metrics-only inspection also accepts absent groups. Each present group must be
+complete, with exact non-base parent names in the skin.
+
+Package `length` (default 1, range [0.5,3]) survives world and character overrides,
+then multiplies state factors and clamps to [0.25,4]. Both setup and character
+advanced inputs expose it with a live preview hint. Runtime particles are ordered
+by driven ancestor count independently of payload order.

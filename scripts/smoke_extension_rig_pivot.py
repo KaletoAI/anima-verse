@@ -298,8 +298,8 @@ def main():
     args=parser.parse_args()
     import yaml
     manifest=yaml.safe_load(args.declaration.read_text())
-    group=next(copy.deepcopy(s['rig']) for s in manifest['body_slots']
-               if (s.get('rig') or {}).get('id')==args.group)
+    group=next(copy.deepcopy(rig) for s in manifest['body_slots'] for rig in s.get('rigs',[])
+               if rig.get('id')==args.group)
     group.update(enabled=True,flip=False)
     source_hash=hashlib.sha256(args.model.read_bytes()).hexdigest()
     declaration_hash=hashlib.sha256(args.declaration.read_bytes()).hexdigest()

@@ -180,8 +180,8 @@ def main():
         parser.error('--normalize requires positive --target-height-m')
     import yaml
     manifest = yaml.safe_load(args.declaration.read_text())
-    matches = [slot['rig'] for slot in manifest.get('body_slots', [])
-               if (slot.get('rig') or {}).get('id') == args.group]
+    matches = [rig for slot in manifest.get('body_slots', []) for rig in slot.get('rigs',[])
+               if rig.get('id') == args.group]
     if len(matches) != 1:
         parser.error('expected one matching rig declaration')
     group = copy.deepcopy(matches[0])

@@ -26,26 +26,32 @@ def rig_groups_for(character_name, profile=None):
     active_slots = {id(slot) for slot in slots_for_character(character_name, profile=profile)}
     groups = []
     for slot in (slot for package in packages() for slot in package.body_slots):
-        rig = slot.rig
-        if rig is None:
-            continue
-        if rig.templates is None:
-            if id(slot) not in active_slots:
+        for rig in slot.rigs:
+            if rig.templates is None:
+                if id(slot) not in active_slots:
+                    continue
+            elif not template_name or not fragment_applies({"apply_to": rig.templates}, template_name, template):
                 continue
-        elif not template_name or not fragment_applies({"apply_to": rig.templates}, template_name, template):
-            continue
-        values = (profile.get("body_slots") or {}).get(slot.id) or {}
-        matches = True
-        for key, allowed in rig.applies_to.items():
-            value = (values.get(key[len("attributes."):]) if key.startswith("attributes.")
-                     else values.get(key) if key in slot.attributes else profile.get(key))
-            if normalize_condition_value(value) not in [
-                    normalize_condition_value(v) for v in allowed]:
-                matches = False
-                break
-        if matches:
-            groups.append(asdict(rig))
-    return sorted(groups, key=lambda group: group["id"])
+            values = (profile.get("body_slots") or {}).get(slot.id) or {}
+            matches = True
+            for key, allowed in rig.applies_to.items():
+                value = (values.get(key[len("attributes."):]) if key.startswith("attributes.")
+                         else values.get(key) if key in slot.attributes else profile.get(key))
+                if normalize_condition_value(value) not in [
+                        normalize_condition_value(v) for v in allowed]:
+                    matches = False
+                    break
+            if matches:
+                groups.append(asdict(rig))
+    ordered = []
+    while groups:
+        ready = sorted([g for g in groups if not g["depends_on"] or any(
+            parent["id"] == g["depends_on"] for parent in ordered)], key=lambda g: g["id"])
+        if not ready:
+            break
+        ordered.extend(ready)
+        groups = [g for g in groups if g not in ready]
+    return ordered
 
 
 def extension_bone_names(character_name, profile=None):
@@ -59,7 +65,7 @@ def extension_rig_fingerprint(groups, overrides=None):
     """Versioned identity of applicable declarations and model overrides."""
     geometry = [{key: group[key] for key in ("id", "op", "chains", "params", "enabled", "flip") if key in group}
                 for group in groups]
-    return _revision({"version": 13, "groups": sorted(geometry, key=lambda g: g["id"]),
+    return _revision({"version": 14, "groups": sorted(geometry, key=lambda g: g["id"]),
                       "overrides": overrides or {}})
 
 
@@ -119,22 +125,23 @@ def resolved_extension_groups(character_name, profile=None, signature=None):
     result = []
     for group in rig_groups_for(character_name, profile):
         override = overrides.get(group["id"]) or {}
-        result.append({**group, "enabled": override.get("enabled", True),
+        result.append({**group, "enabled": override.get("enabled", True) and all(
+            parent["enabled"] for parent in result if parent["id"] == group["depends_on"]),
                        "flip": override.get("flip", False)})
     return result
 
 
 # sag_max_deg bounds the whole chain static droop for each root chain.
-MOTION_FIELDS = ("freq_hz", "zeta", "gravity", "spill", "flatten", "stretch", "spread", "flatten_floor", "translate", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "squash", "axis_gain", "rest_max_deg", "straighten_deg", "freetext_clothing_gain")
+MOTION_FIELDS = ("length", "freq_hz", "zeta", "gravity", "spill", "flatten", "stretch", "spread", "flatten_floor", "translate", "gain", "max_deg", "sag_max_deg", "spill_max_deg", "head_sag", "squash", "axis_gain", "rest_max_deg", "straighten_deg", "freetext_clothing_gain")
 
 
 def declared_motion_groups():
     """All loaded declarations, including character-inapplicable groups."""
     from app.plugins import registry
-    return sorted([{"id": slot.rig.id,
-                    "defaults": {key: (slot.rig.squash[0] if key == "flatten_floor" and slot.rig.flatten_floor is None else getattr(slot.rig, key)) for key in MOTION_FIELDS}}
+    return sorted([{"id": rig.id,
+                    "defaults": {key: (rig.squash[0] if key == "flatten_floor" and rig.flatten_floor is None else getattr(rig, key)) for key in MOTION_FIELDS}}
                    for package in registry.packages() for slot in package.body_slots
-                   if slot.rig is not None], key=lambda group: group["id"])
+                   for rig in slot.rigs], key=lambda group: group["id"])
 
 
 def validate_motion_overrides(section, *, character=False):
@@ -193,10 +200,10 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
                            for key in ("motion_damping", "covers", "partially_covers")}
             pieces[iid]["occupied_slots"] = sorted(slot for slot, worn in equipment.items() if worn == iid)
     slots = slots_for_character(character_name, profile=profile)
-    attributes = {slot.rig.id: ((profile.get("body_slots") or {}).get(slot.id) or {})
-                  for slot in slots if slot.rig is not None}
-    coverage = {slot.rig.id: list(slot.covered_by) for slot in
-                slots if slot.rig is not None}
+    attributes = {rig.id: ((profile.get("body_slots") or {}).get(slot.id) or {})
+                  for slot in slots for rig in slot.rigs}
+    coverage = {rig.id: list(slot.covered_by) for slot in
+                slots for rig in slot.rigs}
     from app.core.prompt_filters import BONE_POSE_FIELDS, collect_bone_poses, valid_bone_pose_number
     if preview_states is not None:
         from app.core.prompt_filters import load_filters
@@ -253,7 +260,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             elif targets.intersection(piece["partially_covers"]):
                 factor *= 1 - (1 - f) / 2
         values["gain"] *= factor
-        values.update(length=1.0, girth=1.0)
+        values["girth"] = 1.0
         rest = None
         for state in states:
             pose = state["bone_pose"].get(group["id"], {})
@@ -275,6 +282,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         for field, upper in {"freq_hz": 20, "zeta": 10, "gravity": 10,
                              "gain": 1, "flatten": 1, "stretch": 1, "spread": 1, "flatten_floor": 1, "spill": 1, "translate": 1, "head_sag": 1}.items():
             values[field] = max(0.0, min(float(upper), values[field]))
+        values["length"] = max(.25, min(4., values["length"]))
         values["gravity_scale"] = scale
         groups[group["id"]] = {
             "bones": [link["bone"] for chain in group["chains"] for link in chain],

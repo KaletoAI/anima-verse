@@ -214,7 +214,7 @@ def main():
     args=parser.parse_args()
     import yaml
     manifest=yaml.safe_load(args.declaration.read_text())
-    group=next(copy.deepcopy(s['rig']) for s in manifest['body_slots'] if (s.get('rig') or {}).get('id')==args.group)
+    group=next(copy.deepcopy(rig) for s in manifest['body_slots'] for rig in s.get('rigs',[]) if rig.get('id')==args.group)
     group.update(enabled=True,flip=False)
     with tempfile.TemporaryDirectory(prefix='extension-robustness-') as tmp:
         root=Path(tmp)

@@ -180,7 +180,7 @@ def main():
                 outfit_piece={'slots': ['top'], 'covers': ['top'], 'motion_damping': .5})
             from types import SimpleNamespace
             with patch('app.core.body_slots.slots_for_character', return_value=[
-                    SimpleNamespace(id='slot', rig=SimpleNamespace(id='sample_group'), covered_by=['top'])]):
+                    SimpleNamespace(id='slot', rigs=[SimpleNamespace(id='sample_group')], covered_by=['top'])]):
                 change(equipped_pieces={'top': item['id']})
                 check(values()['gain'] == 1, 'state after clothing: .5 x 3 clamps to 1')
             change(equipped_pieces={})

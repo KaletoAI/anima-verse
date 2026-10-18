@@ -9,12 +9,14 @@ import heapq
 import statistics
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 _SCRIPT_DIR = str(Path(__file__).parent)
 sys.path.insert(0, _SCRIPT_DIR)
 import _common
 sys.path.remove(_SCRIPT_DIR)
 import bpy
+import bmesh
 import numpy as np
 from mathutils.geometry import barycentric_transform
 from mathutils import Matrix, Vector
@@ -135,6 +137,13 @@ PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'front_to_bone': 'bone',
                      'front_distance_min': 'number'}}
 
+PARAMETERS['pair_tip'] = {key:kind for key,kind in PARAMETERS['pair_protrusion'].items()
+                          if key.startswith(('up_', 'lateral_positive_', 'lateral_negative_', 'front_from_', 'front_to_', 'front_distance_', 'test_')) or key=='weight_min'}
+PARAMETERS['pair_tip'].update({key:'number' for key in ('normal_radius','fill_radius','fill_ring','fill_blend',
+    'fill_depth','fill_tolerance','fill_rms_max','head_depth','tail_length','tip_radius','tip_radius_max',
+    'outer_level','outer_radius','outer_ramp','weight_depth')})
+PARAMETERS['pair_tip']['subdivide_radii'] = 'fractions'
+
 
 def smooth(t):
     t = max(0., min(1., t))
@@ -219,6 +228,15 @@ def parameters(group):
             raise ValueError('boundary_s_max must exceed boundary_s_min')
         if p['boundary_directions'] < 4 or p['boundary_directions'] % 4:
             raise ValueError('boundary_directions must be an integer multiple of four')
+    elif op == 'pair_tip':
+        radii = p['subdivide_radii']
+        if not 1 <= len(radii) <= 4 or any(v <= 0 for v in radii) or radii != sorted(radii,reverse=True):
+            raise ValueError('subdivide_radii requires up to four positive non-increasing values')
+        for key in ('normal_radius','fill_radius','fill_ring','fill_blend','fill_tolerance','fill_rms_max','head_depth','tail_length','tip_radius','tip_radius_max','outer_radius','outer_ramp'):
+            if p[key] <= 0:
+                raise ValueError(key+' must be positive')
+        if p['fill_blend'] >= p['fill_radius'] or min(p['fill_depth'],p['weight_depth']) < 0 or not 0 <= p['outer_level'] < 1:
+            raise ValueError('invalid pair_tip fill or weight range')
     else:
         if not 0 <= p['contact_follow_weight'] < 1:
             raise ValueError('contact_follow_weight must be in [0,1)')
@@ -249,6 +267,16 @@ def lookup(bones, name):
         raise ValueError('base bone not found: ' + name)
     return bones[key]
 
+
+def validate_references(p, bones):
+    rise = lookup(bones,p['up_to_bone']).head_local.z - lookup(bones,p['up_from_bone']).head_local.z
+    if not p['up_distance_min'] < rise < p['up_distance_max']:
+        raise ValueError('Declared up/size reference check failed')
+    if lookup(bones,p['lateral_positive_bone']).head_local.x <= lookup(bones,p['lateral_negative_bone']).head_local.x:
+        raise ValueError('Declared lateral reference check failed')
+    front = lookup(bones,p['front_from_bone']).head_local.y - lookup(bones,p['front_to_bone']).head_local.y
+    if front <= p['front_distance_min']:
+        raise ValueError('Declared front reference check failed')
 
 def pair_surface(meshes):
     """Cache world triangles and image pixels once for all pair groups."""
@@ -293,7 +321,7 @@ def pair_surface(meshes):
     return front
 
 
-def pair_plan(group, p, co, bones, front, owners):
+def pair_plan(group, p, co, bones, front, owners, pinned=None):
     chains = group['chains']
     if len(chains) != 2 or any(len(c) != 1 for c in chains):
         raise ValueError('pair_protrusion requires two one-link chains')
@@ -308,6 +336,7 @@ def pair_plan(group, p, co, bones, front, owners):
             raise ValueError('no protrusion candidates on side '+str(sign))
         candidates.append(side)
         initial.append(min(side,key=lambda v:v.y).copy())
+    marker_areas = [None,None]
     def marker(apex,sign):
         step,radius = p['marker_grid_step'],p['marker_search_radius']
         cells = {}
@@ -357,15 +386,27 @@ def pair_plan(group, p, co, bones, front, owners):
             return None,note
         if math.sqrt(((points-centre)**2).sum(axis=1).mean()) > p['marker_spread_max']:
             return None,'marker spread'
+        marker_areas[0 if sign==1 else 1] = area
         hit = front(*centre)
         return (Vector((centre[0],hit[0].y,centre[1])),note) if hit else (None,'centroid miss')
-    markers = [marker(v,sign) for v,sign in zip(initial,(1,-1))]
-    colour = all(v is not None for v,_ in markers)
-    if colour:
-        a,b = [v for v,_ in markers]
-        colour = abs(a.z-b.z)<p['marker_pair_dz'] and abs(a.x+b.x)<p['marker_pair_dx']
-        if not colour:
-            markers = [(v,'pair mismatch; '+note) for v,note in markers]
+    if pinned is not None:
+        markers = []
+        for row in pinned:
+            x,z = row['tip'][0],row['tip'][2]
+            hit = front(x,z)
+            if not hit:
+                raise ValueError('pinned marker missed modified surface')
+            markers.append((Vector((x,hit[0].y,z)),row['marker_note']))
+        marker_areas = [row['marker_area'] for row in pinned]
+        colour = True
+    else:
+        markers = [marker(v,sign) for v,sign in zip(initial,(1,-1))]
+        colour = all(v is not None for v,_ in markers)
+        if colour:
+            a,b = [v for v,_ in markers]
+            colour = abs(a.z-b.z)<p['marker_pair_dz'] and abs(a.x+b.x)<p['marker_pair_dx']
+            if not colour:
+                markers = [(v,'pair mismatch; '+note) for v,note in markers]
     K = int(p['boundary_directions'])
     directions = [(math.sin(2*math.pi*k/K),math.cos(2*math.pi*k/K)) for k in range(K)]
     def walls(apexes):
@@ -459,8 +500,135 @@ def pair_plan(group, p, co, bones, front, owners):
             raise ValueError('empty pair weight region')
         weights[link['bone']] = w
         placements.append({'head':list(head),'tip':list(apex),'apex_source':'colour' if colour else 'geometry',
-                           'marker_note':note,'reach':reach.copy(),'wall_centre':list(c),'wall_normal':list(n),'depth':depth})
+                           'marker_area':marker_areas[len(placements)] if colour else None,'marker_note':note,'reach':reach.copy(),'wall_centre':list(c),'wall_normal':list(n),'depth':depth})
     return links,weights,{'placement':placements,'leak':False},set(),[]
+
+
+def mesh_arrays(meshes):
+    co,edges,owners,normals,faces = [],[],[],[],[]
+    for mesh in meshes:
+        offset = len(co)
+        co.extend(mesh.matrix_world@v.co for v in mesh.data.vertices)
+        normal_matrix = mesh.matrix_world.to_3x3().inverted().transposed()
+        normals.extend((normal_matrix@v.normal).normalized() for v in mesh.data.vertices)
+        owners.extend((mesh,v.index) for v in mesh.data.vertices)
+        edges.extend((e.vertices[0]+offset,e.vertices[1]+offset) for e in mesh.data.edges)
+        faces.extend(tuple(i+offset for i in face.vertices) for face in mesh.data.polygons)
+    return co,edges,owners,normals,faces
+
+
+def tip_mesh(meshes, p, placement):
+    tips = [Vector(row['tip']) for row in placement]
+    radius = math.sqrt(sum(row['marker_area'] for row in placement)/(2*math.pi))
+    before = sum(len(mesh.data.vertices) for mesh in meshes)
+    for mesh in meshes:
+        bm = bmesh.new()
+        bm.from_mesh(mesh.data)
+        original = set(bm.verts)
+        for level in p['subdivide_radii']:
+            selected = [e for e in bm.edges if any((mesh.matrix_world@((e.verts[0].co+e.verts[1].co)/2)-t).length <= level*radius for t in tips)]
+            if selected:
+                bmesh.ops.subdivide_edges(bm,edges=selected,cuts=1,use_grid_fill=True,smooth=0.)
+                bmesh.ops.triangulate(bm,faces=[f for f in bm.faces if len(f.verts)>4])
+        deform = bm.verts.layers.deform.active
+        deform_names = {bone.name for modifier in mesh.modifiers if modifier.type=='ARMATURE' and modifier.object
+                        for bone in modifier.object.data.bones if bone.use_deform}
+        deform_indices = {group.index for group in mesh.vertex_groups if group.name in deform_names}
+        if deform is None or any(abs(sum(weight for index,weight in v[deform].items() if index in deform_indices)-1)>1e-4 for v in bm.verts if v not in original):
+            bm.free()
+            raise ValueError('subdivision deform weights must sum to one')
+        bm.to_mesh(mesh.data)
+        bm.free()
+        mesh.data.update()
+    rows = []
+    for tip in tips:
+        normal = Vector()
+        for mesh in meshes:
+            for face in mesh.data.polygons:
+                points = [mesh.matrix_world@mesh.data.vertices[i].co for i in face.vertices]
+                centre = sum(points,Vector())/len(points)
+                if (centre-tip).length <= p['normal_radius']*radius:
+                    for j in range(1,len(points)-1):
+                        normal += (points[j]-points[0]).cross(points[j+1]-points[0])/2
+        if normal.length < 1e-12:
+            raise ValueError('tip surface normal is empty')
+        normal.normalize()
+        if normal.y >= 0:
+            normal.negate()
+        a = normal.orthogonal().normalized()
+        b = normal.cross(a)
+        def coords(point):
+            d = point-tip
+            u,w,h = d.dot(a),d.dot(b),d.dot(normal)
+            return u,w,h,math.hypot(u,w)
+        unique = {}
+        for mesh in meshes:
+            for vertex in mesh.data.vertices:
+                point = mesh.matrix_world@vertex.co
+                unique.setdefault(tuple(round(v,8) for v in point),point)
+        ring = [coords(point) for point in unique.values()]
+        ring = [(u,w,h) for u,w,h,r in ring if p['fill_radius']*radius <= r <= (p['fill_radius']+p['fill_ring'])*radius and h >= -p['fill_depth']]
+        coef,rms = None,None
+        reason = 'fewer than 12 ring points'
+        if len(ring) >= 12:
+            design = np.array([[1,u,w,u*u,u*w,w*w] for u,w,_ in ring])
+            heights = np.array([h for _,_,h in ring])
+            candidate,_,rank,_ = np.linalg.lstsq(design,heights,rcond=None)
+            rms = float(np.sqrt(np.mean((design@candidate-heights)**2)))
+            reason = 'rank deficient fit' if rank < 6 else 'RMS exceeds fill_rms_max'
+            if rank == 6 and rms <= p['fill_rms_max']:
+                coef = candidate
+        moved,kept = 0,0
+        if coef is not None:
+            for mesh in meshes:
+                inverse = mesh.matrix_world.inverted()
+                for vertex in mesh.data.vertices:
+                    u,w,h,r = coords(mesh.matrix_world@vertex.co)
+                    if r >= p['fill_radius']*radius or h < -p['fill_depth']:
+                        continue
+                    fitted = float(np.dot(coef,[1,u,w,u*u,u*w,w*w]))
+                    if abs(h-fitted) > p['fill_tolerance']:
+                        kept += 1
+                        continue
+                    factor = smooth((p['fill_radius']*radius-r)/(p['fill_blend']*radius))
+                    vertex.co = inverse@(tip+a*u+b*w+normal*(h*(1-factor)+fitted*factor))
+                    moved += 1
+                mesh.data.update()
+        filled = tip+normal*float(coef[0]) if coef is not None else tip.copy()
+        axis = (normal-a*float(coef[1])-b*float(coef[2])).normalized() if coef is not None else normal
+        rows.append({'tip':list(filled),'axis':list(axis),'radius':radius,'fill':'applied' if coef is not None else 'skipped: '+reason,
+                     'fill_rms':rms,'fill_moved':moved,'fill_kept_by_tolerance':kept})
+    return rows, before
+
+
+def tip_plan(group, p, co, source, rows, before):
+    links,weights,transfers = [],{},[]
+    for chain,source_chain,row in zip(group['chains'],source[0]['chains'],rows):
+        link = chain[0]
+        tip,axis = Vector(row['tip']),Vector(row['axis'])
+        head,tail = tip-axis*p['head_depth'],tip+axis*p['tail_length']
+        source_weights = source[2][1][source_chain[0]['bone']]
+        values,factors = {},{}
+        for i,value in source_weights.items():
+            delta = co[i]-tip
+            if delta.dot(axis) < -p['weight_depth']:
+                continue
+            r = (delta-axis*delta.dot(axis)).length
+            core = smooth(1-r/min(p['tip_radius']*row['radius'],p['tip_radius_max']))
+            outer = smooth((p['outer_radius']*row['radius']-r)/(p['outer_ramp']*row['radius']))
+            factor = core+(1-core)*p['outer_level']*outer
+            if factor*value > p['weight_min']:
+                values[i],factors[i] = factor*value,factor
+        if not values:
+            return None
+        transfers.append((source_weights,factors))
+        weights[link['bone']] = values
+        links.append((link['bone'],head,tail,link['parent']))
+        row.update(head=list(head),tail=list(tail),verts_within_5mm=sum((point-tip).length<.005 for point in co))
+    for source_weights,factors in transfers:
+        for i,factor in factors.items():
+            source_weights[i] *= 1-factor
+    return links,weights,{'placement':rows,'vertices_before':before,'vertices_after':len(co)},set(),[]
 
 
 def unique_positions(indices, co):
@@ -1679,6 +1847,14 @@ def measure(arm, meshes, edges, plans):
                          captured_beyond_tube_radius=beyond_tube, captured_tube_distance_max=maximum_distance,
                          weighted_outside_part=outside_weighted, uncaptured_in_part=missing)
 
+        if g['op']=='pair_tip' and plan[2].get('placement'):
+            lift = []
+            for row in plan[2]['placement']:
+                nearest = min(range(len(rest)),key=lambda i:(rest[i]-Vector(row['tip'])).length_squared)
+                value = float((posed[nearest]-rest[nearest]).dot(Vector(row['axis'])))
+                row['lift'] = value
+                lift.append(value)
+            plan[2]['lift'] = lift
         if len(plan)>5:
             values = [sum(w.get(i,0.) for w in plan[1].values()) for i in plan[5]]
             plan[2].update(contact_tissue_vertices_weighted=sum(v>0 for v in values),
@@ -1717,20 +1893,17 @@ def extension_bones(args):
             weight=sum(ge.weight for ge in v.groups if mesh.vertex_groups[ge.group].name in deform_names)
             if weight <= 1e-8:
                 return skip('Skinned vertices require nonzero deform weights',status='failed')
-    co,edges,owners,normals,faces = [],[],[],[],[]
-    for mesh in meshes:
-        offset = len(co)
-        co.extend(mesh.matrix_world@v.co for v in mesh.data.vertices)
-        normal_matrix = mesh.matrix_world.to_3x3().inverted().transposed()
-        normals.extend((normal_matrix@v.normal).normalized() for v in mesh.data.vertices)
-        owners.extend((mesh,v.index) for v in mesh.data.vertices)
-        edges.extend((e.vertices[0]+offset,e.vertices[1]+offset) for e in mesh.data.edges)
-        faces.extend(tuple(i+offset for i in face.vertices) for face in mesh.data.polygons)
+    co,edges,owners,normals,faces = mesh_arrays(meshes)
     if args['params'].get('metrics_only',False):
         plans=[]
+        absent={}
         for g in enabled:
             try:
                 p=parameters(g)
+                names = [link['bone'] for chain in g['chains'] for link in chain]
+                if all(bone_key(name) not in bones for name in names):
+                    absent[g['id']] = {'status':'not_found','reason':'Group bones absent from model'}
+                    continue
                 links=[]
                 weights={}
                 for chain in g['chains']:
@@ -1747,50 +1920,150 @@ def extension_bones(args):
             except (ValueError,KeyError,TypeError) as e:
                 return skip(str(e),status='failed')
         metrics=measure(arm,meshes,edges,plans)
+        metrics.update(absent)
         return {'status':'applied','reason':'','groups':metrics,'metrics':metrics},{}
-    surface = pair_surface(meshes) if any(g['op']=='pair_protrusion' for g in enabled) else None
-    plans,failed,names = [],{},set()
-    malformed = False
-    for g in enabled:
-        try:
+    try:
+        if len({g['id'] for g in enabled})!=len(enabled):
+            raise ValueError('duplicate group id')
+        declared = {}
+        for g in enabled:
+            for chain in g['chains']:
+                for link in chain:
+                    name = link['bone']
+                    if name in declared or bone_key(name) in bones or any(bone_key(name)==bone_key(other) for other in declared):
+                        raise ValueError('bone already exists: '+name)
+                    declared[name] = g['id']
+        dependencies = {}
+        for g in enabled:
+            parents = set()
+            for chain in g['chains']:
+                earlier = set()
+                for link in chain:
+                    parent = link['parent']
+                    if bone_key(parent) not in bones and parent not in earlier:
+                        if earlier or parent not in declared or declared[parent]==g['id']:
+                            raise ValueError('missing enabled chain parent: '+parent)
+                        parents.add(declared[parent])
+                    earlier.add(link['bone'])
+            if g.get('depends_on'):
+                parents.add(g['depends_on'])
+            dependencies[g['id']] = parents
+        remaining = list(enabled)
+        enabled = []
+        while remaining:
+            ready = sorted([g for g in remaining if dependencies[g['id']] <= {v['id'] for v in enabled}],key=lambda g:g['id'])
+            if not ready:
+                raise ValueError('missing enabled dependency or dependency cycle')
+            enabled.extend(ready)
+            remaining = [g for g in remaining if g not in ready]
+        for g in enabled:
+            p = parameters(g)
+            validate_references(p,bones)
+            if g['op']=='pair_protrusion' and (len(g['chains'])!=2 or any(len(c)!=1 for c in g['chains'])):
+                raise ValueError('pair_protrusion requires two one-link chains')
+            if g['op']=='appendage_chain' and (len(g['chains'])!=1 or not g['chains'][0]):
+                raise ValueError('appendage_chain requires one nonempty chain')
+            if g['op']=='pair_tip':
+                source = next((v for v in enabled if v['id']==g.get('depends_on')),None)
+                if source is None or source['op']!='pair_protrusion' or len(g['chains'])!=2 or any(len(c)!=1 for c in g['chains']):
+                    raise ValueError('pair_tip requires a pair_protrusion dependency and two one-link chains')
+                if [c[0]['parent'] for c in g['chains']] != [c[0]['bone'] for c in source['chains']]:
+                    raise ValueError('pair_tip parents must match source sides')
+    except (ValueError,KeyError,TypeError,IndexError) as e:
+        return skip(str(e),status='failed')
+    def plan_sources(pinned):
+        surface = pair_surface(meshes) if any(g['op']=='pair_protrusion' for g in enabled) else None
+        plans,failed,names = [],{},set()
+        planning_bones = dict(bones)
+        # Parent identity is available before tip placement; source geometry is independent.
+        for g in enabled:
+            if g['op']=='pair_tip':
+                for chain in g['chains']:
+                    name = chain[0]['bone']
+                    planning_bones[bone_key(name)] = SimpleNamespace(name=name,children_recursive=[])
+        malformed = False
+        for g in enabled:
+            if g['op']=='pair_tip':
+                continue
             try:
-                p = parameters(g)
-                rise = lookup(bones,p['up_to_bone']).head_local.z - lookup(bones,p['up_from_bone']).head_local.z
-                if not p['up_distance_min'] < rise < p['up_distance_max']:
-                    raise ValueError('Declared up/size reference check failed')
-                if lookup(bones,p['lateral_positive_bone']).head_local.x <= lookup(bones,p['lateral_negative_bone']).head_local.x:
-                    raise ValueError('Declared lateral reference check failed')
-                front = lookup(bones,p['front_from_bone']).head_local.y - lookup(bones,p['front_to_bone']).head_local.y
-                if front <= p['front_distance_min']:
-                    raise ValueError('Declared front reference check failed')
-                chains = g['chains']
-                if g['op']=='pair_protrusion' and (len(chains)!=2 or any(len(c)!=1 for c in chains)):
-                    raise ValueError('pair_protrusion requires two one-link chains')
-                if g['op']=='appendage_chain' and (len(chains)!=1 or not chains[0]):
-                    raise ValueError('appendage_chain requires one nonempty chain')
-            except (ValueError, KeyError, TypeError) as e:
-                malformed = True
-                raise ValueError(str(e)) from e
-            plan = pair_plan(g,p,co,bones,surface,owners) if g['op']=='pair_protrusion' else appendage_plan(g,p,co,edges,bones,normals,faces)
-            if g['op']=='appendage_chain':
-                follow,count = contact_follow_weights(p,co,edges,faces,plan)
-                followers = {i for w in follow.values() for i in w}
-                ramped = contact_inside_weights(p,co,edges,faces,plan,follow)
-                plan = (*plan,followers,ramped)
-                plan[2]['contact_faces_outside_ring'] = count
-                for name,w in follow.items():
-                    plan[1][name].update(w)
-            for name,h,t,parent in plan[0]:
-                if name in names or bone_key(name) in bones:
-                    raise ValueError('bone already exists: '+name)
-                if (t-h).length < 1e-6:
-                    raise ValueError('bone has zero length: '+name)
-                names.add(name)
-            plans.append((g,p,plan))
-        except (ValueError,KeyError,TypeError,IndexError) as e:
-            failed[g['id']] = str(e)
+                try:
+                    p = parameters(g)
+                    validate_references(p,planning_bones)
+                    chains = g['chains']
+                    if g['op']=='pair_protrusion' and (len(chains)!=2 or any(len(c)!=1 for c in chains)):
+                        raise ValueError('pair_protrusion requires two one-link chains')
+                    if g['op']=='appendage_chain' and (len(chains)!=1 or not chains[0]):
+                        raise ValueError('appendage_chain requires one nonempty chain')
+                except (ValueError, KeyError, TypeError) as e:
+                    malformed = True
+                    raise ValueError(str(e)) from e
+                plan = pair_plan(g,p,co,planning_bones,surface,owners,pinned=pinned.get(g['id'])) if g['op']=='pair_protrusion' else appendage_plan(g,p,co,edges,planning_bones,normals,faces)
+                if g['op']=='appendage_chain':
+                    follow,count = contact_follow_weights(p,co,edges,faces,plan)
+                    followers = {i for w in follow.values() for i in w}
+                    ramped = contact_inside_weights(p,co,edges,faces,plan,follow)
+                    plan = (*plan,followers,ramped)
+                    plan[2]['contact_faces_outside_ring'] = count
+                    for name,w in follow.items():
+                        plan[1][name].update(w)
+                for name,h,t,parent in plan[0]:
+                    if name in names or bone_key(name) in bones:
+                        raise ValueError('bone already exists: '+name)
+                    if (t-h).length < 1e-6:
+                        raise ValueError('bone has zero length: '+name)
+                    names.add(name)
+                    planning_bones[bone_key(name)] = SimpleNamespace(name=name,head_local=h,tail_local=t,children_recursive=[])
+                plans.append((g,p,plan))
+            except (ValueError,KeyError,TypeError,IndexError) as e:
+                failed[g['id']] = str(e)
+        return plans,failed,malformed
+    plans,failed,malformed = plan_sources({})
     if failed:
         return skip('; '.join(k+': '+v for k,v in failed.items()),failed,'failed' if malformed else 'not_found')
+    soft,prepared = {},{}
+    pinned = {g['id']:plan[2]['placement'] for g,p,plan in plans
+              if g['op']=='pair_protrusion' and all(row['apex_source']=='colour' for row in plan[2]['placement'])}
+    try:
+        for g in enabled:
+            if dependencies[g['id']].intersection(soft):
+                soft[g['id']] = {'status':'not_found','reason':'Source group was not found'}
+                continue
+            if g['op']!='pair_tip':
+                continue
+            if g['depends_on'] not in pinned:
+                soft[g['id']] = {'status':'not_found','reason':'Source placement is not colour'}
+                continue
+            p = parameters(g)
+            prepared[g['id']] = tip_mesh(meshes,p,pinned[g['depends_on']])
+        if prepared:
+            co,edges,owners,normals,faces = mesh_arrays(meshes)
+            plans,failed,malformed = plan_sources(pinned)
+            if failed:
+                return skip('; '.join(k+': '+v for k,v in failed.items()),failed,'failed')
+            for g in enabled:
+                if g['id'] not in prepared:
+                    continue
+                source = next(row for row in plans if row[0]['id']==g['depends_on'])
+                p = parameters(g)
+                rows,before = prepared[g['id']]
+                plan = tip_plan(g,p,co,source,rows,before)
+                if plan is None:
+                    soft[g['id']] = {'status':'not_found','reason':'Empty tip weights; mesh remains modified'}
+                else:
+                    if any(bone_key(name) in bones or any(name==other for _,_,previous in plans for other,_,_,_ in previous[0]) for name,_,_,_ in plan[0]):
+                        raise ValueError('tip bone already exists')
+                    plans.append((g,p,plan))
+    except (ValueError,KeyError,TypeError,IndexError) as e:
+        return skip(str(e),status='failed')
+    for g in enabled:
+        if not any(row[0]['id']==g['id'] for row in plans) and g['id'] not in soft:
+            soft[g['id']] = {'status':'not_found','reason':'Source group was not found'}
+    for g in enabled:
+        if dependencies[g['id']].intersection(soft):
+            soft[g['id']] = {'status':'not_found','reason':'Source group was not found'}
+    plans = [row for row in plans if row[0]['id'] not in soft]
+    order = {g['id']:i for i,g in enumerate(enabled)}
+    plans.sort(key=lambda row:order[row[0]['id']])
     bpy.context.view_layer.objects.active=arm
     bpy.ops.object.mode_set(mode='EDIT')
     eb=arm.data.edit_bones
@@ -1876,6 +2149,7 @@ def extension_bones(args):
         if g['op'] == 'appendage_chain' and any(not any(v > .9 for v in w.values()) for w in plan[1].values()):
             return skip('chain link has no exported core vertices (weight > 0.9)',status='failed')
     metrics=measure(arm,meshes,edges,plans)
+    metrics.update(soft)
     output=Path(args['out_dir'])/'model.glb'
     bpy.ops.export_scene.gltf(filepath=str(output),export_format='GLB',export_apply=False,export_yup=True,export_skins=True,export_animations=True,export_morph=True,export_all_influences=False)
     return {'status':'applied','reason':'','groups':metrics,'metrics':metrics},{'model':str(output)}

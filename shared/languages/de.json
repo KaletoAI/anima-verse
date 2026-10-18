@@ -8,6 +8,7 @@
     }
   },
   "translations": {
+    "Length factor (1 = as modelled)": "Längenfaktor (1 = wie modelliert)",
     "Remove stored settings?": "Gespeicherte Einstellungen entfernen?",
     "This save would remove: {paths}. If this page is stale, cancel and reload instead.": "Dieses Speichern würde entfernen: {paths}. Ist diese Seite veraltet, abbrechen und neu laden.",
     "Skin colour correction": "Hautfarbe korrigieren",

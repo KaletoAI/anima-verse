@@ -494,8 +494,8 @@ def main():
                 parser.error('present fixtures require --declaration and --group')
             import yaml
             manifest=yaml.safe_load(args.declaration.read_text())
-            group=next(copy.deepcopy(slot['rig']) for slot in manifest['body_slots']
-                       if (slot.get('rig') or {}).get('id')==args.group)
+            group=next(copy.deepcopy(rig) for slot in manifest['body_slots'] for rig in slot.get('rigs',[])
+                       if rig.get('id')==args.group)
             group.update(enabled=True,flip=False)
             hashes=[hashlib.sha256(path.read_bytes()).hexdigest() for path in (fixture,args.declaration)]
             normalized={'outputs':{'model':str(fixture)}}

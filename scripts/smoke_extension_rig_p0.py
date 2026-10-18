@@ -110,7 +110,7 @@ def main():
         manifest = {"name": "Example package", "apply_to": "*", "body_slots": [
             {"id": "example_slot", "attributes": {"example_attribute": {"type": "str"}},
              "prompt": {"always": "example fixture marker"}, "covered_by": ["example_cover"],
-             "rig": rig}]}
+             "rigs": [rig]}]}
         plugins = root / "plugins"
         package = plugins / "example_a"
         package.mkdir(parents=True)
@@ -162,7 +162,7 @@ def main():
             check(rig_groups_for("demo", profile) == [], "slot applicability " + condition)
             slot.applies_to = {condition: ["ENABLED"]}
             check(len(rig_groups_for("demo", profile)) == 1, "slot case-insensitive " + condition)
-        for target in (slot, slot.rig):
+        for target in (slot, slot.rigs[0]):
             saved_conditions = target.applies_to
             target.applies_to = {"optional": [None]}
             for value in ({}, {"optional": None}):
@@ -178,9 +178,9 @@ def main():
         pkg = registry.get_package("example_a")
         saved_selector = pkg.apply_to
         pkg.apply_to = ["demo"]
-        slot.rig.templates = ["npc-temporary"]
-        saved_conditions = slot.rig.applies_to
-        slot.rig.applies_to = {"gender": ["female"]}
+        slot.rigs[0].templates = ["npc-temporary"]
+        saved_conditions = slot.rigs[0].applies_to
+        slot.rigs[0].applies_to = {"gender": ["female"]}
         npc = {"template": "npc-temporary", "gender": "female"}
         check(len(rig_groups_for("demo", npc)) == 1, "rig template bypasses package selector")
         check(slots_for_character("demo", profile=npc) == [], "rig selector leaves slot attributes and coverage inactive")
@@ -191,12 +191,12 @@ def main():
         check(get_body_slots("sample")["slots"] == [], "body slots coverage API stays empty for rig-only NPC")
         check(prompt_fragments("sample") == {"general": [], "exposed": []}, "stored NPC prompt isolation")
         check(rig_groups_for("demo", {**npc, "gender": "male"}) == [], "rig gender condition still filters")
-        slot.rig.templates = {"feature": "humanoid"}
+        slot.rigs[0].templates = {"feature": "humanoid"}
         check(len(rig_groups_for("demo", npc)) == 1, "rig feature template selector")
-        slot.rig.templates = "*"
+        slot.rigs[0].templates = "*"
         check(len(rig_groups_for("demo", npc)) == 1, "rig wildcard template selector")
-        slot.rig.templates = None
-        slot.rig.applies_to = saved_conditions
+        slot.rigs[0].templates = None
+        slot.rigs[0].applies_to = saved_conditions
         pkg.apply_to = saved_selector
         motion = motion_payload("demo", profile)
         expected = {"bones": ["ExampleBone1", "ExampleBone2"], "freq_hz": 2.2,
@@ -205,26 +205,26 @@ def main():
         check(motion["groups"] == {"example_group": expected}, "motion defaults")
         check(motion == motion_payload("demo", copy.deepcopy(profile)), "stable motion rev")
         check(motion["rev"] != motion_payload("demo", {})["rev"], "resolved content changes rev")
-        slot.rig.gain = 0.5
+        slot.rigs[0].gain = 0.5
         changed_motion = motion_payload("demo", profile)
         check(changed_motion["rev"] != motion["rev"] and
               changed_motion["groups"]["example_group"]["gain"] == 0.5,
               "package defaults change motion independently")
-        slot.rig.gain = 1.0
-        slot.rig.spill = .5
+        slot.rigs[0].gain = 1.0
+        slot.rigs[0].spill = .5
         spill_motion = motion_payload("demo", profile)
         check(spill_motion["groups"]["example_group"]["spill"] == .5 and spill_motion["rev"] != motion["rev"],
               "package spill changes payload and revision")
-        slot.rig.spill = 0.0
+        slot.rigs[0].spill = 0.0
         fingerprint = extension_metadata("demo", profile)["fingerprint"]
         for key, value in (("straighten_deg", 60), ("freetext_clothing_gain", .25), ("spread", .2), ("stretch", .8), ("flatten_floor", .15), ("translate", .6), ("flatten", .5), ("sag_max_deg", 40), ("axis_gain", [.5, 1, .15])):
-            original = getattr(slot.rig, key)
-            setattr(slot.rig, key, value)
+            original = getattr(slot.rigs[0], key)
+            setattr(slot.rigs[0], key, value)
             changed = motion_payload("demo", profile)
             check(changed["groups"]["example_group"][key] == value and changed["rev"] != motion["rev"]
                   and extension_metadata("demo", profile)["fingerprint"] == fingerprint,
                   key + " changes motion revision without mesh fingerprint")
-            setattr(slot.rig, key, original)
+            setattr(slot.rigs[0], key, original)
         check(extension_metadata("demo", profile)["status"] == "not_found", "reserved status")
         check(RigSpec.parse({**rig, "axis_gain": [0, .5, 1]}).axis_gain == [0, .5, 1],
               "axis_gain inclusive bounds and package round trip")
@@ -276,7 +276,7 @@ def main():
         else:
             raise AssertionError("undeclared attribute profile accepted")
         malformed_manifest = copy.deepcopy(manifest)
-        malformed_manifest["body_slots"][0]["rig"]["chains"][0][0]["parent"] = "ForeignBone"
+        malformed_manifest["body_slots"][0]["rigs"][0]["chains"][0][0]["parent"] = "ForeignBone"
         bad = plugins / "example_bad"
         bad.mkdir()
         (bad / "plugin.yaml").write_text(yaml.safe_dump(malformed_manifest))
@@ -284,17 +284,17 @@ def main():
         with TestCase().assertLogs("plugin_loader", level="WARNING") as logged:
             discover_packages(plugins, force=True)
         check(any("rig dropped" in line for line in logged.output), "malformed rig emits warning")
-        check(registry.get_package("example_bad").body_slots[0].rig is None,
+        check(registry.get_package("example_bad").body_slots[0].rigs == [],
               "malformed rig dropped, slot retained")
         shutil.rmtree(bad)
         duplicate = plugins / "example_b"
         duplicate.mkdir()
         duplicate_manifest = copy.deepcopy(manifest)
-        duplicate_manifest["body_slots"][0]["rig"]["id"] = "another_group"
+        duplicate_manifest["body_slots"][0]["rigs"][0]["id"] = "another_group"
         (duplicate / "plugin.yaml").write_text(yaml.safe_dump(duplicate_manifest))
         for conflict in ("normalized bones", "group id"):
             declaration = copy.deepcopy(duplicate_manifest)
-            other_rig = declaration["body_slots"][0]["rig"]
+            other_rig = declaration["body_slots"][0]["rigs"][0]
             if conflict == "normalized bones":
                 other_rig["chains"][0][0]["bone"] = "mixamorig:EXAMPLEBONE1"
                 other_rig["chains"][0][1]["parent"] = "mixamorig:EXAMPLEBONE1"
@@ -307,7 +307,7 @@ def main():
                 (duplicate / "plugin.yaml").write_text(yaml.safe_dump(right))
                 with TestCase().assertLogs("plugin_loader", level="ERROR") as logged:
                     discover_packages(plugins, force=True)
-                check(all(registry.get_package(owner).body_slots[0].rig is None
+                check(all(registry.get_package(owner).body_slots[0].rigs == []
                           for owner in ("example_a", "example_b")),
                       f"reject every {conflict} owner reverse={reverse}")
                 check(any("example_a" in line and "example_b" in line for line in logged.output),

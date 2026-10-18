@@ -55,9 +55,9 @@ def main():
                'attribute_profiles': {'response': {'fast': {'freq_hz': 2, 'gravity': 3, 'gain': .5}}}}
         (package / 'plugin.yaml').write_text(yaml.safe_dump({
             'name': 'Sample', 'apply_to': '*', 'body_slots': [
-                {'id': 'sample_slot', 'attributes': {'response': {'type': 'str'}}, 'covered_by': ['underwear_top', 'underwear_bottom'], 'rig': rig},
-                {'id': 'other_slot', 'attributes': {'response': {'type': 'str'}}, 'rig': {**rig, 'id': 'other_group',
-                    'chains': [[{'bone': 'OtherBone', 'parent': 'Hips'}]]}}]}))
+                {'id': 'sample_slot', 'attributes': {'response': {'type': 'str'}}, 'covered_by': ['underwear_top', 'underwear_bottom'], 'rigs': [rig]},
+                {'id': 'other_slot', 'attributes': {'response': {'type': 'str'}}, 'rigs': [{**rig, 'id': 'other_group',
+                    'chains': [[{'bone': 'OtherBone', 'parent': 'Hips'}]]}]}]}))
         discover_packages(plugins, force=True)
         from app.models import inventory
         from app.core.extension_rig import motion_payload
@@ -113,7 +113,7 @@ def main():
         check(gain({**profile, 'equipped_pieces': {'legs': c['id']}}) == .8, 'partial cover .6 gives .8')
         check(gain({'template': 'human-default', 'outfit_description': 'plain outfit'}) == 1, 'free text no damping')
         # With no pieces, nonblank text contributes k=.25; absent/blank text k=1.
-        registry.get_package('sample').body_slots[0].rig.freetext_clothing_gain = .25
+        registry.get_package('sample').body_slots[0].rigs[0].freetext_clothing_gain = .25
         bare_text = {'template': 'human-default', 'equipped_pieces': {}}
         for field in ('outfit_description', 'outfit_worn'):
             check(gain({**bare_text, field: 'plain outfit'}) == .25, 'free text gain ' + field)
@@ -122,7 +122,7 @@ def main():
         check(motion_payload('sample', {**bare_text, 'outfit_worn': 'plain outfit'}, apply_clothing=False)['groups']['sample_group']['gain'] == 1,
               'editor bypasses free text clothing')
         check(gain({**bare_text, 'outfit_worn': 'plain outfit', 'equipped_pieces': {'top': 'missing'}}) == .25, 'missing item is not a worn piece')
-        registry.get_package('sample').body_slots[0].rig.freetext_clothing_gain = 1
+        registry.get_package('sample').body_slots[0].rigs[0].freetext_clothing_gain = 1
         from app.models.character import save_character_profile, get_character_profile
         from app.core.character_ops import apply_profile_update
         from fastapi import HTTPException
@@ -372,7 +372,7 @@ def main():
                 raise AssertionError('accepted invalid override')
         check(True, 'override ranges')
         before = motion()
-        registry.get_package('sample').body_slots[0].rig.params['version'] = 2
+        registry.get_package('sample').body_slots[0].rigs[0].params['version'] = 2
         check(motion()['rev'] != before['rev'], 'package declaration changes revision')
         for connection in db._connections.values():
             connection.close()

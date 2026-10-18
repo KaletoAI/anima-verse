@@ -8,6 +8,7 @@ import { getAt, type Json } from './schemaValues'
 type Physics = Record<string, number | number[]>
 type Group = { id: string; defaults: Physics }
 const fields: Record<string, string> = {
+  length: 'Length factor (1 = as modelled)',
   straighten_deg: 'Straightening rest angle (degrees, 0 = off)', freetext_clothing_gain: 'Free-text clothing gain',
   spill_max_deg: 'Maximum spill angle (degrees)', head_sag: 'Vertical static pull when not upright',
   freq_hz: 'Frequency (Hz)', zeta: 'Damping ratio', gravity: 'Gravity', spill: 'Spill', translate: 'Translation fraction', flatten: 'Flatten', stretch: 'Stretch', spread: 'Spread', flatten_floor: 'Flatten floor', sag_max_deg: 'Maximum static angle (degrees)', gain: 'Gain',
@@ -56,8 +57,8 @@ export function ExtensionMotion({ values, onChange }: {
       return <fieldset key={group.id}>
         <legend>{group.id}</legend>
         {Object.entries(fields).map(([key, label]) => <label key={key}>{t(label)} <MotionPreviewHint field={key} />
-          <MotionNumberInput value={effective[key] as number} positive={key === 'freq_hz'}
-            max={['freetext_clothing_gain', 'gain', 'spill', 'flatten', 'stretch', 'spread', 'flatten_floor', 'translate', 'head_sag'].includes(key) ? 1 : key.endsWith('deg') ? 180 : undefined}
+          <MotionNumberInput value={effective[key] as number} min={key === 'length' ? .5 : 0} positive={key === 'freq_hz'}
+            max={['freetext_clothing_gain', 'gain', 'spill', 'flatten', 'stretch', 'spread', 'flatten_floor', 'translate', 'head_sag'].includes(key) ? 1 : key === 'length' ? 3 : key.endsWith('deg') ? 180 : undefined}
             onCommit={text => update(group.id, key, Number(text))} />
         </label>)}
         {['Lateral gain', 'Vertical gain', 'Longitudinal gain'].map((label, index) => <label key={label}>{t(label)} <MotionPreviewHint field="axis_gain" />
