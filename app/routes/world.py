@@ -1172,67 +1172,6 @@ async def location_model3d_upload(location_id: str, request: Request) -> Dict[st
     return {"status": "success", **meta, "warnings": result["warnings"]}
 
 
-# ── The generated ROOF (docs/llm-blender-models.md) ──
-# Two steps, deliberately: PROPOSE hands the admin a validated description to
-# look at and edit, BUILD executes exactly what comes back. Nothing here is
-# silent — the roof is a parametric building part, and its parameters are the
-# feature.
-
-@router.post("/locations/{location_id}/roof/propose")
-def location_roof_propose(location_id: str) -> Dict[str, Any]:
-    """Propose a roof for this location: one LLM call over the known facts.
-
-    Returns the footprint (with the source it came from), the storey count,
-    the eaves height and a VALIDATED build description — plus ``llm`` saying
-    whether the description really came from a model or is the clamped
-    default (an unrouted task is not an error here). 409 = the location has
-    nothing to roof."""
-    from app.core.roof_model import propose_roof
-    if not get_location_by_id(location_id):
-        raise HTTPException(status_code=404, detail="Location not found")
-    res = propose_roof(location_id)
-    if not res.get("ok"):
-        raise HTTPException(
-            status_code=409,
-            detail="This location has no footprint to roof — draw a building "
-                   "outline, a boundary, or give it a room with a floor plan.")
-    return res
-
-
-@router.post("/locations/{location_id}/roof/generate")
-async def location_roof_generate(location_id: str, request: Request) -> Dict[str, Any]:
-    """Build the roof from a description (body: the description object, or
-    ``{description: {...}}``) and store it as the location's building model.
-
-    Background job — poll ``model3d/status`` for ``pending``. The description
-    is validated and clamped again here: what the UI sends is a suggestion,
-    not a contract."""
-    data = await request.json()
-    return await asyncio.to_thread(_location_roof_generate_sync, location_id,
-                                   data)
-
-
-def _location_roof_generate_sync(location_id: str,
-                                 data: Any) -> Dict[str, Any]:
-    """The blocking body of ``location_roof_generate`` — runs in the
-    threadpool."""
-    from app.blender import runner
-    from app.core.roof_model import trigger_roof_generation, validate_description
-    if not get_location_by_id(location_id):
-        raise HTTPException(status_code=404, detail="Location not found")
-    if not runner.is_available():
-        raise HTTPException(status_code=503,
-                            detail="Blender is not available — the roof is "
-                                   "built locally, not on a backend.")
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Body must be an object")
-    raw = data.get("description") if isinstance(data.get("description"), dict) else data
-    desc = validate_description(raw)
-    if not trigger_roof_generation(location_id, desc):
-        return {"status": "already_running", "description": desc}
-    return {"status": "generating", "description": desc}
-
-
 # Building hull proposals and explicit generation.
 
 _HULL_NO_OUTLINE = "This location has no building outline — draw one in the floor plan editor first."
@@ -1337,46 +1276,6 @@ def hull_style_reset(style_id: str) -> Dict[str, Any]:
     """Remove a world override, revealing the shared style again."""
     from app.core.hull_styles import delete_world_style
     return {"ok": delete_world_style(style_id)}
-
-
-# ── The EXTERIOR RENDER (plan-blender-aussenansicht.md) ──
-# ONE step, unlike the roof: nothing is decided here that the user would want
-# to edit first — the volume IS the location's own geometry and the roof form
-# follows a stated heuristic. What comes out is an ordinary gallery image of
-# type "building-front", so the existing img2mesh path takes it from there.
-
-@router.post("/locations/{location_id}/exterior/render")
-async def location_exterior_render(location_id: str) -> Dict[str, Any]:
-    """Render the location's exterior with Blender into its gallery.
-
-    Background job — poll ``model3d/status`` for ``pending``. 409 = the
-    location has no exterior to render (no wall, no plate, no footprint)."""
-    return await asyncio.to_thread(_location_exterior_render_sync, location_id)
-
-
-def _location_exterior_render_sync(location_id: str) -> Dict[str, Any]:
-    """The blocking body of ``location_exterior_render`` — runs in the
-    threadpool (the geometry extraction composes the whole scene)."""
-    from app.blender import runner
-    from app.core.exterior_render import build_job, trigger_exterior_render
-    location = get_location_by_id(location_id)
-    if not location:
-        raise HTTPException(status_code=404, detail="Location not found")
-    if not runner.is_available():
-        raise HTTPException(status_code=503,
-                            detail="Blender is not available — the exterior "
-                                   "is rendered locally, not on a backend.")
-    # Ask BEFORE starting a thread, so an empty location gets a reason instead
-    # of a job that fails silently in the background.
-    job = build_job(location_id, location)
-    if not job.get("ok"):
-        raise HTTPException(
-            status_code=409,
-            detail="This location has nothing to render — draw a building "
-                   "outline, a boundary, or give it a room with a floor plan.")
-    if not trigger_exterior_render(location_id):
-        return {"status": "already_running", "expect": job["expect"]}
-    return {"status": "generating", "expect": job["expect"]}
 
 
 @router.delete("/locations/{location_id}/model3d")

@@ -797,57 +797,6 @@ def save_uploaded_building(location_id: str, contents: bytes, *,
     return meta
 
 
-def save_roof_model(location_id: str, contents: bytes, *,
-                    placement: Dict[str, Any],
-                    description: Dict[str, Any]) -> Dict[str, Any]:
-    """Store a GENERATED ROOF as the location's building model.
-
-    The roof is built from numbers (``app/core/roof_model.py``), so its
-    placement is not a dial anybody has to find: the sidecar is written with
-    the width, the two plane offsets and the height offset the build itself
-    computed, and the standard building placement (§ B2) then puts the mesh
-    exactly on the vertices it was built from — scale 1, no calibration.
-
-    ``roof_only`` is the display contract: this model is the roof and NOTHING
-    else, so the client keeps the recipe shell underneath it instead of
-    dropping it (docs/llm-blender-models.md).
-
-    The file serves BOTH tiers. A roof is a handful of triangles — asking the
-    distance-mesh path to decimate it would only risk destroying it, and
-    leaving the ``low`` tier empty would make ``_demand_low`` try exactly that
-    on every payload build.
-    """
-    owner = _owner_id(location_id)
-    if not owner:
-        raise ValueError("location not found")
-    target = _gallery(owner).new_path()
-    target.write_bytes(contents)
-    meta = {
-        "created_at": utc_now_iso(),
-        "source": "roof_build",
-        "format": "glb",
-        "rig": "none",
-        "tier": DEFAULT_TIER,
-        "backend": "blender",
-        "location": owner,
-        "roof_only": True,
-        "roof": dict(description or {}),
-        "width_m": float(placement.get("width_m") or 0.0),
-        "offset_x": float(placement.get("offset_x") or 0.0),
-        "offset_z": float(placement.get("offset_z") or 0.0),
-        "offset_y": float(placement.get("offset_y") or 0.0),
-        "eaves_height_m": float(placement.get("eaves_height_m") or 0.0),
-        "footprint_source": str(placement.get("footprint_source") or ""),
-    }
-    write_sidecar(target, meta)
-    select_model(location_id, target.name, "", DEFAULT_TIER)
-    select_model(location_id, target.name, "", LOW_TIER)
-    logger.info("Roof model %s: %s (%d bytes, %s, width %.2f m)", owner,
-                target.name, len(contents),
-                (description or {}).get("form") or "?", meta["width_m"])
-    return {**meta, "filename": target.name}
-
-
 def _reduce_to_low(location_id: str, owner: str, room_id: str, src: Path,
                    ratio: float) -> Dict[str, Any]:
     """The reduction itself: Blender Decimate, then a NEW gallery file that

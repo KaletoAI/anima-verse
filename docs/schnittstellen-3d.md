@@ -6449,7 +6449,6 @@ alte Geometrie bis jemand die Location zufällig speichert.
 | Kontur: Sturz über dem projizierten Loch, gleiche x-Spanne, Tür so hoch wie die Wand → gar kein Sturz; weichende Kontur überlässt auch den Sturz der Raumwand | ebenda **[4]** |
 | `doorways[].height_m`: geklemmt gegen die Wand (9,0 → 2,85), fehlende Autorierung → Wandhöhe, also kein Sturz | ebenda **[3d]** |
 | Sturz bekommt keinen Schürzen-Anteil (§ A16.9) | ebenda **[4a]** |
-| Blender-Volumen: 10 × 8-Haus, ein Raum, eine 1 × 2,1-m-Tür → 14 Wandprismen (12 Wand + 2 Türblatt), 126 Vertices, 95 Faces (ohne Tür 8 / 78 / 59), Bounding-Box unverändert | `scripts/smoke_exterior_render.py` **[4b]** |
 | Kollision: das geflaggte Stück wird kein Segment, ROTE PROBE „ohne Flag wäre die Tür zugemauert" | `client3d/scripts/smoke_walk_math.mjs` |
 
 ### Das TÜRBLATT — eine Tür ist von außen SICHTBAR (§ B1)
@@ -6519,7 +6518,6 @@ volle Stücke ins Gelände reichen.
 | Raumwand: Blatt 0,00 / 2,10 / 0,042, ohne `texture_kind`, ROTE PROBE „das Blatt trägt keine Schürze"; ein `passage` bekommt keines | `scripts/smoke_scene_recipe.py` **[3]** |
 | Kontur: Blatt über dem projizierten Loch, gleiche x-Spanne wie der Sturz; weichende Kontur überlässt auch das Blatt der Raumwand | ebenda **[4]** |
 | `style.door_color` liegt im Stil-Vokabular | ebenda **[9]** |
-| Blender-Volumen: 14 Wandprismen (2 davon Türblatt), 126 Vertices, 95 Faces, vier Materialien, Bounding-Box unverändert | `scripts/smoke_exterior_render.py` **[4b]/[5]** |
 | Kollision: das Blatt wird kein Segment, ROTE PROBE „ein sperrendes Blatt mauert die Tür zu" | `client3d/scripts/smoke_walk_math.mjs` |
 
 ### Tür-Props + Slots (v5) (§ B1/B2)
@@ -6569,9 +6567,9 @@ bekommt: „Location default" an einem Ort, der keine Standard-Tür nennt.
 | `size_m: [w, h]` | `models[]` (nur `fit`) | lichte Breite/Höhe der Öffnung in Weltmetern |
 | `door: {opening, hinge, swing}` | `models[]` | `opening` = Index in `doorways[]`, `swing` = ±1 |
 
-`walls[]` behält den Blatt-Eintrag mit Absicht: der Blender-Außenrender
-(`exterior_render.py`) baut seine Fassade aus `walls` und verlöre sonst das
-Prisma der Tür. Nur die beiden Renderer überspringen ihn. Ein `fit`-Spec trägt
+`walls[]` behält den Blatt-Eintrag mit Absicht: die Öffnungserkennung der
+Grundriss-Hülle (`hull_facts._edge_openings`) benötigt diese Blätter. Nur die beiden Renderer überspringen ihn.
+Ein `fit`-Spec trägt
 kein `max_m` — die Öffnung ist das Maß.
 
 #### `place()` mit `measure: "fit"` (§ B2, die EINE Ausnahme)
@@ -7588,9 +7586,9 @@ Import durch dieselbe Transformation geschickt.
 
 Ein Gebäudemodell ERSETZT die Fernsicht-Hülle: sobald ein Servermodell
 eintrifft, nimmt der Client seine aus den § B Primitiven gebaute Hülle weg
-(`dropFarShell`), denn das Modell IST das Gebäude. Seit dem LLM-Blender-Dach
-(`docs/llm-blender-models.md`) gibt es ein Gebäudemodell, für das das nicht
-gilt: ein **parametrisch über den Umriss gebautes Dach**, ohne Wände. Als
+(`dropFarShell`), denn das Modell IST das Gebäude. Für gespeicherte Dachmodelle von vor 2026-10
+(stored roof models from before 2026-10; `docs/llm-blender-models.md`) gilt
+diese Ausnahme: ein **parametrisch über den Umriss gebautes Dach**, ohne Wände. Als
 normales Gebäudemodell abgelegt, würde es genau die Wände verstecken, auf die
 es gehört.
 
@@ -7614,7 +7612,8 @@ Die Label-Höhe misst Hülle + Dach zusammen.
 
 Der Server setzt das Flag aus dem Sidecar des Modells
 (`location_model3d` → `get_client_meta` → `scene_recipe._building_model`); es
-entsteht ausschließlich beim Dach-Bau, nie beim Meshen eines Bildes.
+wird für gespeicherte Dachmodelle von vor 2026-10 weiterhin übernommen.
+Neue parametrische Gebäudemodelle entstehen über die Grundriss-Hülle.
 
 ### Grundriss-Hülle (`plan_hull`) (§ B1/B2, Nachtrag 2026-10-18)
 

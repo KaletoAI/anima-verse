@@ -20,7 +20,7 @@
  *  2. assignTask(R0, "intent", 3) appends {task:"intent", order:3} to entry 3
  *     (max existing order 2 + 1); returns true. Assigning again returns false
  *     and changes nothing.
- *  3. assignTask(R0, "roof_design", 3) → order 1 (nothing existed).
+ *  3. assignTask(R0, "hull_design", 3) → order 1 (nothing existed).
  *  4. unassignTask(R0, "intent", 1) removes it from entry 1 and renumbers:
  *     chain becomes [{entry:0, order:1}, {entry:3, order:2}] (after check 2).
  *  5. moveTask(R0, "intent", 3, -1) swaps → [{entry:3,order:1},{entry:0,order:2}];
@@ -83,7 +83,7 @@ check(eq(ch.intent, [{entry:1,order:1},{entry:0,order:2}]), '1. intent chain sor
 check(eq(ch.chat_stream, [{entry:0,order:1},{entry:2,order:2}]), '1. disabled entries listed');
 check(sb.assignTask(R, 'intent', 3) === true && eq(R[3].tasks, [{task:'intent',order:3}]), '2. assign appends at max+1');
 check(sb.assignTask(R, 'intent', 3) === false && R[3].tasks.length === 1, '2. double assign is a no-op');
-sb.assignTask(R, 'roof_design', 3);
+sb.assignTask(R, 'hull_design', 3);
 check(R[3].tasks[1].order === 1, '3. first assignment gets order 1');
 sb.unassignTask(R, 'intent', 1);
 check(eq(sb.buildTaskChains(R).intent, [{entry:0,order:1},{entry:3,order:2}]), '4. unassign renumbers');

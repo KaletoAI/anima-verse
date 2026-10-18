@@ -125,7 +125,7 @@ def main() -> None:
             if args.out:
                 args.out.mkdir(parents=True, exist_ok=True)
             for style_id in (hull_styles.load_styles() if args.out else ("fachwerk", "modern")):
-                with patch.object(hull_model, "_timeout_s", return_value=600):
+                with patch.object(hull_model, "timeout_s", return_value=600):
                     result = hull_model.generate_hull(loc_id, {"style": style_id, "seed": 4})
                 assert result["ok"], result
                 expected_job = hull_model.build_job(loc_id, {"style": style_id, "seed": 4}, tex_dir=root / "verify")

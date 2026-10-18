@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 from app.core.log import get_logger
 from app.core.paths import get_shared_dir
-from app.core.roof_model import _tone
+from app.core.hull_util import tone
 from app.core.surface_textures import safe_kind
 
 SHARED_DIR = get_shared_dir() / "building_styles"
@@ -57,8 +57,8 @@ def validate_style(raw: Any, style_id: str) -> Dict[str, Any]:
         "description": raw.get("description", "")[:600] if isinstance(raw.get("description", ""), str) else "",
         "materials": {key: safe_kind(materials.get(key)) if isinstance(materials.get(key), str) else ""
                       for key in MATERIAL_KEYS},
-        "palette": {"glass": _tone(palette.get("glass"), "#3a4a55"),
-                    "interior": _tone(palette.get("interior"), "#4a443e")},
+        "palette": {"glass": tone(palette.get("glass"), "#3a4a55"),
+                    "interior": tone(palette.get("interior"), "#4a443e")},
         "corners": _choice(raw.get("corners"), ("none", "quoins", "posts", "log_ends"), "none"),
         "frames": _choice(raw.get("frames"), ("none", "timber", "stone", "metal"), "timber"),
         "timber_frame": _choice(raw.get("timber_frame"), ("none", "upper", "all"), "none"),
@@ -179,7 +179,7 @@ def validate_description(raw: Any, styles: Dict[str, Dict[str, Any]]) -> Dict[st
     if "pitch_deg" in source:
         overrides["pitch_deg"] = _number(source["pitch_deg"], 5, 60, 30)
     overrides["ornament_density"] = _number(source.get("ornament_density"), 0, 1, 0.5)
-    tint = _tone(source.get("tint"), "")
+    tint = tone(source.get("tint"), "")
     if tint:
         overrides["tint"] = tint
     return {"style": style, "seed": seed, "overrides": overrides}

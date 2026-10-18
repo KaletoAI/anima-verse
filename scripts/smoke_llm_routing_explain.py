@@ -14,7 +14,7 @@ Synthetic config:
     #1 B/m1 enabled  tasks intent@1, consolidation@1
     #2 A/m2 DISABLED tasks chat_stream@2, translation@1
     #3 A/m3 enabled  tasks image_recognition@1   (m3 in cooldown 42 s)
-  disabled (persistent): {"secret_generation"}; runtime_disabled: {"roof_design"}
+  disabled (persistent): {"secret_generation"}; runtime_disabled: {"hull_design"}
   story_engine.enabled = False (gates story_stream off)
   embedding.backend = "internal", internal_model = "BAAI/bge-small-en-v1.5"
 
@@ -35,7 +35,7 @@ Expected (by hand from the resolver rule):
      chain[0].skipped == "model cooldown".
   8. story_stream: via gated_off, resolved None, gated_off True.
   9. secret_generation: via disabled, disabled True.
- 10. roof_design: via disabled, runtime_disabled True.
+ 10. hull_design: via disabled, runtime_disabled True.
  11. pose_embedding: via direct, resolved None, reason startswith "built-in".
  12. entries[3].model_cooldown_s == 42 (rounded), entries[2].enabled False,
      entries[1].provider_available False; providers has 2 rows.
@@ -100,7 +100,7 @@ PROV = {"A": SimpleNamespace(available=True, type="openai"),
         "B": SimpleNamespace(available=False, type="openai")}
 res = explain_routing(CFG, provider_lookup=PROV.get,
                       cooled_down=lambda p, m: 42.0 if (p, m) == ("A", "m3") else None,
-                      disabled={"secret_generation"}, runtime_disabled={"roof_design"})
+                      disabled={"secret_generation"}, runtime_disabled={"hull_design"})
 T = {t["task"]: t for t in res["tasks"]}
 
 t = T["chat_stream"]; check(t["via"] == "direct" and t["resolved"]["index"] == 0 and len(t["chain"]) == 1, "1. chat_stream")
@@ -114,7 +114,7 @@ t = T["npc_talk"]; check(t["via"] == "fallback" and t["resolved"]["via_task"] ==
 t = T["image_recognition"]; check(t["via"] == "none" and t["chain"][0]["skipped"] == "model cooldown", "7. image_recognition")
 t = T["story_stream"]; check(t["via"] == "gated_off" and t["resolved"] is None and t["gated_off"] is True, "8. story_stream")
 t = T["secret_generation"]; check(t["via"] == "disabled" and t["disabled"] is True, "9. secret_generation")
-t = T["roof_design"]; check(t["via"] == "disabled" and t["runtime_disabled"] is True, "10. roof_design")
+t = T["hull_design"]; check(t["via"] == "disabled" and t["runtime_disabled"] is True, "10. hull_design")
 t = T["pose_embedding"]; check(t["via"] == "direct" and t["resolved"] is None and t["reason"].startswith("built-in"), "11. pose_embedding")
 E = res["entries"]
 check(round(E[3]["model_cooldown_s"]) == 42 and E[2]["enabled"] is False and E[1]["provider_available"] is False and len(res["providers"]) == 2, "12. entries/providers")

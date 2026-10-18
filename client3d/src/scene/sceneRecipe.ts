@@ -1291,7 +1291,7 @@ export async function mountShell(tile: Tile, scene: ScenePayload,
     // that shell; and a piece the § B5a verify measures has to hang in the
     // graph, or it would be measured without the tile's own transform.
     // The wall entry itself stays in the payload on purpose as well: the
-    // Blender exterior render builds its facade out of `walls`.
+    // hull opening detection (hull_facts._edge_openings) relies on the leaves.
     if (wall.door_prop) mesh.visible = false;
     parentFor(wall.room_id).add(mesh);
     builtWalls.push({ mesh, wall });

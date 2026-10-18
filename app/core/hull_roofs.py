@@ -347,7 +347,7 @@ def clip_detail(part, level, roof_info, style, *, diagonal=False):
 
 
 def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, parts):
-    """Use roof_model's wall-span pitch and shortened hip-ridge formulas."""
+    """Use wall-span pitch and shortened hip-ridge formulas."""
     original_angle = rect["angle_deg"]
     rect, high = _wing_axes(rect, sides, form)
     outer = wall_offsets(style, number)[1]

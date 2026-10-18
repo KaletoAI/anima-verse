@@ -91,7 +91,7 @@ logger = get_logger(__name__)
 #: 5 (2026-08-27): DOOR PROPS — a door opening may be filled by a PROP
 #: instead of the flat leaf: a ``models[]`` spec with ``measure "fit"``,
 #: hung on its HINGE edge so a renderer can swing it. The leaf wall stays in
-#: ``walls[]`` (the Blender exterior render reads that list) and merely says
+#: ``walls[]`` (hull opening detection, ``hull_facts._edge_openings``, needs it) and says
 #: ``door_prop`` so the renderers skip drawing it.
 #: 6 (2026-08-27): BAKED MODEL SURFACES (spec-surface-height) — a diorama and
 #: a prop tagged ``walkable`` carry the height lattice their mesh was baked
@@ -1271,8 +1271,8 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
     the contour carries on as a LINTEL piece over the opening, exactly like
     the head a window has always had on a room wall. The projected hole used
     to run from the foot to the top of the shell, so a door in an outer wall
-    read as a missing wall segment rather than as a door — from outside and in
-    the Blender exterior render alike. Where the contour has already yielded
+    read as a missing wall segment rather than as a door from outside.
+    Where the contour has already yielded
     to a room hull the lintel yields with it: no wall there, no lintel there,
     and the room's own wall carries both.
 
@@ -1415,7 +1415,7 @@ def _contour_walls(map3d: Dict[str, Any], levels: List[int], storey: float,
                     if has_prop:
                         # A PROP fills this hole (v5) — same rule as on a room
                         # wall: the renderers skip the plate, the entry stays
-                        # for the exterior render.
+                        # for hull opening detection (hull_facts._edge_openings).
                         entry["door_prop"] = True
                 elif wall_kinds.get(level):
                     entry["texture_kind"] = wall_kinds[level]
@@ -1631,9 +1631,8 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
                 if door_prop:
                     # …and a PROP fills this hole (v5): the renderers skip the
                     # plate, the prop is the door. The entry itself STAYS —
-                    # the Blender exterior render builds its facade from
-                    # ``walls`` and would lose the door's prism with it
-                    # (user decision 2026-08-27).
+                    # hull opening detection (hull_facts._edge_openings)
+                    # relies on the door leaves in ``walls``.
                     entry["door_prop"] = True
             elif kind:
                 entry["texture_kind"] = kind

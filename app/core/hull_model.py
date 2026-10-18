@@ -11,7 +11,7 @@ from app.core.hull_facts import hull_facts
 from app.core.hull_geometry import build_hull, fit_budget
 from app.core.hull_mesh import rng
 from app.core.log import get_logger
-from app.core.roof_model import _timeout_s, tone_to_linear
+from app.core.hull_util import timeout_s, tone_to_linear
 from app.core.scene_recipe import scene_mesh_placement
 
 logger = get_logger(__name__)
@@ -166,7 +166,7 @@ def generate_hull(location_id: str, description: Any) -> Dict[str, Any]:
         out_dir = directory / "out"
         out_dir.mkdir()
         result = runner.run("hull_build", inputs={"job": job_file, **job["textures"]},
-                            out_dir=out_dir, timeout_s=_timeout_s())
+                            out_dir=out_dir, timeout_s=timeout_s())
         if not result.get("ok"):
             return {"ok": False, "error": str(result.get("error") or "build failed")}
         outputs = result.get("outputs") or {}
@@ -246,7 +246,7 @@ def hull_status(location_id: str) -> Dict[str, Any]:
 def propose_hull(location_id: str) -> Dict[str, Any]:
     """Suggest a validated building style with one LLM call, or fresh defaults."""
     from app.models.world import get_location_by_id
-    from app.core.roof_model import _parse_json, oriented_bbox
+    from app.core.hull_util import parse_json, oriented_bbox
     location = get_location_by_id(location_id)
     facts = hull_facts(location, location_id)
     if not facts["ok"]:
@@ -271,7 +271,7 @@ def propose_hull(location_id: str) -> Dict[str, Any]:
         response = llm_call(task="hull_design", system_prompt=system_prompt,
                             user_prompt=user_prompt, agent_name="system",
                             label=f"Hull design: {name}")
-        parsed = _parse_json(str(getattr(response, "content", "") or ""))
+        parsed = parse_json(str(getattr(response, "content", "") or ""))
         if (not parsed or not isinstance(parsed.get("style"), str)
                 or parsed["style"] not in styles or not isinstance(parsed.get("overrides"), dict)):
             raise ValueError("Invalid hull design answer")

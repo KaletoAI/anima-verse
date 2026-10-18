@@ -281,8 +281,8 @@ stops acting autonomously).
   a building, in seconds and without an LLM: a room type's template (`shared/furniture/room_types.json`)
   is filled with the props tagged `kit:<kit>` + `role:<role>`, and the kit follows the hull style.
 
-  To prepare a kit, run `.venv/bin/python scripts/create_kit_props.py --world <your world> --dry-run`
-  (optionally `--kit rustic` or `--dry-run`), then generate an image and mesh for each prop in the
+  To prepare a kit, run `scripts/create_kit_props.py` once against your world (its `--help` lists a
+  preview mode and a per-kit filter), then generate an image and mesh for each prop in the
   **Props** tab. Set the room types and use **Furnish from kit** or **Furnish empty rooms from kit**.
   To export a kit as a marketplace collection, use the CollectionBuilder tag filter `kit:<id>`.
 - Optional **Blender refinement** of generated meshes (headless, no manual modelling).
