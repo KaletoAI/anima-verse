@@ -239,7 +239,7 @@ async function main() {
     recipe.includes('for (const m of oldMats) if (!tile.roofMats.includes(m)) m.dispose();'),
     true);
 
-  check('B7 plan hull stays visible without corridor fade',
+  check('B7 plan hull stays visible and defers its corridor to cutout clones',
     [recipe.includes("const keep = display === 'ground' || planHull;"),
       recipe.includes('if (!keep) {'),
       recipe.includes('createdRoofMats, !!spec.plan_hull);'),

@@ -22,7 +22,7 @@ import { applyOcclusionFade } from './occlusion';
 import { leaseGlb, type GlbLease } from './propAssets';
 import { wantsRecipeShell } from './shellPlan';
 import {
-  deriveCorridorCentres, deriveRoomSpots, preloadSurfaceTexture, surfaceFor,
+  deriveCorridorCentres, deriveRoomSpots, preloadSurfaceTexture, surfaceFor, setTileCutoutsEnabled,
   surfaceMaterialSpec, tileDirToWorld, tileToWorld, worldGroundSampler,
   worldWaterSampler,
   type PlacedSceneModel as BasePlacedSceneModel, type RoomFloor, type StairWorldLink, type SwingingDoor,
@@ -2033,6 +2033,7 @@ function applyBuildingModel(tile: Tile, placed: THREE.Group,
     // The polygons arrive around the tile centre, the shader measures in world
     // coordinates — the same conversion as for the room clip.
     tile.cutouts?.dispose();
+    tile.cutoutOccGate = undefined;
     tile.cutouts = applyCutouts(THREE, placed, cutouts.map(
       (poly) => poly.map(([cx, cz]) => {
         const w = tileToWorld(tile, cx, cz);
@@ -2040,7 +2041,19 @@ function applyBuildingModel(tile: Tile, placed: THREE.Group,
       })));
     // Apply the current view state at once: the tile may already be in the
     // interior view by the time the model arrives.
-    tile.cutouts.setEnabled(tile.fade > 0.03);
+    if (spec.plan_hull && spec.display !== 'ground') {
+      const gate = tile.cutoutOccGate = { value: 1 };
+      placed.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const mat of materials) {
+          // Only applyCutouts clones belong to this handle; never patch a lease.
+          if (mat.userData.__cutoutClone) applyOcclusionFade(mat, gate);
+        }
+      });
+    }
+    setTileCutoutsEnabled(tile, tile.fade > 0.03);
   }
 }
 
@@ -2129,7 +2142,7 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
           // Prepare against a separate tile state so failures leave the installed
           // building, cutouts and material lists intact.
           const shellMats = (tile.shell?.userData.shellMats as THREE.Material[] | undefined) ?? [];
-          const staged = { ...tile, shell: rec.spec.roof_only ? tile.shell : undefined, cutouts: undefined, labelObj: undefined,
+          const staged = { ...tile, shell: rec.spec.roof_only ? tile.shell : undefined, cutouts: undefined, cutoutOccGate: undefined, labelObj: undefined,
             roofMats: tile.roofMats.filter(m => shellMats.includes(m)) } as Tile;
           try {
             applyBuildingModel(staged, placed, rec.spec);
@@ -2142,7 +2155,7 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
           tile.cutouts?.dispose();
           if (!rec.spec.roof_only) dropFarShell(tile);
           for (const key of ['serverModel', 'modelIsGround', 'modelIsPlanHull', 'modelIsShellArea', 'shellMats',
-            'roofMats', 'roofParts', 'facadeMats', 'height', 'modelWalkY', 'cutouts'] as const) {
+            'roofMats', 'roofParts', 'facadeMats', 'height', 'modelWalkY', 'cutouts', 'cutoutOccGate'] as const) {
             Object.assign(tile, { [key]: staged[key] });
           }
           tile.labelObj?.position.set(0, tile.height + 2.2, 0);
@@ -2293,8 +2306,8 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
   // go into roofParts/roofMats, which the crossfade takes away. The cutouts do
   // the revealing instead (`setEnabled` on the same fade state). Without a fade
   // there is no need for material clones either; the cutout routine clones on
-  // its own account anyway — which is why the corridor fade below reaches only
-  // the shell branch.
+  // its own account. Plan hulls receive their gated corridor on those cutout
+  // clones in applyBuildingModel; ground models receive no corridor.
   tile.roofParts = keep ? [] : [...keptParts, model];
   tile.facadeMats = [];
   model.traverse((o) => {
@@ -2310,9 +2323,8 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
         // like a tree is, so it takes part in the corridor fade
         // (`scene/occlusion.ts`). Patched on the CLONE this line just made —
         // the loaded model's own material belongs to the lease pool and to
-        // every other tile that shows the same building. A kept model takes
-        // no clone and no patch: ground models and plan hulls deliberately
-        // take no corridor fade.
+        // every other tile that shows the same building. Kept plan hulls get
+        // the corridor later on their cutout clones; ground models stay whole.
         applyOcclusionFade(c);
         tile.roofMats.push(c as THREE.MeshStandardMaterial);
         return c;
@@ -2341,6 +2353,7 @@ export function unmountShell(tile: Tile): void {
   dropFarShell(tile);
   tile.cutouts?.dispose();
   tile.cutouts = undefined;
+  tile.cutoutOccGate = undefined;
   for (const mat of tile.roofMats) mat.dispose();
   tile.roofMats = [];
   dropLayerModels(tile, 'shell');
@@ -2364,6 +2377,7 @@ export function unmountShell(tile: Tile): void {
   // groups are the placements above, and the angle was view state.
   tile.doorProps = undefined;
   tile.cutouts = undefined;
+  tile.cutoutOccGate = undefined;
   tile.modelIsGround = false;
   tile.modelIsPlanHull = false;
   tile.modelIsShellArea = false;

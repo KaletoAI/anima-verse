@@ -15,14 +15,17 @@
  * restore. It is a continuous function of the geometry, which is why it needs no
  * hysteresis at all: walk half a metre and half a bush more is gone.
  *
- * WHAT IS PATCHED is decided by the callers, and deliberately narrow: the
+ * Callers patch owned material clones, with a per-tile gate for plan hulls:
+ * their corridor runs only while cutouts are off. Ground models stay whole.
+ * Other patched geometry is deliberately narrow: the
  * scattered props of the painted ground (`scene/ground.ts`) and the building
  * shells of the world view (`scene/tiles.ts`, and the server model in
  * `scene/sceneRecipe.ts`). NOT the ground itself, not the figures, not the
  * interior geometry of the open detail view (the existing tile fade rules
  * there) and not water.
  *
- * THE UNIFORMS ARE SHARED, exactly like the surface clock `surfaceTimeUniform`
+ * The corridor uniforms are shared; only the optional tile gate is per tile.
+ * Shared values follow the surface clock `surfaceTimeUniform`
  * of @anima/scene-render: one object per value, written ONCE per frame by
  * `updateOcclusion` (from `main.ts`), read by every patched material. Fifty
  * patched materials therefore cost one uniform update, and the patch's cache key
@@ -146,6 +149,9 @@ const ANCHOR_VERT = '#include <project_vertex>';
  *  test goes: a fragment that is gone should cost nothing after it. */
 const ANCHOR_FRAG = '#include <clipping_planes_fragment>';
 
+/** Shared default keeps every existing caller fully enabled. */
+const defaultOccGate = { value: 1 };
+
 /**
  * Give a material the corridor test.
  *
@@ -160,9 +166,10 @@ const ANCHOR_FRAG = '#include <clipping_planes_fragment>';
  * that came out of it belongs to every other user of that prop — patching it
  * would make a placed tree in a scene dissolve too. The scatter path therefore
  * clones per entry (`mountUrl`), the tile shells are built per tile anyway, and
- * the server model is patched on the clones `applySceneBuilding` makes.
+ * the server shell uses `applySceneBuilding` clones; plan hulls use the
+ * cutout clones made in `applyBuildingModel`.
  */
-export function applyOcclusionFade(mat: THREE.Material): void {
+export function applyOcclusionFade(mat: THREE.Material, gate = defaultOccGate): void {
   if (occPatched.has(mat)) return;
   occPatched.add(mat);
   const prev = mat.onBeforeCompile;
@@ -178,6 +185,7 @@ export function applyOcclusionFade(mat: THREE.Material): void {
     shader.uniforms.uOccB = occB;
     shader.uniforms.uOccRadius = occRadius;
     shader.uniforms.uOccStrength = occStrength;
+    shader.uniforms.uOccGate = gate;
     // A three version without the anchor leaves the material UNPATCHED whole:
     // the fragment side alone would read a varying the vertex side never wrote.
     if (!shader.vertexShader.includes(ANCHOR_VERT)) return;
@@ -198,6 +206,7 @@ export function applyOcclusionFade(mat: THREE.Material): void {
 
     const head = 'uniform vec3 uOccA;\nuniform vec3 uOccB;\n'
       + 'uniform float uOccRadius;\nuniform float uOccStrength;\n'
+      + 'uniform float uOccGate;\n'
       + 'varying vec3 vOccWorld;\n';
     // Point-to-SEGMENT distance, not point-to-line: the corridor has two ends,
     // and a line would keep thinning props behind the avatar and behind the
@@ -218,7 +227,7 @@ export function applyOcclusionFade(mat: THREE.Material): void {
     float occDist = distance( vOccWorld, uOccA + occAB * occT );
     // Soft edge: full inside half the radius, nothing outside it — a hard rim
     // would draw a circle of dither on the ground cover.
-    float occHide = uOccStrength * ( 1.0 - smoothstep( uOccRadius * 0.5, uOccRadius, occDist ) );
+    float occHide = uOccStrength * uOccGate * ( 1.0 - smoothstep( uOccRadius * 0.5, uOccRadius, occDist ) );
     vec2 occPix = mod( floor( gl_FragCoord.xy ), 4.0 );
     float occX0 = mod( occPix.x, 2.0 );
     float occX1 = mod( floor( occPix.x / 2.0 ), 2.0 );

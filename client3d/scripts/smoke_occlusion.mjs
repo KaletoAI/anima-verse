@@ -114,7 +114,7 @@
  *     0. The mutant drops `embodied` from the gate: it then answers a real
  *     strength for an unembodied client, while the truth answers 0.
  */
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -140,7 +140,8 @@ async function loadClient(mutate) {
     const entry = "export { applyOcclusionFade, occlusionUniforms, updateOcclusion,\n"
       + "  occA, occB, occRadius, occStrength, OCC_CACHE_KEY, OCC_RADIUS_M }\n"
       + `  from '${OCC_SRC}';\n`
-      + `export { applySway } from '${GROUND_SRC}';\n`;
+      + `export { applySway } from '${GROUND_SRC}';\n`
+      + `export { applyCutouts } from '${join(ROOT, 'packages/scene-render/src/cutouts.ts')}';\n`;
     const built = await esbuild.build({
       stdin: { contents: entry, resolveDir: dir, loader: 'ts' },
       bundle: true, platform: 'node', format: 'esm', write: false,
@@ -253,7 +254,7 @@ async function main() {
   const THREE = await import('three');
   const { applyOcclusionFade, occlusionUniforms, updateOcclusion,
     occA, occB, occRadius, occStrength, OCC_CACHE_KEY, OCC_RADIUS_M,
-    applySway } = await loadClient();
+    applySway, applyCutouts } = await loadClient();
 
   /** One material through the patch, with its composed shader. */
   function patched(patch = applyOcclusionFade, before = null) {
@@ -338,6 +339,48 @@ async function main() {
   check('leaving the mode neutralises both at once',
     [bush.shader.uniforms.uOccStrength.value, grass.shader.uniforms.uOccStrength.value],
     [0, 0]);
+
+  console.log('\n[3b] cutout clones and the tile corridor gate');
+  const sourceMat = new THREE.MeshStandardMaterial();
+  const model = new THREE.Group();
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(), sourceMat);
+  model.add(mesh);
+  const cut = applyCutouts(THREE, model, [[[0, 0], [4, 0], [4, 4], [0, 4]]]);
+  const cutKey = mesh.material.customProgramCacheKey();
+  const tileGate = { value: 1 };
+  applyOcclusionFade(mesh.material, tileGate);
+  const composed = stubShader();
+  mesh.material.onBeforeCompile(composed, null);
+  check('patches the cutout clone, preserving the leased source', mesh.material !== sourceMat, true);
+  check('cutout discard survives', composed.fragmentShader.includes('if ( cutHit ) discard;'), true);
+  check('corridor discard survives', marksIn(composed, OCC_MARKS), allOf(OCC_MARKS));
+  check('gate is wired by identity', composed.uniforms.uOccGate === tileGate, true);
+  check('gate declared in every shader', bush.shader.fragmentShader.includes('uniform float uOccGate;'), true);
+  check('gate multiplies strength', composed.fragmentShader.includes('uOccStrength * uOccGate *'), true);
+  check('both cache keys survive', mesh.material.customProgramCacheKey(), `${cutKey}+${OCC_CACHE_KEY}`);
+  check('default gate is shared', bush.shader.uniforms.uOccGate === grass.shader.uniforms.uOccGate, true);
+  check('default gate is one', bush.shader.uniforms.uOccGate?.value, 1);
+  check('gate does not change shader text', composed.fragmentShader.slice(0, composed.fragmentShader.indexOf('#define CUT_POLYS')),
+    bush.shader.fragmentShader.slice(0, bush.shader.fragmentShader.indexOf('void main()')));
+  cut.setEnabled(true);
+  tileGate.value = 0;
+  check('gate changes live without recompiling', composed.uniforms.uOccGate?.value, 0);
+  check('gate changes preserve cache key', mesh.material.customProgramCacheKey(), `${cutKey}+${OCC_CACHE_KEY}`);
+  cut.dispose();
+  sourceMat.dispose();
+  mesh.geometry.dispose();
+
+  const recipe = await readFile(join(ROOT, 'client3d/src/scene/sceneRecipe.ts'), 'utf8');
+  const tiles = await readFile(join(ROOT, 'client3d/src/scene/tiles.ts'), 'utf8');
+  const building = recipe.slice(recipe.indexOf('function applyBuildingModel('), recipe.indexOf('/** Room clipping'));
+  check('only plan hulls excluding ground get the gated patch after cutouts',
+    /if \(spec\.plan_hull && spec\.display !== 'ground'\)/.test(building)
+      && building.indexOf('applyOcclusionFade(') > building.indexOf('tile.cutouts = applyCutouts('), true);
+  check('patch only proven cutout clones', building.includes('__cutoutClone'), true);
+  const calls = (recipe + tiles).match(/setTileCutoutsEnabled\(tile,/g) || [];
+  check('at least both known toggle sites use the helper', calls.length >= 2, true);
+  check('only helper calls cutout setEnabled', ((recipe + tiles).match(/cutouts\??\.setEnabled\(/g) || []).length, 1);
+  check('helper keeps gate inverse to cutouts', /cutoutOccGate\.value = on \? 0 : 1/.test(tiles), true);
 
   console.log('\n[4] the arithmetic — occlusionUniforms, by hand');
   const feet = { x: 0, y: 0, z: 0 };

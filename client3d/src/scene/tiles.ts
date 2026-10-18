@@ -737,6 +737,8 @@ export interface Tile {
    *  the crossfade — intact model at a distance, holes in the interior view —
    *  and releases its material clones on remount. */
   cutouts?: CutoutHandle;
+  /** Owned with cutout clones; zero while cutouts reveal the interior. */
+  cutoutOccGate?: { value: number };
   /** Model placements of the mounted scene (tier swapping, Stage 3). */
   placedModels?: PlacedSceneModel[];
   /** The DOOR PROPS of the mounted scene (v5), one per `models[]` entry with a
@@ -775,6 +777,12 @@ export function detectStyle(loc: WorldLocation): TileStyle {
   if (/caf|bar|restaurant|shop|laden|store|diner/.test(n)) return 'cafe';
   if (/residence|house|haus|home|cottage|villa/.test(n)) return 'house';
   return 'generic';
+}
+
+/** Keep the hull corridor and cutouts mutually exclusive without recompiling. */
+export function setTileCutoutsEnabled(tile: Tile, on: boolean): void {
+  tile.cutouts?.setEnabled(on);
+  if (tile.cutoutOccGate) tile.cutoutOccGate.value = on ? 0 : 1;
 }
 
 /**
@@ -1348,7 +1356,7 @@ export function applyTileFade(tile: Tile, dt: number) {
   // the interior view cuts out the floor plan and detached rooms to reveal
   // the recipe interior. Detail mode has no holes (its interior is composed
   // like a building interior), so the model's fade reveals it instead.
-  if (!tile.modelIsShellArea) tile.cutouts?.setEnabled(f > 0.03);
+  if (!tile.modelIsShellArea) setTileCutoutsEnabled(tile, f > 0.03);
   // When a basement storey is SHOWN, the area model disappears entirely
   // (user finding 2026-07-28: the enlarged floor opening existed, but the
   // never-fading location model blocked it). Same semantics as the slab
