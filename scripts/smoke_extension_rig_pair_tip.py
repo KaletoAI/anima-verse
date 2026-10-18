@@ -236,7 +236,7 @@ def main():
     from app.blender import runner
     if not runner.status()['executable']:
         raise RuntimeError('Blender executable unavailable; no checks ran')
-    prefix=WALL_PROBE[:WALL_PROBE.index("for kind in ('A','B','C','D'):")]
+    prefix=WALL_PROBE[:WALL_PROBE.index("for kind in ('A','B','C','D','E'):")]
     prefix=prefix.replace("r2=(dx/.06)**2+(dz/.09)**2\n    y=-.1-.05*max(0.,1-r2)**.5", "q=.106**2-dx*dx-dz*dz\n    y=min(-.1,-.044-math.sqrt(q)) if q>=0 else -.1")
     prefix=prefix.replace("assert abs(s['reach'][0]-s['reach'][2])>.01, s", "assert s['marker_area']>0, s")
     with tempfile.TemporaryDirectory(prefix='pair-tip-') as tmp:

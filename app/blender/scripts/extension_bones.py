@@ -34,6 +34,9 @@ PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'lateral_min': 'number',
                      'lateral_max': 'number',
                      'marker_search_radius': 'number',
+                     'apex_smooth_radius': 'number',
+                     'apex_plateau_depth': 'number',
+                     'apex_context_radius': 'number',
                      'marker_grid_step': 'number',
                      'marker_score_min': 'number',
                      'marker_yellow_weight': 'number',
@@ -187,7 +190,7 @@ def parameters(group):
                     raise ValueError(key + ' must contain finite numbers')
                 if kind == 'vector3' and len(value) != 3:
                     raise ValueError(key + ' must have three components')
-    positive = ('radius_scale', 'marker_search_radius', 'marker_grid_step', 'marker_area_min',
+    positive = ('radius_scale', 'marker_search_radius', 'apex_smooth_radius', 'apex_plateau_depth', 'apex_context_radius', 'marker_grid_step', 'marker_area_min',
                 'marker_area_max', 'marker_spread_max', 'marker_pair_dz', 'marker_pair_dx',
                 'boundary_s_min', 'boundary_s_max', 'boundary_step', 'exclude_weight', 'depth_ramp', 'slice_size', 'part_half_width',
                 'candidate_lateral_max', 'protrusion_threshold', 'weld_distance',
@@ -329,13 +332,76 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
     hi = lookup(bones,p['band_upper_bone']).head_local.z+p['band_upper_offset']
     if lo >= hi:
         raise ValueError('empty height band')
-    candidates,initial = [],[]
+    # The tip search runs on a smoothed front depth map, not on single vertices:
+    # under clothing the front is a flat plateau whose front-most vertex is a
+    # fold, seam or bow rather than the shape's crest. The crest is where the
+    # map (blurred by apex_smooth_radius) stands furthest in front of its
+    # surroundings (blurred by apex_context_radius), so torso tilt and rib cage
+    # curvature drop out. Both sides are scored together on cells mirrored
+    # about the body midline.
+    step = p['marker_grid_step']
+    mid = .5*(lookup(bones,p['lateral_positive_bone']).head_local.x+lookup(bones,p['lateral_negative_bone']).head_local.x)
+    # The map extends 3 sigma beyond the candidate cells (across the midline
+    # too), so the blur near the candidate edge does not average one-sidedly.
+    margin = math.ceil(3*p['apex_context_radius']/step)
+    zs = lo+step*np.arange(-margin,int(math.floor((hi-lo)/step+1e-9))+1+margin)
+    ds = p['lateral_min']+step*np.arange(-margin,int(math.floor((p['lateral_max']-p['lateral_min'])/step+1e-9))+1+margin)
+    def crest_search():
+        # Built only in geometry mode: about 60k front rays.
+        def blur(a,sigma):
+            reach = math.ceil(3*sigma/step)
+            kernel = np.exp(-.5*(np.arange(-reach,reach+1)*step/sigma)**2)
+            a = np.apply_along_axis(lambda r:np.convolve(r,kernel,'same'),0,a)
+            return np.apply_along_axis(lambda r:np.convolve(r,kernel,'same'),1,a)
+        def normalised(depth,known,sigma):
+            return blur(np.where(known,depth,0.),sigma)/np.maximum(blur(known.astype(float),sigma),1e-9)
+        grids = []
+        for sign in (1,-1):
+            depth = np.full((len(zs),len(ds)),np.nan)
+            for j,z in enumerate(zs):
+                for i,d in enumerate(ds):
+                    hit = front(float(mid+sign*d),float(z))
+                    if hit:
+                        depth[j,i] = hit[0].y
+            known = ~np.isnan(depth)
+            smoothed = np.where(known,normalised(depth,known,p['apex_smooth_radius']),np.nan)
+            grids.append((depth,smoothed,normalised(depth,known,p['apex_context_radius'])-smoothed))
+        paired = [(j,i) for j,i in zip(*np.nonzero(~np.isnan(grids[0][0])&~np.isnan(grids[1][0])))
+                  if margin <= j < len(zs)-margin and margin <= i < len(ds)-margin]
+        if not paired:
+            raise ValueError('no protrusion candidates on both sides')
+        def cell(j,i,sign):
+            return Vector((mid+sign*ds[i],grids[0 if sign==1 else 1][1][j,i],zs[j]))
+        def pick(score):
+            # Centre of the crest: a flat plateau has no single best cell, so the
+            # connected cells within apex_plateau_depth per side are averaged.
+            values = {c:score(c) for c in paired}
+            seed = max(values,key=values.get)
+            level = values[seed]-2*p['apex_plateau_depth']
+            crest,stack = {seed},[seed]
+            while stack:
+                j,i = stack.pop()
+                for c in ((j+1,i),(j-1,i),(j,i+1),(j,i-1)):
+                    if c not in crest and values.get(c,-math.inf) >= level:
+                        crest.add(c)
+                        stack.append(c)
+            d = sum(ds[i] for _,i in crest)/len(crest)
+            z = sum(zs[j] for j,_ in crest)/len(crest)
+            out = []
+            for sign in (1,-1):
+                hit = front(float(mid+sign*d),float(z))
+                if hit is None:
+                    raise ValueError('crest centre missed surface')
+                out.append(Vector((mid+sign*d,hit[0].y,z)))
+            return out
+        return cell,pick,pick(lambda c:grids[0][2][c]+grids[1][2][c])
+    # The colour search still starts at each side's front-most vertex.
+    frontmost = []
     for sign in (1,-1):
         side = [v for v in co if lo < v.z < hi and p['lateral_min'] < sign*v.x < p['lateral_max']]
         if not side:
             raise ValueError('no protrusion candidates on side '+str(sign))
-        candidates.append(side)
-        initial.append(min(side,key=lambda v:v.y).copy())
+        frontmost.append(min(side,key=lambda v:v.y))
     marker_areas = [None,None]
     def marker(apex,sign):
         step,radius = p['marker_grid_step'],p['marker_search_radius']
@@ -344,7 +410,7 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
         for j in range(-count,count+1):
             for i in range(-count,count+1):
                 x,z = apex.x+i*step,apex.z+j*step
-                if math.hypot(i*step,j*step) > radius or sign*x <= p['side_margin']:
+                if math.hypot(i*step,j*step) > radius or sign*(x-mid) <= p['side_margin']:
                     continue
                 hit = front(x,z,True)
                 if hit and hit[1] is not None:
@@ -400,7 +466,7 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
         marker_areas = [row['marker_area'] for row in pinned]
         colour = True
     else:
-        markers = [marker(v,sign) for v,sign in zip(initial,(1,-1))]
+        markers = [marker(v,sign) for v,sign in zip(frontmost,(1,-1))]
         colour = all(v is not None for v,_ in markers)
         if colour:
             a,b = [v for v,_ in markers]
@@ -421,7 +487,7 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
                 for j in range(steps+1):
                     distance = p['boundary_s_min']+j*p['boundary_step']
                     x,z = apex.x+sign*dx*distance,apex.z+dz*distance
-                    if sign*x <= p['side_margin']:
+                    if sign*(x-mid) <= p['side_margin']:
                         break
                     hit = front(x,z)
                     if hit:
@@ -460,13 +526,22 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
                 raise ValueError('apex does not protrude from wall')
             fitted.append((c,n,points))
         return reach,fitted
-    apexes = [v.copy() for v,_ in markers] if colour else initial
+    if colour:
+        apexes = [v.copy() for v,_ in markers]
+    else:
+        cell,pick,initial = crest_search()
+        apexes = initial
     reach,fitted = walls(apexes)
     if not colour:
-        apexes = [max((v for v in side if math.hypot(v.x-start.x,v.z-start.z)<=p['marker_search_radius']),
-                      key=lambda v:(v-c).dot(n)).copy()
-                  for side,start,(c,n,_) in zip(candidates,initial,fitted)]
+        near = lambda c:all(math.hypot(mid+sign*ds[c[1]]-start.x,zs[c[0]]-start.z)<=p['marker_search_radius'] for sign,start in zip((1,-1),initial))
+        # Only the sagittal tilt of the wall moves the tip (a torso leaning back);
+        # its lateral tilt follows the rib cage and would drag the tip to the midline.
+        sagittal = [Vector((0,n.y,n.z)).normalized() for _,n,_ in fitted]
+        apexes = pick(lambda c:sum((cell(*c,sign)-w[0]).dot(s) for sign,w,s in zip((1,-1),fitted,sagittal)) if near(c) else -math.inf)
         reach,fitted = walls(apexes)
+        # Without a marked tip (clothing) the tangent search rarely finds a real
+        # boundary; a round outline of the median reach avoids angular jumps.
+        reach = [statistics.median(v for v in reach if v is not None)]*K
     excluded = set()
     for name in p['exclude_bones']:
         bone = lookup(bones,name)
@@ -486,14 +561,20 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
         w = {}
         for i,v in enumerate(co):
             dist = (v-c).dot(n)
-            if sign*v.x < p['side_margin'] or dist < -p['front_margin']:
+            if sign*(v.x-mid) < p['side_margin'] or dist < -p['front_margin']:
                 continue
             rx,rz = (v.x-apex.x)*sign,v.z-apex.z
             t = (math.atan2(rx,rz)%(2*math.pi))/(2*math.pi)*K
             k = int(t)%K
             f = t-int(t)
-            radius = (reach[k] if reach[k] is not None else p['boundary_s_min'])*(1-f)+(reach[(k+1)%K] if reach[(k+1)%K] is not None else p['boundary_s_min'])*f
-            value = smooth((1-math.hypot(rx,rz)/(radius*p['radius_scale']))/(1-p['radius_plateau']))*smooth((dist+p['front_margin'])/p['depth_ramp'])*max(0.,1-exclusion[i]/p['exclude_weight'])
+            radius = ((reach[k] if reach[k] is not None else p['boundary_s_min'])*(1-f)+(reach[(k+1)%K] if reach[(k+1)%K] is not None else p['boundary_s_min'])*f)*p['radius_scale']
+            r = math.hypot(rx,rz)
+            if rx < 0:
+                # The outline ends at the midline margin, also where clothing bridges the gap.
+                radius = min(radius,(sign*(apex.x-mid)-p['side_margin'])*r/-rx)
+                if radius <= 0:
+                    continue
+            value = smooth((1-r/radius)/(1-p['radius_plateau']))*smooth((dist+p['front_margin'])/p['depth_ramp'])*max(0.,1-exclusion[i]/p['exclude_weight'])
             if value > p['weight_min']:
                 w[i] = value
         if not w:

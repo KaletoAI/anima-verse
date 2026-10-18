@@ -452,11 +452,15 @@ The retired singular manifest key is an error and loads no rigs for that slot.
 Declared `length` defaults to 1 and accepts [0.5,3]. World and character overrides
 replace it; state `bone_pose.length` values multiply it. The effective result is
 clamped to [0.25,4]. Girth starts at 1 before state factors. These are motion-only
-values; fingerprint version 14 identifies the new mesh operation contract.
+values; fingerprint version 14 identified the pair tip contract, version 16
+the geometry-mode crest search and midline cap of `pair_protrusion`.
 
 `pair_protrusion` requires two one-link chains: first `+X`, second `-X`.
-It starts from each side's smallest-Y vertex within the declared height/lateral
-band. The tip comes from a colour marker when the texture shows one: a front
+Sides are measured from the body midline, the mean x of `lateral_positive_bone`
+and `lateral_negative_bone`; `lateral_min`/`lateral_max` bound the candidate
+cells and `side_margin` keeps every sample and weight on its own side.
+The colour search starts from each side's smallest-Y vertex within the declared
+height/lateral band. The tip comes from a colour marker when the texture shows one: a front
 ray grid (`marker_grid_step`, disc `marker_search_radius`) samples the base
 colour, converts it to CIE Lab and scores `(a-a_median) - marker_yellow_weight*(b-b_median)`;
 cells above `marker_score_min` with lightness between `marker_dark_min*L_median`
@@ -471,12 +475,26 @@ in `boundary_step` steps, the boundary is the tangent point (largest
 `(y - tip.y)/s`). Lateral directions mirror the medial ones. The pair uses
 the smaller reach per direction and the deeper wall offset (occluders such as
 hair lie in front of the surface), and a least-squares plane through the wall
-points is each side's wall. In geometry mode the tip is then the candidate
-farthest in front of that wall, and the wall is measured once more. The bone
+points is each side's wall.
+
+Geometry mode (no marker, e.g. under clothing) never uses single vertices: a
+front ray grid at `marker_grid_step`, mirrored about the midline and extended by
+3·`apex_context_radius` beyond the candidate cells, is blurred with Gaussians of
+`apex_smooth_radius` (folds, seams, bows) and `apex_context_radius`
+(surroundings). A cell's protrusion is how far the first stands in front of the
+second, so torso tilt and rib cage curvature drop out. Both sides are scored
+together (sum over mirrored cells); the tip is the mean of the 4-connected cells
+within 2·`apex_plateau_depth` of the best sum. The wall is measured from there;
+the tip then moves to the crest of distance in front of the wall, using only its
+sagittal (y-z) normal and staying within `marker_search_radius`, and the wall is
+measured once more. The tangent search rarely finds a real boundary on fabric,
+so the outline becomes round with the median reach. The bone
 runs from `head_wall_depth` behind the wall (at the wall points' mean) to
 the tip. Weights combine a radial term over the star-shaped outline `R(angle)`
 (linear between the directions): `smooth((1-r/(R*radius_scale))/(1-radius_plateau))`,
-full through `radius_plateau*R*radius_scale`, zero at `R*radius_scale`; a depth
+full through `radius_plateau*R*radius_scale`, zero at `R*radius_scale`; toward
+the midline `R*radius_scale` is capped where the ray from the tip meets
+`side_margin`, so weight fades to zero there even when fabric bridges the gap; a depth
 ramp of `depth_ramp` that starts `front_margin` behind the wall; and
 `1 - w/exclude_weight` for a vertex's current weight `w` on `exclude_bones` and
 their descendants. Parameter changes alter the fingerprint and rebuild from the
@@ -572,6 +590,9 @@ each group complete or absent, and checks non-base parents by exact name.
 | `marker_spread_max` | `0.02` |
 | `marker_pair_dz` | `0.02` |
 | `marker_pair_dx` | `0.03` |
+| `apex_smooth_radius` | `0.015` |
+| `apex_plateau_depth` | `0.003` |
+| `apex_context_radius` | `0.05` |
 | `boundary_directions` | `8` |
 | `boundary_s_min` | `0.03` |
 | `boundary_s_max` | `0.13` |
