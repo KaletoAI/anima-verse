@@ -1,6 +1,7 @@
 """Wall shells and aperture details built exclusively from hull facts."""
 import math
 from typing import Dict, List, Optional, Tuple
+from app.core.hull_facades import module_bays, mullions
 from app.core.hull_mesh import Part, PartBuilder, offset_ring, rng, _normal
 from app.core.scene_recipe import WALL_THICKNESS, WALL_SINK_M
 
@@ -55,7 +56,8 @@ def _span(ring, edge, distance):
 
 
 def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
-                uv_sizes: Optional[Dict[str, float]] = None, roof_info: Optional[Dict] = None) -> List[Part]:
+                uv_sizes: Optional[Dict[str, float]] = None, roof_info: Optional[Dict] = None,
+                resolved: frozenset[str] = frozenset()) -> List[Part]:
     """Build full or low shells; real apertures cut shells while blind panes sit outside."""
     if tier not in ('full','low'):
         raise ValueError('tier must be full or low')
@@ -97,22 +99,38 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 emit(tag,mat,[point(s0,y0,d),point(s1,y0,d),point(s1,y1,d),point(s0,y1,d)],
                      [-v for v in outward] if reverse else outward)
 
-            def block(tag,mat,s0,s1,y0,y1,d0,d1):
+            def block(tag,mat,s0,s1,y0,y1,d0,d1,*,cut_holes=True):
                 if s1-s0 <= 1e-5 or y1-y0 <= 1e-5:
                     return
                 from app.core.hull_roofs import clip_detail, detail_breaks
-                breaks = detail_breaks(roof_info, number, edge, (d0,d1))
+                breaks = detail_breaks(roof_info, number, edge, (inner if tag == 'band' else d0,d1))
                 spans = sorted({s0,s1,*(v for v in breaks if s0 < v < s1)})
                 for left,right in zip(spans,spans[1:]):
+                    if tag == 'band' and right-left <= 1e-5:
+                        continue
                     build = builder(tag,mat)
-                    pieces = (_cells(left,right,y0,y1,holes) if tag in ('frame','shutter')
+                    pieces = (_cells(left,right,y0,y1,holes) if cut_holes and tag in ('frame','shutter')
                               else [(left,right,y0,y1)])
                     for c,d,e,f in pieces:
                         outline = [[point(s,e,depth)[k] for k in (0,2)]
                                    for s,depth in ((c,d0),(d,d0),(d,d1),(c,d1))]
                         build.prism(outline,e,f)
                     if build.part()['faces']:
-                        clipped = clip_detail(build.part(), number, roof_info, style)
+                        part = build.part()
+                        if tag == 'band':
+                            # A band at a zero-overhang eave only touches the roof footprint.
+                            # Probe through the wall so the covered strip still clears that roof.
+                            probe = builder(tag,mat)
+                            probe.prism([[point(s,y0,depth)[k] for k in (0,2)]
+                                         for s,depth in ((left,inner),(right,inner),(right,d1),(left,d1))],y0,y1)
+                            clearance = clip_detail(probe.part(), number, roof_info, style)
+                            if clearance is None:
+                                continue
+                            low = min(v[1] for v in clearance['vertices'])
+                            high = max(v[1] for v in clearance['vertices'])
+                            for vertex in part['vertices']:
+                                vertex[1] = round(low+(vertex[1]-y0)*(high-low)/(y1-y0),4)
+                        clipped = clip_detail(part, number, roof_info, style)
                         if clipped is not None:
                             parts.append(clipped)
 
@@ -125,7 +143,20 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 if clipped['s1']-clipped['s0'] > 1e-5 and clipped['y1']-clipped['y0'] > 1e-5:
                     holes.append(clipped)
             real_holes = [h for h in holes if not h.get('blind')]
-            for s0,s1,y0,y1 in _cells(lo,hi,bottom,top,real_holes,(plinth,)):
+            bays = (module_bays(hi-lo, facts['storey_m']) if filler
+                    and style.get('materials',{}).get('facade_module') and 'facade_module' in resolved else 0)
+            if bays:
+                start = max(floor,plinth) if number == 0 else floor
+                build = builder('facade_module','facade_module')
+                points = [point(lo,start,outer),point(hi,start,outer),point(hi,top,outer),point(lo,top,outer)]
+                uv = [[0,(start-floor)/(top-floor)],[bays,(start-floor)/(top-floor)],[bays,1],[0,1]]
+                if sum(v*w for v,w in zip(_normal(points),outward)) < 0:
+                    points,uv = points[::-1],uv[::-1]
+                build.poly(points,uv)
+                if build.part()['faces']:
+                    parts.append(build.part())
+            shell_top = min(top,plinth) if bays and number == 0 else (bottom if bays else top)
+            for s0,s1,y0,y1 in _cells(lo,hi,bottom,shell_top,real_holes,(plinth,)):
                 is_plinth = number == 0 and (y0+y1)/2 < plinth
                 face('plinth' if is_plinth else 'wall','plinth' if is_plinth else material,
                      s0,s1,y0,y1,outer)
@@ -152,6 +183,18 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 for tag,mat,y0,y1,depth in bands:
                     for s0,s1,c,d in _cells(lo,hi,max(bottom,y0),min(top,y1),real_holes):
                         block(tag,mat,s0,s1,c,d,outer,outer+depth)
+                if style.get('storey_bands') and number >= 1:
+                    previous = next((item for item in facts['levels'] if item['level'] == number-1), None)
+                    band_holes = list(real_holes)
+                    if previous is not None:
+                        for prior_edge in previous['edges']:
+                            if prior_edge['a'] == a and prior_edge['b'] == b:
+                                band_holes.extend(h for h in prior_edge['openings'] if not h.get('blind'))
+                    # Only vertically intersecting real apertures may subdivide the strip.
+                    band_holes = [h for h in band_holes if h['y0'] < floor+.15 and h['y1'] > floor-.15
+                                  and h['s0'] < hi and h['s1'] > lo]
+                    for s0,s1,c,d in _cells(lo,hi,floor-.15,floor+.15,band_holes):
+                        block('band','trim',s0,s1,c,d,outer,outer+.05)
                 if outer > inner+style['wall_thickness_m']+1e-6:
                     # Jetty underside from the un-jettied outside to the outer edge.
                     base = outer-style.get('jetty_m',0)
@@ -180,6 +223,15 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                                     (s0-.12,s1+.12,y1,y1+.12)):
                         block('frame','trim',c,d,e,f,outer,outer+.06)
                     block('frame','trim',s0-.12,s1+.12,y0-.12,y0,outer,outer+.06)
+                elif frame == 'metal' and kind in ('window','door'):
+                    for c,d,e,f in ((s0-.05,s0,y0,y1),(s1,s1+.05,y0,y1),
+                                    (s0-.05,s1+.05,y1,y1+.05),(s0-.05,s1+.05,y0-.05,y0)):
+                        block('frame','trim',c,d,e,f,outer,outer+.03)
+                    if kind == 'window':
+                        block('frame','trim',s0-.05,s1+.05,y0-.05,y0,outer,outer+.06)
+                        d0,d1 = (outer+.005,outer+.03) if h.get('blind') else (outer-.10,outer)
+                        for centre in mullions(s0,s1):
+                            block('frame','trim',centre-.025,centre+.025,y0,y1,d0,d1,cut_holes=False)
                 elif frame == 'stone':
                     block('frame','trim',s0-.05,s1+.05,y1,y1+.15,outer,outer+.10)
                     if kind == 'window':

@@ -32,8 +32,9 @@ spans 30.68 and 20.68. Bay range [2.6,3.2] gives 30..36 windows per
 filler floor: 2*(9+6)..2*(11+7). Thus 39 filler floors give 1170..1404
 panes, 2340..2808 pane triangles; 40*4*2=320 shell triangles, plus
 8 ground plinth triangles. Roof/ground interior leave ample room below
-12000 low and 90000 full. This check uses no resolved module and adds
-none of Tasks 4/5's details. Density can only decrease from .5.
+12000 low and 90000 full. Full bands add 39*4*12=1872 triangles;
+metal filler frames disappear at density 0 if needed to fit 90000.
+This check uses no resolved module. Density can only decrease from .5.
 
 Hand derivation: L corners (0,0),(20,0),(20,6),(8,6),(8,14),(0,14)
 span 20 by 14 m. Each of three floors has 3+2+1+2=8 windows;
@@ -137,6 +138,8 @@ def check_uvs(result: dict) -> None:
     """Check actual box projection on wall faces at supplied metre scale."""
     checked = 0
     for part in result["parts"]:
+        if part["tag"] == "facade_module":
+            continue
         if part["tag"] != "wall":
             continue
         for face, uvs in zip(part["faces"], part["uvs"]):

@@ -37,3 +37,20 @@ def blind_windows(level, edge, style, seed, lo, hi):
     return [dict(kind="window", blind=True, index=i, s0=max(lo, left), s1=min(hi, right),
                  y0=bottom, y1=top)
             for i, (left, right) in enumerate(blind_raster(lo, hi, dims["bay"], dims["width"]))]
+
+
+def module_bays(span, storey_m):
+    """Choose the least distorted square fields, preferring fewer on ties."""
+    if span < .75*storey_m:
+        return 0
+    lower = max(1, math.floor(span/storey_m))
+    return min((lower, lower+1), key=lambda n: (abs(span/n-storey_m), n))
+
+
+def mullions(s0, s1):
+    """Return evenly spaced centres for wide-window vertical bars."""
+    width = s1-s0
+    if width <= 1.8:
+        return []
+    fields = math.ceil(width/1.6)
+    return [s0+width*i/fields for i in range(1,fields)]

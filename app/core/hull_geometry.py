@@ -29,7 +29,10 @@ def prepare_facts(facts: Dict, style: Dict, desc: Dict, resolved: frozenset[str]
         ring = hull_mesh.offset_ring(level["outline"], level["ccw"], outer)
         for edge in level["edges"]:
             lo, hi = hull_walls._span(ring, edge, outer)
-            edge["openings"] = hull_facades.blind_windows(level, edge, style, desc.get("seed", 0), lo, hi)
+            module = (style.get("materials", {}).get("facade_module") and "facade_module" in resolved
+                      and hull_facades.module_bays(hi-lo, prepared["storey_m"]) > 0)
+            edge["openings"] = ([] if module else
+                                hull_facades.blind_windows(level, edge, style, desc.get("seed", 0), lo, hi))
     return prepared
 
 
@@ -37,7 +40,7 @@ def _build_parts(facts: Dict, style: Dict, desc: Dict, tier: str,
                  uv_sizes: Optional[Dict[str, float]], resolved: frozenset[str]) -> Tuple[List[Part], Dict]:
     """Build the dependent roof and ornament payloads in stable order."""
     roofs, roof_info = hull_roofs.build_roofs(facts, style, desc, tier=tier, uv_sizes=uv_sizes)
-    parts = hull_walls.build_walls(facts, style, desc, tier=tier, uv_sizes=uv_sizes, roof_info=roof_info)
+    parts = hull_walls.build_walls(facts, style, desc, tier=tier, uv_sizes=uv_sizes, roof_info=roof_info, resolved=resolved)
     parts.extend(roofs)
     parts.extend(hull_ornaments.build_ornaments(
         facts, style, desc, roof_info, tier=tier, uv_sizes=uv_sizes))

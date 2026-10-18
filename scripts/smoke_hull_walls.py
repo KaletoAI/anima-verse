@@ -40,6 +40,7 @@ from _hull_fixtures import (stepped_house, opening_edge_cases, count, total_open
 
 
 def main():
+    check_modern()
     check_facades()
     from app.core.hull_styles import validate_style
     from app.core.hull_mesh import PartBuilder, offset_ring, rng, bounds, tri_count
@@ -251,6 +252,157 @@ def check_facades():
                    and face_normal(p['vertices'])[1]<0 and max(v[0] for v in p['vertices'])-min(v[0] for v in p['vertices'])==10
                    for p in build_walls(regular,style,desc,tier='full'))
     print('PASS: facade raster, solid shells, blind panes, ceilings, density, ground filler')
+
+def check_modern():
+    """Hand derivations for Task 4.
+
+    7/2=3.5 differs from 3.1 by .4, beating 7/1 and 7/3;
+    2.3<.75*3.1=2.325, while 2.4 exceeds it. At span 4 and
+    pitch 3, n=1 and 2 tie at error 1, so choose 1.
+    Width 5 gives ceil(5/1.6)-1=3 centres at 5*i/4;
+    width 1.8 has none. Modern outer=.07/2+.005+.3=.34.
+    Five-metre window at s=2..7,y=.9..2.1: four .05 strips,
+    one sill x=1.95..7.05,y=.85...9,depth .34...40, and three
+    mullions x=3.25,4.5,5.75 +/- .025,depth .24...34.
+    Door gets four strips and no sill/mullions. Blind mullions
+    use depth .345...37. Module UVs cover n fields and v=0..1;
+    filler ground starts v=.15/top, without stretching the image.
+    A 1x7 rectangle has short outer spans 1+2*.34=1.68<2.325;
+    its two long edges carry modules and two short edges carry wall.
+    Upper floor is 3.08: band y=2.93..3.23,depth .34...39.
+    A lower hole y=2.9..3.08 removes band area below 3.08;
+    upper hole y=3.08..3.3 removes area above 3.08.
+    With 40 storeys there are 39*4=156 band blocks when no real
+    hole reaches a boundary; blind apertures add no subdivisions.
+    Stepped gable: shed footprint starts x=6+.04+.01=6.05;
+    flush front/back bands retain x=-.34..6.05, y=2.93..3.23,
+    z=-.39..-.34 and 8.34..8.39. Covered pieces must be absent.
+    """
+    from copy import deepcopy
+    from _hull_fixtures import gap_house
+    from app.core.hull_facades import module_bays, mullions
+    from app.core.hull_facts import hull_facts
+    from app.core.hull_geometry import prepare_facts, build_hull
+    from app.core.hull_styles import validate_style
+    from app.core.hull_walls import build_walls, _span
+    from app.core.hull_mesh import bounds, offset_ring
+    assert [module_bays(s,3.1) for s in (7,2.3,2.4)] == [2,0,1]
+    assert module_bays(4,3)==1
+    assert mullions(0,5)==[1.25,2.5,3.75]
+    assert mullions(0,1.5)==mullions(0,1.8)==[]
+    style=validate_style(json.loads(Path('shared/building_styles/modern.json').read_text()),'modern')
+    desc=dict(seed=7,overrides=dict(ornament_density=1))
+    resolved=frozenset({'facade_module'})
+    raw=hull_facts(gap_house())
+    for tier in ('full','low'):
+        facts=prepare_facts(raw,style,desc,resolved)
+        for level in facts['levels']:
+            isolated=build_walls(dict(facts,levels=[level]),style,desc,tier=tier,resolved=resolved,
+                                 uv_sizes={'facade_module':99})
+            modules=[p for p in isolated if p['tag']=='facade_module']
+            assert len(modules)==(4 if level['filler'] else 0)
+            if not level['filler']:
+                continue
+            assert not any(e['openings'] for e in level['edges'])
+            assert not any(p['material']=='blind' or p['tag']=='frame' for p in isolated)
+            for edge,part in zip(level['edges'],modules):
+                lo,hi=_span(offset_ring(level['outline'],level['ccw'],.34),edge,.34)
+                assert part['material']=='facade_module' and len(part['faces'])==1
+                assert sorted(part['uvs'][0])==sorted([[0,0],[module_bays(hi-lo,3.1),0],
+                                                       [module_bays(hi-lo,3.1),1],[0,1]])
+        fallback=prepare_facts(raw,style,desc,frozenset())
+        assert any(p['material']=='blind' for p in build_walls(fallback,style,desc,tier=tier))
+    ground_raw=deepcopy(raw)
+    ground_raw['levels']=ground_raw['levels'][1:2]
+    ground=ground_raw['levels'][0]
+    ground.update(level=0,floor_y=0,filler=True)
+    ground=prepare_facts(ground_raw,style,desc,resolved)
+    modules=[p for p in build_walls(ground,style,desc,tier='low',resolved=resolved) if p['tag']=='facade_module']
+    assert len(modules)==4
+    for p in modules:
+        assert min(v[1] for v in p['vertices'])==.15
+        assert math.isclose(min(uv[1] for uv in p['uvs'][0]),.15/ground['levels'][0]['top_y'])
+    acute=polygon_case_facts([[0,0],[4,0],[.01,.01]])
+    acute['storey_m']=3.1
+    acute['levels'][0]['filler']=True
+    acute=prepare_facts(acute,style,desc,resolved)
+    parts=build_walls(acute,style,desc,tier='low',resolved=resolved)
+    assert any(p['tag']=='wall' for p in parts)
+    assert len([p for p in parts if p['tag']=='facade_module'])==2
+    narrow=polygon_case_facts([[0,0],[1,0],[1,7],[0,7]])
+    narrow['storey_m']=3.1
+    narrow['levels'][0]['filler']=True
+    narrow=prepare_facts(narrow,style,desc,resolved)
+    parts=build_walls(narrow,style,desc,tier='low',resolved=resolved)
+    assert count(parts,tag='facade_module')==2 and count(parts,tag='wall')==2
+    test=deepcopy(hull_facts(stepped_house()))
+    test['levels']=test['levels'][:1]
+    for edge in test['levels'][0]['edges']:
+        edge['openings']=[]
+    edge=test['levels'][0]['edges'][0]
+    edge['openings']=[dict(kind='window',s0=2,s1=7,y0=.9,y1=2.1)]
+    parts=build_walls(test,style,desc,tier='full')
+    frames=[bounds([p]) for p in parts if p['tag']=='frame']
+    assert len(frames)==8, frames
+    for box in ({'min':[1.95,.9,-.37],'max':[2,2.1,-.34]},
+                {'min':[7,.9,-.37],'max':[7.05,2.1,-.34]},
+                {'min':[1.95,2.1,-.37],'max':[7.05,2.15,-.34]},
+                {'min':[1.95,.85,-.37],'max':[7.05,.9,-.34]}):
+        assert box in frames
+    assert {'min':[1.95,.85,-.4],'max':[7.05,.9,-.34]} in frames
+    for x in (3.25,4.5,5.75):
+        assert {'min':[x-.025,.9,-.34],'max':[x+.025,2.1,-.24]} in frames
+    edge['openings'][0]['kind']='door'
+    assert count(build_walls(test,style,desc,tier='full'),tag='frame')==4
+    edge['openings'][0].update(kind='window',blind=True)
+    frames=[bounds([p]) for p in build_walls(test,style,desc,tier='full') if p['tag']=='frame']
+    for x in (3.25,4.5,5.75):
+        assert {'min':[x-.025,.9,-.37],'max':[x+.025,2.1,-.345]} in frames
+    tall_desc=dict(seed=7,overrides=dict(storeys_total=40,ornament_density=0))
+    tall=prepare_facts(raw,style,tall_desc,frozenset())
+    bands=[p for p in build_walls(tall,style,tall_desc,tier='full') if p['tag']=='band']
+    assert len(bands)==156, len(bands)
+    stepped=hull_facts(stepped_house())
+    stepped['levels'][1]['outline']=deepcopy(stepped['levels'][0]['outline'])
+    stepped['levels'][1]['edges']=deepcopy(stepped['levels'][0]['edges'])
+    for edge in stepped['levels'][1]['edges']:
+        edge['openings']=[]
+    stepped['levels'][0]['edges'][0]['openings']=[dict(kind='window',s0=1,s1=2,y0=2.9,y1=3.08)]
+    stepped['levels'][1]['edges'][0]['openings']=[dict(kind='window',s0=3,s1=4,y0=3.08,y1=3.3)]
+    bands=[p for p in build_walls(stepped,style,desc,tier='full') if p['tag']=='band'
+           and all(-.391<=v[2]<=-.339 for v in p['vertices'])]
+    assert bands
+    for p in bands:
+        box=bounds([p])
+        assert not (box['min'][0]<2 and box['max'][0]>1 and box['min'][1]<3.08)
+        assert not (box['min'][0]<4 and box['max'][0]>3 and box['max'][1]>3.08)
+    # A differently directed endpoint must not contribute lower holes.
+    stepped['levels'][0]['edges'][0]['b']=[9,0]
+    unmatched=[p for p in build_walls(stepped,style,desc,tier='full') if p['tag']=='band'
+               and all(-.391<=v[2]<=-.339 for v in p['vertices'])]
+    assert any(bounds([p])['min'][0]<2 and bounds([p])['max'][0]>1
+               and bounds([p])['min'][1]==2.93 for p in unmatched)
+    module_hull=build_hull(raw,style,desc,tier='full',resolved=resolved)
+    assert all(c==1 for p in module_hull['parts'] if p['tag']=='facade_module'
+               for colors in p['colors'] for c in colors)
+    result=build_hull(hull_facts(stepped_house()),style,
+                      dict(seed=7,overrides=dict(roof_form='gable',pitch_deg=45)),tier='full')
+    for front in (-.39,8.39):
+        spans=[]
+        for p in result['parts']:
+            if p['tag']!='band' or p.get('detail_level')!=1:
+                continue
+            box=bounds([p])
+            if not any(abs(v[2]-front)<1e-4 for v in p['vertices']):
+                continue
+            if box['max'][2]-box['min'][2]>.051:
+                continue
+            assert math.isclose(box['min'][1],2.93,abs_tol=1e-4)
+            assert math.isclose(box['max'][1],3.23,abs_tol=1e-4)
+            spans.append((box['min'][0],box['max'][0]))
+        assert spans and min(a for a,b in spans)==-.34 and max(b for a,b in spans)==6.05, spans
+    print('PASS: Modern module UVs, fallback, metal frames, sills, mullions, bands, lean-to clipping')
+
 
 if __name__ == '__main__':
     from app.core import paths
