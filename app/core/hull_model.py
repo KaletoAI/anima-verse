@@ -235,6 +235,8 @@ def hull_status(location_id: str) -> Dict[str, Any]:
     built = hull.get("fingerprint", "")
     current = facts.get("fingerprint", "")
     return {"ok": facts["ok"], "error": facts.get("error", ""),
+            "storeys_plan": len(facts["levels"]) if facts["ok"] else 0,
+            "filler_levels": sum(bool(level.get("filler")) for level in facts["levels"]) if facts["ok"] else 0,
             "has_hull": bool(gallery and any(read_sidecar(file).get("plan_hull") for file in gallery.files())),
             "active": active, "stale": active and built != current,
             "built_fingerprint": built, "current_fingerprint": current,

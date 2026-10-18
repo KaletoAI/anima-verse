@@ -3,7 +3,8 @@
 The fixture spans 10 x 8 metres, with floors at 0 and 3 m. Placement must
 preserve scale 1, XZ box centre and minimum Y. Two tiers mean two distinct
 files and two pinned selections. A moved window changes geometry; a prop
-cannot change the facade fingerprint. Every material object has exactly one
+cannot change the facade fingerprint. The two default styles are fachwerk
+and modern; Modern jobs include both blind and facade_module slots. Every material object has exactly one
 primitive, with UV and colour corner attributes and measured cutout padding.
 Usage: ./.venv/bin/python scripts/smoke_hull_model.py [--out DIR]
 """
@@ -123,11 +124,13 @@ def main() -> None:
         else:
             if args.out:
                 args.out.mkdir(parents=True, exist_ok=True)
-            for style_id in (hull_styles.load_styles() if args.out else ["fachwerk"]):
+            for style_id in (hull_styles.load_styles() if args.out else ("fachwerk", "modern")):
                 with patch.object(hull_model, "_timeout_s", return_value=600):
                     result = hull_model.generate_hull(loc_id, {"style": style_id, "seed": 4})
                 assert result["ok"], result
                 expected_job = hull_model.build_job(loc_id, {"style": style_id, "seed": 4}, tex_dir=root / "verify")
+                if style_id == 'modern':
+                    assert {'blind','facade_module'} <= {m['name'] for m in expected_job['materials']}
                 boxes = []
                 for tier in ("full", "low"):
                     file = location_model3d.find_building_model(loc_id, tier=tier)

@@ -10,7 +10,7 @@ type RoofForm = 'gable' | 'hip' | 'shed' | 'flat'
 interface HullDescription {
   style: string
   seed: number
-  overrides: { roof_form?: RoofForm; pitch_deg?: number; ornament_density: number; tint?: string }
+  overrides: { storeys_total?: number; roof_form?: RoofForm; pitch_deg?: number; ornament_density: number; tint?: string }
 }
 interface HullStatus {
   ok: boolean
@@ -20,6 +20,8 @@ interface HullStatus {
   stale: boolean
   pending: boolean
   description: HullDescription | null
+  storeys_plan: number
+  filler_levels: number
   styles: HullStyle[]
 }
 
@@ -61,6 +63,8 @@ function HullForm({ apiBase, pending, onStarted }: {
   const locked = busy || pending || !!status?.pending
   const selected = status?.styles.find((style) => style.id === desc?.style)
   const overrides = desc?.overrides
+  const facadeStoreys = (status?.filler_levels ?? 0)
+    + Math.max(0, (overrides?.storeys_total ?? 0) - (status?.storeys_plan ?? 0))
   const patch = (part: Partial<HullDescription['overrides']>) =>
     setDesc((current) => current ? { ...current, overrides: { ...current.overrides, ...part } } : current)
 
@@ -117,6 +121,21 @@ function HullForm({ apiBase, pending, onStarted }: {
           <button className="ga-btn ga-btn-sm" aria-label={t('Random seed')}
             onClick={() => setDesc({ ...desc, seed: Math.floor(Math.random() * 2147483647) })}>🎲</button>
         </SliderInput>
+        <label>{t('Storeys total')}{' '}<input className="ga-input" type="number" min={0} max={40} step={1}
+          value={overrides.storeys_total ?? 0} onChange={(e) => {
+            const total = Math.max(0, Math.min(40, Math.trunc(Number(e.target.value) || 0)))
+            setDesc((current) => {
+              if (!current) return current
+              const next = { ...current.overrides }
+              if (total > 0) next.storeys_total = total
+              else delete next.storeys_total
+              return { ...current, overrides: next }
+            })
+          }} /></label>
+        <span className="ga-hint">0 = {t('From floor plan')}</span>
+        {facadeStoreys > 0 ? <span className="ga-hint">
+          {t('{n} facade storeys (not enterable)').replace('{n}', String(facadeStoreys))}
+        </span> : null}
         <label>{t('Form')}{' '}<select className="ga-input" value={overrides.roof_form ?? ''}
           onChange={(e) => patch({ roof_form: (e.target.value || undefined) as RoofForm | undefined })}>
           <option value="">{t('Style default')}</option>

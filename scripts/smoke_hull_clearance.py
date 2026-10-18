@@ -17,6 +17,10 @@ so drop=2.895-(2.9-.15/cos(45))+.02.
 The new low edge is 2.4-drop, above door head+.05=2.15. Raising
 the door head to 2.3 needs the same roof clearance but exceeds that floor.
 Chimney widths are .9 for wood and .6 for stone; schema maximum is 1.5.
+Modern checks cover 2 fixtures * 2 roof forms = 4 six-storey hulls,
+with density 1. Bands, frames and canopies must satisfy the same .02 m
+clearance and .005 m straddle tolerance, including the four added floors
+on stepped_house and two added floors on gap_house.
 All facade detail must clear its own roof by .02, and lower roofs by .02.
 Budget tests use measured counts only to select a threshold between two
 independently requested densities; expected fallback is exactly 1/2 or 0.
@@ -29,7 +33,7 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _hull_fixtures import stepped_house, rect_facts
+from _hull_fixtures import stepped_house, gap_house, rect_facts
 from app.core import paths
 # hull_styles reads world overrides from the world DB: redirect before import.
 _STORAGE = tempfile.TemporaryDirectory(prefix="hull-clearance-")
@@ -42,12 +46,22 @@ from app.core.hull_ornaments import build_ornaments
 def main():
     root = Path(__file__).resolve().parents[1]
     styles = {n: hull_styles.validate_style(json.loads((root/'shared/building_styles'/f'{n}.json').read_text()), n)
-              for n in ('fachwerk', 'steinhaus', 'holzhuette', 'burg')}
+              for n in ('fachwerk', 'steinhaus', 'holzhuette', 'burg', 'modern')}
     facts = hull_facts(stepped_house())
     desc = dict(style='steinhaus', seed=1, overrides=dict(ornament_density=1, pitch_deg=45, roof_form='gable'))
-    for name in ('fachwerk', 'steinhaus', 'holzhuette'):
-        desc['style'] = name
-        result = hull_geometry.build_hull(facts, styles[name], desc, tier='full')
+    cases = [(name, stepped_house, 'gable', None) for name in ('fachwerk','steinhaus','holzhuette')]
+    cases += [('modern', fixture, form, 6) for fixture in (stepped_house,gap_house)
+              for form in ('gable','shed')]
+    modern_tags = set()
+    for name, fixture, form, total in cases:
+        candidate = deepcopy(desc)
+        candidate['style'] = name
+        candidate['overrides']['roof_form'] = form
+        if total:
+            candidate['overrides']['storeys_total'] = total
+        result = hull_geometry.build_hull(hull_facts(fixture()), styles[name], candidate, tier='full')
+        if name == 'modern':
+            modern_tags.update(p['tag'] for p in result['parts'])
         for part in result['parts']:
             if 'detail_level' not in part:
                 continue
@@ -73,6 +87,7 @@ def main():
                     assert max(diffs) <= -.02+1e-4, (name,part['tag'],max(diffs))
                 elif wing['level'] < part['detail_level']:
                     assert min(diffs) >= .02-1e-4, (name,part['tag'],min(diffs))
+    assert {'band','frame','canopy'} <= modern_tags
     # Seed 7: flush walls keep the sill from x=-.59 to x=6.05.
     sill_desc=dict(style='fachwerk',seed=7,overrides=dict(ornament_density=1))
     sill_hull=hull_geometry.build_hull(facts,styles['fachwerk'],sill_desc,tier='full')

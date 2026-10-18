@@ -27,14 +27,22 @@ Reproduce from the repository root (export avoids writing .git):
     print(json.dumps(out,indent=4))
     PY
 
-Forty-storey blind-window bound: Modern outer offset .04+.30=.34 gives
-spans 30.68 and 20.68. Bay range [2.6,3.2] gives 30..36 windows per
-filler floor: 2*(9+6)..2*(11+7). Thus 39 filler floors give 1170..1404
-panes, 2340..2808 pane triangles; 40*4*2=320 shell triangles, plus
-8 ground plinth triangles. Roof/ground interior leave ample room below
-12000 low and 90000 full. Full bands add 39*4*12=1872 triangles;
-metal filler frames disappear at density 0 if needed to fit 90000.
-This check uses no resolved module. Density can only decrease from .5.
+Forty-storey bound: 30 x 20 m, one real floor and 39 facade floors.
+Full bands: one block per edge per facade floor: 39 * 4 * 12 = 1872 tris.
+Seed 7 draws bay 3.1248159131755635 m; outer offset .04+.30=.34 gives
+spans 30.68 and 20.68: floor(30.68/bay)=9, floor(20.68/bay)=6,
+so 2*(9+6)=30 blind windows/storey, or 39*30=1170 windows total.
+Drawn width 1.7413807505613947 <= 1.8 means no mullions. Per window,
+two jamb blocks plus three horizontal members (top, bottom, sill), each
+split into three blocks at the aperture sides: (2+3*3)*12=132 tris.
+Thus metal frames/sills/mullions at density .5 cost 39*30*132=154440
+tris; with bands, 156312 > 90000 before shell, panes and roof.
+Density .25 also fails: filler frames are dropped only at density <= 0,
+so only density 0 fits. Low omits frames and bands; 1170*2=2340 pane
+tris plus shell/roof stay below 12000. Resolved facade_module quads
+replace the windows and frames, keeping density .5.
+The bay range [2.6,3.2] independently bounds panes at 30..36 per facade
+floor, hence 1170..1404 across 39 floors (the existing assertion bound).
 
 Hand derivation: L corners (0,0),(20,0),(20,6),(8,6),(8,14),(0,14)
 span 20 by 14 m. Each of three floors has 3+2+1+2=8 windows;
@@ -201,13 +209,19 @@ def check_forty_storeys():
     style = validate_style(json.loads(Path('shared/building_styles/modern.json').read_text()),'modern')
     desc = description('modern',7)
     desc['overrides']['storeys_total'] = 40
-    fitted = fit_budget(facts,style,desc)
-    assert fitted['overrides']['ornament_density'] <= .5
-    for tier in ('full','low'):
-        result = build_hull(facts,style,fitted,tier=tier)
-        assert 1170 <= sum(p['material']=='blind' for p in result['parts']) <= 1404
-        assert result['tris'] <= TRI_BUDGET[tier]
-        print(f"PASS: 40 storeys {tier}={result['tris']} density={fitted['overrides']['ornament_density']}")
+    for resolved, density in ((frozenset(), 0), (frozenset({'facade_module'}), .5)):
+        fitted = fit_budget(facts,style,desc,resolved=resolved)
+        assert fitted['overrides']['ornament_density'] == density
+        for tier in ('full','low'):
+            result = build_hull(facts,style,fitted,tier=tier,resolved=resolved)
+            if not resolved:
+                assert 1170 <= sum(p['material']=='blind' for p in result['parts']) <= 1404
+            else:
+                assert any(p['tag']=='facade_module' for p in result['parts'])
+            assert result['tris'] <= TRI_BUDGET[tier]
+            check_uvs(build_hull(facts,style,fitted,tier=tier,resolved=resolved,
+                                 uv_sizes={'wall':2.5,'wall_ground':2.5}))
+            print(f"PASS: 40 storeys {tier}={result['tris']} density={density} resolved={sorted(resolved)}")
     assert facts == original and desc['overrides']['ornament_density'] == .5
 
 def main() -> None:

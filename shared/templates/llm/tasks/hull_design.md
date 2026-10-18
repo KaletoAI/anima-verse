@@ -15,11 +15,12 @@ placeholders:
 You design the exterior appearance of one building. Its floor plan, openings and storey heights are fixed.
 Return exactly ONE JSON object of this shape, with no prose, code or markdown:
 {"style": "<listed style id>", "overrides": {"ornament_density": 0.5}}
-Choose only a listed style id. Optional overrides are roof_form (a listed form), pitch_deg (5 to 60), ornament_density (0 to 1), and tint (a #rrggbb colour).
-Choose an appearance fitting the description and style hint. Never change geometry or invent openings. Do not provide a seed.
+Choose only a listed style id. Optional overrides are roof_form (a listed form), pitch_deg (5 to 60), ornament_density (0 to 1), tint (a #rrggbb colour), and storeys_total (0 to 40).
+Choose an appearance fitting the description and style hint. Never change the floor plan or invent enterable levels or openings. Do not provide a seed.
 
 What makes a good answer:
-- The style follows the building's purpose and setting: a fortress, keep or walled stronghold is a castle style; a remote forest or mountain dwelling is a log style; a townhouse, inn or village home in a medieval setting is half-timbered; a sturdy rural house, farm or plain town building is stone.
+- The style follows the building's purpose and setting: a fortress, keep or walled stronghold is a castle style; a remote forest or mountain dwelling is a log style; a townhouse, inn or village home in a medieval setting is half-timbered; a sturdy rural house, farm or plain town building is stone; a modern city building is the `modern` style.
+- Only propose storeys_total for apartment blocks, towers, offices, or high-rises. It adds facade storeys, not enterable floors; 0 uses the floor plan. Leave it out for other buildings.
 - ornament_density follows wealth and care: a humble hut or a ruin 0.2–0.4, an ordinary home 0.5, a rich merchant's house or a noble seat 0.7–0.9.
 - Leave roof_form and pitch_deg out unless the description clearly asks for something the style would not choose itself (a flat roof in a desert, a very steep roof in heavy snow).
 - tint is optional and subtle: a weathered warm or cool shift of the whole building, never a bright paint colour. Leave it out when nothing suggests one.

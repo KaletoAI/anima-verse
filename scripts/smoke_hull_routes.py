@@ -1,7 +1,10 @@
 """Hull HTTP contract and one-call proposal, without a running server.
 
 The fixture has two levels and a 10 by 8 metre ground outline: prompt facts
-must therefore be 2 storeys, length 10, depth 8. Unknown styles are 400,
+must therefore be 2 storeys, 0 fillers, length 10, depth 8.
+Gap levels 0 and 3 imply 4 plan storeys and 2 fillers; no outline gives
+0/0. A requested 41 storeys exceeds the limit by 1 and is stored as 40.
+Modern jobs carry blind and facade_module material slots. Unknown styles are 400,
 oversize hulls 400, missing records 404, missing outlines and busy jobs 409, absent Blender 503.
 Usage: ./.venv/bin/python scripts/smoke_hull_routes.py
 """
@@ -27,7 +30,7 @@ def main() -> None:
         from fastapi.testclient import TestClient
         from app.core import hull_model, hull_styles, users
         from app.models.world import upsert_location
-        from _hull_fixtures import stepped_house, without_outline
+        from _hull_fixtures import stepped_house, gap_house, without_outline
 
         users.create_user("hull-admin", "smoke-password", role="admin")
         users.create_user("hull-player", "smoke-password", role="user")
@@ -42,7 +45,24 @@ def main() -> None:
         empty["id"] = "no-outline"
         assert upsert_location(empty, sync_world=False)
         base = f"/world/locations/{location['id']}/hull"
-        assert client.get(base).json()["styles"]
+        status = client.get(base).json()
+        assert status['styles']
+        assert (status['storeys_plan'], status['filler_levels']) == (2, 0)
+        gap = gap_house()
+        gap['name'] = 'Gap house'
+        assert upsert_location(gap, sync_world=False)
+        status = client.get(f"/world/locations/{gap['id']}/hull").json()
+        assert (status['storeys_plan'], status['filler_levels']) == (4, 2)
+        status = client.get('/world/locations/no-outline/hull').json()
+        assert (status['storeys_plan'], status['filler_levels']) == (0, 0)
+        job = hull_model.build_job(location['id'], {'style':'modern', 'overrides':{'storeys_total':41}})
+        assert job['description']['overrides']['storeys_total'] == 40
+        assert {'blind','facade_module'} <= {m['name'] for m in job['materials']}
+        from app.core import location_model3d
+        location_model3d.save_hull_model(location['id'], b'glTF', b'glTF',
+            placement_full=job['placement']['full'], placement_low=job['placement']['low'],
+            description=job['description'], fingerprint=job['fingerprint'], style_id='modern')
+        assert client.get(base).json()['description']['overrides']['storeys_total'] == 40
         assert client.get("/world/locations/missing/hull").status_code == 404
         assert client.get("/world/locations/no-outline/hull").json()["error"] == "no_outline"
         assert player.get(base).status_code == 200
