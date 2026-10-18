@@ -30,8 +30,16 @@ MAX_ATTEMPTS = 2              # a defect gets one retry, then the step is skippe
 BUSY_DEFER_S = 300            # a step that came back busy sits out this long
 
 # Improvement ids whose next step ignores the idle rule exactly once — the
-# admin's "run now" button. In-memory on purpose: a restart forgets it.
+# admin's "run now" button when another step was still in flight and the click
+# could not submit at once (``run_now``). In-memory on purpose: a restart
+# forgets it.
 _run_now: Set[str] = set()
+
+#: The gates an explicit "run now" overrides: it is the admin asking for this
+#: entry, so neither the idle window nor the engine switch nor a world freeze
+#: (which stops autonomous work, not on-demand work) holds it back. The media
+#: switch and an in-flight step do.
+RUN_NOW_OVERRIDES = ("active", "disabled", "frozen")
 
 # Steps that came back BUSY (BackendBusyError / CandidateBusy), keyed
 # (improvement_id, candidate_key) -> SYSTEM time until which ``tick`` passes
@@ -162,6 +170,58 @@ def request_run_now(improvement_id: str) -> None:
     _run_now.add(improvement_id)
 
 
+def run_now(improvement_id: str) -> Dict[str, Any]:
+    """The admin's "Run now": submit this entry's next pending step NOW,
+    whatever the idle window, the engine switch or a world freeze say.
+
+    Only the media switch stops it, and an improvement step already in flight
+    makes it wait: the flag is armed and the next tick submits the step as
+    soon as that one is done (one step at a time is the engine's rule).
+    Reasons: ``started`` | ``queued`` | ``media_off`` | ``paused`` | ``done`` |
+    ``empty``."""
+    improvement = store.get(improvement_id)
+    if improvement is None:
+        return {"ok": False, "reason": "gone"}
+    if improvement["status"] != "open":
+        return {"ok": False, "reason": improvement["status"]}
+    if not media_generation_enabled():
+        return {"ok": False, "reason": "media_off"}
+    row = next((r for r in ordered_queue()
+                if r["improvement_id"] == improvement_id
+                and r["status"] == "pending"), None)
+    if row is None:
+        return {"ok": False, "reason": "empty"}
+    if get_task_queue().has_pending_task(TASK_TYPE):
+        _run_now.add(improvement_id)
+        return {"ok": True, "reason": "queued"}
+    _run_now.discard(improvement_id)
+    _undefer(improvement_id, row["candidate_key"])
+    task_id = _submit(row)
+    if not task_id:
+        return {"ok": False, "reason": "dedup"}
+    return {"ok": True, "reason": "started", "task_id": task_id}
+
+
+def _submit(row: Dict[str, Any]) -> str:
+    """Mark the step running and hand it to the TaskQueue; "" when the queue
+    deduplicated it (the step is given back as pending)."""
+    # Mark FIRST, submit second. A worker can pick the task up — and even
+    # finish it — before ``submit`` has returned here; a mark_running after
+    # that would overwrite the handler's 'done' back to 'running'.
+    store.mark_running(row["improvement_id"], row["candidate_key"])
+    task_id = get_task_queue().submit(
+        TASK_TYPE,
+        {"improvement_id": row["improvement_id"],
+         "candidate_key": row["candidate_key"]},
+        queue_name=QUEUE_NAME, priority=STEP_PRIORITY, max_retries=0,
+        deduplicate=True)
+    if not task_id:
+        # Deduplicated: nothing is owed after all, so give the step back.
+        store.mark_result(row["improvement_id"], row["candidate_key"],
+                          status="pending", count_attempt=False)
+    return task_id or ""
+
+
 # ---------------------------------------------------------------------------
 # The tick
 # ---------------------------------------------------------------------------
@@ -197,7 +257,11 @@ def tick() -> Dict[str, Any]:
 
     # 3. One step.
     allowed, reason = submit_allowed()
-    if not allowed and not (reason == "active" and _run_now):
+    # A run-now flag passes the gates it overrides — but never an in-flight
+    # step, which ``submit_allowed`` does not reach when an earlier gate failed.
+    override = (not allowed and reason in RUN_NOW_OVERRIDES and bool(_run_now)
+                and not task_queue.has_pending_task(TASK_TYPE))
+    if not allowed and not override:
         return {"scanned": scanned, "submitted": "", "reason": reason}
 
     now = utc_now()
@@ -205,7 +269,7 @@ def tick() -> Dict[str, Any]:
     for row in ordered_queue():
         if row["status"] != "pending":
             continue
-        if reason == "active" and row["improvement_id"] not in _run_now:
+        if override and row["improvement_id"] not in _run_now:
             continue
         # A step that just came back busy waits out BUSY_DEFER_S so the steps
         # behind it get their turn. The admin's run-now is an explicit "try
@@ -216,20 +280,8 @@ def tick() -> Dict[str, Any]:
             continue
         _run_now.discard(row["improvement_id"])
         _undefer(row["improvement_id"], row["candidate_key"])
-        # Mark FIRST, submit second. A worker can pick the task up — and even
-        # finish it — before ``submit`` has returned here; a mark_running after
-        # that would overwrite the handler's 'done' back to 'running'.
-        store.mark_running(row["improvement_id"], row["candidate_key"])
-        task_id = task_queue.submit(
-            TASK_TYPE,
-            {"improvement_id": row["improvement_id"],
-             "candidate_key": row["candidate_key"]},
-            queue_name=QUEUE_NAME, priority=STEP_PRIORITY, max_retries=0,
-            deduplicate=True)
+        task_id = _submit(row)
         if not task_id:
-            # Deduplicated: nothing is owed after all, so give the step back.
-            store.mark_result(row["improvement_id"], row["candidate_key"],
-                              status="pending", count_attempt=False)
             return {"scanned": scanned, "submitted": "", "reason": "dedup"}
         return {"scanned": scanned, "submitted": task_id, "reason": "ok"}
 

@@ -2662,6 +2662,11 @@
     "Current mesh only": "Nur aktuelles Mesh",
     "Nothing to do — the entry was removed": "Nichts zu tun — der Eintrag wurde entfernt",
     "Remove finished": "Abgeschlossene entfernen",
-    "All finished entries and their steps are removed.": "Alle abgeschlossenen Einträge und ihre Schritte werden entfernt."
+    "All finished entries and their steps are removed.": "Alle abgeschlossenen Einträge und ihre Schritte werden entfernt.",
+    "Step started": "Schritt gestartet",
+    "Runs right after the step in progress": "Läuft direkt nach dem laufenden Schritt",
+    "Media generation is switched off": "Mediengenerierung ist ausgeschaltet",
+    "The entry is paused — resume it first": "Der Eintrag ist pausiert — erst fortsetzen",
+    "Nothing to run": "Nichts auszuführen"
   }
 }

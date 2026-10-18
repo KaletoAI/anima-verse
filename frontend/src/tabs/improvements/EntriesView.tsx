@@ -26,6 +26,14 @@ import { STEP_STATUS_LABELS } from './types'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import type { Improvement, ImprovementType } from './types'
 
+/** What "Run now" did, by the server's reason (`engine.run_now`). */
+const RUN_NOW_MESSAGES: Record<string, string> = {
+  started: 'Step started',
+  queued: 'Runs right after the step in progress',
+  media_off: 'Media generation is switched off',
+  paused: 'The entry is paused — resume it first',
+}
+
 /** The ENTRY statuses (not the step ones) — 'open' is a state, not a verb. */
 const ENTRY_STATUS_LABELS: Record<string, string> = {
   open: 'Open',
@@ -224,7 +232,11 @@ export function EntriesView() {
                 </button>
                 <button type="button" className="ga-btn ga-btn-sm"
                   disabled={busyId === entry.id}
-                  onClick={() => act(entry.id, () => runNow(entry.id))}>
+                  onClick={() => act(entry.id, async () => {
+                    const r = await runNow(entry.id)
+                    toast(t(RUN_NOW_MESSAGES[r.reason] || 'Nothing to run'),
+                      r.ok ? undefined : 'error')
+                  })}>
                   {t('Run now')}
                 </button>
                 <button type="button" className="ga-btn ga-btn-sm"

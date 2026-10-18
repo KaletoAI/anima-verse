@@ -805,6 +805,28 @@ check("run-now overrides the deferral",
       (True, {"improvement_id": H, "candidate_key": "ka"}))
 worker_done(result["submitted"])
 
+# A run-now flag also passes the engine switch — but never a step in flight.
+# R owes one step "ra"; H leaves the queue view (paused) so R's is the only one.
+store.update(H, status="paused")
+drop_step_tasks()
+R = store.create("fake", "R", {}, "one_shot")["id"]
+store.replace_steps_scan(R, [("ra", "Ra")])
+store.set_settings(False, 15)
+engine.get_task_queue().submit(engine.TASK_TYPE, {"improvement_id": "other",
+                                                  "candidate_key": "x"},
+                               queue_name=engine.QUEUE_NAME, deduplicate=False)
+engine.request_run_now(R)
+result = engine.tick()
+check("an in-flight step holds the flag back, engine off or not",
+      (result["submitted"], R in engine._run_now), ("", True))
+drop_step_tasks()
+result = engine.tick()
+check("with nothing in flight the flag passes the engine switch",
+      (result["submitted"] != "", step_tasks()[-1]["payload"]),
+      (True, {"improvement_id": R, "candidate_key": "ra"}))
+worker_done(result["submitted"])
+store.set_settings(True, 15)
+
 # Tick sweeps exactly clean finished one-shots, retaining failed ones.
 legacy = store.create("fake", "Legacy", {}, "one_shot")["id"]
 store.update(legacy, status="done")

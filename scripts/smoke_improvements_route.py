@@ -43,8 +43,9 @@ recorded from a run.  A mini FastAPI app carries only this router, and
      'paused'), ``resume`` puts it back ('open').  Paused, B contributes
      nothing to the queue, so only A's rows remain.
 
-  8. ``POST /{id}/rescan`` reports the diff, ``POST /{id}/run-now`` sets the
-     override flag the next tick reads (``engine._run_now``), and
+  8. ``POST /{id}/rescan`` reports the diff, ``POST /{id}/run-now`` submits
+     the entry's first pending step at once even with the engine off, and only
+     arms the next tick's flag (``engine._run_now``) while a step is in flight;
      ``POST /{id}/steps/{key}/retry`` un-skips a step: pending with attempts 0.
 
   9. ``GET /improvements/status`` is the panel head: the settings, the gate
@@ -311,10 +312,28 @@ check("rescan reports the diff",
       client.post(f"/improvements/{A}/rescan").json(),
       {"added": 1, "closed": 0})
 engine._run_now.clear()
-check("run-now arms the next tick",
-      (client.post(f"/improvements/{A}/run-now").status_code,
-       sorted(engine._run_now)), (200, [A]))
+# The engine is still OFF here (section 9 reads the default) and nothing is in
+# flight: run-now submits at once instead of waiting for a tick. A's pending
+# steps are k1 "Zeta" and k3 "Beta"; the label order puts k3 first.
+r = client.post(f"/improvements/{A}/run-now")
+check("run-now starts a step past the engine switch",
+      (r.status_code, r.json()["reason"], len(task_rows())), (200, "started", 1))
+check("…the entry's first step by label",
+      {s["candidate_key"]: s["status"]
+       for s in client.get(f"/improvements/{A}/steps").json()
+       if s["status"] != "done"}, {"k1": "pending", "k3": "running"})
+# With that step in flight a second click only arms the flag for the tick.
+r = client.post(f"/improvements/{A}/run-now")
+check("…a second click waits behind it",
+      (r.json()["reason"], sorted(engine._run_now), len(task_rows())),
+      ("queued", [A], 1))
 engine._run_now.clear()
+# Undo, so the later sections see the state they were written against.
+conn = sqlite3.connect(QUEUE_DB)
+conn.execute("DELETE FROM tasks WHERE task_type=?", (engine.TASK_TYPE,))
+conn.commit()
+conn.close()
+store.mark_result(A, "k3", status="pending", count_attempt=False)
 store.mark_result(A, "k3", status="skipped", error="boom", count_attempt=True)
 r = client.post(f"/improvements/{A}/steps/k3/retry")
 check("retry un-skips the step", r.status_code, 200)

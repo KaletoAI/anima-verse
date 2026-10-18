@@ -45,7 +45,8 @@ export function resumeImprovement(id: string): Promise<Improvement> {
   return apiPost<Improvement>(`/improvements/${encodeURIComponent(id)}/resume`, {})
 }
 
-export function runNow(id: string): Promise<unknown> {
+/** `reason`: started | queued | media_off | paused | done | empty | dedup | gone */
+export function runNow(id: string): Promise<{ ok: boolean; reason: string }> {
   return apiPost(`/improvements/${encodeURIComponent(id)}/run-now`, {})
 }
 
