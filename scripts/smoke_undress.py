@@ -89,6 +89,9 @@ os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="undress-clips-")
 
 from app.core import paths  # noqa: E402
 paths.init(STORAGE)
+# Packages are activated explicitly per world (ba172904): without this the
+# throwaway world loads no package and neither verb exists.
+(STORAGE / "config.json").write_text('{"packages": {"enabled": "undress"}}')
 from app.core import config, db  # noqa: E402
 config.load(STORAGE / "config.json")
 db.init_schema()
