@@ -30,9 +30,29 @@
  */
 import type { ModelTier } from '@anima/scene-render';
 
+/** Movement synchronization counters for this page lifetime. */
+export interface SyncCounters {
+  /** Executed position corrections from world maps, including held snaps. */
+  posCorr: number;
+  /** Refused position reports (HTTP 409). */
+  pos409: number;
+  /** Hard backward traveller snaps. */
+  travBack: number;
+  /** Hard forward traveller snaps. */
+  travFwd: number;
+  /** Largest absolute traveller error in metres. */
+  travErrMaxM: number;
+  /** Traveller arrival snaps. */
+  arrive: number;
+  /** Placement snaps. */
+  place: number;
+}
+
 /** One complete readout — what the overlay shows, filled by the caller from
  *  the three sources above. */
 export interface PerfStats {
+  /** Movement synchronization readout. */
+  sync: SyncCounters;
   /** frames per second, smoothed over the last second (`pushFrame`) */
   fps: number;
   /** Largest raw frame interval since the overlay was enabled/reset. */

@@ -1059,7 +1059,7 @@ Minimap-Maßstab), muss das abfangen.
 
 Die Feldnamen des Charakter-Eintrags sind unverändert; neu ist **`pos`**
 (E1), und **`travel`** hat mit E3 eine andere INNERE Form bekommen (§ A11).
-Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
+Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `pos_origin`, `height_cm`,
 `room_id`, `activity`, `activity_animation`, `animation_set`,
 `animation_sets`, `mood`, `movement_target_id`, `movement_target_name`,
 `travel`, `interaction` (§ A8a), `place` (§ A8a), `avatar_url`,
@@ -1071,6 +1071,7 @@ Die Reihenfolge lautet `name`, `location_id`, **`pos`**, `height_cm`,
 | `model_rev` | `str` | Revision of the served model and its sidecar, or empty when no model exists. A changed revision invalidates the character model even when its outfit signature stays the same, including after re-rigging. |
 | `motion` | `object` | Resolved per-character secondary-motion configuration: groups, attribute profiles and extension declarations used by the shared renderer. |
 | `pos` | `{"x": float, "z": float} \| null` | Freier Meterpunkt. **Die Wahrheit**; `location_id` wird daraus abgeleitet (Punkt im Fußabdruck). Gilt auch IN einem Raum (s. u.). `null` = der Charakter hat keinen Punkt (nie gesetzt, oder seine Location ist selbst unplatziert) — erst dann fällt ein Client auf den Location-Mittelpunkt zurück |
+| `pos_origin` | `{session: str, seq: int} \| null` | Origin of the accepted position report, only on the avatar row; null for every other writer and every other character. Always present. |
 | `travel` | `{…} \| null` | Laufende Reise als **Meter-Polyline** (`target_id`, `waypoints`, `progress_m`, `total_m`, `eta_game`, `eta_hhmm`, `eta_label`, `starts_in_s`, `speed_m_s_real`, `pace_m_s_real`) — Felder und Formeln in **§ A11**. `null` = keine Reise. Solange der Block MIT `waypoints` da ist, kommt die Render-Position aus ihm, nicht aus `pos` (das nur im Ticker-Takt nachgeführt wird); ohne `waypoints` (Fog, § A11 — dort sind auch alle Zahlen des Blocks `null`) bleibt `pos` die Position |
 
 - **`pos` gilt auch IN einem Raum** (2026-09-13, T4). Der Server hat den Punkt
@@ -4012,38 +4013,57 @@ nicht mehr pro Kante um Erlaubnis, sondern **beurteilt einen gemeldeten
 Punkt**. `POST /world/avatar/step` ist mit E3 gelöscht und hat hier keinen
 Nachfolger pro Richtung.
 
-**Request** `{"x": <Meter>, "z": <Meter>, "seq": <Zähler>, "t_ms": <ms>}` ·
+**Request** `{"x": <metres>, "z": <metres>, "seq": <number>, "t_ms": <ms>, "session": <token>}` ·
 **Antwort** `{ok: true, pos: {x, z}, location_id, room_id}`.
 
 **Meldefrequenz:** ~3/s während der Bewegung plus einmal beim Anhalten.
 Server-Drossel ~4/s.
 
-**`seq` + `t_ms` — das Reihenfolge-Paar (2026-08-23, optional).** `seq` ist
-ein Zähler, den der Client pro Meldung SEINER Sitzung hochzählt, `t_ms` seine
-eigene Dauer-Uhr (`performance.now()`) im Moment der Messung. Beide existieren
-für EINEN Fehlerfall: eine **blockierte Event-Loop**. Der Client hat pro
-Meldung eine Frist (8 s), bricht danach ab und läuft weiter — der Request
-läuft auf dem Server aber weiter und wird Sekunden später doch verarbeitet.
-Ohne das Paar wird dieser Nachzügler als neuester Punkt akzeptiert, die
-Basislinie des Servers fällt hinter die Figur zurück, die nächste ehrliche
-Meldung gilt als 12-Meter-Satz „in 0,4 s" und wird abgelehnt — der Spieler
-wird beim Geradeauslaufen immer wieder zurückgerissen. Mit dem Paar gilt:
+**Report stamp: `session`, `seq`, `t_ms` (optional together).** The client
+creates a random 32-character hex token on each page load (16 bytes from
+`crypto.getRandomValues`, also available over HTTP), numbers reports from 1 within that session and records its monotonic
+`performance.now()` at send time. This identifies delayed reports even if the
+server processes them after the client's 8 s request deadline.
 
-* eine Meldung, deren `seq` **nicht neuer** ist als die der letzten
-  AKZEPTIERTEN, wird STILL verworfen (200 `{ok: false, stale: true}`) — nichts
-  wird geschrieben, **keine Korrektur** gesendet; der Client behandelt sie wie
-  `throttled` (Punkt bleibt ungemeldet und wird erneut gesendet). Die
-  Basislinie verfällt nach 10 s Serverzeit bzw. sobald die Client-Uhr mehr als
-  15 s zurückfällt, damit ein **Reload** (Zähler startet wieder bei 1) sich von
-  selbst fängt;
-* die Schrittweite (Nr. 5) misst über `t_ms − letztes t_ms` — die Zeit, die
-  wirklich beim LAUFEN verging — statt über den Abstand zweier Handler-Läufe,
-  den ein Stillstand auf null zusammendrückt. Geklemmt nach unten auf das
-  Drossel-Intervall, nach oben auf 30 s (eine Client-Uhr ist keine
-  vertrauenswürdige Uhr).
+| Field | Validation |
+|---|---|
+| `session` | String matching `^[A-Za-z0-9_-]{8,64}$` |
+| `seq` | Integer from 1 to 2^31−1; booleans and fractional numbers are rejected |
+| `t_ms` | Finite number ≥ 0; booleans are rejected |
 
-Ein Client, der die beiden Felder **nicht** schickt, wird exakt wie bisher
-beurteilt (Serverzeit als Maß, keine Reihenfolge-Prüfung).
+Omitting all three fields preserves unstamped reporting: server elapsed time,
+no ordering check, and a null position origin. Sending only some fields, an
+explicit null, or any invalid value returns 400.
+
+The server keeps the current session, its highest accepted sequence and a set
+of retired sessions per avatar, under the avatar lock. An unknown token takes
+over immediately: it retires the previous token and clears both timing
+baselines and the accepted-sequence floor. Terrain and transition gates still
+apply to the new session's first report. Retired sessions are silently dropped
+with 200 `{ok: false, stale: true}`, without writing or sending a correction.
+Within a session, `seq` ≤ the highest accepted number is always stale; ordering
+never expires. An unstamped report clears only the client timing baseline,
+not session ordering. With two tabs, the last **newly reporting** session wins;
+the other tab's reports stay stale until it reloads.
+
+These session sets live for the server process lifetime, without eviction.
+After a server restart they are empty: the first report wins initially; at
+most one subsequent takeover retires it and ends any exchange between two
+open tabs. Each page load starts its own sequence at 1 with a new token.
+
+For consecutive accepted reports of the same session, step allowance uses
+`(t_ms - previous_t_ms) / 1000`, clamped to the throttle interval below and
+30 s above. An unstamped report uses server monotonic elapsed time.
+
+**Client reconciliation (echo).** The server writes `pos_session` and `pos_seq`
+with the accepted position. Every other position writer clears both. The world
+map's avatar row contains position, origin and validated journey from one SQL
+snapshot; every other row has `pos_origin: null`. The client remembers the last
+64 sent report numbers. A position is its own echo only when the origin's
+session matches its page token and the origin number is in that ring; coordinate
+equality is irrelevant. Other positions still correct when beyond `POS_SNAP_M`.
+Polls asked before the latest correction are ignored before clearing a held
+snap. Existing seat, report-in-flight and movement locks continue to apply.
 
 **Die Gate-Kette, in genau dieser Reihenfolge** (jede Absage trägt
 `{reason, message, pos, location_id}`, wobei `pos` der LETZTE GÜLTIGE Punkt

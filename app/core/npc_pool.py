@@ -95,7 +95,7 @@ def _unplace(name: str) -> None:
         with transaction() as conn:
             conn.execute(
                 "UPDATE character_state SET current_location='', current_room='',"
-                " pos_x=NULL, pos_z=NULL WHERE character_name=?", (name,))
+                " pos_x=NULL, pos_z=NULL, pos_session=NULL, pos_seq=NULL WHERE character_name=?", (name,))
             stored_tx_1 = True
         from app.core import sync_topics
         if stored_tx_1:

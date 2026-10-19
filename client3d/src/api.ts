@@ -97,8 +97,18 @@ export function getLocations3d(): Promise<Locations3d> {
 /** The player's map. `all` asks for the UNFILTERED view (contract § A12) — it
  *  is the admin switch of the game menu and answers 403 for anybody else, so
  *  callers must only pass it for role `admin`. */
+/** Monotonic reception timestamps travel with each parsed map object. */
+export interface MapMeta { polledAt: number; headersAt: number; parsedAt: number }
+const worldMapMeta = new WeakMap<WorldMap, MapMeta>();
+export function mapMetaOf(map: WorldMap): MapMeta | undefined { return worldMapMeta.get(map); }
+
 export async function getWorldMap(all = false): Promise<WorldMap> {
-  return json(await fetch(all ? '/play/worldmap?all=1' : '/play/worldmap'));
+  const polledAt = performance.now();
+  const res = await fetch(all ? '/play/worldmap?all=1' : '/play/worldmap');
+  const headersAt = performance.now();
+  const map = await json<WorldMap>(res);
+  worldMapMeta.set(map, { polledAt, headersAt, parsedAt: performance.now() });
+  return map;
 }
 
 /** Error of a game call that carries the server's own reason. `message` is the
@@ -225,8 +235,9 @@ export async function switchCharacter(name: string): Promise<SwitchedCharacter> 
  * `signal` puts a deadline on it: reports are frequent and a request that
  * never answers must not tie the next one up.
  *
- * `seq` and `tMs` are the ORDERING PAIR (2026-08-23, § A15): `seq` counts the
- * reports of this session, `tMs` is `performance.now()` at the moment the
+ * `session`, `seq` and `tMs` form the report stamp (§ A15). The random
+ * session token identifies a page load; `seq` counts its reports and
+ * `tMs` is `performance.now()` at the moment the
  * report was taken. They exist because a request we ABORTED on the deadline
  * keeps running on a stalled server: without them that leftover is processed
  * late, becomes the server's "last valid point" and every fresh report is
@@ -234,13 +245,13 @@ export async function switchCharacter(name: string): Promise<SwitchedCharacter> 
  * them the server drops the leftover (`stale`) and measures the step against
  * the time that really passed while walking, not between two handler runs.
  */
-export async function postPos(x: number, z: number, signal?: AbortSignal,
-  seq?: number, tMs?: number
+export async function postPos(x: number, z: number, signal: AbortSignal | undefined,
+  seq: number, tMs: number, session: string
 ): Promise<PosReport> {
   const res = await fetch('/play/pos', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ x, z, seq, t_ms: tMs }),
+    body: JSON.stringify({ x, z, seq, t_ms: tMs, session }),
     signal,
   });
   if (res.status === 401) {
@@ -563,7 +574,7 @@ export interface ApiClip {
   kind: string;
   /** `a`/`b` for the half of a PAIR clip (`<kind>__a`), empty for a solo clip */
   role?: string;
-  /** Figur, für die der Clip autoriert wurde (female/male/animal/…); leer = Default */
+  /** Figure the clip was authored for (female/male/animal/…); empty means default */
   set?: string;
   name: string;
   filename: string;
@@ -687,23 +698,23 @@ export interface ApiModel {
   normalized?: boolean;
 }
 
-/** Maßstabs-Anker (backend-note-scale-anchors.md, v3): 0 = nicht deklariert. */
+/** Scale anchors (backend-note-scale-anchors.md, v3): 0 means undeclared. */
 export interface ApiModelAnchors {
-  /** Orientierungs-Korrektur in Grad (Admin-Regler) */
+  /** Orientation correction in degrees (admin control) */
   rotation?: { x?: number; y?: number; z?: number };
-  /** Höhen-Feinjustierung in Metern */
+  /** Height adjustment in metres */
   offset_y?: number;
-  /** Kachel-Verschiebung in Welt-Metern (±25, nur Gebäude): letzter Schritt
-   *  der Kette, Welt-Achsen (+x = Ost, +z = Süd), Yaw dreht NICHT mit */
+  /** Tile offset in world metres (±25, buildings only): final chain step
+   *  along world axes (+x east, +z south), unaffected by yaw */
   offset_x?: number;
   offset_z?: number;
-  /** Gebäude: geschätzte Gesamthöhe in realen Metern */
+  /** Building: estimated total height in real metres */
   height_m?: number;
-  /** Gebäude: sichtbare Geschosse des Meshs */
+  /** Building: visible storeys of the mesh */
   floors?: number;
-  /** Raum: geschätzte reale Breite (größte Seite) in Metern */
+  /** Room: estimated real width (longest side) in metres */
   width_m?: number;
-  /** Änderungs-Kennung des Modells (Cache-Invalidierung) */
+  /** Model change signature (cache invalidation) */
   signature?: string;
 }
 
@@ -825,35 +836,35 @@ export async function getLocationScene(locationId: string): Promise<ScenePayload
   };
 }
 
-/** Zusammenstellung (Surface-Tab): Zonen-Verlauf Richtung einer Nachbar-Art. */
+/** Surface-tab composition: zone gradient towards a neighbouring kind. */
 export interface ApiSurfaceBlend {
-  /** Nachbar-Art, zu der der Verlauf zeigt (z.B. "water") */
+  /** Neighbour kind the gradient points towards (e.g. "water") */
   toward: string;
-  /** Zonen von der toward-Kante aus; until = Anteil 0..1 des Übergangswegs,
-   *  letzte Zone ohne until = Rest; kind "neighbor" = Art des Land-Nachbarn */
+  /** Zones from the toward edge; until is a fraction 0..1 of the transition,
+   *  final zone without until fills the rest; "neighbor" is the adjacent land kind */
   zones: { kind: string; until?: number }[];
-  /** Ausfransung der Zonengrenzen (0..~0.15, Default 0.06) */
+  /** Zone boundary noise (0..~0.15, default 0.06) */
   noise?: number;
 }
 
 export interface ApiSurfaceTexture {
-  /** Die ID — road | grass | water | coast | ... (offen, wie terrain). Klein,
-   *  ohne Leerzeichen, unveraenderlich; das ist der Wert, den terrain und die
-   *  Bodenarten referenzieren. */
+  /** The ID: road | grass | water | coast | ... (open, like terrain).
+   *  Lowercase, immutable and without spaces; referenced by terrain and
+   *  ground kinds. */
   kind: string;
-  /** Anzeigetext der Art (Vertrag § A9). Der Client zeigt ihn, wo er Arten
-   *  benennt; fehlt er, ist die ID als Woerter zu lesen. */
+  /** Display name of the kind (contract § A9). Used wherever the client
+   *  names kinds; if absent, read the ID as words. */
   name?: string;
-  /** einfache Fläche: kachelbares Bild */
+  /** Simple surface: tileable image */
   url?: string;
-  /** physische Kantenlänge der Textur in Metern (Kachel-Maßstab; Default 3) */
+  /** Physical texture edge length in metres (tile scale; default 3) */
   size_m?: number;
-  /** ODER Zusammenstellung aus anderen Arten (Küste usw.) */
+  /** Or a composition of other kinds (coast, etc.) */
   blend?: ApiSurfaceBlend;
 }
 
-/** Globale Oberflächen-Texturen für Terrain-Kacheln; leer/404 = Client
- *  nutzt seine eingebauten prozeduralen Texturen. */
+/** Global surface textures for terrain tiles; empty/404 means the client
+ *  uses its built-in procedural textures. */
 export async function getSurfaceTextures(): Promise<ApiSurfaceTexture[]> {
   try {
     const res = await fetch('/assets/surface-textures');

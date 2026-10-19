@@ -420,7 +420,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     from app.models.events import list_active_world_events
     from app.models.character import (
         list_available_characters, get_character_current_location,
-        get_character_pos, list_character_positions, get_character_config,
+        get_character_pos, get_avatar_sync_snapshot, list_character_positions, get_character_config,
         get_effective_activity, get_effective_pose_key, get_movement_target,
         get_character_profile_image,
         get_character_current_room, get_character_current_feeling,
@@ -613,7 +613,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # because the veil gate below needs it too (its near view), not only the
     # sight rule. `_in_sight` therefore says out loud that a range of 0 is no
     # sight line instead of leaning on a `None` point to mean it.
-    _avatar_pos = get_character_pos(avatar) if (fogged and avatar) else None
+    _avatar_snap = get_avatar_sync_snapshot(avatar) if avatar else None
+    _avatar_pos = _avatar_snap["pos"] if (fogged and _avatar_snap) else None
 
     def _in_sight(p: Optional[Dict[str, float]]) -> bool:
         """Is a metre point within the avatar's sight range? False without a
@@ -659,11 +660,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     _pos = {r["name"]: {"x": r["x"], "z": r["z"]}
             for r in list_character_positions()}
     _fog = _fog_inputs() if fogged else {}
-    _fog.pop(avatar, None)  # The avatar keeps its full-profile path until P1.
+    _fog.pop(avatar, None)  # The avatar position and journey come from one snapshot.
     _row_ctx = (avatar, fogged, visible_ids, _in_sight, _under_veil)
     characters = []
     for name in list_available_characters():
-        pos = _pos.get(name)
+        pos = _avatar_snap["pos"] if name == avatar and _avatar_snap else _pos.get(name)
         if fogged and name != avatar:
             inputs = _fog.get(name, {})
             loc_id = inputs.get("current_location") or ""
@@ -687,7 +688,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # A survivor can move after the batch. Validate the profile we will
         # actually publish, while rejected NPCs still never load a profile.
         try:
-            _j = get_journey(name, profile=_prof)
+            _j = _avatar_snap["journey"] if name == avatar and _avatar_snap else get_journey(name, profile=_prof)
         except Exception as e:
             _j = None
             logger.debug("journey read failed for %s: %s", name, e)
@@ -838,6 +839,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             # location is unplaced). Clients place the figure by `pos` and
             # only fall back to the location centre when it is null.
             "pos": pos,
+            "pos_origin": (_avatar_snap["origin"] if name == avatar and _avatar_snap else None),
             "height_cm": cm,
             "room_id": get_character_current_room(name, profile=_prof) or "",
             "activity": activity,
@@ -3299,7 +3301,7 @@ async def generate_gallery_image_core(location_name: str, data: Dict[str, Any]) 
         # A regenerate/adjust is a VARIANT of its source image: without an
         # explicit room_id it inherits the source's room assignment — the
         # adjust dialog never sends one, and the result silently landed as a
-        # location-level image (finding 2026-07-26, "Adjust image — Küche").
+        # location-level image (finding 2026-07-26, "Adjust image — kitchen").
         if not room_id and (data.get("reference_image") or "").strip():
             from app.models.world import get_gallery_image_rooms
             room_id = get_gallery_image_rooms(location_name).get(

@@ -171,6 +171,8 @@ SCHEMA_STATEMENTS = [
         last_thought_at   TEXT DEFAULT '',
         pos_x             REAL,            -- free metre position (seamless world)
         pos_z             REAL,            -- NULL = no position yet / unplaced location
+        pos_session       TEXT,            -- origin report session; NULL for other writers
+        pos_seq           INTEGER,         -- origin report number; NULL for other writers
         meta              TEXT DEFAULT '{}',
         FOREIGN KEY(character_name) REFERENCES characters(name) ON DELETE CASCADE
     )""",
@@ -1060,6 +1062,8 @@ ALTER_MIGRATIONS = [
     # unplaced location, which has no centre to stand on.
     ("character_state", "pos_x", "REAL"),
     ("character_state", "pos_z", "REAL"),
+    ("character_state", "pos_session", "TEXT"),
+    ("character_state", "pos_seq", "INTEGER"),
     # Wilderness perception (Aug 2026, E6): a speaker outside every location
     # has no room to name, so the utterance carries the metre point it was
     # spoken from. NULL means "spoken inside a location" — the walls, not a

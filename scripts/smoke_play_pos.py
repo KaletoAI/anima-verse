@@ -250,11 +250,9 @@ edge-0 opening at 0.5 sits at (50, 50 − 5) = (50, 45)):
            an unstamped client is judged exactly as before (a 2 m step right
            after it is accepted, so what refuses is the distance and not a
            block).
-      Plus the RELOAD: a fresh session restarts its counter at 1, and a
-      baseline of ``seq`` 40 would make every one of its reports "stale"
-      forever. The client clock gives it away — 90 s of the old session
-      against 30 ms of the new one is far outside the 15 s leftover window —
-      so the baseline is dropped and the new session's first report is taken.
+      Plus the RELOAD: A/40 at 90000 ms is replaced by B/1 at 30 ms.
+      B is a new session token, so its first report has no time or order
+      baseline; 1 m of displacement is accepted. A stays retired until restart.
 
   [22] ONE REPORT AT A TIME PER AVATAR, AND THE SECOND IS DROPPED
       (2026-08-24). The route hands everything after the body parse to the
@@ -513,16 +511,17 @@ def place(name: str, x: float, z: float, *, room: str = "",
     return loc_id
 
 
-def report(x: float, z: float, seq: int = None, t_ms: float = None):
+def report(x: float, z: float, seq: int = None, t_ms: float = None,
+           session: str = "sessAAAA01"):
     """POST /play/pos → ("ok", payload) or ("refused", (status, detail)).
 
-    ``seq``/``t_ms`` are the client's ORDERING PAIR (case [21]) and are only
+    ``session``/``seq``/``t_ms`` form the client's report stamp (case [21]) and are only
     put into the body when given — every other case here reports UNSTAMPED,
     which is the behaviour the pair must leave untouched.
     """
     payload = {"x": x, "z": z}
     if seq is not None:
-        payload["seq"], payload["t_ms"] = seq, t_ms
+        payload["seq"], payload["t_ms"], payload["session"] = seq, t_ms, session
     try:
         return "ok", asyncio.run(play_pos(_FakeRequest(payload), user=USER))
     except HTTPException as exc:
@@ -538,6 +537,9 @@ def park(x: float, z: float, room: str = "") -> None:
         save_character_current_room(AVATAR, room)
     play_route._pos_report_at.pop(AVATAR, None)
     play_route._pos_client_at.pop(AVATAR, None)
+    play_route._pos_session_current.pop(AVATAR, None)
+    play_route._pos_session_retired.pop(AVATAR, None)
+    play_route._pos_session_seq.pop(AVATAR, None)
 
 
 def refusal_of(res):
@@ -983,14 +985,12 @@ def main() -> int:
     status, _payload = report(802.0, 803.0)   # 2 m — inside the bare floor
     check("...and an unstamped step inside the floor still passes", status,
           "ok")
-    # (e) THE RELOAD. A fresh session restarts its counter at 1; against a
-    # baseline of seq 40 every report of it would be "stale" forever. The
-    # client clock gives the restart away (90 s → 30 ms is far outside the
-    # 15 s leftover window), so the baseline is dropped instead.
+    # (e) A new random session token takes over immediately, resets both
+    # baselines and retires the previous token for the process lifetime.
     park(800.0, 803.0)
     status, _payload = report(800.0, 804.0, seq=40, t_ms=90000.0)
     check("the old session's last report is accepted", status, "ok")
-    status, fresh = report(800.0, 805.0, seq=1, t_ms=30.0)
+    status, fresh = report(800.0, 805.0, seq=1, t_ms=30.0, session="sessBBBB02")
     check("the reloaded session's first report is not stale", status, "ok")
     check("...it is a real acceptance", (fresh or {}).get("ok"), True)
     check("the avatar followed it", get_character_pos(AVATAR),

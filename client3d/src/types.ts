@@ -9,15 +9,14 @@ export interface RoomLayout {
   level?: number;          // storey: 0 = ground floor, negative = basement
   /** Turn of the room content around the vertical axis in degrees */
   rotation?: number;
-  /** Anker des Diorama-Modells als Fraktionen des Raum-Rechtecks
-   *  (Nachtrag 2026-07-24); fehlt = zentriert */
+  /** Diorama model anchor as fractions of the room rectangle
+   *  (added 2026-07-24); absent means centred */
   model_at?: [number, number];
-  /** Höhen-Feinjustierung des Diorama-Modells in WELT-Metern — ersetzt für
-   *  Räume das stillgelegte Sidecar-offset_y */
+  /** Diorama model height adjustment in WORLD metres; replaces
+   *  the retired sidecar offset_y for rooms */
   model_offset_y?: number;
-  /** Raum dauerhaft zeigen (unabhängig von der Innenansicht) — für
-   *  Outdoor-Räume, die NICHT schon im Gebäude-Modell abgebildet sind.
-   *  Default: false */
+  /** Always show the room regardless of the interior view, for outdoor
+   *  rooms not already represented in the building model. Default: false */
   always_visible?: boolean;
 }
 
@@ -25,8 +24,8 @@ export interface Room {
   id: string;
   name: string;
   description?: string;
-  /** "indoor" | "outdoor" — Outdoor-Räume liegen außerhalb des
-   *  Gebäude-Grundrisses und sind immer sichtbar */
+  /** "indoor" | "outdoor": outdoor rooms lie outside the building
+   *  footprint and are always visible */
   indoor?: string;
   layout?: RoomLayout;
 }
@@ -54,7 +53,7 @@ export interface Map3dMeta {
   /** AV3D-12: elevator position (fraction of the reference square) — placed
    *  automatically on every storey; figures use it to change floors. */
   elevator?: [number, number];
-  /** Etagenhöhe in REALEN Metern. Default 3. */
+  /** Storey height in REAL metres. Default 3. */
   storey_height_m?: number;
   /** THE FOOTPRINT (contract v6 "Gebiete"): the drawn outline as a closed
    *  point sequence `[x, z]` in LOCAL METRES around the pin, clockwise in map
@@ -67,8 +66,8 @@ export interface Map3dMeta {
    *  backdrop, texture repeat) are written in terms of it; in the scene payload
    *  it is `extent_m`, and k = 1 — a world metre IS a real metre. */
   plan_width_m?: number;
-  /** Bodentextur-Kind je Etage für die Grundriss-Platten (Raum-Rezept §7),
-   *  Level-Schlüssel als String: {"0": "parquet", "-1": "stone"} */
+  /** Floor texture kind per storey for floor-plan plates (room recipe §7),
+   *  with string level keys: {"0": "parquet", "-1": "stone"} */
   level_floors?: Record<string, string>;
   /** Authored pass-throughs at the LOCATION edge (§ B1 Nr. 13), as the world
    *  editor stores them and the server sanitises them
@@ -229,12 +228,14 @@ export interface MapCharacter {
    *  location is unplaced). Clients place the figure BY `pos` and only fall
    *  back to the location centre when it is null. */
   pos: { x: number; z: number } | null;
-  /** AV3D-6: Animations-Kategorie der aktuellen Aktivität (autoritativ) */
+  /** Report that produced this point; null for every other writer. */
+  pos_origin: { session: string; seq: number } | null;
+  /** AV3D-6: Authoritative animation category of the current activity */
   activity_animation?: string;
-  /** Fallback-Kette der Clip-Sets, z.B. ["lady","female"] */
+  /** Clip-set fallback chain, e.g. ["lady","female"] */
   animation_sets?: string[];
   animation_set?: string;
-  /** Körpergröße in cm — bestimmt die Skalierung der 3D-Figur */
+  /** Body height in cm; determines the 3D figure scale */
   height_cm?: number;
   room_id?: string;   // AV3D-8
   mood?: string;      // AV3D-8

@@ -273,8 +273,11 @@ async function main() {
   checkTrue('a diorama with no diorama place of its own is nothing to click',
     pickableProps([{ ...dio, roomId: 'c' }], propEntries, allOffers).length === 0)
 
+  // Correction clock: 100 < 150 is stale; 200 > 150 is current.
   // --- the stale poll and the standing clip (plan-aufstehen.md) ------------
   const { pollIsStale } = await import('../src/game/placement.ts')
+  checkTrue('poll before correction', pollIsStale(100, 150) === true)
+  checkTrue('poll after correction', pollIsStale(200, 150) === false)
   const { standingClipFor } = await import('../src/game/walk.ts')
 
   console.log('[9] a poll asked before our own seat change was answered is stale')

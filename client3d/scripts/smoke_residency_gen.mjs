@@ -471,7 +471,7 @@ for (const name of ['entry_settled_far', 'entry_same_offer', 'entry_offer_gone',
     assertBefore(snapTick, 'clearApproach(', 'npcs.snapPlayerTo(');
     const body = fn('reconcileAvatarPos');
     assertBefore(body, 'pollIsStale(', 'clearSnap(');
-    assertBefore(body, 'clearSnap(', 'if (reportedPos');
+    assertBefore(body, 'clearSnap(', 'isOwnEcho(');
     assertBefore(body, 'holdSnap(', 'correctTo(me.pos)');
     const entry = fn('enterOfferedLocation'), guard = entry.indexOf('if (!(await enterWhenReady(');
     assert.ok(guard >= 0);
@@ -490,6 +490,8 @@ for (const name of ['snap_superseded_free', 'snap_superseded_ready', 'snap_super
     const point = name.endsWith('here') ? { x: 0, z: 0 } : { x: 20, z: 0 };
     const deps = { isReady: () => true, placeAt: () => name.endsWith('free') ? null : 'B', pin() { }, release(id) { pins.delete(id); } };
     const api = compile(['reconcileAvatarPos'], { getGameState: () => ({ mode: 'embodied' }), pollIsStale: () => false, ownSeatChangeAt: 0,
+        isOwnEcho: () => false, sentSeqs: [], posSession: 'sessAAAA01', ownCorrectionAt: 0,
+        syncCounters: { posCorr: 0, pos409: 0, travBack: 0, travFwd: 0, travErrMaxM: 0, arrive: 0, place: 0 },
         avatarSeated: false, posInFlight: false, walkIn: null, verticalRide: null, correction: null, npcs: { positionOf: () => ({ x: 0, z: 0 }) },
         avatarName: 'avatar', reportedPos: null, POS_SNAP_M: 1, CORRECT_WALK_M: 8, clearSnap: () => clearSnap(deps, state),
         holdSnap, readinessDeps: deps, readinessState: state, correctTo: p => corrected.push(p), THREE: { Vector3: class {

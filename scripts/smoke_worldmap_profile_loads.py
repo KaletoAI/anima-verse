@@ -424,6 +424,10 @@ def main() -> int:
             comparable.pop("locations_rev", None)
             old_payload = dict(old_payload)
             old_payload.pop("locations_rev", None)
+            # P1 adds a mandatory nullable origin to every row. These fixtures
+            # contain no position reports, so the hand-derived origin is null.
+            old_payload["characters"] = [dict(c, pos_origin=None)
+                                         for c in old_payload["characters"]]
             check(f"{label} entire canonical JSON identical",
                   json.dumps(old_payload, sort_keys=True, default=str) ==
                   json.dumps(comparable, sort_keys=True, default=str), True)

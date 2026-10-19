@@ -44,6 +44,7 @@ export function PerfOverlay() {
   // Nothing measured yet (the first tick is up to a second away) — show the
   // frame instead of popping in, so switching it on has an immediate answer.
   const dash = '—';
+  const s = stats?.sync;
   const longTasks = (v: LongTaskSummary | null) => v === null ? t('n/a')
     : `${v.count}, ${num(v.totalMs)} ms, ${t('max')} ${num(v.maxMs)} ms @ ${v.maxPhase ?? t('n/a')}`;
 
@@ -77,6 +78,7 @@ export function PerfOverlay() {
           ? `${num(stats.scatter.mesh.calls + stats.scatter.impostor.calls)}`
             + ` / ${stats.scatterLodMs.toFixed(1)} ms`
           : dash} wide />
+      <Row label={t('Movement sync')} value={s ? `corr ${s.posCorr} · 409 ${s.pos409} · back ${s.travBack} · fwd ${s.travFwd} · err ${s.travErrMaxM.toFixed(2)} m · arrive ${s.arrive} · place ${s.place}` : dash} wide />
       <Row label={t('Boot')} value="" wide />
       <Row label={t('Boot stages (ms)')}
         value={Object.entries(boot.stages).map(([stage, ms]) =>

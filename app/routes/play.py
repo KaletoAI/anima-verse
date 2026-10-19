@@ -8,8 +8,9 @@ The built shell lives (like game-admin) under ``static/game_admin/play.html``
 — the same ``frontend/`` build, but its own page/route.
 """
 import threading
+import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
@@ -737,24 +738,15 @@ _POS_OPENING_TOLERANCE_M = 1.5
 #: not world state — a restart simply grants everyone one free first report,
 #: which is the same grace a takeover gets.
 _pos_report_at: Dict[str, float] = {}
-#: The CLIENT's stamp of each avatar's last ACCEPTED report: ``(seq, t_ms)``,
-#: the two fields a client may send along (below). Beside ``_pos_report_at``
-#: and for the same reason: process-local, a plausibility baseline, no world
-#: state. Absent for a client that sends neither.
-_pos_client_at: Dict[str, Tuple[int, float]] = {}
-#: How long a client baseline stays a baseline (seconds of SERVER monotonic
-#: time since the last accepted report). A report with an older ``seq`` is a
-#: leftover the client has long given up on — but only for as long as such a
-#: leftover can still be in flight; the client's own deadline is 8 s. After
-#: this window the baseline is treated as dead, which is what makes a RELOAD
-#: (fresh session → ``seq`` restarts at 1) recover on its own instead of
-#: having every report of the new session refused as "stale" forever.
-_POS_STALE_WINDOW_S = 10.0
-#: The same window measured on the CLIENT's clock (milliseconds): a leftover
-#: report is at most the client's deadline old, so its ``t_ms`` sits just
-#: behind the baseline's. A new session's clock restarts near zero and falls
-#: far behind it — which is the second, faster half of the reload recovery.
-_POS_STALE_WINDOW_MS = 15000.0
+#: Accepted report time basis; session ordering is stored separately.
+_pos_client_at: Dict[str, Tuple[str, int, float]] = {}
+#: Current and permanently retired sessions, guarded by _pos_lock.
+_pos_session_current: Dict[str, str] = {}
+_pos_session_retired: Dict[str, Set[str]] = {}
+#: Highest accepted number; unstamped reports do not clear session ordering.
+_pos_session_seq: Dict[str, int] = {}
+_SESSION_RE = re.compile(r"[A-Za-z0-9_-]{8,64}")
+_SEQ_MAX = 2**31 - 1
 #: Upper bound of the CLIENT-measured elapsed time the step allowance is built
 #: from (seconds). A client clock is not a trusted clock: without a cap a
 #: single report claiming an hour of walking would buy an unbounded jump.
@@ -835,7 +827,7 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
     is the LAST VALID point — the client snaps the figure back onto it, so a
     refusal never leaves the two views disagreeing.
 
-    ORDER AND ELAPSED TIME — WHY THE CLIENT'S TWO EXTRA FIELDS EXIST
+    ORDER AND ELAPSED TIME — THE CLIENT'S REPORT STAMP
     (2026-08-23). This route used to measure the step against its own
     PROCESSING time, and it took whichever report reached the handler as the
     newest one. Both break the moment the event loop stalls for seconds (a
@@ -846,17 +838,15 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
     judged as a 12 m stride "in 0.4 s" and refused. The player is snapped
     backwards, over and over, walking a straight line.
 
-    Two fields close both holes and neither loosens the speed gate:
+    The session, sequence and time stamp close both holes without loosening the speed gate:
 
       * ``seq`` — a counter the client raises for every report of its session.
         A report that is not newer than the last ACCEPTED one is a leftover of
         exactly that kind and is dropped without writing anything and without
         a correction (``{ok: false, stale: true}``; a correction is what
-        snapped the figure back). The baseline expires after
-        ``_POS_STALE_WINDOW_S`` of server time — or as soon as the client
-        clock falls more than ``_POS_STALE_WINDOW_MS`` behind — so a RELOAD,
-        whose counter restarts at 1, recovers on its own instead of being
-        locked out for the rest of the process' life,
+        snapped the figure back). Ordering never expires within a session.
+        A new random session token retires the previous session and resets
+        the time basis; retired sessions remain stale until process restart.
       * ``t_ms`` — the client's own duration clock (``performance.now()``).
         The step allowance is built from ``t_ms − last_t_ms``, the time that
         really passed WHILE WALKING, instead of from the gap between two
@@ -864,7 +854,7 @@ async def play_pos(request: Request, user=Depends(get_current_user)):
         by the throttle interval and from above by
         ``_POS_CLIENT_ELAPSED_CAP_S`` — a client clock is not a trusted clock.
 
-    A client that sends neither field is judged exactly as before.
+    A client that omits all three stamp fields is judged exactly as before.
 
     FOOTPRINT WINS — FOR THE PASSABILITY (decision 2026-08-13, narrowed by
     finding 3). Painted terrain judges whether one MAY STAND out in the
@@ -997,46 +987,62 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         x, z = float(body.get("x")), float(body.get("z"))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise HTTPException(status_code=400, detail="x/z must be numbers")
     if not (math.isfinite(x) and math.isfinite(z)):
         raise HTTPException(status_code=400, detail="x/z must be finite")
 
-    # The ordering pair, ALL OR NOTHING: a report is either stamped by the
-    # client (both fields, both usable numbers) or it is not stamped at all —
-    # half a stamp would give an ordering without a clock or the other way
-    # round, and both are worse than the plain server-side judgement.
-    seq: Optional[int] = None
-    t_ms: Optional[float] = None
-    try:
-        _seq_raw, _t_raw = body.get("seq"), body.get("t_ms")
-        if _seq_raw is not None and _t_raw is not None:
-            seq, t_ms = int(_seq_raw), float(_t_raw)
-            if not math.isfinite(t_ms):
-                seq, t_ms = None, None
-    except (TypeError, ValueError):
-        seq, t_ms = None, None
+    # PRESENCE is the KEY, not its value: an explicit null is a malformed stamp (400),
+    # only a report that omits all three keys is judged unstamped (contract § A15).
+    keys = ("seq", "t_ms", "session")
+    present = [k for k in keys if k in body]
+    raw = {k: body.get(k) for k in keys}
+    seq = t_ms = session = None
+    if present:
+        if len(present) != 3:
+            raise HTTPException(400, "seq, t_ms and session come together or not at all")
+        s, tm, se = raw["seq"], raw["t_ms"], raw["session"]
+        if isinstance(s, bool) or not isinstance(s, int) or not (1 <= s <= _SEQ_MAX):
+            raise HTTPException(400, "seq must be an integer in 1..2^31-1")
+        if isinstance(tm, bool) or not isinstance(tm, (int, float)):
+            raise HTTPException(400, "t_ms must be a finite number >= 0")
+        try:
+            tm = float(tm)
+        except (TypeError, ValueError, OverflowError):
+            raise HTTPException(400, "t_ms must be a finite number >= 0")
+        if not math.isfinite(tm) or tm < 0:
+            raise HTTPException(400, "t_ms must be a finite number >= 0")
+        if not isinstance(se, str) or not _SESSION_RE.fullmatch(se):
+            raise HTTPException(400, "session must match [A-Za-z0-9_-]{8,64}")
+        seq, t_ms, session = s, tm, se
 
     now = time.monotonic()
     last_at = _pos_report_at.get(avatar)
-    client_base = _pos_client_at.get(avatar)
-    # THE BASELINE EXPIRES. Only a report that could still be in flight can be
-    # a leftover; beyond that window a lower counter is a NEW SESSION (a
-    # reload restarts at 1), and holding on to the old baseline would refuse
-    # every single report it ever sends.
-    if client_base is not None and last_at is not None and (
-            now - last_at > _POS_STALE_WINDOW_S
-            or (t_ms is not None
-                and client_base[1] - t_ms > _POS_STALE_WINDOW_MS)):
-        client_base = None
-        _pos_client_at.pop(avatar, None)
-
-    # STALE — the answer to the stalled-loop snap-back (see the docstring).
-    # Nothing is written and NO correction is sent: the client keeps the point
-    # dirty and reports it again, which is what a dropped report deserves.
-    if seq is not None and client_base is not None and seq <= client_base[0]:
-        logger.debug("pos stale: %s seq %d <= %d", avatar, seq, client_base[0])
-        return {"ok": False, "stale": True}
+    client_base = _pos_client_at.get(avatar)   # (session, seq, t_ms) of the last accepted
+    if session is not None:
+        # A RETIRED session is a tab that was reloaded or taken over: its reports are
+        # dropped however late they come (contract § A15).
+        if session in _pos_session_retired.get(avatar, ()):
+            return {"ok": False, "stale": True}
+        cur = _pos_session_current.get(avatar)
+        if cur != session:
+            # TAKEOVER: the first report of an unknown session. Every baseline goes —
+            # the new session is judged "as given" like any fresh one (terrain and
+            # transition gate still apply).
+            if cur is not None:
+                _pos_session_retired.setdefault(avatar, set()).add(cur)
+            _pos_session_current[avatar] = session
+            _pos_session_seq.pop(avatar, None)
+            _pos_client_at.pop(avatar, None)
+            _pos_report_at.pop(avatar, None)
+            client_base = last_at = None
+        # ORDER inside ONE session never expires and survives unstamped reports: the
+        # token, not a time window, tells a reload apart, so a late leftover of THIS
+        # session stays stale.
+        floor = _pos_session_seq.get(avatar)
+        if floor is not None and seq <= floor:
+            logger.debug("pos stale: %s seq %d <= %d", avatar, seq, floor)
+            return {"ok": False, "stale": True}
 
     if last_at is not None and now - last_at < _POS_REPORT_INTERVAL_S:
         return {"ok": False, "throttled": True}
@@ -1062,10 +1068,10 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
         # blocked event loop compresses the gap between two handler runs to
         # nothing while the player keeps covering ground (2026-08-23). The
         # server's own gap is the fallback for a client that sends no stamp.
-        if t_ms is not None and client_base is not None:
+        if session is not None and client_base is not None and client_base[0] == session:
             elapsed = min(_POS_CLIENT_ELAPSED_CAP_S,
                           max(_POS_REPORT_INTERVAL_S,
-                              (t_ms - client_base[1]) / 1000.0))
+                              (t_ms - client_base[2]) / 1000.0))
         else:
             elapsed = max(0.0, now - last_at)
         allowance = max(_POS_STEP_FLOOR_M,
@@ -1304,7 +1310,8 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
                    t("That step is too high to climb.", lang) if step else
                    t("That slope is too steep to climb.", lang))
 
-    written = set_character_pos(avatar, x, z)
+    written = set_character_pos(avatar, x, z,
+                                origin=(session, seq) if session is not None else None)
     if entry_room:
         save_character_current_room(avatar, entry_room)
     # DISCOVERY BY SIGHT (E6): walking past a place reveals it, the same rule
@@ -1347,8 +1354,9 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
     # The client baseline follows the accepted report — or is DROPPED when
     # this one came without a stamp, so a stamped and an unstamped client on
     # the same avatar never measure against each other's clock.
-    if seq is not None and t_ms is not None:
-        _pos_client_at[avatar] = (seq, t_ms)
+    if session is not None:
+        _pos_client_at[avatar] = (session, seq, t_ms)
+        _pos_session_seq[avatar] = seq
     else:
         _pos_client_at.pop(avatar, None)
     return {"ok": True, "pos": written["pos"],
@@ -3871,7 +3879,7 @@ def _play_save_layout_sync(user, body: Any):
 
 @router.delete("/play/layouts/{name}")
 def play_delete_layout(name: str, user=Depends(get_current_user)):
-    """Löscht einen benannten Layout-Preset."""
+    """Delete a named layout preset."""
     from app.models.account import (_current_user_settings,
                                     _update_current_user_settings)
     us = _current_user_settings() or {}

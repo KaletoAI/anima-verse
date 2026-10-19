@@ -1,15 +1,15 @@
-"""Character-Profil Verwaltung - User-spezifisch
+"""Per-user character profile management
 
 Renamed from agent.py. All functions use character_name instead of agent_name,
 and directories are stored under characters/ instead of agents/.
 
-Storage: world.db — Tabellen characters, character_state
+Storage: world.db — characters and character_state tables
 """
 from datetime import datetime
 
 from app.core.timeutils import parse_iso, utc_now, utc_now_iso, game_time
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import json
 import math
 import uuid
@@ -51,11 +51,10 @@ LANGUAGE_MAP = {
 
 
 def get_user_characters_dir() -> Path:
-    """Gibt das Characters-Verzeichnis fuer einen User zurueck.
+    """Return the user character directory.
 
     Supports both characters/ (new) and agents/ (legacy) directories.
-    Single-world model: characters live directly under storage root.
-    """
+    Single-world model: characters live directly under the storage root."""
     characters_dir = get_storage_dir() / "characters"
     if characters_dir.exists():
         return characters_dir
@@ -265,9 +264,8 @@ _STATE_META_KEYS = ("equipped_pieces", "equipped_items",
 # Removed in step 8 (cleanup, May 2026):
 # - runtime_outfit_skip → outfit_intent.forbidden_slots
 
-# Per-Character User-Config (nicht Stamm) — wandern in config_json, nicht profile_json.
-# Beim Laden aus config_json in Profile injiziert (fuer Abwaerts-Kompatibilitaet der
-# Consumer-APIs), beim Save extrahiert.
+# Per-character user configuration belongs in config_json, not profile_json.
+# Injected into profiles for existing consumers on read; extracted on save.
 _CONFIG_KEYS_IN_PROFILE = ("outfit_exceptions", "outfit_imagegen",
                            )
 
@@ -324,8 +322,7 @@ def _read_scheduler_job_ids(conn, character_name: str) -> List[str]:
 
 
 def _load_character_state(character_name: str) -> Dict[str, Any]:
-    """Laedt character_state: Spalten (current_*, *_changed_at, pose_*,
-    is_*) + meta-Keys."""
+    """Load character_state columns (current_*, *_changed_at, pose_*, is_*) and meta keys."""
     result: Dict[str, Any] = {k: "" for k in _STATE_COLS}
     for k in _STATE_META_KEYS:
         result[k] = None
@@ -368,14 +365,13 @@ def _load_character_state(character_name: str) -> Dict[str, Any]:
 
 
 def get_character_profile(character_name: str) -> Dict[str, Any]:
-    """Laedt das Profil eines Characters aus der DB.
+    """Load a character profile from the DB.
 
-    Runtime-State (current_location/room/activity/feeling + *_changed_at)
-    wird aus character_state injiziert, nicht aus profile_json.
-    Soul-MD-Files (tasks.md, personality.md etc.) werden ueber
-    _inject_soul_md_values eingelesen — beim Speichern werden diese Felder
-    aus profile_json entfernt, also muessen sie beim Lesen re-injiziert
-    werden, sonst fehlt z.B. character_task im ThoughtLoop.
+    Runtime state (current_location/room/activity/feeling + *_changed_at)
+    comes from character_state, not profile_json. Soul Markdown files
+    (tasks.md, personality.md, etc.) are read by _inject_soul_md_values.
+    Their fields are removed from profile_json on save, so reads must inject
+    them again or the ThoughtLoop would lack fields such as character_task.
 
     There is no JSON fallback (DATA-17): world data is DB-only, nothing has
     written ``character_profile.json`` since the migration, and the fallback
@@ -393,8 +389,7 @@ def get_character_profile(character_name: str) -> Dict[str, Any]:
             profile = json.loads(row[0] or "{}")
             profile.setdefault("character_name", character_name)
             profile.update(_load_character_state(character_name))
-            # Per-Character User-Config aus config_json in profile injizieren
-            # (Abwaertskompatibilitaet fuer Consumer-Code).
+            # Inject per-character configuration from config_json for consumers.
             try:
                 cfg = json.loads(row[1] or "{}")
                 for k in _CONFIG_KEYS_IN_PROFILE:
@@ -402,11 +397,9 @@ def get_character_profile(character_name: str) -> Dict[str, Any]:
                         profile[k] = cfg[k]
             except Exception:
                 pass
-            # Template-Name aus eigener Spalte ins Profile injizieren —
-            # is_feature_enabled() liest profile["template"], um die
-            # Feature-Defaults zu finden. Ohne diese Zeile fielen alle
-            # Characters auf "human-default" zurueck und sahen damit
-            # einen Default-Set mit allen Features = False.
+            # Inject the template name from its column: is_feature_enabled()
+            # reads profile["template"] to resolve feature defaults. Without
+            # it every character would use human-default with features off.
             tmpl_name = (row[2] or "").strip()
             if tmpl_name and "template" not in profile:
                 profile["template"] = tmpl_name
@@ -464,17 +457,16 @@ def _inject_soul_md_values(character_name: str, profile: Dict[str, Any]) -> None
 
 
 def get_character_language(character_name: str) -> str:
-    """Gibt den Sprachcode des Characters zurueck (z.B. 'de', 'en'). Fallback: 'de'."""
+    """Return the character language code (e.g. 'de', 'en'); default: 'de'."""
     profile = get_character_profile(character_name)
     return profile.get("language", "") or "de"
 
 
 def get_character_language_instruction(character_name: str) -> str:
-    """Erzeugt die Sprach-Anweisung fuer den System-Prompt aus dem Character-Profil.
+    """Build the system-prompt language instruction from the character profile.
 
-    Liest das 'language'-Feld aus dem Character-Profil und erzeugt daraus
-    eine Anweisung wie 'Always respond in German.' Falls kein Sprachfeld
-    gesetzt ist, Fallback auf User-Level language_instruction.
+    The language field yields an instruction such as 'Always respond in German.'
+    If absent, use the user-level language_instruction.
     """
     profile = get_character_profile(character_name)
     lang_code = profile.get("language", "")
@@ -483,7 +475,7 @@ def get_character_language_instruction(character_name: str) -> str:
         lang_name = LANGUAGE_MAP.get(lang_code, lang_code)
         return f"Always respond in {lang_name}."
 
-    # Fallback: User-Level language_instruction
+    # Fallback: user-level language_instruction
     from app.models.account import get_user_language_instruction
     return get_user_language_instruction()
 
@@ -555,7 +547,7 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
                 "(%s) — nothing created", character_name, _name_problem.code)
             return False
 
-    # Existenz-Check — wenn nicht create_new, muss Character bereits existieren
+    # Unless create_new is set, the character must already exist.
     if not create_new:
         _exists = False
         try:
@@ -598,18 +590,17 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
 
     profile["character_name"] = character_name
     profile["created_by"] = ""
-    # Legacy-Felder aus dem alten Outfit-System entfernen — nicht mehr genutzt.
+    # Remove unused fields from the retired outfit system.
     for _legacy in ("current_outfit", "outfit_last_changed", "outfit_last_location"):
         profile.pop(_legacy, None)
 
-    # Runtime-State aus profile extrahieren — wird in character_state persistiert,
-    # nicht in profile_json. Nur Keys die tatsaechlich im Dict sind werden uebertragen
-    # (fehlende Keys lassen den bestehenden State unveraendert).
+    # Extract runtime state into character_state, not profile_json.
+    # Only supplied keys are transferred; missing keys leave existing state intact.
     state_values: Dict[str, str] = {}
     for k in _STATE_COLS:
         if k in profile:
             state_values[k] = profile.pop(k) or ""
-    # Typisierte State-Spalten (pose_*, is_*) — separat damit Typ-Casts klappen.
+    # Typed state columns (pose_*, is_*) need their own casts.
     state_typed: Dict[str, Any] = {}
     for name, _sql_type, _read_cast, write_cast in _STATE_TYPED_COLS:
         if name in profile:
@@ -618,7 +609,7 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     for k in _STATE_META_KEYS:
         if k in profile:
             state_meta[k] = profile.pop(k)
-    # Per-Character User-Config aus profile rausziehen → wandert in config_json
+    # Extract per-character user configuration into config_json.
     config_patch: Dict[str, Any] = {}
     for k in _CONFIG_KEYS_IN_PROFILE:
         if k in profile:
@@ -641,10 +632,10 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     except Exception as _se:
         logger.debug("ensure/populate soul files failed for %s: %s", character_name, _se)
 
-    # Der DB-Blob bekommt das gestrippte Profil
+    # Store the stripped profile in the DB blob.
     profile_to_store = profile
 
-    # In DB schreiben
+    # Write to the DB.
     now = utc_now_iso()
     _stored = True
     try:
@@ -676,9 +667,8 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
                 now,
                 now,
             ))
-            # Bestehenden State laden — wir updaten nur die Spalten die der Caller
-            # mitgeliefert hat, damit ein reiner Profil-Save (ohne Runtime-Keys)
-            # den State nicht versehentlich leert.
+            # Load existing state; update only supplied columns so a profile-only
+            # save without runtime keys does not accidentally clear the state.
             existing_state = {c: "" for c in _STATE_COLS}
             existing_meta: Dict[str, Any] = {}
             _srow = conn.execute(
@@ -704,9 +694,8 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
             merged_state.update(state_values)
             existing_meta.update(state_meta)
             meta_json = json.dumps(existing_meta, ensure_ascii=False)
-            # INSERT der Kern-Spalten — separates UPDATE fuer typisierte
-            # Spalten weil deren Werte optional sind (Caller liefert sie
-            # nur wenn explizit gesetzt).
+            # Insert core columns; update typed columns separately because their
+            # values are optional and supplied only when explicitly set.
             conn.execute("""
                 INSERT INTO character_state
                 (character_name, current_location, current_room,
@@ -749,10 +738,8 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
                      character_name, e, exc_info=True)
         _stored = False
 
-    # Caller erwartet dass der uebergebene Dict weiterhin die Runtime-Keys hat
-    # — sie wurden oben aus dem Dict GEPOPPT, das hier gibt sie zurueck. Das
-    # gilt auch nach einem Fehlschlag: sonst faende der Aufrufer seine eigenen
-    # Keys nicht mehr vor.
+    # Restore popped runtime keys to the caller's dictionary, including
+    # after a failed save; callers expect their supplied keys to remain.
     profile.update(state_values)
     for k, v in state_meta.items():
         profile[k] = v
@@ -1150,18 +1137,14 @@ def get_character_config(character_name: str, *, profile=None) -> Dict[str, Any]
 
 
 def save_character_config(character_name: str, config: Dict[str, Any]) -> bool:
-    """Speichert die per-Character Konfiguration in DB.
+    """Save per-character configuration to the DB.
 
-    Akzeptiert nur Updates fuer Characters die bereits per save_character_profile
-    angelegt wurden (oder ein Verzeichnis haben). So legt ein versehentlich aus
-    einem LLM-Output durchgereichter Vorname (z.B. "Lirien" statt
-    "Lirien Edwinsdottir") keinen neuen Geister-Character an.
+    Only update characters already created by save_character_profile or with an
+    existing directory. An accidental partial name from LLM output must not create
+    a ghost character.
 
-    Returns True when the row was committed, False when nothing was stored —
-    a reserved or unknown name, or a failed write (DATA-13). Same reasoning as
-    ``save_character_profile``: logged at ERROR with its traceback, never
-    raised.
-    """
+    Return True on commit, False for reserved/unknown names or failed writes
+    (DATA-13). Like save_character_profile, log errors with traceback, never raise."""
     if character_name.lower() in _RESERVED_NAMES:
         logger.warning("save_character_config: reservierter Name '%s' uebersprungen",
                        character_name)
@@ -1207,7 +1190,7 @@ def save_character_config(character_name: str, config: Dict[str, Any]) -> bool:
 
 
 def get_character_appearance(character_name: str) -> str:
-    """Gibt das Aussehen eines Characters zurueck (Platzhalter aufgeloest)"""
+    """Return the character appearance with placeholders resolved."""
     if not character_name:
         return ""
     profile = get_character_profile(character_name)
@@ -1219,14 +1202,11 @@ def get_character_appearance(character_name: str) -> str:
 
 def get_character_current_location(character_name: str = "",
                                    profile: Optional[Dict[str, Any]] = None) -> str:
-    """Gibt den aktuellen Aufenthaltsort des Characters zurueck (Character-Level).
+    """Return the character's current location.
 
-    ``profile``: an already-loaded character profile to read from — callers
-    that hold one anyway (the worldmap loop) pass it and save a DB round-trip
-    (same contract as ``travel_engine.get_journey``). The value lives in the
-    ``character_state`` column and is injected by ``get_character_profile``,
-    so a profile that came from there carries it.
-    """
+    ``profile`` is an already-loaded profile: callers such as the worldmap loop
+    pass it to avoid another DB read (like travel_engine.get_journey). The value
+    comes from character_state and is injected by get_character_profile."""
     if not character_name:
         return ""
     if profile is None:
@@ -1267,10 +1247,10 @@ def get_gallery_viewers(character_name: str) -> List[str]:
 
 
 def can_view_gallery(viewer: str, owner: str) -> bool:
-    """True, wenn ``viewer`` die Galerie von ``owner`` sehen darf.
+    """Whether viewer may see owner's gallery.
 
-    Der Besitzer sieht seine eigene Galerie immer; sonst entscheidet die
-    Freigabeliste (``gallery_allowed_viewers``) des Besitzers.
+    Owners always see their own gallery; otherwise the owner's
+    gallery_allowed_viewers list decides.
     """
     viewer = (viewer or "").strip()
     owner = (owner or "").strip()
@@ -1282,11 +1262,9 @@ def can_view_gallery(viewer: str, owner: str) -> bool:
 
 
 def add_known_location(character_name: str, location_id: str) -> List[str]:
-    """Fuegt eine Location-ID zur known_locations-Liste hinzu (idempotent).
+    """Add a location ID to known_locations idempotently and return the list.
 
-    Erstellt das Feld falls noch nicht vorhanden (aktiviert damit strict mode
-    fuer diesen Character). Gibt die aktualisierte Liste zurueck.
-    """
+    Create the field if absent, enabling strict mode for this character."""
     if not character_name or not location_id:
         return []
     cfg = get_character_config(character_name) or {}
@@ -1302,11 +1280,11 @@ def add_known_location(character_name: str, location_id: str) -> List[str]:
 
 
 def set_known_locations(character_name: str, location_ids: List[str]) -> List[str]:
-    """Setzt die komplette known_locations-Liste (Soll-Zustand, Editor).
+    """Replace the entire known_locations list with the editor's desired state.
 
-    Im Gegensatz zu add_known_location ueberschreibt das die Liste vollstaendig
-    — auch Entfernen. Leere Liste = "kennt nichts" (strict mode bleibt aktiv,
-    da das Feld vorhanden ist). Dedupliziert unter Beibehaltung der Reihenfolge.
+    Unlike add_known_location, this also removes entries. An empty list means
+    no known locations; strict mode remains active because the field exists.
+    Deduplicate while preserving order.
     """
     if not character_name:
         return []
@@ -1471,7 +1449,7 @@ def _movement_trace(character_name: str, location_id: str, room_id: str,
 
 
 def _room_in_location(room_id: str, location_id: str) -> bool:
-    """True, wenn ``room_id`` zu ``location_id`` gehört (Raum-Wechsel-Guard)."""
+    """Whether room_id belongs to location_id (room-change guard)."""
     if not (room_id and location_id):
         return False
     try:
@@ -1484,9 +1462,9 @@ def _room_in_location(room_id: str, location_id: str) -> bool:
 
 def _suggest_follow_after_move(leaver: str, from_loc: str, from_room: str,
                                to_loc: str, to_room: str, to_label: str) -> None:
-    """C2b: Nach einem Raum-/Ortswechsel die aktiv beteiligten NPCs im verlassenen
-    Raum anstoßen, damit sie SELBST über Folgen entscheiden (Loop-seitig gegated +
-    Cooldown). Lazy-Import, um Zyklus character↔agent_loop zu vermeiden."""
+    """C2b: After a room/location change, prompt engaged NPCs in the old room
+    to decide whether to follow (loop-side gate and cooldown). Import lazily
+    to avoid the character/agent_loop cycle."""
     try:
         from app.core.agent_loop import get_agent_loop
         get_agent_loop().suggest_follow(leaver, from_loc, from_room,
@@ -1764,6 +1742,34 @@ def get_character_pos(character_name: str = "") -> Optional[Dict[str, float]]:
     return {"x": float(row[0]), "z": float(row[1])}
 
 
+def get_avatar_sync_snapshot(character_name: str) -> Dict[str, Any]:
+    """Read position, report origin and validated journey in one SQL snapshot.
+
+    Movement target uses the same meta-first source as list_active_journeys.
+    Other profile fields remain the caller's responsibility.
+    """
+    from app.core.travel_engine import get_journey
+
+    row = get_connection().execute(
+        "SELECT s.pos_x, s.pos_z, s.pos_session, s.pos_seq, "
+        "json_extract(c.profile_json, '$.journey'), "
+        "COALESCE(json_extract(s.meta, '$.movement_target'), "
+        "json_extract(c.profile_json, '$.movement_target'), '') "
+        "FROM characters c LEFT JOIN character_state s ON s.character_name = c.name "
+        "WHERE c.name = ?", (character_name,)).fetchone()
+    if not row:
+        return {"pos": None, "origin": None, "journey": None, "movement_target": ""}
+    x, z, session, seq, raw, target = row
+    pos = {"x": float(x), "z": float(z)} if x is not None and z is not None else None
+    origin = {"session": session, "seq": seq} if pos is not None and session is not None and seq is not None else None
+    try:
+        journey = json.loads(raw) if raw else None
+    except (TypeError, ValueError):
+        journey = None
+    journey = get_journey(character_name, profile={"journey": journey, "movement_target": target})
+    return {"pos": pos, "origin": origin, "journey": journey, "movement_target": target}
+
+
 def list_wilderness_positions() -> List[Dict[str, Any]]:
     """Everyone standing OUTSIDE every location, with their metre point —
     ``[{"name": ..., "x": ..., "z": ...}, ...]``.
@@ -1812,28 +1818,28 @@ def list_character_positions() -> List[Dict[str, Any]]:
             for r in rows if _is_real_character(r[0])]
 
 
-def _write_character_pos(character_name: str, x: Optional[float],
-                         z: Optional[float]) -> None:
-    """Raw write of the two position columns (None/None clears the position).
+def _write_character_pos(character_name: str, x: Optional[float], z: Optional[float],
+                         *, origin: Optional[Tuple[str, int]] = None) -> None:
+    """Raw write of the position columns AND their origin (None/None clears the position).
 
-    Upserts because a character can be positioned before anything else ever
-    touched its state row.
-    """
+    ``origin`` is ``(session, seq)`` of the ``POST /play/pos`` report that produced this
+    point; every other writer passes nothing and the origin is cleared — that is what lets a
+    client tell its own echo from a server move (§ A15)."""
     if not character_name:
         return
+    sess, seq = (origin if origin else (None, None))
     try:
         with transaction() as conn:
             cur = conn.execute(
-                "UPDATE character_state SET pos_x=?, pos_z=? "
-                "WHERE character_name=?", (x, z, character_name))
+                "UPDATE character_state SET pos_x=?, pos_z=?, pos_session=?, pos_seq=? "
+                "WHERE character_name=?", (x, z, sess, seq, character_name))
             if cur.rowcount == 0:
                 conn.execute(
-                    "INSERT INTO character_state (character_name, pos_x, pos_z) "
-                    "VALUES (?, ?, ?)", (character_name, x, z))
+                    "INSERT INTO character_state (character_name, pos_x, pos_z, "
+                    "pos_session, pos_seq) VALUES (?, ?, ?, ?, ?)",
+                    (character_name, x, z, sess, seq))
     except Exception as e:
-        logger.error("_write_character_pos DB error for %s: %s",
-                     character_name, e)
-
+        logger.error("_write_character_pos DB error for %s: %s", character_name, e)
 
 def _shift_location_occupants(location_id: str,
                               old_cx: Optional[float], old_cz: Optional[float],
@@ -1948,7 +1954,8 @@ def _clear_location_and_room(character_name: str) -> None:
 
 
 def set_character_pos(character_name: str, x: float, z: float,
-                      preserve_movement_target: bool = False) -> Dict[str, Any]:
+                      preserve_movement_target: bool = False, *,
+                      origin: Optional[Tuple[str, int]] = None) -> Dict[str, Any]:
     """Put a character at a free metre point; the location is DERIVED from it.
 
     The point is the truth — ``current_location`` follows from
@@ -2007,7 +2014,7 @@ def set_character_pos(character_name: str, x: float, z: float,
             # scope here — the reverse step back INTO a location still runs
             # through the normal setter and gets all of them.
             _clear_location_and_room(character_name)
-    _write_character_pos(character_name, fx, fz)
+    _write_character_pos(character_name, fx, fz, origin=origin)
     return {"pos": {"x": fx, "z": fz}, "location_id": location_id}
 
 
@@ -2528,24 +2535,20 @@ def force_set_status(character_name: str,
     return written
 
 
-# === Szenen-Positionen (Figur-Standpunkt pro Raum + Expression-Bild) =========
-# Wo (und wie gross) eine Figur im Umgebungsfenster steht, haengt vom Raum, vom
-# konkreten Hintergrundbild (bg_id = Dateiname) und vom Expression-Bild
-# (Hash/expr_version) ab. BEWUSST OHNE Location im Schluessel: verschiedene
-# Locations (z.B. Wald-Klone) teilen sich dieselben BG-Dateien — die Platzierung
-# soll am Bild haengen, nicht am Ort. Gespeichert in character_state.meta unter
-# "scene_positions" -> { "<room>": { "<bg_id>": { "<expr_version>":
-# {x, y, scale} } } }, damit die Platzierung fuer ALLE Spieler gilt (in den
-# Character-Daten, nicht pro User).
+# === Scene positions (figure point per room and expression image) ===========
+# Placement and scale depend on room, background filename and expression hash.
+# Location is deliberately excluded: cloned locations may share backgrounds,
+# and placement belongs to the image. Stored for all players in character_state.meta:
+# scene_positions -> {room: {bg_id: {expr_version: {x, y, scale}}}}.
 
-_SCENE_POS_MAX_PER_BG = 24   # aelteste expr-Hashes je Hintergrund verfallen
-_SCENE_POS_MAX_BG = 16       # aelteste Hintergruende je Raum verfallen
+_SCENE_POS_MAX_PER_BG = 24   # evict oldest expression hashes per background
+_SCENE_POS_MAX_BG = 16       # evict oldest backgrounds per room
 _SCENE_SCALE_MIN = 0.3
 _SCENE_SCALE_MAX = 2.0
 
 
 def _read_state_meta(character_name: str) -> Dict[str, Any]:
-    """Liest den rohen meta-JSON-Blob aus character_state (oder {})."""
+    """Read the raw character_state meta JSON blob, or {}."""
     if not character_name:
         return {}
     try:
@@ -2559,10 +2562,9 @@ def _read_state_meta(character_name: str) -> Dict[str, Any]:
 
 def get_scene_position(character_name: str, room_id: str,
                        expr_version: str, bg_id: str) -> Optional[Dict[str, float]]:
-    """Standpunkt {x, y, scale} der Figur fuer (Raum, Hintergrundbild,
-    Expression-Bild) oder None, wenn dafuer noch nicht platziert.
+    """Return figure {x, y, scale} for room/background/expression, or None if unplaced.
 
-    x/y sind Bruchteile 0..1; scale ist ein Groessen-Faktor (Default 1.0)."""
+    x/y are fractions 0..1; scale is a size factor (default 1.0)."""
     if not (character_name and expr_version):
         return None
     rooms = _read_state_meta(character_name).get("scene_positions") or {}
@@ -2580,14 +2582,10 @@ def get_scene_position(character_name: str, room_id: str,
 
 def get_last_scene_position(character_name: str, room_id: str,
                             bg_id: str = "") -> Optional[Dict[str, float]]:
-    """Letzte gespeicherte Position {x, y, scale} fuer (Character, Raum) — zum
-    Vererben, wenn ein NEUES Expression-Bild (neuer expr_version) noch keinen
-    eigenen Eintrag hat.
+    """Return the last {x, y, scale} for a character/room to seed a new expression.
 
-    Bevorzugt denselben Hintergrund (bg_id, da x/y bg-relativ sind), faellt
-    sonst auf den zuletzt platzierten Hintergrund im Raum zurueck. Die Dict-
-    Insertion-Order ist LRU → der letzte Eintrag ist die neueste Platzierung.
-    """
+    Prefer the same background (x/y are background-relative), otherwise use the
+    room's last placed background. Dictionary insertion order is LRU: last is newest."""
     if not character_name:
         return None
     rooms = _read_state_meta(character_name).get("scene_positions") or {}
@@ -2607,11 +2605,11 @@ def get_last_scene_position(character_name: str, room_id: str,
                     continue
         return None
 
-    # 1) gleicher Hintergrund — genaueste x/y-Uebernahme
+    # 1) Same background gives the most precise x/y inheritance.
     p = _last_valid(bgs.get(bg_id or ""))
     if p:
         return p
-    # 2) sonst der zuletzt platzierte Hintergrund im Raum
+    # 2) Otherwise use the last placed background in the room.
     for bg_dict in reversed(list(bgs.values())):
         p = _last_valid(bg_dict)
         if p:
@@ -2688,23 +2686,23 @@ def set_scene_position(character_name: str, room_id: str,
 
 # === Outfit-Intent (Runtime, in character_state.meta) ====================
 # Plan: development_instructions/plan-outfit-system-rethink.md §3
-# Ersetzt runtime_outfit_skip + outfit_locked + (teilweise) outfit_exceptions.
-# Lebenszyklus von forbidden_slots: verfaellt bei Location-Wechsel und
-# beim Schlafen (siehe save_character_current_location).
+# Replaces runtime_outfit_skip, outfit_locked and parts of outfit_exceptions.
+# forbidden_slots expires on location changes and sleep
+# (see save_character_current_location).
 
 OUTFIT_INTENT_DEFAULT = {
-    "forced_pieces": {},        # {slot: item_id} — explizit gesetzt
-    "forbidden_slots": [],      # Slots die explizit leer bleiben sollen
-    "target_outfit_type": None, # optionaler Stil-Hint fuer Auto-Fill
-    "locked": False,            # globaler "Haende weg"-Switch
+    "forced_pieces": {},        # {slot: item_id} — explicitly set
+    "forbidden_slots": [],      # slots explicitly kept empty
+    "target_outfit_type": None, # optional style hint for auto-fill
+    "locked": False,            # global hands-off switch
 }
 
 
 def get_outfit_intent(character_name: str) -> Dict[str, Any]:
-    """Liefert das Outfit-Intent-Dict mit Default-Feldern.
+    """Return the outfit intent dictionary with defaults.
 
-    Liest aus character_state.meta. Fehlende Felder werden mit Defaults
-    aufgefuellt — das Resultat ist immer ein vollstaendiges Dict.
+    Read character_state.meta and fill missing fields with defaults,
+    always returning a complete dictionary.
     """
     if not character_name:
         return dict(OUTFIT_INTENT_DEFAULT, forced_pieces={}, forbidden_slots=[])
@@ -2721,7 +2719,7 @@ def get_outfit_intent(character_name: str) -> Dict[str, Any]:
 
 
 def set_outfit_intent(character_name: str, intent: Dict[str, Any]) -> None:
-    """Schreibt das vollstaendige Intent-Dict in character_state.meta."""
+    """Write the complete intent dictionary into character_state.meta."""
     if not character_name:
         return
     from app.core.keyed_lock import keyed_lock
@@ -2767,7 +2765,7 @@ def add_forbidden_slot(character_name: str, slot: str) -> None:
 
 
 def clear_forbidden_slots(character_name: str) -> None:
-    """Leert die Liste vollstaendig — z.B. bei Location-Wechsel."""
+    """Clear the entire list, for example on a location change."""
     if not character_name:
         return
     intent = get_outfit_intent(character_name)
@@ -2777,9 +2775,9 @@ def clear_forbidden_slots(character_name: str) -> None:
 
 
 def is_outfit_locked(character_name: str) -> bool:
-    """True wenn das Outfit des Characters gegen Auto-Aenderung gesperrt ist.
+    """Whether the character outfit is locked against automatic changes.
 
-    Liest jetzt aus `outfit_intent.locked` (statt frueherem profile.outfit_locked).
+    Read outfit_intent.locked, replacing the retired profile.outfit_locked.
     """
     if not character_name:
         return False
@@ -2787,29 +2785,27 @@ def is_outfit_locked(character_name: str) -> bool:
 
 
 def set_outfit_locked(character_name: str, locked: bool) -> None:
-    """Setzt/entfernt die Outfit-Sperre via intent.locked."""
+    """Set or clear the outfit lock through intent.locked."""
     if not character_name:
         return
     _update_outfit_intent(character_name, locked=bool(locked))
 
 
-# === Spezial-Aktivitaeten (pro Character, in character_config.json) ===
+# === Special activities (per character, in character_config.json) ===
 
-# === Erlaubte Orte: DEPRECATED ============================================
-# Das allowed_locations-Feld wurde abgeschafft. Orte-Zugang wird ueber das
-# Rules-System (Block-Rules) gesteuert; Wissen/Sichtbarkeit eines Ortes laeuft
-# jetzt ueber knowledge_item_id an Location/Room. Der Getter bleibt als
-# No-Op bestehen fuer etwaige externe Aufrufer.
+# === Allowed locations: deprecated =========================================
+# allowed_locations was removed. Block rules control access; knowledge and
+# visibility use knowledge_item_id on locations/rooms. The getter remains
+# a no-op for external callers.
 
 def _migrate_outfits(outfits: list) -> list:
-    """Konvertiert altes Format (location/activity) zu neuem (locations/activities).
+    """Convert location/activity to locations/activities idempotently.
 
-    Idempotent — bereits migrierte Eintraege werden unveraendert uebernommen.
-    """
+    Already migrated entries remain unchanged."""
     migrated = []
     for o in outfits:
         if "locations" in o:
-            # Bereits neues Format — sicherstellen dass id + image + excluded_locations vorhanden
+            # Already migrated: ensure id, image and excluded_locations exist.
             if not o.get("id"):
                 o["id"] = uuid.uuid4().hex[:8]
             if "image" not in o:
@@ -2818,7 +2814,7 @@ def _migrate_outfits(outfits: list) -> list:
                 o["excluded_locations"] = []
             migrated.append(o)
             continue
-        # Altes Format: {location, activity, outfit}
+        # Old format: {location, activity, outfit}
         migrated.append({
             "id": uuid.uuid4().hex[:8],
             "name": "",
@@ -2832,14 +2828,14 @@ def _migrate_outfits(outfits: list) -> list:
 
 
 # ---------------------------------------------------------------------------
-# Soul-Files: Template-getriebene Erstellung
+# Soul files: template-driven creation
 # ---------------------------------------------------------------------------
 
-# Map: Template-Feature → Soul-Datei. None = immer aktiv (kein Feature-Gate).
+# Map template feature to soul file. None means always enabled.
 _SOUL_FILE_FEATURES = {
-    "personality.md":    None,                  # immer
-    "tasks.md":          None,                  # immer
-    "presence.md":       None,                  # immer — Aussenwirkung
+    "personality.md":    None,                  # always
+    "tasks.md":          None,                  # always
+    "presence.md":       None,                  # always — outward presence
     "roleplay_rules.md": "roleplay_rules_enabled",
     "beliefs.md":        "beliefs_enabled",
     "lessons.md":        "lessons_enabled",
@@ -2849,7 +2845,7 @@ _SOUL_FILE_FEATURES = {
 
 
 def _soul_template_dir() -> Path:
-    """shared/templates/soul/ Verzeichnis (Repo-Root)."""
+    """The shared/templates/soul/ directory at repository root."""
     return Path(__file__).resolve().parents[2] / "shared" / "templates" / "soul"
 
 
@@ -2924,11 +2920,9 @@ def populate_soul_files_from_profile(character_name: str,
 
 
 def _inject_into_first_empty_section(md_text: str, content: str) -> str:
-    """Schreibt content unter die erste ## Section die noch leer ist.
+    """Write content under the first empty ## section.
 
-    Gibt unveraenderten Text zurueck wenn keine leere Section gefunden ODER
-    bereits Content vorhanden ist.
-    """
+    Return unchanged text if no empty section exists or content is already present."""
     if not md_text:
         return md_text
     lines = md_text.splitlines()
@@ -2939,7 +2933,7 @@ def _inject_into_first_empty_section(md_text: str, content: str) -> str:
         line = lines[i]
         out_lines.append(line)
         if not injected and line.startswith("## "):
-            # Schauen ob diese Section leer ist (kein Body bis naechste ## oder EOF)
+            # Check whether this section is empty until the next ## or EOF.
             j = i + 1
             section_body = []
             while j < len(lines) and not lines[j].startswith("## ") and not lines[j].startswith("# "):
@@ -3021,7 +3015,7 @@ _OUTFIT_COLUMNS = ("id", "name", "pieces", "image", "created_at")
 
 
 def _load_outfits_file(character_name: str) -> List[Dict]:
-    """Laedt Outfit-Definitionen aus outfits_sets-Tabelle."""
+    """Load outfit definitions from outfits_sets."""
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -3055,7 +3049,7 @@ def _load_outfits_file(character_name: str) -> List[Dict]:
 
 
 def _save_outfits_file(character_name: str, outfits: List[Dict]):
-    """Schreibt Outfit-Definitionen in outfits_sets-Tabelle (KEIN image_meta)."""
+    """Write outfit definitions to outfits_sets, excluding image_meta."""
     now = utc_now_iso()
     new_ids = {o.get("id") for o in outfits if o.get("id")}
     try:
@@ -3116,11 +3110,10 @@ def save_outfit_image_meta(character_name: str, image_filename: str, meta: Dict[
 
 
 def get_character_outfits(character_name: str) -> List[Dict]:
-    """Gibt alle definierten Outfits zurueck (aus outfits_sets-Tabelle).
+    """Return all defined outfits from outfits_sets.
 
-    Migriert automatisch alte Felder (locations: str→list).
-    Embedded image_meta aus alten Profilen wird ignoriert — Sidecar ist Quelle.
-    """
+    Automatically migrate old fields (locations: str to list).
+    Ignore embedded image_meta from old profiles; the sidecar is authoritative."""
     if not character_name:
         return []
     raw = _load_outfits_file(character_name)
@@ -3128,11 +3121,10 @@ def get_character_outfits(character_name: str) -> List[Dict]:
 
 
 def find_outfit_by_image(character_name: str, image_filename: str) -> Optional[Dict]:
-    """Sucht ein Outfit anhand seines Bild-Dateinamens.
+    """Find an outfit by its image filename.
 
-    Wird vom Re-Creation Dialog genutzt um aus reference_images[input_reference_image_1]
-    das Outfit beim Erstellungszeitpunkt zu rekonstruieren — auch fuer alte Bilder
-    ohne canonical.outfits.
+    The recreation dialog uses reference_images[input_reference_image_1] to
+    reconstruct the outfit at creation, including old images without canonical.outfits.
     """
     if not character_name or not image_filename:
         return None
@@ -3144,10 +3136,9 @@ def find_outfit_by_image(character_name: str, image_filename: str) -> Optional[D
 
 
 def save_character_outfits(character_name: str, outfits: List[Dict]):
-    """Speichert die Outfit-Konfigurationen in der DB (KEIN image_meta).
+    """Save outfit configuration to the DB, excluding image_meta.
 
-    image_meta gehoert in die Sidecar-JSON neben dem PNG, nicht in der DB.
-    """
+    image_meta belongs in the JSON sidecar beside the PNG, not the DB."""
     for outfit in outfits:
         if not outfit.get("name", "").strip():
             outfit["name"] = _next_outfit_name(outfits)
@@ -3164,11 +3155,10 @@ def _next_outfit_name(outfits: List[Dict]) -> str:
 
 
 def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
-    """Fuegt ein neues Outfit hinzu oder aktualisiert ein bestehendes.
+    """Add or update an outfit.
 
     outfit_data: {id?, name, outfit, locations[], activities[]}
-    Returns: outfit id
-    """
+    Return the outfit ID."""
     outfits = get_character_outfits(character_name)
     outfit_id = outfit_data.get("id", "")
 
@@ -3195,7 +3185,7 @@ def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
                 save_character_outfits(character_name, outfits)
                 return outfit_id
 
-    # Neues Outfit
+    # New outfit
     from datetime import datetime
     outfit_id = uuid.uuid4().hex[:8]
     name = outfit_data.get("name", "")
@@ -3222,12 +3212,10 @@ _REMBG_SESSION_LOCK = None
 
 
 def preload_rembg_session() -> None:
-    """Laedt die rembg/u2net-Session im Hintergrund.
+    """Load the rembg/u2net session in a background thread at server startup.
 
-    Ohne Preload triggert der erste outfit-postprocessing-Request einen
-    ~5s Block des Event-Loops (170 MB ONNX-Modell lod, GIL haelt zwischendurch).
-    Beim Server-Startup als Background-Thread aufgerufen.
-    """
+    Without preload, the first outfit postprocessing request blocks the event
+    loop for about 5 s (170 MB ONNX model load, intermittently holding the GIL)."""
     import threading as _t
     def _worker():
         try:
@@ -3240,14 +3228,11 @@ def preload_rembg_session() -> None:
 
 
 def _get_rembg_session():
-    """Lazy-Init und Cache der rembg/U2Net-Session.
+    """Lazily initialize and cache the rembg/U2Net session.
 
-    Eine wiederverwendete Session vermeidet (a) wiederholtes
-    Modell-Laden bei jedem Aufruf und (b) den onnxruntime
-    pthread_setaffinity_np-Fehler, der bei jeder neuen
-    InferenceSession ausgeloest wird wenn keine SessionOptions
-    mit explizitem intra_op_num_threads gesetzt sind.
-    """
+    Reusing a session avoids repeated model loads and onnxruntime's
+    pthread_setaffinity_np error on new InferenceSessions without explicit
+    intra_op_num_threads in SessionOptions."""
     global _REMBG_SESSION, _REMBG_SESSION_LOCK
     if _REMBG_SESSION is not None:
         return _REMBG_SESSION
@@ -3257,8 +3242,8 @@ def _get_rembg_session():
     with _REMBG_SESSION_LOCK:
         if _REMBG_SESSION is not None:
             return _REMBG_SESSION
-        # OMP_NUM_THREADS VOR rembg-Import setzen, damit onnxruntime
-        # die CPU-Affinity nicht zu setzen versucht (im Container fehlerhaft).
+        # Set OMP_NUM_THREADS before importing rembg to keep onnxruntime
+        # from attempting CPU affinity changes that fail inside containers.
         import os
         os.environ.setdefault("OMP_NUM_THREADS",
             os.environ.get("REMBG_OMP_NUM_THREADS", "4"))
@@ -3329,14 +3314,10 @@ def postprocess_outfit_image(image_path: Path) -> Path:
 
 def update_outfit_image(character_name: str, outfit_id: str, image: str,
                         image_meta: dict | None = None) -> bool:
-    """Aktualisiert das image-Feld eines Outfits.
+    """Update an outfit's image field.
 
-    image_meta wird als Sidecar-JSON (`outfits/<image>.json`) geschrieben — NICHT
-    in outfits.json embedded.
-
-    Loescht automatisch alle Expression-Variants fuer dieses Outfit,
-    da sie auf dem alten Bild basieren.
-    """
+    Write image_meta as outfits/<image>.json, never embedded in outfits.json.
+    Automatically delete this outfit's expression variants based on the old image."""
     outfits = get_character_outfits(character_name)
     for o in outfits:
         if o.get("id") == outfit_id:
@@ -3344,28 +3325,27 @@ def update_outfit_image(character_name: str, outfit_id: str, image: str,
             o["image"] = image
             save_character_outfits(character_name, outfits)
 
-            # Sidecar fuer das neue Bild schreiben (falls Meta da)
+            # Write the new image sidecar if metadata is available.
             if image and image_meta:
                 try:
                     save_outfit_image_meta(character_name, image, image_meta)
                 except Exception as _se:
                     logger.warning("Sidecar-Write fehlgeschlagen fuer %s: %s", image, _se)
 
-            # Altes PNG + Sidecar loeschen wenn ersetzt
+            # Delete the old PNG and sidecar when replaced.
             if old_image and old_image != image:
                 _delete_outfit_files(character_name, old_image)
 
-            # Expression-Variants invalidieren — Variant-Cache haengt jetzt
-            # nur noch an Character + Equipped + Mood + Activity, d.h. ein
-            # Outfit-Image-Wechsel betrifft den Cache nicht mehr. Bleibt als
-            # No-Op fuer Lesbarkeit.
+            # Expression variants now depend on character, equipment, mood and
+            # activity. Outfit image changes no longer invalidate the cache;
+            # retain this no-op note for readability.
 
             return True
     return False
 
 
 def _delete_outfit_files(character_name: str, image_filename: str) -> None:
-    """Loescht PNG + Sidecar-JSON eines Outfits aus dem outfits/-Verzeichnis."""
+    """Delete an outfit PNG and JSON sidecar from outfits/."""
     if not image_filename:
         return
     outfits_dir = get_character_outfits_dir(character_name)
@@ -3382,17 +3362,16 @@ def _delete_outfit_files(character_name: str, image_filename: str) -> None:
 def delete_character_outfit(character_name: str,
                             outfit_id: str = "", location: str = "",
                             activity: str = "") -> bool:
-    """Loescht ein Outfit per ID oder legacy location+activity.
+    """Delete an outfit by ID or legacy location/activity match.
 
-    Loescht auch das PNG und die Sidecar-JSON aus dem outfits/-Verzeichnis.
-    """
+    Also delete its PNG and JSON sidecar from outfits/."""
     outfits = get_character_outfits(character_name)
 
     if outfit_id:
         to_delete = [o for o in outfits if o.get("id") == outfit_id]
         new_outfits = [o for o in outfits if o.get("id") != outfit_id]
     else:
-        # Legacy: location+activity Match (fuer Rueckwaertskompatibilitaet)
+        # Legacy location/activity match for existing callers.
         to_delete = [
             o for o in outfits
             if (o.get("locations") == [location] and
@@ -3406,7 +3385,7 @@ def delete_character_outfit(character_name: str,
 
     if len(new_outfits) < len(outfits):
         save_character_outfits(character_name, new_outfits)
-        # PNG + Sidecar mit-loeschen
+        # Delete the PNG and sidecar too.
         for o in to_delete:
             _delete_outfit_files(character_name, o.get("image", ""))
         return True
@@ -3414,12 +3393,11 @@ def delete_character_outfit(character_name: str,
 
 
 def resolve_outfit_placeholders(outfit_text: str, character_name: str) -> str:
-    """Ersetzt {placeholder} in Outfit-Texten durch Profil-Felder des Characters.
+    """Replace outfit-text placeholders with direct character profile fields.
 
-    Unterstuetzte Platzhalter: alle direkten Profil-Felder wie
-    {size}, {body_type}, {breast_size}, {butt_size}, {hair_color},
-    {hair_length}, {eye_color}, {skin_color}, {gender}, etc.
-    Unbekannte Platzhalter werden unveraendert belassen.
+    Supported examples: {size}, {body_type}, {breast_size}, {butt_size},
+    {hair_color}, {hair_length}, {eye_color}, {skin_color}, {gender}.
+    Unknown placeholders remain unchanged.
     """
     if not outfit_text or '{' not in outfit_text:
         return outfit_text
@@ -3436,7 +3414,7 @@ def resolve_outfit_placeholders(outfit_text: str, character_name: str) -> str:
 
 
 def save_character_default_outfit(character_name: str, outfit: str):
-    """Speichert das Default-Outfit"""
+    """Save the default outfit."""
     from app.core.keyed_lock import keyed_lock
     # Read AND write under the per-character profile lock (DATA-3).
     with keyed_lock("character_profile", character_name):
@@ -3446,20 +3424,19 @@ def save_character_default_outfit(character_name: str, outfit: str):
 
 
 def get_character_default_outfit(character_name: str) -> str:
-    """Gibt das Default-Outfit zurueck"""
+    """Return the default outfit."""
     if not character_name:
         return ""
     return get_character_profile(character_name).get("default_outfit", "")
 
 
 def character_exists(name: str) -> bool:
-    """True wenn ein Character mit diesem Namen in der Welt existiert.
+    """Whether a character with this exact name exists in the world.
 
-    Case-insensitiver, exakter Name-Match (KEINE Vor-/Nachnamen-Aufloesung).
-    Fuer den Dangling-Filter: Beziehungen/Memories/Commitments, die einen nicht
-    (mehr) existierenden Character referenzieren, werden read-seitig aus Prompts
-    gefiltert (Daten bleiben in der DB, tauchen wieder auf sobald der Character
-    importiert wird). Siehe plan-character-import-fresh-start.md.
+    Case-insensitive, without resolving partial names. The dangling-reference
+    filter excludes relationships, memories and commitments to absent characters
+    from prompts. Data stays in the DB and reappears on import; see
+    plan-character-import-fresh-start.md.
     """
     n = (name or "").strip().lower()
     if not n:
@@ -3471,16 +3448,13 @@ def character_exists(name: str) -> bool:
 
 
 def list_available_characters(include_pooled: bool = False) -> List[str]:
-    """Listet alle verfuegbaren Characters aus der DB.
+    """List available characters from the DB.
 
-    Filterung:
-      - Namen mit fuehrendem Underscore (_messaging_frame, _system) sind
-        interne System-Characters
-      - Reservierte Namen (admin, user, system, default, player, "") sind
-        keine spielbaren Characters — sie repraesentieren Login-Accounts
-        oder Sentinels und sollen niemals in Galerie/Roster/Chat-Auswahl
-        auftauchen, auch wenn sie versehentlich als Row in der ``characters``
-        Tabelle landen
+    Filtering:
+      - Leading underscores (_messaging_frame, _system) mark internal characters.
+      - Reserved names (admin, user, system, default, player, "") represent login
+        accounts or sentinels. They must never appear in galleries, rosters or
+        chat pickers, even if accidentally stored in characters.
       - POOLED temporary NPCs (``status='pooled'``, plan-npc-auto-spawn.md
         § 3) stand nowhere in the world: their profile is only kept so a later
         spawn can re-use it. This is THE roster gate, so filtering here is what
@@ -3602,16 +3576,14 @@ MODEL_RIG_VALUES = ("mixamo", "generic")
 
 
 def get_character_images(character_name: str) -> List[str]:
-    """Gibt eine Liste aller Galerie-Bild-Dateinamen zurueck.
+    """Return gallery image filenames by scanning images/.
 
-    Scannt das images/ Verzeichnis nach Bilddateien.
-    Sortiert nach created_at aus Metadaten (neueste zuerst), Fallback auf mtime.
-    """
+    Sort newest first by metadata created_at, falling back to mtime."""
     images_dir = get_character_images_dir(character_name)
     files = []
     for f in images_dir.iterdir():
         if f.is_file() and f.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
-            # created_at aus JSON laden (ISO-String sortiert lexikographisch = chronologisch)
+            # Read created_at from JSON (ISO lexical order is chronological).
             sort_key = None
             meta_path = images_dir / f"{f.stem}.json"
             if meta_path.exists():
@@ -3631,7 +3603,7 @@ def get_character_images(character_name: str) -> List[str]:
 
 def get_character_profile_image(character_name: str,
                                 profile: Optional[Dict[str, Any]] = None) -> str:
-    """Gibt den Namen des Profilbildes zurueck.
+    """Return the profile image filename.
 
     ``profile``: an already-loaded profile to read from (see
     ``get_character_current_location``).
@@ -3679,13 +3651,13 @@ def set_character_profile_image(character_name: str, image_filename: str) -> boo
 
 
 def _get_image_meta_path(character_name: str, image_filename: str) -> Path:
-    """Gibt den Pfad zur Metadaten-Datei eines Bildes zurueck (gleicher Name wie Bild, .json)."""
+    """Return an image metadata path (same name as image, with .json suffix)."""
     stem = Path(image_filename).stem
     return get_character_images_dir(character_name) / f"{stem}.json"
 
 
 def _load_single_image_meta(character_name: str, image_filename: str) -> Dict[str, Any]:
-    """Laedt die Metadaten eines einzelnen Bildes."""
+    """Load metadata for one image."""
     meta_path = _get_image_meta_path(character_name, image_filename)
     if meta_path.exists():
         try:
@@ -3696,7 +3668,7 @@ def _load_single_image_meta(character_name: str, image_filename: str) -> Dict[st
 
 
 def _save_single_image_meta(character_name: str, image_filename: str, meta: Dict[str, Any]):
-    """Speichert die Metadaten eines einzelnen Bildes."""
+    """Save metadata for one image."""
     meta_path = _get_image_meta_path(character_name, image_filename)
     meta_path.write_text(
         json.dumps(meta, ensure_ascii=False, indent=2),
@@ -3740,7 +3712,7 @@ def remove_image_animation(character_name: str, image_filename: str) -> Optional
 
 
 def _load_all_image_meta(character_name: str) -> Dict[str, Dict[str, Any]]:
-    """Laedt alle Bild-Metadaten als Dict {filename: meta}."""
+    """Load all image metadata as {filename: meta}."""
     images_dir = get_character_images_dir(character_name)
     result = {}
     for meta_file in images_dir.glob("*.json"):
@@ -3754,7 +3726,7 @@ def _load_all_image_meta(character_name: str) -> Dict[str, Dict[str, Any]]:
 
 
 def add_character_image_comment(character_name: str, image_filename: str, comment: str) -> None:
-    """Speichert einen Bild-Kommentar in der separaten Metadaten-Datei."""
+    """Save an image comment in the separate metadata file."""
     meta = _load_single_image_meta(character_name, image_filename)
     meta["image_filename"] = image_filename
     meta["comment"] = comment
@@ -3762,13 +3734,13 @@ def add_character_image_comment(character_name: str, image_filename: str, commen
 
 
 def get_character_image_comments(character_name: str) -> Dict[str, str]:
-    """Gibt alle Bild-Kommentare zurueck als {filename: comment}."""
+    """Return all image comments as {filename: comment}."""
     all_meta = _load_all_image_meta(character_name)
     return {fn: m.get("comment", "") for fn, m in all_meta.items() if m.get("comment")}
 
 
 def add_character_image_prompt(character_name: str, image_filename: str, prompt: str) -> None:
-    """Speichert den Generierungs-Prompt in der separaten Metadaten-Datei."""
+    """Save the generation prompt in the separate metadata file."""
     meta = _load_single_image_meta(character_name, image_filename)
     meta["image_filename"] = image_filename
     meta["prompt"] = prompt
@@ -3776,18 +3748,18 @@ def add_character_image_prompt(character_name: str, image_filename: str, prompt:
 
 
 def get_character_image_prompts(character_name: str) -> Dict[str, str]:
-    """Gibt alle gespeicherten Bild-Prompts zurueck als {filename: prompt}."""
+    """Return saved image prompts as {filename: prompt}."""
     all_meta = _load_all_image_meta(character_name)
     return {fn: m.get("prompt", "") for fn, m in all_meta.items() if m.get("prompt")}
 
 
 def add_character_image_metadata(character_name: str, image_filename: str, metadata: Dict[str, Any]
 ) -> None:
-    """Speichert Generierungs-Metadaten zu einem Bild (Backend, Modell, Dauer etc.)."""
+    """Save image generation metadata (backend, model, duration, etc.)."""
     meta = _load_single_image_meta(character_name, image_filename)
     meta["image_filename"] = image_filename
     meta.update(metadata)
-    # created_at setzen falls noch nicht vorhanden (Fallback: Datei-mtime)
+    # Set created_at if absent, falling back to file mtime.
     if not meta.get("created_at"):
         img_path = get_character_images_dir(character_name) / image_filename
         try:
@@ -3856,7 +3828,7 @@ def get_character_image_metadata(character_name: str) -> Dict[str, Any]:
 
 
 def get_single_image_meta(character_name: str, image_filename: str) -> Dict[str, Any]:
-    """Gibt die kompletten Metadaten eines einzelnen Bildes zurueck."""
+    """Return the complete metadata of one image."""
     return _load_single_image_meta(character_name, image_filename)
 
 
@@ -3874,7 +3846,7 @@ def get_character_skills_dir(character_name: str) -> Path:
 
 
 def get_character_skill_config(character_name: str, skill_name: str) -> Dict[str, Any]:
-    """Laedt die character-spezifische Skill-Konfiguration"""
+    """Load per-character skill configuration."""
     skills_dir = get_character_skills_dir(character_name)
     config_path = skills_dir / f"{skill_name}.json"
 
@@ -3888,12 +3860,11 @@ def get_character_skill_config(character_name: str, skill_name: str) -> Dict[str
 
 
 def save_character_skill_config(character_name: str, skill_name: str, config: Dict[str, Any]):
-    """Speichert die character-spezifische Skill-Konfiguration.
+    """Save per-character skill configuration.
 
-    Skill-Configs gehoeren zu BESTEHENDEN Characters — ein unbekannter Name
-    wird als Bug behandelt (z.B. LLM-Output mit Vornamen statt Vollnamen)
-    und der Write verworfen, statt ein Geister-Verzeichnis anzulegen.
-    """
+    Only existing characters may own skill configuration. Treat an unknown or
+    partial LLM-generated name as a bug: discard the write instead of creating
+    a ghost directory."""
     if character_name.lower() in _RESERVED_NAMES:
         logger.warning("save_character_skill_config: reservierter Name '%s' uebersprungen",
                        character_name)
@@ -3930,7 +3901,7 @@ def get_character_scheduler_dir(character_name: str) -> Path:
 
 
 def get_character_scheduler_jobs(character_name: str) -> List[Dict[str, Any]]:
-    """Laedt Scheduler-Jobs fuer einen Character aus der DB."""
+    """Load scheduler jobs for a character from the DB."""
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -3963,7 +3934,7 @@ def get_character_scheduler_jobs(character_name: str) -> List[Dict[str, Any]]:
         return jobs
     except Exception as e:
         get_logger("character").warning("get_character_scheduler_jobs DB-Fehler fuer %s: %s", character_name, e)
-    # Fallback: JSON-Datei
+    # Fallback: JSON file
     scheduler_dir = get_character_scheduler_dir(character_name)
     jobs_path = scheduler_dir / "jobs.json"
     if jobs_path.exists():
@@ -3979,7 +3950,7 @@ def get_character_scheduler_jobs(character_name: str) -> List[Dict[str, Any]]:
 
 
 def save_character_scheduler_jobs(character_name: str, jobs: List[Dict[str, Any]]):
-    """Speichert Scheduler-Jobs fuer einen Character in die DB (Upsert)."""
+    """Upsert scheduler jobs for a character into the DB."""
     now = utc_now_iso()
     try:
         with transaction() as conn:
@@ -4019,7 +3990,7 @@ def save_character_scheduler_jobs(character_name: str, jobs: List[Dict[str, Any]
 
 
 def get_character_scheduler_logs(character_name: str) -> List[Dict[str, Any]]:
-    """Laedt Scheduler-Logs fuer einen Character aus der DB."""
+    """Load scheduler logs for a character from the DB."""
     try:
         conn = get_connection()
         # All job ids of this character
@@ -4040,7 +4011,7 @@ def get_character_scheduler_logs(character_name: str) -> List[Dict[str, Any]]:
                 for r in rows]
     except Exception as e:
         get_logger("character").warning("get_character_scheduler_logs DB-Fehler fuer %s: %s", character_name, e)
-    # Fallback: JSON-Datei
+    # Fallback: JSON file
     scheduler_dir = get_character_scheduler_dir(character_name)
     logs_path = scheduler_dir / "job_logs.json"
     if logs_path.exists():
@@ -4052,7 +4023,7 @@ def get_character_scheduler_logs(character_name: str) -> List[Dict[str, Any]]:
 
 
 def save_character_scheduler_logs(character_name: str, logs: List[Dict[str, Any]]):
-    """Speichert Scheduler-Logs fuer einen Character in die DB."""
+    """Save scheduler logs for a character to the DB."""
     try:
         with transaction() as conn:
             for log_entry in logs:
@@ -4060,7 +4031,7 @@ def save_character_scheduler_logs(character_name: str, logs: List[Dict[str, Any]
                 if not job_id:
                     continue
                 _result = log_entry.get("result", "")
-                # Dict/List serialisieren — SQLite kann nur str/int/float/bytes/None
+                # Serialize dictionaries/lists; SQLite accepts str/int/float/bytes/None.
                 # binden. Manche Jobs liefern strukturierte Ergebnisse.
                 if isinstance(_result, (dict, list)):
                     try:
@@ -4087,14 +4058,11 @@ def save_character_scheduler_logs(character_name: str, logs: List[Dict[str, Any]
 
 
 def _normalize_schedule_slots(raw_slots: Any) -> List[Dict[str, Any]]:
-    """Bringt Slots auf das aktuelle Schema {hour, location, role, sleep}.
+    """Normalize slots to {hour, location, role, sleep} without data migration.
 
-    Translates Legacy-Slots ohne Datenmigration: das alte ``activity``-Feld
-    wird verworfen; die Sentinels ``__sleep__`` (in ``activity`` oder
-    ``location``) werden zu ``sleep: True``; Stunden mit der alten
-    ``__llm_choice__``-Location fallen weg, weil leere Stunden im neuen
-    Schema implizit "KI waehlt" bedeuten.
-    """
+    Discard the old activity field; __sleep__ in activity or location becomes
+    sleep: True. Drop hours with __llm_choice__ locations: empty hours now
+    implicitly let the AI choose."""
     out: List[Dict[str, Any]] = []
     if not isinstance(raw_slots, list):
         return out
@@ -4114,7 +4082,7 @@ def _normalize_schedule_slots(raw_slots: Any) -> List[Dict[str, Any]]:
         if is_sleep:
             out.append({"hour": hour, "sleep": True, "location": "", "role": ""})
             continue
-        # Legacy "Ortsunabhaengig" -> verwerfen (leer = KI waehlt im neuen Schema).
+        # Drop the legacy location-independent sentinel; empty means AI choice.
         if legacy_loc == "__llm_choice__":
             continue
         location = legacy_loc
@@ -4126,7 +4094,7 @@ def _normalize_schedule_slots(raw_slots: Any) -> List[Dict[str, Any]]:
 
 
 def get_character_daily_schedule(character_name: str) -> Dict[str, Any]:
-    """Laedt den Tagesablauf fuer einen Character aus der DB."""
+    """Load a character's daily schedule from the DB."""
     schedule: Dict[str, Any] = {"enabled": False, "slots": []}
     try:
         conn = get_connection()
@@ -4148,7 +4116,7 @@ def get_character_daily_schedule(character_name: str) -> Dict[str, Any]:
                 schedule["slots"] = []
     except Exception as e:
         get_logger("character").warning("get_character_daily_schedule DB-Fehler fuer %s: %s", character_name, e)
-        # Fallback: JSON-Datei (Altdaten von vor der DB-Migration).
+        # Fallback: JSON file predating the DB migration.
         path = get_character_scheduler_dir(character_name) / "daily_schedule.json"
         if path.exists():
             try:
@@ -4393,15 +4361,12 @@ def appear_in_world(character_name: str) -> bool:
 
 def is_character_sleeping(character_name: str,
                           profile: Optional[Dict[str, Any]] = None) -> bool:
-    """Prueft ob der Character gerade wirklich schlaeft.
+    """Whether the character is actually sleeping.
 
-    Schritt 6 (May 2026): liest den is_sleeping-Flag aus character_state.
-    Legacy-Fallback: wenn der Flag noch nicht migriert ist (alte Saves),
-    zaehlt auch ``current_activity == "sleeping"``.
+    Step 6 (May 2026): read is_sleeping from character_state. For old saves with
+    an unmigrated flag, current_activity == "sleeping" also counts.
 
-    ``profile``: an already-loaded profile to read from (see
-    ``get_character_current_location``).
-    """
+    ``profile`` is an already-loaded profile (see get_character_current_location)."""
     try:
         if profile is None:
             profile = get_character_profile(character_name) or {}
@@ -4470,7 +4435,7 @@ def adjust_status_effects(character_name: str, deltas: Dict[str, int],
 # Drei orthogonale Flags ersetzen Activity-Effekte:
 #   is_sleeping  → Compliance skip + AgentLoop-Skip + off-map
 #   is_wet       → swim-Exemption bei swim_allowed Raum
-#   is_intimate  → Decency-Override auf nude_ok
+#   is_intimate  → decency override to nude_ok
 
 def set_is_sleeping(character_name: str, value: bool) -> None:
     """Set the is_sleeping flag. True may send the character off-map — that
@@ -4638,7 +4603,7 @@ def get_state_flags(character_name: str) -> Dict[str, bool]:
 
 
 def delete_character_daily_schedule(character_name: str) -> bool:
-    """Loescht den Tagesablauf fuer einen Character."""
+    """Delete a character's daily schedule."""
     path = get_character_scheduler_dir(character_name) / "daily_schedule.json"
     if path.exists():
         path.unlink()
@@ -4699,7 +4664,7 @@ def delete_character_image(character_name: str, image_filename: str) -> bool:
 
 
 def _cleanup_image_from_chats(character_name: str, image_filename: str):
-    """Entfernt Bild-Referenzen aus allen Chat-Dateien."""
+    """Remove image references from all chat files."""
     import re
     chat_dir = get_character_dir(character_name) / "chats"
     if not chat_dir.exists():

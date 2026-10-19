@@ -1,3 +1,4 @@
+import { pushSeq, isOwnEcho } from './game/posEcho';
 import { avatarWaitsForPlace, holdFor, holdSnap, clearApproach, clearSnap, trySnap, enterWhenReady, type PendingSnap, type ReadinessDeps } from './game/readiness';
 import { createFocusQueue } from './game/focusQueue';
 import { createResidencyDriver, type StepResult } from './game/residency';
@@ -44,7 +45,7 @@ import { getAudio } from './game/audio';
 import {
   emptyScatterCounts, newFpsMeter, pushFrame, pushWorstFrame, scatterCosts, tierCounts,
   visibleVertices,
-  type ScatterCounts, type TierCounts, type TierSample,
+  type ScatterCounts, type TierCounts, type TierSample, type SyncCounters,
 } from './game/perfstats';
 import { loadPrefs, loadScatterPrefs, PREFS_KEY, scatterLodCfgOf,
   SCATTER_PREFS_KEY } from './game/prefs';
@@ -575,6 +576,7 @@ async function startApp(username: string, role: string) {
   // (`scene/impostors.ts`). A second renderer would mean a second context and
   // a second copy of every texture the props already uploaded.
   setImpostorRenderer(engine.renderer);
+  const syncCounters: SyncCounters = { posCorr: 0, pos409: 0, travBack: 0, travFwd: 0, travErrMaxM: 0, arrive: 0, place: 0 };
   const npcs = new NpcManager(figures);
   figures.setModelFocus((name) => {
     const p = npcs.positionOf(name);
@@ -1202,6 +1204,7 @@ async function startApp(username: string, role: string) {
       tiers: perfHeavy.tiers,
       scatter: perfHeavy.scatter,
       scatterLodMs,
+      sync: { ...syncCounters },
     });
   }, PERF_UI_MS);
 
@@ -1211,6 +1214,8 @@ async function startApp(username: string, role: string) {
       clearApproach(readinessDeps, readinessState);
       const snap = pendingSnap;
       const p = new THREE.Vector3(snap.x, groundY(snap.x, snap.z), snap.z);
+      ownCorrectionAt = performance.now();
+      syncCounters.posCorr += 1;
       npcs.snapPlayerTo(avatarName, p);
       engine.flyTo(p, engine.targetDist);
       clearSnap(readinessDeps, readinessState);
@@ -2414,7 +2419,7 @@ async function startApp(username: string, role: string) {
   }
   function applyWorldMap(p: PolledMap): void {
     // A show-all switch publishes its own snapshot; reject the previous view.
-    if (p.viewRev !== viewRev) return;
+    if (p.viewRev !== viewRev || viewSwitchBusy) return;
     const { map, polledAt } = p;
     try {
       if (map.locations_rev !== locationsRev) void syncLocations();
@@ -3550,9 +3555,18 @@ async function startApp(username: string, role: string) {
       // payload is just as unable to know about a seat change answered while
       // it was in flight (`pollIsStale`).
       const askedAt = performance.now();
-      const map = await api.getWorldMap(on);
       showAll = on;
       viewRev += 1;
+      let map: WorldMap;
+      try {
+        map = await api.getWorldMap(on);
+      } catch (e) {
+        showAll = !on;
+        viewRev += 1;
+        console.warn('[view] show-all switch failed', e);
+        uiActions.toast?.('The view could not be switched.', true);
+        return;
+      }
       lastMap = map;
       if (!map.characters.some(c => c.name === firstMap.avatar)) cancelPendingControl();
       syncStreamPins();
@@ -3762,6 +3776,8 @@ async function startApp(username: string, role: string) {
    *  back onto it, over and over (2026-08-23). The server drops anything not
    *  newer than the last it accepted. */
   let posSeq = 0;
+  const posSession = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+  const sentSeqs: number[] = [];
   /** When the last report went out (`performance.now()`, a DURATION clock). */
   let lastReportAt = 0;
   /** The point the last report carried, so a standing figure reports once and
@@ -3782,6 +3798,8 @@ async function startApp(username: string, role: string) {
    *  `Infinity` while a release is in flight. A poll asked before that
    *  moment shows the state before it and is not believed. */
   let ownSeatChangeAt = 0;
+  /** Polls asked before our latest correction cannot describe the new position. */
+  let ownCorrectionAt = 0;
   // --- Sitting down by click (plan-posen-plaetze.md § 4, Task 13): the
   // state of the rings and the menu; the functions live with the place
   // reconcile below.
@@ -3874,6 +3892,7 @@ async function startApp(username: string, role: string) {
    * because it is not a correction at all but a move the player did not make.
    */
   function correctTo(point: { x: number; z: number }): void {
+    ownCorrectionAt = performance.now();
     clearApproach(readinessDeps, readinessState);
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
@@ -3903,6 +3922,7 @@ async function startApp(username: string, role: string) {
     const sentAt = performance.now();
     lastReportAt = sentAt;
     const seq = ++posSeq;
+    pushSeq(sentSeqs, seq);
     const abort = new AbortController();
     const deadline = setTimeout(() => abort.abort(), POS_TIMEOUT_MS);
     try {
@@ -3912,7 +3932,7 @@ async function startApp(username: string, role: string) {
       // last accepted. Both fields exist for one failure: a blocked event
       // loop, which compresses the server's own clock to nothing and lets a
       // long-abandoned report land last (§ A15).
-      const res = await api.postPos(x, z, abort.signal, seq, sentAt);
+      const res = await api.postPos(x, z, abort.signal, seq, sentAt, posSession);
       // Throttled or STALE: the server took none of it and said so. Not an
       // error, not a correction — but the point IS still unreported, so the
       // dirty flag has to go back up. `tickPosReport` cleared it when it sent
@@ -3958,6 +3978,7 @@ async function startApp(username: string, role: string) {
       // Where the figure ENDS UP decides whether the disc may be drawn at
       // all: the server's own point when it sent one (`correctTo` puts the
       // figure there), otherwise the place the figure is standing.
+      if (err.status === 409) syncCounters.pos409 += 1;
       rememberRefused(x, z, err.pos ?? npcs.positionOf(avatarName) ?? null);
       if (err.pos) correctTo(err.pos);
       const now = performance.now();
@@ -4483,6 +4504,7 @@ async function startApp(username: string, role: string) {
     // figure back onto it for up to CORRECT_MS, swallowing the steering input
     // all the while (plan-aufstehen.md).
     if (pollIsStale(polledAt, ownSeatChangeAt)) return;
+    if (pollIsStale(polledAt, ownCorrectionAt)) return;
     const me = map.characters.find((c) => c.name === avatarName);
     if (me) clearSnap(readinessDeps, readinessState);
     // A SEATED avatar stands where `reconcileAvatarPlace` put it: on the
@@ -4498,19 +4520,8 @@ async function startApp(username: string, role: string) {
     // No point in the payload = the server has no position for the avatar at
     // all (an unplaced location). Nothing to reconcile against.
     if (!me?.pos) return;
-    // OUR OWN last report is not foreign movement. The payload is up to a
-    // poll old and the report before it took a round trip, so on a remote
-    // client (a documented deployment: `ANIMA_API=http://<host>:8000`) the
-    // figure has walked on by report-lag + poll-lag by the time this sees it
-    // — from ~260 ms of latency that alone exceeds POS_SNAP_M and the figure
-    // would be tugged backwards on every single poll. So the comparison is
-    // against what WE last told the server: if the payload says that point,
-    // it is our own echo and there is nothing to reconcile. This is the
-    // metric successor of the grid world's `expectedCell` grace.
-    if (reportedPos
-      && Math.hypot(me.pos.x - reportedPos.x, me.pos.z - reportedPos.z) < 0.05) {
-      return;
-    }
+    // Only the origin stamp can distinguish our own echo from a server move.
+    if (isOwnEcho(sentSeqs, posSession, me.pos_origin)) return;
     const d = Math.hypot(me.pos.x - pos.x, me.pos.z - pos.z);
     if (d <= POS_SNAP_M) return;
     // `correctTo` moves the figure — walking the last few metres, jumping a
@@ -4524,6 +4535,7 @@ async function startApp(username: string, role: string) {
       npcs.setPlayerTarget(avatarName, pos.clone());
       return;
     }
+    syncCounters.posCorr += 1;
     correctTo(me.pos);
     if (d > CORRECT_WALK_M) {
       const p = new THREE.Vector3(me.pos.x, groundY(me.pos.x, me.pos.z), me.pos.z);
@@ -6191,7 +6203,7 @@ async function startApp(username: string, role: string) {
    * further placement of that figure, and the only thing left to repair it was
    * `reconcileAvatarPos` on the next worldmap poll — which is exactly the
    * "if one is lucky": it gives up as soon as the client has reported the
-   * wrong point itself (the `reportedPos` echo check), and the point it
+   * wrong point itself (the report-origin echo check), and the point it
    * corrects to is a metre reading with no room floor in it.
    *
    * THE THREE THINGS WAITED FOR, and nothing else:
