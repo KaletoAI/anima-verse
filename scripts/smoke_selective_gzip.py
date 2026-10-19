@@ -8,12 +8,33 @@ and decompression must recover every original byte. Allowed types and all
 and GLB remain byte-identical. An SSE producer waits for client receipt of
 its first event before finishing: buffering even that small event deadlocks.
 Raw ASGI send captures wire bytes (HTTP clients often auto-decompress).
+offload_equivalence: 1024, 65535, 65536 and ~3 MB JSON-ish bytes must
+round-trip and equal level-5 gzip compress+flush of the identical chunks,
+both whole and split. Nonempty splits below/equal 64 KiB stay inline;
+a 65 KiB case split at 1 KiB and the ~3 MB split exercise offloaded tails.
+offload_thread: 65535 bytes must make zero offload calls; 65536 must make
+exactly one, executing on a thread whose name starts with "gzip". Both
+outputs must decompress to the original bytes; the seam is restored finally.
+offload_disconnect: start is sent before the first 70 KiB body enters the
+gate. A concurrent app task calls receive, which sets receive_done just before
+returning http.disconnect. The receive wrapper sets disconnected before that
+task yields; the gate also yields once after the event, ensuring it resumes
+after disconnect observation. Expect exactly one start and no body messages.
+offload_keeps_loop: ~4 MB of varied JSON string data makes inline compression
+occupy the loop for its full duration (planner measured >150 ms; print the
+local measurement without asserting a machine-dependent lower bound).
+A pre-started 2 ms ticker prints worst overshoot during middleware compression
+as a diagnostic only; decompression must recover the original bytes. The
+thread and disconnect checks above assert deterministic offload behavior.
 Usage: .venv/bin/python scripts/smoke_selective_gzip.py
 """
 import asyncio
 import gzip
+import random
+import time
 import sys
 import tempfile
+import threading
 import zlib
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -23,10 +44,158 @@ from starlette.responses import Response, StreamingResponse
 from starlette.routing import Route
 from starlette.staticfiles import StaticFiles
 from app.core.http_files import etag_matches
+from app.core import selective_gzip
 from app.core.selective_gzip import SelectiveGZipMiddleware
 
 LARGE = b'"' + b"a" * 2046 + b'"'
 SMALL = b'"' + b"a" * 198 + b'"'
+
+async def gzip_chunks(chunks):
+    messages = []
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200,
+                    "headers": [(b"content-type", b"application/json")]})
+        for index, chunk in enumerate(chunks):
+            await send({"type": "http.response.body", "body": chunk,
+                        "more_body": index < len(chunks) - 1})
+
+    async def receive():
+        return {"type": "http.request", "body": b""}
+
+    async def send(message):
+        messages.append(message)
+
+    await SelectiveGZipMiddleware(app)(
+        {"type": "http", "method": "GET", "headers": [(b"accept-encoding", b"gzip")]},
+        receive, send)
+    assert dict(messages[0]["headers"])[b"content-encoding"] == b"gzip"
+    return b"".join(m.get("body", b"") for m in messages[1:])
+
+
+def jsonish(size):
+    # Seeded hex data is valid JSON, varied enough to avoid trivial compression.
+    content = random.Random(73).randbytes((size + 1) // 2).hex().encode()
+    return b'"' + content[:size - 2] + b'"'
+
+
+async def offload_equivalence():
+    for size in (1024, 64 * 1024 - 1, 64 * 1024, 65 * 1024, 3 * 1024 * 1024):
+        original = jsonish(size)
+        split = 1024 if size > 64 * 1024 else 1
+        for chunks in ([original], [original[:split], original[split:]],
+                       [original, b""]):
+            reference = zlib.compressobj(5, zlib.DEFLATED, 31)
+            expected = b"".join(reference.compress(chunk) for chunk in chunks)
+            expected += reference.flush()
+            wire = await gzip_chunks(chunks)
+            assert gzip.decompress(wire) == original, (size, len(chunks))
+            assert wire == expected, (size, len(chunks))
+    print("PASS offload_equivalence")
+
+
+async def offload_thread():
+    original_offload = selective_gzip._offload
+    calls = []
+    threads = []
+
+    async def spy(fn):
+        calls.append(fn)
+
+        def wrapped():
+            threads.append(threading.current_thread().name)
+            return fn()
+
+        return await original_offload(wrapped)
+
+    selective_gzip._offload = spy
+    try:
+        for size, expected in ((64 * 1024 - 1, 0), (64 * 1024, 1)):
+            calls.clear()
+            threads.clear()
+            original = jsonish(size)
+            wire = await gzip_chunks([original])
+            assert gzip.decompress(wire) == original
+            assert len(calls) == expected, (size, len(calls))
+            assert len(threads) == expected, (size, threads)
+            assert all(name.startswith("gzip") for name in threads), threads
+    finally:
+        selective_gzip._offload = original_offload
+    print("PASS offload_thread")
+
+
+async def offload_disconnect():
+    original_offload = selective_gzip._offload
+    receive_done = asyncio.Event()
+    messages = []
+
+    async def gated(fn):
+        await receive_done.wait()
+        await asyncio.sleep(0)
+        return fn()
+
+    async def receive():
+        receive_done.set()
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        messages.append(message)
+
+    async def app(scope, receive, send):
+        task = asyncio.create_task(receive())
+        try:
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body", "body": jsonish(70 * 1024),
+                        "more_body": False})
+        finally:
+            await task
+
+    selective_gzip._offload = gated
+    try:
+        await SelectiveGZipMiddleware(app)(
+            {"type": "http", "method": "GET",
+             "headers": [(b"accept-encoding", b"gzip")]}, receive, send)
+        assert [m["type"] for m in messages] == ["http.response.start"], messages
+    finally:
+        selective_gzip._offload = original_offload
+    print("PASS offload_disconnect")
+
+
+async def offload_keeps_loop():
+    original = jsonish(4 * 1024 * 1024)
+    reference = zlib.compressobj(5, zlib.DEFLATED, 31)
+    started = time.perf_counter()
+    reference.compress(original)
+    reference.flush()
+    print(f"inline compress+flush: {(time.perf_counter() - started) * 1000:.1f} ms",
+          flush=True)
+    loop = asyncio.get_running_loop()
+    ready = asyncio.Event()
+    done = False
+    overshoots = []
+
+    async def ticker():
+        while not done:
+            started = loop.time()
+            ready.set()
+            await asyncio.sleep(0.002)
+            overshoots.append(max(0, loop.time() - started - 0.002))
+
+    task = asyncio.create_task(ticker())
+    try:
+        await ready.wait()
+        wire = await gzip_chunks([original])
+        # Let the pending sleep record any stall even if compression never yielded.
+        await asyncio.sleep(0.004)
+    finally:
+        done = True
+        await task
+    worst = max(overshoots)
+    print(f"offloaded ticker worst overshoot: {worst * 1000:.1f} ms", flush=True)
+    assert gzip.decompress(wire) == original
+    print("PASS offload_keeps_loop")
+
 
 async def lifecycle_checks():
     """Incomplete streams must not flush; per-request state cannot escape."""
@@ -204,6 +373,10 @@ async def main():
     for encoding in ("*", "br, GZip;q=0.5"):
         _, headers, body = await request("json_2k", encoding=encoding)
         assert headers[b"content-encoding"] == b"gzip" and gzip.decompress(body) == LARGE
+    await offload_thread()
+    await offload_disconnect()
+    await offload_equivalence()
+    await offload_keeps_loop()
     await lifecycle_checks()
     await request("sse_first")
     assert first_received.is_set() and ended

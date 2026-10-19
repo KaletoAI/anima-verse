@@ -1,7 +1,24 @@
-"""Streaming ASGI gzip for explicitly compressible representations only."""
+"""Streaming ASGI gzip for explicitly compressible representations only.
+
+Large chunks are compressed in a worker thread to keep the event loop responsive.
+"""
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import zlib
 
 from starlette.datastructures import Headers, MutableHeaders
+
+
+# Below this, inline is cheaper than a thread hop; above it, a worker uses CPython zlib's GIL release to keep the loop running.
+OFFLOAD_BYTES = 64 * 1024
+
+
+# Bounded to spare the default executor shared by sync_stream and other asyncio.to_thread callers; two workers suffice because compression releases the GIL and more only compete for CPU.
+_COMPRESS_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gzip")
+
+
+async def _offload(fn):
+    return await asyncio.get_running_loop().run_in_executor(_COMPRESS_POOL, fn)
 
 
 _ALLOWED = (
@@ -104,9 +121,25 @@ class SelectiveGZipMiddleware:
             if compressor is None:
                 await send(message)
                 return
-            body = compressor.compress(message.get("body", b""))
-            if not message.get("more_body", False):
-                body += compressor.flush()
+            body_in = message.get("body", b"")
+            if len(body_in) >= OFFLOAD_BYTES:
+                # One coroutine owns the compressor and awaits each call before the
+                # next, so no two threads ever use it concurrently. A request cancelled
+                # while its job runs leaves it to finish on its own captured compressor,
+                # which nobody else can reach.
+                def compress_body(compressor=compressor):
+                    body = compressor.compress(body_in)
+                    if not message.get("more_body", False):
+                        body += compressor.flush()
+                    return body
+
+                body = await _offload(compress_body)
+                if disconnected:
+                    return
+            else:
+                body = compressor.compress(message.get("body", b""))
+                if not message.get("more_body", False):
+                    body += compressor.flush()
             await send(dict(message, body=body))
 
         try:
