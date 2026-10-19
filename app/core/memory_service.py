@@ -185,6 +185,17 @@ def extract_memories_from_exchange(character_name: str,
             open_plans_block=open_plans_block,
             lang_instruction=_lang_instruction(character_name, "memory contents"))
         if monologue:
+            from app.models.character import get_character_profile
+            from app.core.thought_context import room_presence_names, absent_named_people
+            profile = get_character_profile(character_name)
+            location_id = profile.get("current_location") or ""
+            room_id = profile.get("current_room") or ""
+            presence = room_presence_names(character_name, location_id, room_id)
+            shared.update(
+                presence_known=presence is not None,
+                present_names=", ".join(presence[0]) if presence is not None else "",
+                absent_names=", ".join(absent_named_people(
+                    character_name, location_id, room_id, texts=[clean_own])))
             sys_prompt, user_prompt = render_task("extraction_thought", **shared)
         else:
             sys_prompt, user_prompt = render_task(

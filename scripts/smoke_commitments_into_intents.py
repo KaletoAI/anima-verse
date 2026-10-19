@@ -115,7 +115,7 @@ def main():
             participant = intents.create_own_intent('demo', 'Shared promise', extra_participants={'B': {'role': '', 'progress': []}})
             assert intents.complete_intent_as('B', participant['id'])
             for task in ['extraction_thought', 'extraction_memory']:
-                _, user = render_task(task, speaker_a='B', speaker_b='demo', text_a='', text_b='', existing_summary='', open_plans_block='OPEN_PLANS_SENTINEL', lang_instruction='')
+                _, user = render_task(task, presence_known=False, present_names="", absent_names="", speaker_a='B', speaker_b='demo', text_a='', text_b='', existing_summary='', open_plans_block='OPEN_PLANS_SENTINEL', lang_instruction='')
                 assert 'OPEN_PLANS_SENTINEL' in user and '"title"' in user and '[ID:' not in user
             for template in ['chat/agent_thought.md', 'chat/agent_thought_in_chat.md', 'tasks/perceive_action.md']:
                 from jinja2 import Environment, meta

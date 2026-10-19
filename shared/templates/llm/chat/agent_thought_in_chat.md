@@ -10,11 +10,14 @@
    Same context dict as agent_thought.md.
 
    Required:
-     character_name, personality, location_name, activity, feeling,
+     character_name, personality, location_name, room_name, activity, feeling,
      time_of_day, game_date, game_weather
      birthday_today            — True only on the character's own birthday
                                  (world calendar); the static "Birthday:"
                                  line comes from the character template
+
+     room_name                 — current room display name, empty when unknown
+     absent_block              — mentioned people outside this place, avatar marked
 
    Optional pre-formatted blocks (omit / empty string to skip):
      effects_block          — active status modifiers (drunk, exhausted, …)
@@ -53,7 +56,7 @@ You are CURRENTLY in an active chat with your conversation partner.
 The chat is the focus — only act if the conversation needs continuation.
 
 Current situation:
-- Location: {{ location_name }}
+- Location: {{ location_name }}{% if room_name %} — room: {{ room_name }}{% endif %}
 - Activity: {{ activity }}
 - Mood: {{ feeling }}
 - Time: {{ time_of_day }}
@@ -72,6 +75,7 @@ Current situation:
 {% endif %}
 {% if present_people_block %}
 - In this room with you: {{ present_people_block }}
+  Only these are with you. Anyone else — even someone your plans, your activity or your last turns mention — is not here.
 {% elif alone_here %}
 - You are ALONE in this room — your conversation partner is not physically
   here either. Do not act towards anyone as if they were in the room with you.
@@ -79,6 +83,12 @@ Current situation:
 {% if elsewhere_block %}
 - Elsewhere at this location (not in your room — they cannot hear you):
 {{ elsewhere_block }}
+{% endif %}
+{% if absent_block %}
+- NOT with you — not at this place at all (they cannot see or hear you; whatever your plans, your
+  activity or your last turns say, they are not here). SendMessage reaches them; to be with them, go to
+  them first:
+{{ absent_block }}
 {% endif %}
 {% if outfit_self_block %}
 - {{ outfit_self_block }}

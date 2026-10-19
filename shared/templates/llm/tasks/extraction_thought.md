@@ -4,6 +4,9 @@ purpose: Extract semantic facts and commitments from a character's own thought t
 placeholders:
   speaker_b: Name of the memory owner (the character whose thought this is)
   text_b: The thought itself
+  presence_known: Whether actual room presence is known
+  present_names: Comma-joined names actually present (empty means nobody)
+  absent_names: Comma-joined mentioned names absent from this place
   existing_summary: Bullet list of recent existing memories ("(none yet)" if none)
   open_plans_block: Pre-formatted block of open plans (empty string when none)
   lang_instruction: Optional "\nWrite the memory contents in <Language>." or empty
@@ -15,6 +18,14 @@ You are a strict information extractor. Extract ONLY what the text literally sta
 This is what {{ speaker_b }} thought to themselves. Nobody else was part of it. Extract the memories worth keeping.
 
 {{ speaker_b }}: "{{ text_b }}"
+
+{% if presence_known %}
+Who was really in the room with {{ speaker_b }}: {{ present_names if present_names else "nobody" }}.
+{% if absent_names %}
+NOT there: {{ absent_names }}. Whatever the thought tells about being with them, talking to or touching them
+is imagined — it did not happen.
+{% endif %}
+{% endif %}
 
 Extract as a JSON array. For each memory:
 - memory_type: "semantic" (fact/info) or "commitment" (promise/plan)
@@ -33,6 +44,7 @@ Already stored memories (DO NOT repeat):
 {% endif %}
 
 IMPORTANT:
+- Something done WITH a person who was not there did not happen: no semantic memory of it, and a plan that needed that person is NOT fulfilled — never put its id into completed_ids.
 - Extract ONLY what is literally in the thought above. Never infer, complete or embellish a fact, a motive or a relationship that is not stated there. When in doubt, leave it out.
 - Extract ONLY facts (semantic) and plans (commitment)
 - Semantic memories only for what the thought shows as DONE or LEARNED and still matters later: an action with a lasting result (something made, cleaned, posted, sent, given or taken, a place visited) or a fact found out about the world or a person. Never for gestures, poses or passing body movements (stretching, breathing, looking around), and never for intentions, plans, wishes, preparations, rehearsals, moods, worries, wondering or imagined events ("plans to", "wants to", "will", "is preparing", "is nervous about", "wonders whether"). This restricts semantic memories only; commitment rules below still apply.

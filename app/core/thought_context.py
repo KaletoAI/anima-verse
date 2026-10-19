@@ -15,7 +15,7 @@ import re
 from datetime import datetime, timedelta
 
 from app.core.timeutils import parse_iso, utc_now, game_time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from app.core.log import get_logger
 
@@ -72,6 +72,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     when it has content. The template renders nothing for empty blocks.
     """
     from app.core.birthday import is_birthday_today
+    from app.models.world import get_room_name
     from app.core.perception import prompt_place
     from app.models.character import (
         get_character_profile, get_character_current_location,
@@ -100,6 +101,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "lang_instruction": get_character_language_instruction(character_name),
         "personality": (profile.get("character_personality", "") or "").strip(),
         "location_name": location_name,
+        "room_name": get_room_name(location_id, room_id, lang) if location_id and room_id else "",
         # DISPLAY text, not a render key: the sanitized flavor if there is
         # one, else the bare catalog key. Cleaned and capped at the write path.
         "activity": ("Sleeping" if profile.get("is_sleeping")
@@ -215,6 +217,16 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
 
     # has_assignments may have changed if the filter dropped assignments_block
     ctx["has_assignments"] = bool(ctx["assignments_block"])
+    excluded = {"present_people_block", "elsewhere_block", "absent_block", "tools_hint"}
+    ctx["absent_people"] = absent_named_people(
+        character_name, location_id, room_id,
+        [value for key, value in ctx.items()
+         if key not in excluded and isinstance(value, str)])
+    from app.models.account import get_active_character
+    avatar = (get_active_character() or "").strip()
+    ctx["absent_block"] = "\n".join(
+        f"- {name} (avatar)" if name == avatar else f"- {name}"
+        for name in ctx["absent_people"])
     return ctx
 
 
@@ -1014,7 +1026,7 @@ def _build_presence(character_name: str, location_id: str,
     Why alone_known exists: an empty block used to drop the whole section
     from the prompt, so the prompt said NOTHING about who is around. A
     missing section is no evidence of absence for an LLM — with a stale
-    pose like "standing in front of Kai" it happily kept playing a scene
+    pose like "standing in front of Ben" it happily kept playing a scene
     with a person who was at the other end of the map. Silence is not
     "alone"; the prompt has to say it.
 
@@ -1033,20 +1045,10 @@ def _build_presence(character_name: str, location_id: str,
     try:
         from app.models.account import get_active_character
         avatar = (get_active_character() or "").strip()
-        if not location_id:
-            from app.core.perception import nearby_in_the_open
-            from app.models.character import get_character_pos
-            pos = get_character_pos(character_name)
-            if not pos:
-                return "", "", False
-            names = nearby_in_the_open(character_name, pos)
-            here = [(n, f"{n} (avatar)" if n == avatar else n) for n in names]
-            # location_id "" for the state labels: they are per character,
-            # the place only feeds location-bound filter conditions.
-            return (present_people_details(here[:8], "") if here else "",
-                    "", not here)
-        here_names, elsewhere_pairs = location_presence_split(
-            character_name, location_id, room_id)
+        presence = _room_presence(character_name, location_id, room_id)
+        if presence is None:
+            return "", "", False
+        here_names, elsewhere_pairs = presence
         here = [(n, f"{n} (avatar)" if n == avatar else n) for n in here_names]
         elsewhere = [
             f"- {n} (avatar) — in: {room}" if n == avatar else f"- {n} — in: {room}"
@@ -1056,6 +1058,54 @@ def _build_presence(character_name: str, location_id: str,
     except Exception as e:
         logger.debug("present_people block failed for %s: %s", character_name, e)
         return "", "", False
+
+
+def _room_presence(character_name: str, location_id: str, room_id: str
+                   ) -> Optional[Tuple[List[str], List[Tuple[str, str]]]]:
+    """Shared room/open-air computation; None means presence is unknown."""
+    try:
+        if location_id:
+            return location_presence_split(character_name, location_id, room_id)
+        from app.core.perception import nearby_in_the_open
+        from app.models.character import get_character_pos
+        pos = get_character_pos(character_name)
+        if not pos:
+            return None
+        return nearby_in_the_open(character_name, pos), []
+    except Exception as e:
+        logger.debug("presence lookup failed for %s: %s", character_name, e)
+        return None
+
+
+def room_presence_names(character_name: str, location_id: str, room_id: str
+                        ) -> Optional[Tuple[List[str], List[str]]]:
+    """Return (here_names, elsewhere_names), or None when unknown."""
+    presence = _room_presence(character_name, location_id, room_id)
+    if presence is None:
+        return None
+    here, elsewhere = presence
+    return here, [name for name, _ in elsewhere]
+
+
+def absent_named_people(character_name: str, location_id: str, room_id: str,
+                        texts: Iterable[str]) -> List[str]:
+    """Named people outside this place, in first-mention order, at most six."""
+    presence = room_presence_names(character_name, location_id, room_id)
+    if presence is None:
+        return []
+    from app.models.character import list_available_characters
+    here, elsewhere = presence
+    excluded = {character_name, *here, *elsewhere}
+    patterns = [(name, re.compile(r"(?<!\w)" + re.escape(name) + r"(?:s|'s|’s)?(?!\w)"))
+                for name in list_available_characters() if name not in excluded]
+    mentioned = {}
+    for index, text in enumerate(texts):
+        for name, pattern in patterns:
+            if name not in mentioned:
+                match = pattern.search(text)
+                if match:
+                    mentioned[name] = (index, match.start())
+    return sorted(mentioned, key=mentioned.get)[:6]
 
 
 def location_presence_split(character_name: str, location_id: str,

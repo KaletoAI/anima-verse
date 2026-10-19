@@ -133,6 +133,7 @@ def test_suppliers() -> None:
 THOUGHT_CTX = {
     "character_name": "Mira", "lang_instruction": "Always respond in German.",
     "personality": "curious", "location_name": "Village Square",
+    "room_name": "", "absent_block": "",
     "activity": "sweeping", "feeling": "Neutral",
     "time_of_day": "07:14", "game_date": DATE, "game_weather": LABEL,
     # Always present, like the weather — the template gates on it and

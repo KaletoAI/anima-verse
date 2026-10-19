@@ -60,6 +60,7 @@ CALL_SITES = {
         lang_instruction="\nWrite the memory contents in German."),
     "extraction_thought": dict(
         speaker_b="Beta", text_b="b", existing_summary="(none yet)",
+        presence_known=False, present_names="", absent_names="",
         open_plans_block="",
         lang_instruction="\nWrite the memory contents in German."),
     "consolidation_daily": dict(
