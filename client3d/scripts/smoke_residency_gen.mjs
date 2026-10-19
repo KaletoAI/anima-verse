@@ -492,7 +492,7 @@ for (const name of ['snap_superseded_free', 'snap_superseded_ready', 'snap_super
     const api = compile(['reconcileAvatarPos'], { getGameState: () => ({ mode: 'embodied' }), pollIsStale: () => false, ownSeatChangeAt: 0,
         isOwnEcho: () => false, sentSeqs: [], posSession: 'sessAAAA01', ownCorrectionAt: 0,
         syncCounters: { posCorr: 0, pos409: 0, travBack: 0, travFwd: 0, travErrMaxM: 0, arrive: 0, place: 0 },
-        avatarSeated: false, posInFlight: false, walkIn: null, verticalRide: null, correction: null, npcs: { positionOf: () => ({ x: 0, z: 0 }) },
+        avatarDrive: { kind: 'PLAYER' }, avatarSeated: false, posInFlight: false, walkIn: null, verticalRide: null, correction: null, npcs: { positionOf: () => ({ x: 0, z: 0 }) },
         avatarName: 'avatar', reportedPos: null, POS_SNAP_M: 1, CORRECT_WALK_M: 8, clearSnap: () => clearSnap(deps, state),
         holdSnap, readinessDeps: deps, readinessState: state, correctTo: p => corrected.push(p), THREE: { Vector3: class {
             } }, groundY: () => 0, engine: { flyTo() { } } }, 'let pendingSnap=readinessState.pendingSnap;');

@@ -3433,6 +3433,42 @@ gefoggter Fremder ⇒ alle neun Felder `null`, `target_id` bleibt) und
 `scripts/smoke_fog_worldmap.py` (Fall 7: Reisender 100 m entfernt, also weit
 außerhalb jeder Sichtweite, steht trotzdem mit `pos` im Payload).
 
+**Avatar with its own journey**
+
+The `avatarDrive` state machine runs in every view mode; input and position
+reports run only in embodied mode. `SERVER` uses the same target/display route
+as NPCs, suspends position reconciliation and all report paths, and retains the
+existing follow camera. `NO_CANCEL` differs from a legacy journey id `null`.
+
+| From | Event | To |
+|---|---|---|
+| PLAYER | Payload with route J different from the cancelled journey | SERVER(J) |
+| SERVER(J) | Payload without a route | PLAYER; snap to the arrival point |
+| SERVER(J) | Payload with replacement J2 | SERVER(J2) |
+| SERVER(J) | Player input | CANCELLING(J, S); remember J and reserve report S |
+| CANCELLING(J, S) | Replacement J2, checked before acknowledgement | SERVER(J2); keep cancelled J |
+| CANCELLING(J, S) | Own origin sequence >= S | PLAYER |
+| CANCELLING(J, S) | Payload without a route | PLAYER |
+| CANCELLING(J, S) | Refusal 409 for sequence >= S | Correct to the refused answer's point, then SERVER(J); clear cancelled J |
+| CANCELLING(J, S) | Payload still carrying J without acknowledgement | Stay CANCELLING; suppress J in every renderer and skip position correction |
+| PLAYER | Payload still carrying remembered cancelled J | Stay PLAYER; suppress J in every renderer and skip position correction |
+
+Input hands control back immediately at the displayed position. It reserves S
+before sending, serializes reports, and records echo numbers only at send time.
+Answers older than the last server drive remain obsolete even after arrival;
+while cancelling, only answers with sequence >= S may act. A replacement clears
+pending reports. Arrival uses the NPC arrival snap and counter and stamps the
+correction clock. Rebuilt figures retain server ownership or the local cancelled
+position. Suppression of a non-null cancelled journey survives acknowledgement:
+overview and figure rebuilds use the current local position or its remembered
+fallback, while replacement J2 is adopted. Polls still carrying the cancelled
+journey cannot correct the position or clear report retry dirtiness in either
+CANCELLING or PLAYER. Party followers retain their existing input lock.
+
+U6 remains outside P1: acknowledgement does not guarantee a permanent server
+cancellation. A late ticker write without the remembered cancelled journey can still move
+the avatar and is treated as a foreign correction, counted in `pos corr`.
+
 **Konsumenten (Stand E5, 2026-08-12): beide migriert.** Die v1-Felder haben
 damit KEINEN Leser mehr — weder `path` noch `progress_cells`.
 

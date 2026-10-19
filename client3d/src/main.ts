@@ -1,4 +1,4 @@
-import { pushSeq, isOwnEcho } from './game/posEcho';
+import { pushSeq, isOwnEcho, avatarDriver, NO_CANCEL, suppressedJourney, answerApplies, type DriverState, type Cancelled } from './game/posEcho';
 import { avatarWaitsForPlace, holdFor, holdSnap, clearApproach, clearSnap, trySnap, enterWhenReady, type PendingSnap, type ReadinessDeps } from './game/readiness';
 import { createFocusQueue } from './game/focusQueue';
 import { createResidencyDriver, type StepResult } from './game/residency';
@@ -984,7 +984,7 @@ async function startApp(username: string, role: string) {
   }
   function tickModelTiers() {
     // THE RELIEF UNDER EVERY MOUNTED SCENE (user finding 2026-08-21, the
-    // sinking Mondscheinhütte). A scene mounts as soon as its payload is
+    // sinking moonlight cabin). A scene mounts as soon as its payload is
     // there, which on a fresh load is BEFORE the 2 m height tiles under it —
     // so its storey-0 placements were lifted onto the coarse overview and kept
     // that answer until the next remount. `heightRevision` counts up when the
@@ -2455,6 +2455,7 @@ async function startApp(username: string, role: string) {
         void syncLocations(true);
       }
       syncStreamPins();
+      applyDriver(map, polledAt);
       reconcileAvatarPlace(map, polledAt); // server seated the avatar? (places § 4)
       reconcileAvatarPos(map, polledAt);   // server moved the avatar? (E4-T5)
       void syncPlaceGlyphs(map);  // free slots to sit down on (places § 4)
@@ -2645,6 +2646,14 @@ async function startApp(username: string, role: string) {
     hiddenChars.clear();
     const states: NpcState[] = [];
     for (const c of map.characters) {
+      if (c.name === avatarName && c.travel && suppressedJourney(avatarDrive, avatarCancelled, c.travel.journey_id)) {
+        const local = npcs.positionOf(avatarName);
+        if (local) avatarLocalPos = { x: local.x, z: local.z };
+        const pos = local ?? avatarLocalPos ?? c.pos;
+        if (pos) states.push({ char: { ...c, travel: null }, pos: new THREE.Vector3(pos.x, groundY(pos.x, pos.z), pos.z) });
+        shownPlacement.set(c.name, { room: null, interiorShown: false });
+        continue;
+      }
       if (avatarWaitsForPlace(c.name === avatarName, c.location_id, residency.get(c.location_id))) {
         hiddenChars.add(c.name);
         const center = places.get(c.location_id)?.center;
@@ -3573,6 +3582,7 @@ async function startApp(username: string, role: string) {
         return;
       }
       lastMap = map;
+      applyDriver(map, askedAt);
       if (!map.characters.some(c => c.name === firstMap.avatar)) cancelPendingControl();
       syncStreamPins();
       mapPolledAt = askedAt;
@@ -3781,6 +3791,11 @@ async function startApp(username: string, role: string) {
    *  back onto it, over and over (2026-08-23). The server drops anything not
    *  newer than the last it accepted. */
   let posSeq = 0;
+  let avatarDrive: DriverState = { kind: 'PLAYER' };
+  let avatarCancelled: Cancelled = NO_CANCEL;
+  let answerFloor = 0;
+  let avatarLocalPos: { x: number; z: number } | null = null;
+  let pendingReport: { x: number; z: number; seq: number } | null = null;
   const posSession = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
   const sentSeqs: number[] = [];
   /** When the last report went out (`performance.now()`, a DURATION clock). */
@@ -3919,15 +3934,60 @@ async function startApp(username: string, role: string) {
     posDirty = false;
   }
 
+  /** Adopt server ownership only from a payload fresh enough to know our last move. */
+  function applyDriver(map: WorldMap, polledAt: number): void {
+    if (pollIsStale(polledAt, ownCorrectionAt)) return;
+    const me = map.characters.find((c) => c.name === avatarName);
+    const tr = me?.travel ?? null;
+    const prev = avatarDrive;
+    const r = avatarDriver(avatarDrive, { kind: 'payload',
+      hasRoute: !!(tr && tr.waypoints && tr.waypoints.length >= 2),
+      journeyId: tr?.journey_id ?? null,
+      originOwnSeq: me?.pos_origin?.session === posSession ? me.pos_origin.seq : null }, avatarCancelled);
+    avatarDrive = r.state; avatarCancelled = r.cancelled;
+    if (prev.kind !== 'SERVER' && avatarDrive.kind === 'SERVER') enterServerDrive();
+    else if (prev.kind === 'SERVER' && avatarDrive.kind === 'PLAYER') {
+      const at = me?.pos
+        ? new THREE.Vector3(me.pos.x, groundY(me.pos.x, me.pos.z), me.pos.z) : undefined;
+      if (at) ownCorrectionAt = performance.now();
+      npcs.setServerDriven(avatarName, false, at ? { arriveAt: at } : undefined);
+    }
+    // A replacement route is adopted by its journey key on the next NPC update.
+  }
+
+  function enterServerDrive(): void {
+    answerFloor = posSeq + 1;
+    pendingReport = null;
+    clearSnap(readinessDeps, readinessState);
+    cancelRoute();
+    walkIn = null;
+    correction = null;
+    npcs.setServerDriven(avatarName, true);
+  }
+
+  /** Reserve the next number now, sending only once the previous request has finished. */
+  function reserveReport(x: number, z: number): number {
+    const seq = ++posSeq;
+    pendingReport = { x, z, seq };
+    flushPendingReport();
+    return seq;
+  }
+
+  function flushPendingReport(): void {
+    if (posInFlight || !pendingReport) return;
+    const p = pendingReport; pendingReport = null;
+    if (avatarDrive.kind === 'SERVER') return;
+    void reportPosWithSeq(p.x, p.z, p.seq);
+  }
+
   /** Send ONE report. Never throws: every refusal is either a correction plus
    *  a toast, or (the throttle) nothing at all. */
-  async function reportPos(x: number, z: number): Promise<void> {
+  async function reportPosWithSeq(x: number, z: number, seq: number): Promise<void> {
+    // A reserved cancel number may remain unsent; later reports still acknowledge seq >= S.
     if (pendingSnap) { posDirty = true; return; }
     posInFlight = true;
     const sentAt = performance.now();
     lastReportAt = sentAt;
-    const seq = ++posSeq;
-    pushSeq(sentSeqs, seq);
     const abort = new AbortController();
     const deadline = setTimeout(() => abort.abort(), POS_TIMEOUT_MS);
     try {
@@ -3937,7 +3997,9 @@ async function startApp(username: string, role: string) {
       // last accepted. Both fields exist for one failure: a blocked event
       // loop, which compresses the server's own clock to nothing and lets a
       // long-abandoned report land last (§ A15).
+      pushSeq(sentSeqs, seq);
       const res = await api.postPos(x, z, abort.signal, seq, sentAt, posSession);
+      if (!answerApplies(avatarDrive, seq, answerFloor)) return;
       // Throttled or STALE: the server took none of it and said so. Not an
       // error, not a correction — but the point IS still unreported, so the
       // dirty flag has to go back up. `tickPosReport` cleared it when it sent
@@ -3957,6 +4019,7 @@ async function startApp(username: string, role: string) {
       // UNREPORTED (`posDirty`), so the first report after the relogin carries
       // it, exactly like the network hiccup below.
       if (api.isAuthError(e)) { posDirty = true; return; }
+      if (!answerApplies(avatarDrive, seq, answerFloor)) return;
       const err = e instanceof api.ApiError ? e : null;
       if (!err) {
         // A dropped request is a network hiccup, not a verdict: the figure
@@ -3984,8 +4047,14 @@ async function startApp(username: string, role: string) {
       // all: the server's own point when it sent one (`correctTo` puts the
       // figure there), otherwise the place the figure is standing.
       if (err.status === 409) syncCounters.pos409 += 1;
+      const wasCancelling = avatarDrive.kind === 'CANCELLING';
       rememberRefused(x, z, err.pos ?? npcs.positionOf(avatarName) ?? null);
       if (err.pos) correctTo(err.pos);
+      if (err.status === 409) {
+        const r = avatarDriver(avatarDrive, { kind: 'refused', seq }, avatarCancelled);
+        avatarDrive = r.state; avatarCancelled = r.cancelled;
+        if (wasCancelling && avatarDrive.kind === 'SERVER') enterServerDrive();
+      }
       const now = performance.now();
       if (err.message && (err.reason !== quietReason || now > quietUntil)) {
         quietReason = err.reason;
@@ -3995,6 +4064,7 @@ async function startApp(username: string, role: string) {
     } finally {
       clearTimeout(deadline);
       posInFlight = false;
+      flushPendingReport();
     }
   }
 
@@ -4010,6 +4080,7 @@ async function startApp(username: string, role: string) {
    */
   function tickPosReport(pos: { x: number; z: number }): void {
     if (pendingSnap) return;
+    if (avatarDrive.kind === 'SERVER') return;
     if (posInFlight) return;
     if (!posDirty) return;
     // A SEATED avatar reports nothing (plan-posen-plaetze.md § 4), for the
@@ -4021,7 +4092,7 @@ async function startApp(username: string, role: string) {
     // report follows the first step.
     if (avatarSeated) return;
     if (performance.now() - lastReportAt < POS_REPORT_MS) return;
-    void reportPos(Math.round(pos.x * 100) / 100, Math.round(pos.z * 100) / 100);
+    reserveReport(Math.round(pos.x * 100) / 100, Math.round(pos.z * 100) / 100);
     posDirty = false;
   }
 
@@ -4211,6 +4282,7 @@ async function startApp(username: string, role: string) {
       return;
     }
     const pos = npcs.positionOf(avatarName);
+    if (pos) avatarLocalPos = { x: pos.x, z: pos.z };
     if (!pos) return;                     // no figure on the map (yet) — nothing to steer
     // A running storey change owns the figure: its goal is the holding point
     // of the target storey (the lift) or the far landing of a flight (the
@@ -4280,6 +4352,13 @@ async function startApp(username: string, role: string) {
         if (!to) cancelRoute();
         else { dir = { x: to.x, z: to.z }; reach = to.dist; }
       }
+    }
+    if (avatarDrive.kind === 'SERVER' && dir) {
+      npcs.setServerDriven(avatarName, false);
+      const r = avatarDriver(avatarDrive, { kind: 'input', firstSeq: posSeq + 1 }, avatarCancelled);
+      avatarDrive = r.state; avatarCancelled = r.cancelled;
+      const p = npcs.positionOf(avatarName)!;
+      reserveReport(p.x, p.z);
     }
     // STANDING UP (plan-posen-plaetze.md § 4): the first steering input while
     // seated — a key or a click order — releases the place on the server,
@@ -4503,6 +4582,7 @@ async function startApp(username: string, role: string) {
    */
   function reconcileAvatarPos(map: WorldMap, polledAt: number) {
     if (getGameState().mode !== 'embodied') return;
+    if (avatarDrive.kind === 'SERVER') return;
     // A poll older than our own last seat change knows nothing about now (the
     // one rule, `pollIsStale` — see `reconcileAvatarPlace`). Its point is the
     // SEAT the figure has just stood up from, and `correctTo` would walk the
@@ -4511,6 +4591,8 @@ async function startApp(username: string, role: string) {
     if (pollIsStale(polledAt, ownSeatChangeAt)) return;
     if (pollIsStale(polledAt, ownCorrectionAt)) return;
     const me = map.characters.find((c) => c.name === avatarName);
+    // A poll still carrying the cancelled journey predates its cancellation.
+    if (me?.travel && me.travel.journey_id === avatarCancelled) return;
     if (me) clearSnap(readinessDeps, readinessState);
     // A SEATED avatar stands where `reconcileAvatarPlace` put it: on the
     // payload's slot point, the server's word. The row's `pos` need not be

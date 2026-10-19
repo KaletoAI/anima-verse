@@ -278,6 +278,7 @@ export class NpcManager {
   private firstPersonName: string | null = null;
   /** figure the PLAYER steers (E3-T3); its placement comes from main.ts */
   private playerDriven: string | null = null;
+  private serverDriven = new Set<string>();
   /** ground ring at the click target of a running walk (E3-T4) */
   private walkTargetRing: THREE.Mesh | null = null;
   /**
@@ -418,7 +419,27 @@ export class NpcManager {
     // away): nothing to do HERE — `update()` applies the same state the moment
     // it creates the figure, so the takeover is not lost.
     const npc = this.npcs.get(name);
-    if (npc) this.takeOver(npc);
+    if (npc && !this.serverDriven.has(name)) this.takeOver(npc);
+  }
+
+  /** Server ownership survives figure rebuilds and changes of player mode. */
+  setServerDriven(name: string, on: boolean, how?: { arriveAt?: THREE.Vector3 }): void {
+    if (on) { this.serverDriven.add(name); return; }
+    this.serverDriven.delete(name);
+    const npc = this.npcs.get(name);
+    if (!npc) return;
+    if (how?.arriveAt) this.arrive(npc, how.arriveAt);
+    this.takeOver(npc);
+  }
+
+  /** Shared arrival placement for NPCs and the avatar, before player takeover. */
+  private arrive(npc: Npc, at: THREE.Vector3): void {
+    npc.route = null;
+    npc.waypoints = [];
+    npc.ride = null;
+    npc.root.position.copy(at);
+    npc.figure?.resetSecondaryMotion();
+    this.syncCounters.arrive += 1;
   }
 
   /** Bring a figure into the state a player-driven one has to be in (E3-T3/T6).
@@ -767,7 +788,7 @@ export class NpcManager {
         npc.figure?.resetSecondaryMotion();
         // The figure only arrived now, but the player has been steering since
         // before it existed — `setPlayerDriven` found nothing to write then.
-        if (st.char.name === this.playerDriven) this.takeOver(npc);
+        if (st.char.name === this.playerDriven && !this.serverDriven.has(st.char.name)) this.takeOver(npc);
       }
       // Player-driven figure (E3-T3): WHERE it stands belongs to the frame
       // hook in main.ts — pos/via/route/scale/face/lean/hidden are all
@@ -801,10 +822,12 @@ export class NpcManager {
         // …and for the same reason it carries no dead reckoning: a figure the
         // player steers walks on the player's input, not on a rate measured
         // between two polls of where the server thought it was.
-        npc.travelling = false;
-        npc.reckon = null;
-        this.updateTravelLine(npc, null);
-        continue;
+        if (!this.serverDriven.has(st.char.name)) {
+          npc.travelling = false;
+          npc.reckon = null;
+          this.updateTravelLine(npc, null);
+          continue;
+        }
       }
       // Adopt paces immediately; reconcile progress only for a new payload.
       // Repeated updates of a cached map must not rewind a running journey.
@@ -847,12 +870,7 @@ export class NpcManager {
         // SNAP: walking the last extrapolated metres off would be a visible
         // residual run across the arrival location, and the arrival point is
         // a door, not a direction.
-        npc.route = null;
-        npc.waypoints = [];
-        npc.ride = null;
-        npc.root.position.copy(st.pos);
-        npc.figure?.resetSecondaryMotion();
-        this.syncCounters.arrive += 1;
+        this.arrive(npc, st.pos);
         arrived = true;
       }
       // A new goal adopts the stations on the way to it (room exits). The A*
@@ -913,9 +931,11 @@ export class NpcManager {
       npc.face = st.face ?? null;
       npc.figure?.setLean(st.lean?.tilt ?? 0, st.lean?.roll ?? 0);
       npc.root.visible = !st.hidden;
-      npc.activity = st.char.activity || '';
-      npc.animation = st.char.activity_animation || undefined;
-      npc.labelActivity.textContent = npc.activity;
+      if (st.char.name !== this.playerDriven) {
+        npc.activity = st.char.activity || '';
+        npc.animation = st.char.activity_animation || undefined;
+        npc.labelActivity.textContent = npc.activity;
+      }
       // The walking mark comes from the TRAVEL BLOCK, not from the route: a
       // fogged traveller has no waypoints but is just as much on its way, and
       // its arrival time is in the payload all the same (§ A11).
@@ -1299,7 +1319,7 @@ export class NpcManager {
         // exempt for the same reason `update()` clears its line: it walks on
         // foot, there is no server journey to draw, and re-adding the line
         // here would fight that second-by-second.
-        if (npc.name !== this.playerDriven) this.updateTravelLine(npc, r);
+        if (npc.name !== this.playerDriven || this.serverDriven.has(npc.name)) this.updateTravelLine(npc, r);
         const at = pointAtDistance(r.points, r.shownM)!;
         // The height belongs to the point the walk has REACHED, not to the
         // one the last poll reported: between two polls the figure covers
