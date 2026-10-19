@@ -4603,17 +4603,19 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # DOOR PROPS (v5) — after the thresholds have found their standing height,
     # because a door prop stands ON its threshold. The resolution rode in on
     # the doorway (``_door_prop``) and leaves the payload again right here:
-    # the model spec is its only consumer, and the same fact twice in one
-    # payload is exactly what § B5 forbids.
+    # The resolved style is also public for hull construction; it remains
+    # available while a door model is queued and for doors along the contour.
     door_props, door_prop_sigs = _door_prop_models(
         doorways, prop_cache, door_styles=door_styles,
         door_color=building_meta.get("hull_door_color") if building_meta.get("plan_hull") else None)
     # Retain leaf rectangles for hull facts. Only renderer suppression
-    # changes when a complete style door exists, including mirrored walls
-    # and the projected contour leaf of a room doorway.
+    # changes when a complete style door exists. Carry the same resolved
+    # style onto mirrored walls and projected contour leaves for hull facts,
+    # reusing the leaf association instead of matching geometry again there.
     for door in doorways:
-        if not (door.get("_door_prop") or {}).get("ready"):
-            continue
+        info = door.get("_door_prop") or {}
+        if info.get("style"):
+            door["door_style"] = info["style"]
         ux, uz = door["along"]
         at = door["at_world"]
         spans = [(at, (ux, uz))]
@@ -4637,7 +4639,10 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                              else COLINEAR_TOL_M)
                 if _colinear_span(a, dx, dz, 2*half, wall["from"], wall["to"],
                                   tolerance=tolerance) is not None:
-                    wall["door_prop"] = True
+                    if info.get("style"):
+                        wall["door_style"] = info["style"]
+                    if info.get("ready"):
+                        wall["door_prop"] = True
                     break
     models.extend(door_props)
     for door in doorways:

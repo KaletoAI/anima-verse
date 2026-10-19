@@ -19,15 +19,149 @@ from app.core.hull_facades import mullions
 from app.core.hull_styles import validate_style
 from app.core.hull_walls import build_walls, wall_offsets
 
-# Pre-task wall parts at f2fce906, captured before implementation (seed 17, density 1).
+# Generated door-integrated wall parts (seed 17, density 1).
+# 3a: Blender doors
 BASELINE = {
-    "modern:full": "7035fecd2fdee4411a6873d843f8286c4b372a37dd951d927b528a4f46c43cbf",
-    "modern:low": "e64e4683cc3e272ee64c75011545e88a54c5b849fc38e197eb45aa51d5767212",
-    "fachwerk:low": "38d1ac402a22fb70315c81f85b29c215e8f86729b4deaf3356d0adf3fbaa168e",
-    "steinhaus:low": "0df90dbf6422b343df0167e4a17f1bac78b4fbf51267ba05697ae229a4685daa",
-    "holzhuette:low": "8590d0c23ffad349c89c25ebb9ebf049ded60821efb6a565b9c52f028f136161",
-    "burg:low": "b00ad2fe8b6dd470dbf8ba36e3f5b02bb6b101c0d6e40c1feb0561bc17e9897a"
+    "modern:full": "27726a5f546af691b69b96f86c2e9743e3df875704682bda3f6d626f1e34f6ac",
+    "modern:low": "1d1608011e9a5af1142275a1942b78635afb136032419e969b5810ac56e9bfcd",
+    "fachwerk:low": "135abec5f5a07c1a29bb79dce0969aa474ed2037268b1c56bb40ac4e04771bd4",
+    "steinhaus:low": "2d81b866101d0ef5e893717928bffc2be0fa704e463e2f1c4b43d74eab8a447d",
+    "holzhuette:low": "7154a6f815485c9864debf6836727205bdf466238ecdde580e6078bb55bfc03f",
+    "burg:low": "e574b5e65360b6fe49a8ae11fe551b7a8db5fd04d7ef35f9fcc021ba09f4ad10"
 }
+
+
+def check_blender_doors():
+    """Hole 2..3.2 gives casing 1.93..3.27, y 0..2.17 (0.07 casing).
+
+    Fachwerk wall .30: frame .34, centred at .19, depth .02...36.
+    Low = four frame boxes + one leaf = 30 quads. Castle 1.8 gives
+    two (1.8-.015)/2=.8925 leaves separated by .005.
+    """
+    for name in ('fachwerk','modern','steinhaus','burg'):
+        for tier in ('full','low'):
+            parts=build_walls(rect_facts(),style(name),dict(seed=17,overrides={}),tier=tier)
+            doors=[p for p in parts if p['tag']=='door']
+            assert {p.get('node') for p in doors} == {'frame','leaf'}
+            assert not any(p['material']=='door' for p in parts)
+            frame=next(p for p in doors if p['node']=='frame')
+            inner,outer=wall_offsets(style(name),0)
+            assert box(frame)==(1.93,3.27,0,2.17,round(inner-.02,4),round(outer+.02,4))
+            if tier=='low':
+                assert len(doors)==2 and sum(len(p['faces']) for p in doors)==30
+            # Overlapping casing/surround box faces must not be coplanar.
+            for surround in (p for p in parts if p['tag']=='frame'):
+                for f in frame['faces']:
+                    a=[frame['vertices'][i] for i in f]
+                    for g in surround['faces']:
+                        b=[surround['vertices'][i] for i in g]
+                        for axis in range(3):
+                            if max(v[axis] for v in a)-min(v[axis] for v in a)>1e-6:
+                                continue
+                            if not all(abs(v[axis]-a[0][axis])<1e-6 for v in b):
+                                continue
+                            assert not all(min(max(v[k] for v in a),max(v[k] for v in b)) >
+                                           max(min(v[k] for v in a),min(v[k] for v in b))+1e-6
+                                           for k in range(3) if k!=axis)
+    shop=build_walls(rect_facts(),style('fachwerk'),dict(seed=17,overrides={'shopfront':True}),tier='full')
+    assert any(p['tag']=='door' and p['material']=='glass' for p in shop)
+    facts=rect_facts(); facts['levels'][0]['edges'][0]['openings'][0]['s1']=3.8
+    doors=[p for p in build_walls(facts,style('burg'),dict(seed=17,overrides={}),tier='low') if p['tag']=='door']
+    leaves=[box(p) for p in doors if p['node'] in ('leaf','leaf_b')]
+    assert len(leaves)==2 and leaves[0][:2]==(2.005,2.8975) and leaves[1][:2]==(2.9025,3.795)
+    # Opposite hinge: B's .04 x .06 ring is .06 from its centre-seam
+    # latch edge, at 2.9025+.06=2.9625, lifted to y=1.025.
+    full=build_walls(facts,style('burg'),dict(seed=17,overrides={}),tier='full')
+    hardware=next(p for p in full if p.get('node')=='leaf_b' and p['material']=='hardware_castle')
+    boxes=[hardware['vertices'][i:i+8] for i in range(0,len(hardware['vertices']),8)]
+    rings=[v for v in boxes if abs(max(p[0] for p in v)-min(p[0] for p in v)-.04)<1e-4
+           and abs(max(p[1] for p in v)-min(p[1] for p in v)-.06)<1e-4]
+    assert len(rings)==2 and all(abs(sum(p[0] for p in v)/8-2.9625)<1e-4 for v in rings)
+    from _hull_fixtures import face_normal
+    for part in (p for p in full if p['tag']=='door'):
+        for face in part['faces']:
+            points=[part['vertices'][i] for i in face]
+            start=min(face)//8*8
+            solid=part['vertices'][start:start+8]
+            normal=face_normal(points)
+            assert sum(normal[k]*(sum(v[k] for v in points)/4-sum(v[k] for v in solid)/8)
+                       for k in range(3)) > 0
+
+
+
+
+def check_door_resolution_and_materials():
+    """Styles change the facts hash, but leave every aperture coordinate fixed.
+
+    Texture RGB 128 times #808080 leaf tint times #808080 paint rounds
+    to 32 per channel. Frame has no leaf tint, so stays at 128.
+    """
+    from unittest.mock import patch
+    from PIL import Image
+    from app.core import door_models, door_styles, scene_recipe, hull_model
+    loc=stepped_house()
+    opening=next(op for room in loc['rooms'] for op in room['layout'].get('openings',[]) if op.get('type')=='door')
+    with patch.object(door_models,'ensure_door_model',return_value=None):
+        opening['door_style']='castle'
+        first=hull_facts(loc)
+        scene=scene_recipe.compose_scene(loc,plan_width_m=10)
+        assert any(d.get('door_style')=='castle' for d in scene['doorways'])
+        holes=[h for lv in first['levels'] for e in lv['edges'] for h in e['openings'] if h['kind']=='door']
+        assert [h['door_style'] for h in holes]==['castle']
+        opening['door_style']='interior'
+        second=hull_facts(loc)
+        assert first['fingerprint']!=second['fingerprint']
+        strip=lambda f: [{k:v for k,v in h.items() if k!='door_style'} for lv in f['levels'] for e in lv['edges'] for h in e['openings']]
+        assert strip(first)==strip(second)
+        opening['prop_id']='image-door'
+        prop=scene_recipe.compose_scene(loc,plan_width_m=10)
+        assert all('door_style' not in d for d in prop['doorways'])
+        propfacts=hull_facts(loc)
+        assert any(h.get('door_style')=='' for lv in propfacts['levels'] for e in lv['edges'] for h in e['openings'] if h['kind']=='door')
+        parts=build_walls(propfacts,style('burg'),dict(seed=1,overrides={}),tier='low')
+        assert any(p['material']=='door_leaf_castle' for p in parts)
+        opening.pop('prop_id'); opening.pop('door_style'); opening['door_prop']='none'
+        assert all('door_style' not in d for d in scene_recipe.compose_scene(loc,plan_width_m=10)['doorways'])
+        assert not any(h['kind']=='door' for lv in hull_facts(loc)['levels'] for e in lv['edges'] for h in e['openings'])
+    facts=rect_facts()
+    facts['levels'][0]['edges'][1]['openings']=[dict(s0=2,s1=3,y0=0,y1=2.1,kind='door',door_style='interior')]
+    config=style('fachwerk')
+    catalog=door_styles.load_door_styles()
+    catalog['plank']['leaf_tint']='#808080'
+    # A painted style remains painted when the hull substitutes a texture.
+    catalog['interior']['leaf_tint']='#808080'
+    desc=dict(seed=17,overrides=dict(door_color='#808080',materials={'door':'replacement'}))
+    with tempfile.TemporaryDirectory() as tmp:
+        source=Path(tmp)/'source.png'; Image.new('RGB',(1,1),(128,128,128)).save(source)
+        with patch.object(door_styles,'load_door_styles',return_value=catalog), patch.object(hull_model.surface_textures,'base_texture_file',return_value=source):
+            materials,images,sizes=hull_model._materials(config,desc,Path(tmp)/'textures',frozenset(),facts)
+        by_name={m['name']:m for m in materials}
+        assert 'door' not in by_name
+        assert {'door_leaf_plank','door_leaf_interior','door_frame_plank','door_frame_interior','hardware_plank','hardware_interior','glass'} <= by_name.keys()
+        with Image.open(images[by_name['door_leaf_interior']['texture']]) as image:
+            assert image.getpixel((0,0))==(32,32,32)
+        with Image.open(images[by_name['door_leaf_plank']['texture']]) as image:
+            assert image.getpixel((0,0))==(64,64,64)  # timber does not take paint
+        assert by_name['hardware_plank']['roughness']==.3
+        assert by_name['glass']['alpha']==.6
+        geometry=build_walls(facts,config,desc,tier='full',uv_sizes=sizes)
+        assert {p['material'] for p in geometry} <= by_name.keys()
+        # fachwerk names materials.door "door_planks"; only a BUILDING override may
+        # replace a door style's leaf, so the painted interior door stays untextured.
+        assert config['materials']['door']
+        with patch.object(door_styles,'load_door_styles',return_value=catalog), patch.object(hull_model.surface_textures,'base_texture_file',return_value=source):
+            plain,_,_=hull_model._materials(config,dict(seed=17,overrides={}),Path(tmp)/'plain',frozenset(),facts)
+        assert next(m for m in plain if m['name']=='door_leaf_interior')['texture'] is None
+    from _hull_fixtures import l_shaped_house
+    large=hull_facts(l_shaped_house())
+    for name in ('fachwerk','holzhuette','steinhaus','burg','modern'):
+        config=style(name)
+        fitted=fit_budget(large,config,dict(seed=7,overrides={'ornament_density':.5}))
+        for tier in ('full','low'):
+            result=build_hull(large,config,fitted,tier=tier)
+            assert result['tris'] <= TRI_BUDGET[tier]
+            assert sum(p['tag']=='door' and p.get('node')=='frame' for p in result['parts'])==2
+
 
 
 def style(name):
@@ -385,7 +519,7 @@ def check_hull_proposal_window_count():
 
 def main():
     failed = []
-    for check in (check_glass,check_details,check_density,check_blind,check_surrounds,check_wide_and_thresholds,check_identity,
+    for check in (check_blender_doors,check_door_resolution_and_materials,check_glass,check_details,check_density,check_blind,check_surrounds,check_wide_and_thresholds,check_identity,
                   check_real_storey_raster,check_real_storey_flag_and_medians,
                   check_real_storey_roof_and_short_wall,check_real_storey_filters,check_real_storey_budget,
                   check_shop_street_edges,check_shop_panels_and_band,check_shop_awnings,

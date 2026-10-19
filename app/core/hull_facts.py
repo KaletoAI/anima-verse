@@ -22,7 +22,7 @@ def _edge_openings(walls, level, a, frame, floor, height):
         if span is None:
             continue
         if wall.get('leaf'):
-            leaves.append(span)
+            leaves.append((*span, wall.get('door_style', '')))
             continue
         if wall.get('glass'):
             continue
@@ -68,14 +68,17 @@ def _edge_openings(walls, level, a, frame, floor, height):
             continue
         kind = 'window' if hole['y0'] > floor + 0.05 else (
             'door' if any(min(end, hole['s1']) > max(start, hole['s0'])
-                          for start, end in leaves) else 'passage')
-        result.append({**{key: sr._r(value) for key, value in hole.items()},
+                          for start, end, _style in leaves) else 'passage')
+        door_style = next((style for start,end,style in leaves
+                           if min(end,hole['s1']) > max(start,hole['s0'])), '')
+        result.append({**({'door_style': door_style} if kind == 'door' else {}),
+                       **{key: sr._r(value) for key, value in hole.items()},
                        'kind': kind})
     return sorted(result, key=lambda h: (h['s0'], h['y0'], h['s1'], h['y1']))
 
 
 def hull_facts(location: Dict[str, Any], location_id: str = '') -> Dict[str, Any]:
-    """Return rounded per-storey hull facts and their geometry-only fingerprint.
+    """Return rounded per-storey hull facts and their geometry and door-style fingerprint.
 
     A supplied dict is composed directly. Passing None with an id loads that
     location lazily; missing records return ``not_found``.

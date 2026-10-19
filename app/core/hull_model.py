@@ -25,7 +25,7 @@ def material_kinds(style: Dict, desc: Dict, location: Dict, levels: list[int]) -
     """Resolve floor-plan precedence and stable material slots without mutation."""
     slots = {key: style["materials"][key] for key in hull_styles.MATERIAL_KEYS}
     overrides = desc.get("overrides", {}).get("materials", {})
-    slots.update({key: overrides[key] for key in ("roof", "trim", "plinth") if overrides.get(key)})
+    slots.update({key: overrides[key] for key in ("roof", "trim", "plinth", "door") if overrides.get(key)})
     plan = location.get("map3d") or {}
     upper = plan.get("wall_kind") or slots["wall"]
     slots["wall"] = upper
@@ -47,12 +47,14 @@ def resolved_materials(style: Dict) -> frozenset[str]:
                      and source.is_file())
 
 
-def _materials(style: Dict, desc: Dict, tex_dir: Path, resolved: frozenset[str]) -> tuple:
+def _materials(style: Dict, desc: Dict, tex_dir: Path, resolved: frozenset[str], facts=None) -> tuple:
     """Tint texture copies deterministically and retain their physical UV sizes."""
     from PIL import Image
     materials, textures, sizes = [], {}, {}
     tex_dir.mkdir(parents=True, exist_ok=True)
     for material in style["materials"]:
+        if material == "door":
+            continue
         if material == "facade_module" and not style["materials"][material]:
             continue
         source = (surface_textures.base_texture_file(style["materials"][material])
@@ -92,6 +94,34 @@ def _materials(style: Dict, desc: Dict, tex_dir: Path, resolved: frozenset[str])
         color = desc["overrides"].get(key + "_color") or style["palette"][key]
         materials.append({"name": material, "texture": None,
                           "color": tone_to_linear(color), "roughness": 0.6, "alpha": 1.0})
+    from app.core.door_models import _materials as door_materials
+    from app.core.door_styles import load_door_styles
+    from app.core.hull_walls import used_door_styles
+    catalog = load_door_styles()
+    ids = used_door_styles(facts, style, desc) if facts is not None else [style.get('door_style', 'panel')]
+    for style_id in ids:
+        door = dict(catalog[style_id])
+        painted = door['leaf_material'].startswith('#')
+        # Only a building's own door texture replaces the door style's leaf: every
+        # shipped hull style names a door kind, which would flatten all door styles.
+        door['leaf_material'] = (desc.get('overrides', {}).get('materials', {}).get('door')
+                                 or door['leaf_material'])
+        directory = tex_dir / style_id
+        directory.mkdir(parents=True, exist_ok=True)
+        entries, images, scales = door_materials(
+            door, desc.get('overrides', {}).get('door_color') if painted else None, directory)
+        for entry in entries:
+            if entry['name'] == 'glass':
+                continue  # All door glazing uses the hull's glass slot.
+            role = entry['name']
+            entry['name'] = f'{role}_{style_id}'
+            if entry['texture']:
+                old = entry['texture']
+                entry['texture'] = f'{old}_{style_id}'
+                textures[entry['texture']] = str(images[old])
+            if role in scales:
+                sizes[entry['name']] = scales[role]
+            materials.append(entry)
     return materials, textures, sizes
 
 
@@ -134,7 +164,7 @@ def build_job(location_id: str, description: Any, location: Optional[Dict] = Non
     kinds = material_kinds(style, desc, location, [level["level"] for level in levels])
     style = {**style, "materials": kinds["slots"], "storey_slot": kinds["storey_slot"]}
     resolved = resolved_materials(style)
-    materials, textures, sizes = _materials(style, desc, directory, resolved)
+    materials, textures, sizes = _materials(style, desc, directory, resolved, facts)
     try:
         fitted = fit_budget(facts, style, desc, uv_sizes=sizes, resolved=resolved)
     except ValueError as error:

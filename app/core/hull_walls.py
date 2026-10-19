@@ -1,6 +1,8 @@
 """Wall shells and aperture details built exclusively from hull facts."""
 import math
 from typing import Dict, List, Optional, Tuple
+from app.core.door_geometry import build_door, leaves_for
+from app.core.door_styles import load_door_styles
 from app.core.hull_facades import module_count, mullions, street_edges, shop_band
 from app.core.hull_mesh import Part, PartBuilder, offset_ring, rng, _normal
 from app.core.scene_recipe import WALL_THICKNESS, WALL_SINK_M
@@ -12,6 +14,19 @@ def wall_offsets(style: Dict, level: int) -> Tuple[float, float]:
     if level >= 1 and style.get('timber_frame', 'none') != 'none':
         outer += style.get('jetty_m', 0)
     return inner, outer
+
+
+def door_style_id(hole, level, style, desc):
+    """Keep doorway resolution; prop leaves use this hull's exterior style."""
+    return hole.get('door_style') or style.get(
+        'shop_door_style' if level == 0 and desc.get('overrides', {}).get('shopfront')
+        else 'door_style', 'panel')
+
+
+def used_door_styles(facts, style, desc):
+    return sorted({door_style_id(h, level['level'], style, desc)
+                   for level in facts['levels'] for edge in level['edges']
+                   for h in edge['openings'] if h['kind'] == 'door' and not h.get('blind')})
 
 
 def _cells(s0, s1, y0, y1, holes, extra_y=(), extra_s=()):
@@ -76,6 +91,7 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
         if b.part()['faces']:
             parts.append(b.part())
 
+    door_styles = load_door_styles()
     full = tier == 'full'
     for level in facts['levels']:
         number = level['level']
@@ -102,7 +118,11 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 emit(tag,mat,[point(s0,y0,d),point(s1,y0,d),point(s1,y1,d),point(s0,y1,d)],
                      [-v for v in outward] if reverse else outward)
 
-            def block(tag,mat,s0,s1,y0,y1,d0,d1,*,cut_holes=True):
+            def block(tag,mat,s0,s1,y0,y1,d0,d1,*,cut_holes=True,door_surround=False):
+                # The casing ends .02 proud. Surrounds start .001 beyond it,
+                # avoiding coincident head/jamb faces while retaining the reveal.
+                if door_surround:
+                    d0 = max(d0, outer+.021)
                 if s1-s0 <= 1e-5 or y1-y0 <= 1e-5:
                     return
                 from app.core.hull_roofs import clip_detail, detail_breaks
@@ -209,12 +229,38 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 kind = h['kind']
                 frame = style.get('frames','none')
                 casement = full and kind == 'window' and frame != 'metal'
-                if kind in ('window','door'):
-                    depth = -.02 if h.get('blind') else (0 if not full else (.10 if kind == 'window' else .08))
+                if kind == 'door' and not h.get('blind'):
+                    style_id = door_style_id(h, number, style, desc)
+                    door_style = door_styles[style_id]
+                    width, height = s1-s0, y1-y0
+                    double = leaves_for(door_style, width) == 2
+                    roles = {role: f'{role}_{style_id}' for role in ('door_leaf','door_frame','hardware')}
+                    scales = {role: uv_sizes[name] for role,name in {**roles, 'glass':'glass'}.items() if name in uv_sizes}
+                    for piece in (('double_a','double_b') if double else ('single',)):
+                        geometry = build_door(door_style, width, height, thickness=outer-inner,
+                                              piece=piece, outside=1, tier=tier, uv_sizes=scales)
+                        shift = .07+.005+(width-.015)/2+.005 if piece == 'double_b' else 0
+                        lift = .025 if piece == 'double_b' else 0
+                        for part in geometry['parts']:
+                            part.update(tag='door', protrudes=False,
+                                        material=roles.get(part['material'],part['material']))
+                            if piece == 'double_b':
+                                part['node'] = 'leaf_b'
+                            # B's hinge-local x runs back from the right jamb.
+                            part['vertices'] = [[round(v,4) for v in point(
+                                s0-.07+shift+((width-.015)/2-x if piece == 'double_b' else x),
+                                y0+y+lift,(inner+outer)/2+z)]
+                                                for x,y,z in part['vertices']]
+                            # The edge frame can reflect z; preserve outward winding.
+                            if (u[0]*n[1]-u[1]*n[0]) * (-1 if piece == 'double_b' else 1) < 0:
+                                part['faces'] = [face[::-1] for face in part['faces']]
+                                part['uvs'] = [uv[::-1] for uv in part['uvs']]
+                            parts.append(part)
+                if kind == 'window':
+                    depth = -.02 if h.get('blind') else (0 if not full else .10)
                     if casement and not h.get('blind'):
                         depth = .12
-                    face('glass' if kind == 'window' else 'door',
-                         'blind' if h.get('blind') else ('glass' if kind == 'window' else 'door'),s0,s1,y0,y1,outer-depth)
+                    face('glass','blind' if h.get('blind') else 'glass',s0,s1,y0,y1,outer-depth)
                 if casement:
                     d0,d1 = (outer+.02,outer+.06) if h.get('blind') else (outer-.14,outer-.08)
                     for c,d,e,f in ((s0,s0+.06,y0,y1),(s1-.06,s1,y0,y1),
@@ -241,20 +287,20 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 if frame == 'timber':
                     for c,d,e,f in ((s0-.12,s0,y0,y1),(s1,s1+.12,y0,y1),
                                     (s0-.12,s1+.12,y1,y1+.12)):
-                        block('frame','trim',c,d,e,f,outer,outer+.06)
+                        block('frame','trim',c,d,e,f,outer,outer+.06,door_surround=kind == 'door')
                     if kind != 'window':
-                        block('frame','trim',s0-.12,s1+.12,y0-.12,y0,outer,outer+.06)
+                        block('frame','trim',s0-.12,s1+.12,y0-.12,y0,outer,outer+.06,door_surround=kind == 'door')
                 elif frame == 'metal' and kind in ('window','door'):
                     for c,d,e,f in ((s0-.05,s0,y0,y1),(s1,s1+.05,y0,y1),
                                     (s0-.05,s1+.05,y1,y1+.05),(s0-.05,s1+.05,y0-.05,y0)):
-                        block('frame','trim',c,d,e,f,outer,outer+.03,cut_holes=e < y1 and f > y0)
+                        block('frame','trim',c,d,e,f,outer,outer+.03,cut_holes=e < y1 and f > y0,door_surround=kind == 'door')
                     if kind == 'window':
                         block('frame','trim',s0-.05,s1+.05,y0-.05,y0,outer,outer+.06,cut_holes=False)
                         d0,d1 = (outer+.02,outer+.03) if h.get('blind') else (outer-.10,outer)
                         for centre in mullions(s0,s1):
                             block('frame','trim',centre-.025,centre+.025,y0,y1,d0,d1,cut_holes=False)
                 elif frame == 'stone':
-                    block('frame','trim',s0-.05,s1+.05,y1,y1+.15,outer,outer+.10)
+                    block('frame','trim',s0-.05,s1+.05,y1,y1+.15,outer,outer+.10,door_surround=kind == 'door')
                 chance = min(1,style.get('shutters',0)*desc.get('overrides',{}).get('ornament_density',1)*2)
                 if kind == 'window' and rng(desc['seed'],f"shutter:{number}:{edge['index']}:{h['index']}").random() < chance:
                     width = (s1-s0)/2

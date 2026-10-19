@@ -92,23 +92,24 @@ STYLES = ("fachwerk", "holzhuette", "burg", "steinhaus")
 # 1c-B Task 3b: partial seams keep the free eave
 # 1c-B Task 3c: extend only across a ridge end
 # 1c-C Task 2: casement and sill
+# 3a: Blender doors
 IDENTITY = {
-    "stepped_house:fachwerk:full": "1cdc2876e267df3a59d2e0a1b9d02ee87c8e536d0d7c8fb080e9766f4c233268",
-    "stepped_house:fachwerk:low": "265edb57712ecee23decf6adf68093d7a859c0f7d8a6419397af25675d320ea6",
-    "stepped_house:holzhuette:full": "ded4d218ddc94fc07d0ee6c09a4a6e0035dad43c2ab6bd00b25f0ff5e895a48f",
-    "stepped_house:holzhuette:low": "4737bbc9dd465aab0cec70c589a01fd4937b2e2e28581f0a17d497aebfb22f46",
-    "stepped_house:burg:full": "be13157ef2c6d4b01210ed4fbdcda475f3fc9d3bd2eb13c93bd9ed50818bfb26",
-    "stepped_house:burg:low": "1f268acef9a014d379b45766b1a97e9b9fab81ae85a1373c63ef0b56b30fccca",
-    "stepped_house:steinhaus:full": "f22144cff047a2363eb8bc38f6537d20cf3cf7ce90c7fc856c869879900864e0",
-    "stepped_house:steinhaus:low": "80b263899597636c78f925e4913cb1e1fee2b3d44d720caffea03f093ea785e4",
-    "l_shaped_house:fachwerk:full": "5b8230777cc83534b905de03d001316150c7e9b6ac6c0732eaea9fe24af76dcc",
-    "l_shaped_house:fachwerk:low": "c0515c7f666ffd8fff9f76ee5aa1b5e12c8cb87e5f960509cd26704b66e04410",
-    "l_shaped_house:holzhuette:full": "3d6f5d2e735d1f78e925becb6f0fd836a0cd1cba92ae2df5af971d0a1d62eefe",
-    "l_shaped_house:holzhuette:low": "123a77715662864c99200baa178f51212fe299409011dc66f3ed296c31b1fcf9",
-    "l_shaped_house:burg:full": "21bd5b9a5a30419f9c8b7e589b04f46d52fbc2f52641341fb6fd7868c30fc14c",
-    "l_shaped_house:burg:low": "95c2234bfadc26b68a46d349d33d4d9248f01bec79fd9a1beeb51033c69573d2",
-    "l_shaped_house:steinhaus:full": "f0f8a6405ad5e413cd623a8e92893f4249cada7fe51e9649a0118b4340b544d8",
-    "l_shaped_house:steinhaus:low": "f41d4fd8433b2d0a10d9081b8f9ed392b780d3a53eb456f17ed8ced5848a1570"
+    "stepped_house:fachwerk:full": "f6028b441de0a84d99dd1df35aea7ee5769e4c0de8b5d9ef8518c21318aaff4c",
+    "stepped_house:fachwerk:low": "a4e8bba6feaded24da9daaffeb9eeb5e71c2c26efee6f30dc4ec2707fdfc8d9d",
+    "stepped_house:holzhuette:full": "00ded0a21a8766db61ecaf45322e898d57fef798c2dd221da43349167bf24566",
+    "stepped_house:holzhuette:low": "498a201773c799b0e3a7785e371c80b8df8778099e8030249f16a76df4345071",
+    "stepped_house:burg:full": "975886385a874d26b0cba87fc08664738a4b2dcda9460d080b191df0cd4a3c07",
+    "stepped_house:burg:low": "a78af9bfae83fad92755e4e6cd46a57275f8edf042b4b5e812ac3483fab86214",
+    "stepped_house:steinhaus:full": "e2ad3ce5a5dbf330e6c69a3e6d1c7da13bd5a53f435d78685a60596047c26527",
+    "stepped_house:steinhaus:low": "e0c5286ec2dcfff5e2edef79f65b64c3b920a1c4a7bd33a083b7acce2984dfca",
+    "l_shaped_house:fachwerk:full": "8fcccdbfbb279bbac6157777b4a46f57e2cd986bbfeb7f2b79b1f2d3fd8d1057",
+    "l_shaped_house:fachwerk:low": "9fcfc30692467073afbd1c9c0cc303fd414dec4333a0824ac579cddb97a93bc7",
+    "l_shaped_house:holzhuette:full": "6008e6687f2f130c38cdf5361dda2c28efc9d10113ce9dcb8931992e281e9b1f",
+    "l_shaped_house:holzhuette:low": "55eaf3593c1c9f5181cd4e776e6d593612ba8abde9bea7f39f76175437f5f408",
+    "l_shaped_house:burg:full": "c5a732ac04106723ef2de38682f516fc21320485a05d73272bac47e4ee709e72",
+    "l_shaped_house:burg:low": "ea38bf9b949761f34106e668e0a44113bca6d12c7b4dcdf2bb1280c268370408",
+    "l_shaped_house:steinhaus:full": "4f3ded78a738128234f10949850a645f1e8099b1eaf02c2649dae897981fb65c",
+    "l_shaped_house:steinhaus:low": "16a7cc2fe289f4533a0ae980d67f41977bfba5b0047e22eb6a662f45231bd299"
 }
 
 
@@ -119,7 +120,7 @@ def check_identity():
             style = validate_style(json.loads((root / "shared/building_styles" / f"{name}.json").read_text()), name)
             for tier in ("full", "low"):
                 assert digest(build_hull(hull_facts(fixture()), style, description(name, 7), tier=tier)) == IDENTITY[f"{fixture.__name__}:{name}:{tier}"]
-    print("PASS: 16 baseline byte-identity literals (8b5f1124)")
+    print("PASS: 16 Blender door byte-identity literals")
 
 
 def description(style: str, seed: int) -> dict:

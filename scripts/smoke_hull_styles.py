@@ -158,7 +158,7 @@ def main():
             style = s[name]
             materials, _, _ = hull_model._materials(
                 style, desc, Path(tmp) / name, hull_model.resolved_materials(style))
-            assert len(materials) == (14 if name == "modern" else 13)
+            assert len(materials) == (16 if name == "modern" else 15)
             by_name = {material["name"]: material for material in materials}
             assert by_name["blind"] == dict(name="blind", texture=None,
                 color=by_name["glass"]["color"], roughness=.1, alpha=1.0)

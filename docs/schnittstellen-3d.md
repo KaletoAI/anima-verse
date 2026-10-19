@@ -6926,6 +6926,8 @@ jedem Neuaufbau).
 
 ### Blender doors (v15)
 
+`doorways[].door_style` is the resolved style id; absent for prop doors and open gaps.
+
 Door resolution is shared by walls, doorways and model specs: opening prop,
 opening style, explicit `door_prop: "none"` (open gap), location prop,
 location style, active hull exterior/interior/shop style, then shipped

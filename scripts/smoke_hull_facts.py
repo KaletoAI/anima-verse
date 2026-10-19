@@ -179,7 +179,7 @@ def main():
         assert f['eaves_y'] == 5.93
         expected = {
             (0, 0): [dict(s0=4.4, s1=5.6, y0=0.9, y1=2.1, kind='window')],
-            (0, 2): [dict(s0=2.5, s1=3.5, y0=0.0, y1=2.1, kind='door')],
+            (0, 2): [dict(s0=2.5, s1=3.5, y0=0.0, y1=2.1, kind='door', door_style='panel')],
             (1, 1): [dict(s0=3.4, s1=4.6, y0=4.0, y1=5.2, kind='window')],
             (1, 3): [dict(s0=3.5, s1=4.5, y0=3.08, y1=5.5, kind='passage')],
         }
@@ -198,7 +198,8 @@ def main():
                                     for l in f['levels']]),
                             sort_keys=True, separators=(',', ':'))
         assert f['fingerprint'] == hashlib.sha256(packed.encode()).hexdigest()[:16]
-        assert f['fingerprint'] == 'df35445505db09c7'
+        # 3a: Blender doors — door_style participates in the canonical hash.
+        assert f['fingerprint'] == 'bc700a15ab6c8ce2'
         assert f['elevator'] is None
         check_storeys(hull_facts, gap_house, stepped_house, compose_scene)
         moved = copy.deepcopy(loc)

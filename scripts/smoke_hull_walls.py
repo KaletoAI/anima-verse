@@ -21,8 +21,9 @@ Hand expectations: inner offset .07/2+.005=.04; stone outer .04+.50=.54.
 The fixture has four apertures (two windows, one door, one passage), hence
 16 reveals, two glass parts, one leaf. A unit cube has 6 quads = 12 triangles.
 Stone frames extend .05 each side: width 1.2+.10=1.3; height .15,
-depth .10. Cornice is .12 high and .08 deep. Full glass/door recesses
-are .12/.08: front glass z=-.42 and rear door z=8.46; low is flush.
+depth .10. Cornice is .12 high and .08 deep. Full glass recess is .12:
+front glass z=-.42; low is flush. Door frame depth .50+.04=.54 spans
+rear depths 8+.04-.02=8.02 through 8+.54+.02=8.56 in both tiers.
 Timber shutters .5 * density 1 * 2 = 1, hence two leaves per window (4).
 Ground sink is .14, so ground facade height is 3.22.
 The rounded-normal stress rectangle is 100x8, rotated 30 degrees;
@@ -30,6 +31,7 @@ its outer perimeter is 2*(100+8)+8*.54=220.32. Its facade area is
 220.32*(3+.14)-1.44 for the single window.
 A 2x2 square offset by .5 has bounds -.5..2.5 on both axes.
 """
+# 3a: Blender doors
 import json
 import math
 import sys
@@ -58,7 +60,7 @@ def main():
         assert no_degenerate_faces(parts)
         assert abs(outer_face_distance(parts, facts)-.54) < 1e-4
         assert count(parts, tag='glass') == windows(facts) == 2
-        assert count(parts, tag='door') == doors(facts) == 1
+        assert sum(p['tag']=='door' and p.get('node')=='frame' for p in parts) == doors(facts) == 1
         assert parts == build_walls(facts, styles['steinhaus'], desc, tier=tier)
         if tier == 'full':
             assert count(parts, tag='reveal') == 4*total_openings(facts) == 16
@@ -83,12 +85,12 @@ def main():
     assert ring == [[-.5,-.5],[2.5,-.5],[2.5,2.5],[-.5,2.5]]
     assert rng(17,'x').random() == rng(17,'x').random()
     assert wall_offsets(styles['fachwerk'], 1) == (.04, .59)
-    for tier,window_z,door_z in (('full',-.42,8.46),('low',-.54,8.54)):
+    for tier,window_z in (('full',-.42),('low',-.54)):
         parts = build_walls(facts,styles['steinhaus'],desc,tier=tier)
         glass = next(p for p in parts if p['tag'] == 'glass')
-        door = next(p for p in parts if p['tag'] == 'door')
+        door = next(p for p in parts if p['tag'] == 'door' and p['node']=='frame')
         assert all(abs(v[2]-window_z) < 1e-5 for v in glass['vertices'])
-        assert all(abs(v[2]-door_z) < 1e-5 for v in door['vertices'])
+        assert bounds([door])['min'][2] == 8.02 and bounds([door])['max'][2] == 8.56
     timber = build_walls(facts,styles['fachwerk'],desc,tier='full')
     assert count(timber,tag='shutter') == 4
     assert count(timber,tag='frame') == 4*total_openings(facts)-windows(facts)
