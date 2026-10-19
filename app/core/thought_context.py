@@ -1192,15 +1192,20 @@ def _build_daily_schedule_block(character_name: str) -> str:
     containing only free blocks is silent, as are disabled or gated schedules.
     Sleep remains a hint; the energy-based rule decides whether it triggers.
 
-    Orphan places are warned about and dropped while their roles survive.
-    The current block notes an absent character; only the first following
-    block at another place adds a set-off nudge. Neither enforces travel.
+    Sleep uses the configured home display name; off-map, empty and unknown
+    homes have no place and produce no orphan warning. Orphan slot places
+    are warned about and dropped while their roles survive. The current
+    block notes an absent character; only the first following block whose
+    place differs from both here and the current block adds a set-off nudge.
+    Neither note enforces travel.
     """
     try:
         from app.models.character_template import is_feature_enabled
         if not is_feature_enabled(character_name, "activity_home_enabled"):
             return ""
-        from app.models.character import get_character_daily_schedule
+        from app.models.character import (
+            get_character_daily_schedule, get_character_config, OFFMAP_SLEEP_SENTINEL,
+        )
         schedule = get_character_daily_schedule(character_name) or {}
         if not schedule.get("enabled"):
             return ""
@@ -1246,7 +1251,7 @@ def _build_daily_schedule_block(character_name: str) -> str:
         except Exception:
             pass
 
-        def _resolve(loc: str) -> Optional[str]:
+        def _resolve(loc: str, *, warn: bool = True) -> Optional[str]:
             """Display name for a slot's place — ``None`` when it points at a
             place the world does not have any more.
 
@@ -1261,6 +1266,8 @@ def _build_daily_schedule_block(character_name: str) -> str:
                 return loc_id_to_name[loc]
             if loc in known_names:
                 return loc
+            if not warn:
+                return None
             if not loc_id_to_name:
                 # The world list itself was unreadable — every place would
                 # look orphaned. Fail open and pass the slot through unjudged.
@@ -1268,13 +1275,17 @@ def _build_daily_schedule_block(character_name: str) -> str:
             _warn_orphan_slot(character_name, loc)
             return None
 
+        home_id = (get_character_config(character_name).get("home_location") or "").strip()
+        home_place = (_resolve(home_id, warn=False) or ""
+                      if home_id and home_id != OFFMAP_SLEEP_SENTINEL else "")
+
         # Resolve once so aliases and orphan slots merge by visible content.
         hours = []
         for hour in range(24):
             slot = slot_by_hour.get(hour) or {}
             loc = (slot.get("location") or "").strip()
             hours.append((bool(slot.get("sleep")),
-                          (_resolve(loc) or "") if loc else "",
+                          home_place if slot.get("sleep") else ((_resolve(loc) or "") if loc else ""),
                           (slot.get("role") or "").strip()))
 
         blocks = []
@@ -1291,24 +1302,27 @@ def _build_daily_schedule_block(character_name: str) -> str:
 
         lines: List[str] = []
         nudged = False
+        current_place = blocks[0][2][1]
         for start, end, (sleep, place, role) in blocks:
             until = f"{(cur_h + end) % 24:02d}:00"
             current = start == 0
             label = (f"now, until {until}" if current
                      else f"{(cur_h + start) % 24:02d}:00")
+            away = ""
+            if place and here_name and place != here_name:
+                if current:
+                    away = " — you are not there right now; getting there takes in-world time"
+                elif not nudged and place != current_place:
+                    away = " — you are not there; set off in time, getting there takes in-world time"
+                    nudged = True
             if sleep:
                 text = ("you usually sleep around now" if current
                         else f"you usually sleep (until {until})")
+                if place:
+                    text += f", at home: {place}{away}"
             else:
                 parts = []
                 if place:
-                    away = ""
-                    if here_name and place != here_name:
-                        if current:
-                            away = " — you are not there right now; getting there takes in-world time"
-                        elif not nudged:
-                            away = " — you are not there; set off in time, getting there takes in-world time"
-                            nudged = True
                     parts.append(f"location: {place}{away}")
                 if role:
                     parts.append(f"role: {role}")
