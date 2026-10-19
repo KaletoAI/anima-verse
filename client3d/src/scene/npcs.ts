@@ -325,6 +325,16 @@ export class NpcManager {
   private placeAt: (name: string, id: string, x: number, z: number) => PlaceEntry | undefined =
     () => undefined;
 
+  /**
+   * The STANDING height in the character's room at a world point — handed in
+   * like the place lookup, because the rooms live in `main.ts`
+   * (`tiles.roomStandY`). A pair that met halfway (`anchor.placeId` null)
+   * stands on THIS floor: in a room upstairs or in the cellar that is the
+   * storey's plate, not the terrain under the building. `null` = no room
+   * floor (the location's ground, no interior) — then the world ground.
+   */
+  private roomStandAt: (name: string, x: number, z: number) => number | null = () => null;
+
   private syncCounters: SyncCounters;
   private errWindow: ErrWindow;
 
@@ -337,6 +347,11 @@ export class NpcManager {
   /** Install the place lookup for pair anchors (see `placeAt`). */
   setPlaceAt(fn: (name: string, id: string, x: number, z: number) => PlaceEntry | undefined) {
     this.placeAt = fn;
+  }
+
+  /** Install the room standing height for pairs on the floor (see `roomStandAt`). */
+  setRoomStandAt(fn: (name: string, x: number, z: number) => number | null) {
+    this.roomStandAt = fn;
   }
 
   /** Install the world height sampler (`Ground.heightAt`) and the revision of
@@ -1225,7 +1240,8 @@ export class NpcManager {
     const z = it.anchor.z - root.x * s + root.z * c;
     const seat = it.anchor.placeId
       ? this.placeAt(npc.name, it.anchor.placeId, it.anchor.x, it.anchor.z) : undefined;
-    npc.root.position.set(x, seat ? seat.slots[0].y : this.groundY(x, z), z);
+    npc.root.position.set(x,
+      seat ? seat.slots[0].y : (this.roomStandAt(npc.name, x, z) ?? this.groundY(x, z)), z);
     npc.figure.setYaw(it.anchor.yaw);
     npc.figure.update(dt, { frozen: frozen || it.rate <= 0 });
     npc.label.visible = labelVisible;

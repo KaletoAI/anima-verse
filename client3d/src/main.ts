@@ -60,7 +60,7 @@ import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintBoundary, footprintYaw, footprintCentre, redatumTile, roomFloorAt, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile, type VerticalTarget } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintBoundary, footprintYaw, footprintCentre, redatumTile, roomStandY, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile, type VerticalTarget } from './scene/tiles';
 import { setFogVeilCameraHeight, setFogVeilCells, setFogVeilFogged,
   tickFogVeil } from './scene/fogVeil';
 import { setModelEnvironment } from './scene/glbMaterials';
@@ -2323,6 +2323,15 @@ async function startApp(username: string, role: string) {
     const room = roomOf.get(name);
     return room ? tileAt(x, z)?.roomMarkers.get(room)?.get(id) : undefined;
   });
+  // A pair that met halfway stands on the floor of its ROOM — the storey it
+  // is on, not the terrain under the building.
+  npcs.setRoomStandAt((name, x, z) => {
+    const room = roomOf.get(name);
+    const tile = room ? tileAt(x, z) : null;
+    if (!room || !tile) return null;
+    const local = worldToTile(tile, x, z);
+    return roomStandY(tile, room, local.x, local.z);
+  });
   /** Figures the placement pass left INVISIBLE (a storey that is not shown, a
    *  room whose interior is closed). Rewritten by every `computeNpcStates`
    *  run; read by the talk target, because nobody can be addressed through a
@@ -2787,9 +2796,8 @@ async function startApp(username: string, role: string) {
             // terrain), asked per figure instead of once per room, so a figure
             // on a diorama's hillock stands on the hillock.
             const local = worldToTile(tile, c.pos.x, c.pos.z);
-            const y = roomFloorAt(tile, inRoom, local.x, local.z);
             pos = new THREE.Vector3(c.pos.x,
-                                    y === null ? roomCenter.y : y + WALK_CLEARANCE_M,
+                                    roomStandY(tile, inRoom, local.x, local.z) ?? roomCenter.y,
                                     c.pos.z);
           } else {
             // No point at all (a character that was never positioned): the

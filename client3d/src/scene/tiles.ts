@@ -1141,6 +1141,19 @@ export function roomFloorAt(tile: Tile, roomId: string,
   return floor ? roomFloorWorldY(tile, roomId, floor, lx, lz) : null;
 }
 
+/** The STANDING height in a room the caller names, in WORLD metres: its floor
+ *  plus the drawing clearance, or — for a room without a floor of its own (a
+ *  storey corridor, § A13c) — its stand centre. `null` when the tile knows no
+ *  such room. The one answer for every figure the server put on a room point:
+ *  the ordinary placement and a pair that met halfway (§ A8a) alike, so a
+ *  handshake upstairs or in the cellar stays on that storey. */
+export function roomStandY(tile: Tile, roomId: string,
+                           lx: number, lz: number): number | null {
+  const y = roomFloorAt(tile, roomId, lx, lz);
+  if (y !== null) return y + WALK_CLEARANCE_M;
+  return tile.roomCenters.get(roomId)?.y ?? null;
+}
+
 /**
  * WHERE A FIGURE STANDS on this tile, in WORLD metres.
  *

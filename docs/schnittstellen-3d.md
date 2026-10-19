@@ -5615,6 +5615,7 @@ sie produziert.
 | `client3d/scripts/smoke_surface_math.mjs` | `surfaceHeightAt`/`highestSurfaceAt` gegen DIESELBE Handtabelle wie der Python-Zwilling (`smoke_model_surface.py` part 2), Zahl für Zahl — Knotenwert, Bilinear-Mitte, `null`-Nachbar, Punkt außerhalb, Yaw, `measure xyz`, `lift`, höchstes gewinnt |
 | `client3d/scripts/smoke_room_spots.mjs` | Schwerpunkt (inkl. L-Raum, dessen Schwerpunkt draußen liegt), Raster + Polygon-Filter als Schwerpunkt-Rückfall, Möbel-Fenster, Zonen-Wasser-Auswahl |
 | `client3d/scripts/smoke_pair_realtime.mjs` | die Echtzeit-Phase eines Paar-Clips (§ A8a): `elapsed_s / rate` bei Faktor 0,5/1/2 ergibt dieselbe Phase, Freeze hält sie, Loop wickelt / Einmal-Clip klemmt, der Poll schnappt erst über `PAIR_SNAP_S` |
+| `client3d/scripts/smoke_pair_storey.mjs` | die HÖHE eines Paares (§ A8a): ohne Platz steht es auf dem Boden SEINES Raums (`tiles.roomStandY` — Obergeschoss, Keller, Flur), nicht auf dem Gelände unter dem Haus; nur der Grund des Ortes nimmt das Gelände, ein Platz seine Slot-Höhe |
 | `client3d/scripts/smoke_undergrowth.mjs` § J | der Unterwuchs-Filter gegen die Maske, mit Gegenprobe |
 | `client3d/scripts/smoke_natural_ground.mjs` | die drei Naturstufen auf dem KOMPONIERTEN Ergebnis |
 | `client3d/scripts/smoke_hillshade.mjs` | die Schattierungs-Tabelle samt Überhöhung und den roten Gegenproben |
