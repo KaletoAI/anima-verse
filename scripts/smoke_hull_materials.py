@@ -35,6 +35,23 @@ def main():
     assert desc['overrides']['roof_tint'] == '#336699'
     assert 'roof_tint' not in hull_styles.validate_description(
         {'overrides': {'roof_tint': 'blue'}}, styles)['overrides']
+    # Plain colours bypass global tint, jitter and weathering; overrides win per slot.
+    from app.core.hull_util import tone_to_linear
+    with tempfile.TemporaryDirectory() as tmp:
+        for name, style in styles.items():
+            for colours in ({}, {'frame_color': '#abcdef', 'shop_color': '#123456',
+                                 'awning_color': '#fedcba'}):
+                plain_desc = hull_styles.validate_description({'overrides': {
+                    **colours, 'tint': '#000000', 'roof_tint': '#000000'}}, styles)
+                materials, textures, sizes = hull_model._materials(
+                    {**style, 'materials': {}}, plain_desc, Path(tmp) / name, frozenset())
+                by_name = {m['name']: m for m in materials}
+                for material, key in (('window_frame', 'frame'), ('shop', 'shop'), ('awning', 'awning')):
+                    assert material in by_name, (name, material)
+                    colour = colours.get(key + '_color', style['palette'].get(key, '#ffffff'))
+                    assert by_name[material] == dict(name=material, texture=None,
+                        color=tone_to_linear(colour), roughness=.6, alpha=1.0)
+                    assert 'texture_' + material not in textures and material not in sizes
     style = deepcopy(styles['steinhaus'])
     style['materials'].update(wall='w', wall_ground='g')
     desc = description('steinhaus', 7)

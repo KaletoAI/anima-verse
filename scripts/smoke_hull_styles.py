@@ -12,8 +12,8 @@ Blind bay endpoints 0.5 and 9 clamp to 1.5 and 6; missing ranges use
 [2.4, 3.0], [0.9, 1.2], [1.3, 1.5] and sill 0.9 from spec 3.3.
 Only wall and trim get existing files in the resolver fixture, so exactly
 those two material keys resolve; a directory and missing file do not.
-Old styles emit 7 texture slots + glass + interior + blind = 10 materials, since
-the empty new facade slot contributes zero. Modern emits 8 + 3 = 11.
+Old styles emit 7 texture slots + 6 plain materials = 13 materials, since
+the empty new facade slot contributes zero. Modern emits 8 + 6 = 14.
 Blind uses palette.glass with roughness .1 and opaque alpha 1.0; glass
 retains alpha .6, so the two panes have identical colors but distinct opacity.
 Width -1/9 clamps to .4/4, height -1/9 to .6/3, sill 9 to 1.5.
@@ -57,6 +57,24 @@ def main():
                     assert texture_size_m(texture) > 0, kind
         assert set(s) == {"fachwerk", "steinhaus", "holzhuette", "burg", "modern"}
         assert all(v["origin"] == "shared" for v in s.values())
+        # Missing palette validation or incorrect shipped frame colours breaks these rows.
+        for name, frame in (("fachwerk", "#efe9dc"), ("steinhaus", "#ece8df"),
+                            ("holzhuette", "#e3d6bd"), ("burg", "#4a3f35"),
+                            ("modern", "#2f3236")):
+            for key, expected in (("frame", frame), ("shop", "#2f6f6a"), ("awning", "#d9cfb8")):
+                assert s[name]["palette"].get(key) == expected, (name, key, s[name]["palette"])
+        for key, expected in (("frame", "#ece8df"), ("shop", "#2f6f6a"), ("awning", "#d9cfb8")):
+            assert validate_style({}, "x")["palette"][key] == expected
+            assert validate_style({"palette": {key: "red"}}, "x")["palette"][key] == expected
+            assert validate_style({"palette": {key: "#ABCDEF"}}, "x")["palette"][key] == "#abcdef"
+        for key in ("blind_windows", "shopfront"):
+            for value in (False, "yes", 1, 0, None, [], {}):
+                assert key not in validate_description({"overrides": {key: value}}, s)["overrides"]
+            assert validate_description({"overrides": {key: True}}, s)["overrides"][key] is True
+        for key in ("frame_color", "shop_color", "awning_color"):
+            for value in ("red", "", None):
+                assert key not in validate_description({"overrides": {key: value}}, s)["overrides"]
+            assert validate_description({"overrides": {key: "#ABCDEF"}}, s)["overrides"][key] == "#abcdef"
         from PIL import Image
         # Regenerate deterministic fixtures in temporary storage: the live selected
         # facade texture may have been replaced (including its old placeholder).
@@ -100,7 +118,8 @@ def main():
                 "wall": "concrete_panel", "wall_ground": "dark_stone", "plinth": "dark_stone",
                 "roof": "roof_gravel", "trim": "brushed_metal", "door": "metal_door",
                 "chimney": "brushed_metal", "facade_module": "facade_module_modern"},
-            "palette": {"glass": "#2f3d47", "interior": "#5a5a58"},
+            "palette": {"glass": "#2f3d47", "interior": "#5a5a58",
+                        "frame": "#2f3236", "shop": "#2f6f6a", "awning": "#d9cfb8"},
             "wall_thickness_m": 0.3, "plinth_height_m": 0.15, "cornice": False,
             "corners": "none", "frames": "metal", "shutters": 0, "timber_frame": "none",
             "log_walls": False, "jetty_m": 0,
@@ -139,7 +158,7 @@ def main():
             style = s[name]
             materials, _, _ = hull_model._materials(
                 style, desc, Path(tmp) / name, hull_model.resolved_materials(style))
-            assert len(materials) == (11 if name == "modern" else 10)
+            assert len(materials) == (14 if name == "modern" else 13)
             by_name = {material["name"]: material for material in materials}
             assert by_name["blind"] == dict(name="blind", texture=None,
                 color=by_name["glass"]["color"], roughness=.1, alpha=1.0)

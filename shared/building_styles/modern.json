@@ -12,7 +12,10 @@
   },
   "palette": {
     "glass": "#2f3d47",
-    "interior": "#5a5a58"
+    "interior": "#5a5a58",
+    "frame": "#2f3236",
+    "shop": "#2f6f6a",
+    "awning": "#d9cfb8"
   },
   "wall_thickness_m": 0.3,
   "plinth_height_m": 0.15,

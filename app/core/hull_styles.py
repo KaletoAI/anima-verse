@@ -58,7 +58,10 @@ def validate_style(raw: Any, style_id: str) -> Dict[str, Any]:
         "materials": {key: safe_kind(materials.get(key)) if isinstance(materials.get(key), str) else ""
                       for key in MATERIAL_KEYS},
         "palette": {"glass": tone(palette.get("glass"), "#3a4a55"),
-                    "interior": tone(palette.get("interior"), "#4a443e")},
+                    "interior": tone(palette.get("interior"), "#4a443e"),
+                    "frame": tone(palette.get("frame"), "#ece8df"),
+                    "shop": tone(palette.get("shop"), "#2f6f6a"),
+                    "awning": tone(palette.get("awning"), "#d9cfb8")},
         "corners": _choice(raw.get("corners"), ("none", "quoins", "posts", "log_ends"), "none"),
         "frames": _choice(raw.get("frames"), ("none", "timber", "stone", "metal"), "timber"),
         "timber_frame": _choice(raw.get("timber_frame"), ("none", "upper", "all"), "none"),
@@ -184,7 +187,10 @@ def validate_description(raw: Any, styles: Dict[str, Dict[str, Any]]) -> Dict[st
     if "pitch_deg" in source:
         overrides["pitch_deg"] = _number(source["pitch_deg"], 5, 60, 30)
     overrides["ornament_density"] = _number(source.get("ornament_density"), 0, 1, 0.5)
-    for key in ("tint", "roof_tint"):
+    for key in ("blind_windows", "shopfront"):
+        if source.get(key) is True:
+            overrides[key] = True
+    for key in ("tint", "roof_tint", "frame_color", "shop_color", "awning_color"):
         tint = tone(source.get(key), "")
         if tint:
             overrides[key] = tint
