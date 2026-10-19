@@ -388,7 +388,7 @@ def t_perceive_action() -> None:
         task_at = out.find("=== Your task ===")
         last_ctx = max(out.find(h) for h in (
             "=== Active events at your location ===",
-            "=== Your typical rhythm right now ==="))
+            "=== Your typical rhythm ==="))
         check("prod: task block comes after all context blocks",
               task_at > last_ctx > 0,
               f"| task at {task_at}, last context heading at {last_ctx}")

@@ -13,7 +13,7 @@ WHAT IS CHECKED, and where every expected value comes from
 ----------------------------------------------------------
 
 The clock is frozen (``set_game_factor(0.0)`` + ``set_game_time``) at
-Y0002-D100T10:00, so "the current hour" is exactly 10 and the next one 11.
+Y0002-D100T10:00, so the current block starts at 10; the horizon is 10 tomorrow.
 
   (a) THE FLAG ITSELF, read through ``is_feature_enabled`` (fail-open, step 2
       = template default):
@@ -36,15 +36,13 @@ Y0002-D100T10:00, so "the current hour" is exactly 10 and the next one 11.
           {"hour": 10, "location": <Crossroads Inn id>, "role": "sweeping"}
           {"hour": 11, "sleep": True}
 
-      ``_build_daily_schedule_block`` formats the slot of the current hour and
-      the one of the next hour (``thought_context.py`` ``_fmt``): a placed slot
-      as ``"  HH:00 — location: <name>, role: <role>"`` (the location ID is
-      resolved to the location NAME), a sleep slot as
-      ``"  HH:00 — you usually sleep around now"``, joined with "\\n". By hand,
-      for the full character:
+      By hand: sweeping occupies 10–11, sleep occupies 11–12, and free
+      hours run from 12 through midnight to 10 tomorrow. The four-block
+      window ends at 10 tomorrow (24 hours ahead), so it has three lines:
 
-          "  10:00 — location: Crossroads Inn, role: sweeping\\n"
-          "  11:00 — you usually sleep around now"
+          "  now, until 11:00 — location: Crossroads Inn, role: sweeping\\n"
+          "  11:00 — you usually sleep (until 12:00)\\n"
+          "  12:00 — free, nothing planned"
 
       The temp NPC has the very same rows in the DB and gets ``""`` — that is
       the gate talking and not missing data, which is the whole point of
@@ -178,8 +176,9 @@ SCHEDULE = {"enabled": True, "slots": [
     {"hour": 10, "location": LOC_ID, "role": "sweeping", "sleep": False},
     {"hour": 11, "location": "", "role": "", "sleep": True},
 ]}
-EXPECTED_BLOCK = ("  10:00 — location: Crossroads Inn, role: sweeping\n"
-                  "  11:00 — you usually sleep around now")
+EXPECTED_BLOCK = ("  now, until 11:00 — location: Crossroads Inn, role: sweeping\n"
+                  "  11:00 — you usually sleep (until 12:00)\n"
+                  "  12:00 — free, nothing planned")
 
 # ---------------------------------------------------------------------------
 print("\n(a) the flag")

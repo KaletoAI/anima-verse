@@ -34,7 +34,7 @@
      inventory_block           — what the character is carrying
      room_items_block          — visible items in the current room
      activity_hint_block       — the room's place offer: free places with their poses, busy ones by name, the free-text hint as the tail
-     daily_schedule_block      — typical-rhythm hint for current hour
+     daily_schedule_block      — typical rhythm: the current block and the next few
      tracker_block             — carried tracker-items revealing target locations
      recent_thoughts           — how this character's OWN last thoughts ENDED,
                                  short closing excerpts (private — never another

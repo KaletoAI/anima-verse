@@ -23,7 +23,7 @@
      relationship_to_actor        — short sentiment hint ("close friend", "rival")
      action_actor_location        — display name of the place the actor is at
      action_actor_room            — room within that location (may be empty)
-     daily_schedule_block         — typical-rhythm hint for current hour
+     daily_schedule_block         — typical rhythm: the current block and the next few
      events_block                 — acute events at location
      tools_hint                   — tool-format hint for single-mode tool use
      lang_instruction             — which language this character speaks
@@ -77,7 +77,7 @@ Your view of {{ action_actor }}: {{ relationship_to_actor }}
 {% endif %}
 {% if daily_schedule_block %}
 
-=== Your typical rhythm right now ===
+=== Your typical rhythm ===
 {{ daily_schedule_block }}
 {% endif %}
 {% if tools_hint %}

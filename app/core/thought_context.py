@@ -1184,24 +1184,17 @@ def _warn_orphan_slot(character_name: str, loc: str) -> None:
 
 
 def _build_daily_schedule_block(character_name: str) -> str:
-    """Soft hint about the character's typical rhythm at the current hour.
+    """Soft hint: the current rhythm block and up to three following blocks.
 
-    Each slot now carries ``location`` and ``role`` (or ``sleep: true``).
-    Hours without a slot are intentionally left blank — the agent is free
-    to choose. Sleep stays a hint; the energy-based rule decides whether
-    it actually triggers. Returns '' if there is no usable hint.
+    Equal consecutive hours (sleep flag, resolved place and role) merge,
+    including across midnight. Missing or unusable slots become free blocks.
+    The window ends at most 24 hours after the current game hour; a window
+    containing only free blocks is silent, as are disabled or gated schedules.
+    Sleep remains a hint; the energy-based rule decides whether it triggers.
 
-    A slot naming a place the world no longer has is dropped (its role, if
-    any, survives) and reported once — the raw id used to reach the prompt
-    as the character's destination, which no verb accepts. A slot the
-    character is not currently AT says so: that sentence is the whole
-    coupling between rhythm and travel, and it stays a nudge — enforcement
-    was removed on purpose (``scheduler_manager._resync_daily_schedules``).
-
-    A template can switch the whole subject off (``activity_home_enabled:
-    false`` — a temporary NPC takes its rhythm from the slot window it was
-    spawned for, not from a per-character daily plan). Fail-open: only an
-    explicit ``false`` silences the block.
+    Orphan places are warned about and dropped while their roles survive.
+    The current block notes an absent character; only the first following
+    block at another place adds a set-off nudge. Neither enforces travel.
     """
     try:
         from app.models.character_template import is_feature_enabled
@@ -1242,7 +1235,6 @@ def _build_daily_schedule_block(character_name: str) -> str:
         # clock. This read the system clock, so every slot fired at the wrong
         # in-world hour as soon as the world clock was offset or sped up.
         cur_h = game_time().hour
-        next_h = (cur_h + 1) % 24
         # Where the character actually IS, as a display name — the same shape
         # a resolved slot has, so "am I already there?" is one comparison.
         here_name = ""
@@ -1276,41 +1268,52 @@ def _build_daily_schedule_block(character_name: str) -> str:
             _warn_orphan_slot(character_name, loc)
             return None
 
-        def _fmt(slot: Dict[str, Any], hour: int) -> str:
-            if slot.get("sleep"):
-                return f"  {hour:02d}:00 — you usually sleep around now"
+        # Resolve once so aliases and orphan slots merge by visible content.
+        hours = []
+        for hour in range(24):
+            slot = slot_by_hour.get(hour) or {}
             loc = (slot.get("location") or "").strip()
-            role = (slot.get("role") or "").strip()
-            parts = []
-            if loc:
-                name = _resolve(loc)
-                if name:
-                    # Whether the character is ALREADY there decides what the
-                    # hint is worth: standing in the right place it confirms,
-                    # standing elsewhere it is the one nudge that turns a
-                    # rhythm into a journey — nothing forces the trip, the
-                    # character still chooses.
-                    away = ("" if not here_name or name == here_name
-                            else " — you are not there right now; getting "
-                                 "there takes in-world time")
-                    parts.append(f"location: {name}{away}")
-            if role:
-                parts.append(f"role: {role}")
-            if not parts:
-                return ""
-            return f"  {hour:02d}:00 — " + ", ".join(parts)
+            hours.append((bool(slot.get("sleep")),
+                          (_resolve(loc) or "") if loc else "",
+                          (slot.get("role") or "").strip()))
+
+        blocks = []
+        start = 0
+        while start < 24 and len(blocks) < 4:
+            content = hours[(cur_h + start) % 24]
+            end = start + 1
+            while end < 24 and hours[(cur_h + end) % 24] == content:
+                end += 1
+            blocks.append((start, end, content))
+            start = end
+        if not any(sleep or place or role for _, _, (sleep, place, role) in blocks):
+            return ""
 
         lines: List[str] = []
-        cur = slot_by_hour.get(cur_h)
-        if cur:
-            line = _fmt(cur, cur_h)
-            if line:
-                lines.append(line)
-        nxt = slot_by_hour.get(next_h)
-        if nxt and nxt is not cur:
-            line = _fmt(nxt, next_h)
-            if line:
-                lines.append(line)
+        nudged = False
+        for start, end, (sleep, place, role) in blocks:
+            until = f"{(cur_h + end) % 24:02d}:00"
+            current = start == 0
+            label = (f"now, until {until}" if current
+                     else f"{(cur_h + start) % 24:02d}:00")
+            if sleep:
+                text = ("you usually sleep around now" if current
+                        else f"you usually sleep (until {until})")
+            else:
+                parts = []
+                if place:
+                    away = ""
+                    if here_name and place != here_name:
+                        if current:
+                            away = " — you are not there right now; getting there takes in-world time"
+                        elif not nudged:
+                            away = " — you are not there; set off in time, getting there takes in-world time"
+                            nudged = True
+                    parts.append(f"location: {place}{away}")
+                if role:
+                    parts.append(f"role: {role}")
+                text = ", ".join(parts) if parts else "free, nothing planned"
+            lines.append(f"  {label} — {text}")
         return "\n".join(lines)
     except Exception as e:
         logger.debug("daily_schedule block failed for %s: %s", character_name, e)

@@ -35,12 +35,15 @@ Hand-derived expectations. The world (all placed, so all reachable):
                        delete
 
   [1] ``_build_daily_schedule_block`` renders places, not ids. Pinned at
-      game hour 09:00, so the block shows the 09 and 10 slots and nothing
-      else:
+      game hour 09:00: the current slot lasts until 10, Home until 11,
+      then free hours merge through midnight until 09 tomorrow (the
+      24-hour horizon). After deletion the current line is therefore
+      "  now, until 10:00 — role: assistant"; Home and free stay unchanged:
         * a slot on a LIVE place renders its NAME;
         * a slot on a DELETED place drops the place and KEEPS the role —
           the role is still true, the place is not;
-        * a slot with a deleted place and NO role produces no line at all
+        * a schedule with a deleted place and NO role merges into one free
+          block and produces no output
           (rather than a line naming a hex string);
         * a slot naming the place the character is standing in renders
           WITHOUT the "you are not there" clause, and one naming anywhere
@@ -106,8 +109,7 @@ from app.models.world import (  # noqa: E402
 FAILURES = []
 CHECKED = 0
 
-# 09:00 in the world calendar — the block renders the current and the next
-# hour, so every slot below is written for 09 or 10 and nothing drifts.
+# 09:00 in the world calendar — current block, then up to three successors.
 START = "Y0001-D001T09:00:00"
 
 
@@ -207,7 +209,7 @@ check_true("a deleted place is dropped from the line", DOOMED not in block,
            block)
 check_true("… while its role survives", "role: assistant" in block, block)
 check_true("… and no place is named for that hour",
-           "09:00 — role: assistant" in block, block)
+           "now, until 10:00 — role: assistant" in block, block)
 
 # Same slot without a role: nothing left worth a line.
 set_plan("plan_npc", [{"hour": 9, "location": DOOMED, "role": "",
