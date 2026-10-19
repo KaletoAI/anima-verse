@@ -58,6 +58,7 @@ DELIBERATE = {
     "general_task": "same — the standing task drives initiatives, which are off here",
     "outfit_decision_block": "no outfit changes while a conversation runs",
     "daily_schedule_block": "the schedule would start something unrelated",
+    "rhythm_sleep_now": "sleeping is not decided inside a conversation",
     "arc_block": "story-arc initiative is not a conversation step",
     "assignments_block": "assignments would pull the character out of the chat",
     "intent_tracking_enabled": "the [INTENT:] grammar belongs with the assignments — "
@@ -100,7 +101,7 @@ check("[2] no stale entry in the list", sorted(set(DELIBERATE) - missing), [])
 
 # [3]
 ctx = {n: f"<{n}>" for n in (regular | in_chat)}
-ctx.update(character_name="Rosi", alone_here=False, birthday_today=False)
+ctx.update(character_name="Rosi", alone_here=False, birthday_today=False, rhythm_sleep_now=False)
 for tpl in (REGULAR, IN_CHAT):
     out = render(tpl, **{k: v for k, v in ctx.items() if k in names(tpl)})
     check(f"[3] {tpl} renders", "<skill_context_blocks>" in out, True)

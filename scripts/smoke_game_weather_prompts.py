@@ -139,6 +139,7 @@ THOUGHT_CTX = {
     # Always present, like the weather — the template gates on it and
     # StrictUndefined raises on a missing key.
     "birthday_today": False,
+    "rhythm_sleep_now": False,
     "has_assignments": False, "alone_here": False,
     "intent_tracking_enabled": False,
     "action_instruction": "Decide what you want to do next.",

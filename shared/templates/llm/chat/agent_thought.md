@@ -35,6 +35,7 @@
      room_items_block          — visible items in the current room
      activity_hint_block       — the room's place offer: free places with their poses, busy ones by name, the free-text hint as the tail
      daily_schedule_block      — typical rhythm: the current block and the next few
+     rhythm_sleep_now          — True only when the current rhythm block is sleep
      tracker_block             — carried tracker-items revealing target locations
      recent_thoughts           — how this character's OWN last thoughts ENDED,
                                  short closing excerpts (private — never another
@@ -185,10 +186,13 @@ If this turn starts something you will only carry out LATER, record it with a ma
 === What to do now ===
 Take the FIRST that applies:
 1. Someone here speaks to you, or a message waits → answer.
-2. A plan is due or can be done here → do it now{% if intent_tracking_enabled %}; close it with [INTENT_DONE: <id>] when done{% endif %}.
-3. Your rhythm puts you elsewhere or at another activity now → go there or start it.
-4. Your general task → one concrete step leaving a result (a post, message, finished piece, item used), not preparation or thought.
-5. Otherwise something new, different from where you left off — or SKIP.
+{% if rhythm_sleep_now %}
+2. It is your usual sleep time → go home if you are not there, then go to sleep; plans wait until you are up, unless one is set for this very hour.
+{% endif %}
+{{ 3 if rhythm_sleep_now else 2 }}. A plan is due or can be done here → do it now{% if intent_tracking_enabled %}; close it with [INTENT_DONE: <id>] when done{% endif %}.
+{{ 4 if rhythm_sleep_now else 3 }}. Your rhythm puts you elsewhere or at another activity now → go there or start it.
+{{ 5 if rhythm_sleep_now else 4 }}. Your general task → one concrete step leaving a result (a post, message, finished piece, item used), not preparation or thought.
+{{ 6 if rhythm_sleep_now else 5 }}. Otherwise something new, different from where you left off — or SKIP.
 Changing clothes, re-setting the same activity or thinking about a plan without acting is not a step.
 
 {{ action_instruction }}

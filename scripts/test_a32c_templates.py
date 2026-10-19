@@ -145,6 +145,7 @@ THOUGHT_CTX = {
     "tracker_block": "",
     "activity_hint_block": "",
     "daily_schedule_block": "Around this hour you are usually outdoors.",
+    "rhythm_sleep_now": False,
     "tools_hint": "",
     "has_assignments": False,
     "action_instruction": "Decide what you want to do next.",

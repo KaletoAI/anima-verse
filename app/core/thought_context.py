@@ -94,6 +94,8 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     present_people_block, elsewhere_block, alone_here = _build_presence(
         character_name, location_id, room_id)
 
+    daily_schedule_block, rhythm_sleep_now = _build_daily_schedule_context(character_name)
+
     ctx: Dict[str, Any] = {
         "character_name": character_name,
         # The character's language instruction (e.g. "Always respond in
@@ -147,7 +149,8 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "alone_here": alone_here,
         "tracker_block": _build_tracker_block(character_name, location_id),
         "activity_hint_block": _build_activity_hint_block(character_name, location_id, room_id),
-        "daily_schedule_block": _build_daily_schedule_block(character_name),
+        "daily_schedule_block": daily_schedule_block,
+        "rhythm_sleep_now": rhythm_sleep_now,
         "tools_hint": tools_hint,
         "has_assignments": False,  # set below if assignments_block non-empty
     }
@@ -1184,13 +1187,19 @@ def _warn_orphan_slot(character_name: str, loc: str) -> None:
 
 
 def _build_daily_schedule_block(character_name: str) -> str:
+    """Return the rhythm hint text for callers that do not need sleep status."""
+    return _build_daily_schedule_context(character_name)[0]
+
+
+def _build_daily_schedule_context(character_name: str) -> tuple[str, bool]:
     """Soft hint: the current rhythm block and up to three following blocks.
 
     Equal consecutive hours (sleep flag, resolved place and role) merge,
     including across midnight. Missing or unusable slots become free blocks.
     The window ends at most 24 hours after the current game hour; a window
     containing only free blocks is silent, as are disabled or gated schedules.
-    Sleep remains a hint; the energy-based rule decides whether it triggers.
+    Return the hint and whether its CURRENT block is sleep.
+    Sleep remains a hint; the energy-based rule is unchanged.
 
     Sleep uses the configured home display name; off-map, empty and unknown
     homes have no place and produce no orphan warning. Orphan slot places
@@ -1202,16 +1211,16 @@ def _build_daily_schedule_block(character_name: str) -> str:
     try:
         from app.models.character_template import is_feature_enabled
         if not is_feature_enabled(character_name, "activity_home_enabled"):
-            return ""
+            return "", False
         from app.models.character import (
             get_character_daily_schedule, get_character_config, OFFMAP_SLEEP_SENTINEL,
         )
         schedule = get_character_daily_schedule(character_name) or {}
         if not schedule.get("enabled"):
-            return ""
+            return "", False
         slots = schedule.get("slots") or []
         if not slots:
-            return ""
+            return "", False
 
         loc_id_to_name: Dict[str, str] = {}
         try:
@@ -1298,7 +1307,7 @@ def _build_daily_schedule_block(character_name: str) -> str:
             blocks.append((start, end, content))
             start = end
         if not any(sleep or place or role for _, _, (sleep, place, role) in blocks):
-            return ""
+            return "", False
 
         lines: List[str] = []
         nudged = False
@@ -1328,7 +1337,7 @@ def _build_daily_schedule_block(character_name: str) -> str:
                     parts.append(f"role: {role}")
                 text = ", ".join(parts) if parts else "free, nothing planned"
             lines.append(f"  {label} — {text}")
-        return "\n".join(lines)
+        return "\n".join(lines), blocks[0][2][0]
     except Exception as e:
         logger.debug("daily_schedule block failed for %s: %s", character_name, e)
-        return ""
+        return "", False
