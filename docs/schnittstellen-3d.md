@@ -3226,7 +3226,7 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `target_id` | `str` | Ziel-Location (identisch mit `movement_target_id`) |
-| `waypoints` | `[[x, z], …] \| null` | Route in Welt-Metern, auf 2 Stellen gerundet, **inkl. Start- und Zielpunkt**. **Ohne Zeiten** — die beim Start gebackenen Zeitmarken (`t_cum`) bleiben serverintern, der Client rechnet über die STRECKE. Die Formel unten kommt auch mit einer entarteten Ein-Punkt-Linie klar (Reise ohne Weg). **`null` im gefoggten Payload für JEDEN außer dem Avatar** — siehe Fog-Absatz unten |
+| `waypoints` | `[[x, z], …] \| null` | Route in Welt-Metern, auf 2 Stellen gerundet, **inkl. Start- und Zielpunkt**. **Ohne kumulative Zeitmarken** — `t_cum` bleibt serverintern. Die Strecke kommt aus `progress_m`, die Extrapolation aus `paces_m_s_real` (Länge / gebackene Zeitspanne × Zeitfaktor). Die Formel unten kommt auch mit einer entarteten Ein-Punkt-Linie klar (Reise ohne Weg). **`null` im gefoggten Payload für JEDEN außer dem Avatar** — siehe Fog-Absatz unten |
 | `progress_m` | `float \| null` | bereits gelaufene Strecke **entlang der Polylinie**, in Metern. **`null` im gefoggten Payload für JEDEN außer dem Avatar** (E6) — siehe Fog-Absatz unten |
 | `total_m` | `float \| null` | Gesamtlänge der Polylinie in Metern. **Gefoggt `null`** wie `progress_m` |
 | `eta_game` | Kalenderzeit `\| null` | nominelle Ankunft auf der **Spieluhr**, als **kanonischer Weltkalender-Stempel** `"Y0002-D109T14:00:00"` (Jahr 4-stellig, Tag im Jahr 3-stellig). Kein ISO-Datum, **keine Weltzeitzone** — die gibt es nicht mehr. Der Client PARST das Feld nicht: es ist der Vergleichs-/Sortierwert, die Anzeige kommt aus den beiden Feldern darunter. **Gefoggt `null`** wie `progress_m` |
@@ -3235,6 +3235,36 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
 | `starts_in_s` | `float \| null` | **ECHTE** Sekunden, bis die Figur losläuft — `null`, sobald sie läuft. Eine Reise kann mit einem verzögerten `started_at_game` beginnen, weil die Figur erst aus ihrer Pose aufsteht (`travel_engine.departure_bridge`): solange spielt der Client den Übergangsclip aus `activity_animation` und bewegt **nichts** — `journey_state` klemmt die Position ohnehin auf den ersten Punkt. **Trägt der Ausstiegsclip einen Weg** (§ A8, Übergangsclips mit Weg), beginnt `waypoints` mit einem **zeitlosen Abschnitt Sitz → Aufstehpunkt**: Während `starts_in_s` steht die Figur am Sitz (erster Punkt), beim Start schon am Aufstehpunkt; den Weg dazwischen zeigt der Client mit dem Clip, nicht per Interpolation. Dauer durch Zeitfaktor geteilt (es ist eine DAUER, kein Tempo). Der Server verzögert den Start um die **echte** Cliplänge mal Zeitfaktor, aufgerundet auf ganze Spielsekunden (`travel_engine._exit_delay`; eingefrorene Uhr: die Cliplänge selbst) — deshalb ist `starts_in_s` bei jedem Zeitfaktor ≥ der Cliplänge, und die Route beginnt nie unter dem laufenden Clip. **Wird NICHT ausgedünnt**: ein Abfahrts-Countdown verrät keine Route, und eine gefoggte Figur, die noch steht, darf nicht extrapoliert werden |
 | `speed_m_s_real` | `float \| null` | **Nominal**-Reisetempo in Metern pro **ECHTER** Sekunde (`speed_m_s × Zeitfaktor`); `null`, wenn nicht extrapoliert werden darf: eingefrorene Welt bzw. Zeitfaktor 0 — und ebenso, wenn die Reise kein brauchbares `speed_m_s` trägt (fehlend, 0 oder negativ). **Gefoggt `null`** wie `progress_m` |
 | `pace_m_s_real` | `float \| null` | **Echtes** Tempo des Segments, das die Figur GERADE läuft, in Metern pro ECHTER Sekunde: `\|w[seg+1] − w[seg]\| / (t[seg+1] − t[seg]) × Zeitfaktor` aus denselben gebackenen Zeitmarken (seit **E4**, 2026-08-09). Damit steckt der Gelände-`speed_factor` drin, den `speed_m_s_real` nicht kennt. `null`, wenn es kein aktuelles Segment gibt oder nichts extrapoliert werden darf: eingefrorene Welt / Zeitfaktor 0, angekommen (Zeit über dem Ende), entartetes Segment (Länge 0 oder Zeitspanne 0). **Gefoggt `null`** wie `progress_m` |
+| `paces_m_s_real` | `(float \| null)[] \| null` | One entry per segment: baked length / baked game-time span × clock factor, rounded to 4 decimals. A zero-time or zero-length segment has a `null` entry and is traversed without time. The whole field is `null` when frozen, at factor 0, before departure (`starts_in_s` set), or under foreign fog. After arrival the list remains filled. |
+| `journey_id` | `str \| null` | Present only for the avatar, including in `show_all`; always `null` for foreign rows. Both journey starters persist UUID4 hex (32 characters); a supplied party claim is preserved. Pre-update journeys without an ID have `null`. |
+
+**Required root field `sync`**
+
+`{"clock_age_ms": number, "build_ms": number}` contains nonnegative milliseconds
+measured with `time.monotonic()`: clock read → end of the payload builder, and
+route entry → completed payload respectively. The builder initially writes
+`build_ms: 0.0`; `/play/worldmap` overwrites it, including for `show_all`.
+There is no fallback for a missing `sync`.
+
+The builder reads `(GameTime, frac_s) = game_time_exact()` once. The remainder
+is exact minus rounded game time, in [−0.5, +0.5] seconds; frozen or factor 0
+returns 0 without division. `progress_m`, pending departure and `starts_in_s`
+use this exact instant. `game_time()` retains its rounded value, and `eta_*`
+are unchanged. Both exact and rounded instants clamp at the game epoch.
+
+**One baked timeline and the 2 cm rounding proof**
+
+Before `segment_costs`, `_bake_route` removes route points less than
+`MIN_WAYPOINT_GAP_M = 0.02` m from the last kept point. The goal always stays;
+a too-close predecessor is removed instead, even the start. A collapsed
+one-point route is already arrived. Costs are computed on these kept points,
+so progress and segment paces share one timeline.
+
+At least one axis differs by ≥ 2/√2 = 1.414 cm for points 2 cm apart. This
+exceeds the 1 cm rounding grid, so two-decimal payload coordinates cannot
+collapse such a pair. The seat → stand leg is prepended afterward and is
+unchanged, even below 2 cm. Older journeys may also have tiny segments; clients
+treat a transmitted zero-length segment as timeless.
 
 **Semantik**
 
@@ -3258,34 +3288,18 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
   wird beim START aus `game.travel_speed_m_s` (Admin → Game) gelesen und
   festgeschrieben — laufende Reisen behalten ihr Tempo, eine geänderte
   Einstellung re-timet niemanden. Der Client bekommt sie nur in
-  Realzeit-Form (`speed_m_s_real`) und rechnet ausschließlich damit.
+  Realzeit-Form (`speed_m_s_real`); zur Extrapolation dient `paces_m_s_real`.
   **Faktor-Richtung:** eine DAUER wird durch den Zeitfaktor geteilt (so
   rechnete v1 `cell_seconds_real`), ein TEMPO mit ihm multipliziert —
   Faktor 2 heißt doppelt so viele Meter pro echter Sekunde.
-- **Zwei Tempo-Felder, und `pace_m_s_real` ist das, mit dem gerechnet wird.**
-  Der Gelände-`speed_factor` (§ A1.5) steckt ausschließlich in den
-  serverinternen Zeitmarken der Reise, nicht in `speed_m_s`. Auf zähem
-  Untergrund (Faktor 0,5) läuft die Figur real halb so schnell, wie
-  `speed_m_s_real` sagt; auf schnellem Untergrund umgekehrt. Seit **E4**
-  liefert der Server deshalb zusätzlich `pace_m_s_real`, das echte Tempo des
-  aktuellen Segments, aus denselben Zeitmarken:
-
-  ```
-  pace_m_s_real = |w[seg+1] − w[seg]| / (t[seg+1] − t[seg]) × Zeitfaktor
-  ```
-
-  * **Extrapoliert wird mit `pace_m_s_real`**, `speed_m_s_real` ist nur der
-    Rückfall, wenn es `null` ist (Regel 2 unten). Innerhalb eines Segments ist
-    das exakt, nicht genähert; das Schnappen am Poll bleibt nur für den
-    Segmentwechsel dazwischen übrig.
-  * `speed_m_s_real` bleibt der NOMINALE Wert (die Reisegeschwindigkeit, mit
-    der die Reise gestartet wurde) und macht keine Aussage über den
-    Untergrund.
-  * Die Restzeit-Division unten bleibt eine Näherung — sie rechnet mit EINEM
-    Tempo über den ganzen Restweg, der durch beliebiges Gelände führt.
-    **Autoritativ für die Ankunft ist `eta_game`** — es kennt die
-    Gelände-Zeiten, die Division kennt sie nicht. Ein Countdown darf
-    gerechnet werden, ein *Termin* wird angezeigt.
+- **Per-segment extrapolation uses only `paces_m_s_real`.** The terrain
+  `speed_factor` lives in the baked spans; each entry is length / span ×
+  clock factor. Advancing across a corner consumes the remaining real time
+  with the next segment's own pace. A null list forbids extrapolation;
+  a null entry is traversed without time. Neither `pace_m_s_real` nor
+  `speed_m_s_real` is a fallback. Both scalar fields remain independent
+  values for existing readers. `eta_game` is the authoritative arrival;
+  a remaining-distance division by one scalar pace is only an estimate.
 - **`pos` (§ A1.4) und `travel` widersprechen sich nicht.** `pos` ist der vom
   Reise-Ticker geschriebene Punkt und wird nur im **Ticker-Takt (5 s)**
   nachgeführt; `travel` erlaubt die stetige Ableitung dazwischen. Für einen
@@ -3333,7 +3347,7 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
   GELAUFENEN Stücks, nie einem weiter vorn. Auch dann verschwindet `travel`
   einfach.
 - **Freeze:** steht die Spieluhr, stehen alle Reisen. `progress_m` bleibt
-  konstant, `speed_m_s_real` und `pace_m_s_real` sind `null` — genau dann
+  konstant, `speed_m_s_real`, `pace_m_s_real` und `paces_m_s_real` sind `null` — genau dann
   darf nicht extrapoliert werden.
 - **Ein laufender Restzeit-Countdown rechnet in ECHTEN Sekunden**,
   näherungsweise `(total_m − progress_m) / speed_m_s_real` — NICHT `eta_game`
@@ -3359,11 +3373,12 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
   Kartenmarke für einen Ort, den der Avatar nicht kennt. **Dasselbe sagen
   aber auch die Zahlen daneben**: aus Position, Restweg (`total_m −
   progress_m`), Ankunftszeit und Tempo lässt sich das unbekannte Ziel
-  einkreisen. Gefoggt sind für jeden außer dem Avatar deshalb ALLE acht
+  einkreisen. Gefoggt sind für jeden außer dem Avatar deshalb ALLE neun
   Felder `null` — `waypoints`, `progress_m`, `total_m`, `eta_game`,
-  `eta_hhmm`, `eta_label`, `speed_m_s_real`, `pace_m_s_real`. Die Schlüssel
+  `eta_hhmm`, `eta_label`, `speed_m_s_real`, `pace_m_s_real`,
+  `paces_m_s_real`. `journey_id` ist für Fremde ebenfalls immer `null`. Die Schlüssel
   bleiben stehen, damit
-  „nicht mitgeteilt" von „leer" unterscheidbar ist. Es bleibt genau
+  „nicht mitgeteilt" von „leer" unterscheidbar ist. Es bleiben `starts_in_s` (Abfahrts-Countdown ohne Routenwissen) und
   **`target_id`**, eine opake Id, die der Fog nie verborgen hat (wie
   `movement_target_id`, dessen NAMEN die Figurenliste sehr wohl
   zurückhält). Eine fremde Figur wird dann an ihrem `pos` gezeichnet, ohne
@@ -3375,19 +3390,14 @@ Charakter das Feld **`travel`** — `null`, solange keine Reise läuft.
    Mittelpunkt von `location_id` und nicht auf `pos`, solange `travel` MIT
    `waypoints` da ist. Ohne `waypoints` (Fog, s. o.) bleibt `pos` die
    Position.
-2. Zwischen zwei Polls darf extrapoliert werden, mit
-   **`pace_m_s_real ?? speed_m_s_real`** (das Segment-Tempo zuerst, das
-   nominale nur als Rückfall):
-   `progress_m += Δt_real × tempo`, geklemmt auf `total_m`
-   (sind beide `null`: einfrieren). Extrapoliert wird **`progress_m`** — der
-   Punkt wird daraus jedes Frame neu abgelaufen, nie ein Segment einzeln
-   hochgezählt (sonst bleibt die Figur an jedem Knick stehen, bis der
-   nächste Poll kommt).
-3. Beim nächsten Poll: Abweichung `|progress_m_client − progress_m_server|`
-   > 1,0 m ⇒ hart auf den Server-Wert schnappen. Darunter weich nachziehen.
-   Mit `pace_m_s_real` ist das der Ausnahmefall (Segmentwechsel zwischen
-   zwei Polls); wer nur `speed_m_s_real` benutzt, schnappt auf Gelände mit
-   `speed_factor ≠ 1` bei jedem Poll.
+2. Between polls, advance along `paces_m_s_real`, consuming real time per
+   segment, clamped at `total_m`. A null list holds the position; null entries
+   and zero-length transmitted segments consume no time. Account for payload
+   age using required `sync` and the client's request/receipt metadata. No
+   scalar-pace or missing-`sync` fallback is allowed.
+3. Reconcile polls against forward progress; never walk backwards along a
+   continuing journey. Detailed target/display reconciliation is defined by
+   P1 spec section 4.4; the server supplies the exact snapshot and ages here.
 4. Blickrichtung/Clip bleiben Client-Sache (Laufrichtung aus dem aktuellen
    Segment); `activity_animation` wird bewusst NICHT auf „walk" gezwungen
    (§ A8).
@@ -3411,7 +3421,7 @@ eingefrorene Uhr bei t = 35 s ⇒ `progress_m` 35,0 · `total_m` 70,0 ·
 80 s statt 40 s auf dem zweiten Schenkel ⇒ bei Faktor 2
 `speed_m_s_real` 2,0 gegen `pace_m_s_real` 1,0 — die beiden Felder sind
 messbar verschieden). Die **Ausdünnung** prüfen dieselbe Datei (Fall 6:
-gefoggter Fremder ⇒ alle sechs Felder `null`, `target_id` bleibt) und
+gefoggter Fremder ⇒ alle neun Felder `null`, `target_id` bleibt) und
 `scripts/smoke_fog_worldmap.py` (Fall 7: Reisender 100 m entfernt, also weit
 außerhalb jeder Sichtweite, steht trotzdem mit `pos` im Payload).
 
@@ -3424,7 +3434,7 @@ damit KEINEN Leser mehr — weder `path` noch `progress_cells`.
   `cell_seconds_real` und dem `Array.isArray`-Notbremsen-Guard ist
   **ersatzlos gelöscht**. Reisende werden entlang der Polylinie
   interpoliert (`client3d/src/scene/travelPath.ts`: Bogenlänge,
-  Extrapolation mit `pace_m_s_real ?? speed_m_s_real`, doppelt geklemmt,
+  Extrapolation künftig ausschließlich mit `paces_m_s_real` (P1 Task 3), doppelt geklemmt,
   Ankunfts-Snap ab 2 m) und werden dabei VOR der Ortsgruppierung
   eingesammelt — vorher fiel jeder Reisende mit leerer `location_id` aus
   dem NPC-Update und war für die ganze Reise unsichtbar.

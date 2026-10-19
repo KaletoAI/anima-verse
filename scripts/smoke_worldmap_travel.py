@@ -134,7 +134,7 @@ Hand-derived expectations:
         its ``target_id``, and everything else in the block is null:
           fogged, npc_near (visible, travelling) -> waypoints, progress_m,
                     total_m, eta_game, eta_hhmm, eta_label, speed_m_s_real,
-                    pace_m_s_real ALL null; target_id still B; the keys all stay (so "not
+                    pace_m_s_real, paces_m_s_real ALL null; target_id still B; the keys all stay (so "not
                     told" stays distinguishable from "empty")
         ``starts_in_s`` is deliberately NOT among them (§ A11): it is a
         countdown to a DEPARTURE, not route knowledge — it says nothing about
@@ -144,9 +144,29 @@ Hand-derived expectations:
           fogged, demo_avatar (itself)           -> the full block
           show_all, npc_near                     -> the full block
 
+[7-8] P1 hand calculations: 30/30*2 = 2 and 40/80*2 = 1 m/real-s;
+a 0.6 m zero-time lead and a zero-length segment each give a null entry.
+Frozen, factor 0, pending and foreign fog give a null list; arrival retains it.
+At real +10.3 with factor 2, 20.6 game-s gives progress 20.6 m.
+Start 5 game-s ahead, real +0.1 at factor 2: pending (5-0.2)/2 = 2.4 real-s.
+At rounded start with fraction -0.4, pending is 0.4/2 = 0.2 real-s;
+the departure clip must still play.
+Identity is 32 hex characters for the avatar and null for every foreign row.
+Both monotonic ages are nonnegative, with builder build_ms initially zero.
+At 1 game-s/m, thinning 0,10,10.01,20 leaves 0,10,20 with times 0,10,20;
+t15 gives 15 m. Goal 10.015 replaces 10, so duration is 10.015 s.
+0 -> 0.001 collapses to the goal at t0, already arrived; the separate seat
+leg still survives. For 10000 seeded pairs 2-5 cm apart, one axis differs
+by at least 2/sqrt(2) = 1.414 cm > 1 cm: rounding cannot merge a pair.
+The new contract assertions fail against Task 1 commit 0d4c1c88.
+
 Usage:  ./.venv/bin/python scripts/smoke_worldmap_travel.py
 """
 import os
+import math
+import random
+import re
+from unittest.mock import patch
 import shutil
 import sys
 import tempfile
@@ -162,12 +182,13 @@ os.environ["ANIMATION_CLIPS_DIR"] = str(CLIPS)
 from app.core import paths  # noqa: E402
 
 paths.init(STORAGE)
+paths.init_instance(STORAGE / "instance")
 
 from app.core import db  # noqa: E402
 
 db.init_schema()
 
-from app.core import config  # noqa: E402
+from app.core import config, travel_engine, nav_grid, timeutils  # noqa: E402
 from app.core.game_time import GameDuration, GameTime  # noqa: E402
 from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.core.world_ops import build_worldmap_payload  # noqa: E402
@@ -192,10 +213,10 @@ SPEED = 1.0
 # Exactly the fields § A11 lists — no more, no less.
 FIELDS = {"target_id", "waypoints", "progress_m", "total_m", "eta_game",
           "eta_hhmm", "eta_label", "starts_in_s", "speed_m_s_real",
-          "pace_m_s_real"}
-# What the fog withholds from a foreign traveller: everything but target_id.
+          "pace_m_s_real", "paces_m_s_real", "journey_id"}
+# Route details withheld from foreign travellers; the departure countdown stays.
 THIN_NUMBERS = ("progress_m", "total_m", "eta_game", "eta_hhmm", "eta_label",
-                "speed_m_s_real", "pace_m_s_real")
+                "speed_m_s_real", "pace_m_s_real", "paces_m_s_real")
 # The v1 cell vocabulary, dropped without replacement.
 V1_FIELDS = ("path", "seg", "frac", "progress_cells", "cell_seconds_real")
 
@@ -242,13 +263,15 @@ def seed_character(name: str, location_id: str) -> None:
 def give_journey(name: str, target: str, waypoints=None) -> None:
     """Write journey + movement target in ONE profile save — the two live and
     die together, and a mismatch would make ``get_journey`` call it stale."""
-    prof = get_character_profile(name)
-    prof["journey"] = {"target": target,
-                       "waypoints": [list(w) for w in (waypoints or WAYPOINTS)],
-                       "started_at_game": START, "speed_m_s": SPEED,
-                       "entry_edge": ""}
-    prof["movement_target"] = target
-    save_character_profile(name, prof)
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", name):
+        prof = get_character_profile(name)
+        prof["journey"] = {"target": target,
+                           "waypoints": [list(w) for w in (waypoints or WAYPOINTS)],
+                           "started_at_game": START, "speed_m_s": SPEED,
+                           "entry_edge": "", "journey_id": "a" * 32}
+        prof["movement_target"] = target
+        save_character_profile(name, prof)
 
 
 def freeze_at(seconds: float) -> None:
@@ -287,6 +310,91 @@ give_journey("npc_walker", B)
 give_journey("npc_near", B)
 give_journey("npc_slow", B, waypoints=SLOW_WAYPOINTS)
 set_movement_target("npc_idle", B)
+
+
+def contract_checks():
+    """Hand-derived cases are listed in the module docstring."""
+    print("\n[7] exact instant, per-segment paces, identity and payload ages")
+    from app.routes.play import play_worldmap
+    from app.models.account import set_active_character
+    from datetime import datetime, timedelta, timezone
+
+    set_active_character("demo_avatar")
+    give_journey("demo_avatar", B, SLOW_WAYPOINTS)
+    freeze_at(35)
+    frozen = play_worldmap(user={"role": "admin"}, show_all=1)
+    check("route sync keys", sorted(frozen["sync"]), ["build_ms", "clock_age_ms"])
+    check("route sync nonnegative", all(isinstance(v, (int, float)) and v >= 0
+          for v in frozen["sync"].values()), True)
+    check("builder has complete sync", build_worldmap_payload()["sync"]["build_ms"], 0.0)
+    check("frozen paces null", char(frozen, "demo_avatar")["travel"]["paces_m_s_real"], None)
+    check("own ID is 32 hex", bool(re.fullmatch(r"[0-9a-f]{32}",
+          char(frozen, "demo_avatar")["travel"]["journey_id"] or "")), True)
+    check("foreign ID is null even show_all", char(frozen, "npc_near")["travel"]["journey_id"], None)
+
+    real = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    set_world_frozen(False)
+    # Patch the technical clock, not the payload or any travel arithmetic.
+    def payload_at(delta, factor=2, anchor=START_GT):
+        timeutils._persist_game_anchors(real, anchor, factor, False)
+        with patch.object(timeutils, "utc_now", return_value=real + timedelta(seconds=delta)):
+            return play_worldmap(user={"role": "admin"}, show_all=1)
+
+    run = payload_at(10.3)
+    own = char(run, "demo_avatar")["travel"]
+    check("paces factor 2", own["paces_m_s_real"], [2.0, 1.0])
+    check("exact payload progress 21 - 0.4", own["progress_m"], 20.6)
+    check("paces after arrival", char(payload_at(100), "demo_avatar")["travel"]["paces_m_s_real"], [2.0, 1.0])
+    check("factor zero paces", char(payload_at(10.3, 0), "demo_avatar")["travel"]["paces_m_s_real"], None)
+    pending = char(payload_at(0, 2, START_GT - GameDuration(5)), "demo_avatar")["travel"]
+    check("pending paces null", pending["paces_m_s_real"], None)
+    pending = char(payload_at(0.1, 2, START_GT - GameDuration(5)), "demo_avatar")["travel"]
+    check("exact starts_in_s (5 - 0.2) / 2", pending["starts_in_s"], 2.4)
+    check("not started exact progress", pending["progress_m"], 0.0)
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", "demo_avatar"):
+        prof = get_character_profile("demo_avatar")
+        prof["journey"]["exit_clip"] = "standup"
+        save_character_profile("demo_avatar", prof)
+    boundary = char(payload_at(0.3, 2, START_GT - GameDuration(1)), "demo_avatar")
+    check("rounded start still pending by 0.4 game s", boundary["travel"]["starts_in_s"], 0.2)
+    check("negative remainder keeps departure clip", boundary["activity_animation"], "standup")
+    fog = build_worldmap_payload("demo_avatar", show_all=False)
+    check("foreign fog paces", char(fog, "npc_near")["travel"]["paces_m_s_real"], None)
+    give_journey("demo_avatar", B, [[-0.6, 0, 0], [0, 0, 0], [30, 0, 30]])
+    check("zero-time lead", char(payload_at(1), "demo_avatar")["travel"]["paces_m_s_real"], [None, 2.0])
+    give_journey("demo_avatar", B, [[0, 0, 0], [0, 0, 1], [30, 0, 31]])
+    check("zero-length segment", char(payload_at(1), "demo_avatar")["travel"]["paces_m_s_real"], [None, 2.0])
+
+    print("\n[8] thinning precedes costs and retains the goal")
+    def bake(points):
+        with patch.object(nav_grid, "build_nav_context", return_value=None), \
+             patch.object(nav_grid, "route", return_value=points), \
+             patch.object(nav_grid, "segment_costs", side_effect=lambda pts, ctx:
+                          [math.dist(a, b) for a, b in zip(pts, pts[1:])]), \
+             patch.object(travel_engine, "get_travel_speed_m_s", return_value=1.0):
+            return travel_engine._bake_route(points[0], points[-1], None)[0]
+
+    wps = bake([(0, 0), (10, 0), (10.01, 0), (20, 0)])
+    check("thin before costing", wps, [[0, 0, 0], [10, 0, 10], [20, 0, 20]])
+    check("thinned paces", travel_engine.segment_paces_m_s_real(wps, 1), [1.0, 1.0])
+    check("same time axis at t15", travel_engine.journey_state(wps, START,
+          START_GT + GameDuration(15))["progress_m"], 15.0)
+    check("close goal replaces predecessor", bake([(0, 0), (10, 0), (10.015, 0)]),
+          [[0, 0, 0], [10.015, 0, 10.015]])
+    collapsed = bake([(0, 0), (0.001, 0)])
+    check("collapse keeps only goal", collapsed, [[0.001, 0, 0]])
+    check("collapse arrived", travel_engine.journey_state(collapsed, START, START_GT)["arrived"], True)
+    check("seat leg remains below 2cm", travel_engine._with_seat_leg([[0.001, 0, 0]], (0, 0)),
+          [[0, 0, 0], [0.001, 0, 0]])
+    rng = random.Random(2043)
+    collapsed_pairs = 0
+    for _ in range(10000):
+        a = (rng.uniform(-1000, 1000), rng.uniform(-1000, 1000))
+        gap, angle = rng.uniform(0.02, 0.05), rng.uniform(0, 2 * math.pi)
+        b = (a[0] + gap * math.cos(angle), a[1] + gap * math.sin(angle))
+        collapsed_pairs += tuple(round(v, 2) for v in a) == tuple(round(v, 2) for v in b)
+    check("rounding proof 10000 pairs", collapsed_pairs, 0)
 
 
 def main() -> int:
@@ -393,7 +501,7 @@ def main() -> int:
     fog = build_worldmap_payload("demo_avatar", show_all=False)
     near = char(fog, "npc_near").get("travel") or {}
     check("someone else's waypoints are withheld", near.get("waypoints"), None)
-    check("… and the seven fields with them",
+    check("… and the eight fields with them",
           [f for f in THIN_NUMBERS if near.get(f) is not None], [])
     check("… the opaque target_id stays", near.get("target_id"), B)
     check("… and every key is there, only null", sorted(near), sorted(FIELDS))
@@ -408,6 +516,8 @@ def main() -> int:
           [[0.0, 0.0], [30.0, 0.0], [30.0, 40.0]])
     check("… and thins no number",
           (other.get("progress_m"), other.get("total_m")), (35.0, 70.0))
+
+    contract_checks()
 
     print(f"\n{CHECKED} checks, {len(FAILURES)} deviation(s)")
     if FAILURES:

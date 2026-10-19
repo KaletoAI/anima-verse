@@ -78,6 +78,10 @@ export interface WorldmapTravel {
   eta_label: string | null
   speed_m_s_real: number | null
   pace_m_s_real: number | null
+  /** One REAL pace per segment; null entries are timeless, null list forbids extrapolation. */
+  paces_m_s_real: (number | null)[] | null
+  /** Only the avatar's journey identity; legacy journeys have null. */
+  journey_id: string | null
 }
 
 /**

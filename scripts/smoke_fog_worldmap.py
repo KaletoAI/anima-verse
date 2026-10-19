@@ -97,12 +97,12 @@ Hand-derived expectations:
         for most of its length, and a figure that blinks out for the whole
         trip is what § A11 warns against. What goes is everything the route
         could be RECONSTRUCTED from — waypoints, progress_m, total_m,
-        eta_game, eta_hhmm, eta_label, speed_m_s_real, pace_m_s_real are ALL
+        eta_game, eta_hhmm, eta_label, speed_m_s_real, pace_m_s_real, paces_m_s_real are ALL
         null, while the opaque target_id and the character's own pos stay:
-          fogged, npc_trav      -> the seven fields + waypoints null,
+          fogged, npc_trav      -> the eight fields + waypoints null,
                                    target_id = C, pos = {"x": 100, "z": 0}
           fogged, demo_avatar   -> its own block is FULL (waypoints and all
-                                   seven fields present)
+                                   eight fields present)
           show_all, npc_trav    -> full block, nothing thinned
 
   [6b] …and the exception is a TRIP BETWEEN PLACES, not any journey at all
@@ -297,11 +297,11 @@ def char(payload, name: str) -> dict:
     return {}
 
 
-# The seven travel numbers the fog withholds from a foreign traveller
+# The eight travel numbers the fog withholds from a foreign traveller
 # (§ A11). The arrival is three of them: the canonical game stamp plus the
 # two ready-made display strings the server computes beside it.
 THIN_FIELDS = ("progress_m", "total_m", "eta_game", "eta_hhmm", "eta_label",
-               "speed_m_s_real", "pace_m_s_real")
+               "speed_m_s_real", "pace_m_s_real", "paces_m_s_real")
 
 
 def sight_range(metres: float) -> None:
@@ -321,16 +321,18 @@ def give_journey(name: str, target: str, start_x: float) -> None:
     """A long journey starting NOW, written by hand — this is a payload check,
     not a routing check. 4000 m at 1 m per GAME second keeps the traveller on
     its first leg for the whole run."""
-    prof = get_character_profile(name)
-    prof["journey"] = {
-        "target": target,
-        "waypoints": [[start_x, 0.0, 0.0], [start_x + 4000.0, 0.0, 4000.0]],
-        "started_at_game": game_time().canonical(),
-        "speed_m_s": 1.0,
-        "entry_edge": "",
-    }
-    prof["movement_target"] = target
-    save_character_profile(name, prof)
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", name):
+        prof = get_character_profile(name)
+        prof["journey"] = {
+            "target": target,
+            "waypoints": [[start_x, 0.0, 0.0], [start_x + 4000.0, 0.0, 4000.0]],
+            "started_at_game": game_time().canonical(),
+            "speed_m_s": 1.0,
+            "entry_edge": "",
+        }
+        prof["movement_target"] = target
+        save_character_profile(name, prof)
 
 
 def give_point_journey(name: str, start_x: float) -> None:
@@ -341,16 +343,18 @@ def give_point_journey(name: str, start_x: float) -> None:
     (``travel_engine.get_journey``, E3-0). Same 4000 m first leg as
     :func:`give_journey`, so it is still walking for the whole run.
     """
-    prof = get_character_profile(name)
-    prof["journey"] = {
-        "target": "",
-        "target_point": {"x": start_x + 4000.0, "z": 4000.0},
-        "waypoints": [[start_x, 0.0, 0.0], [start_x + 4000.0, 0.0, 4000.0]],
-        "started_at_game": game_time().canonical(),
-        "speed_m_s": 1.0,
-        "entry_edge": "",
-    }
-    save_character_profile(name, prof)
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", name):
+        prof = get_character_profile(name)
+        prof["journey"] = {
+            "target": "",
+            "target_point": {"x": start_x + 4000.0, "z": 4000.0},
+            "waypoints": [[start_x, 0.0, 0.0], [start_x + 4000.0, 0.0, 4000.0]],
+            "started_at_game": game_time().canonical(),
+            "speed_m_s": 1.0,
+            "entry_edge": "",
+        }
+        save_character_profile(name, prof)
 
 
 def main() -> int:

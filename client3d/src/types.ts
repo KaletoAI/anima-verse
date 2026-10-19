@@ -208,13 +208,17 @@ export interface MapTravel {
   eta_hhmm: string | null;
   eta_label: string | null;
   /** NOMINAL pace of the journey in metres per REAL second; `null` on a
-   *  frozen world. The fallback when the segment pace is missing. */
+   *  frozen world. Independent of the per-segment extrapolation paces. */
   speed_m_s_real: number | null;
   /** Pace of the segment being walked RIGHT NOW (terrain `speed_factor` is
    *  baked into the stamps, not into `speed_m_s`), metres per REAL second.
    *  `null` on a frozen clock, after arrival and for a degenerate segment —
    *  the three cases where the number would be a lie. */
   pace_m_s_real: number | null;
+  /** One REAL pace per segment; null entries are timeless, null list forbids extrapolation. */
+  paces_m_s_real: (number | null)[] | null;
+  /** Only the avatar's journey identity; legacy journeys have null. */
+  journey_id: string | null;
   /** REAL seconds until the figure STARTS walking — it is standing up until
    *  then (`activity_animation` carries the clip it plays for that). `null`
    *  once the journey is under way, which is the ordinary case. */
@@ -345,6 +349,8 @@ export interface GameTimeInfo {
 }
 
 export interface WorldMap {
+  /** Monotonic payload ages in milliseconds, measured on the server. */
+  sync: { clock_age_ms: number; build_ms: number };
   locations_rev: string;
   avatar: string;
   current_location_id: string;

@@ -9,6 +9,7 @@ The built shell lives (like game-admin) under ``static/game_admin/play.html``
 """
 import json
 import threading
+import time
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Set
@@ -3174,6 +3175,7 @@ def play_worldmap(user=Depends(get_current_user),
     built synchronously (every character, inventory, prop sidecars, model
     store) and this is the 3-second poll every client runs.
     """
+    t0 = time.monotonic()
     from app.models.account import get_active_character
     from app.core.world_ops import build_worldmap_payload
 
@@ -3182,7 +3184,9 @@ def play_worldmap(user=Depends(get_current_user),
         raise HTTPException(status_code=403,
                             detail="all=1 is reserved for admins")
     avatar = (get_active_character() or "").strip()
-    return build_worldmap_payload(avatar, show_all=bool(show_all) and is_admin)
+    payload = build_worldmap_payload(avatar, show_all=bool(show_all) and is_admin)
+    payload["sync"]["build_ms"] = round((time.monotonic() - t0) * 1000, 1)
+    return payload
 
 
 @router.get("/play/terrain")

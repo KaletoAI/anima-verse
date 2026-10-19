@@ -29,9 +29,9 @@ recorded from an implementation run). Metres, contract v6:
                  GAME second, so it is still on that leg for the whole run)
 
 The game clock is pinned to a fixed GameTime for the whole run (the module
-attribute ``timeutils.game_time`` is replaced; ``build_worldmap_payload``
-imports it inside the function, so both the current and the baseline module see
-the frozen value). Without that the two builds compared in [3] would be
+attributes ``timeutils.game_time`` and ``game_time_exact`` are replaced,
+the latter with fraction 0.0; both the current and baseline module therefore
+see the same instant). Without that the two builds compared in [3] would be
 milliseconds apart and their journey/eta numbers would differ for that reason
 alone.
 
@@ -63,6 +63,13 @@ Hand-derived expectations
     (``show_all=True``) and for the fogged avatar view alike. Skipped with a
     notice when git is unavailable; never a failure, because a working tree
     without git history is not a defect of this fix.
+
+    T2 comparison additions are hand-derived: the clock factor is pinned to
+    1, so the sole journey's 4000 m / 4000 game-s * 1 gives paces [1.0]
+    in the admin view and null under foreign fog. Its manually seeded journey
+    has no ID, so journey_id is null in both views. Only the measured sync
+    ages are excluded; their values vary with build duration. All other keys
+    and values, including any unexpected sync key, remain compared strictly.
 
 Usage:  ./.venv/bin/python scripts/smoke_worldmap_profile_loads.py
 """
@@ -143,6 +150,8 @@ def check_bound(label: str, actual: int, bound: int) -> None:
 # alone. Everything reads the clock through this module attribute.
 FROZEN = GameTime.parse("Y0002-D100T12:00:00")
 timeutils.game_time = lambda: FROZEN
+timeutils.game_time_exact = lambda: (FROZEN, 0.0)
+timeutils.set_game_factor(1.0)
 
 # ── a private pose catalog: the shipped one must not be edited ──────────
 CAT = Path(tempfile.mkdtemp(prefix="worldmap-loads-cat-"))
@@ -428,6 +437,20 @@ def main() -> int:
             # contain no position reports, so the hand-derived origin is null.
             old_payload["characters"] = [dict(c, pos_origin=None)
                                          for c in old_payload["characters"]]
+            # T2: 4000 m / 4000 game-s * factor 1 = 1 m/real-s.
+            # npc_walker is foreign to npc_lead, so fog withholds the list.
+            # This hand-written legacy journey has no journey_id in either view.
+            for c in old_payload["characters"]:
+                if c["travel"] is not None:
+                    c["travel"] = dict(c["travel"], journey_id=None,
+                                       paces_m_s_real=[1.0] if label == "admin" else None)
+            # Measured ages depend on execution time, not profile-read behavior.
+            # Require both age keys but exclude their values; retain any other
+            # sync keys so an unexpected addition still fails strict comparison.
+            comparable["sync"] = dict(comparable["sync"])
+            del comparable["sync"]["clock_age_ms"]
+            del comparable["sync"]["build_ms"]
+            old_payload["sync"] = {}
             check(f"{label} entire canonical JSON identical",
                   json.dumps(old_payload, sort_keys=True, default=str) ==
                   json.dumps(comparable, sort_keys=True, default=str), True)

@@ -36,7 +36,8 @@ Hand-derived expectations:
         travel time = 30.0 / 3.0 = 10.0 GAME seconds
       so the waypoints are [[0.0, 0.0, 0.0], [30.0, 0.0, 10.0]] — two of
       them, ``target`` empty, ``target_point`` {'x': 30.0, 'z': 0.0},
-      ``entry_edge`` None, ``speed_m_s`` 3.0. NO ``movement_target`` is
+      ``entry_edge`` None, ``speed_m_s`` 3.0. T2 requires a generated
+      ``journey_id`` that is a non-empty string. NO ``movement_target`` is
       stamped (a free point has no id to stamp), and ``get_journey`` returns
       the dict anyway — a point journey identifies itself by its own goal.
 
@@ -216,7 +217,9 @@ check_true("journey created", isinstance(journey, dict), f"{journey}")
 if isinstance(journey, dict):
     check("journey keys", sorted(journey),
           sorted(["target", "target_point", "waypoints", "started_at_game",
-                  "speed_m_s", "entry_edge"]))
+                  "speed_m_s", "entry_edge", "journey_id"]))
+    check_true("journey_id is a non-empty string",
+               isinstance(journey["journey_id"], str) and bool(journey["journey_id"]))
     check("target is empty (a free point has no location id)",
           journey["target"], "")
     check("target_point", journey["target_point"], {"x": 30.0, "z": 0.0})

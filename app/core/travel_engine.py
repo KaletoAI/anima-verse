@@ -56,6 +56,7 @@ location ids) is discarded on read together with its movement target.
 """
 import asyncio
 import math
+import uuid
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from app.core.game_time import GameDuration, GameTime
@@ -133,7 +134,7 @@ def _reject_speed(raw: Any) -> float:
 
 
 def journey_state(waypoints: Sequence[Sequence[float]], started_at_game: str,
-                  now_game: GameTime) -> Dict[str, Any]:
+                  now_game: GameTime, offset_s: float = 0.0) -> Dict[str, Any]:
     """Position on ``waypoints`` at game time ``now_game`` — pure, no I/O.
 
     ``started_at_game`` is a canonical world-calendar stamp
@@ -180,7 +181,7 @@ def journey_state(waypoints: Sequence[Sequence[float]], started_at_game: str,
     total_m = round(sum(lengths), 2)
     total_t = pts[-1][2]
     eta_game = (started + GameDuration.of(seconds=total_t)).canonical()
-    raw_elapsed = (now_game - started).seconds
+    raw_elapsed = (now_game - started).seconds + float(offset_s)
     elapsed = max(0.0, raw_elapsed)
 
     if len(pts) == 1 or elapsed >= total_t:
@@ -223,6 +224,21 @@ def journey_state(waypoints: Sequence[Sequence[float]], started_at_game: str,
     return {"pos": (round(last[0], 2), round(last[1], 2)),
             "seg": max(len(pts) - 2, 0), "arrived": True,
             "eta_game": eta_game, "progress_m": total_m, "total_m": total_m}
+
+
+def segment_paces_m_s_real(waypoints, factor: float) -> Optional[List[Optional[float]]]:
+    """Every segment's metres per REAL second; null entries are timeless.
+
+    Return None overall when the clock does not allow extrapolation.
+    """
+    if not factor or factor <= 0:
+        return None
+    out: List[Optional[float]] = []
+    for a, b in zip(waypoints, waypoints[1:]):
+        span = float(b[2]) - float(a[2])
+        length = math.dist((float(a[0]), float(a[1])), (float(b[0]), float(b[1])))
+        out.append(round(length / span * factor, 4) if span > 0 and length > 0 else None)
+    return out
 
 
 def segment_pace_m_s(waypoints: Sequence[Sequence[float]],
@@ -419,6 +435,29 @@ def _start_point(character_name: str, current_loc: Optional[Dict[str, Any]],
     return None
 
 
+# 2/sqrt(2) cm > the 1 cm rounding grid on at least one axis: no collapsed pair.
+MIN_WAYPOINT_GAP_M = 0.02
+
+
+def _thin_points(points: List[Point]) -> List[Point]:
+    """Drop points within 2 cm of the last kept one, always preserving the goal.
+
+    Two kept points differ by >= 1.414 cm on at least one axis, so rounding
+    the payload to two decimals cannot collapse a segment (spec section 4.3).
+    """
+    if len(points) <= 1:
+        return points
+    kept = [points[0]]
+    for pt in points[1:-1]:
+        if math.dist(kept[-1], pt) >= MIN_WAYPOINT_GAP_M:
+            kept.append(pt)
+    goal = points[-1]
+    while kept and math.dist(kept[-1], goal) < MIN_WAYPOINT_GAP_M:
+        kept.pop()  # Even the start goes when only the goal fits.
+    kept.append(goal)
+    return kept
+
+
 def _bake_route(start: Point, goal: Point,
                 current_loc: Optional[Dict[str, Any]]
                 ) -> Tuple[Optional[List[List[float]]], float]:
@@ -472,6 +511,7 @@ def _bake_route(start: Point, goal: Point,
     if not points:
         return None, speed
 
+    points = _thin_points(points)
     costs = segment_costs(points, ctx)      # game-seconds at 1 m/s
     waypoints: List[List[float]] = [[points[0][0], points[0][1], 0.0]]
     t_cum = 0.0
@@ -691,9 +731,8 @@ def start_journey(character_name: str, target_id: str,
     journey = {"target": target_id, "waypoints": waypoints,
                "started_at_game": starts.canonical(), "speed_m_s": speed,
                "entry_edge": entry_edge}
-    if journey_id:
-        # Persist the caller's claim in the SAME write as the journey itself.
-        journey["journey_id"] = journey_id
+    # Preserve the caller's party claim in the same write as the journey.
+    journey["journey_id"] = journey_id or uuid.uuid4().hex
     if execution_ref:
         journey["execution_ref"] = execution_ref
     if (target_room or "").strip():
@@ -805,6 +844,7 @@ def start_journey_to_point(character_name: str, x: float,
                "waypoints": waypoints,
                "started_at_game": starts.canonical(), "speed_m_s": speed,
                "entry_edge": None}
+    journey["journey_id"] = uuid.uuid4().hex
     if exit_clip:
         journey["exit_clip"] = exit_clip
         journey["exit_s"] = round(exit_s, 3)

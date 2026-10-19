@@ -25,6 +25,9 @@ Rules every expectation below is derived from BY HAND:
 
 Hand-derived expectations:
 
+  New journeys persist a 32-character lowercase hexadecimal UUID; a supplied
+  party claim stays unchanged. Replacement point journeys get distinct IDs.
+
   [1] ``get_travel_speed_m_s``: unset → 1.4; 3.0 → 3.0; 0.05 → 0.1 and
       50 → 20.0 (clamped); 0, −2, "fast", True, NaN → 1.4 (garbage, and an
       emptied admin field arrives as 0 — silently reading that as "fastest
@@ -114,9 +117,11 @@ Usage:  ./.venv/bin/python scripts/smoke_journey_v2.py
 """
 import math
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -129,6 +134,7 @@ from app.core import db  # noqa: E402
 db.init_schema()
 
 from app.core import config, travel_engine  # noqa: E402
+from app.core.keyed_lock import keyed_lock  # noqa: E402
 from app.core.boundary_entry import opening_world_point  # noqa: E402
 from app.core.config_schema import SECTIONS  # noqa: E402
 from app.core.game_time import GameDuration, GameTime  # noqa: E402
@@ -297,11 +303,12 @@ approx("single waypoint total_m", st["total_m"], 0.0)
 # ── [3] the old format is discarded ─────────────────────────────────────
 print("[3] an old journey (path key) is dropped on read, target cleared")
 save_character_profile("legacy_npc", {"current_location": ""}, create_new=True)
-prof = get_character_profile("legacy_npc")
-prof["movement_target"] = "loc_old"
-prof["journey"] = {"target": "loc_old", "path": ["loc_a", "loc_old"],
-                   "started_at_game": START, "seconds_per_cell": 60.0}
-save_character_profile("legacy_npc", prof)
+with keyed_lock("character_profile", "legacy_npc"):
+    prof = get_character_profile("legacy_npc")
+    prof["movement_target"] = "loc_old"
+    prof["journey"] = {"target": "loc_old", "path": ["loc_a", "loc_old"],
+                       "started_at_game": START, "seconds_per_cell": 60.0}
+    save_character_profile("legacy_npc", prof)
 check("old journey is not returned",
       travel_engine.get_journey("legacy_npc"), None)
 check("movement_target cleared", get_movement_target("legacy_npc"), "")
@@ -381,7 +388,9 @@ check_true("journey created", isinstance(journey, dict), f"{journey}")
 if isinstance(journey, dict):
     check("journey keys", sorted(journey),
           sorted(["target", "waypoints", "started_at_game", "speed_m_s",
-                  "entry_edge"]))
+                  "entry_edge", "journey_id"]))
+    check_true("start sets stored journey_id", bool(re.fullmatch(r"[0-9a-f]{32}",
+               get_character_profile("demo_npc")["journey"].get("journey_id", ""))))
     check("target", journey["target"], MARKET)
     check("entry_edge is the aimed-at opening (MARKET's west gate = 3)",
           journey["entry_edge"], 3)
@@ -435,12 +444,13 @@ print("[7] a finished journey is settled by the ticker (Task 3 rebuilds it)")
 # clock at a known instant makes "the journey has finished" exact.
 set_game_factor(0.0)
 set_game_time(GameTime.parse("Y0001-D010T12:00:00"))
-prof = get_character_profile("demo_npc")
-# Back-date the start so the whole route lies in the past.
-prof["journey"] = dict(prof["journey"],
-                       started_at_game=(game_time()
-                                        - GameDuration.of(hours=1)).canonical())
-save_character_profile("demo_npc", prof)
+with keyed_lock("character_profile", "demo_npc"):
+    prof = get_character_profile("demo_npc")
+    # Back-date the start so the whole route lies in the past.
+    prof["journey"] = dict(prof["journey"],
+                           started_at_game=(game_time()
+                                            - GameDuration.of(hours=1)).canonical())
+    save_character_profile("demo_npc", prof)
 travel_engine.advance_all_journeys()
 check("arrived at the target", get_character_current_location("demo_npc"),
       MARKET)
@@ -710,15 +720,18 @@ try:
     set_character_pos(_ROSTER_NPC, 0.0, 0.0)
 
     def _roster(offset_s):
-        _p = get_character_profile(_ROSTER_NPC) or {}
-        _p["journey"] = {
-            "target": "somewhere", "waypoints": [[0.0, 0.0, 0.0], [10.0, 0.0, 10.0]],
-            "started_at_game": (game_time()
-                                + GameDuration.of(seconds=offset_s)).canonical(),
-            "speed_m_s": 1.0, "exit_clip": "standup", "exit_s": 2.23}
-        _p["movement_target"] = "somewhere"
-        save_character_profile(_ROSTER_NPC, _p)
-        _rows = _wo.build_worldmap_payload(show_all=True)["characters"]
+        now = game_time()
+        with keyed_lock("character_profile", _ROSTER_NPC):
+            _p = get_character_profile(_ROSTER_NPC) or {}
+            _p["journey"] = {
+                "target": "somewhere", "waypoints": [[0.0, 0.0, 0.0], [10.0, 0.0, 10.0]],
+                "started_at_game": (now
+                                    + GameDuration.of(seconds=offset_s)).canonical(),
+                "speed_m_s": 1.0, "exit_clip": "standup", "exit_s": 2.23}
+            _p["movement_target"] = "somewhere"
+            save_character_profile(_ROSTER_NPC, _p)
+        with patch("app.core.timeutils.game_time_exact", return_value=(now, 0.0)):
+            _rows = _wo.build_worldmap_payload(show_all=True)["characters"]
         return next((c for c in _rows if c["name"] == _ROSTER_NPC), None)
 
     # 3.0, not 2.23: that is what `start_journey` writes for a 2.23 s clip.
@@ -768,10 +781,11 @@ print("\n[the exit delay is the clip's REAL length]")
 import app.core.timeutils as _tu                               # noqa: E402
 
 _PIN = GameTime.parse("Y0001-D020T08:00:00")
-_keep_clock = (_tu.game_time, travel_engine.game_time,
+_keep_clock = (_tu.game_time, _tu.game_time_exact, travel_engine.game_time,
                travel_engine.departure_bridge)
 try:
     _tu.game_time = travel_engine.game_time = lambda: _PIN
+    _tu.game_time_exact = lambda: (_PIN, 0.0)
     travel_engine.departure_bridge = lambda n: ("standup", 2.23)
     set_known_locations(_ROSTER_NPC, [HOME, PARK])
     for _factor, _delay, _real in ((1.0, 3, 3.0), (10.0, 23, 2.3),
@@ -793,9 +807,24 @@ try:
 except Exception as _e:                                        # pragma: no cover
     check_true(f"the real-length check ran ({_e})", False)
 finally:
-    (_tu.game_time, travel_engine.game_time,
+    (_tu.game_time, _tu.game_time_exact, travel_engine.game_time,
      travel_engine.departure_bridge) = _keep_clock
     travel_engine.cancel_journey(_ROSTER_NPC)
+
+# Hand expectation: UUID4 hex is exactly 32 lowercase hexadecimal digits;
+# an explicit party claim is retained verbatim; each replacement is distinct.
+print("\n[start identity for both journey kinds]")
+set_known_locations("demo_npc", [HOME, MARKET, PARK])
+with patch.object(
+        travel_engine, "_bake_route", return_value=([[0, 0, 0], [1, 0, 1]], 1.0)):
+    claimed, why = travel_engine.start_journey("demo_npc", PARK, journey_id="party-claim")
+    check("caller claim preserved", (claimed or {}).get("journey_id"), "party-claim")
+    point, why = travel_engine.start_journey_to_point("demo_npc", 1, 0)
+    check("point journey starts", why, "ok")
+    point_id = get_character_profile("demo_npc")["journey"].get("journey_id", "")
+    check_true("point start sets stored journey_id", bool(re.fullmatch(r"[0-9a-f]{32}", point_id)))
+    again, why = travel_engine.start_journey_to_point("demo_npc", 1, 0)
+    check_true("replacement gets distinct ID", (again or {}).get("journey_id") != point_id)
 
 print()
 if FAILURES:

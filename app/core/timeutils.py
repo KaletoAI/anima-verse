@@ -226,20 +226,32 @@ def _persist_game_anchors(anchor_real: datetime, anchor_game: GameTime,
     _game_cache.clear()
 
 
-def game_time() -> GameTime:
-    """Current GAME time as a :class:`GameTime` (world calendar, no timezone).
-
-    Frozen world → the clock stands still at the freeze anchor."""
-    a = _load_game_anchors()
-    anchor_game: GameTime = a["anchor_game"]
+def _game_elapsed_exact(a) -> float:
+    """Exact elapsed GAME seconds since the anchor (0.0 when frozen)."""
     if a["frozen"]:
-        return anchor_game
-    elapsed = (utc_now() - a["anchor_real"]).total_seconds() * a["factor"]
+        return 0.0
+    return (utc_now() - a["anchor_real"]).total_seconds() * a["factor"]
+
+
+def game_time_exact() -> Tuple[GameTime, float]:
+    """Rounded game time and the exact remainder in [-0.5, 0.5] seconds.
+
+    Frozen or factor 0 returns remainder 0.0 without division. This technical
+    payload helper describes the clock-read instant; game logic uses game_time.
+    """
+    a = _load_game_anchors()
+    elapsed = _game_elapsed_exact(a)
     seconds = int(round(elapsed))
-    if seconds >= 0:
-        return anchor_game + GameDuration(seconds)
-    # A real clock jump backwards must never produce a pre-epoch instant.
-    return anchor_game.minus_clamped(GameDuration(-seconds))
+    base: GameTime = a["anchor_game"]
+    gt = (base + GameDuration(seconds)) if seconds >= 0 else base.minus_clamped(GameDuration(-seconds))
+    # Clamp the exact instant at the epoch just like the rounded instant.
+    exact = max(0.0, base.total_seconds + elapsed)
+    return gt, exact - gt.total_seconds
+
+
+def game_time() -> GameTime:
+    """Current GAME time, rounded to whole seconds; frozen at the anchor."""
+    return game_time_exact()[0]
 
 
 def game_speed_factor() -> float:

@@ -10,6 +10,7 @@ import asyncio
 import math
 import os
 import re
+import time
 from fastapi import HTTPException
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
@@ -592,11 +593,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # Journeys are a pure function of the GAME clock — read it ONCE for the
     # whole payload so every character in one response shares the same now.
     from app.core.game_time import GameTime
-    from app.core.timeutils import game_speed_factor, game_time
+    from app.core.timeutils import game_speed_factor, game_time_exact
     from app.core.travel_engine import (get_journey, journey_state,
-                                        segment_pace_m_s)
+                                        segment_pace_m_s, segment_paces_m_s_real)
     from app.models.character import get_character_language
-    _now_game = game_time()
+    _now_game, _frac = game_time_exact()
+    _read_mono = time.monotonic()
     _factor = game_speed_factor()
     # Display language for the ready-made time labels below — the avatar's,
     # like every other localized string this endpoint hands out. Without an
@@ -732,7 +734,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         try:
             if _j:
                 _st = journey_state(_j["waypoints"], _j["started_at_game"],
-                                    _now_game)
+                                    _now_game, offset_s=_frac)
                 # The pace the journey was STARTED with (world setting at that
                 # moment) — a later setting change never re-times it.
                 _speed = float(_j.get("speed_m_s") or 0.0)
@@ -745,9 +747,12 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                 # would let a client move it has to say so — a client that
                 # extrapolates here walks a figure that is standing up.
                 _pending = max(0.0, (GameTime.parse(_j["started_at_game"])
-                                     - _now_game).seconds)
+                                     - _now_game).seconds - _frac)
                 travel = {
                     "target_id": _j["target"],
+                    "journey_id": _j.get("journey_id") if name == avatar else None,
+                    "paces_m_s_real": (None if _thin or _pending else
+                                       segment_paces_m_s_real(_j["waypoints"], _factor)),
                     # x/z ONLY — the baked cumulative game seconds (t_cum) are
                     # server-internal. A client walks the line by DISTANCE
                     # (progress_m), never by re-deriving the timing.
@@ -781,8 +786,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                                        and _factor > 0 and _speed > 0 else None),
                     # The pace of the segment being walked RIGHT NOW (§ A11,
                     # E4): the terrain speed_factor sits in the baked stamps,
-                    # not in speed_m_s, so THIS is what a client extrapolates
-                    # with; speed_m_s_real above stays the nominal fallback.
+                    # not in speed_m_s. Per-segment extrapolation uses
+                    # paces_m_s_real; these scalar fields remain independent.
                     # null on a frozen clock, after the arrival and for a
                     # degenerate segment — the three cases where the number
                     # would be a lie.
@@ -815,7 +820,8 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         _bridge = ""
         try:
             if _j and _j.get("exit_clip") and _j.get("started_at_game"):
-                if (_now_game - GameTime.parse(_j["started_at_game"])).seconds < 0:
+                if ((_now_game - GameTime.parse(_j["started_at_game"])).seconds
+                        + _frac) < 0:
                     _bridge = str(_j["exit_clip"])
         except Exception as e:
             logger.debug("departure bridge payload for %s: %s", name, e)
@@ -896,7 +902,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
 
     backdrop = get_backdrop()
 
-    return {
+    payload = {
         "locations_rev": locations_rev(),
         "avatar": avatar,
         "current_location_id": (get_character_current_location(avatar) if avatar else ""),
@@ -970,6 +976,11 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
         # exactly what an older server sends, so absent and off are one state.
         **({"backdrop": backdrop} if backdrop else {}),
     }
+    payload["sync"] = {
+        "clock_age_ms": round((time.monotonic() - _read_mono) * 1000, 1),
+        "build_ms": 0.0,
+    }
+    return payload
 
 
 # Contract v6 Nr. 2 ("the metric wave"): every stored plan coordinate is a
