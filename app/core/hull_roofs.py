@@ -410,78 +410,135 @@ def _cap_surfaces(surfaces, top):
     return surfaces
 
 
+def _free_intervals(start, end, blocked):
+    """Subtract seam intervals from an edge, preserving its direction."""
+    reverse = start > end
+    intervals = [tuple(sorted((start, end)))]
+    for low, high in sorted(blocked):
+        remaining = []
+        for a, b in intervals:
+            if high <= a or low >= b:
+                remaining.append((a, b))
+            else:
+                if a < low:
+                    remaining.append((a, low))
+                if high < b:
+                    remaining.append((high, b))
+        intervals = remaining
+    return [(b, a) if reverse else (a, b) for a, b in intervals]
+
+
+def _subtract_region(region, cut):
+    """Return disjoint rectangles outside an axis-aligned cut."""
+    a, b, c, d = region
+    left, right = max(a, cut[0]), min(b, cut[1])
+    bottom, top = max(c, cut[2]), min(d, cut[3])
+    if left >= right or bottom >= top:
+        return [region]
+    return [piece for piece in ([a, left, c, d], [right, b, c, d],
+                               [left, right, c, bottom], [left, right, top, d])
+            if piece[0] < piece[1] and piece[2] < piece[3]]
+
+
 def _trim_board(first, second, outward, width, thickness, kind, number, uv_sizes, parts):
     """Closed rectangular board outside an edge; width runs down its face."""
-    direction = [b-a for a,b in zip(first,second)]
-    length = math.sqrt(sum(v*v for v in direction))
+    direction = [b - a for a, b in zip(first, second)]
+    length = math.sqrt(sum(value * value for value in direction))
     if length < 1e-6:
         return
     # Downward perpendicular within the vertical edge plane (rakes included).
-    down = [direction[1]*direction[0]/length, -(direction[0]**2+direction[2]**2)/length,
-            direction[1]*direction[2]/length]
-    magnitude = math.sqrt(sum(v*v for v in down))
-    down = [v*width/magnitude for v in down]
-    points = [first, second, [second[k]+down[k] for k in range(3)],
-              [first[k]+down[k] for k in range(3)]]
-    points += [[v[k]+outward[k]*thickness for k in range(3)] for v in points]
-    center = [sum(v[k] for v in points)/8 for k in range(3)]
-    builder = _builder('roof_trim','trim',uv_sizes)
-    for indices in ((0,1,2,3),(4,5,6,7),(0,1,5,4),(1,2,6,5),(2,3,7,6),(3,0,4,7)):
+    down = [direction[1] * direction[0] / length,
+            -(direction[0] ** 2 + direction[2] ** 2) / length,
+            direction[1] * direction[2] / length]
+    magnitude = math.sqrt(sum(value * value for value in down))
+    down = [value * width / magnitude for value in down]
+    points = [first, second, [second[k] + down[k] for k in range(3)],
+              [first[k] + down[k] for k in range(3)]]
+    points += [[point[k] + outward[k] * thickness for k in range(3)] for point in points]
+    center = [sum(point[k] for point in points) / 8 for k in range(3)]
+    builder = _builder("roof_trim", "trim", uv_sizes)
+    for indices in ((0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4),
+                    (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)):
         face = [points[j] for j in indices]
-        if sum(n*(face[0][k]-center[k]) for k,n in enumerate(_normal(face))) < 0:
+        if sum(normal * (face[0][k] - center[k])
+               for k, normal in enumerate(_normal(face))) < 0:
             face.reverse()
         builder.poly(face)
-    part=builder.part()
-    part.update(trim_kind=kind,roof_level=number,protrudes=True)
+    part = builder.part()
+    part.update(trim_kind=kind, roof_level=number, protrudes=True)
     parts.append(part)
 
 
 def _eave_trim(first, second, outward, overhang, details, number, uv_sizes, parts):
-    _trim_board(first,second,outward,.18,.03,'fascia',number,uv_sizes,parts)
+    _trim_board(first, second, outward, .18, .03, "fascia", number, uv_sizes, parts)
     if details and overhang >= .15:
-        ends = [[p[k]+outward[k]*.03-(.18 if k==1 else 0) for k in range(3)]
-                for p in (first,second)]
-        _trim_board(*ends,outward,.10,.10,'gutter',number,uv_sizes,parts)
+        ends = [[point[k] + outward[k] * .03 - (.18 if k == 1 else 0)
+                 for k in range(3)] for point in (first, second)]
+        _trim_board(*ends, outward, .10, .10, "gutter", number, uv_sizes, parts)
 
 
 def _pitched_trim(rect, limits, blocked, form, high, base, span, slope, cap,
                   overhang, details, number, uv_sizes, parts):
-    """Use own-wing limits, never the roof's extension into its neighbour."""
-    a,b,c,d=limits
-    def point(x,z):
-        y=base+(span+high*z)*slope if form=='shed' else base+(span-abs(z))*slope
-        return _at(rect,x,min(y,cap),z)
-    def outward(x,z):
-        v=_rotate([x,z],rect['angle_deg'])
-        return [v[0],0,v[1]]
-    for index in (range(4) if form=='hip' else ((2 if high>0 else 3,) if form=='shed' else (2,3))):
-        if index in blocked:
-            continue
-        ends=([point(a,c),point(a,d)] if index==0 else
-              [point(b,c),point(b,d)] if index==1 else
-              [point(a,c),point(b,c)] if index==2 else [point(a,d),point(b,d)])
-        # Hip end eaves have the same height as the transverse eaves.
-        if form=='hip':
-            for p in ends: p[1]=base-overhang*slope
-        _eave_trim(*ends,outward(-1 if index==0 else 1 if index==1 else 0,
-                               -1 if index==2 else 1 if index==3 else 0),
-                   overhang,details,number,uv_sizes,parts)
-    if not details or form=='hip':
+    """Use free own-wing edges, never the extension into its neighbour."""
+    a, b, c, d = limits
+
+    def point(x, z):
+        y = (base + (span + high * z) * slope if form == "shed"
+             else base + (span - abs(z)) * slope)
+        return _at(rect, x, min(y, cap), z)
+
+    def outward(x, z):
+        vector = _rotate([x, z], rect["angle_deg"])
+        return [vector[0], 0, vector[1]]
+
+    eaves = (range(4) if form == "hip" else
+             (2 if high > 0 else 3,) if form == "shed" else (2, 3))
+    for index in eaves:
+        # Intervals live in the ridge frame, before scene rotation.
+        low, upper = (c, d) if index < 2 else (a, b)
+        for start, finish in _free_intervals(low, upper, blocked.get(index, [])):
+            ends = ([point(a if index == 0 else b, start),
+                     point(a if index == 0 else b, finish)] if index < 2 else
+                    [point(start, c if index == 2 else d),
+                     point(finish, c if index == 2 else d)])
+            # Hip end eaves have the same height as the transverse eaves.
+            if form == "hip":
+                for vertex in ends:
+                    vertex[1] = base - overhang * slope
+            _eave_trim(*ends, outward(-1 if index == 0 else 1 if index == 1 else 0,
+                                      -1 if index == 2 else 1 if index == 3 else 0),
+                       overhang, details, number, uv_sizes, parts)
+    if not details or form == "hip":
         return
-    for index,x in ((0,a),(1,b)):
-        if index in blocked:
-            continue
-        if form=='shed':
-            low,upper=sorted((c,d),key=lambda z:high*z)
-            upper=min(upper,(cap-base)/slope-span) if high>0 else max(upper,-((cap-base)/slope-span))
-            intervals=[(low,upper)]
+    for index, x in ((0, a), (1, b)):
+        if form == "shed":
+            low, upper = sorted((c, d), key=lambda z: high * z)
+            cut = (cap - base) / slope - span
+            upper = min(upper, cut) if high > 0 else max(upper, -cut)
+            intervals = [(low, upper)]
         else:
-            cut=max(0,span-(cap-base)/slope)
-            intervals=[(c,-cut),(d,cut)]
-        for start,end in intervals:
-            if min(c,d)-1e-8<=end<=max(c,d)+1e-8 and abs(start-end)>1e-8:
-                _trim_board(point(x,start),point(x,end),outward(-1 if index==0 else 1,0),
-                            .20,.03,'verge',number,uv_sizes,parts)
+            cut = max(0, span - (cap - base) / slope)
+            intervals = [(c, -cut), (d, cut)]
+        intervals = [piece for start, end in intervals
+                     for piece in _free_intervals(start, end, blocked.get(index, []))]
+        for start, end in intervals:
+            if min(c, d) - 1e-8 <= end <= max(c, d) + 1e-8 and abs(start - end) > 1e-8:
+                _trim_board(point(x, start), point(x, end), outward(-1 if index == 0 else 1, 0),
+                            .20, .03, "verge", number, uv_sizes, parts)
+
+
+def _gable_panels(points, rect, limits, blocked, index, material, uv_sizes, parts):
+    """Keep wall-end infill only on the free intervals of a wing side."""
+    other = 2 if index < 2 else 0
+    for low, high in _free_intervals(limits[other], limits[other + 1], blocked):
+        region = list(limits)
+        region[other:other + 2] = [low, high]
+        clipped = _clip_polygon(points, region)
+        if len(clipped) < 3:
+            continue
+        builder = _builder("gable", material, uv_sizes)
+        builder.poly([_at(rect, *point) for point in clipped])
+        parts.append(builder.part())
 
 
 def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, parts, *, explicit_pitch=False, max_rise=6.0, seams=(), details=False):
@@ -509,7 +566,9 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
     seam_indices = set()
     seam_regions = []
     seam_bounds = {}
+    normal_limits = list(limits)
     own_limits = list(limits)
+    seam_intervals = {}
     for seam in seams:
         axis, direction = seam["side"].split("_")
         vector = _rotate([1,0] if axis == "x" else [0,1], original_angle-rect["angle_deg"])
@@ -517,17 +576,27 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
         sign = (1 if direction == "max" else -1) * vector[index//2]
         index += int(sign > 0)
         seam_indices.add(index)
+        neighbor = seam["rect"]
+        corners = [_at(neighbor, x, 0, z)
+                   for x in (-neighbor["length"] / 2, neighbor["length"] / 2)
+                   for z in (-neighbor["depth"] / 2, neighbor["depth"] / 2)]
+        local = [_rotate([p[0] - rect["center"][0], p[2] - rect["center"][1]],
+                         -rect["angle_deg"]) for p in corners]
+        transverse = 1 if index < 2 else 0
+        low = min(p[transverse] for p in local)
+        upper = max(p[transverse] for p in local)
+        wall_half = rect["depth" if index < 2 else "length"] / 2
+        other = 2 if index < 2 else 0
+        # A seam reaching a wall corner also blocks that corner's overhang.
+        low = normal_limits[other] if low <= -wall_half + 1e-8 else low
+        upper = normal_limits[other + 1] if upper >= wall_half - 1e-8 else upper
+        seam_intervals.setdefault(index, []).append((low, upper))
         half = rect["length" if index < 2 else "depth"] / 2
         own_limits[index] = math.copysign(half, sign)
         bound = math.copysign(half + seam["extension"], sign)
         seam_bounds[index] = (max if sign > 0 else min)(seam_bounds.get(index, bound), bound)
         limits[index] = seam_bounds[index]
         if seam["extension"]:
-            neighbor = seam["rect"]
-            corners = [_at(neighbor,x,0,z) for x in (-neighbor["length"]/2,neighbor["length"]/2)
-                       for z in (-neighbor["depth"]/2,neighbor["depth"]/2)]
-            local = [_rotate([p[0]-rect["center"][0],p[2]-rect["center"][1]], -rect["angle_deg"])
-                     for p in corners]
             region = [min(p[0] for p in local)-outer-overhang,
                       max(p[0] for p in local)+outer+overhang,
                       min(p[1] for p in local)-outer-overhang,
@@ -536,11 +605,36 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
             region[axis:axis+2] = sorted((math.copysign(half,sign),bound))
             seam_regions.append(region)
     regions = [own_limits]
+    trim_limits = list(own_limits)
+    partial_indices = {index for index, intervals in seam_intervals.items()
+                       if _free_intervals(normal_limits[2 if index < 2 else 0],
+                                          normal_limits[3 if index < 2 else 1], intervals)}
+    if partial_indices:
+        # Subtract only the seam-facing strips from the normal eave rectangle.
+        # The resulting disjoint rectangles are shared by slabs and height queries.
+        regions = [normal_limits]
+        for index, intervals in seam_intervals.items():
+            axis = 0 if index < 2 else 2
+            other = 2 - axis
+            for low, upper in intervals:
+                cut = list(normal_limits)
+                cut[other:other + 2] = [low, upper]
+                cut[axis + (1 if index % 2 == 0 else 0)] = own_limits[index]
+                regions = [piece for region in regions for piece in _subtract_region(region, cut)]
+        for index in partial_indices:
+            trim_limits[index] = normal_limits[index]
+            limits[index] = ((min if index % 2 == 0 else max)
+                             (limits[index], normal_limits[index]))
     for region in seam_regions:
         region = [max(region[0], limits[0]), min(region[1], limits[1]),
                   max(region[2], limits[2]), min(region[3], limits[3])]
         if region[0] < region[1] and region[2] < region[3]:
-            regions.append(region)
+            additions = [region]
+            if partial_indices:
+                for existing in regions:
+                    additions = [piece for addition in additions
+                                 for piece in _subtract_region(addition, existing)]
+            regions.extend(additions)
     ridge_y = base + half_span * slope
     ridge_half = half_length
     surfaces = []
@@ -612,7 +706,7 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
             points = []
             for x, y, z in clipped:
                 point = _at(rect, x, y, z)
-                if point not in points:
+                if not any(math.dist(point, previous) < 1e-8 for previous in points):
                     points.append(point)
             if len(points) < 3 or abs(_normal(points)[1]) < 1e-10:
                 continue
@@ -625,9 +719,9 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
     if form == "gable":
         material = style.get("storey_slot", {}).get(number, "wall_ground" if number == 0 and style.get("materials", {}).get("wall_ground") else "wall")
         for side in (-1, 1):
-            if (0 if side < 0 else 1) in seam_indices:
+            index = 0 if side < 0 else 1
+            if index in seam_indices and index not in partial_indices:
                 continue
-            builder = _builder("gable", material, uv_sizes)
             points = [_at(rect, max(limits[0], min(limits[1], side * half_length)), base, z) for z in (-half_span, half_span)]
             if flat_top:
                 cap_half = max(0, half_span - max_rise / slope)
@@ -643,14 +737,14 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
             for point in points:
                 x, z = _rotate([point[0]-rect["center"][0], point[2]-rect["center"][1]], -rect["angle_deg"])
                 local_points.append([x, point[1], z])
-            builder.poly([_at(rect, *point) for point in _clip_polygon(local_points, limits)])
-            parts.append(builder.part())
+            _gable_panels(local_points, rect, limits, seam_intervals.get(index, []),
+                          index, material, uv_sizes, parts)
     if form == "shed":
         material = style.get("storey_slot", {}).get(number, "wall_ground" if number == 0 and style.get("materials", {}).get("wall_ground") else "wall")
         for side in (-1, 1):
-            if (0 if side < 0 else 1) in seam_indices:
+            index = 0 if side < 0 else 1
+            if index in seam_indices and index not in partial_indices:
                 continue
-            builder = _builder("gable", material, uv_sizes)
             points = [_at(rect, max(limits[0], min(limits[1], side * half_length)), base, -high * half_span),
                       _at(rect, max(limits[0], min(limits[1], side * half_length)), base, high * half_span),
                       _at(rect, max(limits[0], min(limits[1], side * half_length)), base + 2 * half_span * slope, high * half_span)]
@@ -663,10 +757,10 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
             for point in points:
                 x, z = _rotate([point[0]-rect["center"][0], point[2]-rect["center"][1]], -rect["angle_deg"])
                 local_points.append([x, point[1], z])
-            builder.poly([_at(rect, *point) for point in _clip_polygon(local_points, limits)])
-            parts.append(builder.part())
-        if not sides and (2 if high < 0 else 3) not in seam_indices:
-            builder = _builder("gable", material, uv_sizes)
+            _gable_panels(local_points, rect, limits, seam_intervals.get(index, []),
+                          index, material, uv_sizes, parts)
+        index = 2 if high < 0 else 3
+        if not sides and (index not in seam_indices or index in partial_indices):
             points = [_at(rect, x, y, high * half_span) for x, y in (
                 (-half_length, base), (half_length, base),
                 (half_length, ridge_y), (-half_length, ridge_y))]
@@ -678,8 +772,8 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
             for point in points:
                 x, z = _rotate([point[0]-rect["center"][0], point[2]-rect["center"][1]], -rect["angle_deg"])
                 local_points.append([x, point[1], z])
-            builder.poly([_at(rect, *point) for point in _clip_polygon(local_points, limits)])
-            parts.append(builder.part())
+            _gable_panels(local_points, rect, limits, seam_intervals.get(index, []),
+                          index, material, uv_sizes, parts)
     if sides or seams:
         ridge_y = max(point[1] for point in ridge)
         for part in parts[first_part:]:
@@ -694,7 +788,9 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
                 moved[1] -= (normal[0]*(moved[0]-point[0])+normal[2]*(moved[2]-point[2]))/normal[1]
                 point[:] = [round(v, 4) for v in moved]
     if any(form != "flat" for form in style["roof"]["forms"]):
-        _pitched_trim(rect, own_limits, seam_indices | covered_indices, form, high, base,
+        blocked = dict(seam_intervals)
+        blocked.update({index: [(-math.inf, math.inf)] for index in covered_indices})
+        _pitched_trim(rect, trim_limits, blocked, form, high, base,
                       half_span, slope, base+max_rise, overhang, details, number, uv_sizes, parts)
     for part in parts[first_part:]:
         part["roof_level"] = number
@@ -774,14 +870,14 @@ def _tent(level, base, pitch, overhang, style, uv_sizes, parts, *, explicit_pitc
             builder.poly([points[i], back[i], back[following], points[following]])
         parts.append(builder.part())
     for plane in (planes if any(form != "flat" for form in style["roof"]["forms"]) else []):
-        first,second=plane[:2]
-        dx,dz=second[0]-first[0],second[2]-first[2]
-        length=math.hypot(dx,dz)
-        outward=[dz/length,0,-dx/length]
-        midpoint=[(first[k]+second[k])/2 for k in range(3)]
-        if outward[0]*(midpoint[0]-center[0])+outward[2]*(midpoint[2]-center[1])<0:
-            outward=[-v for v in outward]
-        _eave_trim(first,second,outward,overhang,details,number,uv_sizes,parts)
+        first, second = plane[:2]
+        dx, dz = second[0] - first[0], second[2] - first[2]
+        length = math.hypot(dx, dz)
+        outward = [dz / length, 0, -dx / length]
+        midpoint = [(first[k] + second[k]) / 2 for k in range(3)]
+        if outward[0] * (midpoint[0] - center[0]) + outward[2] * (midpoint[2] - center[1]) < 0:
+            outward = [-value for value in outward]
+        _eave_trim(first, second, outward, overhang, details, number, uv_sizes, parts)
     xs, zs = [list(point[axis] for point in outline) for axis in (0, 1)]
     return {"rect": {"center": center, "length": max(xs) - min(xs),
                      "depth": max(zs) - min(zs), "angle_deg": 0.0},

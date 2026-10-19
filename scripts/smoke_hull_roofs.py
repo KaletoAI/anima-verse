@@ -152,7 +152,7 @@ def check_junctions():
     assert lower['ridge_y'] < higher['ridge_y']
     # Main wing rotates its ridge frame 90 degrees: original x_max is
     # local z_min=-4. Lower x_min extends from -6 to -10 (8/2=4 m).
-    close(higher['limits'][2], -4)
+    close(higher['limits'][2], -4.99)  # Free eave: 4 + .59 outer + .40 overhang.
     close(lower['limits'][0], -10)
     assert not any(p['tag']=='gable' and all(abs(v[0]-8)<1e-4 for v in p['vertices']) for p in parts)
     end = min(lower['ridge'], key=lambda p:p[0])
@@ -210,12 +210,101 @@ def check_junctions():
     print('PASS: reciprocal L/T/U seams, rotated junctions and lower-wing roof junction')
 
 
+
+def check_partial_seams():
+    """A=[5,16]x[0,14], B=[0,5]x[0,8]; seam x=5,z=0..8.
+
+    Outer=.035+.005+.30=.34, so free west/east=4.26/16.74.
+    Higher A's Task 2 seam edge remains x=5; free trim z=8..14.74.
+    Eave y=3-.4=2.6; fascia y=2.42..2.6, gutter y=2.32..2.42.
+    Whole-side suppression must fail the free edge and trim assertions.
+    """
+    from _hull_fixtures import polygon_case_facts
+    from app.core.hull_roofs import roof_top_y
+    outline = [[0, 0], [16, 0], [16, 14], [5, 14], [5, 8], [0, 8]]
+    tiles = decompose(outline, None, 0)
+    assert [tile["rect"] for tile in tiles] == [
+        {"center": [2.5, 4.0], "length": 5.0, "depth": 8.0, "angle_deg": 0},
+        {"center": [10.5, 7.0], "length": 11.0, "depth": 14.0, "angle_deg": 0}]
+    assert [tile["seam_sides"] for tile in tiles] == [
+        [{"side": "x_max", "neighbor": 1}], [{"side": "x_min", "neighbor": 0}]]
+    style = json.loads((Path(__file__).resolve().parents[1] /
+                        "shared/building_styles/fachwerk.json").read_text())
+    style["roof"].update(overhang_m=[.4, .4], max_rise_ratio=3)
+    style.update(chimneys=[0, 0], dormers=0)
+    desc = {"seed": 1, "overrides": {"roof_form": "gable", "pitch_deg": 45,
+                                      "ornament_density": 1}}
+    parts, info = build_roofs(polygon_case_facts(outline), style, desc, tier="full")
+    main = info["wings"][1]
+    slabs = []
+    for part in parts:
+        if part["tag"] != "roof":
+            continue
+        top = [part["vertices"][i] for i in part["faces"][0]]
+        heights = [roof_top_y(main, v[0], v[2], style) for v in top]
+        if all(y is not None and abs(y - v[1]) < .0003 for y, v in zip(heights, top)):
+            slabs.append(part)
+    from app.core.hull_roofs import _clip_polygon
+    free = [v for part in slabs for v in _clip_polygon(
+        [part["vertices"][i] for i in part["faces"][0]], [-100, 100, 8.051, 13.999])]
+    close(min(v[0] for v in free), 4.26)
+    close(max(v[0] for part in slabs for v in part["vertices"]), 16.74)
+    seam = [v for part in slabs for v in _clip_polygon(
+        [part["vertices"][i] for i in part["faces"][0]], [-100, 100, .051, 7.949])]
+    close(min(v[0] for v in seam), 5)
+    for kind in ("fascia", "gutter"):
+        west = [part for part in parts if part.get("trim_kind") == kind and
+                all(4 < v[0] < 4.27 for v in part["vertices"])]
+        assert len(west) == 1, (kind, west)
+        close(min(v[2] for v in west[0]["vertices"]), 8)
+        close(max(v[2] for v in west[0]["vertices"]), 14.74)
+    close(roof_top_y(main, 4.26, 10, style), 2.6)
+    assert roof_top_y(main, 4.26, 4, style) is None
+    for part in parts:
+        if part["tag"] != "gable":
+            closed(part)
+    # Partial ridge-end seam: A x=-7..7,z=-5.5..5.5; neighbour
+    # x=7..12,z=-5.5..-.5. The free end wall/rake starts at z=-.5.
+    from app.core.hull_roofs import _pitched
+    end_parts = []
+    _pitched({"center": [0, 0], "length": 14, "depth": 11, "angle_deg": 0},
+             [], "gable", 0, 3, 45, .4, style, {}, end_parts,
+             explicit_pitch=True, max_rise=20, details=True,
+             seams=[{"side": "x_max", "extension": 0,
+                     "rect": {"center": [9.5, -3], "length": 5, "depth": 5, "angle_deg": 0}}])
+    end_gables = [p for p in end_parts if p["tag"] == "gable" and
+                  all(v[0] > 7 for v in p["vertices"])]
+    assert end_gables, "partial end seam suppressed the free gable"
+    close(min(v[2] for p in end_gables for v in p["vertices"]), -.5)
+    end_verges = [p for p in end_parts if p.get("trim_kind") == "verge" and
+                  all(v[0] > 7 for v in p["vertices"])]
+    assert len(end_verges) == 2
+    close(min(v[2] for p in end_verges for v in p["vertices"]), -.5)
+    for part in end_parts:
+        if part["tag"] != "gable":
+            closed(part)
+    # Rotated clipping must weld near-equal cut vertices before extrusion.
+    from app.core.hull_roofs import _rotate
+    for angle in (0, 17, 31, 90):
+        for form in ("gable", "hip", "shed"):
+            for cap in (1, 20):
+                current = deepcopy(desc)
+                current["overrides"].update(roof_form=form, max_rise_m=cap)
+                built, _ = build_roofs(polygon_case_facts([_rotate(p, angle) for p in outline]),
+                                       style, current, tier="full")
+                assert no_degenerate_faces(built), (angle, form, cap)
+                for part in built:
+                    if part["tag"] != "gable":
+                        closed(part)
+    print("PASS partial seams: free eave, seam, fascia/gutter, height regions, closed slabs")
+
+
 def check_eaves_trim():
     """Timber outer=.34, overhang=.4, tan(45)=1: slab eave=3-.4=2.6.
 
     Fascia y=2.42..2.60, .03 thick; gutter y=2.32..2.42, .10 thick.
     Gable counts=2/2/4; hip=4/4/0; shed=1/1/2. Cap=3+1=4.
-    L loses one main eave and one branch rake end => 3/3/6.
+    L keeps its partial main eave and loses one branch rake end => 4/4/6.
     Tent triangle has 3 eaves, thus 3/3/0; trapezoid has 4/4/0.
     Stepped lower shed loses its covered high side: 1/1/2.
     Low/density zero: 2/0/0; gutters appear at exactly .15 overhang.
@@ -260,7 +349,7 @@ def check_eaves_trim():
         if p['trim_kind']=='verge': close(max(v[1] for v in p['vertices']),4)
     del desc['overrides']['max_rise_m']
     trim=build(hull_facts(l_shaped_house()))
-    assert counts(trim)==(3,3,6)
+    assert counts(trim)==(4,4,6)
     for p in trim:
         if p['trim_kind']=='fascia' and max(v[0] for v in p['vertices'])>20:
             close(min(v[0] for v in p['vertices']),8)
@@ -422,6 +511,7 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as temporary:
         from app.core import paths
         paths.init(temporary)
+        check_partial_seams()
         check_coordinate_snap()
         check_junctions()
         check_modern_roofs()

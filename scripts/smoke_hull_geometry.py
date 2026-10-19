@@ -89,6 +89,7 @@ STYLES = ("fachwerk", "holzhuette", "burg", "steinhaus")
 # 1c-B Task 1: roof rise cap (fachwerk/steinhaus/holzhuette)
 # 1c-B Task 2: roof junctions (L/T/U)
 # 1c-B Task 3: eaves trim
+# 1c-B Task 3b: partial seams keep the free eave
 IDENTITY = {
     "stepped_house:fachwerk:full": "691990f67e83e7579b67414f1f86273828e0eca50888506952e404130129a0e7",
     "stepped_house:fachwerk:low": "4740ff54b945b0355cdaca38cbd4719b84c521d41d70da0c3b84d226fea9c520",
@@ -98,14 +99,14 @@ IDENTITY = {
     "stepped_house:burg:low": "1f268acef9a014d379b45766b1a97e9b9fab81ae85a1373c63ef0b56b30fccca",
     "stepped_house:steinhaus:full": "502c3a4dbd98a4495e1c71270ad55fd01fe5a9207131de6b9c06c9b93b7dabf3",
     "stepped_house:steinhaus:low": "1fb5abda1a9bd33eaaaa2c49623fcb9196ce3139924b3263d4c6ac5bf19e9f93",
-    "l_shaped_house:fachwerk:full": "1532d90ea8db7f443276bb595a689b338fcaa11504656002926c0c4f98dddd7e",
-    "l_shaped_house:fachwerk:low": "36093e50d743dcb677e184a7405eb60dac0294b002630eb812013f7563ce7d73",
-    "l_shaped_house:holzhuette:full": "29a9686cf981b2ddfe1390640169b2d63f4ca815a3cfa120df0b821ac13fb617",
-    "l_shaped_house:holzhuette:low": "a4a3567f938c2d685c85a4cded1c18610fce79f13d18d7e817c8a02fdc03a743",
+    "l_shaped_house:fachwerk:full": "6c68d47c9a607e3ba653cf0aacca34015580e7b7a2765c379282985a60bf8985",
+    "l_shaped_house:fachwerk:low": "0c7bad5d1c8e0477cfed65478debd13b4f2d7400b8746e4b2cd82508586bd1d3",
+    "l_shaped_house:holzhuette:full": "5d7ccdcffbb659daba1acada33c71e0eea817eadbbfc60b6c82bc768aa339b21",
+    "l_shaped_house:holzhuette:low": "e1a615fa94dda06e12b616a51d2ae8c31c551861a0d883a7081626b325c8a9a7",
     "l_shaped_house:burg:full": "7b8d98b5706e2c7ce14735cde9404b222c764010309f6773106231574ef46786",
     "l_shaped_house:burg:low": "95c2234bfadc26b68a46d349d33d4d9248f01bec79fd9a1beeb51033c69573d2",
-    "l_shaped_house:steinhaus:full": "9557c9bc99b94c9f8b3b6afe8d414371519fcf31badbe2221d7f8fd9f6575df1",
-    "l_shaped_house:steinhaus:low": "fd9db04aa0ae82a57a8fea2e86504ca898b01999eef1c6916e2265324498d411"
+    "l_shaped_house:steinhaus:full": "88b6e3956cd65988a055d1d182d8779ff993d948d18c1c0aed97d20eb94eb350",
+    "l_shaped_house:steinhaus:low": "80c01467871275f7a9725786efeaf2a0663da0941ec4883ffc7ac8b46049e906"
 }
 
 
