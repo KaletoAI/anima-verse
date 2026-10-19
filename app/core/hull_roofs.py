@@ -230,6 +230,15 @@ def _wing_axes(rect, covered_sides, form):
     return result, -1 if side == "z_min" else 1
 
 
+def _side_index(side, original_angle, ridge_angle):
+    """Map an original rectangle side into its wing's ridge frame."""
+    axis, direction = side.split("_")
+    vector = _rotate([1, 0] if axis == "x" else [0, 1], original_angle-ridge_angle)
+    index = 0 if abs(vector[0]) > .5 else 2
+    sign = (1 if direction == "max" else -1) * vector[index//2]
+    return index + int(sign > 0)
+
+
 def _clip_polygon(points, limits):
     """Clip a 3D polygon to four local x/z half-planes, interpolating y."""
     for axis, boundary, sign in ((0, limits[0], 1), (0, limits[1], -1),
@@ -565,16 +574,14 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
     covered_indices = {i for i, value in enumerate(limits) if abs(value-(-end,end,-edge,edge)[i])>1e-8}
     seam_indices = set()
     seam_regions = []
+    higher_intervals = {}
     seam_bounds = {}
     normal_limits = list(limits)
     own_limits = list(limits)
     seam_intervals = {}
     for seam in seams:
-        axis, direction = seam["side"].split("_")
-        vector = _rotate([1,0] if axis == "x" else [0,1], original_angle-rect["angle_deg"])
-        index = 0 if abs(vector[0]) > .5 else 2
-        sign = (1 if direction == "max" else -1) * vector[index//2]
-        index += int(sign > 0)
+        index = _side_index(seam["side"], original_angle, rect["angle_deg"])
+        sign = 1 if index % 2 else -1
         seam_indices.add(index)
         neighbor = seam["rect"]
         corners = [_at(neighbor, x, 0, z)
@@ -591,6 +598,9 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
         low = normal_limits[other] if low <= -wall_half + 1e-8 else low
         upper = normal_limits[other + 1] if upper >= wall_half - 1e-8 else upper
         seam_intervals.setdefault(index, []).append((low, upper))
+        if index < 2 and seam.get("higher", False):
+            higher_intervals.setdefault(index, []).append((low, upper,
+                math.copysign(rect["length"]/2 + seam["extension"], sign)))
         half = rect["length" if index < 2 else "depth"] / 2
         own_limits[index] = math.copysign(half, sign)
         bound = math.copysign(half + seam["extension"], sign)
@@ -647,24 +657,27 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
     else:
         ridge_half = max(0.0, half_length - half_span) if form == "hip" else end
         low_y = base - overhang * slope
+        ridge_ends = [limits[0] if 0 in seam_indices else -ridge_half,
+                      limits[1] if 1 in seam_indices else ridge_half]
         for side in (-1, 1):
             surfaces.append([[-end, low_y, side * edge], [end, low_y, side * edge],
-                             [ridge_half, ridge_y, 0], [-ridge_half, ridge_y, 0]])
+                             [ridge_ends[1], ridge_y, 0], [ridge_ends[0], ridge_y, 0]])
         if form == "hip":
             for side in (-1, 1):
+                if (0 if side < 0 else 1) in seam_indices:
+                    continue
                 surfaces.append([[side * end, low_y, -edge], [side * end, low_y, edge],
                                  [side * ridge_half, ridge_y, 0]])
-        ridge = [_at(rect, x, ridge_y, 0) for x in (-ridge_half, ridge_half)]
+        ridge = [_at(rect, x, ridge_y, 0) for x in ridge_ends]
     if seams:
-        # Extend ridge-axis slopes before clipping. On transverse seams the
-        # same affine slope continues across the join into the other roof.
+        # Only ridge ends extend; side seams stop at their own wall line.
         for surface in surfaces:
             normal = _normal(surface)
             for point in surface:
                 old_x, old_z = point[0], point[2]
                 for axis, index in ((0,0),(0,1),(2,2),(2,3)):
                     bound = end if axis == 0 else edge
-                    if index in seam_indices and abs(point[axis] - (-bound if index % 2 == 0 else bound)) < 1e-8:
+                    if index < 2 and index in seam_indices and abs(point[axis] - (-bound if index % 2 == 0 else bound)) < 1e-8:
                         point[axis] = limits[index]
                 point[1] -= (normal[0]*(point[0]-old_x)+normal[2]*(point[2]-old_z))/normal[1]
         if form == "gable":
@@ -676,8 +689,9 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
         surfaces = _cap_surfaces(surfaces, ridge_y)
         if form == "shed":
             cut_z = high * (max_rise / slope - half_span)
-            surfaces.append([[-end, ridge_y, cut_z], [end, ridge_y, cut_z],
-                             [end, ridge_y, high * edge], [-end, ridge_y, high * edge]])
+            a, b = (limits[:2] if seams else (-end, end))
+            surfaces.append([[a, ridge_y, cut_z], [b, ridge_y, cut_z],
+                             [b, ridge_y, high * edge], [a, ridge_y, high * edge]])
         for point in ridge:
             point[1] = ridge_y
     if seams and form == "shed":
@@ -686,8 +700,8 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
             target_z = high * min(high * target_z, max_rise / slope - half_span)
         intervals = [region[:2] for region in regions if region[2]-1e-8 <= target_z <= region[3]+1e-8]
         ridge = [_at(rect, x, min(ridge_y, base+(half_span+high*target_z)*slope), target_z)
-                 for x in (max(-half_length,min(a for a,b in intervals)),
-                           min(half_length,max(b for a,b in intervals)))]
+                 for x in (min(a for a,b in intervals) if 0 in seam_indices else -half_length,
+                           max(b for a,b in intervals) if 1 in seam_indices else half_length)]
     original_ridge_y = ridge_y
     if sides or seams:
         ridge = [[*point] for point in ridge]
@@ -774,6 +788,25 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
                 local_points.append([x, point[1], z])
             _gable_panels(local_points, rect, limits, seam_intervals.get(index, []),
                           index, material, uv_sizes, parts)
+    material = style.get("storey_slot", {}).get(number, "wall_ground" if number == 0 and style.get("materials", {}).get("wall_ground") else "wall")
+    for index, intervals in higher_intervals.items():
+        for low, upper, limit in intervals:
+            if form == "shed":
+                points = [[limit, base, -high*half_span], [limit, base, high*half_span],
+                          [limit, base+2*half_span*slope, high*half_span]]
+                points = _clip_height(points, ridge_y)
+            else:
+                cap_half = max(0, half_span-max_rise/slope) if flat_top else 0
+                points = [[limit, base, -half_span], [limit, base, half_span],
+                          [limit, ridge_y, cap_half]]
+                if flat_top:
+                    points.append([limit, ridge_y, -cap_half])
+            if _normal(points)[0] * (-1 if index == 0 else 1) < 0:
+                points.reverse()
+            panel_limits = list(limits)
+            panel_limits[0:2] = [min(limits[0],limit), max(limits[1],limit)]
+            panel_limits[2:4] = [low,upper]
+            _gable_panels(points, rect, panel_limits, [], index, material, uv_sizes, parts)
     if sides or seams:
         ridge_y = max(point[1] for point in ridge)
         for part in parts[first_part:]:
@@ -797,6 +830,7 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
     return {**({"footprint_regions": regions} if seams else {}),
             "rect": rect, "level": number, "form": form, "eaves_y": base,
             "ridge_y": ridge_y, "flat_top": flat_top, "ridge": ridge, "pitch_deg": pitch,
+            "gable_ends": sorted(seam_indices & {0, 1}) if form == "hip" else [],
             "overhang_m": overhang, "limits": limits, "high": high}
 
 
@@ -893,7 +927,12 @@ def _roof_height(wing, x, z, style, pitch):
     slope = math.tan(math.radians(pitch))
     if wing["form"] == "hip":
         end = wing["rect"]["length"] / 2 + outer
-        return wing["eaves_y"] + min(span - abs(z), end - abs(x)) * slope
+        distances = [span - abs(z)]
+        if 0 not in wing.get("gable_ends", []):
+            distances.append(end + x)
+        if 1 not in wing.get("gable_ends", []):
+            distances.append(end - x)
+        return wing["eaves_y"] + min(distances) * slope
     if wing["form"] == "shed":
         return wing["eaves_y"] + (span + z * wing["high"]) * slope
     return (wing["eaves_y"] + (span - abs(z)) * slope if wing.get("flat_top")
@@ -1090,9 +1129,18 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 for seam in wing["seam_sides"]:
                     neighbor = seam["neighbor"]
                     dimension = "length" if seam["side"].startswith("x") else "depth"
-                    extension = (wings[neighbor]["rect"][dimension]/2
-                                 if (rises[wing_index], wing_index) < (rises[neighbor], neighbor) else 0)
-                    seams.append(dict(seam, extension=extension, rect=wings[neighbor]["rect"]))
+                    ridge_rect, _ = _wing_axes(rect, sides, wing_form)
+                    neighbor_wing = wings[neighbor]
+                    neighbor_form = "shed" if not topmost and neighbor_wing["covered_sides"] and form != "flat" else form
+                    neighbor_rect, _ = _wing_axes(neighbor_wing["rect"], neighbor_wing["covered_sides"], neighbor_form)
+                    reciprocal = next(s for s in neighbor_wing["seam_sides"] if s["neighbor"] == wing_index)
+                    end_seam = _side_index(seam["side"], rect["angle_deg"], ridge_rect["angle_deg"]) < 2
+                    neighbor_end = _side_index(reciprocal["side"], neighbor_wing["rect"]["angle_deg"], neighbor_rect["angle_deg"]) < 2
+                    extends = end_seam and (not neighbor_end or
+                        (rises[wing_index], wing_index) < (rises[neighbor], neighbor))
+                    extension = wings[neighbor]["rect"][dimension]/2 if extends else 0
+                    seams.append(dict(seam, extension=extension, rect=wings[neighbor]["rect"],
+                                      higher=rises[wing_index] > rises[neighbor] + 1e-6))
                 info["wings"].append(_pitched(rect, sides, wing_form, number, base,
                                               wing_pitch, overhang, style, uv_sizes, parts,
                                               explicit_pitch=explicit_pitch, max_rise=max_rise, seams=seams, details=details))

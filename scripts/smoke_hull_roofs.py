@@ -177,12 +177,13 @@ def check_junctions():
             built, metadata = build_roofs(case, style, desc, tier='low')
             assert no_degenerate_faces(built), (name, form)
             if name == 'U' and form == 'gable':
-                # All spans are 3 m, so equal rises use the smaller index:
-                # left 0 extends into base 1, base 1 into right 2 only.
+                # Side arms have END seams and extend into the bar by 3/2.
+                # Bar seams are SIDE: its partial free eave stays at
+                # half depth 1.5 + outer .34 + overhang .4 = 2.24.
                 left, bar, right = metadata['wings']
                 close(left['limits'][0], -4)
-                close(bar['limits'][3], 4)
-                close(right['limits'][0], -2.5)
+                close(bar['limits'][3], 2.24)
+                close(right['limits'][0], -4)
                 assert roof_top_y(bar,5,4,style) is None, 'courtyard notch filled'
 
             from app.core.hull_roofs import _rotate
@@ -209,6 +210,80 @@ def check_junctions():
                     closed(part)
     print('PASS: reciprocal L/T/U seams, rotated junctions and lower-wing roof junction')
 
+
+
+def check_end_seams():
+    """A=[0,12]x[0,10] has END x=12; B=[12,16]x[-6,16] has SIDE.
+
+    A extends B's half width 4/2=2 to x=14 despite rise 5+outer >
+    2+outer. Classic L branch extends from x=8 by 8/2=4 to x=4.
+    A .15 slab extruded vertically drops .15/cos(pitch) (.2615 at 55 deg), so
+    the eave floor is base - overhang*tan(pitch) - .15/cos(pitch) - .01.
+    Parallel L wings rotate 90 degrees, making both x seams SIDE.
+    """
+    from _hull_fixtures import polygon_case_facts
+    from app.core.hull_roofs import roof_top_y
+    outlines = {
+        'L': [[0,0],[20,0],[20,6],[8,6],[8,14],[0,14]],
+        'parallel': [[0,0],[16,0],[16,14],[5,14],[5,8],[0,8]],
+        'Bernstein': [[-5.09,-10.85],[10.78,-10.91],[10.73,3.09],
+                      [-.07,3.05],[-.05,-2.4],[-5.09,-2.42]],
+        **{name: roof_shapes()[name]['levels'][0]['outline']
+           for name in ('T', 'U', 'rotated_L')}}
+    for name in ('fachwerk', 'steinhaus', 'holzhuette'):
+        style = json.loads((Path(__file__).resolve().parents[1] /
+                            f'shared/building_styles/{name}.json').read_text())
+        style.update(chimneys=[0,0], dormers=0)
+        for shape, outline in outlines.items():
+            for form in ('gable', 'hip', 'shed'):
+                for pitch in (30,45,55):
+                    parts, info = build_roofs(polygon_case_facts(outline), style,
+                        {'seed':1,'overrides':{'roof_form':form,'pitch_deg':pitch}}, tier='low')
+                    assert no_degenerate_faces(parts), (name,shape,form,pitch)
+                    for part in parts:
+                        if part['tag'] != 'roof':
+                            continue
+                        closed(part)
+                        top = [part['vertices'][i] for i in part['faces'][0]]
+                        owners = [w for w in info['wings'] if all(
+                            (y := roof_top_y(w,v[0],v[2],style)) is not None and
+                            abs(y-v[1]) < .001 for v in top)]
+                        assert owners, (name,shape,form,pitch,'height mismatch')
+                        assert any(all(v[1] >= w['eaves_y']-w['overhang_m']*
+                            math.tan(math.radians(w['pitch_deg']))-.15/math.cos(
+                            math.radians(w['pitch_deg']))-.01 for v in part['vertices'])
+                            for w in owners), (name,shape,form,pitch,'below eaves')
+    style['roof']['overhang_m'] = [.4,.4]
+    desc = {'seed':1,'overrides':{'roof_form':'gable','pitch_deg':45}}
+    parts, info = build_roofs(polygon_case_facts(outlines['parallel']),style,desc,tier='low')
+    small, main = info['wings']
+    close(small['limits'][2], -2.5)
+    # Main seam is partial: its free eave retains overhang, seam regions stop at x=5.
+    close(max(d for a,b,c,d in main['footprint_regions'] if a <= -3 <= b), 5.5)
+    assert roof_top_y(main,4.99,4,style) is None
+    small_roofs = [p for p in parts if p['tag']=='roof' and all(
+        roof_top_y(small,v[0],v[2],style) is not None for v in p['vertices'])]
+    assert small_roofs and max(v[0] for p in small_roofs for v in p['vertices']) <= 5.001
+    t = [[0,0],[12,0],[12,-6],[16,-6],[16,16],[12,16],[12,10],[0,10]]
+    parts, info = build_roofs(polygon_case_facts(t),style,desc,tier='low')
+    a = next(w for w in info['wings'] if abs(w['rect']['center'][0]-6)<.001)
+    b = next(w for w in info['wings'] if abs(w['rect']['center'][0]-14)<.001)
+    close(max(v[0] for v in a['ridge']),14)
+    assert roof_top_y(b,11.99,4,style) is None
+    assert any(p['tag']=='gable' and all(abs(v[0]-14)<.001 for v in p['vertices']) for p in parts)
+    # Capped higher END seam uses the same x=14 limit, with a four-vertex
+    # trapezoid: cap half-width is 5+outer-1/tan45.
+    desc['overrides']['max_rise_m']=1
+    capped,_=build_roofs(polygon_case_facts(t),style,desc,tier='low')
+    panels=[p for p in capped if p['tag']=='gable' and
+            all(abs(v[0]-14)<.001 for v in p['vertices'])]
+    assert len(panels)==1 and len(panels[0]['vertices'])==4
+    close(max(v[1] for v in panels[0]['vertices']),4)
+    del desc['overrides']['max_rise_m']
+    desc['overrides']['roof_form']='hip'
+    _,info=build_roofs(polygon_case_facts(outlines['L']),style,desc,tier='low')
+    close(min(v[0] for v in info['wings'][1]['ridge']),4)
+    print('PASS end seams: 162 matrix cases, parallel valley, higher T gable, L hip ridge')
 
 
 def check_partial_seams():
@@ -511,6 +586,7 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as temporary:
         from app.core import paths
         paths.init(temporary)
+        check_end_seams()
         check_partial_seams()
         check_coordinate_snap()
         check_junctions()
