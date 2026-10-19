@@ -1205,6 +1205,31 @@ def location_hull_status(location_id: str) -> Dict[str, Any]:
     return {**result, "styles": _hull_style_list()}
 
 
+@router.post("/locations/{location_id}/building-assistant/propose")
+async def location_building_propose(location_id: str, request: Request) -> Dict[str, Any]:
+    """Preview a building design without writing any world data."""
+    from app.core.building_assistant import propose
+    if not await asyncio.to_thread(get_location_by_id, location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    try:
+        data = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+    text = data.get("text")
+    if not isinstance(text, str) or not text.strip() or len(text) > 2000:
+        raise HTTPException(status_code=400, detail="text must contain 1–2000 characters")
+    if (not isinstance(data.get("style", ""), str)
+            or not isinstance(data.get("revision", ""), str)
+            or (data.get("previous") is not None and not isinstance(data["previous"], dict))):
+        raise HTTPException(status_code=400, detail="Invalid style, previous or revision")
+    return await asyncio.to_thread(propose, location_id, text.strip(),
+                                   style=data.get("style", ""),
+                                   previous=data.get("previous"),
+                                   revision=data.get("revision", ""))
+
+
 @router.post("/locations/{location_id}/hull/propose")
 def location_hull_propose(location_id: str) -> Dict[str, Any]:
     """Suggest an editable style using one LLM call or validated defaults."""

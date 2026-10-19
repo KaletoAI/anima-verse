@@ -84,6 +84,7 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # steps stay distinguishable in the LLM log through their call labels.
     # No thinking: the answers must be a bare JSON object.
     "pose_animation_prompt": {"label": "Poses: Animation Captions", "priority": Priority.NORMAL, "category": "tool", "cache_class": "tool", "gate": "image_generation.enabled"},
+    "building_layout": {"label": "Building design (floor plan + look)", "priority": Priority.NORMAL, "category": "tool", "cache_class": "tool"},
     "furnish":            {"label": "Furnish (needs · match · placement)", "priority": Priority.NORMAL, "category": "tool", "cache_class": "tool"},
     # The fourth step of the same feature, but the only one that answers PROSE:
     # after the furnishing has landed, the room's description is rewritten so it
@@ -383,6 +384,12 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         # German descriptions in, English captions/posture prompts out;
         # both the parser and the admin review the result.
         "tools": False, "vision": False, "json": True, "min_context": 4096,
+        "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
+        "creative": True, "language_de": True, "latency_sensitive": False,
+    },
+    "building_layout": {
+        # The floor-plan rules alone are ~4k tokens; a three-storey answer adds as much again.
+        "tools": False, "vision": False, "json": True, "min_context": 16384,
         "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
         "creative": True, "language_de": True, "latency_sensitive": False,
     },

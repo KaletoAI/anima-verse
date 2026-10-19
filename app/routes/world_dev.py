@@ -21,25 +21,14 @@ from app.models.character import (
 router = APIRouter(prefix="/world-dev", tags=["world-dev"],
                    dependencies=[Depends(require_admin)])
 
-from app.core.paths import get_schemas_dir as _get_schemas_dir
+from app.core.layout_prompt import (
+    load_schema as _load_schema, extract_json_block as _extract_json_block,
+    layout_target, format_layout_location, format_layout_rooms,
+    format_surface_kinds, world_setup_block as build_world_setup_block,
+)
 
 # In-memory session store
 _sessions: Dict[str, Dict[str, Any]] = {}
-
-
-def _load_schema(schema_name: str, **kwargs) -> str:
-    """Loads a schema definition file and fills in placeholders.
-
-    Schemas use literal `{key}` placeholders. Do not use .format(): their
-    JSON examples contain braces that must remain literal.
-    """
-    path = _get_schemas_dir() / f"{schema_name}.md"
-    if not path.exists():
-        raise FileNotFoundError(f"Schema '{schema_name}' nicht gefunden: {path}")
-    content = path.read_text(encoding="utf-8")
-    for key, value in kwargs.items():
-        content = content.replace(f"{{{key}}}", str(value))
-    return content
 
 
 def _create_llm(model: str, provider: str = "", max_tokens: Optional[int] = None):
@@ -399,173 +388,6 @@ def _format_existing_map() -> str:
     return "\n\n".join(blocks)
 
 
-# ---------------------------------------------------------------------------
-# Layout schema context — the three placeholders `layout.md` carries.
-# A floor plan is drawn INSIDE one location, so everything here is about that
-# one place: how big its plot is and what shape, which rooms exist and where
-# they stand today, and which surface kinds the world's texture library holds.
-# ---------------------------------------------------------------------------
-
-def _layout_target(location_id: str) -> Optional[Dict[str, Any]]:
-    """The location a layout draft is about, or None when none was picked."""
-    loc_id = (location_id or "").strip()
-    if not loc_id:
-        return None
-    return get_location_by_id(loc_id)
-
-
-def _format_layout_location(loc: Optional[Dict[str, Any]]) -> str:
-    """`{layout_location}` — the plot: its outline in local metres, its size,
-    its storey height, indoor/outdoor, and where one may already walk in.
-
-    The outline is quoted POINT FOR POINT, not simplified: unlike a map draft
-    (where a wood is a shape, not a tracing) a floor plan is measured against
-    these very edges, and the model has to be able to snap a room flush to one.
-    """
-    from app.core.scene_recipe import DEFAULT_STOREY_REAL_M
-
-    if not loc:
-        return ("No location selected. Ask the user which place the plan is "
-                "for — a floor plan always belongs to one location.")
-    map3d = loc.get("map3d") if isinstance(loc.get("map3d"), dict) else {}
-    boundary = map3d.get("boundary") or []
-    lines: List[str] = [
-        f"**{loc.get('name') or loc.get('id')}** (`{loc.get('id')}`)",
-    ]
-    desc = " ".join(str(loc.get("description") or "").split())
-    if desc:
-        lines.append(desc)
-    indoor = str(loc.get("indoor") or "").strip() or "unspecified"
-    storey = map3d.get("storey_height_m") or DEFAULT_STOREY_REAL_M
-    lines.append(f"- indoor/outdoor: {indoor}")
-    lines.append(f"- storey height: {float(storey):g} m "
-                 f"(one `level` step is this tall)")
-    if boundary:
-        width = map3d.get("plan_width_m")
-        xs = [float(p[0]) for p in boundary]
-        zs = [float(p[1]) for p in boundary]
-        lines.append(
-            f"- plot outline ({len(boundary)} points, local metres, edge i "
-            f"runs from point i to point i+1): "
-            + json.dumps([[round(float(p[0]), 2), round(float(p[1]), 2)]
-                          for p in boundary]))
-        lines.append(f"- the plot spans x {min(xs):g} … {max(xs):g} and "
-                     f"y {min(zs):g} … {max(zs):g} metres"
-                     + (f" (widest side {float(width):g} m)" if width else ""))
-    else:
-        lines.append("- **This location has no drawn plot outline.** Nothing "
-                     "can be checked against it and `boundary_openings` have "
-                     "no edge to sit on — say so, and keep the plan modest "
-                     "(a few tens of metres around the origin).")
-    entry_room = str(loc.get("entry_room") or "").strip()
-    if entry_room:
-        lines.append(f"- current entry room: `{entry_room}`")
-    bo = map3d.get("boundary_openings") or []
-    if bo:
-        lines.append(f"- {len(bo)} boundary opening(s) already exist: "
-                     + json.dumps(bo))
-    return "\n".join(lines)
-
-
-def _format_layout_rooms(loc: Optional[Dict[str, Any]]) -> str:
-    """`{layout_rooms}` — every room of the location with its CURRENT plan.
-
-    A room already carrying a layout is quoted with its exact numbers, so
-    "leave the kitchen where it is" is something the model can actually obey by
-    copying them back out.
-    """
-    from app.models.world import GROUND_ROOM_ID, is_floor_room
-    if not loc:
-        return "— (no location selected)"
-    lines: List[str] = []
-    for room in loc.get("rooms") or []:
-        if not isinstance(room, dict):
-            continue
-        room_id = str(room.get("id") or "")
-        # Neither the ground nor a storey's corridor carries a plan of its
-        # own — the server derives both, so the model must not be offered
-        # them as rooms it may place (spec § 4).
-        if room_id == GROUND_ROOM_ID or is_floor_room(room_id):
-            continue
-        head = f"- `{room_id}` — **{room.get('name') or room_id}**"
-        lay = room.get("layout") if isinstance(room.get("layout"), dict) else {}
-        if lay:
-            head += (f" · at x={lay.get('x')}, y={lay.get('y')}, "
-                     f"{lay.get('w')} × {lay.get('d')} m, level "
-                     f"{lay.get('level', 0)}")
-            if lay.get("no_walls"):
-                head += ", open sub-area"
-            if lay.get("outline"):
-                head += f", drawn outline ({len(lay['outline'])} points)"
-            if lay.get("openings"):
-                head += f", {len(lay['openings'])} opening(s)"
-        else:
-            head += " · **no plan yet**"
-        desc = " ".join(str(room.get("description") or "").split())
-        if len(desc) > 200:
-            desc = desc[:200].rstrip() + "…"
-        lines.append(head + (f"\n  {desc}" if desc else ""))
-    if not lines:
-        return ("This location has no rooms yet — every room in your plan is a "
-                "new one (give it a `name` and a `description`).")
-    return "\n".join(lines)
-
-
-def _format_surface_kinds() -> str:
-    """`{surface_kinds}` — the ids the shared surface-texture library holds."""
-    from app.core.surface_textures import library_kinds
-    kinds = sorted(library_kinds())
-    if not kinds:
-        return ("The surface library is empty — leave `surfaces` out of every "
-                "room.")
-    return ", ".join(f"`{k}`" for k in kinds)
-
-
-def _extract_json_block(text: str, block_type: str) -> Dict[str, Any] | None:
-    """Extracts a JSON from ```json:<block_type> ... ``` code blocks."""
-    import re
-    # Match ```json:type with optional whitespace, newlines, and closing ```
-    pattern = rf'```json:{re.escape(block_type)}\s*\n(.*?)```'
-    match = re.search(pattern, text, re.DOTALL)
-    if not match:
-        # Missing closing fence — the model stopped right after the JSON or
-        # the output was cut off mid-block. Try to parse from the opening
-        # fence to the end of the text (raw_decode stops at the JSON end, so
-        # trailing prose does not hurt). Truly truncated JSON still fails —
-        # the caller reports that via extraction_warning.
-        open_m = re.search(rf'```json:{re.escape(block_type)}\s*\n', text)
-        if not open_m:
-            return None
-        tail = text[open_m.end():].strip()
-        try:
-            parsed, _ = json.JSONDecoder().raw_decode(tail)
-            if isinstance(parsed, dict):
-                logger.info("Extracted %s JSON (unclosed fence): %d keys",
-                            block_type, len(parsed))
-                return parsed
-        except json.JSONDecodeError:
-            logger.warning("json:%s block found but not parseable — output "
-                           "truncated mid-JSON?", block_type)
-        return None
-    raw = match.group(1).strip()
-    try:
-        parsed = json.loads(raw)
-        logger.info("Extracted %s JSON: %d keys", block_type, len(parsed))
-        return parsed
-    except json.JSONDecodeError:
-        # Tolerate common LLM JSON glitches: leading "+" on positive numbers
-        # ("attention_change": +5) and trailing commas before } or ].
-        sanitized = re.sub(r'([:\[,]\s*)\+(\d)', r'\1\2', raw)
-        sanitized = re.sub(r',(\s*[}\]])', r'\1', sanitized)
-        try:
-            parsed = json.loads(sanitized)
-            logger.info("Extracted %s JSON (after sanitize): %d keys", block_type, len(parsed))
-            return parsed
-        except json.JSONDecodeError as e2:
-            logger.warning("Failed to parse %s JSON: %s\nRaw: %s", block_type, e2, raw[:200])
-            return None
-
-
 def _validate_character_fields(char_data: Dict[str, Any], selected_template: str = "") -> list[str]:
     """Checks which expected fields are missing or empty in character data.
 
@@ -796,12 +618,7 @@ async def world_dev_chat(request: Request):
             # the LLM sees the world's tone / era / premise before any
             # task-specific instructions. Empty when the user hasn't set
             # one yet (the placeholder collapses to nothing).
-            from app.models.world_setup import get_world_setup_text
-            _ws_text = get_world_setup_text()
-            world_setup_block = (
-                f"## World setup\n\nThe world this content goes into:\n\n{_ws_text}\n\n"
-                if _ws_text else ""
-            )
+            world_setup_block = build_world_setup_block()
             # The map schema's four placeholders. Computed ONLY for `map` —
             # every one of them costs DB reads (catalog, locations, painted
             # areas), and no other schema contains the placeholder to fill.
@@ -820,10 +637,10 @@ async def world_dev_chat(request: Request):
             # computed ONLY for `layout`, because each one costs DB/disk reads
             # and no other schema carries the placeholder to fill.
             if schema == "layout":
-                _target = _layout_target(edit_location_id)
-                layout_location = _format_layout_location(_target)
-                layout_rooms = _format_layout_rooms(_target)
-                surface_kinds = _format_surface_kinds()
+                _target = layout_target(edit_location_id)
+                layout_location = format_layout_location(_target)
+                layout_rooms = format_layout_rooms(_target)
+                surface_kinds = format_surface_kinds()
             else:
                 layout_location = layout_rooms = surface_kinds = ""
             system_prompt = _load_schema(
@@ -1358,7 +1175,7 @@ def _layout_world_context(location_id: str) -> Tuple[Dict[str, Any],
     the ONE place that reads its two world facts out of the world.
     """
     from app.core.surface_textures import library_kinds
-    loc = _layout_target(location_id)
+    loc = layout_target(location_id)
     if not loc:
         raise HTTPException(status_code=404,
                             detail=f"no such location: {location_id!r}")

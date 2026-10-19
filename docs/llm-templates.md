@@ -109,6 +109,7 @@ into "what does the room need" and "what does the library already have";
 
 | Template | Task | Caller | Purpose |
 |---|---|---|---|
+| `building_layout.md` | `building_layout` | `building_assistant.propose` | One-shot floor plan and hull proposal, with optional revision of the normalized draft |
 | `furnish_needs.md` | `furnish` (label `needs`) | `room_furnish._phase_needs` | Stage 1a: the room's complete need list (kind, category, count, mount, size, style, marker) invented from its purpose alone — the library is not in the prompt |
 | `furnish_match.md` | `furnish` (label `match`) | `room_furnish._phase_needs` | Stage 1b: map the setting-filtered prop catalog (short ids `#n`) onto that need list; every unmatched need is built as a new prop |
 | `furnish_place.md` | `furnish` (label `place`) | `furnish_place.run` (via `room_furnish._phase_place`) | Stage 2: relational placement plan per mount pass (anchors `around` / `under` / `wall_above` / `at_opening` / `above` / `on`), with one repair round per failing pass; `furnish_solver` turns it into metres |
