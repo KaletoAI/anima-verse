@@ -1083,14 +1083,28 @@ export function deriveRoomSpots(tile: Tile, roomId: string,
   // own (a podium, a sunken lounge, a hut in a lake, an upper storey's plate)
   // the marker follows it.
   //
+  // THE FLOOR UNDER THE PLACE, NOT UNDER THE ROOM'S CENTRE, and without the
+  // room's baked lattices (`roomBaseFloorY`; finding 2026-10-20, "Dachboden"):
+  // `floorY` above is the centre's STAND height, and in a diorama room that is
+  // whatever furniture stands in the middle — a table 0.69 m high lifted a
+  // lying place by exactly that. The offset already carries the furniture
+  // under the place, and on a slope the terrain counts where the place is.
+  // Sampled once per place, at the mean of its slots: the slots of one place
+  // share one height (`npcs.tickInteraction` reads slot 0 for a pair).
+  //
   // WRITTEN ABSOLUTELY, never as a delta: a model tier swap re-derives the same
   // room (`setSceneModelTier`), and a relative correction would apply twice.
   // `fixed` markers (prop markers) are finished and are never touched. Every
   // SLOT of a place is written, in place — a figure the server seated holds
   // a reference to its slot vector and follows it.
   for (const e of tile.roomMarkers.get(roomId)?.values() ?? []) {
-    if (e.fixed) continue;
-    for (const s of e.slots) s.setY(floorY - e.drop + e.offsetY);
+    if (e.fixed || !e.slots.length) continue;
+    let mx = 0;
+    let mz = 0;
+    for (const s of e.slots) { mx += s.x; mz += s.z; }
+    const at = worldToTile(tile, mx / e.slots.length, mz / e.slots.length);
+    const y = roomBaseFloorY(tile, floor, at.x, at.z) - e.drop + e.offsetY;
+    for (const s of e.slots) s.setY(y);
   }
 }
 
@@ -1126,6 +1140,16 @@ function roomFloorWorldY(tile: Tile, roomId: string, floor: RoomFloor,
                          lx: number, lz: number): number {
   const baked = bakedFloorAt(tile, lx, lz, (e) => e.roomId === roomId);
   if (baked !== null) return baked;
+  return roomBaseFloorY(tile, floor, lx, lz);
+}
+
+/** The floor of ONE room WITHOUT its baked lattices, in WORLD metres: the
+ *  declaration, else the terrain at the point. What a room MARKER's height is
+ *  measured from — its `offset_y` already says how high the furniture under
+ *  it stands (§ A4: `y_world` = datum + `offset_y`; the composer knows no
+ *  lattice), so a diorama's surface added on top would count that furniture
+ *  twice. */
+function roomBaseFloorY(tile: Tile, floor: RoomFloor, lx: number, lz: number): number {
   if (floor.declared !== undefined) return tile.center.y + floor.declared;
   const w = tileToWorld(tile, lx, lz, 0);
   const y = worldGroundAt ? worldGroundAt(w.x, w.z) : NaN;
