@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Smoke run for the v2 travel block in the worldmap payload (E3, Task 6).
+Checks that route JSON is encoded in the endpoint, off the event loop.
 
 Checks the ``travel`` block of ``world_ops.build_worldmap_payload`` against
 docs/schnittstellen-3d.md § A11 (metre polyline): the block carries
@@ -162,6 +163,8 @@ The new contract assertions fail against Task 1 commit 0d4c1c88.
 
 Usage:  ./.venv/bin/python scripts/smoke_worldmap_travel.py
 """
+import json
+from starlette.responses import JSONResponse
 import os
 import math
 import random
@@ -229,6 +232,12 @@ def check(label: str, actual, expected) -> None:
           + ("" if ok else f" — expected {expected!r}"))
     if not ok:
         FAILURES.append(label)
+
+
+def route_json(result):
+    check("JSONResponse encoded in the endpoint, off the event loop",
+          isinstance(result, JSONResponse), True)
+    return json.loads(result.body)
 
 
 def approx(label: str, actual, expected, tol: float) -> None:
@@ -322,7 +331,7 @@ def contract_checks():
     set_active_character("demo_avatar")
     give_journey("demo_avatar", B, SLOW_WAYPOINTS)
     freeze_at(35)
-    frozen = play_worldmap(user={"role": "admin"}, show_all=1)
+    frozen = route_json(play_worldmap(user={"role": "admin"}, show_all=1))
     check("route sync keys", sorted(frozen["sync"]), ["build_ms", "clock_age_ms"])
     check("route sync nonnegative", all(isinstance(v, (int, float)) and v >= 0
           for v in frozen["sync"].values()), True)
@@ -338,7 +347,7 @@ def contract_checks():
     def payload_at(delta, factor=2, anchor=START_GT):
         timeutils._persist_game_anchors(real, anchor, factor, False)
         with patch.object(timeutils, "utc_now", return_value=real + timedelta(seconds=delta)):
-            return play_worldmap(user={"role": "admin"}, show_all=1)
+            return route_json(play_worldmap(user={"role": "admin"}, show_all=1))
 
     run = payload_at(10.3)
     own = char(run, "demo_avatar")["travel"]

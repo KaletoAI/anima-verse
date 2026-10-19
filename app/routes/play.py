@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Set
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from app.core import users
 from app.core.auth_dependency import get_current_user, require_admin
@@ -3162,6 +3163,18 @@ def play_gallery_delete_image(character: str, filename: str, user=Depends(get_cu
     return {"ok": True}
 
 
+def _json_off_loop(payload: Any) -> JSONResponse:
+    """Keep FastAPI's encoding and rendering in the endpoint's worker thread.
+
+    The 2026-10-19 watchdog line exposed serialization on the event loop:
+    returning a dict makes FastAPI encode and render there even for plain def.
+    jsonable_encoder preserves non-native values; its Python walk can yield
+    the GIL in the worker. Unlike _json_in_slices, these payloads have no
+    single bulk key, and their one C dump is small next to that Python walk.
+    """
+    return JSONResponse(jsonable_encoder(payload))
+
+
 @router.get("/play/worldmap")
 def play_worldmap(user=Depends(get_current_user),
                   show_all: int = Query(0, alias="all")):
@@ -3174,6 +3187,7 @@ def play_worldmap(user=Depends(get_current_user),
     A PLAIN ``def`` for the same reason as ``/play/scene``: the payload is
     built synchronously (every character, inventory, prop sidecars, model
     store) and this is the 3-second poll every client runs.
+    ``_json_off_loop`` keeps JSON encoding and rendering off the event loop.
     """
     t0 = time.monotonic()
     from app.models.account import get_active_character
@@ -3186,7 +3200,7 @@ def play_worldmap(user=Depends(get_current_user),
     avatar = (get_active_character() or "").strip()
     payload = build_worldmap_payload(avatar, show_all=bool(show_all) and is_admin)
     payload["sync"]["build_ms"] = round((time.monotonic() - t0) * 1000, 1)
-    return payload
+    return _json_off_loop(payload)
 
 
 @router.get("/play/terrain")
@@ -3288,10 +3302,11 @@ def get_terrain_layers_route(keys: str = "", user=Depends(get_current_user)):
     Tiles the index does not know are LEFT OUT rather than answered empty — the
     client already knows they are bare ground, the same bargain
     ``/play/heightfield/tiles`` strikes.
+    ``_json_off_loop`` keeps JSON encoding and rendering off the event loop.
     """
     from app.core import terrain_layers
     if not (keys or "").strip():
-        return terrain_layers.index_payload()
+        return _json_off_loop(terrain_layers.index_payload())
     from app.core.heightfield import overflow_tile_keys, unusable_tile_tokens
     junk = unusable_tile_tokens(keys)
     if junk and not _LAYER_KEY_WARNED.get("junk"):
@@ -3310,7 +3325,7 @@ def get_terrain_layers_route(keys: str = "", user=Depends(get_current_user)):
             len(dropped), "s" if len(dropped) > 1 else "",
             terrain_layers.BATCH_MAX,
             ",".join(f"{tx}:{tz}" for tx, tz in dropped[:3]))
-    return terrain_layers.batch_payload(terrain_layers.parse_keys(keys))
+    return _json_off_loop(terrain_layers.batch_payload(terrain_layers.parse_keys(keys)))
 
 
 @router.get("/play/explored")
@@ -3336,13 +3351,14 @@ def get_explored_route(user=Depends(get_current_user)):
     list is FLAT and complete: a long-lived world can reach tens of thousands
     of cells (60 000 cells = 245 km² of walked ground ≈ 600 kB of JSON), which
     is affordable a few times per session and would not be on a 3-second poll.
+    ``_json_off_loop`` keeps JSON encoding and rendering off the event loop.
     """
     from app.core.exploration import explored_cells, explored_sig
     from app.models.account import get_active_character
     avatar = (get_active_character() or "").strip()
     if not avatar:
-        return {"cells": [], "sig": ""}
-    return {"cells": explored_cells(avatar), "sig": explored_sig(avatar)}
+        return _json_off_loop({"cells": [], "sig": ""})
+    return _json_off_loop({"cells": explored_cells(avatar), "sig": explored_sig(avatar)})
 
 
 def _json_in_slices(payload: Dict[str, Any], bulk: str) -> Response:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke run for AVATAR travel over the /play routes
 (Seamless World, E3 Task 5).
+Checks that route JSON is encoded in the endpoint, off the event loop.
 
 Runs against a THROWAWAY storage directory — never touches a real world.
 Route level: the handler functions of ``app/routes/play.py`` are called
@@ -110,6 +111,8 @@ Hand-derived expectations:
 
 Usage:  ./.venv/bin/python scripts/smoke_avatar_travel.py
 """
+import json
+from starlette.responses import JSONResponse
 import asyncio
 import os
 import subprocess
@@ -164,6 +167,12 @@ def check(label, actual, expected):
           + ("" if ok else f" — expected {expected!r}"))
     if not ok:
         FAILURES.append(label)
+
+
+def route_json(result):
+    check("JSONResponse encoded in the endpoint, off the event loop",
+          isinstance(result, JSONResponse), True)
+    return json.loads(result.body)
 
 
 def check_true(label, cond, detail=""):
@@ -420,7 +429,7 @@ def main() -> int:
     play_travel_cancel(user=USER)
 
     print("\n[8] the destination list's data source")
-    wm = play_worldmap(user=USER, show_all=0)
+    wm = route_json(play_worldmap(user=USER, show_all=0))
     check("the payload is fogged", wm.get("fogged"), True)
     entries = {e["id"]: e for e in wm.get("locations", [])}
     check_true("the known target is on the map", MARKET in entries)

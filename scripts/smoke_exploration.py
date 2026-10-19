@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Smoke run for the EXPLORATION MEMORY (Fog-Gedaechtnis, 2026-08-16).
+Checks that route JSON is encoded in the endpoint, off the event loop.
 
 The server side of the package: the cell raster, the 3×3 marking, the
 in-process cache that keeps a walking avatar from writing on every report, the
@@ -80,6 +81,9 @@ the payload and the cache — that file owns the two write paths, whose world
 
 Usage:  ./.venv/bin/python scripts/smoke_exploration.py
 """
+import json
+from starlette.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
 import os
 import sys
 import tempfile
@@ -118,6 +122,12 @@ def check(label, actual, expected):
           + ("" if ok else f" — expected {expected!r}"))
     if not ok:
         FAILURES.append(label)
+
+
+def route_json(result):
+    check("JSONResponse encoded in the endpoint, off the event loop",
+          isinstance(result, JSONResponse), True)
+    return json.loads(result.body)
 
 
 class InsertCounter:
@@ -223,9 +233,12 @@ from app.routes.play import get_explored_route  # noqa: E402
 from app.core.world_ops import build_worldmap_payload  # noqa: E402
 from app.models.account import set_active_character  # noqa: E402
 
-check("unembodied", get_explored_route(user=None), {"cells": [], "sig": ""})
+check("unembodied", route_json(get_explored_route(user=None)), {"cells": [], "sig": ""})
 set_active_character(WALKER)
-payload = get_explored_route(user=None)
+payload = route_json(get_explored_route(user=None))
+# The route adds and drops nothing; only where the encoding runs moved.
+check("payload matches FastAPI encoding", payload,
+      jsonable_encoder({"cells": explored_cells(WALKER), "sig": explored_sig(WALKER)}))
 check("payload keys", sorted(payload), ["cells", "sig"])
 check("payload cells", payload["cells"], explored_cells(WALKER))
 check("payload sig", payload["sig"], "12")
