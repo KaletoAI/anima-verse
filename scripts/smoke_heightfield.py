@@ -178,6 +178,8 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
     which runs in exactly that window) is 404 too and leaves the hill gone —
     the old check-then-write answered 200 and brought it back.
     GET /play/heightfield returns exactly the field plus its signature.
+    Both relief GETs return JSON Responses; the decoded batch is exactly the core payload.
+    Sliced JSON checks exact bytes, Unicode, empty containers, NaN and invalid bulk types.
 [11] THE AUTO-PLATEAU (E1, plan-ein-boden.md § G5). A location that draws a
     BUILT floor — a ``map3d.outline`` or at least one CLOSED room — stamps its
     plot flat. There is no flag any more: ``level_ground`` is gone, and a
@@ -628,6 +630,7 @@ THE SHAPES USED BELOW (step 4 m, the default, throughout)
 Usage:  ./.venv/bin/python scripts/smoke_heightfield.py
 """
 import asyncio
+import json
 import math
 import os
 import sys
@@ -940,11 +943,12 @@ store.delete_height_area(_cache_area["id"])
 
 print("[10] the routes")
 from fastapi import HTTPException  # noqa: E402
+from starlette.responses import JSONResponse, Response  # noqa: E402
 from app.core import relief  # noqa: E402
 from app.routes.world import (delete_height_area_route,  # noqa: E402
                               get_height_areas_route, post_height_area_route,
                               put_height_area_route)
-from app.routes.play import (get_heightfield_route,  # noqa: E402
+from app.routes.play import (_json_in_slices, get_heightfield_route,  # noqa: E402
                              get_heightfield_tiles_route)
 
 
@@ -972,6 +976,38 @@ def route_status(fn, *args):
     except HTTPException as e:
         return e.status_code
     return 200
+
+
+def route_json(response):
+    check("heightfield answered as a Response, so FastAPI never walks it "
+          "with jsonable_encoder on the event loop",
+          isinstance(response, Response), True)
+    check("heightfield Response declares JSON for the client",
+          response.media_type, "application/json")
+    return json.loads(response.body)
+
+
+# Hand-derived compact JSON: bulk moves last, Unicode stays literal, and
+# commas separate items/elements only (including when the head is empty).
+for _payload, _bulk, _expected in [
+    ({"a": 1, "t": {"x": [1.5, 2], "y": {}}}, "t",
+     b'{"a":1,"t":{"x":[1.5,2],"y":{}}}'),
+    ({"h": [[0.25, 1], [2, 3.5]], "s": "ä"}, "h",
+     '{"s":"ä","h":[[0.25,1],[2,3.5]]}'.encode()),
+    ({"t": {}}, "t", b'{"t":{}}'),
+    ({"t": []}, "t", b'{"t":[]}'),
+]:
+    _response = _json_in_slices(_payload, _bulk)
+    check("sliced JSON exact bytes", _response.body, _expected)
+    check("sliced JSON equals Starlette's object", route_json(_response),
+          json.loads(JSONResponse(_payload).body))
+for _invalid, _error in [([float("nan")], ValueError), ("invalid", TypeError)]:
+    try:
+        _json_in_slices({"t": _invalid}, "t")
+    except _error:
+        check("sliced JSON rejects " + repr(_invalid), True, True)
+    else:
+        check("sliced JSON rejects " + repr(_invalid), False, True)
 
 
 check("PUT on an unknown id", route_status(
@@ -1031,7 +1067,7 @@ check("...and the limits are the same ones the walk gate reads",
      (areas_payload["max_slope_deg"], areas_payload["max_step_height_m"]),
      (relief.get_max_slope_deg(), relief.get_max_step_height_m()))
 
-payload = get_heightfield_route(user={"role": "user"})
+payload = route_json(get_heightfield_route(user={"role": "user"}))
 # The three pyramid fields are ADDITIVE (E1, § G2): everything a pre-E1
 # client read is still there and still means the same thing.
 check("payload keys", sorted(payload.keys()),
@@ -1061,8 +1097,8 @@ near("payload height at (20,20)",
 
 # …and the batch endpoint on the same world: (0,0) is the only indexed tile,
 # (5,5) is 1.3 km away and simply missing, the junk token is skipped.
-batch = get_heightfield_tiles_route(keys="0:0,5:5,nonsense",
-                                    user={"role": "user"})
+batch = route_json(get_heightfield_tiles_route(keys="0:0,5:5,nonsense",
+                                               user={"role": "user"}))
 check("batch keys", sorted(batch.keys()),
       ["mip_levels_m", "sig", "step_m", "tile_m", "tiles"])
 check("...and a shipped tile carries its own stats with it",
@@ -1073,6 +1109,11 @@ check("the batch answers the indexed tile and nothing else",
 near("...and it is the fine ground under the hill's centre",
      hf.sample_height({**batch["tiles"]["0,0"], "step_m": batch["step_m"]},
                       20, 20), 7.0)
+
+# The route adds nothing and drops nothing; only the encoding moved.
+check("the route ships exactly the core payload", batch,
+      json.loads(json.dumps(hf.tiles_payload(
+          hf.parse_tile_keys("0:0,5:5,nonsense")))))
 
 check("DELETE", route_status(delete_height_area_route, new_id), 200)
 check("DELETE again", route_status(delete_height_area_route, new_id), 404)

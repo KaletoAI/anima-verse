@@ -7,13 +7,14 @@ active avatar.
 The built shell lives (like game-admin) under ``static/game_admin/play.html``
 — the same ``frontend/`` build, but its own page/route.
 """
+import json
 import threading
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Set
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from app.core import users
 from app.core.auth_dependency import get_current_user, require_admin
@@ -3340,6 +3341,39 @@ def get_explored_route(user=Depends(get_current_user)):
     return {"cells": explored_cells(avatar), "sig": explored_sig(avatar)}
 
 
+def _json_in_slices(payload: Dict[str, Any], bulk: str) -> Response:
+    """Encode bulk tiles/rows separately so the event loop keeps running.
+
+    The 2026-10-19 watchdog line exposed heightfield serialization stalls:
+    64 tiles of 129x129 (7.2 MB) measured 459-473 ms worst loop lag with a
+    dict return, 116-122 ms with one JSONResponse dump, and 7-12 ms with
+    per-tile dumps, at roughly the same 130 ms total request time. Between
+    dumps calls the interpreter can release the GIL to the event loop;
+    a single C json.dumps holds it for the whole payload in the worker.
+
+    The result parses to exactly the same object as JSONResponse(payload).
+    Object key order is not part of the contract: bulk goes last. Starlette's
+    settings are preserved, including NaN raising with allow_nan=False.
+    A bulk value other than a dict or list is a programming error.
+    """
+    def dumps(value):
+        return json.dumps(value, ensure_ascii=False, allow_nan=False,
+                          separators=(",", ":"))
+
+    value = payload[bulk]
+    if isinstance(value, dict):
+        encoded_bulk = "{" + ",".join(
+            dumps(key) + ":" + dumps(item) for key, item in value.items()) + "}"
+    elif isinstance(value, list):
+        encoded_bulk = "[" + ",".join(dumps(item) for item in value) + "]"
+    else:
+        raise TypeError("JSON bulk must be a dict or list")
+    head = dumps({key: item for key, item in payload.items() if key != bulk})
+    body = head[:-1] + ("," if len(payload) > 1 else "")
+    body += dumps(bulk) + ":" + encoded_bulk + "}"
+    return Response(body, media_type="application/json")
+
+
 @router.get("/play/heightfield")
 def get_heightfield_route(user=Depends(get_current_user)):
     """The world relief as a grid of support points (§ A16).
@@ -3370,11 +3404,16 @@ def get_heightfield_route(user=Depends(get_current_user)):
     pure arithmetic. In the threadpool that delays only this request; the
     tile-level locks in ``heightfield`` keep two callers from rastering the
     same tile twice.
+
+    RETURNS A Response: a dict runs through FastAPI's ``jsonable_encoder``
+    on the EVENT LOOP even for a plain ``def`` (2026-10-19 watchdog).
+    One JSONResponse dump in the worker still held the GIL for ~120 ms;
+    sliced dumps keep the loop free, encoding overview rows one at a time.
     """
     from app.core.heightfield import (TILE_M, TILE_STEP_M, get_field,
                                       index_stats_payload, tile_index_keys)
     field = get_field()
-    return {
+    payload = {
         "origin_x": field.get("origin_x", 0.0),
         "origin_z": field.get("origin_z", 0.0),
         "step_m": field.get("step_m", 0.0),
@@ -3392,6 +3431,7 @@ def get_heightfield_route(user=Depends(get_current_user)):
         # the overview grid sees exactly the fields it always saw.
         **index_stats_payload(),
     }
+    return _json_in_slices(payload, "heights")
 
 
 #: One-shot state of the two warnings below, one flag per channel — the route
@@ -3419,6 +3459,11 @@ def get_heightfield_tiles_route(keys: str = "", user=Depends(get_current_user)):
     keys past the cap are dropped for the same reason, and BOTH are said once
     here: a dropped tile is indistinguishable from flat ground on the other
     side, so the only place it can still be noticed is the log.
+
+    RETURNS A Response: a dict runs through FastAPI's ``jsonable_encoder``
+    on the EVENT LOOP even for a plain ``def`` (2026-10-19 watchdog).
+    One JSONResponse dump in the worker still held the GIL for ~120 ms;
+    sliced dumps keep the loop free, encoding tiles one at a time.
     """
     from app.core.heightfield import (TILE_BATCH_MAX, overflow_tile_keys,
                                       parse_tile_keys, tiles_payload,
@@ -3439,7 +3484,8 @@ def get_heightfield_tiles_route(keys: str = "", user=Depends(get_current_user)):
             "flat ground on the client",
             len(dropped), "s" if len(dropped) > 1 else "", TILE_BATCH_MAX,
             ",".join(f"{tx}:{tz}" for tx, tz in dropped[:3]))
-    return tiles_payload(parse_tile_keys(keys))
+    payload = tiles_payload(parse_tile_keys(keys))
+    return _json_in_slices(payload, "tiles")
 
 
 @router.get("/play/heightfield/stats")
