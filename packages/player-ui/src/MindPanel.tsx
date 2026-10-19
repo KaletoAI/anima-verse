@@ -7,16 +7,17 @@
  *   Today    GET /characters/{character}/memory/today + GET /diary/me/{character}
  *   Diary    GET /diary/me/{character}?date&type&limit&offset, /dates
  *   Memories GET /characters/{character}/memory/list?q&tier&source&related&sort
- * Only write: POST /diary/me/{character}/summary (async, then poll).
+ * Writes: admin DELETE /diary/me/{character}/entries/{entry_id}; POST /diary/me/{character}/summary (async, then poll).
  * The server ignores the diary routes’ user_id segment, so use "me".
  */
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { useI18n } from './I18nProvider'
-import { apiGet, apiPost } from './api'
+import { apiDelete, apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
 import { SYNC_ENDPOINTS } from './syncEndpoints'
 import { formatDate, formatDateTime, formatTime, sameZoneDay } from './clockFormat'
 import { clockSettings, useClockSettings } from './clockSettings'
+import { useToast } from './Toast'
 import { EmptyState } from './EmptyState'
 import { MindThoughtsSection } from './MindThoughtsSection'
 
@@ -24,6 +25,8 @@ import { MindThoughtsSection } from './MindThoughtsSection'
 // API shapes
 // ---------------------------------------------------------------------------
 interface DiaryEntry {
+  id?: string
+  deletable?: boolean
   type: string
   content: string
   timestamp: string
@@ -177,7 +180,24 @@ const sepStyle: React.CSSProperties = {
 // ---------------------------------------------------------------------------
 // Timeline row (Diary/Today): time | icon | content and metadata.
 // ---------------------------------------------------------------------------
-function TimelineRow({ e, icons }: { e: DiaryEntry; icons: Record<string, string> }) {
+function TimelineRow({ e, icons, onDelete }: {
+  e: DiaryEntry; icons: Record<string, string>; onDelete?: (id: string) => Promise<void>
+}) {
+  const { t } = useI18n()
+  const [confirming, setConfirming] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  useEffect(() => {
+    if (!confirming) return
+    const timer = setTimeout(() => setConfirming(false), 4000)
+    return () => clearTimeout(timer)
+  }, [confirming])
+  const deleteEntry = async () => {
+    if (!confirming) { setConfirming(true); return }
+    if (!e.id || !onDelete || deleting) return
+    setDeleting(true)
+    try { await onDelete(e.id) }
+    finally { setDeleting(false); setConfirming(false) }
+  }
   const meta = e.metadata || {}
   const bits: string[] = []
   if (meta.partner) bits.push(String(meta.partner))
@@ -196,13 +216,19 @@ function TimelineRow({ e, icons }: { e: DiaryEntry; icons: Record<string, string
           <span style={{ opacity: 0.5, fontSize: '0.78em' }}> · {bits.join(' · ')}</span>
         )}
       </span>
+      {e.deletable && e.id && onDelete && (
+        <button className="player-chip" style={chipBtnStyle} disabled={deleting} onClick={deleteEntry}>
+          {confirming ? t('Confirm delete') : t('Delete')}
+        </button>
+      )}
     </div>
   )
 }
 
 /** Render entries newest first, separated by day. */
-function Timeline({ entries, icons, withDays }: {
+function Timeline({ entries, icons, withDays, onDelete }: {
   entries: DiaryEntry[]; icons: Record<string, string>; withDays: boolean
+  onDelete?: (id: string) => Promise<void>
 }) {
   const out: React.ReactNode[] = []
   let lastDay = ''
@@ -212,7 +238,7 @@ function Timeline({ entries, icons, withDays }: {
       lastDay = day
       out.push(<div key={`d${day}${i}`} style={sepStyle}>{day}</div>)
     }
-    out.push(<TimelineRow key={`e${i}`} e={e} icons={icons} />)
+    out.push(<TimelineRow key={e.id || `e${i}`} e={e} icons={icons} onDelete={onDelete} />)
   })
   return <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>{out}</div>
 }
@@ -404,7 +430,8 @@ function TodayView({ character, onOpenMemories }: { character: string; onOpenMem
 // ---------------------------------------------------------------------------
 // Diary: date/type filters, search, timeline and daily summary.
 // ---------------------------------------------------------------------------
-function DiaryView({ character }: { character: string }) {
+function DiaryView({ character, canDeleteEntries }: { character: string; canDeleteEntries: boolean }) {
+  const { toast } = useToast()
   const { t, lang } = useI18n()
   const enc = encodeURIComponent(character)
   const LIMIT = 100
@@ -471,6 +498,17 @@ function DiaryView({ character }: { character: string }) {
     }
   }
 
+  const deleteEntry = async (id: string) => {
+    try {
+      await apiDelete(`/diary/me/${enc}/entries/${encodeURIComponent(id)}`)
+      setEntries((prev) => prev.filter((entry) => entry.id !== id))
+      // The next page starts one row earlier after removing a loaded row.
+      setOffset((prev) => prev - 1)
+    } catch {
+      toast(t('Could not delete entry'), 'error')
+    }
+  }
+
   const needle = q.trim().toLowerCase()
   const visible = needle
     ? entries.filter((e) => (e.content || '').toLowerCase().includes(needle))
@@ -518,7 +556,8 @@ function DiaryView({ character }: { character: string }) {
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
         {visible.length === 0
           ? <EmptyState small icon="journal" title={t('No entries')} />
-          : <Timeline entries={visible} icons={icons} withDays={date === 'all'} />}
+          : <Timeline entries={visible} icons={icons} withDays={date === 'all'}
+                      onDelete={canDeleteEntries ? deleteEntry : undefined} />}
         {mayHaveMore && !needle && (
           <button className="player-chip" style={{ ...chipBtnStyle, marginTop: 8 }}
                   onClick={() => load(offset + LIMIT, true)}>
@@ -897,9 +936,11 @@ function ScheduleView({ data }: { data: ScheduleResponse | null }) {
 // ---------------------------------------------------------------------------
 type SectionId = 'today' | 'diary' | 'memories' | 'bonds' | 'history' | 'thoughts' | 'schedule'
 
-export function MindPanel({ character, alwaysLabels = false, withThoughts = false }: {
+export function MindPanel({ character, alwaysLabels = false, withThoughts = false, canDeleteEntries = false }: {
   character: string
   alwaysLabels?: boolean
+  /** Admin diary controls; the server separately enforces administrator access. */
+  canDeleteEntries?: boolean
   /** ADMIN ONLY: adds the private thought-journal section (Game-Admin Mind
    *  tab). Never set from /play — thoughts must not reach a player surface,
    *  and the endpoint behind the section is admin-gated anyway. */
@@ -986,7 +1027,7 @@ export function MindPanel({ character, alwaysLabels = false, withThoughts = fals
       </div>
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, overflow: section === 'today' ? 'auto' : 'hidden' }}>
         {section === 'today' && <TodayView character={character} onOpenMemories={() => openMemories('')} />}
-        {section === 'diary' && <DiaryView character={character} />}
+        {section === 'diary' && <DiaryView key={character} character={character} canDeleteEntries={canDeleteEntries} />}
         {section === 'memories' && <MemoriesView character={character} initialRelated={memRelated} />}
         {section === 'bonds' && <BondsView character={character} onOpenMemories={openMemories} />}
         {section === 'history' && <HistoryView character={character} />}

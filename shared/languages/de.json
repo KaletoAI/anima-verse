@@ -435,6 +435,8 @@
     "Def.": "Std.",
     "Default pose": "Standard-Pose",
     "Delete": "Löschen",
+    "Confirm delete": "Löschen bestätigen",
+    "Could not delete entry": "Eintrag konnte nicht gelöscht werden",
     "Delete all": "Alles löschen",
     "Delete area": "Fläche löschen",
     "Delete character": "Character löschen",

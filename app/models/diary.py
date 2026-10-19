@@ -26,7 +26,7 @@ from app.core.game_time import GameTime
 from app.core.timeutils import (game_time, game_time_at, parse_iso,
                                 system_window_of_game_day, utc_now_iso)
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
 from app.core.db import get_connection, transaction
@@ -137,7 +137,7 @@ def _load_stored(character_name: str) -> List[Dict[str, Any]]:
         return entries
     except Exception as e:
         logger.warning("_load_stored diary DB-Fehler fuer %s: %s", character_name, e)
-        # Fallback: JSON-Datei
+        # Fallback: JSON file
         path = _get_diary_path(character_name)
         if not path.exists():
             return []
@@ -292,7 +292,7 @@ def _collect_mood(character_name: str, window: Window) -> List[Dict[str, Any]]:
         return result
     except Exception as e:
         logger.debug("Mood collect DB error: %s — falling back to JSON", e)
-    # Fallback: JSON-Datei
+    # Fallback: JSON file
     from app.models.character import get_character_dir
     path = get_character_dir(character_name) / "mood_history.json"
     if not path.exists():
@@ -320,9 +320,9 @@ def _collect_mood(character_name: str, window: Window) -> List[Dict[str, Any]]:
 
 def get_state_history(character_name: str,
     entry_type: str = "", limit: int = 20) -> List[Dict[str, Any]]:
-    """Gibt die letzten N Eintraege aus state_history zurueck (neueste zuerst).
+    """Return the last N state_history entries, newest first.
 
-    entry_type: Filter auf "activity", "location", "condition" etc. Leer = alle.
+    entry_type: Filter by "activity", "location", "condition", etc. Empty = all.
     """
     try:
         conn = get_connection()
@@ -353,7 +353,7 @@ def get_state_history(character_name: str,
         return entries
     except Exception as e:
         logger.debug("get_state_history DB error: %s — falling back to JSON", e)
-    # Fallback: JSON-Datei
+    # Fallback: JSON file
     from app.models.character import get_character_dir
     path = get_character_dir(character_name) / "state_history.json"
     if not path.exists():
@@ -368,28 +368,22 @@ def get_state_history(character_name: str,
 
 
 # ---------------------------------------------------------------------------
-# Diary-Renderer-Registry
+# Diary renderer registry
 # ---------------------------------------------------------------------------
-# state_history-types werden ueber Renderer-Funktionen in Diary-Eintraege
-# umgewandelt. Neue Types kommen via ``register_diary_renderer`` rein —
-# ohne Code-Aenderung in _process_state_entry.
-#
-# Ein Renderer bekommt (value, meta, ts) und liefert entweder:
-#   - dict {type, content, timestamp, [metadata]} → Eintrag landet im Tagebuch
-#   - None → Eintrag wird verworfen (z.B. Rauschen wie activity="none")
-#
-# Unbekannte Types werden via Fallback-Renderer als generischer Eintrag
-# gerendert — damit kein neues state_history-Feld stillschweigend im Tagebuch
-# verschluckt wird.
+# Renderers turn state_history types into diary entries. Register new types
+# with register_diary_renderer without changing _process_state_entry.
+# A renderer receives (value, meta, ts) and returns either an entry dict
+# {type, content, timestamp, [metadata]} or None to discard noise.
+# Unknown types use a generic fallback so new state fields remain visible.
 
 _DIARY_RENDERERS: Dict[str, Any] = {}
 
 
 def register_diary_renderer(state_type: str, renderer) -> None:
-    """Registriert einen Renderer fuer einen state_history-Type.
+    """Register a renderer for a state_history type.
 
-    Mehrfach-Registrierung ueberschreibt — der zuletzt registrierte Renderer
-    gewinnt. Fuer Plugins, Tests, oder neue Event-Types.
+    Re-registration replaces the previous renderer. Intended for plugins,
+    tests, and new event types.
     """
     if not state_type:
         return
@@ -413,9 +407,8 @@ def _render_location(value: str, meta: Dict[str, Any], ts: str) -> Optional[Dict
 
 
 def _render_activity(value: str, meta: Dict[str, Any], ts: str) -> Optional[Dict[str, Any]]:
-    # "none"/leere Aktivitaet als Tagebuch-Rauschen rausfiltern — passiert
-    # z.B. wenn der Scheduler eine Activity beendet (Reset auf "") oder
-    # ein Char zwischen Activities "nichts tut".
+    # Filter empty/"none" activity noise when the scheduler ends an activity
+    # or a character is idle between activities.
     v_lower = (value or "").strip().lower()
     if not v_lower or v_lower in ("none", "null"):
         return None
@@ -525,8 +518,7 @@ def _render_effects(value: str, meta: Dict[str, Any], ts: str) -> Optional[Dict[
     return {"type": "effects", "content": f"Effekte ({value})", "timestamp": ts, "metadata": entry_meta}
 
 
-# Builtin-Registry — neue Types einfach hier ergaenzen oder via
-# register_diary_renderer von ausserhalb registrieren.
+# Add built-in types here or register external types via register_diary_renderer.
 register_diary_renderer("location", _render_location)
 register_diary_renderer("activity", _render_activity)
 register_diary_renderer("condition", _render_condition)
@@ -540,17 +532,15 @@ register_diary_renderer("effects", _render_effects)
 
 def _render_unknown_fallback(state_type: str, value: str,
                               meta: Dict[str, Any], ts: str) -> Optional[Dict[str, Any]]:
-    """Fallback fuer state-types ohne registrierten Renderer.
+    """Render unknown state types as generic entries.
 
-    Statt None zu returnen (= verschwindet) bauen wir einen Generic-Eintrag,
-    damit neue Event-Types sichtbar werden — der Admin sieht im Tagebuch
-    sofort wenn ein Type nicht dokumentiert ist.
+    Keep new event types visible so administrators can spot undocumented types.
     """
     if not value:
         return None
     content = f"{state_type}: {value}"
     if meta:
-        # Maximal ein paar Meta-Felder mit reinen — Kuerze halten.
+        # Include only a few metadata fields to keep the entry short.
         meta_str = ", ".join(f"{k}={v}" for k, v in list(meta.items())[:3]
                               if v not in (None, "", []))
         if meta_str:
@@ -560,10 +550,9 @@ def _render_unknown_fallback(state_type: str, value: str,
 
 
 def _process_state_entry(e: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Verarbeitet einen einzelnen State-History-Eintrag in einen Diary-Eintrag.
+    """Convert a state history row into a diary entry.
 
-    Dispatch via ``_DIARY_RENDERERS``. Unbekannte Types werden ueber den
-    Fallback gerendert (statt verworfen), damit nichts im Tagebuch versickert.
+    Dispatch via _DIARY_RENDERERS; render unknown types through the fallback.
     """
     ts = e.get("timestamp", "")
     change_type = e.get("type", "")
@@ -920,12 +909,11 @@ def _enrich_with_relationships(
 
 
 def _collect_event_resolutions(character_name: str, window: Window) -> List[Dict[str, Any]]:
-    """Sammelt Loesungsversuche + geloeste Events in denen der Character aktiv war.
+    """Collect resolution attempts and resolved events involving the character.
 
-    Quelle: `events`-Tabelle, pro Event gibt es `resolution.attempts: [...]` mit
-    {when, who, text, outcome, reason, joint_with}. Sowie das finale
-    `resolved_by` / `resolved_text`. Alle mit Timestamp im Tagesbereich werden
-    als Diary-Entries gerendert.
+    The events table holds resolution.attempts with
+    {when, who, text, outcome, reason, joint_with}, plus the final
+    resolved_by / resolved_text. Render entries stamped within the day window.
     """
     result: List[Dict[str, Any]] = []
     try:
@@ -972,8 +960,54 @@ def _collect_event_resolutions(character_name: str, window: Window) -> List[Dict
 # Main generation
 # ---------------------------------------------------------------------------
 
+# Source callbacks are registered at plugin load time, once per process.
+_DIARY_SOURCES: Dict[str, Dict[str, Any]] = {}
+
+
+def register_diary_source(
+    source_id: str, collect: Callable[[str, str], List[Dict]], *,
+    type_label: str, icon: str,
+    delete: Optional[Callable[[str, str], bool]] = None,
+    summary_input: bool = False,
+) -> None:
+    """Register a dated source, excluded from summary input by default.
+
+    Collection receives (character_name, day_key); deletion receives
+    (character_name, local_id). Re-registering replaces the source.
+    """
+    if not source_id or ":" in source_id or source_id in ENTRY_TYPES:
+        raise ValueError("Invalid or reserved diary source id")
+    _DIARY_SOURCES[source_id] = {
+        "collect": collect, "delete": delete, "summary_input": summary_input,
+        "type_label": type_label, "icon": icon,
+    }
+
+
+def diary_source_types() -> Dict[str, str]:
+    """Return core and registered display labels."""
+    return {**ENTRY_TYPES, **{key: source["type_label"]
+                             for key, source in _DIARY_SOURCES.items()}}
+
+
+def diary_source_icons() -> Dict[str, str]:
+    """Return core and registered icons."""
+    return {**ENTRY_ICONS, **{key: source["icon"]
+                             for key, source in _DIARY_SOURCES.items()}}
+
+
+def delete_source_entry(character_name: str, entry_id: str) -> bool:
+    """Delete an entry; unknown sources raise KeyError, read-only ones PermissionError."""
+    source_id, separator, local_id = entry_id.partition(":")
+    if not separator or not local_id or source_id not in _DIARY_SOURCES:
+        raise KeyError(entry_id)
+    delete = _DIARY_SOURCES[source_id]["delete"]
+    if delete is None:
+        raise PermissionError(source_id)
+    return delete(character_name, local_id)
+
+
 def generate_for_day(character_name: str,
-    day_key: Optional[str] = None) -> List[Dict[str, Any]]:
+    day_key: Optional[str] = None, *, for_summary: bool = False) -> List[Dict[str, Any]]:
     """Generate diary entries for one GAME day by pulling from all sources.
 
     ``day_key`` is a game day (``Y0002-D109``), defaulting to today's. All
@@ -1002,6 +1036,21 @@ def generate_for_day(character_name: str,
     for e in _load_stored(character_name):
         if e.get("type") == "daily_summary" and (e.get("game_ts") or "").startswith(key):
             entries.append(e)
+
+    for source_id, source in _DIARY_SOURCES.items():
+        if for_summary and not source["summary_input"]:
+            continue
+        try:
+            collected = source["collect"](character_name, key) or []
+        except Exception as e:
+            # A broken package source must not take the whole diary down.
+            logger.warning("Diary source %s failed for %s: %s", source_id, character_name, e)
+            continue
+        for entry in collected:
+            entries.append({**entry, "type": source_id,
+                            "id": f"{source_id}:{entry['id']}",
+                            "deletable": source["delete"] is not None,
+                            "metadata": dict(entry.get("metadata") or {})})
 
     # Sort chronologically
     entries.sort(key=lambda x: x.get("timestamp", ""))
@@ -1118,7 +1167,7 @@ def build_daily_summary_input(character_name: str,
     small model context windows. Every time is the WORLD clock — the character
     writing this diary has never seen the server's clock.
     """
-    entries = generate_for_day(character_name, day_key)
+    entries = generate_for_day(character_name, day_key, for_summary=True)
     entries = [e for e in entries if e.get("type") != "daily_summary"]
     if not entries:
         return ""

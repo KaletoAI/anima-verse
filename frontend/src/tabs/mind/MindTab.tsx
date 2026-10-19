@@ -113,7 +113,7 @@ export function MindTab() {
       ) : (
         <div className="ga-mind-body">
           <div className="ga-mind-debug">
-            {/* Why — aggregierte Begründung */}
+            {/* Why — aggregated reasoning */}
             <div className="ga-mind-card">
               <h4>{t('Why this behaviour?')}</h4>
               {dbg && dbg.reasons.length > 0 ? (
@@ -156,8 +156,8 @@ export function MindTab() {
                     </li>
                   ) : null}
                   {dbg.block_rules.map((b) => {
-                    // Block-Semantik: Condition erfüllt → Regel greift jetzt.
-                    // enter: greift = kein Zutritt · leave: greift = eingesperrt.
+                    // Block semantics: a satisfied condition activates the rule.
+                    // enter: active = no entry; leave: active = no exit.
                     const isLeave = b.action === 'leave'
                     const active = b.blocking ?? b.condition_met ?? false
                     const status = isLeave
@@ -176,8 +176,8 @@ export function MindTab() {
               </div>
             ) : null}
 
-            {/* Active effects (prompt filters) + conditions — was wirklich im
-                System-Prompt landet, inkl. Abklingzeit. */}
+            {/* Active effects (prompt filters) and conditions included in
+                the system prompt, with their remaining duration. */}
             {dbg && ((dbg.active_effects && dbg.active_effects.length > 0)
                      || (dbg.active_conditions && dbg.active_conditions.length > 0)) ? (
               <div className="ga-mind-card">
@@ -264,7 +264,7 @@ export function MindTab() {
           </div>
 
           <div className="ga-mind-panel-wrap">
-            <MindPanel character={selected} alwaysLabels withThoughts />
+            <MindPanel character={selected} alwaysLabels withThoughts canDeleteEntries />
           </div>
         </div>
       )}

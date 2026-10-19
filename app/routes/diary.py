@@ -7,9 +7,10 @@ real time. The Generate button rebuilds the view.
 key (``Y0002-D109``), and the server ships the readable ``date_label`` next to
 it — the client renders, it never computes the world calendar.
 """
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from typing import Any, Dict, List, Optional
 
+from app.core.auth_dependency import require_admin
 from app.core.log import get_logger
 from app.models.diary import (
     day_label,
@@ -19,8 +20,9 @@ from app.models.diary import (
     build_daily_summary_input,
     add_summary,
     resolve_day_key,
-    ENTRY_TYPES,
-    ENTRY_ICONS)
+    diary_source_types,
+    diary_source_icons,
+    delete_source_entry)
 
 logger = get_logger("diary_route")
 
@@ -67,8 +69,8 @@ def get_diary_entries(character_name: str,
         "entries": entries[offset:offset + limit],
         "date": day_key,
         "date_label": day_label(day_key, lang) if day_key else "",
-        "types": ENTRY_TYPES,
-        "icons": ENTRY_ICONS,
+        "types": diary_source_types(),
+        "icons": diary_source_icons(),
     }
 
 
@@ -156,3 +158,18 @@ def _generate_summary_sync(character_name: str, day_key: str, day_text: str):
             logger.info("Diary summary generated: %s/%s", character_name, day_key)
     except Exception as e:
         logger.error("Diary summary error for %s: %s", character_name, e)
+
+
+@router.delete("/{user_id}/{character_name}/entries/{entry_id}",
+               dependencies=[Depends(require_admin)])
+def delete_diary_entry(character_name: str, entry_id: str) -> Dict[str, str]:
+    """Delete a source entry, if supported, as an administrator."""
+    try:
+        deleted = delete_source_entry(character_name, entry_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Diary source not found")
+    except PermissionError:
+        raise HTTPException(status_code=405, detail="Diary source does not support deletion")
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Diary entry not found")
+    return {"deleted": entry_id}

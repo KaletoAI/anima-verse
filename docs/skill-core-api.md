@@ -774,3 +774,30 @@ skipped. Rows contain `game_ts`, `speaker`, `content`, `kind`, `location_id`,
 `limit` rows are returned; a non-positive limit returns no rows. Content comes
 from the perception, so canonical speech that the character did not hear is
 never exposed by this reader.
+
+
+## Diary sources
+
+`app.models.diary.register_diary_source(source_id, collect, *, type_label, icon,
+delete=None, summary_input=False)` registers or replaces a source at plugin load.
+Use a nonempty source id without colons that does not collide with a core type.
+`collect(character_name, day_key)` returns entry dictionaries with `type`
+(the source id), `content`, `timestamp` (system ISO for ordering), `game_ts`
+(canonical game stamp), `id` (local id), and optional `metadata`.
+The core copies each row, prefixes its id with `<source_id>:`, and sets
+`deletable` according to whether the source supplies a delete callback.
+GET `/diary/{user_id}/{character_name}` merges source labels and icons into
+`types` and `icons`; the existing type filter applies to source entries.
+
+`generate_for_day(character_name, day_key=None, *, for_summary=False)` includes
+registered sources in the day view. `build_daily_summary_input` uses
+`for_summary=True`, excluding sources unless they explicitly opt in with
+`summary_input=True`. Display-only text therefore never feeds daily summaries.
+
+DELETE `/diary/{user_id}/{character_name}/entries/{entry_id}` requires
+`Depends(require_admin)`, including when the caller owns the character.
+It calls `delete(character_name, local_id)` for the named source: unknown
+source or a callback returning `False` yields 404, no callback yields 405,
+and success returns `{"deleted": "<source_id>:<local_id>"}`. The callback must
+scope deletion to the supplied character. The `user_id` segment is ignored,
+so clients can use `me`. Existing diary read authorization remains in force.
