@@ -8,6 +8,7 @@ export interface HullStyle {
   name: string
   description: string
   origin: string
+  roof: { max_rise_m: number; max_rise_ratio: number; [key: string]: unknown }
   [key: string]: unknown
 }
 

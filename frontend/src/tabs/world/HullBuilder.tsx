@@ -13,7 +13,7 @@ type RoofForm = 'gable' | 'hip' | 'shed' | 'flat'
 interface HullDescription {
   style: string
   seed: number
-  overrides: { storeys_total?: number; roof_form?: RoofForm; pitch_deg?: number; ornament_density: number; tint?: string; roof_tint?: string; materials?: HullMaterials }
+  overrides: { storeys_total?: number; roof_form?: RoofForm; pitch_deg?: number; max_rise_m?: number; ornament_density: number; tint?: string; roof_tint?: string; materials?: HullMaterials }
 }
 interface HullStatus {
   ok: boolean
@@ -177,6 +177,18 @@ function HullForm({ apiBase, pending, onStarted }: {
           value={overrides.pitch_deg} clearable placeholder={t('Style default')}
           disabled={overrides.roof_form === 'flat'} onChange={(pitch_deg) => patch({ pitch_deg })}
           onClear={() => patch({ pitch_deg: undefined })} />
+        <SliderInput style={{ display: 'flex', flexWrap: 'wrap' }} label={<span className="ga-hull-label">{t('Max roof height (m)')}</span>} min={1.5} max={12} step={0.5} fineStep={0.1}
+          value={overrides.max_rise_m} clearable placeholder={t('Style default ({value} m max)').replace('{value}', String(selected?.roof.max_rise_m ?? ''))}
+          disabled={overrides.roof_form === 'flat'} onChange={(max_rise_m) => patch({ max_rise_m })}
+          onClear={() => setDesc((current) => {
+            if (!current) return current
+            const next = { ...current.overrides }
+            delete next.max_rise_m
+            return { ...current, overrides: next }
+          })} />
+        {overrides.max_rise_m === undefined && selected ? <span className="ga-hint">
+          {t('Lower of this and the wall height × {ratio}.').replace('{ratio}', String(selected.roof.max_rise_ratio))}
+        </span> : null}
       </fieldset>
       <fieldset disabled={locked} className="ga-fieldset">
         <legend className="ga-fieldset-title">{t('Look')}</legend>

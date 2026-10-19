@@ -7,6 +7,13 @@ seed and edit overrides, then **Build hull**. **Suggest from description (LLM)**
 fills the same fields; it does not start a build. No drawn outline means a
 readable 409; Blender unavailable means 503. Both details appear in a toast.
 
+Roof rise is capped by the lower of the style's `roof.max_rise_m` and
+`roof.max_rise_ratio` × wall height; the per-building `overrides.max_rise_m`
+replaces that whole cap (the ratio no longer applies). If even the minimum pitch would exceed the cap,
+the roof gets a flat top. Fascia appears on all tiers; gutter and verge trim
+appear on the full tier when ornament density is greater than 0. L/T/U junction
+seams drop overhang and trim only along the joined stretch.
+
 The pipeline is `scene_recipe` facts → walls/roofs/ornaments → Blender.
 `hull_facts` takes the outline, openings and level heights from the recipe's
 geometry helpers. Python builds the vertices, faces, UVs and material groups;
