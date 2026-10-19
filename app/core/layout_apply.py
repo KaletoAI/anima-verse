@@ -39,6 +39,7 @@ them and what to say about the result.
 """
 
 import json
+import math
 import re
 import secrets
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -224,7 +225,8 @@ def _room_key(entry: Dict[str, Any]) -> str:
 
 def sanitize_layout(data: Any, *,
                     location: Dict[str, Any],
-                    surface_kinds: Optional[Sequence[str]] = None
+                    surface_kinds: Optional[Sequence[str]] = None,
+                    derive_contour: bool = False
                     ) -> Tuple[Dict[str, Any], List[Dict[str, str]]]:
     """Turn one LLM layout draft into the rows :func:`apply_layout` writes.
 
@@ -246,6 +248,13 @@ def sanitize_layout(data: Any, *,
     ``world_ops._sanitize_room_layout``. ``boundary_openings`` and ``stairs``
     are ``None`` when the draft did not mention them at all, which means "leave
     what is there".
+
+    Optional room types and hull descriptions use their shared libraries;
+    a supplied storey height is a finite number clamped to 2.6…4.5 m.
+    With ``derive_contour=True``, placed rooms are aligned before preview,
+    omitted stored layouts participate in the contour, and ``errors`` block
+    Apply. Without that flag or optional keys, the chat result is unchanged
+    (including its existing storey-height preview value).
 
     Raises ValueError only when the draft is not an object or names no room at
     all; everything else is a warning, because a plan in progress is a normal
@@ -322,7 +331,7 @@ def sanitize_layout(data: Any, *,
             continue
 
         raw_layout = {k: v for k, v in raw.items()
-                      if k not in ("id", "name", "description", "open", "flat")}
+                      if k not in ("id", "name", "description", "open", "flat", "room_type")}
         # The flag trio behind the operating language "open / closed
         # sub-area" (contract v6 Nr. 9). The FIELDS stay what they were; only
         # the way an author says it changed.
@@ -368,6 +377,15 @@ def sanitize_layout(data: Any, *,
                   f"{dropped} opening(s) were refused — an edge the room does "
                   f"not have, a curved edge, or a size outside 0.4…10 m.")
 
+        room_type = None
+        if "room_type" in raw:
+            from app.core.furniture_kits import load_room_types
+            candidate = raw["room_type"]
+            if isinstance(candidate, str) and candidate in load_room_types():
+                room_type = candidate
+            else:
+                _warn(warnings, "room_type_dropped", room_id,
+                      "Unknown room type; the type was dropped.")
         seen.add(key)
         entries.append({
             "room_id": room_id,
@@ -376,6 +394,40 @@ def sanitize_layout(data: Any, *,
             "is_new": is_new,
             "layout": layout,
         })
+
+        if room_type is not None:
+            entries[-1]["room_type"] = room_type
+
+    contour = None
+    if derive_contour:
+        from app.core.layout_contour import align_rooms, derive_contour as contour_of, seed_boundary
+        placed_ids = {e["room_id"] for e in entries}
+        omitted = []
+        for room_id, room in known_rooms.items():
+            if room_id in placed_ids or room_id == GROUND_ROOM_ID or is_floor_room(room_id):
+                continue
+            _warn(warnings, "room_not_placed", room_id,
+                  "The plan does not place this room; it keeps its place, "
+                  "its edges aligned to the building by up to 0.3 m.")
+            if room.get("layout"):
+                omitted.append({"room_id": room_id, "is_new": False,
+                                "name": str(room.get("name") or room_id),
+                                "description": "", "omitted": True,
+                                "layout": room["layout"]})
+        # An omitted room is part of the building, so it is aligned and WRITTEN
+        # aligned too: kept unaligned, its outer wall would stand up to 0.3 m
+        # beside the contour the other rooms now share.
+        aligned, alignment_warnings = align_rooms(entries + omitted)
+        entries = aligned
+        warnings.extend(alignment_warnings)
+        contour = contour_of(entries)
+        for finding in contour["warnings"] + contour["errors"]:
+            if finding not in warnings:
+                warnings.append(finding)
+        if not boundary:
+            boundary = seed_boundary(contour["outline"])
+        # Boundary openings below must use the newly seeded plot too.
+        map3d = {**map3d, "boundary": boundary}
 
     # ── the findings that never drop anything ──────────────────────────────
     draft_ids = {e["room_id"] for e in entries}
@@ -481,6 +533,27 @@ def sanitize_layout(data: Any, *,
         "boundary_openings": boundary_openings,
         "stairs": stairs,
     }
+    if "storey_height_m" in data:
+        height = data["storey_height_m"]
+        normalized.pop("storey_height_m", None)
+        if type(height) in (int, float) and math.isfinite(height):
+            normalized["storey_height_m"] = round(max(2.6, min(4.5, height)), 2)
+    if "hull" in data or derive_contour:
+        from app.core.hull_styles import load_styles, validate_description
+        hull = data.get("hull")
+        styles = load_styles()
+        style = hull.get("style") if isinstance(hull, dict) else None
+        valid = isinstance(style, str) and style in styles
+        normalized["hull_valid"] = valid
+        if valid:
+            normalized["hull"] = validate_description(hull, styles)
+        else:
+            _warn(warnings, "hull_style_unknown", normalized["location_id"],
+                  "Hull style is missing or unknown; a hull proposal is needed.")
+    if contour is not None:
+        normalized.update(outline=contour["outline"],
+                          level_outlines=contour["level_outlines"],
+                          errors=contour["errors"])
     return normalized, warnings
 
 
@@ -522,6 +595,11 @@ def apply_layout(normalized: Dict[str, Any]) -> Dict[str, Any]:
     from app.core.world_ops import update_location_with_extras
     from app.models.world import get_location_by_id
 
+    if normalized.get("errors"):
+        raise ValueError("contour: " + "; ".join(
+            str(e.get("code", e)) if isinstance(e, dict) else str(e)
+            for e in normalized["errors"]))
+
     location_id = str(normalized.get("location_id") or "").strip()
     if not location_id:
         raise ValueError("layout carries no location_id")
@@ -551,9 +629,13 @@ def apply_layout(normalized: Dict[str, Any]) -> Dict[str, Any]:
                 "activities": [],
                 "layout": layout,
             })
+            if "room_type" in entry:
+                rooms[-1]["room_type"] = entry["room_type"]
             created.append(room_id)
         else:
             by_id[room_id]["layout"] = layout
+            if "room_type" in entry:
+                by_id[room_id]["room_type"] = entry["room_type"]
             updated.append(room_id)
 
     body: Dict[str, Any] = {"rooms": rooms}
@@ -568,6 +650,14 @@ def apply_layout(normalized: Dict[str, Any]) -> Dict[str, Any]:
         touched = True
     if normalized.get("stairs") is not None:
         map3d["stairs"] = normalized["stairs"]
+        touched = True
+    if normalized.get("outline") is not None:
+        map3d["outline"] = normalized["outline"]
+        map3d["level_outlines"] = normalized.get("level_outlines") or {}
+        if "storey_height_m" in normalized:
+            map3d["storey_height_m"] = normalized["storey_height_m"]
+        if not map3d.get("boundary") and normalized.get("boundary"):
+            map3d["boundary"] = normalized["boundary"]
         touched = True
     if touched:
         body["map3d"] = map3d

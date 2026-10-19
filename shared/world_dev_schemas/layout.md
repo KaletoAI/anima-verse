@@ -215,3 +215,15 @@ before `}` or `]`.
 ## Surface kinds
 
 {surface_kinds}
+
+## Optional: room type, storey height, hull look
+
+- `rooms[].room_type`: living, bedroom, kitchen, dining, bathroom, study, hall,
+  storage, workshop, tavern. Unknown ids are dropped with a warning.
+- `storey_height_m`: a number in metres, clamped to 2.6…4.5.
+- `hull`: an object with `style` (a hull style id) and optional `overrides`.
+  Use the hull panel's override keys and validation (see `hull_design.md`):
+  storeys_total, roof_form, max_rise_m, pitch_deg, ornament_density,
+  blind_windows, shopfront, tint, roof_tint, frame_color, shop_color,
+  awning_color, door_color, materials (roof, trim, plinth).
+  A missing or unknown style requires a separate hull proposal.
