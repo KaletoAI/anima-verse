@@ -11,9 +11,14 @@ rise <1.6 suppresses dormers. Slabs retain .15 thickness.
 """
 import json
 import sys
+import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _hull_fixtures import polygon_case_facts, no_degenerate_faces
+from app.core import paths
+# hull_styles reads world overrides from the world DB: redirect before import.
+_STORAGE = tempfile.TemporaryDirectory(prefix="hull-roof-cap-import-")
+paths.init(_STORAGE.name)
 from smoke_hull_roofs import closed
 from app.core.hull_roofs import build_roofs
 
