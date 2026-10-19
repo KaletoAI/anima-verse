@@ -99,6 +99,7 @@ shared/templates/**/*nsfw*
 plugins/intimacy
 plugins/nsfw_anatomy
 plugins/attraction
+plugins/secret_diary
 
 # Marketplace-installed skill packages (never repo content)
 plugins/installed/
