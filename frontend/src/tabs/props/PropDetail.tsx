@@ -76,7 +76,8 @@ import {
 } from './variantFields'
 import type { DimKey } from './dims'
 import type {
-  PropAreasInfo, PropFull, PropMarker, PropSourceImage, PropVariant, PropView,
+  PropAreasInfo, PropFull, PropMarker, PropSlotValues, PropSourceImage,
+  PropVariant, PropView,
 } from './propTypes'
 
 /**
@@ -337,7 +338,8 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const [areaFrontal, setAreaFrontal] = useState(false)
   /** The kind the polygon tool is drawing for ('' = not drawing). */
   const [drawKind, setDrawKind] = useState('')
-  /** Which picture variant the preview is assembled with (null = bare mesh). */
+  /** Which picture variant the preview is assembled with (null = the open
+   *  variant's own panes and pictures). */
   const [areaPreview, setAreaPreview] = useState<number | null>(null)
   /** Which areas call is running ('' = none) — the lock the panel's verbs and
    *  the polygon tool share, because they all write the same mesh. */
@@ -450,16 +452,27 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
    *  since v2 E1 — the open variant's defaults would preview a mesh nobody
    *  renders.
    *
-   *  MEMOISED, deliberately: the viewer re-applies its slot materials whenever
-   *  this object's identity changes, and a fresh map per render would reload
-   *  every texture on every keystroke on this page. */
-  const previewSlots = useMemo(() => {
-    const picked = areaPreview === null
-      ? null : serverVariants.find((v) => v.index === areaPreview) || null
-    return picked
-      ? { ...(picked.area_defaults || {}), ...(picked.slot_values || {}) }
-      : undefined
-  }, [areaPreview, serverVariants])
+   *  With nothing picked the preview shows the OPEN variant the same way —
+   *  its own panes and pictures, as the client renders it. Showing the bare
+   *  mesh instead hid every mirror pane (a mirror has no picture variant to
+   *  pick) and every picture variant opened from the strip.
+   *
+   *  KEYED BY CONTENT, deliberately: the viewer re-applies its slot materials
+   *  whenever this object's identity changes — reloading every texture and
+   *  rebuilding every mirror — and the variant list gets a fresh identity on
+   *  every background poll while a generation runs. */
+  const previewSlotsKey = useMemo(() => {
+    const shown = areaPreview ?? variant
+    const entry = serverVariants.find((v) => v.index === shown) || null
+    const merged = entry
+      ? { ...(entry.area_defaults || {}), ...(entry.slot_values || {}) }
+      : {}
+    return Object.keys(merged).length ? JSON.stringify(merged) : ''
+  }, [areaPreview, variant, serverVariants])
+  const previewSlots = useMemo(
+    () => (previewSlotsKey
+      ? JSON.parse(previewSlotsKey) as PropSlotValues : undefined),
+    [previewSlotsKey])
   const areaTools = useMemo(() => ({
     drawKind, preview: areaPreview, setView: setAreaView,
     busy: areaBusy, setBusy: setAreaBusy, run: runAreas,

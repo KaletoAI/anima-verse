@@ -1861,7 +1861,7 @@
     "Mirror": "Spiegel",
     "Picture variants": "Bild-Varianten",
     "Every picture hung on this frame is a variant of the prop: it carries a copy of the frame’s mesh and shows its own picture. The floor plan then places the prop and picks the variant.": "Jedes Bild an diesem Rahmen ist eine Variante des Props: Sie trägt eine Kopie des Rahmen-Meshes und zeigt ihr eigenes Bild. Der Lageplan setzt dann Prop und Variante.",
-    "Stop previewing — show the bare frame again.": "Vorschau beenden — wieder den blanken Rahmen zeigen.",
+    "Stop previewing — show the open variant again.": "Vorschau beenden — wieder die geöffnete Variante zeigen.",
     "Show this assembly in the viewer above.": "Diesen Zusammenbau oben in der Vorschau zeigen.",
     "(area removed)": "(Fläche entfernt)",
     "The frame was split again after this copy was made — the picture still hangs on the old mesh.": "Der Rahmen wurde nach dieser Kopie erneut aufgeteilt — das Bild hängt noch am alten Mesh.",

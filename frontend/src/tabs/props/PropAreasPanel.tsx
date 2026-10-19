@@ -58,7 +58,8 @@ import type { PropArea, PropAreasInfo, PropFull, PropSlotValues,
 export interface PropAreaTools {
   /** Which kind the polygon tool is drawing for ('' = not drawing). */
   drawKind: string
-  /** Which picture variant the preview is assembled with (null = bare mesh). */
+  /** Which picture variant the preview is assembled with (null = the open
+   *  variant's own panes and pictures). */
   preview: number | null
   /** Switch either — the parent applies the coupling rules. The FRONT VIEW is
    *  not switched from here: arming the ring turns it on, and its button sits
@@ -473,7 +474,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
                   aria-label={t('Preview this variant')}
                   aria-pressed={preview === v.index}
                   title={preview === v.index
-                    ? t('Stop previewing — show the bare frame again.')
+                    ? t('Stop previewing — show the open variant again.')
                     : t('Show this assembly in the viewer above.')}
                   onClick={() => tools.setView({
                     preview: preview === v.index ? null : v.index })}>
