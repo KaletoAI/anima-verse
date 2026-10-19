@@ -368,6 +368,15 @@ def _sub_chat_retention():
         logger.debug("chat_retention sub error: %s", e)
 
 
+def _sub_door_models():
+    """Sweep door assets unused for seven SYSTEM days."""
+    try:
+        from app.core.door_models import sweep_cache
+        sweep_cache()
+    except Exception as error:
+        logger.debug("door_models sub error: %s", error)
+
+
 def _sub_glb_delivery_cache():
     """Sweep unused delivery copies daily, under the normal world-pause gate."""
     try:
@@ -557,6 +566,7 @@ _SUB_TASKS: List[tuple] = [
     (_sub_variant_prune,             3600,                  "variant_prune"),
     # 86400s — the horizon counts whole SYSTEM days; a finer interval would
     # only re-scan the same rows for nothing.
+    (_sub_door_models,               86400,                 "door_models"),
     (_sub_glb_delivery_cache,        86400,                 "glb_delivery_cache"),
     (_sub_chat_retention,            86400,                 "chat_retention"),
     (_sub_pose_animation_candidates, 86400,                 "pose_animation_candidates"),

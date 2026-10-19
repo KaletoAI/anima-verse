@@ -859,6 +859,16 @@ def list_props():
     return _list()
 
 
+@router.get("/doors/{sig}/model")
+def get_door_model(sig: str, request: Request):
+    """Serve contained door meshes, with retryable cache misses."""
+    from app.core.door_models import model_path
+    path = model_path(sig)
+    if path is None:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    return glb_file_response(path, request, cache_control="public, max-age=3600")
+
+
 @router.get("/props/{prop_id}/model")
 def get_prop_model(prop_id: str, request: Request, tier: str = "",
                    variant: str = ""):

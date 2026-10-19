@@ -1252,6 +1252,34 @@ def _location_hull_generate_sync(location_id: str, data: Any) -> Dict[str, Any]:
     return {"ok": True, "started": True}
 
 
+@router.get("/door-styles")
+def door_style_list() -> Dict[str, Any]:
+    """List shipped door styles for authenticated readers."""
+    from app.core.door_styles import load_door_styles
+    return {"styles": [{"id": key, "name": style["name"],
+                        "description": style["description"],
+                        "thumbnail_url": f"/world/door-styles/{key}/thumbnail"}
+                       for key, style in load_door_styles().items()]}
+
+
+@router.get("/door-styles/{style_id}/thumbnail")
+def door_style_thumbnail(style_id: str):
+    """Build a Workbench thumbnail on demand."""
+    from fastapi.responses import FileResponse
+    from app.blender import runner
+    from app.core.door_models import style_thumbnail
+    from app.core.door_styles import load_door_styles
+    if style_id not in load_door_styles():
+        raise HTTPException(status_code=404, detail="Unknown door style")
+    if not runner.is_available():
+        raise HTTPException(status_code=503, detail="Blender is not available")
+    try:
+        path = style_thumbnail(style_id)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail="Door preview build failed") from error
+    return FileResponse(path, media_type="image/png")
+
+
 @router.get("/hull-styles")
 def hull_style_list() -> Dict[str, Any]:
     """List building styles with world overrides applied."""
