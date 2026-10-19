@@ -58,6 +58,7 @@ export interface LayoutOpening {
 
 export interface LayoutRoomEntry {
   room_id: string
+  room_type?: string
   name: string
   description?: string
   is_new?: boolean
@@ -85,6 +86,8 @@ export interface LayoutBoundaryOpening {
 
 export interface LayoutDraftNormalized {
   summary?: string
+  outline?: Array<[number, number]> | null
+  level_outlines?: Record<string, Array<[number, number]>>
   location_id: string
   location_name?: string
   /** The plot outline in local metres; empty when the location has none. */
@@ -217,12 +220,16 @@ export function LayoutDraftPreview({
   const shownLevel = level !== null && levels.includes(level) ? level
     : (levels.includes(0) ? 0 : levels[0] ?? 0)
 
+  const contour = normalized.level_outlines?.[String(shownLevel)]
+    || (shownLevel === 0 ? normalized.outline : null)
+
   /** Fit everything — plot, rooms AND staircases, so a room outside the plot
    *  (or a flight that overshoots it) stays visible; hiding the very thing a
    *  warning is about would be perverse. */
   const view = useMemo(() => {
     const xs: number[] = []
     const ys: number[] = []
+    for (const p of [...(normalized.outline || []), ...Object.values(normalized.level_outlines || {}).flat()]) { xs.push(p[0]); ys.push(p[1]) }
     for (const p of boundary) { xs.push(p[0]); ys.push(p[1]) }
     for (const r of rooms) {
       for (const p of roomShell(r)) { xs.push(p[0]); ys.push(p[1]) }
@@ -241,7 +248,7 @@ export function LayoutDraftPreview({
     const scale = Math.min(PANE_PX / spanX, PANE_PX / spanY)
     return { minX, minY, spanX, spanY, scale,
              w: spanX * scale, h: spanY * scale }
-  }, [boundary, rooms, stairs, storeyM])
+  }, [boundary, rooms, stairs, storeyM, normalized.outline, normalized.level_outlines])
 
   const toPx = (p: Pt): [number, number] => [
     (p[0] - (view?.minX ?? 0)) * (view?.scale ?? 1),
@@ -363,6 +370,9 @@ export function LayoutDraftPreview({
               </g>
             )
           })}
+
+          {contour && contour.length >= 3 ? <path d={path(contour)} fill="none"
+            stroke="#f2cc60" strokeWidth={3} /> : null}
 
           {/* STAIRCASES — the true footprint a flight covers, not a glyph:
               1.2 m across, the run its climb really needs, a line per tread

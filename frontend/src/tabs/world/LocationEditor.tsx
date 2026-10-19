@@ -669,6 +669,7 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
         sideLabel={t('3D')}
         main={(
         <RoomLayoutEditor
+          onReload={onChanged}
           rooms={draft.rooms || []}
           onChange={(rooms) => upd('rooms', rooms)}
           locationId={location.id}

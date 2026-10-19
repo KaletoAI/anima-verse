@@ -75,6 +75,7 @@ import {
 } from './boundaryApi'
 import { FurnishDialog, useFurnishJob } from './FurnishDialog'
 import { NEED_ID_PREFIX } from './furnishTypes'
+import { BuildingAssistantPanel } from './BuildingAssistantPanel'
 import { PlanInspector, type InspectorTab } from './PlanInspector'
 import { PlanInspectorLevel } from './PlanInspectorLevel'
 import { PlanFindings } from './PlanFindings'
@@ -129,6 +130,7 @@ const FALLBACK_VIEW_M = 10
 const GRID_STEPS = [0, 0.1, 0.25, 0.5, 1, 2] as const
 
 interface RoomLayoutEditorProps {
+  onReload?: () => void
   rooms: Room[]
   onChange: (rooms: Room[]) => void
   /** Location id — the building-underlay + auto plan width need its model. */
@@ -239,7 +241,7 @@ function hullsOf(list: Room[], level: number, skipId = ''): PolyRoom[] {
 
 const NO_PREVIEW_POSES: Record<string, string> = {}
 
-export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, previewPose = NO_PREVIEW_POSES, onPreviewPose, unsaved = false, defaultDoorPropId = '', defaultDoorStyle = '', onDefaultDoorProp, children }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, previewPose = NO_PREVIEW_POSES, onPreviewPose, unsaved = false, defaultDoorPropId = '', defaultDoorStyle = '', onDefaultDoorProp, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [kitCatalog, setKitCatalog] = useState<FurnitureKitCatalog | null>(null)
@@ -1734,6 +1736,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
     }
   }, [selected, updateLayout, t, toast])
 
+  const [assistantLocation, setAssistantLocation] = useState('')
+
   const furnishBuilding = async (dryRun: boolean) => {
     if (unsaved || kitBusy || !buildingKit || !locationId) return
     setKitBusy(true)
@@ -2297,7 +2301,11 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
 
   return (
     <div className="ga-form" style={{ gap: 6 }}>
-      <div className="ga-form-section-label">{t('Room layout (floor plan)')}</div>
+      <div className="ga-form-section-label">{t('Room layout (floor plan)')}
+        {locationId && onReload && <button className="ga-btn ga-btn-sm" style={{ marginLeft: 8 }}
+          aria-expanded={assistantLocation === locationId}
+          onClick={() => setAssistantLocation((current) => current === locationId ? '' : locationId)}>{t('Building assistant')}</button>}
+      </div>
       {locationId && <div className="ga-form">
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <label>{t('Kit')} <select className="ga-input" value={buildingKit}
@@ -2740,7 +2748,8 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           Three panes as nodes, not as props: the selection pane below is
           built from closures over the drag state, the running draft and the
           server calls of this very component. */}
-      <PlanInspector
+      {assistantLocation === locationId && onReload ? <BuildingAssistantPanel
+        key={locationId} locationId={locationId} unsaved={unsaved} onReload={onReload} /> : <PlanInspector
         tab={inspTab}
         onTab={setInspTab}
         collapsed={inspCollapsed}
@@ -3123,7 +3132,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
       />
         </>
         )}
-      />
+      />}
       </div>
     </div>
   )

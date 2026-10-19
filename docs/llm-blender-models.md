@@ -64,6 +64,8 @@ outline, opening or height change marks the active hull stale, while moving
 furniture does not. The old model stays active. **Rebuild** submits its saved
 description, including seed; **Build hull** submits the edited fields.
 
+The floor-plan editor's **Building assistant** dock turns a description into a proposal before writing anything: inspect the plan and derived contour per storey, room types and areas, hull style, colours and findings, then use **Change something / Revise** for adjustments. **Apply and build** snapshots the saved location and runs floor plan, hull and furniture in sequence, showing progress and refreshing the canvas after the plan and final step. Contour errors block applying; save local edits first. **Undo** asks for confirmation, restores the previous plan and model selection, and keeps the generated hull in the gallery.
+
 Per-building material overrides select surface-texture kinds for roof, trim and
 plinth; an empty selection uses the style default. Roof tint overrides the main
 tint for the roof. Storey wall textures come from the floor plan's Wall / Shell
