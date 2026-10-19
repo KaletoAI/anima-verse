@@ -616,7 +616,7 @@ implement four methods:
 `ParamField.show_if` maps earlier parameter keys to allowed string values, for
 example `{"subject": ["prop_images"]}`. All conditions must match the already
 normalised values, so referenced fields must precede dependent fields in schema
-order. `to_dict()` emits `{}` when there is no condition. Hidden fields are stored
+order. `ParamField.to_dict()` emits `{}` when there is no condition. Hidden fields are stored
 as `""`, skip required/options validation, and do not render or contribute to the
 dialog's required-field check or generated label. The dialog stays type-agnostic.
 

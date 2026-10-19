@@ -599,7 +599,7 @@ closed from outside; its interior cutaway opens only inside an enclosed room, no
 
 The world database, portraits and **23 textured environment/furniture models** ship in
 `worlds/demo/`; viewing them needs no generation backend. The matching original castle-wall
-surface ships as `shared/surface_textures/hogwarts_sandstone.png`, tiled over four metres.
+surface ships as `shared/surface_textures/hogwarts_sandstone_1792403224.jpg`, tiled over four metres.
 These are self-created models and textures, not extracted film/game assets or an official architectural survey. Characters use the
 client's existing standard figure rendering, not bespoke Hogwarts rigs. Other castle towers remain
 exterior architecture; train and boats are decorative, not transport.
