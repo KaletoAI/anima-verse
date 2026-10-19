@@ -2,13 +2,11 @@
   "sand": "sand_1784407260.jpg",
   "wooden_floor": "wooden_floor_1785354047.jpg",
   "dark_wooden_floor": "dark_wooden_floor_1784586204.jpg",
-  "rubber_flooring": "rubber_flooring_1784719928.jpg",
   "tiled_floor": "tiled_floor_1785090045.jpg",
-  "non-woven_wallpaper": "non-woven_wallpaper_1785090229.jpg",
   "woodchip_wallpaper": "woodchip_wallpaper_1785090436.jpg",
-  "dark_stone": "dark_stone_1785094673.jpg",
+  "dark_stone": "dark_stone_1792405836.jpg",
   "dark_stone_2": "dark_stone_2_1785267141.jpg",
-  "water": "water_1785274635.jpg",
+  "water": "water_1792408217.jpg",
   "forest": {
     "autumn": "forest_1784407246.jpg",
     "spring": "forest_1786052223.jpg",
@@ -16,7 +14,7 @@
     "winter": "forest_1787309196.jpg"
   },
   "deep_forest": {
-    "": "deep_forest_1787309347.jpg",
+    "": "deep_forest_1792405918.jpg",
     "autumn": "deep_forest_1787309319.jpg",
     "spring": "deep_forest_1786831520.jpg",
     "summer": "deep_forest_1787309319.jpg",
@@ -25,8 +23,21 @@
   "badfliessen": "badfliessen_1787675158.jpg",
   "indoor_old_house": "indoor_old_house_1788618618.jpg",
   "indoor_old_house_floor": "indoor_old_house_floor_1788620558.jpg",
-  "indoor_kitchen_wall": "indoor_kitchen_wall_1788620511.jpg",
   "street": "street_1788976915.jpg",
   "side_step": "side_step_1788977048.jpg",
-  "facade_module_modern": "facade_module_modern_1792353521.jpg"
+  "facade_module_modern": "facade_module_modern_1792405623.jpg",
+  "brick": "brick_1792402740.jpg",
+  "ashlar": "ashlar_1792402794.jpg",
+  "castle_stone": "castle_stone_1792402948.jpg",
+  "clay_roof_tiles": "clay_roof_tiles_1792405794.jpg",
+  "fieldstone": "fieldstone_1792403784.jpg",
+  "hogwarts_sandstone": "hogwarts_sandstone_1792403224.jpg",
+  "metal_door": "metal_door_1792405540.jpg",
+  "roof_gravel": "roof_gravel_1792404482.jpg",
+  "wood_shingles": "wood_shingles_1792405077.jpg",
+  "slate_roof": "slate_roof_1792405449.jpg",
+  "concrete_panel": "concrete_panel_1792405861.jpg",
+  "deep_water": "deep_water_1792405708.jpg",
+  "brushed_metal": "brushed_metal_1792402680.jpg",
+  "grass": "grass_1792408168.jpg"
 }
