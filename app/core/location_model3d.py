@@ -579,6 +579,12 @@ def get_client_meta(location_id: str, room_id: str = "",
         out["plan_hull"] = True
         # The storey wall kinds the hull was built with: the scene's contour
         # walls fall back to them where the floor plan names none.
+        description = (meta.get("hull") or {}).get("description") or {}
+        from app.core.hull_styles import get_style
+        out["hull_style"] = get_style(description.get("style", "")) or {}
+        overrides = description.get("overrides") or {}
+        out["hull_shopfront"] = overrides.get("shopfront") is True
+        out["hull_door_color"] = overrides.get("door_color") or ""
         walls = (meta.get("hull") or {}).get("walls")
         if isinstance(walls, dict) and walls:
             out["hull_walls"] = {str(k): str(v) for k, v in walls.items()}

@@ -5429,7 +5429,7 @@ def test_surface_specs() -> None:
     the numbers of the lattice are the bake's, and the recipe hands them on
     character for character:
 
-    * ``SCENE_RECIPE_VERSION`` is 14, so every client re-fetches once — the
+    * ``SCENE_RECIPE_VERSION`` is 15, so every client re-fetches once — the
       constant is the payload's own code version and moves with EVERY change
       to what the composer answers for unchanged data (6 = these baked
       surfaces, 7 = markers speaking place types, 8 = the prop marker naming
@@ -5457,8 +5457,8 @@ def test_surface_specs() -> None:
     """
     print("\n[7i] baked model surfaces (v6)")
     from app.core import props as prop_store
-    check("code_version 14 (the corridors[] block + the entrance sentence)",
-          scene_recipe.SCENE_RECIPE_VERSION == 14,
+    check("code_version 15 (Blender doors + corridors[] + entrance sentence)",
+          scene_recipe.SCENE_RECIPE_VERSION == 15,
           str(scene_recipe.SCENE_RECIPE_VERSION))
 
     # ── the room diorama ─────────────────────────────────────────────────

@@ -87,5 +87,8 @@
       "cone"
     ]
   },
-  "chimney_width_m": 0.6
+  "chimney_width_m": 0.6,
+  "door_style": "glass",
+  "interior_door_style": "interior",
+  "shop_door_style": "glass"
 }

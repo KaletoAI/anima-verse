@@ -2012,6 +2012,13 @@ def sanitize_ground_layout(raw: Any) -> Dict[str, Any]:
     return out
 
 
+def safe_door_style_id(value: Any) -> str:
+    """Keep an existing shipped door style id, or the unselected empty id."""
+    from app.core.door_styles import load_door_styles
+    value = value.strip() if isinstance(value, str) else ""
+    return value if value in load_door_styles() else ""
+
+
 def _sanitize_opening(raw: Any) -> Optional[Dict[str, Any]]:
     """Whitelist + coerce ONE wall opening (door / window / passage). Returns
     None for an invalid entry so the caller can drop it individually.
@@ -2088,6 +2095,9 @@ def _sanitize_opening(raw: Any) -> Optional[Dict[str, Any]]:
     # the location default fills.
     if str(raw.get("door_prop") or "").strip().lower() == "none":
         out["door_prop"] = "none"
+    door_style = safe_door_style_id(raw.get("door_style"))
+    if door_style:
+        out["door_style"] = door_style
     hinge = str(raw.get("hinge") or "").strip().lower()
     if hinge in ("left", "right"):
         out["hinge"] = hinge
@@ -2162,6 +2172,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     knowledge_item_id = data.get("knowledge_item_id")
     entry_room = data.get("entry_room")
     default_door_prop_id = data.get("default_door_prop_id")
+    default_door_style = data.get("default_door_style")
     indoor = data.get("indoor")
     terrain = data.get("terrain")
     map3d = data.get("map3d")
@@ -2206,6 +2217,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                   or outfit_type is not None or knowledge_item_id is not None
                   or entry_room is not None or indoor is not None
                   or default_door_prop_id is not None
+                  or default_door_style is not None
                   or decency is not None or style_hint is not None
                   or swim_allowed is not None or activity_hint is not None
                   or terrain is not None
@@ -2241,6 +2253,8 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                         _l["activity_hint"] = (activity_hint or "").strip()
                     if knowledge_item_id is not None:
                         _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
+                    if default_door_style is not None:
+                        _l["default_door_style"] = safe_door_style_id(default_door_style)
                     if default_door_prop_id is not None:
                         # THE PLACE'S OWN DOOR (2026-08-27): every door opening
                         # that names no prop of its own gets this one, unless it
@@ -2326,6 +2340,7 @@ def update_location_with_extras(location_id: str,
     knowledge_item_id = data.get("knowledge_item_id")
     entry_room = data.get("entry_room")
     default_door_prop_id = data.get("default_door_prop_id")
+    default_door_style = data.get("default_door_style")
     indoor = data.get("indoor")
     terrain = data.get("terrain")
     map3d = data.get("map3d")
@@ -2364,6 +2379,7 @@ def update_location_with_extras(location_id: str,
                   or outfit_type is not None or knowledge_item_id is not None
                   or entry_room is not None or indoor is not None
                   or default_door_prop_id is not None
+                  or default_door_style is not None
                   or decency is not None or style_hint is not None
                   or swim_allowed is not None or activity_hint is not None
                   or terrain is not None
@@ -2412,6 +2428,8 @@ def update_location_with_extras(location_id: str,
                         _l["activity_hint"] = (activity_hint or "").strip()
                     if knowledge_item_id is not None:
                         _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
+                    if default_door_style is not None:
+                        _l["default_door_style"] = safe_door_style_id(default_door_style)
                     if default_door_prop_id is not None:
                         # THE PLACE'S OWN DOOR (2026-08-27): every door opening
                         # that names no prop of its own gets this one, unless it

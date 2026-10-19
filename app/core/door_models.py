@@ -173,7 +173,8 @@ def build_door_model(style_id, width, height, thickness, *, piece='single', outs
         model = work / 'model.glb'
         if not model.is_file() or (mode == 'thumbnail' and not (work/'thumbnail.png').is_file()):
             raise RuntimeError('door build missing output')
-        meta = dict(sig=sig,style_id=style_id,size_m=geometry['size_m'],leaf_bbox=geometry['leaf_bbox'],
+        meta = dict(sig=sig,style_id=style_id,size_m=[round(v,4) for v in geometry['size_m']],
+                    leaf_bbox={k:[round(v,4) for v in box] for k,box in geometry['leaf_bbox'].items()},
                     piece=piece,outside=outside,built_at=utc_now().isoformat())
         target.mkdir(parents=True,exist_ok=True)
         for name in ('model.glb','thumbnail.png'):
@@ -217,9 +218,13 @@ def _work():
 
 
 def ensure_door_model(style_id,width,height,thickness,*,piece='single',outside=1,color=None):
-    """Return cached metadata immediately or queue a deduplicated background build."""
+    """Return cached metadata or queue a build; never wait for Blender.
+
+    Accept a style id or a validated style dict from a composition catalog,
+    so composing many doors reads the shipped styles only once.
+    """
     global _worker
-    style = load_door_styles().get(style_id)
+    style = style_id if isinstance(style_id, dict) else load_door_styles().get(style_id)
     if style is None:
         return None
     dims = _dimensions(width,height,thickness)

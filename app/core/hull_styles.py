@@ -89,6 +89,12 @@ def validate_style(raw: Any, style_id: str) -> Dict[str, Any]:
         "rooftop_units": _range(raw.get("rooftop_units"), 0, 4, [0, 0], integer=True),
         "chimneys": _range(raw.get("chimneys"), 0, 4, [0, 1], integer=True),
     }
+    from app.core.door_styles import load_door_styles
+    door_styles = load_door_styles()
+    for key, default in (("door_style", "panel"), ("interior_door_style", "interior"),
+                         ("shop_door_style", "glazed")):
+        value = raw.get(key)
+        result[key] = value if isinstance(value, str) and value in door_styles else default
     for key in ("cornice", "log_walls", "crenellations", "porch",
                 "storey_bands", "roof_housing", "entrance_canopy", "parapet_cap"):
         result[key] = raw.get(key) if isinstance(raw.get(key), bool) else False
@@ -190,7 +196,7 @@ def validate_description(raw: Any, styles: Dict[str, Dict[str, Any]]) -> Dict[st
     for key in ("blind_windows", "shopfront"):
         if source.get(key) is True:
             overrides[key] = True
-    for key in ("tint", "roof_tint", "frame_color", "shop_color", "awning_color"):
+    for key in ("tint", "roof_tint", "frame_color", "shop_color", "awning_color", "door_color"):
         tint = tone(source.get(key), "")
         if tint:
             overrides[key] = tint

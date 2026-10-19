@@ -64,5 +64,8 @@
   "dormers": 0,
   "porch": false,
   "tint_jitter": 0.06,
-  "weathering": 0.5
+  "weathering": 0.5,
+  "door_style": "castle",
+  "interior_door_style": "plank",
+  "shop_door_style": "glazed"
 }

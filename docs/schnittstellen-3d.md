@@ -6924,6 +6924,32 @@ jedem Neuaufbau).
 | Preset `mirror`: Spiegel-`ShaderMaterial` auf dem Klon, Nachbar-Material unberührt, gemessen wird die EIGENE Gruppe (`mirrorPlaneOf`), `DoubleSide`, EINE Warnung je Anhängen, erneutes Anhängen gibt das Erste frei, Hook setzen und zurückgeben, geteiltes Budget | `scripts/smoke_slot_materials.mjs` **[9]–[13]** |
 | `SLOT_PRESETS` == `MATERIAL_PRESETS`, `mirror` wird angenommen, Unbekanntes abgewiesen, kein Preset auf einer `picture`-Fläche | `scripts/smoke_props_slots.py` **[7]** |
 
+### Blender doors (v15)
+
+Door resolution is shared by walls, doorways and model specs: opening prop,
+opening style, explicit `door_prop: "none"` (open gap), location prop,
+location style, active hull exterior/interior/shop style, then shipped
+`panel` outside or `interior` inside. Exterior means the wall lies on the
+storey contour; shopfront applies to exterior doors on storey 0. Hull choices
+and `door_color` come from the active model's `hull.description`.
+
+A built style door is an ordinary `role: "prop"`, `measure: "fit"` spec with
+`id: "door:<sig>"`, full variants under `/assets/doors/<sig>/model`,
+`fix_euler: null`, the model's own `size_m` (including casing), and
+`door: {opening, hinge, swing, leaf_bbox}`. The anchor is the outer casing
+edge on the hinge side, `bottom_y` the threshold base. Glass styles carry
+`slots: {"glass": {"preset": "glass"}}`. While a model is queued, no style
+spec is emitted and the flat wall leaf stays visible; a ready model marks
+that leaf `door_prop: true`, preserving the rectangle for hull facts.
+
+At the style's double-door threshold, two specs share `door.opening`:
+`double_a` has the frame and first leaf; `double_b` has the opposite hinge,
+its anchor 0.005 m inside that jamb and `bottom_y = base_y + 0.025`.
+Both must exist before replacing the flat leaf. Builder `outside` selects
+which local z face points outward after yaw; reversing the hinge reverses
+that sign. Door-model generation participates in the scene fingerprint, so
+finishing a build invalidates the cached payload and ETag (recipe v15).
+
 ## C2. Treppen und Fahrstuhl
 
 ### TREPPEN — man geht in den ersten Stock (§ A6/B1)

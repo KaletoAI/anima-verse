@@ -138,7 +138,8 @@ logger = get_logger(__name__)
 #: outline as the second way to seal a hallway ground floor. Unchanged
 #: data therefore yields a different payload, so a cached scene has to
 #: be re-fetched.
-SCENE_RECIPE_VERSION = 14
+#: 15 (2026-10-19): Blender door models, casing anchors and double leaves.
+SCENE_RECIPE_VERSION = 15
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -1165,7 +1166,8 @@ COLINEAR_TOL_M = 0.09
 
 
 def _colinear_span(a: List[float], ux: float, uz: float, length: float,
-                   pa: List[float], pb: List[float]) -> Optional[Tuple[float, float]]:
+                   pa: List[float], pb: List[float], *,
+                   tolerance: float = COLINEAR_TOL_M) -> Optional[Tuple[float, float]]:
     """Span (t0, t1) that segment ``pa→pb`` covers on the directed edge
     starting at ``a`` with unit (ux, uz) — None when it is not colinear
     with the edge or the overlap is not worth a hole."""
@@ -1175,7 +1177,7 @@ def _colinear_span(a: List[float], ux: float, uz: float, length: float,
         return t, e
     t0, e0 = proj(pa)
     t1, e1 = proj(pb)
-    if max(e0, e1) > COLINEAR_TOL_M:
+    if max(e0, e1) > tolerance:
         return None
     lo, hi = sorted((t0, t1))
     lo = max(lo, 0.0)
@@ -1517,6 +1519,50 @@ def door_prop_id(opening: Dict[str, Any], default_prop_id: str = "") -> str:
     return str(default_prop_id or "").strip()
 
 
+def door_choice(opening: Dict[str, Any], *, default_prop_id: str = "",
+                default_door_style: str = "", hull_door_styles=None,
+                exterior: bool = False, shop: bool = False,
+                door_styles=None) -> Dict[str, str]:
+    """Pure spec 3.1 resolution; own choices precede the open-gap veto.
+
+    Exterior describes contour geometry, never connectivity. Composition
+    supplies the active hull style and its once-loaded door style catalog.
+    """
+    if str(opening.get("type") or "door").lower() != "door":
+        return {}
+    valid = (door_styles if door_styles is not None else
+             ("plank", "panel", "glazed", "glass", "castle", "interior"))
+    own = str(opening.get("prop_id") or "").strip()
+    if own:
+        return {"prop": own}
+    own_style = str(opening.get("door_style") or "").strip()
+    if own_style in valid:
+        return {"style": own_style}
+    if str(opening.get("door_prop") or "").strip().lower() == "none":
+        return {}
+    if str(default_prop_id or "").strip():
+        return {"prop": str(default_prop_id).strip()}
+    if default_door_style in valid:
+        return {"style": default_door_style}
+    key = ("shop_door_style" if exterior and shop else
+           "door_style" if exterior else "interior_door_style")
+    style = (hull_door_styles or {}).get(key)
+    return {"style": style if style in valid else
+            "panel" if exterior else "interior"}
+
+
+def _door_on_contour(map3d, level, a, ux, uz, length):
+    """Reuse facade-hole colinearity against this storey's contour edges."""
+    pts = _outline_world(map3d or {}, level)
+    b = [a[0] + ux * length, a[1] + uz * length]
+    for i, ca in enumerate(pts):
+        cb = pts[(i + 1) % len(pts)]
+        frame = _edge_frame(ca, cb)
+        if frame and _colinear_span(ca, *frame, a, b) is not None:
+            return True
+    return False
+
+
 def door_has_leaf(opening: Dict[str, Any]) -> bool:
     """Whether this door hole gets the plain LEAF at all.
 
@@ -1536,7 +1582,7 @@ def door_has_leaf(opening: Dict[str, Any]) -> bool:
 
 
 def _door_prop_of(op: Dict[str, Any],
-                  default_door_prop_id: str = "") -> Dict[str, Any]:
+                  default_door_prop_id: str = "", **choice_options) -> Dict[str, Any]:
     """The INTERNAL ``_door_prop`` of ONE opening: which prop fills the hole
     (:func:`door_prop_id`), which jamb it hinges on, and whether anything
     hangs in it at all (:func:`door_has_leaf`).
@@ -1546,17 +1592,20 @@ def _door_prop_of(op: Dict[str, Any],
     and the shell both read it off the doorway, so the two derivations must
     not drift apart.
     """
+    choice = door_choice(op, default_prop_id=default_door_prop_id, **choice_options)
     return {
-        "id": door_prop_id(op, default_door_prop_id),
+        "id": choice.get("prop", ""),
+        "style": choice.get("style", ""),
         "hinge": ("right" if str(op.get("hinge") or "").strip().lower()
                   == "right" else "left"),
-        "leaf": door_has_leaf(op),
+        "leaf": bool(choice) or door_has_leaf(op),
     }
 
 
 def _room_walls(recipe: Dict[str, Any], storey: float,
                 ground_level: int,
-                default_door_prop_id: str = "") -> List[Dict[str, Any]]:
+                default_door_prop_id: str = "", *, map3d=None,
+                door_context=None, shopfront=False) -> List[Dict[str, Any]]:
     """One room's shell walls, split around its openings (§ A4).
 
     EVERY opening is cut the same way (finding 2026-08-25): the wall below it
@@ -1680,9 +1729,15 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
                 _emit(s0, s1, sill, top - sill,
                       WALL_THICKNESS * PANE_THICKNESS_FACTOR, glass=True)
             elif op_type == "door" and door_has_leaf(op):
+                # A style door keeps its flat leaf here: compose_scene
+                # suppresses it only once the Blender model exists.
+                choice = door_choice(op, default_prop_id=default_door_prop_id,
+                                     **(door_context or {}), exterior=_door_on_contour(
+                                         map3d, level, a, ux, uz, length),
+                                     shop=shopfront and level == 0)
                 _emit(s0, s1, 0.0, top,
                       WALL_THICKNESS * PANE_THICKNESS_FACTOR, leaf=True,
-                      door_prop=bool(door_prop_id(op, default_door_prop_id)))
+                      door_prop=bool(choice.get("prop")))
     return walls
 
 
@@ -1690,7 +1745,8 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
 
 def _doorways(recipes: List[Dict[str, Any]], storey: float,
               default_door_prop_id: str = "",
-              floor_levels: Set[int] = frozenset()) -> List[Dict[str, Any]]:
+              floor_levels: Set[int] = frozenset(), *, map3d=None,
+              door_context=None, shopfront=False) -> List[Dict[str, Any]]:
     """Every walkable threshold of the location as a finished primitive
     (plan-betreten-und-tueren.md § 4.1).
 
@@ -1808,7 +1864,10 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
                     # it: the hull builder reads that from here rather than
                     # looking the opening up a second time, the same way it
                     # reads the type and the width.
-                    "_door_prop": _door_prop_of(op, default_door_prop_id),
+                    "_door_prop": _door_prop_of(
+                        op, default_door_prop_id, **(door_context or {}),
+                        exterior=_door_on_contour(map3d, level, a, ux, uz, length),
+                        shop=shopfront and level == 0),
                 }
                 # The CENTRE before the edge clamp: that point is identical on
                 # both faces of a shared wall (up to the wall's own offset),
@@ -1913,7 +1972,7 @@ def _doorways(recipes: List[Dict[str, Any]], storey: float,
 
 def _hull_doorways(map3d: Dict[str, Any], storey: float,
                    corridor_levels: Set[int],
-                   default_door_prop_id: str = "",
+                   default_door_prop_id: str = "", *, door_context=None, shopfront=False,
                    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """The doors drawn on the BUILDING OUTLINE itself (§ 6) as doorways, plus
     the findings of the ones that lead nowhere.
@@ -2057,7 +2116,9 @@ def _hull_doorways(map3d: Dict[str, Any], storey: float,
             # point that already lies on it.
             "_hull_hit": (edge, t),
             # INTERNAL, stripped in compose_scene — as on a room door.
-            "_door_prop": _door_prop_of(op, default_door_prop_id),
+            "_door_prop": _door_prop_of(
+                op, default_door_prop_id, **(door_context or {}),
+                exterior=True, shop=shopfront and level == 0),
         })
     return out, problems
 
@@ -3294,6 +3355,7 @@ def _slot_spec(entry: Dict[str, Any]) -> Dict[str, Any]:
 
 def _door_prop_models(doorways: List[Dict[str, Any]],
                       prop_cache: Optional[Dict[str, Dict[str, Any]]] = None,
+                      *, door_styles=None, door_color=None,
                       ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """The door props of a location as ``models[]`` specs (§ B2 v5), plus the
     ``{prop_id: model_signature}`` of the props they name.
@@ -3303,13 +3365,19 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
     running client would keep the old leaf forever — the same reason a room
     placement carries ``model_sig`` (``room_recipe._join_placements``).
 
-    ONE spec per threshold that :func:`door_prop_id` gave a prop — a door two
+    For image props, ONE spec per threshold that :func:`door_choice` gave a prop — a door two
     rooms share is one hole, so it is one door, and the dedup in
     :func:`_doorways` has already made it one entry. Call this AFTER
     :func:`threshold_base_y` has settled ``base_y``: a door prop stands on the
     threshold, not in it.
 
-    NOT REAL-SIZE, and the only such spec in this file: a door prop is FITTED
+    Style doors use their cached model's own casing-inclusive size and
+    outer casing hinge anchor, so fit scaling is unity. A double emits
+    frame/leaf A and the opposite leaf B, only once both are ready. B is
+    anchored .005 inside its jamb and .025 above the threshold. Local +z
+    after yaw opposes the positive-swing direction, hence outside=-swing.
+
+    For image props: NOT REAL-SIZE — a door prop is FITTED
     to the hole it fills (``measure "fit"``, ``size_m`` = the clear width and
     height of the doorway). A frame that is 5 cm too narrow is a lit gap in a
     wall, so the opening wins over the mesh's own metres — the renderer scales
@@ -3365,11 +3433,66 @@ def _door_prop_models(doorways: List[Dict[str, Any]],
     """
     from urllib.parse import quote
 
+    from app.core import door_models
+    from app.core.door_styles import load_door_styles
+    from app.core.door_geometry import leaves_for
+    door_styles = load_door_styles() if door_styles is None else door_styles
     out: List[Dict[str, Any]] = []
     sigs: Dict[str, str] = {}
     for index, door in enumerate(doorways):
         info = door.get("_door_prop") or {}
         pid = str(info.get("id") or "")
+        style = door_styles.get(info.get("style"))
+        if style:
+            # Publish a pair atomically; an unfinished half keeps the flat
+            # leaf over the whole opening until both meshes exist.
+            width, height = _num(door.get("width_m")), _num(door.get("height_m"))
+            pieces = ["double_a", "double_b"] if leaves_for(style, width) == 2 else ["single"]
+            pair = []
+            for piece in pieces:
+                hinge = "right" if info.get("hinge") == "right" else "left"
+                if piece == "double_b":
+                    hinge = "left" if hinge == "right" else "right"
+                ux, uz = door["along"]
+                nx, nz = door.get("outward_normal") or _door_outward(door)
+                swing = 1 if uz * nx - ux * nz > 0 else -1
+                if hinge == "right":
+                    swing = -swing
+                # Ry(theta) maps +z to (-uz,ux) for a left hinge,
+                # opposite its positive-swing direction; right flips both.
+                meta = door_models.ensure_door_model(
+                    style, width, height,
+                    WALL_THICKNESS,
+                    piece=piece, outside=-swing, color=door_color)
+                if meta is None:
+                    continue
+                sign = 1 if hinge == "right" else -1
+                edge = sign * (width / 2 + .07)
+                if piece == "double_b":
+                    edge = sign * (width / 2 - .005)
+                sig = meta["sig"]
+                pair.append({
+                    "role": "prop", "id": "door:" + sig,
+                    "variants": _variants(f"/assets/doors/{sig}/model", ["full"]),
+                    "room_id": (door.get("rooms") or [""])[0],
+                    "level": int(door.get("level") or 0), "fix_euler": None,
+                    "yaw_deg": _r((math.degrees(math.atan2(-uz, ux)) +
+                                   (180 if hinge == "right" else 0)) % 360, 1),
+                    "measure": "fit", "size_m": meta["size_m"],
+                    "anchor": [_r(door["at_world"][0] + ux * edge),
+                               _r(door["at_world"][1] + uz * edge)],
+                    "bottom_y": _r(_num(door.get("base_y")) +
+                                   (.025 if piece == "double_b" else 0)),
+                    "door": {"opening": index, "hinge": hinge,
+                             "swing": swing, "leaf_bbox": meta["leaf_bbox"]},
+                    **({"slots": {"glass": {"preset": "glass"}}}
+                       if style["leaf"] in ("glass", "glazed") else {}),
+                })
+            info["ready"] = len(pair) == len(pieces)
+            if info["ready"]:
+                out.extend(pair)
+                sigs.update({spec["id"]: spec["id"][5:] for spec in pair})
+            continue
         if not pid:
             continue
         hinge = "right" if info.get("hinge") == "right" else "left"
@@ -3896,6 +4019,7 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
                        for rid, meta in (room_metas or {}).items()},
         "default_door_prop_id": str(location.get("default_door_prop_id")
                                     or "").strip(),
+        "default_door_style": str(location.get("default_door_style") or ""),
         "door_props": door_prop_sigs or {},
         "surfaces": surface_sigs or {},
         "corridors": sorted(corridor_levels or ()),
@@ -4288,13 +4412,23 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     from app.models.world import floor_room_level, is_floor_room
     corridor_levels = {floor_room_level(str(r.get("id") or ""))
                        for r in rooms if is_floor_room(str(r.get("id") or ""))}
+    from app.core.door_styles import load_door_styles
+    door_styles = load_door_styles()
+    door_context = {
+        "default_door_style": str(location.get("default_door_style") or ""),
+        "hull_door_styles": building_meta.get("hull_style") if building_meta.get("plan_hull") else {},
+        "door_styles": door_styles,
+    }
+    shopfront = bool(building_meta.get("plan_hull") and building_meta.get("hull_shopfront"))
     doorways = _doorways(recipes, storey, default_door_prop_id,
-                         floor_levels=corridor_levels)
+                         floor_levels=corridor_levels, map3d=map3d,
+                         door_context=door_context, shopfront=shopfront)
     # …and the doors drawn on the CONTOUR itself (§ 6), appended after the
     # dedup above and never part of it: a hull door pierces no room's wall, so
     # there is no gap it could be the second candidate of.
     hull_doors, hull_problems = _hull_doorways(map3d, storey, corridor_levels,
-                                               default_door_prop_id)
+                                               default_door_prop_id, door_context=door_context,
+                                               shopfront=shopfront)
     doorways.extend(hull_doors)
     # One order for the whole block again — consumers diff whole payloads, and
     # the sort key is the one :func:`_doorways` uses.
@@ -4430,7 +4564,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         room_id = str(recipe.get("room_id") or "")
         room = by_room.get(room_id) or {}
         walls.extend(_room_walls(recipe, storey, min(levels),
-                                 default_door_prop_id))
+                                 default_door_prop_id, map3d=map3d,
+                                 door_context=door_context, shopfront=shopfront))
         diorama = _diorama_model(recipe, room, room_metas.get(room_id) or {},
                                  storey)
         if diorama:
@@ -4470,7 +4605,40 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # the doorway (``_door_prop``) and leaves the payload again right here:
     # the model spec is its only consumer, and the same fact twice in one
     # payload is exactly what § B5 forbids.
-    door_props, door_prop_sigs = _door_prop_models(doorways, prop_cache)
+    door_props, door_prop_sigs = _door_prop_models(
+        doorways, prop_cache, door_styles=door_styles,
+        door_color=building_meta.get("hull_door_color") if building_meta.get("plan_hull") else None)
+    # Retain leaf rectangles for hull facts. Only renderer suppression
+    # changes when a complete style door exists, including mirrored walls
+    # and the projected contour leaf of a room doorway.
+    for door in doorways:
+        if not (door.get("_door_prop") or {}).get("ready"):
+            continue
+        ux, uz = door["along"]
+        at = door["at_world"]
+        spans = [(at, (ux, uz))]
+        if door.get("outside") and not door.get("hull"):
+            pts = _outline_world(map3d, door["level"])
+            hit = _contour_hit(pts, at, _door_outward(door))
+            if hit:
+                edge, t = hit
+                a = pts[edge]
+                ex, ez, _ = _edge_frame(a, pts[(edge + 1) % len(pts)])
+                spans.append(([a[0] + ex*t, a[1] + ez*t], (ex, ez)))
+        for wall in walls:
+            if not wall.get("leaf") or wall["level"] != door["level"]:
+                continue
+            for centre, (dx, dz) in spans:
+                half = door["width_m"] / 2
+                a = [centre[0]-dx*half, centre[1]-dz*half]
+                # The two room faces of one shared door can be .15 m
+                # apart; facade leaves retain the contour's .09 m slack.
+                tolerance = (SHARE_TOL_M + 1e-4 if wall.get("room_id") in door["rooms"]
+                             else COLINEAR_TOL_M)
+                if _colinear_span(a, dx, dz, 2*half, wall["from"], wall["to"],
+                                  tolerance=tolerance) is not None:
+                    wall["door_prop"] = True
+                    break
     models.extend(door_props)
     for door in doorways:
         door.pop("_door_prop", None)
@@ -4764,6 +4932,9 @@ def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
         their tier files and their baked lattices all live flat in that one
         directory per prop. This is the only input with no signature of its
         own, and the one the finding named.
+    ``door_models``
+        ``door_models.generation()`` changes after a background door build,
+        so a completed model replaces the flat leaf on the next poll.
     ``models``
         the same, for ``<storage>/locations/<owner>/model3d/``: the building
         and room meshes, their sidecars (orientation fix, ``width_m``,
@@ -4813,6 +4984,8 @@ def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
         from app.core.paths import get_storage_dir
         return str(get_storage_dir())
 
+    from app.core.door_models import generation as door_generation
+
     parts = [
         str(SCENE_RECIPE_VERSION),
         json.dumps(season_token()),
@@ -4824,6 +4997,7 @@ def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
         _safe(_place_types),
         _safe(_props),
         _safe(_models),
+        _safe(door_generation),
     ]
     return hashlib.md5("\u0000".join(parts).encode()).hexdigest()
 
