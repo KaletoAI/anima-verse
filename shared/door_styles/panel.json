@@ -1,0 +1,17 @@
+{
+  "id": "panel",
+  "name": "Panel",
+  "description": "Painted four-panel door.",
+  "leaf": "panel",
+  "leaf_material": "#5a3b2a",
+  "leaf_tint": "",
+  "frame_material": "#efe9dc",
+  "glass_rows": 2,
+  "glass_cols": 3,
+  "panels": 4,
+  "hardware": "lever",
+  "hardware_color": "#333333",
+  "studs": false,
+  "strap_hinges": false,
+  "double_from_m": 1.5
+}

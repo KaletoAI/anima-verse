@@ -1,0 +1,17 @@
+{
+  "id": "interior",
+  "name": "Interior",
+  "description": "Painted flush interior door.",
+  "leaf": "flush",
+  "leaf_material": "#e8e2d6",
+  "leaf_tint": "",
+  "frame_material": "#e8e2d6",
+  "glass_rows": 2,
+  "glass_cols": 3,
+  "panels": 0,
+  "hardware": "knob",
+  "hardware_color": "#333333",
+  "studs": false,
+  "strap_hinges": false,
+  "double_from_m": 1.5
+}

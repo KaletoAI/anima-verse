@@ -1,0 +1,17 @@
+{
+  "id": "glass",
+  "name": "Glass",
+  "description": "Glass door in metal stiles.",
+  "leaf": "glass",
+  "leaf_material": "brushed_metal",
+  "leaf_tint": "",
+  "frame_material": "brushed_metal",
+  "glass_rows": 1,
+  "glass_cols": 1,
+  "panels": 0,
+  "hardware": "bar",
+  "hardware_color": "#333333",
+  "studs": false,
+  "strap_hinges": false,
+  "double_from_m": 1.5
+}

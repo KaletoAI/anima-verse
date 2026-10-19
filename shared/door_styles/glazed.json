@@ -1,0 +1,17 @@
+{
+  "id": "glazed",
+  "name": "Glazed",
+  "description": "Shopfront door with glazing above a panel.",
+  "leaf": "glazed",
+  "leaf_material": "#2f6f6a",
+  "leaf_tint": "",
+  "frame_material": "#2f6f6a",
+  "glass_rows": 2,
+  "glass_cols": 3,
+  "panels": 2,
+  "hardware": "lever",
+  "hardware_color": "#333333",
+  "studs": false,
+  "strap_hinges": false,
+  "double_from_m": 1.5
+}

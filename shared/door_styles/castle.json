@@ -1,0 +1,17 @@
+{
+  "id": "castle",
+  "name": "Castle",
+  "description": "Studded timber gate.",
+  "leaf": "plank",
+  "leaf_material": "door_planks",
+  "leaf_tint": "#6e5c4c",
+  "frame_material": "timber_beam",
+  "glass_rows": 2,
+  "glass_cols": 3,
+  "panels": 0,
+  "hardware": "ring",
+  "hardware_color": "#333333",
+  "studs": true,
+  "strap_hinges": true,
+  "double_from_m": 1.5
+}
