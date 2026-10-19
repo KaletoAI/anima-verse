@@ -854,6 +854,7 @@ export class FigureLibrary {
     world: new Map<string, THREE.Quaternion>(),
     parent: new Map<string, THREE.Quaternion>(),
     parentBone: new Map<string, string | null>(),
+    position: new Map<string, THREE.Vector3>(),
   };
   /** Rest hips height of that same rig, in its own units — the length a
    *  clip's root TRAVEL is measured against (`adaptExternalClips`).

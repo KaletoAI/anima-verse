@@ -83,7 +83,7 @@
  *
  * three is a PARAMETER, never an import — the admin loads it lazily.
  */
-import type { AnimationClip, KeyframeTrack, Object3D, Quaternion } from 'three'
+import type { AnimationClip, KeyframeTrack, Matrix4, Object3D, Quaternion, Vector3 } from 'three'
 
 /** The three namespace, as a PARAMETER — a type-only import, so the package
  *  never pulls the library into the admin's main bundle. */
@@ -100,6 +100,8 @@ export interface RestPose {
   /** normalised name of the bone ABOVE each bone — `null` at the root bone,
    *  whose parent is the armature rather than another bone. */
   parentBone: Map<string, string | null>
+  /** each bone's REST head position, accumulated the same way as `world` */
+  position: Map<string, Vector3>
 }
 
 /** `K_p⁻¹` and `K_b` of one bone — the two factors of `q = left·c·right`. */
@@ -134,24 +136,92 @@ export function restPoseOf(three: THREE, root: Object3D): RestPose {
   const world = new Map<string, Quaternion>()
   const parent = new Map<string, Quaternion>()
   const parentBone = new Map<string, string | null>()
-  const walk = (node: Object3D, above: Quaternion, aboveBone: string | null) => {
+  const position = new Map<string, Vector3>()
+  const walk = (node: Object3D, above: Quaternion, aboveMatrix: Matrix4,
+                aboveBone: string | null) => {
     const here = new three.Quaternion().copy(above).multiply(node.quaternion)
+    const matrix = new three.Matrix4().copy(aboveMatrix)
+      .multiply(new three.Matrix4().compose(node.position, node.quaternion, node.scale))
     const bone = !!(node as { isBone?: boolean }).isBone
     const key = bone ? normBoneName(node.name) : ''
     if (bone && !world.has(key)) {
       world.set(key, here)
       parent.set(key, above)
       parentBone.set(key, aboveBone)
+      position.set(key, new three.Vector3().setFromMatrixPosition(matrix))
     }
-    for (const child of node.children) walk(child, here, bone ? key : aboveBone)
+    for (const child of node.children) walk(child, here, matrix, bone ? key : aboveBone)
   }
-  walk(root, new three.Quaternion(), null)
-  return { world, parent, parentBone }
+  walk(root, new three.Quaternion(), new three.Matrix4(), null)
+  return { world, parent, parentBone, position }
 }
 
 /** the rotation angle of a quaternion, in degrees */
 function angleOf(q: Quaternion): number {
   return 2 * Math.acos(Math.min(1, Math.abs(q.w))) * (180 / Math.PI)
+}
+
+/** Pair-mean sideways deviation (degrees) a rig's leg stance may have from
+ *  the donor's before the legs are stood the clip's way (`legStance`). */
+export const LEG_STANCE_TOLERANCE_DEG = 3
+
+/**
+ * LEG STANCE. The generated T-pose asks for the legs clearly apart (the mesher
+ * fuses touching legs), so a rig's bind stands anywhere from a few degrees
+ * knock-kneed to 7° spread, and the transplant above keeps that stance through
+ * every clip: Kira's 2026-10-18 rigs walked with the feet 0.25–0.30 × the hips
+ * height apart against 0.083 on the reference rig. Like the global attitude,
+ * that spread is a property of the generation pose, not of the body — but
+ * only where it is large: a rig within `LEG_STANCE_TOLERANCE_DEG` keeps its
+ * own stance exactly.
+ *
+ * Per leg the frontal-plane angle of the hip→ankle line is read in the root
+ * bone frame (x sideways, y up — the frame the comparison already uses). When
+ * the PAIR's mean outward deviation from the donor exceeds the tolerance,
+ * each leg gets `S`, a rotation about the frame's forward axis that turns its
+ * line onto the donor's angle; fore/aft lean and knee bend stay the rig's own.
+ * `S` enters every bone of that leg, `K_b = R̃_d⁻¹·S·R̃_t`, so the leg is
+ * rotated rigidly about the hip before the clip moves it: the deformation is
+ * `M_d·G·S`, and the left factors follow from the parents' `K` unchanged.
+ */
+function legStance(three: THREE, donor: RestPose, self: RestPose,
+                   donorRoot: Quaternion | undefined,
+                   targetRoot: Quaternion | undefined): Map<string, Quaternion> {
+  const out = new Map<string, Quaternion>()
+  const angle = (pose: RestPose, root: Quaternion | undefined, side: string): number | null => {
+    const hip = pose.position.get(`${side}upleg`)
+    const foot = pose.position.get(`${side}foot`)
+    if (!hip || !foot) return null
+    const d = foot.clone().sub(hip)
+    if (root) d.applyQuaternion(root.clone().invert())
+    return Math.atan2(d.x, -d.y)
+  }
+  const sides = ['left', 'right'].map((side) => {
+    const hip = self.position.get(`${side}upleg`)
+    const t = angle(self, targetRoot, side)
+    const d = angle(donor, donorRoot, side)
+    if (!hip || t === null || d === null) return null
+    const lateral = hip.clone()
+    if (targetRoot) lateral.applyQuaternion(targetRoot.clone().invert())
+    const rootPos = [...self.parentBone].find(([, above]) => above === null)?.[0]
+    const centre = rootPos ? self.position.get(rootPos)!.clone() : new three.Vector3()
+    if (targetRoot) centre.applyQuaternion(targetRoot.clone().invert())
+    const outward = Math.sign(lateral.x - centre.x) || 1
+    return { side, delta: d - t, outward: outward * (t - d) }
+  })
+  if (sides.some((s) => s === null)) return out
+  const mean = (sides[0]!.outward + sides[1]!.outward) / 2
+  if (Math.abs(mean) * 180 / Math.PI <= LEG_STANCE_TOLERANCE_DEG) return out
+  for (const s of sides) {
+    const rot = new three.Quaternion().setFromAxisAngle(new three.Vector3(0, 0, 1), s!.delta)
+    const top = `${s!.side}upleg`
+    for (const key of self.world.keys()) {
+      let above: string | null | undefined = key
+      while (above && above !== top) above = self.parentBone.get(above)
+      if (above === top) out.set(key, rot)
+    }
+  }
+  return out
 }
 
 /**
@@ -181,12 +251,15 @@ export function restCorrections(three: THREE,
     const out = new three.Quaternion().copy(q)
     return root ? out.premultiply(new three.Quaternion().copy(root).invert()) : out
   }
+  const stance = legStance(three, donor, self, donorRoot, targetRoot)
   const k = new Map<string, Quaternion>()
   for (const [key, targetWorld] of self.world) {
     const donorWorld = donor.world.get(key)
     if (!donorWorld) continue
-    k.set(key, inRootFrame(donorRoot, donorWorld).invert()
-      .multiply(inRootFrame(targetRoot, targetWorld)))
+    const kb = inRootFrame(donorRoot, donorWorld).invert()
+    const s = stance.get(key)
+    if (s) kb.multiply(s)
+    k.set(key, kb.multiply(inRootFrame(targetRoot, targetWorld)))
   }
   for (const [key, right] of k) {
     const above = self.parentBone.get(key) ?? null

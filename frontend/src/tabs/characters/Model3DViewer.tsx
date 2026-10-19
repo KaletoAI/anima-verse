@@ -136,7 +136,8 @@ const donorRig = () => {
       } catch {
         return { rest: { world: new Map<string, Quaternion>(),
                          parent: new Map<string, Quaternion>(),
-                         parentBone: new Map<string, string | null>() },
+                         parentBone: new Map<string, string | null>(),
+                         position: new Map<string, Vector3>() },
                  hipsY: undefined }
       }
     })()

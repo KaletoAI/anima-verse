@@ -110,6 +110,25 @@
  *     to 2·sqrt(2·2e-8) ≈ 4e-4 rad ≈ 0.023°. The check allows 0.05°. The
  *     UNCORRECTED case has no such error at all — the original array is kept
  *     rather than rewritten, which is what makes case [2] exact.
+ * [8] LEG STANCE (`legStance`, tolerance 3°). Hips at the origin, UpLeg at
+ *     x = ±0.1, Leg and Foot each 0.45 below — the donor straight down. A
+ *     target UpLeg at Rz(θ) on the left and Rz(-θ) on the right turns the
+ *     hip→ankle line (0,-0.9,0) into (±0.9·sinθ, -0.9·cosθ): frontal angle
+ *     atan2(x,-y) = ±θ, i.e. θ OUTWARD on both sides.
+ *     - θ = 6° > 3°: S = Rz(∓6°), so K_UpLeg = S·Rz(±6°) = 1 and K_Leg =
+ *       K_Foot = S·1·... = 1 as well — every leg factor is the identity, the
+ *       corrections hold NO leg bone and the clip plays verbatim: a swing
+ *       c = Rx(30°) puts the foot at (±0.1, -0.9·cos30, -0.9·sin30) =
+ *       (±0.1, -0.779423, -0.45), exactly under the hip like the donor's.
+ *       Without the stance rule K_UpLeg = Rz(±6°) and the foot would sit
+ *       0.9·sin6° = 0.094076 further out.
+ *     - θ = 2° ≤ 3°: the rig keeps its stance, K_UpLeg = Rz(±2°) (2°) and the
+ *       Leg's left factor is its inverse.
+ *     - left +8° outward, right 4° INWARD (Rz(+4°) on the right): pair mean
+ *       (8 − 4)/2 = 2° ≤ 3°, so neither leg is touched: K_UpLeg,left = Rz(8°).
+ *     - fore/aft stays: left UpLeg Rz(6°)·Rx(10°) has frontal angle exactly
+ *       6° (Rx keeps x = 0, Rz then gives x = 0.9·cos10·sin6, y =
+ *       −0.9·cos10·cos6), so S = Rz(−6°) and K_UpLeg = Rx(10°): 10° about x̂.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -332,6 +351,52 @@ async function main() {
     outP === pt && outP.values[1] === 100 && outP.values[4] === 110)
   check('nothing to correct → the SAME clip object comes back',
     bindRelativeClip(THREE, clip, new Map()) === clip)
+
+  console.log('\n[8] leg stance — only where the pair is spread beyond 3°')
+  const legs = (left, right) => {
+    const root = new THREE.Object3D()
+    const hips = bone('mixamorig:Hips', ID())
+    root.add(hips)
+    for (const [side, x, q] of [['Left', 0.1, left], ['Right', -0.1, right]]) {
+      const up = bone(`mixamorig:${side}UpLeg`, q)
+      up.position.set(x, 0, 0)
+      const leg = bone(`mixamorig:${side}Leg`, ID())
+      leg.position.set(0, -0.45, 0)
+      const foot = bone(`mixamorig:${side}Foot`, ID())
+      foot.position.set(0, -0.45, 0)
+      hips.add(up); up.add(leg); leg.add(foot)
+    }
+    root.updateMatrixWorld(true)
+    return root
+  }
+  const RZ = (deg) => qAxis(new THREE.Vector3(0, 0, 1), deg)
+  const donorLegs = restPoseOf(THREE, legs(ID(), ID()))
+  const spread = restCorrections(THREE, donorLegs, legs(RZ(6), RZ(-6)))
+  const legKeys = ['leftupleg', 'leftleg', 'leftfoot', 'rightupleg', 'rightleg', 'rightfoot']
+  check('6° spread: every leg factor is the identity, no leg bone corrected',
+    legKeys.every((key) => !spread.has(key)), [...spread.keys()].join(',') || 'none')
+  const swing = legs(RZ(6), RZ(-6))
+  const swingUp = swing.getObjectByName('mixamorig:LeftUpLeg')
+  swingUp.quaternion.copy(spread.get('leftupleg') ? drive(spread.get('leftupleg'), RX(30)) : RX(30))
+  swing.updateMatrixWorld(true)
+  const foot = swing.getObjectByName('mixamorig:LeftFoot').getWorldPosition(new THREE.Vector3())
+  check('a 30° swing puts the foot under the hip: (0.1, -0.779423, -0.45)',
+    near(foot.x, 0.1, 1e-6) && near(foot.y, -0.779423, 1e-6) && near(foot.z, -0.45, 1e-6),
+    `(${foot.x.toFixed(6)}, ${foot.y.toFixed(6)}, ${foot.z.toFixed(6)})`)
+  const small = restCorrections(THREE, donorLegs, legs(RZ(2), RZ(-2)))
+  check('2° spread keeps the rig\'s own stance: K_UpLeg = Rz(2°)',
+    near(small.get('leftupleg').right.angleTo(RZ(2)), 0, 1e-6)
+    && near(small.get('leftleg').left.angleTo(RZ(-2)), 0, 1e-6),
+    `${ang(small.get('leftupleg').right).toFixed(4)}°`)
+  const mixed = restCorrections(THREE, donorLegs, legs(RZ(8), RZ(4)))
+  check('+8° out / 4° in: pair mean 2° ≤ 3°, left keeps Rz(8°)',
+    near(mixed.get('leftupleg').right.angleTo(RZ(8)), 0, 1e-6),
+    `${ang(mixed.get('leftupleg').right).toFixed(4)}°`)
+  const lean = restCorrections(THREE, donorLegs,
+    legs(RZ(6).multiply(RX(10)), RZ(-6).multiply(RX(10))))
+  check('fore/aft lean stays: K_UpLeg = Rx(10°)',
+    near(lean.get('leftupleg').right.angleTo(RX(10)), 0, 1e-6),
+    `${(lean.get('leftupleg').right.angleTo(RX(10)) * DEG).toFixed(6)}° off`)
 
   console.log(failures.length
     ? `\n${failures.length} FAILED: ${failures.join(', ')}`

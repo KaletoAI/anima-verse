@@ -13,7 +13,10 @@ Client-Seite davon sieht.
    CMU-Mocap, gekaufte Packs, fremde FBX aus dem Inbox-Import —, deshalb muss
    der Client nichts mehr umrechnen außer der Bind-Pose der jeweiligen Figur
    (`@anima/scene-render` → `restCorrections`, gegen die Rest-Pose aus
-   `GET /assets/animation-rig`).
+   `GET /assets/animation-rig`). Die Beinhaltung übernimmt die Figur nur dann
+   vom Clip, wenn ihr Beinpaar in der Bind-Pose im Mittel mehr als 3°
+   (`LEG_STANCE_TOLERANCE_DEG`) seitlich vom Referenz-Rig abweicht — die
+   generierte T-Pose steht absichtlich breitbeinig; Vor-/Rücklage bleibt.
 2. **FBX ohne Mesh/Skin** („Without Skin"), reine Keyframes.
 3. **Bewegungsclips laufen IN PLACE.** Die Wurzel bewegt der Client (Laufen,
    Reise, Klick-Route); ein Clip mit eigener Wurzelbewegung zieht die Figur
