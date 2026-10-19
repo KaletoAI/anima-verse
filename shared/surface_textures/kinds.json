@@ -7,35 +7,35 @@
       "roughness": 0.25,
       "metalness": 0.1
     },
-    "name": "bath flow",
-    "description": "the surface of badfliessen seen straight from above"
+    "name": "Bathroom Tiles",
+    "description": "large glossy white square bathroom tiles with thin light grey grout lines, seen straight on"
   },
   "city": {
-    "name": "city",
-    "description": "the surface of city seen straight from above"
+    "name": "City Paving",
+    "description": "light grey square concrete paving slabs with narrow joints, seen straight from above"
   },
   "coast": {
-    "name": "coast",
+    "name": "Coast",
     "description": "the surface of coast seen straight from above"
   },
   "dark_stone": {
-    "name": "dark stone",
+    "name": "Dark Stone",
     "description": "the surface of dark stone seen straight from above"
   },
   "dark_stone_2": {
-    "name": "dark stone 2",
+    "name": "Dark Stone 2",
     "description": "the surface of dark stone 2 seen straight from above"
   },
   "dark_wooden_floor": {
-    "name": "dark wooden floor",
+    "name": "Dark Wooden Floor",
     "description": "the surface of dark wooden floor seen straight from above"
   },
   "deep_forest": {
-    "name": "deep forest",
+    "name": "Deep Forest",
     "description": "the surface of deep forest seen straight from above"
   },
   "deep_water": {
-    "name": "deep water",
+    "name": "Deep Water",
     "description": "the surface of deep water seen straight from above",
     "material": {
       "class": "water",
@@ -49,35 +49,35 @@
     }
   },
   "forest": {
-    "name": "forest",
+    "name": "Forest Floor",
     "description": "forest floor of brown leaf litter, moss patches and small twigs"
   },
   "grass": {
-    "name": "grass",
+    "name": "Grass",
     "description": "dense short lawn grass, natural fresh green blades"
   },
   "non-woven_wallpaper": {
-    "name": "non woven wallpaper",
+    "name": "Non-Woven Wallpaper",
     "description": "the surface of non woven wallpaper seen straight from above"
   },
   "rubber_flooring": {
-    "name": "rubber flooring",
+    "name": "Rubber Flooring",
     "description": "the surface of rubber flooring seen straight from above"
   },
   "sand": {
-    "name": "sand",
+    "name": "Sand",
     "description": "fine beach sand with slight wind ripples, warm beige tones"
   },
   "street": {
-    "name": "street",
-    "description": "asphalt surface texture"
+    "name": "Asphalt Street",
+    "description": "dark grey asphalt road surface with fine aggregate, seen straight from above"
   },
   "tiled_floor": {
-    "name": "tiled floor",
-    "description": "the surface of tiled floor seen straight from above"
+    "name": "Tiled Floor",
+    "description": "large light grey square ceramic floor tiles with thin grout lines, seen straight from above"
   },
   "water": {
-    "name": "water",
+    "name": "Water",
     "description": "calm water surface with gentle ripples and small waves, natural blue-green tones",
     "material": {
       "class": "water",
@@ -91,95 +91,95 @@
     }
   },
   "woodchip_wallpaper": {
-    "name": "woodchip wallpaper",
-    "description": "the surface of woodchip wallpaper seen straight from above"
+    "name": "Woodchip Wallpaper",
+    "description": "woodchip wallpaper painted matte white, fine irregular embedded wood fibres giving a subtle bumpy texture, seen straight on"
   },
   "wooden_floor": {
-    "name": "wooden floor",
+    "name": "Wooden Floor",
     "description": "the surface of wooden floor seen straight from above"
   },
   "indoor_old_house": {
-    "name": "indoor - old house wall",
-    "description": "Interior texture of an old rustic inn, featuring a combination of weathered aged wood beams and rough natural stone walls, tactile surfaces, historical atmosphere, high detail."
+    "name": "Old Inn Wall",
+    "description": "rustic inn interior wall of rough natural stone with weathered dark wooden posts and beams, seen straight on"
   },
   "indoor_old_house_floor": {
-    "name": "indoor - old house floor",
+    "name": "Old Inn Floor",
     "description": "Seamless tileable surface texture seen straight from above: a rustic inn floor featuring long weathered aged wood planks and rough natural stone tiles, tactile surfaces, historical atmosphere, high detail, flat even lighting, no perspective, no vignette, no drop shadows, no horizon, no objects or subjects, no border."
   },
   "indoor_kitchen_wall": {
-    "name": "indoor - kitchen - wall",
-    "description": "A seamless tileable surface texture of kitchen tiles, viewed straight from above, flat even lighting, no perspective, no vignette, no drop shadows, no horizon, no objects or subjects, no border, material only."
+    "name": "Kitchen Wall Tiles",
+    "description": "glossy white rectangular kitchen wall tiles in a running bond with thin light grey grout lines, seen straight on"
   },
   "side_step": {
-    "name": "side step",
-    "description": "side step"
+    "name": "Sidewalk",
+    "description": "grey concrete sidewalk paving bricks in a stretcher pattern, seen straight from above"
   },
   "hogwarts_sandstone": {
-    "name": "Schloss-Sandstein",
+    "name": "Castle Sandstone",
     "description": "Seamless warm Scottish sandstone masonry with staggered ashlar blocks, recessed dark mortar and subtle natural grain; straight-on orthographic surface, no timber, no windows, no perspective."
   },
   "plaster_infill": {
-    "name": "lime plaster infill",
+    "name": "Lime Plaster Infill",
     "description": "whitewashed lime plaster wall, slightly uneven, seen straight on"
   },
   "timber_beam": {
-    "name": "oak timber",
+    "name": "Oak Timber",
     "description": "weathered dark oak timber grain, seen straight on"
   },
   "clay_roof_tiles": {
-    "name": "clay roof tiles",
+    "name": "Clay Roof Tiles",
     "description": "rows of overlapping red clay roof tiles, seen straight on"
   },
   "fieldstone": {
-    "name": "fieldstone masonry",
+    "name": "Fieldstone Masonry",
     "description": "irregular grey fieldstone masonry with mortar joints, seen straight on"
   },
   "ashlar": {
-    "name": "ashlar blocks",
+    "name": "Ashlar Blocks",
     "description": "dressed sandstone ashlar blocks in regular courses, seen straight on"
   },
   "slate_roof": {
-    "name": "slate roof",
+    "name": "Slate Roof",
     "description": "rows of dark grey slate roof shingles, seen straight on"
   },
   "log_wood": {
-    "name": "log wood",
+    "name": "Log Wood",
     "description": "horizontal round pine logs with bark patches, seen straight on"
   },
   "wood_shingles": {
-    "name": "wood shingles",
+    "name": "Wood Shingles",
     "description": "rows of weathered wooden roof shingles, seen straight on"
   },
   "castle_stone": {
-    "name": "castle stone",
+    "name": "Castle Stone",
     "description": "large weathered grey castle stone blocks, seen straight on"
   },
   "door_planks": {
-    "name": "door planks",
+    "name": "Door Planks",
     "description": "vertical dark wooden door planks with iron studs, seen straight on"
   },
   "brick": {
-    "name": "brick",
+    "name": "Brick",
     "description": "red brick masonry in running bond, seen straight on"
   },
   "concrete_panel": {
-    "name": "concrete panels",
+    "name": "Concrete Panels",
     "description": "light grey precast concrete facade panels with thin recessed joints, seen straight on"
   },
   "roof_gravel": {
-    "name": "roof gravel",
+    "name": "Roof Gravel",
     "description": "flat roof covered with fine light grey gravel, seen from above"
   },
   "brushed_metal": {
-    "name": "brushed metal",
+    "name": "Brushed Metal",
     "description": "brushed anthracite aluminium cladding, seen straight on"
   },
   "metal_door": {
-    "name": "metal door",
+    "name": "Metal Door",
     "description": "modern anthracite metal entrance door with a narrow vertical glass strip, front view"
   },
   "facade_module_modern": {
-    "name": "modern facade module",
+    "name": "Modern Facade Module",
     "description": "front elevation of exactly one storey and one window bay of a modern apartment building: light grey precast concrete wall, one large dark window with a slim anthracite frame centred; flat orthographic view, no perspective, edges continue seamlessly left/right and top/bottom"
   }
 }
