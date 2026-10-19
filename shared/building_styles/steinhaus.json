@@ -24,6 +24,7 @@
   "log_walls": false,
   "jetty_m": 0,
   "roof": {
+    "max_rise_ratio": 0.8,
     "max_rise_m": 4.5,
     "min_pitch_deg": 25,
     "forms": [

@@ -66,6 +66,7 @@ def validate_style(raw: Any, style_id: str) -> Dict[str, Any]:
             "forms": _subset(roof.get("forms"), ROOF_FORMS, ["gable"]),
             "pitch_deg": _range(roof.get("pitch_deg"), 5, 60, [30, 40]),
             "overhang_m": _range(roof.get("overhang_m"), 0, 1, [0.3, 0.5]),
+            "max_rise_ratio": _number(roof.get("max_rise_ratio"), .3, 3, 1.0),
             "max_rise_m": _number(roof.get("max_rise_m"), 1.5, 12, 6.0),
             "min_pitch_deg": _number(roof.get("min_pitch_deg"), 5, 60, 20),
             "parapet": roof.get("parapet") if isinstance(roof.get("parapet"), bool) else False,

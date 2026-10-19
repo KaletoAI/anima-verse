@@ -57,6 +57,23 @@ def closed(part: dict) -> None:
     assert volume > 0, (part["tag"], volume)
 
 
+def check_coordinate_snap():
+    """Four-centimetre near-equal coordinates must not create sliver wings."""
+    from app.core.hull_roofs import _rotate
+    clean = [[0,0],[12,0],[12,6],[6,6],[6,12],[0,12]]
+    jitter = [[0,0],[12,0],[12,6],[6.04,6],[6,12],[0,12]]
+    for angle in (0, 31):
+        for covered in (None, [[0,0],[6.02,0],[6.02,6],[0,6]]):
+            cover = [_rotate(p, angle) for p in covered] if covered else None
+            expected = decompose([_rotate(p, angle) for p in clean], cover, angle)
+            actual = decompose([_rotate(p, angle) for p in jitter], cover, angle)
+            assert len(actual) == len(expected), actual
+            if angle == 0 and covered is None:
+                assert any(abs(w["rect"]["length"] - 6.02) < 1e-6 for w in actual), actual
+            assert all(min(w["rect"]["length"], w["rect"]["depth"]) >= .15 for w in actual), actual
+    print("PASS coordinate snap: jitter, covered outline, rotated frame")
+
+
 def check_modern_roofs():
     """Plate top=3+.25=3.25; parapet top=4.25; cap top=4.30.
 
@@ -199,6 +216,9 @@ def main() -> None:
     root = Path(__file__).resolve().parents[1]
     styles = {name: json.loads((root / "shared/building_styles" / f"{name}.json").read_text())
               for name in ("fachwerk", "steinhaus", "holzhuette", "burg")}
+    # Preserve these form/detail rows independently of the relative cap.
+    for style in styles.values():
+        style["roof"]["max_rise_ratio"] = 3
     shapes = roof_shapes()
     close(orthogonal_frame(shapes["rotated_L"]["levels"][0]["outline"]), 30)
     assert orthogonal_frame(shapes["triangle"]["levels"][0]["outline"]) is None
@@ -332,6 +352,7 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as temporary:
         from app.core import paths
         paths.init(temporary)
+        check_coordinate_snap()
         check_junctions()
         check_modern_roofs()
         main()

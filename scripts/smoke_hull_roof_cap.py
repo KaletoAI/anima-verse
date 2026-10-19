@@ -20,6 +20,7 @@ from app.core.hull_roofs import build_roofs
 ROOT = Path(__file__).resolve().parents[1]
 def case(name, length, depth, form, overrides=None):
     style = json.loads((ROOT / "shared/building_styles" / f"{name}.json").read_text())
+    style["roof"]["max_rise_ratio"] = .3 if overrides and "max_rise_m" in overrides else 3
     style["roof"]["pitch_deg"] = [40,40] if name == "steinhaus" else [50,50]
     style.update(chimneys=[1,1], dormers=1)
     facts = polygon_case_facts([[0,0],[length,0],[length,depth],[0,depth]])
@@ -57,6 +58,20 @@ def check():
     parts, _ = case("fachwerk",20,16,"gable",{"max_rise_m":1.5})
     assert not any(p["tag"]=="dormer" for p in parts)
     print("PASS roof rise cap")
+def check_cafe():
+    """Cafe: atan(2.44/4.54)=28.3 degrees; absolute cap alone misses it."""
+    style = json.loads((ROOT / "shared/building_styles/steinhaus.json").read_text())
+    style["roof"]["pitch_deg"] = [44.5, 44.5]
+    facts = polygon_case_facts([[0,0],[9.5,0],[9.5,8],[0,8]])
+    facts["eaves_y"] = 3.05
+    _, info = build_roofs(facts, style, {"overrides":{"roof_form":"hip"}}, tier="full")
+    wing = info["wings"][0]
+    assert abs(wing["pitch_deg"] - 28.3) <= .05, wing
+    assert abs(wing["ridge_y"] - wing["eaves_y"] - 2.44) <= .01, wing
+    assert not wing["flat_top"]
+    print("PASS Cafe relative rise cap")
+
+
 def check_extra():
     """Triangle centroid (26/3,16/3); explicit 50° is capped at rise 1.5.
     Shed 20x16 has full wall-span rise 16.68*tan50, capped at 1.5.
@@ -78,6 +93,9 @@ def check_extra():
         if wing["form"] == "tent":
             x,z = wing["rect"]["center"]
             assert abs(roof_top_y(wing,x,z,style)-4.5)<.0001
+    assert validate_style({}, "x")["roof"]["max_rise_ratio"] == 1
+    for value, expected in ((0,.3),(99,3)):
+        assert validate_style({"roof":{"max_rise_ratio":value}}, "x")["roof"]["max_rise_ratio"] == expected
     assert validate_style({}, "x")["roof"]["max_rise_m"] == 6
     assert validate_style({}, "x")["roof"]["min_pitch_deg"] == 20
     for value, expected in ((0,1.5),(99,12)):
@@ -87,5 +105,6 @@ def check_extra():
         assert validate_style({"roof":{"min_pitch_deg":value}}, "x")["roof"]["min_pitch_deg"] == expected
     print("PASS tent, shed and validation")
 if __name__ == "__main__":
+    check_cafe()
     check()
     check_extra()

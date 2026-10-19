@@ -66,10 +66,24 @@ def decompose(outline: List[List[float]], covered: Optional[List[List[float]]],
 
     Side names refer to the rectangle's local frame. Ties prefer shorter seams,
     then x runs; covered partitions retain their original x-run preference.
-    Coordinates are clustered at 1e-6 m to suppress rotation roundoff.
+    Coordinates snap to their cluster mean; a cluster spans at most 0.15 m,
+    so outline jitter never makes a sliver wing and a chain of close values
+    never collapses a real step.
     """
     local = [_rotate(point, -angle_deg) for point in outline]
     above = [_rotate(point, -angle_deg) for point in (covered or [])]
+    # Snap both rings together in the roof frame, before grid and polygon tests.
+    for axis in (0, 1):
+        points = sorted(local + above, key=lambda point: point[axis])
+        groups = []
+        for point in points:
+            if not groups or point[axis] - groups[-1][0][axis] > .15 + 1e-10:
+                groups.append([])
+            groups[-1].append(point)
+        for group in groups:
+            mean = sum(point[axis] for point in group) / len(group)
+            for point in group:
+                point[axis] = mean
     xs, zs = [sorted({round(point[axis], 6) for point in local + above})
               for axis in (0, 1)]
     exposed, occupied = set(), set()
@@ -821,7 +835,9 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
     roof = style["roof"]
     form = overrides.get("roof_form") or rng(seed, "roof_form").choice(roof["forms"])
     explicit_pitch = "pitch_deg" in overrides
-    max_rise = overrides.get("max_rise_m", roof.get("max_rise_m", 6.0))
+    max_rise = (overrides["max_rise_m"] if "max_rise_m" in overrides else
+                min(roof.get("max_rise_m", 6.0),
+                    roof.get("max_rise_ratio", 1.0) * facts["eaves_y"]))
     pitch = overrides.get("pitch_deg")
     if pitch is None:
         pitch = round(rng(seed, "roof_pitch").uniform(*roof["pitch_deg"]) * 2) / 2

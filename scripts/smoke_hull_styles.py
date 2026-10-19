@@ -116,8 +116,8 @@ def main():
         for key, value in modern.items():
             assert raw_modern[key] == value, key
             # A flat style never reads the rise cap; validation still fills
-            # its defaults (1c-B: max_rise_m 6.0, min_pitch_deg 20).
-            expected = ({**value, "max_rise_m": 6.0, "min_pitch_deg": 20}
+            # its defaults (1c-B: max_rise_m 6.0, min_pitch_deg 20, max_rise_ratio 1.0).
+            expected = ({**value, "max_rise_m": 6.0, "min_pitch_deg": 20, "max_rise_ratio": 1.0}
                         if key == "roof" else value)
             assert s["modern"][key] == expected, key
         assert raw_modern["towers"]["chance"] == s["modern"]["towers"]["chance"] == 0
