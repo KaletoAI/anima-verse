@@ -22,6 +22,8 @@ Manifest format (package format v1):
       llm: templates/llm          # added to the prompt-template search path
       character:                  # character-template fragments (merged)
         - templates/character/courage.json
+    llm_tasks:                    # routable package tasks
+      demo_note: {label: Demo note, category: chat, fallback: chat_stream}
     config_schema:                # admin settings subsections under "skills"
       training:
         label: Training
@@ -165,8 +167,9 @@ def _parse_skill_entries(meta: Dict[str, Any]) -> List[SkillEntry]:
     return entries
 
 
-def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
-    """Parse one manifest into a Package (contributions resolved, no skills instantiated)."""
+def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
+                   register_tasks: bool = True) -> Optional[Package]:
+    """Parse a manifest; inventory callers defer task registration until discovery."""
     pkg = Package(id=entry_dir.name, dir=entry_dir, manifest=meta)
     pkg.capability_label = str(meta.get("capability_label", "") or "").strip()
     pkg.capability_description = str(meta.get("capability_description", "") or "").strip()
@@ -176,6 +179,11 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
     if not meta.get("name"):
         logger.warning("Package %s: name missing in plugin.yaml", entry_dir.name)
         return None
+
+    task_specs = meta.get("llm_tasks") or {}
+    if not isinstance(task_specs, dict):
+        logger.warning("Package %s: llm_tasks must be a mapping", pkg.id)
+        task_specs = {}
 
     tmpl = meta.get("templates") or {}
     llm_rel = (tmpl.get("llm") or "").strip()
@@ -276,11 +284,15 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
                                or pkg.config_subsections or pkg.flags
                                or pkg.silhouette or pkg.body_slots
                                or pkg.piece_slots or pkg.undressed_prompt
-                               or meta.get("on_load")):
+                               or meta.get("on_load") or task_specs):
         logger.warning("Package %s: neither skills nor contributions in plugin.yaml",
                        entry_dir.name)
         return None
 
+    if register_tasks:
+        from app.core.llm_tasks import register_plugin_task
+        for task_id, task_spec in task_specs.items():
+            register_plugin_task(task_id, task_spec, pkg.id)
     return pkg
 
 
@@ -322,7 +334,7 @@ def _collect_packages(base: Path, *, warn: bool = True,
             except Exception as e:
                 logger.error("Error reading %s: %s", manifest, e)
                 continue
-            pkg = _parse_package(entry, meta)
+            pkg = _parse_package(entry, meta, register_tasks=False)
             if pkg:
                 found[pkg.id] = pkg
 
@@ -426,9 +438,16 @@ def discover_packages(plugin_dir: Optional[Path] = None,
             for package_id in (config.get("packages.enabled", "") or "").split(",")
             if package_id.strip()
         )
+    from app.core.llm_tasks import _clear_plugin_tasks, register_plugin_task
+    _clear_plugin_tasks()
     registry.clear_registry()
     for pkg in _collect_packages(base, enabled_ids=_activation_enabled_ids):
         registry.register_package(pkg)
+    for pkg in registry.packages():
+        task_specs = pkg.manifest.get("llm_tasks") or {}
+        if isinstance(task_specs, dict):
+            for task_id, task_spec in task_specs.items():
+                register_plugin_task(task_id, task_spec, pkg.id)
 
     if plugin_dir is None:
         _discovered = True

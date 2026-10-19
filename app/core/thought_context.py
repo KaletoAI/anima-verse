@@ -291,7 +291,7 @@ def _build_skill_context_blocks(character_name: str) -> List[Tuple[str, str]]:
     try:
         from app.core.dependencies import get_skill_manager
         skills = get_skill_manager()._get_agent_skills(
-            character_name, check_limits=False)
+            character_name, check_limits=False, turn="thought")
     except Exception:
         return []
     try:

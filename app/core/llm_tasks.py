@@ -149,6 +149,65 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
 }
 
 
+_CORE_TASK_IDS = frozenset(TASK_TYPES)
+_PLUGIN_TASK_PACKAGES: Dict[str, str] = {}
+_PLUGIN_TASK_FALLBACKS: Dict[str, str] = {}
+
+
+def _clear_plugin_tasks() -> None:
+    """Rebuild package contributions alongside the loader's active registry."""
+    for task_id in _PLUGIN_TASK_PACKAGES:
+        TASK_TYPES.pop(task_id, None)
+    _PLUGIN_TASK_PACKAGES.clear()
+    _PLUGIN_TASK_FALLBACKS.clear()
+
+
+def register_plugin_task(task_id: str, spec: dict, package: str) -> bool:
+    """Register a package task without replacing core or another package's task."""
+    from app.core.log import get_logger
+    logger = get_logger("llm_tasks")
+    if (not isinstance(task_id, str) or not task_id.strip()
+            or not isinstance(spec, dict)
+            or not isinstance(spec.get("label"), str) or not spec["label"].strip()
+            or spec.get("category") not in ("chat", "tool", "helper", "image")
+            or spec.get("priority", "normal") not in ("low", "normal", "high")):
+        logger.warning("Package %s: invalid LLM task %s", package, task_id)
+        return False
+    if task_id in _CORE_TASK_IDS or (
+            task_id in _PLUGIN_TASK_PACKAGES and _PLUGIN_TASK_PACKAGES[task_id] != package):
+        logger.warning("Package %s: LLM task %s already owned", package, task_id)
+        return False
+    parent = spec.get("fallback")
+    if parent is not None and (not isinstance(parent, str) or parent not in TASK_TYPES
+                               or parent == task_id):
+        logger.warning("Package %s: unknown or invalid fallback for %s", package, task_id)
+        parent = None
+    seen = {task_id}
+    ancestor = parent
+    while ancestor:
+        if ancestor in seen:
+            logger.warning("Package %s: cyclic fallback for %s", package, task_id)
+            parent = None
+            break
+        seen.add(ancestor)
+        ancestor = _PLUGIN_TASK_FALLBACKS.get(ancestor)
+    TASK_TYPES[task_id] = {
+        "label": spec["label"], "category": spec["category"],
+        "priority": {"low": Priority.LOW, "normal": Priority.NORMAL,
+                     "high": Priority.HIGH}[spec.get("priority", "normal")],
+    }
+    _PLUGIN_TASK_PACKAGES[task_id] = package
+    _PLUGIN_TASK_FALLBACKS.pop(task_id, None)
+    if parent:
+        _PLUGIN_TASK_FALLBACKS[task_id] = parent
+    return True
+
+
+def plugin_task_fallback(task_id: str) -> str | None:
+    """Return a package task's declared routing parent, if any."""
+    return _PLUGIN_TASK_FALLBACKS.get(task_id)
+
+
 # Human-readable label per category (used in the admin UI).
 CATEGORY_LABELS: Dict[str, str] = {
     "image":  "Image Input",

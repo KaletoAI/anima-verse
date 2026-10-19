@@ -35,6 +35,7 @@ class BaseSkill(ABC):
     """
 
     SKILL_ID = ""  # subclass must define
+    TURN_KINDS: tuple = ()  # Empty means every turn; otherwise explicit turn kinds only.
     ALWAYS_LOAD = False  # True = skill always loaded, activation per character
     DEFERRED = False  # True = tool intent detected but executed after the chat reply
     CONTENT_TOOL = False  # True = result must flow into the RP (retry in rp_first mode)

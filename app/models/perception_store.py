@@ -352,6 +352,26 @@ def get_character_stream(perceiver: str, limit: int = 100,
     return [_row_to_dict(r) for r in reversed(rows)]
 
 
+def get_character_stream_between(perceiver: str, start_game_ts: str,
+                                 end_game_ts: str, limit: int = 400) -> List[Dict]:
+    """Read subjective perceptions in an inclusive canonical game-time window.
+
+    Returns the earliest ``limit`` rows, ordered by game time and perception
+    ID. Equal bounds include that instant. Unstamped utterances are skipped;
+    content always comes from the perception, never the canonical utterance.
+    """
+    if limit <= 0:
+        return []
+    rows = get_connection().execute(
+        "SELECT u.game_ts, u.speaker, p.content, p.kind, u.location_id, u.room_id "
+        "FROM perceptions p JOIN utterances u ON u.id=p.utterance_id "
+        "WHERE p.perceiver=? AND u.game_ts<>'' "
+        "AND u.game_ts>=? AND u.game_ts<=? "
+        "ORDER BY u.game_ts ASC, p.id ASC LIMIT ?",
+        (perceiver, start_game_ts, end_game_ts, limit)).fetchall()
+    return [dict(row) for row in rows]
+
+
 def prune_wilderness_rows(cutoff_ts: str) -> Tuple[int, int]:
     """Delete LOCATION-LESS speech acts older than ``cutoff_ts`` together with
     their perceptions. Returns ``(utterances, perceptions)`` deleted.

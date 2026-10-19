@@ -520,6 +520,7 @@ Capabilities, die der Core heute abfragt:
 
 | Hook | Semantik |
 |---|---|
+| `TURN_KINDS: tuple = ()` | Class flag: empty allows every turn; a non-empty tuple requires an explicit matching `turn`. For example, `("thought",)` excludes the verb from default/chat calls. `get_agent_tools(character_name, check_limits=True, turn="")` applies this filter even when limits are skipped; thought tools, their usage lines (`get_agent_usage_instructions(..., turn=)`) and thought-context blocks pass `turn="thought"`. |
 | `visible_for(character_name) -> bool` | Per-Character-Sichtbarkeit jenseits der enabled-Config (z.B. Party-Rolle) — der skill_manager fragt generisch ab. Gilt für die RUNTIME-Toolliste; der Admin-Skills-Tab zeigt das Verb weiter an (Config-Fläche ≠ Laufzeit-Fläche) |
 | `defer_for_attachment(raw_input) -> bool` | Call muss NACH den deferred Image-Tools desselben Turns laufen (Input referenziert ein erst dann existierendes Attachment) |
 | `thought_context_block(character_name) -> str` | Selbst-enthaltene Prompt-Sektion (s.u.) |
@@ -748,3 +749,28 @@ blocking and the async upload adapter calls it through `asyncio.to_thread`.
 A stale result returns `ok=false`, `status="stale"` and an explanatory error.
 Rebuild preparation requires a normalized base-only clean source; operation
 parameters (including reference checks and poses) are all declaration-required.
+
+## Package LLM task catalog
+
+`app.core.llm_tasks.register_plugin_task(task_id: str, spec: dict, package: str) -> bool`
+registers `{label, category, priority?, fallback?}` in `TASK_TYPES`. Categories are
+`chat|tool|helper|image`; priority is `low|normal|high`, default `normal`.
+Invalid specs and core ID collisions return `False` and log a warning.
+Unknown fallback parents are dropped with a warning. Prefer the `llm_tasks`
+manifest mapping, which calls this API during parsing.
+
+`app.core.llm_tasks.plugin_task_fallback(task_id: str) -> Optional[str]` returns
+the declared parent. Routing consumers use `llm_router.fallback_parent(task)`
+so declared parents and built-in routing rules stay in one place.
+
+## Perception window reader
+
+`app.models.perception_store.get_character_stream_between(perceiver: str,
+start_game_ts: str, end_game_ts: str, limit: int = 400) -> List[Dict]` reads
+one character's subjective perceptions using inclusive canonical game-time
+bounds. Equal bounds include lines at that instant; unstamped utterances are
+skipped. Rows contain `game_ts`, `speaker`, `content`, `kind`, `location_id`,
+`room_id`, oldest first with perception ID as a tie breaker. The earliest
+`limit` rows are returned; a non-positive limit returns no rows. Content comes
+from the perception, so canonical speech that the character did not hear is
+never exposed by this reader.

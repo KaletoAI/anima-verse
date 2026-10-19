@@ -120,18 +120,21 @@ class SkillManager:
         }
 
     def _get_agent_skills(self, character_name: str,
-                          check_limits: bool = True) -> List:
+                          check_limits: bool = True, turn: str = "") -> List:
         """Filter visible skills by character overrides and package defaults.
 
         Proactive calls also apply runtime limits; chat calls skip those limits.
         """
         if not character_name:
-            return self.skills
+            return [skill for skill in self.skills
+                    if not skill.TURN_KINDS or turn in skill.TURN_KINDS]
 
         from app.models.character import get_character_skill_config
 
         result = []
         for skill in self.skills:
+            if skill.TURN_KINDS and turn not in skill.TURN_KINDS:
+                continue
             if not skill.SKILL_ID:
                 result.append(skill)
                 continue
@@ -163,9 +166,9 @@ class SkillManager:
         return result
 
     def get_agent_tools(self, character_name: str,
-                        check_limits: bool = True) -> List[ToolSpec]:
+                        check_limits: bool = True, turn: str = "") -> List[ToolSpec]:
         """Return the character's currently active tool specifications."""
-        agent_skills = self._get_agent_skills(character_name, check_limits=check_limits)
+        agent_skills = self._get_agent_skills(character_name, check_limits=check_limits, turn=turn)
         return [s.as_tool(character_name=character_name) for s in agent_skills]
 
     def get_skill(self, skill_id: str):
@@ -206,14 +209,16 @@ class SkillManager:
     def get_agent_usage_instructions(self, character_name: str,
                                      format_name: str = "",
                                      check_limits: bool = True,
-                                     exclude: frozenset = frozenset()) -> str:
+                                     exclude: frozenset = frozenset(),
+                                     turn: str = "") -> str:
         """Usage instructions for the skills active for this character.
 
         ``exclude``: tool names whose usage lines stay out — a verb the
         caller does not offer this turn (in-person movement) must not come
         back through its usage example either.
         """
-        agent_skills = self._get_agent_skills(character_name, check_limits=check_limits)
+        agent_skills = self._get_agent_skills(character_name, check_limits=check_limits,
+                                              turn=turn)
         if not agent_skills:
             return ""
         return "\n".join(skill.get_usage_instructions(format_name, character_name=character_name)

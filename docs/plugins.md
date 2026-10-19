@@ -123,6 +123,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `always_load` | nein | Default für `skills[].always_load` aller Verben des Pakets |
 | `enabled_default` | nein | Lade-Gate-Default für Verben OHNE `always_load`, wenn weder `skills.<id>.enabled` in der Config noch die Env-Bridge etwas sagen (z.B. `true` für Kern-Verben wie `talk_to`, `movement`, `act`, `interact`, `take_photo`) |
 | `env_prefix` | nein | Nur Altbestand: Präfix der Env-Bridge-Variable `<prefix>ENABLED` (Default `SKILL_<ID>_`). Neue Pakete nutzen `ctx.get_config` |
+| `llm_tasks` | no | Mapping of task IDs to `{label, category, priority?, fallback?}`. Categories: `chat`, `tool`, `helper`, `image`; priorities: `low`, `normal` (default), `high`. Fallback names an existing task. Unknown parents are dropped with a warning; core task IDs cannot be replaced. Task declarations also count as a content contribution. Only active packages with satisfied dependencies contribute tasks; discovery rebuilds them after removal. Inventory scans do not register tasks. |
 | `templates.llm` | nein | Ordner relativ zum Paket; gleiche Struktur wie `shared/templates/llm/`. Existiert er nicht, gibt es eine Warnung und keinen Beitrag |
 | `templates.character` | nein | Liste von Fragment-JSONs (siehe unten) |
 | `config_schema` | nein | Subsections für `/admin/settings → Skills` |

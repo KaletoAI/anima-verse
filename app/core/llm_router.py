@@ -315,6 +315,10 @@ def fallback_parent(task: str) -> Optional[str]:
         (strict-JSON tool work; the tool-class anchor)
       * npc_* → "chat_stream" (character writing; the chat anchor)
     """
+    from app.core.llm_tasks import plugin_task_fallback
+    declared_parent = plugin_task_fallback(task)
+    if declared_parent:
+        return declared_parent
     for parent in ("intent", "thought", "extraction"):
         if task.startswith(parent + "_") and task != parent:
             return parent

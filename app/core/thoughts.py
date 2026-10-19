@@ -310,7 +310,7 @@ class ThoughtRunner:
 
         # Load skills and determine the mode.
         sm = get_skill_manager()
-        agent_tools = sm.get_agent_tools(character_name)
+        agent_tools = sm.get_agent_tools(character_name, turn="thought")
 
         # Observer turns restrict tools to prevent role confusion.
         if tool_whitelist:
@@ -379,7 +379,7 @@ class ThoughtRunner:
         tools_hint = ""
         if available_tool_names and mode != "rp_first":
             appearance = get_character_appearance(character_name)
-            usage = sm.get_agent_usage_instructions(character_name, tool_format)
+            usage = sm.get_agent_usage_instructions(character_name, tool_format, turn="thought")
             tools_hint = (
                 f"\n"
                 + build_tool_instruction(
@@ -432,7 +432,7 @@ class ThoughtRunner:
             _td = load_prompt_data(character_name, THOUGHT_FULL)
 
             appearance = get_character_appearance(character_name)
-            usage = sm.get_agent_usage_instructions(character_name, tool_format)
+            usage = sm.get_agent_usage_instructions(character_name, tool_format, turn="thought")
             _tool_fmt = tool_format
             from app.models.character_template import is_roleplay_character as _is_rp_pa
             tool_instr_block = build_tool_instruction(
