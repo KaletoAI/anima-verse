@@ -58,6 +58,8 @@ def main():
         state = ba.status(lid)
         assert state['state'] == 'done', state
         assert [s['state'] for s in state['steps']] == ['done'] * 3
+        # The previous pair survives the rebuild as the Undo target.
+        assert build.call_args.kwargs['keep'] == ('old.glb', 'old.glb'), build.call_args
         assert state['steps'][2]['counts'] == {'rooms': 1, 'skipped': 1, 'reasons': {'has_furniture': 1}}
         assert ba.undo(lid, result['snapshot_id'])['reselected'] == 'old.glb'
         select.assert_called_once_with(lid, 'old.glb')
@@ -92,7 +94,7 @@ def main():
         join()
         proposal.assert_called_once_with(lid)
         entered, proceed = threading.Event(), threading.Event()
-        def blocking(*args):
+        def blocking(*args, **kwargs):
             entered.set()
             assert proceed.wait(5)
             return {'ok': True}

@@ -3,7 +3,7 @@ import json
 import secrets
 from pathlib import Path
 import tempfile
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 from app.core import hull_styles, surface_textures
 from app.core.hull_facts import hull_facts, with_storeys
@@ -190,8 +190,11 @@ def build_job(location_id: str, description: Any, location: Optional[Dict] = Non
             "placement": placement, "walls": kinds["walls"]}
 
 
-def generate_hull(location_id: str, description: Any) -> Dict[str, Any]:
-    """Build and pin both gallery tiers synchronously without changing the location."""
+def generate_hull(location_id: str, description: Any, *,
+                  keep: Iterable[str] = ()) -> Dict[str, Any]:
+    """Build and pin both gallery tiers synchronously without changing the location.
+
+    Earlier hull builds are removed, except the files named in ``keep``."""
     from app.blender import runner
     from app.core.location_model3d import save_hull_model
     if not runner.is_available():
@@ -215,7 +218,7 @@ def generate_hull(location_id: str, description: Any) -> Dict[str, Any]:
             return {"ok": False, "error": "no glb produced"}
         meta = save_hull_model(location_id, files["full"].read_bytes(), files["low"].read_bytes(),
             placement_full=job["placement"]["full"], placement_low=job["placement"]["low"],
-            description=job["description"], fingerprint=job["fingerprint"], style_id=job["style_id"], walls=job["walls"])
+            description=job["description"], fingerprint=job["fingerprint"], style_id=job["style_id"], walls=job["walls"], keep=keep)
     return {"ok": True, "error": "", "meta": meta}
 
 

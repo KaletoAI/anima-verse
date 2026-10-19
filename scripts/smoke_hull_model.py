@@ -78,6 +78,26 @@ def main() -> None:
         selection = json.loads((full.parent / "selection.json").read_text())
         assert selection["building"] == {"full": full.name, "low": low_file.name}
         assert read_sidecar(full)["plan_hull"] is True
+        # A rebuild removes the earlier hull pair unless it is kept; an
+        # image-generated building mesh is never touched.
+        from app.core.model_store import write_sidecar
+        image_mesh = full.parent / "building_1000.glb"
+        image_mesh.write_bytes(b"glTF")
+        write_sidecar(image_mesh, {"source": "mesh_generation", "tier": "full"})
+        kept = location_model3d.save_hull_model(loc_id, b"glTF", b"glTF",
+            placement_full=job["placement"]["full"], placement_low=job["placement"]["low"],
+            description=job["description"], fingerprint=job["fingerprint"], style_id="fachwerk",
+            keep=[full.name])
+        assert full.exists() and not low_file.exists() and image_mesh.exists()
+        again = location_model3d.save_hull_model(loc_id, b"glTF", b"glTF",
+            placement_full=job["placement"]["full"], placement_low=job["placement"]["low"],
+            description=job["description"], fingerprint=job["fingerprint"], style_id="fachwerk")
+        names = sorted(p.name for p in full.parent.glob("building_*.glb"))
+        assert not full.exists() and not (full.parent / kept["filename"]).exists()
+        assert len(names) == 3 and image_mesh.name in names and again["filename"] in names, names
+        full = location_model3d.find_building_model(loc_id, tier="full")
+        low_file = location_model3d.find_building_model(loc_id, tier="low")
+        meta = again
         # Consumer check: the flag must reach the scene spec through the client meta.
         from app.core.scene_recipe import compose_scene
         from app.models.world import get_location_by_id

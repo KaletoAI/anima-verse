@@ -103,7 +103,8 @@ def _step(location_id: str, step_id: str, state: str, message: str = '',
         step.update(state=state, message=message, counts=counts or {})
 
 
-def _run_chain(location_id: str, description: dict | None) -> None:
+def _run_chain(location_id: str, description: dict | None,
+               keep: tuple[str, ...] = ()) -> None:
     task_id, error, step_id = '', '', 'hull'
     try:
         from app.core.task_queue import get_task_queue
@@ -115,7 +116,8 @@ def _run_chain(location_id: str, description: dict | None) -> None:
         _step(location_id, 'hull', 'running')
         if description is None:
             description = propose_hull(location_id)['description_json']
-        result = generate_hull(location_id, description)
+        # The previous model stays for Undo; older hull builds are removed.
+        result = generate_hull(location_id, description, keep=keep)
         if not result.get('ok'):
             raise RuntimeError(result.get('error') or 'Hull build failed')
         _step(location_id, 'hull', 'done')
@@ -175,6 +177,8 @@ def apply(location_id: str, draft: dict, hull: dict | None = None) -> dict:
             elif normalized.get('hull_valid'):
                 description = normalized['hull']
             previous = find_building_model(location_id)
+            previous_low = find_building_model(location_id, tier='low')
+            keep = tuple(p.name for p in (previous, previous_low) if p)
             snapshot_id = layout_snapshot(location_id)
             applied = apply_layout(normalized)
             _statuses[location_id] = {
@@ -185,7 +189,7 @@ def apply(location_id: str, draft: dict, hull: dict | None = None) -> dict:
                           for key in ('floorplan', 'hull', 'furnish')],
             }
             try:
-                threading.Thread(target=_run_chain, args=(location_id, description),
+                threading.Thread(target=_run_chain, args=(location_id, description, keep),
                                  daemon=True).start()
             except Exception as exc:
                 _statuses[location_id]['state'] = 'failed'

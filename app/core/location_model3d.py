@@ -41,7 +41,7 @@ same pending flag; the result is a new gallery file selected for ``low``.
 from copy import deepcopy
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from app.core import hub_ops
 from app.core.log import get_logger
@@ -1682,8 +1682,14 @@ def delete_building_model(location_id: str, room_id: str = "",
 def save_hull_model(location_id: str, full: bytes, low: bytes, *,
                     placement_full: Dict, placement_low: Dict,
                     description: Dict, fingerprint: str, style_id: str,
-                    walls: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-    """Store separate hull tiers with their placement and pin both selections."""
+                    walls: Optional[Dict[str, str]] = None,
+                    keep: Iterable[str] = ()) -> Dict[str, Any]:
+    """Store separate hull tiers with their placement and pin both selections.
+
+    Every earlier hull build of the building is removed afterwards, except the
+    files named in ``keep`` (the Building assistant's Undo target): a rebuild
+    replaces the hull, it does not pile up Blender copies in the model list.
+    Image-generated building meshes are never touched."""
     owner = _owner_id(location_id)
     if not owner:
         raise ValueError("location not found")
@@ -1703,4 +1709,22 @@ def save_hull_model(location_id: str, full: bytes, low: bytes, *,
         saved[tier] = {**meta, "filename": target.name}
     for tier, meta in saved.items():
         select_model(location_id, meta["filename"], "", tier)
+    prune_hull_models(location_id, keep={*keep, *(m["filename"] for m in saved.values())})
     return saved[DEFAULT_TIER]
+
+
+def prune_hull_models(location_id: str, keep: Iterable[str] = ()) -> List[str]:
+    """Delete the building's hull builds (sidecar source ``hull_build``) whose
+    file name is not in ``keep``; returns the removed names."""
+    owner = _owner_id(location_id)
+    if not owner:
+        return []
+    gallery = _gallery(owner)
+    kept = set(keep)
+    removed = []
+    for path in gallery.files():
+        if path.name in kept or read_sidecar(path).get("source") != "hull_build":
+            continue
+        if gallery.delete(path.name):
+            removed.append(path.name)
+    return removed
