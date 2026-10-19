@@ -473,8 +473,9 @@ def _subject_outfit_text(actor: str) -> str:
     """Equipped outfit string (without the leading 'wearing: ' prefix
     duplication — the template already labels it)."""
     try:
-        from app.core.outfit_renderer import render_outfit
-        raw = render_outfit(character_name=actor).get("full", "") or ""
+        from app.core.outfit_renderer import render_outfit, undressed_line
+        raw = (undressed_line(actor)
+               or render_outfit(character_name=actor).get("full", "") or "")
         return raw.strip()
     except Exception:
         return ""
@@ -536,13 +537,14 @@ def _build_present_people_block(names: List[str]) -> str:
     if not names:
         return ""
     try:
-        from app.core.outfit_renderer import render_outfit
+        from app.core.outfit_renderer import render_outfit, undressed_line
     except Exception:
         return "\n".join(f"- {n}" for n in names)
     lines = []
     for n in names:
         try:
-            outfit = (render_outfit(character_name=n).get("full", "") or "").strip()
+            outfit = (undressed_line(n)
+                      or render_outfit(character_name=n).get("full", "") or "").strip()
         except Exception:
             outfit = ""
         if outfit:

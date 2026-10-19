@@ -454,7 +454,7 @@ def outfit_signature_raw(equipped_pieces: Optional[Dict[str, str]],
     first one's T-pose render and mesh get served to all of them.
 
     The free-text branch returns ``render_outfit(...)["full"]``, EXACTLY what
-    the image prompt is built from: ``NO_CLOTHES_TEXT`` for an undressed
+    the image prompt is built from: ``outfit_renderer.undressed_text`` for an undressed
     character (``outfit_worn`` false) and "" when no text is set. Undressed
     therefore has a signature of its own — it renders a different picture
     than the dressed one and must not share its cache entry.

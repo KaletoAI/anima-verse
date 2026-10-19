@@ -30,8 +30,36 @@ def _get_item(iid: str) -> Optional[Dict[str, Any]]:
 
 
 #: What an undressed character wears — the text that REPLACES the wardrobe
-#: description once `outfit_worn` is off (see render_outfit step 5).
+#: description once `outfit_worn` is off (see render_outfit step 5). A
+#: species package may declare its own (``undressed_prompt``, see
+#: :func:`undressed_text`).
 NO_CLOTHES_TEXT = "no clothes"
+
+
+def is_free_text_wardrobe(profile: Optional[Dict[str, Any]]) -> bool:
+    """Whether the character dresses by free text only: its template has no
+    outfit system (``features.outfit_system_enabled: false``, e.g.
+    npc-temporary). Its wardrobe is ``outfit_description`` + ``outfit_worn``."""
+    name = str((profile or {}).get("template") or "").strip()
+    if not name:
+        return False
+    try:
+        from app.models.character_template import get_template
+        tmpl = get_template(name) or {}
+    except Exception:
+        return False
+    return (tmpl.get("features") or {}).get("outfit_system_enabled") is False
+
+
+def undressed_text(profile: Optional[Dict[str, Any]]) -> str:
+    """What an undressed character wears in every prompt: the
+    ``undressed_prompt`` of a species package applying to its template, else
+    ``NO_CLOTHES_TEXT``."""
+    try:
+        from app.core.body_slots import undressed_prompt
+        return undressed_prompt(profile or {}) or NO_CLOTHES_TEXT
+    except Exception:
+        return NO_CLOTHES_TEXT
 
 
 def is_outfit_worn(profile: Optional[Dict[str, Any]]) -> bool:
@@ -53,7 +81,7 @@ def is_outfit_worn(profile: Optional[Dict[str, Any]]) -> bool:
 def free_text_outfit(profile: Optional[Dict[str, Any]]) -> str:
     """What a free-text wardrobe WEARS right now, as ``render_outfit`` says it.
 
-    ``NO_CLOTHES_TEXT`` for an undressed character, ``"wearing: <text>"`` for
+    :func:`undressed_text` for an undressed character, ``"wearing: <text>"`` for
     a dressed one, "" when no ``outfit_description`` is set. It is the string
     the per-outfit caches sign (``model_refs.outfit_signature_raw``), so
     "did this save re-dress the character" is asked of THIS and not of the
@@ -61,13 +89,13 @@ def free_text_outfit(profile: Optional[Dict[str, Any]]) -> str:
     (``npc_assets.on_outfit_description_changed``).
     """
     if not is_outfit_worn(profile):
-        return NO_CLOTHES_TEXT
+        return undressed_text(profile)
     described = str((profile or {}).get("outfit_description") or "").strip()
     return "wearing: " + described if described else ""
 
 
 def collect_covered_slots(equipped_pieces: Dict[str, str]) -> Set[str]:
-    """Alle Slots, die durch ein anderes Piece via `covers` verdeckt werden."""
+    """All slots another piece hides entirely via `covers`."""
     covered: Set[str] = set()
     for slot, iid in (equipped_pieces or {}).items():
         if not iid:
@@ -104,12 +132,12 @@ def _resolve_partial_covers(
     equipped_pieces: Dict[str, str],
     slot_order: List[str],
 ) -> Tuple[Dict[str, Tuple[str, str]], Set[str]]:
-    """Liefert (partially_covered_map, suppressed_slots).
+    """Returns (partially_covered_map, suppressed_slots).
 
     - partially_covered_map: {target_slot → (covering_fragment, covering_slot)}
-      bedeutet "covering_slot deckt target_slot teilweise, fragment lautet ..."
-    - suppressed_slots: Slots deren Fragment im "underneath"-Teil eines
-      anderen Slots steckt — nicht doppelt rendern.
+      means "covering_slot partially covers target_slot, its fragment reads ..."
+    - suppressed_slots: slots whose fragment already sits in the "underneath"
+      part of another slot — not rendered twice.
     """
     partial: Dict[str, Tuple[str, str]] = {}
     seen_items: Set[str] = set()
@@ -140,8 +168,8 @@ def _iter_visible_pieces(
     covered: Set[str],
     suppressed: Set[str],
 ) -> List[Tuple[str, str, Dict[str, Any]]]:
-    """Iteriert sichtbare Pieces in Slot-Reihenfolge mit Dedup fuer
-    Multi-Slot-Pieces. Returns Liste (slot, item_id, item_dict).
+    """Iterates the visible pieces in slot order, de-duplicating
+    multi-slot pieces. Returns a list of (slot, item_id, item_dict).
     """
     out: List[Tuple[str, str, Dict[str, Any]]] = []
     rendered: Set[str] = set()
@@ -167,31 +195,30 @@ def render_outfit(
     equipped_items: Optional[List[str]] = None,
     back_view: bool = False,
 ) -> Dict[str, str]:
-    """Baut Outfit-Beschreibung — Pieces + Items + Fallback fuer leere Slots.
+    """Builds the outfit description — pieces + items + fallback for empty slots.
 
     Inputs:
-        profile: Character-Profile. Wenn None und character_name gegeben,
-            wird via get_character_profile geladen.
-        equipped_pieces / equipped_items: Overrides — fuer Set-Vorschauen
-            oder andere Stelle, die NICHT den aktuellen Status zeigen sollen.
-            None → aus dem Profil.
-        back_view: Render aus der Rueckansicht — nur LoRAs von Body-Slots,
-            die `back: true` deklarieren (siehe app/core/body_slots.py).
+        profile: character profile. When None and character_name is given,
+            it is loaded via get_character_profile.
+        equipped_pieces / equipped_items: overrides — for set previews or
+            other places that must NOT show the current state.
+            None → from the profile.
+        back_view: a render seen from behind — only LoRAs of body slots
+            that declare `back: true` (see app/core/body_slots.py).
 
     Returns:
         {
             "pieces":   str,   # "white bustier, jeans, sneakers"
             "items":    str,   # "holding hammer, wearing aviator sunglasses"
-            "fallback": str,   # "topless, bottomless" — leere Slots
-            "full":     str,   # zusammengesetzt fuer "altes" build_equipped_outfit_prompt
+            "fallback": str,   # "topless, bottomless" — empty slots
+            "full":     str,   # assembled as the old build_equipped_outfit_prompt did
         }
 
-    Wenn weder Pieces noch Items noch Fallback befuellt sind, ist `full=""`.
-    Aufrufer behandeln das als "outfit-frei" und greifen ggf. auf Freitext-
-    Fallback zurueck. Ein ausgezogener Character (`outfit_worn` aus) ist
-    dagegen KEIN leerer Fall: `fallback` und `full` tragen dann
-    NO_CLOTHES_TEXT, damit jeder Prompt den Zustand ausspricht statt ihn
-    wegzulassen.
+    With neither pieces nor items nor fallback filled, `full=""`. Callers
+    treat that as "no outfit" and may fall back to a free text. An undressed
+    character (`outfit_worn` off) is NOT an empty case: `fallback` and
+    `full` then carry :func:`undressed_text`, so every prompt states the
+    condition instead of leaving it out.
     """
     from app.models.inventory import VALID_PIECE_SLOTS
     if profile is None and character_name:
@@ -210,18 +237,13 @@ def render_outfit(
     # equipped) must never override that text — the wardrobe UI is hidden
     # for these templates, so stray pieces would be uncorrectable and the
     # rendered image would contradict the description.
-    try:
-        from app.models.character_template import get_template
-        _tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
-        if _tmpl and (_tmpl.get("features") or {}).get("outfit_system_enabled") is False:
-            pieces, items = {}, []
-    except Exception:
-        pass
+    if is_free_text_wardrobe(profile):
+        pieces, items = {}, []
 
     covered = collect_covered_slots(pieces)
     partial, suppressed = _resolve_partial_covers(pieces, list(VALID_PIECE_SLOTS))
 
-    # 1) Piece-Fragmente
+    # 1) Piece fragments
     piece_fragments: List[str] = []
     for slot, iid, item in _iter_visible_pieces(
         pieces, list(VALID_PIECE_SLOTS), covered, suppressed,
@@ -233,7 +255,7 @@ def render_outfit(
             frag = f"{frag} underneath {partial[slot][0]}"
         piece_fragments.append(frag)
 
-    # 2) Item-Fragmente (equipped_items — Hand/Akzessoires)
+    # 2) Item fragments (equipped_items — hand-held / accessories)
     item_fragments: List[str] = []
     seen_iids: Set[str] = set()
     for iid in items or []:
@@ -247,11 +269,10 @@ def render_outfit(
         if frag:
             item_fragments.append(frag)
 
-    # 3) Fallback-Parts: leere + nicht-verdeckte Slots (Slot-Override
-    #    oder no_outfit_prompt_top/bottom Legacy). Achtung: underwear_top/
-    #    underwear_bottom werden NICHT als sichtbar betrachtet, wenn der
-    #    Outer-Slot belegt ist — sonst beschreibt der Prompt freiliegende
-    #    Haut, obwohl Hose/Top sie verdecken.
+    # 3) Fallback parts: empty and uncovered slots. Note: underwear_top/
+    #    underwear_bottom do NOT count as visible while the outer slot is
+    #    occupied — otherwise the prompt describes bare skin that trousers
+    #    or a top actually hide.
     def _outer_layer_covers(slot: str) -> bool:
         if slot == "underwear_top":
             return bool(pieces.get("top")) or "underwear_top" in covered
@@ -292,7 +313,7 @@ def render_outfit(
     items_text = ", ".join(item_fragments)
     fallback_text = ", ".join(fallback_parts)
 
-    # 4) Full-Zusammenbau (Format wie altes build_equipped_outfit_prompt):
+    # 4) Full assembly (format of the old build_equipped_outfit_prompt):
     #    "<fallback>. wearing: <pieces>. <items>"
     if not pieces and not items:
         full = ""
@@ -331,19 +352,47 @@ def render_outfit(
     }
 
 
+def undressed_line(character_name: str = "",
+                   profile: Optional[Dict[str, Any]] = None) -> str:
+    """What an LLM is told about an UNDRESSED free-text wardrobe — "" for
+    anyone dressed or dressed by pieces/items.
+
+    :func:`undressed_text` followed by the exposed body-slot fragments
+    ("<undressed text>, <exposed fragment>, …"): the image path carries those fragments in the
+    person description already (``appearance_suffix``), the LLM prompts
+    that name the outfit only did not — they said what is missing and not
+    what is there. The clothing description is left out on purpose."""
+    if profile is None and character_name:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    profile = profile or {}
+    if is_outfit_worn(profile):
+        return ""
+    out = render_outfit(profile, character_name=character_name)
+    if out.get("pieces") or out.get("items"):
+        return ""
+    parts = [out.get("full") or undressed_text(profile)]
+    try:
+        from app.core.body_slots import prompt_fragments
+        parts += prompt_fragments(character_name, profile=profile)["exposed"]
+    except Exception:
+        pass
+    return ", ".join(p for p in parts if p)
+
+
 def render_unworn_slots(
     profile: Optional[Dict[str, Any]] = None,
     *,
     character_name: str = "",
 ) -> str:
-    """Sammelt prompt-Fragmente fuer leere UND nicht-verdeckte Slots.
+    """Collects prompt fragments for empty AND uncovered slots.
 
-    Im Gegensatz zu render_outfit().fallback enthaelt das hier ALLE
-    unbedeckten/leeren Slots (auch underwear-Slots wenn outer leer ist),
-    weil der Chat-Pfad die Appearance-Zeile erweitert — wenn der Char
-    nichts traegt, soll der LLM-Prompt sehen "topless, no panties".
+    Unlike render_outfit().fallback this holds ALL uncovered/empty slots
+    (underwear slots too while the outer one is empty), because the chat
+    path extends the appearance line — a character wearing nothing should
+    show the LLM prompt "topless, no panties".
 
-    Returns kommaseparierte Liste der Fragmente.
+    Returns a comma-separated list of the fragments.
     """
     from app.models.inventory import VALID_PIECE_SLOTS
     if profile is None and character_name:

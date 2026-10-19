@@ -199,7 +199,8 @@ def on_outfit_description_changed(name: str, old: str, new: str) -> Optional[str
 
     ``old``/``new`` are the WORN text (``outfit_renderer.free_text_outfit``),
     so flipping ``outfit_worn`` counts as a re-dressing too: undressed signs
-    as "no clothes" and owns a default expression and a mesh of its own. The
+    as ``outfit_renderer.undressed_text`` ("no clothes" unless a species
+    package declares its own) and owns a default expression and a mesh of its own. The
     job renders only what ``npc_assets_complete`` misses, so flipping back to
     a state that was rendered before costs nothing.
 

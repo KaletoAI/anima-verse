@@ -136,6 +136,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `apply_to` | nein | Template-Selektor (Namen/`*`/`{feature}`) für die Spezies-Inhalte (`silhouette`/`body_slots`/`piece_slots`); ohne ihn zählen die Selektoren der Character-Fragmente |
 | `silhouette` | nein | `{asset: <relpath>, anchors: {slot: [x%, y%]}}` — UI-Paper-Doll der Spezies |
 | `body_slots` | nein | Körper-Slot-Deklarationen (s.u.) |
+| `undressed_prompt` | nein | Text, den ein ausgezogener Freitext-Charakter (Template ohne Outfit-System, `outfit_worn` aus) in allen Prompts statt des Core-Texts „no clothes" trägt; gilt für die `apply_to`-Templates des Pakets. Zählt als Paket-Beitrag |
 | `piece_slots` | nein | Kleidungs-Slot-Topologie der Spezies (String oder `{id, label}`); ohne Deklaration gilt der Core-Default (`inventory.VALID_PIECE_SLOTS`) inkl. Core-Reihenfolge/-Labels |
 
 ### Verb-Ebene (`skills[]`)
@@ -249,14 +250,17 @@ body_slots:
 | `id` | Pflicht — ohne `id` wird der Eintrag übersprungen |
 | `covered_by` | Kleidungs-Slots, die den Slot verdecken; leer = immer sichtbar |
 | `applies_to` | `{profilfeld: [erlaubte Werte]}` — Slot gilt nur für passende Charaktere |
-| `attributes` | `{name: {type: …, options: …}}`. `interest_aliases` (`{kanonischer_wert: [phrase, …]}`) ist das Attraction-Matching: Phrasen im romantic_interests-Text der GEGENSEITE matchen gegen den Slot-Wert dieses Charakters — der Core hat keine Alias-Tabellen |
+| `attributes` | `{name: {type: …, options: …}}`. Optional `default: {apply_to: <Template-Selektor>, value: <text>, by: {<profilfeld>: {<feldwert>: <text>}}}` — füllt einen UNGESETZTEN Wert nur im `exposed`-Fragment der passenden Templates (bedeckt spricht der eigene Aussehenstext) (`by` zuerst, sonst `value`; ohne Treffer und ohne `value` = ""); ein so vertretenes Attribut darf leer sein, das Wort entfällt dann statt des ganzen Fragments. Der Editor zeigt den Wert grau, gespeichert wird er nie. `interest_aliases` (`{kanonischer_wert: [phrase, …]}`) ist das Attraction-Matching: Phrasen im romantic_interests-Text der GEGENSEITE matchen gegen den Slot-Wert dieses Charakters — der Core hat keine Alias-Tabellen |
 | `prompt` | `always` / `covered` / `exposed` (s.o.) |
 | `face` | Fragment gehört auch in Portrait-/Ausdrucks-Prompts (`prompt_fragments(face_only=True)`) |
 | `back` | Die Anatomie ist auch von HINTEN zu sehen. Rückansicht-Renders — die T-Pose-Back-Referenz der Bild→3D-Kette — behalten nur `exposed`-Fragmente solcher Slots und deren LoRAs; alles andere beschreibt die Vorderseite und zöge die Figur zur Kamera herum. `always`/`covered` sind nicht betroffen: sie beschreiben die ganze Person, nicht eine Seite. Default `false` |
 
 Werte pro Charakter liegen im Profil (`body_slots: {<slot>: {<attr>: <wert>}}`).
 Fragmente mit fehlenden Attribut-Werten entfallen komplett (kein halb gerendertes
-`{size}`). Die Fragmente gehen auch mit Referenzbild mit (F3).
+`{size}`), außer ein `default` vertritt das Attribut. Die Fragmente gehen auch mit
+Referenzbild mit (F3). Ein Freitext-Charakter (Template ohne Outfit-System) hat
+keine Pieces: seine Slots mit `covered_by` sind bedeckt, solange er angezogen ist
+(`outfit_worn`), und unbedeckt, sobald er ausgezogen ist.
 
 #### Optional `rigs` declaration (P1)
 

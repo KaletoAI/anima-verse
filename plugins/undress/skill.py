@@ -55,13 +55,18 @@ class UndressSkill(PluginSkill):
     def _prompt_context(self, *, character_name: str, mode: str, blocks: list) -> None:
         if not self._is_current() or not self._available(character_name):
             return
+        from app.core.outfit_renderer import undressed_line
         from app.core.prompt_templates import render
         from app.models.character import get_character_profile, get_state_flags
         profile = get_character_profile(character_name) or {}
         flags = get_state_flags(character_name)
+        # Undressed, the prompt states what is there (the core's undressed
+        # text plus exposed anatomy), never the clothes lying around.
+        undressed = "" if not self._dressed else undressed_line(character_name, profile)
         blocks.append(render(
             "undress/context.md", mode=mode, dressed=not self._dressed,
             description=profile.get("outfit_description", ""),
+            undressed=undressed,
             verb=self.name, target_dressed=self._dressed,
             suggest_dressing=self._dressed and not any(flags.get(k) for k in
                 ("is_sleeping", "is_wet", "is_intimate", "decency_exempt")),

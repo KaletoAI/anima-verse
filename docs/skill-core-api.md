@@ -97,6 +97,8 @@ Stat-Namen.
 | `slot_values(character_name)` / `set_slot_value(character_name, slot_id, attr, value)` | Gespeicherte Attribut-Werte (Profil, Stammdaten) |
 | `prompt_fragments(character_name, face_only=False, profile=None, back_view=False)` | `{general, exposed}` — general = always+covered (Personenbeschreibung, F1), exposed nur unbedeckt; `face_only` filtert auf `face: true`-Slots, `back_view` auf die Rückansicht |
 | `appearance_suffix(character_name, face_only=False, profile=None, back_view=False) -> str` | Kombinierter Text; hängt der PromptBuilder automatisch an die Appearance an |
+| `is_slot_exposed(spec, profile) -> bool` | Unbedeckt? Piece-Garderobe: kein Piece in `covered_by`; Freitext-Garderobe: `outfit_worn` aus |
+| `attribute_default(decl, profile) -> Optional[str]` | Template-gebundener Fallback eines Attributs (`default`), `None` = keiner |
 | `piece_slots_for_character(character_name) -> Tuple[str, ...]` | Kleidungs-Slot-Topologie der Spezies (Fallback `inventory.VALID_PIECE_SLOTS`). Konsumenten: Paper-Doll/Belongings, `inventory.equip_piece`-Validierung, `CreateOutfit`-Slot-Liste, Decency-required-Slots |
 | `declared_piece_slots(character_name)` | `(slots, labels)` NUR wenn eine Spezies deklariert, sonst `None` — Aufrufer behalten dann ihren Core-Default |
 | `silhouette_for_character(character_name)` | Silhouetten-Deklaration des Spezies-Pakets (UI) |
@@ -113,6 +115,9 @@ liefert `slot_order`/`slot_labels`/`slot_anchors`/`silhouette_url` spezies-getri
 |---|---|
 | `apply_outfit_compliance(character_name, *, is_intimate=None, is_wet=None, is_sleeping=None) -> Dict` | Decency/Style des aktuellen Raums gegen `equipped_pieces` abgleichen — nach JEDER Zustandsänderung rufen, die die Kleiderordnung beeinflusst. Die drei Kwargs geben den Zustand mit, wenn er gerade geschrieben wurde und noch nicht im Profil steht |
 | `app.core.outfit_renderer.is_outfit_worn(profile) -> bool` | Binärer „angezogen?"-Zustand für Freitext-Garderoben (undress-Paket) |
+| `app.core.outfit_renderer.is_free_text_wardrobe(profile) -> bool` | Template ohne Outfit-System (`outfit_system_enabled: false`) — Kleidung = `outfit_description` + `outfit_worn` |
+| `app.core.outfit_renderer.undressed_text(profile) -> str` | Was ein Ausgezogener trägt: `undressed_prompt` eines passenden Spezies-Pakets, sonst „no clothes" |
+| `app.core.outfit_renderer.undressed_line(character_name="", profile=None) -> str` | LLM-Zeile eines AUSGEZOGENEN Freitext-Charakters: `undressed_text` + unbedeckte Body-Slot-Fragmente, ohne Kleidungsbeschreibung; "" für Angezogene und Piece-Garderoben |
 
 ## Beziehung — `app.models.relationship` ⚠
 

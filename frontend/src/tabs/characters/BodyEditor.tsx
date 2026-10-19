@@ -23,6 +23,9 @@ export interface BodySlotAttr {
   value: string
   // lora_select only: companion strength value (<key>_strength)
   strength?: number
+  // Template-scoped fallback the exposed prompt uses while `value` is empty
+  // (shown greyed, never materialized); null = the attribute has none.
+  default?: string | null
 }
 export interface BodySlot {
   id: string
@@ -144,19 +147,21 @@ export function BodyEditor({ character, queueBody, draftFor, discardSignal }: {
                 </span>
               )
             }
+            const fallback = a.default ? `${a.label}: ${a.default}` : ''
+            const tip = fallback ? `${a.label} — ${t('Default for this template')}: ${a.default}` : a.label
             if (a.options.length > 0 && !a.allow_custom) {
               return (
-                <select key={a.key} className="ga-input" value={a.value} title={a.label}
+                <select key={a.key} className="ga-input" value={a.value} title={tip}
                   style={{ fontSize: '0.82em', padding: '2px 6px', minWidth: 100 }}
                   onChange={(e) => commit(s.id, a.key, e.target.value)}>
-                  <option value="">{a.label}…</option>
+                  <option value="">{fallback || `${a.label}…`}</option>
                   {a.options.map((o) => <option key={o} value={o}>{o}</option>)}
                 </select>
               )
             }
             return (
-              <input key={a.key} className="ga-input" value={a.value} title={a.label}
-                placeholder={a.label} list={a.options.length ? `body-${s.id}-${a.key}` : undefined}
+              <input key={a.key} className="ga-input" value={a.value} title={tip}
+                placeholder={fallback || a.label} list={a.options.length ? `body-${s.id}-${a.key}` : undefined}
                 style={{ fontSize: '0.82em', padding: '2px 6px', width: 120 }}
                 onChange={(e) => commit(s.id, a.key, e.target.value)} />
             )

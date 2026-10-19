@@ -23,6 +23,17 @@ A slot may declare ``back: true`` — its anatomy is visible from BEHIND as
 well. A render that shows the character's back (the T-pose back view) keeps
 only those exposed fragments and their LoRAs; the rest describe the front
 and would drag the figure around toward the camera.
+
+A character dressed by free text (template without an outfit system, e.g.
+``npc-temporary``) has no pieces to cover a slot: its slots are covered while
+it is dressed (``outfit_worn``) and exposed once it is undressed. An
+attribute may declare a template-scoped ``default`` (``apply_to`` +
+``value``/``by``) that fills an unset value in the EXPOSED fragment only —
+visible anatomy has to be named, while covered the character's own
+appearance text speaks; a default resolving to "" lets the word vanish
+instead of dropping the fragment. A package may declare ``undressed_prompt``,
+the text an undressed free-text character says in place of the core's
+"no clothes".
 """
 from string import Formatter
 from typing import Any, Dict, List, Optional, Tuple
@@ -62,7 +73,8 @@ def _species_packages_for(profile: Dict[str, Any]) -> List[Any]:
     tmpl = get_template(tmpl_name) or {}
     out = []
     for pkg in packages():
-        if not (pkg.body_slots or pkg.piece_slots or pkg.silhouette):
+        if not (pkg.body_slots or pkg.piece_slots or pkg.silhouette
+                or pkg.undressed_prompt):
             continue
         try:
             if _template_matches(pkg, tmpl_name, tmpl):
@@ -155,13 +167,58 @@ def set_slot_value(character_name: str, slot_id: str, attr: str, value: Any) -> 
 # Visibility & prompt fragments
 # ---------------------------------------------------------------------------
 
-def _is_exposed(spec, profile: Dict[str, Any]) -> bool:
+def is_slot_exposed(spec, profile: Dict[str, Any]) -> bool:
     """Exposed = none of the covering clothing slots holds a piece.
-    Slots without ``covered_by`` count as exposed (always visible)."""
+    Slots without ``covered_by`` count as exposed (always visible). A
+    free-text wardrobe has no pieces: there the binary dressed state decides
+    (``outfit_worn`` off = every covered slot is exposed)."""
     if not spec.covered_by:
         return True
+    from app.core.outfit_renderer import is_free_text_wardrobe, is_outfit_worn
+    if is_free_text_wardrobe(profile):
+        return not is_outfit_worn(profile)
     equipped = dict(profile.get("equipped_pieces") or {})
     return not any(equipped.get(slot) for slot in spec.covered_by)
+
+
+def attribute_default(decl: Dict[str, Any], profile: Dict[str, Any]) -> Optional[str]:
+    """The template-scoped fallback of one slot attribute, or None.
+
+    Declared as ``default: {apply_to: <selector>, value: <text>,
+    by: {<profile field>: {<field value>: <text>}}}``: ``by`` is tried
+    first (case-insensitive), ``value`` is the rest; an unmatched default
+    without ``value`` resolves to "" (the word vanishes). None = no default
+    applies to this character's template — the attribute stays required."""
+    spec = decl.get("default")
+    if not isinstance(spec, dict):
+        return None
+    tmpl_name = (profile.get("template") or "").strip()
+    if not tmpl_name:
+        return None
+    try:
+        from app.models.character_template import fragment_applies, get_template
+        if not fragment_applies({"apply_to": spec.get("apply_to")}, tmpl_name,
+                                get_template(tmpl_name) or {}):
+            return None
+    except Exception:
+        return None
+    for field_name, table in (spec.get("by") or {}).items():
+        if not isinstance(table, dict):
+            continue
+        own = normalize_condition_value(profile.get(field_name))
+        for key, text in table.items():
+            if normalize_condition_value(key) == own:
+                return str(text or "").strip()
+    return str(spec.get("value") or "").strip()
+
+
+def undressed_prompt(profile: Dict[str, Any]) -> str:
+    """The package-declared text of an undressed free-text character ("" =
+    none declared for this template; the caller keeps its own)."""
+    for pkg in _species_packages_for(profile or {}):
+        if pkg.undressed_prompt:
+            return pkg.undressed_prompt
+    return ""
 
 
 def _format_if_complete(text: str, values: Dict[str, str]) -> str:
@@ -213,11 +270,14 @@ def prompt_fragments(character_name: str,
     general: List[str] = []
     exposed: List[str] = []
 
-    def _render(tpl: str, vals: Dict[str, str], lenient: bool = False) -> str:
+    def _render(tpl: str, vals: Dict[str, str], lenient: bool = False,
+                optional: frozenset = frozenset()) -> str:
         """Attribute placeholders are REQUIRED (missing value -> the whole
         fragment drops) — unless ``lenient`` (the per-character
         exposed_always flag): then empty attributes simply vanish from the
-        text ('exposed {size} breasts' -> 'exposed breasts'). Every OTHER
+        text ('exposed {size} breasts' -> 'exposed breasts'); ``optional``
+        names the attributes a template default stands in for, which vanish
+        the same way. Every OTHER
         {placeholder} resolves OPTIONALLY from the character's state flags:
         value-carrying flags (body_reaction="shivering") render their string,
         unset/boolean flags render empty — whitespace artifacts squashed."""
@@ -225,7 +285,8 @@ def prompt_fragments(character_name: str,
             return ""
         import re as _re
         placeholders = _re.findall(r"\{(\w+)\}", tpl)
-        if not lenient and any(ph in vals and not (vals.get(ph) or "").strip()
+        if not lenient and any(ph in vals and ph not in optional
+                               and not (vals.get(ph) or "").strip()
                                for ph in placeholders):
             return ""
         merged = dict(vals)
@@ -249,19 +310,28 @@ def prompt_fragments(character_name: str,
         return out.strip(" ,")
 
     for spec in specs:
-        vals = {attr: str((stored.get(spec.id) or {}).get(attr, "") or "")
+        slot_stored = stored.get(spec.id) or {}
+        vals = {attr: str(slot_stored.get(attr, "") or "")
                 for attr in spec.attributes}
         frag = _render(spec.prompt.get("always", ""), vals)
         if frag:
             general.append(frag)
-        if _is_exposed(spec, profile) and not (back_view and not spec.back):
+        if is_slot_exposed(spec, profile) and not (back_view and not spec.back):
             # Per-character override of the exposed fragment (stored under
             # the reserved 'exposed_prompt' slot value); the manifest text
             # is only the default. Placeholders resolve in both.
-            slot_stored = stored.get(spec.id) or {}
             tpl = (str(slot_stored.get("exposed_prompt", "") or "").strip()
                    or spec.prompt.get("exposed", ""))
-            frag = _render(tpl, vals, lenient=bool(slot_stored.get("exposed_always")))
+            exposed_vals = dict(vals)
+            defaulted = set()
+            for attr, decl in spec.attributes.items():
+                if not exposed_vals[attr].strip():
+                    fallback = attribute_default(decl, profile)
+                    if fallback is not None:
+                        exposed_vals[attr] = fallback
+                        defaulted.add(attr)
+            frag = _render(tpl, exposed_vals, lenient=bool(slot_stored.get("exposed_always")),
+                           optional=frozenset(defaulted))
             if frag:
                 exposed.append(frag)
         else:
@@ -300,7 +370,7 @@ def exposed_slot_loras(character_name: str,
     out: List[Dict[str, Any]] = []
     seen = set()
     for spec in specs:
-        if not _is_exposed(spec, profile):
+        if not is_slot_exposed(spec, profile):
             continue
         if back_view and not spec.back:
             continue

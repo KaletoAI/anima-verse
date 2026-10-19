@@ -171,6 +171,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
     pkg.capability_label = str(meta.get("capability_label", "") or "").strip()
     pkg.capability_description = str(meta.get("capability_description", "") or "").strip()
     pkg.being = str(meta.get("being", "") or "").strip().lower()
+    pkg.undressed_prompt = str(meta.get("undressed_prompt", "") or "").strip()
     pkg.skills = _parse_skill_entries(meta)
     if not meta.get("name"):
         logger.warning("Package %s: name missing in plugin.yaml", entry_dir.name)
@@ -274,7 +275,8 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any]) -> Optional[Package]:
     if not pkg.skills and not (pkg.llm_template_dir or pkg.character_fragments
                                or pkg.config_subsections or pkg.flags
                                or pkg.silhouette or pkg.body_slots
-                               or pkg.piece_slots or meta.get("on_load")):
+                               or pkg.piece_slots or pkg.undressed_prompt
+                               or meta.get("on_load")):
         logger.warning("Package %s: neither skills nor contributions in plugin.yaml",
                        entry_dir.name)
         return None

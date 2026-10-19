@@ -1531,16 +1531,15 @@ def build_body_slots(character_name: str) -> Dict[str, Any]:
     """Body-slot editor payload (species packages, plan-body-slots.md):
     applicable slots with attribute declarations + current values, plus the
     silhouette declaration. Generic — everything comes from the packages."""
-    from app.core.body_slots import (silhouette_for_character,
+    from app.core.body_slots import (attribute_default, is_slot_exposed,
+                                     silhouette_for_character,
                                      slot_values, slots_for_character)
     from app.models.character import get_character_profile
     profile = get_character_profile(character_name) or {}
     values = slot_values(character_name)
-    equipped = dict(profile.get("equipped_pieces") or {})
     slots = []
     for spec in slots_for_character(character_name):
-        exposed = (not spec.covered_by
-                   or not any(equipped.get(s) for s in spec.covered_by))
+        exposed = is_slot_exposed(spec, profile)
         attrs = []
         for key, decl in spec.attributes.items():
             attr = {
@@ -1550,6 +1549,9 @@ def build_body_slots(character_name: str) -> Dict[str, Any]:
                 "allow_custom": bool(decl.get("allow_custom")),
                 "label": decl.get("label", key.replace("_", " ").title()),
                 "value": (values.get(spec.id) or {}).get(key, ""),
+                # Template-scoped fallback the exposed prompt uses while the
+                # value is unset (shown greyed, never materialized); None = none.
+                "default": attribute_default(decl, profile),
             }
             if attr["type"] == "lora_select":
                 try:

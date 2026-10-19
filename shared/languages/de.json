@@ -8,6 +8,7 @@
     }
   },
   "translations": {
+    "Default for this template": "Vorgabe für diese Vorlage",
     "Window frame colour": "Fensterrahmenfarbe",
     "Fill blank walls with blind windows": "Leere Wände mit Blindfenstern füllen",
     "Shopfront": "Ladenfront",

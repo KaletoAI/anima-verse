@@ -1,6 +1,6 @@
 name: undress
 capability_label: "Undress / Get dressed"   # ONE UI toggle for both verbs
-capability_description: "The character can take its clothes off and put them back on. Only for characters whose clothing is a free text (no wardrobe): the description stays, the binary 'Dressed' state flips, and prompts show 'no clothes' while undressed. Background NPC turns can explicitly choose these actions and receive situational dressing reminders. Characters with a wardrobe change clothes piece by piece instead."
+capability_description: "The character can take its clothes off and put them back on. Only for characters whose clothing is a free text (no wardrobe): the description stays, the binary 'Dressed' state flips, and prompts show 'no clothes' (or a species package's undressed text plus the uncovered body slots) while undressed, without the clothing description. Background NPC turns can explicitly choose these actions and receive situational dressing reminders. Characters with a wardrobe change clothes piece by piece instead."
 version: "1.0.0"
 description: Undress / GetDressed verbs for free-text wardrobes — flips the binary outfit_worn state
 

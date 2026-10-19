@@ -277,6 +277,9 @@ class Package:
     capability_label: str = ""   # one UI toggle for ALL verbs of the package
     capability_description: str = ""  # human-facing UI text (LLM descriptions address the character)
     being: str = ""               # species prompt noun: person/animal/... (scene composition)  # optional UI labels per slot
+    # What an undressed free-text wardrobe says in prompts in place of the
+    # core's "no clothes" (scoped by `apply_to` like the other species content).
+    undressed_prompt: str = ""
     # Package dependencies (F9): ids of other packages.
     # requires — must be PRESENT for this package to load at all, and ACTIVE
     #            on a character before this package's skills can be enabled.

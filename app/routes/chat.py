@@ -18,7 +18,7 @@ from app.core.perception import STORYTELLER_SPEAKER
 logger = get_logger("chat")
 from app.core.dependencies import get_skill_manager
 from app.models.account import get_user_appearance
-from app.core.outfit_renderer import render_outfit, render_unworn_slots
+from app.core.outfit_renderer import render_outfit, render_unworn_slots, undressed_line
 from app.models.character import (
     get_character_config,
     get_character_profile,
@@ -1071,13 +1071,16 @@ def _build_chat_prompt(character_name: str,
         try:
             from app.models.inventory import (
                 get_character_inventory, get_equipped_item_ids)
-            wearing = _strip_wearing_prefix(
+            undressed = undressed_line(_cname)
+            wearing = "" if undressed else _strip_wearing_prefix(
                 render_outfit(character_name=_cname).get("full", ""))
             lines: list = []
             _is_self = (_label == "You")
             _v_wear = "are" if _is_self else "is"
             _v_carry = "have" if _is_self else "has"
-            if wearing:
+            if undressed:
+                lines.append(f"{_label} {_v_wear} undressed: {undressed}")
+            elif wearing:
                 lines.append(f"{_label} {_v_wear} currently wearing this clothing and equipment: {wearing}")
             if include_inventory:
                 inv = get_character_inventory(_cname).get("inventory", [])

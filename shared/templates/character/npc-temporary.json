@@ -398,8 +398,8 @@
           ],
           "default": "true",
           "in_prompt": false,
-          "hint": "Binary dressed state — set to No and every prompt says \"no clothes\" in place of the outfit description.",
-          "hint_de": "Binärer Bekleidungs-Zustand — auf Nein steht in allen Prompts \"no clothes\" statt der Outfit-Beschreibung."
+          "hint": "Binary dressed state — set to No and every prompt says \"no clothes\" (or the text an installed body package declares, plus the uncovered body slots) in place of the outfit description.",
+          "hint_de": "Binärer Bekleidungs-Zustand — auf Nein steht in allen Prompts \"no clothes\" (oder der Text eines installierten Körper-Pakets, plus die unbedeckten Körper-Slots) statt der Outfit-Beschreibung."
         }
       ]
     },

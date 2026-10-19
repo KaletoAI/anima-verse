@@ -1,4 +1,4 @@
-Clothing state: {% if dressed %}dressed — {{ description }}{% else %}no clothes; your clothes are available: {{ description }}{% endif %}.
+Clothing state: {% if dressed %}dressed — {{ description }}{% else %}{{ undressed }}{% endif %}.
 {% if flags %}Current states: {{ flags | join(", ") }}.
 {% endif %}{% if suggest_dressing %}You are undressed. Unless staying undressed is intentional for this situation, put your clothes back on before resuming ordinary work or social activity.
 {% endif %}{% if mode == "npc_action" %}Clothing is a real state, not an activity sentence. You may choose {{ verb }} by adding `"action": {"type": "clothing", "dressed": {{ "true" if target_dressed else "false" }}}` to your JSON answer. Keep your current room; this is a solo action, requires nobody within earshot and starts no walk. Do not also speak or propose a pair action. Otherwise omit `action` and leave clothing unchanged. Before bathing, consider whether to take your clothes off; once that reason is over, consider putting them back on. Never narrate a clothing change without this action.

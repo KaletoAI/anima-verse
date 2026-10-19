@@ -125,7 +125,7 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
     """
     from app.core.tool_formats import build_tool_instruction
     from app.core.dependencies import get_skill_manager
-    from app.core.outfit_renderer import render_outfit
+    from app.core.outfit_renderer import render_outfit, undressed_line
     from app.core.streaming import _suppress_in_person_tool_names
     from app.models.character import (get_character_appearance,
                                        get_character_current_location,
@@ -160,11 +160,15 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
                                          get_character_current_room(character_name) or "")
         except Exception:
             act_list = ""
-    self_outfit = render_outfit(character_name=character_name).get("full", "") or "(nothing equipped)"
+    self_outfit = (undressed_line(character_name)
+                   or render_outfit(character_name=character_name).get("full", "")
+                   or "(nothing equipped)")
     outfit_block = f"\n{character_name} currently wears: {self_outfit}"
     avatar = get_active_character() or ""
     if avatar and avatar != character_name:
-        av_outfit = render_outfit(character_name=avatar).get("full", "") or "(nothing equipped)"
+        av_outfit = (undressed_line(avatar)
+                     or render_outfit(character_name=avatar).get("full", "")
+                     or "(nothing equipped)")
         outfit_block += f"\n{avatar} currently wears: {av_outfit}"
 
     real_partner = (partner_name or "").strip()
