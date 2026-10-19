@@ -148,14 +148,16 @@ def build_job(location_id: str, description: Any, location: Optional[Dict] = Non
         location = get_location_by_id(location_id)
     if location is None:
         return {"ok": False, "error": "not_found"}
-    facts = hull_facts(location, location_id)
-    if not facts["ok"]:
-        return facts
     styles = hull_styles.load_styles()
     raw_style = description.get("style") if isinstance(description, dict) else None
-    if raw_style is not None and (not isinstance(raw_style, str) or raw_style not in styles):
+    style_ok = raw_style is None or (isinstance(raw_style, str) and raw_style in styles)
+    desc = hull_styles.validate_description(description, styles) if style_ok else None
+    # The facts of THIS hull: its style picks the doors it draws (and fingerprints).
+    facts = hull_facts(location, location_id, description=desc)
+    if not facts["ok"]:
+        return facts
+    if not style_ok:
         return {"ok": False, "error": "unknown_style"}
-    desc = hull_styles.validate_description(description, styles)
     style = styles.get(desc["style"])
     if style is None:
         return {"ok": False, "error": "unknown_style"}
@@ -262,13 +264,15 @@ def hull_status(location_id: str) -> Dict[str, Any]:
     from app.core.model_store import DEFAULT_TIER, read_sidecar
     from app.models.world import get_location_by_id
     location = get_location_by_id(location_id)
-    facts = hull_facts(location, location_id)
     owner = location_model3d._owner_id(location_id)
     gallery = location_model3d._gallery(owner) if owner else None
     selected = gallery.find(DEFAULT_TIER, fallback=False) if gallery else None
     meta = read_sidecar(selected) if selected else {}
     active = bool(meta.get("plan_hull"))
     hull = meta.get("hull") or {}
+    # Measured against the ACTIVE hull's own description, as it was built.
+    facts = hull_facts(location, location_id,
+                       description=hull.get("description") if active else None)
     built = hull.get("fingerprint", "")
     current = facts.get("fingerprint", "")
     return {"ok": facts["ok"], "error": facts.get("error", ""),

@@ -113,6 +113,17 @@ def check_door_resolution_and_materials():
         assert first['fingerprint']!=second['fingerprint']
         strip=lambda f: [{k:v for k,v in h.items() if k!='door_style'} for lv in f['levels'] for e in lv['edges'] for h in e['openings']]
         assert strip(first)==strip(second)
+        # The fallback door follows the hull being BUILT: steinhaus with a
+        # shopfront puts its shop door (glazed) in this storey-0 contour door,
+        # no description falls back to the shipped exterior default (panel).
+        opening.pop('door_style')
+        def hole_styles(**kw):
+            facts=hull_facts(loc,**kw)
+            return [h['door_style'] for lv in facts['levels'] for e in lv['edges'] for h in e['openings'] if h['kind']=='door']
+        assert hole_styles()==['panel']
+        assert hole_styles(description=dict(style='steinhaus',overrides=dict(shopfront=True)))==['glazed']
+        assert hole_styles(description=dict(style='burg',overrides={}))==['castle']
+        opening['door_style']='interior'
         opening['prop_id']='image-door'
         prop=scene_recipe.compose_scene(loc,plan_width_m=10)
         assert all('door_style' not in d for d in prop['doorways'])

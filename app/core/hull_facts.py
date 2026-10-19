@@ -77,11 +77,25 @@ def _edge_openings(walls, level, a, frame, floor, height):
     return sorted(result, key=lambda h: (h['s0'], h['y0'], h['s1'], h['y1']))
 
 
-def hull_facts(location: Dict[str, Any], location_id: str = '') -> Dict[str, Any]:
+def _door_meta(description: Any) -> Any:
+    """The door-relevant part of a hull description, shaped like the client meta."""
+    if not isinstance(description, dict) or not description.get('style'):
+        return None
+    from app.core.hull_styles import get_style
+    overrides = description.get('overrides') or {}
+    return {'hull_style': get_style(str(description['style'])) or {},
+            'hull_shopfront': overrides.get('shopfront') is True,
+            'hull_door_color': overrides.get('door_color') or ''}
+
+
+def hull_facts(location: Dict[str, Any], location_id: str = '', *,
+               description: Any = None) -> Dict[str, Any]:
     """Return rounded per-storey hull facts and their geometry and door-style fingerprint.
 
     A supplied dict is composed directly. Passing None with an id loads that
-    location lazily; missing records return ``not_found``.
+    location lazily; missing records return ``not_found``. ``description`` is
+    the hull the facts are for (the one being built, or the active one when
+    checking staleness): its style and shopfront pick the fallback doors.
     """
     if location is None and location_id:
         from app.models.world import get_location_by_id
@@ -92,7 +106,8 @@ def hull_facts(location: Dict[str, Any], location_id: str = '') -> Dict[str, Any
     loc_id = location_id or str(location.get('id') or '')
     map3d = location.get('map3d') or {}
     width = derive_plan_width_m(loc_id, map3d)
-    scene = sr.compose_scene(location, plan_width_m=width)
+    scene = sr.compose_scene(location, plan_width_m=width,
+                             door_meta=_door_meta(description))
     extent, _, storey = sr.derive_scalars(map3d, width)
     levels = []
     used = {entry['level'] for entry in scene['levels']}

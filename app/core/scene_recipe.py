@@ -4359,6 +4359,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                   building_meta: Optional[Dict[str, Any]] = None,
                   room_metas: Optional[Dict[str, Dict[str, Any]]] = None,
                   surface_kinds: Optional[Set[str]] = None,
+                  door_meta: Optional[Dict[str, Any]] = None,
                   ) -> Dict[str, Any]:
     """The whole scene of ONE location as finished primitives (§ B1).
 
@@ -4414,12 +4415,18 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                        for r in rooms if is_floor_room(str(r.get("id") or ""))}
     from app.core.door_styles import load_door_styles
     door_styles = load_door_styles()
+    # The hull look that picks the fallback doors: the ACTIVE hull's, unless
+    # the caller names the hull it is about to build (``door_meta``, from
+    # ``hull_facts(description=...)``) — a hull must carry the doors of its
+    # own style, not of the one it replaces.
+    door_source = (door_meta if door_meta is not None else
+                   building_meta if building_meta.get("plan_hull") else {})
     door_context = {
         "default_door_style": str(location.get("default_door_style") or ""),
-        "hull_door_styles": building_meta.get("hull_style") if building_meta.get("plan_hull") else {},
+        "hull_door_styles": door_source.get("hull_style") or {},
         "door_styles": door_styles,
     }
-    shopfront = bool(building_meta.get("plan_hull") and building_meta.get("hull_shopfront"))
+    shopfront = bool(door_source.get("hull_shopfront"))
     doorways = _doorways(recipes, storey, default_door_prop_id,
                          floor_levels=corridor_levels, map3d=map3d,
                          door_context=door_context, shopfront=shopfront)
@@ -4607,7 +4614,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # available while a door model is queued and for doors along the contour.
     door_props, door_prop_sigs = _door_prop_models(
         doorways, prop_cache, door_styles=door_styles,
-        door_color=building_meta.get("hull_door_color") if building_meta.get("plan_hull") else None)
+        door_color=door_source.get("hull_door_color") or None)
     # Retain leaf rectangles for hull facts. Only renderer suppression
     # changes when a complete style door exists. Carry the same resolved
     # style onto mirrored walls and projected contour leaves for hull facts,
