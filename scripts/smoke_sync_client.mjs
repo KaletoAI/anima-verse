@@ -20,6 +20,7 @@
  * bye: no reconnect in 120s, fallback interval 5s. closed_reconnect: new source
  * after 5s. refresh_inflight: resolves after request 2, never after request 1.
  * interval_raise: removing the 5s subscriber leaves the 30s interval.
+ * suspend_wake/dead/twice: one 35s grace after suspension; frames reset it.
  * Additional NEU guards: latest fetcher, synchronous failures, error backoff,
  * runHidden, restart with a pending retry, malformed frames and listener cleanup.
  * listener_cleanup: a two-topic listener fires once per matching frame, zero
@@ -63,6 +64,18 @@ function fixture() {
     t = end;
     await flush();
   }
+  async function suspend(ms) {
+    t += ms;
+    await flush();
+    for (; ; ) {
+      const n = [...timers].filter(([, v]) => v.at <= t).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!n) break;
+      timers.delete(n[0]);
+      n[1].fn();
+      await flush();
+    }
+    await flush();
+  }
   class Source {
     readyState = 0;
     onopen = null;
@@ -95,14 +108,14 @@ function fixture() {
     const s = new Source();
     sources.push(s);
     return s;
-  }, setTimeout: timer });
+  }, setTimeout: timer, now: () => t });
   const core = createPollCore({ now: () => t, hidden: () => hidden, setTimeout: timer, clearTimeout: (h) => timers.delete(h) }, hub);
   const fetcher = () => {
     const n = starts.push(t);
     return new Promise((r) => timer(() => r(n), 100));
   };
   const sub = (spec = S.scene, cb = (d, e) => data.push([d, e]), fetch = fetcher) => core.subscribe("x", fetch, spec, cb);
-  return { hub, core, starts, data, sources, sub, advance, hidden: (v) => hidden = v, source: () => sources.at(-1) };
+  return { hub, core, starts, data, sources, sub, advance, suspend, hidden: (v) => hidden = v, source: () => sources.at(-1) };
 }
 async function test(n, fn) {
   await fn(fixture());
@@ -458,6 +471,35 @@ await test("delivery_deadline", async f => {
   assert.equal(f.sources.length, 2);
   await f.advance(35000 + 10000);
   assert.equal(f.sources.length, 3);
+});
+// NEU: wake at 610000 grants grace; a frame resets the deadline to 645000, retry at 650000.
+await test("suspend_wake", async f => {
+  f.sub(); const s = f.source(); s.open(); s.msg({ resync: true });
+  await f.advance(10000);
+  await f.suspend(600000); // 610000 - 0 > 45000 grants one fresh window.
+  assert.equal(s.readyState, 1); assert.equal(f.sources.length, 1); assert.equal(f.hub.connected(), true);
+  s.msg({ resync: true }); // Queued native reconnect resync resets the normal deadline.
+  await f.advance(34999); assert.equal(f.hub.connected(), true);
+  await f.advance(1); assert.equal(s.readyState, 2); assert.equal(f.hub.connected(), false);
+  await f.advance(5000); assert.equal(f.sources.length, 2);
+});
+// NEU: wake at 600000 grants grace until 635000; no frame means close, retry at 640000.
+await test("suspend_dead", async f => {
+  f.sub(); const s = f.source(); s.open(); s.msg({ resync: true });
+  await f.suspend(600000);
+  assert.equal(f.sources.length, 1); assert.equal(s.readyState, 1);
+  await f.advance(34999); assert.equal(s.readyState, 1);
+  await f.advance(1); assert.equal(s.readyState, 2);
+  await f.advance(5000); assert.equal(f.sources.length, 2);
+});
+// NEU: grace armed at 600000 fires at 1200000; late=true closes, retry at 1205000.
+await test("suspend_twice", async f => {
+  f.sub(); const s = f.source(); s.open(); s.msg({ resync: true });
+  await f.suspend(600000);
+  assert.equal(f.sources.length, 1); assert.equal(s.readyState, 1);
+  await f.suspend(600000);
+  assert.equal(s.readyState, 2); assert.equal(f.hub.connected(), false);
+  await f.advance(5000); assert.equal(f.sources.length, 2);
 });
 // NEU: [0,60000) has at most 60000/oldInterval starts under 100ms signals.
 for (const [key, spec] of Object.entries(S)) await test("sustained_" + key, async f => {

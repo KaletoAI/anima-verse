@@ -1,4 +1,6 @@
 import type { HubLike, SyncTopic } from './pollCore';
+const DEADLINE_MS = 35_000; // Maximum wait for a delivered frame.
+const LATE_MS = 10_000; // Tolerance for an overdue deadline.
 export interface EventSourceLike {
   onopen: ((e: unknown) => void) | null;
   onerror: ((e: unknown) => void) | null;
@@ -15,8 +17,10 @@ export interface SyncHub extends HubLike {
 export function createSyncHub(deps: {
   open(url: string): EventSourceLike;
   setTimeout(fn: () => void, ms: number): unknown;
+  now?: () => number;
   url?: string;
 }): SyncHub {
+  const now = deps.now ?? Date.now;
   const listeners = new Set<{ topics: SyncTopic[]; fn: () => void }>();
   const states = new Set<() => void>();
   let source: EventSourceLike | null = null;
@@ -30,15 +34,21 @@ export function createSyncHub(deps: {
     for (const l of [...listeners]) l.fn();
   };
   let deliveryToken = 0;
-  function armDeadline(s: EventSourceLike) {
+  function armDeadline(s: EventSourceLike, late = false) {
     const token = ++deliveryToken;
+    const armedAt = now();
     deps.setTimeout(() => {
       if (token !== deliveryToken || source !== s) return;
+      if (!late && now() - armedAt > DEADLINE_MS + LATE_MS) {
+        // Suspension prevented frame delivery; allow one fresh window after wake.
+        armDeadline(s, true);
+        return;
+      }
       source = null;
       s.close();
       setConnected(false);
       scheduleRetry();
-    }, 35_000);
+    }, DEADLINE_MS);
   }
   function start() {
     if (stopped || source || retryPending) return;
