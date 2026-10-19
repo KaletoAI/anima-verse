@@ -15,7 +15,11 @@ def _rotate(point, angle):
 
 
 def orthogonal_frame(outline: List[List[float]]) -> Optional[float]:
-    """Return the longest edge's frame if all edges align within 0.5 degrees."""
+    """Return the longest edge's frame if every edge aligns with it.
+
+    An edge aligns within 0.5 degrees, or when its ends stray at most the
+    decompose snap distance (0.15 m) across the axis it follows.
+    """
     edges = [(math.dist(first, second), math.degrees(math.atan2(
         second[1] - first[1], second[0] - first[0])))
         for first, second in zip(outline, outline[1:] + outline[:1])
@@ -23,9 +27,11 @@ def orthogonal_frame(outline: List[List[float]]) -> Optional[float]:
     if not edges:
         return None
     angle = max(edges, key=lambda edge: edge[0])[1] % 180
-    if any(abs((direction - angle + 45) % 90 - 45) > 0.5 + 1e-8
-           for _, direction in edges):
-        return None
+    for length, direction in edges:
+        deviation = abs((direction - angle + 45) % 90 - 45)
+        if (deviation > 0.5 + 1e-8
+                and length * math.sin(math.radians(deviation)) > .15 + 1e-8):
+            return None
     return angle
 
 

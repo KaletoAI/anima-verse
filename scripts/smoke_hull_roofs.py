@@ -71,7 +71,14 @@ def check_coordinate_snap():
             if angle == 0 and covered is None:
                 assert any(abs(w["rect"]["length"] - 6.02) < 1e-6 for w in actual), actual
             assert all(min(w["rect"]["length"], w["rect"]["depth"]) >= .15 for w in actual), actual
-    print("PASS coordinate snap: jitter, covered outline, rotated frame")
+    # A 0.1 m skew over 6.7 m (0.86 deg, Haus von Kai) is a pitched L, not a
+    # flat roof; 0.5 m over 6.7 m stays non-orthogonal.
+    from app.core.hull_roofs import orthogonal_frame
+    skewed = [[-6.2,-6.3],[7.1,-6.3],[7.1,3.5],[3.1,3.5],[3.1,.4],[-6.3,.4]]
+    assert orthogonal_frame(skewed) == 0, orthogonal_frame(skewed)
+    assert len(decompose(skewed, None, 0)) == 2, decompose(skewed, None, 0)
+    assert orthogonal_frame([[-6.2,-6.3],[7.1,-6.3],[7.1,3.5],[3.1,3.5],[3.1,.4],[-6.7,.4]]) is None
+    print("PASS coordinate snap: jitter, covered outline, rotated frame, skewed edge")
 
 
 def check_modern_roofs():
