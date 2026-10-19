@@ -39,6 +39,9 @@ Hand-derived expectations
       "Iris lehnt am Tresen"      (Iris ≠ I)
     quoted speech goes first: 'says "I am tired" and yawns' → "says and yawns"
     only the FIRST sentence counts: "leans back. I wait." → "leans back."
+[1b] Ben's / Ben’s bedroom → bedroom; Bens Zimmer → Zimmer;
+     Benches unchanged; sitting with Cleo → sitting with; bare Ben'/Ben’
+     loses the apostrophe along with the stored name.
 [2] set_pose_key_detail on a one-row world ('demo'):
     a ("sitting", "reads a book")                 → flavor "reads a book"
     b ("", "greife nach meiner Tasche", keep)     → nothing written, returns
@@ -97,6 +100,26 @@ got = sanitize_flavor('says "I am tired" and yawns')
 check("quoted speech removed before the check", got == "says and yawns", repr(got))
 got = sanitize_flavor("leans back. I wait.")
 check("only the first sentence counts", got == "leans back.", repr(got))
+
+print("\n[1b] stored possessives")
+ts = utc_now_iso()
+with _db.transaction() as conn:
+    for name in ("Ben", "Cleo"):
+        conn.execute(
+            "INSERT INTO characters (name, template, profile_json, config_json,"
+            " created_at, updated_at) VALUES (?, '', '{}', '{}', ?, ?)",
+            (name, ts, ts))
+for text, want in (
+    ("moving toward Ben's bedroom", "moving toward bedroom"),
+    ("moving toward Ben’s bedroom", "moving toward bedroom"),
+    ("geht in Bens Zimmer", "geht in Zimmer"),
+    ("Benches by the wall", "Benches by the wall"),
+    ("sitting with Cleo", "sitting with"),
+    ("beside Ben' chair", "beside chair"),
+    ("beside Ben’ chair", "beside chair"),
+):
+    got = sanitize_flavor(text)
+    check(text, got == want, repr(got))
 
 print("\n[2] set_pose_key_detail")
 ts = utc_now_iso()

@@ -358,6 +358,15 @@ def build_tool_instruction(format_name: str, tools: List[Any],
 
 
 
+def _strip_json_placeholder(tool_input: str) -> str:
+    """Remove a copied angle placeholder directly before JSON input."""
+    match = re.match(r"^<[^<>{}]{3,}>\s*(?=[{\[])", tool_input)
+    if match:
+        logger.debug("Removed copied placeholder before JSON tool input")
+        return tool_input[match.end():]
+    return tool_input
+
+
 def _is_placeholder_input(tool_input: str) -> bool:
     """Detects whether a tool input is a hallucinated placeholder.
 
@@ -508,6 +517,7 @@ def find_tool_calls(format_name: str, text: str,
         # Placeholder inputs such as "[search query or question]". Logged as
         # a warning: a dropped call is otherwise invisible ("tool call in the
         # log, never executed").
+        inp = _strip_json_placeholder(inp)
         if _is_placeholder_input(inp):
             logger.warning("Tool call %s dropped — placeholder input: %.60s", name, inp)
             continue
@@ -554,11 +564,26 @@ def find_stream_tool_call(format_name: str, text: str,
     if not any(marker in folded for marker in _STREAM_MARKERS):
         return None
 
+    def normalized_match(match: re.Match) -> re.Match:
+        raw = match.group(2)
+        cleaned = _strip_json_placeholder(raw.strip())
+        if cleaned == raw.strip():
+            return match
+        # Keep the original span: streaming callers use end() to trim prose.
+        input_start = match.start(2) + raw.index(cleaned)
+        input_end = input_start + len(cleaned)
+        pattern = (re.escape(text[match.start():match.start(1)])
+                   + "(" + re.escape(match.group(1)) + ")"
+                   + re.escape(text[match.end(1):input_start])
+                   + "(" + re.escape(cleaned) + ")"
+                   + re.escape(text[input_end:match.end()]))
+        return re.compile(pattern).match(text, match.start())
+
     # 1. Configured format first
     fmt = get_format(format_name)
     match = re.search(fmt["stream_pattern"], text, re.IGNORECASE)
     if match:
-        return match
+        return normalized_match(match)
 
     # 2. Try every other format
     for other_name, other_fmt in TOOL_FORMATS.items():
@@ -566,7 +591,7 @@ def find_stream_tool_call(format_name: str, text: str,
             continue
         match = re.search(other_fmt["stream_pattern"], text, re.IGNORECASE)
         if match:
-            return match
+            return normalized_match(match)
 
     # 3. Universal fallback on known tool names
     # IMPORTANT: the pattern must match the find_tool_calls() fallback!
@@ -576,7 +601,7 @@ def find_stream_tool_call(format_name: str, text: str,
         fallback = rf"(?:[Nn]utze|[Uu]se)\s+({tool_names_pattern})\s+(?:f(?:ü|ue)r|for):\s*(.*?)(?:\n|$)"
         match = re.search(fallback, text, re.IGNORECASE)
         if match:
-            return match
+            return normalized_match(match)
 
     return None
 

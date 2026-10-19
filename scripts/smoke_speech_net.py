@@ -24,6 +24,8 @@ Three deterministic exclusions on top, checked one class per case:
     verb's own example produced exactly this: only `sketching in a notebook`
     survives the base rule (the other values have no space and no final
     punctuation), and it is a JSON value. Expected: [].
+[18] Call arguments → no speech (SetActivity: json=2); prose parentheses
+     keep dialogue; a call after dialogue cannot suppress the earlier quote.
 [2] Writing verb in the 60 characters in front of the quote -> written, not
     spoken. Expected: [].
 [3] Caption wording in front of the quote -> written. Expected: [].
@@ -199,6 +201,16 @@ def main() -> int:
     case("[10] hashtag = caption",
          'Der Post: "Selbst im Regen wachsen wir. #Mut #WachseMitUns"',
          [])
+
+    quotes, counts = _scan_speech_candidates(
+        'SetActivity("Vorräte holen", "eine Kiste mit Gläsern hebt")', "Ava")
+    check("[18] call arguments excluded", quotes == [], repr(quotes))
+    check("[18] call arguments count as json", counts["json"] == 2, repr(counts))
+    case("[18] TalkTo arguments", 'TalkTo("Ben", "Komm mal her, bitte.")', [])
+    case("[18] prose parentheses",
+         'Ich lache (leise) und sage: „Komm mal her, bitte.“', ["Komm mal her, bitte."])
+    case("[18] call after speech", '„Komm her“, sage ich. Dann SetActivity("sitting")',
+         ["Komm her"])
 
     print("[11] content tool as a delivery path")
     calls = [("Post", '{"caption": "Sunset over the bay, finally."}')]

@@ -29,6 +29,10 @@ Hand-derived expectations:
       (``">[`` must not occur), and tells the model to write ``{}`` for a
       tool without input.
 
+  (f) Copied placeholders before JSON are stripped in both parsers; plain
+      JSON is unchanged. Bare angle placeholders are returned unchanged by both parsers,
+      as before.
+
 Usage:  ./.venv/bin/python scripts/smoke_tool_formats.py
 """
 import sys
@@ -39,7 +43,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core import tool_formats  # noqa: E402
 from app.core.tool_formats import (_is_placeholder_input,  # noqa: E402
-                                   build_tool_instruction, find_tool_calls)
+                                   build_tool_instruction, find_tool_calls,
+                                   find_stream_tool_call)
 
 # The appearance hint asks the skill manager which tools produce an image;
 # that would boot the plugin tree against the real storage. Not needed here.
@@ -99,6 +104,22 @@ check("example uses the first tool",
       '<tool name="ChangeOutfit">your detailed input here</tool>' in text, True)
 check("no bracket right after an opening tag", '">[' in text, False)
 check("empty-input rule present", '<tool name="ToolName">{}</tool>' in text, True)
+
+print("(f) copied placeholder before JSON")
+placeholder = "<JSON input exactly as the tool description specifies>"
+for raw, want in (
+    (placeholder + '{"name": "Ben", "message": "Hallo"}',
+     '{"name": "Ben", "message": "Hallo"}'),
+    (placeholder + ' \n []', '[]'),
+    ('{"message": "Hallo"}', '{"message": "Hallo"}'),
+    ("<only a placeholder>", "<only a placeholder>"),
+):
+    text = '<tool name="TalkTo">' + raw + '</tool>'
+    check("full input " + raw, find_tool_calls("tag", text),
+          [("TalkTo", want)])
+    match = find_stream_tool_call("tag", text)
+    check("stream input " + raw, match.group(2).strip() if match else None, want)
+    check("stream span " + raw, match.span() if match else None, (0, len(text)))
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed"
       + (": " + ", ".join(FAILURES) if FAILURES else ""))

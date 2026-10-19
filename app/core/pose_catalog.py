@@ -941,7 +941,7 @@ def sanitize_flavor(text: str) -> str:
         names = []
     for name in sorted(names, key=len, reverse=True):
         if name:
-            raw = re.sub(rf"\b{re.escape(name)}\b", "", raw, flags=re.IGNORECASE)
+            raw = re.sub(rf"\b{re.escape(name)}(?:['’]s\b|s\b|\b['’]|\b)", "", raw, flags=re.IGNORECASE)
     raw = re.sub(r"\s{2,}", " ", raw).strip(" ,;:-")
     first = re.split(r"(?<=[.!?])\s", raw, maxsplit=1)[0].strip()
     if is_first_person(first):

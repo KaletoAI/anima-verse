@@ -597,7 +597,8 @@ def _scan_speech_candidates(text: str, speaker: str) -> Tuple[List[str], Dict[st
 
     json      the segment is a JSON value: an unclosed ``{`` precedes it on the
               same line, it stands directly behind a ``"<key>":`` or directly
-              in front of a ``:``. A tool input, never speech.
+              in front of a ``:``, or an open identifier-followed-by-``(`` call
+              shell precedes it on the same line. A tool input, never speech.
     written   a conjugated writing VERB stands in front of the quote WITHIN
               THE SAME SENTENCE (at most 60 characters back, cut at the last
               `.`/`!`/`?`/`…`), or the segment carries a hashtag — a caption,
@@ -640,7 +641,8 @@ def _scan_speech_candidates(text: str, speaker: str) -> Tuple[List[str], Dict[st
         # line would otherwise pull quotes that sit outside the object in.
         in_braces = before.count("{") > before.count("}")
         if in_braces or _JSON_VALUE_BEFORE_RE.search(before) \
-                or after.lstrip().startswith(":"):
+                or after.lstrip().startswith(":") \
+                or re.search(r"[A-Za-z_]\w*\([^()]*$", before):
             counts["json"] += 1
             continue
 
