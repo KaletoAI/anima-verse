@@ -1515,7 +1515,10 @@ async function main() {
         interaction: null, activity: '', travelLine: null, travelKey: '', bobPhase: 0,
         settle: null,
       };
-      const mgr = new NpcManager(null);
+      const mgr = new NpcManager(null, {
+        syncCounters: { posCorr: 0, pos409: 0, travBack: 0, travFwd: 0, travErrMaxM: 0, arrive: 0, place: 0 },
+        errWindow: { t: [], e: [] },
+      });
       mgr.npcs.set(name, npc);
       fig.figure.faceTowards(new THREE.Vector3(Math.sin(YAW), 0, Math.cos(YAW)), true);
       for (let i = 0; i < 20; i++) mgr.tick(0.05, 10);
@@ -1622,7 +1625,7 @@ async function main() {
     const seatLeg = moved(seatTrip, standTrip);
     trip.npc.route = {
       key: 'y3f', points: [[seatTrip.x, seatTrip.z], [standTrip.x, standTrip.z], [far.x, far.z]],
-      totalM: seatLeg + 5, progressM: seatLeg, rateMS: 1.4, stamp: 1,
+      totalM: seatLeg + 5, targetM: seatLeg, shownM: seatLeg, paces: [null, 1.4], stamp: 1,
     };
     trip.npc.travelling = true;
     let worstStep = 0;

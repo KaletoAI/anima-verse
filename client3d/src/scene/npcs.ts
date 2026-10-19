@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { transparentPortraitUrl } from '@anima/player-ui';
+import type { SyncCounters } from '../game/perfstats';
 import type { MapCharacter, MapInteraction } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
@@ -15,7 +16,7 @@ import { GROUND_Y } from './ground';
 import type { PlaceEntry } from './placeSlot';
 import { settleOffset, type StandSettle } from './standSettle';
 import { seededRandom } from './textures';
-import { advanceProgress, catchUpStep, clampProgress, deadReckonRate, deadReckonStep, densifyPolyline, pointAtDistance, remainingPoints, shouldSnap, trimBucket, type MetrePoint } from './travelPath';
+import { adoptTarget, advanceAlongPaces, stepShown, rateAt, pushErr, catchUpStep, clampProgress, deadReckonRate, deadReckonStep, densifyPolyline, pointAtDistance, remainingPoints, trimBucket, type ErrWindow, type MetrePoint } from './travelPath';
 
 /** Walking pace in METRES PER SECOND — and since E4 that is all it is: the
  *  metre world has one scale, so this number means the same thing on the map
@@ -162,9 +163,9 @@ interface Npc {
   ride?: StairRide | null;
   /** server journey being followed (§ A11) — replaces goal/waypoint logic.
    *  `key` identifies the POLYLINE: as long as it is unchanged the local
-   *  `progressM` keeps running and only reconciles against a fresh poll; a new
+   *  `shownM` keeps running and only reconciles against a fresh poll; a new
    *  key is a new journey and is adopted whole. */
-  route: (TravelRoute & { key: string }) | null;
+  route: TravelRoute | null;
   /** the payload says this figure is on a JOURNEY (`char.travel`) — true for a
    *  fogged traveller as well, which is the one that has no `route` (§ A12) */
   travelling: boolean;
@@ -181,20 +182,26 @@ interface Npc {
   bobPhase: number;
 }
 
-/** A journey as the renderer needs it (contract § A11): the metre polyline,
- *  the one number that walks it, and the rate it walks at. */
-export interface TravelRoute {
-  /** `travel.waypoints` — world points `[x, z]` in METRES, start to goal */
+/** What one worldmap payload says about a journey (built by main.ts). */
+export interface IncomingRoute {
   points: MetrePoint[];
-  /** arc length of `points`, measured by the client (`polylineLength`) */
   totalM: number;
-  /** metres already walked along the polyline (`travel.progress_m`) */
-  progressM: number;
-  /** metres per REAL second: `pace_m_s_real ?? speed_m_s_real`. `null` means
-   *  do not extrapolate at all — frozen world, arrived, degenerate segment. */
-  rateMS: number | null;
-  /** which worldmap poll the numbers came from; the progress reconciliation
-   *  only runs against a genuinely NEW payload */
+  paces: (number | null)[] | null;
+  serverM: number;
+  ageAtParsedS: number;
+  parsedAt: number;
+  journeyId: string | null;
+  stamp: number;
+}
+
+/** What the NpcManager keeps walking between payloads. */
+export interface TravelRoute {
+  key: string;
+  points: MetrePoint[];
+  totalM: number;
+  paces: (number | null)[] | null;
+  targetM: number;
+  shownM: number;
   stamp: number;
 }
 
@@ -256,7 +263,7 @@ export interface NpcState {
    *  fogged (`waypoints: null`, § A12): then `pos` alone places the figure,
    *  no line is drawn and nothing is extrapolated. The travel line is drawn
    *  from THIS — there is no second field naming a destination. */
-  route?: TravelRoute;
+  route?: IncomingRoute;
   /** Running pair interaction (§ A8a), straight from the worldmap row. */
   interaction?: MapInteraction | null;
   /** which worldmap poll this state came from (reconciliation of `elapsed`) */
@@ -317,7 +324,14 @@ export class NpcManager {
   private placeAt: (name: string, id: string, x: number, z: number) => PlaceEntry | undefined =
     () => undefined;
 
-  constructor(private figures: FigureLibrary | null = null) {}
+  private syncCounters: SyncCounters;
+  private errWindow: ErrWindow;
+
+  constructor(private figures: FigureLibrary | null,
+    opts: { syncCounters: SyncCounters; errWindow: ErrWindow }) {
+    this.syncCounters = opts.syncCounters;
+    this.errWindow = opts.errWindow;
+  }
 
   /** Install the place lookup for pair anchors (see `placeAt`). */
   setPlaceAt(fn: (name: string, id: string, x: number, z: number) => PlaceEntry | undefined) {
@@ -792,41 +806,35 @@ export class NpcManager {
         this.updateTravelLine(npc, null);
         continue;
       }
-      // Adopt the server journey (§ A11). The RATE and the polyline are
-      // authoritative and adopted on every update — a mid-journey freeze must
-      // stop the extrapolation immediately, and a rate that changed with the
-      // terrain must take effect at once. Only `progressM` is subject to
-      // reconciliation, and only against a genuinely NEW worldmap payload
-      // (stamp): update() runs at 1 Hz off the cached map, so comparing
-      // against a stale payload would snap fast journeys backwards each
-      // second. Hard snap when the two are more than TRAVEL_SNAP_M (2 m)
-      // apart, otherwise let the local extrapolation keep running — that is
-      // what keeps poll jitter out of the figure.
-      /** this update ended a journey — the placement below must not re-walk it */
+      // Adopt paces immediately; reconcile progress only for a new payload.
+      // Repeated updates of a cached map must not rewind a running journey.
       let arrived = false;
       if (st.route && st.route.points.length >= 2) {
-        const key = routeKey(st.route.points);
+        const inc = st.route;
+        const key = `${inc.journeyId ?? ''}|${routeKey(inc.points)}`;
+        const age = inc.ageAtParsedS + (performance.now() - inc.parsedAt) / 1000;
+        const target = advanceAlongPaces(inc.points, inc.paces, inc.serverM, age);
         if (!npc.route || npc.route.key !== key) {
-          // Another polyline is another journey: take it whole, progress
-          // included. Counting the points would not do — a new route can have
-          // just as many, and the figure would then walk the new line from
-          // the old distance.
           npc.route = {
-            key,
-            points: st.route.points.map((p) => [p[0], p[1]] as MetrePoint),
-            totalM: st.route.totalM,
-            progressM: st.route.progressM,
-            rateMS: st.route.rateMS,
-            stamp: st.route.stamp,
+            key, points: inc.points.map((p) => [p[0], p[1]] as MetrePoint),
+            totalM: inc.totalM, paces: inc.paces, targetM: target, shownM: target,
+            stamp: inc.stamp,
           };
         } else {
-          npc.route.rateMS = st.route.rateMS;
-          if (npc.route.stamp !== st.route.stamp) {
-            if (shouldSnap(st.route.progressM, npc.route.progressM)) {
-              npc.route.progressM = st.route.progressM;
+          npc.route.paces = inc.paces;
+          if (npc.route.stamp !== inc.stamp) {
+            npc.route.targetM = target;
+            npc.route.stamp = inc.stamp;
+            const a = adoptTarget(npc.route.shownM, target, rateAt(npc.route.points, inc.paces, target));
+            npc.route.shownM = a.shownM;
+            if (a.snap === 'back') {
+              const at = pointAtDistance(npc.route.points, a.shownM)!;
+              npc.root.position.set(at[0], this.groundY(at[0], at[1]), at[1]);
               npc.figure?.resetSecondaryMotion();
+              this.syncCounters.travBack += 1;
+            } else if (a.snap === 'fwd') {
+              this.syncCounters.travFwd += 1;
             }
-            npc.route.stamp = st.route.stamp;
           }
         }
         npc.waypoints = [];
@@ -844,6 +852,7 @@ export class NpcManager {
         npc.ride = null;
         npc.root.position.copy(st.pos);
         npc.figure?.resetSecondaryMotion();
+        this.syncCounters.arrive += 1;
         arrived = true;
       }
       // A new goal adopts the stations on the way to it (room exits). The A*
@@ -883,6 +892,7 @@ export class NpcManager {
       // front door of a room it never left. Handled like the arrival above:
       // waypoints dropped, position set — on the kept spot, if it has one.
       if (st.snap && !arrived) {
+        if (npc.root.position.distanceTo(goal) > 0.5) this.syncCounters.place += 1;
         npc.waypoints = [];
         npc.ride = null;      // a placement, not a climb
         npc.root.position.copy(goal);
@@ -1038,12 +1048,12 @@ export class NpcManager {
    *  five-metre buckets, which is what the KEY carries — the geometry is
    *  rebuilt when the bucket rolls over and at no other time, so a traveller
    *  costs one buffer every metre and a half instead of one per frame. */
-  private updateTravelLine(npc: Npc, route: (TravelRoute & { key: string }) | null) {
+  private updateTravelLine(npc: Npc, route: TravelRoute | null) {
     // Clamped ONCE, for the bucket and the trim alike: a `progress_m` that has
     // run past the end of its own polyline draws the same last point however
     // far it overshoots, and an unclamped bucket would rebuild that identical
     // geometry every further five metres.
-    const walked = route ? clampProgress(route.progressM, route.totalM) : 0;
+    const walked = route ? clampProgress(route.shownM, route.totalM) : 0;
     const key = route ? `${route.key}#${trimBucket(walked)}#${this.groundRev()}` : '';
     if (key === npc.travelKey) return;
     this.dropTravelLine(npc);   // clears travelKey, so the new one goes after
@@ -1278,7 +1288,9 @@ export class NpcManager {
             npc.root.position.z += t.z;
           }
         }
-        r.progressM = advanceProgress(r.progressM, r.rateMS, dt, r.totalM);
+        r.shownM = stepShown(r.points, r.paces, r.shownM, r.targetM, dt);
+        r.targetM = advanceAlongPaces(r.points, r.paces, r.targetM, dt);
+        pushErr(this.errWindow, performance.now(), Math.abs(r.targetM - r.shownM));
         // The trim follows the walker from HERE, not from the 1 Hz update:
         // the progress that decides the bucket is the extrapolated one, and a
         // line that only caught up with the next poll would lag a whole second
@@ -1288,7 +1300,7 @@ export class NpcManager {
         // foot, there is no server journey to draw, and re-adding the line
         // here would fight that second-by-second.
         if (npc.name !== this.playerDriven) this.updateTravelLine(npc, r);
-        const at = pointAtDistance(r.points, r.progressM)!;
+        const at = pointAtDistance(r.points, r.shownM)!;
         // The height belongs to the point the walk has REACHED, not to the
         // one the last poll reported: between two polls the figure covers
         // several metres of open country, and holding the poll's height would
@@ -1304,7 +1316,7 @@ export class NpcManager {
         // MIRROR instead of under the carved bed. `d` is a horizontal distance
         // (`delta.y = 0` above), so deciding the pose before the height is not
         // a circle.
-        const travelling = d > 0.02 || (r.rateMS ?? 0) > 0;
+        const travelling = d > 0.02 || (r.shownM < r.totalM && (rateAt(r.points, r.paces, r.shownM) ?? 0) > 0);
         const raw = this.groundMoveAt(at[0], at[1]);
         // TWO REACH RULES, in order: the SCOPE (a built place replaces the
         // ground with its floor) and, since W4c, the WATER DEPTH under the
@@ -1344,7 +1356,7 @@ export class NpcManager {
           // about 2.4 the interpolated point outruns 3.4 m/s and the figure
           // lags behind its own journey for the whole trip, then teleports on
           // arrival.
-          const step = catchUpStep(d, r.rateMS, dt, WALK_SPEED);
+          const step = catchUpStep(d, rateAt(r.points, r.paces, r.shownM), dt, WALK_SPEED);
           const dir = delta.clone().normalize();
           npc.root.position.addScaledVector(dir, step * paceLimit);
           // A bridge that holds the figure owns its facing (`holdsFacing`);

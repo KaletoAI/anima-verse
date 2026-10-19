@@ -1,5 +1,25 @@
 #!/usr/bin/env node
 /**
+ * Task 3 hand calculations, in metres and real seconds:
+ * L lengths 30,40 at 1,.5: from 28, 2 s reaches 30, 2 s adds 1 => 31.
+ * From 69, 10 s clamps to 70. Null first segment crosses 30 instantly,
+ * then 2 s adds 1 => 31. Null list keeps 12. Zero-length middle costs 0:
+ * from 29, 1 s reaches 30, 2 s adds 1 => 31.
+ * Timeless after budget: 30 s reaches 30; null second segment still crosses
+ * instantly => 60. From 30 at dt=0 also => 60; timed dt=0 keeps 10.
+ * Age: (300+(500-200)/2+40)/1000=.49; net clamped at 0 gives .34.
+ * Even 10 advances to 10.1. Ahead: max(0,.1-1.5*(1-exp(-.1)))=0,
+ * so 11.5 stays. Cross: pred=30.05,target'=30.6, k=1-exp(-.2),
+ * 29.9+.15+.55*k=30.1496980858. Freeze: 19+1*(1-exp(-.1))=
+ * 19.0951626; ahead 21 stays. long_dt: target'=min(99+5,100)=100,
+ * pred=min(98+5,100)=100, err=0 => clamp(98+2,0,100)=100.
+ * Threshold max(6,2*rate): 1.4/null => 6, 4 => 8. At 31 rate=.5.
+ * Adoption gaps 5,7,-10,7 at limits 6,6,6,8 => none,fwd,back,none.
+ * After pause: shown 60,target 52 => -8; abs(-8)>6 => back to 52.
+ * Deque (0,.8),(10000,.3),(29000,.2): at 29500 none expired => .8;
+ * at 30500 t<=500 expires => .3. Empty => 0. Sample (999,.9) at 30000
+ * is 29.001 s old (keep .9); at 31000 is 30.001 s old (expire => 0).
+ *
  * Smoke check for the pure journey maths of the 3D client
  * (plan-freie-weltkarte-e4-3d-client.md, task 4) —
  * `client3d/src/scene/travelPath.ts`.
@@ -116,34 +136,6 @@
  *   clampProgress(Infinity, 30) = 30     (an over-run, not a nonsense value)
  *   clampProgress(5, 0)         = 0      (degenerate line: nothing to walk)
  *
- * --- advanceProgress: the capped extrapolation ------------------------------
- * Between two worldmap polls the client moves the figure itself:
- *     progress' = clamp(clamp(progress) + rate * dt, 0, total)
- * — the incoming value is pinned onto the line FIRST, so a negative
- * `progress_m` starts the frame at the beginning and walks from there, rather
- * than spending its first metres crawling back to zero.
- * `rate` is METRES PER REAL SECOND — `pace_m_s_real ?? speed_m_s_real` — and
- * `null` means "do not extrapolate" (frozen world, arrived, degenerate
- * segment). The clamp at `total` is the binding cap of the plan: the figure
- * never walks past the end of its own polyline while it waits for the server
- * to book the arrival.
- *   advanceProgress(5,    2,    1,   30) = 5 + 2      = 7
- *   advanceProgress(5,    1.4,  0.5, 30) = 5 + 0.7    = 5.7
- *   advanceProgress(28,   4,    1,   30) = 32 -> capped        = 30   <- plan
- *   advanceProgress(28.4, 3.4,  0.5, 30) = 28.4 + 1.7 = 30.1 -> capped = 30
- *   advanceProgress(30,   2,    1,   30) = 32 -> capped        = 30
- *   advanceProgress(5,    null, 1,   30) = 5           (frozen: no movement)
- *   advanceProgress(5,    0,    1,   30) = 5           (rate 0 is no rate)
- *   advanceProgress(5,    -2,   1,   30) = 5           (a negative rate is junk)
- *   advanceProgress(5,    2,    0,   30) = 5           (no time passed)
- *   advanceProgress(-5,   1,    1,   30) = clamp(-5) = 0, then 0 + 1*1 = 1
- *
- * And the two composed, which is what the frame loop actually does — the plan
- * case: standing at 28 m on (P) with 4 m/s for one second lands ON the end
- * point, not past it:
- *   pointAtDistance(P, advanceProgress(28, 4, 1, 30))
- *     = pointAtDistance(P, 30) = (10, 20)
- *
  * --- catchUpStep: how far the FIGURE moves towards that point ---------------
  * The rendered figure does not jump onto the interpolated point, it walks
  * there, so a poll correction stays a walk:
@@ -169,20 +161,6 @@
  *   catchUpStep(10, -5,   1,   3.4) = a junk rate is no rate    = 3.4
  *   catchUpStep(0,  5.6,  1,   3.4) = nothing to correct        = 0
  *   catchUpStep(10, 5.6,  0,   3.4) = no time passed            = 0
- *
- * --- shouldSnap: reconciling with a fresh server number ---------------------
- * The local extrapolation drifts (segment changes between polls, a paused
- * tab, a rate that changed with the terrain). When a genuinely NEW payload
- * arrives, the client adopts the server's `progress_m` only if the two are
- * further apart than TRAVEL_SNAP_M — otherwise the local number keeps running
- * and poll jitter does not make the figure stutter. The threshold is ABSOLUTE
- * METRES since E4 (v1 compared 0.5 CELLS, a unit that no longer exists).
- *   TRAVEL_SNAP_M = 2
- *   shouldSnap(10, 8)     -> |2|   > 2 ? no   -> false  (exactly on it: keep)
- *   shouldSnap(10, 7.9)   -> |2.1| > 2 ? yes  -> true
- *   shouldSnap(10, 12.5)  -> |2.5| > 2 ? yes  -> true   (local ran AHEAD)
- *   shouldSnap(0, 0)      -> 0                -> false
- *   shouldSnap(3, 2.5)    -> 0.5              -> false
  *
  * --- trimBucket / remainingPoints: the line BEHIND the walker (E5 task 2) ---
  * The drawn journey used to be the whole polyline, start to goal, for the
@@ -265,6 +243,11 @@ function compare(a, b, eps) {
     return Array.isArray(a) && a.length === b.length
       && b.every((v, i) => compare(a[i], v, eps));
   }
+  if (b && typeof b === 'object') {
+    return a && typeof a === 'object'
+      && Object.keys(a).length === Object.keys(b).length
+      && Object.keys(b).every((key) => compare(a[key], b[key], eps));
+  }
   return a === b;
 }
 
@@ -277,9 +260,50 @@ const D = [[0, 0], [0, 0], [10, 0]];
 const S = [[7, -2]];
 
 async function main() {
-  const { polylineLength, pointAtDistance, clampProgress, advanceProgress,
-          catchUpStep, shouldSnap, TRAVEL_SNAP_M,
-          trimBucket, remainingPoints, TRIM_BUCKET_M } = await loadTravelPath();
+  const t = await loadTravelPath();
+  {
+    const L = [[0,0],[30,0],[70,0]], P = [1.0, 0.5];
+    check('adv cross',      t.advanceAlongPaces(L, P, 28, 4), 31.0);
+    check('adv clamp',      t.advanceAlongPaces(L, P, 69, 10), 70.0);
+    check('adv null seg',   t.advanceAlongPaces(L, [null, 0.5], 0, 2), 31.0);
+    check('adv paces null', t.advanceAlongPaces(L, null, 12, 5), 12);
+    check('adv zero-length seg', t.advanceAlongPaces([[0,0],[30,0],[30,0],[70,0]], [1, 1, 0.5], 29, 3), 31.0);
+    // timeless segments are crossed even when the time budget is exactly used up (plan review 8):
+    const T = [[0,0],[30,0],[60,0]];
+    check('adv timeless after budget', t.advanceAlongPaces(T, [1, null], 0, 30), 60);
+    check('adv timeless at dt 0',      t.advanceAlongPaces(T, [1, null], 30, 0), 60);
+    check('adv dt 0 timed',            t.advanceAlongPaces(T, [1, 1], 10, 0), 10);
+    check('age',       t.ageAtReceiptS({clock_age_ms: 300, build_ms: 200}, {polledAt: 0, headersAt: 500, parsedAt: 540}), 0.49);
+    check('age net 0', t.ageAtReceiptS({clock_age_ms: 300, build_ms: 200}, {polledAt: 0, headersAt: 150, parsedAt: 190}), 0.34);
+    const S = [[0,0],[100,0]];
+    check('even',  t.stepShown(S, [1.0], 10.0, 10.0, 0.1), 10.1);
+    check('ahead', t.stepShown(S, [1.0], 11.5, 10.0, 0.1), 11.5);          // gap afterwards 1.4
+    check('cross', t.stepShown(L, P, 29.9, 30.5, 0.2), 30.149698, 1e-6);
+    check('freeze catch-up', t.stepShown(S, null, 19, 20, 0.1), 19.0951626, 1e-6);
+    check('freeze ahead',    t.stepShown(S, null, 21, 20, 0.1), 21);
+    check('long_dt', t.stepShown(S, [1.0], 98, 99, 5), 100);              // Review focus 3
+    check('snap 1.4', t.hardSnapM(1.4), 6); check('snap 4', t.hardSnapM(4), 8); check('snap null', t.hardSnapM(null), 6);
+    check('rateAt seg2', t.rateAt(L, P, 31), 0.5);
+    // adoption on a NEW payload (plan review 10): the snap decision itself
+    check('adopt none', t.adoptTarget(40, 45, 1.4), { shownM: 40, snap: 'none' });   // |5| <= 6
+    check('adopt fwd',  t.adoptTarget(40, 47, 1.4), { shownM: 47, snap: 'fwd' });    // 7 > 6
+    check('adopt back', t.adoptTarget(50, 40, 1.4), { shownM: 40, snap: 'back' });   // |-10| > 6
+    check('adopt fast', t.adoptTarget(40, 47, 4),   { shownM: 40, snap: 'none' });   // 7 <= 8
+    // Review focus 3 (pause/tab switch): a stale payload 5 s behind a figure that ran on
+    check('adopt after pause', t.adoptTarget(60, 52, 1.4), { shownM: 52, snap: 'back' });
+    // the 30-s maximum is over the LAST 30 s, not a fixed window (plan review 10)
+    const w = t.createErrWindow();
+    t.pushErr(w, 0, 0.8); t.pushErr(w, 10_000, 0.3); t.pushErr(w, 29_000, 0.2);
+    check('err max inside', t.maxErr(w, 29_500), 0.8);
+    check('err max slid',   t.maxErr(w, 30_500), 0.3);    // the 0.8 at t=0 is older than 30 s
+    check('err max empty',  t.maxErr(t.createErrWindow(), 0), 0);
+    const w2 = t.createErrWindow(); t.pushErr(w2, 999, 0.9);
+    check('err max keeps 29.001 s', t.maxErr(w2, 30_000), 0.9);   // plan review R2-3
+    check('err max expires',        t.maxErr(w2, 31_000), 0);
+    }
+  const { polylineLength, pointAtDistance, clampProgress,
+          catchUpStep,
+          trimBucket, remainingPoints, TRIM_BUCKET_M } = t;
   // What `npcs.ts` hands in as its walking pace; kept as a literal because
   // this module is pure and must not import the figure code.
   const WALK = 3.4;
@@ -328,30 +352,6 @@ async function main() {
   check('Infinity is the end', clampProgress(Infinity, 30), 30);
   check('a zero-length line has only 0', clampProgress(5, 0), 0);
 
-  console.log('\nadvanceProgress — extrapolation, capped at the polyline end');
-  check('two metres a second for one second', advanceProgress(5, 2, 1, 30), 7);
-  check('1.4 m/s for half a second', advanceProgress(5, 1.4, 0.5, 30), 5.7);
-  check('the cap holds at the end', advanceProgress(28, 4, 1, 30), 30);
-  check('…and it holds on a fraction too', advanceProgress(28.4, 3.4, 0.5, 30), 30);
-  check('standing on the end stays on the end', advanceProgress(30, 2, 1, 30), 30);
-  check('a frozen world does not extrapolate', advanceProgress(5, null, 1, 30), 5);
-  check('rate 0 is no rate', advanceProgress(5, 0, 1, 30), 5);
-  check('a negative rate is junk, not a walk backwards',
-    advanceProgress(5, -2, 1, 30), 5);
-  check('no time passed, no metres walked', advanceProgress(5, 2, 0, 30), 5);
-  check('a NaN rate moves nothing', advanceProgress(5, NaN, 1, 30), 5);
-  check('a NaN dt moves nothing', advanceProgress(5, 2, NaN, 30), 5);
-  check('below zero starts at the start and walks from there',
-    advanceProgress(-5, 1, 1, 30), 1);
-
-  console.log('\nthe two composed — one frame of the loop on (P)');
-  check('28 m + 4 m/s * 1 s lands ON the end, not past it',
-    pointAtDistance(P, advanceProgress(28, 4, 1, 30)), [10, 20]);
-  check('5 m + 2 m/s * 2.5 s is 10 m: the corner',
-    pointAtDistance(P, advanceProgress(5, 2, 2.5, 30)), [10, 0]);
-  check('a frozen journey stays where it is',
-    pointAtDistance(P, advanceProgress(15, null, 1, 30)), [10, 5]);
-
   console.log('\ncatchUpStep — the walk towards the interpolated point');
   check('a frozen journey still walks its correction off',
     catchUpStep(10, null, 1, WALK), 3.4);
@@ -374,14 +374,6 @@ async function main() {
   check('below factor 3.4/1.4 the walk is still the bound',
     catchUpStep(10, 1.4 * 2, 1, WALK), 3.4);
   check('above it the journey pace is', catchUpStep(10, 1.4 * 3, 1, WALK), 4.2);
-
-  console.log('\nshouldSnap — adopt the server number only past 2 metres');
-  check('the threshold is two metres', TRAVEL_SNAP_M, 2);
-  check('exactly two metres apart: keep the local value', shouldSnap(10, 8), false);
-  check('2.1 m apart: snap', shouldSnap(10, 7.9), true);
-  check('the local value ran ahead by 2.5 m: snap', shouldSnap(10, 12.5), true);
-  check('no difference at all', shouldSnap(0, 0), false);
-  check('half a metre of poll jitter is not a snap', shouldSnap(3, 2.5), false);
 
   console.log('\ntrimBucket — the five metres a redrawn travel line costs');
   check('the bucket is five metres', TRIM_BUCKET_M, 5);

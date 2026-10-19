@@ -483,7 +483,10 @@ async function main() {
         interaction: null, activity: '', travelLine: null, travelKey: '', bobPhase: 0,
         settle: null,
       };
-      const mgr = new C.NpcManager(pairLib);
+      const mgr = new C.NpcManager(pairLib, {
+        syncCounters: { posCorr: 0, pos409: 0, travBack: 0, travFwd: 0, travErrMaxM: 0, arrive: 0, place: 0 },
+        errWindow: { t: [], e: [] },
+      });
       mgr.npcs.set(name, npc);
       const seat = new THREE.Vector3(0, S - drop, 0);
       const avatar = scenario !== 'npc';
@@ -713,7 +716,10 @@ async function main() {
           waypoints: [], ride: null, route: null, travelling: false, reckon: null,
           interaction: null, activity: '', travelLine: null, travelKey: '', bobPhase: 0, settle: null,
         };
-        const mgr = new C.NpcManager(pairLib);
+        const mgr = new C.NpcManager(pairLib, {
+          syncCounters: { posCorr: 0, pos409: 0, travBack: 0, travFwd: 0, travErrMaxM: 0, arrive: 0, place: 0 },
+          errWindow: { t: [], e: [] },
+        });
         mgr.npcs.set(name, npc);
         owner.position.set(0, FLOOR, 0);
         for (let i = 0; i < 2 * FPS; i++) mgr.tick(DT, 10);

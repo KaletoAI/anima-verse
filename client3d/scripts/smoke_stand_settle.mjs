@@ -181,7 +181,10 @@ async function main() {
   const SEAT = new THREE.Vector3(1.6, 0, 3.0);
   const P = new THREE.Vector3(2.0, 0, 3.0);
   const npcOn = (name, travel, player = false) => {
-    const mgr = new NpcManager(null);
+    const mgr = new NpcManager(null, {
+      syncCounters: { posCorr: 0, pos409: 0, travBack: 0, travFwd: 0, travErrMaxM: 0, arrive: 0, place: 0 },
+      errWindow: { t: [], e: [] },
+    });
     const root = new THREE.Group();
     root.position.copy(SEAT);
     const npc = {

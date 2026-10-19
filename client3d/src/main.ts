@@ -81,7 +81,7 @@ import type { ModelTier, ScenePayload } from './api';
 import { createGround } from './scene/ground';
 import { createBackdrop } from './scene/backdrop';
 import { createWorldProps } from './scene/worldProps';
-import { clampProgress, pointAtDistance, polylineLength, type MetrePoint } from './scene/travelPath';
+import { ageAtReceiptS, createErrWindow, maxErr, clampProgress, pointAtDistance, polylineLength, type MetrePoint } from './scene/travelPath';
 import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } from './types';
 
 // --- THE CELL WORLD IS GONE (E4, tasks 2–6) ---------------------------------
@@ -577,7 +577,8 @@ async function startApp(username: string, role: string) {
   // a second copy of every texture the props already uploaded.
   setImpostorRenderer(engine.renderer);
   const syncCounters: SyncCounters = { posCorr: 0, pos409: 0, travBack: 0, travFwd: 0, travErrMaxM: 0, arrive: 0, place: 0 };
-  const npcs = new NpcManager(figures);
+  const errWindow = createErrWindow();
+  const npcs = new NpcManager(figures, { syncCounters, errWindow });
   figures.setModelFocus((name) => {
     const p = npcs.positionOf(name);
     return { avatar: name === firstMap.avatar,
@@ -1191,6 +1192,7 @@ async function startApp(username: string, role: string) {
   setInterval(() => {
     if (!perfEnabled()) return;
     const info = engine.renderer.info;
+    syncCounters.travErrMaxM = maxErr(errWindow, performance.now());
     setPerfStats({
       fps: fpsNow,
       worstFrameMs: worstFrame.worstFrameMs,
@@ -2587,7 +2589,7 @@ async function startApp(username: string, role: string) {
    * rule: the route ends at the target's door and would be a metre-exact map
    * marker for a place the avatar may not know.
    */
-  function travellerState(c: MapCharacter, stamp: number): NpcState | null {
+  function travellerState(c: MapCharacter, stamp: number, map: WorldMap): NpcState | null {
     const tr: MapTravel | null = c.travel ?? null;
     if (!tr) return null;
     const wp = tr.waypoints;
@@ -2595,6 +2597,8 @@ async function startApp(username: string, role: string) {
     // route without a `progress_m` is therefore a withheld row, not a walkable
     // line.
     if (wp && wp.length >= 2 && tr.progress_m !== null) {
+      const meta = api.mapMetaOf(map);
+      if (!meta) throw new Error('worldmap without receive metadata');
       const points = wp.map((p) => [p[0], p[1]] as MetrePoint);
       const totalM = polylineLength(points);
       const progressM = clampProgress(tr.progress_m, totalM);
@@ -2607,8 +2611,9 @@ async function startApp(username: string, role: string) {
         // figure keeps sampling it while it walks the polyline between polls —
         // that half lives in `npcs.ts`, on the same sampler.
         pos: new THREE.Vector3(at[0], terrainGround.heightAt(at[0], at[1]), at[1]),
-        route: { points, totalM, progressM,
-                 rateMS: tr.pace_m_s_real ?? tr.speed_m_s_real, stamp },
+        route: { points, totalM, paces: tr.paces_m_s_real, serverM: progressM,
+                 ageAtParsedS: ageAtReceiptS(map.sync, meta), parsedAt: meta.parsedAt,
+                 journeyId: tr.journey_id ?? null, stamp },
       };
     }
     // Withheld route, or a degenerate one-point line (a journey without a way):
@@ -2651,7 +2656,7 @@ async function startApp(username: string, role: string) {
       // character stands in the WILDERNESS (`location_id: ""`, § A11), which
       // is no tile — grouping by location would drop it off the map for the
       // whole journey.
-      const travelling = travellerState(c, mapStamp);
+      const travelling = travellerState(c, mapStamp, map);
       if (travelling) {
         states.push(travelling);
         shownPlacement.set(c.name, { room: null, interiorShown: false });

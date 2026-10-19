@@ -3395,9 +3395,17 @@ treat a transmitted zero-length segment as timeless.
    and zero-length transmitted segments consume no time. Account for payload
    age using required `sync` and the client's request/receipt metadata. No
    scalar-pace or missing-`sync` fallback is allowed.
-3. Reconcile polls against forward progress; never walk backwards along a
-   continuing journey. Detailed target/display reconciliation is defined by
-   P1 spec section 4.4; the server supplies the exact snapshot and ages here.
+3. Keep a server target (`targetM`) and displayed progress (`shownM`). On each
+   new payload, advance `progress_m` by its estimated age from `sync` and
+   request/header/parse timestamps, plus the time since parsing. A new journey
+   (journey id plus polyline) adopts that target whole. Between payloads, advance
+   both predictions per segment and reduce their error with `1 - exp(-dt / τ)`,
+   τ = 1 s, clamping the display's increment to zero or greater. A frozen world
+   only permits catching up to its held target. On payload adoption, a gap
+   strictly greater than `max(6 m, 2 s × target segment rate)` snaps the display
+   to the target (6 m for a null rate). Forward snaps retain root catch-up;
+   backward snaps place the root directly and reset secondary motion, so the
+   figure never walks backwards. Progress remains clamped to the polyline.
 4. Blickrichtung/Clip bleiben Client-Sache (Laufrichtung aus dem aktuellen
    Segment); `activity_animation` wird bewusst NICHT auf „walk" gezwungen
    (§ A8).
@@ -3428,16 +3436,17 @@ außerhalb jeder Sichtweite, steht trotzdem mit `pos` im Payload).
 **Konsumenten (Stand E5, 2026-08-12): beide migriert.** Die v1-Felder haben
 damit KEINEN Leser mehr — weder `path` noch `progress_cells`.
 
-* `client3d` — **erledigt (E4 Tasks 2 + 4).** `MapTravel` trägt v2
-  (`waypoints`/`progress_m`/`total_m`/`eta_game`/`speed_m_s_real`/
-  `pace_m_s_real`), der Zellen-Zweig samt `path`/`seg`/`frac`/
-  `cell_seconds_real` und dem `Array.isArray`-Notbremsen-Guard ist
-  **ersatzlos gelöscht**. Reisende werden entlang der Polylinie
-  interpoliert (`client3d/src/scene/travelPath.ts`: Bogenlänge,
-  Extrapolation künftig ausschließlich mit `paces_m_s_real` (P1 Task 3), doppelt geklemmt,
-  Ankunfts-Snap ab 2 m) und werden dabei VOR der Ortsgruppierung
-  eingesammelt — vorher fiel jeder Reisende mit leerer `location_id` aus
-  dem NPC-Update und war für die ganze Reise unsichtbar.
+* `client3d` — **P1 Task 3 implemented.** `main.ts` builds an `IncomingRoute`
+  from `paces_m_s_real`, `progress_m`, `journey_id`, and the map's required
+  receipt metadata. `NpcManager` retains separate target/display distances,
+  advances them with the import-free helpers in `scene/travelPath.ts`, trims
+  the drawn line at the display, and stops the walking animation at the end
+  once the root has caught up. The movement-sync overlay counts hard forward
+  and backward corrections, arrivals and placement snaps over 0.5 m, and shows
+  the maximum absolute target/display error over the last 30 seconds.
+  Travellers are collected before grouping by location, including journeys
+  with an empty `location_id`. Fogged foreign travellers without a route
+  retain their existing dead reckoning.
 * `frontend/src/player/MapPanel.tsx` — **erledigt (E5 Task 1).** Der
   Spieler-Panel ist als Schemakarte der Meter-Welt neu gebaut: Grundrisse in
   echter Größe, gemaltes Gelände, Figuren an ihrem `pos` — und die Reise als
@@ -6924,6 +6933,7 @@ jedem Neuaufbau).
 | Preset `mirror`: Spiegel-`ShaderMaterial` auf dem Klon, Nachbar-Material unberührt, gemessen wird die EIGENE Gruppe (`mirrorPlaneOf`), `DoubleSide`, EINE Warnung je Anhängen, erneutes Anhängen gibt das Erste frei, Hook setzen und zurückgeben, geteiltes Budget | `scripts/smoke_slot_materials.mjs` **[9]–[13]** |
 | `SLOT_PRESETS` == `MATERIAL_PRESETS`, `mirror` wird angenommen, Unbekanntes abgewiesen, kein Preset auf einer `picture`-Fläche | `scripts/smoke_props_slots.py` **[7]** |
 
+
 ### Blender doors (v15)
 
 `doorways[].door_style` is the resolved style id; absent for prop doors and open gaps.
@@ -6951,6 +6961,8 @@ Both must exist before replacing the flat leaf. Builder `outside` selects
 which local z face points outward after yaw; reversing the hinge reverses
 that sign. Door-model generation participates in the scene fingerprint, so
 finishing a build invalidates the cached payload and ETag (recipe v15).
+
+
 
 ## C2. Treppen und Fahrstuhl
 

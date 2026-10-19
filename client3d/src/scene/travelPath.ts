@@ -21,17 +21,6 @@
 /** A world point in metres, exactly the payload's `[x, z]` shape. */
 export type MetrePoint = [number, number];
 
-/**
- * How far apart the server's `progress_m` and the locally extrapolated one may
- * be before the client adopts the server's, in METRES.
- *
- * Absolute since E4: v1 compared "0.5 cells", a unit that no longer exists.
- * Two metres is a bit more than half a step of the 3.4 m/s walk and well below
- * what a segment change between two polls can accumulate — below it the local
- * extrapolation keeps running, so poll jitter never makes a figure stutter.
- */
-export const TRAVEL_SNAP_M = 2;
-
 function isNum(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
 }
@@ -229,28 +218,6 @@ export function clampProgress(value: number, totalM: number): number {
 }
 
 /**
- * One frame of client-side extrapolation: `progress + rate * dt`, capped at
- * the end of the polyline.
- *
- * `rateMS` is METRES PER REAL SECOND — `pace_m_s_real ?? speed_m_s_real` of
- * § A11 — and `null` means "do not extrapolate at all": a frozen world, an
- * arrival already reached, a degenerate segment. Rate 0, a negative rate and
- * any non-finite input mean the same thing, because each of them would be a
- * lie about how fast the figure is moving.
- *
- * The INPUT is clamped before it is advanced, not only afterwards: a payload
- * that hands in a negative `progress_m` starts the frame at the beginning of
- * the line and then walks its `rate * dt` from there.
- */
-export function advanceProgress(
-  progressM: number, rateMS: number | null | undefined, dt: number, totalM: number
-): number {
-  const from = clampProgress(progressM, totalM);
-  if (!isNum(rateMS) || rateMS <= 0 || !isNum(dt) || dt <= 0) return from;
-  return clampProgress(from + rateMS * dt, totalM);
-}
-
-/**
  * How far a figure may move TOWARDS its interpolated journey point this frame.
  *
  * The rendered figure does not jump onto the point the polyline says; it walks
@@ -346,13 +313,89 @@ export function deadReckonStep(
   return Math.min(remainingM, rateMS * p * dt);
 }
 
-/**
- * Does a freshly polled `progress_m` override the locally extrapolated one?
- *
- * Only past `TRAVEL_SNAP_M`. Both numbers are pre-clamped finite metres (the
- * caller runs the payload through `clampProgress`), so this is the plain
- * distance comparison it looks like.
- */
-export function shouldSnap(serverM: number, localM: number): boolean {
-  return Math.abs(serverM - localM) > TRAVEL_SNAP_M;
+export const TRAVEL_TAU_S = 1.0;
+export interface MapMeta { polledAt: number; headersAt: number; parsedAt: number }
+
+/** Walk `dtS` seconds forward from `fromM`, each segment at ITS pace (§ A11
+ *  `paces_m_s_real`). A null pace and a zero-length segment cost no time and
+ *  are crossed even when the budget is used up — the server counts them as
+ *  walked the moment their start is reached (`journey_state`). Clamped. */
+export function advanceAlongPaces(points: MetrePoint[], paces: (number | null)[] | null,
+  fromM: number, dtS: number): number {
+  const total = polylineLength(points);
+  let m = clampProgress(fromM, total);
+  if (!paces) return m;
+  let left = isNum(dtS) && dtS > 0 ? dtS : 0;
+  let acc = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    const L = segLength(points[i], points[i + 1]);
+    const segEnd = acc + L;
+    acc = segEnd;
+    if (m >= segEnd && L > 0) continue;               // already behind us
+    const pace = paces[i];
+    if (L <= 0 || pace === null || pace === undefined) { m = Math.max(m, segEnd); continue; }
+    if (!isNum(pace) || pace <= 0) break;            // broken entry: stop, never guess
+    if (left <= 0) break;                            // a TIMED segment needs time we lack
+    const need = (segEnd - m) / pace;
+    if (need <= left) { left -= need; m = segEnd; continue; }
+    m += pace * left; left = 0;
+    break;
+  }
+  return clampProgress(m, total);
+}
+
+export function ageAtReceiptS(sync: { clock_age_ms: number; build_ms: number }, meta: MapMeta): number {
+  const net = Math.max(0, (meta.headersAt - meta.polledAt) - sync.build_ms) / 2;
+  return (sync.clock_age_ms + net + (meta.parsedAt - meta.headersAt)) / 1000;
+}
+
+export function stepShown(points: MetrePoint[], paces: (number | null)[] | null,
+  shownM: number, targetM: number, dt: number, tau = TRAVEL_TAU_S): number {
+  const total = polylineLength(points);
+  const target2 = advanceAlongPaces(points, paces, targetM, dt);
+  const pred = advanceAlongPaces(points, paces, shownM, dt);
+  const err = target2 - pred;
+  const k = dt > 0 ? 1 - Math.exp(-dt / tau) : 0;
+  return clampProgress(shownM + Math.max(0, (pred - shownM) + err * k), total);
+}
+
+export function rateAt(points: MetrePoint[], paces: (number | null)[] | null, m: number): number | null {
+  if (!paces) return null;
+  let acc = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    acc += segLength(points[i], points[i + 1]);
+    if (m < acc) return paces[i] ?? null;
+  }
+  return paces[paces.length - 1] ?? null;
+}
+
+export function hardSnapM(rate: number | null): number {
+  return Math.max(6, isNum(rate) && rate > 0 ? 2 * rate : 0);
+}
+
+export function adoptTarget(shownM: number, targetM: number, rate: number | null):
+  { shownM: number; snap: 'none' | 'fwd' | 'back' } {
+  const gap = targetM - shownM;
+  if (Math.abs(gap) <= hardSnapM(rate)) return { shownM, snap: 'none' };
+  return { shownM: targetM, snap: gap < 0 ? 'back' : 'fwd' };
+}
+
+/** Max |error| over the LAST 30 s — a monotonic deque of timestamped samples:
+ *  a new sample evicts every older one it dominates, the front is the maximum,
+ *  and samples leave by THEIR OWN timestamp (no whole-second buckets that
+ *  would drop a 29-s-old sample early). Bounded by the number of decreasing
+ *  values inside 30 s, not by the frame count. */
+export interface ErrWindow { t: number[]; e: number[] }
+export function createErrWindow(): ErrWindow { return { t: [], e: [] }; }
+function pruneErr(w: ErrWindow, nowMs: number): void {
+  while (w.t.length && w.t[0] <= nowMs - 30_000) { w.t.shift(); w.e.shift(); }
+}
+export function pushErr(w: ErrWindow, nowMs: number, errM: number): void {
+  while (w.e.length && w.e[w.e.length - 1] <= errM) { w.t.pop(); w.e.pop(); }
+  w.t.push(nowMs); w.e.push(errM);
+  pruneErr(w, nowMs);
+}
+export function maxErr(w: ErrWindow, nowMs: number): number {
+  pruneErr(w, nowMs);
+  return w.e.length ? w.e[0] : 0;
 }
