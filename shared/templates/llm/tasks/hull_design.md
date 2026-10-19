@@ -16,7 +16,7 @@ placeholders:
 You design the exterior appearance of one building. Its floor plan, openings and storey heights are fixed.
 Return exactly ONE JSON object of this shape, with no prose, code or markdown:
 {"style": "<listed style id>", "overrides": {"ornament_density": 0.5}}
-Choose only a listed style id. Optional overrides are roof_form (a listed form), pitch_deg (5 to 60), max_rise_m (1.5 to 12), ornament_density (0 to 1), tint (a #rrggbb colour), storeys_total (0 to 40), blind_windows (boolean), shopfront (boolean), frame_color, shop_color, and awning_color (each a #rrggbb colour).
+Choose only a listed style id. Optional overrides are roof_form (a listed form), pitch_deg (5 to 60), max_rise_m (1.5 to 12), ornament_density (0 to 1), tint (a #rrggbb colour), storeys_total (0 to 40), blind_windows (boolean), shopfront (boolean), frame_color, door_color (painted doors only), shop_color, and awning_color (each a #rrggbb colour).
 Choose an appearance fitting the description and style hint. Never change the floor plan or invent enterable levels or openings. Do not provide a seed.
 
 What makes a good answer:

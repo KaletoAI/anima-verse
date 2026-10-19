@@ -1831,8 +1831,6 @@
     "Left or right as seen from inside this room, facing the door.": "Links oder rechts, von innen aus diesem Raum auf die Tür blickend.",
     "Doors": "Türen",
     "Other props": "Andere Props",
-    "Fills every door opening that picks nothing of its own. An opening can override it with its own prop or opt out with “None”.": "Füllt jede Tür-Öffnung, die nichts Eigenes wählt. Eine Öffnung kann es mit einem eigenen Prop übersteuern oder mit „Keine“ abwählen.",
-    "— no default door —": "— keine Standard-Tür —",
     "detected": "erkannt",
     "Material": "Material",
     "Nothing was inside the outline — draw around the surface, facing it.": "Nichts lag im Umriss — zeichne um die Fläche herum, mit Blick darauf.",
@@ -2683,6 +2681,12 @@
     "Run now active": "Jetzt ausführen aktiv",
     "Stop run": "Ausführen stoppen",
     "Task queue paused": "Task-Queue pausiert",
-    "Runs all steps of this entry now, without waiting for the idle time, even with the engine off or the world frozen.": "Führt alle Schritte dieses Eintrags jetzt aus, ohne auf die Ruhezeit zu warten — auch bei ausgeschalteter Engine oder eingefrorener Welt."
+    "Runs all steps of this entry now, without waiting for the idle time, even with the engine off or the world frozen.": "Führt alle Schritte dieses Eintrags jetzt aus, ohne auf die Ruhezeit zu warten — auch bei ausgeschalteter Engine oder eingefrorener Welt.",
+    "Door style": "Türstil",
+    "Building default (from the hull style)": "Gebäudevorgabe (aus dem Hüllenstil)",
+    "Door colour": "Türfarbe",
+    "Painted doors only": "Nur gestrichene Türen",
+    "— pick a door style —": "— Türstil wählen —",
+    "Choose the location default, an open gap, a door style or a door prop.": "Standortvorgabe, eine offene Lücke, einen Türstil oder ein Tür-Prop wählen."
   }
 }

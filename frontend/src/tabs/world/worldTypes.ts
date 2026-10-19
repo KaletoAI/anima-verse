@@ -184,6 +184,7 @@ export interface RoomOpening {
   to?: string
   /** Optional frame/leaf prop scaled onto the opening. Set = this opening
    *  brings its own door, whatever the location's default says. */
+  door_style?: string
   prop_id?: string
   /** The explicit "no prop in this door" — the ONE value that keeps the
    *  location's `default_door_prop_id` out of this opening. Absent = nothing
@@ -446,7 +447,8 @@ export interface Location {
   entry_room?: string
   /** The place's own door: every door opening that names no prop of its own
    *  is filled with this one, unless it opts out with `door_prop: 'none'`.
-   *  Empty = no default, i.e. the plain leaf as before. */
+   *  Empty = use the location style, then the building style or shipped default. */
+  default_door_style?: string
   default_door_prop_id?: string
   danger_level?: number
   indoor?: string

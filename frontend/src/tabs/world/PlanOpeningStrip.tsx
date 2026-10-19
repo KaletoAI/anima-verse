@@ -65,13 +65,14 @@ interface Props {
    *  empty option says so instead of reading like "leads nowhere". */
   corridorName?: string
   /** The location's fallback door prop, named as the first option. */
+  defaultDoorStyle?: string
   defaultDoorPropId: string
   /** Merge a patch into this opening, or remove it when null is passed. */
   onPatch: (patch: Partial<RoomOpening> | null) => void
 }
 
 export function PlanOpeningStrip({
-  opening: op, index, otherRooms, corridorName = '', defaultDoorPropId, onPatch,
+  opening: op, index, otherRooms, corridorName = '', defaultDoorPropId, defaultDoorStyle, onPatch,
 }: Props) {
   const { t } = useI18n()
 
@@ -132,6 +133,7 @@ export function PlanOpeningStrip({
           key={index}
           opening={op}
           defaultPropId={defaultDoorPropId}
+          defaultStyle={defaultDoorStyle}
           onPatch={onPatch}
         />
       ) : null}

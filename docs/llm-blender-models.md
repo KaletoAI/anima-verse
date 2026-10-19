@@ -288,3 +288,11 @@ bounding-box and timeout helpers live in `app/core/hull_util.py`.
 Pure verification: `scripts/smoke_hull_styles.py`, `smoke_hull_facts.py` and
 `smoke_hull_geometry.py`. Blender and route integration are covered by
 `smoke_hull_model.py` and `smoke_hull_routes.py`.
+
+Blender doors use shipped door styles to build exact-size models cached per signature
+(style, dimensions, hinge, materials and colour). Separate frame and leaf nodes keep
+the frame fixed while the leaves swing; the hull uses the same door geometry.
+An opening chooses its own door prop first, then its door style, then an explicit
+None (open gap), then the location's default prop or style. Otherwise the hull style
+chooses exterior, interior or shopfront doors, falling back to panel outside and
+interior inside. Door colour overrides apply to painted leaves only.

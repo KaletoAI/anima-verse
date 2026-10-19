@@ -18,7 +18,7 @@
  * shape or somebody else's, and the middle button is the bridge between them.
  */
 import { useI18n } from '../../i18n/I18nProvider'
-import { DoorPropSelect } from './DoorPropPicker'
+import { LocationDoorDefault } from './DoorPropPicker'
 import { PlanHullOpeningStrip } from './PlanHullOpeningStrip'
 import { SurfaceKindSelect } from './SurfaceKindSelect'
 import { HULL_OPENING_MAX, outlineSourceLevel } from './planGeometry'
@@ -31,8 +31,9 @@ interface Props {
    *  offered, which lives on the location and not in the 3D block. */
   onMap3d?: (key: keyof Map3D, value: unknown) => void
   surfaceKinds: SurfaceKind[]
+  defaultDoorStyle?: string
   defaultDoorPropId: string
-  onDefaultDoorProp?: (id: string) => void
+  onDefaultDoorProp?: (id: string, style: string) => void
   /** The footprint tool is armed FOR THIS STOREY right now. */
   drawingOutline: boolean
   /** There IS an inherited shape to copy — without one the fork button would
@@ -59,7 +60,7 @@ interface Props {
 }
 
 export function PlanInspectorLevel({
-  level, map3d, onMap3d, surfaceKinds, defaultDoorPropId, onDefaultDoorProp,
+  level, map3d, onMap3d, surfaceKinds, defaultDoorPropId, defaultDoorStyle, onDefaultDoorProp,
   drawingOutline, canForkOutline, onDrawOutline, onForkOutline, onDropOutline,
   levelOutline, drawingHull, onDrawHull, hullSel, onSelectHull,
 }: Props) {
@@ -273,6 +274,7 @@ export function PlanInspectorLevel({
                   opening={hullAll[hullSel]}
                   index={hullSel}
                   outline={levelOutline}
+                  defaultDoorStyle={defaultDoorStyle}
                   defaultDoorPropId={defaultDoorPropId}
                   onPatch={(patch) => writeHull(hullSel, patch)}
                 />
@@ -307,17 +309,8 @@ export function PlanInspectorLevel({
       {/* THE PLACE'S OWN DOOR — the fallback every door opening on this plan
           inherits, and the first option the opening panel offers. */}
       {onDefaultDoorProp ? (
-        <label style={{ display: 'flex', gap: 5, alignItems: 'center',
-          fontSize: '0.82em' }}
-          title={t('Fills every door opening that picks nothing of its own. An opening can override it with its own prop or opt out with “None”.')}>
-          <span style={{ width: 38, flex: '0 0 auto' }}>{t('Door')}</span>
-          <DoorPropSelect
-            value={defaultDoorPropId}
-            onChange={onDefaultDoorProp}
-            emptyLabel={t('— no default door —')}
-            width={190}
-          />
-        </label>
+        <LocationDoorDefault propId={defaultDoorPropId} styleId={defaultDoorStyle || ''}
+          onChange={onDefaultDoorProp} />
       ) : null}
     </div>
   )

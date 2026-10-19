@@ -1264,7 +1264,7 @@ def door_style_list() -> Dict[str, Any]:
 
 @router.get("/door-styles/{style_id}/thumbnail")
 def door_style_thumbnail(style_id: str):
-    """Build a Workbench thumbnail on demand."""
+    """Build a door style thumbnail (Cycles) on demand."""
     from fastapi.responses import FileResponse
     from app.blender import runner
     from app.core.door_models import style_thumbnail

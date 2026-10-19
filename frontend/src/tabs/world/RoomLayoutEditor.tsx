@@ -178,9 +178,10 @@ interface RoomLayoutEditorProps {
    *  an opening inherits when it chooses nothing, and the inspector's Storey
    *  tab edits it — it is a setting OF this plan, and it used to stand as a
    *  lone full-width row above the whole editor. */
+  defaultDoorStyle?: string
   defaultDoorPropId?: string
   /** Absent = the field is read-only here (the tab did not hand a writer). */
-  onDefaultDoorProp?: (id: string) => void
+  onDefaultDoorProp?: (id: string, style: string) => void
   /** Rendered at the bottom INSIDE the editor's frame — the Floor-plan tab
    *  slots the model adjustment strip of the selected room here. */
   children?: ReactNode
@@ -238,7 +239,7 @@ function hullsOf(list: Room[], level: number, skipId = ''): PolyRoom[] {
 
 const NO_PREVIEW_POSES: Record<string, string> = {}
 
-export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, previewPose = NO_PREVIEW_POSES, onPreviewPose, unsaved = false, defaultDoorPropId = '', onDefaultDoorProp, children }: RoomLayoutEditorProps) {
+export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMap3d, placedOnMap = true, hasEntrance, onSelectRoom, scene = null, calibrationRoomId = '', onCalibrationAt, previewPose = NO_PREVIEW_POSES, onPreviewPose, unsaved = false, defaultDoorPropId = '', defaultDoorStyle = '', onDefaultDoorProp, children }: RoomLayoutEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [kitCatalog, setKitCatalog] = useState<FurnitureKitCatalog | null>(null)
@@ -2754,6 +2755,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
               ? (key, value) => onMap3d(key as never, value as never)
               : undefined}
             surfaceKinds={surfaceKinds}
+            defaultDoorStyle={defaultDoorStyle}
             defaultDoorPropId={defaultDoorPropId || ''}
             onDefaultDoorProp={onDefaultDoorProp}
             drawingOutline={clickMode === 'outline' && outlineLevel === level}
@@ -3050,6 +3052,7 @@ export function RoomLayoutEditor({ rooms, onChange, locationId = '', map3d, onMa
           // the storey's corridor (§ A13b), so only they may say so.
           corridorName={selectedRoom.layout.openings[openingSel].type === 'window'
             ? '' : corridorOfLevel(selectedRoom.layout?.level || 0)}
+          defaultDoorStyle={defaultDoorStyle}
           defaultDoorPropId={defaultDoorPropId}
           onPatch={(patch) => {
             const list = (selectedRoom.layout?.openings || [])

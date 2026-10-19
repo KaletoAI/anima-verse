@@ -7,6 +7,9 @@ export interface HullStyle {
   id: string
   name: string
   description: string
+  door_style?: string
+  interior_door_style?: string
+  shop_door_style?: string
   origin: string
   palette: { frame: string; shop: string; awning: string; [key: string]: unknown }
   roof: { max_rise_m: number; max_rise_ratio: number; [key: string]: unknown }

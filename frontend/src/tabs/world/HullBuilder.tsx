@@ -13,7 +13,7 @@ type RoofForm = 'gable' | 'hip' | 'shed' | 'flat'
 interface HullDescription {
   style: string
   seed: number
-  overrides: { storeys_total?: number; roof_form?: RoofForm; pitch_deg?: number; max_rise_m?: number; ornament_density: number; tint?: string; roof_tint?: string; blind_windows?: boolean; shopfront?: boolean; frame_color?: string; shop_color?: string; awning_color?: string; materials?: HullMaterials }
+  overrides: { storeys_total?: number; roof_form?: RoofForm; pitch_deg?: number; max_rise_m?: number; ornament_density: number; tint?: string; roof_tint?: string; blind_windows?: boolean; shopfront?: boolean; frame_color?: string; door_color?: string; shop_color?: string; awning_color?: string; materials?: HullMaterials }
 }
 interface HullStatus {
   ok: boolean
@@ -215,6 +215,15 @@ function HullForm({ apiBase, pending, onStarted }: {
               onChange={(e) => patch({ frame_color: e.target.value })} />
             <button className="ga-btn ga-btn-sm" onClick={() => patch({ frame_color: undefined })}>{t('none')}</button>
             {!overrides.frame_color ? <span className="ga-hint">{t('Style default ({value})').replace('{value}', selected?.palette.frame ?? '')}</span> : null}
+          </span>
+        </label>
+        <label><span>{t('Door colour')}</span>
+          <span className="ga-hull-colour">
+            <input type="color" title={t('Painted doors only')} value={overrides.door_color ?? '#ffffff'}
+              onChange={(e) => patch({ door_color: e.target.value })} />
+            <button className="ga-btn ga-btn-sm" onClick={() => patch({ door_color: undefined })}>{t('none')}</button>
+            {!overrides.door_color ? <span className="ga-hint">{t('Style default')}</span> : null}
+            <span className="ga-hint">{t('Painted doors only')}</span>
           </span>
         </label>
         <label><input type="checkbox" checked={!!overrides.blind_windows}

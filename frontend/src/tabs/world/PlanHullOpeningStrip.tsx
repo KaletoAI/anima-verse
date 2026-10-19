@@ -34,13 +34,14 @@ interface Props {
    *  as the boundary pass-throughs do. */
   outline: Array<[number, number]>
   /** The location's fallback door prop, named as the first option. */
+  defaultDoorStyle?: string
   defaultDoorPropId: string
   /** Merge a patch into this door, or remove it when null is passed. */
   onPatch: (patch: Partial<HullOpening> | null) => void
 }
 
 export function PlanHullOpeningStrip({
-  opening: op, index, outline, defaultDoorPropId, onPatch,
+  opening: op, index, outline, defaultDoorPropId, defaultDoorStyle, onPatch,
 }: Props) {
   const { t } = useI18n()
   const m = (v: number) => Math.round(v * 10) / 10
@@ -115,6 +116,7 @@ export function PlanHullOpeningStrip({
           key={index}
           opening={op}
           defaultPropId={defaultDoorPropId}
+          defaultStyle={defaultDoorStyle}
           onPatch={onPatch}
         />
       ) : null}
