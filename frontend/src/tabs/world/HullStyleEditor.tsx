@@ -8,6 +8,7 @@ export interface HullStyle {
   name: string
   description: string
   origin: string
+  palette: { frame: string; shop: string; awning: string; [key: string]: unknown }
   roof: { max_rise_m: number; max_rise_ratio: number; [key: string]: unknown }
   [key: string]: unknown
 }

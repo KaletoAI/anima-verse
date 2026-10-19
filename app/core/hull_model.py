@@ -273,6 +273,9 @@ def propose_hull(location_id: str) -> Dict[str, Any]:
             "hull_design", name=name,
             description=str(location.get("description") or ""),
             style_hint=str(location.get("style_hint") or ""),
+            windows=sum(1 for level in facts["levels"] for edge in level["edges"]
+                        for opening in edge["openings"]
+                        if opening["kind"] == "window" and not opening.get("blind")),
             storeys=len(facts["levels"]), length_m=rectangle["length"],
             depth_m=rectangle["depth"], styles=listing, forms=list(hull_styles.ROOF_FORMS))
         response = llm_call(task="hull_design", system_prompt=system_prompt,

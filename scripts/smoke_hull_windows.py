@@ -347,13 +347,49 @@ def check_shop_flag_and_blinds():
     assert any(h.get('blind') for e in facts['levels'][1]['edges'] for h in e['openings'])
 
 
+def check_hull_design_render():
+    """The real-window count and new optional overrides reach the rendered prompt."""
+    from app.core.prompt_templates import render_task
+    system, user = render_task(
+        'hull_design', name='Cafe', description='Street cafe', style_hint='',
+        storeys=2, windows=3, length_m=12, depth_m=8,
+        styles=[dict(id='fachwerk', name='Timber', description='Traditional')],
+        forms=['gable'])
+    assert 'Real exterior windows: 3 (all storeys).' in user
+    for key in ('blind_windows', 'shopfront', 'frame_color', 'shop_color', 'awning_color'):
+        assert key in system, key
+    assert 'cafés' in system and 'few windows for its size' in system
+
+
+def check_hull_proposal_window_count():
+    """Count windows on every storey, excluding doors and blind windows."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from app.core.hull_model import propose_hull
+    from app.core.prompt_templates import render_task
+    facts = rect_facts()
+    upper = deepcopy(facts['levels'][0])
+    upper['edges'][0]['openings'].append(dict(kind='window', blind=True))
+    facts['levels'].append(upper)
+    with patch('app.models.world.get_location_by_id', return_value=dict(name='Cafe')), \
+         patch('app.core.hull_model.hull_facts', return_value=facts), \
+         patch('app.core.hull_styles.load_styles', return_value={'fachwerk': style('fachwerk')}), \
+         patch('app.core.prompt_templates.render_task', wraps=render_task) as render, \
+         patch('app.core.llm_router.llm_call', return_value=SimpleNamespace(
+             content='{"style":"fachwerk","overrides":{"shopfront":true}}')):
+        result = propose_hull('fixture')
+    assert result['llm'], result
+    assert render.call_args.kwargs['windows'] == 2
+    assert result['description_json']['overrides']['shopfront'] is True
+
+
 def main():
     failed = []
     for check in (check_glass,check_details,check_density,check_blind,check_surrounds,check_wide_and_thresholds,check_identity,
                   check_real_storey_raster,check_real_storey_flag_and_medians,
                   check_real_storey_roof_and_short_wall,check_real_storey_filters,check_real_storey_budget,
                   check_shop_street_edges,check_shop_panels_and_band,check_shop_awnings,
-                  check_shop_grouping_and_tall_door,check_shop_flag_and_blinds):
+                  check_shop_grouping_and_tall_door,check_shop_flag_and_blinds,check_hull_design_render,check_hull_proposal_window_count):
         try:
             check()
         except AssertionError as error:

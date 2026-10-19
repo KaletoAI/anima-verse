@@ -14,6 +14,18 @@ the roof gets a flat top. Fascia appears on all tiers; gutter and verge trim
 appear on the full tier when ornament density is greater than 0. L/T/U junction
 seams drop overhang and trim only along the joined stretch.
 
+Traditional styles add painted casement frames, glazing bars and projecting sills
+on the full tier; Modern keeps its metal windows. **Window frame colour**
+(`frame_color`) overrides the style palette. **Fill blank walls with blind windows**
+(`blind_windows`) adds opaque windows to blank walls without changing real openings
+or interiors. **Shopfront ground floor** (`shopfront`) adds painted panels, a sign
+band and awnings to ground-floor edges with exterior doors, falling back to the
+longest edge. **Shopfront colour** (`shop_color`) and **Awning colour**
+(`awning_color`) accept #rrggbb overrides; clearing a colour uses the style palette.
+Both options default off. LLM suggestions use the real exterior window count to
+suggest blind windows for sparse facades and shopfronts for street-facing shops,
+cafés, bakeries, taverns and inns.
+
 The pipeline is `scene_recipe` facts → walls/roofs/ornaments → Blender.
 `hull_facts` takes the outline, openings and level heights from the recipe's
 geometry helpers. Python builds the vertices, faces, UVs and material groups;

@@ -8,6 +8,13 @@
     }
   },
   "translations": {
+    "Window frame colour": "Fensterrahmenfarbe",
+    "Fill blank walls with blind windows": "Leere Wände mit Blindfenstern füllen",
+    "Shopfront": "Ladenfront",
+    "Shopfront ground floor": "Ladenfront im Erdgeschoss",
+    "Shopfront colour": "Ladenfrontfarbe",
+    "Awning colour": "Markisenfarbe",
+    "Style default ({value})": "Stilvorgabe ({value})",
     "Shape": "Formgebung",
     "Look": "Aussehen",
     "Materials": "Materialien",

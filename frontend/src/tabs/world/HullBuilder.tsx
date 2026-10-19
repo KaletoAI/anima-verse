@@ -13,7 +13,7 @@ type RoofForm = 'gable' | 'hip' | 'shed' | 'flat'
 interface HullDescription {
   style: string
   seed: number
-  overrides: { storeys_total?: number; roof_form?: RoofForm; pitch_deg?: number; max_rise_m?: number; ornament_density: number; tint?: string; roof_tint?: string; materials?: HullMaterials }
+  overrides: { storeys_total?: number; roof_form?: RoofForm; pitch_deg?: number; max_rise_m?: number; ornament_density: number; tint?: string; roof_tint?: string; blind_windows?: boolean; shopfront?: boolean; frame_color?: string; shop_color?: string; awning_color?: string; materials?: HullMaterials }
 }
 interface HullStatus {
   ok: boolean
@@ -209,6 +209,34 @@ function HullForm({ apiBase, pending, onStarted }: {
           </span>
         </label>)}
         <span className="ga-hint">{t('Overrides Tint for the roof.')}</span>
+        <label><span>{t('Window frame colour')}</span>
+          <span className="ga-hull-colour">
+            <input type="color" value={overrides.frame_color ?? selected?.palette.frame ?? '#ffffff'}
+              onChange={(e) => patch({ frame_color: e.target.value })} />
+            <button className="ga-btn ga-btn-sm" onClick={() => patch({ frame_color: undefined })}>{t('none')}</button>
+            {!overrides.frame_color ? <span className="ga-hint">{t('Style default ({value})').replace('{value}', selected?.palette.frame ?? '')}</span> : null}
+          </span>
+        </label>
+        <label><input type="checkbox" checked={!!overrides.blind_windows}
+          onChange={(e) => patch({ blind_windows: e.target.checked || undefined })} />{t('Fill blank walls with blind windows')}</label>
+      </fieldset>
+      <fieldset disabled={locked} className="ga-fieldset">
+        <legend className="ga-fieldset-title">{t('Shopfront')}</legend>
+        <label><input type="checkbox" checked={!!overrides.shopfront}
+          onChange={(e) => patch({ shopfront: e.target.checked || undefined })} />{t('Shopfront ground floor')}</label>
+        {(['shop_color', 'awning_color'] as const).map((slot) => {
+          const colour = selected?.palette[slot === 'shop_color' ? 'shop' : 'awning'] ?? '#ffffff'
+          return <label key={slot}>
+            <span>{slot === 'shop_color' ? t('Shopfront colour') : t('Awning colour')}</span>
+            <span className="ga-hull-colour">
+              <input type="color" disabled={!overrides.shopfront} value={overrides[slot] ?? colour}
+                onChange={(e) => patch({ [slot]: e.target.value })} />
+              <button className="ga-btn ga-btn-sm" disabled={!overrides.shopfront}
+                onClick={() => patch({ [slot]: undefined })}>{t('none')}</button>
+              {!overrides[slot] ? <span className="ga-hint">{t('Style default ({value})').replace('{value}', colour)}</span> : null}
+            </span>
+          </label>
+        })}
       </fieldset>
       <fieldset disabled={locked} className="ga-fieldset">
         <legend className="ga-fieldset-title">{t('Materials')}</legend>
