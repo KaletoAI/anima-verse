@@ -1,4 +1,4 @@
-"""Hand-derived §3.1/3.2 window checks; run with ./.venv/bin/python."""
+"""Hand-derived §3.1/3.2/3.3 window and shopfront checks; run with ./.venv/bin/python."""
 from copy import deepcopy
 import math
 import hashlib
@@ -261,11 +261,99 @@ def check_real_storey_budget():
             print(f"PASS: blind budget {tier}={result['tris']} resolved={sorted(resolved)}")
     assert desc == original
 
+def shop_parts(facts=None, tier='full', enabled=True, name='fachwerk'):
+    from app.core.hull_ornaments import build_ornaments
+    config = style(name)
+    config['shutters'] = 0
+    facts = rect_facts() if facts is None else facts
+    desc = dict(seed=17,overrides=dict(shopfront=enabled))
+    return (build_walls(facts,config,desc,tier=tier),
+            build_ornaments(facts,config,desc,{},tier=tier))
+
+
+def check_shop_street_edges():
+    assert hasattr(hull_facades,'street_edges'), 'street_edges missing'
+    facts = rect_facts()
+    level = facts['levels'][0]
+    assert hull_facades.street_edges(level) == {0}
+    level['edges'][1]['openings'] = [dict(kind='passage')]
+    assert hull_facades.street_edges(level) == {0,1}
+    for edge in level['edges']:
+        edge['openings'] = []
+    assert hull_facades.street_edges(level) == {0}
+    level['level'] = 1
+    assert hull_facades.street_edges(level) == set()
+
+
+def check_shop_panels_and_band():
+    """outer=.34; span [-.34,10.34] inset gives [-.24,10.24]."""
+    for tier in ('full','low'):
+        walls, ornaments = shop_parts(tier=tier)
+        panels = [p for p in walls if p['material']=='shop']
+        assert panels, 'missing painted panels'
+        assert all(p['tag']=='wall' and box(p)[2]>=.45 and box(p)[3]<=2.25
+                   and box(p)[4:]==(.34,.34) for p in panels)
+        street = [p for p in walls if p['tag']=='wall' and box(p)[4:]==(.34,.34)]
+        assert all(p['material']=='shop' for p in street if .45<=box(p)[2]<2.25)
+        signs = [p for p in ornaments if p['tag']=='sign']
+        assert len(signs)==1
+        assert box(signs[0]) == (-.24,10.24,2.25,2.75,.34,.4)
+        assert signs[0]['material']=='shop' and signs[0]['protrudes']
+        assert all(p['material']!='shop' for p in walls if p['tag']=='reveal')
+
+
+def check_shop_awnings():
+    for tier in ('full','low'):
+        _, parts = shop_parts(tier=tier)
+        awnings = [p for p in parts if p['tag']=='awning']
+        assert len(awnings)==(8 if tier=='full' else 2), 'missing awning pieces'
+        assert all(p['protrudes'] and p['material']=='awning' for p in awnings)
+        for left,right in ((1.85,3.35),(5.85,7.35)):
+            sheet = next(p for p in awnings if box(p)==(left,right,1.8296,2.23,.34,1.44))
+            assert len(sheet['faces'])==1
+            if tier=='full':
+                assert any(box(p)==(left,right,1.6296,1.8296,1.42,1.44) for p in awnings)
+                for a,b in ((left,round(left+.02,4)),(round(right-.02,4),right)):
+                    cheek = next(p for p in awnings if box(p)==(a,b,1.8296,2.23,.34,1.44))
+                    assert sorted(len(face) for face in cheek['faces'])==[3,3,4,4,4]
+        assert no_degenerate_faces(parts)
+        assert not any(p['tag'] in ('porch','canopy') for p in parts)
+    for name in ('fachwerk','modern'):
+        assert not any(p['tag'] in ('porch','canopy') for p in shop_parts(name=name)[1])
+
+
+def check_shop_grouping_and_tall_door():
+    for start,count in ((3.7,1),(3.9,2),(3.8,2)):
+        facts = rect_facts()
+        facts['levels'][0]['edges'][0]['openings'][1].update(s0=start,s1=start+1.2)
+        awnings = [p for p in shop_parts(facts,tier='low')[1] if p['tag']=='awning']
+        assert len(awnings)==count, (start,len(awnings))
+        if count==1:
+            assert box(awnings[0])==(1.85,5.05,1.8296,2.23,.34,1.44)
+    facts = rect_facts()
+    facts['levels'][0]['edges'][0]['openings'][0]['y1'] = 2.8
+    parts = shop_parts(facts,tier='low')[1]
+    assert not any(p['tag']=='sign' for p in parts)
+    assert any(box(p)==(1.85,3.35,2.5296,2.93,.34,1.44) for p in parts if p['tag']=='awning')
+
+
+def check_shop_flag_and_blinds():
+    walls, ornaments = shop_parts(enabled=False)
+    assert not any(p['material']=='shop' or p['tag'] in ('sign','awning') for p in walls+ornaments)
+    facts = prepared_windows(shopfront=True)
+    ground = facts['levels'][0]
+    assert not any(h.get('blind') for h in ground['edges'][2]['openings']), 'street blind windows remain'
+    assert any(h.get('blind') for e in ground['edges'] for h in e['openings'])
+    assert any(h.get('blind') for e in facts['levels'][1]['edges'] for h in e['openings'])
+
+
 def main():
     failed = []
     for check in (check_glass,check_details,check_density,check_blind,check_surrounds,check_wide_and_thresholds,check_identity,
                   check_real_storey_raster,check_real_storey_flag_and_medians,
-                  check_real_storey_roof_and_short_wall,check_real_storey_filters,check_real_storey_budget):
+                  check_real_storey_roof_and_short_wall,check_real_storey_filters,check_real_storey_budget,
+                  check_shop_street_edges,check_shop_panels_and_band,check_shop_awnings,
+                  check_shop_grouping_and_tall_door,check_shop_flag_and_blinds):
         try:
             check()
         except AssertionError as error:

@@ -2,7 +2,7 @@
 import math
 from typing import Dict, List, Optional
 
-from app.core.hull_facades import module_count
+from app.core.hull_facades import module_count, street_edges, shop_band
 from app.core.hull_mesh import Part, PartBuilder, _normal, offset_ring, rng
 from app.core.hull_walls import _axes, _cells, _span, wall_offsets
 from app.core.scene_recipe import WALL_SINK_M, _ring_ccw, _point_in_polygon
@@ -316,12 +316,12 @@ def _roof_drop(level, edge, vertices, top_at, roof_info, style):
     return drop
 
 
-def _porches(level, style, uv_sizes, parts, roof_info=None):
+def _porches(level, style, uv_sizes, parts, roof_info=None, streets=frozenset()):
     """Attach a closed shed slab and two .12 m posts to each ground door."""
     outer = wall_offsets(style, 0)[1]
     for edge in level["edges"]:
         for hole in edge["openings"]:
-            if hole["kind"] != "door":
+            if hole["kind"] != "door" or edge["index"] in streets:
                 continue
             left, right = hole["s0"] - .6, hole["s1"] + .6
             low = hole["y1"] + .3
@@ -355,12 +355,12 @@ def _porches(level, style, uv_sizes, parts, roof_info=None):
             _append(parts, cap)
 
 
-def _canopies(level, style, uv_sizes, parts, roof_info):
+def _canopies(level, style, uv_sizes, parts, roof_info, streets=frozenset()):
     """Fit rigid entrance plates below the wall head and nearby roof undersides."""
     outer = wall_offsets(style, 0)[1]
     for edge in level["edges"]:
         for hole in edge["openings"]:
-            if hole["kind"] != "door":
+            if hole["kind"] != "door" or edge["index"] in streets:
                 continue
             low = min(hole["y1"]+.25, level["top_y"]-.15)
             builder = _builder("canopy", "trim", uv_sizes, protrudes=True)
@@ -426,6 +426,51 @@ def _roof_units(facts, style, desc, roof_info, density, uv_sizes, parts):
                 break
 
 
+def _shopfront(level, style, streets, tier, uv_sizes, parts):
+    """Paint the sign and attach grouped sloping awnings to street apertures."""
+    outer = wall_offsets(style, 0)[1]
+    ring = offset_ring(level["outline"], level["ccw"], outer)
+    drop = 1.1*math.tan(math.radians(20))
+    for edge in level["edges"]:
+        if edge["index"] not in streets:
+            continue
+        bottom, top = shop_band(level, edge)
+        left, right = _span(ring, edge, outer)
+        if top-bottom >= .3-1e-8:
+            builder = _builder("sign", "shop", uv_sizes, protrudes=True)
+            _block(builder, edge, left+.10, right-.10, bottom, top, outer, outer+.06)
+            _append(parts, builder)
+        groups = []
+        for hole in sorted((h for h in edge["openings"]
+                            if h["kind"] in ("door", "passage", "window") and not h.get("blind")),
+                           key=lambda h: h["s0"]):
+            if groups and hole["s0"]-groups[-1][1] < .6-1e-8:
+                groups[-1][1] = max(groups[-1][1], hole["s1"])
+                groups[-1][2] = max(groups[-1][2], hole["y1"])
+            else:
+                groups.append([hole["s0"], hole["s1"], hole["y1"]])
+        for left, right, opening_top in groups:
+            left, right = left-.15, right+.15
+            high = min(opening_top+.30, bottom-.02)
+            low = high-drop
+            builder = _builder("awning", "awning", uv_sizes, protrudes=True)
+            builder.poly([_point(edge,s,y,d) for s,y,d in
+                          ((left,high,outer),(left,low,outer+1.1),
+                           (right,low,outer+1.1),(right,high,outer))])
+            _append(parts, builder)
+            if tier == "low":
+                continue
+            for span, step in ((left,.02),(right,-.02)):
+                builder = _builder("awning", "awning", uv_sizes, protrudes=True)
+                section = [(high,outer),(low,outer+1.1),(low,outer)]
+                _extrude(builder, [_point(edge,span,y,d) for y,d in section],
+                         [_point(edge,span+step,y,d) for y,d in section])
+                _append(parts, builder)
+            builder = _builder("awning", "awning", uv_sizes, protrudes=True)
+            _block(builder, edge, left, right, low-.20, low, outer+1.08, outer+1.1)
+            _append(parts, builder)
+
+
 def build_ornaments(facts: Dict, style: Dict, desc: Dict, roof_info: Dict, *, tier: str,
                     uv_sizes: Optional[Dict[str, float]] = None,
                     resolved: frozenset[str] = frozenset()) -> List[Part]:
@@ -437,6 +482,9 @@ def build_ornaments(facts: Dict, style: Dict, desc: Dict, roof_info: Dict, *, ti
     parts = []
     levels = sorted(facts["levels"], key=lambda level: level["level"])
     for level in levels:
+        streets = street_edges(level) if desc.get("overrides", {}).get("shopfront") else set()
+        if streets:
+            _shopfront(level, style, streets, tier, uv_sizes, parts)
         start = len(parts)
         timber = style.get("timber_frame", "none")
         if tier == "full" and (timber == "all" or timber == "upper" and (len(levels) == 1 or level["level"] != 0)):
@@ -444,9 +492,9 @@ def build_ornaments(facts: Dict, style: Dict, desc: Dict, roof_info: Dict, *, ti
         if style.get("log_walls") or style.get("corners") == "log_ends":
             _logs(level, style, tier == "full", uv_sizes, parts, roof_info)
         if level["level"] == 0 and style.get("porch"):
-            _porches(level, style, uv_sizes, parts, roof_info)
+            _porches(level, style, uv_sizes, parts, roof_info, streets)
         if level["level"] == 0 and style.get("entrance_canopy") and not style.get("porch"):
-            _canopies(level, style, uv_sizes, parts, roof_info)
+            _canopies(level, style, uv_sizes, parts, roof_info, streets)
         clipped = []
         for part in parts[start:]:
             if part["tag"] in ("porch", "roof", "canopy"):

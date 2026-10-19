@@ -101,3 +101,19 @@ def module_count(level, style, resolved, span, storey_m):
     return (module_bays(span, storey_m) if level.get("filler", False)
             and style.get("materials", {}).get("facade_module")
             and "facade_module" in resolved else 0)
+
+
+def street_edges(level) -> set[int]:
+    """Select ground exterior entrances, falling back to the longest edge."""
+    if level['level'] != 0 or not level['edges']:
+        return set()
+    entrances = {edge['index'] for edge in level['edges']
+                 if any(h['kind'] in ('door','passage') for h in edge['openings'])}
+    return entrances or {max(level['edges'], key=lambda edge: edge['length'])['index']}
+
+
+def shop_band(level, edge):
+    """Return sign limits even when the available band is too short to emit."""
+    highest = max((h['y1'] for h in edge['openings']), default=level['floor_y'])
+    bottom = max(highest+.15, level['top_y']-.75)
+    return bottom, min(bottom+.5, level['top_y']-.05)

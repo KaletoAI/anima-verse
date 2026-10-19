@@ -43,7 +43,11 @@ def prepare_facts(facts: Dict, style: Dict, desc: Dict, resolved: frozenset[str]
             outer = hull_walls.wall_offsets(style, level["level"])[1]
             ring = hull_mesh.offset_ring(level["outline"], level["ccw"], outer)
             lower = [wing for wing in roof_info["wings"] if wing["level"] < level["level"]]
+            streets = (hull_facades.street_edges(level)
+                       if desc.get("overrides", {}).get("shopfront") else set())
             for edge in level["edges"]:
+                if edge["index"] in streets:
+                    continue
                 lo, hi = hull_walls._span(ring, edge, outer)
                 u, n = hull_walls._axes(edge)
 

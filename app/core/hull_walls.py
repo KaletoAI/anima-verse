@@ -1,7 +1,7 @@
 """Wall shells and aperture details built exclusively from hull facts."""
 import math
 from typing import Dict, List, Optional, Tuple
-from app.core.hull_facades import module_count, mullions
+from app.core.hull_facades import module_count, mullions, street_edges, shop_band
 from app.core.hull_mesh import Part, PartBuilder, offset_ring, rng, _normal
 from app.core.scene_recipe import WALL_THICKNESS, WALL_SINK_M
 
@@ -86,7 +86,10 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
         rings = {d: offset_ring(level['outline'],level['ccw'],d) for d in (inner,outer)}
         material = style.get("storey_slot", {}).get(number, 'wall_ground' if number == 0 and style.get('materials',{}).get('wall_ground') else 'wall')
         plinth = style.get('plinth_height_m',0) if number == 0 else bottom
+        streets = street_edges(level) if desc.get('overrides',{}).get('shopfront') else set()
         for edge in level['edges']:
+            shop = edge['index'] in streets
+            band_bottom = shop_band(level,edge)[0] if shop else top
             a,b = edge['a'],edge['b']
             length = math.dist(a,b)
             u,n = _axes(edge)
@@ -155,9 +158,11 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 if build.part()['faces']:
                     parts.append(build.part())
             shell_top = min(top,plinth) if bays and number == 0 else (bottom if bays else top)
-            for s0,s1,y0,y1 in _cells(lo,hi,bottom,shell_top,real_holes,(plinth,)):
+            cuts = (plinth,band_bottom) if shop else (plinth,)
+            for s0,s1,y0,y1 in _cells(lo,hi,bottom,shell_top,real_holes,cuts):
                 is_plinth = number == 0 and (y0+y1)/2 < plinth
-                face('plinth' if is_plinth else 'wall','plinth' if is_plinth else material,
+                paint = 'shop' if shop and (y0+y1)/2 < band_bottom else material
+                face('plinth' if is_plinth else 'wall','plinth' if is_plinth else paint,
                      s0,s1,y0,y1,outer)
             if full and not filler:
                 ilo,ihi = _span(rings[inner],edge,inner)
