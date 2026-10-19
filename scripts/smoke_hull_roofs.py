@@ -210,6 +210,76 @@ def check_junctions():
     print('PASS: reciprocal L/T/U seams, rotated junctions and lower-wing roof junction')
 
 
+def check_eaves_trim():
+    """Timber outer=.34, overhang=.4, tan(45)=1: slab eave=3-.4=2.6.
+
+    Fascia y=2.42..2.60, .03 thick; gutter y=2.32..2.42, .10 thick.
+    Gable counts=2/2/4; hip=4/4/0; shed=1/1/2. Cap=3+1=4.
+    L loses one main eave and one branch rake end => 3/3/6.
+    Tent triangle has 3 eaves, thus 3/3/0; trapezoid has 4/4/0.
+    Stepped lower shed loses its covered high side: 1/1/2.
+    Low/density zero: 2/0/0; gutters appear at exactly .15 overhang.
+    """
+    from _hull_fixtures import l_shaped_house
+    from app.core.hull_facts import hull_facts
+    style=json.loads((Path(__file__).resolve().parents[1]/'shared/building_styles/fachwerk.json').read_text())
+    style['roof'].update(overhang_m=[.4,.4],max_rise_ratio=3)
+    style.update(chimneys=[0,0],dormers=0)
+    desc={'seed':1,'overrides':{'pitch_deg':45,'ornament_density':1}}
+    def build(facts=None,tier='full'):
+        parts,_=build_roofs(facts or roof_shapes()['rectangle'],style,desc,tier=tier)
+        trim=[p for p in parts if p['tag']=='roof_trim']
+        for p in trim:
+            assert p['material']=='trim'
+            closed(p)
+        return trim
+    def counts(trim):
+        c=Counter(p['trim_kind'] for p in trim)
+        return tuple(c[k] for k in ('fascia','gutter','verge'))
+    for form,want in [('gable',(2,2,4)),('hip',(4,4,0)),('shed',(1,1,2))]:
+        desc['overrides']['roof_form']=form
+        assert counts(build())==want,form
+    desc['overrides']['roof_form']='gable'
+    for p in build():
+        k=p['trim_kind']
+        if k!='verge':
+            close(max(v[1] for v in p['vertices']),2.6 if k=='fascia' else 2.42)
+            close(min(v[1] for v in p['vertices']),2.42 if k=='fascia' else 2.32)
+            close(max(v[2] for v in p['vertices'])-min(v[2] for v in p['vertices']),.03 if k=='fascia' else .10)
+    assert counts(build(tier='low'))==(2,0,0)
+    desc['overrides']['ornament_density']=0
+    assert counts(build())==(2,0,0)
+    desc['overrides']['ornament_density']=1
+    style['roof']['overhang_m']=[.1,.1]
+    assert counts(build())==(2,0,4)
+    style['roof']['overhang_m']=[.15,.15]
+    assert counts(build())==(2,2,4)
+    style['roof']['overhang_m']=[.4,.4]
+    desc['overrides']['max_rise_m']=1
+    for p in build():
+        if p['trim_kind']=='verge': close(max(v[1] for v in p['vertices']),4)
+    del desc['overrides']['max_rise_m']
+    trim=build(hull_facts(l_shaped_house()))
+    assert counts(trim)==(3,3,6)
+    for p in trim:
+        if p['trim_kind']=='fascia' and max(v[0] for v in p['vertices'])>20:
+            close(min(v[0] for v in p['vertices']),8)
+    assert counts(build(roof_shapes()['triangle']))==(3,3,0)
+    from _hull_fixtures import polygon_case_facts
+    assert counts(build(polygon_case_facts([[0,0],[10,0],[8,8],[0,8]])))==(4,4,0)
+    lower=[p for p in build(hull_facts(stepped_house())) if p['roof_level']==0]
+    assert counts(lower)==(1,1,2)
+    # No board lies on the covered high edge x=6.05.
+    assert not any(all(abs(v[0]-6.05)<.0003 for v in p['vertices']) for p in lower)
+    for name in ('burg','modern'):
+        other=json.loads((Path(__file__).resolve().parents[1]/f'shared/building_styles/{name}.json').read_text())
+        parts,_=build_roofs(roof_shapes()['rectangle'],other,desc,tier='full')
+        assert not any(p['tag']=='roof_trim' for p in parts),name
+    desc['overrides']['roof_form']='flat'
+    assert not build()
+    print('PASS eaves trim: counts, dimensions, cap, tier/density, seams, tent, flat')
+
+
 def main() -> None:
     """Exercise decomposition, fallbacks, metrics, details and determinism."""
     from app.core.hull_facts import hull_facts
@@ -341,7 +411,7 @@ def main() -> None:
         assert no_degenerate_faces(result)
         json.dumps(result, allow_nan=False)
         for part in result:
-            assert part["protrudes"] == (part["tag"] == "roof")
+            assert part["protrudes"] == (part["tag"] in ("roof", "roof_trim"))
             assert part["material"] != "glass"
             if part["tag"] != "gable":
                 closed(part)
@@ -355,4 +425,5 @@ if __name__ == "__main__":
         check_coordinate_snap()
         check_junctions()
         check_modern_roofs()
+        check_eaves_trim()
         main()

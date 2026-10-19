@@ -410,7 +410,81 @@ def _cap_surfaces(surfaces, top):
     return surfaces
 
 
-def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, parts, *, explicit_pitch=False, max_rise=6.0, seams=()):
+def _trim_board(first, second, outward, width, thickness, kind, number, uv_sizes, parts):
+    """Closed rectangular board outside an edge; width runs down its face."""
+    direction = [b-a for a,b in zip(first,second)]
+    length = math.sqrt(sum(v*v for v in direction))
+    if length < 1e-6:
+        return
+    # Downward perpendicular within the vertical edge plane (rakes included).
+    down = [direction[1]*direction[0]/length, -(direction[0]**2+direction[2]**2)/length,
+            direction[1]*direction[2]/length]
+    magnitude = math.sqrt(sum(v*v for v in down))
+    down = [v*width/magnitude for v in down]
+    points = [first, second, [second[k]+down[k] for k in range(3)],
+              [first[k]+down[k] for k in range(3)]]
+    points += [[v[k]+outward[k]*thickness for k in range(3)] for v in points]
+    center = [sum(v[k] for v in points)/8 for k in range(3)]
+    builder = _builder('roof_trim','trim',uv_sizes)
+    for indices in ((0,1,2,3),(4,5,6,7),(0,1,5,4),(1,2,6,5),(2,3,7,6),(3,0,4,7)):
+        face = [points[j] for j in indices]
+        if sum(n*(face[0][k]-center[k]) for k,n in enumerate(_normal(face))) < 0:
+            face.reverse()
+        builder.poly(face)
+    part=builder.part()
+    part.update(trim_kind=kind,roof_level=number,protrudes=True)
+    parts.append(part)
+
+
+def _eave_trim(first, second, outward, overhang, details, number, uv_sizes, parts):
+    _trim_board(first,second,outward,.18,.03,'fascia',number,uv_sizes,parts)
+    if details and overhang >= .15:
+        ends = [[p[k]+outward[k]*.03-(.18 if k==1 else 0) for k in range(3)]
+                for p in (first,second)]
+        _trim_board(*ends,outward,.10,.10,'gutter',number,uv_sizes,parts)
+
+
+def _pitched_trim(rect, limits, blocked, form, high, base, span, slope, cap,
+                  overhang, details, number, uv_sizes, parts):
+    """Use own-wing limits, never the roof's extension into its neighbour."""
+    a,b,c,d=limits
+    def point(x,z):
+        y=base+(span+high*z)*slope if form=='shed' else base+(span-abs(z))*slope
+        return _at(rect,x,min(y,cap),z)
+    def outward(x,z):
+        v=_rotate([x,z],rect['angle_deg'])
+        return [v[0],0,v[1]]
+    for index in (range(4) if form=='hip' else ((2 if high>0 else 3,) if form=='shed' else (2,3))):
+        if index in blocked:
+            continue
+        ends=([point(a,c),point(a,d)] if index==0 else
+              [point(b,c),point(b,d)] if index==1 else
+              [point(a,c),point(b,c)] if index==2 else [point(a,d),point(b,d)])
+        # Hip end eaves have the same height as the transverse eaves.
+        if form=='hip':
+            for p in ends: p[1]=base-overhang*slope
+        _eave_trim(*ends,outward(-1 if index==0 else 1 if index==1 else 0,
+                               -1 if index==2 else 1 if index==3 else 0),
+                   overhang,details,number,uv_sizes,parts)
+    if not details or form=='hip':
+        return
+    for index,x in ((0,a),(1,b)):
+        if index in blocked:
+            continue
+        if form=='shed':
+            low,upper=sorted((c,d),key=lambda z:high*z)
+            upper=min(upper,(cap-base)/slope-span) if high>0 else max(upper,-((cap-base)/slope-span))
+            intervals=[(low,upper)]
+        else:
+            cut=max(0,span-(cap-base)/slope)
+            intervals=[(c,-cut),(d,cut)]
+        for start,end in intervals:
+            if min(c,d)-1e-8<=end<=max(c,d)+1e-8 and abs(start-end)>1e-8:
+                _trim_board(point(x,start),point(x,end),outward(-1 if index==0 else 1,0),
+                            .20,.03,'verge',number,uv_sizes,parts)
+
+
+def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, parts, *, explicit_pitch=False, max_rise=6.0, seams=(), details=False):
     """Use wall-span pitch and shortened hip-ridge formulas."""
     original_angle = rect["angle_deg"]
     rect, high = _wing_axes(rect, sides, form)
@@ -431,6 +505,7 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
         half = rect["length" if index == 0 else "depth"] / 2
         limits[index + (1 if sign > 0 else 0)] = math.copysign(
             half - wall_offsets(style, number + 1)[0] - .01, sign)
+    covered_indices = {i for i, value in enumerate(limits) if abs(value-(-end,end,-edge,edge)[i])>1e-8}
     seam_indices = set()
     seam_regions = []
     seam_bounds = {}
@@ -618,6 +693,9 @@ def _pitched(rect, sides, form, number, base, pitch, overhang, style, uv_sizes, 
                 # Keep both parallel slab planes when trimming the extrusion.
                 moved[1] -= (normal[0]*(moved[0]-point[0])+normal[2]*(moved[2]-point[2]))/normal[1]
                 point[:] = [round(v, 4) for v in moved]
+    if any(form != "flat" for form in style["roof"]["forms"]):
+        _pitched_trim(rect, own_limits, seam_indices | covered_indices, form, high, base,
+                      half_span, slope, base+max_rise, overhang, details, number, uv_sizes, parts)
     for part in parts[first_part:]:
         part["roof_level"] = number
     return {**({"footprint_regions": regions} if seams else {}),
@@ -642,7 +720,7 @@ def _convex(outline):
     return all(turn >= -1e-8 for turn in turns) or all(turn <= 1e-8 for turn in turns)
 
 
-def _tent(level, base, pitch, overhang, style, uv_sizes, parts, *, explicit_pitch=False, max_rise=6.0):
+def _tent(level, base, pitch, overhang, style, uv_sizes, parts, *, explicit_pitch=False, max_rise=6.0, details=False):
     """Put the apex over the area centroid and measure rise from outer walls."""
     outline = level["outline"]
     number = level["level"]
@@ -695,6 +773,15 @@ def _tent(level, base, pitch, overhang, style, uv_sizes, parts, *, explicit_pitc
             following = (i + 1) % len(points)
             builder.poly([points[i], back[i], back[following], points[following]])
         parts.append(builder.part())
+    for plane in (planes if any(form != "flat" for form in style["roof"]["forms"]) else []):
+        first,second=plane[:2]
+        dx,dz=second[0]-first[0],second[2]-first[2]
+        length=math.hypot(dx,dz)
+        outward=[dz/length,0,-dx/length]
+        midpoint=[(first[k]+second[k])/2 for k in range(3)]
+        if outward[0]*(midpoint[0]-center[0])+outward[2]*(midpoint[2]-center[1])<0:
+            outward=[-v for v in outward]
+        _eave_trim(first,second,outward,overhang,details,number,uv_sizes,parts)
     xs, zs = [list(point[axis] for point in outline) for axis in (0, 1)]
     return {"rect": {"center": center, "length": max(xs) - min(xs),
                      "depth": max(zs) - min(zs), "angle_deg": 0.0},
@@ -845,6 +932,7 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
     info = {"form": form, "pitch_deg": float(pitch), "overhang_m": overhang,
             "wings": [], "flat_tops": []}
     parts = []
+    details = tier == "full" and overrides.get("ornament_density", .5) > 0
     levels = sorted(facts["levels"], key=lambda level: level["level"])
     info["topmost_level"] = levels[-1]["level"]
     for i, level in enumerate(levels):
@@ -860,7 +948,7 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
         angle = orthogonal_frame(outline)
         if angle is None or (covered and orthogonal_frame(covered) is None):
             if topmost and form != "flat" and _convex(outline):
-                info["wings"].append(_tent(level, base, pitch, overhang, style, uv_sizes, parts, explicit_pitch=explicit_pitch, max_rise=max_rise))
+                info["wings"].append(_tent(level, base, pitch, overhang, style, uv_sizes, parts, explicit_pitch=explicit_pitch, max_rise=max_rise, details=details))
             else:
                 _flat(outline, number, base, style, overhang, uv_sizes, info, parts)
             continue
@@ -911,7 +999,7 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                     seams.append(dict(seam, extension=extension, rect=wings[neighbor]["rect"]))
                 info["wings"].append(_pitched(rect, sides, wing_form, number, base,
                                               wing_pitch, overhang, style, uv_sizes, parts,
-                                              explicit_pitch=explicit_pitch, max_rise=max_rise, seams=seams))
+                                              explicit_pitch=explicit_pitch, max_rise=max_rise, seams=seams, details=details))
     density = overrides.get("ornament_density", 0.5)
     _chimneys(info, style, desc, density, uv_sizes, parts)
     if tier == "full":
