@@ -202,10 +202,27 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
             for h in holes:
                 s0,s1,y0,y1 = [h[k] for k in ('s0','s1','y0','y1')]
                 kind = h['kind']
+                frame = style.get('frames','none')
+                casement = full and kind == 'window' and frame != 'metal'
                 if kind in ('window','door'):
                     depth = -.02 if h.get('blind') else (0 if not full else (.10 if kind == 'window' else .08))
+                    if casement and not h.get('blind'):
+                        depth = .12
                     face('glass' if kind == 'window' else 'door',
                          'blind' if h.get('blind') else ('glass' if kind == 'window' else 'door'),s0,s1,y0,y1,outer-depth)
+                if casement:
+                    d0,d1 = (outer+.02,outer+.06) if h.get('blind') else (outer-.14,outer-.08)
+                    for c,d,e,f in ((s0,s0+.06,y0,y1),(s1-.06,s1,y0,y1),
+                                    (s0+.06,s1-.06,y0,y0+.06),(s0+.06,s1-.06,y1-.06,y1)):
+                        block('casement','window_frame',c,d,e,f,d0,d1)
+                    if desc.get('overrides',{}).get('ornament_density',.5) > 0:
+                        centres = mullions(s0,s1) if s1-s0 > 1.8 else ([(s0+s1)/2] if s1-s0 >= .7 else [])
+                        for centre in centres:
+                            block('casement','window_frame',centre-.02,centre+.02,y0+.06,y1-.06,d0,d1)
+                        if y1-y0 >= .9:
+                            centre = y0+.62*(y1-y0)
+                            block('casement','window_frame',s0+.06,s1-.06,centre-.02,centre+.02,d0,d1)
+                    block('sill','trim',s0-.08,s1+.08,y0-.07,y0,outer,outer+.10)
                 if not full or filler and desc.get('overrides',{}).get('ornament_density',.5) <= 0:
                     continue
                 if not h.get('blind'):
@@ -216,12 +233,12 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                     for y,normal in ((y0,[0,1,0]),(y1,[0,-1,0])):
                         emit('reveal',material,[point(s0,y,inner),point(s1,y,inner),
                              point(s1,y,outer),point(s0,y,outer)],normal)
-                frame = style.get('frames','none')
                 if frame == 'timber':
                     for c,d,e,f in ((s0-.12,s0,y0,y1),(s1,s1+.12,y0,y1),
                                     (s0-.12,s1+.12,y1,y1+.12)):
                         block('frame','trim',c,d,e,f,outer,outer+.06)
-                    block('frame','trim',s0-.12,s1+.12,y0-.12,y0,outer,outer+.06)
+                    if kind != 'window':
+                        block('frame','trim',s0-.12,s1+.12,y0-.12,y0,outer,outer+.06)
                 elif frame == 'metal' and kind in ('window','door'):
                     for c,d,e,f in ((s0-.05,s0,y0,y1),(s1,s1+.05,y0,y1),
                                     (s0-.05,s1+.05,y1,y1+.05),(s0-.05,s1+.05,y0-.05,y0)):
@@ -233,8 +250,6 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                             block('frame','trim',centre-.025,centre+.025,y0,y1,d0,d1,cut_holes=False)
                 elif frame == 'stone':
                     block('frame','trim',s0-.05,s1+.05,y1,y1+.15,outer,outer+.10)
-                    if kind == 'window':
-                        block('frame','trim',s0-.05,s1+.05,y0-.15,y0,outer,outer+.10)
                 chance = min(1,style.get('shutters',0)*desc.get('overrides',{}).get('ornament_density',1)*2)
                 if kind == 'window' and rng(desc['seed'],f"shutter:{number}:{edge['index']}:{h['index']}").random() < chance:
                     width = (s1-s0)/2

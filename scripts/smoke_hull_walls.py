@@ -13,15 +13,16 @@ Each filler rectangle has 4 edges: 1 cornice block per edge gives
 Blind panes end at top-.25, below cornice bottom top-.12.
 Each filler rectangle has 4 shell quads, zero reveals/interiors, panes
 at stone outer .54+.02=.56. Top margin is .25. Density zero and
-low tier have no filler frames/shutters. Ground sink remains -.14. Each timber blind window has 4 frame blocks
+low tier have no filler frames/shutters. Ground sink remains -.14. Each timber blind window has 3 frame blocks
 and 2 shutters at density 1 (.5*1*2=1); density 0 removes both.
+Full-tier casement rings and sills remain at density 0.
 
 Hand expectations: inner offset .07/2+.005=.04; stone outer .04+.50=.54.
 The fixture has four apertures (two windows, one door, one passage), hence
 16 reveals, two glass parts, one leaf. A unit cube has 6 quads = 12 triangles.
 Stone frames extend .05 each side: width 1.2+.10=1.3; height .15,
 depth .10. Cornice is .12 high and .08 deep. Full glass/door recesses
-are .10/.08: front glass z=-.44 and rear door z=8.46; low is flush.
+are .12/.08: front glass z=-.42 and rear door z=8.46; low is flush.
 Timber shutters .5 * density 1 * 2 = 1, hence two leaves per window (4).
 Ground sink is .14, so ground facade height is 3.22.
 The rounded-normal stress rectangle is 100x8, rotated 30 degrees;
@@ -82,7 +83,7 @@ def main():
     assert ring == [[-.5,-.5],[2.5,-.5],[2.5,2.5],[-.5,2.5]]
     assert rng(17,'x').random() == rng(17,'x').random()
     assert wall_offsets(styles['fachwerk'], 1) == (.04, .59)
-    for tier,window_z,door_z in (('full',-.44,8.46),('low',-.54,8.54)):
+    for tier,window_z,door_z in (('full',-.42,8.46),('low',-.54,8.54)):
         parts = build_walls(facts,styles['steinhaus'],desc,tier=tier)
         glass = next(p for p in parts if p['tag'] == 'glass')
         door = next(p for p in parts if p['tag'] == 'door')
@@ -90,7 +91,7 @@ def main():
         assert all(abs(v[2]-door_z) < 1e-5 for v in door['vertices'])
     timber = build_walls(facts,styles['fachwerk'],desc,tier='full')
     assert count(timber,tag='shutter') == 4
-    assert count(timber,tag='frame') == 4*total_openings(facts)
+    assert count(timber,tag='frame') == 4*total_openings(facts)-windows(facts)
     bare = build_walls(facts,styles['fachwerk'],dict(seed=17,overrides={'ornament_density':0}),tier='full')
     assert count(bare,tag='shutter') == 0
     full = build_walls(facts,styles['steinhaus'],desc,tier='full')
@@ -236,7 +237,7 @@ def check_facades():
     filler = timber_facts['levels'][1]
     panes = sum(len(e['openings']) for e in filler['edges'])
     timber = build_walls(dict(timber_facts,levels=[filler]),timber_style,desc,tier='full')
-    assert count(timber,tag='frame') == 4*panes and count(timber,tag='shutter') == 2*panes
+    assert count(timber,tag='frame') == 3*panes and count(timber,tag='shutter') == 2*panes
     bare = build_walls(dict(timber_facts,levels=[filler]),timber_style,dict(seed=17,overrides=dict(ornament_density=0)),tier='full')
     assert not any(p['tag'] in ('frame','shutter','interior','reveal') for p in bare)
     assert sum(p['material']=='blind' for p in bare) == panes

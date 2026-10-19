@@ -91,22 +91,23 @@ STYLES = ("fachwerk", "holzhuette", "burg", "steinhaus")
 # 1c-B Task 3: eaves trim
 # 1c-B Task 3b: partial seams keep the free eave
 # 1c-B Task 3c: extend only across a ridge end
+# 1c-C Task 2: casement and sill
 IDENTITY = {
-    "stepped_house:fachwerk:full": "0bba95b8b036d2d5cccfa538e749276528ce3b39749b0af363d67d081c06029b",
+    "stepped_house:fachwerk:full": "1cdc2876e267df3a59d2e0a1b9d02ee87c8e536d0d7c8fb080e9766f4c233268",
     "stepped_house:fachwerk:low": "265edb57712ecee23decf6adf68093d7a859c0f7d8a6419397af25675d320ea6",
-    "stepped_house:holzhuette:full": "3beeb909980e597f7af8fab4eeb9f16962df1d2e5d216011177f31583709b5cf",
+    "stepped_house:holzhuette:full": "ded4d218ddc94fc07d0ee6c09a4a6e0035dad43c2ab6bd00b25f0ff5e895a48f",
     "stepped_house:holzhuette:low": "4737bbc9dd465aab0cec70c589a01fd4937b2e2e28581f0a17d497aebfb22f46",
-    "stepped_house:burg:full": "8baf7d4939833f41dae46fb6e70e77a7012ba5522df833ba27848a680c7e2a74",
+    "stepped_house:burg:full": "be13157ef2c6d4b01210ed4fbdcda475f3fc9d3bd2eb13c93bd9ed50818bfb26",
     "stepped_house:burg:low": "1f268acef9a014d379b45766b1a97e9b9fab81ae85a1373c63ef0b56b30fccca",
-    "stepped_house:steinhaus:full": "bc1460fde8c8a324c588ecbfe07a046ae2d152f212903a5b7e911cee08037765",
+    "stepped_house:steinhaus:full": "f22144cff047a2363eb8bc38f6537d20cf3cf7ce90c7fc856c869879900864e0",
     "stepped_house:steinhaus:low": "80b263899597636c78f925e4913cb1e1fee2b3d44d720caffea03f093ea785e4",
-    "l_shaped_house:fachwerk:full": "9dbc4b015b588cc66eaac9db80253a9ed536749e5045fdd3da87e60e27f6a5d3",
+    "l_shaped_house:fachwerk:full": "5b8230777cc83534b905de03d001316150c7e9b6ac6c0732eaea9fe24af76dcc",
     "l_shaped_house:fachwerk:low": "c0515c7f666ffd8fff9f76ee5aa1b5e12c8cb87e5f960509cd26704b66e04410",
-    "l_shaped_house:holzhuette:full": "c55fa70721e1b8e20a893190a4287bf2131c70b4ea8611fbf14c7d0063c009b4",
+    "l_shaped_house:holzhuette:full": "3d6f5d2e735d1f78e925becb6f0fd836a0cd1cba92ae2df5af971d0a1d62eefe",
     "l_shaped_house:holzhuette:low": "123a77715662864c99200baa178f51212fe299409011dc66f3ed296c31b1fcf9",
-    "l_shaped_house:burg:full": "7b8d98b5706e2c7ce14735cde9404b222c764010309f6773106231574ef46786",
+    "l_shaped_house:burg:full": "21bd5b9a5a30419f9c8b7e589b04f46d52fbc2f52641341fb6fd7868c30fc14c",
     "l_shaped_house:burg:low": "95c2234bfadc26b68a46d349d33d4d9248f01bec79fd9a1beeb51033c69573d2",
-    "l_shaped_house:steinhaus:full": "955ae48215019b1cef67cad27b2c5fa98d367c27266ce80f40940f954f1c9604",
+    "l_shaped_house:steinhaus:full": "f0f8a6405ad5e413cd623a8e92893f4249cada7fe51e9649a0118b4340b544d8",
     "l_shaped_house:steinhaus:low": "f41d4fd8433b2d0a10d9081b8f9ed392b780d3a53eb456f17ed8ced5848a1570"
 }
 
