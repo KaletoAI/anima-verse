@@ -2588,10 +2588,11 @@ async function startApp(username: string, role: string) {
    * is not travelling — then the location placement below takes over.
    *
    * With `waypoints` the position is the point `progress_m` metres along the
-   * metre polyline; the route travels into the NpcManager, which keeps walking
-   * it between polls at `pace_m_s_real ?? speed_m_s_real` (the SEGMENT pace
-   * first: the terrain speed factor sits in it, the nominal journey speed
-   * knows nothing about the ground).
+   * metre polyline; the route travels into the NpcManager, which advances a
+   * target distance (`targetM`) between polls along `paces_m_s_real` — one
+   * real-time pace per SEGMENT, so the terrain speed factor changes exactly at
+   * the segment boundary — and lets the displayed distance (`shownM`) follow
+   * it (`stepShown`).
    *
    * WITHOUT them — the filter nulls `waypoints` for every traveller but the
    * avatar (§ A12) — there is no route at all: the figure stands at its `pos`,

@@ -1288,11 +1288,12 @@ export class NpcManager {
       const labelVisible = visible && camDist < 55;
       if (npc.interaction && this.tickInteraction(npc, dt, labelVisible, frozen)) continue;
       // Server journey (§ A11): walk along the route instead of npc.target.
-      // ONE number carries the whole journey — the metres walked along the
-      // polyline — and the point is re-derived from it by arc length, so a
-      // node is crossed without waiting for the next poll. The rate is metres
-      // per REAL second (`pace_m_s_real ?? speed_m_s_real`); `null` (frozen
-      // world, arrived, degenerate segment) extrapolates nothing, and the
+      // Metres along the polyline carry the whole journey: the server target
+      // `targetM` advances per segment along `paces_m_s_real` (metres per REAL
+      // second), the displayed `shownM` follows it, and the point is
+      // re-derived from `shownM` by arc length, so a node is crossed without
+      // waiting for the next poll. `paces === null` (frozen world, time factor
+      // 0, fog) extrapolates nothing, and the
       // advance is capped at the END of the polyline: the figure holds at its
       // last waypoint until the server books the arrival, it never walks past
       // it.
@@ -1388,7 +1389,7 @@ export class NpcManager {
         if (d > 0.05 && paceLimit > 0) {
           // Catch-up speed: WALK_SPEED, or the JOURNEY's own pace when that is
           // faster. A fixed WALK_SPEED was a brake, not a smoother — the game
-          // time factor multiplies `pace_m_s_real` (§ A11), so past a factor of
+          // time factor multiplies `paces_m_s_real` (§ A11), so past a factor of
           // about 2.4 the interpolated point outruns 3.4 m/s and the figure
           // lags behind its own journey for the whole trip, then teleports on
           // arrival.
