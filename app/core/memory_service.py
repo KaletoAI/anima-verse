@@ -115,6 +115,14 @@ def season_label(season_key: str, lang: str = "en") -> str:
 # Memory extraction from chat exchanges
 # ---------------------------------------------------------------------------
 
+def _monologue_prose(text: str) -> str:
+    """Strip shared journal syntax and plain quoted-argument CamelCase calls."""
+    from app.core.tool_formats import thought_prose
+    quoted = r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')'''
+    plain_call = rf'\b[A-Z][a-zA-Z0-9]*\(\s*{quoted}(?:\s*,\s*{quoted})*\s*\)'
+    return thought_prose(re.sub(plain_call, '', text))
+
+
 def extract_memories_from_exchange(character_name: str,
     partner_name: str,
     partner_message: str,
@@ -173,6 +181,11 @@ def extract_memories_from_exchange(character_name: str,
     clean_own = re.sub(r'\*\*I\s+do\s+[^*]+\*\*', '', clean_own, flags=re.IGNORECASE)
     clean_own = re.sub(r'\[INTENT:[^\]]+\]', '', clean_own)
     clean_own = clean_own.strip()
+    if monologue:
+        clean_own = _monologue_prose(clean_own)
+        if not any(char.isalnum() for char in clean_own):
+            logger.debug("[%s] Thought extraction skipped: no prose after call cleanup", character_name)
+            return []
 
     try:
         from app.core.llm_router import llm_call
@@ -235,6 +248,12 @@ def extract_memories_from_exchange(character_name: str,
                 if mem_type == "episodic":
                     continue
                 mem_type = "semantic"
+            if monologue and mem_type == "commitment":
+                when = str(item.get("when") or "").strip().lower()
+                if when != "later":
+                    logger.debug("Skipping monologue commitment %r: when=%r",
+                                 item.get("title") or mem_content, item.get("when"))
+                    continue
             importance = item.get("importance", 3)
             if not isinstance(importance, int) or importance < 1:
                 importance = 3

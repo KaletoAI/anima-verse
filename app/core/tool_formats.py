@@ -606,12 +606,13 @@ def find_stream_tool_call(format_name: str, text: str,
     return None
 
 
-def thought_handover(text: str) -> str:
-    """Remove call syntax and state markers from prompt-facing journal text.
+def thought_prose(text: str) -> str:
+    """Return journal prose without call syntax or fallback action labels."""
+    return _thought_parts(text)[0]
 
-    Reuse the format patterns, retaining action labels when no prose remains.
-    Attribute-style calls are log output rather than a model's tool format.
-    """
+
+def _thought_parts(text: str) -> tuple:
+    """Strip journal syntax, retaining parsed calls for handover labels."""
     calls = []
 
     def remove_call(match):
@@ -644,6 +645,12 @@ def thought_handover(text: str) -> str:
                   text, flags=re.DOTALL)
     text = re.sub(r'\*\*I (?:feel|do)\b[^*]*\*\*', '', text, flags=re.IGNORECASE)
     text = " ".join(text.split())
+    return text, calls
+
+
+def thought_handover(text: str) -> str:
+    """Remove call syntax and state markers, retaining labels without prose."""
+    text, calls = _thought_parts(text)
     if text or not calls:
         return text
     actions = []

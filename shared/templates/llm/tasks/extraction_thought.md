@@ -34,6 +34,7 @@ Extract as a JSON array. For each memory:
 - related_character: the other person this memory is ABOUT, if the text names one. Leave it out entirely when the thought is only about {{ speaker_b }} — never invent an addressee.
 - importance: 1-5 (5=critical, 4=important, 3=medium, 2=minor, 1=trivial)
 - tags: list of keywords
+- when: ONLY for commitments — first decide WHEN the plan happens, judged by the thought itself: "now" ({{ speaker_b }} is doing, starting or about to do it in this thought — going there, telling, knocking, taking the order), "ongoing" (a state or attitude: staying with, watching over, keeping company, being there for someone), "done" (the thought shows it finished), or "later" (not started in this thought, meant for a later moment). Only "later" is a commitment; for the others leave the item out.
 - delay_minutes: ONLY for commitments — how many minutes from now the plan is due, as a NUMBER (30 = in half an hour, 120 = in two hours, 480 = this evening, 1440 = tomorrow, 10080 = next week). Use 0 when no time was given. Never write words here.
 
 Already stored memories (DO NOT repeat):
@@ -51,7 +52,9 @@ IMPORTANT:
 - Keep WHO did or said what exactly as the text has it, and never turn an intention into an accomplished action ("planned to warn her" is not "warned her").
 - NO episodic memories (experiences) — those are auto-consolidated from chat history
 - NEVER write "User", "Player", "Spieler", "the user", "I" or generic labels. A stand-in like "the narrator", "my conversation partner" or "the other one" is a generic label too.{{ lang_instruction }}
-- A thought is NOT automatically a promise. "commitment" needs either a concrete time hint or a named person the plan is directed at. An inner intention with neither is not extracted at all.
+- A commitment is something {{ speaker_b }} means to do LATER and has not started in this thought.
+  NOT a commitment: doing or starting something now; a lasting state or attitude (staying with, watching over, keeping company, being there for someone); something shown as done (if it finishes an open plan, put its id into completed_ids); something only considered or wished ("wonders whether", "would like to", "maybe").
+  A named person alone does not make a plan a commitment; a plan without a person is fine when clearly for later ("tomorrow", "next week", "after the shift", "first ..., then ...").
 - MAXIMUM 2 commitments per extraction. If more plans appear, pick the most important ones.
 - If an open plan was fulfilled, put its id into "completed_ids" exactly as shown (8 hex characters), never a number.
 - Ignore mood descriptions, scenery and smalltalk with oneself
@@ -59,7 +62,7 @@ IMPORTANT:
 
 Reply ONLY with valid JSON:
 {"memories": [
-    {"memory_type": "...", "title": "... (commitments only)", "content": "...", "related_character": "...", "importance": N, "tags": ["..."], "delay_minutes": N},
+    {"memory_type": "...", "title": "... (commitments only)", "content": "...", "related_character": "...", "importance": N, "tags": ["..."], "when": "later", "delay_minutes": N},
     ...
 ],
 "completed_ids": ["a1b2c3d4", ...]

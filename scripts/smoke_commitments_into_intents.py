@@ -12,6 +12,14 @@ complete an id. A missing title uses the last whole word within 60 characters.
 Deleting two legacy rows returns two, preserves two fact/episode rows, then
 returns zero. Reminder bumps once and creates no memory. Templates expose
 hex plan ids and titles, with no old memory-based promise block.
+A call-only monologue has zero prose, so it makes zero LLM calls, memories,
+or intents and returns []. Prose plus a call makes exactly one LLM call,
+whose prompt keeps the prose and removes the call. The rendered thought rule
+requires a plan for later, rather than accepting a named person alone.
+A monologue reply with later/now/ongoing/missing commitments and a semantic
+fact returns exactly the later commitment and the fact, without storing when.
+A dyadic commitment without when survives. Rendered thought JSON includes
+"when": "later".
 """
 import json
 import os
@@ -52,6 +60,47 @@ def main():
                 if title is not None:
                     item['title'] = title
                 return ms.apply_extracted_memories(owner, [item], {'is_background': True})
+
+            call = 'SetActivity("going down to cellar", "mit Kisten hantierend")'
+            empty_reply = SimpleNamespace(content='{"memories": [], "completed_ids": []}')
+            with patch('app.models.character.get_character_config', return_value={}), \
+                 patch('app.core.llm_router.llm_call', return_value=empty_reply) as llm:
+                before_memories = memory.load_memories('demo')
+                before_intents = intents.list_intents()
+                assert ms.extract_memories_from_exchange('demo', '', '', call, None) == []
+                for call_only in ["Name('one argument')", call + ' ... ;',
+                                  '<tool name="SetActivity">{"detail": "cellar"}</tool>']:
+                    assert ms.extract_memories_from_exchange('demo', '', '', call_only, None) == []
+                llm.assert_not_called()
+                assert memory.load_memories('demo') == before_memories
+                assert intents.list_intents() == before_intents
+                prose = 'demo learned that the cellar door is repaired.'
+                assert ms.extract_memories_from_exchange('demo', '', '', prose + ' ' + call, None) == []
+                llm.assert_called_once()
+                prompt = llm.call_args.kwargs['user_prompt']
+                assert prose in prompt and 'SetActivity(' not in prompt
+
+            timing_items = [
+                {'memory_type': 'commitment', 'title': 'Bake tomorrow', 'content': 'demo will bake tomorrow.', 'when': 'later'},
+                {'memory_type': 'commitment', 'title': 'Walk now', 'content': 'demo walks to the cellar.', 'when': 'now'},
+                {'memory_type': 'commitment', 'title': 'Keep company', 'content': 'demo keeps B company.', 'when': 'ongoing'},
+                {'memory_type': 'commitment', 'title': 'Missing timing', 'content': 'demo plans a task.'},
+                {'memory_type': 'semantic', 'content': 'The cellar door is repaired.'}]
+            timing_reply = SimpleNamespace(content=json.dumps({'memories': timing_items, 'completed_ids': []}))
+            with patch('app.models.character.get_character_config', return_value={}), \
+                 patch('app.core.llm_router.llm_call', return_value=timing_reply):
+                extracted = ms.extract_memories_from_exchange('demo', '', '', 'Plans and a learned fact.', None)
+                assert [(e['memory_type'], e['content']) for e in extracted] == [
+                    ('commitment', 'demo will bake tomorrow.'),
+                    ('semantic', 'The cellar door is repaired.')], extracted
+                assert all('when' not in e for e in extracted)
+            dyadic_reply = SimpleNamespace(content=json.dumps({'memories': [
+                {'memory_type': 'commitment', 'title': 'Help B', 'content': 'demo promises to help B.'}], 'completed_ids': []}))
+            with patch('app.models.character.get_character_config', return_value={}), \
+                 patch('app.core.llm_router.llm_call', return_value=dyadic_reply):
+                extracted = ms.extract_memories_from_exchange('demo', 'B', 'Can you help?', 'I promise.', None)
+                assert len(extracted) == 1 and extracted[0]['title'] == 'Help B'
+                assert 'when' not in extracted[0]
 
             assert apply('Fass anzapfen', delay=120) == 1
             rows = intents.list_intents(owner='demo', status='active')
@@ -99,8 +148,8 @@ def main():
             owned = intents.list_intents(owner='demo', status='active')[0]
             foreign = intents.create_intent(owner='B', title='Foreign task')
             reply = SimpleNamespace(content=json.dumps({'memories': [
-                {'memory_type': 'commitment', 'title': 'Explicit label', 'content': 'A new plan', 'delay_minutes': 120},
-                {'memory_type': 'commitment', 'title': '  ', 'content': text}],
+                {'memory_type': 'commitment', 'title': 'Explicit label', 'content': 'A new plan', 'when': 'later', 'delay_minutes': 120},
+                {'memory_type': 'commitment', 'title': '  ', 'content': text, 'when': 'later'}],
                 'completed_ids': [' ' + owned['id'] + ' ', foreign['id']]}))
             with patch('app.models.character.get_character_config', return_value={}), \
                  patch('app.core.llm_router.llm_call', return_value=reply) as llm:
@@ -116,6 +165,10 @@ def main():
             assert intents.complete_intent_as('B', participant['id'])
             for task in ['extraction_thought', 'extraction_memory']:
                 _, user = render_task(task, presence_known=False, present_names="", absent_names="", speaker_a='B', speaker_b='demo', text_a='', text_b='', existing_summary='', open_plans_block='OPEN_PLANS_SENTINEL', lang_instruction='')
+                if task == 'extraction_thought':
+                    assert '"when": "later"' in user
+                    assert 'means to do LATER and has not started in this thought' in user
+                    assert 'needs either a concrete time hint or a named person' not in user
                 assert 'OPEN_PLANS_SENTINEL' in user and '"title"' in user and '[ID:' not in user
             for template in ['chat/agent_thought.md', 'chat/agent_thought_in_chat.md', 'tasks/perceive_action.md']:
                 from jinja2 import Environment, meta
@@ -135,7 +188,7 @@ def main():
             loop.bump.assert_called_once_with('demo', hint='Reminder: Check cellar')
             assert memory.load_memories('demo') == before
             assert _handle_remind({'agent_name': 'demo'})['error'] == 'missing_note'
-        print('PASS all ten commitments-into-intents scenarios')
+        print('PASS commitments-into-intents scenarios including thought call stripping')
 
 
 if __name__ == '__main__':
