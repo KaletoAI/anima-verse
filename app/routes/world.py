@@ -1230,6 +1230,56 @@ async def location_building_propose(location_id: str, request: Request) -> Dict[
                                    revision=data.get("revision", ""))
 
 
+@router.post("/locations/{location_id}/building-assistant/apply")
+async def location_building_apply(location_id: str, request: Request) -> Dict[str, Any]:
+    """Apply the plan and launch the hull and furnishing chain."""
+    from app.core.building_assistant import apply
+    data = await _building_body(location_id, request)
+    if not isinstance(data.get("draft"), dict):
+        raise HTTPException(status_code=400, detail="draft must be an object")
+    result = await asyncio.to_thread(apply, location_id, data["draft"], data.get("hull"))
+    return _building_result(result)
+
+
+@router.get("/locations/{location_id}/building-assistant/status")
+async def location_building_status(location_id: str) -> Dict[str, Any]:
+    """Return process-local chain progress."""
+    from app.core.building_assistant import status
+    if not await asyncio.to_thread(get_location_by_id, location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    return await asyncio.to_thread(status, location_id)
+
+
+@router.post("/locations/{location_id}/building-assistant/undo")
+async def location_building_undo(location_id: str, request: Request) -> Dict[str, Any]:
+    """Restore the saved plan and previous model selection."""
+    from app.core.building_assistant import undo
+    data = await _building_body(location_id, request)
+    if not isinstance(data.get("snapshot_id"), str) or not data["snapshot_id"].strip():
+        raise HTTPException(status_code=400, detail="snapshot_id must be a non-empty string")
+    return _building_result(await asyncio.to_thread(undo, location_id, data["snapshot_id"]))
+
+
+async def _building_body(location_id: str, request: Request) -> dict:
+    if not await asyncio.to_thread(get_location_by_id, location_id):
+        raise HTTPException(status_code=404, detail="Location not found")
+    try:
+        data = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+    return data
+
+
+def _building_result(result: dict):
+    if not result.get("ok"):
+        from fastapi.responses import JSONResponse
+        code = {"busy": 409, "not_found": 404}.get(result.get("error"), 400)
+        return JSONResponse(status_code=code, content=result)
+    return result
+
+
 @router.post("/locations/{location_id}/hull/propose")
 def location_hull_propose(location_id: str) -> Dict[str, Any]:
     """Suggest an editable style using one LLM call or validated defaults."""
