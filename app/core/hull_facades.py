@@ -1,5 +1,7 @@
 """Deterministic blind-window dimensions and facade-edge raster."""
 import math
+from statistics import median
+from typing import Optional
 
 from app.core.hull_mesh import rng
 
@@ -37,6 +39,44 @@ def blind_windows(level, edge, style, seed, lo, hi):
     return [dict(kind="window", blind=True, index=i, s0=max(lo, left), s1=min(hi, right),
                  y0=bottom, y1=top)
             for i, (left, right) in enumerate(blind_raster(lo, hi, dims["bay"], dims["width"]))]
+
+
+def storey_window_dims(level) -> Optional[dict]:
+    """Use independent medians of real window width, sill and height."""
+    windows = [h for edge in level["edges"] for h in edge["openings"]
+               if h["kind"] == "window" and not h.get("blind", False)]
+    if not windows:
+        return None
+    return dict(width=median(h["s1"]-h["s0"] for h in windows),
+                sill=median(h["y0"]-level["floor_y"] for h in windows),
+                height=median(h["y1"]-h["y0"] for h in windows))
+
+
+def wall_blind_windows(level, edge, dims, bay, lo, hi, roof_tops):
+    """Drop unsafe raster slots; roof_tops(s) returns lower roof heights.
+
+    dims carries the style plinth height in addition to the storey dimensions.
+    Unlike filler windows, real-storey windows retain the supplied height.
+    """
+    bottom = level["floor_y"] + dims["sill"]
+    top = bottom + dims["height"]
+    if (top <= bottom
+            or (level["level"] == 0 and bottom < dims.get("plinth", 0)+.1)):
+        return []
+    real = [h for h in edge["openings"] if not h.get("blind", False)]
+    result = []
+    for i, (left, right) in enumerate(blind_raster(lo, hi, bay, dims["width"])):
+        if left < lo+.6 or right > hi-.6:
+            continue
+        if any(h["y0"] < top and h["y1"] > bottom
+               and left < h["s1"]+.5 and right > h["s0"]-.5 for h in real):
+            continue
+        if any(height is not None and height > bottom-.1
+               for height in roof_tops((left+right)/2)):
+            continue
+        result.append(dict(kind="window", blind=True, index=i, s0=left, s1=right,
+                           y0=bottom, y1=top))
+    return result
 
 
 def module_bays(span, storey_m):

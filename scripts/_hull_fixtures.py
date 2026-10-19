@@ -233,3 +233,19 @@ def gap_house():
             "level": 3, "openings": [{"edge": 1, "at": .5, "width_m": 1.2,
                 "height_m": 1.2, "sill_m": .9, "type": "window"}]}},
     ]}
+
+
+def waldkante_house():
+    """Two real 10.4 by 9.1 m storeys, 3.3 m high, sparse north openings.
+
+    Scene aperture base includes .02 m above hull floor: .90 yields sill .92.
+    """
+    return {"id": "hull-waldkante", "map3d": {
+        "outline": [[0,0],[10.4,0],[10.4,9.1],[0,9.1]], "storey_height_m": 3.3},
+        "rooms": [{"id": f"wald-{level}", "layout": {
+            "x": 0, "y": 0, "w": 10.4, "d": 9.1, "level": level,
+            "openings": ([{"edge": 2, "at": at, "width_m": 1.2,
+                "height_m": 1.2, "sill_m": .90, "type": "window"}
+                for at in (.3,.7)] if level else [{"edge": 2, "at": .5,
+                "width_m": 1.2, "height_m": 2.1, "type": "door", "to": "outside"}])}}
+            for level in (0,1)]}

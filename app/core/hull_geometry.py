@@ -32,6 +32,27 @@ def prepare_facts(facts: Dict, style: Dict, desc: Dict, resolved: frozenset[str]
             module = hull_facades.module_count(level, style, resolved, hi-lo, prepared["storey_m"])
             edge["openings"] = ([] if module else
                                 hull_facades.blind_windows(level, edge, style, desc.get("seed", 0), lo, hi))
+    if desc.get("overrides", {}).get("blind_windows", False):
+        _, roof_info = hull_roofs.build_roofs(prepared, style, desc, tier="full")
+        fallback = hull_facades.blind_dims(style, desc.get("seed", 0))
+        for level in prepared["levels"]:
+            if level.get("filler", False):
+                continue
+            dims = dict(hull_facades.storey_window_dims(level) or fallback,
+                        plinth=style.get("plinth_height_m", 0))
+            outer = hull_walls.wall_offsets(style, level["level"])[1]
+            ring = hull_mesh.offset_ring(level["outline"], level["ccw"], outer)
+            lower = [wing for wing in roof_info["wings"] if wing["level"] < level["level"]]
+            for edge in level["edges"]:
+                lo, hi = hull_walls._span(ring, edge, outer)
+                u, n = hull_walls._axes(edge)
+
+                def roof_tops(s):
+                    x, z = [edge["a"][k]+u[k]*s+n[k]*outer for k in range(2)]
+                    return [hull_roofs.roof_top_y(wing, x, z, style) for wing in lower]
+
+                edge["openings"].extend(hull_facades.wall_blind_windows(
+                    level, edge, dims, fallback["bay"], lo, hi, roof_tops))
     return prepared
 
 
