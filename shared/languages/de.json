@@ -8,6 +8,7 @@
     }
   },
   "translations": {
+    "{invitee} would like to, but {pose} with {inviter} is not possible ({reason}).": "{invitee} würde gern, aber das {pose} mit {inviter} geht gerade nicht ({reason}).",
     "Openings": "Öffnungen",
     "Stairs": "Treppen",
     "New rooms": "Neue Räume",

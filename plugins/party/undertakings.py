@@ -194,8 +194,8 @@ def ended(character, partner, interaction_id, reason="ended", invite_id=""):
             arrive(intent)
 
 
-def failed(invite_id, reason=""):
-    """Retain the real cause when a temporary NPC cannot finish its answer."""
+def failed(invite_id, reason="", **_kwargs):
+    """Retain the real cause of every failed accepted pair invitation."""
     if not invite_id.startswith("iinv_intent_"):
         return
     intent_id = invite_id[len("iinv_intent_"):]

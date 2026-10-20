@@ -26,13 +26,10 @@ A1  point inactive -> decide is never called; Kira is bumped once and the
 A2  active, answer accept (0.9), resolve -> "started":
     resolve_invite("i2", True) once; mark_taken("pair_invite", "i2"); no bump;
     NO narrator line from the hook (start_interaction writes its own).
-A3  active, accept, resolve -> "cannot" and the row is back on "pending"
-    (the engine's "ask again in a minute"): no mark_taken; Kira is bumped
-    so she answers in her own turn (the outcome is recorded then).
-A3b active, accept, resolve -> "cannot" and the row is "stale" (asleep,
-    travelling — the question is CLOSED): nobody can answer it any more, so
-    waking Kira would only make her call the verb back into a fresh
-    counter-invitation. Settled: mark_taken, no bump.
+A3/A3b accepted answers that cannot start leave failed rows with reasons.
+    They are settled: mark_taken, no bump, since another answer cannot repair
+    the terminal question. A10 failed with reason seat taken must report
+    "Kira cannot right now: seat taken.".
 A4  active, answer decline: resolve_invite("i4", False); mark_taken; no bump
     at all (controller ruling: the inviter learns it from its own tool result).
     NO narrator line from register: the engine narrates; resolve is stubbed.
@@ -207,16 +204,16 @@ check("A2 mark_taken", _events("taken"), [(POINT, "i2")])
 check("A2 no bump", _events("bump"), [])
 check("A2 no narrator line from the hook", _events("narrate"), [])
 
-print("A3 active, accept, cannot (row back on pending)")
+print("A3 active, accept, cannot (row failed)")
 invite("i3", active=True, decision_=answer("accept"),
-       resolve={"status": "cannot", "reason": "seat taken"}, row={"status": "pending"})
+       resolve={"status": "cannot", "reason": "seat taken"}, row={"status": "failed", "reason": "seat taken"})
 check("A3 resolve(i3, True)", _events("resolve"), [("i3", True)])
-check("A3 no mark_taken", _events("taken"), [])
-check("A3 Kira bumped", [b[0] for b in _events("bump")], [INVITEE])
+check("A3 mark_taken", _events("taken"), [(POINT, "i3")])
+check("A3 no bump", _events("bump"), [])
 
-print("A3b active, accept, cannot (row stale — question closed)")
+print("A3b active, accept, cannot (row failed — question closed)")
 invite("i3b", active=True, decision_=answer("accept"),
-       resolve={"status": "cannot", "reason": "asleep"}, row={"status": "stale"})
+       resolve={"status": "cannot", "reason": "asleep"}, row={"status": "failed", "reason": "asleep"})
 check("A3b mark_taken", _events("taken"), [(POINT, "i3b")])
 check("A3b no bump", _events("bump"), [])
 
@@ -312,6 +309,9 @@ check("A9 decline outcome", _events("outcome"), [(POINT, "i9", {"answer": "decli
 check("A9 refusal resolve(i9, False)", _events("resolve"), [("i9", False)])
 
 print("A10 _answered_at_once for an ordinary NPC")
+INVITE_ROW[0] = {"status": "failed", "reason": "seat taken"}
+check("A10 failed", SKILL._answered_at_once(INVITEE, "i10", KEY),
+      "Kira cannot right now: seat taken.")
 INVITE_ROW[0] = {"status": "declined"}
 check("A10 declined", SKILL._answered_at_once(INVITEE, "i10", KEY),
       "Kira does not want to shaking hands right now.")

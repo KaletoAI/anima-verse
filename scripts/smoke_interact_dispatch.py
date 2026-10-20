@@ -10,6 +10,8 @@ yes binds both profiles to one interaction; no closes the row without a pair.
 Both answers must work during an active conversation and with world freeze
 on. Freeze must retain ordinary room replies and autonomous thought bumps;
 queue pause and world sleep must retain even requested invitation answers.
+Their rows remain pending: dispatch is blocked before any yes is executed,
+so the failed-yes rule has no accepted answer to close.
 
 The external LLM, provider availability and autonomous scheduling inputs
 are controlled. The hook, respond dispatcher/worker, tool, invitation

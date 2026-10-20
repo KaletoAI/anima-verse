@@ -942,6 +942,7 @@ SCHEMA_STATEMENTS = [
 # ALTER TABLE migrations run idempotently after all CREATE statements.
 # Add missing columns per table; OperationalError means the column exists.
 ALTER_MIGRATIONS = [
+    ("interaction_invites", "reason", "TEXT NOT NULL DEFAULT ''"),
     # improvements: the admin's "Run now" — the entry works off all its steps
     # past the idle window, the engine switch, a freeze and a queue pause, and
     # the engine clears the flag once nothing is left to run.

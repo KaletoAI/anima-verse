@@ -13,8 +13,8 @@ starts only on the answer. The avatar answers through the player UI
 same verb back, which the counter-invitation brake reads as consent — the
 same shape the party's invite/join uses, and never a keyword match on prose.
 
-The interaction itself ends on the game clock (travel ticker), or when either
-participant walks away, is moved, or takes another pose.
+The interaction ends through signals, including a participant walking away,
+being moved, falling asleep, or taking another pose.
 """
 from typing import Any, Dict
 
@@ -189,7 +189,8 @@ class InteractSkill(PluginSkill):
             return ""
         try:
             from app.core import interaction_engine as IE
-            status = str((IE.get_invite(invite_id) or {}).get("status") or "")
+            row = IE.get_invite(invite_id) or {}
+            status = str(row.get("status") or "")
         except Exception as e:  # noqa: BLE001 — never lose the verb over this
             self.ctx.logger.debug("reading invite %s failed: %s", invite_id, e)
             return ""
@@ -199,6 +200,8 @@ class InteractSkill(PluginSkill):
             return f"{partner} agrees and comes over for the {key}."
         if status == "declined":
             return f"{partner} does not want to {key} right now."
+        if status == "failed":
+            return f"{partner} cannot right now: {row.get('reason') or 'The activity could not start'}."
         if status in ("stale", "cancelled"):
             return f"{partner} cannot right now."
         return ""

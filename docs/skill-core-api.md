@@ -268,8 +268,9 @@ Zustimmung ist immer ein Tool-Call, nie ein Keyword-Match auf Prosa.
 | `partner_poses() -> List[Tuple[str, str]]` | Welche Paar-Posen es gibt (Key + Anzeige) |
 | `get_interaction(character_name, profile=None)` | Läuft gerade eine? |
 | `create_invite(inviter, invitee, pose_key, *, request_id=None) -> Optional[str]` | Ask through the ordinary consent flow. A supplied id atomically creates/reuses only the exact inviter/invitee/pose row, emits the offer once, and never replaces another pending question. A mismatching existing id is rejected. Ordinary same-pose repeats reuse the fresh question; replacements mark old questions cancelled instead of deleting their identity |
-| `resolve_invite(invite_id, accept) -> Dict` | Einladung beantworten. `status` `cannot` = gerade nicht möglich (schläft, reist, Platz besetzt), die Frage bleibt offen |
+| `resolve_invite(invite_id, accept) -> Dict` | Answer an invitation. `status` `cannot` ends an accepted yes as `failed` with its saved reason |
 | `get_invite(invite_id)` / `cancel_invite(invite_id) -> bool` / `clear_invites_for(character)` | Read/close invitations. Cancellation conditionally claims only a pending/approaching row; an answer that already claimed it wins. A live pair's accepted invitation survives housekeeping |
+| `last_answer_of(inviter) -> Optional[dict]` / `dismiss_answer(invite_id, inviter) -> bool` | Read the newest fresh own declined/failed answer (`invite_id`, `invitee`, `pose_key`, `status`, `reason`); dismiss only an own declined/failed row as cancelled |
 | `end_interaction(character_name, reason='ended', *, interaction_id='') -> bool` | End the pair for both participants. An optional ownership id is rechecked under the removal locks; a different live pair is never ended |
 | `pair_profile_locks(a, b)` | Der EINZIGE sanktionierte Weg, zwei Profil-Locks zu halten (sortierte Namensreihenfolge, siehe „Sperren") |
 
@@ -493,7 +494,7 @@ Events, die der Core heute feuert:
 | `interaction.invited` | `invite_id`, `inviter`, `invitee`, `pose_key` |
 | `interaction.invite_started` | `invite_id`, `interaction`, `inviter`, `invitee`; emitted after the ordinary answer/approach starts the real pair |
 | `interaction.ended` | `character`, `partner`, `interaction_id`, `reason`, `invite_id` (empty for a direct start); emitted after the real pair is cleared. The originating invitation identity is persisted in both pair profiles before start hooks, so a concurrent end cannot lose its ownership |
-| `interaction.invite_failed` | `invite_id`, `reason`; the pair package emits this before closing a temporary NPC's retryable failed answer, retaining the actual failure cause for an owned undertaking |
+| `interaction.invite_failed` | `invite_id`, `inviter`, `invitee`, `pose_key`, `reason`; emitted by the core on every failed yes, retaining the actual cause for an owned undertaking |
 | `instagram.post_created` | `poster_name`, `post` |
 | `instagram.user_comment` | `character_name`, `post_id`, `commenter_name`, `comment_text`, `comment_id`, `post` |
 | `character.prompt_context` | `character_name`, `mode` (`chat`, `npc_action`, `npc_scene`), mutable `blocks: List[str]`; packages append volatile state/policy text. Chat renders it only in the scene-state moment, never in the stable system prefix. |

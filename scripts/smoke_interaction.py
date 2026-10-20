@@ -94,7 +94,7 @@ Hand-derived expectations:
       the pair on the beat after it ends, and marks the row ``accepted``.
       Calling the invitation off mid-walk cancels the journey with it — the
       trip existed only for that pair. Arriving with the other one gone ends
-      the approach (``stale``) instead of walking after them forever.
+      the approach (``failed``) instead of walking after them forever.
 
       Finally ``describe`` renders the running pair as "embracing with Bob"
       from both sides and "" without one.
@@ -183,6 +183,16 @@ Hand-derived expectations:
       no swap → Ann "a", yaw −π/2, Ann (10, 13.2), Bob (10, 13.8).
       The assignment and the genders are removed afterwards.
 
+  [11] A yes without a pair or walk ends failed with the actual reason,
+      one complete failure hook and an invitee-language narrator line. A
+      repeated failure cannot change the stored reason or emit twice.
+      Accept-time refusal and arrival failure follow the same rule. A party
+      request reports blocked/terminal with that reason. Only the newest
+      fresh own answered row is shown; dismissal or a newer pending row hides
+      the old failure. The scene exposes that answer and cancel dismisses it.
+      No route or a refused approach save means no walk can continue, so both
+      must yield cannot with the same persisted failed reason. A fresh decline
+      is also dismissible; an aged answer cannot appear as a fresh banner.
   [10a-e] Narration (spec A): Ann speaks en, Bob de in square. Embracing's
       world label is Umarmen: one invite says "Ann suggests embracing to Bob."
       Reuse adds zero lines. Bob declines with "Bob hat gerade keine Lust auf
@@ -799,7 +809,7 @@ res = ie.resolve_invite(iid7, True)
 check("accepting with a sleeping partner is refused",
       res["status"] == "cannot" and "asleep" in res["reason"], str(res))
 check("… and that question is closed, not left hanging",
-      ie.get_invite(iid7)["status"] == "stale")
+      ie.get_invite(iid7)["status"] == "failed")
 set_is_sleeping("Bob", False)
 
 # The claim makes a double answer harmless: the second one finds nothing.
@@ -869,7 +879,7 @@ ie.resolve_invite(iid11, True)
 cancel_journey("Bob")                      # the walk ended…
 check("arrived but still too far: the approach is over",
       ie.settle_approaches() == 0
-      and ie.get_invite(iid11)["status"] == "stale")
+      and ie.get_invite(iid11)["status"] == "failed")
 check("… and nothing started", ie.get_interaction("Bob") is None)
 ie.clear_invites_for("Ann")
 set_character_pos("Ann", 10.0, 20.0)
@@ -1023,6 +1033,92 @@ with patch.object(perception, "record_utterance", record_line), patch.object(hoo
           and len(_lines) == _count + 1)
     ie.create_invite("Ann", "Bob", "embracing", request_id="iinv_narration")
     check("[10b] owned reuse is silent", len(_lines) == _count + 1)
+
+
+# [11] Use the fixture's existing entry whose animation has no clip pair.
+NO_CLIP_KEY = next(k for k, v in pose_catalog.get_catalog("pose").items()
+                   if v.get("animation") == "kiss")
+_failed_calls = []
+
+def observe_failure(event, **kw):
+    if event == "interaction.invite_failed":
+        _failed_calls.append(kw)
+    return _emit(event, **kw)
+
+with patch.object(perception, "record_utterance", record_line), patch.object(hooks, "emit", observe_failure):
+    ie.clear_invites_for("Ann")
+    _iid = ie.create_invite("Ann", "Bob", NO_CLIP_KEY)
+    _res = ie.resolve_invite(_iid, True)
+    _row = ie.get_invite(_iid)
+    check("[11a] failed clip retains reason", _row["status"] == "failed" and bool(_row.get("reason")))
+    check("[11a] one complete failure hook", _failed_calls == [{
+        "invite_id": _iid, "inviter": "Ann", "invitee": "Bob",
+        "pose_key": NO_CLIP_KEY, "reason": _res["reason"]}])
+    ie._fail_invite(_row, "duplicate failure")
+    check("[11a] repeated failure is silent", len(_failed_calls) == 1
+          and ie.get_invite(_iid)["reason"] == _res["reason"])
+    check("[11a] German failed yes", _lines[-1]["content"] ==
+          f"Bob würde gern, aber das {NO_CLIP_KEY} mit Ann geht gerade nicht ({_res['reason']}).", str(_lines[-1]))
+    from app.routes import play as play_routes
+    with patch("app.models.account.get_active_character", return_value="Ann"):
+        _scene = play_routes.play_scene(user={"role": "admin"})
+    check("[11e] scene exposes answer without pending", _scene["interaction_pending"] is None
+          and _scene["interaction_answered"] == {
+              "invite_id": _iid, "invitee": "Bob", "pose_key": NO_CLIP_KEY,
+              "pose_label": NO_CLIP_KEY, "status": "failed", "reason": _res["reason"]})
+    check("[11e] latest failure visible", ie.last_answer_of("Ann")["invite_id"] == _iid)
+    check("[11e] wrong owner cannot dismiss", not ie.dismiss_answer(_iid, "Cid"))
+    with patch.object(play_routes, "_require_avatar", return_value="Ann"):
+        _dismissed = play_routes._play_interact_cancel_sync({"invite_id": _iid})
+    check("[11e] cancel route dismisses failure", _dismissed == {"ok": True}
+          and ie.last_answer_of("Ann") is None)
+    _iid = ie.create_invite("Ann", "Bob", "embracing")
+    with patch.object(ie, "check_can_pair", return_value="Bob is asleep."):
+        ie.resolve_invite(_iid, True)
+    check("[11b] refusal is failed", ie.get_invite(_iid)["status"] == "failed")
+    ie.create_invite("Ann", "Bob", "embracing")
+    check("[11e] newer pending hides failure", ie.last_answer_of("Ann") is None)
+    ie.clear_invites_for("Ann")
+    _iid = ie.create_invite("Ann", "Bob", "embracing", request_id="iinv_intent_x")
+    ie._set_invite_status(_iid, "approaching", expected_status="pending")
+    _before = len(_failed_calls)
+    with patch("app.core.travel_engine.get_journey", return_value=None), patch.object(
+            ie, "start_interaction", side_effect=ValueError("partner left the room")):
+        ie.settle_approaches()
+    _row = ie.get_invite(_iid)
+    check("[11c] arrival fails once with reason", _row["status"] == "failed"
+          and _row["reason"] == "partner left the room" and len(_failed_calls) == _before + 1)
+    from plugins.interact.undertakings import shared_activity_status
+    with patch("plugins.interact.undertakings._available", return_value=True):
+        _status = shared_activity_status("Ann", "Bob", {"type": "pair", "pose_key": "embracing"}, _iid)
+    check("[11d] party receives terminal actual reason", _status["status"] == "blocked"
+          and _status.get("terminal") is True and _status["reason"] == _row["reason"], str(_status))
+
+
+# A failed walk and an unsaved approach also terminate their claimed yes.
+for _walks in (False, True):
+    ie.clear_invites_for("Ann")
+    _iid = ie.create_invite("Ann", "Bob", "embracing")
+    _set_status = ie._set_invite_status
+    def refuse_approach(invite_id, status, **kw):
+        return False if status == "approaching" else _set_status(invite_id, status, **kw)
+    with patch.object(ie, "start_interaction", side_effect=ie.TooFarApart("too far away")), patch.object(
+            ie, "_walk_to_partner", return_value=_walks), patch.object(
+            ie, "_set_invite_status", refuse_approach), patch("app.core.travel_engine.cancel_journey"):
+        _res = ie.resolve_invite(_iid, True)
+    check("[11] failed or unsaved walk is terminal", _res["status"] == "cannot"
+          and ie.get_invite(_iid)["status"] == "failed"
+          and ie.get_invite(_iid)["reason"] == _res["reason"])
+
+
+# Fresh declined answers are dismissible too; aged answers are not banners.
+ie.clear_invites_for("Ann")
+_iid = ie.create_invite("Ann", "Bob", "embracing")
+ie.resolve_invite(_iid, False)
+check("[11e] declined answer visible", ie.last_answer_of("Ann")["status"] == "declined")
+with patch.object(ie, "_fresh", return_value=False):
+    check("[11e] old answer hidden", ie.last_answer_of("Ann") is None)
+check("[11e] declined answer dismisses", ie.dismiss_answer(_iid, "Ann"))
 
 
 print()

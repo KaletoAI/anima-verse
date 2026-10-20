@@ -136,6 +136,9 @@ def shared_activity_status(owner: str, target: str, action: Any, request_id: str
     if not _matches_invite(invitation, owner, target, normalized["pose_key"]):
         return _result("blocked", request_id, "The request id belongs to a different invitation.")
     status = invitation.get("status")
+    if status == "failed":
+        return {**_result("blocked", request_id, invitation["reason"] or
+                          "The shared activity could not start."), "terminal": True}
     if status == "declined":
         return _result("declined", request_id, f"{target} declined the shared activity.")
     if status == "accepted":

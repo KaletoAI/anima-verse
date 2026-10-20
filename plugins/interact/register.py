@@ -48,9 +48,8 @@ def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
     A TEMPORARY NPC has no will system to consult: it says yes at once,
     without an LLM answer turn. The engine's own state check decides
     whether the pair can start
-    (asleep, travelling, occupied -> ``cannot``). A ``cannot`` that leaves the
-    question OPEN is closed here: the engine keeps "not yet" questions alive
-    for a second answer, and a temporary NPC never gives one.
+    (asleep, travelling, occupied -> ``cannot``). The engine owns all
+    terminal failure cleanup and notifications.
     """
     if not inviter or not invitee:
         return
@@ -67,21 +66,6 @@ def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
             res = IE.resolve_invite(invite_id, accept=True)
             logger.info("interaction invite %s: temporary NPC %s says yes -> %s",
                         invite_id, invitee, res.get("status"))
-            # "cannot" with the row back on `pending` is the engine's "ask
-            # again in a minute" (a taken seat, a missing clip). For a
-            # temporary NPC nobody ever will: it has no thought turns, so the
-            # question would sit open until the sweep. Close it here.
-            if res.get("status") == "cannot":
-                row = IE.get_invite(invite_id) or {}
-                if row.get("status") == "pending":
-                    logger.info("interaction invite %s: %s cannot (%s) and "
-                                "nobody re-answers a temporary NPC — cancelled",
-                                invite_id, invitee,
-                                res.get("reason") or "no reason given")
-                    from app.core.hooks import emit
-                    emit("interaction.invite_failed", invite_id=invite_id,
-                         reason=res.get("reason") or "The activity could not start.")
-                    IE.cancel_invite(invite_id)
             return
     except Exception as e:
         logger.debug("temporary-NPC acceptance failed for %s: %s", invitee, e)
@@ -127,7 +111,7 @@ def _decide_invite(invite_id: str, inviter: str, invitee: str,
 
     True = the invitation is settled and the NPC must NOT be woken. False =
     take the usual path (the bump): point inactive, no confident answer, or
-    an accept the engine turned into a "not yet". Never raises.
+    an exception before the answer settled. Never raises.
 
     No record_outcome here: resolve_invite never records one, so the
     decider's own action cannot be counted as agreement with the usual path
@@ -150,16 +134,6 @@ def _decide_invite(invite_id: str, inviter: str, invitee: str,
         from app.core import interaction_engine as IE
         if ans.value == "accept":
             res = IE.resolve_invite(invite_id, accept=True)
-            if res.get("status") == "cannot":
-                # A "cannot" with the row back on `pending` is the engine's
-                # "ask again in a minute": the NPC answers in its own turn
-                # and the outcome is recorded then. Any closed state (stale,
-                # or a row that moved on meanwhile) has nobody left to
-                # answer — waking the NPC would only turn its call-back into
-                # a counter-invitation.
-                row = IE.get_invite(invite_id) or {}
-                if row.get("status") == "pending":
-                    return False
             decision.mark_taken(PAIR_INVITE, invite_id)
             logger.info("interaction invite %s: decision model — %s accepts -> %s",
                         invite_id, invitee, res.get("status"))

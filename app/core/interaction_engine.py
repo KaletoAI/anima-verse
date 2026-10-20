@@ -557,7 +557,7 @@ def _sweep_before() -> str:
 
 def _invite_row(r) -> Dict[str, Any]:
     return {"invite_id": r[0], "inviter": r[1], "invitee": r[2],
-            "pose_key": r[3], "created_at": r[4], "status": r[5]}
+            "pose_key": r[3], "created_at": r[4], "status": r[5], "reason": r[6]}
 
 
 def _fresh(created_at: str, max_age_minutes: int = INVITE_MAX_AGE_MIN) -> bool:
@@ -578,7 +578,7 @@ def _sweep_invites() -> None:
             "DELETE FROM interaction_invites WHERE status NOT IN ('pending', 'accepted') "
             "AND created_at < ?", (before,))
         rows = conn.execute(
-            "SELECT invite_id, inviter, invitee, pose_key, created_at, status "
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
             "FROM interaction_invites WHERE status='accepted' AND created_at < ?",
             (before,)).fetchall()
         stored_tx_1 = True
@@ -702,7 +702,7 @@ def get_invite(invite_id: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         r = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, pose_key, created_at, status "
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
             "FROM interaction_invites WHERE invite_id=?", (invite_id,)).fetchone()
     except Exception:
         return None
@@ -725,7 +725,7 @@ def pending_invites_for(invitee: str) -> List[Dict[str, Any]]:
         return []
     try:
         rows = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, pose_key, created_at, status "
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
             "FROM interaction_invites WHERE invitee=? AND status='pending' "
             "ORDER BY created_at ASC", (invitee,)).fetchall()
     except Exception:
@@ -753,7 +753,7 @@ def outgoing_invite_of(inviter: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         r = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, pose_key, created_at, status "
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
             "FROM interaction_invites WHERE inviter=? AND status='pending' "
             "ORDER BY created_at DESC LIMIT 1", (inviter,)).fetchone()
     except Exception:
@@ -774,7 +774,7 @@ def approach_of(character: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         r = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, pose_key, created_at, status "
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
             "FROM interaction_invites WHERE status='approaching' "
             "AND (inviter=? OR invitee=?) ORDER BY created_at DESC LIMIT 1",
             (c, c)).fetchone()
@@ -795,7 +795,7 @@ def find_pending_invite(inviter: str, invitee: str,
     invitee = (invitee or "").strip()
     if not inviter or not invitee:
         return None
-    sql = ("SELECT invite_id, inviter, invitee, pose_key, created_at, status "
+    sql = ("SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
            "FROM interaction_invites WHERE inviter=? AND invitee=? "
            "AND status='pending'")
     args: List[Any] = [inviter, invitee]
@@ -836,6 +836,50 @@ def _set_invite_status(invite_id: str, status: str, *,
         return False
 
 
+def _fail_invite(inv: dict, reason: str, *, expected_status: str = "answering") -> None:
+    """Publish a failed yes only after atomically owning its terminal change."""
+    from app.core.db import transaction
+    from app.core.hooks import emit
+    from app.core import sync_topics
+    with transaction() as conn:
+        changed = conn.execute(
+            "UPDATE interaction_invites SET status='failed', reason=? "
+            "WHERE invite_id=? AND status=?",
+            (reason, inv["invite_id"], expected_status)).rowcount == 1
+    if not changed:
+        return
+    _narrate(inv["invitee"],
+             "{invitee} would like to, but {pose} with {inviter} is not possible ({reason}).",
+             inviter=inv["inviter"], invitee=inv["invitee"],
+             pose_key=inv["pose_key"], reason=reason)
+    emit("interaction.invite_failed", invite_id=inv["invite_id"],
+         inviter=inv["inviter"], invitee=inv["invitee"], pose_key=inv["pose_key"], reason=reason)
+    sync_topics.avatars([inv["inviter"], inv["invitee"]], "presence")
+
+
+def last_answer_of(inviter: str) -> Optional[dict]:
+    """Return only the newest own question if freshly declined or failed."""
+    from app.core.db import get_connection
+    row = get_connection().execute(
+        "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
+        "FROM interaction_invites WHERE inviter=? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (inviter,)).fetchone()
+    if not row:
+        return None
+    inv = _invite_row(row)
+    if inv["status"] not in ("declined", "failed") or not _fresh(inv["created_at"]):
+        return None
+    return {k: inv[k] for k in ("invite_id", "invitee", "pose_key", "status", "reason")}
+
+
+def dismiss_answer(invite_id: str, inviter: str) -> bool:
+    """Dismiss only an answered invitation owned by the supplied inviter."""
+    inv = get_invite(invite_id)
+    if not inv or inv["inviter"] != inviter or inv["status"] not in ("declined", "failed"):
+        return False
+    return _set_invite_status(invite_id, "cancelled", expected_status=inv["status"])
+
+
 def _claim_invite(invite_id: str, status: str = "pending") -> bool:
     """Take the pending/approaching row out of circulation for THIS answer/start.
 
@@ -870,10 +914,8 @@ def resolve_invite(invite_id: str, accept: bool) -> Dict[str, Any]:
     the situation is checked for the first time — minutes may have passed —
     and a refusal carries the engine's own reason so the UI can say WHY.
 
-    Whether the question SURVIVES a refusal is the difference between "not
-    yet" and "not at all": too far apart or no free seat is something the
-    two can fix by walking, so the question stays open. Asleep, travelling,
-    gone — nothing they will fix by standing still, so the question closes.
+    Every accepted yes that neither starts a pair nor walks ends as failed,
+    with its reason saved, narrated and emitted by the core.
     """
     inv = get_invite(invite_id)
     if not inv or inv["status"] != "pending":
@@ -892,7 +934,7 @@ def resolve_invite(invite_id: str, accept: bool) -> Dict[str, Any]:
         return {**out, "status": "declined"}
     blocked = check_can_pair(inv["inviter"], inv["invitee"])
     if blocked:
-        _set_invite_status(invite_id, "stale")
+        _fail_invite(inv, blocked)
         return {**out, "status": "cannot", "reason": blocked}
     try:
         inter = start_interaction(inv["inviter"], inv["invitee"], inv["pose_key"],
@@ -907,17 +949,18 @@ def resolve_invite(invite_id: str, accept: bool) -> Dict[str, Any]:
                 return {**out, "status": "approaching", "reason": str(e)}
             from app.core.travel_engine import cancel_journey
             cancel_journey(inv["invitee"])
+            _fail_invite(inv, "the approach could not be saved")
             return {**out, "status": "cannot", "reason": "the approach could not be saved"}
-        _set_invite_status(invite_id, "pending")
+        _fail_invite(inv, str(e))
         return {**out, "status": "cannot", "reason": str(e)}
     except ValueError as e:
-        # A seat that is taken, a clip that is gone: the question stays open
-        # — the same answer may work in a minute.
-        _set_invite_status(invite_id, "pending")
+        # A failed yes is terminal even when a later invitation might work.
+        _fail_invite(inv, str(e))
         return {**out, "status": "cannot", "reason": str(e)}
     if not _set_invite_status(invite_id, "accepted"):
         end_interaction(inv["inviter"], reason="invitation_failed",
                         interaction_id=inter["id"])
+        _fail_invite(inv, "the accepted answer could not be saved")
         return {**out, "status": "cannot", "reason": "the accepted answer could not be saved"}
     clear_invites_for(inv["inviter"])
     clear_invites_for(inv["invitee"])
@@ -970,7 +1013,8 @@ def _walk_to_partner(walker: str, target: str) -> bool:
 
 def settle_approaches() -> int:
     """Bind every pair whose walker has arrived; drop the ones that will not
-    happen. Called on the travel ticker's beat, right after the journeys.
+    happen as failed with a saved reason, narration and hook. Called on the
+    travel ticker's beat, right after the journeys.
 
     A row stays ``approaching`` while the journey runs — the consent is
     given, only the metres are still being covered. When the walking stops
@@ -982,7 +1026,7 @@ def settle_approaches() -> int:
     from app.core.travel_engine import get_journey
     try:
         rows = get_connection().execute(
-            "SELECT invite_id, inviter, invitee, pose_key, created_at, status "
+            "SELECT invite_id, inviter, invitee, pose_key, created_at, status, reason "
             "FROM interaction_invites WHERE status='approaching'").fetchall()
     except Exception:
         return 0
@@ -992,8 +1036,7 @@ def settle_approaches() -> int:
         claimed = False
         try:
             if not _fresh(inv["created_at"]):
-                _set_invite_status(inv["invite_id"], "stale",
-                                   expected_status="approaching")
+                _fail_invite(inv, "the approach expired", expected_status="approaching")
                 continue
             if get_journey(inv["invitee"]):
                 continue                      # still on the way
@@ -1005,6 +1048,7 @@ def settle_approaches() -> int:
             if not _set_invite_status(inv["invite_id"], "accepted"):
                 end_interaction(inv["inviter"], reason="invitation_failed",
                                 interaction_id=inter["id"])
+                _fail_invite(inv, "the accepted answer could not be saved")
                 continue
             claimed = False
             clear_invites_for(inv["inviter"])
@@ -1015,7 +1059,7 @@ def settle_approaches() -> int:
             logger.info("interaction invite %s expired on arrival: %s",
                         inv["invite_id"], e)
             if claimed:
-                _set_invite_status(inv["invite_id"], "stale")
+                _fail_invite(inv, str(e))
         except Exception as e:          # one bad row must not stop the beat
             if claimed:
                 _set_invite_status(inv["invite_id"], "approaching")

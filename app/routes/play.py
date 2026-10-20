@@ -349,6 +349,11 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
         interaction_pending = ({"invite_id": _out["invite_id"],
                                 "invitee": _out["invitee"],
                                 "pose_key": _out["pose_key"]} if _out else None)
+        _answer = _IE.last_answer_of(avatar) if interaction_pending is None else None
+        from app.core.pose_catalog import pose_label
+        from app.models.character import get_character_language
+        interaction_answered = ({**_answer, "pose_label": pose_label(
+            _answer["pose_key"], get_character_language(avatar))} if _answer else None)
         # Agreed, not started yet: whoever said yes is walking over.
         _app = _IE.approach_of(avatar)
         interaction_approaching = (
@@ -362,6 +367,7 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
     except Exception as _ie:
         logger.debug("interaction block failed: %s", _ie)
         interaction_invites, interaction_pending = [], None
+        interaction_answered = None
         interaction_approaching, interaction = None, None
 
     # MARK the storyteller lines, then localise their label — in that order,
@@ -405,6 +411,7 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
         "party": party, "party_invites": party_invites,
         "interaction_invites": interaction_invites,
         "interaction_pending": interaction_pending,
+        "interaction_answered": interaction_answered,
         "interaction_approaching": interaction_approaching,
         "interaction": interaction,
         "speaker_expr_versions": speaker_expr_versions,
@@ -1978,7 +1985,7 @@ def _play_interact_cancel_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     inv = IE.get_invite(invite_id)
     if not inv or inv.get("inviter") != avatar:
         raise HTTPException(status_code=404, detail="invite not found")
-    return {"ok": IE.cancel_invite(invite_id)}
+    return {"ok": IE.cancel_invite(invite_id) or IE.dismiss_answer(invite_id, avatar)}
 
 
 @router.post("/play/interact/end")
