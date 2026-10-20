@@ -2230,7 +2230,6 @@
     "The room holds nothing yet.": "Im Raum steht noch nichts.",
     "Description saved.": "Beschreibung gespeichert.",
     "Not placed": "Nicht aufgestellt",
-    "{name} asks you to {pose} together.": "{name} fragt dich, ob ihr zusammen {pose} wollt.",
     "No": "Nein",
     "Waiting for {name} to answer about {pose}.": "Warte auf {name}s Antwort zu {pose}.",
     "Take back": "Zurücknehmen",
@@ -2738,6 +2737,10 @@
     "{inviter} suggests {pose} to {invitee}.": "{inviter} lädt {invitee} zum {pose} ein.",
     "{invitee} does not feel like {pose} with {inviter} right now.": "{invitee} hat gerade keine Lust auf das {pose} mit {inviter}.",
     "{actor} and {partner} start {pose}.": "{actor} und {partner} fangen mit dem {pose} an.",
-    "{actor} and {partner} stop {pose}.": "{actor} und {partner} hören mit dem {pose} auf."
+    "{actor} and {partner} stop {pose}.": "{actor} und {partner} hören mit dem {pose} auf.",
+    "{name} suggests {pose} to you.": "{name} lädt dich zum {pose} ein.",
+    "{name} does not feel like {pose} right now.": "{name} hat gerade keine Lust auf das {pose}.",
+    "{pose} with {name} is not possible: {reason}": "Das {pose} mit {name} geht gerade nicht: {reason}",
+    "Dismiss": "Schließen"
   }
 }

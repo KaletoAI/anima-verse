@@ -337,32 +337,33 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
         party_invites = []
 
     # Pair interactions: the questions waiting for the avatar, the one it is
-    # waiting on itself, and the pair it is in right now — the three states
-    # the banner has to render.
+    # waiting on itself, its latest answer, and its approaching or running pair.
     try:
         from app.core import interaction_engine as _IE
+        from app.core.pose_catalog import pose_label
         interaction_invites = [
             {"invite_id": i["invite_id"], "inviter": i["inviter"],
-             "pose_key": i["pose_key"]}
+             "pose_key": i["pose_key"], "pose_label": pose_label(i["pose_key"], lang)}
             for i in _IE.pending_invites_for(avatar)]
         _out = _IE.outgoing_invite_of(avatar)
         interaction_pending = ({"invite_id": _out["invite_id"],
                                 "invitee": _out["invitee"],
-                                "pose_key": _out["pose_key"]} if _out else None)
+                                "pose_key": _out["pose_key"],
+                                "pose_label": pose_label(_out["pose_key"], lang)} if _out else None)
         _answer = _IE.last_answer_of(avatar) if interaction_pending is None else None
-        from app.core.pose_catalog import pose_label
-        from app.models.character import get_character_language
         interaction_answered = ({**_answer, "pose_label": pose_label(
-            _answer["pose_key"], get_character_language(avatar))} if _answer else None)
+            _answer["pose_key"], lang)} if _answer else None)
         # Agreed, not started yet: whoever said yes is walking over.
         _app = _IE.approach_of(avatar)
         interaction_approaching = (
             {"invite_id": _app["invite_id"], "pose_key": _app["pose_key"],
+             "pose_label": pose_label(_app["pose_key"], lang),
              "partner": (_app["inviter"] if _app["invitee"] == avatar
                          else _app["invitee"]),
              "walking": _app["invitee"] == avatar} if _app else None)
         _run = _IE.get_interaction(avatar)
-        interaction = ({"partner": _run["partner"], "pose_key": _run["pose_key"]}
+        interaction = ({"partner": _run["partner"], "pose_key": _run["pose_key"],
+                        "pose_label": pose_label(_run["pose_key"], lang)}
                        if _run else None)
     except Exception as _ie:
         logger.debug("interaction block failed: %s", _ie)
@@ -2309,7 +2310,7 @@ def play_self(user=Depends(get_current_user)):
     return out
 
 
-def _state_block(name: str) -> dict:
+def _state_block(name: str, lang: str = "en") -> dict:
     """Mood + status bars + conditions + profile image of a character (shared
     with the /play/self logic, used by /play/others) — plus the place it holds
     (plan-posen-plaetze.md § 7: the presence list shows "on the armchair"):
@@ -2350,10 +2351,12 @@ def _state_block(name: str) -> dict:
         pass
     try:
         from app.core.interaction_engine import get_interaction
+        from app.core.pose_catalog import pose_label
         run = get_interaction(name)
         if run:
             blk["interaction"] = {"partner": run["partner"],
-                                  "pose_key": run["pose_key"]}
+                                  "pose_key": run["pose_key"],
+                                  "pose_label": pose_label(run["pose_key"], lang)}
     except Exception:
         pass
     try:
@@ -2416,7 +2419,9 @@ def play_others(user=Depends(get_current_user)):
         return out
     out["avatar"] = avatar
     try:
-        out["characters"] = [_state_block(c) for c in _present_characters(avatar)]
+        from app.models.character import get_character_language
+        lang = get_character_language(avatar)
+        out["characters"] = [_state_block(c, lang) for c in _present_characters(avatar)]
         # Relationship of the avatar TO each present character. Built ONCE
         # per request, then looked up per character.
         try:

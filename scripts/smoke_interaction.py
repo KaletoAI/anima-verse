@@ -207,6 +207,11 @@ Hand-derived expectations:
       "Ann und Bob hören mit dem swaying auf." once, before the ended hook.
       Repeated end adds zero lines. A request_id invite also narrates once.
 
+  [13] Reader-language payloads: embracing has no English label, hence
+      Ann (en) sees embracing and Bob (de) sees Umarmen in incoming, pending,
+      approaching, running and Others card rows. A refused yes yields failed plus reason
+      and no pending row. Dismissal permits a new pending invitation.
+
 Usage:  ./.venv/bin/python scripts/smoke_interaction.py
 """
 import json
@@ -1203,6 +1208,50 @@ for _importance, _partner_end, _invited in ((3, False, True), (2, False, True),
           and not ie.end_interaction("Bob") and pair_count() == _history_before + 1
           and all(len(pair_memories(n)) == _before[n] + 1 for n in ("Ann", "Bob")))
 
+
+# [13] Actual scene payloads against the isolated fixture.
+for _n in ("Ann", "Bob"):
+    ie.clear_invites_for(_n)
+    save_character_current_room(_n, "square")
+set_character_pos("Ann", 10.0, 20.0)
+set_character_pos("Bob", 10.0, 20.6)
+
+def scene_for(name):
+    with patch("app.models.account.get_active_character", return_value=name):
+        return play_routes.play_scene(user={"role": "admin"})
+
+for _a, _b in (("Bob", "Ann"), ("Ann", "Bob")):
+    _iid = ie.create_invite(_a, _b, "embracing")
+    for _viewer, _field in ((_a, "interaction_pending"), (_b, "interaction_invites")):
+        _value = scene_for(_viewer)[_field]
+        _row = _value[0] if isinstance(_value, list) else _value
+        check("[13] incoming/pending reader label", _row.get("pose_label") ==
+              ("embracing" if _viewer == "Ann" else "Umarmen"))
+    ie.cancel_invite(_iid)
+_iid = ie.create_invite("Ann", "Bob", "embracing")
+with patch.object(ie, "check_can_pair", return_value="Bob is asleep."):
+    ie.resolve_invite(_iid, True)
+_scene = scene_for("Ann")
+check("[13] failure replaces pending", _scene["interaction_pending"] is None
+      and _scene["interaction_answered"]["status"] == "failed"
+      and _scene["interaction_answered"]["reason"] == "Bob is asleep."
+      and _scene["interaction_answered"]["pose_label"] == "embracing")
+ie.dismiss_answer(_iid, "Ann")
+_iid = ie.create_invite("Ann", "Bob", "embracing")
+check("[13] pending after dismissal", scene_for("Ann")["interaction_pending"]["invite_id"] == _iid
+      and scene_for("Ann")["interaction_answered"] is None)
+ie._set_invite_status(_iid, "approaching", expected_status="pending")
+for _viewer, _label in (("Ann", "embracing"), ("Bob", "Umarmen")):
+    check("[13] approach reader label", scene_for(_viewer)["interaction_approaching"].get("pose_label") == _label)
+ie.clear_invites_for("Ann")
+ie.start_interaction("Ann", "Bob", "embracing")
+for _viewer, _label in (("Ann", "embracing"), ("Bob", "Umarmen")):
+    check("[13] running reader label", scene_for(_viewer)["interaction"].get("pose_label") == _label)
+with patch("app.models.account.get_active_character", return_value="Bob"):
+    with patch.object(play_routes, "_present_characters", return_value=["Ann"]):
+        _cards = play_routes.play_others(user={"role": "admin"})["characters"]
+check("[13] Others card uses viewer language", _cards[0]["interaction"].get("pose_label") == "Umarmen")
+ie.end_interaction("Ann", reason="smoke")
 
 print()
 if FAILURES:

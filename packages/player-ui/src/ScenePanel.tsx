@@ -97,17 +97,21 @@ export interface SceneData {
   party?: { role: 'leader' | 'follower'; leader: string; members: string[] } | null
   party_invites?: Array<{ invite_id: string; inviter: string; intent_id?: string; destination_label?: string; after_arrival_label?: string; participants?: string[] }>
   /** Pair interactions (app/core/interaction_engine.py). A shared action is
-   *  ASKED, never imposed, so the banner has three states: questions waiting
-   *  for the avatar, the question it is waiting on itself, and the pair it is
+   *  ASKED, never imposed, so the banner shows questions waiting
+   *  for the avatar, its pending or answered question, and the pair it is
    *  currently in. */
-  interaction_invites?: Array<{ invite_id: string; inviter: string; pose_key: string }>
-  interaction_pending?: { invite_id: string; invitee: string; pose_key: string } | null
+  interaction_invites?: Array<{ invite_id: string; inviter: string; pose_key: string; pose_label?: string }>
+  interaction_pending?: { invite_id: string; invitee: string; pose_key: string; pose_label?: string } | null
+  interaction_answered?: {
+    invite_id: string; invitee: string; pose_key: string; pose_label?: string
+    status: 'declined' | 'failed'; reason: string
+  } | null
   /** Agreed but not started: whoever said yes is still walking over.
    *  `walking` is true when that is the avatar itself. */
   interaction_approaching?: {
-    invite_id: string; partner: string; pose_key: string; walking: boolean
+    invite_id: string; partner: string; pose_key: string; pose_label?: string; walking: boolean
   } | null
-  interaction?: { partner: string; pose_key: string } | null
+  interaction?: { partner: string; pose_key: string; pose_label?: string } | null
   rooms: RoomInfo[]
   travel?: TravelInfo | null
   /** GONE since E3 Task 5 — the grid compass they described does not exist
@@ -571,7 +575,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
         )}
 
         {((data?.interaction_invites?.length ?? 0) > 0 || data?.interaction_pending
-          || data?.interaction_approaching || data?.interaction) && (
+          || data?.interaction_answered || data?.interaction_approaching || data?.interaction) && (
           <div style={{
             flex: '0 0 auto', padding: '6px 12px', display: 'flex', flexWrap: 'wrap',
             gap: 10, alignItems: 'center', borderTop: '1px solid var(--border, #30363d)',
@@ -580,8 +584,8 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
             {(data?.interaction_invites ?? []).map((inv) => (
               <span key={inv.invite_id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em' }}>
                 <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
-                  🤝 {t('{name} asks you to {pose} together.')
-                    .replace('{name}', inv.inviter).replace('{pose}', inv.pose_key)}
+                  🤝 {t('{name} suggests {pose} to you.')
+                    .replace('{name}', inv.inviter).replace('{pose}', inv.pose_label || inv.pose_key)}
                 </span>
                 <button onClick={() => handleInteractRespond(inv.invite_id, true)}
                   disabled={!!answering} className="player-chip player-chip-follow">
@@ -598,11 +602,27 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
                 <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
                   🤝 {t('Waiting for {name} to answer about {pose}.')
                     .replace('{name}', data.interaction_pending.invitee)
-                    .replace('{pose}', data.interaction_pending.pose_key)}
+                    .replace('{pose}', data.interaction_pending.pose_label || data.interaction_pending.pose_key)}
                 </span>
                 <button onClick={() => handleInteractCancel(data!.interaction_pending!.invite_id)}
                   className="player-chip">
                   {t('Take back')}
+                </button>
+              </span>
+            )}
+            {data?.interaction_answered && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em' }}>
+                <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
+                  🤝 {(data.interaction_answered.status === 'declined'
+                    ? t('{name} does not feel like {pose} right now.')
+                    : t('{pose} with {name} is not possible: {reason}'))
+                    .replace('{name}', data.interaction_answered.invitee)
+                    .replace('{pose}', data.interaction_answered.pose_label || data.interaction_answered.pose_key)
+                    .replace('{reason}', data.interaction_answered.reason)}
+                </span>
+                <button onClick={() => handleInteractCancel(data!.interaction_answered!.invite_id)}
+                  className="player-chip">
+                  {t('Dismiss')}
                 </button>
               </span>
             )}
@@ -613,7 +633,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
                     ? t('On your way to {name} for {pose}.')
                     : t('{name} is on their way to you for {pose}.'))
                     .replace('{name}', data.interaction_approaching.partner)
-                    .replace('{pose}', data.interaction_approaching.pose_key)}
+                    .replace('{pose}', data.interaction_approaching.pose_label || data.interaction_approaching.pose_key)}
                 </span>
                 <button onClick={() => handleInteractCancel(data!.interaction_approaching!.invite_id)}
                   className="player-chip">
@@ -625,7 +645,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.82em' }}>
                 <span style={{ fontStyle: 'italic', color: '#d6b06a' }}>
                   🤝 {t('{pose} with {name}.')
-                    .replace('{pose}', data.interaction.pose_key)
+                    .replace('{pose}', data.interaction.pose_label || data.interaction.pose_key)
                     .replace('{name}', data.interaction.partner)}
                 </span>
                 <button onClick={handleInteractEnd} className="player-chip">

@@ -35,10 +35,10 @@ interface CharState {
   relation?: Relation | null
   /** The running pair interaction, or null — a two-person pose says nothing
    *  without the partner it is shared with. */
-  interaction?: { partner: string; pose_key: string } | null
+  interaction?: { partner: string; pose_key: string; pose_label?: string } | null
 }
 interface Others { avatar: string; characters: CharState[] }
-interface PairPose { key: string; kind: string }
+interface PairPose { key: string; kind: string; label: string }
 
 /** "reading, on the armchair" — activity and place, either alone when the
  *  other is missing, "" when both are. A running pair replaces the activity:
@@ -51,7 +51,7 @@ interface PairPose { key: string; kind: string }
 function whereabouts(c: CharState, t: (s: string) => string): string {
   const place = (c.place_phrase || '').trim().toLowerCase()
   const doing = c.interaction
-    ? t('{pose} with {name}').replace('{pose}', c.interaction.pose_key)
+    ? t('{pose} with {name}').replace('{pose}', c.interaction.pose_label || c.interaction.pose_key)
       .replace('{name}', c.interaction.partner)
     : c.activity
   return [doing, place].filter(Boolean).join(', ')
@@ -190,7 +190,7 @@ function PairMenu({ anchorEl, poses, onPick, onClose, t }: {
         }}
           onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.08)' }}
           onMouseLeave={(e) => { e.currentTarget.style.background = 'none' }}>
-          {p.key}
+          {p.label || p.key}
         </button>
       ))}
     </div>,
