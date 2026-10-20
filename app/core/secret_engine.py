@@ -86,7 +86,7 @@ def generate_secrets(character_name: str,
 
 
 def _build_generation_context(character_name: str) -> str:
-    """Sammelt den vollstaendigen Kontext fuer die Generierung."""
+    """Collect generation context, excluding written records."""
     parts = []
 
     # 1. Character-Profil
@@ -150,10 +150,10 @@ def _build_generation_context(character_name: str) -> str:
     except Exception:
         pass
 
-    # 5. Bestehende Geheimnisse (zur Duplikat-Vermeidung)
+    # 5. Existing non-record secrets for duplicate avoidance.
     try:
-        from app.models.secrets import list_secrets
-        existing = list_secrets(character_name)
+        from app.models.secrets import list_secrets, is_record
+        existing = [s for s in list_secrets(character_name) if not is_record(s)]
         if existing:
             existing_lines = [f"- {s.get('content', '')}" for s in existing]
             parts.append("ALREADY EXISTING secrets (DO NOT repeat these):\n" + "\n".join(existing_lines))

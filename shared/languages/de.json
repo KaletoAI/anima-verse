@@ -2749,6 +2749,8 @@
     "Only you noticed this": "Nur du hast das bemerkt",
     "Discovery difficulty": "Entdeckungs-Schwierigkeit",
     "Compared with the discovery stat (Setup). Above 100 stays hidden unless a state boosts the stat.": "Wird mit dem Entdeckungswert verglichen (Setup). Über 100 bleibt es versteckt, außer ein Zustand hebt den Wert.",
-    "Found by": "Gefunden von"
+    "Found by": "Gefunden von",
+    "Record": "Aufzeichnung",
+    "Hide records": "Aufzeichnungen ausblenden"
   }
 }

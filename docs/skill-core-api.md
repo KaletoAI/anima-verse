@@ -827,3 +827,25 @@ so clients can use `me`. Existing diary read authorization remains in force.
 
 These helpers read without mutating profiles. Use them for decisions and display;
 stat writers and LLM stat adjustments continue to use the base values (0–100).
+
+
+## Secrets — `app.models.secrets` ✅
+
+- `list_secrets(character_name)` → all stored secrets owned by a character.
+- `get_secret(character_name, secret_id)` → secret dict or `None`.
+- `add_secret(character_name, content, category="personal", severity=2, related_characters=None, related_location=None, consequences_if_revealed="", source="manual", known_by=None, source_ref="")` → created secret dict.
+- `add_known_by(character_name, secret_id, knower_name, discovered=False)` → whether the secret exists; adds the knower and stamps first learning with `game_time().canonical()` in `known_at`. Repeated learning preserves that stamp.
+- `delete_secrets_by_ref(character_name, source_ref)` → number deleted with the exact reference, scoped to this owner.
+- `is_record(secret)` → whether `source == "record"`.
+
+Record secrets keep their creator-assigned `source_ref` through edits. They are
+excluded from the owner's own prompt, secret generation context, random hint
+candidates and `has_secret`. They remain available to readers who know them.
+`created_at` retains its existing timestamp format. Initial or manually edited
+`known_by` entries have no learning stamp and use `created_at` for legacy ordering.
+
+`KNOWN_PER_OWNER = 3` and `KNOWN_TOTAL = 8` bound only the known-about-others
+prompt block. Stamped entries come first in descending learning order, followed
+by unstamped entries in descending `created_at` order. Storage and `list_secrets`
+remain unlimited. All secret read-modify-write operations serialize through
+`keyed_lock("secrets", character_name)`.

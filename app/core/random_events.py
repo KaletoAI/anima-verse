@@ -415,7 +415,7 @@ def _try_generate_secret_hint_event(loc_id: str,
     if len(char_names) < 2:
         return False  # Braucht mindestens Ziel + Beobachter
 
-    from app.models.secrets import list_secrets
+    from app.models.secrets import list_secrets, is_record
     from app.models.events import add_event
 
     # Character mit Geheimnissen sammeln
@@ -423,7 +423,7 @@ def _try_generate_secret_hint_event(loc_id: str,
     for c in char_names:
         try:
             secs = [s for s in list_secrets(c)
-                    if s.get("content") and len(s.get("known_by", [])) < 3]
+                    if not is_record(s) and s.get("content") and len(s.get("known_by", [])) < 3]
             if secs:
                 candidates.append((c, secs))
         except Exception:

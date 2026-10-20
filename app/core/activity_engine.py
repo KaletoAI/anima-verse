@@ -596,11 +596,11 @@ def _check_status_effect(character_name: str,
 
 
 def _check_has_secret(character_name: str) -> Tuple[bool, str]:
-    """Prueft ob der Character Geheimnisse hat."""
+    """Check whether the character has any non-record secrets."""
     try:
-        from app.models.secrets import list_secrets
+        from app.models.secrets import list_secrets, is_record
         secrets = list_secrets(character_name)
-        if secrets:
+        if any(not is_record(s) for s in secrets):
             return True, ""
         return False, "Keine Geheimnisse vorhanden"
     except Exception:

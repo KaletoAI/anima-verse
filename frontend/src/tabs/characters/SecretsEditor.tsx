@@ -18,6 +18,8 @@ interface Secret {
   severity: number
   related_characters?: string[]
   consequences_if_revealed?: string
+  source?: string
+  source_ref?: string
   known_by?: string[]
 }
 
@@ -56,6 +58,8 @@ export function SecretsEditor({ character }: { character: string }) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [secrets, setSecrets] = useState<Secret[]>([])
+  const [hideRecords, setHideRecords] = useState(false)
+  const visibleSecrets = hideRecords ? secrets.filter((s) => s.source !== 'record') : secrets
   const [loading, setLoading] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null) // null = closed, '' = new
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
@@ -182,17 +186,22 @@ export function SecretsEditor({ character }: { character: string }) {
           </div>
         </div>
 
+        <label>
+          <input type="checkbox" checked={hideRecords} onChange={(e) => setHideRecords(e.target.checked)} />{' '}
+          {t('Hide records')}
+        </label>
         {loading ? (
           <div className="ga-loading">{t('Loading…')}</div>
         ) : secrets.length === 0 ? (
           <div className="ga-placeholder">{t('No secrets yet.')}</div>
         ) : (
           <div className="ga-secret-list">
-            {secrets.map((s) => {
+            {visibleSecrets.map((s) => {
               const content = s.content || ''
               return (
               <div key={s.id} className="ga-secret-row">
                 <div className="ga-secret-info">
+                  {s.source === 'record' ? <span className="ga-chip" title={s.source_ref || ''}>{t('Record')}</span> : null}
                   <strong>{content.length > 90 ? content.slice(0, 90) + '…' : content}</strong>
                   <span className="ga-sched-muted">
                     {t(CATEGORIES.find((c) => c.value === s.category)?.label || s.category)} ·{' '}

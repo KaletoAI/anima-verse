@@ -7,9 +7,9 @@ Storage: world.db Tabelle `secrets` (pro Welt).
 """
 import json
 import uuid
-from datetime import datetime
 
-from app.core.timeutils import utc_now_iso
+from app.core.timeutils import utc_now_iso, game_time
+from app.core.keyed_lock import keyed_lock
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
@@ -26,7 +26,15 @@ SEVERITY_LABELS = {
 }
 
 VALID_CATEGORIES = ("personal", "relationship", "location", "criminal")
-VALID_SOURCES = ("manual", "generated", "discovered", "event", "conversation")
+VALID_SOURCES = ("manual", "generated", "discovered", "event", "conversation", "record")
+
+KNOWN_PER_OWNER = 3
+KNOWN_TOTAL = 8
+
+
+def is_record(secret: dict) -> bool:
+    """Whether a secret mirrors a written record."""
+    return secret.get("source") == "record"
 
 
 def _row_to_secret(row) -> Dict[str, Any]:
@@ -57,6 +65,8 @@ def _row_to_secret(row) -> Dict[str, Any]:
             pass
         meta.setdefault("known_by", vis.get("known_by", []) if isinstance(vis, dict) else [])
         meta.setdefault("discovered_by", vis.get("discovered_by", []) if isinstance(vis, dict) else [])
+    meta.setdefault("source_ref", "")
+    meta.setdefault("known_at", {})
     return meta
 
 
@@ -151,103 +161,122 @@ def add_secret(character_name: str,
     related_location: Optional[str] = None,
     consequences_if_revealed: str = "",
     source: str = "manual",
-    known_by: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Erstellt ein neues Geheimnis fuer einen Character."""
-    if category not in VALID_CATEGORIES:
-        category = "personal"
-    severity = max(1, min(5, severity))
-    if source not in VALID_SOURCES:
-        source = "manual"
+    known_by: Optional[List[str]] = None,
+    source_ref: str = "") -> Dict[str, Any]:
+    """Create a secret for a character."""
+    with keyed_lock("secrets", character_name):
+        if category not in VALID_CATEGORIES:
+            category = "personal"
+        severity = max(1, min(5, severity))
+        if source not in VALID_SOURCES:
+            source = "manual"
 
-    secrets = _load_secrets(character_name)
-    now = utc_now_iso()
+        secrets = _load_secrets(character_name)
+        now = utc_now_iso()
 
-    secret = {
-        "id": f"sec_{uuid.uuid4().hex[:8]}",
-        "content": content.strip(),
-        "category": category,
-        "severity": severity,
-        "known_by": known_by or [],
-        "discovered_by": [],
-        "created_at": now,
-        "discovered_at": None,
-        "source": source,
-        "related_characters": related_characters or [],
-        "related_location": related_location or None,
-        "consequences_if_revealed": consequences_if_revealed.strip(),
-    }
+        secret = {
+            "id": f"sec_{uuid.uuid4().hex[:8]}",
+            "content": content.strip(),
+            "category": category,
+            "severity": severity,
+            "known_by": known_by or [],
+            "discovered_by": [],
+            "created_at": now,
+            "discovered_at": None,
+            "source": source,
+            "source_ref": source_ref,
+            "known_at": {},
+            "related_characters": related_characters or [],
+            "related_location": related_location or None,
+            "consequences_if_revealed": consequences_if_revealed.strip(),
+        }
 
-    secrets.append(secret)
-    _save_secrets(character_name, secrets)
-    logger.info("Secret erstellt: %s fuer %s (severity=%d, category=%s)",
-                secret["id"], character_name, severity, category)
-    return secret
+        secrets.append(secret)
+        _save_secrets(character_name, secrets)
+        logger.info("Secret erstellt: %s fuer %s (severity=%d, category=%s)",
+                    secret["id"], character_name, severity, category)
+        return secret
 
 
 def update_secret(character_name: str,
     secret_id: str,
     updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Aktualisiert ein bestehendes Geheimnis."""
-    secrets = _load_secrets(character_name)
-    for s in secrets:
-        if s.get("id") == secret_id:
-            # Erlaubte Felder aktualisieren
-            allowed = {
-                "content", "category", "severity", "known_by", "discovered_by",
-                "related_characters", "related_location", "consequences_if_revealed",
-                "discovered_at", "source",
-            }
-            for key, value in updates.items():
-                if key in allowed:
-                    s[key] = value
-            # Validierung
-            if s.get("category") not in VALID_CATEGORIES:
-                s["category"] = "personal"
-            s["severity"] = max(1, min(5, s.get("severity", 2)))
-            _save_secrets(character_name, secrets)
-            logger.info("Secret aktualisiert: %s", secret_id)
-            return s
-    return None
+    """Update editable fields of an existing secret."""
+    with keyed_lock("secrets", character_name):
+        secrets = _load_secrets(character_name)
+        for s in secrets:
+            if s.get("id") == secret_id:
+                # Update allowed fields.
+                allowed = {
+                    "content", "category", "severity", "known_by", "discovered_by",
+                    "related_characters", "related_location", "consequences_if_revealed",
+                    "discovered_at", "source",
+                }
+                for key, value in updates.items():
+                    if key in allowed:
+                        s[key] = value
+                # Validate editable values.
+                if s.get("category") not in VALID_CATEGORIES:
+                    s["category"] = "personal"
+                s["severity"] = max(1, min(5, s.get("severity", 2)))
+                _save_secrets(character_name, secrets)
+                logger.info("Secret aktualisiert: %s", secret_id)
+                return s
+        return None
 
 
 def delete_secret(character_name: str, secret_id: str) -> bool:
-    """Loescht ein Geheimnis."""
-    secrets = _load_secrets(character_name)
-    new_secrets = [s for s in secrets if s.get("id") != secret_id]
-    if len(new_secrets) < len(secrets):
-        _save_secrets(character_name, new_secrets)
-        logger.info("Secret geloescht: %s", secret_id)
-        return True
-    return False
+    """Delete a secret by id."""
+    with keyed_lock("secrets", character_name):
+        secrets = _load_secrets(character_name)
+        new_secrets = [s for s in secrets if s.get("id") != secret_id]
+        if len(new_secrets) < len(secrets):
+            _save_secrets(character_name, new_secrets)
+            logger.info("Secret geloescht: %s", secret_id)
+            return True
+        return False
 
 
 def add_known_by(character_name: str,
     secret_id: str,
     knower_name: str,
     discovered: bool = False) -> bool:
-    """Fuegt einen Character zur known_by-Liste eines Geheimnisses hinzu.
+    """Add a knower, stamping first learning with game time.
 
-    discovered=True: Character hat es selbst herausgefunden (nicht erzaehlt bekommen).
+    discovered=True marks independent discovery.
     """
-    secrets = _load_secrets(character_name)
-    for s in secrets:
-        if s.get("id") == secret_id:
-            known_by = s.get("known_by", [])
-            if knower_name not in known_by:
-                known_by.append(knower_name)
-                s["known_by"] = known_by
-            if discovered:
-                discovered_by = s.get("discovered_by", [])
-                if knower_name not in discovered_by:
-                    discovered_by.append(knower_name)
-                    s["discovered_by"] = discovered_by
-                if not s.get("discovered_at"):
-                    s["discovered_at"] = utc_now_iso()
-            _save_secrets(character_name, secrets)
-            logger.info("Secret %s: %s weiss jetzt davon (discovered=%s)",
-                        secret_id, knower_name, discovered)
-            return True
-    return False
+    with keyed_lock("secrets", character_name):
+        secrets = _load_secrets(character_name)
+        for s in secrets:
+            if s.get("id") == secret_id:
+                known_by = s.get("known_by", [])
+                if knower_name not in known_by:
+                    known_by.append(knower_name)
+                    s["known_by"] = known_by
+                    s.setdefault("known_at", {})[knower_name] = game_time().canonical()
+                if discovered:
+                    discovered_by = s.get("discovered_by", [])
+                    if knower_name not in discovered_by:
+                        discovered_by.append(knower_name)
+                        s["discovered_by"] = discovered_by
+                    if not s.get("discovered_at"):
+                        s["discovered_at"] = utc_now_iso()
+                _save_secrets(character_name, secrets)
+                logger.info("Secret %s: %s weiss jetzt davon (discovered=%s)",
+                            secret_id, knower_name, discovered)
+                return True
+        return False
+
+
+def delete_secrets_by_ref(character_name: str, source_ref: str) -> int:
+    """Delete all secrets with this exact source reference; return the count."""
+    with keyed_lock("secrets", character_name):
+        secrets = _load_secrets(character_name)
+        remaining = [s for s in secrets if s.get("source_ref", "") != source_ref]
+        count = len(secrets) - len(remaining)
+        if count:
+            _save_secrets(character_name, remaining)
+        return count
 
 
 # --- Secrets fuer andere Characters (was dieser Character ueber andere weiss) ---
@@ -278,21 +307,35 @@ def get_known_secrets_about(observer_name: str) -> List[Dict[str, Any]]:
 # --- Prompt-Injection ---
 
 def build_secrets_prompt_section(character_name: str) -> str:
-    """Baut den Secrets-Abschnitt fuer den System-Prompt.
+    """Build own secrets and a bounded list of recently learned secrets."""
+    own_secrets = [s for s in list_secrets(character_name) if not is_record(s)]
+    # Learning stamps precede legacy entries; creation time orders the latter.
+    def learned_order(entry):
+        secret = entry["secret"]
+        stamp = secret.get("known_at", {}).get(character_name)
+        return (bool(stamp), stamp or secret.get("created_at") or "")
 
-    Zwei Teile:
-    1. Eigene Geheimnisse des Characters
-    2. Was der Character ueber andere weiss
-    """
-    own_secrets = list_secrets(character_name)
-    known_about_others = get_known_secrets_about(character_name)
+    candidates = sorted(get_known_secrets_about(character_name),
+                        key=learned_order, reverse=True)
+    known_about_others = []
+    counts = {}
+    for entry in candidates:
+        owner = entry["secret_owner"]
+        if not (entry["secret"].get("content") or "").strip():
+            continue
+        if counts.get(owner, 0) >= KNOWN_PER_OWNER:
+            continue
+        known_about_others.append(entry)
+        counts[owner] = counts.get(owner, 0) + 1
+        if len(known_about_others) >= KNOWN_TOTAL:
+            break
 
     if not own_secrets and not known_about_others:
         return ""
 
     parts = []
 
-    # Eigene Geheimnisse
+    # Own secrets
     if own_secrets:
         lines = []
         for s in own_secrets:
@@ -314,7 +357,7 @@ def build_secrets_prompt_section(character_name: str) -> str:
             + "\n".join(lines)
         )
 
-    # Was dieser Character ueber andere weiss
+    # Secrets known about others
     if known_about_others:
         lines = []
         for entry in known_about_others:
