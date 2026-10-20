@@ -347,6 +347,8 @@ async def act_route(character_name: str, request: Request) -> Dict[str, Any]:
 
         from app.core.act_engine import perform_act
         result = await perform_act(character_name, text, scope)
+        if result.get("busy"):
+            raise HTTPException(status_code=409, detail=result.get("summary", ""))
 
         return {
             "status": "success",

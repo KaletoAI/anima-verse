@@ -303,7 +303,8 @@ def check_call() -> int:
 
 
 def check_callsite() -> int:
-    """perform_act must pass every parameter _run_storyteller_agent declares."""
+    """_perform_act (the pipeline body behind perform_act's one-act-per-actor
+    guard) must pass every parameter _run_storyteller_agent declares."""
     tree = ast.parse(TARGET.read_text(encoding="utf-8"), filename=str(TARGET))
     sig, call = None, None
     for node in tree.body:
@@ -320,7 +321,7 @@ def check_callsite() -> int:
                     if d is not None:
                         required.discard(x.arg)
                 sig = required
-            if node.name == "perform_act":
+            if node.name == "_perform_act":
                 for sub in ast.walk(node):
                     if (isinstance(sub, ast.Call)
                             and isinstance(sub.func, ast.Name)
@@ -333,9 +334,9 @@ def check_callsite() -> int:
         return 1
     missing = sig - call
     if missing:
-        print(f"FAIL: perform_act does not pass {sorted(missing)} to {CRITICAL}")
+        print(f"FAIL: _perform_act does not pass {sorted(missing)} to {CRITICAL}")
         return 1
-    print(f"PASS: perform_act passes all {len(sig)} required parameters "
+    print(f"PASS: _perform_act passes all {len(sig)} required parameters "
           f"of {CRITICAL}")
     return 0
 

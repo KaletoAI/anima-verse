@@ -27,6 +27,7 @@ Input JSON (when called by tool-LLM):
 """
 import json
 import re
+import threading
 from datetime import datetime, timedelta
 
 from app.core.timeutils import utc_now, game_time
@@ -86,7 +87,42 @@ def _coerce_to_dict(raw):
 # ---------------------------------------------------------------------------
 
 
+# Actors whose action is being narrated right now. A second act of the same
+# actor while the first is still running is refused: the storyteller's own
+# tool LLM may hand the action it was asked to narrate straight back to the
+# Act verb, and that nested act would wait for the very lane the outer
+# storyteller turn still holds (one-lane pool = stalled until the stale-chat
+# cleanup, then the same again, endlessly). A threading lock, not an asyncio
+# one: the Act verb runs the nested pipeline under its own event loop in a
+# pool thread.
+_ACTING: set = set()
+_ACTING_LOCK = threading.Lock()
+
+
 async def perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
+    """Run the full Storyteller pipeline for an action — one at a time per
+    actor (see ``_ACTING``); a refused call returns ``busy=True`` and runs
+    no LLM at all."""
+    with _ACTING_LOCK:
+        busy = actor in _ACTING
+        if not busy:
+            _ACTING.add(actor)
+    if busy:
+        logger.warning("Act refused for %s: an earlier action of %s is still "
+                       "being narrated (no nested acts)", actor, actor)
+        return {"narration": "", "resolved": False, "event_id": None,
+                "tools_fired": [], "busy": True,
+                "summary": (f"Action not performed: {actor}'s previous action "
+                            f"is still being narrated — an action cannot "
+                            f"trigger another action.")}
+    try:
+        return await _perform_act(actor, text, scope)
+    finally:
+        with _ACTING_LOCK:
+            _ACTING.discard(actor)
+
+
+async def _perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
     """Run the full Storyteller pipeline for an action.
 
     Async — uses ``StreamingAgent`` so the configured chat mode (rp_first /
