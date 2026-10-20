@@ -76,7 +76,8 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     from app.core.perception import prompt_place
     from app.models.character import (
         get_character_profile, get_character_current_location,
-        get_character_language, get_character_language_instruction)
+        get_character_language, get_character_language_instruction,
+        get_effective_activity)
 
     profile = get_character_profile(character_name)
     # Same language source the localized room names below use — the season
@@ -106,9 +107,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "room_name": get_room_name(location_id, room_id, lang) if location_id and room_id else "",
         # DISPLAY text, not a render key: the sanitized flavor if there is
         # one, else the bare catalog key. Cleaned and capped at the write path.
-        "activity": ("Sleeping" if profile.get("is_sleeping")
-                     else (profile.get("pose_flavor")
-                           or profile.get("pose_key") or "")) or "None",
+        "activity": get_effective_activity(character_name, profile=profile) or "None",
         "feeling": (profile.get("current_feeling", "") or "Neutral"),
         "time_of_day": now_game.time_hhmm(),   # game clock, HH:MM
         # In-world calendar date ("Summer, day 17 · Year 3") — the character
@@ -978,7 +977,16 @@ def _build_tracker_block(character_name: str, current_location_id: str) -> str:
         return ""
 
 
-def present_people_details(entries, location_id: str = "") -> str:
+def _visible_activity(name: str) -> str:
+    """What a present person is visibly doing (the same display rule as the
+    own activity, ``get_effective_activity``), capped at 80 characters."""
+    from app.models.character import get_effective_activity
+    activity = get_effective_activity(name)
+    return activity[:80] + "…" if len(activity) > 80 else activity
+
+
+def present_people_details(entries, location_id: str = "",
+                           with_activity: bool = False) -> str:
     """Visible-detail lines for present characters — worn outfit (short)
     plus visibly triggered states. ``entries`` = [(name, display_label)].
     Shared by the thought context AND the chat system prompt (R5): what a
@@ -1005,6 +1013,10 @@ def present_people_details(entries, location_id: str = "") -> str:
                 details.append("visibly " + ", ".join(states[:4]))
         except Exception:
             pass
+        if with_activity:
+            activity = _visible_activity(n)
+            if activity:
+                details.append("doing: " + activity)
         lines.append(f"- {label}" + (f": {'; '.join(details)}" if details else ""))
     return "\n".join(lines)
 
@@ -1059,7 +1071,8 @@ def _build_presence(character_name: str, location_id: str,
         elsewhere = [
             f"- {n} (avatar) — in: {room}" if n == avatar else f"- {n} — in: {room}"
             for n, room in elsewhere_pairs]
-        room_block = present_people_details(here[:8], location_id) if here else ""
+        room_block = present_people_details(
+            here[:8], location_id, with_activity=True) if here else ""
         return room_block, "\n".join(elsewhere[:8]), not here
     except Exception as e:
         logger.debug("present_people block failed for %s: %s", character_name, e)

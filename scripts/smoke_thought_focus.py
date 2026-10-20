@@ -13,6 +13,9 @@ An isolated rut waits 20 SYSTEM minutes after its last turn; a bump bypasses
 that wait, zero disables it, company/unknown presence prevents it, and a
 broken rut releases it. These checks catch missing cleanup, incorrect window
 or place comparisons, a sliding rest deadline and cooldown applied to bumps.
+Presence: flavor is last after appearance and states; sleep overrides flavor,
+pose_key is the fallback, no pose adds nothing, 100 chars become 80 plus …,
+and the default chat path omits activity. Expectations are derived by hand.
 All database imports follow paths.init in a temporary directory.
 """
 import sys
@@ -34,6 +37,26 @@ from jinja2 import meta
 
 
 class Focus(unittest.TestCase):
+    def test_presence_activity(self):
+        cases = [
+            ({"pose_flavor": "Schläft auf der Bank"}, "Schläft auf der Bank"),
+            ({"is_sleeping": True, "pose_flavor": "ignored"}, "Sleeping"),
+            ({"pose_key": "sitting"}, "sitting"), ({}, ""),
+            ({"pose_flavor": "x" * 100}, "x" * 80 + "…"),
+        ]
+        for profile, expected in cases:
+            with self.subTest(profile=profile), \
+                    patch("app.models.character.get_character_profile", return_value=profile), \
+                    patch("app.core.scene_render._appearance_text", return_value="appearance"), \
+                    patch("app.core.prompt_filters.triggered_state_labels", return_value=["calm"]), \
+                    patch.object(tc, "_room_presence", return_value=(["Lukas"], [])), \
+                    patch("app.models.account.get_active_character", return_value=""):
+                base = "- Lukas: appearance; visibly calm"
+                block, elsewhere, alone = tc._build_presence("Kira", "demo", "room")
+                self.assertEqual(block, base + ("; doing: " + expected if expected else ""))
+                self.assertEqual((elsewhere, alone), ("", False))
+                self.assertEqual(tc.present_people_details([("Lukas", "Lukas")]), base)
+
     def test_decisions(self):
         names = meta.find_undeclared_variables(_env.parse(
             _env.loader.get_source(_env, "chat/agent_thought.md")[0]))

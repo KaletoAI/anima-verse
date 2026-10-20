@@ -214,7 +214,7 @@ class TalkToSkill(PluginSkill):
             from app.core.agent_loop import get_agent_loop
             if not get_agent_loop().bump_respond(
                     target_name, speaker=sender_name, content=message,
-                    volume=volume or "normal", obligatory=True):
+                    volume=volume or "normal", obligatory=True, cascade=False):
                 self.ctx.logger.info(
                     "TalkTo: %s cannot answer on its own (player-controlled)",
                     target_name)

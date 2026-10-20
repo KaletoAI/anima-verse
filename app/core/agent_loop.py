@@ -402,9 +402,7 @@ class AgentLoop:
             logger.debug("AgentLoop.bump skipped: %s ineligible", character_name)
             return False
         if hint:
-            existing = self._bump_hints.get(character_name, "")
-            self._bump_hints[character_name] = (
-                existing + "\n" + hint if existing else hint)
+            self.add_hint(character_name, hint)
         if perception_template:
             self._bump_perception[character_name] = {
                 "template": perception_template,
@@ -418,6 +416,16 @@ class AgentLoop:
                     character_name,
                     " (with hint)" if hint else "",
                     f" (perception={perception_template})" if perception_template else "")
+        return True
+
+    def add_hint(self, character_name: str, hint: str) -> bool:
+        """Append context for the next ordinary thought without queue priority."""
+        if not character_name or not _is_agent_eligible(character_name):
+            return False
+        if hint:
+            existing = self._bump_hints.get(character_name, "")
+            self._bump_hints[character_name] = (
+                existing + "\n" + hint if existing else hint)
         return True
 
     @staticmethod
@@ -438,7 +446,8 @@ class AgentLoop:
                      content: str, volume: str = "normal",
                      obligatory: bool = True, hint: str = "",
                      winding_down: bool = False,
-                     on_demand: bool = False, request_id: str = "") -> bool:
+                     on_demand: bool = False, request_id: str = "",
+                     cascade: bool = True) -> bool:
         """Phase 3: character should react to a room utterance of the speaker.
 
         Unlike ``bump`` (thoughts/perception) this triggers a VISIBLE chat
@@ -471,7 +480,7 @@ class AgentLoop:
             "speaker": speaker, "content": content,
             "volume": volume, "obligatory": obligatory,
             "hint": hint, "winding_down": winding_down, "on_demand": on_demand,
-            "request_id": request_id,
+            "request_id": request_id, "cascade": cascade,
         }
         # Mandatory answers go to the FRONT (the lane pops FIFO) so they
         # never starve behind chime opportunities — otherwise the scene can
@@ -1652,20 +1661,26 @@ class AgentLoop:
             except Exception as e:
                 logger.error("respond-turn %s: record_utterance failed: %s",
                              character_name, e)
-            # Cascade: this AI utterance consumes a hop (decay) and gives the
-            # remaining characters present a Chime opportunity — until the
-            # Backstop kicks in. This is how emergent NPC↔NPC conversations
-            # arise and ebb away.
-            try:
-                key = self._room_key(_loc, _room, character_name)
-                self._room_ai_turns[key] = self._room_ai_turns.get(key, 0) + 1
-                self.dispatch_room_reactions(
-                    speaker=character_name, content=reply, volume=_reply_vol,
-                    location_id=_loc, room_id=_room,
-                    addressees=[speaker] if speaker else [], is_avatar=False)
-            except Exception as e:
-                logger.debug("respond-turn %s: cascade dispatch failed: %s",
-                             character_name, e)
+            if not respond.get("cascade", True):
+                clipped = reply[:300] + "…" if len(reply) > 300 else reply
+                self.add_hint(
+                    speaker,
+                    f'{character_name} answered what you said to them: "{clipped}"')
+            else:
+                # Cascade: this AI utterance consumes a hop (decay) and gives the
+                # remaining characters present a Chime opportunity — until the
+                # Backstop kicks in. This is how emergent NPC↔NPC conversations
+                # arise and ebb away.
+                try:
+                    key = self._room_key(_loc, _room, character_name)
+                    self._room_ai_turns[key] = self._room_ai_turns.get(key, 0) + 1
+                    self.dispatch_room_reactions(
+                        speaker=character_name, content=reply, volume=_reply_vol,
+                        location_id=_loc, room_id=_room,
+                        addressees=[speaker] if speaker else [], is_avatar=False)
+                except Exception as e:
+                    logger.debug("respond-turn %s: cascade dispatch failed: %s",
+                                 character_name, e)
         elif obligatory:
             # The mandatory answer came back EMPTY (LLM SKIP/refusal) → make it
             # visible; otherwise it looks like "ignored" (no-answer bug).
