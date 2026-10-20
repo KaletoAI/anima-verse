@@ -208,6 +208,20 @@ def _put_groups_sync(body: Any) -> Dict[str, Any]:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
 
 
+def _entry_labels(body: Dict[str, Any]) -> Dict[str, str]:
+    """Validate optional editor labels before changing a stored entry."""
+    labels = {}
+    for field in ("label", "label_de"):
+        if field not in body:
+            continue
+        value = body[field]
+        if not isinstance(value, str) or len(value.strip()) > 80:
+            raise HTTPException(status_code=400,
+                                detail=f"{field} must be a string of at most 80 characters")
+        labels[field] = value.strip()
+    return labels
+
+
 @router.get("")
 def list_entries(axis: str = Query("pose"),
                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
@@ -230,6 +244,9 @@ def list_entries(axis: str = Query("pose"),
             "store": entry.get("_store", "shared"),
         }
         if axis == "pose":
+            row["label"] = entry.get("label", "")
+            row["label_de"] = entry.get("label_de", "")
+            row["label_de_missing"] = not row["solo"] and not row["label_de"]
             # Place fields are POSE vocabulary — an expression has no place.
             # Read through the ACCESSORS, never off the entry: a solo pose has
             # no stored places/yaw_offset, and a raw `.get(..., 2)` would tell
@@ -288,6 +305,7 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
         animation = str(body.get("animation") or "").strip().lower()
         if axis == "pose" and not animation:
             raise HTTPException(status_code=400, detail="animation missing")
+        labels = _entry_labels(body) if axis == "pose" else {}
         group = validate_group(body.get("group")) if axis == "pose" else ""
         # A new entry defaults to the TRACKED catalog; the importer of a licensed
         # clip asks for "world" so its name never reaches a committed file.
@@ -301,6 +319,7 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
 
             entry: Dict[str, Any] = {"prompt": prompt, "synonyms": synonyms}
             if axis == "pose":
+                entry.update({field: value for field, value in labels.items() if value})
                 entry["animation"] = animation
                 entry["solo"] = bool(body.get("solo", True))
                 entry["group"] = group
@@ -450,6 +469,7 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
     try:
         axis = _axis(axis)
         key = key.strip().lower()
+        labels = _entry_labels(body) if axis == "pose" else {}
         with catalog_txn(axis):
             was = store_of(axis, key)
             # An entry may MOVE between the tracked catalog and the world layer
@@ -460,6 +480,11 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
             entry = data["entries"].get(key)
             if entry is None:
                 raise HTTPException(status_code=404, detail="Entry not found")
+            for field, value in labels.items():
+                if value:
+                    entry[field] = value
+                else:
+                    entry.pop(field, None)
             if "prompt" in body:
                 entry["prompt"] = str(body["prompt"] or "").strip()
             if "synonyms" in body:

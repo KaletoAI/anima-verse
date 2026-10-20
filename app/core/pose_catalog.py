@@ -346,6 +346,10 @@ def _load(axis: str) -> Dict[str, dict]:
             "_store": origin.get(key, "shared"),
         }
         if axis == "pose":
+            norm["label"] = str(entry.get("label") or "").strip()
+            norm.update({field: str(value or "").strip()
+                         for field, value in entry.items()
+                         if field.startswith("label_")})
             # Place types are POSE vocabulary — an expression has no place.
             # plan-posen-plaetze.md § 3.2: the PLACE TYPE the pose needs.
             norm["group"] = str(entry.get("group") or "").strip().lower()
@@ -360,6 +364,17 @@ def _load(axis: str) -> Dict[str, dict]:
                                                    or "yaw_offset" in entry)
         out[str(key).strip().lower()] = norm
     return out
+
+
+def pose_label(key: str, lang: str = "en") -> str:
+    """Return a localized pose label, or the stripped key on any failure."""
+    fallback = key.strip()
+    try:
+        from app.core.i18n import localized
+        entry = get_catalog("pose").get(fallback.lower())
+        return localized(entry, "label", lang) or fallback
+    except Exception:
+        return fallback
 
 
 def _load_groups() -> Dict[str, dict]:

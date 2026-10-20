@@ -294,6 +294,7 @@ by this invitation identity before the intent's start receipt is written.
 | `get_effective_pose_key(character_name, profile=None)` / `get_effective_activity(character_name, profile=None)` | Render-Key bzw. Anzeigetext, beide inkl. Schlaf-Override |
 | `app.core.pose_catalog.split_key_detail(text, axis='pose') -> (key, detail)` | Zerlegt eine `key: detail`-Eingabe |
 | `app.core.pose_catalog.resolve_to_catalog(text, axis, _embed=None) -> (key, detail)` | Freitext auf den Katalog abbilden (Embedding-Match mit Alias-Fallback) |
+| `app.core.pose_catalog.pose_label(key, lang="en") -> str` | Returns the localized pose label (`label_<lang>`, then `label`), falling back to the stripped key. Lookup ignores key case; unknown keys and catalog failures never raise. |
 | `app.core.pose_catalog.PairPoseWithoutPartner` | Exception: eine Paar-Pose ohne Partner — das Verb muss sie abfangen und den Nutzer/Charakter auf das Einladungs-Verb verweisen |
 
 ## Instagram — `app.models.instagram` ✅ (instagram-Paket)
@@ -760,7 +761,7 @@ Unknown fallback parents are dropped with a warning. Prefer the `llm_tasks`
 manifest mapping, which calls this API during parsing.
 
 `app.core.llm_tasks.plugin_task_fallback(task_id: str) -> Optional[str]` returns
-the declared parent. Routing consumers use `llm_router.fallback_parent(task)`
+the declared parent. Routing consumers use `app.core.llm_router.fallback_parent(task)`
 so declared parents and built-in routing rules stay in one place.
 
 ## Perception window reader

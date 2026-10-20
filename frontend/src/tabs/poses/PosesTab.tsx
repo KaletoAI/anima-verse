@@ -116,6 +116,9 @@ interface PlaceType {
 interface Entry {
   key: string
   prompt: string
+  label?: string
+  label_de?: string
+  label_de_missing?: boolean
   synonyms: string[]
   animation: string
   solo: boolean
@@ -174,7 +177,7 @@ function suggestedPlaces(span: number | undefined): 1 | 2 | undefined {
 }
 
 const EMPTY: Entry = { key: '', prompt: '', synonyms: [], animation: '', solo: true,
-  group: '', store: 'shared' }
+  group: '', store: 'shared', label: '', label_de: '' }
 
 /** Figure height the root drop is read back against — the reference figure of
  *  every metre readout in the admin UI. */
@@ -526,6 +529,7 @@ export function PosesTab() {
         key,
         prompt: draft.prompt,
         synonyms: draft.synonyms,
+        ...(isPose ? { label: draft.label || '', label_de: draft.label_de || '' } : {}),
         store: draft.store || 'shared',
         ...(isPose
           ? {
@@ -1095,6 +1099,9 @@ export function PosesTab() {
                       {t('pair')}
                     </span>
                   ) : null}
+                  {isPose && p.label_de_missing ? (
+                    <span className="ga-source">{t('No German label')}</span>
+                  ) : null}
                   {p.is_default ? <span className="ga-source">{t('default')}</span> : null}
                   {p.store === 'world'
                     ? <span className="ga-source">{t('world')}</span> : null}
@@ -1314,6 +1321,19 @@ export function PosesTab() {
                     onChange={(next) => upd('synonyms', next)}
                   />
                 </Field>
+
+                {isPose && <>
+                  <Field label={t('Label (en)')}
+                    hint={t('Gerund phrase, e.g. “dancing”. Empty = the key.')}>
+                    <input className="ga-input" maxLength={80} value={draft.label || ''}
+                      onChange={(e) => upd('label', e.target.value)} />
+                  </Field>
+                  <Field label={t('Label (de)')}
+                    hint={t('Noun form, e.g. “Tanzen”. Used in German sentences.')}>
+                    <input className="ga-input" maxLength={80} value={draft.label_de || ''}
+                      onChange={(e) => upd('label_de', e.target.value)} />
+                  </Field>
+                </>}
 
                 <Field
                   label={t('Stored in')}

@@ -1843,7 +1843,12 @@ def play_interact_options(user=Depends(get_current_user)):
     from app.core.interaction_engine import partner_poses
     if not get_provider("pair_verb_name"):
         return {"poses": []}
-    return {"poses": [{"key": k, "kind": kind} for k, kind in partner_poses()]}
+    from app.core.pose_catalog import pose_label
+    from app.models.character import get_character_language
+    from app.models.account import get_active_character
+    lang = get_character_language(get_active_character() or "")
+    return {"poses": [{"key": k, "kind": kind, "label": pose_label(k, lang)}
+                      for k, kind in partner_poses()]}
 
 
 @router.post("/play/interact")

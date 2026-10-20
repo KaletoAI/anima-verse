@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory(prefix="diary-sources-") as tmp:
     os.environ["INSTANCE_DIR"] = str(Path(tmp) / "instance")
     from app.core import paths
     paths.init(tmp)
-    paths.init_instance(os.environ["INSTANCE_DIR"])
+    paths.init_instance(Path(tmp) / "instance")
     from app.core import config, db
     config.load(Path(tmp) / "config.json")
     db.init_schema()
