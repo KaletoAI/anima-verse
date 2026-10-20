@@ -1,0 +1,18 @@
+name: read_item
+version: "1.0.0"
+description: Read a written item privately in the current room
+enabled_default: true
+
+skills:
+  - skill_id: read_item
+    always_load: true
+    default_enabled: true
+
+templates:
+  llm: templates/llm
+
+config_schema:
+  read_item:
+    label: ReadItem
+    fields:
+      enabled: {type: bool, label: Enabled, default: true}
