@@ -275,7 +275,7 @@ SECTIONS = {
                 # slot (how many prompt beginnings it holds at once), not a
                 # sampling setting.
                 "fields": ["name", "preload_on_startup", "provider",
-                           "model", "max_concurrent", "temperature",
+                           "model", "max_concurrent", "accepts_overflow", "temperature",
                            "max_tokens", "chat_template", "tasks"],
                 # Rendered as a click toggle in the collapsed entry header
                 # instead of inside the accordion body.
@@ -331,6 +331,12 @@ SECTIONS = {
                 "max": 16,
                 "description": "Lanes belong to the MODEL, not to this entry: every entry on the same provider+model (e.g. one per temperature) runs on ONE shared set of lanes, so this is one number for all of them — changing it here changes it on the others too. It is how many calls the model runs at the same time. Each lane is one serialized slot that remembers the prompt beginning it last served, and a new call prefers the lane that already holds its own beginning — so two alternating conversations keep their prompt caches instead of evicting each other. 1 = strictly one call after another. Raise it only as far as the backend really serves in parallel: more lanes mean more different prompt beginnings at once, and the backend drops the oldest cache. What the lanes are doing right now is on /admin/agent-loop.",
             },
+            "accepts_overflow": {
+                "type": "bool",
+                "label": "Accepts Overflow",
+                "default": True,
+                "description": "Background calls from a full model higher up a task's chain may move here. Switch off for rate-limited or paid models. The entry still serves as a regular choice either way.",
+            },
             "max_tokens": {"type": "int", "label": "Max Tokens", "min": 0, "max": 200000, "placeholder": "provider default", "hide_for_embedding": True, "description": "Completion budget per request. For thinking models (GLM, DeepSeek-R1, …) the HIDDEN reasoning tokens count against it — too small a value cuts the visible answer mid-output. Empty = no cap sent (provider default)."},
             "chat_template": {
                 "type": "text",
@@ -347,8 +353,8 @@ SECTIONS = {
     # Cache lanes — the global timings of the assignment rules
     # (development_instructions/plan-cache-lanes.md § 5). HOW MANY lanes a
     # model has is one number per provider+model (LLM Routing › LLMs › Lanes,
-    # shared by every entry on that model); these three
-    # decide who gets one when they are scarce. All of them are SYSTEM time.
+    # shared by every entry on that model); these timings
+    # decide who gets one when they are scarce and when work may overflow. All of them are SYSTEM time.
     "lanes": {
         "label": "Cache Lanes",
         "icon": "🛣️",
@@ -377,6 +383,14 @@ SECTIONS = {
                 "min": 0,
                 "max": 3600,
                 "description": "After this long in the waiting list a call counts one priority class higher when the next lane is handed out (LOW → NORMAL → HIGH → CHAT). That is what keeps background work from starving behind a busy chat. 0 = no ageing.",
+            },
+            "overflow_after_seconds": {
+                "type": "int",
+                "label": "Overflow After (s)",
+                "default": 60,
+                "min": 0,
+                "max": 3600,
+                "description": "How long a BACKGROUND call (anything not of the chat class — thoughts, tool calls, storyteller, helpers) waits for a lane before it moves to the next model of its routing chain that accepts overflow and has a free lane. A call that would land on a pool that is already full with waiters moves at once. Chats never move. 0 = off.",
             },
         },
     },

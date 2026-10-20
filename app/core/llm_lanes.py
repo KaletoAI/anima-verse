@@ -80,10 +80,13 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from app.core.llm_queue import Priority
 from app.core.log import get_logger
+
+if TYPE_CHECKING:
+    from app.core.llm_router import LLMInstance
 
 logger = get_logger("llm_lanes")
 
@@ -112,6 +115,38 @@ class LaneTimeout(TimeoutError):
     catches exactly this one to put its task back unchanged, instead of
     parking a worker thread on a pool that is not even its own.
     """
+
+
+@dataclass(frozen=True)
+class Overflow:
+    """Pools a call already left, keeping its first origin for logging."""
+    left: frozenset = frozenset()
+    origin: str = ""
+
+    def leaving(self, pool_key: str) -> "Overflow":
+        return Overflow(self.left | {pool_key}, self.origin or pool_key)
+
+
+class LaneWaitExpired(Exception):
+    """A bounded lane wait ended without losing its arrival stamp."""
+
+    def __init__(self, arrived: float):
+        super().__init__(arrived)
+        self.arrived = arrived
+
+
+class LaneWaitCancelled(Exception):
+    """The caller abandoned its lane wait."""
+
+
+class LaneOverflow(Exception):
+    """A call can continue on another instance without an upstream failure."""
+
+    def __init__(self, target: LLMInstance, overflow: Overflow, waited_s: float):
+        super().__init__(target, overflow, waited_s)
+        self.target = target
+        self.overflow = overflow
+        self.waited_s = waited_s
 
 
 # ── task classes ───────────────────────────────────────────────────────────
@@ -181,6 +216,11 @@ def task_class_for(task_type: str) -> str:
         seen.add(task)
     entry = TASK_TYPES.get(task) or {}
     return str(entry.get("cache_class") or DEFAULT_CACHE_CLASS)
+
+
+def is_background(task_type: str) -> bool:
+    """Whether the call belongs to a prompt class other than chat."""
+    return task_class_for(task_type) != "chat"
 
 
 def cache_key_for(task_type: str, agent_name: str = "") -> str:
@@ -275,7 +315,7 @@ def configured_lane_count(pool_key: str) -> int:
 
 @dataclass(frozen=True)
 class LaneRules:
-    """The three global lane timings (plan § 5, config section ``lanes``).
+    """The global lane timings (plan § 5, config section ``lanes``).
 
     Seconds on the MANAGER's clock — SYSTEM time, like every other queue
     timing. They are read live (see ``configured_lane_rules``), so an admin
@@ -284,6 +324,7 @@ class LaneRules:
     affinity_wait: float = 3.0       # R3
     conversation_hold: float = 120.0  # R4
     wait_upgrade: float = 60.0       # R2
+    overflow_after: float = 60.0
 
 
 def configured_lane_rules() -> LaneRules:
@@ -305,6 +346,8 @@ def configured_lane_rules() -> LaneRules:
                                                 defaults.conversation_hold)),
             wait_upgrade=float(section.get("wait_upgrade_seconds",
                                            defaults.wait_upgrade)),
+            overflow_after=float(section.get("overflow_after_seconds",
+                                             defaults.overflow_after)),
         )
     except Exception as e:  # pragma: no cover - config must never break a call
         logger.debug("lane rules not readable: %s", e)
@@ -482,6 +525,7 @@ class LaneManager:
         self._cond = threading.Condition()
         self._pools: Dict[str, _Pool] = {}
         self._ticket = 0
+        self._overflow_counts: Dict[str, Dict[str, int]] = {}
 
     # -- public API --------------------------------------------------------
 
@@ -727,6 +771,31 @@ class LaneManager:
             if pool.reservations.pop(cache_key, None) is not None:
                 self._cond.notify_all()
 
+    def pool_saturated(self, pool_key: str) -> bool:
+        """Every lane busy and at least one full round of callers waiting —
+        the resolve-time overflow test (plan-lane-overflow.md § 4).
+
+        It sees only callers parked in ``pool.waiting`` (streaming
+        registrations, nested waits). A queued task asks with ``timeout=0``
+        and sits in its worker's deferred list instead, so a pool backed up
+        with queued work alone does not count here; that work overflows by
+        its wait instead. An unknown pool is not saturated and is not
+        created by asking."""
+        with self._cond:
+            pool = self._pools.get(pool_key)
+            return (pool is not None and bool(pool.lanes)
+                    and all(lane.busy for lane in pool.lanes)
+                    and len(pool.waiting) >= len(pool.lanes))
+
+    def note_overflow(self, from_pool: str, to_pool: str) -> None:
+        """Count a move without bringing either pool into being."""
+        with self._cond:
+            for key, counter in ((from_pool, "overflowed_out"),
+                                 (to_pool, "overflowed_in")):
+                counts = self._overflow_counts.setdefault(
+                    key, {"overflowed_out": 0, "overflowed_in": 0})
+                counts[counter] += 1
+
     def snapshot(self) -> Dict[str, Any]:
         """State of every pool for the admin view (phase 4) and for checks.
 
@@ -754,6 +823,10 @@ class LaneManager:
                     "busy": sum(1 for x in pool.lanes if x.busy),
                     "free": sum(1 for x in pool.lanes if not x.busy),
                     "waiting": len(pool.waiting),
+                    "overflowed_out": self._overflow_counts.get(key, {}).get(
+                        "overflowed_out", 0),
+                    "overflowed_in": self._overflow_counts.get(key, {}).get(
+                        "overflowed_in", 0),
                     "lanes": [
                         {
                             "lane_id": lane.lane_id,
@@ -866,6 +939,7 @@ class LaneManager:
         """Drops all pools — for checks only."""
         with self._cond:
             self._pools.clear()
+            self._overflow_counts.clear()
             self._cond.notify_all()
 
     # -- internals ---------------------------------------------------------
