@@ -71,6 +71,7 @@ from app.core.room_recipe import (SHARE_TOL_M, _WALKABLE_TYPES,
 # same one) — imported, never copied. ``world_geometry`` pulls in nothing of
 # ours, so this stays a plain module import.
 from app.core.world_geometry import point_segment_distance
+from app.core import furnish_findings
 
 logger = get_logger(__name__)
 
@@ -2300,9 +2301,14 @@ def _problems(location: Dict[str, Any], map3d: Dict[str, Any],
         })
     # Openings drawn into a room whose walls are off: the recipe carries them,
     # but no wall is ever split there, so nothing of them is built.
+    # Only the room's OWN openings count: a neighbour's door into an outdoor
+    # zone is mirrored into the zone's recipe (``mirrored``), but it is built
+    # in the neighbour's wall and nothing of it is lost (finding 2026-10-20,
+    # a café's terrace door).
     wall_less = [r for r in recipes
                  if (r.get("no_walls") or r.get("always_visible"))
-                 and (r.get("openings") or [])]
+                 and [op for op in (r.get("openings") or [])
+                      if not op.get("mirrored")]]
     if wall_less:
         out.append({
             "kind": "openings_without_walls",
@@ -4794,7 +4800,19 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         # editor and 3D client only display it.
         "problems": (_problems(location, map3d, shell_levels, doorways,
                                recipes, flights)
-                     + corridor_problems + hull_problems),
+                     + corridor_problems + hull_problems
+                     # WHAT THE ROOMS HOLD and WHETHER THEY CAN BE REACHED
+                     # (2026-10-20, ``furnish_findings``): measured on the
+                     # recipes, walls and thresholds built above — the
+                     # furnishing half carries ``scope: "editor"``.
+                     + furnish_findings.reachability_problems(
+                         str(location.get("id") or ""), recipes, doorways,
+                         [f["block"] for f in flights], map3d.get("elevator"),
+                         corridors)
+                     + furnish_findings.furnishing_problems(
+                         str(location.get("id") or ""), recipes, walls,
+                         doorways, map3d.get("elevator"), storey,
+                         lambda pid: _prop_record(pid, prop_cache))),
     }
     if boundary:
         out["boundary_openings"] = boundary

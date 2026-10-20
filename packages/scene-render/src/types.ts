@@ -693,6 +693,18 @@ export interface SceneProblem {
   edge?: number
   /** `elevator_outside_level_outline`: the storeys the shaft misses. */
   levels?: number[]
+  /** `'editor'` = a FURNISHING finding (`app/core/furnish_findings.py`,
+   *  2026-10-20: `prop_outside_room`, `wall_prop_on_floor`,
+   *  `wall_prop_facing_wall`, `wall_prop_off_wall`,
+   *  `ceiling_prop_through_ceiling`, `ceiling_prop_not_hanging`,
+   *  `prop_in_doorway`, `prop_in_elevator`, `prop_without_model`) — shown in
+   *  the floor-plan editor, never toasted to a player. Absent = a building
+   *  finding (`room_unreachable` among them). */
+  scope?: 'editor'
+  /** Furnishing findings: the placements concerned (`layout.props[].id`)
+   *  and their prop names, in the same order. */
+  prop_ids?: string[]
+  prop_names?: string[]
 }
 
 /** Pass-through at the LOCATION edge (§ B1 Nr. 13) — where a road enters and

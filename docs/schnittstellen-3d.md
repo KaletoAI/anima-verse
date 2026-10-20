@@ -6122,7 +6122,7 @@ stellt nur fest; **Floor-Plan-Editor und 3D-Client zeigen es an, mehr nicht**
 der stabile Schlüssel, `message` der englische Server-Satz (eine Oberfläche
 darf einen `kind`, den sie kennt, übersetzen und fällt sonst auf den Text
 zurück; Zahlen stehen NIE im `message`, sondern in eigenen Feldern, weil der
-Satz als Ganzes übersetzt wird). Hier beschrieben sind sechs — die
+Satz als Ganzes übersetzt wird). Hier beschrieben sind sieben Gebäude-Befunde und die Einrichtungsbefunde — die
 Etagen-Grundriss-Befunde stehen in § A6, `room_outside_boundary` in der
 v6-Präambel Nr. 9 und die Selbstschnitt-Warnung
 (`boundary_self_intersection`) in deren Nr. 1, wo sie ohne Namen steht:
@@ -6149,7 +6149,10 @@ v6-Präambel Nr. 9 und die Selbstschnitt-Warnung
   entstehen nirgends, während die 2D-Planzeichnung sie weiter zeigt. Ein
   wandloser Raum OHNE Öffnungen ist erlaubt (offene Zone, Pavillon) und
   bleibt still — nur die Kombination meldet sich, einmal pro Location mit
-  `room_count` der betroffenen Räume.
+  `room_count` der betroffenen Räume. Es zählen nur die EIGENEN Öffnungen des
+  Raums (2026-10-20): die Tür eines ummauerten Nachbarn in eine Terrasse wird
+  in deren Rezept gespiegelt (`mirrored`), steht aber in der Wand des
+  Nachbarn und wird gebaut.
 - **`corridor_without_floor`** (2026-09-09, § A13b) — die Räume einer Etage
   lassen ihrem Flur keine freie Fläche: der Anker fällt auf den Mittelpunkt
   des Etagengrundrisses zurück (Stufe 4 oben), Flur-Figuren stehen also
@@ -6165,6 +6168,43 @@ v6-Präambel Nr. 9 und die Selbstschnitt-Warnung
   (mehr) hat: kein Umriss, ein Index außerhalb, oder eine Kante der Länge 0.
   **Einmal je Tür**, mit `level` und der genannten `edge` — ein neu
   gezeichneter Umriss soll die Tür des Autors nicht wortlos verschlucken.
+- **`room_unreachable`** (2026-10-20, `app/core/furnish_findings.py`) — kein
+  Weg aus Schwellen, Durchgängen, Treppen (Fuß/Kopf), Fahrstuhl-Halten, Fluren
+  und Outdoor-/`no_walls`-Zonen verbindet den Raum mit draußen. Einmal **je
+  Raum** mit `room_id` und `level`. Schweigt, solange es gar keine Außentür
+  gibt — das sagt schon `no_building_entrance`.
+
+**Einrichtungsbefunde** (2026-10-20, `app/core/furnish_findings.py`) — gemessen
+an den Rezept-Platzierungen (`at`/`yaw`/`offset_y` komponiert, `dims` der
+gezeigten Variante; eine Orientierungs-Korrektur von 90°/270° um y tauscht
+Breite und Tiefe), den gebauten `walls` und den `doorways`. Sie tragen
+**`scope: "editor"`**: der Grundriss-Editor listet sie, der 3D-Client zeigt sie
+dem Spieler NICHT als Hinweis. **Einmal je Raum und Art**, mit `room_id` und
+den betroffenen Platzierungen als `prop_ids` (Platzierungs-ids) und
+`prop_names` (gleiche Reihenfolge) — Namen stehen nie in `message`. Gestreute
+Kopien und Platzierungen mit `on` zählen nur bei `prop_without_model`.
+
+- **`prop_outside_room`** — der gedrehte Fußabdruck reicht in einem ummauerten
+  Raum mehr als 0,02 m² über den Raumumriss hinaus (durch die Wand).
+  Flaches (< 0,1 m, Teppiche) zählt nicht.
+- **`wall_prop_on_floor`** — `mount: wall` unter 0,3 m und niedriger als
+  1,6 m. Kamine (`category: fireplace`), Türen und Vorhänge reichen absichtlich
+  zum Boden.
+- **`wall_prop_facing_wall`** — die Vorderseite (Modell +Z nach Yaw) zeigt
+  mehr als 30° von der Innennormalen der nächsten Wand weg, an der das Teil
+  hängt (Umrisskante, auf die sein Mittelpunkt fällt, höchstens 0,6 m + halbe
+  Tiefe entfernt).
+- **`wall_prop_off_wall`** — die Rückseite steht mehr als 0,12 m vor der
+  Wandfläche (Kante + 0,035 m), oder es gibt in Reichweite gar keine Wand.
+- **`ceiling_prop_through_ceiling`** / **`ceiling_prop_not_hanging`** —
+  `mount: ceiling`, Oberkante mehr als 0,03 m über bzw. mehr als 0,4 m unter
+  der Decke (= Wandoberkante des Raums über seinem Etagenboden).
+- **`prop_in_doorway`** — ein Bodenteil steht mehr als 0,03 m² im Meter vor
+  einer Tür oder einem Durchgang derselben Etage, auf der Seite dieses Raums.
+- **`prop_in_elevator`** — ein Bodenteil steht mehr als 0,02 m² im
+  Fahrstuhlschacht (1,8 m Kantenlänge um `map3d.elevator`).
+- **`prop_without_model`** — die Platzierung nennt eine Prop ohne Mesh oder
+  eine, die es nicht gibt: im 3D-Client steht dort nichts.
 
 **Damit wandern in den Server:** Wand-Splitting um Öffnungen inkl.
 Fenster-Brüstung/-Sturz/Glas UND Tür-Sturz als eigene `walls`-Einträge

@@ -4562,6 +4562,9 @@ async function startApp(username: string, role: string) {
     const locId = map.characters.find((c) => c.name === avatarName)?.location_id;
     if (!locId) return;
     for (const problem of scenes.get(locId)?.problems ?? []) {
+      // Furnishing findings (`scope: 'editor'`) are for the floor-plan
+      // editor, not a toast greeting the player at the door.
+      if (problem.scope === 'editor') continue;
       const key = `${locId}|${problem.kind}|${problem.room_id ?? ''}`;
       if (announcedProblems.has(key)) continue;
       announcedProblems.add(key);
