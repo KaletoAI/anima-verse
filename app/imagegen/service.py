@@ -980,9 +980,13 @@ class ImageService:
                       view_images: Optional[Dict[str, str]] = None,
                       lod_faces=None, occasion: str = "", *,
                       view_body: str = "humanoid",
+                      material: str = "", alpha: str = "",
                       hub_stage=None) -> Dict[str, Any]:
         """Generates a 3D model from one or more views via a MEDIA_TYPE=="mesh"
         backend.
+
+        ``material`` and ``alpha`` request material and basecolor-alpha modes
+        only from aliases declaring those params; empty means the alias default.
 
         ``source_image_path`` is the required main image: front for a
         humanoid, left profile for an animal (``view_body``). ``view_images``
@@ -1044,6 +1048,10 @@ class ImageService:
         # chains expose it.
         if texture_size:
             params["texture_size"] = int(texture_size)
+        if material:
+            params["material"] = material
+        if alpha:
+            params["alpha"] = alpha
         if hub_stage is not None:
             params["hub_stage"] = hub_stage
 

@@ -635,6 +635,17 @@ class OpenAIMeshBackend(ImageBackend):
             else:
                 logger.info("%s: texture_size=%s requested but the alias "
                             "declares no texture param — dropped", self.name, tex)
+        # Material and alpha overrides require explicit schema support; an
+        # unreadable schema must keep the alias defaults instead of sending blind.
+        for key in ("material", "alpha"):
+            value = params.get(key)
+            if value:
+                pname = f"input_{key}"
+                if pname in self._alias_param_names:
+                    alias_params[pname] = value
+                else:
+                    logger.info("%s: %s=%s requested but the alias "
+                                "declares no %s — dropped", self.name, key, value, pname)
         return alias_params
 
     def _generate(self, prompt: str, negative_prompt: str,

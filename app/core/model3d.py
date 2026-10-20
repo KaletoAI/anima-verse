@@ -2059,6 +2059,9 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
             mesh_name=character_name,
             face_num=inputs.get("face_num"),
             texture_size=inputs.get("texture_size"),
+            # Characters are never metal; predicted alpha on an OPAQUE material
+            # only blackens texels in premultiplying viewers.
+            material="dielectric", alpha="opaque",
             view_images=views or None,
             view_body=inputs["view_body"],
             occasion=inputs["occasion"],

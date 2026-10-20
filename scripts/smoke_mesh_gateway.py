@@ -181,6 +181,33 @@ b = backend("Trellis2-Multiview", face_num="100000", mesh_steps="50",
 check("unreadable schema -> sent blind (§ 1: unknown names are ignored)",
       b.build_alias_params({"mesh_name": "Held"}).get("input_steps") == 50)
 
+# --- (a3) caller-selected material and alpha require a readable schema ---
+# The hub defaults both to predicted. Characters request dielectric (metallic
+# zero, roughness kept) and opaque (alpha 255, RGB kept); other callers keep
+# the defaults. Unlike input_steps, these overrides must never be sent blind.
+print("\n(a3) input_material / input_alpha (strict schema opt-in)")
+b = backend("UniForge3D-Multiview",
+            declared=FULL + ["input_material", "input_alpha"])
+overrides = {"material": "dielectric", "alpha": "opaque"}
+p = b.build_alias_params(overrides)
+check("declared input_material = dielectric",
+      p.get("input_material") == "dielectric", str(p))
+check("declared input_alpha = opaque",
+      p.get("input_alpha") == "opaque", str(p))
+for label, params in (("absent", {}), ("empty", {"material": "", "alpha": ""})):
+    p = b.build_alias_params(params)
+    check(f"{label} overrides -> alias defaults stand",
+          "input_material" not in p and "input_alpha" not in p, str(p))
+for label, declared in (("undeclared", FULL), ("unreadable schema", None)):
+    p = backend("UniForge3D-Multiview", declared=declared).build_alias_params(overrides)
+    check(f"{label} -> material and alpha dropped",
+          "input_material" not in p and "input_alpha" not in p, str(p))
+for category in ("face_retexture", "mesh2rig"):
+    b.category = category
+    p = b.build_alias_params(overrides)
+    check(f"{category} never carries material or alpha",
+          "input_material" not in p and "input_alpha" not in p, str(p))
+
 # --- (b) Triposplat: input_num_gaussians only ----------------------------
 print("\n(b) Triposplat-style schema (input_num_gaussians, no face param)")
 SPLAT = ["input_name", "input_remove_background", "input_num_gaussians",
