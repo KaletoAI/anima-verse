@@ -26,6 +26,7 @@ import { EmptyState } from './EmptyState'
 import { useToast } from './Toast'
 import { useEnlarge } from './ZoomButton'
 import { thumbUrl, thumbWidth } from './thumbs'
+import { ReadingModal } from './ReadingModal'
 
 /** Item picture in the detail modal — 110 CSS px; the magnifier opens the
  *  ORIGINAL file. */
@@ -76,6 +77,8 @@ interface Equipped { item_id: string; name: string; image: boolean }
 interface RoomItem {
   item_id: string; name: string; description: string; quantity: number; image: boolean
   discovered?: boolean
+  readable?: boolean
+  portable?: boolean
 }
 interface Belongings {
   avatar: string; slot_order: string[]; slot_labels: Record<string, string>
@@ -280,6 +283,7 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
   const [data, setData] = useState<Belongings>(EMPTY)
   // Item whose detail modal is open ('' = none).
   const [detailId, setDetailId] = useState('')
+  const [readingId, setReadingId] = useState('')
   const [cat, setCat] = useState<Cat>('all')
   const [slotFilter, setSlotFilter] = useState('')
   // Outfit-type filter, next to the slot filter. The vocabulary comes from
@@ -468,8 +472,10 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
                                      textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.description}</span>
                     )}
                   </div>
-                  <button disabled={busy} style={btn()}
-                    onClick={() => act('/play/pickup', { item_id: it.item_id })}>{t('Pick up')}</button>
+                  {it.readable && <button style={btn()}
+                    onClick={() => setReadingId(it.item_id)}>{t('Read')}</button>}
+                  {it.portable !== false && <button disabled={busy} style={btn()}
+                    onClick={() => act('/play/pickup', { item_id: it.item_id })}>{t('Pick up')}</button>}
                 </div>
               ))}
             </div>
@@ -530,6 +536,7 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
         </div>
       </div>
 
+      {readingId && <ReadingModal key={readingId} itemId={readingId} onClose={() => setReadingId('')} />}
       {detailId && (
         <ItemDetailModal itemId={detailId} slotLabels={data.slot_labels}
           onClose={() => setDetailId('')}

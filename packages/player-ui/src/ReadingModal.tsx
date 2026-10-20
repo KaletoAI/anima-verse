@@ -1,0 +1,124 @@
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { apiPost } from './api'
+import { useI18n } from './I18nProvider'
+import { useToast } from './Toast'
+
+interface Reading {
+  item_name: string
+  index: number
+  total: number
+  page: { heading: string; text: string } | null
+}
+
+/** Shared by the 2D inventory and 3D HUD; escape transformed panel bounds. */
+export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () => void }) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [request, setRequest] = useState({ index: 0, opening: true })
+  const [reading, setReading] = useState<Reading | null>(null)
+  const [busy, setBusy] = useState(true)
+  const dialog = useRef<HTMLDivElement>(null)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+
+  useEffect(() => {
+    let active = true
+    apiPost<Reading | { error: string }>('/play/read', { item_id: itemId, ...request })
+      .then((result) => {
+        if (!active) return
+        if ('error' in result) throw new Error(result.error)
+        setReading(result)
+        setBusy(false)
+      })
+      .catch((error: Error) => {
+        if (!active) return
+        toast(error.message, 'error')
+        closeRef.current()
+      })
+    return () => { active = false }
+  }, [itemId, request, toast])
+
+  useEffect(() => {
+    const previous = document.activeElement
+    dialog.current?.focus()
+    return () => { if (previous instanceof HTMLElement) previous.focus() }
+  }, [])
+
+  function flip(index: number) {
+    if (busy || !reading || index < 0 || index >= reading.total) return
+    setBusy(true)
+    setRequest({ index, opening: false })
+  }
+
+  useEffect(() => {
+    function keydown(event: KeyboardEvent) {
+      if (['Escape', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        if (event.key === 'Escape') closeRef.current()
+        else if (!busy && reading) {
+          const index = reading.index + (event.key === 'ArrowLeft' ? -1 : 1)
+          if (index >= 0 && index < reading.total) {
+            setBusy(true)
+            setRequest({ index, opening: false })
+          }
+        }
+      }
+      if (event.key === 'Tab') {
+        const buttons = dialog.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')
+        if (!buttons?.length) return
+        const first = buttons[0]
+        const last = buttons[buttons.length - 1]
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) {
+          event.preventDefault()
+          last.focus()
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault()
+          first.focus()
+        }
+      }
+    }
+    window.addEventListener('keydown', keydown, true)
+    return () => window.removeEventListener('keydown', keydown, true)
+  }, [busy, reading])
+
+  return createPortal(
+    <div className="ga-modal-backdrop" onMouseDown={() => onClose()}>
+      <style>{`
+        @keyframes reading-page-turn {
+          from { opacity: 0.4; transform: perspective(800px) rotateY(-5deg); }
+          to { opacity: 1; transform: perspective(800px) rotateY(0); }
+        }
+        .reading-page { animation: reading-page-turn 160ms ease-out; transform-origin: left center; }
+        @media (prefers-reduced-motion: reduce) { .reading-page { animation: none; } }
+      `}</style>
+      <div ref={dialog} className="ga-modal" role="dialog" aria-modal="true"
+        aria-label={reading?.item_name || t('Read')} tabIndex={-1}
+        style={{ maxWidth: 620 }} onMouseDown={(event) => event.stopPropagation()}>
+        <div className="ga-modal-header">
+          <span>{reading?.item_name || t('Loading…')}</span>
+          <button className="ga-modal-close" aria-label={t('Close')} onClick={onClose}>×</button>
+        </div>
+        <div className="ga-modal-body" aria-busy={busy}
+          style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {reading ? <>
+            <div key={reading.index} className="reading-page" style={{ minHeight: 160, lineHeight: 1.6 }}>
+              {reading.total === 0 ? <p>{t('The pages are empty.')}</p> : reading.page && <>
+                <h3 style={{ marginTop: 0 }}>{reading.page.heading}</h3>
+                <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{reading.page.text}</div>
+              </>}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <button className="ga-btn" disabled={busy || reading.index <= 0 || reading.total === 0}
+                onClick={() => flip(reading.index - 1)}>{t('‹ Previous')}</button>
+              <span aria-live="polite">{reading.total ? reading.index + 1 : 0} / {reading.total}</span>
+              <button className="ga-btn" disabled={busy || reading.index >= reading.total - 1}
+                onClick={() => flip(reading.index + 1)}>{t('Next ›')}</button>
+            </div>
+          </> : <div>{t('Loading…')}</div>}
+        </div>
+      </div>
+    </div>, document.body,
+  )
+}

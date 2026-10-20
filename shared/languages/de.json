@@ -2756,6 +2756,10 @@
     "That cannot be taken": "Das lässt sich nicht mitnehmen",
     "Pages source": "Seitenquelle",
     "Portable": "Tragbar",
-    "Document": "Dokument"
+    "Document": "Dokument",
+    "Read": "Lesen",
+    "‹ Previous": "‹ Zurück",
+    "Next ›": "Weiter ›",
+    "The pages are empty.": "Die Seiten sind leer."
   }
 }
