@@ -507,6 +507,10 @@ def bake_face_texture(source_glb: bytes, hub_glb: bytes, *, dilate_px: int = 4,
         'KHR_materials_sheen', 'KHR_materials_emissive_strength',
         'KHR_materials_iridescence', 'KHR_materials_anisotropy',
         'KHR_materials_pbrSpecularGlossiness', 'KHR_materials_dispersion',
+        # Names only an image index; the repack rewrites bufferView offsets in
+        # place and never renumbers images (an opaque-alpha export keeps its
+        # WebP MR map beside a plain PNG basecolor).
+        'EXT_texture_webp',
     }
     extensions = []
 

@@ -13,6 +13,10 @@ WebP textures 0/1 resolve to images 0/1; bake adds plain PNG texture 2,
 copying sampler 0. Both hub materials retain MR texture index 1.
 Geometry arrays and both original WebP images remain unchanged.
 For VP8, VP8L and VP8X headers a 13x7 image must report (13,7).
+An "opaque" UniForge export appends a plain PNG basecolor (image/texture 2)
+and keeps the WebP MR map and the now unused WebP basecolor: the bake must
+repack it (EXT_texture_webp only names image indices), replace image 2 in
+place (still 3 images), keep both WebP payloads and the extension declared.
 Every malformed case must return ok=False and a nonempty error list.
 """
 import copy
@@ -97,6 +101,33 @@ def fixture(hub=False):
     return doc, bytes(binary)
 
 
+def opaque_fixture(hub=False):
+    """The bridge's input_alpha=opaque shape: PNG basecolor beside the WebP maps."""
+    doc, binary = fixture()
+    binary = bytearray(binary)
+    def add(raw):
+        binary.extend(b'\0' * (-len(binary) % 4))
+        doc['bufferViews'].append({'buffer': 0, 'byteOffset': len(binary), 'byteLength': len(raw)})
+        binary.extend(raw)
+        return len(doc['bufferViews']) - 1
+    doc['images'].append({'bufferView': add(png((10,20,200,255))), 'mimeType': 'image/png'})
+    doc['textures'].append({'source': 2})
+    doc['materials'][0]['pbrMetallicRoughness']['baseColorTexture'] = {'index': 2}
+    if hub:
+        doc['images'].append({'bufferView': add(png((240,10,20,255))), 'mimeType': 'image/png'})
+        doc['textures'].append({'source': 3})
+        doc['materials'].append({'pbrMetallicRoughness': {'baseColorTexture': {'index': 3}, 'metallicRoughnessTexture': {'index': 1}}})
+        doc['accessors'][0]['count'] = 3
+        doc['accessors'].append({'bufferView': 0, 'byteOffset': 6, 'componentType': 5123, 'type': 'SCALAR', 'count': 6})
+        face = doc['meshes'][0]['primitives'][0]
+        body = copy.deepcopy(face)
+        face['material'] = 1
+        body['indices'] = 3
+        doc['meshes'][0]['primitives'] = [body, face]
+    doc['buffers'] = [{'byteLength': len(binary)}]
+    return doc, bytes(binary)
+
+
 def image_bytes(parsed, index):
     view = parsed['gltf']['bufferViews'][parsed['gltf']['images'][index]['bufferView']]
     start = view.get('byteOffset', 0)
@@ -168,6 +199,22 @@ def main():
     assert mv.face_texture_geometry(baked, original=True)['ok']
     assert face_texture_preserved(baked, baked, original_glb=source)
     print('OK: bake references, pixels, alpha, MR bytes and geometry')
+    od, ob = opaque_fixture()
+    opaque = glb(od, ob)
+    assert mv.face_texture_geometry(opaque, original=True)['ok']
+    baked, _ = bake_face_texture(opaque, glb(*opaque_fixture(True)), dilate_px=1)
+    result, before = mv.parse_glb(baked), mv.parse_glb(opaque)
+    gd = result['gltf']
+    assert gd['materials'][0]['pbrMetallicRoughness']['baseColorTexture']['index'] == 2
+    assert len(gd['images']) == 3 and gd['images'][2]['mimeType'] == 'image/png'
+    assert tuple(pixels(image_bytes(result, 2))[5,5,:3]) == (240,10,20)
+    assert tuple(pixels(image_bytes(result, 2))[15,15,:3]) == (10,20,200)
+    for index in (0, 1):
+        assert image_bytes(result, index) == image_bytes(before, index)
+    for key in ('extensionsUsed', 'extensionsRequired'):
+        assert gd[key] == ['EXT_texture_webp']
+    assert validate_source(baked)['ok'] and mv.face_texture_geometry(baked, original=True)['ok']
+    print('OK: opaque export (PNG basecolor beside WebP maps) bakes in place')
     fallback = copy.deepcopy(hd)
     fallback['textures'][0]['source'] = 2
     assert mv.texture_image_index(fallback, fallback['textures'][0]) == 0
