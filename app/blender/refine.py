@@ -224,7 +224,8 @@ def auto_normalize_enabled() -> bool:
 
 
 def normalize(path: Path, target_height_m: float,
-              validator: Optional[Callable[[bytes], Dict[str, Any]]] = None
+              validator: Optional[Callable[[bytes], Dict[str, Any]]] = None,
+              repair_limb_weights: bool = False
               ) -> Dict[str, Any]:
     """Scales a model to its real height, grounds it and bakes the transforms.
 
@@ -236,11 +237,22 @@ def normalize(path: Path, target_height_m: float,
     """
     from app.core import config
     return apply_script(path, "normalize",
-                        {"target_height_m": float(target_height_m)},
+                        {"target_height_m": float(target_height_m),
+                         "repair_limb_weights": bool(repair_limb_weights)},
                         validator=validator, require_smaller=False,
                         keep_original=bool(config.get(
                             "image_generation.blender_keep_original", True)),
                         frame_allowance=head_twist_allowance)
+
+
+def limb_weights(path: Path,
+                 validator: Optional[Callable[[bytes], Dict[str, Any]]] = None
+                 ) -> Dict[str, Any]:
+    """Repair stored weights through the same validation and backup gates."""
+    from app.core import config
+    return apply_script(path, "limb_weights", {}, validator=validator,
+                        require_smaller=False, keep_original=bool(config.get(
+                            "image_generation.blender_keep_original", True)))
 
 
 def head_twist_allowance(data: Dict[str, Any]) -> Dict[str, float]:

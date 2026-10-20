@@ -2760,6 +2760,12 @@
     "Read": "Lesen",
     "‹ Previous": "‹ Zurück",
     "Next ›": "Weiter ›",
-    "The pages are empty.": "Die Seiten sind leer."
+    "The pages are empty.": "Die Seiten sind leer.",
+    "Weights": "Gewichte",
+    "not checked": "nicht geprüft",
+    "Run the improvement \"Repair rig weights\"": "Verbesserung „Rig-Gewichte reparieren“ ausführen",
+    "{n} vertices repaired": "{n} Vertices repariert",
+    "clean": "fehlerfrei",
+    "Repair rig weights": "Rig-Gewichte reparieren"
   }
 }

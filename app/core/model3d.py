@@ -263,11 +263,11 @@ def _serial_model(function):
                 if generation_error is not None:
                     raise generation_error
                 return result
-            if name in ("rerig_model", "face_retexture_model", "revert_face_retexture") and not result.get("ok"):
+            if name in ("rerig_model", "face_retexture_model", "revert_face_retexture", "repair_model_weights") and not result.get("ok"):
                 return result
             if not _publish_signature(character_name, directory, stage, signature, token,
                                       rollback_on_error=name in (
-                                          "generate_for_current_outfit", "rerig_model", "face_retexture_model", "revert_face_retexture"),
+                                          "generate_for_current_outfit", "rerig_model", "face_retexture_model", "revert_face_retexture", "repair_model_weights"),
                                       invalidate=name == "delete_model3d"):
                 return stale("Model changed during processing; result discarded")
             if isinstance(result, dict):
@@ -791,7 +791,9 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
                                 "match": match,
                                 "format": path.suffix.lstrip(".").lower(),
                                 "rig": rig,
-                                "size": path.stat().st_size}
+                                "size": path.stat().st_size,
+                                "limb_weights": {"checked": False, "vertices": 0,
+                                                 "fully_foreign": 0, "error": ""}}
         info["has_unrigged_source"] = (path.parent / "unrigged" / f"{path.stem}.glb").is_file()
         info["unrigged_source_reason"] = "" if info["has_unrigged_source"] else "No retained unrigged mesh source. Generate a new model to enable re-rigging."
         info["source"] = "generated"  # default for legacy sidecars
@@ -830,6 +832,13 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
                 if "normalize" in ((meta.get("blender") or {}).get("steps")
                                    or []):
                     info["normalized"] = True
+                weights = (meta.get("blender") or {}).get("limb_weights") or {}
+                info["limb_weights"] = {
+                    "checked": "limb_weights" in ((meta.get("blender") or {}).get("steps") or []),
+                    "vertices": weights.get("vertices", 0),
+                    "fully_foreign": weights.get("fully_foreign", 0),
+                    "error": weights.get("error", ""),
+                }
                 if meta.get("rig"):
                     info["rig"] = meta["rig"]  # what it was ACTUALLY made with
             except (OSError, ValueError):
@@ -1049,7 +1058,9 @@ def _auto_extension_rig(character_name: str, path: Path,
     overrides = model_extension_overrides(profile, path.stem)
     fingerprint = extension_rig_fingerprint(declarations, overrides)
     previous = meta.get("extension_rig") or {}
-    if previous.get("attempted") and previous.get("status") in ("applied", "not_found", "none_applicable") and previous.get("fingerprint") == fingerprint and (not force or previous.get("status") == "applied"):
+    if previous.get("attempted") and previous.get("status") in ("applied", "not_found", "none_applicable") and previous.get("fingerprint") == fingerprint and (not force or (previous.get("status") == "applied"
+            and (_read_sidecar(path.parent / "prerig" / path.name).get("blender") or {})
+            == (meta.get("blender") or {}))):
         return {"ok": previous.get("status") != "failed", "applied": False, "noop": True, "extension_rig": previous}
     groups = [g for g in resolved_extension_groups(character_name, profile=profile, signature=path.stem) if g["enabled"]]
     state = {"fingerprint": fingerprint, "groups": [g["id"] for g in declarations],
@@ -1309,9 +1320,27 @@ def _auto_normalize(character_name: str, path: Path,
         return
     done = list((meta.get("blender") or {}).get("steps") or [])
     if "normalize" in done:
+        if meta.get("rig") != "mixamo" or "limb_weights" in done:
+            return
+        try:
+            res = refine.limb_weights(path, validator=_validator_for("mixamo", character_name))
+            report = dict(res.get("data") or {})
+            success = (res.get("ok") and (res.get("applied") or res.get("error") in ("", "nothing to do"))
+                       and not report.get("error"))
+            if not success:
+                report["error"] = report.get("error") or res.get("error") or "Weight repair failed"
+        except Exception as exc:
+            report = {"error": str(exc)}
+            success = False
+        meta.setdefault("blender", {})["limb_weights"] = report
+        if success:
+            meta["blender"]["steps"] = done + ["limb_weights"]
+        else:
+            logger.warning("Model3D %s: weight repair failed (%s)", character_name, report["error"])
         return
     target = _target_height_m(character_name)
     res = refine.normalize(path, target,
+                           repair_limb_weights=(meta.get("rig") == "mixamo"),
                            validator=_validator_for(meta.get("rig") or "", character_name))
     data = res.get("data") or {}
     if not res.get("applied"):
@@ -1333,6 +1362,10 @@ def _auto_normalize(character_name: str, path: Path,
     }
     if "head_twist" in data:
         meta["blender"]["head_twist"] = data["head_twist"]
+    if "limb_weights" in data:
+        meta["blender"]["limb_weights"] = data["limb_weights"]
+        if not data["limb_weights"].get("error"):
+            meta["blender"]["steps"].append("limb_weights")
     logger.info("Model3D %s: normalised to %.2f m (%s basis, scale %.4f)",
                 character_name, target, data.get("height_basis", "?"),
                 float(data.get("scale") or 0))
@@ -1360,6 +1393,77 @@ def _auto_retexture(character_name: str, path: Path,
     if not res.get("applied") and res.get("error"):
         logger.info("Model3D %s: Textur-Neukodierung nicht angewandt (%s)",
                     character_name, res["error"])
+
+
+@_serial_model
+def repair_model_weights(character_name: str, signature: str) -> Dict[str, Any]:
+    """Repair the pelvis limb weights of a stored humanoid model, every tier.
+
+    The clean prerig sources are repaired first; a model with applied
+    extension bones is then rebuilt from its repaired source, any other model
+    is repaired in place. A derived low tier is rebuilt from the full one.
+    A failure publishes nothing, so the improvement can retry.
+    """
+    path = find_model3d(character_name, signature)
+    repaired: Dict[str, Any] = {}
+    if path is None:
+        return {"ok": False, "repaired": repaired, "error": "no_model"}
+    tiers = {FULL_TIER: path}
+    low = tier_variant(path, LOW_TIER)
+    if low:
+        tiers[LOW_TIER] = low
+
+    def checked(tier, target, meta, *, required=False):
+        _auto_normalize(character_name, target, meta, required=required)
+        _publish_sidecar(target, meta)
+        block = meta.get("blender") or {}
+        report = block.get("limb_weights") or {}
+        repaired[tier] = report
+        if "limb_weights" not in (block.get("steps") or []):
+            raise RuntimeError(report.get("error") or "Weight repair did not complete")
+
+    try:
+        # Repair both independent sources before a full extension rebuild can
+        # recursively rebuild the low tier.
+        for tier, target in tiers.items():
+            meta = _read_sidecar(target)
+            if tier == LOW_TIER and meta.get("source") == "lod":
+                continue
+            source = target.parent / "prerig" / target.name
+            if source.is_file():
+                source_meta = _read_sidecar(source)
+                source_meta.setdefault("rig", meta.get("rig", "mixamo"))
+                checked(tier, source, source_meta, required=True)
+        full_rebuilt = False
+        for tier, target in tiers.items():
+            meta = _read_sidecar(target)
+            if tier == LOW_TIER and meta.get("source") == "lod":
+                if not full_rebuilt:
+                    result = build_lod(character_name, signature, ratio=_auto_lod_ratio())
+                    if not result.get("ok"):
+                        raise RuntimeError(result.get("error") or "Low tier rebuild failed")
+                repaired[tier] = (_read_sidecar(target).get("blender") or {}).get(
+                    "limb_weights", repaired.get(FULL_TIER, {}))
+                continue
+            source = target.parent / "prerig" / target.name
+            state = meta.get("extension_rig") or {}
+            if source.is_file() and (state.get("status") == "applied" or state.get("has_applied")):
+                # A full rebuild already handles an independent low tier.
+                if tier != LOW_TIER or not full_rebuilt:
+                    result = rebuild_extension_rig(character_name, signature, tier=tier, force=True)
+                    if not result.get("ok"):
+                        raise RuntimeError(result.get("error") or "Extension rebuild failed")
+                    full_rebuilt = tier == FULL_TIER and bool((result.get("low") or {}).get("ok"))
+                block = _read_sidecar(target).get("blender") or {}
+                repaired[tier] = block.get("limb_weights") or {}
+                if "limb_weights" not in (block.get("steps") or []):
+                    raise RuntimeError("Rebuilt model is missing repaired weights")
+            else:
+                checked(tier, target, meta)
+        return {"ok": True, "repaired": repaired, "error": ""}
+    except Exception as exc:
+        logger.warning("Model3D %s: stored weight repair failed (%s)", character_name, exc)
+        return {"ok": False, "repaired": repaired, "error": str(exc)}
 
 
 @_serial_model
@@ -1599,6 +1703,8 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
         "signature": path.stem,
         "character": character_name,
     }
+    if meta.get("blender"):
+        side["blender"] = dict(meta["blender"])
     from app.core.extension_rig import extension_metadata
     side["extension_rig"] = dict(meta.get("extension_rig") or extension_metadata(character_name, signature=path.stem))
     side["extension_rig"].pop("per_tier", None)

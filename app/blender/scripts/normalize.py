@@ -28,6 +28,8 @@ Steps, in order:
     3. ground    X/Y centre of the box to 0, lowest point to z=0
     4. bake      transforms applied, so scale/rotation live in the geometry
                  and no importer heuristic ("is this Z-up?") has to guess
+    5. repair    with ``repair_limb_weights`` (humanoid rigs), remove hand/foot
+                 weights the rigger put on the pelvis (``_limb_weights.py``)
 
 Reported under ``data``: ``height_basis`` ("crown"|"bbox"), ``scale``, and
 ``before``/``after`` with {dims_m, center_xy, min_z, tris, joints} each —
@@ -258,6 +260,15 @@ def normalize(args):
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     bpy.context.view_layer.update()
 
+    limb_weights = None
+    if args["params"].get("repair_limb_weights", False):
+        sys.path.insert(0, _SCRIPTS_DIR)
+        try:
+            from _limb_weights import repair
+            limb_weights = repair()
+        finally:
+            sys.path.remove(_SCRIPTS_DIR)
+
     after = _snapshot(_world_bounds(_mesh_objects()))
 
     out_dir = Path(args["out_dir"])
@@ -268,14 +279,17 @@ def normalize(args):
     else:
         bpy.ops.export_scene.fbx(filepath=str(path))
 
-    return {
+    data = {
         "head_twist": head_twist,
         "height_basis": basis,
         "scale": round(scale, 6),
         "target_height_m": target,
         "before": before,
         "after": after,
-    }, {"model": str(path)}
+    }
+    if limb_weights is not None:
+        data["limb_weights"] = limb_weights
+    return data, {"model": str(path)}
 
 
 _common.main(normalize)

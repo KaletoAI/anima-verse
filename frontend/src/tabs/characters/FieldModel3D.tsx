@@ -94,6 +94,7 @@ interface FaceRetextureCheck {
 }
 
 interface Model3DInfo {
+  limb_weights?: { checked: boolean; vertices: number; fully_foreign: number; error: string }
   tpose_status?: 'current' | 'changed' | 'other_outfit' | 'unknown'
   head_twist?: { current: number | null; corrected: number | null }
   clips?: Record<string, { loop: boolean }>
@@ -918,6 +919,9 @@ export function FieldModel3D({ character }: { character: string }) {
     : face?.status === 'applied' ? (face.reference === 'face' ? t('Face view') : up?.status === 'applied' && up.backend
       ? `${up.backend}${up.in?.[0] && up.out?.[0] ? ` ×${+(up.out[0] / up.in[0]).toFixed(1)}` : ''}` : t('applied')) : '–'
   const photoText = face?.status === 'applied' && face.photo ? `${face.photo.balance ? ` · ${t('Light balance')} ${Math.round(face.photo.balance * 100)} %` : ''}${face.photo.tone_match != null && face.photo.tone_match !== 1 ? ` · ${t('Skin tone match')} ${Math.round(face.photo.tone_match * 100)} %` : ''}${typeof face.photo.skin_recolor === 'number' && face.photo.skin_recolor !== 1 ? ` · ${t('Skin colour correction')} ${Math.round(face.photo.skin_recolor * 100)} %` : ''}${face.photo.brightness !== 1 ? ` · ${t('Face brightness')} ${Math.round(face.photo.brightness * 100)} %` : ''}${face.photo.applied_on === 'hub' ? ' (hub)' : face.photo.applied_on === 'none' ? '' : ' (local)'}` : ''
+  const weights = model?.limb_weights
+  const weightsText = weights?.error ? t('Error') : !weights?.checked ? t('not checked')
+    : weights.vertices > 0 ? t('{n} vertices repaired').replace('{n}', String(weights.vertices)) : t('clean')
   const statusPanel = <div className="ga-model3d-status">
     {statusRow(t('T-pose'), tp === 'current' ? t('current') : tp === 'changed' ? t('re-rendered')
       : tp === 'other_outfit' ? t('other outfit') : t('unknown'),
@@ -925,6 +929,8 @@ export function FieldModel3D({ character }: { character: string }) {
       t('T-pose source freshness'))}
     {statusRow(t('Mesh'), model?.mesh_backend || '–', model?.mesh_backend ? 'green' : 'grey', model?.mesh_backend || t('unknown'))}
     {statusRow(t('Rig'), rigText, model?.rig_error ? 'red' : turned ? 'yellow' : model?.rig_backend && currentTwist != null ? 'green' : 'grey', model?.rig_error || rigText)}
+    {mixamo && statusRow(t('Weights'), weightsText, weights?.error ? 'red' : weights?.checked ? 'green' : 'yellow',
+      weights?.error || (weights?.checked ? weightsText : t('Run the improvement "Repair rig weights"')))}
     {statusRow(t('Face'), faceText + photoText, face?.status === 'failed' ? 'red' : face?.face_texture_lost ? 'yellow' : face?.status === 'applied' ? 'green' : 'grey', face?.error || face?.reason || faceText)}
   </div>
   const rigMetrics = model?.rig_metrics
