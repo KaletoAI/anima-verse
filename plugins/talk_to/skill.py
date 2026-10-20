@@ -21,10 +21,11 @@ from app.core.timeutils import utc_now_iso
 class TalkToSkill(PluginSkill):
     """One character speaks to another within earshot.
 
-    Inbox-only: the spoken line is written into both characters' chat
-    history (sender as 'assistant', recipient as 'user'); the recipient
-    is bumped and processes it on their next AgentLoop turn. The skill
-    returns immediately — it no longer blocks for a synchronous reply.
+    The spoken line is written into both characters' chat history (sender
+    as 'assistant', recipient as 'user') and the recipient is queued for a
+    mandatory answer in the AgentLoop's respond lane (``bump_respond``) —
+    temporary NPCs included, who answer through ``npc_talk``. The skill
+    returns immediately — it does not block for a synchronous reply.
 
     Tool name/description/action_hint and the CASCADE_BRAKE flag come from
     the package (plugin.yaml + templates/llm/skills/talk_to.md).
@@ -169,10 +170,9 @@ class TalkToSkill(PluginSkill):
             except Exception as e:
                 self.ctx.logger.debug("pending_report add failed: %s", e)
 
-        # Inbox-only: write the spoken line into both characters' chat
-        # history. Sender sees their own line as 'assistant', recipient
-        # sees it as 'user'. Recipient processes the message in their
-        # next AgentLoop turn — TalkTo no longer blocks waiting for a
+        # Write the spoken line into both characters' chat history. Sender
+        # sees their own line as 'assistant', recipient sees it as 'user'.
+        # The answer is queued below — TalkTo does not block waiting for a
         # synchronous reply.
         from app.models.chat import save_message
         ts = utc_now_iso()
@@ -206,12 +206,21 @@ class TalkToSkill(PluginSkill):
                 sender_name, target_name, stored.count(False))
             return f"Error saving message to {target_name}."
 
-        # Bump the recipient so they react soon, not on their normal slot.
+        # The addressee OWES an answer: queue it into the respond lane, the
+        # same path a room utterance with an addressee takes. A thought bump
+        # was the old route and it dead-ended for every character without
+        # thoughts — a temporary NPC never answered a TalkTo (2026-10-20).
         try:
             from app.core.agent_loop import get_agent_loop
-            get_agent_loop().bump(target_name)
+            if not get_agent_loop().bump_respond(
+                    target_name, speaker=sender_name, content=message,
+                    volume=volume or "normal", obligatory=True):
+                self.ctx.logger.info(
+                    "TalkTo: %s cannot answer on its own (player-controlled)",
+                    target_name)
         except Exception as e:
-            self.ctx.logger.debug("TalkTo: AgentLoop bump failed: %s", e)
+            self.ctx.logger.warning("TalkTo: respond bump for %s failed: %s",
+                                    target_name, e)
 
         # Resolve: if this TalkTo answers an open pending_report.
         try:
