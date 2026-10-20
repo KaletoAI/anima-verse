@@ -496,7 +496,7 @@ class ProviderManager:
         self,
         llm_instance: Any,
         agent_name: str, task_type: str = "chat_stream",
-        label: str = "") -> str:
+        label: str = "", *, cancel: Optional[threading.Event] = None) -> str:
         """Registers chat active on the correct LLM channel.
 
         Returns task_id for register_chat_done().
@@ -509,7 +509,7 @@ class ProviderManager:
 
         model = getattr(llm_instance, "model", "") if llm_instance else ""
         return pq.register_chat_active(agent_name, model=model,
-                                        task_type=task_type, label=label)
+                                        task_type=task_type, label=label, cancel=cancel)
 
     def register_chat_done(self, task_id: str) -> None:
         """Finds which provider queue owns this task_id and marks done.

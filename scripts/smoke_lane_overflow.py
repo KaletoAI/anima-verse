@@ -30,6 +30,16 @@ B9 An unrouted thought child borrows thought's chain and task identity.
 B10 Explanation switches are [true, false, true], one per entry; disabled,
 missing, unavailable and cooled-down C leaves no usable target.
 
+Section C expectations, derived by hand (real clock for thread plumbing):
+C1 One CHAT blocker occupies the only lane. Cancellation at 0.2 s removes
+   the waiter within one <=5 s slice (6 s deadline). After release and 1 s,
+   busy=0, registrations=0, queue unpaused and serialize gate unclaimed.
+C2 Grant then cancel leaves one orphan; closing it returns busy/tasks to 0.
+C3 A 0.3 s budget from the supplied arrival expires with that same stamp,
+   waiting=0, no registration, no queue pause and no gate claim.
+C4 With a fake clock, 62 s = 12 slices of 5 s + 2 s, one wait log at
+   60 s and 13 stale checks. Without cancel/budget, nested waits still use
+   60-s slices: three timeouts log two WARNINGs then one ERROR.
 """
 import sys
 import tempfile
@@ -244,6 +254,171 @@ def section_b():
                 thread.join(3)
                 assert not thread.is_alive(), "waiter did not finish"
             assert not errors, errors
+
+
+def section_c():
+    import asyncio
+    import os
+    from contextlib import ExitStack
+    from types import SimpleNamespace
+    from app.core import paths, llm_lanes as lanes
+
+    with tempfile.TemporaryDirectory(prefix="lane-c-") as root, ExitStack() as stack:
+        # Copy the integration smoke's storage/log/DB isolation before imports.
+        stack.enter_context(patch.dict(os.environ, {"ANIMATION_CLIPS_DIR": root}))
+        paths.init(root)
+        from app.core import provider_manager as pm_mod, provider_queue as pq_mod, llm_queue as lq_mod
+        from app.core.llm_queue import get_llm_queue
+        from app.core.provider import Provider
+        from app.utils import llm_logger, llm_stats
+        stack.enter_context(patch.object(llm_logger, "LOG_DIR", Path(root)))
+        stack.enter_context(patch.object(llm_logger, "LOG_FILE", Path(root) / "llm_calls.jsonl"))
+        stack.enter_context(patch.object(pq_mod, "_attach_duration_estimate", lambda task: None))
+        stack.enter_context(patch.object(llm_stats, "record_call", lambda *a, **kw: None))
+        manager = lanes.LaneManager(lane_count=lambda key: 1,
+            rules=lambda: lanes.LaneRules(affinity_wait=0, conversation_hold=0))
+        stack.enter_context(patch.object(lanes, "_manager", manager))
+        provider = Provider(name="P", type="openai", api_base="http://stub",
+                            api_key="", max_concurrent=1, timeout=30)
+        queue = pq_mod.ProviderQueue(provider, queue_name="P", max_concurrent=1,
+                                    chat_pause_enabled=False, serialize_group="")
+        pm = pm_mod.ProviderManager()
+        pm.providers["P"] = provider
+        pm.channels["P"] = queue
+        pm._queues["P"] = queue
+        stack.enter_context(patch.object(pm_mod, "_provider_manager", pm))
+        facade = get_llm_queue()
+        instance = SimpleNamespace(provider_name="P", model="m")
+        gate = threading.Semaphore(1)
+        queue._serialize_gate = gate
+        def pool():
+            return manager.snapshot()["pools"]["P/m"]
+        def clean():
+            assert queue._chat_tasks == {} and queue._chat_lanes == {}
+            assert queue._chat_active.is_set() and not queue._holds_serialize_gate
+            assert gate.acquire(blocking=False), "serialize gate claimed"
+            gate.release()
+
+        blocker = manager.acquire_lane("P/m", "chat:blocker", lanes.Priority.CHAT, timeout=0)
+        async def cancelled_wait():
+            pending = asyncio.create_task(facade.register_chat_active_async(
+                "demo", instance, task_type="thought"))
+            await asyncio.sleep(0.2)
+            assert pool()["waiting"] == 1
+            pending.cancel()
+            try:
+                await pending
+            except asyncio.CancelledError:
+                pass
+            deadline = time.monotonic() + 6
+            while pool()["waiting"]:
+                if time.monotonic() >= deadline:
+                    blocker.release()
+                    await asyncio.sleep(0.2)
+                    raise AssertionError("cancelled waiter still parked")
+                await asyncio.sleep(0.01)
+            clean()
+        try:
+            with patch.object(pq_mod.logger, "handle") as queue_log, \
+                    patch.object(lq_mod.logger, "handle") as facade_log:
+                asyncio.run(cancelled_wait())
+                assert all(call.args[0].levelno <= 10
+                           for log in (queue_log, facade_log)
+                           for call in log.call_args_list), "cancelled wait logged above DEBUG"
+        finally:
+            blocker.release()
+        time.sleep(1)
+        assert pool()["busy"] == 0
+        clean()
+        print("PASS C1 cancelled wait leaves no registration or lane")
+
+        async def granted_race():
+            original = facade.register_chat_active
+            caller = None
+            loop = asyncio.get_running_loop()
+            def grant_then_cancel(*args, **kwargs):
+                task_id = original(*args, **kwargs)
+                # Cancel before to_thread delivers the already granted id.
+                loop.call_soon_threadsafe(caller.cancel)
+                return task_id
+            with patch.object(facade, "register_chat_active", grant_then_cancel):
+                caller = asyncio.create_task(facade.register_chat_active_async(
+                    "demo", instance, task_type="thought"))
+                try:
+                    await caller
+                    raise AssertionError("race did not cancel caller")
+                except asyncio.CancelledError:
+                    pass
+                deadline = time.monotonic() + 3
+                while queue._chat_tasks:
+                    assert time.monotonic() < deadline, "orphan not closed"
+                    await asyncio.sleep(0.01)
+                await asyncio.sleep(0)
+            assert pool()["busy"] == 0
+            clean()
+        asyncio.run(granted_race())
+        print("PASS C2 granted lane is closed after cancellation race")
+
+        blocker = manager.acquire_lane("P/m", "chat:blocker", lanes.Priority.CHAT, timeout=0)
+        arrived = manager.now()
+        try:
+            try:
+                queue.register_chat_active("demo", model="m", task_type="thought",
+                                           max_wait=0.3, arrived=arrived)
+                raise AssertionError("bounded wait registered")
+            except lanes.LaneWaitExpired as exc:
+                assert exc.arrived == arrived
+            assert 0.3 <= manager.now() - arrived < 1.0
+            assert pool()["waiting"] == 0 and pool()["busy"] == 1
+            clean()
+        finally:
+            blocker.release()
+        print("PASS C3 bounded wait preserves arrival and registers nothing")
+
+        # Pin cadence and slice lengths without spending a minute on a clock.
+        class SlicedManager:
+            def __init__(self, failures):
+                self.stamp = 100.0
+                self.failures = failures
+                self.timeouts = []
+            def now(self):
+                return self.stamp
+            def sync_from_config(self, key):
+                pass
+            def acquire_lane(self, *args, timeout, **kwargs):
+                self.timeouts.append(timeout)
+                if len(self.timeouts) > self.failures:
+                    return "handle"
+                self.stamp += timeout
+                raise lanes.LaneTimeout()
+
+        sliced = SlicedManager(13)
+        with patch.object(lanes, "_manager", sliced), \
+                patch.object(queue, "_check_stale_chat") as stale, \
+                patch.object(pq_mod.logger, "error") as error, \
+                patch.object(pq_mod.logger, "warning") as warning:
+            try:
+                queue._wait_for_lane("P/m", "thought:demo", lanes.Priority.LOW,
+                                     "thought", arrived=100, max_wait=62,
+                                     cancel=threading.Event())
+                raise AssertionError("fake bounded wait registered")
+            except lanes.LaneWaitExpired as exc:
+                assert exc.arrived == 100
+            assert sliced.timeouts == [5.0] * 12 + [2.0]
+            assert stale.call_count == 13 and error.call_count == 1
+            assert error.call_args.args[-2] == 60.0
+            warning.assert_not_called()
+        sliced = SlicedManager(3)
+        with patch.object(lanes, "_manager", sliced), \
+                patch.object(queue, "_check_stale_chat") as stale, \
+                patch.object(pq_mod.logger, "error") as error, \
+                patch.object(pq_mod.logger, "warning") as warning:
+            assert queue._wait_for_lane("P/m", "tool:demo", lanes.Priority.NORMAL,
+                                        "tool", nested=True) == ("handle", 100.0)
+            assert sliced.timeouts == [60.0] * 4
+            assert stale.call_count == 3
+            assert warning.call_count == 2 and error.call_count == 1
+        print("PASS C4 short slices retain wait cadence and nested defaults")
 
 
 def main():

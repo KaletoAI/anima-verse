@@ -602,7 +602,10 @@ class ProviderQueue:
 
     def register_chat_active(self, agent_name: str, model: str = "",
                              task_type: str = "chat_stream",
-                             label: str = "") -> str:
+                             label: str = "", *,
+                             max_wait: Optional[float] = None,
+                             arrived: Optional[float] = None,
+                             cancel: Optional[threading.Event] = None) -> str:
         """Registers active chat/story. Pauses this provider's queue.
 
         Waits for any running background task to finish before returning,
@@ -644,7 +647,8 @@ class ProviderQueue:
         # until register_chat_done — the tool executor releases and
         # re-registers around its own LLM calls (R6), which is why a lane is
         # never held across a nested call.
-        handle = self._acquire_chat_lane(task)
+        handle = self._acquire_chat_lane(task, max_wait=max_wait,
+                                         arrived=arrived, cancel=cancel)
 
         with self._lock:
             self._chat_tasks[task.task_id] = task
@@ -689,7 +693,10 @@ class ProviderQueue:
             task.current_iteration = iteration
             task.max_iterations = max_iterations
 
-    def _acquire_chat_lane(self, task: LLMTask) -> Any:
+    def _acquire_chat_lane(self, task: LLMTask, *,
+                           max_wait: Optional[float] = None,
+                           arrived: Optional[float] = None,
+                           cancel: Optional[threading.Event] = None) -> Any:
         """Takes a cache lane for a streaming registration and returns the
         handle.
 
@@ -708,8 +715,8 @@ class ProviderQueue:
         finally does not run. Without lanes that left a stale entry behind;
         with lanes it would hold the model's lane for the lifetime of the
         process, so every later chat would wait here forever and every queued
-        task of that pool would be deferred for good. The ERROR line per
-        slice (same 60-s cadence as before) keeps such a wait visible.
+        task of that pool would be deferred for good. The ERROR line every
+        60 seconds keeps such a wait visible even with shorter cancel slices.
 
         A slice boundary drops the call out of the pool's waiting list for an
         instant. The arrival stamp is taken ONCE and handed back in on every
@@ -730,7 +737,8 @@ class ProviderQueue:
         task._lane_priority = lane_priority_for(task.task_type)
         handle, arrived = self._wait_for_lane(
             pool_key, task._cache_key, task._lane_priority, task.task_type,
-            who=task.agent_name or "?")
+            who=task.agent_name or "?", arrived=arrived,
+            max_wait=max_wait, cancel=cancel)
         task._lane_arrived = arrived
         task._lane_handle = handle
         return handle
@@ -739,7 +747,9 @@ class ProviderQueue:
                        label: str, who: str = "",
                        arrived: Optional[float] = None,
                        own_lane: Optional[int] = None,
-                       nested: bool = False) -> Tuple[Any, float]:
+                       nested: bool = False,
+                       max_wait: Optional[float] = None,
+                       cancel: Optional[threading.Event] = None) -> Tuple[Any, float]:
         """Waits for a lane of ``pool_key`` in slices. Returns (handle, when
         it first asked).
 
@@ -749,6 +759,10 @@ class ProviderQueue:
         the one thing that can free a lane held by a registration whose
         ``register_chat_done`` never came; a log line per slice keeps a long
         wait visible.
+
+        ``cancel`` bounds abandoned-thread cleanup to five seconds without
+        changing the wait-log cadence. ``max_wait`` counts from ``arrived``
+        so slicing never resets a caller's deadline or ageing.
 
         ``arrived`` hands in a stamp the CALLER already owns instead of taking
         a fresh one: the nested call of a turn and the turn's own resume are
@@ -776,7 +790,9 @@ class ProviderQueue:
         slice, so the ordering rules (R2 ageing, R3 affinity) age it from when
         it really arrived.
         """
-        from app.core.llm_lanes import LaneTimeout, get_lane_manager
+        from app.core.llm_lanes import (
+            LaneTimeout, LaneWaitCancelled, LaneWaitExpired, get_lane_manager,
+        )
 
         manager = get_lane_manager()
         # Live config: an admin save changes the lane count without a restart.
@@ -785,10 +801,22 @@ class ProviderQueue:
             arrived = manager.now()
         waited = 0.0
         slices = 0
+        warn_seconds = max(0.05, float(_LANE_WAIT_WARN))
+        next_warning = warn_seconds
         while True:
-            # The lower bound only keeps a misconfigured 0 from
-            # spinning; a check may shorten the slice to run in seconds.
-            slice_seconds = max(0.05, float(_LANE_WAIT_WARN))
+            # The AgentLoop's 600-s wait_for cancels the turn, but cannot
+            # stop its shielded thread. Short slices let that abandoned
+            # waiter leave instead of ageing and eventually taking a lane.
+            if cancel is not None and cancel.is_set():
+                raise LaneWaitCancelled()
+            slice_seconds = warn_seconds
+            if cancel is not None:
+                slice_seconds = min(slice_seconds, 5.0)
+            if max_wait is not None:
+                remaining = max_wait - (manager.now() - arrived)
+                if remaining <= 0:
+                    raise LaneWaitExpired(arrived)
+                slice_seconds = min(slice_seconds, remaining)
             try:
                 handle = manager.acquire_lane(
                     pool_key, cache_key, priority, arrived=arrived,
@@ -797,14 +825,19 @@ class ProviderQueue:
                 return handle, arrived
             except LaneTimeout:
                 waited += slice_seconds
-                slices += 1
-                _log = (logger.warning
-                        if nested and slices < _LANE_WAIT_ESCALATE_SLICES
-                        else logger.error)
-                _log(
-                    "[%s] %s (%s) waits %.0fs for a lane on %s — looking for "
-                    "stale chat registrations",
-                    self._queue_name, who or "?", cache_key, waited, pool_key)
+                # Cancellation polling must not turn the 60-s wait line
+                # into an ERROR every five seconds. Nested waits keep their
+                # existing warning-to-error escalation per full interval.
+                if waited >= next_warning:
+                    slices += 1
+                    next_warning += warn_seconds
+                    _log = (logger.warning
+                            if nested and slices < _LANE_WAIT_ESCALATE_SLICES
+                            else logger.error)
+                    _log(
+                        "[%s] %s (%s) waits %.0fs for a lane on %s — looking for "
+                        "stale chat registrations",
+                        self._queue_name, who or "?", cache_key, waited, pool_key)
                 # The one cleanup that can free this lane again. It runs here
                 # because this path is reached on EVERY provider, whereas the
                 # worker's chat-pause wait only runs where a serialize group

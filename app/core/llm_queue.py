@@ -13,7 +13,7 @@ Usage:
     queue = get_llm_queue()
     response = queue.submit("image_prompt", Priority.NORMAL, llm, messages, agent_name="Pixel")
 """
-import threading  # noqa: F401  (still used for LLMTask._done_event)
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import IntEnum
@@ -204,7 +204,8 @@ class LLMQueue:
 
     def register_chat_active(self, agent_name: str, llm_instance: Any = None,
                              task_type: str = "chat_stream",
-                             label: str = "") -> str:
+                             label: str = "", *,
+                             cancel: Optional[threading.Event] = None) -> str:
         """Registers an active chat/story. Pauses the provider queue.
 
         Args:
@@ -224,12 +225,15 @@ class LLMQueue:
         pm = get_provider_manager()
 
         if llm_instance:
-            return pm.register_chat_active(llm_instance, agent_name, task_type=task_type, label=label)
+            return pm.register_chat_active(
+                llm_instance, agent_name, task_type=task_type,
+                label=label, cancel=cancel)
 
         # Fallback: first available queue
         pq = pm.get_first_queue()
         if pq:
-            return pq.register_chat_active(agent_name, task_type=task_type, label=label)
+            return pq.register_chat_active(
+                agent_name, task_type=task_type, label=label, cancel=cancel)
 
         raise Exception("No provider queue available for chat registration")
 
@@ -244,23 +248,24 @@ class LLMQueue:
         using register_chat_active().
 
         CANCELLATION-SAFE. Cancelling the caller (thoughts.py wraps the whole
-        turn in a wait_for) does not stop the thread — it registers, takes a
-        lane and hands back a task_id that nobody would ever be able to close
-        again: the lane would be lost for the lifetime of the process. The
-        registration is therefore shielded and, if the caller is gone by the
-        time it finishes, closed right here. The caller still sees the
-        CancelledError it asked for.
+        turn in a 600-s wait_for) does not stop its shielded thread. The
+        cancel event ends the lane wait within one short slice; otherwise
+        abandoned thought turns keep ageing in the pool (the repeated waits
+        bug). Shielding and orphan close still cover a lane granted just
+        before cancellation. The caller still sees CancelledError.
         """
         import asyncio
 
+        cancel = threading.Event()
         pending = asyncio.ensure_future(asyncio.to_thread(
             self.register_chat_active,
             agent_name, llm_instance=llm_instance,
-            task_type=task_type, label=label,
+            task_type=task_type, label=label, cancel=cancel,
         ))
         try:
             return await asyncio.shield(pending)
         except asyncio.CancelledError:
+            cancel.set()
             pending.add_done_callback(self._close_orphaned_registration)
             raise
 
@@ -272,10 +277,15 @@ class LLMQueue:
         never raise: it runs on the event loop, with nobody left to handle
         anything.
         """
+        from .llm_lanes import LaneWaitCancelled
+
         try:
             if done.cancelled():
                 return
-            if done.exception() is not None:
+            error = done.exception()
+            if isinstance(error, LaneWaitCancelled):
+                return  # Normal end of an abandoned wait; keep it silent.
+            if error is not None:
                 return
             task_id = done.result()
             if not task_id:
