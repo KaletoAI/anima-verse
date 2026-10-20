@@ -15,6 +15,7 @@ import threading
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
+from .llm_lanes import Overflow
 from .provider import Provider
 from .provider_queue import ProviderQueue
 
@@ -473,7 +474,7 @@ class ProviderManager:
         llm_instance: Any,
         llm: Any,
         messages_or_prompt: Any,
-        agent_name: str = "") -> Any:
+        agent_name: str = "", overflow: Optional[Overflow] = None) -> Any:
         """Routes an LLM task to the correct channel.
 
         Uses the provider from llm_instance to find the matching LLM channel.
@@ -490,7 +491,7 @@ class ProviderManager:
             raise Exception("No channel available for LLM task")
 
         return pq.submit(task_type, priority, llm, messages_or_prompt,
-                         agent_name)
+                         agent_name, overflow=overflow)
 
     def register_chat_active(
         self,

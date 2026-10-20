@@ -17,7 +17,10 @@ import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import IntEnum
-from typing import Any, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
+
+if TYPE_CHECKING:
+    from app.core.llm_lanes import Overflow
 
 from app.core.log import get_logger
 
@@ -101,6 +104,9 @@ class LLMTask:
     _lane_handle: Any = field(default=None, repr=False)
     _cache_key: str = field(default="", repr=False)
     _overflow_from: str = field(default="", repr=False)
+    # None preserves direct callers; state carries the origin across hops.
+    _overflow: Optional["Overflow"] = field(default=None, repr=False)
+    _overflow_checked_at: float = field(default=0.0, repr=False)
     # The priority this call carries IN THE LANES. Not the same thing as
     # `priority`: that one pauses the provider queue and is what the admin
     # panel shows, and every streaming registration sets it to CHAT — thought
@@ -160,7 +166,8 @@ class LLMQueue:
         priority: int,
         llm: Any,
         messages_or_prompt: Any,
-        agent_name: str = "", label: str = "") -> Any:
+        agent_name: str = "", label: str = "",
+        overflow: Optional["Overflow"] = None) -> Any:
         """Hands an LLM call to the right provider queue.
 
         Determines the provider from the LLMClient's api_base and delegates
@@ -175,13 +182,13 @@ class LLMQueue:
             pq = pm.get_queue_for_provider(provider_name)
             if pq:
                 return pq.submit(task_type, priority, llm, messages_or_prompt,
-                                 agent_name, label=label)
+                                 agent_name, label=label, overflow=overflow)
 
         # Fallback: first available queue
         pq = pm.get_first_queue()
         if pq:
             return pq.submit(task_type, priority, llm, messages_or_prompt,
-                             agent_name, label=label)
+                             agent_name, label=label, overflow=overflow)
 
         raise Exception("No provider queue available for LLM call")
 

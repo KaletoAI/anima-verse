@@ -30,6 +30,8 @@ from fastapi import HTTPException
 from app.core.timeutils import utc_now_iso
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.core.llm_lanes import Overflow
+
 from .provider import Provider
 from .llm_queue import LLMTask, Priority
 from .turn_trace import current_trace
@@ -453,7 +455,8 @@ class ProviderQueue:
         priority: int,
         llm: Any,
         messages_or_prompt: Any,
-        agent_name: str = "", label: str = "") -> Any:
+        agent_name: str = "", label: str = "",
+        overflow: Optional[Overflow] = None) -> Any:
         """Submits an LLM call to this provider's queue. Blocks until result ready.
 
         Args:
@@ -483,7 +486,8 @@ class ProviderQueue:
             # JSONL logger writes it so a call can be traced to its caller.
             label=label,
             _llm=llm,
-            _messages=messages_or_prompt)
+            _messages=messages_or_prompt,
+            _overflow=overflow)
         task.trace_id, task.trace_kind = _trace_fields()
         # Who reports a failure of this task — see caller_handles_failure().
         task._caller_handles_failure = _caller_handles_failure.get()
@@ -507,6 +511,9 @@ class ProviderQueue:
         with self._lock:
             if task in self._pending_tasks:
                 self._pending_tasks.remove(task)
+
+        if task.status == "overflow":
+            raise task._exception
 
         if task.status == "cancelled":
             raise Exception(f"LLM Queue task cancelled: {task.task_id}")
@@ -1436,6 +1443,34 @@ class ProviderQueue:
                             self._queue_name, _abandoned)
                     self._semaphore.acquire()
             elif not self._acquire_lane(task):
+                from app.core.llm_lanes import (
+                    LaneOverflow, configured_lane_rules, get_lane_manager,
+                    is_background, pool_key_for,
+                )
+                manager = get_lane_manager()
+                threshold = configured_lane_rules().overflow_after
+                waited = manager.now() - task._lane_arrived
+                checked_at = time.monotonic()
+                if (task._overflow is not None and is_background(task.task_type)
+                        and threshold > 0 and waited >= threshold
+                        and checked_at - task._overflow_checked_at >= 1.0):
+                    from app.core.llm_router import overflow_target
+                    task._overflow_checked_at = checked_at
+                    pool = pool_key_for(task.provider_name or self.provider.name, task.model)
+                    alt = overflow_target(task.task_type, task.agent_name,
+                        exclude_pools=task._overflow.left | {pool})
+                    if alt is not None:
+                        target_pool = pool_key_for(alt.provider_name, alt.model)
+                        task.status = "overflow"
+                        task._exception = LaneOverflow(alt, task._overflow.leaving(pool), waited)
+                        manager.note_overflow(pool, target_pool)
+                        logger.info("[lanes] overflow %s %s: %s → %s after %.0fs (waited)",
+                                    task.task_type, task.agent_name, pool, target_pool, waited)
+                        # This get is finished; earlier deferred tasks still belong
+                        # to this pass and are flushed before any blocking work.
+                        task._done_event.set()
+                        self._queue.task_done()
+                        continue
                 # The pool of THIS task is full. Hold it back and carry on
                 # with the next task: lanes belong to the MODEL, workers to
                 # the PROVIDER, so another model of the same provider may well
@@ -1851,6 +1886,7 @@ def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,
             lane=(task._lane_handle.lane_id
                   if task._lane_handle is not None else None),
             cache_key=getattr(task, "_cache_key", "") or "",
+            overflow_from=task._overflow.origin if task._overflow else "",
             llm=task._llm,
             request_messages=to_openai_messages(task._messages),
             error=error)

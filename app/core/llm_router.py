@@ -789,9 +789,12 @@ def llm_call(
         {"role": "user", "content": user_prompt},
     ]
 
+    from app.core.llm_lanes import LaneOverflow, Overflow
+
+    hop_limit = len(_load_routing()) + 1
     last_err: Optional[BaseException] = None
     for attempt in range(1, _LLM_CALL_MAX_ATTEMPTS + 1):
-        instance = resolve_llm(task, agent_name=agent_name)
+        instance = resolve_llm(task, agent_name=agent_name, overflow=True)
         if instance is None:
             if last_err is not None:
                 # Nothing caught this one — the traceback the worker held back
@@ -805,21 +808,30 @@ def llm_call(
                     f"last error: {last_err}")
             raise RuntimeError(f"llm_call: no LLM available for task '{task}'")
 
-        llm = (instance.create_llm(max_tokens=max_tokens) if max_tokens
-               else instance.create_llm())
-        logger.info("llm_call task=%s provider=%s model=%s agent=%s attempt=%d/%d",
-                    task, instance.provider_name, instance.model,
-                    agent_name or "-", attempt, _LLM_CALL_MAX_ATTEMPTS)
-
+        overflow = None if instance.pinned else Overflow()
         try:
-            with caller_handles_failure():
-                return get_llm_queue().submit(
-                    task_type=task,
-                    priority=priority,
-                    llm=llm,
-                    messages_or_prompt=messages,
-                    agent_name=agent_name,
-                    label=label)
+            # A hop is lane contention, so it stays inside the upstream attempt.
+            for hop in range(hop_limit):
+                llm = (instance.create_llm(max_tokens=max_tokens) if max_tokens
+                       else instance.create_llm())
+                logger.info("llm_call task=%s provider=%s model=%s agent=%s attempt=%d/%d",
+                            task, instance.provider_name, instance.model,
+                            agent_name or "-", attempt, _LLM_CALL_MAX_ATTEMPTS)
+                try:
+                    with caller_handles_failure():
+                        return get_llm_queue().submit(
+                            task_type=task,
+                            priority=priority,
+                            llm=llm,
+                            messages_or_prompt=messages,
+                            agent_name=agent_name,
+                            label=label,
+                            overflow=overflow)
+                except LaneOverflow as ov:
+                    if hop + 1 == hop_limit:
+                        raise RuntimeError("llm_call: overflow hop limit exceeded") from ov
+                    instance = ov.target
+                    overflow = ov.overflow
         except Exception as e:
             last_err = e
             if not _is_upstream_failure(e):

@@ -689,6 +689,132 @@ def section_e():
     print("PASS E3 NPC acts opt in; player routes keep default")
 
 
+def section_f():
+    """F: one lane per pool; 1 s stands in for the configured 60 s.
+
+    F1 A busy/C free gives one hop in [1,3) s and origin A/a.
+    F2 both busy for 2.5 s stays on A; F3 chat and F4 direct submit also
+    stay for 2.5 s. F5 expects A1,C1,A2,D2: overflow costs no attempt,
+    C's single ConnectionError cools C, and normal retry resolves A again.
+    """
+    import json
+    from contextlib import ExitStack
+    from types import SimpleNamespace
+    from app.core import paths, llm_lanes as lanes, llm_router as router
+    with tempfile.TemporaryDirectory(prefix="lane-f-") as root, ExitStack() as stack:
+        paths.init(root)
+        from app.core import provider_manager as pm_mod, provider_queue as pq_mod
+        from app.core.provider import Provider
+        from app.core.llm_queue import get_llm_queue, Priority
+        from app.utils import llm_logger, llm_stats
+        rules = lambda: lanes.LaneRules(affinity_wait=0, conversation_hold=0, overflow_after=1)
+        manager = lanes.LaneManager(lane_count=lambda key: 1, rules=rules)
+        pm = pm_mod.ProviderManager()
+        routing = [{"provider": p, "model": p.lower(), "tasks": [
+            {"task": t, "order": i} for t in ("extraction", "npc_talk")]}
+            for i, p in enumerate("AC", 1)]
+        for name in "ACD":
+            provider = Provider(name=name, type="openai", api_base=f"http://stub/{name}",
+                                api_key="", max_concurrent=1, timeout=30, available=True)
+            queue = pq_mod.ProviderQueue(provider, queue_name=name, max_concurrent=1,
+                                         chat_pause_enabled=False, serialize_group="")
+            pm.providers[name] = provider
+            pm.channels[name] = pm._queues[name] = queue
+        log_file = Path(root) / "llm_calls.jsonl"
+        for obj, name, value in (
+            (lanes, "_manager", manager), (lanes, "configured_lane_rules", rules),
+            (pm_mod, "_provider_manager", pm), (router, "get_provider_manager", lambda: pm),
+            (router, "_load_routing", lambda: routing),
+            (router, "disabled_providers", lambda: set()),
+            (router, "_resolve_character_override", lambda *a: None),
+            (pq_mod, "_attach_duration_estimate", lambda task: None),
+            (llm_stats, "record_call", lambda *a, **kw: None),
+            (llm_logger, "LOG_DIR", Path(root)), (llm_logger, "LOG_FILE", log_file)):
+            stack.enter_context(patch.object(obj, name, value))
+        stack.enter_context(patch("app.core.llm_task_state.is_enabled", return_value=True))
+        gate = threading.Event()
+        gate.set()
+        fail_c = [False]
+        invoked = []
+        class Client:
+            def __init__(self, inst, max_tokens):
+                self.model, self.max_tokens = inst.model, max_tokens
+                self.api_base = pm.providers[inst.provider_name].api_base
+                self.provider_name = inst.provider_name
+            def invoke(self, messages):
+                assert gate.wait(3)
+                invoked.append((self.provider_name, self.max_tokens))
+                if self.provider_name == "C" and fail_c[0]:
+                    fail_c[0] = False
+                    raise RuntimeError("ConnectionError: stub upstream failed")
+                return SimpleNamespace(content="fixed", model=self.model)
+        stack.enter_context(patch.object(router.LLMInstance, "create_llm",
+            lambda inst, **kw: Client(inst, kw.get("max_tokens", inst.max_tokens))))
+
+        def run(code, *, both=False, task="extraction", direct=False, failure=False):
+            result, errors = [], []
+            a = manager.acquire_lane("A/a", "chat:blocker", lanes.Priority.CHAT, timeout=0)
+            c = manager.acquire_lane("C/c", "chat:blocker", lanes.Priority.CHAT, timeout=0) if both else None
+            before = len(log_file.read_text().splitlines()) if log_file.exists() else 0
+            invoked.clear()
+            fail_c[0] = failure
+            def call():
+                try:
+                    if direct:
+                        inst = router.LLMInstance("A", "a")
+                        result.append(get_llm_queue().submit(task, Priority.NORMAL,
+                            inst.create_llm(), "u", agent_name="demo"))
+                    else:
+                        result.append(router.llm_call(task, "s", "u", agent_name="demo", max_tokens=17))
+                except Exception as exc:
+                    errors.append(exc)
+            thread = threading.Thread(target=call, daemon=True)
+            started = time.monotonic()
+            with patch.object(router.logger, "info") as info:
+                thread.start()
+                try:
+                    if both or task == "npc_talk" or direct:
+                        time.sleep(2.5)
+                        assert not result and not errors, (result, errors)
+                        a.release()
+                    thread.join(4 if failure else 3)
+                    assert not thread.is_alive() and not errors, errors
+                    assert result[0].content == "fixed"
+                    if code == "F1":
+                        assert 1 <= time.monotonic() - started < 3
+                    if failure:
+                        attempts = [(c.args[2], c.args[-2]) for c in info.call_args_list
+                                    if c.args[0].startswith("llm_call task=")]
+                        assert attempts == [("A", 1), ("C", 1), ("A", 2), ("D", 2)], attempts
+                        assert not pm.providers["C"].available
+                finally:
+                    a.release()
+                    if c:
+                        c.release()
+                    thread.join(6)
+            entries = [json.loads(line) for line in log_file.read_text().splitlines()[before:]]
+            last = entries[-1]
+            expected = "D" if failure else "A" if both or task == "npc_talk" or direct else "C"
+            assert last["provider"] == expected, last
+            if expected == "A":
+                assert "overflow_from" not in last
+            else:
+                assert last["overflow_from"] == "A/a"
+                assert all(p != "A" and tokens == 17 for p, tokens in invoked)
+            assert not pm._queues["A"]._pending_tasks
+            if code == "F1":
+                assert manager.snapshot()["pools"]["A/a"]["overflowed_out"] == 1
+                assert not pm._queues["A"]._history
+                assert pm.providers["A"].available and pm.providers["C"].available
+            print(f"PASS {code}")
+        run("F1")
+        run("F2", both=True)
+        run("F3", task="npc_talk")
+        run("F4", direct=True)
+        routing.append({"provider": "D", "model": "d", "tasks": [{"task": "extraction", "order": 3}]})
+        run("F5", failure=True)
+
+
 def main():
     from app.core import paths
 
