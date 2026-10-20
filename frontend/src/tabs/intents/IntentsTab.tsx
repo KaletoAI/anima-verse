@@ -123,6 +123,7 @@ const EXPIRY_REASON_LABELS: Record<string, string> = {
   replaced: 'replaced by reflection',
   duplicate: 'duplicate merged',
   cleanup: 'ended by clean-up',
+  participant_gone: 'a participant left the world',
 }
 
 const TRIP_PHASE_LABELS: Record<string, string> = {

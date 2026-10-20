@@ -109,6 +109,12 @@ Sections:
       delete an unrelated memory, and must NOT touch the daily summary that
       merely mentions the name — a daily summary is about the DAY. The
       per-partner summary row DOES go.
+      Five intents give two expirations by hand: A (observer owns, NPC is a
+      participant) and E (NPC owns) become expired with participant_gone.
+      B (observer only) and C (lookalike demo_npc_marenka) remain active;
+      D (NPC participates, already done) stays done. Thus intents == 2.
+      Re-seeding one active intent with the NPC before delete_character
+      must also leave that intent expired with participant_gone.
 
   [9] The generation schema resolves completely. `_load_schema` substitutes by
       plain `str.replace` and leaves an unknown placeholder standing as literal
@@ -635,6 +641,7 @@ check("the normal character survives its stale stamp", RP in after_names, True)
 # ---------------------------------------------------------------------------
 print("\n[8] Trace cleanup deletes what others remembered ABOUT the NPC")
 from app.core.memory_service import cleanup_npc_traces  # noqa: E402
+from app.models.intents import create_intent, get_intent  # noqa: E402
 
 TRACE_NPC = "demo_npc_maren"
 OBSERVER = "demo_observer"
@@ -658,10 +665,30 @@ with db.transaction() as conn:
         (OBSERVER, "daily", "Y0001-D001", "",
          f"Rain all morning. {TRACE_NPC} poured the wine."))
 
+intent_cases = [
+    ("A", OBSERVER, {OBSERVER: {}, TRACE_NPC: {}}, "active", "expired"),
+    ("B", OBSERVER, {OBSERVER: {}}, "active", "active"),
+    ("C", OBSERVER, {OBSERVER: {}, "demo_npc_marenka": {}}, "active", "active"),
+    ("D", OBSERVER, {OBSERVER: {}, TRACE_NPC: {}}, "done", "done"),
+    ("E", TRACE_NPC, {TRACE_NPC: {}}, "active", "expired"),
+]
+seeded_intents = []
+for label, owner, participants, status, expected_status in intent_cases:
+    intent = create_intent(owner=owner, title=f"Trace cleanup {label}",
+                           participants=participants, status=status,
+                           source="admin" if label == "E" else "character")
+    seeded_intents.append((label, intent["id"], expected_status))
+
 check("observer memories before", count_memories(OBSERVER), 4)
 result = cleanup_npc_traces(TRACE_NPC)
 check("memories deleted", result["memories"], 2)
 check("partner summaries deleted", result["summaries"], 1)
+check("intents expired", result.get("intents"), 2)
+for label, intent_id, expected_status in seeded_intents:
+    intent = get_intent(intent_id)
+    check(f"intent {label} status", intent["status"], expected_status)
+    check(f"intent {label} expiry reason", intent["meta"].get("expired_reason"),
+          "participant_gone" if expected_status == "expired" else None)
 
 conn = db.get_connection()
 left = [r[0] for r in conn.execute(
@@ -678,7 +705,14 @@ check("and it still names the NPC", TRACE_NPC in day_rows[0][0], True)
 # The delete path wires it up: deleting the NPC runs the cleanup by itself.
 add_memory(OBSERVER, f"{TRACE_NPC} nodded goodbye.", memory_type="episodic")
 check("re-seeded trace", count_memories(OBSERVER), 3)
+delete_intent = create_intent(
+    owner=OBSERVER, title="Delete path trace",
+    participants={OBSERVER: {}, TRACE_NPC: {}})
 delete_character(TRACE_NPC)
+deleted_trace = get_intent(delete_intent["id"])
+check("delete_character expired the intent", deleted_trace["status"], "expired")
+check("delete_character recorded the reason",
+      deleted_trace["meta"].get("expired_reason"), "participant_gone")
 check("delete_character swept the trace", count_memories(OBSERVER), 2)
 
 # ---------------------------------------------------------------------------

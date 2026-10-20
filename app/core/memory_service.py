@@ -421,17 +421,19 @@ def cleanup_npc_traces(npc_name: str) -> Dict[str, int]:
       NPC, so they go with it.
     * ``summaries`` rows whose ``partner`` is the NPC — a per-partner summary
       has no meaning once the partner is gone.
+    * Active ``intents`` owned by or involving the NPC are expired with reason
+      ``participant_gone``, not deleted.
 
     Deliberately NOT touched: daily/weekly/season summaries and diary entries
     that merely *mention* the name. Those are about the DAY, not about the NPC;
     dropping them would destroy unrelated history. The decision is deletion
     without substitution — no "a stranger" rewriting.
 
-    Returns ``{"memories": n, "summaries": n}``.
+    Returns ``{"memories": n, "summaries": n, "intents": n}``.
     """
     from app.core.db import transaction
 
-    removed = {"memories": 0, "summaries": 0}
+    removed = {"memories": 0, "summaries": 0, "intents": 0}
     name = (npc_name or "").strip()
     if not name:
         return removed
@@ -468,9 +470,15 @@ def cleanup_npc_traces(npc_name: str) -> Dict[str, int]:
         logger.error("cleanup_npc_traces failed for %s: %s", name, e)
         return removed
 
-    if removed["memories"] or removed["summaries"]:
-        logger.info("NPC trace cleanup '%s': %d memories, %d partner summaries",
-                    name, removed["memories"], removed["summaries"])
+    try:
+        from app.models.intents import expire_intents_involving
+        removed["intents"] = expire_intents_involving(name)
+    except Exception as e:
+        logger.warning("NPC intent cleanup failed for %s: %s", name, e)
+
+    if removed["memories"] or removed["summaries"] or removed["intents"]:
+        logger.info("NPC trace cleanup '%s': %d memories, %d partner summaries, %d intents",
+                    name, removed["memories"], removed["summaries"], removed["intents"])
     return removed
 
 

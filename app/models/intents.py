@@ -324,7 +324,7 @@ def auto_track_progress(character_name: str, tool_type: str,
 
 def expire_intent(intent_id: str, reason: str) -> bool:
     """Expire an active intent and preserve its metadata with the reason."""
-    if reason not in {"cap", "deadline", "replaced", "duplicate", "cleanup"}:
+    if reason not in {"cap", "deadline", "replaced", "duplicate", "cleanup", "participant_gone"}:
         raise ValueError("Unknown intent expiry reason")
     with keyed_lock("intent_execution", intent_id):
         intent = get_intent(intent_id)
@@ -333,6 +333,25 @@ def expire_intent(intent_id: str, reason: str) -> bool:
         meta = dict(intent.get("meta") or {})
         meta["expired_reason"] = reason
         return update_intent(intent_id, status="expired", meta=meta) is not None
+
+
+def expire_intents_involving(name: str) -> int:
+    """Expire active plans owned by or involving a departing participant.
+
+    A managed intent (a package runs its action, e.g. a shared trip) is left
+    to that package: it ends its own rows when a participant leaves.
+    """
+    folded_name = name.casefold()
+    expired = 0
+    for intent in list_intents(owner=name, status="active"):
+        if is_managed_intent(intent):
+            continue
+        if (intent["owner"].casefold() == folded_name
+                or any(participant.casefold() == folded_name
+                       for participant in (intent.get("participants") or {}))):
+            if expire_intent(intent["id"], "participant_gone"):
+                expired += 1
+    return expired
 
 
 def _cap_class(intent: Dict[str, Any]) -> str:
