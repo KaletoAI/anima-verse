@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from app.core.model_validate import parse_glb
+from app.core.model_validate import parse_glb, texture_image_index
 
 
 def png_basecolor(raw: bytes) -> bytes:
@@ -38,7 +38,7 @@ def source_basecolor(mesh: Path, separate: str = "") -> bytes:
         ref = (material.get('pbrMetallicRoughness') or {}).get('baseColorTexture')
         if isinstance(ref, dict):
             try:
-                indices.add(textures[ref['index']]['source'])
+                indices.add(texture_image_index(gltf, textures[ref['index']]))
             except (KeyError, IndexError, TypeError) as exc:
                 raise ValueError('source basecolor texture reference is invalid') from exc
     if len(indices) != 1:

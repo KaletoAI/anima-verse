@@ -326,10 +326,11 @@ def _accessor_array(parsed: dict, index: int):
 
 def _primitive_basecolor(parsed: dict, primitive: dict):
     """Resolve the used material's embedded image, rather than image zero."""
+    from app.core.model_validate import texture_image_index
     gltf = parsed['gltf']
     material = gltf['materials'][primitive['material']]
     texture = gltf['textures'][material['pbrMetallicRoughness']['baseColorTexture']['index']]
-    image = gltf['images'][texture['source']]
+    image = gltf['images'][texture_image_index(gltf, texture)]
     view = gltf['bufferViews'][image['bufferView']]
     start = int(view.get('byteOffset', 0))
     if view.get('buffer', 0) != 0 or start < 0 or start + view['byteLength'] > len(parsed['bin']):
@@ -343,7 +344,7 @@ def bake_face_texture(source_glb: bytes, hub_glb: bytes, *, dilate_px: int = 4,
     import struct
     import numpy as np
     from PIL import ImageDraw, ImageFilter
-    from app.core.model_validate import parse_glb
+    from app.core.model_validate import parse_glb, texture_image_index
     from app.core.mesh_source import validate_face_source, validate_source
 
     if not isinstance(dilate_px, int) or isinstance(dilate_px, bool) or dilate_px < 0:
@@ -466,7 +467,7 @@ def bake_face_texture(source_glb: bytes, hub_glb: bytes, *, dilate_px: int = 4,
     texture_info = gltf['materials'][primitive['material']]['pbrMetallicRoughness']['baseColorTexture']
     texture_index = texture_info['index']
     original_texture = gltf['textures'][texture_index]
-    image_index = original_texture['source']
+    image_index = texture_image_index(gltf, original_texture)
     image = gltf['images'][image_index]
     image_view = image['bufferView']
 
@@ -491,8 +492,12 @@ def bake_face_texture(source_glb: bytes, hub_glb: bytes, *, dilate_px: int = 4,
             return any(extension_image_reference(v) for v in value)
         return False
 
-    shared = (other_reference(gltf['materials'])
-              or any(i != texture_index and t.get('source') == image_index
+    # PNG bytes would contradict the WebP texture extension; the MR map still
+    # needs the declared extension and its original WebP image.
+    shared = ('EXT_texture_webp' in original_texture.get('extensions', {})
+              or other_reference(gltf['materials'])
+              # A PNG fallback of another WebP texture is a user of the image too.
+              or any(i != texture_index and image_index in (t.get('source'), texture_image_index(gltf, t))
                      for i, t in enumerate(gltf['textures']))
               or any(i != image_index and img.get('bufferView') == image_view
                      for i, img in enumerate(gltf['images'])))
@@ -591,7 +596,7 @@ def face_texture_preserved(baked_glb: bytes, rigged_glb: bytes, *,
     """
     import numpy as np
     import zlib
-    from app.core.model_validate import parse_glb
+    from app.core.model_validate import parse_glb, texture_image_index
     try:
         def decode(parsed, primitive):
             return Image.open(io.BytesIO(_primitive_basecolor(parsed, primitive)[1])).convert('RGB')
@@ -626,7 +631,7 @@ def face_texture_preserved(baked_glb: bytes, rigged_glb: bytes, *,
         for primitive in primitives:
             material = rigged['gltf']['materials'][primitive['material']]
             texture = rigged['gltf']['textures'][material['pbrMetallicRoughness']['baseColorTexture']['index']]
-            image_index = texture['source']
+            image_index = texture_image_index(rigged['gltf'], texture)
             if image_index in decoded:
                 continue
             decoded[image_index] = True

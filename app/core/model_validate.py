@@ -29,6 +29,8 @@ MIXAMO_JOINT_COUNT = 52
 # A texture this small is never real content — it is the known "empty texture"
 # artefact of a failed bake.
 MIN_TEXTURE_DIM = 8
+MAX_TEXTURE_SIDE = 8192
+MAX_TEXTURE_PIXELS = 8192 * 8192
 # Above this many vertices a primitive is sampled instead of read completely —
 # proportions do not get better from the last 100k points.
 MAX_POSITION_SAMPLES = 200_000
@@ -63,8 +65,102 @@ def _jpeg_size(data: bytes) -> Optional[Tuple[int, int]]:
     return None
 
 
+def _webp_size(data: bytes) -> Optional[Tuple[int, int]]:
+    """Read the canvas dimensions from a RIFF WebP header without decoding."""
+    if len(data) < 20 or data[:4] != b'RIFF' or data[8:12] != b'WEBP':
+        return None
+    end = struct.unpack_from('<I', data, 4)[0] + 8
+    if end > len(data):
+        return None
+    offset = 12
+    while offset + 8 <= end:
+        kind = data[offset:offset + 4]
+        size = struct.unpack_from('<I', data, offset + 4)[0]
+        start = offset + 8
+        if start + size > end:
+            return None
+        chunk = data[start:start + size]
+        if kind == b'VP8 ' and len(chunk) >= 10 and chunk[3:6] == b'\x9d\x01\x2a':
+            w, h = struct.unpack_from('<HH', chunk, 6)
+            return w & 0x3fff, h & 0x3fff
+        if kind == b'VP8L' and len(chunk) >= 5 and chunk[0] == 0x2f:
+            bits = int.from_bytes(chunk[1:5], 'little')
+            return (bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1
+        if kind == b'VP8X' and len(chunk) >= 10:
+            return (int.from_bytes(chunk[4:7], 'little') + 1,
+                    int.from_bytes(chunk[7:10], 'little') + 1)
+        offset = start + size + size % 2
+    return None
+
+
 def _image_size(data: bytes) -> Optional[Tuple[int, int]]:
-    return _png_size(data) or _jpeg_size(data)
+    return _png_size(data) or _jpeg_size(data) or _webp_size(data)
+
+
+def texture_image_index(gltf: dict, texture: dict) -> int:
+    """Resolve a texture's preferred WebP image or its PNG/JPEG core source.
+
+    A core fallback must remain valid even when the WebP extension is used.
+    """
+    images = gltf.get('images') or []
+
+    def source_index(value, mime_types):
+        if (not isinstance(value, int) or isinstance(value, bool)
+                or not 0 <= value < len(images)):
+            raise ValueError('invalid texture image index')
+        image = images[value]
+        if not isinstance(image, dict) or image.get('mimeType') not in mime_types:
+            raise ValueError('texture source has an incompatible image mimeType')
+        return value
+
+    if not isinstance(texture, dict):
+        raise ValueError('invalid texture')
+    if 'extensions' in texture:
+        extensions = texture['extensions']
+        if not isinstance(extensions, dict):
+            raise ValueError('texture extensions must be an object')
+        unknown = set(extensions) - {'EXT_texture_webp'}
+        if unknown:
+            raise ValueError('unsupported texture extensions: ' + ', '.join(sorted(unknown)))
+        if 'EXT_texture_webp' in extensions:
+            if 'EXT_texture_webp' not in (gltf.get('extensionsUsed') or []):
+                raise ValueError('EXT_texture_webp is missing from extensionsUsed')
+            extension = extensions['EXT_texture_webp']
+            if not isinstance(extension, dict):
+                raise ValueError('EXT_texture_webp must be an object')
+            index = source_index(extension.get('source'), ('image/webp',))
+            if 'source' in texture:
+                source_index(texture['source'], ('image/png', 'image/jpeg'))
+            return index
+    return source_index(texture.get('source'), ('image/png', 'image/jpeg'))
+
+
+def _validate_texture_image(image: dict, raw: bytes) -> None:
+    """Check the header and resource limits before decoding one embedded image."""
+    import io
+    from PIL import Image
+
+    mime = image.get('mimeType')
+    formats = {'image/png': 'PNG', 'image/jpeg': 'JPEG', 'image/webp': 'WEBP'}
+    matches = (mime == 'image/png' and raw.startswith(b'\x89PNG\r\n\x1a\n')
+               or mime == 'image/jpeg' and raw.startswith(b'\xff\xd8\xff')
+               or mime == 'image/webp' and len(raw) >= 12
+               and raw[:4] == b'RIFF' and raw[8:12] == b'WEBP')
+    if not matches:
+        raise ValueError('image mimeType and byte magic do not match')
+    try:
+        with Image.open(io.BytesIO(raw)) as decoded:
+            width, height = decoded.size
+            if (width <= 0 or height <= 0 or width > MAX_TEXTURE_SIDE
+                    or height > MAX_TEXTURE_SIDE or width * height > MAX_TEXTURE_PIXELS):
+                raise ValueError('texture dimensions exceed limits')
+            if decoded.format != formats[mime]:
+                raise ValueError('image format does not match mimeType')
+            if getattr(decoded, 'n_frames', 1) != 1:
+                raise ValueError('animated textures are unsupported')
+            decoded.load()
+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise ValueError(f'unusable embedded texture: {exc}') from exc
 
 
 def material_names(gltf: Dict[str, Any]) -> List[str]:
@@ -724,18 +820,21 @@ def validate_fbx(data: bytes, texture: Optional[bytes], meta: Optional[dict] = N
 def face_texture_geometry(data: bytes, *, original: bool = False,
                           rigged: bool = False) -> Dict[str, Any]:
     """Validate projection inputs and material preservation; count triangles."""
-    import io
-    from PIL import Image
     errors = []
     triangles = 0
     primitive_count = 0
     try:
         parsed = parse_glb(data)
         gltf, binary = parsed['gltf'], parsed['bin']
-        if gltf.get('extensionsRequired'):
-            raise ValueError('required extensions are unsupported')
+        required = set(gltf.get('extensionsRequired') or [])
+        unsupported = required - {'EXT_texture_webp'}
+        if unsupported:
+            raise ValueError('unsupported required extensions: ' + ', '.join(sorted(unsupported)))
+        missing = required - set(gltf.get('extensionsUsed') or [])
+        if missing:
+            raise ValueError('required extensions missing from extensionsUsed: ' + ', '.join(sorted(missing)))
         forbidden = {'KHR_draco_mesh_compression', 'EXT_meshopt_compression',
-                     'KHR_texture_basisu', 'EXT_texture_webp'}
+                     'KHR_texture_basisu'}
 
         if forbidden.intersection(gltf.get('extensionsUsed') or []):
             raise ValueError('compressed geometry or textures are unsupported')
@@ -776,9 +875,15 @@ def face_texture_geometry(data: bytes, *, original: bool = False,
         def view_bytes(index):
             view = at(gltf.get('bufferViews') or [], index)
             start, size = int(view.get('byteOffset', 0)), int(view['byteLength'])
-            if view.get('buffer', 0) != 0 or start < 0 or size <= 0 or start + size > len(binary):
+            if view.get('buffer', 0) != 0 or start < 0 or size <= 0 or start + size > int(buffers[0]['byteLength']):
                 raise ValueError('invalid embedded bufferView')
             return view, binary[start:start + size]
+
+        for image in gltf.get('images') or []:
+            _, raw = view_bytes(image.get('bufferView'))
+            _validate_texture_image(image, raw)
+        for texture in gltf.get('textures') or []:
+            texture_image_index(gltf, texture)
 
         def accessor(index, kind, components):
             acc = at(gltf.get('accessors') or [], index)
@@ -809,14 +914,7 @@ def face_texture_geometry(data: bytes, *, original: bool = False,
                 raise ValueError('basecolor must be opaque')
             ref = material['pbrMetallicRoughness']['baseColorTexture']['index']
             texture = at(gltf.get('textures') or [], ref)
-            image = at(gltf.get('images') or [], texture['source'])
-            if image.get('mimeType') not in ('image/png', 'image/jpeg'):
-                raise ValueError('basecolor must be PNG or JPEG')
-            _, raw = view_bytes(image.get('bufferView'))
-            decoded = Image.open(io.BytesIO(raw))
-            decoded.load()
-            if decoded.format not in ('PNG', 'JPEG'):
-                raise ValueError('basecolor encoding is unsupported')
+            texture_image_index(gltf, texture)
     except (ValueError, OSError, KeyError, IndexError, TypeError, struct.error) as exc:
         errors.append(str(exc))
     return {'ok': not errors, 'errors': errors, 'triangles': triangles,
