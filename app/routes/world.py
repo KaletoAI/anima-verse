@@ -9,7 +9,7 @@ from app.core.http_files import etag_matches
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from app.core.log import get_logger
-from app.core.auth_dependency import require_admin
+from app.core.auth_dependency import require_admin, get_current_user
 from app.core.explicit_backend import (require_explicit_backend,
                                        require_explicit_backend_async)
 from app.core.upload_limits import (MODEL_UPLOAD_MAX_BYTES, ensure_image,
@@ -49,7 +49,7 @@ router = APIRouter(prefix="/world", tags=["world"])
 @router.get("/locations")
 def get_locations_route(request: Request,
                         character_name: str = Query("", alias="agent_name"),
-                        view: str = Query("")) -> Any:
+                        view: str = Query(""), user=Depends(get_current_user)) -> Any:
     """List locations, optionally filtered by a character's inventory/state.
 
     Invisible locations are omitted; inaccessible ones get accessible=false.
@@ -64,7 +64,7 @@ def get_locations_route(request: Request,
         if etag_matches(request.headers.get("if-none-match"), etag):
             return Response(status_code=304, headers=headers)
         return JSONResponse(world_ops.build_locations_payload_3d(), headers=headers)
-    return world_ops.build_locations_payload(character_name)
+    return world_ops.build_locations_payload(character_name, is_admin=user.get("role") == "admin")
 
 
 @router.post("/locations")

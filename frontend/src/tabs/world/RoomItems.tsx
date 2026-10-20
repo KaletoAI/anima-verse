@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiGet, apiPost } from '../../lib/api'
+import { apiDelete, apiGet, apiPost, apiPatch } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Field } from '../../components/Field'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
@@ -13,6 +13,9 @@ interface RoomItem {
   item_name?: string
   item_description?: string
   quantity?: number
+  discovery_difficulty?: number
+  found_by?: string[]
+  note?: string
   hidden?: boolean
 }
 
@@ -86,6 +89,19 @@ export function RoomItems({
     }
   }, [addId, addQty, addHidden, locationId, roomId, reload, t, toast])
 
+  const editItem = async (itemId: string, updates: Partial<RoomItem>) => {
+    try {
+      await apiPatch(
+        `/inventory/rooms/${encodeURIComponent(locationId)}/${encodeURIComponent(roomId)}/${encodeURIComponent(itemId)}`,
+        updates,
+      )
+      await reload()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      await reload()
+    }
+  }
+
   return (
     <div className="ga-section">
       <div className="ga-form-section-label">{t('Items in this room')}</div>
@@ -96,10 +112,31 @@ export function RoomItems({
       ) : (
         <ul className="ga-room-mini-list">
           {roomItems.map((it) => (
-            <li key={it.item_id}>
+            <li key={it.item_id} style={{ flexWrap: 'wrap' }}>
               <strong>{it.item_name || it.item_id}</strong>
               {it.quantity && it.quantity > 1 ? ` ×${it.quantity}` : ''}
-              {it.hidden ? <span className="ga-form-hint"> · {t('hidden')}</span> : null}
+              <Field label={t('Hidden')} inline compact>
+                <input type="checkbox" checked={!!it.hidden}
+                  onChange={(e) => { void editItem(it.item_id, { hidden: e.target.checked }) }} />
+              </Field>
+              {it.hidden && (
+                <div style={{ flexBasis: '100%', order: 1 }}>
+                  <Field label={t('Discovery difficulty')}
+                    hint={t('Compared with the discovery stat (Setup). Above 100 stays hidden unless a state boosts the stat.')}>
+                    <input type="number" className="ga-input" min={0} max={999} step={1}
+                      value={it.discovery_difficulty ?? 0}
+                      onChange={(e) => {
+                        const value = e.target.valueAsNumber
+                        setRoomItems((current) => current?.map((row) => row.item_id === it.item_id
+                          ? { ...row, discovery_difficulty: Number.isFinite(value) ? value : 0 } : row) ?? null)
+                      }}
+                      onBlur={(e) => { void editItem(it.item_id, {
+                        discovery_difficulty: Math.max(0, Math.min(999, Math.trunc(e.target.valueAsNumber || 0))),
+                      }) }} />
+                  </Field>
+                  <div className="ga-form-hint">{t('Found by')}: {(it.found_by || []).join(', ') || '—'}</div>
+                </div>
+              )}
               <button className="ga-btn ga-btn-sm ga-btn-danger" onClick={() => removeItem(it.item_id)}>
                 ×
               </button>

@@ -2745,6 +2745,10 @@
     "Stat boosts": "Stat-Boosts",
     "{label} {base} + {boost} = {value}": "{label} {base} + {boost} = {value}",
     "{name} {amount} ({hours} h left)": "{name} {amount} (noch {hours} h)",
-    "effective {value} ({boost})": "wirksam {value} ({boost})"
+    "effective {value} ({boost})": "wirksam {value} ({boost})",
+    "Only you noticed this": "Nur du hast das bemerkt",
+    "Discovery difficulty": "Entdeckungs-Schwierigkeit",
+    "Compared with the discovery stat (Setup). Above 100 stays hidden unless a state boosts the stat.": "Wird mit dem Entdeckungswert verglichen (Setup). Über 100 bleibt es versteckt, außer ein Zustand hebt den Wert.",
+    "Found by": "Gefunden von"
   }
 }

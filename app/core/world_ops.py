@@ -131,17 +131,37 @@ def conditions_pass(conditions: Any, character_name: str,
     return True
 
 
-def build_locations_payload(character_name: str) -> Dict[str, Any]:
+def _without_hidden_placements(loc: Dict[str, Any]) -> Dict[str, Any]:
+    """The location as a player may see it: hidden placements and discovery
+    metadata removed. Copies only what it changes (the location list is a
+    shared cache), so a world without hidden items costs nothing."""
+    rooms = loc.get("rooms") or []
+    if not any(p.get("hidden") or "discovery_difficulty" in p or "found_by" in p
+               for room in rooms for p in (room.get("items") or [])):
+        return loc
+    out = dict(loc)
+    out["rooms"] = [
+        dict(room, items=[{k: v for k, v in p.items()
+                           if k not in ("discovery_difficulty", "found_by")}
+                          for p in room["items"] if not p.get("hidden")])
+        if room.get("items") else room
+        for room in rooms]
+    return out
+
+
+def build_locations_payload(character_name: str, *, is_admin: bool = False) -> Dict[str, Any]:
     """List locations from a character's point of view.
 
     If ``character_name`` is set, locations with ``visible_when``/
     ``accessible_when`` are filtered against the character inventory/state.
     Invisible locations (visible_when fails) are removed; inaccessible
     locations (accessible_when fails) get an ``accessible: false`` flag.
-    Without ``character_name`` all locations are returned unfiltered
-    (admin view).
+    Without ``character_name`` location conditions are unfiltered. Hidden
+    placements and discovery metadata are only included for an admin.
     """
     locations = list_locations()
+    if not is_admin:
+        locations = [_without_hidden_placements(loc) for loc in locations]
 
     if character_name:
         filtered = []

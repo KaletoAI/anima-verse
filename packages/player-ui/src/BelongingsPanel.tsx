@@ -72,9 +72,10 @@ const RARITY_COLOR: Record<string, string> = {
 }
 interface Equipped { item_id: string; name: string; image: boolean }
 /** An item lying in the avatar's room (server: /play/belongings -> items_here).
- *  Hidden room items never appear here — they have not been discovered. */
+ *  Hidden placements appear only after the avatar has discovered them. */
 interface RoomItem {
   item_id: string; name: string; description: string; quantity: number; image: boolean
+  discovered?: boolean
 }
 interface Belongings {
   avatar: string; slot_order: string[]; slot_labels: Record<string, string>
@@ -459,6 +460,7 @@ export function BelongingsPanel({ onClose }: { onClose?: () => void } = {}) {
                   <ItemIcon itemId={it.item_id} hasImage={it.image} emoji="📦" size={32} />
                   <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {it.discovered && <span title={t('Only you noticed this')} aria-label={t('Only you noticed this')}>👁 </span>}
                       {it.name}{it.quantity > 1 ? <span style={{ opacity: 0.6 }}> ×{it.quantity}</span> : null}
                     </span>
                     {it.description && (

@@ -2,9 +2,11 @@
 import io
 import time
 from pathlib import Path
-from fastapi import APIRouter, Request, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Request, HTTPException, Query, UploadFile, File, Depends
 from fastapi.responses import FileResponse, StreamingResponse
 from typing import Dict, Any, List
+from app.core.auth_dependency import get_current_user
+from app.core import users
 from app.core.log import get_logger
 from app.core.paths import get_storage_dir
 from app.models.inventory import (
@@ -649,14 +651,26 @@ async def generate_item_image_route(item_id: str, request: Request) -> Dict[str,
 @router.get("/rooms/{location_id}/{room_id}")
 def list_room_items_route(
     location_id: str,
-    room_id: str) -> Dict[str, Any]:
-    """List items in a room."""
+    room_id: str, user=Depends(get_current_user)) -> Dict[str, Any]:
+    """List placements visible to the caller, with discovery details for admins."""
+    from app.models.account import get_active_character
+    from app.models.inventory import placement_visible_to, discovered_by
+    admin = user.get("role") == users.ROLE_ADMIN
+    avatar = "" if admin else (get_active_character() or "")
     room_items = get_room_items(location_id, room_id)
     # Enrich with item details.
     enriched = []
     for ri in room_items:
+        if not admin and not placement_visible_to(avatar, location_id, room_id, ri):
+            continue
         item = get_item(ri.get("item_id", ""))
         entry = {**ri}
+        if admin:
+            entry["discovery_difficulty"] = ri.get("discovery_difficulty", 0)
+            entry["found_by"] = discovered_by(location_id, room_id, ri.get("item_id", ""))
+        else:
+            entry.pop("discovery_difficulty", None)
+            entry.pop("found_by", None)
         if item:
             entry["item_name"] = item.get("name", "?")
             entry["item_description"] = item.get("description", "")
@@ -693,10 +707,56 @@ def _add_room_item_route_sync(location_id: str, room_id: str,
         item_id=item_id,
         quantity=int(body.get("quantity", 1)),
         hidden=body.get("hidden", False),
-        discovery_difficulty=int(body.get("discovery_difficulty", 0)),
+        # A hidden placement without an explicit difficulty must not be
+        # visible to everyone (0); 50 is the middle of the stat scale.
+        discovery_difficulty=int(body.get("discovery_difficulty",
+                                          50 if body.get("hidden") else 0)),
         note=body.get("note", ""))
     if not success:
         raise HTTPException(status_code=400, detail="Failed to place item")
+    return {"ok": True}
+
+
+@router.patch("/rooms/{location_id}/{room_id}/{item_id}")
+async def patch_room_item_route(location_id: str, room_id: str, item_id: str,
+                                request: Request) -> Dict[str, Any]:
+    """Edit an existing placement without adding quantity or clearing discoveries."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_patch_room_item_route_sync,
+                                   location_id, room_id, item_id, body)
+
+
+def _patch_room_item_route_sync(location_id: str, room_id: str, item_id: str,
+                                 body: Any) -> Dict[str, Any]:
+    """Validate and serialize a placement edit with other world writers."""
+    from app.models.world import (get_location_by_id, get_room_by_id,
+                                  upsert_location, world_write_lock)
+    from app.core import sync_topics
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Expected an object")
+    updates = {}
+    for key in ("hidden", "discovery_difficulty", "note", "quantity"):
+        if key not in body:
+            continue
+        value = body[key]
+        expected = {"hidden": bool, "discovery_difficulty": int, "note": str, "quantity": int}[key]
+        if type(value) is not expected or (key == "quantity" and value < 1):
+            raise HTTPException(400, f"Invalid {key}")
+        updates[key] = max(0, min(999, value)) if key == "discovery_difficulty" else value
+    with world_write_lock:
+        location = get_location_by_id(location_id)
+        room = get_room_by_id(location, room_id) if location else None
+        placement = next((p for p in (room or {}).get("items", [])
+                          if p.get("item_id") == item_id), None)
+        if placement is None:
+            raise HTTPException(404, "Item not found in room")
+        visible_before = not placement.get("hidden", False)
+        placement.update(updates)
+        if not upsert_location(location, sync_world=False):
+            raise HTTPException(400, "Failed to update placement")
+        sync_topics.room_items_changed(location_id, room_id, visible_before,
+                                       not placement.get("hidden", False))
     return {"ok": True}
 
 

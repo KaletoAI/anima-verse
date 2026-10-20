@@ -15,6 +15,13 @@ Hand-derived expectations:
 [j] Legacy hidden 3 becomes 101, marker stat; rerun preserves an edit to 72.
 [k] Unmarked location pack converts hidden items to 101; export marks stat,
     and a marked round trip preserves 72. Unrelated locations survive.
+[l] Setting difficulty 120 preserves quantity 3 and B's discovery stamp.
+    Quantity 2 replaces 3; difficulty clamps to 0–999; invalid quantity is 400,
+    absent placement is 404, and PATCH is admin-only.
+[m] Only B found the notebook: admin gets found_by [B], A gets only coin,
+    B gets both, no avatar gets only coin. Players get no difficulty/found_by.
+[n] Non-admin locations omit all hidden placements, including without avatar;
+    admin retains them, storage is unchanged, and 3D room fields omit items.
 """
 import io
 import json
@@ -167,7 +174,50 @@ def main():
         assert imported_difficulties(content) == [72]
         assert get_location(untouched)
         print("PASS [k]")
-        print("All item discovery checks passed (11/11).")
+        from app.routes.inventory import list_room_items_route, _patch_room_item_route_sync
+        from fastapi import HTTPException
+        from app.core.auth_dependency import is_admin_only_path
+        from app.core.world_ops import build_locations_payload, VIEW_3D_ROOM_FIELDS
+        remove_item_from_room(loc, room, notebook, quantity=999)
+        add_item_to_room(loc, room, notebook, quantity=3, hidden=True, discovery_difficulty=72)
+        boost(expired=True)
+        assert sees("B") and not sees("A")
+        stamps = [tuple(r) for r in get_connection().execute("SELECT * FROM item_discoveries")]
+        assert _patch_room_item_route_sync(loc, room, notebook, {"discovery_difficulty": 120}) == {"ok": True}
+        assert placement()["quantity"] == 3 and placement()["discovery_difficulty"] == 120
+        assert [tuple(r) for r in get_connection().execute("SELECT * FROM item_discoveries")] == stamps
+        _patch_room_item_route_sync(loc, room, notebook, {"quantity": 2, "note": "kept", "discovery_difficulty": 1500})
+        assert placement()["quantity"] == 2 and placement()["note"] == "kept" and placement()["discovery_difficulty"] == 999
+        _patch_room_item_route_sync(loc, room, notebook, {"discovery_difficulty": -5})
+        assert placement()["discovery_difficulty"] == 0
+        for body, iid, status in [({"quantity": 0}, notebook, 400), ({"quantity": 1.5}, notebook, 400),
+                                  ({"hidden": "false"}, notebook, 400), ({"note": "x"}, "absent", 404)]:
+            try:
+                _patch_room_item_route_sync(loc, room, iid, body)
+                raise AssertionError("invalid edit accepted")
+            except HTTPException as exc:
+                assert exc.status_code == status
+        _patch_room_item_route_sync(loc, room, notebook, {"discovery_difficulty": 120})
+        assert discovered_by(loc, room, notebook) == ["B"]
+        assert is_admin_only_path(f"/inventory/rooms/{loc}/{room}/{notebook}", "PATCH")
+        print("PASS [l]")
+        entries = list_room_items_route(loc, room, user={"role": "admin"})["items"]
+        assert next(e for e in entries if e["item_id"] == notebook)["found_by"] == ["B"]
+        for avatar, expected in [("A", {coin}), ("B", {coin, notebook}), ("", {coin})]:
+            with patch("app.models.account.get_active_character", return_value=avatar):
+                entries = list_room_items_route(loc, room, user={"role": "player", "id": "test"})["items"]
+            assert {e["item_id"] for e in entries} == expected
+            assert all("discovery_difficulty" not in e and "found_by" not in e for e in entries)
+        print("PASS [m]")
+        for viewer in ("A", ""):
+            payload = build_locations_payload(viewer, is_admin=False)
+            assert all(not p.get("hidden") for l in payload["locations"] for r in l.get("rooms", []) for p in r.get("items", []))
+        payload = build_locations_payload("", is_admin=True)
+        assert any(p.get("hidden") for l in payload["locations"] for r in l.get("rooms", []) for p in r.get("items", []))
+        assert placement()["hidden"] is True
+        assert "items" not in VIEW_3D_ROOM_FIELDS
+        print("PASS [n]")
+        print("All item discovery checks passed (14/14).")
 
 
 if __name__ == "__main__":
