@@ -157,9 +157,13 @@ class Focus(unittest.TestCase):
                 if response[0] != "SKIP":
                     yield streaming.ToolResultEvent("DemoAction", "done")
 
-        instance = SimpleNamespace(model="demo", create_llm=lambda **kw: object())
-        manager = SimpleNamespace(get_agent_tools=lambda name: [])
-        queue = SimpleNamespace(register_chat_active_async=AsyncMock(return_value="demo"),
+        instance = SimpleNamespace(model="demo", provider_name="demo", create_llm=lambda **kw: object())
+        manager = SimpleNamespace(get_agent_tools=lambda name, **_kw: [])
+        # With overflow=True the registration also names the instance it
+        # picked; this smoke never overflows to another model.
+        queue = SimpleNamespace(register_chat_active_async=AsyncMock(
+                                    side_effect=lambda *a, overflow=False, **kw:
+                                    ("demo", instance) if overflow else "demo"),
                                 register_chat_done=lambda task_id: None)
         profile = {"current_location": "demo", "current_room": "room"}
 
