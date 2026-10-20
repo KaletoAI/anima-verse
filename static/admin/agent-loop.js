@@ -245,6 +245,10 @@ function renderPool(p) {
   html += '<div class="pool-head"><span class="pool-key">' + escapeHtml(p.pool_key) + '</span>'
     + '<span class="pool-counts">' + escapeHtml(counts) + '</span>'
     + '<span class="pool-cache">⚡ ' + escapeHtml((p.cache && p.cache.text) || '') + '</span>';
+  if (p.overflowed_out || p.overflowed_in) {
+    html += '<span class="pool-overflow" title="Background calls that moved to another model (out) / arrived from one (in) since server start">'
+      + escapeHtml('↗ ' + (p.overflowed_out || 0) + ' · ↘ ' + (p.overflowed_in || 0)) + '</span>';
+  }
   if (!p.configured) html += '<span class="badge-warn">not in the routing config</span>';
   html += '</div>';
   if (p.entries && p.entries.length) {

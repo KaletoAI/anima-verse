@@ -36,6 +36,7 @@ h1 { font-size:18px; margin-top:0; }
 .pool-key { color:#79c0ff; font-weight:600; }
 .pool-counts { color:#8b949e; }
 .pool-cache { color:#d29922; }
+.pool-overflow { color:#a371f7; }
 .pool-entries { color:#6e7681; font-size:11px; margin-top:2px; }
 .badge-warn { background:#4a2a1a; color:#f0883e; padding:1px 6px; border-radius:3px; font-size:10px; }
 .lane-table { width:100%; font-size:12px; border-collapse:collapse; margin-top:6px; }

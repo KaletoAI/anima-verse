@@ -266,6 +266,8 @@ function buildSections(e, searchTerm) {
         provider: e.provider, model: e.model, service: e.service,
         user_id: e.user_id,
         trace_id: e.trace_id || '', trace_kind: e.trace_kind || '',
+        // Only a call that moved to another model carries it (lane overflow).
+        ...(e.overflow_from ? { overflow_from: e.overflow_from } : {}),
         starttime: e.starttime, endtime: e.endtime,
         duration_s: e.duration_s, sampler: e.sampler,
         tokens: e.tokens, finish_reason: e.finish_reason

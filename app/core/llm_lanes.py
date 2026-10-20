@@ -1395,6 +1395,10 @@ def admin_lane_view(manager: Optional[LaneManager] = None,
             "busy": (pool or {}).get("busy"),
             "free": (pool or {}).get("free"),
             "waiting": (pool or {}).get("waiting", 0),
+            # Background calls that moved away from / arrived on this pool
+            # since server start (plan-lane-overflow.md § 5.6).
+            "overflowed_out": (pool or {}).get("overflowed_out", 0),
+            "overflowed_in": (pool or {}).get("overflowed_in", 0),
             "lanes": (pool or {}).get("lanes", []),
             "waiting_calls": (pool or {}).get("waiting_calls", []),
             # A reply that is queued in the AgentLoop and holds this pool
