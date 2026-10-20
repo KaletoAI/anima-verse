@@ -605,7 +605,8 @@ class ProviderQueue:
                              label: str = "", *,
                              max_wait: Optional[float] = None,
                              arrived: Optional[float] = None,
-                             cancel: Optional[threading.Event] = None) -> str:
+                             cancel: Optional[threading.Event] = None,
+                             overflow_from: str = "") -> str:
         """Registers active chat/story. Pauses this provider's queue.
 
         Waits for any running background task to finish before returning,
@@ -632,6 +633,7 @@ class ProviderQueue:
             provider_name=self.provider.name,
             model=model,
             label=label)
+        task._overflow_from = overflow_from
         # Monotonic timestamp for stale detection (per task, not global)
         task._monotonic_created = time.monotonic()
         # Duration estimate without input scaling — the messages do not exist

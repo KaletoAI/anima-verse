@@ -421,6 +421,209 @@ def section_c():
         print("PASS C4 short slices retain wait cadence and nested defaults")
 
 
+def section_d():
+    """D: 1 s stands in for 60 s; the rule is the threshold, not its value.
+
+    One busy lane on A and free C gives one hop after 1 <= t < 3 seconds.
+    Both busy for 2.5 s give two checks (allow three for scheduling), never
+    hundreds; arrival age remains >=2 s. Releasing C gives a hop by 1.5 s;
+    releasing A gives no hop. Chat, off, pinned and no opt-in stay on A.
+    D7 Fake arrivals 100,101,102 give budgets 1,2,None after live off; all
+    rounds carry the same cancel flag. D8 A->C resets arrival from 100 to
+    101; the next search excludes both A and C, retaining origin A. D9 A
+    second-round cancellation leaves only the first routing call. D10 One tuple orphan closes
+    one id. D11 One moved log has origin A/a; the unmoved log omits it.
+    """
+    from contextlib import ExitStack
+    from app.core import paths, llm_lanes as lanes, llm_router as router
+    with tempfile.TemporaryDirectory(prefix="lane-d-") as root, ExitStack() as stack:
+        paths.init(root)
+        from app.core import provider_manager as pm_mod, provider_queue as pq_mod
+        from app.core.provider import Provider
+        from app.utils import llm_stats
+        stack.enter_context(patch.object(pq_mod, "_attach_duration_estimate", lambda task: None))
+        stack.enter_context(patch.object(llm_stats, "record_call", lambda *a, **kw: None))
+        threshold = [1.0]
+        rules = lambda: lanes.LaneRules(affinity_wait=0, conversation_hold=0,
+                                        overflow_after=threshold[0])
+        manager = lanes.LaneManager(lane_count=lambda key: 1, rules=rules)
+        stack.enter_context(patch.object(lanes, "_manager", manager))
+        stack.enter_context(patch.object(lanes, "configured_lane_rules", rules))
+        pm = pm_mod.ProviderManager()
+        for name in "AC":
+            provider = Provider(name=name, type="openai", api_base="http://stub",
+                                api_key="", max_concurrent=1, timeout=30)
+            queue = pq_mod.ProviderQueue(provider, queue_name=name, max_concurrent=1,
+                                         chat_pause_enabled=False, serialize_group="")
+            pm.providers[name] = provider
+            pm.channels[name] = pm._queues[name] = queue
+        inst = router.LLMInstance("A", "a", tasks=["thought"])
+        alt = router.LLMInstance("C", "c", tasks=["thought"])
+        def target(*args, exclude_pools, **kwargs):
+            if "C/c" not in exclude_pools and manager.free_lanes(
+                    "C/c", "thought:demo", lanes.lane_priority_for("thought")):
+                return alt
+            return None
+        stack.enter_context(patch.object(router, "overflow_target", side_effect=target))
+
+        def run_case(code, *, both=False, release="", task="thought", overflow=True,
+                     pinned=False, off=False):
+            threshold[0] = 0 if off else 1
+            inst.pinned = pinned
+            a = manager.acquire_lane("A/a", "chat:blocker", lanes.Priority.CHAT, timeout=0)
+            c = manager.acquire_lane("C/c", "chat:blocker", lanes.Priority.CHAT, timeout=0) if both else None
+            result, errors = [], []
+            def register():
+                try:
+                    result.append(pm.register_chat_active(inst, "demo", task_type=task,
+                                                          overflow=overflow))
+                except Exception as exc:
+                    errors.append(exc)
+            started = time.monotonic()
+            thread = threading.Thread(target=register, daemon=True)
+            with patch.object(router, "overflow_target", wraps=target) as lookup:
+                thread.start()
+                try:
+                    if release:
+                        time.sleep(2.5)
+                        assert not result and not errors, (result, errors)
+                        if both:
+                            assert 2 <= lookup.call_count <= 3, lookup.call_count
+                            assert manager.snapshot()["pools"]["A/a"]["waiting_calls"][0]["waiting_s"] >= 2
+                        else:
+                            lookup.assert_not_called()
+                        (c if release == "C" else a).release()
+                    thread.join(1.5 if release else 3)
+                    assert not thread.is_alive() and not errors, errors
+                    returned = result[0]
+                    task_id, actual = returned if overflow else (returned, inst)
+                    expected = "C" if not release or release == "C" else "A"
+                    assert actual.provider_name == expected
+                    assert pm.chat_overflow_from(task_id) == ("A/a" if expected == "C" else "")
+                    if not release:
+                        assert 1 <= time.monotonic() - started < 3
+                    if not overflow:
+                        assert isinstance(returned, str)
+                    pm.register_chat_done(task_id)
+                    assert manager.snapshot()["pools"]["A/a"]["waiting"] == 0
+                finally:
+                    a.release()
+                    if c:
+                        c.release()
+                    thread.join(6)
+            print(f"PASS {code}")
+        run_case("D1 background hops")
+        pools = manager.snapshot()["pools"]
+        assert pools["A/a"]["overflowed_out"] == pools["C/c"]["overflowed_in"] == 1
+        run_case("D2a no spin; C opens", both=True, release="C")
+        run_case("D2b original arrival; A opens", both=True, release="A")
+        run_case("D3 chat stays", task="chat_stream", release="A")
+        run_case("D4 off stays", off=True, release="A")
+        run_case("D5 legacy string", overflow=False, release="A")
+        run_case("D6 pinned stays", pinned=True, release="A")
+
+        # Fake-clock rounds pin the live-off transition without timing races:
+        # elapsed 0 -> budget 1; elapsed 1 -> budget 2; then off -> unbounded.
+        clock = [100.0]
+        rounds = []
+        cancel = threading.Event()
+        inst.pinned = False
+        threshold[0] = 1
+        def live_round(*args, **kwargs):
+            rounds.append(kwargs)
+            assert kwargs["arrived"] == 100 and kwargs["cancel"] is cancel
+            if len(rounds) <= 2:
+                clock[0] += 1
+                if len(rounds) == 2:
+                    threshold[0] = 0
+                raise lanes.LaneWaitExpired(100)
+            return "fake-id"
+        with patch.object(manager, "now", side_effect=lambda: clock[0]), \
+                patch.object(pm._queues["A"], "register_chat_active", side_effect=live_round), \
+                patch.object(router, "overflow_target", return_value=None):
+            assert pm.register_chat_active(inst, "demo", task_type="thought",
+                                           overflow=True, cancel=cancel) == ("fake-id", inst)
+        assert [r["max_wait"] for r in rounds] == [1, 2, None]
+        print("PASS D7 live off and cancellation flag across rounds")
+
+        threshold[0] = 1
+        clock[0] = 100
+        seen = []
+        def hop_round(*args, **kwargs):
+            assert kwargs["cancel"] is cancel
+            if not seen:
+                clock[0] += 1
+                raise lanes.LaneWaitExpired(kwargs["arrived"])
+            assert kwargs["arrived"] == 101
+            assert kwargs["overflow_from"] == "A/a"
+            if len(seen) == 1:
+                clock[0] += 1
+                raise lanes.LaneWaitExpired(kwargs["arrived"])
+            return "moved-id"
+        def hop_target(*args, exclude_pools, **kwargs):
+            seen.append(exclude_pools)
+            return alt if len(seen) == 1 else None
+        with patch.object(manager, "now", side_effect=lambda: clock[0]), \
+                patch.object(pm._queues["A"], "register_chat_active", side_effect=hop_round), \
+                patch.object(pm._queues["C"], "register_chat_active", side_effect=hop_round), \
+                patch.object(router, "overflow_target", side_effect=hop_target):
+            assert pm.register_chat_active(inst, "demo", task_type="thought",
+                                           overflow=True, cancel=cancel) == ("moved-id", alt)
+        assert seen == [{"A/a"}, {"A/a", "C/c"}]
+        print("PASS D8 hop excludes departed pools and restarts arrival")
+
+        # A later round must still observe cancellation before routing again.
+        cancel_rounds = []
+        def cancel_round(*args, **kwargs):
+            cancel_rounds.append(kwargs)
+            if len(cancel_rounds) == 2:
+                cancel.set()
+            raise lanes.LaneWaitExpired(kwargs["arrived"])
+        with patch.object(pm._queues["A"], "register_chat_active", side_effect=cancel_round), \
+                patch.object(router, "overflow_target", return_value=None) as lookup:
+            try:
+                pm.register_chat_active(inst, "demo", task_type="thought",
+                                        overflow=True, cancel=cancel)
+                raise AssertionError("cancelled boundary registered")
+            except lanes.LaneWaitCancelled:
+                pass
+            assert lookup.call_count == 1 and len(cancel_rounds) == 2
+            assert cancel_rounds[0]["arrived"] == cancel_rounds[1]["arrived"]
+        print("PASS D9 cancellation after no-target retry")
+
+        from concurrent.futures import Future
+        from app.core.llm_queue import get_llm_queue
+        facade = get_llm_queue()
+        orphan = Future()
+        orphan.set_result(("orphan-id", alt))
+        with patch.object(facade, "register_chat_done") as close:
+            facade._close_orphaned_registration(orphan)
+            close.assert_called_once_with("orphan-id")
+        print("PASS D10 tuple orphan unwrap")
+
+        from app.core.streaming import StreamingAgent
+        from app.utils import llm_logger
+        from types import SimpleNamespace
+        import json
+        agent = StreamingAgent.__new__(StreamingAgent)
+        agent.log_task, agent.agent_name, agent.chat_task_id = "thought", "demo", "log-id"
+        log_file = Path(root) / "llm_calls.jsonl"
+        with patch.object(pm_mod, "_provider_manager", pm), \
+                patch.object(pm, "chat_overflow_from", return_value="A/a") as origin, \
+                patch.object(agent, "_resolve_provider", return_value="C"), \
+                patch.object(agent, "_lane_fields", return_value=(0, "thought:demo")), \
+                patch.object(llm_logger, "LOG_DIR", Path(root)), \
+                patch.object(llm_logger, "LOG_FILE", log_file):
+            agent._log_llm_call(SimpleNamespace(model="c", max_tokens=10),
+                                "system", "user", "response", "LLM", time.monotonic())
+            origin.assert_called_once_with("log-id")
+            llm_logger.log_llm_call(task="thought", model="a")
+        entries = [json.loads(line) for line in log_file.read_text().splitlines()]
+        assert entries[0]["overflow_from"] == "A/a" and entries[0]["provider"] == "C"
+        assert "overflow_from" not in entries[1]
+        print("PASS D11 streaming JSONL provenance only when nonempty")
+
+
 def main():
     from app.core import paths
 

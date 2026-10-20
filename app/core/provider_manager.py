@@ -496,20 +496,81 @@ class ProviderManager:
         self,
         llm_instance: Any,
         agent_name: str, task_type: str = "chat_stream",
-        label: str = "", *, cancel: Optional[threading.Event] = None) -> str:
+        label: str = "", *, cancel: Optional[threading.Event] = None,
+        overflow: bool = False) -> Any:
         """Registers chat active on the correct LLM channel.
 
-        Returns task_id for register_chat_done().
-        """
-        pq = self.get_queue_for_instance(llm_instance)
-        if not pq:
-            pq = self.get_first_queue()
-        if not pq:
-            raise Exception("No channel available for chat registration")
+        Returns task_id, or (task_id, actual instance) when ``overflow`` is
+        True — the caller must then stream on THAT instance.
 
-        model = getattr(llm_instance, "model", "") if llm_instance else ""
-        return pq.register_chat_active(agent_name, model=model,
-                                        task_type=task_type, label=label, cancel=cancel)
+        Overflow (development_instructions/plan-lane-overflow.md § 5.3) only
+        moves a BACKGROUND registration whose instance came from the routing
+        chain (not a pinned character override). It waits on its pool for
+        ``lanes.overflow_after_seconds`` (read live every round); then
+        ``overflow_target`` names the next chain entry with a free lane for
+        this caller. Found: register there, with a fresh arrival — it is a
+        new pool — and the pools already left excluded, so a second hop moves
+        on and never back. Not found: wait one more threshold on the SAME
+        pool with the SAME arrival stamp (R2 ageing keeps its place) and ask
+        again. The cancel flag is honoured in every round.
+        """
+        from .llm_lanes import (Overflow, LaneWaitExpired, LaneWaitCancelled,
+                                configured_lane_rules, get_lane_manager,
+                                is_background, pool_key_for)
+        from .llm_router import overflow_target
+
+        manager = get_lane_manager()
+        ov = Overflow()
+        arrived = None
+        movable = (overflow and is_background(task_type)
+                   and bool(getattr(llm_instance, "tasks", ()))
+                   and not getattr(llm_instance, "pinned", False))
+        while True:
+            if cancel is not None and cancel.is_set():
+                raise LaneWaitCancelled()
+            pq = self.get_queue_for_instance(llm_instance) or self.get_first_queue()
+            if not pq:
+                raise Exception("No channel available for chat registration")
+            model = getattr(llm_instance, "model", "") if llm_instance else ""
+            pool = pool_key_for(pq.provider.name, model)
+            threshold = configured_lane_rules().overflow_after
+            if arrived is None:
+                arrived = manager.now()
+            # The budget is measured from arrival, which must survive retries
+            # for ageing. Extend it by one threshold to avoid immediate expiry.
+            max_wait = (manager.now() - arrived + threshold
+                        if movable and threshold > 0 else None)
+            try:
+                task_id = pq.register_chat_active(
+                    agent_name, model=model, task_type=task_type, label=label,
+                    cancel=cancel, max_wait=max_wait, arrived=arrived,
+                    overflow_from=ov.origin)
+                return (task_id, llm_instance) if overflow else task_id
+            except LaneWaitExpired as exc:
+                arrived = exc.arrived
+                if cancel is not None and cancel.is_set():
+                    raise LaneWaitCancelled()
+                alt = overflow_target(llm_instance.tasks[0], agent_name,
+                                      exclude_pools=ov.left | {pool})
+                if alt is None:
+                    continue
+                target_pool = pool_key_for(alt.provider_name, alt.model)
+                ov = ov.leaving(pool)
+                manager.note_overflow(pool, target_pool)
+                logger.info("[lanes] overflow %s %s: %s → %s after %.1fs (waited)",
+                            task_type, agent_name, pool, target_pool, manager.now() - arrived)
+                llm_instance = alt
+                arrived = None
+
+    def chat_overflow_from(self, task_id: str) -> str:
+        """The pool a streaming registration overflowed FROM ("" = it did not
+        move), for its LLM-log line. Searches ``_queues`` like
+        ``register_chat_done``, so a queue retired by a reload still answers."""
+        for pq in self._queues.values():
+            task = pq._chat_tasks.get(task_id)
+            if task is not None:
+                return task._overflow_from
+        return ""
 
     def register_chat_done(self, task_id: str) -> None:
         """Finds which provider queue owns this task_id and marks done.

@@ -2298,10 +2298,18 @@ class StreamingAgent:
                 finish_reason=finish_reason or "",
                 lane=_lane,
                 cache_key=_cache_key,
+                overflow_from=self._overflow_from(),
                 llm=active_llm,
                 llm_role=llm_label)
         except Exception as e:
             logger.error("LLM-Log Fehler: %s", e)
+
+    def _overflow_from(self) -> str:
+        """The registration owns provenance because it may have changed pools."""
+        if self.chat_task_id:
+            from app.core.provider_manager import get_provider_manager
+            return get_provider_manager().chat_overflow_from(self.chat_task_id)
+        return ""
 
     def _lane_fields(self) -> Tuple[Optional[int], str]:
         """``(lane, cache key)`` of this turn for the log line.
@@ -2347,6 +2355,7 @@ class StreamingAgent:
                 max_tokens=get_max_tokens(active_llm),
                 messages=history or None,
                 error=str(error),
+                overflow_from=self._overflow_from(),
                 llm=active_llm,
                 llm_role=llm_label)
         except Exception:

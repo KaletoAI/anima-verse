@@ -89,7 +89,8 @@ def log_llm_call(
     lane: Optional[int] = None,
     cache_key: str = "",
     llm: Any = None,
-    request_messages: Optional[List[Dict[str, Any]]] = None):
+    request_messages: Optional[List[Dict[str, Any]]] = None,
+    overflow_from: str = ""):
     """Logs an LLM call as a JSONL line and prints a short line to stdout.
 
     Args:
@@ -139,6 +140,7 @@ def log_llm_call(
             lane (an unlaned fallback, or a path that does not take one) and
             the field is left out, the same way ``tokens_cached`` distinguishes
             "not reported" from a real value.
+        overflow_from: first pool left by this registration; omitted when empty.
         cache_key: the prompt-prefix key the lane was assigned for
             (``<task class>:<character>``, e.g. ``chat:Kira``). Together with
             ``lane`` it makes the cache hit rate readable per conversation:
@@ -205,6 +207,8 @@ def log_llm_call(
         entry["finish_reason"] = finish_reason
     if lane is not None:
         entry["lane"] = lane
+    if overflow_from:
+        entry["overflow_from"] = overflow_from
     if cache_key:
         entry["cache_key"] = cache_key
     if trace_id:

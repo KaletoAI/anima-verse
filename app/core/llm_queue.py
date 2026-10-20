@@ -100,6 +100,7 @@ class LLMTask:
     # logger, which runs in the worker thread.
     _lane_handle: Any = field(default=None, repr=False)
     _cache_key: str = field(default="", repr=False)
+    _overflow_from: str = field(default="", repr=False)
     # The priority this call carries IN THE LANES. Not the same thing as
     # `priority`: that one pauses the provider queue and is what the admin
     # panel shows, and every streaming registration sets it to CHAT — thought
@@ -205,7 +206,8 @@ class LLMQueue:
     def register_chat_active(self, agent_name: str, llm_instance: Any = None,
                              task_type: str = "chat_stream",
                              label: str = "", *,
-                             cancel: Optional[threading.Event] = None) -> str:
+                             cancel: Optional[threading.Event] = None,
+                             overflow: bool = False) -> Any:
         """Registers an active chat/story. Pauses the provider queue.
 
         Args:
@@ -218,28 +220,19 @@ class LLMQueue:
             label: short user-friendly label
 
         Returns:
-            task_id for register_chat_done()
+            task_id, or (task_id, actual instance) when overflow is enabled.
         """
         from .provider_manager import get_provider_manager
 
         pm = get_provider_manager()
 
-        if llm_instance:
-            return pm.register_chat_active(
-                llm_instance, agent_name, task_type=task_type,
-                label=label, cancel=cancel)
-
-        # Fallback: first available queue
-        pq = pm.get_first_queue()
-        if pq:
-            return pq.register_chat_active(
-                agent_name, task_type=task_type, label=label, cancel=cancel)
-
-        raise Exception("No provider queue available for chat registration")
+        return pm.register_chat_active(
+            llm_instance, agent_name, task_type=task_type,
+            label=label, cancel=cancel, overflow=overflow)
 
     async def register_chat_active_async(self, agent_name: str, llm_instance: Any = None,
                                           task_type: str = "chat_stream",
-                                          label: str = "") -> str:
+                                          label: str = "", *, overflow: bool = False) -> Any:
         """Async wrapper: runs the blocking registration in the threadpool so
         the event loop does not stall while we wait for a cache lane of this
         model's pool (app/core/llm_lanes.py).
@@ -260,7 +253,7 @@ class LLMQueue:
         pending = asyncio.ensure_future(asyncio.to_thread(
             self.register_chat_active,
             agent_name, llm_instance=llm_instance,
-            task_type=task_type, label=label, cancel=cancel,
+            task_type=task_type, label=label, cancel=cancel, overflow=overflow,
         ))
         try:
             return await asyncio.shield(pending)
@@ -288,6 +281,8 @@ class LLMQueue:
             if error is not None:
                 return
             task_id = done.result()
+            if isinstance(task_id, tuple):
+                task_id = task_id[0]
             if not task_id:
                 return
             self.register_chat_done(task_id)
