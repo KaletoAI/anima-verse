@@ -48,6 +48,7 @@ class LLMInstance:
     max_tokens: Optional[int] = None
     chat_template: Optional[str] = None
     _provider: Optional[Provider] = field(default=None, repr=False)
+    pinned: bool = False
 
     @property
     def type(self) -> str:
@@ -299,6 +300,7 @@ def _resolve_character_override(task: str, agent_name: str) -> Optional[LLMInsta
                     raw, task, agent_name)
         return None
     instance.tasks = [task]
+    instance.pinned = True
     logger.info("Character-Override greift: task=%s agent=%s -> %s/%s",
                 task, agent_name, instance.provider_name, instance.model)
     return instance
@@ -342,7 +344,114 @@ def _candidates(task: str, routing: list) -> List[Tuple[int, dict]]:
     return out
 
 
-def resolve_llm(task: str, agent_name: str = "") -> Optional[LLMInstance]:
+def _usable(entry: dict, task: str = "", *, quiet: bool = False) -> Optional[Provider]:
+    """The provider of a routing entry if the entry can serve a call right
+    now, else None — the one availability rule of ``resolve_llm`` and
+    ``overflow_target``.
+
+    ``quiet`` drops the "not found / unavailable / cooldown" lines: the
+    overflow check walks the whole chain on every pass of a waiting call
+    (up to once per second per queued task), and repeating the resolver's
+    lines there would only flood the log with what it already said."""
+    pm = get_provider_manager()
+    off = disabled_providers()
+    provider_name = (entry.get("provider") or "").strip()
+    model = (entry.get("model") or "").strip()
+    if not provider_name or not model:
+        return None
+    if provider_name in off:
+        # Switched off in the admin — not loaded, skipped without a warning.
+        return None
+    provider = pm.get_provider(provider_name)
+    if not provider:
+        if not quiet:
+            logger.warning("resolve_llm(%s): provider '%s' not found", task, provider_name)
+        return None
+    if not provider.available:
+        if not quiet:
+            logger.info("resolve_llm(%s): provider '%s' unavailable, trying next", task, provider_name)
+        return None
+    if _model_cooled_down(provider_name, model):
+        if not quiet:
+            logger.info("resolve_llm(%s): %s/%s in model-cooldown (no servable backend), trying next",
+                        task, provider_name, model)
+        return None
+
+    return provider
+
+
+def _instance_for(task: str, entry: dict, provider: Provider) -> LLMInstance:
+    """The LLMInstance of a routing entry — the same settings whether the
+    entry is the regular choice or an overflow target."""
+    provider_name = (entry.get("provider") or "").strip()
+    model = (entry.get("model") or "").strip()
+    temperature = float(entry.get("temperature") or 0.7)
+    max_tokens = entry.get("max_tokens")
+    if max_tokens in ("", None, 0):
+        max_tokens = None
+    else:
+        max_tokens = int(max_tokens)
+
+    return LLMInstance(
+        provider_name=provider_name,
+        model=model,
+        tasks=[task],
+        temperature=temperature,
+        max_tokens=max_tokens,
+        chat_template=(entry.get("chat_template") or "") or None,
+        _provider=provider)
+
+
+# (task, pool) -> SYSTEM monotonic time of the last "saturated" overflow line,
+# so a busy pool logs its resolve-time skips once a minute, not per call.
+_OVERFLOW_LOGGED: Dict[Tuple[str, str], float] = {}
+
+
+def overflow_target(task: str, agent_name: str = "", *,
+                    exclude_pools: frozenset = frozenset()) -> Optional[LLMInstance]:
+    """Where a BACKGROUND call may move when its pool is full, or None
+    (development_instructions/plan-lane-overflow.md § 4/§ 5).
+
+    Walks the task's chain in order (the ``fallback_parent`` chain when the
+    task has no route of its own) and returns the first entry that is
+    usable, not in ``exclude_pools`` (pools this call already waited on and
+    left), does not have ``accepts_overflow`` switched off, and whose pool
+    has a lane free FOR THIS CALLER — ``free_lanes`` with the caller's key
+    and class, so R4's conversation hold counts: a lane a chat just left is
+    not free for a thought, and moving there would only start another wait.
+    Chats never get a target, and ``overflow_after_seconds = 0`` switches
+    the whole mechanism off."""
+    from app.core.llm_lanes import (is_background, configured_lane_rules,
+        get_lane_manager, pool_key_for, cache_key_for, lane_priority_for)
+    from app.core.llm_task_state import is_enabled
+
+    if not is_background(task) or configured_lane_rules().overflow_after <= 0:
+        return None
+    routing = _load_routing()
+    chain_task = task
+    candidates = _candidates(chain_task, routing)
+    while not candidates:
+        parent = fallback_parent(chain_task)
+        if not parent:
+            return None
+        chain_task = parent
+        candidates = _candidates(chain_task, routing)
+    if not is_enabled(task) or not is_enabled(chain_task):
+        return None
+    manager = get_lane_manager()
+    for _, entry in sorted(candidates, key=lambda item: item[0]):
+        pool = pool_key_for((entry.get("provider") or "").strip(),
+                            (entry.get("model") or "").strip())
+        if pool in exclude_pools or entry.get("accepts_overflow") is False:
+            continue
+        provider = _usable(entry, chain_task, quiet=True)
+        if provider is not None and manager.free_lanes(
+                pool, cache_key_for(task, agent_name), lane_priority_for(task)) > 0:
+            return _instance_for(chain_task, entry, provider)
+    return None
+
+
+def resolve_llm(task: str, agent_name: str = "", *, overflow: bool = False) -> Optional[LLMInstance]:
     """Determines the LLM for a task from the llm_routing config.
 
     Order:
@@ -355,6 +464,10 @@ def resolve_llm(task: str, agent_name: str = "") -> Optional[LLMInstance]:
         task: task id from TASK_TYPES
         user_id, agent_name: optional — when both are set, the character
             override from character_config.json is taken into account.
+
+    Opting into overflow lets background calls skip a saturated pool only
+    when an accepting alternative has a free lane. Character overrides stay
+    pinned, and callers without the flag keep the regular routing choice.
 
     The task disable (llm_task_state) is always the first check.
     """
@@ -380,48 +493,33 @@ def resolve_llm(task: str, agent_name: str = "") -> Optional[LLMInstance]:
         parent = fallback_parent(task)
         if parent:
             logger.debug("resolve_llm(%s): no routing, falling back to '%s'", task, parent)
-            return resolve_llm(parent, agent_name=agent_name)
+            return resolve_llm(parent, agent_name=agent_name, overflow=overflow)
         return None
 
     candidates.sort(key=lambda x: x[0])
-    pm = get_provider_manager()
-    off = disabled_providers()
-
     for order, entry in candidates:
-        provider_name = (entry.get("provider") or "").strip()
-        model = (entry.get("model") or "").strip()
-        if not provider_name or not model:
+        provider = _usable(entry, task)
+        if provider is None:
             continue
-        if provider_name in off:
-            # Switched off in the admin — not loaded, skipped without a warning.
-            continue
-        provider = pm.get_provider(provider_name)
-        if not provider:
-            logger.warning("resolve_llm(%s): provider '%s' not found", task, provider_name)
-            continue
-        if not provider.available:
-            logger.info("resolve_llm(%s): provider '%s' unavailable, trying next", task, provider_name)
-            continue
-        if _model_cooled_down(provider_name, model):
-            logger.info("resolve_llm(%s): %s/%s in model-cooldown (no servable backend), trying next",
-                        task, provider_name, model)
-            continue
-
-        temperature = float(entry.get("temperature") or 0.7)
-        max_tokens = entry.get("max_tokens")
-        if max_tokens in ("", None, 0):
-            max_tokens = None
-        else:
-            max_tokens = int(max_tokens)
-
-        return LLMInstance(
-            provider_name=provider_name,
-            model=model,
-            tasks=[task],
-            temperature=temperature,
-            max_tokens=max_tokens,
-            chat_template=(entry.get("chat_template") or "") or None,
-            _provider=provider)
+        instance = _instance_for(task, entry, provider)
+        if overflow:
+            from app.core.llm_lanes import (is_background, configured_lane_rules,
+                                           get_lane_manager, pool_key_for)
+            if is_background(task) and configured_lane_rules().overflow_after > 0:
+                pool = pool_key_for(instance.provider_name, instance.model)
+                if get_lane_manager().pool_saturated(pool):
+                    alt = overflow_target(task, agent_name, exclude_pools={pool})
+                    if alt is not None:
+                        now = time.monotonic()
+                        key = (task, pool)
+                        last = _OVERFLOW_LOGGED.get(key)
+                        if last is None or now - last >= 60:
+                            _OVERFLOW_LOGGED[key] = now
+                            logger.info("[lanes] overflow %s %s: %s → %s (saturated)",
+                                        task, agent_name, pool,
+                                        pool_key_for(alt.provider_name, alt.model))
+                        return alt
+        return instance
 
     logger.warning("resolve_llm(%s): kein verfuegbares LLM in der Kette", task)
     return None
@@ -505,7 +603,8 @@ def explain_routing(cfg: dict, *, provider_lookup, cooled_down,
             else:
                 skip = None
             chain.append({"index": idx, "order": order, "provider": entry.get("provider") or "",
-                          "model": entry.get("model") or "", "skipped": skip})
+                          "model": entry.get("model") or "", "skipped": skip,
+                          "accepts_overflow": entry.get("accepts_overflow") is not False})
             if skip is None and resolved is None:
                 resolved = {"index": idx, "provider": entry.get("provider") or "",
                             "model": entry.get("model") or "", "order": order, "via_task": task}
