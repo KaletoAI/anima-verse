@@ -24,6 +24,7 @@ interface PromptFilter {
   drop_blocks?: string[]
   prompt_modifier?: string
   image_modifier?: string
+  stat_boosts?: Record<string, number>
   bone_pose?: BonePose
   enabled?: boolean
   source?: string
@@ -36,6 +37,7 @@ interface PromptFilter {
 interface FiltersData {
   filters: PromptFilter[]
   block_keys: string[]
+  stat_keys: string[]
   condition_hint?: string
 }
 
@@ -55,6 +57,7 @@ const EMPTY_DRAFT: DraftState = {
   prompt_modifier: '',
   image_modifier: '',
   bone_pose: {},
+  stat_boosts: {},
   enabled: true,
   originalId: '',
   source: '',
@@ -72,6 +75,7 @@ function asDraft(f: PromptFilter): DraftState {
     prompt_modifier: f.prompt_modifier || '',
     image_modifier: f.image_modifier || '',
     bone_pose: structuredClone(f.bone_pose || {}),
+    stat_boosts: { ...(f.stat_boosts || {}) },
     enabled: f.enabled !== false,
     originalId: f.id,
     source: f.source || '',
@@ -173,6 +177,7 @@ export function StatesTab() {
         prompt_modifier: draft.prompt_modifier,
         image_modifier: draft.image_modifier,
         bone_pose: bonePose,
+        stat_boosts: draft.stat_boosts,
         enabled: draft.enabled,
       })
       toast(t('Saved'))
@@ -351,6 +356,7 @@ export function StatesTab() {
             <DraftForm key={draft.originalId}
               draft={draft}
               blockKeys={data.block_keys || []}
+              statKeys={data.stat_keys || []}
               onUpdate={updateDraft}
               onToggleBlock={toggleBlock}
             />
@@ -366,11 +372,12 @@ export function StatesTab() {
 interface DraftFormProps {
   draft: DraftState
   blockKeys: string[]
+  statKeys: string[]
   onUpdate: <K extends keyof DraftState>(key: K, value: DraftState[K]) => void
   onToggleBlock: (block: string) => void
 }
 
-function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps) {
+function DraftForm({ draft, blockKeys, statKeys, onUpdate, onToggleBlock }: DraftFormProps) {
   const { t } = useI18n()
   const [groups, setGroups] = useState<MotionGroup[]>([])
   const [groupsError, setGroupsError] = useState(false)
@@ -466,6 +473,39 @@ function DraftForm({ draft, blockKeys, onUpdate, onToggleBlock }: DraftFormProps
           ) : null}
         </Field>
       </div>
+
+      <Field label={t('Stat boosts')}>
+        {Object.entries(draft.stat_boosts).map(([key, amount]) => (
+          <div key={key} className="ga-form-row">
+            <select className="ga-input" aria-label={t('Stat')} value={key}
+              onChange={e => {
+                const next = { ...draft.stat_boosts }
+                delete next[key]
+                next[e.target.value] = amount
+                onUpdate('stat_boosts', next)
+              }}>
+              {Array.from(new Set([key, ...statKeys])).map(stat => (
+                <option key={stat} value={stat} disabled={stat !== key && stat in draft.stat_boosts}>{stat}</option>
+              ))}
+            </select>
+            <input className="ga-input" type="number" min={-200} max={200} step={1}
+              aria-label={t('Value')} value={amount}
+              onChange={e => onUpdate('stat_boosts', { ...draft.stat_boosts,
+                [key]: Math.max(-200, Math.min(200, Math.trunc(Number(e.target.value) || 0))) })} />
+            <button type="button" className="ga-btn ga-btn-sm" onClick={() => {
+              const next = { ...draft.stat_boosts }
+              delete next[key]
+              onUpdate('stat_boosts', next)
+            }}>{t('Remove')}</button>
+          </div>
+        ))}
+        <button type="button" className="ga-btn ga-btn-sm"
+          disabled={!statKeys.some(key => !(key in draft.stat_boosts))}
+          onClick={() => {
+            const key = statKeys.find(key => !(key in draft.stat_boosts))
+            if (key) onUpdate('stat_boosts', { ...draft.stat_boosts, [key]: 0 })
+          }}>{t('Add')}</button>
+      </Field>
 
       <Field label={t('Drop blocks')} hint={t('Click to toggle which prompt blocks are removed when this filter matches.')}>
         <div className="ga-block-picker">

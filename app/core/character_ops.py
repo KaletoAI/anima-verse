@@ -544,7 +544,11 @@ def build_debug_activity(character_name: str) -> Dict[str, Any]:
         active_effects = active_modifiers(character_name, profile.get("current_location") or "")
     except Exception as _ae:
         logger.debug("active_modifiers fuer %s fehlgeschlagen: %s", character_name, _ae)
-    active_conditions = profile.get("active_conditions", []) or []
+    condition_details = {c["name"].lower(): c for c in
+                         build_active_conditions(character_name)["conditions"]}
+    active_conditions = [dict(c, boosts=condition_details.get(
+        (c.get("name") or "").lower(), {}).get("boosts", []))
+        for c in (profile.get("active_conditions", []) or [])]
 
     return {
         "character": character_name,
@@ -1352,6 +1356,8 @@ def build_active_conditions(character_name: str) -> Dict[str, Any]:
             if name:
                 meta_by_name.setdefault(name, dict(meta, label=meta["label"] or name))
 
+    from app.core.stat_boosts import active_boosts
+    boosts = active_boosts(profile)
     now_game = game_time()
     result = []
     for cond in active:
@@ -1377,6 +1383,9 @@ def build_active_conditions(character_name: str) -> Dict[str, Any]:
             "label": meta.get("label") or name,
             "icon": meta.get("icon", ""),
             "remaining_hours": remaining_h,
+            "boosts": [{"stat": key, "amount": boost["amount"]}
+                       for key, entries in boosts.items() for boost in entries
+                       if boost["condition"].lower() == name.lower()],
             "source": cond.get("source", ""),
         })
     return {"character": character_name, "conditions": result}

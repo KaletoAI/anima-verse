@@ -2271,7 +2271,7 @@ def play_self(user=Depends(get_current_user)):
     current outfit and control options in one call."""
     from app.models.account import get_active_character
     empty = {"avatar": "", "mood": "", "activity": "", "status_effects": {},
-             "bar_meta": {}, "conditions": [], "outfit": "", "profile_image": "",
+             "stat_boosts": {}, "bar_meta": {}, "conditions": [], "outfit": "", "profile_image": "",
              "outfit_sets": []}
     avatar = (get_active_character() or "").strip()
     if not avatar:
@@ -2289,6 +2289,7 @@ def play_self(user=Depends(get_current_user)):
         s = get_status_effects_route(avatar)
         out["status_effects"] = s.get("status_effects", {}) or {}
         out["bar_meta"] = s.get("bar_meta", {}) or {}
+        out["stat_boosts"] = s.get("stat_boosts", {}) or {}
     except Exception as e:
         logger.debug("play_self status-effects failed: %s", e)
     try:
@@ -2329,7 +2330,7 @@ def _state_block(name: str, lang: str = "en") -> dict:
                                       get_character_current_feeling,
                                       get_character_profile_image)
     blk = {"name": name, "mood": "", "activity": "", "status_effects": {},
-           "bar_meta": {}, "conditions": [], "profile_image": "",
+           "stat_boosts": {}, "bar_meta": {}, "conditions": [], "profile_image": "",
            "place_label": "", "place_group": "", "place_phrase": "",
            "interaction": None}
     try:
@@ -2368,6 +2369,7 @@ def _state_block(name: str, lang: str = "en") -> dict:
         s = get_status_effects_route(name)
         blk["status_effects"] = s.get("status_effects", {}) or {}
         blk["bar_meta"] = s.get("bar_meta", {}) or {}
+        blk["stat_boosts"] = s.get("stat_boosts", {}) or {}
     except Exception:
         pass
     try:

@@ -52,6 +52,7 @@ export function StatsPanel({
   const { toast } = useToast()
   const [server, setServer] = useState<Record<string, unknown>>({})
   const [meta, setMeta] = useState<Record<string, BarMeta>>({})
+  const [boosts, setBoosts] = useState<Record<string, { boost: number }>>({})
   const [sel, setSel] = useState('')
   const [local, setLocal] = useState('')
   const [loaded, setLoaded] = useState(false)
@@ -59,16 +60,17 @@ export function StatsPanel({
   useEffect(() => {
     let alive = true
     setLoaded(false)
-    apiGet<{ status_effects: Record<string, unknown>; bar_meta: Record<string, BarMeta> }>(
+    apiGet<{ status_effects: Record<string, unknown>; bar_meta: Record<string, BarMeta>; stat_boosts: Record<string, { boost: number }> }>(
       `/characters/${encodeURIComponent(character)}/status-effects`,
     )
       .then((r) => {
         if (!alive) return
         setServer(r.status_effects || {})
+        setBoosts(r.stat_boosts || {})
         setMeta(r.bar_meta || {})
       })
       .catch(() => {
-        if (alive) setServer({})
+        if (alive) { setServer({}); setBoosts({}) }
       })
       .finally(() => {
         if (alive) setLoaded(true)
@@ -150,9 +152,11 @@ export function StatsPanel({
         </select>
       </Field>
       <Field label={t('Value')}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <input
           className="ga-input"
           type="number"
+          style={{ width: 100 }}
           value={local}
           disabled={!sel}
           onChange={(e) => setLocal(e.target.value)}
@@ -164,6 +168,12 @@ export function StatsPanel({
             }
           }}
         />
+        {boosts[sel] && <span className="ga-hint">
+          {t('effective {value} ({boost})')
+            .replace('{value}', String(Math.max(0, Number(local || 0) + boosts[sel].boost)))
+            .replace('{boost}', boosts[sel].boost >= 0 ? `+${boosts[sel].boost}` : String(boosts[sel].boost))}
+        </span>}
+        </div>
       </Field>
     </>
   )

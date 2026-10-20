@@ -405,14 +405,16 @@ def _update_character_current_feeling_sync(character_name: str,
 @router.get("/{character_name}/status-effects")
 def get_status_effects_route(
                              character_name: str) -> Dict[str, Any]:
-    """Gibt die aktuellen Status-Werte eines Characters zurueck.
-
-    Beim ersten Aufruf: Initialisiert status_effects aus Trait-Defaults
-    und persistiert sie im Profil. Danach werden immer die gespeicherten
-    Werte zurueckgegeben.
-    """
+    """Return base status values and the active boosts used by the UI."""
     try:
-        return character_ops.build_status_effects(character_name)
+        from app.core.stat_boosts import effective_stats
+        from app.models.character import get_character_profile
+        out = character_ops.build_status_effects(character_name)
+        profile = get_character_profile(character_name)
+        profile = dict(profile, status_effects=out.get("status_effects", {}))
+        out["stat_boosts"] = {key: stat for key, stat in effective_stats(profile).items()
+                              if stat["boost"] != 0}
+        return out
     except HTTPException:
         raise
     except Exception as e:

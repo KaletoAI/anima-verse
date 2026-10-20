@@ -320,6 +320,7 @@ def prompt_filters_data(user=Depends(require_admin)):
 
     return {
         "filters": out,
+        "stat_keys": _keys,
         "block_keys": _prompt_filter_block_keys(),
         "condition_hint": (
             "Filter id ALWAYS triggers when present as a tag in the profile (apply_condition). "

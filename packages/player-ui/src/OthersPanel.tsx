@@ -3,6 +3,8 @@
  * counterpart to Self. The cards flow responsively side by side or stacked
  * (flex-wrap, depending on the window width). Source: GET /play/others.
  */
+import { StatFill } from './StatBoost'
+import { statTitle, conditionTitle, type StatBoost, type BoostCondition } from './statBoosts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from './I18nProvider'
@@ -22,8 +24,9 @@ interface CharState {
   mood: string
   activity: string
   status_effects: Record<string, number>
+  stat_boosts?: Record<string, StatBoost>
   bar_meta: Record<string, BarMeta>
-  conditions: Array<{ name?: string; label?: string; icon?: string }>
+  conditions: BoostCondition[]
   profile_image: string
   /** The place held (plan-posen-plaetze.md § 7) as a finished phrase —
    *  "on the sofa". The SERVER composes it (`places.place_phrase`), because
@@ -82,6 +85,7 @@ function RelationLine({ c, t }: { c: CharState; t: (s: string) => string }) {
 }
 
 function StatBars({ c }: { c: CharState }) {
+  const { t, lang } = useI18n()
   const bars = Object.entries(c.status_effects || {})
   // On a narrow card hide label and number, leaving the bar (with a clear end).
   const ref = useRef<HTMLDivElement | null>(null)
@@ -101,23 +105,25 @@ function StatBars({ c }: { c: CharState }) {
     <div ref={ref} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 8px', marginTop: 4 }}>
       {bars.map(([key, val]) => {
         const m = c.bar_meta?.[key] || {}
+        const boost = c.stat_boosts?.[key]
+        const value = boost?.value ?? Number(val)
         const pct = Math.max(0, Math.min(100, Number(val) || 0))
         return (
-          <div key={key} title={`${m.name_de || m.name || key}: ${pct}/100`}
+          <div key={key} title={statTitle(t, (lang === 'de' ? m.name_de || m.name : m.name) || key, pct, boost)}
             style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
             {!compact && (
               <span style={{ width: 24, opacity: 0.7, fontSize: '0.58em', textTransform: 'uppercase' }}>{m.label || key.slice(0, 3)}</span>
             )}
             <div style={{
-              flex: 1, height: compact ? 6 : 4, borderRadius: 3,
+              position: 'relative', flex: 1, height: compact ? 6 : 4, borderRadius: 3,
               background: 'rgba(255,255,255,0.16)',
               border: '1px solid rgba(255,255,255,0.45)',
               overflow: 'hidden', boxSizing: 'border-box',
             }}>
-              <div style={{ width: `${pct}%`, height: '100%', background: m.color || 'var(--accent,#6aa9ff)' }} />
+              <StatFill base={pct} boost={boost} color={m.color || 'var(--accent,#6aa9ff)'} />
             </div>
             {!compact && (
-              <span style={{ width: 14, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: '0.58em', opacity: 0.65 }}>{pct}</span>
+              <span style={{ minWidth: 20, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: '0.58em', opacity: 0.65 }}>{value}</span>
             )}
           </div>
         )
@@ -270,7 +276,7 @@ export function OthersPanel() {
           {c.conditions.length > 0 && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
               {c.conditions.map((cd, i) => (
-                <span key={i} style={{ padding: '0 6px', borderRadius: 9, fontSize: '0.7em',
+                <span key={i} title={conditionTitle(t, cd)} style={{ padding: '0 6px', borderRadius: 9, fontSize: '0.7em',
                   background: 'rgba(255,170,90,0.2)', border: '1px solid rgba(255,170,90,0.4)' }}>
                   {cd.icon ? `${cd.icon} ` : ''}{cd.label || cd.name}
                 </span>

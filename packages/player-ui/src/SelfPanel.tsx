@@ -5,6 +5,8 @@
  * Outfit and inventory live in the Belongings panel.
  * Source: GET /play/self · setter: POST /play/self/mood.
  */
+import { StatFill } from './StatBoost'
+import { statTitle, conditionTitle, type StatBoost, type BoostCondition } from './statBoosts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from './I18nProvider'
 import { ApiError, apiGet, apiPost } from './api'
@@ -20,13 +22,14 @@ interface SelfData {
   mood: string
   activity: string
   status_effects: Record<string, number>
+  stat_boosts?: Record<string, StatBoost>
   bar_meta: Record<string, BarMeta>
-  conditions: Array<{ name?: string; label?: string; icon?: string }>
+  conditions: BoostCondition[]
   profile_image: string
 }
 
 export function SelfPanel() {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const enlarge = useEnlarge()
   const { data, refresh } = usePoll<SelfData>(
     'play-self', () => apiGet<SelfData>('/play/self'), SYNC_ENDPOINTS.self)
@@ -110,7 +113,7 @@ export function SelfPanel() {
         {data.conditions.length > 0 && (
           <div style={{ position: 'absolute', top: 6, left: 6, right: 6, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
             {data.conditions.map((c, i) => (
-              <span key={i} style={{ padding: '1px 7px', borderRadius: 10, fontSize: '0.7em',
+              <span key={i} title={conditionTitle(t, c)} style={{ padding: '1px 7px', borderRadius: 10, fontSize: '0.7em',
                 background: 'rgba(40,30,10,0.7)', border: '1px solid rgba(255,170,90,0.5)' }}>
                 {c.icon ? `${c.icon} ` : ''}{c.label || c.name}
               </span>
@@ -128,22 +131,24 @@ export function SelfPanel() {
           }}>
             {bars.map(([key, val]) => {
               const m = data.bar_meta?.[key] || {}
+              const boost = data.stat_boosts?.[key]
+              const value = boost?.value ?? Number(val)
               const pct = Math.max(0, Math.min(100, Number(val) || 0))
-              const full = m.name_de || m.name || key
+              const full = (lang === 'de' ? m.name_de || m.name : m.name) || key
               // Track with a clearly visible end (border) so the fill level can
               // be judged without the number — matters most in compact mode.
               const track = (
                 <div style={{
-                  flex: 1, height: compact ? 7 : 5, borderRadius: 3,
+                  position: 'relative', flex: 1, height: compact ? 7 : 5, borderRadius: 3,
                   background: 'rgba(255,255,255,0.18)',
                   border: '1px solid rgba(255,255,255,0.45)',
                   overflow: 'hidden', boxSizing: 'border-box',
                 }}>
-                  <div style={{ width: `${pct}%`, height: '100%', background: m.color || 'var(--accent,#6aa9ff)' }} />
+                  <StatFill base={pct} boost={boost} color={m.color || 'var(--accent,#6aa9ff)'} />
                 </div>
               )
               return (
-                <div key={key} title={`${full}: ${pct}/100`}
+                <div key={key} title={statTitle(t, full, pct, boost)}
                   style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   {!compact && (
                     <span style={{ width: 26, opacity: 0.8, fontSize: '0.6em', textTransform: 'uppercase' }}>
@@ -152,7 +157,7 @@ export function SelfPanel() {
                   )}
                   {track}
                   {!compact && (
-                    <span style={{ width: 16, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: '0.6em', opacity: 0.7 }}>{pct}</span>
+                    <span style={{ minWidth: 20, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: '0.6em', opacity: 0.7 }}>{value}</span>
                   )}
                 </div>
               )

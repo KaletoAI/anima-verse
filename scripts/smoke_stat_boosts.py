@@ -14,6 +14,11 @@ Hand-derived expectations (T is fixed at Y0001-D002T12:00:00):
 [g] Base 95 +40=135; adjusting base by +10 clamps 105 to 100.
 [h] Prompt reads effective 90; base zero renders 0, ignoring stale top-level 77.
 [i] Save rejects +300 and unknown keys; +40 survives save/load.
+[j] Player/admin payloads: base 50 + focused 40 = 90; only attention is
+    boosted, with 2-1=1.0h left. No conditions yields an empty boost map.
+    Condition chips carry attention +40 and 1.0h remaining. Expired boosts
+    and net-zero sums are omitted; dazed alone yields max(0,50-70)=0.
+    Editing a shared +40 state into a world override preserves +40.
 """
 import json
 import os
@@ -118,7 +123,52 @@ def main():
             _prompt_filters_save_sync(None, {'id': 'validation', 'stat_boosts': {'attention': 40}})
             assert next(f for f in load_filters() if f['id'] == 'validation')['stat_boosts'] == {'attention': 40}
             print('PASS [i]')
-        print('All stat boost checks passed (9/9).')
+            from app.routes.play import play_self, _state_block
+            from app.routes.characters import get_status_effects_route
+            profile['status_effects']['attention'] = 50
+            profile['active_conditions'] = [cond('focused')]
+            store()
+            expected = {'attention': dict(base=50, boost=40, value=90, boosts=[
+                dict(condition='focused', label='Focused', amount=40, remaining_hours=1.0)])}
+            with patch('app.models.account.get_active_character', return_value='demo'):
+                payload = play_self()
+                assert payload.get('stat_boosts') == expected, payload.get('stat_boosts')
+                chip = next(c for c in payload['conditions'] if c['name'] == 'focused')
+                assert chip['remaining_hours'] == 1.0
+                assert chip['boosts'] == [{'stat': 'attention', 'amount': 40}]
+                assert _state_block('demo')['stat_boosts'] == expected
+                assert get_status_effects_route('demo')['stat_boosts'] == expected
+                profile['active_conditions'] = []
+                store()
+                assert play_self()['stat_boosts'] == {}
+                assert _state_block('demo')['stat_boosts'] == {}
+                assert get_status_effects_route('demo')['stat_boosts'] == {}
+                profile['active_conditions'] = [cond('focused', 3)]
+                store()
+                assert play_self()['stat_boosts'] == {}
+                profile['active_conditions'] = [cond('dazed')]
+                store()
+                negative = get_status_effects_route('demo')['stat_boosts']['attention']
+                assert (negative['base'], negative['boost'], negative['value']) == (50, -70, 0)
+                _prompt_filters_save_sync(None, {'id': 'balanced', 'stat_boosts': {'attention': -40}})
+                profile['active_conditions'] = [cond('focused'), cond('balanced')]
+                store()
+                assert play_self()['stat_boosts'] == {}
+            from app.routes.admin_settings import prompt_filters_data
+            shared_file = Path(tmp) / 'filters.json'
+            shared_file.write_text(json.dumps({'filters': [{'id': 'shared_focus', 'label': 'Focus',
+                                                'stat_boosts': {'attention': 40}}]}))
+            with patch('app.core.prompt_filters._SHARED_FILE', shared_file):
+                data = prompt_filters_data()
+                assert 'attention' in data['stat_keys']
+                shared = next(f for f in data['filters'] if f['id'] == 'shared_focus')
+                assert shared['stat_boosts'] == {'attention': 40}
+                _prompt_filters_save_sync(None, shared)
+                override = next(f for f in prompt_filters_data()['filters'] if f['id'] == 'shared_focus')
+                assert override['source'] == 'world override'
+                assert override['stat_boosts'] == {'attention': 40}
+            print('PASS [j]')
+        print('All stat boost checks passed (10/10).')
 
 
 if __name__ == '__main__':

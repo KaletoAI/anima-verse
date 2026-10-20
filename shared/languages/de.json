@@ -2741,6 +2741,10 @@
     "{name} suggests {pose} to you.": "{name} lädt dich zum {pose} ein.",
     "{name} does not feel like {pose} right now.": "{name} hat gerade keine Lust auf das {pose}.",
     "{pose} with {name} is not possible: {reason}": "Das {pose} mit {name} geht gerade nicht: {reason}",
-    "Dismiss": "Schließen"
+    "Dismiss": "Schließen",
+    "Stat boosts": "Stat-Boosts",
+    "{label} {base} + {boost} = {value}": "{label} {base} + {boost} = {value}",
+    "{name} {amount} ({hours} h left)": "{name} {amount} (noch {hours} h)",
+    "effective {value} ({boost})": "wirksam {value} ({boost})"
   }
 }
