@@ -2239,8 +2239,6 @@
     "Ask to do something together": "Fragen, ob ihr etwas zusammen macht",
     "Busy with someone else": "Gerade mit jemand anderem beschäftigt",
     "No two-person actions available.": "Keine Zwei-Personen-Aktionen verfügbar.",
-    "{actor} and {partner} are {pose} together.": "{actor} und {partner} sind zusammen {pose}.",
-    "{invitee} does not want to {pose} with {inviter} right now.": "{invitee} möchte gerade nicht mit {inviter} {pose}.",
     "That takes two — ask them with “Together…” on their card.": "Dazu gehören zwei — frag sie mit „Gemeinsam…\" auf ihrer Karte.",
     "{actor} takes a selfie.": "{actor} macht ein Selfie.",
     "{actor} holds up the camera and takes a photo of themselves with {others}.": "{actor} hält die Kamera hoch und macht ein Foto von sich mit {others}.",
@@ -2734,6 +2732,10 @@
     "Label (de)": "Bezeichnung (de)",
     "Gerund phrase, e.g. “dancing”. Empty = the key.": "Verlaufsform, z. B. „dancing“. Leer = der Schlüssel.",
     "Noun form, e.g. “Tanzen”. Used in German sentences.": "Substantivierter Infinitiv, z. B. „Tanzen“. Wird in deutschen Sätzen verwendet.",
-    "No German label": "Keine deutsche Bezeichnung"
+    "No German label": "Keine deutsche Bezeichnung",
+    "{inviter} suggests {pose} to {invitee}.": "{inviter} lädt {invitee} zum {pose} ein.",
+    "{invitee} does not feel like {pose} with {inviter} right now.": "{invitee} hat gerade keine Lust auf das {pose} mit {inviter}.",
+    "{actor} and {partner} start {pose}.": "{actor} und {partner} fangen mit dem {pose} an.",
+    "{actor} and {partner} stop {pose}.": "{actor} und {partner} hören mit dem {pose} auf."
   }
 }

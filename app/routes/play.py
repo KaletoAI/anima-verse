@@ -1946,9 +1946,12 @@ def _play_interact_respond_sync(body: Dict[str, Any]) -> Dict[str, Any]:
                 "pose": inv["pose_key"]}
     if res["status"] == "declined":
         try:
+            from app.core.pose_catalog import pose_label
+            from app.models.character import get_character_language
+            label = pose_label(inv["pose_key"], get_character_language(avatar))
             get_agent_loop().bump(
                 inv["inviter"],
-                hint=(f"{avatar} does not want to {inv['pose_key']} with you "
+                hint=(f"{avatar} does not feel like {label} with you "
                       f"right now. React in character."))
         except Exception as e:
             logger.debug("decline bump failed: %s", e)

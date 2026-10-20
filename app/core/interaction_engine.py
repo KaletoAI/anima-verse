@@ -58,6 +58,30 @@ from app.core.timeutils import game_time
 
 logger = get_logger(__name__)
 
+
+def _narrate(anchor: str, key: str, **fmt) -> None:
+    """Record a pair event in the anchor's language and room. Never raises."""
+    try:
+        from app.core.i18n import t
+        from app.core.perception import (STORYTELLER_SPEAKER, VOLUME_NORMAL,
+                                         record_utterance)
+        from app.core.pose_catalog import pose_label
+        from app.models.character import (get_character_current_location,
+                                          get_character_current_room,
+                                          get_character_language)
+        lang = get_character_language(anchor)
+        pose_key = fmt.pop("pose_key")
+        record_utterance(
+            speaker=STORYTELLER_SPEAKER,
+            content=t(key, lang).format(**fmt, pose=pose_label(pose_key, lang)),
+            volume=VOLUME_NORMAL,
+            location_id=get_character_current_location(anchor) or "",
+            room_id=get_character_current_room(anchor) or "",
+            source="interaction", anchor=anchor)
+    except Exception as e:
+        logger.debug("interaction narration failed: %s", e)
+
+
 class TooFarApart(ValueError):
     """The pair failed on METRES alone — everything else about it is fine.
 
@@ -416,21 +440,8 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     # The room has to SEE it. Without a line in the perception stream the
     # pair is a 3D animation nobody in the fiction ever noticed — including
     # the two doing it, who read the stream as their own memory of the scene.
-    try:
-        from app.core.i18n import t
-        from app.core.perception import (STORYTELLER_SPEAKER, VOLUME_NORMAL,
-                                         record_utterance)
-        from app.models.character import get_character_language
-        lang = get_character_language(actor) or "de"
-        record_utterance(
-            speaker=STORYTELLER_SPEAKER,
-            content=t("{actor} and {partner} are {pose} together.", lang).format(
-                actor=actor, partner=partner, pose=pose_key),
-            volume=VOLUME_NORMAL, location_id=loc_a,
-            room_id=get_character_current_room(actor) or "",
-            source="interaction", anchor=actor)
-    except Exception as e:
-        logger.debug("interaction narration failed: %s", e)
+    _narrate(actor, "{actor} and {partner} start {pose}.",
+             actor=actor, partner=partner, pose_key=pose_key)
     logger.info("interaction %s: %s (a) + %s (b) play '%s' (%.1fs %s)",
                 inter_id, who_a, who_b, kind, clip_duration,
                 "cycle" if loop else "one-shot")
@@ -504,6 +515,10 @@ def end_interaction(character_name: str, reason: str = "ended", *,
     for name in saved_names:
         sync_topics.changed_at(name)
     if stand and cleared:
+        actor, other = ((character_name, partner) if inter.get("role") == "a"
+                        else (partner, character_name))
+        _narrate(character_name, "{actor} and {partner} stop {pose}.",
+                 actor=actor, partner=other, pose_key=inter["pose_key"])
         from app.core.hooks import emit
         emit("interaction.ended", character=character_name, partner=partner,
              interaction_id=inter["id"], invite_id=ended_invite_id, reason=reason)
@@ -665,6 +680,8 @@ def create_invite(inviter: str, invitee: str, pose_key: str, *,
         sync_topics.avatars([inviter, invitee], "presence")
     if not created:
         return invite_id
+    _narrate(inviter, "{inviter} suggests {pose} to {invitee}.",
+             inviter=inviter, invitee=invitee, pose_key=pose_key)
     logger.info("interaction invite %s: %s asks %s for '%s'",
                 invite_id, inviter, invitee, pose_key)
     # Somebody now has a question. WHO answers it and how is not the core's
@@ -869,6 +886,9 @@ def resolve_invite(invite_id: str, accept: bool) -> Dict[str, Any]:
     if not accept:
         if not _set_invite_status(invite_id, "declined"):
             return {**out, "status": "cannot", "reason": "the answer could not be saved"}
+        _narrate(inv["invitee"],
+                 "{invitee} does not feel like {pose} with {inviter} right now.",
+                 inviter=inv["inviter"], invitee=inv["invitee"], pose_key=inv["pose_key"])
         return {**out, "status": "declined"}
     blocked = check_can_pair(inv["inviter"], inv["invitee"])
     if blocked:

@@ -89,11 +89,14 @@ def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
         return
     try:
         from app.core.agent_loop import get_agent_loop
+        from app.core.pose_catalog import pose_label
+        from app.models.character import get_character_language
+        label = pose_label(pose_key, get_character_language(invitee))
         get_agent_loop().bump_respond(
             invitee, speaker=inviter,
-            content=f"{inviter} asks you to {pose_key} together.",
+            content=f"{inviter} suggests {label} to you.",
             on_demand=True,
-            hint=(f"{inviter} asks you to {pose_key} together. Decide in "
+            hint=(f"{inviter} suggests {label} to you. Decide in "
                   f"character whether you want to. To agree, call "
                   f"{VERB_NAME} with partner={inviter}, action={pose_key}; "
                   f"to refuse, call it with partner={inviter}, "
@@ -103,8 +106,11 @@ def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
 
 
 def _offer(pose_key: str) -> str:
-    """What is offered, in words: the key plus the catalog's own description."""
-    offer = f"to {pose_key} together"
+    """What is offered, in words: the English pose label plus the catalog's
+    own description. English on purpose — it completes the decision state's
+    English sentence "<inviter> invites <invitee> <offer>"."""
+    from app.core.pose_catalog import pose_label
+    offer = f"to join in {pose_label(pose_key, 'en')}"
     try:
         from app.core.pose_catalog import get_catalog
         desc = str(get_catalog("pose").get(pose_key, {}).get("prompt") or "").strip()
@@ -113,31 +119,6 @@ def _offer(pose_key: str) -> str:
     if desc:
         offer += f" ({desc[:_OFFER_DESC_MAX]})"
     return offer
-
-
-def _narrate_decline(inviter: str, invitee: str, pose_key: str) -> None:
-    """One narrator line in the invitee's room for a decline the decision
-    model settled — the counterpart of start_interaction's line for a pair
-    that starts. Without it the refusal happens in no one's perception
-    stream. Never raises."""
-    try:
-        from app.core.i18n import t
-        from app.core.perception import (STORYTELLER_SPEAKER, VOLUME_NORMAL,
-                                         record_utterance)
-        from app.models.character import (get_character_current_location,
-                                          get_character_current_room,
-                                          get_character_language)
-        lang = get_character_language(invitee) or "de"
-        record_utterance(
-            speaker=STORYTELLER_SPEAKER,
-            content=t("{invitee} does not want to {pose} with {inviter} right now.",
-                      lang).format(invitee=invitee, inviter=inviter, pose=pose_key),
-            volume=VOLUME_NORMAL,
-            location_id=get_character_current_location(invitee) or "",
-            room_id=get_character_current_room(invitee) or "",
-            source="interaction", anchor=invitee)
-    except Exception as e:
-        logger.debug("pair decline narration failed for %s: %s", invitee, e)
 
 
 def _decide_invite(invite_id: str, inviter: str, invitee: str,
@@ -153,7 +134,7 @@ def _decide_invite(invite_id: str, inviter: str, invitee: str,
     — the outcome comes only from the NPC's own counter-call (skill.py).
     A decline does not bump the inviter: it learns the answer from its own
     tool result or the /play response, both of which read the row back —
-    and the room hears it as one narrator line (_narrate_decline), which is
+    and the room hears it as one engine narrator line, which is
     also how a temporary-NPC inviter that never reads the row learns it.
     """
     try:
@@ -185,8 +166,6 @@ def _decide_invite(invite_id: str, inviter: str, invitee: str,
             return True
         if ans.value == "decline":
             res = IE.resolve_invite(invite_id, accept=False)
-            if res.get("status") == "declined":
-                _narrate_decline(inviter, invitee, pose_key)
             decision.mark_taken(PAIR_INVITE, invite_id)
             logger.info("interaction invite %s: decision model — %s declines -> %s",
                         invite_id, invitee, res.get("status"))

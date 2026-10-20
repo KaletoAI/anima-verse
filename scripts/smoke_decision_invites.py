@@ -21,7 +21,8 @@ EXPECTATIONS, DERIVED BY HAND (Halvard invites Kira to "shaking hands").
 A0  importing the package's on_load module registers point "pair_invite"
     with origin "interact", min confidence 0.75, timeout 3.0.
 A1  point inactive -> decide is never called; Kira is bumped once and the
-    hint still carries "answer=no" (the usual path, byte for byte).
+    hint carries the pose label "shaking hands warmly", but action= keeps
+    the catalog key "shaking hands" and still carries "answer=no".
 A2  active, answer accept (0.9), resolve -> "started":
     resolve_invite("i2", True) once; mark_taken("pair_invite", "i2"); no bump;
     NO narrator line from the hook (start_interaction writes its own).
@@ -34,10 +35,7 @@ A3b active, accept, resolve -> "cannot" and the row is "stale" (asleep,
     counter-invitation. Settled: mark_taken, no bump.
 A4  active, answer decline: resolve_invite("i4", False); mark_taken; no bump
     at all (controller ruling: the inviter learns it from its own tool result).
-    Exactly ONE narrator line (record_utterance, speaker STORYTELLER_SPEAKER,
-    source "interaction", anchor Kira) in Kira's place harbour/deck — lang
-    "en" makes t() return the English key, so the content is
-    "Kira does not want to shaking hands with Halvard right now."
+    NO narrator line from register: the engine narrates; resolve is stubbed.
 A4b decision_points.invite_state raises inside _decide_invite -> the hook
     returns normally and Kira is bumped (the usual path); no resolve.
 A5  active, decide -> None: Kira is bumped; resolve_invite not called.
@@ -153,7 +151,8 @@ IE.get_invite = lambda invite_id: INVITE_ROW[0]
 IE.cancel_invite = lambda invite_id: EVENTS.append(("cancel", invite_id))
 ACC.is_player_controlled = lambda name: name in PLAYERS
 C.is_temporary_npc = lambda name: name in TEMPS
-PC.get_catalog = lambda axis: {KEY: {"prompt": "two people shake hands firmly"}}
+PC.get_catalog = lambda axis: {KEY: {"prompt": "two people shake hands firmly",
+                                    "label": "shaking hands warmly"}}
 C.get_character_language = lambda name: "en"
 C.get_character_current_location = lambda name="", profile=None: "harbour"
 C.get_character_current_room = lambda name, profile=None: "deck"
@@ -193,11 +192,16 @@ bumps = _events("bump")
 check("A1 bumped once", [b[0] for b in bumps], [INVITEE])
 check("A1 hint carries answer=no", bool(bumps) and "answer=no" in bumps[0][1], True)
 
+check("A1 hint uses label", bool(bumps) and
+      "suggests shaking hands warmly to you." in bumps[0][1], True)
+check("A1 action keeps catalog key", bool(bumps) and
+      "action=shaking hands;" in bumps[0][1], True)
+
 print("A2 active, accept, started")
 invite("i2", active=True, decision_=answer("accept"), resolve={"status": "started"})
 check("A2 decide asked with key i2", _events("decide"), [(POINT, "i2", ["answer"])])
 check("A2 state offer", [s[2] for s in _events("state")],
-      ["to shaking hands together (two people shake hands firmly)"])
+      ["to join in shaking hands warmly (two people shake hands firmly)"])
 check("A2 resolve(i2, True)", _events("resolve"), [("i2", True)])
 check("A2 mark_taken", _events("taken"), [(POINT, "i2")])
 check("A2 no bump", _events("bump"), [])
@@ -221,17 +225,7 @@ invite("i4", active=True, decision_=answer("decline"), resolve={"status": "decli
 check("A4 resolve(i4, False)", _events("resolve"), [("i4", False)])
 check("A4 mark_taken", _events("taken"), [(POINT, "i4")])
 check("A4 no bump at all", _events("bump"), [])
-narr = _events("narrate")
-check("A4 exactly one narrator line", len(narr), 1)
-if narr:
-    n = narr[0]
-    check("A4 narrator line fields",
-          (n.get("speaker"), n.get("source"), n.get("anchor"), n.get("location_id"),
-           n.get("room_id"), n.get("volume")),
-          (PERC.STORYTELLER_SPEAKER, "interaction", INVITEE, "harbour", "deck",
-           PERC.VOLUME_NORMAL))
-    check("A4 narrator content", n.get("content"),
-          "Kira does not want to shaking hands with Halvard right now.")
+check("A4 no narrator line from the hook", _events("narrate"), [])
 
 print("A4b invite_state raises -> usual path")
 _stub_state = decision_points.invite_state

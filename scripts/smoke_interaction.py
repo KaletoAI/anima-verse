@@ -183,6 +183,14 @@ Hand-derived expectations:
       no swap → Ann "a", yaw −π/2, Ann (10, 13.2), Bob (10, 13.8).
       The assignment and the genders are removed afterwards.
 
+  [10a-e] Narration (spec A): Ann speaks en, Bob de in square. Embracing's
+      world label is Umarmen: one invite says "Ann suggests embracing to Bob."
+      Reuse adds zero lines. Bob declines with "Bob hat gerade keine Lust auf
+      das Umarmen mit Ann." Unlabelled swaying falls back to its key; Ann's
+      start says "Ann and Bob start swaying." Ending through Bob says
+      "Ann und Bob hören mit dem swaying auf." once, before the ended hook.
+      Repeated end adds zero lines. A request_id invite also narrates once.
+
 Usage:  ./.venv/bin/python scripts/smoke_interaction.py
 """
 import json
@@ -933,6 +941,88 @@ _hug.pop("role_gender")
 reload_clip_caches()
 set_gender("Ann", "")
 set_gender("Bob", "")
+
+
+# ── [10a-e] narrator lines ──────────────────────────────────────────────
+print("\n[10a-e] narrator lines")
+from unittest.mock import patch  # noqa: E402
+from app.core import hooks, perception  # noqa: E402
+from app.core.keyed_lock import keyed_lock  # noqa: E402
+from app.core.pose_catalog_edit import read_store, write_store, catalog_txn  # noqa: E402
+
+for _n in ("Ann", "Bob", "Cid"):
+    ie.end_interaction(_n)
+    clear_pose_intent(_n)
+    ie.clear_invites_for(_n)
+set_character_pos("Ann", 10.0, 20.0)
+set_character_pos("Bob", 10.0, 24.0)
+with keyed_lock("character_profile", "Bob"):
+    _profile = get_character_profile("Bob")
+    _profile["language"] = "de"
+    save_character_profile("Bob", _profile)
+with catalog_txn("pose"):
+    _catalog = read_store("pose", "world")
+    _catalog.setdefault("entries", {})["embracing"] = {
+        "prompt": "two people hugging", "animation": "hug", "solo": False,
+        "group": "stand", "places": 2, "label_de": "Umarmen"}
+    write_store("pose", _catalog, "world")
+pose_catalog.reload_catalogs()
+_lines = []
+_end_seen = []
+_record = perception.record_utterance
+_emit = hooks.emit
+
+
+def record_line(**kw):
+    if kw.get("source") == "interaction":
+        _lines.append(kw)
+    return _record(**kw)
+
+
+def observe_end(event, **kw):
+    if event == "interaction.ended":
+        _end_seen.append([row["content"] for row in _lines])
+    return _emit(event, **kw)
+
+
+with patch.object(perception, "record_utterance", record_line), patch.object(hooks, "emit", observe_end):
+    _iid = ie.create_invite("Ann", "Bob", "embracing")
+    check("[10a] one English invitation", [r["content"] for r in _lines] ==
+          ["Ann suggests embracing to Bob."])
+    check("[10a] narrator fields", bool(_lines) and all(
+        r.get("speaker") == perception.STORYTELLER_SPEAKER
+        and r.get("volume") == perception.VOLUME_NORMAL
+        and r.get("anchor") == "Ann" and r.get("location_id") == PLAZA
+        and r.get("room_id") == "square" for r in _lines))
+    check("[10b] reused invitation adds no line",
+          ie.create_invite("Ann", "Bob", "embracing") == _iid and len(_lines) == 1)
+    ie.resolve_invite(_iid, False)
+    check("[10c] German decline with label", bool(_lines) and
+          _lines[-1]["content"] == "Bob hat gerade keine Lust auf das Umarmen mit Ann."
+          and _lines[-1]["anchor"] == "Bob")
+    _iid = ie.create_invite("Ann", "Bob", "swaying")
+    check("[10d] unlabelled invitation", bool(_lines) and
+          _lines[-1]["content"] == "Ann suggests swaying to Bob.")
+    _result = ie.resolve_invite(_iid, True)
+    check("[10d] unlabelled start uses actor language", _result["status"] == "started"
+          and bool(_lines) and _lines[-1]["content"] == "Ann and Bob start swaying."
+          and _lines[-1]["anchor"] == "Ann")
+    ie.end_interaction("Bob", reason="avatar")
+    _end = "Ann und Bob hören mit dem swaying auf."
+    check("[10e] one German end anchored at Bob", bool(_lines) and
+          _lines[-1]["content"] == _end and _lines[-1]["anchor"] == "Bob"
+          and sum(r["content"] == _end for r in _lines) == 1)
+    check("[10e] end recorded before hook", len(_end_seen) == 1
+          and bool(_end_seen[0]) and _end_seen[0][-1] == _end)
+    _count = len(_lines)
+    check("[10e] repeated end is silent", not ie.end_interaction("Ann")
+          and not ie.end_interaction("Bob") and len(_lines) == _count
+          and len(_end_seen) == 1)
+    _owned = ie.create_invite("Ann", "Bob", "embracing", request_id="iinv_narration")
+    check("[10b] owned invitation narrates once", _owned == "iinv_narration"
+          and len(_lines) == _count + 1)
+    ie.create_invite("Ann", "Bob", "embracing", request_id="iinv_narration")
+    check("[10b] owned reuse is silent", len(_lines) == _count + 1)
 
 
 print()
