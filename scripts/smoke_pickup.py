@@ -321,7 +321,7 @@ print("\n[6] items_here lists the visible room items only")
 VISIBLE = add_item(name="Bucket", description="a wooden bucket")["id"]
 HIDDEN = add_item(name="Key", description="a small key")["id"]
 add_item_to_room(LOC, ROOM, VISIBLE, quantity=2)
-add_item_to_room(LOC, ROOM, HIDDEN, quantity=1, hidden=True)
+add_item_to_room(LOC, ROOM, HIDDEN, quantity=1, hidden=True, discovery_difficulty=101)
 
 
 class _Where:

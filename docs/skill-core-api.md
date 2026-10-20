@@ -146,6 +146,14 @@ Weiter (⚠, heute nur Built-ins): `equip_piece`/`unequip_piece`,
 `equip_item`/`unequip_item`, `add_item`, `add_to_inventory`,
 `find_inventory_piece_by_name_slot`, `VALID_PIECE_SLOTS`.
 
+Public discovery helpers (stable):
+
+| Function | Contract |
+|---|---|
+| `discovery_value(viewer: str, *, profile=None) -> int` | Effective stat selected by world config `inventory.discovery_stat` (default `"attention"`). A missing stat counts as 0. An existing profile can be passed to avoid another load. |
+| `placement_visible_to(viewer: str, location_id: str, room_id: str, placement: dict, *, profile=None) -> bool` | Visible placements return True. Hidden placements return True if already found by this viewer, or if the discovery value meets their integer difficulty (0–999). A new find is recorded silently with game time in `item_discoveries`; it changes neither world generation nor scene fingerprints. |
+| `discovered_by(location_id: str, room_id: str, item_id: str) -> list[str]` | Alphabetically sorted names that found this placement. Full removal through `remove_item_from_room` clears these rows; partial removal and edits retain them. Moving an item by removing and placing it in another room requires discovering it again. |
+
 ## Welt & Ortskenntnis — `app.models.world` / `app.models.rules` ⚠
 
 | Funktion | Semantik |

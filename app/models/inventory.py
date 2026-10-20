@@ -903,6 +903,57 @@ def get_room_items(location_id: str, room_id: str) -> List[Dict[str, Any]]:
     return room.get("items", [])
 
 
+def discovery_value(viewer: str, *, profile: dict | None = None) -> int:
+    """Effective configured discovery stat; a missing stat counts as zero."""
+    from app.core import config
+    from app.core.stat_boosts import effective_stat
+    from app.models.character import get_character_profile
+    if profile is None:
+        profile = get_character_profile(viewer) or {}
+    return effective_stat(profile, config.get("inventory.discovery_stat", "attention")) or 0
+
+
+def discovered_by(location_id: str, room_id: str, item_id: str) -> list[str]:
+    """Names that found this placement, in stable alphabetical order."""
+    rows = get_connection().execute(
+        "SELECT character_name FROM item_discoveries "
+        "WHERE location_id=? AND room_id=? AND item_id=? ORDER BY character_name",
+        (location_id, room_id, item_id)).fetchall()
+    return [row[0] for row in rows]
+
+
+def placement_visible_to(viewer: str, location_id: str, room_id: str,
+                         placement: dict, *, profile: dict | None = None) -> bool:
+    """Reveal a hidden placement once per viewer, without changing world geometry.
+
+    Serialize discovery with removal so a stale reader cannot recreate rows
+    after a placement has gone. Only an existing placement can be discovered.
+    """
+    from app.models.world import world_write_lock
+    if not placement.get("hidden"):
+        return True
+    if not viewer:
+        return False
+    item_id = placement.get("item_id", "")
+    with world_write_lock:
+        current = next((p for p in get_room_items(location_id, room_id)
+                        if p.get("item_id") == item_id), None)
+        if current is None:
+            return False
+        if not current.get("hidden"):
+            return True
+        if viewer in discovered_by(location_id, room_id, item_id):
+            return True
+        if discovery_value(viewer, profile=profile) < int(current.get("discovery_difficulty", 0)):
+            return False
+        with transaction() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO item_discoveries "
+                "(location_id, room_id, item_id, character_name, game_ts) VALUES (?, ?, ?, ?, ?)",
+                (location_id, room_id, item_id, viewer, game_time().canonical()))
+        return True
+
+
 def add_item_to_room(location_id: str,
     room_id: str,
     item_id: str,
@@ -937,7 +988,7 @@ def add_item_to_room(location_id: str,
                                 visible_before = not ri.get("hidden", False)
                                 ri["quantity"] = ri.get("quantity", 1) + quantity
                                 ri["hidden"] = hidden
-                                ri["discovery_difficulty"] = discovery_difficulty
+                                ri["discovery_difficulty"] = max(0, min(999, int(discovery_difficulty)))
                                 if note:
                                     ri["note"] = note
                                 if not upsert_location(loc, sync_world=False):
@@ -950,7 +1001,7 @@ def add_item_to_room(location_id: str,
                             "item_id": item_id,
                             "quantity": max(1, quantity),
                             "hidden": hidden,
-                            "discovery_difficulty": max(0, min(5, discovery_difficulty)),
+                            "discovery_difficulty": max(0, min(999, int(discovery_difficulty))),
                             "note": note.strip(),
                         })
                         room["items"] = room_items
@@ -990,6 +1041,11 @@ def remove_item_from_room(location_id: str,
                                 room["items"] = room_items
                                 if not upsert_location(loc, sync_world=False):
                                     return False
+                                if ri["quantity"] <= 0:
+                                    with transaction() as conn:
+                                        conn.execute(
+                                            "DELETE FROM item_discoveries WHERE location_id=? AND room_id=? AND item_id=?",
+                                            (location_id, room_id, item_id))
                                 from app.core import sync_topics
                                 sync_topics.room_items_changed(location_id, room_id, visible_before, visible_before and ri["quantity"] > 0)
                                 logger.info("Item %s aus Raum %s/%s entfernt", item_id, location_id, room_id)
@@ -1700,9 +1756,8 @@ def pick_up_item(character_name: str,
     after the other here, never nested, so an inventory write never holds the
     world lock.
 
-    A HIDDEN room item is not pickable: it has not been discovered, and the
-    room listing (``/play/belongings`` -> ``items_here``) and the NPC prompt
-    (``thought_context._build_room_items_block``) both skip it already.
+    A hidden room item is pickable only when visible to this character,
+    using the same discovery rule as room listings and prompts.
 
     Returns: {success: bool, error?: str, item_name: str, quantity: int}
     """
@@ -1723,7 +1778,7 @@ def pick_up_item(character_name: str,
         in_room = next((ri for ri in room_items if ri.get("item_id") == item_id), None)
         if not in_room:
             return {"success": False, "error": "That is not lying in this room"}
-        if in_room.get("hidden"):
+        if not placement_visible_to(character_name, location_id, room_id, in_room):
             return {"success": False, "error": "You cannot see that here"}
         if int(in_room.get("quantity", 1) or 1) < quantity:
             return {"success": False, "error": "There are not that many lying here"}
@@ -1732,6 +1787,10 @@ def pick_up_item(character_name: str,
         was_hidden = bool(in_room.get("hidden"))
         was_difficulty = int(in_room.get("discovery_difficulty", 0) or 0)
         was_note = str(in_room.get("note", "") or "")
+        discoveries = [tuple(row) for row in get_connection().execute(
+            "SELECT location_id, room_id, item_id, character_name, game_ts "
+            "FROM item_discoveries WHERE location_id=? AND room_id=? AND item_id=?",
+            (location_id, room_id, item_id)).fetchall()]
         if not remove_item_from_room(location_id, room_id, item_id, quantity=quantity):
             return {"success": False, "error": "That is not lying in this room"}
 
@@ -1746,9 +1805,18 @@ def pick_up_item(character_name: str,
         # Hand-over failed (inventory full) — put the claim back. Until this
         # line the item is out of the world; nobody else can take it, because
         # the claim already removed it from the room.
-        add_item_to_room(location_id, room_id, item_id, quantity=quantity,
-                         hidden=was_hidden, discovery_difficulty=was_difficulty,
-                         note=was_note)
+        with world_write_lock:
+            restored = add_item_to_room(location_id, room_id, item_id, quantity=quantity,
+                                        hidden=was_hidden, discovery_difficulty=was_difficulty,
+                                        note=was_note)
+            # A refused hand-over did not move the item: retain every viewer's
+            # remembered find and its original game stamp.
+            if restored and discoveries:
+                with transaction() as conn:
+                    conn.executemany(
+                        "INSERT OR IGNORE INTO item_discoveries "
+                        "(location_id, room_id, item_id, character_name, game_ts) "
+                        "VALUES (?, ?, ?, ?, ?)", discoveries)
         return {"success": False, "error": "Your hands are full"}
 
     item_name = item.get("name", item_id)

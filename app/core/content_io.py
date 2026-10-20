@@ -661,6 +661,7 @@ def export_location_to_zip(location_id: str) -> bytes:
         manifest = {
             "version": MANIFEST_VERSION,
             "type": "location",
+            "discovery_scale": "stat",
             "location_id": canonical_id,
             "location_name": loc.get("name", ""),
             "room_count": len(loc.get("rooms") or []),
@@ -957,7 +958,7 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     except zipfile.BadZipFile as e:
         raise ValueError(f"invalid ZIP: {e}")
 
-    _read_manifest(zf, "location")
+    manifest = _read_manifest(zf, "location")
     loc = json.loads(zf.read("db/location.json"))
     if not isinstance(loc, dict):
         raise ValueError("db/location.json must be an object")
@@ -970,6 +971,12 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
             "as shares of the plan width (contract before v6, 2026-08-19), not "
             "metres, and would import as centimetre rooms; no longer importable. "
             f"Export the location again from a current world. ({reason})")
+
+    if manifest.get("discovery_scale") != "stat":
+        for room in loc.get("rooms") or []:
+            for placement in room.get("items") or []:
+                if placement.get("hidden"):
+                    placement["discovery_difficulty"] = 101
 
     # Fresh ids: the imported location gets a new id.
     new_loc_id = uuid.uuid4().hex[:8]

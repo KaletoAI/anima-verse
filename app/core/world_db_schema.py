@@ -497,6 +497,14 @@ SCHEMA_STATEMENTS = [
     )""",
 
     # ── Inventory ──────────────────────────────────────────────────────
+    """CREATE TABLE IF NOT EXISTS item_discoveries (
+        location_id TEXT,
+        room_id TEXT,
+        item_id TEXT,
+        character_name TEXT,
+        game_ts TEXT,
+        PRIMARY KEY(location_id, room_id, item_id, character_name)
+    )""",
     """CREATE TABLE IF NOT EXISTS inventory_items (
         character_name TEXT NOT NULL,
         item_id        TEXT NOT NULL,

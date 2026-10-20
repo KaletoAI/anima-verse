@@ -1253,7 +1253,7 @@ def _build_chat_prompt(character_name: str,
         try:
             from app.models.inventory import (
                 get_character_inventory, get_room_items, get_item,
-                get_equipped_item_ids)
+                get_equipped_item_ids, placement_visible_to)
 
             def _localized(item: Dict[str, Any], field: str) -> str:
                 if field == "name":
@@ -1284,7 +1284,8 @@ def _build_chat_prompt(character_name: str,
                 room_entries = get_room_items(current_location_id, current_room_id) or []
                 visible_lines = []
                 for ri in room_entries:
-                    if ri.get("hidden"):
+                    if not placement_visible_to(character_name, current_location_id,
+                                                current_room_id, ri, profile=char_profile):
                         continue
                     full_item = get_item(ri.get("item_id", "")) or {}
                     if not full_item:
@@ -1298,6 +1299,8 @@ def _build_chat_prompt(character_name: str,
                         line += f" ({note})"
                     elif desc:
                         line += f" — {desc}"
+                    if ri.get("hidden"):
+                        line += " (hidden — you noticed it)"
                     visible_lines.append(line)
                 if visible_lines:
                     inventory_room_section = "Items visible in this room:\n" + "\n".join(visible_lines)

@@ -186,6 +186,12 @@ async def lifespan(app: FastAPI):
     except Exception as _gce:
         logger.warning("game calendar migration failed: %s", _gce)
 
+    try:
+        from app.core.discovery_scale_migration import migrate_discovery_scale_once
+        migrate_discovery_scale_once()
+    except Exception as exc:
+        logger.warning("Item discovery scale migration failed: %s", exc)
+
     # 3D scale: one frame (the location footprint square, side
     # map3d.plan_width_m) and one scale factor. Extract plan_width_m and
     # storey_height_m before removing the old model fields (2026-07-28).

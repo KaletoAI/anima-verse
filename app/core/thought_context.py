@@ -142,7 +142,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "recent_thoughts": recent_thoughts_block(character_name),
         "outfit_self_block": _build_outfit_block(character_name, "Your outfit"),
         "outfit_avatar_block": _build_avatar_outfit_block(),
-        "room_items_block": _build_room_items_block(location_id, room_id),
+        "room_items_block": _build_room_items_block(location_id, room_id, character_name, profile=profile),
         "inventory_block": _build_inventory_block(character_name),
         "present_people_block": present_people_block,
         "elsewhere_block": elsewhere_block,
@@ -865,21 +865,22 @@ def _build_avatar_outfit_block() -> str:
         return ""
 
 
-def _build_room_items_block(location_id: str, room_id: str) -> str:
-    """Items present in the current room (visible only — hidden ones skipped).
+def _build_room_items_block(location_id: str, room_id: str, viewer: str = "",
+                            *, profile: dict | None = None) -> str:
+    """Items visible to the viewer, including remembered hidden placements.
 
     Format: bullet list of "name (xN) — short description". Cap at 8.
     """
     if not location_id or not room_id:
         return ""
     try:
-        from app.models.inventory import get_room_items, get_item
+        from app.models.inventory import get_room_items, get_item, placement_visible_to
         items = get_room_items(location_id, room_id) or []
         if not items:
             return ""
         lines: List[str] = []
         for ri in items:
-            if ri.get("hidden"):
+            if not placement_visible_to(viewer, location_id, room_id, ri, profile=profile):
                 continue
             iid = ri.get("item_id") or ""
             qty = ri.get("quantity", 1) or 1
@@ -892,6 +893,8 @@ def _build_room_items_block(location_id: str, room_id: str) -> str:
             line = f"- {name}{qty_str}"
             if desc:
                 line += f" — {desc}"
+            if ri.get("hidden"):
+                line += " (hidden — you noticed it)"
             lines.append(line)
             if len(lines) >= 8:
                 break

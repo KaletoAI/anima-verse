@@ -2669,10 +2669,8 @@ def build_belongings(character_name: str) -> dict:
 def _items_here(avatar: str) -> list:
     """The VISIBLE items lying in the avatar's current room.
 
-    HIDDEN entries are skipped — the same rule the NPC prompt applies
-    (``thought_context._build_room_items_block``): an undiscovered item is not
-    part of the room anybody can see, so it is neither listed here nor
-    pickable via ``/play/pickup``.
+    Hidden entries use the avatar's discovery stat and remembered finds,
+    the same visibility rule used by NPC prompts and pickup.
 
     ``image`` is the same boolean flag the inventory rows carry; the picture
     itself is ``/inventory/items/<id>/image``, which the panel puts through
@@ -2686,14 +2684,14 @@ def _items_here(avatar: str) -> list:
         from app.models.character import (get_character_current_location,
                                           get_character_current_room,
                                           get_character_language)
-        from app.models.inventory import get_item, get_room_items
+        from app.models.inventory import get_item, get_room_items, placement_visible_to
         loc = get_character_current_location(avatar) or ""
         if not loc:
             return []
         room = get_character_current_room(avatar) or ""
         lang = get_character_language(avatar) or "de"
         for ri in (get_room_items(loc, room) or []):
-            if ri.get("hidden"):
+            if not placement_visible_to(avatar, loc, room, ri):
                 continue
             iid = (ri.get("item_id") or "").strip()
             it = get_item(iid) if iid else None
@@ -2701,6 +2699,7 @@ def _items_here(avatar: str) -> list:
                 continue
             out.append({
                 "item_id": iid,
+                "discovered": bool(ri.get("hidden")),
                 "name": localized(it, "name", lang) or iid,
                 "description": (localized(it, "description", lang) or "").strip(),
                 "quantity": int(ri.get("quantity", 1) or 1),

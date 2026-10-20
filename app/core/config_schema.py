@@ -68,6 +68,20 @@ WORLD_GROUPS = [
 ]
 
 SECTIONS = {
+    "inventory": {
+        "label": "Inventory",
+        "scope": "world",
+        "world_group": "gameplay",
+        "fields": {
+            "discovery_stat": {
+                "type": "str",
+                "label": "Discovery stat",
+                "default": "attention",
+                "description": "Effective character stat compared with hidden item discovery difficulty. A missing stat counts as zero.",
+            },
+        },
+    },
+
     "packages": {
         "label": "Packages", "scope": "world", "world_group": "packages",
         "fields": {
