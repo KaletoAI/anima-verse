@@ -576,22 +576,21 @@ _last_matched_partner: Optional[str] = None
 
 def _check_status_effect(character_name: str,
     stat_name: str, operator: str, threshold: int) -> Tuple[bool, str]:
-    """Prueft einen Status-Wert generisch gegen profile.status_effects.
-
-    Fehlt der Stat-Wert komplett, wird 100 angenommen (Character startet voll).
-    """
+    """Compare an effective stat; missing stats retain the default of 100."""
     try:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name)
-        status = profile.get("status_effects", {})
-        value = status.get(stat_name, 100)
+        from app.core.stat_boosts import effective_stat
+        value = effective_stat(profile, stat_name)
+        if value is None:
+            value = 100
         if operator == ">" and value > threshold:
             return True, ""
         if operator == "<" and value < threshold:
             return True, ""
         if operator == "=" and int(value) == threshold:
             return True, ""
-        return False, f"{stat_name}: {int(value)} (braucht {operator}{threshold})"
+        return False, f"{stat_name}: {int(value)} (requires {operator}{threshold})"
     except Exception:
         return True, ""
 

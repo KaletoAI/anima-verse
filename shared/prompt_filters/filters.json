@@ -1,4 +1,5 @@
 {
+  "_stat_boosts": "Optional stat_boosts maps template stat keys to integer amounts (-200 to 200). Only active, unexpired condition entries contribute; base stats remain unchanged.",
   "filters": [
     {
       "id": "drunk",

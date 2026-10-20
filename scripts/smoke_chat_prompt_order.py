@@ -208,7 +208,7 @@ tpl = {"sections": [{"fields": [
     {"key": "d", "prompt_label": "D", "in_prompt": True, "store": "status_effects",
      "prompt_volatile": False},
 ]}]}
-data = {"a": "1", "b": "2", "c": "3", "d": "4"}
+data = {"a": "1", "b": "2", "status_effects": {"c": 3, "d": 4}}
 check("[7] stable", build_prompt_section(tpl, data, volatile=False), ["A: 1", "D: 4"])
 check("[7] volatile", build_prompt_section(tpl, data, volatile=True), ["B: 2", "C: 3"])
 check("[7] all", build_prompt_section(tpl, data), ["A: 1", "B: 2", "C: 3", "D: 4"])

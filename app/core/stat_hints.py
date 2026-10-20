@@ -1,16 +1,4 @@
-"""Stat-Hint-Aufloesung aus Character-Template.
-
-Liest hint_thresholds-Felder aus dem Character-Template und liefert kurze
-Hint-Strings (z.B. "mutig", "erschoepft") basierend auf aktuellen Status-
-Effect-Werten. Ersetzt den frueher hardcodierten courage/attention/stamina-
-Block in random_events.py.
-
-Template-Format pro Stat-Feld (optional):
-    "hint_thresholds": [
-        {"min": 70, "text": "mutig"},
-        {"max": 30, "text": "aengstlich"}
-    ]
-"""
+"""Resolve template threshold hints against effective character stats."""
 from typing import Any, Dict, Iterable, List
 
 from app.core.log import get_logger
@@ -25,12 +13,7 @@ def _iter_template_fields(template: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
 
 
 def get_stat_hints(character_name: str) -> List[str]:
-    """Liefert Hint-Strings fuer den Character anhand der aktuellen Stats.
-
-    Iteriert ueber alle Stat-Felder im Character-Template (store=status_effects),
-    wertet deren hint_thresholds gegen den aktuellen Wert aus und sammelt die
-    zutreffenden Texte. Stats ohne hint_thresholds werden uebersprungen.
-    """
+    """Collect template hints whose thresholds match effective stats."""
     try:
         from app.models.character import get_character_profile
         from app.models.character_template import get_template
@@ -38,7 +21,8 @@ def get_stat_hints(character_name: str) -> List[str]:
         return []
 
     profile = get_character_profile(character_name) or {}
-    status = profile.get("status_effects", {}) or {}
+    from app.core.stat_boosts import effective_stats
+    status = effective_stats(profile)
     template_name = profile.get("template", "") or ""
     if not template_name:
         return []
@@ -58,7 +42,7 @@ def get_stat_hints(character_name: str) -> List[str]:
             continue
         default = field.get("default", 100)
         try:
-            value = int(status.get(key, default))
+            value = int(status[key]["value"] if key in status else default)
         except (TypeError, ValueError):
             continue
         for t in thresholds:
@@ -85,9 +69,7 @@ def template_stat_keys(template: Dict[str, Any]) -> set:
 
 
 def get_all_stat_keys() -> List[str]:
-    """Alle Stat-Feld-Keys (store=status_effects) ueber ALLE Character-Templates
-    der Welt — generisch, NICHT hartkodiert. Fuer template-agnostische Hilfen
-    (z.B. das Condition-Help-Topic), da die Stats pro Template variieren."""
+    """Return stat field keys across all world character templates."""
     keys: List[str] = []
     seen = set()
     try:
@@ -107,9 +89,6 @@ def get_all_stat_keys() -> List[str]:
 
 
 def format_character_with_hints(character_name: str) -> str:
-    """Wie get_stat_hints, aber formatiert als 'Name (hint1, hint2)'.
-
-    Liefert nur den Namen zurueck, wenn keine Hints zutreffen.
-    """
+    """Format the character name with matching hints, if any."""
     hints = get_stat_hints(character_name)
     return f"{character_name} ({', '.join(hints)})" if hints else character_name

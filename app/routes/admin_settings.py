@@ -577,6 +577,14 @@ def _prompt_filters_save_sync(user, body: Any):
         bone_pose = validate_bone_pose(body.get("bone_pose", {}))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    from app.core.stat_hints import get_all_stat_keys
+    stat_boosts = body.get("stat_boosts", {})
+    known_stats = set(get_all_stat_keys())
+    if not isinstance(stat_boosts, dict) or any(
+        key not in known_stats or type(amount) is not int or not -200 <= amount <= 200
+        for key, amount in stat_boosts.items()
+    ):
+        raise HTTPException(status_code=400, detail="stat_boosts must map known stats to integers from -200 to 200")
     enabled = bool(body.get("enabled", True))
 
     if not fid:
@@ -590,23 +598,27 @@ def _prompt_filters_save_sync(user, body: Any):
     drop_blocks = [b for b in drop_blocks if b in valid]
 
     with _prompt_filters_txn(), transaction() as conn:
+        row = conn.execute("SELECT meta FROM prompt_filters WHERE id=?", (fid,)).fetchone()
+        meta = _json.loads(row[0] or "{}") if row else {}
+        meta["stat_boosts"] = stat_boosts
         conn.execute("""
             INSERT INTO prompt_filters (id, condition, label, drop_blocks,
                                         prompt_modifier, enabled, meta,
                                         icon, image_modifier, bone_pose)
-            VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 condition=excluded.condition,
                 label=excluded.label,
                 drop_blocks=excluded.drop_blocks,
                 prompt_modifier=excluded.prompt_modifier,
                 enabled=excluded.enabled,
+                meta=excluded.meta,
                 icon=excluded.icon,
                 image_modifier=excluded.image_modifier,
                 bone_pose=excluded.bone_pose
         """, (fid, condition, label,
               _json.dumps(drop_blocks, ensure_ascii=False),
-              prompt_modifier, 1 if enabled else 0,
+              prompt_modifier, 1 if enabled else 0, _json.dumps(meta, ensure_ascii=False),
               icon, image_modifier, _json.dumps(bone_pose, ensure_ascii=False)))
     from app.core.prompt_filters import invalidate_filter_snapshot
     invalidate_filter_snapshot()

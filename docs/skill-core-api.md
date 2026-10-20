@@ -803,3 +803,19 @@ source or a callback returning `False` yields 404, no callback yields 405,
 and success returns `{"deleted": "<source_id>:<local_id>"}`. The callback must
 scope deletion to the supplied character. The `user_id` segment is ignored,
 so clients can use `me`. Existing diary read authorization remains in force.
+
+
+## Effective stats (`app.core.stat_boosts`)
+
+- `active_boosts(profile, *, now=None)`
+  returns each stat's active condition contributions with `condition`, `label`,
+  integer `amount`, and `remaining_hours`. Only enabled definitions attached to
+  `active_conditions` contribute. Expression triggers never contribute boosts.
+  Conditions expire strictly after their duration; an unreadable start remains active.
+- `effective_stat(profile, key)` returns the base plus
+  active boosts, floored at zero with no upper cap; missing stats return `None`.
+- `effective_stats(profile)` returns every base stat with
+  `base`, summed `boost`, effective `value`, and the contribution list `boosts`.
+
+These helpers read without mutating profiles. Use them for decisions and display;
+stat writers and LLM stat adjustments continue to use the base values (0–100).

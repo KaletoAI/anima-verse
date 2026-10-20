@@ -501,13 +501,18 @@ def build_prompt_section(
         source_file = field.get("source_file")
         if source_file:
             value = load_source_file(character_name, source_file) if character_name else ""
+        elif field.get("store") == "status_effects":
+            from app.core.stat_boosts import effective_stat
+            value = effective_stat(data, key)
         else:
             value = data.get(key)
 
-        if not value:
-            # Fall back to template default if profile has no value
+        # A stat of 0 is a value; for every other field an empty value falls
+        # back to the template default as before.
+        is_stat = field.get("store") == "status_effects" and not source_file
+        if (value is None) if is_stat else (not value):
             value = field.get("default")
-            if not value:
+            if (value is None) if is_stat else (not value):
                 continue
 
         label = field.get("prompt_label") or field.get("label", key)

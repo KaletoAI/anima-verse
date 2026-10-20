@@ -76,6 +76,7 @@ def _load_world() -> List[Dict[str, Any]]:
                 "prompt_modifier": r[4] or "",
                 "enabled": bool(r[5]),
                 "meta": meta,
+                "stat_boosts": meta.get("stat_boosts", {}),
                 "icon": r[7] or "",
                 "image_modifier": r[8] or "",
                 "bone_pose": bone_pose if isinstance(bone_pose, dict) else {},
@@ -124,6 +125,7 @@ def load_filters() -> List[Dict[str, Any]]:
             for entry in (*_load_shared(), *_load_world()):
                 fid = (entry.get("id") or "").strip()
                 if fid:
+                    entry.setdefault("stat_boosts", {})
                     by_id[fid] = entry
             _snapshot = list(by_id.values())
             _snapshot_key = key
@@ -274,7 +276,10 @@ def _triggered_filters(character_name: str, location_id: str = "", profile=None)
             if raw.startswith("condition:"):
                 result = _has_tag_condition(character_name, raw.split(":", 1)[1], profile)
             elif match and match[1] not in {"mood", "relationship", "romantic"}:
-                value = (profile.get("status_effects") or {}).get(match[1], 100)
+                from app.core.stat_boosts import effective_stat
+                value = effective_stat(profile, match[1])
+                if value is None:
+                    value = 100
                 threshold = int(match[3])
                 result = {">": value > threshold, "<": value < threshold, "=": int(value) == threshold}[match[2]]
             elif raw in flags:
