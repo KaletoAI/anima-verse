@@ -23,14 +23,15 @@ interface Intent {
   participants: Record<string, { role?: string; progress?: unknown[] }>
   title: string
   description: string
-  trigger: { kind?: string; location_id?: string; run_date?: string }
+  trigger: { kind?: string; location_id?: string; run_date?: string; repeat?: 'daily'; at?: string }
+  target_count?: number
   priority: number
   status: string
   location_id?: string
   outfit_hint?: string
   expires_at?: string
   action?: { type?: string; destination?: { location_id: string; room_id?: string }; scope?: 'pair' | 'party'; after_arrival?: { type: 'pair'; pose_key: string } }
-  meta?: { expired_reason?: string; travel?: { phase?: string; reason?: string; expected_members?: string[]; destination_label?: string } }
+  meta?: { progress_type?: string; repeat_state?: { day: string; log: Array<{ day: string; result: 'done' | 'missed'; count: number }> }; expired_reason?: string; travel?: { phase?: string; reason?: string; expected_members?: string[]; destination_label?: string } }
 }
 
 type TriggerKind = 'standing' | 'now' | 'at_location' | 'at_time'
@@ -42,6 +43,10 @@ interface FormState {
   participants: string[] // additional participants beyond the owner
   priority: number
   triggerKind: TriggerKind
+  repeat: '' | 'daily'
+  dailyAt: string
+  targetCount: number
+  progressType: string
   locationId: string
   runDate: string // the stored GAME stamp of an edited at_time intent ('' on create)
   runInMin: number // at_time: game minutes from now; 0 = keep runDate (edit only)
@@ -61,6 +66,10 @@ const INITIAL_FORM: FormState = {
   participants: [],
   priority: 3,
   triggerKind: 'standing',
+  repeat: '',
+  dailyAt: '09:00',
+  targetCount: 0,
+  progressType: '',
   locationId: '',
   runDate: '',
   runInMin: 0,
@@ -131,7 +140,8 @@ const TRIP_PHASE_LABELS: Record<string, string> = {
 
 const POLL_INTERVAL_MS = 15_000
 
-function triggerSummary(it: Intent, locName: (id: string) => string): string {
+function triggerSummary(it: Intent, locName: (id: string) => string, t: (s: string) => string): string {
+  if (it.trigger?.repeat === 'daily') return `↻ ${t('daily')}${it.trigger.kind === 'at_time' ? ` ${it.trigger.at}` : ''}`
   const k = it.trigger?.kind || 'standing'
   if (k === 'at_location') return `@ ${locName(it.trigger?.location_id || it.location_id || '')}`
   if (k === 'at_time') return `⏰ ${gameStampLabel(it.trigger?.run_date)}`
@@ -148,6 +158,7 @@ export function IntentsTab() {
   const [intents, setIntents] = useState<Intent[] | null>(null)
   const [characters, setCharacters] = useState<CharacterRef[]>([])
   const [locations, setLocations] = useState<LocationRef[]>([])
+  const [progressTypes, setProgressTypes] = useState<string[]>([])
   const [actionTypes, setActionTypes] = useState<string[]>([])
   const [sharedActivityOptions, setSharedActivityOptions] = useState<string[]>([])
   const [showAll, setShowAll] = useState(false)
@@ -180,6 +191,8 @@ export function IntentsTab() {
   useEffect(() => {
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
     loadLocations().then(setLocations).catch(() => setLocations([]))
+    apiGet<string[]>('/intents/progress-types').then(setProgressTypes)
+      .catch((e) => setError((e as Error).message))
     apiGet<string[]>('/intents/action-types').then(setActionTypes)
       .catch((e) => setError((e as Error).message))
     apiGet<string[]>('/intents/shared-activity-options').then(setSharedActivityOptions)
@@ -218,6 +231,10 @@ export function IntentsTab() {
         locationId: it.trigger?.location_id || it.location_id || '',
         runDate: it.trigger?.run_date || '',
         runInMin: 0,
+        repeat: it.trigger?.repeat || '',
+        dailyAt: it.trigger?.at || '09:00',
+        targetCount: it.target_count || 0,
+        progressType: it.meta?.progress_type || '',
         outfitHint: it.outfit_hint || '',
         // expires_at is absolute; we cannot reverse it to a preset, so keep the
         // existing expiry untouched on edit unless the admin picks a new duration.
@@ -257,8 +274,11 @@ export function IntentsTab() {
         }
         trigger.location_id = form.locationId
       }
+      if (form.repeat) trigger.repeat = form.repeat
       if (form.triggerKind === 'at_time') {
-        if (form.runInMin > 0) {
+        if (form.repeat === 'daily') {
+          trigger.at = form.dailyAt
+        } else if (form.runInMin > 0) {
           trigger.run_in_minutes = form.runInMin
         } else if (editingId && form.runDate) {
           trigger.run_date = form.runDate
@@ -288,12 +308,18 @@ export function IntentsTab() {
         location_id: form.triggerKind === 'at_location' ? form.locationId : '',
         outfit_hint: form.outfitHint.trim(),
       }
+      // Count and progress type belong to ordinary plans only — an executable
+      // action's own validator owns every other field of its intent.
+      if (form.actionKind === 'plan') {
+        payload.target_count = form.targetCount
+        payload.meta = { progress_type: form.progressType }
+      }
       // Only stamp source on create — editing must not flip a character-owned
       // intent into a human one.
       if (!editingId) payload.source = 'human'
       // Expiry: only set when a duration preset is chosen. 0 = leave as-is on
       // edit / "never" on create. GAME minutes — the server computes the stamp.
-      if (form.durationMin > 0) {
+      if (!form.repeat && form.durationMin > 0) {
         payload.duration_minutes = form.durationMin
       } else if (!editingId) {
         payload.expires_at = ''
@@ -409,6 +435,8 @@ export function IntentsTab() {
               <th>{t('Trigger')}</th>
               <th>{t('Priority')}</th>
               <th>{t('Expires')}</th>
+              <th>{t('Progress')}</th>
+              <th>{t('Last 7 days')}</th>
               <th>{t('Status')}</th>
               <th />
             </tr>
@@ -416,17 +444,17 @@ export function IntentsTab() {
           <tbody>
             {error ? (
               <tr>
-                <td colSpan={8}>error: {error}</td>
+                <td colSpan={10}>error: {error}</td>
               </tr>
             ) : intents === null ? (
               <tr>
-                <td colSpan={8} className="ga-sched-muted">
+                <td colSpan={10} className="ga-sched-muted">
                   {t('Loading…')}
                 </td>
               </tr>
             ) : intents.length === 0 ? (
               <tr>
-                <td colSpan={8} className="ga-sched-muted">
+                <td colSpan={10} className="ga-sched-muted">
                   {t('No intents yet.')}
                 </td>
               </tr>
@@ -466,11 +494,19 @@ export function IntentsTab() {
                         {it.source}
                       </span>
                     </td>
-                    <td>{triggerSummary(it, locName)}</td>
+                    <td>{triggerSummary(it, locName, t)}</td>
                     <td>{t(PRIORITY_LABELS[it.priority] || 'Normal')}</td>
                     <td className="ga-sched-muted" style={{ fontSize: 12 }}>
                       {expiresAtLabel(it.expires_at) || '—'}
                     </td>
+                    <td>{(it.target_count || 0) > 0
+                      ? `${Math.max(0, ...Object.values(it.participants || {}).map((p) => p.progress?.length || 0))}/${it.target_count}`
+                      : '—'}</td>
+                    <td>{it.meta?.repeat_state?.log.slice(-7).map((entry) => (
+                      <span key={entry.day} title={`${entry.day}: ${t(entry.result)} (${entry.count})`}>
+                        {entry.result === 'done' ? '✓' : '✗'}
+                      </span>
+                    ))}</td>
                     <td className={active ? 'ga-status-ok' : 'ga-status-paused'}>
                       {t(it.status)}
                       {it.status === 'expired' && it.meta?.expired_reason
@@ -509,7 +545,7 @@ export function IntentsTab() {
             <div className="ga-sched-field">
               <label>{t('Plan type')}</label>
               <select className="ga-input" value={form.actionKind} disabled={!!editingId}
-                onChange={(e) => setForm((f) => ({ ...f, actionKind: e.target.value as FormState['actionKind'], triggerKind: 'standing', participants: [] }))}>
+                onChange={(e) => setForm((f) => ({ ...f, actionKind: e.target.value as FormState['actionKind'], triggerKind: 'standing', repeat: '', targetCount: 0, progressType: '', participants: [] }))}>
                 <option value="plan">{t('Ordinary plan')}</option>
                 {actionTypes.includes('travel_together') ? <option value="travel_together">{t('Shared trip')}</option> : null}
               </select>
@@ -591,6 +627,30 @@ export function IntentsTab() {
                 ))}
               </select>
             </div>
+            {form.actionKind === 'plan' ? <>
+              <div className="ga-sched-field">
+                <label>{t('Repeat')}</label>
+                <select className="ga-input" value={form.repeat}
+                  onChange={(e) => setForm((f) => ({ ...f, repeat: e.target.value as FormState['repeat'], triggerKind: 'standing' }))}>
+                  <option value="">{t('never')}</option>
+                  <option value="daily">{t('daily')}</option>
+                </select>
+              </div>
+              <div className="ga-sched-field">
+                <label>{t('Count')}</label>
+                <input className="ga-input" type="number" min={0} step={1} required value={form.targetCount}
+                  onChange={(e) => setForm((f) => ({ ...f, targetCount: Number(e.target.value) }))} />
+                <span className="ga-sched-muted">{t('0 = no count')}</span>
+              </div>
+              <div className="ga-sched-field">
+                <label>{t('Counts')}</label>
+                <select className="ga-input" value={form.progressType}
+                  onChange={(e) => setForm((f) => ({ ...f, progressType: e.target.value }))}>
+                  <option value="">{t('any')}</option>
+                  {[...new Set([...progressTypes, ...(form.progressType ? [form.progressType] : [])])].map((kind) => <option key={kind} value={kind}>{kind}</option>)}
+                </select>
+              </div>
+            </> : null}
             <div className="ga-sched-field">
               <label>{t('Trigger')}</label>
               <select
@@ -599,10 +659,15 @@ export function IntentsTab() {
                 value={form.triggerKind}
                 onChange={(e) => setForm((f) => ({ ...f, triggerKind: e.target.value as TriggerKind }))}
               >
-                <option value="standing">{t('standing (ongoing)')}</option>
-                <option value="now">{t('now (bump immediately)')}</option>
-                <option value="at_location">{t('on entering a location')}</option>
-                <option value="at_time">{t('at a date/time')}</option>
+                {form.repeat === 'daily' ? <>
+                  <option value="standing">{t('all day')}</option>
+                  <option value="at_time">{t('daily at')}</option>
+                </> : <>
+                  <option value="standing">{t('standing (ongoing)')}</option>
+                  <option value="now">{t('now (bump immediately)')}</option>
+                  <option value="at_location">{t('on entering a location')}</option>
+                  <option value="at_time">{t('at a date/time')}</option>
+                </>}
               </select>
             </div>
             {form.triggerKind === 'at_location' ? (
@@ -622,7 +687,14 @@ export function IntentsTab() {
                 </select>
               </div>
             ) : null}
-            {form.triggerKind === 'at_time' ? (
+            {form.triggerKind === 'at_time' && form.repeat === 'daily' ? (
+              <div className="ga-sched-field">
+                <label>{t('daily at')}</label>
+                <input className="ga-input" type="time" required value={form.dailyAt}
+                  onChange={(e) => setForm((f) => ({ ...f, dailyAt: e.target.value }))} />
+              </div>
+            ) : null}
+            {form.triggerKind === 'at_time' && !form.repeat ? (
               <div className="ga-sched-field">
                 <label>{t('Starts in (game time)')}</label>
                 <select
@@ -657,6 +729,7 @@ export function IntentsTab() {
               <label>{editingId ? t('Expiry (change)') : t('Expiry')}</label>
               <select
                 className="ga-input"
+                disabled={form.repeat === 'daily'}
                 value={form.durationMin}
                 onChange={(e) => setForm((f) => ({ ...f, durationMin: parseInt(e.target.value, 10) }))}
               >

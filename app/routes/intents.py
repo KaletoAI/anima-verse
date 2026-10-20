@@ -5,6 +5,7 @@ plans now live in one store (see
 development_instructions/plan-intents-unified.md).
 """
 import asyncio
+import re
 
 from fastapi import APIRouter, HTTPException, Request
 from typing import Any, Dict, List, Optional
@@ -16,7 +17,7 @@ from app.core.hooks import get_provider
 from app.core.keyed_lock import keyed_lock
 from app.models.intents import (
     create_intent, get_intent, list_intents, update_intent,
-    delete_intent, apply_trigger_on_create, cleanup_intents)
+    delete_intent, apply_trigger_on_create, cleanup_intents, renew_repeating)
 
 logger = get_logger("intents_route")
 
@@ -28,6 +29,15 @@ def action_types_route() -> List[str]:
     """Executable intent actions registered by the installed packages."""
     provider = get_provider("intent_action_types")
     return provider() if provider else []
+
+
+@router.get("/progress-types")
+def progress_types_route() -> List[str]:
+    """Trackable progress types declared by the currently loaded skills."""
+    from app.core.dependencies import get_skill_manager
+    manager = get_skill_manager()
+    return sorted({kind for skill in manager.skills
+                   if (kind := manager.progress_type_for_tool(skill.name))})
 
 
 @router.get("/shared-activity-options")
@@ -115,10 +125,15 @@ def _apply_game_time_fields(data: Dict[str, Any]) -> None:
     -> ``trigger.run_date``. The server computes both on the game clock — a
     client has no game clock and must never send a system timestamp for them.
     """
-    stamp = _game_stamp_in(data.pop("duration_minutes", None), "duration_minutes")
+    duration = data.pop("duration_minutes", None)
+    trig = data.get("trigger")
+    if isinstance(trig, dict) and trig.get("repeat") == "daily":
+        # Today's midnight boundary and HH:MM take precedence over presets.
+        trig.pop("run_in_minutes", None)
+        return
+    stamp = _game_stamp_in(duration, "duration_minutes")
     if stamp:
         data["expires_at"] = stamp
-    trig = data.get("trigger")
     if isinstance(trig, dict) and "run_in_minutes" in trig:
         trig = dict(trig)
         run = _game_stamp_in(trig.pop("run_in_minutes"), "run_in_minutes")
@@ -132,8 +147,22 @@ def _validate_payload(data: Dict[str, Any]) -> None:
     for field in ("action", "meta", "participants", "trigger"):
         if field in data and not isinstance(data[field], dict):
             raise HTTPException(status_code=400, detail=f"{field} must be an object")
-    if "travel" in data.get("meta", {}):
-        raise HTTPException(status_code=400, detail="meta.travel is server-owned")
+    for field in ("travel", "repeat_state"):
+        if field in data.get("meta", {}):
+            raise HTTPException(status_code=400, detail=f"meta.{field} is server-owned")
+    trigger = data.get("trigger", {})
+    if "repeat" in trigger and trigger["repeat"] != "daily":
+        raise HTTPException(status_code=400, detail='trigger.repeat must be "daily"')
+    if "at" in trigger and (not isinstance(trigger["at"], str)
+                            or not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", trigger["at"])):
+        raise HTTPException(status_code=400, detail="trigger.at must be HH:MM")
+    if trigger.get("repeat"):
+        if trigger.get("kind", "standing") not in ("standing", "at_time"):
+            raise HTTPException(status_code=400, detail="Daily repeat needs standing or at_time")
+        if trigger.get("kind") == "at_time" and "at" not in trigger:
+            raise HTTPException(status_code=400, detail="Daily at_time needs trigger.at HH:MM")
+        if data.get("action"):
+            raise HTTPException(status_code=400, detail="Executable intents cannot repeat")
     for field in ("title", "description", "owner", "location_id", "outfit_hint", "expires_at"):
         if field in data and not isinstance(data[field], str):
             raise HTTPException(status_code=400, detail=f"{field} must be a string")
@@ -208,7 +237,7 @@ def _create_route_sync(data: Any) -> Dict[str, Any]:
         trigger = ({"kind": "at_location", "location_id": location_id}
                    if location_id else {"kind": "standing"})
 
-    if trigger.get("kind") == "at_time" and not trigger.get("run_date"):
+    if trigger.get("kind") == "at_time" and not trigger.get("repeat") and not trigger.get("run_date"):
         raise HTTPException(status_code=400, detail="an at_time trigger needs run_in_minutes")
     expires_at = (data.get("expires_at") or "").strip()
 
@@ -251,6 +280,22 @@ def _patch_route_sync(intent_id: str, data: Any) -> Dict[str, Any]:
         intent = get_intent(intent_id)
         if not intent:
             raise HTTPException(status_code=404, detail="Intent not found")
+        # PATCH may send only one half of the trigger/action combination.
+        effective = {"trigger": data.get("trigger", intent["trigger"]),
+                     "action": data.get("action", intent["action"])}
+        _validate_payload(effective)
+        # An edit can beat the periodic tick across midnight. Close yesterday
+        # before merging client metadata or completing today's task.
+        if intent["trigger"].get("repeat") == "daily":
+            renewed = renew_repeating(intent_id)
+            intent = get_intent(intent_id)
+            if renewed and "participants" in data:
+                # The editor may still carry yesterday's participant snapshot.
+                data["participants"] = {
+                    name: {**part, "progress": []}
+                    for name, part in data["participants"].items()}
+        if effective["trigger"].get("repeat") == "daily":
+            data["trigger"] = effective["trigger"]
         validator = get_provider("intent_action_change_validate")
         try:
             if validator is not None:

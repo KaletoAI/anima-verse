@@ -65,6 +65,27 @@ def is_managed_intent(intent: Dict[str, Any]) -> bool:
     return bool(provider and provider(intent))
 
 
+def apply_repeat_cycle(data: Dict[str, Any]) -> None:
+    """Set today's cycle and server-owned GAME stamps, retaining the log."""
+    trigger = dict(data.get("trigger") or {})
+    if trigger.get("repeat") != "daily":
+        return
+    now = game_time()
+    start = now.start_of_day()
+    meta = dict(data.get("meta") or {})
+    state = dict(meta.get("repeat_state") or {})
+    state.update(day=now.day_key(), log=list(state.get("log") or [])[-14:])
+    meta["repeat_state"] = state
+    data["meta"] = meta
+    data["expires_at"] = (start + GameDuration.of(days=1)).canonical()
+    if trigger.get("kind") == "at_time":
+        hour, minute = map(int, trigger["at"].split(":"))
+        trigger["run_date"] = (start + GameDuration.of(hours=hour, minutes=minute)).canonical()
+    else:
+        trigger.pop("run_date", None)
+    data["trigger"] = trigger
+
+
 def create_intent(*, owner: str, title: str, description: str = "",
                   source: str = "character",
                   participants: Optional[Dict[str, Any]] = None,
@@ -83,6 +104,9 @@ def create_intent(*, owner: str, title: str, description: str = "",
     trig = trigger if isinstance(trigger, dict) else {"kind": "standing"}
     act = action if isinstance(action, dict) else {}
     m = meta if isinstance(meta, dict) else {}
+    cycle = {"trigger": trig, "meta": m, "expires_at": expires_at}
+    apply_repeat_cycle(cycle)
+    trig, m, expires_at = cycle["trigger"], cycle["meta"], cycle["expires_at"]
     prio = max(1, min(5, int(priority or 3)))
     try:
         with keyed_lock("intent_execution", iid), transaction() as conn:
@@ -157,6 +181,10 @@ def update_intent(intent_id: str, **changes) -> Optional[Dict[str, Any]]:
         previous = get_intent(intent_id)
         if not previous:
             return None
+        if "trigger" in changes and changes["trigger"].get("repeat") == "daily":
+            cycle = {**previous, **changes}
+            apply_repeat_cycle(cycle)
+            changes.update({key: cycle[key] for key in ("trigger", "meta", "expires_at")})
         allowed = {"source", "owner", "participants", "title", "description",
                    "trigger", "action", "priority", "status", "location_id",
                    "target_count", "outfit_hint", "expires_at", "meta"}
@@ -185,6 +213,13 @@ def update_intent(intent_id: str, **changes) -> Optional[Dict[str, Any]]:
         intent = get_intent(intent_id)
     if intent:
         emit("intent_changed", intent=intent, previous=previous)
+        if ({"trigger", "status", "owner"}.intersection(changes)
+                and (intent.get("trigger", {}).get("repeat") == "daily"
+                     or previous.get("trigger", {}).get("repeat") == "daily")):
+            from app.scheduler.scheduler_manager import get_scheduler_manager
+            get_scheduler_manager().remove_job(f"intent_{intent_id}")
+            if intent["status"] == "active":
+                apply_trigger_on_create(intent)
     return get_intent(intent_id)
 
 
@@ -251,7 +286,9 @@ def auto_track_progress(character_name: str, tool_type: str,
     if count <= 0:
         return None
     counted = [it for it in list_intents(owner=character_name, status="active")
-               if int(it.get("target_count") or 0) > 0 and not is_managed_intent(it)]
+               if int(it.get("target_count") or 0) > 0 and not is_managed_intent(it)
+               and (not (it.get("meta") or {}).get("progress_type")
+                    or it["meta"]["progress_type"] == tool_type)]
     if not counted:
         return None
 
@@ -442,6 +479,38 @@ def expire_overdue() -> int:
     return n
 
 
+def renew_repeating(intent_id: str = "") -> int:
+    """Reopen closed daily cycles, optionally for one row before an admin edit."""
+    today = game_time().day_key()
+    renewed = 0
+    candidates = [get_intent(intent_id)] if intent_id else list_intents()
+    for candidate in candidates:
+        if not candidate or (candidate.get("trigger") or {}).get("repeat") != "daily":
+            continue
+        with keyed_lock("intent_execution", candidate["id"]):
+            intent = get_intent(candidate["id"])
+            if (not intent or intent["status"] not in {"active", "done", "expired"}
+                    or intent["trigger"].get("repeat") != "daily"):
+                continue
+            meta = dict(intent.get("meta") or {})
+            state = meta.get("repeat_state") or {}
+            if state.get("day") == today:
+                continue
+            log = list(state.get("log") or [])
+            parts = intent.get("participants") or {}
+            if state.get("day"):
+                log.append({"day": state["day"],
+                            "result": "done" if intent["status"] == "done" else "missed",
+                            "count": max((len(p.get("progress") or []) for p in parts.values()), default=0)})
+            meta["repeat_state"] = {"day": today, "log": log[-14:]}
+            meta.pop("expired_reason", None)
+            parts = {name: {**part, "progress": []} for name, part in parts.items()}
+            if update_intent(intent["id"], status="active", participants=parts,
+                             trigger=intent["trigger"], meta=meta):
+                renewed += 1
+    return renewed
+
+
 # ====================================================================
 # Engine (Phase 2): prompt block, character marker and trigger application.
 # ====================================================================
@@ -455,17 +524,22 @@ DEFAULT_PROMPT_MAX_ENTRIES = 12
 
 
 def build_intents_prompt_section(character_name: str, max_entries: Optional[int] = None) -> str:
-    """Prompt block of a character's active intents, by priority.
+    """Prompt block of active intents and today's completed daily tasks.
 
     Every entry carries its ``(id <8-hex>)`` — the id is what
     ``[INTENT_PROGRESS: <id> | …]`` / ``[INTENT_DONE: <id>]`` need, and a model
     that never sees it cannot use either marker. ``max_entries > 0`` caps the
     list by ENTRIES (never mid-entry); the rest is summed up in one line.
-    Empty when there are no active intents.
+    Completed daily tasks stay visible for their current day only.
     """
     if not character_name:
         return ""
     active = list_intents(owner=character_name, status="active")
+    today = game_time().day_key()
+    active += [it for it in list_intents(owner=character_name, status="done")
+               if it["trigger"].get("repeat") == "daily"
+               and (it.get("meta", {}).get("repeat_state") or {}).get("day") == today]
+    active.sort(key=lambda it: it.get("priority", 3))
     if not active:
         return ""
     if max_entries is None:
@@ -492,7 +566,11 @@ def build_intents_prompt_section(character_name: str, max_entries: Optional[int]
             lines.append(f"  → Your role: {part['role']}")
         progress = part.get("progress") or []
         target = it.get("target_count", 0)
-        if target > 0:
+        if (it.get("trigger") or {}).get("repeat") == "daily":
+            today = (f"{len(progress)} of {target}" if target > 0
+                     else "done" if it["status"] == "done" else "open")
+            lines.append(f"  → Daily task — comes back every day; today: {today}")
+        elif target > 0:
             cnt = len(progress)
             lines.append(f"  → Progress: {cnt} of {target}"
                          + ("  — GOAL REACHED" if cnt >= target else ""))
@@ -801,6 +879,10 @@ def apply_trigger_on_create(intent: Dict[str, Any]) -> None:
             get_agent_loop().bump(owner, hint=hint)
         elif kind == "at_time" and trig.get("run_date"):
             from app.scheduler.scheduler_manager import get_scheduler_manager
+            if trig.get("repeat") == "daily" and (
+                    intent.get("status") != "active"
+                    or GameTime.parse(trig["run_date"]) <= game_time()):
+                return
             get_scheduler_manager().add_job(
                 agent=owner,
                 trigger={"type": "date", "run_date": trig["run_date"], "one_time": True},

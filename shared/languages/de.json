@@ -2718,6 +2718,16 @@
     "Door colour": "Türfarbe",
     "Painted doors only": "Nur gestrichene Türen",
     "— pick a door style —": "— Türstil wählen —",
-    "Choose the location default, an open gap, a door style or a door prop.": "Standortvorgabe, eine offene Lücke, einen Türstil oder ein Tür-Prop wählen."
+    "Choose the location default, an open gap, a door style or a door prop.": "Standortvorgabe, eine offene Lücke, einen Türstil oder ein Tür-Prop wählen.",
+    "Repeat": "Wiederholen",
+    "daily": "täglich",
+    "all day": "ganztägig",
+    "daily at": "täglich um",
+    "Counts": "Zählt",
+    "any": "beliebig",
+    "0 = no count": "0 = ohne Zählung",
+    "Last 7 days": "Letzte 7 Tage",
+    "missed": "verpasst",
+    "Progress": "Fortschritt"
   }
 }
