@@ -165,11 +165,14 @@ function angleOf(q: Quaternion): number {
  *  the donor's before the legs are stood the clip's way (`legStance`). */
 export const LEG_STANCE_TOLERANCE_DEG = 3
 
+/** Mean sagittal trunk deviation (degrees) before torso stance is corrected. */
+export const TORSO_STANCE_TOLERANCE_DEG = 8
+
 /**
  * LEG STANCE. The generated T-pose asks for the legs clearly apart (the mesher
  * fuses touching legs), so a rig's bind stands anywhere from a few degrees
  * knock-kneed to 7° spread, and the transplant above keeps that stance through
- * every clip: Kira's 2026-10-18 rigs walked with the feet 0.25–0.30 × the hips
+ * every clip: rigs of a generated character walked with the feet 0.25–0.30 × the hips
  * height apart against 0.083 on the reference rig. Like the global attitude,
  * that spread is a property of the generation pose, not of the body — but
  * only where it is large: a rig within `LEG_STANCE_TOLERANCE_DEG` keeps its
@@ -225,6 +228,54 @@ function legStance(three: THREE, donor: RestPose, self: RestPose,
 }
 
 /**
+ * TORSO STANCE. A generated mesh may have a hollow back: the bind's upper
+ * trunk leans backward, and the transplant keeps it through every clip.
+ * That is generation pose, not body. Over 109 rigs, the mean sagittal
+ * deviation from reference.fbx of spine→spine1, spine1→spine2, spine2→neck
+ * has median +0.3°, p10 −5.5°, p90 +5.5°, extremes −10.7° and −10.1°;
+ * only two exceed 8°. Hips→spine deviates −5..−8° on EVERY rig: first-joint
+ * placement is a rigger convention, so that segment is excluded.
+ *
+ * Read positions in the root bone frame, x sideways and y up. In its y–z
+ * plane θ = atan2(d.z,d.y); Rx(φ) gives y'=y cosφ−z sinφ,
+ * z'=y sinφ+z cosφ, hence θ'=θ+φ. Only a THREE-trunk-segment mean
+ * deviation beyond TORSO_STANCE_TOLERANCE_DEG triggers: each of the four
+ * segments through neck→head then gets S_b=Rx(θ_d−θ_t). Head rides along
+ * only with the trunk. Missing any of the five positions leaves it alone.
+ *
+ * Each bone inherits S from its NEAREST corrected ancestor-or-self: arms
+ * off spine2 get S_spine2, head and its descendants S_neck. These are
+ * per-segment ABSOLUTE corrections: K_b=R̃_d⁻¹·S_b·R̃_t gives deformation
+ * M_d·G·S_b, so b→child turns onto the donor sagittal angle independently
+ * of the parent's S. Unlike legStance's one rigid turn of the whole leg,
+ * this keeps each segment's sideways component; hips and legs stay alone.
+ */
+function torsoStance(three: THREE, donor: RestPose, self: RestPose,
+                     donorRoot: Quaternion | undefined,
+                     targetRoot: Quaternion | undefined): Map<string, Quaternion> {
+  const out = new Map<string, Quaternion>()
+  const chain = ['spine', 'spine1', 'spine2', 'neck', 'head']
+  if (chain.some((key) => !donor.position.has(key) || !self.position.has(key))) return out
+  const angle = (pose: RestPose, root: Quaternion | undefined, i: number): number => {
+    const d = pose.position.get(chain[i + 1])!.clone().sub(pose.position.get(chain[i])!)
+    if (root) d.applyQuaternion(root.clone().invert())
+    return Math.atan2(d.z, d.y)
+  }
+  const deltas = chain.slice(0, -1).map((_, i) =>
+    angle(donor, donorRoot, i) - angle(self, targetRoot, i))
+  const mean = (deltas[0] + deltas[1] + deltas[2]) / 3
+  if (Math.abs(mean) * 180 / Math.PI <= TORSO_STANCE_TOLERANCE_DEG) return out
+  const segments = new Map(chain.slice(0, -1).map((key, i) =>
+    [key, new three.Quaternion().setFromAxisAngle(new three.Vector3(1, 0, 0), deltas[i])]))
+  for (const key of self.world.keys()) {
+    let above: string | null | undefined = key
+    while (above && !segments.has(above)) above = self.parentBone.get(above)
+    if (above) out.set(key, segments.get(above)!)
+  }
+  return out
+}
+
+/**
  * `left = K_p⁻¹` and `right = K_b` per bone (`q = left·c·right`), both built
  * from the ACCUMULATED world rests of donor and target.
  *
@@ -252,6 +303,11 @@ export function restCorrections(three: THREE,
     return root ? out.premultiply(new three.Quaternion().copy(root).invert()) : out
   }
   const stance = legStance(three, donor, self, donorRoot, targetRoot)
+  for (const [key, s] of torsoStance(three, donor, self, donorRoot, targetRoot)) {
+    // Legs descend from the uplegs, the torso from spine; a rig that hangs a
+    // leg under the spine keeps the leg rule there rather than failing to load.
+    if (!stance.has(key)) stance.set(key, s)
+  }
   const k = new Map<string, Quaternion>()
   for (const [key, targetWorld] of self.world) {
     const donorWorld = donor.world.get(key)

@@ -17,6 +17,7 @@ Client-Seite davon sieht.
    vom Clip, wenn ihr Beinpaar in der Bind-Pose im Mittel mehr als 3°
    (`LEG_STANCE_TOLERANCE_DEG`) seitlich vom Referenz-Rig abweicht — die
    generierte T-Pose steht absichtlich breitbeinig; Vor-/Rücklage bleibt.
+   Rumpfhaltung wird nur übernommen, wenn die drei Rumpfsegmente (spine→neck) im Mittel mehr als 8° (`TORSO_STANCE_TOLERANCE_DEG`) nach vorn/hinten vom Referenz-Rig abweichen; dann auch Hals→Kopf; Becken→Wirbelsäule bleibt (Rigger-Konvention).
 2. **FBX ohne Mesh/Skin** („Without Skin"), reine Keyframes.
 3. **Bewegungsclips laufen IN PLACE.** Die Wurzel bewegt der Client (Laufen,
    Reise, Klick-Route); ein Clip mit eigener Wurzelbewegung zieht die Figur

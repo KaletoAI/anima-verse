@@ -34,7 +34,7 @@ export type { GroundSampler, StoreyGroundStep,
 export { applyClipOutline, disposeClipMaterials, CLIP_MAX_POINTS } from './clip'
 
 export { normBoneName, restPoseOf, restCorrections, bindRelativeValues,
-  bindRelativeClip, LEG_STANCE_TOLERANCE_DEG } from './clipRetarget'
+  bindRelativeClip, LEG_STANCE_TOLERANCE_DEG, TORSO_STANCE_TOLERANCE_DEG } from './clipRetarget'
 export type { RestPose, RestCorrection } from './clipRetarget'
 
 export { applyDepthCut, disposeCutMaterials } from './depthCut'

@@ -129,6 +129,14 @@
  *     - fore/aft stays: left UpLeg Rz(6°)·Rx(10°) has frontal angle exactly
  *       6° (Rx keeps x = 0, Rz then gives x = 0.9·cos10·sin6, y =
  *       −0.9·cos10·cos6), so S = Rz(−6°) and K_UpLeg = Rx(10°): 10° about x̂.
+ * [9] TORSO STANCE. Spine is at y=.1, each upper link is .1 long.
+ *     Rx(-10°) at Spine leans all four links -10°; S=Rx(10°) cancels it.
+ *     Identity donor clips then put Spine1/Spine2/Neck/Head at y=.2/.3/.4/.5,
+ *     Shoulder at (.05,.35,0), with no leg factors. -7° stays unchanged.
+ *     (-12-12+0)/3=-8° stays; (-12-12-1)/3<-8° corrects each link separately.
+ *     Rx(-10°)·Rz(5°) sends a link to (-.1 sin5,.1 cos5 cos10,-.1 cos5 sin10);
+ *     S restores (-.1 sin5,.1 cos5,0): the sideways component stays.
+ *     Neck-only 15° has trunk mean 0 and cannot trigger a correction.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -397,6 +405,79 @@ async function main() {
   check('fore/aft lean stays: K_UpLeg = Rx(10°)',
     near(lean.get('leftupleg').right.angleTo(RX(10)), 0, 1e-6),
     `${(lean.get('leftupleg').right.angleTo(RX(10)) * DEG).toFixed(6)}° off`)
+
+  console.log('\n[9] TORSO STANCE — trunk mean beyond 8°, head together with trunk')
+  const torso = (angles, sideways = 0, rootQ = ID()) => {
+    const root = skeleton([], ID(), rootQ)
+    let parent = root.getObjectByName('mixamorig:Hips')
+    let previous = 0
+    for (const [i, name] of ['Spine', 'Spine1', 'Spine2', 'Neck', 'Head'].entries()) {
+      const angle = angles[Math.min(i, 3)]
+      const q = RX(angle - previous)
+      if (i === 0) q.multiply(RZ(sideways))
+      const b = bone(`mixamorig:${name}`, q)
+      b.position.set(0, .1, 0)
+      parent.add(b)
+      if (i === 2) {
+        const shoulder = bone('mixamorig:LeftShoulder', ID())
+        shoulder.position.set(.05, .05, 0)
+        b.add(shoulder)
+      }
+      parent = b
+      previous = angle
+    }
+    const leg = bone('mixamorig:LeftUpLeg', ID())
+    leg.position.set(.1, -.1, 0)
+    root.getObjectByName('mixamorig:Hips').add(leg)
+    return root
+  }
+  const donorTorso = restPoseOf(THREE, torso([0, 0, 0, 0]))
+  // Missing Head disables the torso rule, leaving the old factors available.
+  const withoutTorso = { ...donorTorso, position: new Map(donorTorso.position) }
+  withoutTorso.position.delete('head')
+  const sameFactors = (a, b) => a.size === b.size && [...a].every(([key, k]) =>
+    b.has(key) && k.left.equals(b.get(key).left) && k.right.equals(b.get(key).right))
+  const posedTorso = (angles, sideways = 0, rootQ = ID()) => {
+    const target = torso(angles, sideways, rootQ)
+    const corrections = restCorrections(THREE, donorTorso, target)
+    target.traverse((b) => {
+      if (!b.isBone) return
+      const k = corrections.get(b.name.replace('mixamorig:', '').toLowerCase())
+      b.quaternion.copy(k ? drive(k, ID()) : ID())
+    })
+    target.updateMatrixWorld(true)
+    return { target, corrections }
+  }
+  const at = (target, name, xyz) => {
+    const p = target.getObjectByName(`mixamorig:${name}`).getWorldPosition(new THREE.Vector3())
+    return xyz.every((v, i) => near(p.getComponent(i), v))
+  }
+  const corrected = posedTorso([-10, -10, -10, -10])
+  check('-10°: chain and shoulder reach donor coordinates',
+    [['Spine1', .2], ['Spine2', .3], ['Neck', .4], ['Head', .5]]
+      .every(([name, y]) => at(corrected.target, name, [0, y, 0]))
+      && at(corrected.target, 'LeftShoulder', [.05, .35, 0]))
+  check('leg factors remain absent', !corrected.corrections.has('leftupleg'))
+  for (const [label, angles] of [['-7°', [-7, -7, -7, -7]],
+    ['mean exactly -8°', [-12, -12, 0, 0]], ['head alone 15°', [0, 0, 0, 15]]]) {
+    const target = torso(angles)
+    check(`${label}: identical keys and factors to the old rule`,
+      sameFactors(restCorrections(THREE, donorTorso, target),
+        restCorrections(THREE, withoutTorso, target)))
+  }
+  const varied = posedTorso([-12, -12, -1, -15])
+  check('mean -8.33°: independent corrections include neck→head',
+    at(varied.target, 'Head', [0, .5, 0]) && at(varied.target, 'Neck', [0, .4, 0]))
+  const lateral = posedTorso([-10, -10, -10, -10], 5)
+  check('sideways component stays: link retains 5° frontal tilt',
+    at(lateral.target, 'Spine1', [-.0087155743, .1996194698, 0]))
+  const rootTilt = posedTorso([-10, -10, -10, -10], 0, RX(23))
+  check('root attitude divides out before measuring lean', at(rootTilt.target, 'Head', [0, .5, 0]))
+  const missingTarget = torso([-10, -10, -10, -10])
+  missingTarget.getObjectByName('mixamorig:Head').removeFromParent()
+  check('missing target Head disables torso correction',
+    sameFactors(restCorrections(THREE, donorTorso, missingTarget),
+      restCorrections(THREE, withoutTorso, missingTarget)))
 
   console.log(failures.length
     ? `\n${failures.length} FAILED: ${failures.join(', ')}`
