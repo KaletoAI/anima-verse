@@ -200,7 +200,11 @@ def _create_item_route_sync(body: Any) -> Dict[str, Any]:
             prompt_fragment=body.get("prompt_fragment", ""),
             outfit_piece=body.get("outfit_piece"),
             effects=body.get("effects"),
-            item_id=(body.get("id") or "").strip())
+            item_id=(body.get("id") or "").strip(),
+            owner=body.get("owner", ""),
+            pages_source=body.get("pages_source", ""),
+            portable=body.get("portable", True),
+            extra_fields=body)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     # Apply magic fields immediately: add_item does not accept them directly,

@@ -143,7 +143,7 @@ apply_condition; liefert `{success, changes, condition_applied}`). `consume_item
 Core-Vokabular — Routen rufen sie direkt, ohne Skill-Bezug.
 
 Weiter (⚠, heute nur Built-ins): `equip_piece`/`unequip_piece`,
-`equip_item`/`unequip_item`, `add_item`, `add_to_inventory`,
+`equip_item`/`unequip_item`, `add_to_inventory`,
 `find_inventory_piece_by_name_slot`, `VALID_PIECE_SLOTS`.
 
 Public discovery helpers (stable):
@@ -153,6 +153,58 @@ Public discovery helpers (stable):
 | `discovery_value(viewer: str, *, profile=None) -> int` | Effective stat selected by world config `inventory.discovery_stat` (default `"attention"`). A missing stat counts as 0. An existing profile can be passed to avoid another load. |
 | `placement_visible_to(viewer: str, location_id: str, room_id: str, placement: dict, *, profile=None) -> bool` | Visible placements return True. Hidden placements return True if already found by this viewer, or if the discovery value meets their integer difficulty (0–999). A new find is recorded silently with game time in `item_discoveries`; it changes neither world generation nor scene fingerprints. |
 | `discovered_by(location_id: str, room_id: str, item_id: str) -> list[str]` | Alphabetically sorted names that found this placement. Full removal through `remove_item_from_room` clears these rows; partial removal and edits retain them. Moving an item by removing and placing it in another room requires discovering it again. |
+
+Public item placement helpers (stable):
+
+| Function | Contract |
+|---|---|
+| `add_item(name, ..., item_id="", owner="", pages_source="", portable=True, extra_fields=None) -> dict` | Create a world item. `document` is a valid category. Reading fields persist in meta; `extra_fields` accepts localized `name_<lang>` and `description_<lang>` fields only. `update_item` accepts those fields and `owner`, `pages_source`, `portable`. Nonportable items fail pickup with translated `That cannot be taken`. |
+| `add_item_to_room(location_id, room_id, item_id, quantity=1, hidden=False, discovery_difficulty=0, note="") -> bool` | Place an item in a room; difficulty is clamped to 0–999. Uses the world write lock. |
+| `find_item_location(item_id, exclude_character="") -> dict \| None` | Search inventories first (excluding the named holder), then room placements. Returns `{kind: "character", character}` or `{kind: "room", location_id, room_id}`, or None. |
+
+## Item reading — `app.core.item_reading` ✅
+
+Provider contract:
+
+```python
+hooks.register_provider("item_pages.<source>", fn)
+# fn(item: dict, reader: str) -> list[dict]
+```
+
+Pages are chronological (oldest first),
+with `{ref: str, heading: str, text: str, secret_id: str = ""}`. A missing provider
+or a provider exception makes the item unreadable; an empty list is a readable
+empty book. Providers may perform blocking work and are called without locks.
+
+| Function | Contract |
+|---|---|
+| `has_pages(item: dict) -> bool` | A provider is registered for the item's `pages_source`; does not call it (used by the polled room listing). |
+| `pages_of(item: dict, reader: str) -> list[dict] \| None` | Get pages; None for absent source/provider or a logged provider failure. |
+| `readable_here(reader: str, item_id: str) -> bool` | Requires a placement in the reader's current room, `placement_visible_to` (stable above), and non-None pages. Carried items do not qualify. |
+| `read_page(reader: str, item_id: str, index: int, *, opening: bool = False) -> dict` | Returns `{item_name, index, total, page: {heading, text}}`, or `{error}`. Index clamps to the book; an empty book has index 0 and page None. Learns the returned page. `opening` is reserved: no narrator or other opening event. |
+| `npc_read(reader: str, item_id: str) -> dict` | Once daily, returns `{item_name, pages}` with up to two newest unknown linked secrets (newest first), otherwise the newest page; returned text is at most 600 characters per page. Invalid/missing secrets and pages without a secret ID are not unknown. Repeat calls that day return `{error}`. |
+| `npc_read_today(reader: str, item_id: str) -> bool` | Whether the NPC path was used on this GameTime day. |
+
+`MEMORIES_PER_DAY = 2`, `NPC_PAGES = 2`, `NPC_PAGE_CHARS = 600`.
+Both read paths share learning: for a valid, newly learned secret of another
+owner, `app.models.secrets.add_known_by(..., discovered=True)` records knowledge. At most two
+memories per reader/item/game day are reserved atomically in `item_reads`
+(`reader, item_id, game_day, memories, npc_read`; day keys such as `Y0002-D109`).
+Memory text goes through the translation helper with a
+localized item name:
+
+```python
+t("Read in {item}: {secret}", reader_lang)
+```
+
+Memories use episodic type, importance 3, tags `["item", "read"]`,
+related_character=owner and extra_meta `{item_id, owner, secret_id, ref}`.
+Owners learn nothing from their own pages. Call these helpers without holding
+any lock: providers and `add_memory` execute outside every lock/transaction.
+
+`POST /play/read` accepts `{item_id, index, opening}` for the active avatar
+(409 without one). Room items expose `readable` and `portable`; avatars can read
+with other characters present. The NPC verb and player book UI are separate tasks.
 
 ## Welt & Ortskenntnis — `app.models.world` / `app.models.rules` ⚠
 

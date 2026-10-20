@@ -2685,6 +2685,7 @@ def _items_here(avatar: str) -> list:
                                           get_character_current_room,
                                           get_character_language)
         from app.models.inventory import get_item, get_room_items, placement_visible_to
+        from app.core.item_reading import has_pages
         loc = get_character_current_location(avatar) or ""
         if not loc:
             return []
@@ -2700,6 +2701,8 @@ def _items_here(avatar: str) -> list:
             out.append({
                 "item_id": iid,
                 "discovered": bool(ri.get("hidden")),
+                "readable": has_pages(it),
+                "portable": it.get("portable", True),
                 "name": localized(it, "name", lang) or iid,
                 "description": (localized(it, "description", lang) or "").strip(),
                 "quantity": int(ri.get("quantity", 1) or 1),
@@ -2726,6 +2729,30 @@ def play_belongings(user=Depends(get_current_user)):
     out = build_belongings(avatar)
     out["items_here"] = _items_here(avatar)
     return out
+
+
+@router.post("/play/read")
+async def play_read(request: Request, user=Depends(get_current_user)):
+    """Read a visible room item as the active avatar, without narration."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_read_sync, body)
+
+
+def _play_read_sync(body: Any):
+    from app.models.account import get_active_character
+    from app.core.item_reading import read_page
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=409, detail="no active avatar")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="object required")
+    try:
+        index = int(body.get("index", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="invalid index")
+    return read_page(avatar, str(body.get("item_id") or ""), index,
+                     opening=bool(body.get("opening", False)))
 
 
 @router.post("/play/equip")

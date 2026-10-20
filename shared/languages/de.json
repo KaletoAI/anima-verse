@@ -2751,6 +2751,11 @@
     "Compared with the discovery stat (Setup). Above 100 stays hidden unless a state boosts the stat.": "Wird mit dem Entdeckungswert verglichen (Setup). Über 100 bleibt es versteckt, außer ein Zustand hebt den Wert.",
     "Found by": "Gefunden von",
     "Record": "Aufzeichnung",
-    "Hide records": "Aufzeichnungen ausblenden"
+    "Hide records": "Aufzeichnungen ausblenden",
+    "Read in {item}: {secret}": "In {item} gelesen: {secret}",
+    "That cannot be taken": "Das lässt sich nicht mitnehmen",
+    "Pages source": "Seitenquelle",
+    "Portable": "Tragbar",
+    "Document": "Dokument"
   }
 }

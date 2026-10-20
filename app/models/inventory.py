@@ -30,7 +30,7 @@ from app.core.paths import get_storage_dir
 
 VALID_ITEM_CATEGORIES = (
     "tool", "key", "consumable", "evidence", "gift", "quest", "decoration",
-    "outfit_piece", "spell")
+    "outfit_piece", "spell", "document")
 VALID_RARITIES = ("common", "rare", "unique")
 VALID_OBTAIN_METHODS = ("found", "given", "crafted", "purchased", "quest_reward", "manual")
 
@@ -464,19 +464,16 @@ def add_item(name: str,
     prompt_fragment: str = "",
     outfit_piece: Optional[Dict[str, Any]] = None,
     effects: Optional[Dict[str, Any]] = None,
-    item_id: str = "") -> Dict[str, Any]:
-    """Erstellt ein neues Item.
+    item_id: str = "",
+    owner: str = "",
+    pages_source: str = "",
+    portable: bool = True,
+    extra_fields: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Create an item with an optional explicit ID and localized extra fields.
 
-    item_id: optional, vom Caller vorgegebene ID (z.B. "item_holoprojector"
-        damit Rules-Bedingungen wie ``has_item:item_holoprojector`` lesbar
-        bleiben). Leer ⇒ Slug aus dem Namen wird benutzt; bei Konflikt
-        wird ein numerischer Suffix angehaengt.
-
-    prompt_fragment: Text-Baustein fuer die Bild-Prompt-Assembly, wenn das
-        Item equipped/angelegt ist. Beispiel: "holding a hammer in the hand".
-    outfit_piece: Nur fuer category=outfit_piece. Dict mit Feldern wie
-        {"slots": ["top", "bottom"], "covers": ["underwear_top"]}. slots ist
-        eine symmetrische Liste — kein Primary-/Additional-Konzept mehr.
+    Empty IDs are derived from the name with a unique numeric suffix.
+    Reading metadata lives in item meta; extra_fields accepts only localized
+    name/description keys, so it cannot override the identity or core fields.
     """
     if category not in VALID_ITEM_CATEGORIES:
         category = "tool"
@@ -504,6 +501,11 @@ def add_item(name: str,
 
     item = {
         "id": new_id,
+        "owner": owner.strip(),
+        "pages_source": pages_source.strip(),
+        "portable": bool(portable),
+        **{k: v for k, v in (extra_fields or {}).items()
+           if _re_module.fullmatch(r"(?:name|description)_[a-z]{2,3}(?:-[A-Za-z0-9]+)*", k)},
         "name": name.strip(),
         "description": description.strip(),
         "category": category,
@@ -584,7 +586,7 @@ def _invalidate_renders_for_item(item_id: str) -> None:
 
 def update_item(item_id: str,
     updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Aktualisiert ein Item — World oder Shared. Admin-only Aufrufer.
+    """Update a world or shared item; callers must be admin-only.
 
     Changing a field that reaches the image prompt invalidates the cached
     renders of every combination this item is part of (see
@@ -602,7 +604,7 @@ def update_item(item_id: str,
         "anchor_item_id", "teleport_subject",
     }
     allowed = {
-        "name", "description",
+        "name", "description", "owner", "pages_source", "portable",
         "category", "image", "image_prompt",
         "rarity", "stackable", "max_stack", "properties",
         "transferable", "consumable", "reveals_secret",
@@ -613,7 +615,7 @@ def update_item(item_id: str,
 
     def _apply_updates(item: Dict[str, Any]) -> Dict[str, Any]:
         for key, value in updates.items():
-            if key in allowed:
+            if key in allowed or _re_module.fullmatch(r"(?:name|description)_[a-z]{2,3}(?:-[A-Za-z0-9]+)*", key):
                 item[key] = value
         if item.get("category") not in VALID_ITEM_CATEGORIES:
             item["category"] = "tool"
@@ -1780,6 +1782,10 @@ def pick_up_item(character_name: str,
             return {"success": False, "error": "That is not lying in this room"}
         if not placement_visible_to(character_name, location_id, room_id, in_room):
             return {"success": False, "error": "You cannot see that here"}
+        if item.get("portable") is False:
+            from app.core.i18n import t
+            from app.models.character import get_character_language
+            return {"success": False, "error": t("That cannot be taken", get_character_language(character_name))}
         if int(in_room.get("quantity", 1) or 1) < quantity:
             return {"success": False, "error": "There are not that many lying here"}
         # Remember the placement so a failed hand-over can put it back exactly

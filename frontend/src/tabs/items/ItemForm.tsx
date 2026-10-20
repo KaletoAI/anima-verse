@@ -342,7 +342,7 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
           >
             {CATEGORIES.map((c) => (
               <option key={c} value={c}>
-                {c}
+                {c === 'document' ? t('Document') : c}
               </option>
             ))}
           </select>
@@ -362,8 +362,20 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
         </Field>
       </div>
 
+      <div className="ga-form-row">
+        <Field label={t('Owner')}>
+          <input className="ga-input" value={draft.owner} onChange={(e) => onUpdate('owner', e.target.value)} />
+        </Field>
+        <Field label={t('Pages source')}>
+          <input className="ga-input" value={draft.pages_source} onChange={(e) => onUpdate('pages_source', e.target.value)} />
+        </Field>
+      </div>
       <Field label={t('Flags')}>
         <div className="ga-form-row" style={{ gap: 14 }}>
+          <label className="ga-form-check">
+            <input type="checkbox" checked={draft.portable} onChange={(e) => onUpdate('portable', e.target.checked)} />
+            {t('Portable')}
+          </label>
           <label className="ga-form-check">
             <input type="checkbox" checked={draft.stackable} onChange={(e) => onUpdate('stackable', e.target.checked)} />
             {t('Stackable')}

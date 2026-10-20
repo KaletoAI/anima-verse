@@ -8,6 +8,7 @@ export type Category =
   | 'spell'
   | 'quest'
   | 'decoration'
+  | 'document'
 export type Rarity = 'common' | 'rare' | 'unique'
 
 export interface OutfitPieceMeta {
@@ -20,6 +21,9 @@ export interface OutfitPieceMeta {
 
 export interface Item {
   id: string
+  owner?: string
+  pages_source?: string
+  portable?: boolean
   name?: string
   description?: string
   category?: Category
@@ -65,6 +69,9 @@ export interface Owner {
 
 export interface DraftItem {
   id: string
+  owner: string
+  pages_source: string
+  portable: boolean
   name: string
   description: string
   category: Category
@@ -174,6 +181,7 @@ export const CATEGORIES: Category[] = [
   'spell',
   'quest',
   'decoration',
+  'document',
 ]
 
 export const RARITIES: Rarity[] = ['common', 'rare', 'unique']
@@ -192,6 +200,9 @@ export const VALID_PIECE_SLOTS = [
 
 export const EMPTY_DRAFT: DraftItem = {
   id: '',
+  owner: '',
+  pages_source: '',
+  portable: true,
   name: '',
   description: '',
   category: 'tool',
@@ -224,6 +235,9 @@ export function itemToDraft(it: Item): DraftItem {
   }
   return {
     id: it.id,
+    owner: it.owner || '',
+    pages_source: it.pages_source || '',
+    portable: it.portable !== false,
     name: it.name || '',
     description: it.description || '',
     category: (it.category || 'tool') as Category,
@@ -248,6 +262,9 @@ export function itemToDraft(it: Item): DraftItem {
 
 export function draftToBody(d: DraftItem): Record<string, unknown> {
   const body: Record<string, unknown> = {
+    owner: d.owner.trim(),
+    pages_source: d.pages_source.trim(),
+    portable: d.portable,
     name: d.name.trim(),
     description: d.description,
     category: d.category,
