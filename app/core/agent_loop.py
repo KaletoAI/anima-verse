@@ -1630,7 +1630,8 @@ class AgentLoop:
                     room_stream=room_stream,
                     respond_opportunity=respond_opportunity,
                     hint=hint, winding_down=winding_down,
-                    usage_out=llm_usage)
+                    usage_out=llm_usage,
+                    synthetic_input=bool(respond.get("on_demand")))
         except Exception as e:
             logger.error("respond-turn %s: run_chat_turn failed: %s", character_name, e)
         if reply and reply.strip():

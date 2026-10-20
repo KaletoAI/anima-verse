@@ -780,7 +780,8 @@ def run_chat_turn(
     hint: str = "",
     winding_down: bool = False,
     addressed_to: Optional[List[str]] = None,
-    usage_out: Optional[Dict[str, Any]] = None) -> str:
+    usage_out: Optional[Dict[str, Any]] = None,
+    synthetic_input: bool = False) -> str:
     """Lets responder generate ONE reply to incoming_message from speaker.
 
     Synchronous. Used by the talk_to / send_message skills. Uses the existing
@@ -790,6 +791,9 @@ def run_chat_turn(
     Writes both sides of the conversation into the chat history:
       - responder's file: "user" (speaker) → "assistant" (responder)
       - speaker's file: "assistant" (speaker) → "user" (responder)
+
+    ``synthetic_input`` marks a system hint; relationship history records only
+    the reply as speech for such a turn.
 
     ``addressed_to`` names who the incoming line was aimed at. If the caller
     does not know it, it is derived from the room transcript (below), so the
@@ -1148,7 +1152,8 @@ def run_chat_turn(
                         user_display_name=(speaker or ctx["user_display_name"]),
                         full_chat_history=ctx["full_chat_history"],
                         old_history=ctx.get("old_history"),
-                        extraction_context={"source": "user_chat"})
+                        extraction_context={"source": "user_chat"},
+                        synthetic_input=synthetic_input)
                 except Exception as _pe:
                     logger.error("run_chat_turn post_process(%s) failed: %s",
                                  responder, _pe)
@@ -1289,7 +1294,8 @@ def post_process_response(
     old_history: list = None,
     extraction_context: Dict[str, Any] = None,
     executed_tools: list = None,
-    detach_background: bool = False) -> Dict[str, Any]:
+    detach_background: bool = False,
+    synthetic_input: bool = False) -> Dict[str, Any]:
     """
     Run all post-processing after a chat response: mood, location, activity,
     memory extraction, relationship updates, intent extraction.
@@ -1307,6 +1313,7 @@ def post_process_response(
         full_chat_history: Full chat history (before this exchange)
         history_window: DEPRECATED — ignored, kept for backward compat
         old_history: Messages older than short-term window (for summary)
+        synthetic_input: The incoming text is a hint, not partner speech.
         detach_background: the caller runs this in a worker thread that must
             not wait for the LLM extractions started here (a thought turn via
             asyncio.to_thread) — they go to a daemon thread instead of running
@@ -1421,8 +1428,8 @@ def post_process_response(
             return
         if _off(character_name, "relationships_enabled"):
             return
-        # Relationship-Update braucht echte Charakternamen — Sentinel
-        # ("user"/"Player") sind keine validen Speaker-Namen.
+        # Relationship updates require real character names; sentinel values
+        # ("user"/"Player") are not valid speakers.
         if not _extract_partner:
             logger.debug("[%s] relationship update skipped: no partner",
                           character_name)
@@ -1433,9 +1440,12 @@ def post_process_response(
                 _speaker_a = _extract_partner
                 _speaker_b = character_name
 
-                summary = f"{_speaker_a}: {user_input[:100]}"
-                if cleaned:
-                    summary += f" — {_speaker_b}: {cleaned[:80]}"
+                if synthetic_input:
+                    summary = f"{character_name}: {cleaned[:80]}"
+                else:
+                    summary = f"{_speaker_a}: {user_input[:100]}"
+                    if cleaned:
+                        summary += f" — {_speaker_b}: {cleaned[:80]}"
 
                 analysis = {"sentiment_a": 0.05, "sentiment_b": 0.05, "romantic_delta": 0.0}
                 # Admin switch "Analyse sentiment after conversations"

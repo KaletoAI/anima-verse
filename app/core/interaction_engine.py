@@ -481,9 +481,13 @@ def end_interaction(character_name: str, reason: str = "ended", *,
     cleared = True
     saved_names: list[str] = []
     ended_invite_id = ""
+    location_id = room_id = ""
     with pair_profile_locks(character_name, partner):
         for name in (character_name, partner):
             p = get_character_profile(name) or {}
+            if name == character_name:
+                location_id = p.get("current_location") or ""
+                room_id = p.get("current_room") or ""
             cur = p.get("interaction")
             if interaction_id and name == character_name and not (
                     isinstance(cur, dict) and cur.get("id") == interaction_id
@@ -519,11 +523,55 @@ def end_interaction(character_name: str, reason: str = "ended", *,
                         else (partner, character_name))
         _narrate(character_name, "{actor} and {partner} stop {pose}.",
                  actor=actor, partner=other, pose_key=inter["pose_key"])
+        _remember_pair(character_name, partner, inter, ended_invite_id,
+                       location_id, room_id, reason)
         from app.core.hooks import emit
         emit("interaction.ended", character=character_name, partner=partner,
              interaction_id=inter["id"], invite_id=ended_invite_id, reason=reason)
     logger.info("interaction %s ended (%s)", inter["id"], reason)
     return True
+
+
+def _remember_pair(character_name: str, partner: str, inter: Dict[str, Any],
+                   invite_id: str, location_id: str, room_id: str,
+                   reason: str) -> None:
+    """Both partners remember the pair; it counts as one relationship event.
+
+    Runs once per really-ended pair, outside every profile lock and BEFORE the
+    ``interaction.ended`` hook. Never raises: a failed write must not keep the
+    hook (party, packages) from hearing that the pair is over.
+    """
+    try:
+        from app.core.i18n import t
+        from app.core.pose_catalog import pose_label
+        from app.models.character import get_character_language
+        from app.models.memory import add_memory
+        from app.models.relationship import record_interaction
+
+        ended_at_game = game_time().canonical()
+        extra_meta = {
+            "interaction_id": inter["id"], "pose_key": inter["pose_key"],
+            "location_id": location_id, "room_id": room_id,
+            "started_at_game": inter.get("started_at_game", ""),
+            "ended_at_game": ended_at_game, "reason": reason,
+        }
+        for name, other in ((character_name, partner), (partner, character_name)):
+            lang = get_character_language(name)
+            add_memory(
+                name, t("{pose} with {partner}.", lang).format(
+                    pose=pose_label(inter["pose_key"], lang), partner=other),
+                memory_type="episodic", importance=3 if inter.get("loop") else 2,
+                tags=["interaction"], related_character=other,
+                game_ts=ended_at_game, extra_meta=extra_meta)
+        invite = get_invite(invite_id) if invite_id else None
+        char_a = invite["inviter"] if invite else character_name
+        char_b = partner if char_a == character_name else character_name
+        record_interaction(
+            char_a=char_a, char_b=char_b, interaction_type="together",
+            summary=f"{char_a} and {char_b}: {inter['pose_key']}",
+            sentiment_delta_a=0.05, sentiment_delta_b=0.05, strength_delta=3)
+    except Exception as e:
+        logger.warning("remembering pair %s failed: %s", inter.get("id"), e)
 
 
 # ------------------------------------------------------------------ invites

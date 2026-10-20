@@ -193,6 +193,12 @@ Hand-derived expectations:
       No route or a refused approach save means no walk can continue, so both
       must yield cannot with the same persisted failed reason. A fresh decline
       is also dismissible; an aged answer cannot appear as a fresh banner.
+  [12] Real pair ends leave one localized episodic memory each and one
+  together history entry, before the hook. Loop importance is 3, one-shot 2.
+  A partner room change retains the old room and inviter; repeated ends
+  add nothing. Without an invite, the ending character is the initiator.
+  Metadata retains the pair identity and game timestamps.
+
   [10a-e] Narration (spec A): Ann speaks en, Bob de in square. Embracing's
       world label is Umarmen: one invite says "Ann suggests embracing to Bob."
       Reuse adds zero lines. Bob declines with "Bob hat gerade keine Lust auf
@@ -1119,6 +1125,83 @@ check("[11e] declined answer visible", ie.last_answer_of("Ann")["status"] == "de
 with patch.object(ie, "_fresh", return_value=False):
     check("[11e] old answer hidden", ie.last_answer_of("Ann") is None)
 check("[11e] declined answer dismisses", ie.dismiss_answer(_iid, "Ann"))
+
+
+# ── [12] pair memories and relationship history ─────────────────────────
+print("\n[12] pair memories and relationship history")
+from app.models.memory import load_memories  # noqa: E402
+from app.models.relationship import get_relationship  # noqa: E402
+
+
+def pair_memories(name):
+    return [m for m in load_memories(name) if "interaction" in m["tags"]]
+
+
+def pair_history():
+    return (get_relationship("Ann", "Bob") or {}).get("history", [])
+
+
+def pair_count():
+    return (get_relationship("Ann", "Bob") or {}).get("interaction_count", 0)
+
+
+for _importance, _partner_end, _invited in ((3, False, True), (2, False, True),
+                                           (2, True, True), (2, True, False)):
+    for _n in ("Ann", "Bob"):
+        ie.end_interaction(_n)
+        clear_pose_intent(_n)
+        ie.clear_invites_for(_n)
+        save_character_current_room(_n, "square")
+    set_character_pos("Ann", 10.0, 20.0)
+    set_character_pos("Bob", 10.0, 20.6)
+    _before = {n: len(pair_memories(n)) for n in ("Ann", "Bob")}
+    _history_before = pair_count()
+    if _invited:
+        _iid = ie.create_invite("Ann", "Bob", "embracing")
+        assert ie.resolve_invite(_iid, True)["status"] == "started"
+    else:
+        ie.start_interaction("Ann", "Bob", "embracing")
+    # Select loop semantics without changing clips used by earlier checks.
+    for _n in ("Ann", "Bob"):
+        with keyed_lock("character_profile", _n):
+            _p = get_character_profile(_n)
+            _p["interaction"]["loop"] = _importance == 3
+            save_character_profile(_n, _p)
+    _inter = ie.get_interaction("Bob")
+    _ended = []
+    def observe_memories(event, **kw):
+        if event == "interaction.ended":
+            _ended.append(([len(pair_memories(n)) for n in ("Ann", "Bob")], pair_count()))
+        return _emit(event, **kw)
+    with patch.object(hooks, "emit", side_effect=observe_memories):
+        if _partner_end:
+            save_character_current_room("Bob", "elsewhere")
+        else:
+            ie.end_interaction("Ann", reason="smoke")
+    _new = {n: [m for m in pair_memories(n) if m["interaction_id"] == _inter["id"]] for n in ("Ann", "Bob")}
+    check("[12] one localized memory each", [m["content"] for m in _new["Ann"]] ==
+          ["embracing with Bob."] and [m["content"] for m in _new["Bob"]] == ["Umarmen mit Ann."])
+    for _n, _other in (("Ann", "Bob"), ("Bob", "Ann")):
+        if _new[_n]:
+            _m = _new[_n][0]
+            check("[12] episodic importance and provenance", _m["importance"] == _importance
+                  and _m["memory_type"] == "episodic" and _m["related_character"] == _other
+                  and _m["interaction_id"] == _inter["id"] and _m["pose_key"] == "embracing"
+                  and _m["location_id"] == PLAZA and _m["room_id"] == "square"
+                  and _m["started_at_game"] == _inter["started_at_game"]
+                  and _m["ended_at_game"] == _m["game_ts"] and bool(_m["reason"]))
+    _rows = pair_history()[-1:]
+    _initiator = "Ann" if _invited else "Bob"
+    _other = "Bob" if _invited else "Ann"
+    check("[12] one together row with inviter", pair_count() == _history_before + 1
+          and _rows[0]["type"] == "together" and _rows[0]["initiator"] == _initiator
+          and _rows[0]["summary"] == f"{_initiator} and {_other}: embracing"
+          and _rows[0]["sentiment_delta"] == 0.05)
+    check("[12] writes precede hook", _ended == [
+        ([_before[n] + 1 for n in ("Ann", "Bob")], _history_before + 1)])
+    check("[12c/d] repeated or absent pair is silent", not ie.end_interaction("Ann")
+          and not ie.end_interaction("Bob") and pair_count() == _history_before + 1
+          and all(len(pair_memories(n)) == _before[n] + 1 for n in ("Ann", "Bob")))
 
 
 print()
