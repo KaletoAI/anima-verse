@@ -17,7 +17,8 @@ Client-Seite davon sieht.
    vom Clip, wenn ihr Beinpaar in der Bind-Pose im Mittel mehr als 3°
    (`LEG_STANCE_TOLERANCE_DEG`) seitlich vom Referenz-Rig abweicht — die
    generierte T-Pose steht absichtlich breitbeinig; Vor-/Rücklage bleibt.
-   Rumpfhaltung wird nur übernommen, wenn die drei Rumpfsegmente (spine→neck) im Mittel mehr als 8° (`TORSO_STANCE_TOLERANCE_DEG`) nach vorn/hinten vom Referenz-Rig abweichen; dann auch Hals→Kopf; Becken→Wirbelsäule bleibt (Rigger-Konvention).
+   Rumpfhaltung wird nur übernommen, wenn die drei Rumpfsegmente (spine→neck) im Mittel mehr als 6° (`TORSO_STANCE_TOLERANCE_DEG`) nach vorn/hinten vom Referenz-Rig abweichen; dann auch Hals→Kopf; Becken→Wirbelsäule bleibt (Rigger-Konvention).
+   Fußneigung wird an der verformten Sohle gemessen: tiefster Fersen- gegen tiefsten Zehenpunkt. Nur Ferse hoch wird ab 6° Paarmittel (`FOOT_STANCE_TOLERANCE_DEG`, Auslösung bei > 6°) korrigiert; dann wird jede Sohle um das Sprunggelenk waagerecht gedreht.
 2. **FBX ohne Mesh/Skin** („Without Skin"), reine Keyframes.
 3. **Bewegungsclips laufen IN PLACE.** Die Wurzel bewegt der Client (Laufen,
    Reise, Klick-Route); ein Clip mit eigener Wurzelbewegung zieht die Figur

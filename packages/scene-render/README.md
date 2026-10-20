@@ -36,7 +36,7 @@ Zeile nennt nur, was es gibt). Die §-Nummern verweisen auf
 | `surface.ts` | § C3 | Die EINE Sample-Formel des gebackenen Oberflächen-Rasters — zeilengleicher Zwilling von `app/core/model_surface.surface_height_at` | `surfaceHeightAt`, `highestSurfaceAt`, `surfaceScale` · Typen: `PlacedSurface`, `SurfacePlacement` |
 | `storeyGround.ts` | § A16.9 | Wo eine Platzierung auf Etage 0 steht: Boden-Datum der Kachel, Hebung und Neu-Datierung | `flatGround`, `storeyGroundLift`, `storeyGroundRelift`, `tileDatumStep` · Typen: `GroundSampler`, `StoreyGroundStep`, `TileDatumStep` |
 | `clip.ts` | § B1 | Diorama auf den Raum-Grundriss beschneiden (Fragment-Discard per Punkt-im-Polygon) | `applyClipOutline`, `disposeClipMaterials`, `CLIP_MAX_POINTS` |
-| `clipRetarget.ts` | § A8 | Einen Bibliotheks-Clip als Rotation GEGEN die Rest-Pose des Referenz-Rigs lesen und auf eine fremde Bind-Pose setzen | `normBoneName`, `restPoseOf`, `restCorrections`, `bindRelativeValues`, `bindRelativeClip`, `LEG_STANCE_TOLERANCE_DEG`, `TORSO_STANCE_TOLERANCE_DEG` · Typen: `RestPose`, `RestCorrection` |
+| `clipRetarget.ts` | § A8 | Einen Bibliotheks-Clip als Rotation GEGEN die Rest-Pose des Referenz-Rigs lesen und auf eine fremde Bind-Pose setzen | `normBoneName`, `restPoseOf`, `restCorrections`, `bindRelativeValues`, `bindRelativeClip`, `LEG_STANCE_TOLERANCE_DEG`, `TORSO_STANCE_TOLERANCE_DEG`, `FOOT_STANCE_TOLERANCE_DEG` · Typen: `RestPose`, `RestCorrection` |
 | `depthCut.ts` | § C3 | Der Tiefenschnitt eines Props (`cut_plane`) — der halbe Tisch an der Wand | `applyDepthCut`, `disposeCutMaterials` |
 | `slotMaterials.ts` | § C3 | Textur-Slots eines Props: das Bild im Rahmen, der Look der Scheibe, die Material-Presets | `applySlotMaterials`, `disposeSlotMaterials`, `GLASS_PRESET`, `MATERIAL_PRESETS` · Typen: `SlotTextureLoader` |
 | `mirrorSurface.ts` | § C3 | Preset `mirror`: aus einem Slot wird ein planarer Reflektor, mit app-weitem, rotierendem Budget | `planeOfFaces`, `MirrorBudget`, `sharedMirrorBudget`, `attachMirror`, `disposeMirror`, `mirrorPlaneOf` · Typen: `MirrorPlane`, `MirrorOptions`, `MirrorInfo` |
@@ -58,6 +58,8 @@ Zeile nennt nur, was es gibt). Die §-Nummern verweisen auf
 | `placeGeometry.ts` | § C4 | Slots eines Platzes und die beiden Hälften eines Paar-Clips, für einen Renderer ohne komponiertes Payload | `markerSlots`, `pairYaw`, `rotateXZ`, `pairPoints` · Typen: `XZ` |
 | `materials.ts` | § A9 | Wie eine Oberflächen-ART gemalt wird (inkl. Wasser-Fließen und Himmel-Uniform) — beide Renderer zeigen denselben See | `surfaceMaterial`, `updateSurfaceMaterials`, `setSurfaceSky`, `surfaceTimeUniform`, `surfaceSkyUniform`, `surfaceWaveNormal`, `waterFlowFactor`, `WATER_FLOW_FACTOR_MIN`, `WATER_FLOW_SPEED_DEFAULT_M_S`, `WATER_FLOW_SPEED_MAX_M_S` · Typen: `SurfaceMaterialSpec`, `SurfaceMaterialOptions` |
 | `waterfall.ts` | § C5 | Wo ein Fluss fällt — aus derselben Achse gelesen, auf der schon der Spiegel steht | `strokeWidthM`, `waterfallsFrom`, `WATERFALL_MIN_DROP_M`, `WATERFALL_MIN_SLOPE` · Typen: `Waterfall`, `WaterfallAxis`, `WaterfallKnot` |
+
+Foot stance measures the deformed sole’s lowest heel and toe points at rest. A heel-up pair mean above 6° levels each foot, composed with leg stance; missing sole data leaves both feet unchanged.
 
 **Bewusst NICHT hier:** Kamera, LOD, Fades, Culling-Anwendung, Labels,
 Wegfindung, NPC-Logik, Editor-Overlays. Sicht-Zustand bleibt pro App.

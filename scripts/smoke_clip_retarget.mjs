@@ -132,11 +132,16 @@
  * [9] TORSO STANCE. Spine is at y=.1, each upper link is .1 long.
  *     Rx(-10°) at Spine leans all four links -10°; S=Rx(10°) cancels it.
  *     Identity donor clips then put Spine1/Spine2/Neck/Head at y=.2/.3/.4/.5,
- *     Shoulder at (.05,.35,0), with no leg factors. -7° stays unchanged.
- *     (-12-12+0)/3=-8° stays; (-12-12-1)/3<-8° corrects each link separately.
+ *     Shoulder at (.05,.35,0), with no leg factors. -7° now corrects; -5° stays unchanged.
+ *     (-9-9+0)/3=-6° stays; (-12-12-1)/3=-8.333° corrects each link separately.
  *     Rx(-10°)·Rz(5°) sends a link to (-.1 sin5,.1 cos5 cos10,-.1 cos5 sin10);
  *     S restores (-.1 sin5,.1 cos5,0): the sideways component stays.
  *     Neck-only 15° has trunk mean 0 and cannot trigger a correction.
+ * [10] SOLE STANCE. With identity joint rotations, heel=(0,-.1+a,-.1),
+ *     toe=(0,-.1,.2) about the ankle and a=.3 tan(tilt), sole tilt is
+ *     atan2(a,.3). Rx(-tilt) gives delta y=-a cos(tilt)+.3 sin(tilt)=0.
+ *     +10° triggers; +5° and -10° do not; (10+4)/2=7° levels each side.
+ *     Undoing Rz(±6°) leg spread before the foot turn levels the same points.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -406,7 +411,7 @@ async function main() {
     near(lean.get('leftupleg').right.angleTo(RX(10)), 0, 1e-6),
     `${(lean.get('leftupleg').right.angleTo(RX(10)) * DEG).toFixed(6)}° off`)
 
-  console.log('\n[9] TORSO STANCE — trunk mean beyond 8°, head together with trunk')
+  console.log('\n[9] TORSO STANCE — trunk mean beyond 6°, head together with trunk')
   const torso = (angles, sideways = 0, rootQ = ID()) => {
     const root = skeleton([], ID(), rootQ)
     let parent = root.getObjectByName('mixamorig:Hips')
@@ -458,13 +463,15 @@ async function main() {
       .every(([name, y]) => at(corrected.target, name, [0, y, 0]))
       && at(corrected.target, 'LeftShoulder', [.05, .35, 0]))
   check('leg factors remain absent', !corrected.corrections.has('leftupleg'))
-  for (const [label, angles] of [['-7°', [-7, -7, -7, -7]],
-    ['mean exactly -8°', [-12, -12, 0, 0]], ['head alone 15°', [0, 0, 0, 15]]]) {
+  for (const [label, angles] of [['-5°', [-5, -5, -5, -5]],
+    ['mean exactly -6°', [-9, -9, 0, 0]], ['head alone 15°', [0, 0, 0, 15]]]) {
     const target = torso(angles)
     check(`${label}: identical keys and factors to the old rule`,
       sameFactors(restCorrections(THREE, donorTorso, target),
         restCorrections(THREE, withoutTorso, target)))
   }
+  check('-7° now reaches donor Head coordinates',
+    at(posedTorso([-7, -7, -7, -7]).target, 'Head', [0, .5, 0]))
   const varied = posedTorso([-12, -12, -1, -15])
   check('mean -8.33°: independent corrections include neck→head',
     at(varied.target, 'Head', [0, .5, 0]) && at(varied.target, 'Neck', [0, .4, 0]))
@@ -478,6 +485,81 @@ async function main() {
   check('missing target Head disables torso correction',
     sameFactors(restCorrections(THREE, donorTorso, missingTarget),
       restCorrections(THREE, withoutTorso, missingTarget)))
+
+  console.log('\n[10] SOLE STANCE — heel-up pair mean beyond 6°')
+  const feet = (left, right, spread = 0, mesh = true) => {
+    const root = legs(RZ(spread), RZ(-spread))
+    const bones = [], positions = [], indices = [], weights = []
+    for (const [side, tilt] of [['Left', left], ['Right', right]]) {
+      const foot = root.getObjectByName(`mixamorig:${side}Foot`)
+      const toe = bone(`mixamorig:${side}ToeBase`, ID())
+      toe.position.set(0, -.05, .12); foot.add(toe)
+      root.updateMatrixWorld(true)
+      for (const [joint, offset] of [[foot, [0, -.1 + .3 * Math.tan(tilt / DEG), -.1]],
+        [toe, [0, -.1, .2]], [foot, [0, .05, -.05]], [toe, [0, .05, .16]]]) {
+        // Positions are ankle-relative; the bind inverse locates ToeBase weights.
+        positions.push(...new THREE.Vector3(...offset).applyMatrix4(foot.matrixWorld).toArray())
+        if (!bones.includes(joint)) bones.push(joint)
+        indices.push(bones.indexOf(joint), 0, 0, 0); weights.push(1, 0, 0, 0)
+      }
+    }
+    if (mesh) {
+      const geometry = new THREE.BufferGeometry()
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+      geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(indices, 4))
+      geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(weights, 4))
+      const skin = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial())
+      root.add(skin); root.updateMatrixWorld(true); skin.bind(new THREE.Skeleton(bones))
+    }
+    return root
+  }
+  const donorFeet = restPoseOf(THREE, feet(0, 0, 0, false))
+  const poseFeet = (target) => {
+    const corrections = restCorrections(THREE, donorFeet, target)
+    target.traverse((b) => {
+      if (!b.isBone) return
+      const k = corrections.get(b.name.replace('mixamorig:', '').toLowerCase())
+      b.quaternion.copy(k ? drive(k, ID()) : ID())
+    })
+    target.updateMatrixWorld(true)
+    return target
+  }
+  const level = (target) => {
+    const skin = target.children.find((n) => n.isSkinnedMesh)
+    return [0, 4].every((i) => {
+      const heel = skin.getVertexPosition(i, new THREE.Vector3()).applyMatrix4(skin.matrixWorld)
+      const toe = skin.getVertexPosition(i + 1, new THREE.Vector3()).applyMatrix4(skin.matrixWorld)
+      return near(heel.y, toe.y, 1e-6)
+    })
+  }
+  check('both +10°: skinned sole low points level (1e-6), verifying rotation sign',
+    level(poseFeet(feet(10, 10))))
+  for (const tilt of [5, -10]) {
+    check(`both ${tilt}°: identical map to no foot rule`,
+      sameFactors(restCorrections(THREE, donorFeet, feet(tilt, tilt)),
+        restCorrections(THREE, donorFeet, feet(tilt, tilt, 0, false))))
+  }
+  check('mean 7°: each sole levelled separately', level(poseFeet(feet(10, 4))))
+  const combined = poseFeet(feet(10, 10, 6))
+  check('6° leg spread: soles level and leg lines on donor',
+    level(combined) && at(combined, 'LeftFoot', [.1, -.9, 0])
+      && at(combined, 'RightFoot', [-.1, -.9, 0]))
+  for (const missing of ['Foot', 'ToeBase']) {
+    const target = feet(10, 10)
+    target.getObjectByName(`mixamorig:Right${missing}`).removeFromParent()
+    check(`missing right ${missing}: no foot correction`,
+      restCorrections(THREE, donorFeet, target).size === 0)
+  }
+  for (const part of ['heel', 'toe']) {
+    const target = feet(10, 10)
+    const position = target.children.find((n) => n.isSkinnedMesh).geometry.getAttribute('position')
+    // Move both right-side vertices into the ankle→ball gap: that sole part is empty.
+    for (const i of part === 'heel' ? [4, 6] : [5, 7]) position.setZ(i, .06)
+    check(`empty right ${part}: no foot correction`,
+      restCorrections(THREE, donorFeet, target).size === 0)
+  }
+  check('no SkinnedMesh: no foot correction',
+    restCorrections(THREE, donorFeet, feet(10, 10, 0, false)).size === 0)
 
   console.log(failures.length
     ? `\n${failures.length} FAILED: ${failures.join(', ')}`

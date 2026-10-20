@@ -83,7 +83,7 @@
  *
  * three is a PARAMETER, never an import — the admin loads it lazily.
  */
-import type { AnimationClip, KeyframeTrack, Matrix4, Object3D, Quaternion, Vector3 } from 'three'
+import type { AnimationClip, KeyframeTrack, Matrix4, Object3D, Quaternion, SkinnedMesh, Vector3 } from 'three'
 
 /** The three namespace, as a PARAMETER — a type-only import, so the package
  *  never pulls the library into the admin's main bundle. */
@@ -166,7 +166,10 @@ function angleOf(q: Quaternion): number {
 export const LEG_STANCE_TOLERANCE_DEG = 3
 
 /** Mean sagittal trunk deviation (degrees) before torso stance is corrected. */
-export const TORSO_STANCE_TOLERANCE_DEG = 8
+export const TORSO_STANCE_TOLERANCE_DEG = 6
+
+/** Pair-mean heel-up sole tilt (degrees) before foot stance is corrected. */
+export const FOOT_STANCE_TOLERANCE_DEG = 6
 
 /**
  * LEG STANCE. The generated T-pose asks for the legs clearly apart (the mesher
@@ -230,10 +233,11 @@ function legStance(three: THREE, donor: RestPose, self: RestPose,
 /**
  * TORSO STANCE. A generated mesh may have a hollow back: the bind's upper
  * trunk leans backward, and the transplant keeps it through every clip.
- * That is generation pose, not body. Over 109 rigs, the mean sagittal
- * deviation from reference.fbx of spine→spine1, spine1→spine2, spine2→neck
- * has median +0.3°, p10 −5.5°, p90 +5.5°, extremes −10.7° and −10.1°;
- * only two exceed 8°. Hips→spine deviates −5..−8° on EVERY rig: first-joint
+ * That is generation pose, not body. Over 110 rigs, the absolute mean
+ * sagittal deviation of spine→spine1, spine1→spine2, spine2→neck exceeds
+ * 8° on 1 rig, 7° on 4, 6° on 16 and 5° on 24. A regenerated rig at −7.2°
+ * visibly keeps a hollow back, hence the 6° tolerance. Hips→spine deviates
+ * −5..−8° on EVERY rig: first-joint
  * placement is a rigger convention, so that segment is excluded.
  *
  * Read positions in the root bone frame, x sideways and y up. In its y–z
@@ -276,6 +280,98 @@ function torsoStance(three: THREE, donor: RestPose, self: RestPose,
 }
 
 /**
+ * FOOT STANCE. Measure the sole, not ankle→toebase pitch: over 110 rigs
+ * their correlation is only 0.13; the worst visible heel-up sole (+13.2°)
+ * has an ordinary joint pitch (+5.9°). Sole tilt has median −0.1°, p10 −8.2°,
+ * p90 +5.2°, max +13.2°; >6°: 6 rigs, >8°: 3, >10°: 1.
+ * Only a heel-up pair mean above 6° triggers: negative tilt commonly comes
+ * from shoes with curved-up toes and must keep that shape.
+ *
+ * In the root rest frame (z forward), take the lowest heel vertex behind
+ * the ankle and lowest toe vertex ahead of the ball, assigned by dominant
+ * foot/toe skin joint. tilt=atan2(heel.y−toe.y, |toe.z−heel.z|).
+ * With Rx(φ), y'=y cosφ−z sinφ; the heel→toe line has Δy=−a, Δz=b>0,
+ * so y'=0 requires tanφ=−a/b, hence φ=−tilt (smoke verifies the sign).
+ * Each foot subtree gets S=Rx(φ). If legStance supplies S_leg, measure
+ * the line on S_leg-rotated offsets instead and use S=Rx(φ*)·S_leg.
+ * K_b=R̃_d⁻¹·S·R̃_t gives deformation M_d·G·S about the ankle.
+ * Missing either joint or either sole part leaves the whole pair alone.
+ * client3d's footLockMeasure / legPin run on the ADAPTED clip and therefore
+ * see the corrected foot automatically.
+ */
+function footStance(three: THREE, target: Object3D, self: RestPose,
+                    targetRoot: Quaternion | undefined,
+                    legs: Map<string, Quaternion>): Map<string, Quaternion> {
+  const out = new Map<string, Quaternion>()
+  const inverseRoot = targetRoot?.clone().invert()
+  const sides = ['left', 'right'].map((side) => {
+    const ankle = self.position.get(`${side}foot`)?.clone()
+    const ball = self.position.get(`${side}toebase`)?.clone()
+    if (!ankle || !ball) return null
+    if (inverseRoot) { ankle.applyQuaternion(inverseRoot); ball.applyQuaternion(inverseRoot) }
+    return { side, ankle, ball, heel: new three.Vector3(0, Infinity, 0),
+      toe: new three.Vector3(0, Infinity, 0) }
+  })
+  if (sides.some((s) => s === null)) return out
+  target.updateMatrixWorld(true)
+  const v = new three.Vector3()
+  target.traverse((node) => {
+    if (!(node as SkinnedMesh).isSkinnedMesh) return
+    const mesh = node as SkinnedMesh
+    const position = mesh.geometry.getAttribute('position')
+    const index = mesh.geometry.getAttribute('skinIndex')
+    const weight = mesh.geometry.getAttribute('skinWeight')
+    if (!position || !index || !weight) return
+    // One pass per mesh at model load; only v is reused inside the vertex loop.
+    const owners = mesh.skeleton.bones.map((bone) => {
+      const key = normBoneName(bone.name)
+      return sides.find((s) => key === `${s!.side}foot`
+        || key.startsWith(`${s!.side}toe`))
+    })
+    for (let i = 0; i < position.count; i++) {
+      let dominant = 0
+      for (let j = 1; j < 4; j++) {
+        if (weight.getComponent(i, j) > weight.getComponent(i, dominant)) dominant = j
+      }
+      const side = owners[index.getComponent(i, dominant)]
+      if (!side || weight.getComponent(i, dominant) <= 0) continue
+      mesh.getVertexPosition(i, v).applyMatrix4(mesh.matrixWorld)
+      if (inverseRoot) v.applyQuaternion(inverseRoot)
+      if (v.z < side.ankle.z && v.y < side.heel.y) side.heel.copy(v)
+      if (v.z > side.ball.z && v.y < side.toe.y) side.toe.copy(v)
+    }
+  })
+  if (sides.some((s) => !Number.isFinite(s!.heel.y) || !Number.isFinite(s!.toe.y))) return out
+  const tilt = (heel: Vector3, toe: Vector3): number =>
+    Math.atan2(heel.y - toe.y, Math.abs(toe.z - heel.z))
+  // The trigger reads the sole AFTER a leg stance turn, because that is the
+  // foot the clip shows: on the measured rigs the sideways turn raised one
+  // heel from 3.8° to 6.3°.
+  const tilts = sides.map((s) => {
+    const leg = legs.get(`${s!.side}foot`)
+    const heel = s!.heel.clone().sub(s!.ankle)
+    const toe = s!.toe.clone().sub(s!.ankle)
+    if (leg) { heel.applyQuaternion(leg); toe.applyQuaternion(leg) }
+    return tilt(heel, toe)
+  })
+  const mean = (tilts[0] + tilts[1]) / 2
+  if (mean * 180 / Math.PI <= FOOT_STANCE_TOLERANCE_DEG) return out
+  for (const [i, s] of sides.entries()) {
+    const top = `${s!.side}foot`
+    const leg = legs.get(top)
+    const rot = new three.Quaternion().setFromAxisAngle(
+      new three.Vector3(1, 0, 0), -tilts[i])
+    if (leg) rot.multiply(leg)
+    for (const key of self.world.keys()) {
+      let above: string | null | undefined = key
+      while (above && above !== top) above = self.parentBone.get(above)
+      if (above === top) out.set(key, rot)
+    }
+  }
+  return out
+}
+
+/**
  * `left = K_p⁻¹` and `right = K_b` per bone (`q = left·c·right`), both built
  * from the ACCUMULATED world rests of donor and target.
  *
@@ -307,6 +403,9 @@ export function restCorrections(three: THREE,
     // Legs descend from the uplegs, the torso from spine; a rig that hangs a
     // leg under the spine keeps the leg rule there rather than failing to load.
     if (!stance.has(key)) stance.set(key, s)
+  }
+  for (const [key, s] of footStance(three, target, self, targetRoot, stance)) {
+    stance.set(key, s)
   }
   const k = new Map<string, Quaternion>()
   for (const [key, targetWorld] of self.world) {
