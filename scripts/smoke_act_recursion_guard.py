@@ -16,12 +16,12 @@ the path a lock bound to one event loop would miss.
 
 Hand-derived expectations:
 
-  [1] outer act of "Spoty", whose narration fires a nested act of "Spoty"
+  [1] outer act of "demo", whose narration fires a nested act of "demo"
       → the nested call returns busy=True, the pipeline body ran ONCE
         (the outer one), the outer result is the fake's normal result.
-  [2] inside that same outer act, an act of ANOTHER actor ("Kira")
-      → not refused: the guard is per actor, the body ran for Kira too.
-  [3] after the outer act returned → "Spoty" may act again (body runs).
+  [2] inside that same outer act, an act of ANOTHER actor ("other")
+      → not refused: the guard is per actor, the body ran for other too.
+  [3] after the outer act returned → "demo" may act again (body runs).
   [4] the body raises → the actor is released anyway (a following act
       runs instead of being refused forever).
 
@@ -60,11 +60,11 @@ def act_like_the_verb(actor):
 nested = {}
 
 
-async def fake_body(actor, text, scope):
+async def fake_body(actor, text, scope, overflow=False):
     calls.append(actor)
     if text == "outer":
         nested["same"] = act_like_the_verb(actor)
-        nested["other"] = act_like_the_verb("Kira")
+        nested["other"] = act_like_the_verb("other")
     if text == "boom":
         raise RuntimeError("pipeline failed")
     return {"narration": f"{actor} acts", "resolved": False,
@@ -74,31 +74,31 @@ async def fake_body(actor, text, scope):
 act_engine._perform_act = fake_body
 
 # [1] + [2]
-outer = asyncio.run(act_engine.perform_act("Spoty", "outer", "here"))
+outer = asyncio.run(act_engine.perform_act("demo", "outer", "here"))
 check("[1] nested act of the same actor is refused",
       nested["same"].get("busy") is True and nested["same"]["narration"] == "")
 check("[1] outer act completes normally",
       outer.get("summary") == "ok" and not outer.get("busy"))
 check("[2] act of another actor inside it runs",
       nested["other"].get("summary") == "ok")
-check("[1][2] body ran for Spoty once and Kira once",
-      calls == ["Spoty", "Kira"])
+check("[1][2] body ran for demo once and other once",
+      calls == ["demo", "other"])
 
 # [3]
 calls.clear()
-again = asyncio.run(act_engine.perform_act("Spoty", "plain", "here"))
+again = asyncio.run(act_engine.perform_act("demo", "plain", "here"))
 check("[3] the actor may act again afterwards",
-      again.get("summary") == "ok" and calls == ["Spoty"])
+      again.get("summary") == "ok" and calls == ["demo"])
 
 # [4]
 try:
-    asyncio.run(act_engine.perform_act("Spoty", "boom", "here"))
+    asyncio.run(act_engine.perform_act("demo", "boom", "here"))
 except RuntimeError:
     pass
 calls.clear()
-after = asyncio.run(act_engine.perform_act("Spoty", "plain", "here"))
+after = asyncio.run(act_engine.perform_act("demo", "plain", "here"))
 check("[4] a failed act releases the actor",
-      after.get("summary") == "ok" and calls == ["Spoty"])
+      after.get("summary") == "ok" and calls == ["demo"])
 
 print(f"\n{len(FAILS)} failure(s)")
 sys.exit(1 if FAILS else 0)

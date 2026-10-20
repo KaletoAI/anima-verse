@@ -60,12 +60,12 @@ class ActSkill(PluginSkill):
                 # Already inside an event loop — schedule and wait via thread.
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    fut = pool.submit(_asyncio.run, perform_act(actor, text, scope))
+                    fut = pool.submit(_asyncio.run, perform_act(actor, text, scope, overflow=True))
                     result = fut.result()
             else:
-                result = _asyncio.run(perform_act(actor, text, scope))
+                result = _asyncio.run(perform_act(actor, text, scope, overflow=True))
         except RuntimeError:
-            result = _asyncio.run(perform_act(actor, text, scope))
+            result = _asyncio.run(perform_act(actor, text, scope, overflow=True))
         return result.get("summary", "Action performed.")
 
     def get_usage_instructions(self, format_name: str = "", **kwargs) -> str:

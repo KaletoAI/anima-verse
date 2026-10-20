@@ -339,6 +339,7 @@ class ThoughtRunner:
         # temperature bump as in the chat path applies here. It hits whichever
         # instance NARRATES this turn; the tool LLM of the dual pass stays
         # untouched, its job is turning prose into tool calls, not writing prose.
+        _anti_rep: Dict[str, Any] = {}
         _narrator_inst = _tool_inst if _is_fast else _thought_inst
         if _narrator_inst:
             _anti_rep = thought_anti_repetition_overrides(
@@ -620,9 +621,28 @@ class ThoughtRunner:
             f"Forced Thought: {character_name}" if _is_forced
             else f"Thought: {character_name}"
         )
-        _thought_task_id = await _llm_queue.register_chat_active_async(
-            character_name, llm_instance=_llm_inst,
-            task_type="thought", label=_thought_label)
+        # Lane overflow (development_instructions/plan-lane-overflow.md § 5.3):
+        # a thought is background work, so a full pool may hand it to the next
+        # model of its chain — but only where nothing built above depends on
+        # the chat model. That holds when a tool LLM is routed (tool format,
+        # tool hint and the agent's tool client come from it) or when the
+        # turn has no tools at all. Fast mode streams on the tool instance
+        # and stays put. The tool re-registrations below never overflow: one
+        # turn runs on one model.
+        _may_overflow = (not _is_fast) and (_tool_inst is not None or not agent_tools)
+        if _may_overflow:
+            _thought_task_id, _reg_inst = await _llm_queue.register_chat_active_async(
+                character_name, llm_instance=_llm_inst,
+                task_type="thought", label=_thought_label, overflow=True)
+            if (_reg_inst.provider_name, _reg_inst.model) != (
+                    _thought_inst.provider_name, _thought_inst.model):
+                agent.llm = (_reg_inst.create_llm(**_anti_rep) if _anti_rep
+                             else _reg_inst.create_llm())
+                _llm_inst = _reg_inst
+        else:
+            _thought_task_id = await _llm_queue.register_chat_active_async(
+                character_name, llm_instance=_llm_inst,
+                task_type="thought", label=_thought_label)
 
         # Hand the chat task_id to the agent so it can report iteration
         # progress (admin queue panel shows "iter N/M" while streaming).

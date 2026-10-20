@@ -99,10 +99,17 @@ _ACTING: set = set()
 _ACTING_LOCK = threading.Lock()
 
 
-async def perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
+async def perform_act(actor: str, text: str, scope: str, *,
+                      overflow: bool = False) -> Dict[str, Any]:
     """Run the full Storyteller pipeline for an action — one at a time per
     actor (see ``_ACTING``); a refused call returns ``busy=True`` and runs
-    no LLM at all."""
+    no LLM at all.
+
+    ``overflow`` lets the storyteller move to the next model of its chain
+    when its pool is full (development_instructions/plan-lane-overflow.md).
+    Only the Act verb passes it — an act an NPC or a thought turn chose.
+    The player's own action and the silence fallback are user-facing and
+    stay on their model."""
     with _ACTING_LOCK:
         busy = actor in _ACTING
         if not busy:
@@ -116,13 +123,14 @@ async def perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
                             f"is still being narrated — an action cannot "
                             f"trigger another action.")}
     try:
-        return await _perform_act(actor, text, scope)
+        return await _perform_act(actor, text, scope, overflow)
     finally:
         with _ACTING_LOCK:
             _ACTING.discard(actor)
 
 
-async def _perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
+async def _perform_act(actor: str, text: str, scope: str,
+                       overflow: bool = False) -> Dict[str, Any]:
     """Run the full Storyteller pipeline for an action.
 
     Async — uses ``StreamingAgent`` so the configured chat mode (rp_first /
@@ -165,7 +173,8 @@ async def _perform_act(actor: str, text: str, scope: str) -> Dict[str, Any]:
     narration, tools_fired = await _run_storyteller_agent(
         actor=actor, scope=scope, location_name=loc_name,
         room_name=room_name, location=location, room=room_obj,
-        active_events=active, recipients=recipients, user_action_text=text)
+        active_events=active, recipients=recipients, user_action_text=text,
+        overflow=overflow)
 
     # Extract [EVENT_RESOLVED:…] marker
     marker = ""
@@ -224,7 +233,7 @@ async def _run_storyteller_agent(
     room_name: str, location: Dict[str, Any],
     room: Optional[Dict[str, Any]],
     active_events: List[Dict[str, Any]],
-    recipients: List[str], user_action_text: str
+    recipients: List[str], user_action_text: str, overflow: bool = False
 ) -> Tuple[str, List[str]]:
     """Run the Storyteller via the same ``StreamingAgent`` infrastructure
     used by chat, but with the per-world storyteller config (chat mode,
@@ -446,9 +455,21 @@ async def _run_storyteller_agent(
         # the instance carries provider_name — a bare client makes the
         # provider manager fall back to the FIRST queue, and the task panel
         # then shows the wrong provider next to the right model.
-        _st_task_id = await _stq.register_chat_active_async(
+        # Overflow moves only the narration client. The tool format and the
+        # agent's tool client were built from the tool instance, so a move is
+        # safe only when that is a separately routed one — with "intent"
+        # unrouted the storyteller instance doubles as the tool LLM.
+        _overflow = overflow and (tool_inst is not st_inst or chat_mode == "no_tools")
+        _st_reg = await _stq.register_chat_active_async(
             actor, llm_instance=st_inst, task_type="storyteller",
-            label=f"{STORYTELLER_SPEAKER}: action by {actor}")
+            label=f"{STORYTELLER_SPEAKER}: action by {actor}", overflow=_overflow)
+        if _overflow:
+            _st_task_id, _alt = _st_reg
+            if (_alt.provider_name, _alt.model) != (st_inst.provider_name, st_inst.model):
+                agent.llm = _alt.create_llm()
+                st_inst = _alt
+        else:
+            _st_task_id = _st_reg
         agent.chat_task_id = _st_task_id
     except Exception as _re:
         logger.debug("storyteller chat-active register failed: %s", _re)

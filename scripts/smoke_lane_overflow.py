@@ -624,6 +624,71 @@ def section_d():
         print("PASS D11 streaming JSONL provenance only when nonempty")
 
 
+def section_e():
+    """E: only background turns opt in; player actions keep their model.
+
+    E1 two calls yield the hand-derived flags [True, False]: explicit opt-in
+    and the default. E2 expects one overflow keyword on the first thought
+    registration and none on tool re-registration, which must reuse _llm_inst.
+    E3 expects True on all three Act skill calls and zero overflow keywords on
+    player route calls. E2/E3 are structural checks because a live thought or
+    route/tool turn needs a world and an LLM; AST checks pin caller policy
+    without running those dependencies or making network calls.
+    """
+    import ast
+    import asyncio
+    from app.core import act_engine
+
+    recorded = []
+    async def recorder(actor, text, scope, overflow=False):
+        recorded.append((actor, text, scope, overflow))
+        return {}
+    with patch.object(act_engine, "_perform_act", side_effect=recorder):
+        asyncio.run(act_engine.perform_act("demo", "x", "here", overflow=True))
+        asyncio.run(act_engine.perform_act("demo", "x", "here"))
+    assert recorded == [("demo", "x", "here", True),
+                        ("demo", "x", "here", False)], recorded
+    print("PASS E1 act overflow flag reaches guarded pipeline")
+
+    repo = Path(__file__).resolve().parents[1]
+    def tree(relative):
+        return ast.parse((repo / relative).read_text(encoding="utf-8"))
+    def calls(node, name):
+        return sorted((n for n in ast.walk(node) if isinstance(n, ast.Call)
+                       and ((isinstance(n.func, ast.Name) and n.func.id == name)
+                            or (isinstance(n.func, ast.Attribute)
+                                and n.func.attr == name))),
+                      key=lambda n: (n.lineno, n.col_offset))
+    def keywords(call):
+        return {kw.arg: kw.value for kw in call.keywords}
+
+    thought = tree("app/core/thoughts.py")
+    registrations = calls(thought, "register_chat_active_async")
+    opted = [n for n in registrations if "overflow" in keywords(n)]
+    assert len(opted) == 1 and opted[0] is registrations[0]
+    queued = next(n for n in ast.walk(thought)
+                  if isinstance(n, ast.AsyncFunctionDef)
+                  and n.name == "_tool_executor_queued")
+    repeated = calls(queued, "register_chat_active_async")
+    assert len(repeated) == 1
+    kw = keywords(repeated[0])
+    assert "overflow" not in kw
+    assert isinstance(kw.get("llm_instance"), ast.Name)
+    assert kw["llm_instance"].id == "_llm_inst"
+    print("PASS E2 thought opts in once and reuses its turn instance")
+
+    skill_calls = calls(tree("plugins/act/skill.py"), "perform_act")
+    assert skill_calls
+    for call in skill_calls:
+        value = keywords(call).get("overflow")
+        assert isinstance(value, ast.Constant) and value.value is True
+    for relative in ("app/routes/characters.py", "app/routes/play.py"):
+        route_calls = calls(tree(relative), "perform_act")
+        assert route_calls, relative
+        assert all("overflow" not in keywords(call) for call in route_calls), relative
+    print("PASS E3 NPC acts opt in; player routes keep default")
+
+
 def main():
     from app.core import paths
 
