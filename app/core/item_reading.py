@@ -77,10 +77,16 @@ def extend_session(reader: str, item_id: str) -> dict | None:
 def sessions_in_room(location_id: str, room_id: str) -> list[dict]:
     """List live sessions, pruning dead rows through active_session."""
     readers = get_connection().execute(
-        "SELECT reader FROM item_reading_sessions WHERE location_id=? AND room_id=?",
+        "SELECT reader FROM item_reading_sessions WHERE location_id=? AND room_id=? AND caught=0",
         (location_id, room_id)).fetchall()
-    return [session for row in readers if (session := active_session(row[0]))
-            and session["location_id"] == location_id and session["room_id"] == room_id]
+    sessions = []
+    for row in readers:
+        with keyed_lock("reading_session", row[0]):
+            stored = _session_row(row[0])
+            session = active_session(row[0]) if stored and not stored["caught"] else None
+        if session and session["location_id"] == location_id and session["room_id"] == room_id:
+            sessions.append(session)
+    return sessions
 
 
 def end_session(reader: str, reason: str) -> None:
@@ -196,6 +202,10 @@ def read_page(reader: str, item_id: str, index: int, *, opening: bool = False) -
     if found is None:
         return {"error": "There is nothing like that to read here."}
     item, pages = found
+    from app.core.reading_watch import watching_owner
+    owner = watching_owner(reader, item)
+    if opening and owner:
+        return {"error": t("{owner} is watching.", character.get_character_language(reader)).format(owner=owner)}
     result = _start_reading(reader, item_id) if opening else heartbeat(reader, item_id)
     if not opening and not result.get("caught_by") and active_session(reader) is None:
         # The session ran out while the book stayed open (no heartbeat, e.g. a
@@ -225,6 +235,10 @@ def npc_read(reader: str, item_id: str) -> dict:
     if found is None:
         return {"error": "There is nothing like that to read here."}
     item, pages = found
+    from app.core.reading_watch import watching_owner
+    owner = watching_owner(reader, item)
+    if owner:
+        return {"error": t("{owner} is watching.", character.get_character_language(reader)).format(owner=owner)}
     day = game_time().day_key()
     with transaction() as conn:
         conn.execute("INSERT OR IGNORE INTO item_reads(reader,item_id,game_day) VALUES (?,?,?)",

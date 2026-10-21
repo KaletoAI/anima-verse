@@ -2766,6 +2766,14 @@
     "Run the improvement \"Repair rig weights\"": "Verbesserung „Rig-Gewichte reparieren“ ausführen",
     "{n} vertices repaired": "{n} Vertices repariert",
     "clean": "fehlerfrei",
-    "Repair rig weights": "Rig-Gewichte reparieren"
+    "Repair rig weights": "Rig-Gewichte reparieren",
+    "{watcher} catches {reader} reading {item}.": "{watcher} ertappt {reader} beim Lesen in {item}.",
+    "I caught {reader} reading {item}.": "Ich habe {reader} beim Lesen in {item} ertappt.",
+    "{owner} caught me reading {item}.": "{owner} hat mich beim Lesen in {item} ertappt.",
+    "I saw {reader} secretly reading {item}.": "Ich habe gesehen, wie {reader} heimlich in {item} gelesen hat.",
+    "{reader} secretly read {item}.": "{reader} hat heimlich in {item} gelesen.",
+    "You catch {reader} reading {item}.": "Du ertappst {reader} beim Lesen in {item}.",
+    "You notice {reader} secretly reading {item}.": "Du bemerkst, wie {reader} heimlich in {item} liest.",
+    "{owner} is watching.": "{owner} schaut zu."
   }
 }

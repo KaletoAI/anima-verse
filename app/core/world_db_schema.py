@@ -497,6 +497,12 @@ SCHEMA_STATEMENTS = [
     )""",
 
     # ── Inventory ──────────────────────────────────────────────────────
+    """CREATE TABLE IF NOT EXISTS item_caught_today (
+        reader TEXT,
+        item_id TEXT,
+        game_day TEXT,
+        PRIMARY KEY(reader, item_id, game_day)
+    )""",
     """CREATE TABLE IF NOT EXISTS item_reading_sessions (
         reader TEXT PRIMARY KEY,
         item_id TEXT,

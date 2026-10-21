@@ -195,13 +195,28 @@ Sessions persist in `item_reading_sessions(reader PRIMARY KEY, item_id,
 location_id, room_id, started_game_ts, until_game_ts, caught DEFAULT 0,
 noticed_by DEFAULT '[]')`. Returned dictionaries decode `noticed_by` to a list.
 Caught rows are inactive but remain available to heartbeat/page turns until
-`active_session` prunes them or they are replaced/closed. No noticing runs yet.
+`active_session` prunes them or they are replaced/closed. Room/tick scans leave caught rows available for heartbeat.
 
 `app.core.reading_watch.on_session_started(session: dict) -> dict` is the
 watcher entry point called by both read paths after starting a session and before
-learning. Currently returns `{}`; a future watcher may return `{caught_by}`.
-World `inventory.notice_reading_difficulty` (int, default 60) reserves the notice
-threshold for that watcher.
+learning. Returns `{caught_by: owner}` when the owner catches, otherwise `{}`.
+
+`app.core.reading_watch.register() -> None` idempotently registers room entry,
+world tick and `respond_finished` handlers. Startup calls it once.
+`check_session(session: dict, watchers: list[str]) -> dict` checks live room
+presence, distraction and `inventory.notice_reading_difficulty` (default 60),
+claims each notice once, then dispatches effects outside locks/transactions.
+`watching_owner(reader: str, item: dict) -> str` returns the present owner when
+a same-day catch blocks reopening, otherwise an empty string.
+
+Owner catches mark sessions caught and narrate in the reader's language. The
+`item_caught_today(reader, item_id, game_day)` primary key limits memories,
+relationship changes and reply chains to once per game day. Owner sentiment
+toward reader drops by 0.3. NPC owners reply first; `respond_finished` (except
+`superseded`) triggers the NPC reader's free response. Avatars never get LLM
+turns. Witnesses silently remember and discover one reader secret per item
+(`source_ref=caught_reading:<item_id>`); avatar witnesses also get a notice.
+Reopening while the owner remains present returns the localized watching error.
 
 `MEMORIES_PER_DAY = 2`, `NPC_PAGES = 2`, `NPC_PAGE_CHARS = 600`.
 Both read paths share learning: for a valid, newly learned secret of another
@@ -918,7 +933,11 @@ stat writers and LLM stat adjustments continue to use the base values (0–100).
 - `add_secret(character_name, content, category="personal", severity=2, related_characters=None, related_location=None, consequences_if_revealed="", source="manual", known_by=None, source_ref="")` → created secret dict.
 - `add_known_by(character_name, secret_id, knower_name, discovered=False)` → whether the secret exists; adds the knower and stamps first learning with `game_time().canonical()` in `known_at`. Repeated learning preserves that stamp.
 - `delete_secrets_by_ref(character_name, source_ref)` → number deleted with the exact reference, scoped to this owner.
+- `known_about_others_block(character_name: str) -> str` → known-about-others prompt text, or `""`; shared by chat and both thought templates (thoughts require `secrets_enabled`). Own secrets are excluded.
 - `is_record(secret)` → whether `source == "record"`.
+
+The owner's `[known by: …]` annotation omits every name in `discovered_by`;
+if no visible knowers remain, the annotation is omitted.
 
 Record secrets keep their creator-assigned `source_ref` through edits. They are
 excluded from the owner's own prompt, secret generation context, random hint
