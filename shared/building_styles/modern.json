@@ -90,5 +90,6 @@
   "chimney_width_m": 0.6,
   "door_style": "glass",
   "interior_door_style": "interior",
-  "shop_door_style": "glass"
+  "shop_door_style": "glass",
+  "window_style": "metal"
 }

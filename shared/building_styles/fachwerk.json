@@ -70,5 +70,6 @@
   "weathering": 0.5,
   "door_style": "plank",
   "interior_door_style": "interior",
-  "shop_door_style": "glazed"
+  "shop_door_style": "glazed",
+  "window_style": "timber"
 }

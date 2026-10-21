@@ -169,6 +169,7 @@ export interface SceneWall {
    *  the door's prism with it (user decision 2026-08-27). Only ever set
    *  together with `leaf`. */
   door_prop?: boolean
+  window_model?: boolean
   /** This piece hangs over a WALKABLE gap (a door or passage). It is drawn
    *  like any other wall, but it bars nothing in a floor plan — whoever
    *  derives 2D colliders from `walls` skips it. */

@@ -7042,6 +7042,33 @@ finishing a build invalidates the cached payload and ETag (recipe v15).
 
 
 
+### Blender windows (v16)
+
+Glass wall entries are the source of window model placement and carry the resolved
+`window_style`. Resolution is opening `window_style` → location
+`default_window_style` → active hull style `window_style` → `plain`; stale ids fall
+through. Hull mappings are fachwerk/holzhuette → timber, steinhaus/burg → stone,
+modern → metal. Frame colour uses `hull_frame_color`, then hull palette `frame`,
+then style `frame_material`; glass uses palette `glass`, then `glass_tint`.
+Bars follow the active hull: on while `hull_ornament_density > 0`; without a hull they are on.
+
+Each ready model emits `{role:'prop', id:'window:<sig>', variants: full, room_id,
+level, fix_euler:null, yaw_deg, measure:'fit', size_m, anchor, bottom_y,
+slots:{glass:{preset:'glass'}}}`. The shared asset URL is
+`/assets/doors/<sig>/model`. Width and height come from the pane; model size is
+`[width+.16, height+.13]`, anchor is pane start minus wall direction × `.08`, and
+`bottom_y` is pane base minus `.07`. Rotation is `atan2(-uz, ux)` in degrees modulo
+360. The build uses `.07` wall thickness and derives outside from the pane normal.
+
+A queued or failed build keeps the glass pane. Only a ready model sets
+`window_model:true`; both renderers then skip that pane. Width or height ≤ `.15`
+keeps the pane without requesting a model. Parallel panes on the same level whose
+centres are within `SHARE_TOL_M` represent one window: the first wins, one spec is
+emitted, and all duplicate panes are suppressed together once ready. Hull facts
+continue to read the original wall rectangles; model readiness changes no holes.
+
+
+
 ## C2. Treppen und Fahrstuhl
 
 ### TREPPEN — man geht in den ersten Stock (§ A6/B1)

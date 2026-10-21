@@ -2032,6 +2032,13 @@ def sanitize_ground_layout(raw: Any) -> Dict[str, Any]:
     return out
 
 
+def safe_window_style_id(value: Any) -> str:
+    """Keep only catalog window style ids."""
+    from app.core.window_styles import load_window_styles
+    value = str(value or "").strip()
+    return value if value in load_window_styles() else ""
+
+
 def safe_door_style_id(value: Any) -> str:
     """Keep an existing shipped door style id, or the unselected empty id."""
     from app.core.door_styles import load_door_styles
@@ -2115,6 +2122,9 @@ def _sanitize_opening(raw: Any) -> Optional[Dict[str, Any]]:
     # the location default fills.
     if str(raw.get("door_prop") or "").strip().lower() == "none":
         out["door_prop"] = "none"
+    window_style = safe_window_style_id(raw.get("window_style"))
+    if typ == "window" and window_style:
+        out["window_style"] = window_style
     door_style = safe_door_style_id(raw.get("door_style"))
     if door_style:
         out["door_style"] = door_style
@@ -2193,6 +2203,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
     entry_room = data.get("entry_room")
     default_door_prop_id = data.get("default_door_prop_id")
     default_door_style = data.get("default_door_style")
+    default_window_style = data.get("default_window_style")
     indoor = data.get("indoor")
     terrain = data.get("terrain")
     map3d = data.get("map3d")
@@ -2238,6 +2249,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                   or entry_room is not None or indoor is not None
                   or default_door_prop_id is not None
                   or default_door_style is not None
+                  or default_window_style is not None
                   or decency is not None or style_hint is not None
                   or swim_allowed is not None or activity_hint is not None
                   or terrain is not None
@@ -2273,6 +2285,8 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                         _l["activity_hint"] = (activity_hint or "").strip()
                     if knowledge_item_id is not None:
                         _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
+                    if default_window_style is not None:
+                        _l["default_window_style"] = safe_window_style_id(default_window_style)
                     if default_door_style is not None:
                         _l["default_door_style"] = safe_door_style_id(default_door_style)
                     if default_door_prop_id is not None:
@@ -2361,6 +2375,7 @@ def update_location_with_extras(location_id: str,
     entry_room = data.get("entry_room")
     default_door_prop_id = data.get("default_door_prop_id")
     default_door_style = data.get("default_door_style")
+    default_window_style = data.get("default_window_style")
     indoor = data.get("indoor")
     terrain = data.get("terrain")
     map3d = data.get("map3d")
@@ -2400,6 +2415,7 @@ def update_location_with_extras(location_id: str,
                   or entry_room is not None or indoor is not None
                   or default_door_prop_id is not None
                   or default_door_style is not None
+                  or default_window_style is not None
                   or decency is not None or style_hint is not None
                   or swim_allowed is not None or activity_hint is not None
                   or terrain is not None
@@ -2448,6 +2464,8 @@ def update_location_with_extras(location_id: str,
                         _l["activity_hint"] = (activity_hint or "").strip()
                     if knowledge_item_id is not None:
                         _l["knowledge_item_id"] = (knowledge_item_id or "").strip()
+                    if default_window_style is not None:
+                        _l["default_window_style"] = safe_window_style_id(default_window_style)
                     if default_door_style is not None:
                         _l["default_door_style"] = safe_door_style_id(default_door_style)
                     if default_door_prop_id is not None:

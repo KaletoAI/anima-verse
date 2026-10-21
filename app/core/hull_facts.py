@@ -105,7 +105,9 @@ def _door_meta(description: Any) -> Any:
     overrides = description.get('overrides') or {}
     return {'hull_style': get_style(str(description['style'])) or {},
             'hull_shopfront': overrides.get('shopfront') is True,
-            'hull_door_color': overrides.get('door_color') or ''}
+            'hull_door_color': overrides.get('door_color') or '',
+            'hull_frame_color': overrides.get('frame_color') or '',
+            'hull_ornament_density': overrides.get('ornament_density', .5)}
 
 
 def hull_facts(location: Dict[str, Any], location_id: str = '', *,

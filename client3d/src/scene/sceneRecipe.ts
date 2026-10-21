@@ -1292,7 +1292,7 @@ export async function mountShell(tile: Tile, scene: ScenePayload,
     // graph, or it would be measured without the tile's own transform.
     // The wall entry itself stays in the payload on purpose as well: the
     // hull opening detection (hull_facts._edge_openings) relies on the leaves.
-    if (wall.door_prop) mesh.visible = false;
+    if (wall.door_prop || wall.window_model) mesh.visible = false;
     parentFor(wall.room_id).add(mesh);
     builtWalls.push({ mesh, wall });
     // A PANE never joins the facade culling — glass since it existed, the

@@ -585,6 +585,8 @@ def get_client_meta(location_id: str, room_id: str = "",
         overrides = description.get("overrides") or {}
         out["hull_shopfront"] = overrides.get("shopfront") is True
         out["hull_door_color"] = overrides.get("door_color") or ""
+        out["hull_frame_color"] = overrides.get("frame_color") or ""
+        out["hull_ornament_density"] = overrides.get("ornament_density", .5)
         walls = (meta.get("hull") or {}).get("walls")
         if isinstance(walls, dict) and walls:
             out["hull_walls"] = {str(k): str(v) for k, v in walls.items()}

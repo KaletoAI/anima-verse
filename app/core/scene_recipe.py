@@ -140,7 +140,8 @@ logger = get_logger(__name__)
 #: data therefore yields a different payload, so a cached scene has to
 #: be re-fetched.
 #: 15 (2026-10-19): Blender door models, casing anchors and double leaves.
-SCENE_RECIPE_VERSION = 15
+#: 16 (2026-10-21): Blender window models with glass pane fallback.
+SCENE_RECIPE_VERSION = 16
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -1552,6 +1553,67 @@ def door_choice(opening: Dict[str, Any], *, default_prop_id: str = "",
             "panel" if exterior else "interior"}
 
 
+def window_choice(opening, *, default_window_style="", hull_style=None,
+                  window_styles=None) -> str:
+    """Resolve a valid window style, falling through stale stored ids."""
+    if window_styles is None:
+        from app.core.window_styles import load_window_styles
+        window_styles = load_window_styles()
+    for value in (opening.get("window_style"), default_window_style,
+                  (hull_style or {}).get("window_style"), "plain"):
+        if isinstance(value, str) and value in window_styles:
+            return value
+    return "plain"
+
+
+def _window_models(walls, *, styles, color, glass, bars) -> list:
+    """Build from emitted panes; retain every fallback until its model exists."""
+    from app.core import door_models
+    groups = []
+    out = []
+    for wall in walls:
+        if not wall.get("glass"):
+            continue
+        a, b = wall["from"], wall["to"]
+        dx, dz = b[0] - a[0], b[1] - a[1]
+        width = math.hypot(dx, dz)
+        height = _num(wall.get("height"))
+        if width <= .15 + 1e-9 or height <= .15:
+            continue
+        ux, uz = dx / width, dz / width
+        centre = [(a[0]+b[0])/2, (a[1]+b[1])/2]
+        duplicate = next((g for g in groups
+            if g[0] == wall.get("level", 0)
+            and math.hypot(centre[0]-g[1][0], centre[1]-g[1][1]) <= SHARE_TOL_M + 1e-9
+            and abs(ux*g[2][1]-uz*g[2][0]) <= 1e-5), None)
+        if duplicate is not None:
+            if duplicate[3]:
+                wall["window_model"] = True
+            continue
+        style = styles.get(wall.get("window_style")) or styles["plain"]
+        nx, nz = wall.get("outward_normal") or [0, -1]
+        meta = door_models.ensure_window_model(
+            style, width, height, WALL_THICKNESS,
+            outside=1 if -uz*nx+ux*nz > 0 else -1, bars=bars,
+            color=color or style["frame_material"], glass=glass or style["glass_tint"])
+        groups.append((wall.get("level", 0), centre, (ux, uz), meta is not None))
+        if meta is None:
+            continue
+        wall["window_model"] = True
+        sig = meta["sig"]
+        out.append({
+            "role": "prop", "id": "window:" + sig,
+            "variants": _variants(meta.get("url") or f"/assets/doors/{sig}/model", ["full"]),
+            "room_id": wall.get("room_id", ""), "level": wall.get("level", 0),
+            "fix_euler": None, "yaw_deg": _r(math.degrees(math.atan2(-uz, ux)) % 360, 1),
+            "measure": "fit", "size_m": meta["size_m"],
+            "anchor": [_r(a[0]-ux*.08), _r(a[1]-uz*.08)],
+            "bottom_y": _r(_num(wall.get("base_y"))-.07),
+            "slots": {"glass": {"preset": "glass"}},
+        })
+    return out
+
+
 def _door_on_contour(map3d, level, a, ux, uz, length):
     """Reuse facade-hole colinearity against this storey's contour edges."""
     pts = _outline_world(map3d or {}, level)
@@ -1606,7 +1668,7 @@ def _door_prop_of(op: Dict[str, Any],
 def _room_walls(recipe: Dict[str, Any], storey: float,
                 ground_level: int,
                 default_door_prop_id: str = "", *, map3d=None,
-                door_context=None, shopfront=False) -> List[Dict[str, Any]]:
+                door_context=None, shopfront=False, window_context=None) -> List[Dict[str, Any]]:
     """One room's shell walls, split around its openings (§ A4).
 
     EVERY opening is cut the same way (finding 2026-08-25): the wall below it
@@ -1649,7 +1711,7 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
         def _emit(s0: float, s1: float, y: float, h: float,
                   thickness: float, glass: bool = False,
                   lintel: bool = False, leaf: bool = False,
-                  door_prop: bool = False) -> None:
+                  door_prop: bool = False, window_style: str = "") -> None:
             if s1 - s0 < MIN_SEGMENT_M or h < MIN_SEGMENT_M:
                 return
             # Only a piece that STANDS ON THE FLOOR gets the skirt (§ A16.9):
@@ -1676,6 +1738,7 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
             }
             if glass:
                 entry["glass"] = True
+                entry["window_style"] = window_style
             elif leaf:
                 # The door itself (§ B1 ``leaf``): opaque and dark, drawn like
                 # a pane, out of the facade culling like a pane, and no
@@ -1728,7 +1791,8 @@ def _room_walls(recipe: Dict[str, Any], storey: float,
             # The pane in the hole: glass for a window, the LEAF for a door.
             if window:
                 _emit(s0, s1, sill, top - sill,
-                      WALL_THICKNESS * PANE_THICKNESS_FACTOR, glass=True)
+                      WALL_THICKNESS * PANE_THICKNESS_FACTOR, glass=True,
+                      window_style=window_choice(op, **(window_context or {})))
             elif op_type == "door" and door_has_leaf(op):
                 # A style door keeps its flat leaf here: compose_scene
                 # suppresses it only once the Blender model exists.
@@ -4026,6 +4090,7 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
         "default_door_prop_id": str(location.get("default_door_prop_id")
                                     or "").strip(),
         "default_door_style": str(location.get("default_door_style") or ""),
+        "default_window_style": str(location.get("default_window_style") or ""),
         "door_props": door_prop_sigs or {},
         "surfaces": surface_sigs or {},
         "corridors": sorted(corridor_levels or ()),
@@ -4432,6 +4497,13 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         "hull_door_styles": door_source.get("hull_style") or {},
         "door_styles": door_styles,
     }
+    from app.core.window_styles import load_window_styles
+    window_styles = load_window_styles()
+    window_context = {
+        "default_window_style": str(location.get("default_window_style") or ""),
+        "hull_style": door_source.get("hull_style") or {},
+        "window_styles": window_styles,
+    }
     shopfront = bool(door_source.get("hull_shopfront"))
     doorways = _doorways(recipes, storey, default_door_prop_id,
                          floor_levels=corridor_levels, map3d=map3d,
@@ -4578,7 +4650,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         room = by_room.get(room_id) or {}
         walls.extend(_room_walls(recipe, storey, min(levels),
                                  default_door_prop_id, map3d=map3d,
-                                 door_context=door_context, shopfront=shopfront))
+                                 door_context=door_context, shopfront=shopfront,
+                                 window_context=window_context))
         diorama = _diorama_model(recipe, room, room_metas.get(room_id) or {},
                                  storey)
         if diorama:
@@ -4618,6 +4691,12 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # the doorway (``_door_prop``) and leaves the payload again right here:
     # The resolved style is also public for hull construction; it remains
     # available while a door model is queued and for doors along the contour.
+    palette = (door_source.get("hull_style") or {}).get("palette") or {}
+    models.extend(_window_models(
+        walls, styles=window_styles,
+        color=door_source.get("hull_frame_color") or palette.get("frame"),
+        glass=palette.get("glass"),
+        bars=_num(door_source.get("hull_ornament_density", .5)) > 0 if door_source else True))
     door_props, door_prop_sigs = _door_prop_models(
         doorways, prop_cache, door_styles=door_styles,
         door_color=door_source.get("hull_door_color") or None)

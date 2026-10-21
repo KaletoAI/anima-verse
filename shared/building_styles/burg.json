@@ -67,5 +67,6 @@
   "weathering": 0.5,
   "door_style": "castle",
   "interior_door_style": "plank",
-  "shop_door_style": "glazed"
+  "shop_door_style": "glazed",
+  "window_style": "stone"
 }

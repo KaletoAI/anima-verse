@@ -1276,7 +1276,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         // A leaf whose hole a DOOR PROP fills is not drawn (v5) — the prop IS
         // the door. The entry stays in the payload for the Blender exterior
         // render, which builds its facade from `walls`.
-        if (wall.door_prop) continue
+        if (wall.door_prop || wall.window_model) continue
         const len = wallLength(wall)
         if (len < 1e-4) continue
         const upper = wall.opacity_role === 'upper'

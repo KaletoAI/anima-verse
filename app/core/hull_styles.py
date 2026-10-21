@@ -91,6 +91,10 @@ def validate_style(raw: Any, style_id: str) -> Dict[str, Any]:
     }
     from app.core.door_styles import load_door_styles
     door_styles = load_door_styles()
+    from app.core.window_styles import load_window_styles
+    window_styles = load_window_styles()
+    window_style = raw.get("window_style", "plain")
+    result["window_style"] = window_style if isinstance(window_style, str) and window_style in window_styles else "plain"
     for key, default in (("door_style", "panel"), ("interior_door_style", "interior"),
                          ("shop_door_style", "glazed")):
         value = raw.get(key)
