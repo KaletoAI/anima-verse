@@ -534,6 +534,12 @@ Prioritätsreihenfolge abgearbeitet — es laufen also bis zu zwei Tasks gleichz
 Ein Verb blockiert nie minutenlang im `execute()`. Lange Arbeit wandert in die
 Queue; das Verb antwortet dem LLM sofort, was es angestoßen hat.
 
+## Attention — `app.core.attention`
+
+| Function | Semantics |
+|---|---|
+| `is_distracted(name: str, *, profile: dict \| None = None) -> bool` | True while sleeping, in a pair interaction, in a conversation derived from recent room utterances, or with a set profile flag declared `distracting`. Reuses the supplied profile; conversation expiry uses game time. |
+
 ## Hooks — `app.core.hooks` ✅ (F5-light)
 
 | Funktion | Semantik |
@@ -551,6 +557,7 @@ Events, die der Core heute feuert:
 | Event | Kwargs |
 |---|---|
 | `startup` | — (nach dem Boot, aus `app/server.py`) |
+| `character.entered_room` | `character`, `location_id`, `room_id`; once after a successful actual room change, including a location change into its arrival room. Same-room saves, departures to no room and failed writes emit nothing. Delivery waits until the emitting thread releases all world/keyed locks, including caller-held locks; multiple changes are delivered in order without coalescing. |
 | `interaction.invited` | `invite_id`, `inviter`, `invitee`, `pose_key` |
 | `interaction.invite_started` | `invite_id`, `interaction`, `inviter`, `invitee`; emitted after the ordinary answer/approach starts the real pair |
 | `interaction.ended` | `character`, `partner`, `interaction_id`, `reason`, `invite_id` (empty for a direct start); emitted after the real pair is cleared. The originating invitation identity is persisted in both pair profiles before start hooks, so a concurrent end cannot lose its ownership |

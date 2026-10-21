@@ -111,6 +111,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
     prompt_when_set: "You are in a training session — end it with {clear_tool} when it is over."
     ttl_minutes: 120            # 0 = kein Zeit-Zerfall
     reset_on_location_change: true
+    distracting: false           # true: a set flag occupies attention
 ```
 
 ### Paket-Ebene
@@ -139,6 +140,11 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 | `body_slots` | nein | Körper-Slot-Deklarationen (s.u.) |
 | `undressed_prompt` | nein | Text, den ein ausgezogener Freitext-Charakter (Template ohne Outfit-System, `outfit_worn` aus) in allen Prompts statt des Core-Texts „no clothes" trägt; gilt für die `apply_to`-Templates des Pakets. Zählt als Paket-Beitrag |
 | `piece_slots` | nein | Kleidungs-Slot-Topologie der Spezies (String oder `{id, label}`); ohne Deklaration gilt der Core-Default (`inventory.VALID_PIECE_SLOTS`) inkl. Core-Reihenfolge/-Labels |
+
+`state_flags[].distracting` is an optional boolean (default `false`), exposed
+as `FlagSpec.distracting`. When true, a truthy value of that flag in the
+character profile makes `app.core.attention.is_distracted` return true.
+This declaration adds no lifecycle or pose changes.
 
 ### Verb-Ebene (`skills[]`)
 

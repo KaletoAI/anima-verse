@@ -319,7 +319,9 @@ _world_file_lock = threading.Lock()
 #: fresh locations — an NPC dropping an item in a room could purge a place the
 #: editor had just created, silently. Delete-by-absence is now opt-in
 #: (:func:`replace_all_locations`); everything else upserts what it touched.
-world_write_lock = threading.RLock()
+from app.core.keyed_lock import _DeferredRLock
+
+world_write_lock = _DeferredRLock()
 
 
 def _write_location_rows(conn, locations: List[Dict[str, Any]],

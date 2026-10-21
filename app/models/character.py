@@ -1570,6 +1570,14 @@ def save_character_current_location(character_name: str = "", location: str = ""
         # location. At the new place the ordinary decency rule takes over again.
         # (Lifecycle per plan-outfit-system-rethink.md § 3)
         stored = save_character_profile(character_name, profile)
+        entered_room = profile.get("current_room") or ""
+        if stored and location_changed and entered_room:
+            from app.core.hooks import emit
+            from app.core.keyed_lock import _after_locks
+            # Queue with the durable write, before fallible side effects.
+            # Delivery waits for this AND every caller-held lock to release.
+            _after_locks(lambda: emit("character.entered_room", character=character_name,
+                                      location_id=location, room_id=entered_room))
     # Seamless world (Aug 2026): the metre position is the truth for WHERE a
     # character stands, so a REAL location change drags it along — the
     # character lands at the centre of the target location. A target location
@@ -2384,6 +2392,12 @@ def save_character_current_room(character_name: str, room_id: str,
             # no reader ever sees the lounge's armchair held from the kitchen.
             profile["place"] = None
         stored = save_character_profile(character_name, profile)
+        if stored and cur_loc and room_id and room_id != old_room:
+            from app.core.hooks import emit
+            from app.core.keyed_lock import _after_locks
+            # Queue once with the write; callbacks run after all lock exits.
+            _after_locks(lambda: emit("character.entered_room", character=character_name,
+                                      location_id=cur_loc, room_id=room_id))
 
     # WHERE IN THE ROOM the character now stands is the server's word (T4):
     # the free point nearest the one it arrived on — the doorstep of a walk,

@@ -67,6 +67,7 @@ class FlagSpec:
     prompt_when_set: str = ""     # situation line; {name}/{clear_tool} placeholders
     ttl_minutes: int = 0          # 0 = no time decay
     reset_on_location_change: bool = False
+    distracting: bool = False     # a set flag occupies the character's attention
 
 
 @dataclass

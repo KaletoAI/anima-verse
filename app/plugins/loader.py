@@ -274,6 +274,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
             prompt_when_set=(fdef.get("prompt_when_set") or "").strip(),
             ttl_minutes=int(fdef.get("ttl_minutes") or 0),
             reset_on_location_change=bool(fdef.get("reset_on_location_change", False)),
+            distracting=bool(fdef.get("distracting", False)),
         ))
 
     # Content-only packages (no verbs) are allowed as long as they contribute
