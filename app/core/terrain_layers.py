@@ -392,6 +392,13 @@ def location_floors(loc: Dict[str, Any],
     * the YARD (``is_ground``, § A13a) contributes nothing. It is not a floor
       laid on the ground, it IS the ground of the plot — and on a built location
       that ground is the plateau the bake already stamped.
+    * the storey-0 CORRIDOR (§ A13b) contributes the building's drawn contour
+      (``map3d.outline``), FIRST among the closed floors so every room paints
+      over it. The corridor is the complement of the rooms and has no layout
+      of its own; without this the hallway between the rooms showed the
+      terrain — grass inside the house. Its kind is ``map3d.level_floors["0"]``
+      or :data:`FLOOR_KIND_DEFAULT`. Only a drawn contour counts, never the
+      plot boundary: the plot is the yard, not a shell.
 
     Only storey 0 is asked. Storeys above and below stay scene geometry (§ G5);
     they have plates and this module has no third dimension to put them in.
@@ -402,7 +409,7 @@ def location_floors(loc: Dict[str, Any],
     from app.core.world_geometry import (effective_boundary,
                                          polygon_local_to_world)
     from app.core.room_recipe import room_outline_local
-    from app.models.world import GROUND_ROOM_ID
+    from app.models.world import GROUND_ROOM_ID, floor_room_id
     eff = effective_boundary(loc)
     if eff is None:
         return []
@@ -439,7 +446,30 @@ def location_floors(loc: Dict[str, Any],
                       kind=kind, closed=closed,
                       edge_blend_m=floor_edge_blend_of(lay))
         (rooms if closed else zones).append(entry)
-    return zones + rooms
+    corridor = _corridor_floor(loc, cx, cz, yaw, floor_room_id(0))
+    return zones + corridor + rooms
+
+
+def _corridor_floor(loc: Dict[str, Any], cx: float, cz: float, yaw: float,
+                    corridor_id: str) -> List[Floor]:
+    """The storey-0 corridor's floor: the drawn contour, when the corridor
+    room is stored and the contour exists (see :func:`location_floors`)."""
+    from app.core.world_geometry import polygon_local_to_world, polygon_points
+    if not any(isinstance(r, dict) and str(r.get("id") or "") == corridor_id
+               for r in (loc.get("rooms") or [])):
+        return []
+    map3d = loc.get("map3d") or {}
+    outline = polygon_points(map3d.get("outline"))
+    if not outline or len(outline) < 3:
+        return []
+    world = polygon_local_to_world(outline, cx, cz, yaw)
+    if world is None or len(world) < 3:
+        return []
+    declared = str(((map3d.get("level_floors") or {}).get("0")) or "").strip()
+    return [Floor(location_id=str(loc.get("id") or ""), room_id=corridor_id,
+                  polygon=[[float(x), float(z)] for x, z in world],
+                  kind=declared or FLOOR_KIND_DEFAULT, closed=True,
+                  edge_blend_m=FLOOR_EDGE_BLEND_DEFAULT_M)]
 
 
 def world_floors(locations: Sequence[Dict[str, Any]],
@@ -1201,9 +1231,13 @@ def floors_basis() -> List[Dict[str, Any]]:
                  if isinstance(r, dict) and isinstance(r.get("layout"), dict)]
         if not rooms:
             continue
+        map3d = loc.get("map3d") or {}
         out.append({"id": loc.get("id"), "x": loc.get("pos_x"),
                     "z": loc.get("pos_z"), "yaw": loc.get("yaw_deg"),
-                    "boundary": (loc.get("map3d") or {}).get("boundary"),
+                    "boundary": map3d.get("boundary"),
+                    # the corridor floor (:func:`_corridor_floor`)
+                    "outline": map3d.get("outline"),
+                    "floor_0": (map3d.get("level_floors") or {}).get("0"),
                     "rooms": sorted(rooms)})
     return out
 
@@ -1221,8 +1255,10 @@ def layers_sig() -> str:
     every kind, which kind the unpainted world is, and every placed room floor
     (:func:`floors_basis`).
 
-    The CLIENT still refetches on `terrain_sig` — that is the signature the
-    worldmap poll carries, and it moves whenever this one does.
+    The CLIENT refetches the index on `terrain_sig` — the signature the
+    worldmap poll carries — AND whenever a tile batch answers under a newer
+    `sig` than its index: room floors move this signature but not
+    `terrain_sig`, on purpose (a room edit must not recompose every scene).
 
     A SIXTH thing rides along, :data:`LAYER_CUT_VERSION`: the masks are a
     function of the cut CODE as much as of the polygons, and a changed rule

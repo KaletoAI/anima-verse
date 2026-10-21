@@ -1350,6 +1350,8 @@ export function createGround(): Ground {
    *  program has to be rebuilt for it. */
   let layerKey = '';
   let layersBusy = false;
+  /** A layer-index refetch is in flight (`reindexLayers`). */
+  let layersReindexing = false;
   const areaMeshes: AreaMesh[] = [];
   /** THE WATERFALLS OF THE WORLD (W5) — the curtain and the foam disc of every
    *  segment of a painted water's flow axis that drops faster than water runs.
@@ -3267,6 +3269,23 @@ export function createGround(): Ground {
     await refreshLayerTiles();
   }
 
+  /** Re-take the layer index once a tile batch answers under a newer cut.
+   *  One refetch at a time; a sync that moved `layerSig` meanwhile wins. */
+  function reindexLayers(sig: string | null): void {
+    if (layersReindexing) return;
+    layersReindexing = true;
+    void (async () => {
+      try {
+        const index = await fetchLayerIndex();
+        if (index && layerSig === sig && index.sig !== sig) {
+          await buildGround(() => applyLayers(index, index.sig));
+        }
+      } finally {
+        layersReindexing = false;
+      }
+    })();
+  }
+
   /**
    * Fetch the mask tiles the anchor wants, in batches, and hand the window over
    * ONCE per batch.
@@ -3297,7 +3316,16 @@ export function createGround(): Ground {
         } catch {
           return;   // keep what stands; the missing keys stay wanted
         }
-        if (layerSig !== sig || (batch.sig && batch.sig !== sig)) return;
+        if (layerSig !== sig) return;
+        if (batch.sig && batch.sig !== sig) {
+          // The cut moved while `terrain_sig` stood still: room floors are
+          // part of the masks but not of `terrain_sig` (a room edit must not
+          // recompose every scene). Dropping the batch and asking again on
+          // the next poll looped forever on the old index and left the
+          // coarse overview — grass — under every room. Take the new index.
+          reindexLayers(sig);
+          return;
+        }
         let taken = 0;
         for (const [key, tile] of Object.entries(batch.tiles || {})) {
           layerTiles.set(key, tile);

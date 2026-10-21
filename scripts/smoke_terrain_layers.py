@@ -398,6 +398,38 @@ def test_location_floors():
           [f.kind for f in TL.world_floors([_location("c", 400.0, 400.0, 5.0, [
               _room("box", -2.0, -2.0, 4.0, 4.0, "")])], FLOOR_CATALOG)],
           [TL.FLOOR_KIND_DEFAULT])
+    # THE STOREY-0 CORRIDOR has a floor (2026-10-21): the contour, painted
+    # before the rooms. Contour (-4,-4)..(4,4) around (500, 500); one 4x4 room
+    # in its west half. (502, 500) is hallway → the corridor's kind; (498, 500)
+    # is the room → tiles; (505, 500) is the plot outside the contour → bare.
+    from app.models.world import floor_room_id
+    shell = _location("shell", 500.0, 500.0, 8.0, [
+        {"id": floor_room_id(0), "name": ""},
+        _room("west", -4.0, -2.0, 4.0, 4.0, "tiles"),
+    ])
+    shell["map3d"]["outline"] = [[-4, -4], [4, -4], [4, 4], [-4, 4]]
+    shell["map3d"]["level_floors"] = {"0": "wood"}
+    floors = TL.world_floors([shell], FLOOR_CATALOG)
+    check("the corridor floor comes BEFORE the rooms, wearing level_floors[0]",
+          [(f.room_id, f.kind) for f in floors],
+          [(floor_room_id(0), "wood"), ("west", "tiles")])
+    probe = TL.LayerModel(MEADOW + [{"id": "far", "kind": "meadow", "z_order": 0,
+        "polygon": [[256, 256], [700, 256], [700, 700], [256, 700]]}],
+        FLOOR_CATALOG, "grass", floors)
+    wood = next(l["index"] for l in probe.layers if l["kind"] == "wood")
+    tiles = next(l["index"] for l in probe.layers if l["kind"] == "tiles")
+    check("hallway (502,500) = wood, room (498,500) = tiles, yard (505,500) = meadow",
+          [probe.layer_at(502.0, 500.0), probe.layer_at(498.0, 500.0),
+           probe.layer_at(505.0, 500.0)], [wood, tiles, 1])
+    del shell["map3d"]["level_floors"]
+    check("without level_floors[0] the corridor wears the default floor",
+          TL.world_floors([shell], FLOOR_CATALOG)[0].kind, TL.FLOOR_KIND_DEFAULT)
+    no_corridor = dict(shell, rooms=shell["rooms"][1:])
+    check("red: no stored corridor room, no corridor floor",
+          [f.room_id for f in TL.world_floors([no_corridor], FLOOR_CATALOG)], ["west"])
+    del shell["map3d"]["outline"]
+    check("red: no drawn contour (the plot alone is the yard), no corridor floor",
+          [f.room_id for f in TL.world_floors([shell], FLOOR_CATALOG)], ["west"])
     check("an UNPLACED location owns no world metre and colours none",
           TL.world_floors([{"id": "nowhere", "rooms": [
               _room("r", 0.0, 0.0, 2.0, 2.0, "wood")]}], FLOOR_CATALOG), [])
