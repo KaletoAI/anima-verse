@@ -69,7 +69,7 @@ def extension_bone_names(character_name, profile=None):
 
 # Bump when app/blender/scripts/attached_part.py changes the part it builds from the
 # same declaration (its defaults live in the script): only attached models rebuild.
-ATTACHED_PART_BUILD = 2
+ATTACHED_PART_BUILD = 3
 
 
 def extension_rig_fingerprint(groups, overrides=None):

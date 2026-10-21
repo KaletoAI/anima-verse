@@ -604,7 +604,10 @@ def build_part(group, companions, output):
 
         near_sh = float(np.clip(1 - max(shaft_distance[i], 0) / settings['pod_link_distance'], 0, 1)) ** 1.5 * settings['pod_link']
         wc_ = {pod_bone: 1 - near_sh, chain[0]['bone']: near_sh}
-        mix = np.clip((pod_distance[i] - shaft_distance[i]) / .04, 0, 1)
+        # Shaft vs pods weights blend only across the junction (about 15 mm to each
+        # side of the equal-distance surface); a wide one-sided ramp left the
+        # shaft's underside on the pods bone, which shears it when the chain lifts.
+        mix = np.clip(.5 + (pod_distance[i] - shaft_distance[i]) / .03, 0, 1)
         w = {}
         for d_, f_ in ((ws_, mix), (wc_, 1 - mix)):
             for k_, x_ in d_.items():
