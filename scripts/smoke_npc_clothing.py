@@ -25,6 +25,9 @@ with tempfile.TemporaryDirectory(prefix="npc-clothing-") as tmp:
     from app.core import paths
     paths.init(tmp)
     from app.core import config, db, embedding, npc_actions
+    # Packages load only when the world enables them explicitly (ba172904).
+    (Path(tmp) / "config.json").write_text(
+        json.dumps({"packages": {"enabled": "undress"}}), encoding="utf-8")
     config.load(Path(tmp) / "config.json")
     db.init_schema()
     # Rendering is external to the clothing transition under test.

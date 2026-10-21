@@ -40,6 +40,8 @@ db.init_schema()
 settings = config.get_all()
 settings.setdefault("npc", {}).update(conversation_mode="turns", action_tick_enabled=True)
 settings.setdefault("image_generation", {})["enabled"] = False
+# Packages load only when the world enables them explicitly (ba172904).
+settings["packages"] = {"enabled": "party"}
 config.save(settings, ROOT / "world" / "config.json")
 from app.core import agent_loop as al, chat_engine, decision, npc_actions, party_engine as party
 from app.core.dependencies import get_skill_manager
