@@ -67,8 +67,9 @@ app/plugins/                      # Paket-Infrastruktur
 Auch noch nicht installierte IDs bleiben gespeichert. Die Installation allein aktiviert nichts.
 Die Seite zeigt den Wert als Checkliste aller Paketordner (`GET /admin/world-settings/packages`,
 `loader.package_inventory`), gruppiert nach `category` (Skills / Body & content / Adult), mit
-Status pro Paket (aktiv, aktiv nach Neustart, aus nach Neustart) und Hinweisen auf fehlende
-`requires` oder aktive `conflicts`.
+Status pro Paket (aktiv, aktiv nach Neustart, aus nach Neustart) und Warnungen bei fehlenden
+`requires`. `conflicts` erscheint nur als Hinweis („nicht an derselben Figur wie …“): es gilt
+pro Charakter, beide Pakete dürfen in einer Welt gleichzeitig aktiv sein (z. B. `cat` und `human`).
 
 Die Auswahl gilt **ab dem nächsten Serverstart**, nicht nach `reload_skills()`. Nur explizit
 aufgeführte Pakete werden geladen. Ihre über `requires` benötigten Pakete müssen ebenfalls

@@ -84,9 +84,8 @@ export function PackagesSetup({ values, onChange }: {
       if (!known.has(r)) out.push(t('Requires “{id}” — not installed').replace('{id}', r))
       else if (!enabledSet.has(r)) out.push(t('Requires “{id}” — not enabled').replace('{id}', r))
     }
-    for (const c of p.conflicts) {
-      if (enabledSet.has(c)) out.push(t('Conflicts with “{id}”').replace('{id}', c))
-    }
+    // `conflicts` is per character (F9), never per world: both packages may
+    // be enabled side by side, so it is a note below, not a warning here.
     return out
   }
 
@@ -128,6 +127,11 @@ export function PackagesSetup({ values, onChange }: {
                       {p.description && <span className="ga-form-hint" style={{ margin: 0 }}>{p.description}</span>}
                       {p.requires.length > 0 && (
                         <span className="ga-sched-muted">{t('Requires')}: {p.requires.join(', ')}</span>
+                      )}
+                      {p.conflicts.length > 0 && (
+                        <span className="ga-sched-muted">
+                          {t('Not on the same character as: {ids}').replace('{ids}', p.conflicts.join(', '))}
+                        </span>
                       )}
                       {warn.map((w) => <span key={w} className="ga-img-nomatch">{w}</span>)}
                     </span>
