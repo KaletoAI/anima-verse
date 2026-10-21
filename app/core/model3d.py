@@ -2584,7 +2584,7 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
         source_meta = _read_sidecar(out_dir / "unrigged" / f"{signature}.glb")
         meta = {k: v for k, v in source_meta.items() if k in (
             "mesh_backend", "mesh_route_meta", "source_image", "source_image_sha256",
-            "view_images", "view_images_sha256", "pieces", "items", "job_id", "single_view")}
+            "view_images", "view_images_sha256", "pieces", "items", "mesh_variant", "job_id", "single_view")}
         meta.update(created_at=utc_now_iso(), source="generated", signature=signature,
                     character=character_name, rig=rig, format=path.suffix.lstrip("."),
                     backend=res.get("backend", ""), rig_backend=res.get("backend", ""),

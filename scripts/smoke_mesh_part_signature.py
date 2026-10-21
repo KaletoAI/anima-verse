@@ -56,4 +56,12 @@ with tempfile.TemporaryDirectory() as tmp:
         (directory / (off + '.glb')).write_bytes(b'fixture')
         with patch.object(m3, 'current_outfit_state', return_value=({}, [], on)), patch.object(m3, 'get_model3d_dir', return_value=directory), patch.object(m3, '_stored_manifest', return_value=dict(pieces={}, items=[], mesh_variant='')):
             assert m3.find_model3d_serving('fixture') == (None, '')
-print('PASS mesh_part signature: distinct exposed, same covered, GC both, fallback isolated')
+# The rig step rebuilds the model sidecar from a key list of the unrigged one; the
+# variant must be on that list or a generated model reaches the GC without it and is
+# judged stale (found on a real run: unrigged sidecar had it, the model had not).
+import ast, inspect
+tree = ast.parse(inspect.getsource(m3))
+carried = [node for node in ast.walk(tree) if isinstance(node, ast.Tuple)
+           and {"pieces", "items", "source_image"} <= {getattr(e, "value", None) for e in node.elts}]
+assert carried and all("mesh_variant" in {getattr(e, "value", None) for e in node.elts} for node in carried), carried
+print('PASS mesh_part signature: distinct exposed, same covered, GC both, fallback isolated, rig keeps the variant')
