@@ -4,7 +4,8 @@
 The declared groups deliberately arrive reversed. Expected runner order is A,
 I, C; companions belong only to A. A failed I that writes garbage must restore
 A before C, hence AC; a failed A still permits IC. With only I failing the
-clean source replaces stale model bytes. Each part timeout is 600 seconds.
+clean source replaces stale model bytes. Each part timeout is 600 seconds. Build 1 metadata must become stale when
+the inset builder advances, while attached-only fingerprints stay identical.
 """
 from contextlib import ExitStack
 from pathlib import Path
@@ -24,6 +25,11 @@ def main():
         from app.blender import refine
         from app.core.rig_contract import BASE_JOINT_NAMES
         from scripts.smoke_extension_rig_p0 import glb
+        old_inset = extension_rig.extension_rig_fingerprint([{'id': 'inset', 'op': 'inset_part'}])
+        attached_identity = extension_rig.extension_rig_fingerprint([{'id': 'part', 'op': 'attached_part'}])
+        with patch.dict(extension_rig.PART_BUILDS, {'inset_part': 1}):
+            assert extension_rig.extension_rig_fingerprint([{'id': 'inset', 'op': 'inset_part'}]) != old_inset
+            assert extension_rig.extension_rig_fingerprint([{'id': 'part', 'op': 'attached_part'}]) == attached_identity
         clean = glb(['mixamorig:' + name for name in BASE_JOINT_NAMES])
         source = root / 'prerig/model.glb'
         source.parent.mkdir()

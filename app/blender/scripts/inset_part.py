@@ -24,8 +24,9 @@ DEFAULTS = {
     'anchor_bone': 'Hips',
     'center_drop': .08,          # chart centre below the anchor head
     'theta': [-70, 170],         # profile angles (0 front, 90 down, 180 back)
-    'anchor_drop': .105,         # s=0 reference: front midline point this far below the Hips head
-    'shift': .046,               # the whole shape moves this far along the surface toward the back
+    'centre_height': .07,       # chart centre above the lowest outer midline point
+    'under': [50, 105],          # outward normal angles bounding the underside
+    'under_ref': .138, 'scale_min': .75, 'centre_offset': -.013,
     'region': {'s0': -.045, 's1': .13, 'u': .032, 'fall': .012},
     'eps': 0.0, 'sink': 0.0,
     'mound': {'s': -.02, 'amp': .003, 'ss': .022, 'su': .03},
@@ -78,8 +79,12 @@ def parameters(raw):
     for section, keys in positive.items():
         if any(p[section][k] <= 0 for k in keys):
             raise ValueError('Expected positive length or profile exponent: ' + section)
-    if min(p['edge']) <= 0 or min(p['center_drop'], p['anchor_drop']) <= 0:
+    if min(p['edge']) <= 0 or min(p['center_drop'], p['centre_height'], p['under_ref']) <= 0:
         raise ValueError('Expected positive chart lengths')
+    if p['under'][0] >= p['under'][1]:
+        raise ValueError('Invalid underside interval')
+    if not 0 < p['scale_min'] <= 1:
+        raise ValueError('Expected scale_min between zero and one')
     if min(p['eps'], p['sink'], p['mound']['amp'], p['ridges']['amp'], p['inner']['rise'],
            p['hood']['fill'], p['nub']['fill']) < 0:
         raise ValueError('Expected nonnegative profile height')
@@ -107,25 +112,46 @@ def build_part(group, output):
     dg = bpy.context.evaluated_depsgraph_get()
     bvh = BVHTree.FromObject(body, dg)
 
-    # Midline profile from rays in the yz plane through the chart centre.
+    def outer_hit(centre, direction):
+        """First surface seen from outside, with its normal oriented outward."""
+        origin = centre + direction * .4
+        local_direction = Ni3 @ (-direction)
+        hit = bvh.ray_cast(Mi @ origin, local_direction.normalized(),
+                           .4 * local_direction.length)
+        if hit[0] is None:
+            return None, None
+        normal = (N3 @ hit[1]).normalized()
+        return M @ hit[0], normal if normal.dot(direction) > 0 else -normal
+
+    # First locate the lowest outer midline point from the original centre.
+    low_points = [outer_hit(c, Vector((0, -math.cos(t), -math.sin(t))))[0]
+                  for t in np.radians(np.arange(40, 141, 2))]
+    if any(point is None for point in low_points):
+        raise ValueError('Lowest outer profile ray missed')
+    c = Vector((xm, hips.y, min(point.z for point in low_points) + P['centre_height']))
     th = np.radians(np.arange(P['theta'][0], P['theta'][1] + .01, .5))
-    prof = []
+    prof, pn = [], []
     for t in th:
-        d = Vector((0, -math.cos(t), -math.sin(t)))
-        h = bvh.ray_cast(Mi @ c, Ni3 @ d)
-        if h[0] is None:
+        point, normal = outer_hit(c, Vector((0, -math.cos(t), -math.sin(t))))
+        if point is None:
             raise ValueError('Profile ray missed at %.1f' % math.degrees(t))
-        prof.append(M @ h[0])
-    prof = np.array([tuple(p) for p in prof])
-    S = np.concatenate([[0], np.cumsum(np.linalg.norm(np.diff(prof[:, 1:], axis=0), axis=1))])
-    low = int(np.argmin(prof[:, 2]))
-    anc = int(np.argmax(prof[:, 2] <= hips.z - P['anchor_drop']))
-    S = S - S[anc] - P['shift']
-    print('anchor', [round(x, 3) for x in prof[anc]], 'theta', round(math.degrees(th[anc]), 1), 'low at s', round(float(S[low]), 3))
-    print('profile low', [round(x, 3) for x in prof[low]], 'theta', round(math.degrees(th[low]), 1), 'hips', [round(x, 3) for x in hips])
-    for s_ in (-.04, -.019, 0, .03, .068, .09):
-        i = int(np.argmin(np.abs(S - s_)))
-        print('  s %+.3f -> y %.3f z %.3f theta %.0f' % (s_, prof[i, 1], prof[i, 2], math.degrees(th[i])))
+        prof.append(tuple(point)); pn.append(tuple(normal))
+    prof, pn = np.array(prof), np.array(pn)
+    arc = np.concatenate([[0], np.cumsum(np.linalg.norm(np.diff(prof[:, 1:], axis=0), axis=1))])
+    phi = np.degrees(np.arctan2(-pn[:, 2], -pn[:, 1]))
+    phi = np.convolve(np.pad(phi, 6, mode='edge'), np.ones(13) / 13, mode='valid')
+    front = np.flatnonzero(phi >= P['under'][0])
+    if not len(front):
+        raise ValueError('No front corner in outer profile')
+    i0 = int(front[0])
+    back = np.flatnonzero(phi[i0 + 1:] >= P['under'][1])
+    i1 = i0 + 1 + int(back[0]) if len(back) else None
+    underside = float(arc[i1] - arc[i0]) if i1 is not None else P['under_ref']
+    scale = float(np.clip(underside / P['under_ref'], P['scale_min'], 1.))
+    centre = arc[i0] + underside / 2 + P['centre_offset']
+    s_start = centre - .05 * scale
+    S = (arc - s_start) / scale
+    print('underside', underside, 'scale', scale, 'front corner', prof[i0].tolist())
 
 
     def chart(Q):
@@ -204,7 +230,7 @@ def build_part(group, output):
         sel = (np.abs(s_b - s_) < .004) & (np.abs(r_b) < .03) & (np.abs(u_b) < .06)
         side = []
         for sg in (1, -1):
-            turn = sel & (sg * u_b > 0) & (fac_b < .5)
+            turn = sel & (sg * u_b > 0) & (fac_b < .5) & (fac_b > -.3)
             side.append(np.min(sg * u_b[turn]) if turn.any() else .06)
         WA.append(min(side))
     WA = np.convolve(np.pad(WA, 2, mode='edge'), np.ones(5) / 5, mode='valid')
@@ -213,6 +239,7 @@ def build_part(group, output):
     R = P['region']
     near = (s_b > R['s0'] - R['fall'] - .01) & (s_b < R['s1'] + R['fall'] + .01) & (np.abs(u_b) < R['u'] + R['fall'] + .01) & (np.abs(r_b) < .04)
     near &= np.abs(u_b) < np.interp(s_b, WS, WA) + .01
+    near &= fac_b > .2
     print('patch body verts', int(near.sum()))
 
     # Patch copy: body faces whose vertices are all near; welded, interior edges subdivided.
@@ -358,9 +385,13 @@ def build_part(group, output):
         o.select_set(o is part)
     bake_uv = me.uv_layers.new(name='bake')
     me.uv_layers.active = bake_uv
-    bpy.ops.object.mode_set(mode='EDIT'); bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.uv.smart_project(angle_limit=1.4, island_margin=.01)
-    bpy.ops.object.mode_set(mode='OBJECT')
+    # Use the undisplaced chart so the height field has no overlapping islands.
+    su = np.stack([u_q, s_q], 1)
+    lo, hi = su.min(0), su.max(0)
+    span = (hi - lo).max() * 1.02
+    for loop in me.loops:
+        uv = (su[loop.vertex_index] - lo) / span + .01
+        bake_uv.data[loop.index].uv = tuple(uv)
     img = next(nd.inputs['Base Color'].links[0].from_node.image for nd in body.active_material.node_tree.nodes if nd.type == 'BSDF_PRINCIPLED')
     bimg = bpy.data.images.new('part_baked', P['bake'], P['bake'], alpha=False)
     bimg.generated_color = (.8, .65, .6, 1)
@@ -396,7 +427,12 @@ def build_part(group, output):
     part_border_local = [v.co.copy() for v in _bmp.verts if v.is_boundary]
     _bmp.free()
     bmb = bmesh.new(); bmb.from_mesh(body.data); bmb.faces.ensure_lookup_table()
-    bmesh.ops.delete(bmb, geom=[bmb.faces[i] for i in sel_polys], context='FACES')
+    inner_wall = {t.polygon_index for t in body.data.loop_triangles if all(
+        fac_b[v] < -.2 and -.04 < r_b[v] < 0
+        and R['s0'] - R['fall'] < s_b[v] < R['s1'] + R['fall']
+        and abs(u_b[v]) < R['u'] + R['fall'] for v in t.vertices)}
+    print('inner wall faces removed', len(inner_wall))
+    bmesh.ops.delete(bmb, geom=[bmb.faces[i] for i in sel_polys | inner_wall], context='FACES')
     bmb.to_mesh(body.data); bmb.free()
     for o in bpy.context.scene.objects:
         o.select_set(o in (body, part))
@@ -422,7 +458,9 @@ def build_part(group, output):
                               export_yup=True, export_skins=True, export_animations=True,
                               export_morph=True, export_extras=True, export_all_influences=False)
     _common.body_meshes_first(output)
-    return {'status': 'applied', 'reason': '', 'anchor': prof[anc].tolist(),
+    return {'status': 'applied', 'reason': '', 'anchor': prof[i0].tolist(),
+            'underside_m': underside, 'scale': scale, 'front_corner': prof[i0].tolist(),
+            'inner_wall_faces_removed': len(inner_wall),
             'patch_tris': patch_tris,
             'border_vertices': int(border.sum()), 'open_border_edges': open_left,
             'border_max_abs_h': float(np.abs(hq[border]).max()) if border.any() else 0.,

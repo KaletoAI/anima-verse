@@ -470,7 +470,7 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
         colour = all(v is not None for v,_ in markers)
         if colour:
             a,b = [v for v,_ in markers]
-            colour = abs(a.z-b.z)<p['marker_pair_dz'] and abs(a.x+b.x)<p['marker_pair_dx']
+            colour = abs(a.z-b.z)<p['marker_pair_dz'] and abs((a.x-mid)+(b.x-mid))<p['marker_pair_dx']
             if not colour:
                 markers = [(v,'pair mismatch; '+note) for v,note in markers]
     K = int(p['boundary_directions'])

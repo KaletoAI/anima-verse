@@ -15,6 +15,10 @@ B: oval axes .06,.09, height .05; disc radius .009 at z=1.41.
 Area pi*.009**2=.0002545, RMS .009/sqrt(2), fit marker limits.
 Skin sRGB (.72,.52,.40), disc (.62,.28,.30) yield Lab approximately
 (59.6,16.3,24.4),(41.5,36.7,13.9): score=25.6>6, L>32.8.
+Offset B/C: translating mesh and rig +.02 gives marker x=.17,-.13;
+their sum .04 exceeds .03, but relative to mid=.02 their sum is zero.
+The C height difference remains .04>.02 after translation.
+X: right disc x=-.115 gives a relative pair sum .035>.03, so it also fails.
 C: right disc at 1.37 differs by .04>.02, rejecting both markers.
 D: a one-sided front sheet cannot deepen the pair wall: maximum paired
 wall offsets selects the unobstructed side; normal.x mirrors exactly.
@@ -41,7 +45,9 @@ cap R=1.15*d>=.071875 gives at least smooth((1-.055/.071875)/.4)=.626 at the mar
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+import json
+import subprocess
+import textwrap
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 PROBE = r"""
@@ -82,6 +88,7 @@ for key in p:
   except ValueError as error: assert key in str(error), error
   else: raise AssertionError((key,'must be required'))
 def fixture(kind):
+ if job['params'].get('offset',False) and kind not in ('B','C','X'): return
  bpy.ops.wm.read_factory_settings(use_empty=True)
  data=bpy.data.armatures.new('Rig'); arm=bpy.data.objects.new('Rig',data)
  bpy.context.collection.objects.link(arm); bpy.context.view_layer.objects.active=arm
@@ -131,18 +138,26 @@ def fixture(kind):
    uv.data[loop.index].uv=((v.x+.3)/.6,(v.z-1.1)/.6)
   import numpy as np
   size=1024; yy,xx=np.mgrid[:size,:size]; xx=(xx+.5)/size*.6-.3; yy=(yy+.5)/size*.6+1.1
-  mask=((xx-.15)**2+(yy-1.41)**2<.009**2)|((xx+.15)**2+(yy-(1.37 if kind=='C' else 1.41))**2<.009**2)
+  mask=((xx-.15)**2+(yy-1.41)**2<.009**2)|((xx+(.115 if kind=='X' else .15))**2+(yy-(1.37 if kind=='C' else 1.41))**2<.009**2)
   pixels=np.empty((size,size,4),np.float32); pixels[:]=(.72,.52,.40,1); pixels[mask]=(.62,.28,.30,1)
   image=bpy.data.images.new('Marker',width=size,height=size); image.pixels.foreach_set(pixels.ravel())
   mat=bpy.data.materials.new('Colour'); mat.use_nodes=True
   tex=mat.node_tree.nodes.new('ShaderNodeTexImage'); tex.image=image
   mat.node_tree.links.new(tex.outputs['Color'],mat.node_tree.nodes['Principled BSDF'].inputs['Base Color'])
   me.materials.append(mat)
+ if job['params'].get('offset',False):
+  for v in me.vertices: v.co.x+=.02
+  bpy.context.view_layer.objects.active=arm
+  bpy.ops.object.mode_set(mode='EDIT')
+  for bone in data.edit_bones:
+   bone.head.x+=.02; bone.tail.x+=.02
+  bpy.ops.object.mode_set(mode='OBJECT')
+  bpy.context.view_layer.update()
  co=[obj.matrix_world@v.co for v in me.vertices]
  surface=scope['pair_surface']([obj]); bones={scope['bone_key'](b.name):b for b in data.bones}
  plan=scope['pair_plan'](group,p,co,bones,surface,[(obj,v.index) for v in me.vertices])
  sides=plan[2]['placement']
- assert all(s['apex_source']==('geometry' if kind in ('A','C','E') else 'colour') for s in sides), sides
+ assert all(s['apex_source']==('geometry' if kind in ('A','C','E','X') else 'colour') for s in sides), sides
  assert excluded not in plan[1]['ExampleLeft'], plan[1]['ExampleLeft'].get(excluded)
  if kind=='A':
   expected=Vector((.15,-.1,1.4))+n*.05
@@ -152,7 +167,7 @@ def fixture(kind):
   assert plan[1]['ExampleLeft'].get(probe,0)>0
  if kind=='B':
   for sign,s in zip((1,-1),sides):
-   assert math.hypot(s['tip'][0]-sign*.15,s['tip'][2]-1.41)<=.0025, s
+   assert math.hypot(s['tip'][0]-sign*.15-(.02 if job['params'].get('offset',False) else 0),s['tip'][2]-1.41)<=.0025, s
    assert abs(s['reach'][0]-s['reach'][2])>.01, s
    assert s['reach'][2]==s['reach'][6], s
  if kind=='D':
@@ -170,22 +185,29 @@ def fixture(kind):
    assert max(near,default=0.)<=.0359, (name,max(near))
  print('PASS fixture',kind)
 for kind in ('A','B','C','D','E'): fixture(kind)
+fixture('X')
 Path(job['result']).write_text(json.dumps({'ok':True,'data':{},'outputs':{}}))
 """
 
 
 def main():
-    from app.blender import runner
-    if not runner.status()['executable']:
-        print('SKIP pair wall: no Blender executable found')
-        return
+    root = Path(__file__).resolve().parents[1]
     with tempfile.TemporaryDirectory(prefix='pair-wall-') as tmp:
-        script=Path(tmp)/'probe.py'; script.write_text(PROBE)
-        source=runner.SCRIPTS_DIR/'extension_bones.py'
-        with patch.object(runner,'SCRIPTS_DIR',Path(tmp)):
-            result=runner.run('probe', params={'source':str(source)}, out_dir=Path(tmp)/'out',timeout_s=180)
-        assert result['ok'], result
-        print('PASS pair wall: tilt, oval colour, pair rejection, occluder, descendant exclusion, clothing crest')
+        directory = Path(tmp)
+        script = directory / 'probe.py'
+        # Flush and exit explicitly: this host can stall in Blender's audio teardown.
+        script.write_text('import os, sys, traceback\ntry:\n' + textwrap.indent(PROBE, '    ') +
+                          '\nexcept BaseException:\n    traceback.print_exc()\n    sys.stdout.flush(); sys.stderr.flush(); os._exit(1)\n'
+                          'sys.stdout.flush(); sys.stderr.flush(); os._exit(0)\n')
+        for offset in (False, True):
+            job = directory / 'job.json'
+            job.write_text(json.dumps({'params': {'source': str(root / 'app/blender/scripts/extension_bones.py'),
+                                                  'offset': offset}, 'result': str(directory / 'result.json')}))
+            result = subprocess.run(['/home/dev/tools/blender-5.2.2-linux-x64/blender', '-b', '-noaudio',
+                                     '-t', '2', '--python-exit-code', '1', '-P', str(script), '--', str(job)],
+                                    capture_output=True, text=True, timeout=180)
+            assert result.returncode == 0, result.stdout + result.stderr
+            print('PASS pair wall offset' if offset else 'PASS pair wall baseline')
 
 if __name__ == '__main__':
     main()

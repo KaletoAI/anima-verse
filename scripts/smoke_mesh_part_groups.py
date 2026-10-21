@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory() as tmp:
         assert er.declared_motion_groups() == []
         assert er.motion_payload('', profile)['groups'] == {}
         fingerprint = er.extension_rig_fingerprint(groups)
-        with patch.dict(er.PART_BUILDS, inset_part=2):
+        with patch.dict(er.PART_BUILDS, inset_part=er.PART_BUILDS["inset_part"] + 1):
             assert fingerprint != er.extension_rig_fingerprint(groups)
         profile['body_slots']['slot']['inner'] = 'small'
         assert er.rig_groups_for('', profile)[0]['params'] == {'inner_scale': 0}

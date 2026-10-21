@@ -8,6 +8,20 @@ interpolation preserves these affine values (displacement x changes <.001).
 With pocket starting at s=.07, the cleft centre s=.05 has depth 9 mm, within
 10 percent after the small mound/ridge contributions. A welded border has
 one vertex per position, so opposing 30 degree walk/spread poses cannot crack.
+
+The inward shell is 5 mm under the 150 mm outer sphere. Outside rays must
+therefore give midline |r| < 1 mm, never the inner shell's 5 mm error.
+For the round sphere L=.15*55*pi/180=.14399 m; the front corner is
+y=-.15*cos(50)=-.09642, z=1.02-.15*sin(50)=.90509 (2 mm sampling tolerance).
+A missing back corner uses .138 m and scale 1; a missing front corner fails.
+A short variant scales outer Y by .4; the 50..105 degree normal interval
+is shorter than .138*.75=.1035 m, so scale must clamp to .75. The cleft
+midpoint is the underside midpoint minus .013 m, and its length is .075 m.
+For the round sphere its angle is 77.5-.013/.15*180/pi=72.534 degrees,
+giving y=-.04502, z=.87691. Arc lengths on the short ellipse integrate
+sqrt(.06**2*sin(t)**2+.15**2*cos(t)**2) between the two sampled endpoints.
+UV coverage samples use strict triangle interiors, excluding shared edges;
+a height field has at most one covering triangle at every sampled texel.
 """
 import json
 import os
@@ -27,7 +41,6 @@ def probe(directory):
     import math
     import numpy as np
     from mathutils import Vector
-    from mathutils.bvhtree import BVHTree
     sys.path.insert(0, str(ROOT / 'app/blender/scripts'))
     import _common
     import inset_part
@@ -47,6 +60,17 @@ def probe(directory):
     bpy.ops.mesh.primitive_uv_sphere_add(segments=128, ring_count=96, radius=.15, location=(0, 0, 1.02))
     body = bpy.context.object
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    if '--short' in sys.argv:
+        for v in body.data.vertices: v.co.y *= .4
+    # Add an inward shell before the source UV seam roundtrip.
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=128, ring_count=96, radius=.145, location=(0, 0, 1.02))
+    shell = bpy.context.object
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    if '--short' in sys.argv:
+        for v in shell.data.vertices: v.co.y *= .4
+    bm = bmesh.new(); bm.from_mesh(shell.data)
+    bmesh.ops.reverse_faces(bm, faces=bm.faces[:]); bm.to_mesh(shell.data); bm.free()
+    body.select_set(True); bpy.context.view_layer.objects.active = body; bpy.ops.object.join()
     # Separate closed leg components exercise inherited skinning without affecting midline rays.
     for x in (-.10, .10):
         bpy.ops.mesh.primitive_cube_add(size=1, location=(x, 0, .57))
@@ -97,9 +121,78 @@ def probe(directory):
         key = tuple(round(x / 1e-5) for x in position)
         seam_positions[key] = seam_positions.get(key, 0) + 1
     assert any(count > 1 and abs(key[0]) == 0 for key, count in seam_positions.items())
-    original = BVHTree.FromPolygons(positions, [tuple(p.vertices) for p in me.polygons])
+    source_faces = [tuple(p.vertices) for p in me.polygons]
     group = {'id': 'inset', 'op': 'inset_part', 'chains': [], 'params': {'pocket': {'s0': .07}, 'bake': 64}}
-    metrics = inset_part.build_part(group, Path(directory) / 'model.glb')
+    try:
+        inset_part.build_part(dict(group, params={'under': [1000, 1001]}), Path(directory) / 'missing.glb')
+    except ValueError as error:
+        assert 'No front corner' in str(error), error
+    else:
+        raise AssertionError('Missing front corner must fail')
+    if '--fallback' in sys.argv:
+        group['params']['under'] = [50, 1000]
+    captured = {}
+    def trace(frame, event, arg):
+        if frame.f_code is inset_part.build_part.__code__ and event == 'return':
+            captured.update(frame.f_locals)
+    sys.setprofile(trace)
+    try:
+        metrics = inset_part.build_part(group, Path(directory) / 'model.glb')
+    finally:
+        sys.setprofile(None)
+    assert metrics['inner_wall_faces_removed'] > 0, metrics
+    assert np.all(captured['fac_b'][captured['near']] > .2)
+    assert np.max(np.abs(captured['r_b'][(np.abs(captured['u_b']) < 1e-6) & captured['near']])) < .001
+    assert len(captured['inner_wall']) == metrics['inner_wall_faces_removed']
+    assert not (captured['inner_wall'] & captured['sel_polys'])
+    position_key = lambda p: tuple(round(float(x)/1e-6) for x in p)
+    removed_faces = {frozenset(position_key(positions[v]) for v in source_faces[i])
+                     for i in captured['inner_wall']}
+    remaining_faces = {frozenset(position_key(body.matrix_world @ body.data.vertices[v].co) for v in face.vertices)
+                       for face in body.data.polygons if face.material_index == 0}
+    assert removed_faces.isdisjoint(remaining_faces)
+    if '--fallback' in sys.argv:
+        assert metrics['underside_m'] == .138 and metrics['scale'] == 1., metrics
+    elif '--short' in sys.argv:
+        assert metrics['scale'] == .75, metrics
+    else:
+        assert metrics['scale'] == 1., metrics
+        # Sphere normals turn through 55 degrees: .15*55*pi/180=.14399 m.
+        assert abs(metrics['underside_m'] - .14399) < .003
+        assert abs(metrics['front_corner'][1] + .09642) < .002
+        assert abs(metrics['front_corner'][2] - .90509) < .002
+    assert abs(captured['s_start'] + .05 * metrics['scale'] -
+               (captured['arc'][captured['i0']] + metrics['underside_m']/2 - .013)) < 1e-9
+    # Measure the physical cleft interval on the analytic fixture, independent
+    # of the chart's arc accumulator and scale implementation.
+    endpoint_indices = [int(np.argmin(abs(captured['s_q']-s) + 20*abs(captured['u_q'])))
+                        for s in (0., .05, .10)]
+    points = captured['Q'][endpoint_indices]
+    axis_y = .06 if '--short' in sys.argv else .15
+    angles = np.arctan2(-(points[:,2]-1.02)/.15, -points[:,1]/axis_y)
+    samples = np.linspace(angles[0], angles[2], 1001)
+    speeds = np.sqrt(axis_y**2*np.sin(samples)**2 + .15**2*np.cos(samples)**2)
+    physical_length = np.trapezoid(speeds, samples)
+    assert abs(physical_length - .10*metrics['scale']) < .002, physical_length
+    if '--short' not in sys.argv and '--fallback' not in sys.argv:
+        assert abs(points[1,1] + .04502) < .002
+        assert abs(points[1,2] - .87691) < .002
+    coverage = np.zeros((128,128), dtype=int)
+    uv = body.data.uv_layers.active.data
+    baked_triangles = [np.array([tuple(uv[i].uv) for i in face.loop_indices])
+                       for face in body.data.polygons if face.material_index == 1]
+    for triangle in baked_triangles:
+        a,b,c = triangle
+        matrix = np.stack([b-a,c-a],1)
+        if abs(np.linalg.det(matrix)) < 1e-14: continue
+        low = np.maximum(0, np.floor(triangle.min(0)*128).astype(int))
+        high = np.minimum(128, np.ceil(triangle.max(0)*128).astype(int)+1)
+        yy, xx = np.mgrid[low[1]:high[1], low[0]:high[0]]
+        samples = np.stack([(xx.ravel()+.371)/128, (yy.ravel()+.619)/128], 1)
+        weights = (samples-a) @ np.linalg.inv(matrix).T
+        inside = (weights[:,0]>1e-9)&(weights[:,1]>1e-9)&(weights.sum(1)<1-1e-9)
+        coverage[yy.ravel()[inside], xx.ravel()[inside]] += 1
+    assert coverage.max() == 1, coverage.max()
     assert metrics['border_max_abs_h'] == 0 and metrics['open_border_edges'] == 0, metrics
     meshes = [o for o in bpy.context.scene.objects if o.type == 'MESH']
     assert meshes == [body] and len(body.data.materials) == 2
@@ -118,19 +211,11 @@ def probe(directory):
         assert abs(sum(weights.values()) - 1) < 1e-6
         assert abs(weights['Hips'] - .3) < 1e-6
         assert abs(weights['LeftUpLeg'] - (.35 + .1*v.co.x)) < 1e-3
-    # Recover the same sampled arc chart independently from original source rays.
-    c = Vector((0, 0, 1.02))
-    theta = np.radians(np.arange(-70, 170.01, .5))
-    profile = np.array([tuple(original.ray_cast(c, Vector((0, -math.cos(t), -math.sin(t))))[0]) for t in theta])
-    arc = np.concatenate([[0], np.cumsum(np.linalg.norm(np.diff(profile[:, 1:], axis=0), axis=1))])
-    anchor = int(np.argmax(profile[:, 2] <= 1.10 - .105))
-    arc -= arc[anchor] + .046
-    sample = Vector(tuple(profile[np.argmin(abs(arc - .05))]))
-    direction = (sample-c).normalized()
-    candidates = [body.data.vertices[i].co for i in patch if abs(body.data.vertices[i].co.x) < .0008]
-    point = min(candidates, key=lambda p: ((p-c).normalized()-direction).length)
-    depth = (sample-c).length - (point-c).length
-    assert .0081 < depth < .0099, depth
+    # Locate the midpoint directly in the undisplaced chart captured at build time.
+    index = int(np.argmin(abs(captured['s_q']-.05) + 20*abs(captured['u_q'])))
+    assert .0081 < -captured['hq'][index] < .0099, captured['hq'][index]
+    displaced = Vector(captured['Q'][index] + captured['qn'][index]*captured['hq'][index])
+    assert min((body.matrix_world @ body.data.vertices[i].co-displaced).length for i in patch) < 1e-6
     bm = bmesh.new(); bm.from_mesh(body.data)
     border = {v.index for e in bm.edges if len(e.link_faces) == 2 and {f.material_index for f in e.link_faces} == {0, 1} for v in e.verts}
     assert border
@@ -174,3 +259,5 @@ if __name__ == '__main__':
     else:
         with tempfile.TemporaryDirectory(prefix='inset-smoke-') as directory:
             subprocess.run([str(BLENDER), '-b', '-noaudio', '--python-exit-code', '1', '-t', '2', '-P', __file__, '--', '--fixture', directory], check=True)
+            for variant in ('--short', '--fallback'):
+                subprocess.run([str(BLENDER), '-b', '-noaudio', '--python-exit-code', '1', '-t', '2', '-P', __file__, '--', '--fixture', variant, directory], check=True)
