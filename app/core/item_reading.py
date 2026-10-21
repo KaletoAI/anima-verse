@@ -3,7 +3,10 @@
 Provider calls and add_memory always run after every local lock/transaction
 has been released. Callers must likewise hold no locks when entering here.
 """
-from app.core import hooks
+import json
+
+from app.core import config, hooks
+from app.core.game_time import GameDuration, GameTime
 from app.core.db import get_connection, transaction
 from app.core.i18n import localized, t
 from app.core.keyed_lock import keyed_lock
@@ -16,6 +19,93 @@ logger = get_logger("item_reading")
 MEMORIES_PER_DAY = 2
 NPC_PAGES = 2
 NPC_PAGE_CHARS = 600
+
+
+def _session_row(reader):
+    row = get_connection().execute(
+        "SELECT * FROM item_reading_sessions WHERE reader=?", (reader,)).fetchone()
+    if row is None:
+        return None
+    session = dict(row)
+    session["noticed_by"] = json.loads(session["noticed_by"])
+    return session
+
+
+def _session_here(session):
+    return (GameTime.parse(session["until_game_ts"]) >= game_time()
+            and character.get_character_current_location(session["reader"]) == session["location_id"]
+            and (character.get_character_current_room(session["reader"]) or "") == session["room_id"])
+
+
+def _until(now):
+    return str(now + GameDuration.of(minutes=int(config.get("inventory.reading_minutes", 10))))
+
+
+def start_session(reader: str, item_id: str, location_id: str, room_id: str) -> dict:
+    """Replace this reader's session; callers invoke the watcher after return."""
+    now = game_time()
+    with keyed_lock("reading_session", reader), transaction() as conn:
+        conn.execute("INSERT OR REPLACE INTO item_reading_sessions "
+                     "(reader,item_id,location_id,room_id,started_game_ts,until_game_ts) "
+                     "VALUES (?,?,?,?,?,?)", (reader, item_id, location_id, room_id, str(now), _until(now)))
+        return _session_row(reader)
+
+
+def active_session(reader: str) -> dict | None:
+    """Return a live session, deleting caught, expired or departed rows."""
+    with keyed_lock("reading_session", reader):
+        session = _session_row(reader)
+        if session and (session["caught"] or not _session_here(session)):
+            end_session(reader, "inactive")
+            return None
+        return session
+
+
+def extend_session(reader: str, item_id: str) -> dict | None:
+    """Extend a matching live session to now plus the configured duration."""
+    with keyed_lock("reading_session", reader):
+        session = active_session(reader)
+        if not session or session["item_id"] != item_id:
+            return None
+        session["until_game_ts"] = _until(game_time())
+        with transaction() as conn:
+            conn.execute("UPDATE item_reading_sessions SET until_game_ts=? WHERE reader=?",
+                         (session["until_game_ts"], reader))
+        return session
+
+
+def sessions_in_room(location_id: str, room_id: str) -> list[dict]:
+    """List live sessions, pruning dead rows through active_session."""
+    readers = get_connection().execute(
+        "SELECT reader FROM item_reading_sessions WHERE location_id=? AND room_id=?",
+        (location_id, room_id)).fetchall()
+    return [session for row in readers if (session := active_session(row[0]))
+            and session["location_id"] == location_id and session["room_id"] == room_id]
+
+
+def end_session(reader: str, reason: str) -> None:
+    """Delete a session; reason describes the caller's lifecycle event."""
+    with keyed_lock("reading_session", reader), transaction() as conn:
+        conn.execute("DELETE FROM item_reading_sessions WHERE reader=?", (reader,))
+
+
+def heartbeat(reader: str, item_id: str) -> dict:
+    """Report a pending owner catch or extend a live matching session."""
+    with keyed_lock("reading_session", reader):
+        session = _session_row(reader)
+        if session and session["item_id"] == item_id and session["caught"] and _session_here(session):
+            item = inventory.get_item(item_id) or {}
+            return {"caught_by": item.get("owner", "")}
+        extend_session(reader, item_id)
+    return {"caught_by": ""}
+
+
+def _start_reading(reader, item_id):
+    from app.core import reading_watch
+    session = start_session(reader, item_id,
+                            character.get_character_current_location(reader) or "",
+                            character.get_character_current_room(reader) or "")
+    return reading_watch.on_session_started(session)
 
 
 def has_pages(item: dict) -> bool:
@@ -101,11 +191,18 @@ def _public_page(page, *, npc=False):
 
 
 def read_page(reader: str, item_id: str, index: int, *, opening: bool = False) -> dict:
-    """Read one clamped page; opening is reserved and has no side effects."""
+    """Read and learn one page, starting or extending the reading session."""
     found = _here(reader, item_id)
     if found is None:
         return {"error": "There is nothing like that to read here."}
     item, pages = found
+    result = _start_reading(reader, item_id) if opening else heartbeat(reader, item_id)
+    if not opening and not result.get("caught_by") and active_session(reader) is None:
+        # The session ran out while the book stayed open (no heartbeat, e.g. a
+        # sleeping tab): turning a page reads again, so it starts a new one.
+        result = _start_reading(reader, item_id)
+    if result.get("caught_by") or result.get("error"):
+        return result
     index = max(0, min(index, len(pages)-1))
     page = pages[index] if pages else None
     _learn(reader, item, [page] if page else [], game_time().day_key())
@@ -137,6 +234,9 @@ def npc_read(reader: str, item_id: str) -> dict:
             (reader, item_id, day)).rowcount
     if not claimed:
         return {"error": "You already read that today."}
+    result = _start_reading(reader, item_id)
+    if result.get("caught_by") or result.get("error"):
+        return result
     unknown = []
     owner = item.get("owner", "")
     seen = set()

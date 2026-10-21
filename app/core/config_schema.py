@@ -73,6 +73,14 @@ SECTIONS = {
         "scope": "world",
         "world_group": "gameplay",
         "fields": {
+            "reading_minutes": {
+                "type": "int", "label": "Reading duration", "default": 10,
+                "description": "Reading session duration in game minutes.",
+            },
+            "notice_reading_difficulty": {
+                "type": "int", "label": "Reading notice difficulty", "default": 60,
+                "description": "Discovery value needed to notice someone reading.",
+            },
             "discovery_stat": {
                 "type": "str",
                 "label": "Discovery stat",

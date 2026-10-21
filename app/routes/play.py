@@ -2755,6 +2755,41 @@ def _play_read_sync(body: Any):
                      opening=bool(body.get("opening", False)))
 
 
+@router.post("/play/read/heartbeat")
+async def play_read_heartbeat(request: Request, user=Depends(get_current_user)):
+    """Keep the active avatar's matching reading session alive."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_read_session_sync, body)
+
+
+@router.post("/play/read/close")
+async def play_read_close(request: Request, user=Depends(get_current_user)):
+    """Close the active avatar's matching reading session."""
+    import asyncio
+    body = await request.json()
+    return await asyncio.to_thread(_play_read_session_sync, body, close=True)
+
+
+def _play_read_session_sync(body: Any, *, close: bool = False):
+    from app.models.account import get_active_character
+    from app.core import item_reading
+    from app.core.keyed_lock import keyed_lock
+    avatar = (get_active_character() or "").strip()
+    if not avatar:
+        raise HTTPException(status_code=409, detail="no active avatar")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="object required")
+    item_id = str(body.get("item_id") or "")
+    if close:
+        with keyed_lock("reading_session", avatar):
+            session = item_reading.active_session(avatar)
+            if session and session["item_id"] == item_id:
+                item_reading.end_session(avatar, "closed")
+        return {"ok": True}
+    return item_reading.heartbeat(avatar, item_id)
+
+
 @router.post("/play/equip")
 async def play_equip(request: Request, user=Depends(get_current_user)):
     """Equip one piece, replacing only conflicts in its slots, including

@@ -181,9 +181,27 @@ empty book. Providers may perform blocking work and are called without locks.
 | `has_pages(item: dict) -> bool` | A provider is registered for the item's `pages_source`; does not call it (used by the polled room listing). |
 | `pages_of(item: dict, reader: str) -> list[dict] \| None` | Get pages; None for absent source/provider or a logged provider failure. |
 | `readable_here(reader: str, item_id: str) -> bool` | Requires a placement in the reader's current room, `placement_visible_to` (stable above), and non-None pages. Carried items do not qualify. |
-| `read_page(reader: str, item_id: str, index: int, *, opening: bool = False) -> dict` | Returns `{item_name, index, total, page: {heading, text}}`, or `{error}`. Index clamps to the book; an empty book has index 0 and page None. Learns the returned page. `opening` is reserved: no narrator or other opening event. |
-| `npc_read(reader: str, item_id: str) -> dict` | Once daily, returns `{item_name, pages}` with up to two newest unknown linked secrets (newest first), otherwise the newest page; returned text is at most 600 characters per page. Invalid/missing secrets and pages without a secret ID are not unknown. Repeat calls that day return `{error}`. |
+| `read_page(reader: str, item_id: str, index: int, *, opening: bool = False) -> dict` | Returns `{item_name, index, total, page: {heading, text}}`, or `{error}` / `{caught_by}`. Index clamps to the book; an empty book has index 0 and page None. Learns the returned page. `opening=True` starts a session; later pages extend it. A pending owner catch returns no page and learns nothing. |
+| `npc_read(reader: str, item_id: str) -> dict` | Once daily, returns `{item_name, pages}` with up to two newest unknown linked secrets (newest first), otherwise the newest page; returned text is at most 600 characters per page. Invalid/missing secrets and pages without a secret ID are not unknown. Repeat calls that day return `{error}`. Starts a full-duration session without changing pose; a catch returns `{caught_by}` before learning. |
 | `npc_read_today(reader: str, item_id: str) -> bool` | Whether the NPC path was used on this GameTime day. |
+| `start_session(reader: str, item_id: str, location_id: str, room_id: str) -> dict` | Replaces this reader's session; started=now, until=now + world `inventory.reading_minutes` (int, default 10). Callers invoke `reading_watch.on_session_started` after return, outside locks. |
+| `extend_session(reader: str, item_id: str) -> dict \| None` | Matching live session gets until=now + duration; otherwise None. |
+| `active_session(reader: str) -> dict \| None` | Live means not caught, until >= game now, reader still in the stored location/room. Deletes dead rows on read. |
+| `sessions_in_room(location_id: str, room_id: str) -> list[dict]` | Live sessions only, with dead rows pruned. |
+| `end_session(reader: str, reason: str) -> None` | Deletes the reader's session. |
+| `heartbeat(reader: str, item_id: str) -> dict` | Returns `{caught_by: owner}` for a matching pending catch, otherwise `{caught_by: ""}` and extends a live matching session. Does not start a session. |
+
+Sessions persist in `item_reading_sessions(reader PRIMARY KEY, item_id,
+location_id, room_id, started_game_ts, until_game_ts, caught DEFAULT 0,
+noticed_by DEFAULT '[]')`. Returned dictionaries decode `noticed_by` to a list.
+Caught rows are inactive but remain available to heartbeat/page turns until
+`active_session` prunes them or they are replaced/closed. No noticing runs yet.
+
+`app.core.reading_watch.on_session_started(session: dict) -> dict` is the
+watcher entry point called by both read paths after starting a session and before
+learning. Currently returns `{}`; a future watcher may return `{caught_by}`.
+World `inventory.notice_reading_difficulty` (int, default 60) reserves the notice
+threshold for that watcher.
 
 `MEMORIES_PER_DAY = 2`, `NPC_PAGES = 2`, `NPC_PAGE_CHARS = 600`.
 Both read paths share learning: for a valid, newly learned secret of another
@@ -204,7 +222,12 @@ any lock: providers and `add_memory` execute outside every lock/transaction.
 
 `POST /play/read` accepts `{item_id, index, opening}` for the active avatar
 (409 without one). Room items expose `readable` and `portable`; avatars can read
-with other characters present. The NPC verb and player book UI are separate tasks.
+with other characters present. `POST /play/read/heartbeat {item_id}` extends the avatar session and returns
+`{caught_by}` (empty string when not caught). `POST /play/read/close {item_id}`
+ends the matching session and returns `{ok: true}`. Both require an active
+avatar (409 without one) and an object body (400 otherwise). A stale close for
+another item does not end a newer book session. Modal heartbeat wiring is a
+separate task.
 
 ## Welt & Ortskenntnis — `app.models.world` / `app.models.rules` ⚠
 
