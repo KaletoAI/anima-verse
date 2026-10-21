@@ -30,6 +30,18 @@ function fmtTime(ts: string): string {
   return d.toLocaleString([], { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })
 }
 
+/** Distance from the bottom (px) that still counts as "reading the latest". */
+const STICK_PX = 40
+
+function sameThread(a: ThreadMsg[], b: ThreadMsg[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i], y = b[i]
+    if (x.mine !== y.mine || x.content !== y.content || x.ts !== y.ts || x.image !== y.image) return false
+  }
+  return true
+}
+
 export function PhonePanel() {
   const { t } = useI18n()
   const lightbox = useLightbox()
@@ -46,6 +58,7 @@ export function PhonePanel() {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const selRef = useRef<string | null>(null)
   selRef.current = selected
+  const stickRef = useRef(true)
 
   const loadConvs = useCallback(async () => {
     try {
@@ -61,7 +74,11 @@ export function PhonePanel() {
     try {
       const d = await apiGet<{ messages?: ThreadMsg[] }>(
         '/play/messages/thread?partner=' + encodeURIComponent(partner))
-      if (alive.current && selRef.current === partner) setThread(d.messages || [])
+      if (!alive.current || selRef.current !== partner) return
+      const next = d.messages || []
+      // The 5 s poll must not replace an unchanged thread: a new array
+      // re-renders and used to re-trigger the scroll effect below.
+      setThread((prev) => (sameThread(prev, next) ? prev : next))
     } catch { /* ignore */ }
   }, [])
 
@@ -76,18 +93,25 @@ export function PhonePanel() {
   }, [loadConvs, loadThread])
 
   useEffect(() => {
-    if (selected) { setThread([]); loadThread(selected) }
+    if (selected) { stickRef.current = true; setThread([]); loadThread(selected) }
   }, [selected, loadThread])
 
+  // Follow new messages only while the reader sits at the bottom (or just
+  // opened the thread / sent something) — scrolling up to read stays put.
   useEffect(() => {
     const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight
   }, [thread, selected])
+
+  const onThreadScroll = useCallback(() => {
+    const el = scrollRef.current
+    if (el) stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_PX
+  }, [])
 
   const openConv = (partner: string) => { setPicking(false); setSelected(partner) }
 
   const markAllRead = useCallback(async () => {
-    // Optimistisch lokal auf 0 setzen, dann Backend + Reload.
+    // Optimistically zero locally, then backend + reload.
     setConvs((prev) => prev.map((c) => ({ ...c, unread: 0 })))
     try { await apiPost('/play/messages/read-all', {}) } catch { /* ignore */ }
     loadConvs()
@@ -98,6 +122,7 @@ export function PhonePanel() {
     const text = draft.trim()
     if (!partner || !text || sending) return
     setSending(true)
+    stickRef.current = true
     setThread((prev) => [...prev, { mine: true, content: text, ts: new Date().toISOString() }])
     setDraft('')
     try {
@@ -108,7 +133,7 @@ export function PhonePanel() {
     finally { if (alive.current) setSending(false) }
   }, [draft, sending, loadThread, loadConvs])
 
-  // ----- Thread-Ansicht -----
+  // ----- Thread view -----
   if (selected) {
     const conv = convs.find((c) => c.partner === selected)
     const statusLabel = conv?.status === 'sleeping' ? t('asleep')
@@ -127,7 +152,7 @@ export function PhonePanel() {
             </div>
           </div>
         </div>
-        <div ref={scrollRef} style={THREAD_SCROLL}>
+        <div ref={scrollRef} onScroll={onThreadScroll} style={THREAD_SCROLL}>
           {thread.length === 0 && <div style={EMPTY}>{t('No messages yet')}</div>}
           {thread.map((m, i) => (
             <div key={i} style={{ alignSelf: m.mine ? 'flex-end' : 'flex-start', maxWidth: '78%' }}>
@@ -159,7 +184,7 @@ export function PhonePanel() {
     )
   }
 
-  // ----- Kontaktliste -----
+  // ----- Contact list -----
   const totalUnread = convs.reduce((s, c) => s + (c.unread || 0), 0)
   return (
     <div style={WRAP}>
