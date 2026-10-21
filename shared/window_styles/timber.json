@@ -1,0 +1,9 @@
+{
+  "id": "timber",
+  "name": "Timber",
+  "description": "Timber window frame.",
+  "frame": "timber",
+  "frame_material": "#efe9dc",
+  "glass_tint": "#3a4a55",
+  "bars": true
+}

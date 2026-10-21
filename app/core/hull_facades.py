@@ -102,6 +102,16 @@ def mullions(s0, s1):
     return [s0+width*i/fields for i in range(1,fields)]
 
 
+def casement_bars(s0: float, s1: float, y0: float, y1: float,
+                  frame: str) -> tuple[list[float], float | None, float]:
+    """Return the existing facade bar centres, transom and full bar width."""
+    if frame == 'metal':
+        return mullions(s0,s1), None, .05
+    centres = mullions(s0,s1) if s1-s0 > 1.8 else ([(s0+s1)/2] if s1-s0 >= .7 else [])
+    transom = y0+.62*(y1-y0) if y1-y0 >= .9 else None
+    return centres, transom, .04
+
+
 def module_count(level, style, resolved, span, storey_m):
     """Return module bays only on eligible, resolved facade edges."""
     return (module_bays(span, storey_m) if level.get("filler", False)

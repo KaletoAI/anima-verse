@@ -1,0 +1,9 @@
+{
+  "id": "stone",
+  "name": "Stone",
+  "description": "Stone window frame.",
+  "frame": "stone",
+  "frame_material": "#ece8df",
+  "glass_tint": "#3a4a55",
+  "bars": true
+}

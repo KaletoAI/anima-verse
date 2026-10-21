@@ -1,0 +1,9 @@
+{
+  "id": "plain",
+  "name": "Plain",
+  "description": "Plain window frame.",
+  "frame": "plain",
+  "frame_material": "#efe9dc",
+  "glass_tint": "#3a4a55",
+  "bars": false
+}

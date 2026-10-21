@@ -1,0 +1,9 @@
+{
+  "id": "metal",
+  "name": "Metal",
+  "description": "Metal window frame.",
+  "frame": "metal",
+  "frame_material": "#2f3236",
+  "glass_tint": "#2f3d47",
+  "bars": true
+}

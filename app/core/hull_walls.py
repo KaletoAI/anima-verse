@@ -3,7 +3,7 @@ import math
 from typing import Dict, List, Optional, Tuple
 from app.core.door_geometry import build_door, leaves_for
 from app.core.door_styles import load_door_styles
-from app.core.hull_facades import module_count, mullions, street_edges, shop_band
+from app.core.hull_facades import module_count, casement_bars, street_edges, shop_band
 from app.core.hull_mesh import Part, PartBuilder, offset_ring, rng, _normal
 from app.core.scene_recipe import WALL_THICKNESS, WALL_SINK_M
 
@@ -276,12 +276,12 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                                     (s0+.06,s1-.06,y0,y0+.06),(s0+.06,s1-.06,y1-.06,y1)):
                         block('casement','window_frame',c,d,e,f,d0,d1)
                     if desc.get('overrides',{}).get('ornament_density',.5) > 0:
-                        centres = mullions(s0,s1) if s1-s0 > 1.8 else ([(s0+s1)/2] if s1-s0 >= .7 else [])
+                        centres, transom, bar_width = casement_bars(s0,s1,y0,y1,frame)
                         for centre in centres:
-                            block('casement','window_frame',centre-.02,centre+.02,y0+.06,y1-.06,d0,d1)
-                        if y1-y0 >= .9:
-                            centre = y0+.62*(y1-y0)
-                            block('casement','window_frame',s0+.06,s1-.06,centre-.02,centre+.02,d0,d1)
+                            block('casement','window_frame',centre-bar_width/2,centre+bar_width/2,y0+.06,y1-.06,d0,d1)
+                        if transom is not None:
+                            centre = transom
+                            block('casement','window_frame',s0+.06,s1-.06,centre-bar_width/2,centre+bar_width/2,d0,d1)
                     block('sill','trim',s0-.08,s1+.08,y0-.07,y0,outer,outer+.10)
                 if not full or filler and desc.get('overrides',{}).get('ornament_density',.5) <= 0:
                     continue
@@ -306,8 +306,9 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                     if kind == 'window':
                         block('frame','trim',s0-.05,s1+.05,y0-.05,y0,outer,outer+.06,cut_holes=False)
                         d0,d1 = (outer+.02,outer+.03) if h.get('blind') else (outer-.10,outer)
-                        for centre in mullions(s0,s1):
-                            block('frame','trim',centre-.025,centre+.025,y0,y1,d0,d1,cut_holes=False)
+                        centres, _, bar_width = casement_bars(s0,s1,y0,y1,frame)
+                        for centre in centres:
+                            block('frame','trim',centre-bar_width/2,centre+bar_width/2,y0,y1,d0,d1,cut_holes=False)
                 elif frame == 'stone':
                     block('frame','trim',s0-.05,s1+.05,y1,y1+.15,outer,outer+.10,door_surround=kind == 'door')
                 chance = min(1,style.get('shutters',0)*desc.get('overrides',{}).get('ornament_density',1)*2)
