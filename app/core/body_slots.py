@@ -140,7 +140,7 @@ def slot_values(character_name: str) -> Dict[str, Dict[str, Any]]:
     return dict(vals) if isinstance(vals, dict) else {}
 
 
-def set_slot_value(character_name: str, slot_id: str, attr: str, value: Any) -> None:
+def set_slot_value(character_name: str, slot_id: str, attr: str, value: Any) -> bool:
     """Editor API: store one attribute value (empty value removes it)."""
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
@@ -160,7 +160,7 @@ def set_slot_value(character_name: str, slot_id: str, attr: str, value: Any) -> 
         else:
             vals.pop(slot_id, None)
         profile["body_slots"] = vals
-        save_character_profile(character_name, profile)
+        return save_character_profile(character_name, profile)
 
 
 # ---------------------------------------------------------------------------
@@ -238,10 +238,18 @@ def _format_if_complete(text: str, values: Dict[str, str]) -> str:
         return ""
 
 
+def mesh_part_active(spec, profile: Dict[str, Any]) -> bool:
+    """Whether an applicable slot selects its procedural part variant."""
+    return bool(spec.mesh_part and _slot_applies(spec, profile)
+                and any(spec is slot for slot in slots_for_character("", profile=profile))
+                and ((profile.get("body_slots") or {}).get(spec.id) or {}).get(spec.mesh_part.switch) == "on")
+
+
 def prompt_fragments(character_name: str,
                      face_only: bool = False,
                      profile: Optional[Dict[str, Any]] = None,
-                     back_view: bool = False) -> Dict[str, List[str]]:
+                     back_view: bool = False,
+                     mesh_input: bool = False) -> Dict[str, List[str]]:
     """Prompt fragments for all applicable slots.
 
     Returns ``{"general": [...], "exposed": [...]}`` — general carries
@@ -322,6 +330,8 @@ def prompt_fragments(character_name: str,
             # is only the default. Placeholders resolve in both.
             tpl = (str(slot_stored.get("exposed_prompt", "") or "").strip()
                    or spec.prompt.get("exposed", ""))
+            if mesh_input and mesh_part_active(spec, profile):
+                tpl = spec.mesh_part.tpose_prompt
             exposed_vals = dict(vals)
             defaulted = set()
             for attr, decl in spec.attributes.items():
@@ -344,7 +354,8 @@ def prompt_fragments(character_name: str,
 def exposed_slot_loras(character_name: str,
                        profile: Optional[Dict[str, Any]] = None,
                        equipped_pieces: Optional[Dict[str, str]] = None,
-                       back_view: bool = False) -> List[Dict[str, Any]]:
+                       back_view: bool = False,
+                       mesh_input: bool = False) -> List[Dict[str, Any]]:
     """LoRAs of currently EXPOSED body slots (lora_select attribute values,
     e.g. the NSFW anatomy LoRAs) — merged into image-generation inputs by
     the variant/expression path. Replaces the former per-clothing-slot
@@ -373,6 +384,8 @@ def exposed_slot_loras(character_name: str,
         if not is_slot_exposed(spec, profile):
             continue
         if back_view and not spec.back:
+            continue
+        if mesh_input and mesh_part_active(spec, profile):
             continue
         for attr, decl in spec.attributes.items():
             if str(decl.get("type", "")) != "lora_select":
@@ -497,7 +510,8 @@ def being_for_character(character_name: str) -> str:
 
 def appearance_suffix(character_name: str, face_only: bool = False,
                       profile: Optional[Dict[str, Any]] = None,
-                      back_view: bool = False) -> str:
+                      back_view: bool = False,
+                      mesh_input: bool = False) -> str:
     """Combined fragment text appended to the character's appearance
     (PromptBuilder; face_only for portrait/expression prompts; ``profile``
     overrides the stored profile for dry-run previews). Empty without
@@ -506,7 +520,7 @@ def appearance_suffix(character_name: str, face_only: bool = False,
     ``back_view=True`` is a render seen from behind: only exposed fragments
     of slots declared ``back: true`` survive."""
     frags = prompt_fragments(character_name, face_only=face_only,
-                             profile=profile, back_view=back_view)
+                             profile=profile, back_view=back_view, mesh_input=mesh_input)
     parts = frags["general"] + frags["exposed"]
     return ", ".join(parts)
 

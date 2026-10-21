@@ -126,7 +126,8 @@ def read_manifest(sidecar: Path) -> Optional[Dict[str, Any]]:
         if isinstance(pieces, dict):
             items = meta.get(ikey)
             return {"pieces": {str(k): str(v) for k, v in pieces.items() if v},
-                    "items": [str(i) for i in (items or []) if i]}
+                    "items": [str(i) for i in (items or []) if i],
+                    "mesh_variant": meta.get("mesh_variant", "")}
     return None
 
 
@@ -158,8 +159,9 @@ def _entry_valid(signature: str, manifest: Optional[Dict[str, Any]],
         used = set(manifest["pieces"].values()) | set(manifest["items"])
         if not used.issubset(owned):
             return False
-        return _sign(manifest["pieces"], manifest["items"],
-                     character_name) == base
+        from app.core.model_refs import mesh_signature
+        return mesh_signature(manifest["pieces"], manifest["items"],
+                              character_name, manifest.get("mesh_variant", "")) == base
     return base in reachable()
 
 

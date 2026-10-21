@@ -195,8 +195,8 @@ def _signature(pieces: Dict[str, str], character_name: str = "") -> str:
     md5("") while the world looks for md5("wearing: …") — a cache miss, a
     second GPU render, and a GC that reports the batch's own entry stale on
     every pass."""
-    from app.core.model_refs import outfit_signature
-    return outfit_signature(pieces, [], character_name)
+    from app.core.model_refs import mesh_signature, mesh_variant
+    return mesh_signature(pieces, [], character_name, mesh_variant(character_name, pieces))
 
 
 def _combo_label(pieces: Dict[str, str],

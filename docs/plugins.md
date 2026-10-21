@@ -1402,3 +1402,85 @@ World and character overrides and state saves reject excluded fields for
 known groups. Unknown group ids retain their existing validation behavior.
 At runtime, excluded stored overrides and state fields are ignored, so a
 changed declaration takes effect without rewriting stored data.
+
+### Procedural mesh parts (declaration interface)
+
+A slot may declare `mesh_part` to select a separate mesh-input variant. The
+switch remains an ordinary body-editor attribute; the core uses generic slot
+and rig identifiers only.
+
+```yaml
+body_slots:
+  - id: example_slot
+    attributes:
+      switch: {type: select, options: ["off", "on"]}
+      size: {type: select, options: [small, large]}
+    mesh_part:
+      switch: switch
+      rig: example_part
+      tpose_prompt: "flat {size} slot"
+      size_attribute: size
+      size_factors: {small: 1.0, large: 1.5}
+      params: {radius: 0.02}
+    rigs:
+      - id: example_part
+        op: appendage_chain
+        chains:
+          - - {bone: ExamplePart, parent: Hips}
+            - {bone: ExampleTip, parent: ExamplePart}
+        rigid_tail: 1
+        params: {} # Supply the normal appendage_chain parameters for switch off.
+      - id: example_pods
+        op: attached_part_bone
+        applies_to: {attributes.switch: ["on"]}
+        chains: [[{bone: ExamplePods, parent: Hips}]]
+```
+
+`mesh_part.switch` must name a declared select with the string option `"on"`.
+`rig` names a rig on the same slot; `size_attribute` names a declared attribute.
+`size_factors` maps a subset of that attribute's options to finite positive
+numbers (booleans are rejected). Missing size entries use 1.0. `tpose_prompt`
+is a non-empty string with the usual fragment placeholders. `params` is a
+mapping; execution validates operation-specific parameters. A malformed
+`mesh_part` rejects the package rather than loading an incomplete variant.
+
+When the slot applies and its stored switch equals `"on"`, its named group
+keeps its ID and chains but emits `op: attached_part` and parameters
+`{...mesh_part.params, size_factor: <resolved factor>}`. This changes the mesh
+fingerprint while preserving state and motion group references. The companion
+`attached_part_bone` accepts only one-link chains and empty parameters. These
+are interfaces for the later procedural Blender builder; declaration support
+alone does not build geometry. Other rig operations keep their existing rules.
+
+Only mesh-input occasions `tpose` and `tpose_view` replace an exposed slot's
+fragment with `tpose_prompt` and suppress its slot LoRAs. Covered slots, ordinary
+expressions, outfit previews and pose references retain their normal behavior.
+The main render and enabled extra views share the mesh variant. Changing the
+switch schedules missing T-pose inputs followed by the missing mesh, regardless
+of the character's automatic-generation option. Generation runs outside profile
+locks; disabled media is logged. Busy mesh lanes are retried while the requested
+signature remains current. Main and extra-view prompts share a captured slot
+profile, so a later switch edit cannot poison an earlier variant’s reference.
+
+`model_refs.current_outfit_state` is the mesh-input signature. Exposed active
+slots append sorted `|mesh:<package>.<slot>=on` tokens before hashing. Ordinary
+outfit/expression/pose keys remain unchanged. Reference and mesh manifests store
+`mesh_variant` so GC can validate either cached variant after switching back.
+Nearest-model fallback requires the same variant. Stored extension metadata
+records `group_ops` and attached groups’ `group_params`; an `attached_part` group exposes status, reason,
+`protrusion_mm` and warning in the model panel's Part row. Built parts are green;
+a protrusion above `protrusion_warn_mm` (default 12 mm) is yellow; failures show
+the reason in red. The metrics and builder implementation belong to the later
+procedural operation work package.
+
+### Rigid chain tails
+
+`rigs[].rigid_tail` is a declaration-only integer, default 0, satisfying
+`0 <= rigid_tail < len(chain)` for every chain. It is transported in motion
+payloads and excluded from mesh fingerprints and editable motion fields.
+The last N links follow their parent's deformed position and rotation while
+keeping their own bind size: they inherit no extension scale and receive no
+independent sag, swing, straightening or state length/girth. At least the root
+remains driven. For two unit links, parent length 1.5 moves the rigid tip head
+1.5 units from the parent head while the tip's own axes remain unit length.
+Removing the group or disposing motion restores the original bind transforms.

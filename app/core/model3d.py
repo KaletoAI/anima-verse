@@ -584,6 +584,9 @@ def find_model3d_serving(character_name: str) -> tuple:
             manifest = _stored_manifest(character_name, p.stem)
             if manifest is None:
                 continue
+            from app.core.model_refs import mesh_variant
+            if manifest.get("mesh_variant", "") != mesh_variant(character_name, pieces):
+                continue
             score = outfit_similarity(pieces, items,
                                       manifest["pieces"], manifest["items"])
             # Ties: prefer the newest neutral outfit entry.
@@ -756,6 +759,24 @@ def versioned_model_urls(character_name: str, enc_base: str) -> Dict[str, str]:
     return _finish_model_urls(captured, publication)
 
 
+def attached_part_info(extension):
+    """Read stored part metrics; declarations describe the served model, not today's switch."""
+    groups = extension.get("group_ops") or {}
+    part_ids = [key for key, op in groups.items() if op == "attached_part"]
+    if not part_ids:
+        return None
+    metrics = extension.get("metrics") or {}
+    rows = [{"protrusion_warn_mm": ((extension.get("group_params") or {}).get(key) or {}).get("protrusion_warn_mm", 12),
+             **(metrics.get(key) or {})} for key in part_ids]
+    failed = next((row for row in rows if row.get("status") == "failed"), None)
+    row = failed or max(rows, key=lambda r: r.get("protrusion_mm") or 0)
+    protrusion = row.get("protrusion_mm")
+    status = row.get("status", extension.get("status", "not_found"))
+    return {"status": status, "reason": row.get("reason") or extension.get("reason", ""),
+            "protrusion_mm": protrusion,
+            "warning": bool(protrusion is not None and protrusion > row.get("protrusion_warn_mm", 12))}
+
+
 @_model_reader
 def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, Any]:
     """Status of the mesh for the CURRENTLY worn outfit: cached file + meta,
@@ -849,6 +870,9 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         # the file itself); "low" only once it has been built.
         from app.core.extension_rig import extension_metadata
         info.setdefault("extension_rig", extension_metadata(character_name, profile=profile, signature=path.stem))
+        part = attached_part_info(info["extension_rig"])
+        if part is not None:
+            info["attached_part"] = part
         info["model_rev"] = model_revision(path)
         info["tiers"] = available_tiers(path)
         low = tier_variant(path, LOW_TIER)
@@ -1072,6 +1096,8 @@ def _auto_extension_rig(character_name: str, path: Path,
         return {"ok": previous.get("status") != "failed", "applied": False, "noop": True, "extension_rig": previous}
     groups = [g for g in resolved_extension_groups(character_name, profile=profile, signature=path.stem) if g["enabled"]]
     state = {"fingerprint": fingerprint, "groups": [g["id"] for g in declarations],
+             "group_ops": {g["id"]: g["op"] for g in declarations},
+             "group_params": {g["id"]: g["params"] for g in declarations if g["op"] == "attached_part"},
              "status": "not_found" if groups else "none_applicable",
              "reason": "", "has_applied": previous.get("has_applied", previous.get("status") == "applied"), "attempted": True, "attempted_at": utc_now_iso(), "metrics": {}, "per_tier": {}}
     meta["extension_rig"] = state
@@ -1250,6 +1276,7 @@ def _save_uploaded_model(character_name: str, original_filename: str,
     _publish_model_bytes(target, contents)
     if texture is not None:
         _publish_model_bytes(target.with_suffix(".png"), texture)
+    from app.core.model_refs import mesh_variant
     meta = {
         "created_at": utc_now_iso(),
         "source": "upload",
@@ -1261,6 +1288,7 @@ def _save_uploaded_model(character_name: str, original_filename: str,
         "character": character_name,
         # Manifest (outfit_cache_gc) — an upload is made FOR the worn
         # combination, so its pieces are exactly what this signature stands for.
+        "mesh_variant": mesh_variant(character_name, pieces),
         "pieces": dict(pieces or {}),
         "items": list(items or []),
     }
@@ -1847,7 +1875,8 @@ def _ref_manifest(ref_image: Path) -> Dict[str, Any]:
         return {}
     items = meta.get("equipped_items")
     return {"pieces": {str(k): str(v) for k, v in pieces.items() if v},
-            "items": [str(i) for i in (items or []) if i]}
+            "items": [str(i) for i in (items or []) if i],
+            "mesh_variant": meta.get("mesh_variant", "")}
 
 
 def _store_unrigged_model(character_name: str, signature: str, result: Dict[str, Any],

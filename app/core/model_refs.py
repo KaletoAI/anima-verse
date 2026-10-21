@@ -491,19 +491,36 @@ def outfit_signature(equipped_pieces: Optional[Dict[str, str]],
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
-def current_outfit_state(character_name: str) -> tuple:
-    """(equipped_pieces, equipped_items, signature) of the CURRENT worn
-    state. The signature comes from ``outfit_signature`` — the equipped
-    state, or the free-text outfit when nothing structured is worn — so both
-    caches agree on what counts as "the same outfit combination". Public:
-    the per-outfit mesh store (app/core/model3d.py) keys on the same
-    signature.
+def mesh_variant(character_name, pieces=None, profile=None):
+    """Stable token for exposed, active slot parts; empty preserves historical keys."""
+    from app.core.body_slots import slots_for_character, mesh_part_active, is_slot_exposed
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    profile = dict(profile)
+    if pieces is not None:
+        profile["equipped_pieces"] = pieces
+    return "".join(f"|mesh:{slot.package_id}.{slot.id}=on" for slot in sorted(
+        slots_for_character(character_name, profile=profile), key=lambda slot: (slot.package_id, slot.id))
+        if mesh_part_active(slot, profile) and is_slot_exposed(slot, profile))
 
-    Mesh inputs always use this outfit-only signature."""
+
+def mesh_signature(pieces, items, character_name, variant):
+    """Hash the ordinary outfit plus a recorded mesh variant, including for cache GC."""
+    import hashlib
+    raw = outfit_signature_raw(pieces, items, character_name) + variant
+    return hashlib.md5(raw.encode()).hexdigest()[:12]
+
+
+def current_outfit_state(character_name: str) -> tuple:
+    """THE mesh-input signature: worn outfit plus exposed procedural part variant.
+
+    Expression, preview and ordinary pose keys use outfit_signature instead.
+    """
     from app.models.inventory import get_equipped_pieces, get_equipped_items
     pieces = get_equipped_pieces(character_name)
     items = get_equipped_items(character_name)
-    sig = outfit_signature(pieces, items, character_name)
+    sig = mesh_signature(pieces, items, character_name, mesh_variant(character_name, pieces))
     return pieces, items, sig
 
 
@@ -538,7 +555,9 @@ def find_ref_image(character_name: str, kind: str,
     candidates = [signature]
     if signature is None:
         try:
-            _, _, sig = current_outfit_state(character_name)
+            pieces, items, sig = current_outfit_state(character_name)
+            if kind == "pose":
+                sig = outfit_signature(pieces, items, character_name)
         except Exception:
             return None
         candidates = [pose_reference_signature(character_name, sig), sig] if kind == "pose" else [sig]
@@ -764,6 +783,16 @@ def generate_model_ref_images(character_name: str,
         pieces, items, signature = current_outfit_state(character_name)
     if is_state_fork(signature) or "-p" in signature:
         raise ValueError("Mesh-input signatures must be neutral outfit signatures")
+    from app.models.character import get_character_profile
+    from copy import deepcopy
+    mesh_profile = deepcopy(get_character_profile(character_name) or {})
+    mesh_profile["equipped_pieces"] = dict(pieces or {})
+    from app.core.body_slots import slots_for_character
+    if (any(slot.mesh_part for slot in slots_for_character(character_name, profile=mesh_profile))
+            and mesh_signature(pieces, items, character_name,
+                               mesh_variant(character_name, pieces, mesh_profile)) != signature):
+        logger.info("Skipping superseded mesh input for %s (%s)", character_name, signature)
+        return {}
     neutral = signature
     signatures = {"tpose": signature, "pose": signature}
     # Non-humanoid characters get their own mesh-input pose (a T-pose makes no
@@ -817,7 +846,7 @@ def generate_model_ref_images(character_name: str,
             modifier_scope.close()
             if kind == "pose":
                 modifier_scope.enter_context(image_modifier_snapshot(character_name))
-            signature = (pose_reference_signature(character_name, neutral)
+            signature = (pose_reference_signature(character_name, outfit_signature(pieces, items, character_name))
                          if kind == "pose" else neutral)
             if kind == "pose" and not force and find_ref_image(character_name, kind, signature):
                 continue
@@ -851,7 +880,8 @@ def generate_model_ref_images(character_name: str,
                     apply_state_modifiers=not _tpose,
                     # Wardrobe previews use the normal character match;
                     # only mesh-input references use the T-pose match.
-                    occasion="tpose" if _tpose else "expression")
+                    occasion="tpose" if _tpose else "expression",
+                    mesh_input_profile=mesh_profile if _tpose else None)
             if tpose_view in (None, "main"):
                 results[kind] = str(path) if path else None
             if path is None:
@@ -886,6 +916,7 @@ def generate_model_ref_images(character_name: str,
                             output_stem=refs_dir / f"{view_kind}_{signature}",
                             apply_state_modifiers=False,
                             occasion="tpose_view",
+                            mesh_input_profile=mesh_profile,
                             # Seen from behind, the species package decides
                             # which exposed anatomy still shows (body slot
                             # `back: true`); front-only fragments and their
@@ -1018,15 +1049,39 @@ def schedule_outfit_render(character_name: str) -> None:
 
 
 def trigger_now(character_name: str, kinds: Optional[tuple] = None, *,
-                tpose_view: Optional[str] = None) -> None:
+                tpose_view: Optional[str] = None, force: bool = True,
+                blocking: bool = False, pieces=None, items=None, signature=None) -> None:
     """Manual trigger (UI button): fires the render immediately — no debounce,
     force=True so a fresh render replaces the cached one of the current
     combination. ``kinds`` narrows to specific images (each tab passes its
     own, so wardrobe and 3D generate independently); None = the per-image
     auto toggles decide, like the automatic trigger. ``tpose_view`` narrows
-    the T-pose pass to one view while retaining its lock and status lane."""
+    the T-pose pass to one view while retaining its lock and status lane.
+    ``blocking=True`` waits in the T-pose lane for a switch-triggered input
+    pass; ``force=False`` then reuses cached views. The optional outfit triple
+    captures its intended signature and superseded requests are skipped."""
+    if blocking:
+        selected = tuple(kinds) if kinds is not None else tuple(
+            k for k, enabled in get_auto_kinds(character_name).items() if enabled)
+        _cancel_timers(character_name, selected)
+        # Used by the switch worker: complete cached/missing inputs before mesh scheduling.
+        key = (character_name, "tpose")
+        with _kind_lock(key):
+            if signature is not None and current_outfit_state(character_name)[2] != signature:
+                return
+            from app.core.timeutils import utc_now
+            with _lock:
+                _running[key] = utc_now()
+            try:
+                generate_model_ref_images(character_name, kinds=selected, force=force,
+                                          tpose_view=tpose_view, pieces=pieces, items=items,
+                                          signature=signature)
+            finally:
+                with _lock:
+                    _running.pop(key, None)
+        return
     if tpose_view == "face":
-        _start_face_view(character_name, force=True)
+        _start_face_view(character_name, force=force)
         return
     auto = get_auto_kinds(character_name)
     auto_kinds = tuple(k for k in REF_KINDS if auto.get(k))
@@ -1040,9 +1095,9 @@ def trigger_now(character_name: str, kinds: Optional[tuple] = None, *,
     # manual run — the manual run supersedes it, for exactly these kinds.
     _cancel_timers(character_name, kinds)
     if tpose_view is None:
-        _fire_kinds(character_name, kinds, force=True)
+        _fire_kinds(character_name, kinds, force=force)
     else:
-        _fire_kinds(character_name, kinds, force=True, tpose_view=tpose_view)
+        _fire_kinds(character_name, kinds, force=force, tpose_view=tpose_view)
 
 
 def current_profile_image(character_name: str) -> Optional[Path]:

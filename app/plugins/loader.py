@@ -236,6 +236,14 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
                 except (ValueError, TypeError, OverflowError) as exc:
                     logger.warning("Package %s slot %s: rig dropped: %s", pkg.id, bdef["id"], exc)
             rigs = _resolve_rig_dependencies(rigs, pkg.id, bdef["id"])
+        mesh_part = None
+        if "mesh_part" in bdef:
+            from app.plugins.registry import MeshPartSpec
+            try:
+                mesh_part = MeshPartSpec.parse(bdef["mesh_part"], bdef.get("attributes") or {}, rigs)
+            except (ValueError, TypeError, OverflowError) as exc:
+                logger.error("Package %s slot %s: invalid mesh_part: %s", pkg.id, bdef["id"], exc)
+                return None
         pkg.body_slots.append(BodySlotSpec(
             id=str(bdef["id"]).strip(),
             package_id=pkg.id,
@@ -249,6 +257,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
             face=bool(bdef.get("face", False)),
             back=bool(bdef.get("back", False)),
             rigs=rigs,
+            mesh_part=mesh_part,
         ))
     # piece_slots entries: plain string OR {id, label}
     for pdef in meta.get("piece_slots") or []:
@@ -383,6 +392,19 @@ def _collect_packages(base: Path, *, warn: bool = True,
     for pkg in found.values():
         for slot in pkg.body_slots:
             slot.rigs = _resolve_rig_dependencies(slot.rigs, pkg.id, slot.id)
+    # A part variant is only usable while its owning geometry group survives.
+    for pkg in list(found.values()):
+        if any(slot.mesh_part and slot.mesh_part.rig not in {rig.id for rig in slot.rigs}
+               for slot in pkg.body_slots):
+            logger.error("Package %s: mesh_part rig lost during conflict resolution", pkg.id)
+            found.pop(pkg.id)
+    while True:
+        broken = [pkg for pkg in found.values() if any(dep not in found for dep in pkg.requires)]
+        if not broken:
+            break
+        for pkg in broken:
+            logger.warning("Package %s inert after mesh_part dependency rejection", pkg.id)
+            found.pop(pkg.id)
     return [found[k] for k in sorted(found)]
 
 

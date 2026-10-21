@@ -194,6 +194,7 @@ def render_outfit(
     equipped_pieces: Optional[Dict[str, str]] = None,
     equipped_items: Optional[List[str]] = None,
     back_view: bool = False,
+    mesh_input: bool = False,
 ) -> Dict[str, str]:
     """Builds the outfit description — pieces + items + fallback for empty slots.
 
@@ -293,7 +294,7 @@ def render_outfit(
         slot_loras = exposed_slot_loras(character_name or "",
                                         profile=profile,
                                         equipped_pieces=dict(pieces or {}),
-                                        back_view=back_view)
+                                        back_view=back_view, mesh_input=mesh_input)
     except Exception:
         slot_loras = []
 

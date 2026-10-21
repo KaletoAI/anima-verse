@@ -871,7 +871,8 @@ def generate_expression_image(character_name: str,
                               reference_image: Optional[Path] = None,
                               occasion: str = "",
                               record_provenance: bool = False,
-                              bare_prompt: Optional[str] = None) -> Optional[Path]:
+                              bare_prompt: Optional[str] = None,
+                              mesh_input_profile: Optional[Dict[str, Any]] = None) -> Optional[Path]:
     """Generate an expression/pose variant.
 
     Character + equipped items + pose + expression -> text-prompt-based
@@ -933,15 +934,22 @@ def generate_expression_image(character_name: str,
             equipped_pieces = equipped_pieces or {}
             equipped_items = equipped_items or []
 
+    _occasion = occasion or ("tpose" if image_use_case in TPOSE_USE_CASES else "expression")
+    _mesh_input = _occasion in ("tpose", "tpose_view")
+
     # Outfit text via the central renderer (plan §4). equipped_pieces/items
     # are passed in so set previews work (override against the profile state).
     from app.models.character import get_character_profile as _gcp_render
-    _render_profile = _gcp_render(character_name) or {}
+    _render_profile = (mesh_input_profile if _mesh_input and mesh_input_profile is not None
+                       else _gcp_render(character_name) or {})
+    _render_profile = dict(_render_profile)
+    _render_profile["equipped_pieces"] = dict(equipped_pieces or {})
     _rendered = {} if bare_prompt is not None else render_outfit(
         profile=_render_profile,
         equipped_pieces=equipped_pieces,
         equipped_items=equipped_items,
         back_view=back_view,
+        mesh_input=_mesh_input,
     )
     outfit_desc = _rendered.get("pieces", "")
     items_desc = _rendered.get("items", "")
@@ -1012,7 +1020,8 @@ def generate_expression_image(character_name: str,
     else:
         _expr_builder = PromptBuilder(character_name,
                                       apply_state_modifiers=apply_state_modifiers,
-                                      back_view=back_view)
+                                      back_view=back_view, mesh_input=_mesh_input,
+                                      body_profile=_render_profile if _mesh_input else None)
         persons = _expr_builder.detect_persons("", character_names=[character_name])
         appearance = persons[0].appearance if persons else get_character_appearance(character_name)
         actor_label = persons[0].actor_label if persons else character_name
@@ -1055,7 +1064,6 @@ def generate_expression_image(character_name: str,
     # the character's own match (tpose_workflow, else workflow, for the
     # T-pose occasion) is position 0, then the occasion chain; a failed
     # backend re-runs the render on the next entry.
-    _occasion = occasion or ("tpose" if image_use_case in TPOSE_USE_CASES else "expression")
 
     # Read the per-character override early — allows model/LoRA overrides
     # per character (configurable in the character editor). The render match
@@ -1254,7 +1262,9 @@ def generate_expression_image(character_name: str,
         _gen_meta = getattr(_tls, 'last_image_meta', None) if _tls is not None else None
         if _gen_meta is None:
             _gen_meta = getattr(image_skill, 'last_image_meta', {}) or {}
+        from app.core.model_refs import mesh_variant
         _expr_meta = {
+            **({"mesh_variant": mesh_variant(character_name, equipped_pieces, _render_profile)} if _mesh_input else {}),
             "provider": _gen_meta.get("backend_type", ""),
             "service": _gen_meta.get("backend", ""),
             "model": _gen_meta.get("model", ""),

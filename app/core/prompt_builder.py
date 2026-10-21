@@ -240,7 +240,9 @@ def strip_face_terms(text: str) -> str:
 def person_description(name: str, *,
                        include_outfit: bool = False,
                        apply_state_modifiers: bool = True,
-                       back_view: bool = False) -> str:
+                       back_view: bool = False,
+                       mesh_input: bool = False,
+                       body_profile: Optional[Dict[str, Any]] = None) -> str:
     """THE text description of a person for image prompts.
 
     Every path that describes a person — PromptBuilder (chat images,
@@ -275,7 +277,7 @@ def person_description(name: str, *,
     # Empty without species packages — safe no-op.
     try:
         from app.core.body_slots import appearance_suffix
-        suffix = appearance_suffix(name, back_view=back_view)
+        suffix = appearance_suffix(name, profile=body_profile, back_view=back_view, mesh_input=mesh_input)
     except Exception:
         suffix = ""
     if suffix:
@@ -284,7 +286,7 @@ def person_description(name: str, *,
         try:
             from app.core.outfit_renderer import render_outfit
             # render_outfit 'full' already carries its own 'wearing:' prefix
-            outfit = (render_outfit(character_name=name).get("full", "") or "").strip()
+            outfit = (render_outfit(character_name=name, mesh_input=mesh_input).get("full", "") or "").strip()
         except Exception:
             outfit = ""
         if outfit:
@@ -312,7 +314,9 @@ class PromptBuilder:
 
     def __init__(self, character_name: str, *,
                  apply_state_modifiers: bool = True,
-                 back_view: bool = False):
+                 back_view: bool = False,
+                 mesh_input: bool = False,
+                 body_profile: Optional[Dict[str, Any]] = None):
         self.user_id = ""
         self.character_name = character_name
         # State-triggered image_modifier directives rewrite the person
@@ -322,6 +326,8 @@ class PromptBuilder:
         # A render seen from behind (the T-pose back view) keeps only the
         # exposed body-slot fragments of slots declared visible from behind.
         self.back_view = back_view
+        self.mesh_input = mesh_input
+        self.body_profile = body_profile
 
     # ------------------------------------------------------------------
     # Schritt 1: Personen erkennen
@@ -497,7 +503,8 @@ class PromptBuilder:
         person_description so previews and renders cannot drift."""
         return person_description(
             name, apply_state_modifiers=self.apply_state_modifiers,
-            back_view=self.back_view)
+            back_view=self.back_view, mesh_input=self.mesh_input,
+            body_profile=self.body_profile if name == self.character_name else None)
 
     def _assign_actor_labels(self, persons: List[Person]) -> None:
         """Setzt actor_label auf den echten Character-Namen."""
@@ -727,7 +734,7 @@ class PromptBuilder:
                 # User-Avatar: gleiche Outfit-Kette wie Character.
                 active_char = get_active_character() or person.name
                 if active_char:
-                    outfit_text = render_outfit(character_name=active_char).get("full", "")
+                    outfit_text = render_outfit(character_name=active_char, mesh_input=self.mesh_input).get("full", "")
                     ref_path = self._resolve_person_ref_image(
                         Person(name=active_char, appearance=person.appearance,
                                gender=person.gender, is_agent=False)
@@ -740,7 +747,7 @@ class PromptBuilder:
                         if candidate.exists():
                             ref_path = str(candidate)
             else:
-                outfit_text = render_outfit(character_name=person.name).get("full", "")
+                outfit_text = render_outfit(character_name=person.name, mesh_input=self.mesh_input).get("full", "")
                 ref_path = self._resolve_person_ref_image(person)
 
             if outfit_text:

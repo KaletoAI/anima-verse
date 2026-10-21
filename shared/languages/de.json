@@ -2775,6 +2775,10 @@
     "You catch {reader} reading {item}.": "Du ertappst {reader} beim Lesen in {item}.",
     "You notice {reader} secretly reading {item}.": "Du bemerkst, wie {reader} heimlich in {item} liest.",
     "{owner} is watching.": "{owner} schaut zu.",
-    "{name} caught you reading.": "{name} hat dich beim Lesen ertappt."
+    "{name} caught you reading.": "{name} hat dich beim Lesen ertappt.",
+    "Part": "Teil",
+    "built": "gebaut",
+    "not built": "nicht gebaut",
+    "built — body still shows a protrusion of {n} mm; regenerate the T-pose": "gebaut — der Körper zeigt noch einen Vorsprung von {n} mm; T-Pose neu generieren"
   }
 }

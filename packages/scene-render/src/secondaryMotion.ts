@@ -18,6 +18,9 @@ export interface MotionGroup {
   length: number
   girth: number
   scale_axis?: 'centroid' | 'bone'
+  /** The last N links of each chain ride rigidly on their parent: its rotation and
+   * position, never its scale, and no rest, sag, stretch, swing or state extent. */
+  rigid_tail?: number
   gravity_scale: number
   sag_max_deg: number
   spill_max_deg: number
@@ -281,6 +284,8 @@ export function createSecondaryMotion(
   root.traverse(o => { if ((o as Bone).isBone) bindHeads.set(o as Bone, o.getWorldPosition(new three.Vector3())) })
   const byName = new Map([...binds.values()].map(b => [normBoneName(b.bone.name), b]))
   let particles: Particle[] = []
+  /** rigid_tail links, parent first: carried by their parent, never driven. */
+  let rigids: Bind[] = []
   let far = false
   let disposed = false
   const restore = (b: Bind) => {
@@ -295,6 +300,7 @@ export function createSecondaryMotion(
     const extensionNames = new Set(Object.values(next?.groups ?? {}).flatMap(group =>
       group.bones.map(normBoneName)))
     const nextParticles: Particle[] = []
+    const nextRigids: Bind[] = []
     for (const params of Object.values(next?.groups ?? {})) {
       const chain = params.bones.map(name => byName.get(normBoneName(name)))
       // Absent/partial groups and vertices without influence are ordinary skips.
@@ -401,8 +407,20 @@ export function createSecondaryMotion(
           }
         }
       }
+      // Links within rigid_tail of a chain end are carried, not simulated.
+      const tail = Math.max(0, Math.floor(params.rigid_tail ?? 0))
+      const fromLeaf = (b: Bind): number => {
+        const child = (chain as Bind[]).find(c => c.bone.parent === b.bone)
+        return child ? 1 + fromLeaf(child) : 0
+      }
       for (const bind of chain as Bind[]) {
         if (selected.has(bind.bone)) continue
+        if (tail > 0 && !roots.includes(bind) && fromLeaf(bind) < tail) {
+          selected.add(bind.bone)
+          bind.bone.matrixAutoUpdate = false
+          nextRigids.push(bind)
+          continue
+        }
         selected.add(bind.bone)
         const to = restAngle(params)
         const old = previous.get(bind.bone)
@@ -469,10 +487,11 @@ export function createSecondaryMotion(
           head: new three.Vector3(), centre: new three.Vector3(), force: new three.Vector3(), torque: new three.Vector3(), weight: 0, q: new three.Quaternion() }
       }
     }
-    for (const old of particles) if (!selected.has(old.bind.bone)) {
-      restore(old.bind)
-      old.bind.bone.updateWorldMatrix(false, true)
+    for (const old of [...particles.map(p => p.bind), ...rigids]) if (!selected.has(old.bone)) {
+      restore(old)
+      old.bone.updateWorldMatrix(false, true)
     }
+    rigids = nextRigids.sort((a, b) => a.depth - b.depth)
     const drivenBones = new Set(nextParticles.map(st => st.bind.bone))
     const drivenDepth = (st: Particle) => {
       let depth = 0
@@ -804,12 +823,28 @@ export function createSecondaryMotion(
         // matrix = local x anchorFull^-1 x world.
         if (drivenAncestor) b.bone.matrix.copy(b.local).multiply(inverseAnchor.copy(anchorFull).invert()).multiply(b.bone.matrixWorld)
       }
+      // A rigid tail link takes its parent's frame without the parent's own
+      // extension scale, at the parent's fully deformed position — the same
+      // rule as a driven child, minus every motion of its own.
+      for (const b of rigids) {
+        const parent = b.bone.parent!
+        const owner = driven.get(parent as Bone)
+        anchorFull.copy(parent.matrixWorld).multiply(b.local)
+        anchor.copy(owner ? owner.bind.pureWorld : parent.matrixWorld).multiply(b.local)
+        anchor.setPosition(temp.setFromMatrixPosition(anchorFull))
+        b.bone.matrixWorld.copy(anchor)
+        b.pureWorld.copy(anchor)
+        // parent.matrixWorld x matrix must reproduce that world on the publish below.
+        b.bone.matrix.copy(inverseAnchor.copy(parent.matrixWorld).invert()).multiply(anchor)
+        b.bone.matrixWorldNeedsUpdate = true
+      }
       // Publish all non-driven descendants once after the chain is complete.
       root.updateMatrixWorld(true)
     },
     dispose() {
       for (const st of particles) restore(st.bind)
-      particles = []; binds.clear(); sums.clear(); byName.clear(); disposed = true
+      for (const b of rigids) restore(b)
+      particles = []; rigids = []; binds.clear(); sums.clear(); byName.clear(); disposed = true
     },
   }
 }

@@ -83,6 +83,7 @@ class RigSpec:
     length: float = 1.0
     girth: float = 1.0
     scale_axis: str = "centroid"
+    rigid_tail: int = 0          # last links per chain carried rigidly by their parent (motion only)
     freq_hz: float = 2.2
     zeta: float = 0.15
     gravity: float = 0.35
@@ -160,6 +161,8 @@ class RigSpec:
                 earlier.add(bone)
                 seen.add(key)
             result.append(clean)
+        if raw["op"].strip() == "attached_part_bone" and (params or any(len(c) != 1 for c in result)):
+            raise ValueError("attached_part_bone requires one-link chains and no params")
         spec = cls(raw["id"].strip(), raw["op"].strip(), result,
                    dict(params), dict(conditions))
         spec.external_parents = [chain[0]["parent"] for chain in result
@@ -177,6 +180,10 @@ class RigSpec:
         if axis not in ("centroid", "bone"):
             raise ValueError("rig.scale_axis must be centroid or bone")
         spec.scale_axis = axis
+        tail = raw.get("rigid_tail", spec.rigid_tail)
+        if isinstance(tail, bool) or not isinstance(tail, int) or tail < 0 or any(tail >= len(chain) for chain in result):
+            raise ValueError("rig.rigid_tail must be a whole number below every chain length")
+        spec.rigid_tail = tail
         bounds = {"length": (.5, 3), "girth": (.5, 2), "freq_hz": (0, None), "zeta": (0, None),
                   "gravity": (0, None), "head_sag": (0, 1), "spill": (0, 1), "translate": (0, 1), "flatten": (0, 1), "stretch": (0, 1), "spread": (0, 1), "gain": (0, 1),
                   "max_deg": (0, 180), "rest_max_deg": (0, 180),
@@ -235,6 +242,46 @@ class RigSpec:
 
 
 @dataclass
+class MeshPartSpec:
+    """Slot-owned declaration for a procedural mesh input variant."""
+    switch: str
+    rig: str
+    tpose_prompt: str
+    size_attribute: str
+    size_factors: Dict[str, float]
+    params: Dict[str, Any]
+
+    @classmethod
+    def parse(cls, raw, attributes, rigs):
+        import math
+        if not isinstance(raw, dict):
+            raise ValueError("mesh_part must be a mapping")
+        for key in ("switch", "rig", "tpose_prompt", "size_attribute"):
+            if not isinstance(raw.get(key), str) or not raw[key].strip():
+                raise ValueError(f"mesh_part.{key} must be a non-empty string")
+        switch = attributes.get(raw["switch"], {})
+        if (not isinstance(switch, dict) or switch.get("type") != "select"
+                or not isinstance(switch.get("options"), list) or "on" not in switch["options"]):
+            raise ValueError("mesh_part.switch requires a select with on option")
+        if raw["rig"] not in {rig.id for rig in rigs}:
+            raise ValueError("mesh_part.rig must name a rig of this slot")
+        if not isinstance(attributes.get(raw["size_attribute"]), dict):
+            raise ValueError("mesh_part.size_attribute must name a declared attribute")
+        factors = raw.get("size_factors", {})
+        options = attributes[raw["size_attribute"]].get("options", [])
+        if not isinstance(factors, dict) or any(
+                key not in options or isinstance(value, bool)
+                or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0
+                for key, value in factors.items()):
+            raise ValueError("mesh_part.size_factors requires declared options and finite positive values")
+        params = raw.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError("mesh_part.params must be a mapping")
+        return cls(raw["switch"], raw["rig"], raw["tpose_prompt"].strip(),
+                   raw["size_attribute"], dict(factors), dict(params))
+
+
+@dataclass
 class BodySlotSpec:
     """A body slot declared by a species package (plan-body-slots.md).
 
@@ -254,6 +301,7 @@ class BodySlotSpec:
     face: bool = False  # fragment also belongs into face/portrait prompts
     back: bool = False  # Include fragments in rear-view renders.
     rigs: List[RigSpec] = field(default_factory=list)
+    mesh_part: Optional[MeshPartSpec] = None
 
 
 @dataclass

@@ -15,7 +15,7 @@ def rig_groups_for(character_name, profile=None):
     Effective motion layers are resolved separately by motion_payload.
     Conditions use profile fields or ``attributes.<key>`` for this slot.
     """
-    from app.core.body_slots import normalize_condition_value, slots_for_character
+    from app.core.body_slots import mesh_part_active, normalize_condition_value, slots_for_character
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
@@ -42,7 +42,13 @@ def rig_groups_for(character_name, profile=None):
                     matches = False
                     break
             if matches:
-                groups.append(asdict(rig))
+                group = asdict(rig)
+                if mesh_part_active(slot, profile) and rig.id == slot.mesh_part.rig:
+                    part = slot.mesh_part
+                    group["op"] = "attached_part"
+                    group["params"] = {**part.params, "size_factor": part.size_factors.get(
+                        values.get(part.size_attribute), 1.0)}
+                groups.append(group)
     ordered = []
     while groups:
         ready = sorted([g for g in groups if not g["depends_on"] or any(
@@ -298,7 +304,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         values["gravity_scale"] = scale
         groups[group["id"]] = {
             "bones": [link["bone"] for chain in group["chains"] for link in chain],
-            **values, "scale_axis": group["scale_axis"], "rest_deg": max(-values["rest_max_deg"], min(rest or 0, values["rest_max_deg"])),
+            **values, "scale_axis": group["scale_axis"], "rigid_tail": group["rigid_tail"], "rest_deg": max(-values["rest_max_deg"], min(rest or 0, values["rest_max_deg"])),
         }
     inputs = {"declarations": declarations, "world": world, "equipment": equipment,
               "pieces": pieces, "coverage": coverage, "attributes": attributes,
@@ -315,7 +321,10 @@ def extension_metadata(character_name, profile=None, signature=None):
     groups = rig_groups_for(character_name, profile)
     overrides = model_extension_overrides(profile, signature)
     return {"fingerprint": extension_rig_fingerprint(groups, overrides),
-            "groups": [g["id"] for g in groups], "attempted": False,
+            "groups": [g["id"] for g in groups],
+            "group_ops": {g["id"]: g["op"] for g in groups},
+            "group_params": {g["id"]: g["params"] for g in groups if g["op"] == "attached_part"},
+            "attempted": False,
             "status": "not_found" if groups else "none_applicable",
             "reason": "No extension operation has run" if groups else "",
             "metrics": {}, "per_tier": {}}

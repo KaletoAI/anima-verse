@@ -1609,6 +1609,39 @@ def build_body_slots(character_name: str) -> Dict[str, Any]:
     }
 
 
+def _regenerate_mesh_part(character_name):
+    """Render missing neutral inputs, then request the missing mesh outside profile locks."""
+    from app.core import model_refs, model3d
+    from app.imagegen.base import MediaGenerationDisabled
+    try:
+        pieces, items, signature = model_refs.current_outfit_state(character_name)
+        if model3d.find_model3d(character_name, signature):
+            return
+        model_refs.trigger_now(character_name, kinds=("tpose",), force=False, blocking=True,
+                                             pieces=pieces, items=items, signature=signature)
+        # A later edit must not generate a mesh from a superseded input variant.
+        if model_refs.current_outfit_state(character_name)[2] != signature:
+            return
+        if model_refs.find_ref_image(character_name, "tpose", signature):
+            while model_refs.current_outfit_state(character_name)[2] == signature:
+                if model3d.find_model3d(character_name, signature):
+                    break
+                if model3d.trigger_generation(character_name) is not False:
+                    break
+                # A busy mesh lane must not discard an explicit switch request.
+                import time
+                time.sleep(2.0)
+    except MediaGenerationDisabled as exc:
+        logger.info("Part generation disabled for %s: %s", character_name, exc)
+    except Exception:
+        logger.exception("Part generation failed for %s", character_name)
+
+
+def _schedule_mesh_part_regeneration(character_name):
+    import threading
+    threading.Thread(target=_regenerate_mesh_part, args=(character_name,), daemon=True).start()
+
+
 def apply_body_slot_values(character_name: str,
                            slot_id: str, values: Dict[str, Any]) -> Dict[str, Any]:
     """Editor setter: store attribute values for one declared slot.
@@ -1634,13 +1667,23 @@ def apply_body_slot_values(character_name: str,
     if unknown:
         raise HTTPException(status_code=400,
                             detail=f"Unknown attribute(s): {', '.join(unknown)}")
-    for key, value in values.items():
-        if key == "exposed_always":
-            # Boolean flag from the editor arrives as "true"/"false" —
-            # a stored "false" STRING would stay truthy. Store True or
-            # remove the key entirely (empty value deletes).
-            value = True if str(value).strip().lower() in ("true", "1") else ""
-        set_slot_value(character_name, slot_id, key, value)
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile
+    switch_changed = False
+    with keyed_lock("character_profile", character_name):
+        before = get_character_profile(character_name) or {}
+        old_switch = ((before.get("body_slots") or {}).get(slot_id) or {}).get(spec.mesh_part.switch) if spec.mesh_part else None
+        for key, value in values.items():
+            if key == "exposed_always":
+                value = True if str(value).strip().lower() in ("true", "1") else ""
+            if set_slot_value(character_name, slot_id, key, value) is False:
+                raise HTTPException(status_code=500, detail="Failed to save body slot")
+        after = get_character_profile(character_name) or {}
+        if spec.mesh_part and spec.mesh_part.switch in values:
+            new_switch = ((after.get("body_slots") or {}).get(slot_id) or {}).get(spec.mesh_part.switch)
+            switch_changed = old_switch != new_switch
+    if switch_changed:
+        _schedule_mesh_part_regeneration(character_name)
     return {"status": "success", "slot": slot_id}
 
 
