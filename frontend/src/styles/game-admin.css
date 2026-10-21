@@ -3317,3 +3317,14 @@ a.ga-btn {
 .ga-hull-grid .ga-hint { overflow-wrap: anywhere; }
 .ga-hull-colour { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .ga-hull-footer { display: flex; justify-content: flex-end; }
+
+/* States -> Bone pose: one row per motion group, one narrow column per value. */
+.ga-bone-pose { overflow-x: auto; max-width: 100%; }
+.ga-bone-pose table { border-collapse: collapse; font-size: 12px; }
+.ga-bone-pose th { font-weight: 500; text-align: left; padding: 2px 6px; white-space: nowrap; }
+.ga-bone-pose thead th { font-size: 11px; color: var(--text-muted, #8b949e); vertical-align: bottom; white-space: normal; max-width: 92px; line-height: 1.25; }
+.ga-bone-pose thead th .ga-hint { display: inline-block; margin: 2px 0 0 !important; }
+.ga-bone-pose td { padding: 2px 4px; }
+.ga-bone-pose td .ga-input { width: 72px; padding: 2px 6px; }
+.ga-bone-pose td [role="alert"] { display: block; max-width: 72px; font-size: 10px; }
+.ga-bone-pose-na { color: var(--text-muted, #8b949e); padding-left: 6px; }

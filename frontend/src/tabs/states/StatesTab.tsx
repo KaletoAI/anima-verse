@@ -558,23 +558,38 @@ function DraftForm({ draft, blockKeys, statKeys, onUpdate, onToggleBlock }: Draf
       </Field>
 
       <Field label={t('Bone pose')}
-        hint={t('Rest angle is absolute in degrees. Other values are multipliers. Blank leaves the value unchanged; zero is explicit. Active states use the largest rest angle and multiply the other values.')}>
+        hint={<>{t('Rest angle is absolute in degrees. Other values are multipliers. Blank leaves the value unchanged; zero is explicit. Active states use the largest rest angle and multiply the other values.')} {t('Clamped per character to its maximum rest angle.')}</>}>
         {groupsError ? <p>{t('Failed to load motion groups')}</p> : groups.length === 0 ? <p>{t('No motion groups loaded')}</p> : null}
-        {groups.map(group => (
-          <fieldset key={group.id}>
-            <legend>{group.id}</legend>
-            <div className="ga-form-row">
-              {POSE_FIELDS.filter(field => group.controls == null || group.controls.includes(field === 'freq' ? 'freq_hz' : field === 'rest_deg' ? 'rest_max_deg' : field)).map(field => (
-                <Field key={field} label={poseLabels[field]} hint={<>{field === 'rest_deg' && <span>{t('Clamped per character to its maximum rest angle.')} </span>}<MotionPreviewHint field={field} /></>} compact>
-                  <MotionNumberInput value={draft.bone_pose[group.id]?.[field] ?? ''} optional
-                    min={field === 'rest_deg' ? -180 : ['length', 'girth'].includes(field) ? .5 : 0}
-                    max={field === 'rest_deg' ? 180 : ['length', 'girth'].includes(field) ? 2 : undefined}
-                    onCommit={text => updatePose(group.id, field, text)} />
-                </Field>
-              ))}
+        {groups.length > 0 && (() => {
+          const controlled = (group: typeof groups[number], field: PoseField) =>
+            group.controls == null || group.controls.includes(field === 'freq' ? 'freq_hz' : field === 'rest_deg' ? 'rest_max_deg' : field)
+          const columns = POSE_FIELDS.filter(field => groups.some(group => controlled(group, field)))
+          return (
+            <div className="ga-bone-pose">
+              <table>
+                <thead><tr>
+                  <th />
+                  {columns.map(field => <th key={field}>{poseLabels[field]}<MotionPreviewHint field={field} /></th>)}
+                </tr></thead>
+                <tbody>
+                  {groups.map(group => (
+                    <tr key={group.id}>
+                      <th scope="row">{group.id}</th>
+                      {columns.map(field => (
+                        <td key={field}>{controlled(group, field) ? (
+                          <MotionNumberInput value={draft.bone_pose[group.id]?.[field] ?? ''} optional
+                            min={field === 'rest_deg' ? -180 : ['length', 'girth'].includes(field) ? .5 : 0}
+                            max={field === 'rest_deg' ? 180 : ['length', 'girth'].includes(field) ? 2 : undefined}
+                            onCommit={text => updatePose(group.id, field, text)} />
+                        ) : <span className="ga-bone-pose-na">—</span>}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          </fieldset>
-        ))}
+          )
+        })()}
       </Field>
 
     </div>
