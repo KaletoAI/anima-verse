@@ -173,12 +173,18 @@ def extract_json_block(text: str, block_type: str) -> Dict[str, Any] | None:
         # ("attention_change": +5) and trailing commas before } or ].
         sanitized = re.sub(r'([:\[,]\s*)\+(\d)', r'\1\2', raw)
         sanitized = re.sub(r',(\s*[}\]])', r'\1', sanitized)
+        # German prose quotes opened typographically but closed with an ASCII
+        # quote („wie früher war") end the JSON string early. „ only ever
+        # opens a quotation, so the next ASCII quote on its line is its
+        # closing mark: turn it into “.
+        sanitized = re.sub(r'„([^"“”„\n]*)"', '„\\1“', sanitized)
         try:
             parsed = json.loads(sanitized)
             logger.info("Extracted %s JSON (after sanitize): %d keys", block_type, len(parsed))
             return parsed
         except json.JSONDecodeError as e2:
-            logger.warning("Failed to parse %s JSON: %s\nRaw: %s", block_type, e2, raw[:200])
+            logger.warning("Failed to parse %s JSON: %s\nNear: %r", block_type, e2,
+                           sanitized[max(0, e2.pos - 120):e2.pos + 40])
             return None
 
 

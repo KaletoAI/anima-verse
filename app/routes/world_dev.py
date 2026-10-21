@@ -21,6 +21,7 @@ from app.models.character import (
 router = APIRouter(prefix="/world-dev", tags=["world-dev"],
                    dependencies=[Depends(require_admin)])
 
+from app.core.paths import get_schemas_dir as _get_schemas_dir
 from app.core.layout_prompt import (
     load_schema as _load_schema, extract_json_block as _extract_json_block,
     layout_target, format_layout_location, format_layout_rooms,
