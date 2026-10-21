@@ -67,9 +67,15 @@ def extension_bone_names(character_name, profile=None):
             for chain in group["chains"] for link in chain}
 
 
+# Bump when app/blender/scripts/attached_part.py changes the part it builds from the
+# same declaration (its defaults live in the script): only attached models rebuild.
+ATTACHED_PART_BUILD = 2
+
+
 def extension_rig_fingerprint(groups, overrides=None):
     """Versioned identity of applicable declarations and model overrides."""
-    geometry = [{key: group[key] for key in ("id", "op", "chains", "params", "enabled", "flip") if key in group}
+    geometry = [{**{key: group[key] for key in ("id", "op", "chains", "params", "enabled", "flip") if key in group},
+                 **({"build": ATTACHED_PART_BUILD} if group.get("op") == "attached_part" else {})}
                 for group in groups]
     return _revision({"version": 16, "groups": sorted(geometry, key=lambda g: g["id"]),
                       "overrides": overrides or {}})

@@ -169,10 +169,12 @@ def blender_smoke(directory):
         if any(name.endswith('UpLeg') for name in w):
             assert (point - attachment_root).length <= .035, (tuple(point), w)
         # At the root the body's 45 mm full radial reweight makes it pure
-        # anchor. The root border must stay anchor-dominated after interpolation;
-        # pod contacts do not need skin weights.
+        # anchor. The root border must stay anchor-dominated after interpolation:
+        # the anchor itself plus the pods bone, which is parented to the anchor and
+        # does not follow a chain lift (a straight sweep brings the pods up to the
+        # root border). Pod contacts elsewhere do not need skin weights.
         if v.index in border and (point - attachment_root).length < .025:
-            assert w.get('mixamorig:Hips', 0) > .5, (tuple(point), w)
+            assert w.get('mixamorig:Hips', 0) + w.get('PartPods', 0) > .5, (tuple(point), w)
             root_border_count += 1
         if v.index in border:
             _,bi,_ = kd.find(part.matrix_world@v.co)

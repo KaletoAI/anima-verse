@@ -1509,9 +1509,10 @@ radius: 0.0165
 bend: [[0.85, 0.5, 0.38], [0.25, 0.97, 0.7]] # front, down, length fraction
 inner_extension: 0.015
 base_fraction: 0.15
-girth_max: 1.2
+girth_max: 1.0
 tip_start: 0.728
-tip_scale: 0.85
+tip_rim: 0.012
+tip_girth: 1.05
 first_link_start: 0.1
 relief:
   amplitude: 0.00035
@@ -1553,10 +1554,11 @@ decimate: 0.3
 protrusion_warn_mm: 12
 ```
 
-`bend` defines the two quadratic Bezier control legs. The shaft radius falls
-from 1 to .95 before the tip, with the base flare bounded by `girth_max`.
-The tip neck falls .95 to .89 over `.03*tip_scale`, the bulb rises .89 to .98
-over `.06*tip_scale`, then the rounded cap uses `.98*(1-u**2.4)**.55`.
+`bend` defines the two quadratic Bezier control legs. The sweep radius is constant
+(1) up to `tip_start`; an optional base flare `girth_max/(1+w(girth_max-1))`,
+`w=t/base_fraction`, widens the root (1.0 = straight). At `tip_start` a short rim
+steps smoothly up to `tip_girth` over `tip_rim` of the length, then the rounded cap
+uses `tip_girth*(1-u**2.4)**.55`.
 Flattening relaxes the front window and moves coincident seam copies together,
 only inward. Radial reweighting transfers only `*UpLeg` weights to the anchor.
 The body union is confined to `body_window`; the hidden band retains up to

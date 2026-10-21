@@ -22,8 +22,8 @@ DEFAULTS = {
     'size_factor': 1.0, 'anchor_bone': 'Hips', 'anchor_drop': .09,
     'root_sink': .006, 'length': .095, 'radius': .0165,
     'bend': [[.85, .5, .38], [.25, .97, .7]], 'inner_extension': .015,
-    'base_fraction': .15, 'girth_max': 1.2, 'tip_start': 1 - .32 * .85,
-    'tip_scale': .85, 'first_link_start': .1,
+    'base_fraction': .15, 'girth_max': 1.0, 'tip_start': 1 - .32 * .85,
+    'tip_rim': .012, 'tip_girth': 1.05, 'first_link_start': .1,
     'relief': {'amplitude': .00035, 'terms': [[.6, 3.1, 2, 0], [.4, 7.3, -3, 1.3]],
                'start': .1, 'rise': .06, 'end_offset': .02, 'fall': .05},
     'ridges': [
@@ -83,13 +83,13 @@ def parameters(raw):
             raise ValueError('Expected nonnegative integer: ' + name)
         return value
     settings = merge(DEFAULTS, raw, 'params')
-    for key in ('size_factor', 'length', 'radius', 'voxel', 'tip_scale', 'inner_extension',
+    for key in ('size_factor', 'length', 'radius', 'voxel', 'tip_rim', 'tip_girth', 'inner_extension',
                 'border_lift', 'k_body', 'k_tip_pods', 'pod_scale', 'pod_link_distance'):
         if settings[key] <= 0:
             raise ValueError(key + ' must be positive')
     if not 0 < settings['decimate'] <= 1 or not 0 <= settings['pod_link'] <= 1:
         raise ValueError('Invalid decimate or pod_link')
-    if not 0 < settings['base_fraction'] < settings['tip_start'] < 1 - .09 * settings['tip_scale']:
+    if not 0 < settings['base_fraction'] < settings['tip_start'] < 1 - 2 * settings['tip_rim']:
         raise ValueError('Invalid base / tip profile')
     if not 0 <= settings['first_link_start'] < settings['tip_start']:
         raise ValueError('Invalid first_link_start')
@@ -111,7 +111,7 @@ def parameters(raw):
                            ('hidden_band', ['lateral', 'radius', 'depth'])):
         if any(settings[section][key] < 0 for key in keys):
             raise ValueError('Invalid ' + section + ' length')
-    if settings['anchor_drop'] < 0 or settings['root_sink'] < 0 or settings['skin_sink'] < 0 or settings['girth_max'] < 1:
+    if settings['anchor_drop'] < 0 or settings['root_sink'] < 0 or settings['skin_sink'] < 0 or settings['girth_max'] < 1 or settings['tip_girth'] < 1:
         raise ValueError('Invalid root offset or base flare')
     if not 0 <= settings['smooth']['factor'] <= 1 or not 0 <= settings['flatten']['normal_front'] <= 1:
         raise ValueError('Invalid smoothing or front-normal fraction')
@@ -205,23 +205,23 @@ def build_part(group, companions, output):
     centerline = np.array([tuple(point) for point in inner] + [tuple(point) for point in cl])
     stations = np.concatenate([np.linspace(-.15, 0, 12, endpoint=False), tparam])
     tip_start = settings['tip_start']
-    tip_scale = settings['tip_scale']
+    tip_rim, tip_girth = settings['tip_rim'], settings['tip_girth']
 
 
     base_fraction, girth_max = settings['base_fraction'], settings['girth_max']
 
 
-    # Shaft flare, fixed tip profile, and geometric surface relief.
+    # Straight sweep (optional base flare), a short rim step up to the tip girth,
+    # then the rounded tip cap.
     def radius(t):
         t = np.asarray(t, float)
-        r = np.where(t < tip_start, 1 - .05 * np.clip(t, 0, 1) / tip_start, 0)
-
+        r = np.ones_like(t)
         w_ = np.clip(t / base_fraction, 0, 1)
         r = r * np.where(t < base_fraction, girth_max / (1 + w_ * (girth_max - 1)), 1)
-        r = np.where((t >= tip_start) & (t < tip_start + .03 * tip_scale), .95 - .06 * (t - tip_start) / (.03 * tip_scale), r)
-        r = np.where((t >= tip_start + .03 * tip_scale) & (t < tip_start + .09 * tip_scale), .89 + .09 * np.sin((t - tip_start - .03 * tip_scale) / (.06 * tip_scale) * np.pi / 2), r)
-        u = np.clip((t - tip_start - .09 * tip_scale) / (1 - tip_start - .09 * tip_scale), 0, 1)
-        r = np.where(t >= tip_start + .09 * tip_scale, .98 * np.maximum(0, 1 - u ** 2.4) ** .55, r)
+        k = np.clip((t - tip_start) / tip_rim, 0, 1)
+        r = np.where((t >= tip_start) & (t < tip_start + tip_rim), 1 + (tip_girth - 1) * k * k * (3 - 2 * k), r)
+        u = np.clip((t - tip_start - tip_rim) / (1 - tip_start - tip_rim), 0, 1)
+        r = np.where(t >= tip_start + tip_rim, tip_girth * np.maximum(0, 1 - u ** 2.4) ** .55, r)
         return shaft_radius * r
 
 

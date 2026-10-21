@@ -23,7 +23,7 @@ def main():
     parameters=scope['parameters']
     defaults=parameters({})
     assert abs(defaults['tip_start']-.728)<1e-12
-    assert defaults['length']==.095 and defaults['radius']==.0165 and defaults['girth_max']==1.2
+    assert defaults['length']==.095 and defaults['radius']==.0165 and defaults['girth_max']==1.0 and defaults['tip_girth']==1.05 and defaults['tip_rim']==.012
     values=parameters({'flatten':{'iterations':0},'texture':{'bake':128}})
     assert values['flatten']['lateral']==.055 and values['texture']['blur']==9
     assert parameters({'pods':{'ellipsoids':[]},'ridges':[]})['ridges']==[]
