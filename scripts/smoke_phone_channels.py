@@ -10,6 +10,7 @@ hide the DMs (filter before LIMIT) nor affect preview, unread or read markers.
 A speech-only partner is absent from contacts and has no phone thread/inbox.
 Reading the phone advances only to its latest DM, not to the later speech.
 """
+import json
 import os
 import sys
 import tempfile
@@ -22,6 +23,9 @@ with tempfile.TemporaryDirectory(prefix="phone-channels-") as tmp:
     from app.core import paths
     paths.init(tmp)
     from app.core import config, db
+    # Packages load only when the world enables them explicitly (ba172904).
+    (Path(tmp) / "config.json").write_text(
+        json.dumps({"packages": {"enabled": "notify_user"}}), encoding="utf-8")
     config.load(Path(tmp) / "config.json")
     db.init_schema()
     from app.core.agent_inbox import load_unread_messages
