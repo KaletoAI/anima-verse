@@ -415,6 +415,58 @@ def manifest_config_schemas() -> Dict[str, Dict[str, Any]]:
     return copy.deepcopy(_manifest_schemas)
 
 
+PACKAGE_CATEGORIES = ("skill", "content", "adult")
+
+
+def package_category(meta: Dict[str, Any]) -> str:
+    """The Setup grouping of a manifest: its ``category`` when it names one of
+    ``PACKAGE_CATEGORIES``, else "skill" for a package with verbs and
+    "content" for one without (species, templates, providers)."""
+    declared = str(meta.get("category", "") or "").strip().lower()
+    if declared in PACKAGE_CATEGORIES:
+        return declared
+    return "skill" if _parse_skill_entries(meta) else "content"
+
+
+def package_inventory(plugin_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Every package folder with a readable manifest, for Game-Admin → Setup →
+    Packages — independent of world activation and of missing requirements
+    (those are reported, not dropped). Reads manifests only: no package code
+    is imported, no registry is touched. Repo wins over installed, as in
+    ``discover_packages``; ``loaded`` says whether the package is active in
+    this server right now."""
+    base = plugin_dir or PLUGIN_DIR
+    found: Dict[str, Dict[str, Any]] = {}
+    for root, installed in ((base, False), (base / INSTALLED_DIR_NAME, True)):
+        if not root.is_dir():
+            continue
+        for entry in sorted(root.iterdir()):
+            manifest = entry / "plugin.yaml"
+            if not entry.is_dir() or not manifest.exists() or entry.name in found:
+                continue
+            try:
+                meta = _load_yaml(manifest)
+            except Exception as e:
+                logger.error("Error reading %s: %s", manifest, e)
+                continue
+            if not isinstance(meta, dict):
+                continue
+            found[entry.name] = {
+                "id": entry.name,
+                "label": str(meta.get("capability_label") or meta.get("name") or entry.name),
+                "description": str(meta.get("capability_description")
+                                   or meta.get("description") or "").strip(),
+                "version": str(meta.get("version", "") or ""),
+                "category": package_category(meta),
+                "source": ("installed" if installed
+                           else "linked" if entry.is_symlink() else "repo"),
+                "requires": [str(x).strip() for x in (meta.get("requires") or []) if str(x).strip()],
+                "conflicts": [str(x).strip() for x in (meta.get("conflicts") or []) if str(x).strip()],
+                "loaded": registry.get_package(entry.name) is not None,
+            }
+    return [found[k] for k in sorted(found)]
+
+
 def discover_packages(plugin_dir: Optional[Path] = None,
                       force: bool = False) -> List[Package]:
     """Discover explicitly enabled packages and (re)populate the registry.

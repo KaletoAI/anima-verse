@@ -48,6 +48,14 @@ def get_extension_motion():
     return {"groups": declared_motion_groups()}
 
 
+@router.get("/packages")
+def get_packages():
+    """Every package on disk for the Setup → Packages checklist; what is
+    enabled stays the comma list ``packages.enabled`` in the world values."""
+    from app.plugins.loader import package_inventory
+    return {"packages": package_inventory()}
+
+
 @router.get("")
 def get_world_settings():
     return _payload()

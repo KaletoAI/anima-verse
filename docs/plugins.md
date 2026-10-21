@@ -61,10 +61,14 @@ app/plugins/                      # Paket-Infrastruktur
 
 ### Pakete pro Welt aktivieren
 
-**Game-Admin → Setup → Packages → Enabled packages** setzt `packages.enabled` in der
+**Game-Admin → Setup → Packages** setzt `packages.enabled` in der
 `config.json` der geöffneten Welt. Der Wert ist eine kommaseparierte Allowlist exakter Paket-IDs
 (Ordnernamen), beispielsweise `human,movement,talk_to`. Leer bedeutet: **kein Paket aktiv**.
 Auch noch nicht installierte IDs bleiben gespeichert. Die Installation allein aktiviert nichts.
+Die Seite zeigt den Wert als Checkliste aller Paketordner (`GET /admin/world-settings/packages`,
+`loader.package_inventory`), gruppiert nach `category` (Skills / Body & content / Adult), mit
+Status pro Paket (aktiv, aktiv nach Neustart, aus nach Neustart) und Hinweisen auf fehlende
+`requires` oder aktive `conflicts`.
 
 Die Auswahl gilt **ab dem nächsten Serverstart**, nicht nach `reload_skills()`. Nur explizit
 aufgeführte Pakete werden geladen. Ihre über `requires` benötigten Pakete müssen ebenfalls
@@ -120,6 +124,7 @@ state_flags:                    # Flag-Lebenszyklen (Flag-Lifecycle-Executor)
 |---|---|---|
 | `name` | ja | Ohne `name` verwirft der Loader das Paket. Die **ID** ist dagegen immer der Ordnername (`pkg.id`) — auf sie zeigen `requires`/`conflicts` und `skills.<id>.enabled` |
 | `version` / `description` | nein | Reine Metadaten (Marketplace-Anzeige) |
+| `category` | nein | Gruppe auf Setup → Packages: `skill`, `content` oder `adult`. Fehlt sie (oder ist sie unbekannt), gilt `skill` für ein Paket mit Verben, sonst `content`. Reine Anzeige — Laden und Aktivierung hängen nicht davon ab. Pakete mit Adult-Inhalten (privates Packs-Repo) deklarieren `adult` |
 | `skills` / `skill_id` | nein* | Listenform oder Single-Skill-Kurzform. *Ein Paket ohne Verben („Content-Pack") ist erlaubt, solange es mindestens einen Beitrag liefert (LLM-Templates, Character-Fragmente, `config_schema`, `state_flags`, `silhouette`, `body_slots`, `piece_slots` oder `on_load`). Beiträge gelten, sobald das Paket im Dateisystem liegt — das enabled-Gate betrifft nur Verben |
 | `always_load` | nein | Default für `skills[].always_load` aller Verben des Pakets |
 | `enabled_default` | nein | Lade-Gate-Default für Verben OHNE `always_load`, wenn weder `skills.<id>.enabled` in der Config noch die Env-Bridge etwas sagen (z.B. `true` für Kern-Verben wie `talk_to`, `movement`, `act`, `interact`, `take_photo`) |
