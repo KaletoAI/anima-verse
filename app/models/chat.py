@@ -38,6 +38,13 @@ def get_chat_history(character_name: str = "", partner_name: str = "",
     return [msg.to_dict() for msg in messages]
 
 
+def get_messaging_partners(character_name: str, limit: int = 10) -> List[str]:
+    """Partners of the character's phone threads (medium "messaging"), most
+    recently active first — the threads ``get_chat_history(..., medium=
+    "messaging")`` can then read one by one."""
+    return UnifiedChatManager.get_messaging_partners(character_name, limit=limit)
+
+
 def save_message(message: Dict[str, str], character_name: str = "",
                  partner_name: str = "") -> bool:
     """Stores a message. partner_name: explicit partner character (C2C).

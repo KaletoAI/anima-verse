@@ -9,11 +9,17 @@ Input formats:
     attach_image the image generated in the SAME turn is attached to the DM
     (the streaming layer defers such calls until after the image tools ran).
 
+Unanswered-message brake: after ``max_unanswered`` messages to the same
+recipient without a reply in between, the verb refuses until the recipient
+answers or ``retry_after_game_hours`` of GAME time passed since the last one
+(one reminder per such window). The thought prompt shows the open threads
+(``thought_context_block``) so the character does not even try.
+
 Manifest flags (F6/F7): remote_comm, cascade_brake, intents [send_message] +
 intent_payload_keys — the loader stamps them. The declaration METHODS
 (handle_intent / tool_intent_payload / defer_for_attachment) stay as code.
 """
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.plugins.base import PluginSkill
 from app.plugins.context import PluginContext
@@ -75,7 +81,7 @@ class SendMessageSkill(PluginSkill):
         if initiator:
             args["initiator"] = initiator
         result = self.execute(_json.dumps(args, ensure_ascii=False))
-        success = bool(result) and not str(result).startswith("Error:") \
+        success = bool(result) and not str(result).startswith(("Error:", "Not sent:")) \
             and "not found" not in str(result) and "cannot message" not in str(result)
         return {"success": success, "result": str(result)[:500]}
 
@@ -146,11 +152,17 @@ class SendMessageSkill(PluginSkill):
         if target_name == sender_name:
             return "You cannot message yourself."
 
-        # Sleep check (no busy check — messages can always be sent, the
-        # recipient reads them when they have time)
+        refusal = _unanswered_refusal(sender_name, target_name, self.ctx)
+        if refusal:
+            self.ctx.logger.info("SendMessage %s -> %s refused: unanswered limit",
+                                 sender_name, target_name)
+            return refusal
+
+        # No busy check — messages can always be sent, the recipient reads
+        # them when they have time. A sleeping recipient gets the message in
+        # the inbox all the same; it only gets no early turn.
         from app.models.character import is_character_sleeping
-        if is_character_sleeping(target_name):
-            return f"{target_name} is sleeping — message queued, but no response for now."
+        target_sleeping = is_character_sleeping(target_name)
 
         # Detect avatar target: when the recipient is the player-controlled
         # character, SendMessage counts as a "proactive chat message to the
@@ -187,7 +199,14 @@ class SendMessageSkill(PluginSkill):
             else:
                 self.ctx.logger.info("SendMessage %s: attach_image requested but no "
                                      "recent image found — sending text only", sender_name)
-        _msg_meta = {"image": attached_image} if attached_image else {}
+        _msg_meta: Dict[str, Any] = {"image": attached_image} if attached_image else {}
+        # GAME-time stamp of the send — the unanswered brake measures its
+        # waiting window on the world clock, not the system clock.
+        try:
+            from app.core.timeutils import game_time
+            _msg_meta["game_ts"] = game_time().canonical()
+        except Exception as e:
+            self.ctx.logger.debug("SendMessage: game time unavailable: %s", e)
 
         # Asynchronous: store the message + notification + schedule a
         # forced_thought for the recipient. The sender does NOT wait for the
@@ -242,8 +261,9 @@ class SendMessageSkill(PluginSkill):
 
         # AgentLoop bump: recipient gets prioritised on the next slot so
         # they see the inbox message soon (not waiting for their normal
-        # importance quota). Avatars don't think autonomously, so skip.
-        if not target_is_avatar:
+        # importance quota). Avatars don't think autonomously, and a sleeper
+        # reads the inbox after waking, so skip both.
+        if not target_is_avatar and not target_sleeping:
             try:
                 from app.core.agent_loop import get_agent_loop
                 get_agent_loop().bump(target_name)
@@ -264,10 +284,18 @@ class SendMessageSkill(PluginSkill):
         except Exception as e:
             self.ctx.logger.debug("pending_report resolve failed: %s", e)
 
+        if target_sleeping:
+            return (f"Message sent to {target_name}. They are asleep and will "
+                    f"see it when they wake up.")
         if attached_image:
             return (f"Message with photo sent to {target_name}. "
                     f"They will reply when they get to it.")
         return f"Message sent to {target_name}. They will reply when they get to it."
+
+    def thought_context_block(self, character_name: str) -> str:
+        """Open phone threads: whom this character wrote without a reply yet
+        — so a thought turn waits instead of sending the same question again."""
+        return _waiting_block(character_name, self.ctx)
 
     def get_usage_instructions(self, format_name: str = "", **kwargs) -> str:
         from app.core.tool_formats import format_example
@@ -332,6 +360,130 @@ def _resolve_turn_image(sender_name: str) -> str:
     except Exception as e:
         logger.debug("attach_image: gallery fallback failed: %s", e)
     return ""
+
+
+def _limits(ctx) -> Tuple[int, int]:
+    """(max_unanswered, retry_after_game_hours) from the package config, read
+    live so a settings save applies without a restart. 0 = no limit."""
+    def _int(path: str, default: int) -> int:
+        try:
+            return max(0, int(ctx.get_config(path, default)))
+        except (TypeError, ValueError):
+            return default
+    return (_int("skills.send_message.max_unanswered", 3),
+            _int("skills.send_message.retry_after_game_hours", 24))
+
+
+# Rows read per thread: enough to report a long unanswered run truthfully.
+_SCAN_EXTRA = 20
+
+
+def _count_label(count: int, scan: int) -> str:
+    return f"{count}+" if count >= scan else str(count)
+
+
+def _unanswered(sender: str, target: str, scan: int) -> Tuple[int, str, str]:
+    """``(count, newest_game_ts, newest_content)`` of the messages ``sender``
+    wrote to ``target`` since ``target``'s last reply on the phone.
+
+    ``newest_game_ts`` is "" for a message from before the game-time stamp —
+    its age is unknown, so it never holds a send back."""
+    from app.models.chat import get_chat_history
+    rows = get_chat_history(sender, partner_name=target,
+                            limit=max(1, scan), medium="messaging")
+    count, newest_ts, newest_content = 0, "", ""
+    for msg in reversed(rows):
+        role = msg.get("role")
+        if role == "user":
+            break
+        if role != "assistant":
+            continue
+        if count == 0:
+            meta = msg.get("metadata") or {}
+            newest_ts = str(meta.get("game_ts") or "") if isinstance(meta, dict) else ""
+            newest_content = str(msg.get("content") or "")
+        count += 1
+    return count, newest_ts, newest_content
+
+
+def _release_at(newest_game_ts: str, wait_hours: int):
+    """GameTime from which the next send is allowed again, or None when the
+    last message carries no game stamp (age unknown → not held back)."""
+    if not newest_game_ts:
+        return None
+    try:
+        from app.core.game_time import GameDuration, GameTime
+        return GameTime.parse(newest_game_ts) + GameDuration.of(hours=wait_hours)
+    except Exception:
+        return None
+
+
+def _held_back(count: int, newest_game_ts: str, limit: int, wait_hours: int):
+    """``(blocked, release_at)`` — blocked while ``count`` reached ``limit``
+    and the waiting window since the newest unanswered message is open."""
+    if limit <= 0 or count < limit:
+        return False, None
+    release = _release_at(newest_game_ts, wait_hours)
+    if release is None:
+        return False, None
+    from app.core.timeutils import game_time
+    return game_time() < release, release
+
+
+def _unanswered_refusal(sender: str, target: str, ctx) -> str:
+    """Tool result that refuses the send, or "" when it may go out."""
+    limit, wait_hours = _limits(ctx)
+    if limit <= 0:
+        return ""
+    try:
+        scan = limit + _SCAN_EXTRA
+        count, newest_ts, _ = _unanswered(sender, target, scan)
+        blocked, release = _held_back(count, newest_ts, limit, wait_hours)
+    except Exception as e:
+        ctx.logger.debug("unanswered check %s -> %s failed: %s", sender, target, e)
+        return ""
+    if not blocked:
+        return ""
+    return (f"Not sent: you already sent {target} {_count_label(count, scan)} "
+            f"messages without a "
+            f"reply. Wait for {target} to answer before writing again "
+            f"(earliest {release.label()}).")
+
+
+def _waiting_block(character_name: str, ctx) -> str:
+    limit, wait_hours = _limits(ctx)
+    try:
+        from app.models.chat import get_messaging_partners
+        partners = get_messaging_partners(character_name, limit=8)
+    except Exception as e:
+        ctx.logger.debug("waiting block for %s failed: %s", character_name, e)
+        return ""
+    scan = max(limit, 3) + _SCAN_EXTRA
+    lines: List[str] = []
+    for partner in partners:
+        try:
+            count, newest_ts, newest = _unanswered(character_name, partner, scan)
+        except Exception:
+            continue
+        if count <= 0:
+            continue
+        quote = newest.strip().replace("\n", " ")
+        if len(quote) > 80:
+            quote = quote[:77] + "..."
+        n = _count_label(count, scan)
+        noun = "message" if count == 1 else "messages"
+        blocked, release = _held_back(count, newest_ts, limit, wait_hours)
+        if blocked:
+            advice = (f"do NOT message {partner} again before they answer "
+                      f"(earliest {release.label()})")
+        else:
+            advice = "give them time to answer — only write again if something new happened"
+        lines.append(f'- {partner}: you sent {n} {noun} without a reply '
+                     f'(last: "{quote}") — {advice}.')
+    if not lines:
+        return ""
+    return ("=== Waiting for replies ===\n" + "\n".join(lines) + "\n"
+            "People wait for an answer instead of sending message after message.")
 
 
 def _resolve_name(raw: str, available: list) -> str:

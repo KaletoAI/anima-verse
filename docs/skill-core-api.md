@@ -332,6 +332,7 @@ hängt, räumt ihn über denselben Weg auf (Check:
 |---|---|
 | `app.models.chat.save_message(message, character_name='', partner_name='') -> bool` | Eine Zeile in die Chat-History schreiben (Inbox-Modell: Sender als `assistant`, Empfänger als `user`). **Wirft nie** — `False` heißt: nicht gespeichert. Rückgabe prüfen, sonst verschwindet eine Nachricht lautlos |
 | `app.models.chat.get_chat_history(character_name='', partner_name='', limit=None, medium=None) -> List[Dict]` | History; `medium` filters the communication channel **before** deduplication and the last-N limit. Phone readers use `"messaging"`; omitted means all channels. |
+| `app.models.chat.get_messaging_partners(character_name, limit=10) -> List[str]` | Partners of the character's phone threads (`medium="messaging"`), most recently active first. Read each thread with `get_chat_history(..., medium="messaging")`. |
 | `app.core.pending_reports.add_report(reporter, initiator, initiator_type, target, trigger_type='talk_to_response', trigger_message_id='', ttl_hours=24) -> str` | Chain-of-Command-Follow-up anlegen |
 | `app.core.pending_reports.list_open(character_name)` / `mark_resolved(reporter, report_id) -> bool` | Offene Rückmeldungen lesen / schließen |
 | `app.models.notifications.create_notification(character, content, notification_type='message', metadata=None) -> str` | User-Notification anlegen |

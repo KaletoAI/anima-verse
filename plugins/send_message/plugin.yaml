@@ -20,3 +20,5 @@ config_schema:
     label: SendMessage (remote)
     fields:
       enabled: {type: bool, label: Enabled, default: true}
+      max_unanswered: {type: int, label: Max unanswered messages, default: 3, min: 0, max: 50, description: "Messages a character may send to the same recipient without a reply in between. Then it waits for an answer. 0 = no limit."}
+      retry_after_game_hours: {type: int, label: Retry after (game hours), default: 24, min: 1, max: 720, description: "After this much GAME time without a reply, one more message may go out (a reminder); then the wait starts again."}

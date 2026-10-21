@@ -94,6 +94,25 @@ class UnifiedChatManager:
         return row[0] if row and row[0] else None
 
     @staticmethod
+    def get_messaging_partners(character_name: str, limit: int = 10) -> List[str]:
+        """Partners of the character's phone threads (medium "messaging"),
+        most recently active first, at most ``limit``."""
+        if not character_name:
+            return []
+        try:
+            rows = get_connection().execute(
+                "SELECT partner, MAX(ts) AS last_ts FROM chat_messages "
+                "WHERE character_name=? AND CASE WHEN json_valid(metadata) THEN "
+                "json_extract(metadata, '$.medium') END='messaging' "
+                "GROUP BY partner ORDER BY last_ts DESC LIMIT ?",
+                (character_name, max(1, int(limit)))).fetchall()
+        except Exception as e:
+            logger.error("get_messaging_partners DB error for %s: %s",
+                         character_name, e)
+            return []
+        return [r[0] for r in rows if r[0]]
+
+    @staticmethod
     def get_chat_history(character_name: str = "",
         limit: Optional[int] = None,
         partner_name: str = "", medium: Optional[str] = None) -> List[Message]:
