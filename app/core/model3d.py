@@ -1158,22 +1158,67 @@ def _auto_extension_rig(character_name: str, path: Path,
     with tempfile.TemporaryDirectory(prefix=".extension-", dir=path.parent) as tmp:
         staged = Path(tmp) / path.name
         shutil.copy2(source, staged)
-        result = refine.apply_script(staged, "extension_bones", {"groups": groups},
-                                     validator=_validator_for("mixamo", character_name),
-                                     require_smaller=False, keep_original=False,
-                                     base_joints_only=True)
-        data = result.get("data") or {}
-        state["metrics"] = data.get("metrics") or data.get("groups") or {}
+        attached = [g for g in groups if g["op"] == "attached_part"]
+        companions = [g for g in groups if g["op"] == "attached_part_bone"]
+        remaining = [g for g in groups if g["op"] not in ("attached_part", "attached_part_bone")]
+        validator = _validator_for("mixamo", character_name)
+        part_failed = False
+        part_applied = False
+        if attached:
+            try:
+                part_result = refine.apply_script(
+                    staged, "attached_part", {"groups": attached + companions},
+                    validator=validator, require_smaller=False,
+                    keep_original=False, base_joints_only=True)
+            except Exception as exc:
+                # This optional step must never prevent publication of the body.
+                part_result = {"applied": False, "error": str(exc)}
+            part_data = part_result.get("data") or {}
+            part_metrics = part_data.get("metrics") or part_data.get("groups") or {}
+            part_applied = bool(part_result.get("applied"))
+            part_failed = not part_applied
+            reason = part_data.get("reason") or part_result.get("error") or "Part build produced no model"
+            for group in attached + companions:
+                state["metrics"][group["id"]] = {
+                    **part_metrics.get(group["id"], {}),
+                    "status": "failed" if part_failed else "applied",
+                    "reason": reason if part_failed else ""}
+            if part_failed:
+                # Also protects against a runner that wrote before raising.
+                shutil.copy2(source, staged)
+        if remaining:
+            result = refine.apply_script(staged, "extension_bones", {"groups": remaining},
+                                         validator=validator,
+                                         require_smaller=False, keep_original=False,
+                                         base_joints_only=True)
+            data = result.get("data") or {}
+            state["metrics"].update(data.get("metrics") or data.get("groups") or {})
+            if not result.get("applied"):
+                for group in remaining:
+                    state["metrics"].setdefault(group["id"], {
+                        "status": data.get("status") or "failed",
+                        "reason": data.get("reason") or result.get("error") or "No extension model produced"})
+        else:
+            result = {"applied": part_applied, "data": {}}
+            data = {}
         state["reason"] = data.get("reason") or result.get("error") or ""
-        if result.get("applied"):
+        # A failed part publishes a validated clean body (with other extensions
+        # when available), replacing any stale part from a previous build.
+        publish = bool(result.get("applied")) or bool(attached)
+        if publish:
+            verdict = validator(staged.read_bytes())
+            if not verdict.get("ok"):
+                publish = False
+                state["reason"] = "; ".join(verdict.get("errors") or [])
+        if publish:
             _publish_model_bytes(path, staged.read_bytes())
             meta["blender"] = source_meta.get("blender") or {}
-            state.update(status="applied", has_applied=True, reason="")
+            state.update(status="applied", has_applied=part_applied or bool(remaining and result.get("applied")))
         else:
             state["status"] = data.get("status") if data.get("status") in ("not_found", "failed") else "failed"
         state["per_tier"][LOW_TIER if path.parent.name == LOW_TIER else FULL_TIER] = {
             key: state[key] for key in ("fingerprint", "groups", "status", "reason", "metrics", "attempted", "attempted_at")}
-        return {"ok": state["status"] != "failed", "applied": bool(result.get("applied")),
+        return {"ok": state["status"] != "failed", "applied": publish,
                 "extension_rig": state, "error": state["reason"]}
 
 
@@ -1712,10 +1757,13 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
                     "error": "reduced mesh rewrote the rig frames: "
                              + "; ".join(frames.get("errors") or [])}
         low_metrics = {}
-        if (meta.get("extension_rig") or {}).get("status") == "applied":
-            from app.core.extension_rig import resolved_extension_groups
+        # Built parts are not extension_bones groups; only captured groups are re-measured.
+        from app.core.extension_rig import resolved_extension_groups
+        measured_groups = [g for g in resolved_extension_groups(character_name, signature=path.stem)
+                           if g["op"] not in ("attached_part", "attached_part_bone")]
+        if (meta.get("extension_rig") or {}).get("status") == "applied" and measured_groups:
             measured = runner.run("extension_bones", inputs={"model": next(iter(res["outputs"].values()))},
-                                  params={"groups": resolved_extension_groups(character_name, signature=path.stem), "metrics_only": True})
+                                  params={"groups": measured_groups, "metrics_only": True})
             if not measured.get("ok") or (measured.get("data") or {}).get("status") != "applied":
                 return {"ok": False, "error": measured.get("error") or
                         (measured.get("data") or {}).get("reason") or "Low tier metrics failed"}

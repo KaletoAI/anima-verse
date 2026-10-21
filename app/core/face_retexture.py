@@ -338,6 +338,15 @@ def _primitive_basecolor(parsed: dict, primitive: dict):
     return image, parsed['bin'][start:start + view['byteLength']]
 
 
+def _body_primitives(parsed: dict) -> list:
+    """Exclude procedural part nodes, independent of mesh export order."""
+    gltf = parsed['gltf']
+    excluded = {node['mesh'] for node in gltf.get('nodes', [])
+                if 'mesh' in node and 'attached_part' in (node.get('extras') or {})}
+    return [primitive for i, mesh in enumerate(gltf.get('meshes', []))
+            if i not in excluded for primitive in mesh.get('primitives', [])]
+
+
 def bake_face_texture(source_glb: bytes, hub_glb: bytes, *, dilate_px: int = 4,
                       replacement_masks: list | None = None) -> tuple[bytes, dict]:
     """Bake the projected face into the original mesh's basecolor and layout."""
@@ -354,8 +363,8 @@ def bake_face_texture(source_glb: bytes, hub_glb: bytes, *, dilate_px: int = 4,
         if not verdict['ok']:
             raise ValueError('Invalid face bake mesh: ' + '; '.join(verdict['errors']))
     source, hub = parse_glb(source_glb), parse_glb(hub_glb)
-    primitive = source['gltf']['meshes'][0]['primitives'][0]
-    primitives = [p for mesh in hub['gltf']['meshes'] for p in mesh['primitives']]
+    primitive = _body_primitives(source)[0]
+    primitives = _body_primitives(hub)
     try:
         positions = _accessor_array(source, primitive['attributes']['POSITION'])
         uvs = _accessor_array(source, primitive['attributes']['TEXCOORD_0'])
@@ -605,7 +614,7 @@ def face_texture_preserved(baked_glb: bytes, rigged_glb: bytes, *,
         def decode(parsed, primitive):
             return Image.open(io.BytesIO(_primitive_basecolor(parsed, primitive)[1])).convert('RGB')
         baked, rigged = parse_glb(baked_glb), parse_glb(rigged_glb)
-        primitive = baked['gltf']['meshes'][0]['primitives'][0]
+        primitive = _body_primitives(baked)[0]
         base = decode(baked, primitive)
         base_pixels = np.asarray(base)
         if replacement_mask is None and (bake_meta or {}).get('body_recolored'):
@@ -617,7 +626,7 @@ def face_texture_preserved(baked_glb: bytes, rigged_glb: bytes, *,
             replacement_mask = np.unpackbits(np.frombuffer(packed, dtype=np.uint8))[:base.width * base.height].reshape(base.height, base.width).astype(bool)
         if replacement_mask is None and original_glb is not None:
             original = parse_glb(original_glb)
-            original_image = decode(original, original['gltf']['meshes'][0]['primitives'][0])
+            original_image = decode(original, _body_primitives(original)[0])
             if original_image.size != base.size:
                 return False
             original_pixels = np.asarray(original_image)
@@ -628,7 +637,7 @@ def face_texture_preserved(baked_glb: bytes, rigged_glb: bytes, *,
             del original_pixels, original_image
         if replacement_mask is not None and replacement_mask.shape != base_pixels.shape[:2]:
             return False
-        primitives = [p for mesh in rigged['gltf']['meshes'] for p in mesh['primitives']]
+        primitives = _body_primitives(rigged)
         if not primitives:
             return False
         decoded = {}

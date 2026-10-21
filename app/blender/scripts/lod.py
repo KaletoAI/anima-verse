@@ -87,6 +87,7 @@ def lod(args):
         path = out_dir / name
         # Geometry extras (such as interior cutout margins) must survive tier swaps.
         bpy.ops.export_scene.gltf(filepath=str(path), export_format="GLB", export_extras=True)
+        _common.body_meshes_first(path)
         stages.append({
             "ratio": ratio,
             "tris_before": before,

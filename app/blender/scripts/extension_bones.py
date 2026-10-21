@@ -2277,7 +2277,8 @@ def extension_bones(args):
     metrics=measure(arm,meshes,edges,plans)
     metrics.update(soft)
     output=Path(args['out_dir'])/'model.glb'
-    bpy.ops.export_scene.gltf(filepath=str(output),export_format='GLB',export_apply=False,export_yup=True,export_skins=True,export_animations=True,export_morph=True,export_all_influences=False)
+    bpy.ops.export_scene.gltf(filepath=str(output),export_format='GLB',export_apply=False,export_yup=True,export_skins=True,export_animations=True,export_morph=True,export_all_influences=False,export_extras=True)
+    _common.body_meshes_first(output)
     return {'status':'applied','reason':'','groups':metrics,'metrics':metrics},{'model':str(output)}
 
 

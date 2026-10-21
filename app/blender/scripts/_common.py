@@ -133,3 +133,27 @@ def _drop_bone_shape_objects(bpy):
 def reset_scene():
     import bpy
     bpy.ops.wm.read_factory_settings(use_empty=True)
+
+
+def body_meshes_first(path):
+    """Keep the body mesh first without changing accessors or binary buffers."""
+    import json
+    import struct
+    blob = path.read_bytes()
+    size = struct.unpack_from('<I', blob, 12)[0]
+    doc = json.loads(blob[20:20 + size])
+    marked = {n['mesh'] for n in doc.get('nodes', [])
+              if 'mesh' in n and 'attached_part' in n.get('extras', {})}
+    if not marked:
+        return
+    order = sorted(range(len(doc.get('meshes', []))), key=lambda i: i in marked)
+    remap = {old: new for new, old in enumerate(order)}
+    doc['meshes'] = [doc['meshes'][i] for i in order]
+    for node in doc.get('nodes', []):
+        if 'mesh' in node:
+            node['mesh'] = remap[node['mesh']]
+    raw = json.dumps(doc, separators=(',', ':')).encode()
+    raw += b' ' * (-len(raw) % 4)
+    rest = blob[20 + size:]
+    path.write_bytes(struct.pack('<4sII', b'glTF', 2, 20 + len(raw) + len(rest))
+                     + struct.pack('<II', len(raw), 0x4E4F534A) + raw + rest)

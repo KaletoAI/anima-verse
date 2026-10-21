@@ -1403,7 +1403,7 @@ known groups. Unknown group ids retain their existing validation behavior.
 At runtime, excluded stored overrides and state fields are ignored, so a
 changed declaration takes effect without rewriting stored data.
 
-### Procedural mesh parts (declaration interface)
+### Procedural mesh parts
 
 A slot may declare `mesh_part` to select a separate mesh-input variant. The
 switch remains an ordinary body-editor attribute; the core uses generic slot
@@ -1448,9 +1448,9 @@ When the slot applies and its stored switch equals `"on"`, its named group
 keeps its ID and chains but emits `op: attached_part` and parameters
 `{...mesh_part.params, size_factor: <resolved factor>}`. This changes the mesh
 fingerprint while preserving state and motion group references. The companion
-`attached_part_bone` accepts only one-link chains and empty parameters. These
-are interfaces for the later procedural Blender builder; declaration support
-alone does not build geometry. Other rig operations keep their existing rules.
+`attached_part_bone` accepts only one-link chains and empty parameters. The Blender builder creates the swept part and optional pods as a second skinned
+mesh with its own baked material. The companion carries the pods; without it
+they follow the anchor bone. Other rig operations keep their existing rules.
 
 Only mesh-input occasions `tpose` and `tpose_view` replace an exposed slot's
 fragment with `tpose_prompt` and suppress its slot LoRAs. Covered slots, ordinary
@@ -1470,8 +1470,108 @@ Nearest-model fallback requires the same variant. Stored extension metadata
 records `group_ops` and attached groups’ `group_params`; an `attached_part` group exposes status, reason,
 `protrusion_mm` and warning in the model panel's Part row. Built parts are green;
 a protrusion above `protrusion_warn_mm` (default 12 mm) is yellow; failures show
-the reason in red. The metrics and builder implementation belong to the later
-procedural operation work package.
+the reason in red. The builder measures protrusion on the body before flattening and reports it even
+when the flattening hides it. Publication continues after a failed part
+build: the clean body and other successful extensions are published, with the
+failure reason retained in the part group metrics.
+
+
+The staged prerig passes through `attached_part` first, then `extension_bones`
+for ordinary groups, then the humanoid validator. Companion groups are only
+passed to `attached_part`. Each part node carries `extras.attached_part` equal
+to its group ID. Body meshes remain first, and face texture preservation checks
+ignore marked parts. LOD processes both meshes and preserves the marker.
+
+`pods.ellipsoids: []` omits the pods; `ridges: []` omits the ridges.
+The operation accepts one nonempty chain of at least two links and at most one
+single-link companion per request. Bone names and parents come from `chains`;
+base names accept the Mixamo prefix. The final link carries the tip rigidly.
+The body needs metre coordinates, front -Y/up +Z, a skinned mesh, a UV map and
+an embedded basecolor texture. Missing anchors or unusable texture patches
+produce a failed group rather than an inferred attachment.
+
+`mesh_part.params` accepts the following defaults. Lengths are **metres**,
+except `protrusion_warn_mm` (millimetres) and the reported `skin_patch_cm`.
+Nested mappings can override individual keys; unknown keys at any depth,
+nonfinite numbers, booleans as numbers and invalid intervals are rejected.
+`size_factor` is supplied by the declaration's size table. Length/radius scale
+by that factor; pod dimensions scale by `(1 + .55*(size_factor-1))*pod_scale`.
+Ridge radii `r0`/`r1` are metres. `tip_offset` is a fraction subtracted from
+`tip_start`, and relief terms are `[amplitude, frequency, angular_phase, offset]`.
+
+```yaml
+anchor_bone: Hips
+anchor_drop: 0.09
+root_sink: 0.006
+length: 0.095
+radius: 0.0165
+bend: [[0.85, 0.5, 0.38], [0.25, 0.97, 0.7]] # front, down, length fraction
+inner_extension: 0.015
+base_fraction: 0.15
+girth_max: 1.2
+tip_start: 0.728
+tip_scale: 0.85
+first_link_start: 0.1
+relief:
+  amplitude: 0.00035
+  terms: [[0.6, 3.1, 2, 0], [0.4, 7.3, -3, 1.3]]
+  start: 0.1
+  rise: 0.06
+  end_offset: 0.02
+  fall: 0.05
+ridges:
+  - {t0: 0.12, tip_offset: 0.04, phase: 0.45, wobble: 0.25, freq: 1.4, offset: 0.5, r0: 0.0015, r1: 0.0008}
+  - {t0: 0.2, tip_offset: 0.08, phase: -0.6, wobble: 0.2, freq: 1.1, offset: 2.1, r0: 0.0012, r1: 0.0007}
+  - {t0: 0.1, tip_offset: 0.02, phase: 3.141592653589793, wobble: 0.03, freq: 1, offset: 0, r0: 0.0007, r1: 0.0005}
+ridge_blend: 0.0018
+pod_scale: 1.2
+pods:
+  down: 0.046
+  back: 0.018
+  blend: 0.008
+  ellipsoids:
+    - {lateral: 0.012, down: 0.006, back: 0, radii: [0.014, 0.013, 0.024]}
+    - {lateral: -0.012, down: 0.002, back: 0, radii: [0.014, 0.013, 0.024]}
+    - {lateral: 0, down: 0.012, back: 0, radii: [0.016, 0.011, 0.013]}
+    - {lateral: 0, down: -0.008, back: 0.006, radii: [0.013, 0.010, 0.012]}
+pod_link: 0.7
+pod_link_distance: 0.03
+k_tip_pods: 0.004
+k_body: 0.016
+body_window: {radius: 0.03, fall: 0.02} # both scale with size_factor
+skin_sink: 0.003
+hidden_band: {lateral: 0.025, above: -0.02, radius: 0.045, depth: 0.006}
+flatten: {lateral: 0.055, down: 0.035, below: 0.065, above: 0.01, front: 0.03, normal_front: 0.2, iterations: 150}
+reweight: {from: 0.045, to: 0.095}
+tone: {shaft: [0.9, 0.83, 0.8], tip: [1.04, 0.84, 0.82]}
+border_lift: 0.010
+texture: {bake: 1024, patch_max: 256, flood: 0.07, blur: 9}
+voxel: 0.0014
+smooth: {iterations: 2, factor: 0.5}
+decimate: 0.3
+protrusion_warn_mm: 12
+```
+
+`bend` defines the two quadratic Bezier control legs. The shaft radius falls
+from 1 to .95 before the tip, with the base flare bounded by `girth_max`.
+The tip neck falls .95 to .89 over `.03*tip_scale`, the bulb rises .89 to .98
+over `.06*tip_scale`, then the rounded cap uses `.98*(1-u**2.4)**.55`.
+Flattening relaxes the front window and moves coincident seam copies together,
+only inward. Radial reweighting transfers only `*UpLeg` weights to the anchor.
+The body union is confined to `body_window`; the hidden band retains up to
+`depth` under the skin. Open borders retain the nearest body's exact weights.
+Texture detail comes from the body's UV island at its original texel scale;
+the tip uses a blurred patch. Vertex colours are converted from sRGB to linear
+before a one-sample Cycles CPU emission bake (margin 8), then a Principled
+material uses the single baked atlas at roughness .55.
+
+Per-group metrics include `status`, `reason`, `size_factor`, `protrusion_mm`,
+`flattened_vertices`, `reweighted_vertices`, `part_tris`, `skin_patch_px`,
+`skin_patch_cm`, `tip_vertices`, and `border_vertices`. Geometry metrics use the
+final reduced mesh. `protrusion_mm` tells whether the generated body still carries a
+part: how far anything on the midline 2–16 cm below the anchor reaches in front of the
+belly line 6–12 cm above it, measured on the original body before flattening. A drawn
+part measured +40 mm, a part-less body with a soft rounding 0 mm (it stays behind the line).
 
 ### Rigid chain tails
 
