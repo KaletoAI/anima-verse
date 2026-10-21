@@ -190,6 +190,8 @@ export interface RoomOpening {
    *  location's `default_door_prop_id` out of this opening. Absent = nothing
    *  chosen, i.e. the default applies (`scene_recipe.door_prop_id`). */
   door_prop?: 'none'
+  /** Own window style; absent inherits the location and hull defaults. */
+  window_style?: string
   /** Which side the door prop turns about, read against the doorway's own
    *  direction. Absent = left. */
   hinge?: 'left' | 'right'
@@ -449,6 +451,7 @@ export interface Location {
    *  is filled with this one, unless it opts out with `door_prop: 'none'`.
    *  Empty = use the location style, then the building style or shipped default. */
   default_door_style?: string
+  default_window_style?: string
   default_door_prop_id?: string
   danger_level?: number
   indoor?: string

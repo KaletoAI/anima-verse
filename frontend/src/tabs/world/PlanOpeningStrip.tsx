@@ -1,6 +1,6 @@
 /**
  * PlanOpeningStrip — the selected opening in a room wall: what kind of hole it
- * is, how big, where it leads, and which door hangs in it.
+ * is, how big, where it leads, and its door or window style.
  *
  * THE THREE SIZES ARE COMMITTED ON BLUR, not on every keystroke: a number
  * field that writes while one types turns "1.2" into a 1 m opening the moment
@@ -8,6 +8,7 @@
  * input carries the stored value, so an outside change (an undo, another
  * strip) still refreshes what the field shows.
  */
+import { OpeningWindowStyle } from './WindowStylePicker'
 import { useI18n } from '../../i18n/I18nProvider'
 import { OpeningDoorProp } from './DoorPropPicker'
 import type { Room, RoomOpening } from './worldTypes'
@@ -64,6 +65,8 @@ interface Props {
    *  has one (§ A13b). Set = a door without a target leads into it, so the
    *  empty option says so instead of reading like "leads nowhere". */
   corridorName?: string
+  /** The location's fallback window style, named as the first option. */
+  defaultWindowStyle?: string
   /** The location's fallback door prop, named as the first option. */
   defaultDoorStyle?: string
   defaultDoorPropId: string
@@ -72,7 +75,7 @@ interface Props {
 }
 
 export function PlanOpeningStrip({
-  opening: op, index, otherRooms, corridorName = '', defaultDoorPropId, defaultDoorStyle, onPatch,
+  opening: op, index, otherRooms, corridorName = '', defaultDoorPropId, defaultDoorStyle, defaultWindowStyle, onPatch,
 }: Props) {
   const { t } = useI18n()
 
@@ -137,6 +140,8 @@ export function PlanOpeningStrip({
           onPatch={onPatch}
         />
       ) : null}
+      {op.type === 'window' ? <OpeningWindowStyle opening={op}
+        defaultStyle={defaultWindowStyle} onPatch={onPatch} /> : null}
       <button
         type="button"
         className="ga-btn ga-btn-sm ga-btn-danger"

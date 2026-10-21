@@ -17,6 +17,7 @@
  * drop it and inherit again — because a storey has exactly two states, its own
  * shape or somebody else's, and the middle button is the bridge between them.
  */
+import { LocationWindowDefault } from './WindowStylePicker'
 import { useI18n } from '../../i18n/I18nProvider'
 import { LocationDoorDefault } from './DoorPropPicker'
 import { PlanHullOpeningStrip } from './PlanHullOpeningStrip'
@@ -31,8 +32,10 @@ interface Props {
    *  offered, which lives on the location and not in the 3D block. */
   onMap3d?: (key: keyof Map3D, value: unknown) => void
   surfaceKinds: SurfaceKind[]
+  defaultWindowStyle?: string
   defaultDoorStyle?: string
   defaultDoorPropId: string
+  onDefaultWindowStyle?: (id: string) => void
   onDefaultDoorProp?: (id: string, style: string) => void
   /** The footprint tool is armed FOR THIS STOREY right now. */
   drawingOutline: boolean
@@ -60,7 +63,7 @@ interface Props {
 }
 
 export function PlanInspectorLevel({
-  level, map3d, onMap3d, surfaceKinds, defaultDoorPropId, defaultDoorStyle, onDefaultDoorProp,
+  level, map3d, onMap3d, surfaceKinds, defaultDoorPropId, defaultDoorStyle, onDefaultDoorProp, defaultWindowStyle, onDefaultWindowStyle,
   drawingOutline, canForkOutline, onDrawOutline, onForkOutline, onDropOutline,
   levelOutline, drawingHull, onDrawHull, hullSel, onSelectHull,
 }: Props) {
@@ -305,6 +308,9 @@ export function PlanInspectorLevel({
           ) : null}
         </>
       ) : null}
+
+      {onDefaultWindowStyle ? <LocationWindowDefault styleId={defaultWindowStyle || ''}
+        onChange={onDefaultWindowStyle} /> : null}
 
       {/* THE PLACE'S OWN DOOR — the fallback every door opening on this plan
           inherits, and the first option the opening panel offers. */}

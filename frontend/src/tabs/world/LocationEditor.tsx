@@ -198,6 +198,7 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
         // is taken away again (the server normalizes it through safe_prop_id).
         default_door_prop_id: draft.default_door_prop_id || '',
         default_door_style: draft.default_door_style || '',
+        default_window_style: draft.default_window_style || '',
         danger_level: draft.danger_level,
         indoor: draft.indoor || '',
         decency: draft.decency,
@@ -691,6 +692,8 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
           previewPose={previewPose}
           onPreviewPose={(id, pose) => setPreviewPose((cur) => ({ ...cur, [id]: pose }))}
           unsaved={dirty}
+          defaultWindowStyle={draft.default_window_style || ''}
+          onDefaultWindowStyle={(id) => setDraft((prev) => ({ ...prev, default_window_style: id }))}
           defaultDoorStyle={draft.default_door_style || ''}
           defaultDoorPropId={draft.default_door_prop_id || ''}
           onDefaultDoorProp={(id, style) => setDraft((prev) => ({ ...prev, default_door_prop_id: id, default_door_style: style }))}

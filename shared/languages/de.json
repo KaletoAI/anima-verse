@@ -2779,6 +2779,10 @@
     "Part": "Teil",
     "built": "gebaut",
     "not built": "nicht gebaut",
-    "built — body still shows a protrusion of {n} mm; regenerate the T-pose": "gebaut — der Körper zeigt noch einen Vorsprung von {n} mm; T-Pose neu generieren"
+    "built — body still shows a protrusion of {n} mm; regenerate the T-pose": "gebaut — der Körper zeigt noch einen Vorsprung von {n} mm; T-Pose neu generieren",
+    "Window": "Fenster",
+    "Building default": "Gebäudestandard",
+    "Default window": "Standardfenster",
+    "Window style used by every window of this place that names none.": "Fensterstil für alle Fenster dieses Ortes ohne eigenen Stil."
   }
 }
