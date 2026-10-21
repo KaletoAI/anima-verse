@@ -60,7 +60,7 @@ import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintBoundary, footprintYaw, footprintCentre, redatumTile, roomStandY, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile, type VerticalTarget } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintBoundary, footprintYaw, footprintCentre, redatumTile, roomStandY, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile, type TileCorridor, type VerticalTarget } from './scene/tiles';
 import { setFogVeilCameraHeight, setFogVeilCells, setFogVeilFogged,
   tickFogVeil } from './scene/fogVeil';
 import { setModelEnvironment } from './scene/glbMaterials';
@@ -3035,6 +3035,25 @@ async function startApp(username: string, role: string) {
       if (area < bestArea) { best = id; bestArea = area; }
     }
     return best;
+  }
+
+  /**
+   * The storey CORRIDOR of a plan-hull tile that covers a world point, or null.
+   *
+   * A corridor is the complement of its storey's rooms (§ A13b), so it has no
+   * rectangle in `roomRects` and `roomAt` never names it: the ground-floor
+   * hallway between the rooms read as "outside" and closed the building. The
+   * lowest storey's footprint (`corridors[].outline`, server-resolved) is the
+   * line between hallway and yard; every upper storey sits inside it.
+   */
+  function corridorAt(tile: Tile, x: number, z: number): string | null {
+    let lowest: TileCorridor | null = null;
+    for (const c of tile.corridors) {
+      if (c.level >= 0 && (!lowest || c.level < lowest.level)) lowest = c;
+    }
+    if (!lowest || lowest.outline.length < 3) return null;
+    const p = worldToTile(tile, x, z);
+    return pointInPolygon(p.x, p.z, lowest.outline) ? lowest.roomId : null;
   }
 
   /**
@@ -6136,7 +6155,9 @@ async function startApp(username: string, role: string) {
       const pos = npcs.positionOf(avatarName);
       if (pos) {
         const t = tileAt(pos.x, pos.z);
-        const room = (t?.modelIsGround || t?.modelIsPlanHull) ? roomAt(t, pos.x, pos.z) : null;
+        const room = t?.modelIsGround ? roomAt(t, pos.x, pos.z)
+          : t?.modelIsPlanHull ? (roomAt(t, pos.x, pos.z) ?? corridorAt(t, pos.x, pos.z))
+          : null;
         if (t && openable(t) &&
             (!(t.modelIsGround || t.modelIsPlanHull) || (room !== null && !t.alwaysVisibleRooms.has(room)))) {
           openLocation(t.loc.id);
