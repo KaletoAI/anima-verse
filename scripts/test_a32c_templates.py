@@ -132,6 +132,7 @@ THOUGHT_CTX = {
     "arc_block": "",
     "retrospective_block": "",
     "skill_context_blocks": "",
+    "known_secrets_block": "",
     "effects_block": "",
     "recent_chat_block": "",
     "recent_thoughts": "",

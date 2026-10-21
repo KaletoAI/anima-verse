@@ -16,6 +16,11 @@ Hand-derived expectations from design part D:
 [f] Removing reference test:1 deletes exactly one row, then zero.
 [g] Eight simultaneous learners must retain all eight names and game stamps.
 [h] update_secret cannot replace source_ref.
+[i] [c] sorts stamps descending: O1 5,4,3 then O2 7,6,5; equal O3
+    stamps preserve input order 1,2. Default severity 2, no discoveries.
+    Header/footer literals below are copied from the original formatter,
+    not captured from output; eight lines are derived from those rules.
+[j] Own known_by [W,T] minus discovered_by [W] shows T; W alone is hidden.
 """
 from concurrent.futures import ThreadPoolExecutor
 import os
@@ -82,6 +87,28 @@ def main():
         text = prompt(legacy)
         assert text.index('O1-fact-1') < text.index('legacy-new') < text.index('legacy-old')
         print('PASS [c] newest first, per-owner 3, total 8, legacy fallback')
+        expected_text = "\nSecrets you know about others:\n" + "\n".join(
+            f"- About {owner}: {owner}-fact-{i} (someone told you, severity 2/5)"
+            for owner, indices in [('O1', (5, 4, 3)), ('O2', (7, 6, 5)), ('O3', (1, 2))]
+            for i in indices
+        ) + (
+            "\n\nWhen someone asks directly about one of these people, consider sharing what you know — "
+            "BUT only if: (a) you trust them more than the secret's owner, OR (b) the severity is low, "
+            "OR (c) you have reason to betray the owner (bad relationship, recent conflict). "
+            "Otherwise deflect, lie, or partially reveal. Never volunteer high-severity secrets unprompted."
+        )
+        with patch('app.models.character.list_available_characters', return_value=['O1', 'O2', 'O3', 'X']):
+            assert prompt(fixtures).encode() == expected_text.encode()
+        print('PASS [i] hand-derived chat output is byte-identical')
+        for knowers, annotation in [(['W', 'T'], ' [known by: T]'), (['W'], '')]:
+            secret = dict(content='Notebook fact', known_by=knowers, discovered_by=['W'])
+            with patch.object(sec, 'list_secrets', return_value=[secret]), patch.object(
+                    sec, 'get_known_secrets_about', return_value=[]):
+                own = sec.build_secrets_prompt_section('O1')
+            assert own == (
+                "\nYour secrets (things you keep to yourself — never reveal these unless you choose to):\n"
+                "- Notebook fact (severity: embarrassing)" + annotation), own
+        print('PASS [j] self-discovered knowers stay hidden from owner')
         context = _build_generation_context('O1')
         existing = context.split('ALREADY EXISTING', 1)[1]
         assert record['content'] not in existing and manual['content'] in existing

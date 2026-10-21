@@ -306,9 +306,8 @@ def get_known_secrets_about(observer_name: str) -> List[Dict[str, Any]]:
 
 # --- Prompt-Injection ---
 
-def build_secrets_prompt_section(character_name: str) -> str:
-    """Build own secrets and a bounded list of recently learned secrets."""
-    own_secrets = [s for s in list_secrets(character_name) if not is_record(s)]
+def known_about_others_block(character_name: str) -> str:
+    """Render known secrets with the chat limits and learning order."""
     # Learning stamps precede legacy entries; creation time orders the latter.
     def learned_order(entry):
         secret = entry["secret"]
@@ -330,34 +329,6 @@ def build_secrets_prompt_section(character_name: str) -> str:
         if len(known_about_others) >= KNOWN_TOTAL:
             break
 
-    if not own_secrets and not known_about_others:
-        return ""
-
-    parts = []
-
-    # Own secrets
-    if own_secrets:
-        lines = []
-        for s in own_secrets:
-            content = (s.get("content") or "").strip()
-            if not content:
-                continue
-            severity_label = SEVERITY_LABELS.get(s.get("severity", 2), "unknown")
-            line = f"- {content} (severity: {severity_label})"
-            if s.get("consequences_if_revealed"):
-                line += f" — if revealed: {s['consequences_if_revealed']}"
-            known_count = len(s.get("known_by", []))
-            if known_count > 0:
-                knowers = ", ".join(s["known_by"])
-                line += f" [known by: {knowers}]"
-            lines.append(line)
-
-        parts.append(
-            "\nYour secrets (things you keep to yourself — never reveal these unless you choose to):\n"
-            + "\n".join(lines)
-        )
-
-    # Secrets known about others
     if known_about_others:
         lines = []
         for entry in known_about_others:
@@ -371,7 +342,7 @@ def build_secrets_prompt_section(character_name: str) -> str:
             sev = s.get("severity", 2)
             lines.append(f"- About {owner}: {content} ({method}, severity {sev}/5)")
 
-        parts.append(
+        return (
             "\nSecrets you know about others:\n"
             + "\n".join(lines)
             + "\n\nWhen someone asks directly about one of these people, consider sharing what you know — "
@@ -380,4 +351,38 @@ def build_secrets_prompt_section(character_name: str) -> str:
             + "Otherwise deflect, lie, or partially reveal. Never volunteer high-severity secrets unprompted."
         )
 
+    return ""
+
+
+def build_secrets_prompt_section(character_name: str) -> str:
+    """Build own secrets and a bounded list of recently learned secrets."""
+    own_secrets = [s for s in list_secrets(character_name) if not is_record(s)]
+    known_block = known_about_others_block(character_name)
+    parts = []
+
+    # Own secrets
+    if own_secrets:
+        lines = []
+        for s in own_secrets:
+            content = (s.get("content") or "").strip()
+            if not content:
+                continue
+            severity_label = SEVERITY_LABELS.get(s.get("severity", 2), "unknown")
+            line = f"- {content} (severity: {severity_label})"
+            if s.get("consequences_if_revealed"):
+                line += f" — if revealed: {s['consequences_if_revealed']}"
+            visible_knowers = [name for name in s.get("known_by", [])
+                               if name not in s.get("discovered_by", [])]
+            if visible_knowers:
+                knowers = ", ".join(visible_knowers)
+                line += f" [known by: {knowers}]"
+            lines.append(line)
+
+        parts.append(
+            "\nYour secrets (things you keep to yourself — never reveal these unless you choose to):\n"
+            + "\n".join(lines)
+        )
+
+    if known_block:
+        parts.append(known_block)
     return "\n".join(parts)

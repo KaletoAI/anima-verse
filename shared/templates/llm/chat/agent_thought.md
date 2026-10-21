@@ -30,6 +30,7 @@
                                  (not rp_first) — teaches the [INTENT:] grammar
      general_task              — Medium: static profile task
      outfit_decision_block     — High when triggered (after location-change or wake)
+     known_secrets_block       — Knowledge about others (same limits as chat)
      skill_context_blocks      — Medium: self-contained sections contributed by the character's active skills
      inventory_block           — what the character is carrying
      room_items_block          — visible items in the current room
@@ -158,6 +159,9 @@ If this turn starts something you will only carry out LATER, record it with a ma
 {% if skill_context_blocks %}
 
 {{ skill_context_blocks }}
+{% endif %}
+{% if known_secrets_block %}
+{{ known_secrets_block }}
 {% endif %}
 {% if tracker_block %}
 

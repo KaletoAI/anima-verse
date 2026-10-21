@@ -141,6 +141,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "recent_thoughts": recent_thoughts_block(character_name),
         "outfit_self_block": _build_outfit_block(character_name, "Your outfit"),
         "outfit_avatar_block": _build_avatar_outfit_block(),
+        "known_secrets_block": _build_known_secrets_block(character_name),
         "room_items_block": _build_room_items_block(location_id, room_id, character_name, profile=profile),
         "inventory_block": _build_inventory_block(character_name),
         "present_people_block": present_people_block,
@@ -235,6 +236,15 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
 # ---------------------------------------------------------------------------
 # Block builders
 # ---------------------------------------------------------------------------
+
+def _build_known_secrets_block(character_name: str) -> str:
+    """Knowledge about others only, gated by the character template feature."""
+    from app.models.character_template import is_feature_enabled
+    from app.models.secrets import known_about_others_block
+    if not is_feature_enabled(character_name, "secrets_enabled"):
+        return ""
+    return known_about_others_block(character_name)
+
 
 def _build_inbox_block(character_name: str) -> str:
     """Pre-formatted inbox block: per-sender unread messages with context."""

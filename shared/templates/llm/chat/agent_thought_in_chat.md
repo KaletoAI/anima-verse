@@ -40,6 +40,7 @@
                               to a seat or leans on the counter mid-conversation
                               needs the pose keys, and changing WHAT IT DOES is
                               not one of the initiatives this turn holds back.
+     known_secrets_block       — Knowledge about others (same limits as chat)
      skill_context_blocks   — self-contained sections contributed by the
                               character's active skills (e.g. "Places you can
                               go"). The SAME block agent_thought.md renders:
@@ -139,6 +140,9 @@ Use SetActivity to set what you are doing right now — pose: one of the pose ke
 {% if skill_context_blocks %}
 
 {{ skill_context_blocks }}
+{% endif %}
+{% if known_secrets_block %}
+{{ known_secrets_block }}
 {% endif %}
 {% if tools_hint %}
 
