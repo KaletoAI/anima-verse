@@ -63,10 +63,19 @@ def _on_edge(points, edge, distance):
 
 
 def _span(ring, edge, distance):
+    """The offset ring's extent along one edge.
+
+    Only ring points near THIS edge count: an offset corner lies at most three
+    offsets beyond either end (the bevel limit of ``offset_ring``). A second,
+    separate edge on the same line (two wings around a porch) would otherwise
+    merge into one span and carry walls and blind windows past its corners.
+    """
     a = edge['a']
     u,n = _axes(edge)
-    ss = [sum((p[k]-a[k])*u[k] for k in range(2)) for p in ring
-          if abs(sum((p[k]-a[k])*n[k] for k in range(2))-distance) < 3e-4]
+    reach = 3*abs(distance)+3e-4
+    ss = [s for s in (sum((p[k]-a[k])*u[k] for k in range(2)) for p in ring
+                      if abs(sum((p[k]-a[k])*n[k] for k in range(2))-distance) < 3e-4)
+          if -reach <= s <= edge['length']+reach]
     return min(ss),max(ss)
 
 

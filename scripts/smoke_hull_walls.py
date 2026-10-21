@@ -43,7 +43,29 @@ from _hull_fixtures import (stepped_house, opening_edge_cases, count, total_open
     windows, doors, polygon_case_facts, no_face_overlaps_openings, no_degenerate_faces, outer_face_distance)
 
 
+def check_collinear_span():
+    """Two separate edges on one line keep separate spans (Apartment, 2026-10-21).
+
+    Outline (y up the plan, ccw): (0,0)(4,0)(4,-1)(6,-1)(6,0)(10,0)(10,5)(0,5).
+    Edges 0 (x 0..4) and 4 (x 6..10) both lie on y=0. Offset 0.3 outward:
+    edge 0's span is its own length plus the corner offsets, -0.3..4.3 at most
+    (the notch corner at x=4 is concave: 4-0.3=3.7), never out to x=10.3.
+    """
+    from app.core.hull_mesh import offset_ring
+    from app.core.hull_walls import _span
+    from app.core import scene_recipe as sr
+    outline = [[0,0],[4,0],[4,-1],[6,-1],[6,0],[10,0],[10,5],[0,5]]
+    ccw = sr._ring_ccw(outline)
+    sign = 1 if ccw else -1
+    a, b = outline[0], outline[1]
+    edge = dict(a=a, b=b, length=4.0, normal=[0, -sign])
+    lo, hi = _span(offset_ring(outline, ccw, .3), edge, .3)
+    assert -.31 <= lo <= 0 and 3.6 <= hi <= 4.31, (lo, hi)
+    print('PASS: collinear edges keep their own spans')
+
+
 def main():
+    check_collinear_span()
     check_modern()
     check_facades()
     from app.core.hull_styles import validate_style
