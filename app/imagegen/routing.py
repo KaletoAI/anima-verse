@@ -564,6 +564,16 @@ def run_routed(occasion: str, render: Callable[[Any], Any], *,
         return result, route
 
 
+def character_spec(occasion: str, character: str) -> str:
+    """The character's OWN backend match for this occasion (position 0), or
+    "" when it has none or the occasion is not character-scoped."""
+    try:
+        occ = get_occasion(occasion)
+    except Exception:
+        return ""
+    return _character_spec(occ, character)
+
+
 def is_character_match(occasion: str, character: str, backend_name: str) -> bool:
     """Whether ``backend_name`` is matched by the character's OWN spec of this
     occasion (position 0). Character-level render overrides that only make

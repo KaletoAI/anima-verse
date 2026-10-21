@@ -953,12 +953,38 @@ def get_outfit_imagegen_route(character_name: str) -> Dict[str, Any]:
         # normal render match.
         "tpose_workflow": override.get("tpose_workflow", "") or "",
         "tpose_view_workflow": override.get("tpose_view_workflow", "") or "",
+        # Backend glob in front of the character mesh chain; empty = world chain.
+        "mesh_workflow": override.get("mesh_workflow", "") or "",
+        **_mesh_match_context(character_name),
         "model": override.get("model", "") or "",
         "loras": override.get("loras", []) or [],
         # LoRAs used INSTEAD of "loras" for the T-pose reference renders;
         # empty = the normal LoRAs apply.
         "tpose_loras": override.get("tpose_loras", []) or [],
     }
+
+
+def _mesh_match_context(character_name: str) -> Dict[str, Any]:
+    """What the Image tab needs beside the mesh match: the mesh occasion this
+    character's rig selects, its world chain (shown as the fallback) and every
+    enabled img2mesh backend name (match preview; offline ones included, the
+    glob still names them)."""
+    from app.core import config
+    from app.core.model3d import required_rig
+    from app.imagegen.occasions import mesh_occasion_for_rig
+    from app.imagegen.service import get_image_service
+    try:
+        occasion = mesh_occasion_for_rig(required_rig(character_name))
+    except Exception:
+        occasion = "mesh_humanoid"
+    rules = config.get("image_generation.routing", {}) or {}
+    chain = rules.get(occasion) if isinstance(rules, dict) else None
+    names = [b.name for b in get_image_service().backends
+             if b.instance_enabled and getattr(b, "MEDIA_TYPE", "image") == "mesh"
+             and (getattr(b, "category", "") or "") == "img2mesh"]
+    return {"mesh_occasion": occasion,
+            "mesh_world_chain": [str(x) for x in chain] if isinstance(chain, list) else [],
+            "mesh_backends": names}
 
 
 @router.put("/{character_name}/outfit-imagegen")

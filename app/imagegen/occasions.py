@@ -46,10 +46,17 @@ def _image(label: str, covers: str, style_use_cases: List[str],
             "covers": covers, **scope, **extra}
 
 
-def _mesh(label: str, covers: str, rig: str) -> Dict[str, Any]:
+def _mesh(label: str, covers: str, rig: str,
+          scope: Dict[str, Any] = _WORLD) -> Dict[str, Any]:
     return {"label": label, "media": "mesh", "category": "img2mesh", "rig": rig,
             "needs_ref_slot": False, "style_use_cases": [], "covers": covers,
-            **_WORLD}
+            **scope}
+
+
+# A character's mesh match (Characters → Image) covers whichever of the two
+# character mesh occasions its rig selects; objects and buildings stay world-only.
+_CHAR_MESH = {"character_scoped": True, "char_spec_field": "mesh_workflow",
+              "char_spec_fallback": ""}
 
 
 OCCASIONS: Dict[str, Dict[str, Any]] = {
@@ -100,9 +107,9 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
               "covers": "Animate dialog, Instagram animate, video skill",
               **_WORLD},
     "mesh_humanoid": _mesh("3D mesh — humanoid", "Character mesh (humanoid)",
-                           "none"),
+                           "none", _CHAR_MESH),
     "mesh_creature": _mesh("3D mesh — creature", "Character mesh (non-humanoid)",
-                           "none"),
+                           "none", _CHAR_MESH),
     "rig_humanoid": {**_mesh("3D rig — humanoid", "Character rig (humanoid)", "mixamo"),
                      "category": "mesh2rig", "requires_chain": True},
     "rig_creature": {**_mesh("3D rig — creature", "Character rig (non-humanoid)", "generic"),

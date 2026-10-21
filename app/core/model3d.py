@@ -605,11 +605,13 @@ def required_rig(character_name: str) -> str:
     return "mixamo" if is_humanoid(character_name) else "generic"
 
 
-def list_mesh_backends(occasion: str = "") -> Dict[str, Any]:
+def list_mesh_backends(occasion: str = "", character: str = "") -> Dict[str, Any]:
     """Available img2mesh choices and the supplied occasion's routed default.
 
     All img2mesh backends produce unrigged sources. With no occasion supplied,
-    no default is preselected.
+    no default is preselected. ``character`` puts that character's own mesh
+    match (Characters → Image) in front of the chain, so the dialog preselects
+    what an Auto run for this character would use.
     """
     from app.imagegen.service import get_image_service
     out = []
@@ -639,7 +641,7 @@ def list_mesh_backends(occasion: str = "") -> Dict[str, Any]:
         occ = occasion
         if occ:
             from app.imagegen.routing import explain_occasion
-            default = str(explain_occasion(occ).get("resolved") or "")
+            default = str(explain_occasion(occ, character).get("resolved") or "")
     except Exception as e:
         logger.debug("Mesh default for occasion=%r not resolved: %s", occasion, e)
         default = ""
@@ -896,7 +898,8 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
     out["options"] = get_model3d_options(character_name)
     from app.blender import runner
     out["blender"] = runner.status()
-    out.update(list_mesh_backends(occasion=mesh_occasion_for_rig(rig)))
+    out.update(list_mesh_backends(occasion=mesh_occasion_for_rig(rig),
+                                  character=character_name))
     out["rig_backends"] = list_rig_backends()
     from app.imagegen.service import get_image_service
     out["upscale_backends"] = [{"name": b.name, "model": b.model}
@@ -2018,10 +2021,13 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 character_name, signature, cached.name)
                     return {"ok": True, "cached": True, "path": str(cached)}
 
-            if not backend_glob and prefer_cheapest:
+            from app.imagegen.routing import character_spec
+            if (not backend_glob and prefer_cheapest
+                    and not character_spec(mesh_occasion_for_rig(rig), character_name)):
                 # The auto-mesh hook keeps its rule (user decision 2026-07-18): the
                 # cheapest AVAILABLE unrigged img2mesh backend — explicit, no
-                # chain. Every other call without a glob is routed.
+                # chain. Every other call without a glob is routed, and so is
+                # the hook for a character with its own mesh match.
                 cheapest = get_image_service().list_mesh_backends()
                 if not cheapest:
                     return {"ok": False, "error": "no img2mesh backend available"}

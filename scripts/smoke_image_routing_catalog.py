@@ -25,7 +25,10 @@ A4. P1/P2: all mesh_* occasions require img2mesh/none. rig_humanoid
     pose_animation requires mesh2anim; image/video occasions use category render.
 A5. character_scoped exactly: photo, instagram, profile, expression, tpose, tpose_view,
     regenerate (§ 1 column "figurbez." = ja; frame is a product shot without
-    a figure — review note).
+    a figure — review note), plus the two CHARACTER mesh occasions
+    mesh_humanoid + mesh_creature (user request 2026-10-21: a per-character
+    mesh match; both read outfit_imagegen.mesh_workflow). Objects, buildings
+    and both rigs stay world-only (rig: user decision, no per-character rig).
 A7. needs_ref_slot only on timevariant (§ 1 "nur Backends mit >= 1 Ref-Slot").
 A8. backend_fits, one line each (kind = media/category/rig/ref_slot_count):
       photo    + image/img2img/ref 1          -> True
@@ -178,7 +181,12 @@ def part_a():
 
     check("A5 character scoped",
           [i for i in expected_ids if occ.get_occasion(i)["character_scoped"]],
-          ["photo", "instagram", "profile", "expression", "tpose", "tpose_view", "regenerate"])
+          ["photo", "instagram", "profile", "expression", "tpose", "tpose_view", "regenerate",
+           "mesh_humanoid", "mesh_creature"])
+    check("A5 mesh spec field",
+          {i: occ.get_occasion(i)["char_spec_field"]
+           for i in ("mesh_humanoid", "mesh_creature")},
+          {"mesh_humanoid": "mesh_workflow", "mesh_creature": "mesh_workflow"})
 
     check("A7 needs_ref_slot",
           [i for i in expected_ids if occ.get_occasion(i).get("needs_ref_slot")],

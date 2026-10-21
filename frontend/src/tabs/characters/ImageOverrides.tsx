@@ -20,8 +20,15 @@ import { Field } from '../../components/Field'
  *  - LoRA override: LoRAs always applied for this character.
  *  - T-pose LoRAs: replace the LoRA override for the T-pose reference renders
  *    (different backend, different LoRA ecosystem — no merge).
- * Backed by /characters/{name}/outfit-imagegen (GET/PUT) plus the backend
- * list (/world/imagegen-options) and available LoRAs (/outfit-lora-options).
+ *  - Mesh backend match: a glob over img2mesh backends, position 0 of the
+ *    character mesh chain its rig selects (mesh_humanoid / mesh_creature).
+ *    Objects and buildings have no per-entity match; the rig stays world-only.
+ * Layout: images on the left, T-pose and 3D on the right (one column when
+ * narrow).
+ * Backed by /characters/{name}/outfit-imagegen (GET/PUT — the GET also names
+ * the mesh occasion, its world chain and the img2mesh backends) plus the
+ * image backend list (/world/imagegen-options) and available LoRAs
+ * (/outfit-lora-options).
  *
  * THIS PANEL DOES NOT WRITE. Every edit goes into the character sheet's change
  * buffer (`queueImagegen`) and leaves with the toolbar's one Save.
@@ -30,10 +37,10 @@ import { Field } from '../../components/Field'
  * `PUT /characters/{name}/outfit-imagegen`, and that route takes the WHOLE
  * record — a body carrying only `loras` would blank the match patterns.
  * The buffer hands its patch to that route unchanged, so the patch has to BE
- * `{workflow, profile_workflow, tpose_workflow, tpose_view_workflow, loras, tpose_loras}`, every
- * time, with the edited value taken from the event (the state behind it is one
- * render old) and the other fields from the current render. One keystroke here
- * therefore counts as six pending fields in "Save (n)".
+ * `{workflow, profile_workflow, tpose_workflow, tpose_view_workflow, mesh_workflow, loras, tpose_loras}`,
+ * every time, with the edited value taken from the event (the state behind it
+ * is one render old) and the other fields from the current render. One
+ * keystroke here therefore counts as seven pending fields in "Save (n)".
  *
  * The "Add LoRA" choices are the one thing the SAVED values decide: the server
  * resolves them from the stored backend match, so a match still sitting in the
@@ -53,11 +60,41 @@ interface Override {
   tposePattern: string
   tposeViewPattern: string
   profilePattern: string
+  meshPattern: string
   loras: Lora[]
   tposeLoras: Lora[]
 }
 
-const EMPTY_OVERRIDE: Override = { pattern: '', tposePattern: '', tposeViewPattern: '', profilePattern: '', loras: [], tposeLoras: [] }
+const EMPTY_OVERRIDE: Override = { pattern: '', tposePattern: '', tposeViewPattern: '', profilePattern: '', meshPattern: '', loras: [], tposeLoras: [] }
+
+/** GET /characters/{name}/outfit-imagegen. */
+interface StoredOverride {
+  workflow?: string
+  profile_workflow?: string
+  tpose_workflow?: string
+  tpose_view_workflow?: string
+  mesh_workflow?: string
+  loras?: Lora[]
+  tpose_loras?: Lora[]
+  /** The mesh occasion this character's rig selects. */
+  mesh_occasion?: string
+  /** That occasion's world chain — what runs behind the mesh match. */
+  mesh_world_chain?: string[]
+  /** Every enabled img2mesh backend name (match preview). */
+  mesh_backends?: string[]
+}
+
+function fromServer(ovr: StoredOverride): Override {
+  return {
+    pattern: ovr.workflow || '',
+    tposePattern: ovr.tpose_workflow || '',
+    tposeViewPattern: ovr.tpose_view_workflow || '',
+    profilePattern: ovr.profile_workflow || '',
+    meshPattern: ovr.mesh_workflow || '',
+    loras: Array.isArray(ovr.loras) ? ovr.loras : [],
+    tposeLoras: Array.isArray(ovr.tpose_loras) ? ovr.tpose_loras : [],
+  }
+}
 
 // Convert a shell-style glob (only '*' wildcard) to a case-insensitive regex.
 function globToRegex(glob: string): RegExp {
@@ -73,6 +110,7 @@ function withDraft(stored: Override, draft: Record<string, unknown>): Override {
     tposePattern: typeof draft.tpose_workflow === 'string' ? draft.tpose_workflow : stored.tposePattern,
     tposeViewPattern: typeof draft.tpose_view_workflow === 'string' ? draft.tpose_view_workflow : stored.tposeViewPattern,
     profilePattern: typeof draft.profile_workflow === 'string' ? draft.profile_workflow : stored.profilePattern,
+    meshPattern: typeof draft.mesh_workflow === 'string' ? draft.mesh_workflow : stored.meshPattern,
     loras: Array.isArray(draft.loras) ? (draft.loras as Lora[]) : stored.loras,
     tposeLoras: Array.isArray(draft.tpose_loras) ? (draft.tpose_loras as Lora[]) : stored.tposeLoras,
   }
@@ -86,7 +124,7 @@ export function ImageOverrides({
   savedSignal,
 }: {
   character: string
-  /** Remember the whole override record — see the module note on why all six
+  /** Remember the whole override record — see the module note on why all seven
    *  keys travel together. */
   queueImagegen: (patch: Record<string, unknown>) => void
   /** The container's buffered record, laid over what the GET returned. */
@@ -102,6 +140,10 @@ export function ImageOverrides({
   const [tposePattern, setTposePattern] = useState('')
   const [tposeViewPattern, setTposeViewPattern] = useState('')
   const [profilePattern, setProfilePattern] = useState('')
+  const [meshPattern, setMeshPattern] = useState('')
+  const [meshBackends, setMeshBackends] = useState<string[]>([])
+  const [meshOccasion, setMeshOccasion] = useState('')
+  const [meshWorldChain, setMeshWorldChain] = useState<string[]>([])
   const [loras, setLoras] = useState<Lora[]>([])
   const [tposeLoras, setTposeLoras] = useState<Lora[]>([])
   const [backends, setBackends] = useState<string[]>([])  // image-backend names (match target)
@@ -122,6 +164,7 @@ export function ImageOverrides({
     setTposePattern(rec.tposePattern)
     setTposeViewPattern(rec.tposeViewPattern)
     setProfilePattern(rec.profilePattern)
+    setMeshPattern(rec.meshPattern)
     setLoras(rec.loras)
     setTposeLoras(rec.tposeLoras)
   }, [])
@@ -152,9 +195,7 @@ export function ImageOverrides({
     ;(async () => {
       try {
         const [ovr, opts, loraOpts, tposeOpts] = await Promise.all([
-          apiGet<{ workflow?: string; profile_workflow?: string; tpose_workflow?: string; tpose_view_workflow?: string; loras?: Lora[]; tpose_loras?: Lora[] }>(
-            `/characters/${encodeURIComponent(character)}/outfit-imagegen`,
-          ),
+          apiGet<StoredOverride>(`/characters/${encodeURIComponent(character)}/outfit-imagegen`),
           apiGet<{ options?: Array<{ name?: string; category?: string }> }>('/world/imagegen-options'),
           apiGet<{ loras?: Array<{ name: string; missing?: boolean }> }>(
             `/characters/outfit-lora-options?character_name=${encodeURIComponent(character)}`,
@@ -164,15 +205,11 @@ export function ImageOverrides({
           )
         ])
         if (cancelled) return
-        const stored: Override = {
-          pattern: ovr.workflow || '',
-          tposePattern: ovr.tpose_workflow || '',
-          tposeViewPattern: ovr.tpose_view_workflow || '',
-          profilePattern: ovr.profile_workflow || '',
-          loras: Array.isArray(ovr.loras) ? ovr.loras : [],
-          tposeLoras: Array.isArray(ovr.tpose_loras) ? ovr.tpose_loras : [],
-        }
+        const stored = fromServer(ovr)
         storedRef.current = stored
+        setMeshBackends(ovr.mesh_backends || [])
+        setMeshOccasion(ovr.mesh_occasion || '')
+        setMeshWorldChain(ovr.mesh_world_chain || [])
         // Unsaved edits survive a trip to another sub-tab and back.
         show(withDraft(stored, draftRef.current))
         // Inpaint targets (category=inpaint) are only for Map-Fit/Match-Edges,
@@ -214,19 +251,13 @@ export function ImageOverrides({
     let cancelled = false
     ;(async () => {
       try {
-        const ovr = await apiGet<{ workflow?: string; profile_workflow?: string; tpose_workflow?: string; tpose_view_workflow?: string; loras?: Lora[]; tpose_loras?: Lora[] }>(
+        const ovr = await apiGet<StoredOverride>(
           `/characters/${encodeURIComponent(character)}/outfit-imagegen`,
         )
         if (cancelled) return
-        const stored: Override = {
-          pattern: ovr.workflow || '',
-          tposePattern: ovr.tpose_workflow || '',
-          tposeViewPattern: ovr.tpose_view_workflow || '',
-          profilePattern: ovr.profile_workflow || '',
-          loras: Array.isArray(ovr.loras) ? ovr.loras : [],
-          tposeLoras: Array.isArray(ovr.tpose_loras) ? ovr.tpose_loras : [],
-        }
+        const stored = fromServer(ovr)
         storedRef.current = stored
+        setMeshWorldChain(ovr.mesh_world_chain || [])
         show(stored)
       } catch { /* keep what is on screen */ }
     })()
@@ -243,11 +274,12 @@ export function ImageOverrides({
         tpose_workflow: (next.tposePattern ?? tposePattern).trim(),
         tpose_view_workflow: (next.tposeViewPattern ?? tposeViewPattern).trim(),
         profile_workflow: (next.profilePattern ?? profilePattern).trim(),
+        mesh_workflow: (next.meshPattern ?? meshPattern).trim(),
         loras: next.loras ?? loras,
         tpose_loras: next.tposeLoras ?? tposeLoras,
       })
     },
-    [queueImagegen, pattern, tposePattern, tposeViewPattern, profilePattern, loras, tposeLoras],
+    [queueImagegen, pattern, tposePattern, tposeViewPattern, profilePattern, meshPattern, loras, tposeLoras],
   )
 
   const matching = useMemo(() => {
@@ -281,6 +313,14 @@ export function ImageOverrides({
     return backends.filter((b) => re.test(b))
   }, [profilePattern, backends])
 
+  // The mesh match globs over img2mesh backends, not image backends.
+  const meshMatching = useMemo(() => {
+    const p = meshPattern.trim()
+    if (!p) return []
+    const re = globToRegex(p.replace(/^backend:/i, '').trim())
+    return meshBackends.filter((b) => re.test(b))
+  }, [meshPattern, meshBackends])
+
   /** A LoRA list edit: on screen and in the buffer in the same breath, so a
    *  picked-and-added LoRA is part of the sheet without a second click. */
   const editLoras = useCallback(
@@ -301,181 +341,146 @@ export function ImageOverrides({
 
   if (loading) return <div className="ga-loading">{t('Loading…')}</div>
 
-  return (
-    <div className="ga-form">
-      <div className="ga-fieldset">
-        <div className="ga-fieldset-title">{t('Render match')}</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: 16 }}>
-          {[
-            { label: t('Backend match (glob)'), value: pattern, set: setPattern, key: 'pattern', matches: matching, placeholder: 'Flux*', empty: t('Empty: occasion chain') },
-            { label: t('Portrait backend match (glob)'), value: profilePattern, set: setProfilePattern, key: 'profilePattern', matches: profileMatching, placeholder: 'Portrait*', empty: t('Empty: portrait chain') },
-            { label: t('T-pose backend match (glob)'), value: tposePattern, set: setTposePattern, key: 'tposePattern', matches: tposeMatching, placeholder: 'TPose*', empty: t('Empty: render match, then T-pose chain') },
-            { label: t('T-pose views backend match (glob)'), value: tposeViewPattern, set: setTposeViewPattern, key: 'tposeViewPattern', matches: tposeViewMatching, placeholder: 'Flux*', empty: t('Empty: T-pose views chain') },
-          ].map((match) => (
-            <Field key={match.key} label={match.label}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', minWidth: 0 }}>
+  type MatchRow = {
+    label: string
+    value: string
+    set: (v: string) => void
+    key: keyof Override
+    matches: string[]
+    placeholder: string
+    empty: string
+  }
+  const renderMatch = (match: MatchRow) => (
+    <Field key={match.key} label={match.label}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', minWidth: 0 }}>
+      <input
+        className="ga-input"
+        value={match.value}
+        placeholder={match.placeholder}
+        onChange={(e) => {
+          match.set(e.target.value)
+          queueRecord({ [match.key]: e.target.value })
+        }}
+      />
+      <div className="ga-img-matches">
+        {!match.value.trim() ? (
+          <span className="ga-sched-muted">{match.empty}</span>
+        ) : match.matches.length === 0 ? (
+          <span className="ga-img-nomatch">{t('no match')}</span>
+        ) : (
+          match.matches.map((name) => (
+            <span key={name} className="ga-img-match-chip">{name}</span>
+          ))
+        )}
+      </div>
+      </div>
+    </Field>
+  )
+
+  const renderLoras = ({ title, list, edit, empty, options, addValue, setAddValue }: {
+    title: string
+    list: Lora[]
+    edit: (next: Lora[]) => void
+    empty: string
+    options: Array<{ name: string; missing?: boolean }>
+    addValue: string
+    setAddValue: (v: string) => void
+  }) => (
+    <div className="ga-fieldset">
+      <div className="ga-fieldset-title">{title}</div>
+      {list.length === 0 ? (
+        <div className="ga-placeholder">{empty}</div>
+      ) : (
+        list.map((l, i) => (
+          <div className="ga-form-row" key={i}>
+            <Field label={i === 0 ? t('LoRA') : ''}>
+              <input className="ga-input" value={l.name} disabled readOnly />
+            </Field>
+            <Field label={i === 0 ? t('Strength') : ''} compact>
               <input
                 className="ga-input"
-                value={match.value}
-                placeholder={match.placeholder}
+                type="number"
+                step="0.05"
+                style={{ width: 90 }}
+                value={l.strength}
                 onChange={(e) => {
-                  match.set(e.target.value)
-                  queueRecord({ [match.key]: e.target.value })
+                  const strength = parseFloat(e.target.value)
+                  edit(list.map((x, j) => (j === i ? { ...x, strength: isNaN(strength) ? 1 : strength } : x)))
                 }}
               />
-              <div className="ga-img-matches">
-                {!match.value.trim() ? (
-                  <span className="ga-sched-muted">{match.empty}</span>
-                ) : match.matches.length === 0 ? (
-                  <span className="ga-img-nomatch">{t('no match')}</span>
-                ) : (
-                  match.matches.map((name) => (
-                    <span key={name} className="ga-img-match-chip">{name}</span>
-                  ))
-                )}
-              </div>
-              </div>
             </Field>
-          ))}
-        </div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: 16 }}>
-      <div className="ga-fieldset">
-        <div className="ga-fieldset-title">{t('LoRA override')}</div>
-        {loras.length === 0 ? (
-          <div className="ga-placeholder">{t('No LoRAs forced for this character.')}</div>
-        ) : (
-          loras.map((l, i) => (
-            <div className="ga-form-row" key={i}>
-              <Field label={i === 0 ? t('LoRA') : ''}>
-                <input className="ga-input" value={l.name} disabled readOnly />
-              </Field>
-              <Field label={i === 0 ? t('Strength') : ''} compact>
-                <input
-                  className="ga-input"
-                  type="number"
-                  step="0.05"
-                  style={{ width: 90 }}
-                  value={l.strength}
-                  onChange={(e) => {
-                    const strength = parseFloat(e.target.value)
-                    editLoras(
-                      loras.map((x, j) => (j === i ? { ...x, strength: isNaN(strength) ? 1 : strength } : x)),
-                    )
-                  }}
-                />
-              </Field>
-              <Field label={i === 0 ? '' : ''} compact>
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm ga-btn-danger"
-                  onClick={() => editLoras(loras.filter((_, j) => j !== i))}
-                >
-                  {t('Remove')}
-                </button>
-              </Field>
-            </div>
-          ))
-        )}
-        <div className="ga-form-row" style={{ marginTop: 6, gap: 8 }}>
-          <Field label={t('Add LoRA')}>
-            <select className="ga-input" value={addName} onChange={(e) => setAddName(e.target.value)}>
-              <option value="">— {t('pick a LoRA')} —</option>
-              {availableLoras
-                .filter((l) => !loras.some((x) => x.name === l.name))
-                .map((l) => (
-                  <option key={l.name} value={l.name}>
-                    {l.name}{l.missing ? ` ${t('(missing)')}` : ''}
-                  </option>
-                ))}
-            </select>
-          </Field>
-          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              disabled={!addName}
-              onClick={() => {
-                if (!addName) return
-                editLoras([...loras, { name: addName, strength: 1 }])
-                setAddName('')
-              }}
-            >
-              {t('Add')}
-            </button>
+            <Field label="" compact>
+              <button
+                type="button"
+                className="ga-btn ga-btn-sm ga-btn-danger"
+                onClick={() => edit(list.filter((_, j) => j !== i))}
+              >
+                {t('Remove')}
+              </button>
+            </Field>
           </div>
+        ))
+      )}
+      <div className="ga-form-row" style={{ marginTop: 6, gap: 8 }}>
+        <Field label={t('Add LoRA')}>
+          <select className="ga-input" value={addValue} onChange={(e) => setAddValue(e.target.value)}>
+            <option value="">— {t('pick a LoRA')} —</option>
+            {options
+              .filter((l) => !list.some((x) => x.name === l.name))
+              .map((l) => (
+                <option key={l.name} value={l.name}>
+                  {l.name}{l.missing ? ` ${t('(missing)')}` : ''}
+                </option>
+              ))}
+          </select>
+        </Field>
+        <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            disabled={!addValue}
+            onClick={() => {
+              if (!addValue) return
+              edit([...list, { name: addValue, strength: 1 }])
+              setAddValue('')
+            }}
+          >
+            {t('Add')}
+          </button>
         </div>
       </div>
+    </div>
+  )
 
-      <div className="ga-fieldset">
-        <div className="ga-fieldset-title">{t('T-pose LoRAs')}</div>
-        {tposeLoras.length === 0 ? (
-          <div className="ga-placeholder">{t('Empty: use the normal LoRAs')}</div>
-        ) : (
-          tposeLoras.map((l, i) => (
-            <div className="ga-form-row" key={i}>
-              <Field label={i === 0 ? t('LoRA') : ''}>
-                <input className="ga-input" value={l.name} disabled readOnly />
-              </Field>
-              <Field label={i === 0 ? t('Strength') : ''} compact>
-                <input
-                  className="ga-input"
-                  type="number"
-                  step="0.05"
-                  style={{ width: 90 }}
-                  value={l.strength}
-                  onChange={(e) => {
-                    const strength = parseFloat(e.target.value)
-                    editTposeLoras(
-                      tposeLoras.map((x, j) => (j === i ? { ...x, strength: isNaN(strength) ? 1 : strength } : x)),
-                    )
-                  }}
-                />
-              </Field>
-              <Field label={i === 0 ? '' : ''} compact>
-                <button
-                  type="button"
-                  className="ga-btn ga-btn-sm ga-btn-danger"
-                  onClick={() => editTposeLoras(tposeLoras.filter((_, j) => j !== i))}
-                >
-                  {t('Remove')}
-                </button>
-              </Field>
-            </div>
-          ))
-        )}
-        <div className="ga-form-row" style={{ marginTop: 6, gap: 8 }}>
-          <Field label={t('Add LoRA')}>
-            <select className="ga-input" value={addTposeName} onChange={(e) => setAddTposeName(e.target.value)}>
-              <option value="">— {t('pick a LoRA')} —</option>
-              {tposeLoraOptions
-                .filter((l) => !tposeLoras.some((x) => x.name === l.name))
-                .map((l) => (
-                  <option key={l.name} value={l.name}>
-                    {l.name}{l.missing ? ` ${t('(missing)')}` : ''}
-                  </option>
-                ))}
-            </select>
-          </Field>
-          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              disabled={!addTposeName}
-              onClick={() => {
-                if (!addTposeName) return
-                editTposeLoras([...tposeLoras, { name: addTposeName, strength: 1 }])
-                setAddTposeName('')
-              }}
-            >
-              {t('Add')}
-            </button>
+  const meshEmpty = meshWorldChain.length
+    ? t('Empty: world chain') + ' (' + meshWorldChain.join(' → ') + ')'
+    : t('Empty: world chain')
+
+  return (
+    <div className="ga-form">
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))', gap: 16, alignItems: 'start' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+          <div className="ga-fieldset">
+            <div className="ga-fieldset-title">{t('Images')}</div>
+            {renderMatch({ label: t('Backend match (glob)'), value: pattern, set: setPattern, key: 'pattern', matches: matching, placeholder: 'Flux*', empty: t('Empty: occasion chain') })}
+            {renderMatch({ label: t('Portrait backend match (glob)'), value: profilePattern, set: setProfilePattern, key: 'profilePattern', matches: profileMatching, placeholder: 'Portrait*', empty: t('Empty: portrait chain') })}
           </div>
+          {renderLoras({ title: t('LoRA override'), list: loras, edit: editLoras, empty: t('No LoRAs forced for this character.'), options: availableLoras, addValue: addName, setAddValue: setAddName })}
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+          <div className="ga-fieldset">
+            <div className="ga-fieldset-title">{t('T-pose & 3D')}</div>
+            {renderMatch({ label: t('T-pose backend match (glob)'), value: tposePattern, set: setTposePattern, key: 'tposePattern', matches: tposeMatching, placeholder: 'TPose*', empty: t('Empty: render match, then T-pose chain') })}
+            {renderMatch({ label: t('T-pose views backend match (glob)'), value: tposeViewPattern, set: setTposeViewPattern, key: 'tposeViewPattern', matches: tposeViewMatching, placeholder: 'Flux*', empty: t('Empty: T-pose views chain') })}
+            {renderMatch({
+              label: meshOccasion === 'mesh_creature' ? t('Mesh backend match, creature (glob)') : t('Mesh backend match, humanoid (glob)'),
+              value: meshPattern, set: setMeshPattern, key: 'meshPattern', matches: meshMatching, placeholder: 'Trellis*', empty: meshEmpty,
+            })}
+          </div>
+          {renderLoras({ title: t('T-pose LoRAs'), list: tposeLoras, edit: editTposeLoras, empty: t('Empty: use the normal LoRAs'), options: tposeLoraOptions, addValue: addTposeName, setAddValue: setAddTposeName })}
         </div>
       </div>
-      </div>
-
     </div>
   )
 }

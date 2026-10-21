@@ -574,7 +574,7 @@ export function CharactersTab() {
   )
 
   /** Remember the image-override record instead of PUTting it. Its route
-   *  stores the record AS A WHOLE, so `ImageOverrides` hands over all four of
+   *  stores the record AS A WHOLE, so `ImageOverrides` hands over all seven of
    *  its keys on every edit and this only merges them under the one target. */
   const queueImagegen = useCallback((patch: Record<string, unknown>) => {
     setBuf((b) => queueFields(b, IMAGEGEN_TARGET, patch))
