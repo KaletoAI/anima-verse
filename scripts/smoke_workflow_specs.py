@@ -23,7 +23,9 @@ What is checked here, all hand-derived, no snapshots:
      of app/core/expression_regen.py): ``routing._character_spec`` reads
      ``outfit_imagegen[<char_spec_field>]`` of the occasion catalog, and the
      catalog names ``workflow`` for the character occasions (``expression``,
-     ``profile``) and as the fallback of ``tpose``. Checked against the
+     ``photo``) and as the fallback of ``tpose``. (``profile`` reads its own
+     ``profile_workflow`` since f8b938c0 — a portrait must not inherit the
+     render match — so it is not a witness here.) Checked against the
      catalog, the reader's source line AND the migrated profile, whose key
      must still be ``workflow``.
   (4. The config half is gone: the per-occasion default fields it rewrote
@@ -142,7 +144,7 @@ def main():
     eq("the bare field name is not a legacy spec",
        strip_legacy_workflow_prefix("workflow"), "workflow")
     from app.imagegen.occasions import get_occasion
-    for occ in ("expression", "profile"):
+    for occ in ("expression", "photo"):
         eq(f"the {occ} occasion reads outfit_imagegen['workflow'] (field name kept)",
            get_occasion(occ).get("char_spec_field"), "workflow")
     eq("the tpose occasion falls back to outfit_imagegen['workflow']",
