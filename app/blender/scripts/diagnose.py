@@ -23,6 +23,11 @@ Measured per model, all lengths in metres:
     boundary_edges      edges with only one face: holes, or intentional open
                         surfaces like a flat collar
 
+Procedural parts marked on their node or material are excluded from shape and
+skin-spread measurements. Mixed meshes retain their complete welded topology
+for boundary and component measurements: an inset border is not a hole.
+Components count only vertices incident to unmarked faces (or loose vertices).
+
 Nothing is judged here and nothing is written. Which of these numbers means
 "broken" is a question for whoever compares them across a real store, and that
 comparison is the point of this script.
@@ -52,7 +57,7 @@ def _percentile(values, q):
     return s[idx]
 
 
-def _components(bm):
+def _components(bm, measured_vertices=None):
     seen, sizes = set(), []
     for v in bm.verts:
         if v.index in seen:
@@ -61,14 +66,30 @@ def _components(bm):
         seen.add(v.index)
         while stack:
             cur = stack.pop()
-            n += 1
+            n += int(measured_vertices is None or cur in measured_vertices)
             for e in cur.link_edges:
                 other = e.other_vert(cur)
                 if other is not None and other.index not in seen:
                     seen.add(other.index)
                     stack.append(other)
-        sizes.append(n)
+        if n:
+            sizes.append(n)
     return sizes
+
+
+def _part_materials(obj):
+    return {i for i, slot in enumerate(obj.material_slots)
+            if slot.material is not None and 'attached_part' in slot.material}
+
+
+def _body_vertex_indices(obj):
+    marked = _part_materials(obj)
+    used, body = set(), set()
+    for face in obj.data.polygons:
+        used.update(face.vertices)
+        if face.material_index not in marked:
+            body.update(face.vertices)
+    return body | (set(range(len(obj.data.vertices))) - used)
 
 
 def _skin_spread(obj, arm):
@@ -87,7 +108,10 @@ def _skin_spread(obj, arm):
     bones = {b.name: b for b in arm.data.bones}
     per_bone = {}
     mw = obj.matrix_world
+    body_vertices = _body_vertex_indices(obj)
     for v in obj.data.vertices:
+        if v.index not in body_vertices:
+            continue
         co = mw @ v.co
         for g in v.groups:
             if g.weight < 0.5:               # the bone that actually drives it
@@ -128,7 +152,7 @@ def diagnose(args):
     lengths, needles, boundary = [], 0, 0
     parts, verts_total = [], 0
     spike_out = []
-    for obj in [o for o in bpy.context.scene.objects if o.type == "MESH"]:
+    for obj in [o for o in bpy.context.scene.objects if o.type == "MESH" and "attached_part" not in o]:
         bm = bmesh.new()
         bm.from_mesh(obj.data)
         # Weld FIRST, for the measurement only — nothing is written back.
@@ -138,13 +162,17 @@ def diagnose(args):
         # meaningless without this.
         bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=1e-5)
         bm.verts.index_update()
+        marked = _part_materials(obj)
+        body_faces = {f for f in bm.faces if f.material_index not in marked}
+        body_edges = {e for e in bm.edges if not e.link_faces or any(f in body_faces for f in e.link_faces)}
+        body_vertices = {v for v in bm.verts if not v.link_faces or any(f in body_faces for f in v.link_faces)}
         scale = obj.matrix_world.to_scale()
         factor = (abs(scale.x) + abs(scale.y) + abs(scale.z)) / 3.0
-        for e in bm.edges:
+        for e in body_edges:
             lengths.append(e.calc_length() * factor)
             if len(e.link_faces) == 1:
                 boundary += 1
-        for f in bm.faces:
+        for f in body_faces:
             sides = [e.calc_length() for e in f.edges]
             lo = min(sides)
             if lo > 1e-12 and max(sides) / lo > needle_ratio:
@@ -155,8 +183,8 @@ def diagnose(args):
         # neighbours describe. A long edge alone does not say that — a coarse
         # but intact mesh has long edges everywhere, which is why comparing
         # the longest edge against the median found nothing.
-        for v in bm.verts:
-            links = list(v.link_edges)
+        for v in body_vertices:
+            links = [e for e in v.link_edges if e in body_edges]
             if len(links) < 3:
                 continue
             neighbours = [e.other_vert(v) for e in links]
@@ -168,15 +196,15 @@ def diagnose(args):
             local = sum(e.calc_length() for e in links) / len(links)
             if local > 1e-9:
                 spike_out.append((v.co - centre).length / local)
-        parts.extend(_components(bm))
-        verts_total += len(bm.verts)
+        parts.extend(_components(bm, body_vertices))
+        verts_total += len(body_vertices)
         bm.free()
 
     # Skin spread, for rigged models only.
     arms = [o for o in bpy.context.scene.objects if o.type == "ARMATURE"]
     spread = {}
     if arms:
-        for obj in [o for o in bpy.context.scene.objects if o.type == "MESH"]:
+        for obj in [o for o in bpy.context.scene.objects if o.type == "MESH" and "attached_part" not in o]:
             if any(mod.type == "ARMATURE" for mod in obj.modifiers) or obj.parent in arms:
                 spread.update(_skin_spread(obj, arms[0]))
     worst_bone, worst_spread = "", 0.0

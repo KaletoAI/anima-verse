@@ -236,6 +236,17 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
                 except (ValueError, TypeError, OverflowError) as exc:
                     logger.warning("Package %s slot %s: rig dropped: %s", pkg.id, bdef["id"], exc)
             rigs = _resolve_rig_dependencies(rigs, pkg.id, bdef["id"])
+        for attribute, declaration in (bdef.get("attributes") or {}).items():
+            if isinstance(declaration, dict) and "applies_to" in declaration:
+                conditions = declaration["applies_to"]
+                if not isinstance(conditions, dict) or any(
+                        not isinstance(key, str) or not key.strip()
+                        or (key.startswith("attributes.") and key[11:] not in (bdef.get("attributes") or {}))
+                        or not isinstance(values, list) or not values
+                        or any(not isinstance(value, (str, int, float, bool, type(None))) for value in values)
+                        for key, values in conditions.items()):
+                    logger.error("Package %s slot %s: invalid attribute applies_to: %s", pkg.id, bdef["id"], attribute)
+                    return None
         mesh_part = None
         if "mesh_part" in bdef:
             from app.plugins.registry import MeshPartSpec
@@ -394,7 +405,7 @@ def _collect_packages(base: Path, *, warn: bool = True,
             slot.rigs = _resolve_rig_dependencies(slot.rigs, pkg.id, slot.id)
     # A part variant is only usable while its owning geometry group survives.
     for pkg in list(found.values()):
-        if any(slot.mesh_part and slot.mesh_part.rig not in {rig.id for rig in slot.rigs}
+        if any(slot.mesh_part and not set(slot.mesh_part.rigs).issubset({rig.id for rig in slot.rigs})
                for slot in pkg.body_slots):
             logger.error("Package %s: mesh_part rig lost during conflict resolution", pkg.id)
             found.pop(pkg.id)

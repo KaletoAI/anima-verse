@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { PromptPreview } from './PromptPreview'
+import { bodyAttributeVisible, type BodyConditions } from '../../lib/bodyAttributeVisibility'
 
 /** Generic body-slot editor — renders whatever the character's species
  * package declares (attributes + options).
@@ -16,6 +17,7 @@ import { PromptPreview } from './PromptPreview'
 
 export interface BodySlotAttr {
   key: string
+  applies_to?: BodyConditions
   type: string
   options: string[]
   allow_custom: boolean
@@ -33,12 +35,13 @@ export interface BodySlot {
   covered_by: string[]
   exposed: boolean
   attributes: BodySlotAttr[]
+  condition_profile?: Record<string, unknown>
   // Slots with an exposed prompt: per-character override + the package
   // default (shown greyed as placeholder, never materialized).
   exposed_prompt?: string
   exposed_default?: string
   // Emit the exposed text even when attribute values are empty
-  // (empty placeholders vanish: 'exposed {size} breasts' -> 'exposed breasts').
+  // Empty placeholders vanish from the exposed text.
   exposed_always?: boolean
 }
 
@@ -127,6 +130,8 @@ export function BodyEditor({ character, queueBody, draftFor, discardSignal }: {
             {s.id.replace(/_/g, ' ')}
           </span>
           {s.attributes.map((a) => {
+            const values = Object.fromEntries(s.attributes.map(attr => [attr.key, attr.value]))
+            if (!bodyAttributeVisible(a.applies_to, values, s.condition_profile ?? {})) return null
             if (a.type === 'lora_select') {
               return (
                 <span key={a.key} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>

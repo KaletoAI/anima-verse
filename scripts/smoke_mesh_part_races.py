@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory() as tmp:
     from app.core import body_slots as bs
     from app.plugins.registry import BodySlotSpec, MeshPartSpec
     profile = {'body_slots': {'slot': {'switch': 'on'}}}
-    slot = BodySlotSpec('slot', 'fixture', mesh_part=MeshPartSpec('switch', 'part', 'flat slot', 'size', {}, {}))
+    slot = BodySlotSpec('slot', 'fixture', mesh_part=MeshPartSpec('switch', 'flat slot', [], {'part': {'params': {}, 'attribute_params': {}}}))
     captured = []
     def render(name, **kwargs):
         captured.append(kwargs['mesh_input_profile']['body_slots']['slot']['switch'])

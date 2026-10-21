@@ -43,11 +43,15 @@ def rig_groups_for(character_name, profile=None):
                     break
             if matches:
                 group = asdict(rig)
-                if mesh_part_active(slot, profile) and rig.id == slot.mesh_part.rig:
-                    part = slot.mesh_part
-                    group["op"] = "attached_part"
-                    group["params"] = {**part.params, "size_factor": part.size_factors.get(
-                        values.get(part.size_attribute), 1.0)}
+                if mesh_part_active(slot, profile) and rig.id in slot.mesh_part.rigs:
+                    part = slot.mesh_part.rigs[rig.id]
+                    if rig.op == "appendage_chain":
+                        group["op"] = "attached_part"
+                    group["params"] = dict(part["params"])
+                    for param, mapping in part["attribute_params"].items():
+                        selected = values.get(mapping["attribute"])
+                        if selected in mapping["values"]:
+                            group["params"][param] = mapping["values"][selected]
                 groups.append(group)
     ordered = []
     while groups:
@@ -67,15 +71,15 @@ def extension_bone_names(character_name, profile=None):
             for chain in group["chains"] for link in chain}
 
 
-# Bump when app/blender/scripts/attached_part.py changes the part it builds from the
-# same declaration (its defaults live in the script): only attached models rebuild.
-ATTACHED_PART_BUILD = 3
+# Bump an operation when its builder changes geometry for the same declaration;
+# defaults live in the Blender scripts, so only that part variant rebuilds.
+PART_BUILDS = {"attached_part": 3, "inset_part": 1}
 
 
 def extension_rig_fingerprint(groups, overrides=None):
     """Versioned identity of applicable declarations and model overrides."""
     geometry = [{**{key: group[key] for key in ("id", "op", "chains", "params", "enabled", "flip") if key in group},
-                 **({"build": ATTACHED_PART_BUILD} if group.get("op") == "attached_part" else {})}
+                 **({"build": PART_BUILDS[group["op"]]} if group.get("op") in PART_BUILDS else {})}
                 for group in groups]
     return _revision({"version": 16, "groups": sorted(geometry, key=lambda g: g["id"]),
                       "overrides": overrides or {}})
@@ -159,7 +163,7 @@ def declared_motion_groups():
     return sorted([{"id": rig.id, "controls": rig.controls,
                     "defaults": {key: (rig.squash[0] if key == "flatten_floor" and rig.flatten_floor is None else getattr(rig, key)) for key in MOTION_FIELDS}}
                    for package in registry.packages() for slot in package.body_slots
-                   for rig in slot.rigs], key=lambda group: group["id"])
+                   for rig in slot.rigs if rig.chains], key=lambda group: group["id"])
 
 
 def validate_motion_overrides(section, *, character=False):
@@ -237,6 +241,8 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         states = collect_bone_poses(character_name, profile.get("current_location", ""), profile=profile) if apply_states else []
     groups = {}
     for group in declarations:
+        if not group["chains"]:
+            continue
         values = {key: group[key] for key in MOTION_FIELDS}
         values.update({key: value for key, value in world.get(group["id"], {}).items()
                        if key in MOTION_FIELDS and control_allowed(group, key)})
@@ -329,7 +335,7 @@ def extension_metadata(character_name, profile=None, signature=None):
     return {"fingerprint": extension_rig_fingerprint(groups, overrides),
             "groups": [g["id"] for g in groups],
             "group_ops": {g["id"]: g["op"] for g in groups},
-            "group_params": {g["id"]: g["params"] for g in groups if g["op"] == "attached_part"},
+            "group_params": {g["id"]: g["params"] for g in groups if g["op"] in PART_BUILDS},
             "attempted": False,
             "status": "not_found" if groups else "none_applicable",
             "reason": "No extension operation has run" if groups else "",

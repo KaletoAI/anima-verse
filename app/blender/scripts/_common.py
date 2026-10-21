@@ -144,6 +144,13 @@ def body_meshes_first(path):
     doc = json.loads(blob[20:20 + size])
     marked = {n['mesh'] for n in doc.get('nodes', [])
               if 'mesh' in n and 'attached_part' in n.get('extras', {})}
+    materials = doc.get('materials', [])
+    for index, mesh in enumerate(doc.get('meshes', [])):
+        primitives = mesh.get('primitives', [])
+        if primitives and all('material' in primitive and 'attached_part' in
+                              (materials[primitive['material']].get('extras') or {})
+                              for primitive in primitives):
+            marked.add(index)
     if not marked:
         return
     order = sorted(range(len(doc.get('meshes', []))), key=lambda i: i in marked)

@@ -339,12 +339,15 @@ def _primitive_basecolor(parsed: dict, primitive: dict):
 
 
 def _body_primitives(parsed: dict) -> list:
-    """Exclude procedural part nodes, independent of mesh export order."""
+    """Exclude procedural part nodes and material-marked patch primitives."""
     gltf = parsed['gltf']
     excluded = {node['mesh'] for node in gltf.get('nodes', [])
                 if 'mesh' in node and 'attached_part' in (node.get('extras') or {})}
+    materials = gltf.get('materials', [])
     return [primitive for i, mesh in enumerate(gltf.get('meshes', []))
-            if i not in excluded for primitive in mesh.get('primitives', [])]
+            if i not in excluded for primitive in mesh.get('primitives', [])
+            if 'material' not in primitive
+            or 'attached_part' not in (materials[primitive['material']].get('extras') or {})]
 
 
 def bake_face_texture(source_glb: bytes, hub_glb: bytes, *, dilate_px: int = 4,

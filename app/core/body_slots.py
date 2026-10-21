@@ -11,8 +11,7 @@ species (e.g. a talking dragon) is a new content package, zero core change.
 
 Decisions wired in (dialog 2026-07-08):
 - F1: binary visibility. ``always``/``covered`` fragments flow into the
-  GENERAL person description ("Woman with large breasts, …" — carries
-  clothed anatomy differences); ``exposed`` renders only while uncovered.
+  GENERAL person description (carries clothed appearance differences); ``exposed`` renders only while uncovered.
 - F2: species packages define the FULL slot topology, including which
   clothing slots exist (``piece_slots_for_character``; core
   ``VALID_PIECE_SLOTS`` is only the fallback without a species package).
@@ -283,7 +282,7 @@ def prompt_fragments(character_name: str,
         """Attribute placeholders are REQUIRED (missing value -> the whole
         fragment drops) — unless ``lenient`` (the per-character
         exposed_always flag): then empty attributes simply vanish from the
-        text ('exposed {size} breasts' -> 'exposed breasts'); ``optional``
+        text ('exposed {size} part' -> 'exposed part'); ``optional``
         names the attributes a template default stands in for, which vanish
         the same way. Every OTHER
         {placeholder} resolves OPTIONALLY from the character's state flags:
@@ -356,8 +355,8 @@ def exposed_slot_loras(character_name: str,
                        equipped_pieces: Optional[Dict[str, str]] = None,
                        back_view: bool = False,
                        mesh_input: bool = False) -> List[Dict[str, Any]]:
-    """LoRAs of currently EXPOSED body slots (lora_select attribute values,
-    e.g. the NSFW anatomy LoRAs) — merged into image-generation inputs by
+    """LoRAs of currently EXPOSED body slots (lora_select attribute values),
+    merged into image-generation inputs by
     the variant/expression path. Replaces the former per-clothing-slot
     override LoRAs. Works purely from ``profile`` when no name is given
     (outfit renderer's variant path); ``equipped_pieces`` overrides the
@@ -386,6 +385,10 @@ def exposed_slot_loras(character_name: str,
         if back_view and not spec.back:
             continue
         if mesh_input and mesh_part_active(spec, profile):
+            for attr, decl in spec.attributes.items():
+                name = str((stored.get(spec.id) or {}).get(attr, "") or "").strip()
+                if decl.get("type") == "lora_select" and name and name.lower() != "none":
+                    logger.info("Mesh input part dropped LoRA %s", name)
             continue
         for attr, decl in spec.attributes.items():
             if str(decl.get("type", "")) != "lora_select":
@@ -571,3 +574,20 @@ def silhouette_for_character(character_name: str) -> Optional[Dict[str, Any]]:
                     "dir": str(pkg.dir),
                     **{k: v for k, v in pkg.silhouette.items() if k != "asset"}}
     return None
+
+
+def filter_mesh_input_loras(loras, profile):
+    """Drop LoRAs matching active exposed part declarations for mesh inputs."""
+    import fnmatch
+    patterns = [pattern.casefold()
+                for slot in slots_for_character("", profile=profile)
+                if mesh_part_active(slot, profile) and is_slot_exposed(slot, profile)
+                for pattern in slot.mesh_part.lora_patterns]
+    kept = []
+    for lora in loras:
+        name = str(lora.get("name", ""))
+        if any(fnmatch.fnmatchcase(name.casefold(), pattern) for pattern in patterns):
+            logger.info("Mesh input part dropped LoRA %s", name)
+        else:
+            kept.append(lora)
+    return kept

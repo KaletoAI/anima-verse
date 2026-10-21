@@ -137,7 +137,7 @@ class RigSpec:
                     and isinstance(templates["feature"], str) and templates["feature"].strip())):
             raise ValueError("rig.templates requires template names, * or a feature selector")
         chains = raw.get("chains")
-        if not isinstance(chains, list) or not chains:
+        if not isinstance(chains, list) or (not chains and raw["op"].strip() != "inset_part"):
             raise ValueError("rig.chains must be a non-empty list")
         seen = set()
         result = []
@@ -245,40 +245,54 @@ class RigSpec:
 class MeshPartSpec:
     """Slot-owned declaration for a procedural mesh input variant."""
     switch: str
-    rig: str
     tpose_prompt: str
-    size_attribute: str
-    size_factors: Dict[str, float]
-    params: Dict[str, Any]
+    lora_patterns: List[str]
+    rigs: Dict[str, Dict[str, Any]]
 
     @classmethod
     def parse(cls, raw, attributes, rigs):
         import math
         if not isinstance(raw, dict):
             raise ValueError("mesh_part must be a mapping")
-        for key in ("switch", "rig", "tpose_prompt", "size_attribute"):
+        if set(raw) - {"switch", "tpose_prompt", "lora_patterns", "rigs"}:
+            raise ValueError("unknown mesh_part keys")
+        for key in ("switch", "tpose_prompt"):
             if not isinstance(raw.get(key), str) or not raw[key].strip():
                 raise ValueError(f"mesh_part.{key} must be a non-empty string")
         switch = attributes.get(raw["switch"], {})
         if (not isinstance(switch, dict) or switch.get("type") != "select"
                 or not isinstance(switch.get("options"), list) or "on" not in switch["options"]):
             raise ValueError("mesh_part.switch requires a select with on option")
-        if raw["rig"] not in {rig.id for rig in rigs}:
-            raise ValueError("mesh_part.rig must name a rig of this slot")
-        if not isinstance(attributes.get(raw["size_attribute"]), dict):
-            raise ValueError("mesh_part.size_attribute must name a declared attribute")
-        factors = raw.get("size_factors", {})
-        options = attributes[raw["size_attribute"]].get("options", [])
-        if not isinstance(factors, dict) or any(
-                key not in options or isinstance(value, bool)
-                or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0
-                for key, value in factors.items()):
-            raise ValueError("mesh_part.size_factors requires declared options and finite positive values")
-        params = raw.get("params", {})
-        if not isinstance(params, dict):
-            raise ValueError("mesh_part.params must be a mapping")
-        return cls(raw["switch"], raw["rig"], raw["tpose_prompt"].strip(),
-                   raw["size_attribute"], dict(factors), dict(params))
+        patterns = raw.get("lora_patterns", [])
+        if not isinstance(patterns, list) or any(not isinstance(p, str) or not p.strip() for p in patterns):
+            raise ValueError("mesh_part.lora_patterns requires non-empty glob strings")
+        entries = raw.get("rigs")
+        if not isinstance(entries, dict) or not entries:
+            raise ValueError("mesh_part.rigs requires a non-empty mapping")
+        clean = {}
+        for rig_id, entry in entries.items():
+            if rig_id not in {rig.id for rig in rigs}:
+                raise ValueError("mesh_part.rigs must name rigs of this slot")
+            if not isinstance(entry, dict) or set(entry) - {"params", "attribute_params"}:
+                raise ValueError("mesh_part rig requires params and attribute_params mappings")
+            params, mappings = entry.get("params", {}), entry.get("attribute_params", {})
+            if not isinstance(params, dict) or not isinstance(mappings, dict):
+                raise ValueError("mesh_part rig requires params and attribute_params mappings")
+            for param, mapping in mappings.items():
+                if (not isinstance(param, str) or not param.strip() or not isinstance(mapping, dict)
+                        or set(mapping) != {"attribute", "values"}
+                        or not isinstance(mapping.get("attribute"), str)
+                        or not isinstance(attributes.get(mapping["attribute"]), dict)):
+                    raise ValueError("mesh_part attribute_params requires a declared attribute")
+                values = mapping["values"]
+                options = attributes[mapping["attribute"]].get("options", [])
+                if not isinstance(values, dict) or any(
+                        key not in options or isinstance(value, bool)
+                        or not isinstance(value, (int, float)) or not math.isfinite(value)
+                        for key, value in values.items()):
+                    raise ValueError("mesh_part attribute values require declared options and finite numbers")
+            clean[rig_id] = {"params": dict(params), "attribute_params": dict(mappings)}
+        return cls(raw["switch"], raw["tpose_prompt"].strip(), list(patterns), clean)
 
 
 @dataclass

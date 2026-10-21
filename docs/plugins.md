@@ -1418,11 +1418,13 @@ body_slots:
       size: {type: select, options: [small, large]}
     mesh_part:
       switch: switch
-      rig: example_part
       tpose_prompt: "flat {size} slot"
-      size_attribute: size
-      size_factors: {small: 1.0, large: 1.5}
-      params: {radius: 0.02}
+      lora_patterns: ["*example*"]
+      rigs:
+        example_part:
+          params: {radius: 0.02}
+          attribute_params:
+            size_factor: {attribute: size, values: {small: 1.0, large: 1.5}}
     rigs:
       - id: example_part
         op: appendage_chain
@@ -1438,17 +1440,27 @@ body_slots:
 ```
 
 `mesh_part.switch` must name a declared select with the string option `"on"`.
-`rig` names a rig on the same slot; `size_attribute` names a declared attribute.
-`size_factors` maps a subset of that attribute's options to finite positive
-numbers (booleans are rejected). Missing size entries use 1.0. `tpose_prompt`
-is a non-empty string with the usual fragment placeholders. `params` is a
-mapping; execution validates operation-specific parameters. A malformed
-`mesh_part` rejects the package rather than loading an incomplete variant.
+`rigs` maps rig IDs from the same slot to `params` and `attribute_params`.
+Each attribute parameter names a declared attribute and maps a subset of its
+options to finite numbers (booleans are rejected). Unmapped attribute values
+leave the operation default in place. `tpose_prompt` is a non-empty string
+with the usual fragment placeholders. `lora_patterns` is an optional list of
+non-empty glob strings; matching is case insensitive for active exposed mesh
+inputs. Operation-specific parameters are validated at execution. Old singular
+rig and size declarations are rejected. A malformed declaration rejects the package.
 
-When the slot applies and its stored switch equals `"on"`, its named group
-keeps its ID and chains but emits `op: attached_part` and parameters
-`{...mesh_part.params, size_factor: <resolved factor>}`. This changes the mesh
-fingerprint while preserving state and motion group references. The companion
+When the slot applies and its stored switch equals `"on"`, each declared group
+keeps its ID and chains. An `appendage_chain` becomes `attached_part`; other
+operations keep their op. Parameters combine the declared rig parameters and
+mapped attribute values. Build versions are tracked per part operation in the
+mesh fingerprint. `inset_part` permits empty chains and produces no motion group.
+Attribute declarations may use `applies_to`, with profile fields or
+`attributes.<key>` mapped to non-empty scalar lists, using the same condition
+syntax as rig declarations; for this visibility check `null` also matches an empty
+value (rig conditions keep empty and null apart). The editor updates visibility
+as values change; hidden values remain stored and available to prompts.
+
+The companion
 `attached_part_bone` accepts only one-link chains and empty parameters. The Blender builder creates the swept part and optional pods as a second skinned
 mesh with its own baked material. The companion carries the pods; without it
 they follow the anchor bone. Other rig operations keep their existing rules.
@@ -1468,8 +1480,9 @@ slots append sorted `|mesh:<package>.<slot>=on` tokens before hashing. Ordinary
 outfit/expression/pose keys remain unchanged. Reference and mesh manifests store
 `mesh_variant` so GC can validate either cached variant after switching back.
 Nearest-model fallback requires the same variant. Stored extension metadata
-records `group_ops` and attached groups’ `group_params`; an `attached_part` group exposes status, reason,
-`protrusion_mm` and warning in the model panel's Part row. Built parts are green;
+records `group_ops` and both part operations’ `group_params`; both operations expose
+status and reason in the model panel's Part row. Only `attached_part` exposes
+`protrusion_mm` and a protrusion warning. Built parts are green;
 a protrusion above `protrusion_warn_mm` (default 12 mm) is yellow; failures show
 the reason in red. The builder measures protrusion on the body before flattening and reports it even
 when the flattening hides it. Publication continues after a failed part
@@ -1477,11 +1490,16 @@ build: the clean body and other successful extensions are published, with the
 failure reason retained in the part group metrics.
 
 
-The staged prerig passes through `attached_part` first, then `extension_bones`
-for ordinary groups, then the humanoid validator. Companion groups are only
-passed to `attached_part`. Each part node carries `extras.attached_part` equal
-to its group ID. Body meshes remain first, and face texture preservation checks
-ignore marked parts. LOD processes both meshes and preserves the marker.
+The staged prerig passes through `attached_part`, then `inset_part`, then
+`extension_bones` for ordinary groups and the humanoid validator. Companion
+groups are only passed to `attached_part`. Attached part nodes carry
+`extras.attached_part` equal to their group ID. An inset part replaces body
+faces with a subdivided, displaced skin patch welded into the body; its second
+material carries the same marker in its extras. Body meshes remain first, and
+face texture preservation checks ignore marked nodes and material primitives.
+LOD decimates the joined inset body as one mesh, retaining its second material
+and baked texture. Each failed part operation keeps its incoming body, including
+any preceding successful part, and records the group failure independently.
 
 `pods.ellipsoids: []` omits the pods; `ridges: []` omits the ridges.
 The operation accepts one nonempty chain of at least two links and at most one
@@ -1491,7 +1509,7 @@ The body needs metre coordinates, front -Y/up +Z, a skinned mesh, a UV map and
 an embedded basecolor texture. Missing anchors or unusable texture patches
 produce a failed group rather than an inferred attachment.
 
-`mesh_part.params` accepts the following defaults. Lengths are **metres**,
+`mesh_part.rigs.<id>.params` accepts the following defaults. Lengths are **metres**,
 except `protrusion_warn_mm` (millimetres) and the reported `skin_patch_cm`.
 Nested mappings can override individual keys; unknown keys at any depth,
 nonfinite numbers, booleans as numbers and invalid intervals are rejected.

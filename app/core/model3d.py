@@ -762,19 +762,19 @@ def versioned_model_urls(character_name: str, enc_base: str) -> Dict[str, str]:
 def attached_part_info(extension):
     """Read stored part metrics; declarations describe the served model, not today's switch."""
     groups = extension.get("group_ops") or {}
-    part_ids = [key for key, op in groups.items() if op == "attached_part"]
+    part_ids = [key for key, op in groups.items() if op in ("attached_part", "inset_part")]
     if not part_ids:
         return None
     metrics = extension.get("metrics") or {}
     rows = [{"protrusion_warn_mm": ((extension.get("group_params") or {}).get(key) or {}).get("protrusion_warn_mm", 12),
-             **(metrics.get(key) or {})} for key in part_ids]
+             **(metrics.get(key) or {}), "op": groups[key]} for key in part_ids]
     failed = next((row for row in rows if row.get("status") == "failed"), None)
     row = failed or max(rows, key=lambda r: r.get("protrusion_mm") or 0)
     protrusion = row.get("protrusion_mm")
     status = row.get("status", extension.get("status", "not_found"))
     return {"status": status, "reason": row.get("reason") or extension.get("reason", ""),
             "protrusion_mm": protrusion,
-            "warning": bool(protrusion is not None and protrusion > row.get("protrusion_warn_mm", 12))}
+            "warning": bool(row["op"] == "attached_part" and protrusion is not None and protrusion > row.get("protrusion_warn_mm", 12))}
 
 
 @_model_reader
@@ -1093,7 +1093,7 @@ def _auto_extension_rig(character_name: str, path: Path,
                            or "limb_weights" in (source_blender.get("steps") or [])))
     # A failed part publishes the body without it while the aggregate stays
     # "applied"; a forced rebuild must still retry the part.
-    part_failed = any(op == "attached_part" and ((previous.get("metrics") or {}).get(gid) or {}).get("status") == "failed"
+    part_failed = any(op in ("attached_part", "inset_part") and ((previous.get("metrics") or {}).get(gid) or {}).get("status") == "failed"
                       for gid, op in (previous.get("group_ops") or {}).items())
     if previous.get("attempted") and previous.get("status") in ("applied", "not_found", "none_applicable") and previous.get("fingerprint") == fingerprint and (not force or (previous.get("status") == "applied"
             and source_current and not part_failed)):
@@ -1101,7 +1101,7 @@ def _auto_extension_rig(character_name: str, path: Path,
     groups = [g for g in resolved_extension_groups(character_name, profile=profile, signature=path.stem) if g["enabled"]]
     state = {"fingerprint": fingerprint, "groups": [g["id"] for g in declarations],
              "group_ops": {g["id"]: g["op"] for g in declarations},
-             "group_params": {g["id"]: g["params"] for g in declarations if g["op"] == "attached_part"},
+             "group_params": {g["id"]: g["params"] for g in declarations if g["op"] in ("attached_part", "inset_part")},
              "status": "not_found" if groups else "none_applicable",
              "reason": "", "has_applied": previous.get("has_applied", previous.get("status") == "applied"), "attempted": True, "attempted_at": utc_now_iso(), "metrics": {}, "per_tier": {}}
     meta["extension_rig"] = state
@@ -1164,35 +1164,34 @@ def _auto_extension_rig(character_name: str, path: Path,
         shutil.copy2(source, staged)
         attached = [g for g in groups if g["op"] == "attached_part"]
         companions = [g for g in groups if g["op"] == "attached_part_bone"]
-        remaining = [g for g in groups if g["op"] not in ("attached_part", "attached_part_bone")]
+        remaining = [g for g in groups if g["op"] not in ("attached_part", "attached_part_bone", "inset_part")]
         validator = _validator_for("mixamo", character_name)
-        part_failed = False
+        inset = [g for g in groups if g["op"] == "inset_part"]
         part_applied = False
-        if attached:
+        # Each operation is isolated so a failed later part preserves earlier work.
+        batches = [("attached_part", attached + companions)] if attached else []
+        batches.extend(("inset_part", [group]) for group in inset)
+        for operation, batch in batches:
+            before_part = staged.read_bytes()
             try:
                 part_result = refine.apply_script(
-                    staged, "attached_part", {"groups": attached + companions},
+                    staged, operation, {"groups": batch},
                     validator=validator, require_smaller=False,
-                    keep_original=False, base_joints_only=True,
-                    # Large parts sample a bigger field; the default 120 s cut
-                    # a large size off mid-build.
-                    timeout_s=600)
+                    keep_original=False, base_joints_only=True, timeout_s=600)
             except Exception as exc:
-                # This optional step must never prevent publication of the body.
                 part_result = {"applied": False, "error": str(exc)}
             part_data = part_result.get("data") or {}
             part_metrics = part_data.get("metrics") or part_data.get("groups") or {}
-            part_applied = bool(part_result.get("applied"))
-            part_failed = not part_applied
+            applied = bool(part_result.get("applied"))
+            part_applied = part_applied or applied
             reason = part_data.get("reason") or part_result.get("error") or "Part build produced no model"
-            for group in attached + companions:
+            for group in batch:
                 state["metrics"][group["id"]] = {
                     **part_metrics.get(group["id"], {}),
-                    "status": "failed" if part_failed else "applied",
-                    "reason": reason if part_failed else ""}
-            if part_failed:
-                # Also protects against a runner that wrote before raising.
-                shutil.copy2(source, staged)
+                    "status": "applied" if applied else "failed",
+                    "reason": "" if applied else reason}
+            if not applied:
+                staged.write_bytes(before_part)
         if remaining:
             result = refine.apply_script(staged, "extension_bones", {"groups": remaining},
                                          validator=validator,
@@ -1211,7 +1210,7 @@ def _auto_extension_rig(character_name: str, path: Path,
         state["reason"] = data.get("reason") or result.get("error") or ""
         # A failed part publishes a validated clean body (with other extensions
         # when available), replacing any stale part from a previous build.
-        publish = bool(result.get("applied")) or bool(attached)
+        publish = bool(result.get("applied")) or bool(batches)
         if publish:
             verdict = validator(staged.read_bytes())
             if not verdict.get("ok"):
@@ -1767,7 +1766,7 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
         # Built parts are not extension_bones groups; only captured groups are re-measured.
         from app.core.extension_rig import resolved_extension_groups
         measured_groups = [g for g in resolved_extension_groups(character_name, signature=path.stem)
-                           if g["op"] not in ("attached_part", "attached_part_bone")]
+                           if g["op"] not in ("attached_part", "attached_part_bone", "inset_part")]
         if (meta.get("extension_rig") or {}).get("status") == "applied" and measured_groups:
             measured = runner.run("extension_bones", inputs={"model": next(iter(res["outputs"].values()))},
                                   params={"groups": measured_groups, "metrics_only": True})

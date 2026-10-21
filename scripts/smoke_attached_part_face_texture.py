@@ -5,7 +5,9 @@ A blue body plus a red marked part must pass against the blue baked body.
 Changing the body's RGB by 40 must fail even when the part stays blue. Mesh
 order is intentionally reversed, proving that node extras, not index or name,
 identify the excluded part. A second unmarked body primitive must still pass
-and a changed second body primitive must fail.
+and a changed second body primitive must fail. A joined patch sharing the
+body mesh excludes only its material-marked primitive, leaving one body
+primitive; deleting that marker exposes the differing red atlas and fails.
 """
 import copy
 from pathlib import Path
@@ -48,6 +50,18 @@ def main():
         doc['meshes'][1]['primitives'][1]['material']=0
         doc['nodes'][0].pop('extras')
         assert not face_texture_preserved(baked,glb(doc,binary)), 'An unmarked differing primitive must be checked'
+        # A joined inset patch uses material extras, retaining its body primitive.
+        doc['materials'][1]['extras'] = {'attached_part': 'inset'}
+        doc['meshes'] = [{'primitives': [body, part]}]
+        doc['nodes'] = [{'mesh': 0}]
+        joined = glb(doc, binary)
+        assert len(_body_primitives(parse_glb(joined))) == 1
+        assert face_texture_preserved(baked, joined)
+        path.write_bytes(joined)
+        common.body_meshes_first(path)
+        assert path.read_bytes() == joined, 'Mixed body must retain its mesh order'
+        doc['materials'][1].pop('extras')
+        assert not face_texture_preserved(baked, glb(doc, binary))
         print('PASS face retexture ignores only marked parts, including reversed meshes and multiple body primitives')
 
 

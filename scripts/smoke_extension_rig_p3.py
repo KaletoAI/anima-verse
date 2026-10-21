@@ -345,7 +345,9 @@ def main():
         check(model3d.get_model3d_options('sample')['extension_motion'] == {}, 'manual Reset removes overrides')
 
         spill_rev = motion(bare)['rev']
-        config_admin.save_layer('world', {'extension_motion': {'groups': {'sample_group': {'gain': .6, 'spill': 0}}}})
+        spill_values = copy.deepcopy(values)
+        spill_values['extension_motion']['groups']['sample_group']['spill'] = 0
+        config_admin.save_layer('world', spill_values)
         check(motion(bare)['rev'] != spill_rev, 'spill alone changes revision')
         config_admin.save_layer('world', values)
         check(motion()['rev'] != before['rev'], 'world changes revision')
@@ -365,7 +367,9 @@ def main():
             raise AssertionError('instance accepted world settings')
         for bad in ({'translate': -1}, {'translate': 2}, {'translate': True}, {'translate': float('nan')}, {'axis_gain': [1, 1]}, {'axis_gain': [1, True, 1]}, {'axis_gain': [1, 1, 1.1]}, {'axis_gain': [1, float('nan'), 1]}, {'flatten': -0.1}, {'flatten': 1.1}, {'sag_max_deg': 181}, {'spill': -0.1}, {'spill': 1.1}, {'spill': float('nan')}, {'freq_hz': 0}, {'gain': 2}, {'squash': [1.1, 2]}, {'gravity': float('nan')}):
             try:
-                config_admin.save_layer('world', {'extension_motion': {'groups': {'sample_group': bad}}})
+                invalid_values = copy.deepcopy(values)
+                invalid_values['extension_motion']['groups']['sample_group'].update(bad)
+                config_admin.save_layer('world', invalid_values)
             except config_admin.LayerSaveError:
                 pass
             else:

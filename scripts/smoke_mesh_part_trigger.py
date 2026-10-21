@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory() as tmp:
     from app.plugins.registry import BodySlotSpec, MeshPartSpec
     from app.imagegen.base import MediaGenerationDisabled
     slot = BodySlotSpec('slot', 'fixture', attributes={'switch': {'type': 'select', 'options': ['off', 'on']}},
-                        mesh_part=MeshPartSpec('switch', 'part', 'flat slot', 'size', {}, {}))
+                        mesh_part=MeshPartSpec('switch', 'flat slot', [], {'part': {'params': {}, 'attribute_params': {}}}))
     profile = {'body_slots': {'slot': {'switch': 'off'}}, 'model3d_opts': {'auto_generate': False}}
     calls = []
     class Worker:

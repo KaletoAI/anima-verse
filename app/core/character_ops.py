@@ -1556,6 +1556,7 @@ def build_body_slots(character_name: str) -> Dict[str, Any]:
                 "type": decl.get("type", "select"),
                 "options": list(decl.get("options") or []),
                 "allow_custom": bool(decl.get("allow_custom")),
+                "applies_to": dict(decl.get("applies_to") or {}),
                 "label": decl.get("label", key.replace("_", " ").title()),
                 "value": (values.get(spec.id) or {}).get(key, ""),
                 # Template-scoped fallback the exposed prompt uses while the
@@ -1572,6 +1573,9 @@ def build_body_slots(character_name: str) -> Dict[str, Any]:
         entry = {
             "id": spec.id,
             "package_id": spec.package_id,
+            "condition_profile": {key: profile.get(key) for decl in spec.attributes.values()
+                                  for key in (decl.get("applies_to") or {})
+                                  if not key.startswith("attributes.")},
             "covered_by": list(spec.covered_by),
             "exposed": exposed,
             "attributes": attrs,

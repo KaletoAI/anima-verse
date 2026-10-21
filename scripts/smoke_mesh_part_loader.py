@@ -2,7 +2,7 @@
 
 Hand-derived expectations: one slot switch selects one rig; two size choices
 map to 1 and 1.5. A companion has exactly one link and zero parameters.
-Invalid references, empty text and non-positive/non-finite scales must fail.
+Invalid references, empty text and non-finite values must fail; zero is valid.
 All declarations are synthetic; no plugin discovery or world reads occur.
 """
 import sys
@@ -18,18 +18,32 @@ with tempfile.TemporaryDirectory() as tmp:
              'size': {'type': 'select', 'options': ['small', 'large']}}
     rig = RigSpec.parse({'id': 'part', 'op': 'appendage_chain', 'chains': [[
         {'bone': 'Part', 'parent': 'Hips'}, {'bone': 'Tip', 'parent': 'Part'}]], 'rigid_tail': 1})
-    raw = dict(switch='switch', rig='part', tpose_prompt='flat {size} slot',
-               size_attribute='size', size_factors={'small': 1, 'large': 1.5}, params={})
-    assert MeshPartSpec.parse(raw, attrs, [rig]).size_factors['large'] == 1.5
-    for change in ({'switch': 'missing'}, {'rig': 'missing'}, {'size_attribute': 'missing'},
-                   {'tpose_prompt': ''}, {'params': []}, {'size_factors': {'other': 1}},
-                   *({'size_factors': {'small': n}} for n in (0, -1, float('inf'), float('nan'), True))):
+    raw = dict(switch='switch', tpose_prompt='flat {size} slot', lora_patterns=['*fixture*'],
+               rigs={'part': {'params': {}, 'attribute_params': {
+                   'size_factor': {'attribute': 'size', 'values': {'small': 1, 'large': 1.5}}}}})
+    assert MeshPartSpec.parse(raw, attrs, [rig]).rigs['part']['attribute_params']['size_factor']['values']['large'] == 1.5
+    invalid = [{'switch': 'missing'}, {'tpose_prompt': ''}, {'lora_patterns': ['']},
+               {'lora_patterns': 'fixture'}, {'rig': 'part'}, {'size_attribute': 'size'},
+               {'size_factors': {}}, {'params': {}}, {'rigs': {'missing': {}}}]
+    for mapping in ({'attribute': 'missing', 'values': {}},
+                    {'attribute': 'size', 'values': {'other': 1}},
+                    *({'attribute': 'size', 'values': {'small': n}} for n in (float('inf'), float('nan'), True))):
+        invalid.append({'rigs': {'part': {'attribute_params': {'scale': mapping}}}})
+    for change in invalid:
         try:
             MeshPartSpec.parse({**raw, **change}, attrs, [rig])
         except ValueError:
             pass
         else:
             raise AssertionError(change)
+    RigSpec.parse(dict(id='inset', op='inset_part', chains=[]))
+    for op in ('appendage_chain', 'attached_part', 'attached_part_bone'):
+        try:
+            RigSpec.parse(dict(id='empty', op=op, chains=[]))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(op)
     for bad in (None, [], {'type': 'str'}, {'type': 'select', 'options': ['off']}):
         try:
             MeshPartSpec.parse(raw, {**attrs, 'switch': bad}, [rig])
@@ -40,8 +54,8 @@ with tempfile.TemporaryDirectory() as tmp:
     meta = dict(name='fixture', body_slots=[dict(id='slot', attributes=attrs,
                 rigs=[dict(id='part', op='appendage_chain', chains=rig.chains)], mesh_part=raw)])
     pkg = _parse_package(Path(tmp)/'fixture', meta, register_tasks=False)
-    assert pkg.body_slots[0].mesh_part.rig == 'part'
-    meta['body_slots'][0]['mesh_part'] = {**raw, 'rig': 'missing'}
+    assert set(pkg.body_slots[0].mesh_part.rigs) == {'part'}
+    meta['body_slots'][0]['mesh_part'] = {**raw, 'rigs': {'missing': {}}}
     assert _parse_package(Path(tmp)/'fixture', meta, register_tasks=False) is None
     for tail in (-1, 2, 1.5, True):
         try:

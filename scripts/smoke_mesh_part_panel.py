@@ -1,9 +1,11 @@
 """Usage: .venv/bin/python scripts/smoke_mesh_part_panel.py
 
-Hand-derived: no attached op means no row. 12 mm equals the default threshold
+Hand-derived: no part op means no row. 12 mm equals the default threshold
 and is green; 13 exceeds it and is yellow. A 20 mm threshold keeps 13 green.
 A failed operation exposes its literal reason. All four English UI labels
-must have German translations and live calls in the Part row source.
+must have German translations and live calls in the Part row source. An inset
+part reports each stored status and reason with no protrusion warning, even
+when supplied 99 mm (well above the attached-part default of 12 mm).
 """
 import json
 import sys
@@ -24,6 +26,10 @@ with tempfile.TemporaryDirectory() as tmp:
         'group_params': {'part': {'protrusion_warn_mm': 20}},
         'metrics': {'part': {'status': 'built', 'protrusion_mm': 13}}})['warning'] is False
     assert info(status='failed', reason='fixture failure')['reason'] == 'fixture failure'
+    for status in ('applied', 'failed', 'not_found'):
+        row = attached_part_info({'group_ops': {'inset': 'inset_part'},
+            'metrics': {'inset': {'status': status, 'reason': 'fixture', 'protrusion_mm': 99}}})
+        assert row['status'] == status and row['reason'] == 'fixture' and not row['warning']
     root = Path(__file__).resolve().parents[1]
     de = json.loads((root/'shared/languages/de.json').read_text())['translations']
     source = (root/'frontend/src/tabs/characters/FieldModel3D.tsx').read_text()

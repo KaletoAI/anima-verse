@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory() as tmp:
     from app.plugins.registry import BodySlotSpec, MeshPartSpec
     import json
     slot = BodySlotSpec('slot', 'fixture', covered_by=['cover'], mesh_part=MeshPartSpec(
-        'switch', 'part', 'flat slot', 'size', {}, {}))
+        'switch', 'flat slot', [], {'part': {'params': {}, 'attribute_params': {}}}))
     profile = {'body_slots': {'slot': {'switch': 'on'}}}
     with patch.object(bs, 'slots_for_character', return_value=[slot]), patch('app.models.character.get_character_profile', return_value=profile), patch('app.core.outfit_renderer.is_free_text_wardrobe', return_value=False), patch.object(mr, 'outfit_signature_raw', return_value='base'):
         on = mr.mesh_signature({}, [], 'fixture', mr.mesh_variant('fixture', {}))

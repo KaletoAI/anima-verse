@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory() as tmp:
     rig = RigSpec.parse(dict(id='part', op='appendage_chain', chains=[[dict(bone='Part', parent='Hips')]]))
     slot = BodySlotSpec('slot', 'fixture', attributes=attrs, prompt={'exposed': 'visible {size} part'},
                         covered_by=['cover'], back=True, rigs=[rig], mesh_part=MeshPartSpec(
-                            'switch', 'part', 'flat {size} slot', 'size', {'large': 1.5}, {'radius': .02}))
+                            'switch', 'flat {size} slot', [], {'part': {'params': {'radius': .02}, 'attribute_params': {'size_factor': {'attribute': 'size', 'values': {'large': 1.5}}}}}))
     profile = {'body_slots': {'slot': {'switch': 'on', 'size': 'large', 'lora': 'fixture'}}, 'equipped_pieces': {}}
     pkg = Package('fixture', Path(tmp), {}, body_slots=[slot])
     with patch.object(bs, '_species_packages_for', return_value=[pkg]), patch('app.plugins.registry.packages', return_value=[pkg]), patch('app.core.outfit_renderer.is_free_text_wardrobe', return_value=False):
