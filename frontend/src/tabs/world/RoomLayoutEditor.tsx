@@ -774,7 +774,10 @@ export function RoomLayoutEditor({ onReload, rooms, onChange, locationId = '', m
         ? t('Storey {n}').replace('{n}', String(p.level))
         : ''
     const lead = [where, room].filter(Boolean).join(' · ')
-    return lead ? `${lead}: ${t(p.message)}` : t(p.message)
+    // WHICH PIECES, for a furnishing finding — names ride as their own field
+    // because the message is translated as a whole sentence.
+    const which = p.prop_names?.length ? ` (${p.prop_names.join(', ')})` : ''
+    return (lead ? `${lead}: ${t(p.message)}` : t(p.message)) + which
   }
   const placedRooms = rooms.filter((r) => hasRect(r.layout) && r.id
     && !isFloorRoom(r.id))
