@@ -1058,9 +1058,14 @@ def _auto_extension_rig(character_name: str, path: Path,
     overrides = model_extension_overrides(profile, path.stem)
     fingerprint = extension_rig_fingerprint(declarations, overrides)
     previous = meta.get("extension_rig") or {}
+    source_blender = _read_sidecar(path.parent / "prerig" / path.name).get("blender") or {}
+    # A forced rebuild is only a no-op when the source is already as clean as
+    # it gets: a humanoid source still lacking the weight repair is rebuilt.
+    source_current = (source_blender == (meta.get("blender") or {})
+                      and (meta.get("rig") != "mixamo"
+                           or "limb_weights" in (source_blender.get("steps") or [])))
     if previous.get("attempted") and previous.get("status") in ("applied", "not_found", "none_applicable") and previous.get("fingerprint") == fingerprint and (not force or (previous.get("status") == "applied"
-            and (_read_sidecar(path.parent / "prerig" / path.name).get("blender") or {})
-            == (meta.get("blender") or {}))):
+            and source_current)):
         return {"ok": previous.get("status") != "failed", "applied": False, "noop": True, "extension_rig": previous}
     groups = [g for g in resolved_extension_groups(character_name, profile=profile, signature=path.stem) if g["enabled"]]
     state = {"fingerprint": fingerprint, "groups": [g["id"] for g in declarations],

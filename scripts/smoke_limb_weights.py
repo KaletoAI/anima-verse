@@ -266,6 +266,30 @@ def application_checks(root):
         assert target.read_bytes() == b'repaired'
         assert meta['blender'] == source_meta['blender']
     print('PASS force rebuild detects repaired source despite unchanged fingerprint')
+    # The panel's Rebuild on a model whose source predates the repair: source
+    # and served model carry the same old block, so only the missing step can
+    # tell the rebuild apart from a no-op.
+    target.write_bytes(b'demo')
+    pre.write_bytes(b'demo')
+    old_block = {'steps': ['normalize']}
+    model3d._publish_sidecar(pre, {'rig': 'mixamo', 'blender': dict(old_block)})
+    meta = {'rig': 'mixamo', 'blender': dict(old_block),
+            'extension_rig': {'attempted': True, 'status': 'applied',
+                              'fingerprint': extension_rig_fingerprint([], {})}}
+    with patch('app.core.extension_rig.rig_groups_for', return_value=[]), \
+         patch('app.core.extension_rig.resolved_extension_groups', return_value=[]), \
+         patch('app.models.character.get_character_profile', return_value={}), \
+         patch('app.core.model_validate.validate_glb', return_value={'ok': True}), \
+         patch.object(model3d, '_validator_for', return_value=None), \
+         patch.object(refine, 'limb_weights', side_effect=repair_tier):
+        rebuilt = model3d._auto_extension_rig('demo', target, meta, force=True)
+        assert not rebuilt.get('noop') and rebuilt['applied'], rebuilt
+        assert target.read_bytes() == b'repaired'
+        assert meta['blender']['steps'] == ['normalize', 'limb_weights'], meta['blender']
+        assert 'limb_weights' in model3d._read_sidecar(pre)['blender']['steps']
+        again = model3d._auto_extension_rig('demo', target, meta, force=True)
+        assert not again['applied'] and target.read_bytes() == b'repaired', again
+    print('PASS force rebuild repairs a source that predates the weight repair, once')
 
 
 
