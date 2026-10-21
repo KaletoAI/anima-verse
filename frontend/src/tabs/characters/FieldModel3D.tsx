@@ -891,7 +891,7 @@ export function FieldModel3D({ character }: { character: string }) {
       overrides, sliderPreview.context === sliderContext ? sliderPreview.groups : {})
   }, [st.motion, st.motion_defaults, st.extension_groups, st.options?.extension_motion, sliderPreview, sliderContext])
   const motionToolbar = st.extension_groups?.map(group => st.motion_defaults?.[group.id] && (group.controls == null || group.controls.some(key => ['bounce', 'weight'].includes(key))) ? (
-    <fieldset className="ga-fieldset" key={`${sliderContext}:${group.id}`}>
+    <fieldset className="ga-fieldset ga-model3d-group" key={`${sliderContext}:${group.id}`}>
       <legend>{group.id}</legend>
       <ExtensionMotionSliders controls={group.controls} overrides={st.options?.extension_motion?.[group.id] ?? {}}
         disabled={pending || rigless}
@@ -954,7 +954,7 @@ export function FieldModel3D({ character }: { character: string }) {
           <div ref={previewRef}>
           <Model3DViewer
             previewTilt
-            height={352}
+            height={480}
             statusPanel={statusPanel}
             motion={rigless ? undefined : previewMotion}
             motionToolbar={rigless ? undefined : motionToolbar}

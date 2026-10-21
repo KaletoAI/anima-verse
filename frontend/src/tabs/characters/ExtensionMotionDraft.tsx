@@ -79,9 +79,10 @@ export function ExtensionMotionSliders({ overrides, controls, disabled, onPrevie
           onPreview(Object.fromEntries(sliders.map(field => [field, Number(next.values[field])])))
         }} />
     </label>)}
-    <div className="ga-model3d-save">
-      <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={disabled || !changed} onClick={() => void save()}>{t('Save')}</button>
-      <span className="ga-tag" aria-live="polite">{t(changed ? 'Unsaved changes' : 'Saved')}</span>
-    </div>
+    {/* The save row only appears with a change, so idle groups stay two lines. */}
+    {changed ? <div className="ga-model3d-save">
+      <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={disabled} onClick={() => void save()}>{t('Save')}</button>
+      <span className="ga-tag" aria-live="polite">{t('Unsaved changes')}</span>
+    </div> : null}
   </>
 }
