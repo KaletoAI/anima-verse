@@ -197,7 +197,7 @@ def build_part(group, companions, output):
     curve_control = root + (surface_normal * settings['bend'][0][0] + down * settings['bend'][0][1]).normalized() * sweep_length * settings['bend'][0][2]
     curve_end = curve_control + (down * settings['bend'][1][1] + surface_normal * settings['bend'][1][0]).normalized() * sweep_length * settings['bend'][1][2]
     # Sample the two-leg quadratic sweep and its inner extension.
-    sweep_samples = 240
+    sweep_samples = 80   # chord error < .02 mm at this curvature; segments dominate the field cost
     cl = [curve_root * (1 - t) ** 2 + curve_control * 2 * t * (1 - t) + curve_end * t * t for t in np.linspace(0, 1, sweep_samples)]
     arc = np.concatenate([[0], np.cumsum([(cl[i] - cl[i - 1]).length for i in range(1, sweep_samples)])])
     tparam = arc / arc[-1]
@@ -240,21 +240,25 @@ def build_part(group, companions, output):
 
 
     def shaft_tube(P):
+        # Closest segment by the profiled tube distance; the relief (a sub-mm term)
+        # and its phase are evaluated once for the chosen segment, not per segment.
         best = np.full(len(P), 1e9)
         bt = np.zeros(len(P))
-        bph = np.zeros(len(P))
+        bseg = np.zeros(len(P), int)
+        bh = np.zeros(len(P))
         for i in range(len(centerline) - 1):
             A, B = centerline[i], centerline[i + 1]
             AB = B - A
             h = np.clip(((P - A) @ AB) / (AB @ AB), 0, 1)
-            D = P - (A + h[:, None] * AB)
-            d = np.linalg.norm(D, axis=1)
+            d = np.linalg.norm(P - (A + h[:, None] * AB), axis=1)
             t = stations[i] + h * (stations[i + 1] - stations[i])
-            ph = np.arctan2(D @ SIDE[i], D @ DOR[i])
-            sd = d - radius(t) - relief(t, ph)
+            sd = d - radius(t)
             sel = sd < best
-            best[sel], bt[sel], bph[sel] = sd[sel], t[sel], ph[sel]
-        return best, bt
+            best[sel], bt[sel], bseg[sel], bh[sel] = sd[sel], t[sel], i, h[sel]
+        A = centerline[bseg]
+        D = P - (A + bh[:, None] * (centerline[bseg + 1] - A))
+        ph = np.arctan2(np.einsum('ij,ij->i', D, SIDE[bseg]), np.einsum('ij,ij->i', D, DOR[bseg]))
+        return best - relief(bt, ph), bt
 
 
     def cl_at(t):
@@ -291,7 +295,12 @@ def build_part(group, companions, output):
 
     def shaft_sdf(P):
         d, t = shaft_tube(P)
-        return smin(d, ridge_sdf(P), settings['ridge_blend'] * size_factor), t
+        # Ridges sit on the surface: only points near it can be affected by them.
+        near = np.where(d < .008 * size_factor)[0]
+        if len(near):
+            d = d.copy()
+            d[near] = smin(d[near], ridge_sdf(P[near]), settings['ridge_blend'] * size_factor)
+        return d, t
 
 
 

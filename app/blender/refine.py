@@ -65,7 +65,8 @@ def apply_script(path: Path, script: str, params: Dict[str, Any], *,
                  require_smaller: bool = True,
                  keep_original: bool = True,
                  base_joints_only: bool = False,
-                 frame_allowance: Optional[Callable[[Dict[str, Any]], Dict[str, float]]] = None
+                 frame_allowance: Optional[Callable[[Dict[str, Any]], Dict[str, float]]] = None,
+                 timeout_s: int = 0
                  ) -> Dict[str, Any]:
     """Runs a mesh-modifying script and swaps its result in ONLY if it earns it.
 
@@ -92,7 +93,7 @@ def apply_script(path: Path, script: str, params: Dict[str, Any], *,
     out: Dict[str, Any] = {"ok": False, "applied": False, "data": {}, "error": ""}
     with tempfile.TemporaryDirectory(prefix="av-refine-") as tmp:
         res = runner.run(script, inputs={"model": path}, params=params,
-                         out_dir=Path(tmp))
+                         out_dir=Path(tmp), timeout_s=timeout_s)
         out["data"] = res.get("data") or {}
         if not res.get("ok"):
             out["error"] = res.get("error") or "script failed"

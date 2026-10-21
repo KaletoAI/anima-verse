@@ -1091,8 +1091,12 @@ def _auto_extension_rig(character_name: str, path: Path,
     source_current = (source_blender == (meta.get("blender") or {})
                       and (meta.get("rig") != "mixamo"
                            or "limb_weights" in (source_blender.get("steps") or [])))
+    # A failed part publishes the body without it while the aggregate stays
+    # "applied"; a forced rebuild must still retry the part.
+    part_failed = any(op == "attached_part" and ((previous.get("metrics") or {}).get(gid) or {}).get("status") == "failed"
+                      for gid, op in (previous.get("group_ops") or {}).items())
     if previous.get("attempted") and previous.get("status") in ("applied", "not_found", "none_applicable") and previous.get("fingerprint") == fingerprint and (not force or (previous.get("status") == "applied"
-            and source_current)):
+            and source_current and not part_failed)):
         return {"ok": previous.get("status") != "failed", "applied": False, "noop": True, "extension_rig": previous}
     groups = [g for g in resolved_extension_groups(character_name, profile=profile, signature=path.stem) if g["enabled"]]
     state = {"fingerprint": fingerprint, "groups": [g["id"] for g in declarations],
@@ -1169,7 +1173,10 @@ def _auto_extension_rig(character_name: str, path: Path,
                 part_result = refine.apply_script(
                     staged, "attached_part", {"groups": attached + companions},
                     validator=validator, require_smaller=False,
-                    keep_original=False, base_joints_only=True)
+                    keep_original=False, base_joints_only=True,
+                    # Large parts sample a bigger field; the default 120 s cut
+                    # a large size off mid-build.
+                    timeout_s=600)
             except Exception as exc:
                 # This optional step must never prevent publication of the body.
                 part_result = {"applied": False, "error": str(exc)}

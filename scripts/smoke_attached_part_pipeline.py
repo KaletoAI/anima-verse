@@ -78,7 +78,34 @@ def main():
                 assert meta['extension_rig']['has_applied'] is False
             elif others:
                 assert metrics['other']['weighted_verts']==3
-        print('PASS attached_part pipeline ordering, metrics, failure/exception fallback and clean-body publication')
+        # Retry contract: a clean source (prerig carries the same finished blender
+        # block) makes a forced rebuild a no-op after a built part, but a part that
+        # failed (body published without it, aggregate still "applied") is retried.
+        import json
+        block={'steps':['normalize','limb_weights']}
+        source.with_suffix('.json').write_text(json.dumps({'rig':'mixamo','blender':block}))
+        for failed,expect_runs in ((True,2),(False,1)):
+            runs=[]
+            source.write_bytes(clean);path.write_bytes(b'stale model')
+            def run_once(staged,script,params,**kwargs):
+                runs.append(script)
+                if failed:
+                    return {'applied':False,'error':'fixture failure'}
+                staged.write_bytes(clean+b'part')
+                return {'applied':True,'data':{'metrics':{'part':{},'pods':{}}}}
+            with ExitStack() as stack:
+                stack.enter_context(patch('app.models.character.get_character_profile',return_value={}))
+                stack.enter_context(patch.object(extension_rig,'rig_groups_for',return_value=[part,companion]))
+                stack.enter_context(patch.object(extension_rig,'resolved_extension_groups',return_value=[part,companion]))
+                stack.enter_context(patch.object(model3d,'_auto_normalize'))
+                stack.enter_context(patch.object(model3d,'_validator_for',return_value=lambda blob:{'ok':blob.startswith(clean),'errors':[]}))
+                stack.enter_context(patch.object(refine,'apply_script',side_effect=run_once))
+                meta={'rig':'mixamo','blender':dict(block)}
+                model3d._auto_extension_rig('fixture',path,meta)
+                second=model3d._auto_extension_rig('fixture',path,meta,force=True)
+            assert len(runs)==expect_runs,(failed,runs,second)
+            assert bool(second.get('noop'))==(not failed),second
+        print('PASS attached_part pipeline ordering, metrics, failure/exception fallback, clean-body publication and forced retry of a failed part')
 
 
 if __name__=='__main__': main()
