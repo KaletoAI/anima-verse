@@ -1355,6 +1355,34 @@ def door_style_thumbnail(style_id: str):
     return FileResponse(path, media_type="image/png")
 
 
+@router.get("/window-styles")
+def window_style_list() -> Dict[str, Any]:
+    """List shipped window styles for authenticated readers."""
+    from app.core.window_styles import load_window_styles
+    return {"styles": [{"id": key, "name": style["name"],
+                        "description": style["description"],
+                        "thumbnail_url": f"/world/window-styles/{key}/thumbnail"}
+                       for key, style in load_window_styles().items()]}
+
+
+@router.get("/window-styles/{style_id}/thumbnail")
+def window_style_thumbnail(style_id: str):
+    """Build a window style thumbnail (Cycles) on demand."""
+    from fastapi.responses import FileResponse
+    from app.blender import runner
+    from app.core.door_models import window_style_thumbnail as style_thumbnail
+    from app.core.window_styles import load_window_styles
+    if style_id not in load_window_styles():
+        raise HTTPException(status_code=404, detail="Unknown window style")
+    if not runner.is_available():
+        raise HTTPException(status_code=503, detail="Blender is not available")
+    try:
+        path = style_thumbnail(style_id)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail="Window preview build failed") from error
+    return FileResponse(path, media_type="image/png")
+
+
 @router.get("/hull-styles")
 def hull_style_list() -> Dict[str, Any]:
     """List building styles with world overrides applied."""

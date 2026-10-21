@@ -1,4 +1,4 @@
-"""Signature-keyed door assets and a single non-blocking Blender worker.
+"""Signature-keyed door and window assets and a single non-blocking Blender worker.
 
 Retention and build timestamps use SYSTEM time, never the game clock.
 """
@@ -13,6 +13,8 @@ import threading
 
 from app.blender import runner
 from app.core import paths, surface_textures
+from app.core.window_geometry import build_window
+from app.core.window_styles import load_window_styles, validate_window_style
 from app.core.door_geometry import build_door
 from app.core.door_styles import load_door_styles, validate_door_style
 from app.core.hull_util import tone, tone_to_linear
@@ -88,7 +90,8 @@ def _cached(root, sig):
         if not all(contained(root, p) and p.is_file() for p in (meta, model)):
             return None
         data = json.loads(meta.read_text(encoding='utf-8'))
-        result = {key: data[key] for key in ('sig', 'leaf_bbox', 'size_m')}
+        keys = ('sig', 'style_id', 'size_m', 'kind') if data.get('kind') == 'window' else ('sig', 'leaf_bbox', 'size_m')
+        result = {key: data[key] for key in keys}
         if result['sig'] != sig:
             return None
         now = utc_now().timestamp()
@@ -141,7 +144,9 @@ def _meshes(parts):
     merged = {}
     for part in parts:
         node, material = part['node'], part['material']
-        name = node if material == f'door_{node}' else f'{node}_{material}'
+        primary = material == f'door_{node}' or (node, material) in (
+            ('frame', 'window_frame'), ('glass', 'glass'))
+        name = node if primary else f'{node}_{material}'
         mesh = merged.setdefault((node,material),dict(name=name,node=node,material=material,
                                                     vertices=[],faces=[],uvs=[],colors=[]))
         offset = len(mesh['vertices'])
@@ -176,22 +181,7 @@ def build_door_model(style_id, width, height, thickness, *, piece='single', outs
         meta = dict(sig=sig,style_id=style_id,size_m=[round(v,4) for v in geometry['size_m']],
                     leaf_bbox={k:[round(v,4) for v in box] for k,box in geometry['leaf_bbox'].items()},
                     piece=piece,outside=outside,built_at=utc_now().isoformat())
-        target.mkdir(parents=True,exist_ok=True)
-        for name in ('model.glb','thumbnail.png'):
-            source = work/name
-            if source.is_file():
-                if not contained(root,target/name) or (target/name).is_symlink():
-                    raise ValueError('unsafe door output')
-                # Atomic publication, including when /tmp and storage use different devices.
-                staging = target / f'.{name}.tmp'
-                if staging.is_symlink():
-                    raise ValueError('unsafe door staging path')
-                staging.write_bytes(source.read_bytes()); staging.replace(target/name)
-        staged_meta = target / '.meta.json.tmp'
-        if staged_meta.is_symlink() or (target/'meta.json').is_symlink():
-            raise ValueError('unsafe door metadata')
-        staged_meta.write_text(json.dumps(meta,sort_keys=True),encoding='utf-8')
-        staged_meta.replace(target/'meta.json')
+        _publish(root, target, work, meta)
     return {**meta,'url':f'/assets/doors/{sig}/model'}
 
 
@@ -203,13 +193,13 @@ def generation():
 def _work():
     global _generation
     while True:
-        key, style, dims, options = _queue.get()
+        key, builder, style, dims, options = _queue.get()
         try:
-            build_door_model(style['id'],*dims,_style=style,_root_dir=key[0],**options)
+            builder(style['id'],*dims,_style=style,_root_dir=key[0],**options)
         except Exception:
             with _lock:
                 _failed.add(key)
-            logger.exception('Door build failed for %s; suppressed until restart',key[1])
+            logger.exception('Model build failed for %s; suppressed until restart',key[1])
         finally:
             with _lock:
                 _pending.discard(key)
@@ -237,7 +227,7 @@ def ensure_door_model(style_id,width,height,thickness,*,piece='single',outside=1
         key = (root,sig)
         if key not in _pending and key not in _failed:
             _pending.add(key)
-            _queue.put((key,style,dims,dict(piece=piece,outside=outside,color=color)))
+            _queue.put((key,build_door_model,style,dims,dict(piece=piece,outside=outside,color=color)))
             if _worker is None:
                 _worker = threading.Thread(target=_work,name='door-models',daemon=True)
                 _worker.start()
@@ -279,3 +269,121 @@ def sweep_cache():
             except OSError:
                 continue
     return removed
+
+
+def _publish(root, target, work, meta):
+    """Publish model bytes first and metadata last using atomic replacements."""
+    target.mkdir(parents=True,exist_ok=True)
+    for name in ('model.glb','thumbnail.png'):
+        source = work/name
+        if source.is_file():
+            if not contained(root,target/name) or (target/name).is_symlink():
+                raise ValueError('unsafe door output')
+            # Atomic publication, including when /tmp and storage use different devices.
+            staging = target / f'.{name}.tmp'
+            if staging.is_symlink():
+                raise ValueError('unsafe door staging path')
+            staging.write_bytes(source.read_bytes()); staging.replace(target/name)
+    staged_meta = target / '.meta.json.tmp'
+    if staged_meta.is_symlink() or (target/'meta.json').is_symlink():
+        raise ValueError('unsafe door metadata')
+    staged_meta.write_text(json.dumps(meta,sort_keys=True),encoding='utf-8')
+    staged_meta.replace(target/'meta.json')
+
+
+def window_signature(style, width, height, thickness, outside, bars, color, glass):
+    """Separate window cache identities, including texture file identity."""
+    style = validate_window_style(style)
+    value = style['frame_material']
+    source = None if value.startswith('#') else surface_textures.base_texture_file(value)
+    identity = None
+    if source and source.is_file():
+        stat = source.stat()
+        identity = [str(source.resolve()), stat.st_mtime_ns, stat.st_size,
+                    surface_textures.texture_size_m(source)]
+    payload = ['window', style, _dimensions(width,height,thickness), outside, bars,
+               tone(color, '') or None, tone(glass, '') or None, identity]
+    return hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',', ':')).encode()).hexdigest()[:16]
+
+
+def _window_materials(style, color, glass, directory):
+    # Reuse the door texture tinting and physical UV scale for the frame.
+    frame = color or style['frame_material']
+    proxy = dict(leaf_material='#ffffff', frame_material=frame,
+                 leaf_tint=None, hardware_color='#ffffff')
+    materials, inputs, sizes = _materials(proxy, None, directory)
+    material = {**materials[1], 'name':'window_frame'}
+    tint = tone_to_linear(frame if frame.startswith('#') else '#ffffff')
+    return [material,
+            dict(name='glass',texture=None,color=tone_to_linear(glass or style['glass_tint']),
+                 alpha=.35,roughness=.06),
+            dict(name='trim',texture=None,color=tint,alpha=1.,roughness=.8)], {
+                key: value for key,value in inputs.items() if key == 'texture_door_frame'
+            }, {'window_frame': sizes['door_frame']} if 'door_frame' in sizes else {}
+
+
+def build_window_model(style_id, width, height, thickness, *, outside=1, bars=True,
+                       color=None, glass=None, mode='model', _style=None, _root_dir=None):
+    """Build a window using the same Blender boundary and atomic door cache."""
+    style = validate_window_style(_style) if _style is not None else load_window_styles()[style_id]
+    width,height,thickness = _dimensions(width,height,thickness)
+    color, glass = tone(color, '') or None, tone(glass, '') or None
+    sig = window_signature(style,width,height,thickness,outside,bars,color,glass)
+    root = Path(_root_dir) if _root_dir is not None else _root()
+    target = _directory(root,sig)
+    with tempfile.TemporaryDirectory(prefix='av-window-') as tmp:
+        work = Path(tmp)
+        materials, inputs, sizes = _window_materials(style,color,glass,work)
+        geometry = build_window(style,width,height,thickness,outside=outside,bars=bars,uv_sizes=sizes)
+        job = dict(materials=materials,meshes=_meshes(geometry['parts']),mode=mode)
+        job_path = work/'job.json'
+        job_path.write_text(json.dumps(job,sort_keys=True),encoding='utf-8')
+        result = _run_blender('door_build',inputs={'job':job_path,**inputs},out_dir=work,timeout_s=120)
+        if not result.get('ok'):
+            raise RuntimeError(result.get('error','window build failed'))
+        if not (work/'model.glb').is_file() or (mode == 'thumbnail' and not (work/'thumbnail.png').is_file()):
+            raise RuntimeError('window build missing output')
+        meta = dict(sig=sig,style_id=style_id,size_m=[round(v,4) for v in geometry['size_m']],
+                    kind='window',built_at=utc_now().isoformat())
+        _publish(root,target,work,meta)
+    return {**meta,'url':f'/assets/doors/{sig}/model'}
+
+
+def ensure_window_model(style_or_id, width, height, thickness, *, outside=1, bars=True,
+                        color=None, glass=None):
+    """Return cached metadata or enqueue once on the shared nonblocking worker."""
+    global _worker
+    style = style_or_id if isinstance(style_or_id,dict) else load_window_styles().get(style_or_id)
+    if style is None:
+        return None
+    style = validate_window_style(style)
+    dims = _dimensions(width,height,thickness)
+    sig = window_signature(style,*dims,outside,bars,color,glass)
+    root = _root()
+    with _lock:
+        cached = _cached(root,sig)
+        if cached:
+            return cached
+        key = (root,sig)
+        if key not in _pending and key not in _failed:
+            _pending.add(key)
+            _queue.put((key,build_window_model,style,dims,
+                        dict(outside=outside,bars=bars,color=color,glass=glass)))
+            if _worker is None:
+                _worker = threading.Thread(target=_work,name='door-models',daemon=True)
+                _worker.start()
+    return None
+
+
+def window_style_thumbnail(style_id):
+    """Cache the prescribed 1.2 x 1.4 x .07 window preview."""
+    style = load_window_styles()[style_id]
+    sig = window_signature(style,1.2,1.4,.07,1,True,None,None)
+    with _thumbnail_lock:
+        target = _directory(_root(),sig)/'thumbnail.png'
+        if not contained(_root(),target):
+            raise ValueError('unsafe thumbnail')
+        if not target.is_file():
+            build_window_model(style_id,1.2,1.4,.07,mode='thumbnail',_style=style)
+        _cached(_root(),sig)
+        return target
