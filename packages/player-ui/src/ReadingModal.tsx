@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { apiPost } from './api'
 import { useI18n } from './I18nProvider'
@@ -11,6 +11,8 @@ interface Reading {
   page: { heading: string; text: string } | null
 }
 
+type SessionResult = { caught_by?: string; error?: string }
+
 /** Shared by the 2D inventory and 3D HUD; escape transformed panel bounds. */
 export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () => void }) {
   const { t } = useI18n()
@@ -21,23 +23,86 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
   const dialog = useRef<HTMLDivElement>(null)
   const closeRef = useRef(onClose)
   closeRef.current = onClose
+  const mounted = useRef(false)
+  const closed = useRef(false)
+  const pending = useRef(new Set<Promise<unknown>>())
+  const translateRef = useRef(t)
+  translateRef.current = t
+
+  const notify = useCallback((result: SessionResult) => {
+    if (result.caught_by) {
+      toast(translateRef.current('{name} caught you reading.').replace('{name}', result.caught_by))
+      return true
+    }
+    if (result.error) {
+      toast(result.error, 'error')
+      return true
+    }
+    return false
+  }, [toast])
+
+  const endSession = useCallback(() => {
+    if (closed.current) return
+    closed.current = true
+    // Wait for pending reads so an opening cannot recreate a closed session.
+    void Promise.allSettled([...pending.current])
+      .then(() => apiPost<SessionResult>('/play/read/close', { item_id: itemId }))
+      .then(notify)
+      .catch((error: Error) => toast(error.message, 'error'))
+  }, [itemId, notify, toast])
+
+  const close = useCallback(() => {
+    if (closed.current) return
+    endSession()
+    closeRef.current()
+  }, [endSession])
+
+  useEffect(() => {
+    mounted.current = true
+    const heartbeat = window.setInterval(() => {
+      if (closed.current) return
+      const call = apiPost<SessionResult>('/play/read/heartbeat', { item_id: itemId })
+      pending.current.add(call)
+      void call.then((result) => {
+        if (mounted.current && !closed.current && notify(result)) close()
+      }).catch((error: Error) => {
+        if (!mounted.current || closed.current) return
+        toast(error.message, 'error')
+        close()
+      }).finally(() => pending.current.delete(call))
+    }, 5000)
+    return () => {
+      mounted.current = false
+      window.clearInterval(heartbeat)
+      // StrictMode replays setup immediately; only a real unmount ends the session.
+      queueMicrotask(() => { if (!mounted.current) endSession() })
+    }
+  }, [itemId, close, endSession, notify, toast])
 
   useEffect(() => {
     let active = true
-    apiPost<Reading | { error: string }>('/play/read', { item_id: itemId, ...request })
+    if (closed.current) return
+    const call = apiPost<Reading | SessionResult>('/play/read', { item_id: itemId, ...request })
+    pending.current.add(call)
+    void call
       .then((result) => {
-        if (!active) return
-        if ('error' in result) throw new Error(result.error)
+        if (!mounted.current || closed.current) return
+        if (('caught_by' in result || 'error' in result) && notify(result)) {
+          close()
+          return
+        }
+        if (!active || !('page' in result)) return
         setReading(result)
         setBusy(false)
       })
       .catch((error: Error) => {
-        if (!active) return
+        if (!mounted.current || closed.current) return
         toast(error.message, 'error')
-        closeRef.current()
+        close()
       })
+      .finally(() => pending.current.delete(call))
     return () => { active = false }
-  }, [itemId, request, toast])
+  }, [itemId, request, toast, close, notify])
 
   useEffect(() => {
     const previous = document.activeElement
@@ -46,7 +111,7 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
   }, [])
 
   function flip(index: number) {
-    if (busy || !reading || index < 0 || index >= reading.total) return
+    if (closed.current || busy || !reading || index < 0 || index >= reading.total) return
     setBusy(true)
     setRequest({ index, opening: false })
   }
@@ -56,8 +121,8 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
       if (['Escape', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
         event.preventDefault()
         event.stopImmediatePropagation()
-        if (event.key === 'Escape') closeRef.current()
-        else if (!busy && reading) {
+        if (event.key === 'Escape') close()
+        else if (!closed.current && !busy && reading) {
           const index = reading.index + (event.key === 'ArrowLeft' ? -1 : 1)
           if (index >= 0 && index < reading.total) {
             setBusy(true)
@@ -81,10 +146,10 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
     }
     window.addEventListener('keydown', keydown, true)
     return () => window.removeEventListener('keydown', keydown, true)
-  }, [busy, reading])
+  }, [busy, reading, close])
 
   return createPortal(
-    <div className="ga-modal-backdrop" onMouseDown={() => onClose()}>
+    <div className="ga-modal-backdrop" onMouseDown={close}>
       <style>{`
         @keyframes reading-page-turn {
           from { opacity: 0.4; transform: perspective(800px) rotateY(-5deg); }
@@ -98,7 +163,7 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
         style={{ maxWidth: 620 }} onMouseDown={(event) => event.stopPropagation()}>
         <div className="ga-modal-header">
           <span>{reading?.item_name || t('Loading…')}</span>
-          <button className="ga-modal-close" aria-label={t('Close')} onClick={onClose}>×</button>
+          <button className="ga-modal-close" aria-label={t('Close')} onClick={close}>×</button>
         </div>
         <div className="ga-modal-body" aria-busy={busy}
           style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
