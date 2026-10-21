@@ -55,6 +55,9 @@ def storey_window_dims(level) -> Optional[dict]:
 def wall_blind_windows(level, edge, dims, bay, lo, hi, roof_tops):
     """Drop unsafe raster slots; roof_tops(s) returns lower roof heights.
 
+    A slot in front of a real room (``edge["rooms"]``) drops too: blind
+    windows fill only corridor and empty stretches (ruling 2026-10-21).
+
     dims carries the style plinth height in addition to the storey dimensions.
     Unlike filler windows, real-storey windows retain the supplied height.
     """
@@ -67,6 +70,9 @@ def wall_blind_windows(level, edge, dims, bay, lo, hi, roof_tops):
     result = []
     for i, (left, right) in enumerate(blind_raster(lo, hi, bay, dims["width"])):
         if left < lo+.6 or right > hi-.6:
+            continue
+        # A real room stands behind this stretch (hull_facts._room_spans).
+        if any(left < r1 and right > r0 for r0, r1 in edge.get("rooms", ())):
             continue
         if any(h["y0"] < top and h["y1"] > bottom
                and left < h["s1"]+.5 and right > h["s0"]-.5 for h in real):

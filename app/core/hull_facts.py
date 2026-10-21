@@ -77,6 +77,26 @@ def _edge_openings(walls, level, a, frame, floor, height):
     return sorted(result, key=lambda h: (h['s0'], h['y0'], h['s1'], h['y1']))
 
 
+def _room_spans(walls, level, a, frame):
+    """Merged [s0, s1] stretches of one contour edge that a real room's own
+    wall runs along. Blind windows go only where no room stands behind the
+    wall, i.e. in front of a storey corridor or an empty stretch (user ruling
+    2026-10-21): a room's author decided its windows there."""
+    ux, uz, length = frame
+    spans = sorted(span for wall in walls
+                   if wall['level'] == level and wall.get('room_id')
+                   and not wall.get('glass') and not wall.get('leaf')
+                   for span in [sr._colinear_span(a, ux, uz, length, wall['from'], wall['to'])]
+                   if span is not None)
+    merged = []
+    for s0, s1 in spans:
+        if merged and s0 <= merged[-1][1] + 1e-3:
+            merged[-1][1] = max(merged[-1][1], s1)
+        else:
+            merged.append([s0, s1])
+    return [[sr._r(s0), sr._r(s1)] for s0, s1 in merged]
+
+
 def _door_meta(description: Any) -> Any:
     """The door-relevant part of a hull description, shaped like the client meta."""
     if not isinstance(description, dict) or not description.get('style'):
@@ -131,7 +151,8 @@ def hull_facts(location: Dict[str, Any], location_id: str = '', *,
                               normal=[sr._r(v) for v in normal],
                               openings=[] if filler else _edge_openings(scene['walls'], level, a,
                                                       frame, floor,
-                                                      sr._wall_height(storey))))
+                                                      sr._wall_height(storey)),
+                              rooms=[] if filler else _room_spans(scene['walls'], level, a, frame)))
         levels.append(dict(level=level, filler=filler, floor_y=sr._r(floor),
                            top_y=sr._r(floor + sr._wall_height(storey)),
                            outline=[[sr._r(v) for v in p] for p in outline],

@@ -267,8 +267,17 @@ def check_identity():
 
 
 
+def unbacked(facts):
+    """The raster checks below are about stretches WITHOUT a room behind them
+    (the only place blind windows go since 2026-10-21): clear the room spans."""
+    for level in facts['levels']:
+        for edge in level['edges']:
+            edge['rooms'] = []
+    return facts
+
+
 def prepared_windows(location=None, config=None, **overrides):
-    facts = hull_facts(waldkante_house() if location is None else location)
+    facts = unbacked(hull_facts(waldkante_house() if location is None else location))
     desc = dict(seed=17,overrides=dict(blind_windows=True,**overrides))
     return prepare_facts(facts,style('fachwerk') if config is None else config,desc,frozenset())
 
@@ -310,7 +319,7 @@ def check_real_storey_raster():
 
 
 def check_real_storey_flag_and_medians():
-    facts = hull_facts(gap_house())
+    facts = unbacked(hull_facts(gap_house()))
     original = deepcopy(facts)
     off = prepare_facts(facts,style('fachwerk'),dict(seed=17),frozenset())
     on = prepared_windows(gap_house())
@@ -363,6 +372,30 @@ def check_real_storey_roof_and_short_wall():
 
 
 
+def check_room_backed_stretches():
+    """Ruling 2026-10-21: no blind window in front of a real room.
+
+    Waldkante's rooms cover every contour edge, so with the room spans as
+    hull_facts computes them no real storey gets a blind window. A hand-made
+    span [0, 5] on a 10 m edge with bay 2 (slots [.4,1.6]…[8.4,9.6], ends
+    dropped at .6) leaves exactly the slots right of 5: [6.4,7.6], [8.4,9.6]
+    minus the end slot → [(6.4, 7.6)].
+    """
+    facts = prepared_windows()
+    assert facts == prepared_windows()
+    backed = prepare_facts(hull_facts(waldkante_house()), style('fachwerk'),
+                           dict(seed=17, overrides=dict(blind_windows=True)), frozenset())
+    assert all(e['rooms'] for l in backed['levels'] if not l.get('filler') for e in l['edges'])
+    assert not any(h.get('blind') for l in backed['levels'] if not l.get('filler')
+                   for e in l['edges'] for h in e['openings'])
+    level = dict(level=1, floor_y=3, top_y=6, edges=[])
+    edge = dict(openings=[], rooms=[[0, 5]])
+    level['edges'] = [edge]
+    dims = dict(width=1.2, sill=.9, height=1.2, plinth=.8)
+    got = hull_facades.wall_blind_windows(level, edge, dims, 2, 0, 10, lambda s: [])
+    assert [(round(h['s0'], 2), round(h['s1'], 2)) for h in got] == [(6.4, 7.6)], got
+
+
 def check_real_storey_filters():
     """A 6 m span/bay 2 has slots [.4,1.6],[2.4,3.6],[4.4,5.6].
     End slots drop at .6 clearance. A centre door with overlapping height
@@ -393,7 +426,7 @@ def check_real_storey_budget():
     loc['map3d']['outline'] = [[0,0],[30,0],[30,20],[0,20]]
     loc['rooms'] = [loc['rooms'][0]]
     loc['rooms'][0]['layout'].update(w=30,d=20,openings=[])
-    facts = hull_facts(loc)
+    facts = unbacked(hull_facts(loc))
     desc = dict(seed=7,overrides=dict(storeys_total=40,blind_windows=True,ornament_density=.5))
     original = deepcopy(desc)
     prepared = prepare_facts(facts,style('modern'),desc,frozenset())
@@ -532,7 +565,7 @@ def main():
     failed = []
     for check in (check_blender_doors,check_door_resolution_and_materials,check_glass,check_details,check_density,check_blind,check_surrounds,check_wide_and_thresholds,check_identity,
                   check_real_storey_raster,check_real_storey_flag_and_medians,
-                  check_real_storey_roof_and_short_wall,check_real_storey_filters,check_real_storey_budget,
+                  check_real_storey_roof_and_short_wall,check_real_storey_filters,check_room_backed_stretches,check_real_storey_budget,
                   check_shop_street_edges,check_shop_panels_and_band,check_shop_awnings,
                   check_shop_grouping_and_tall_door,check_shop_flag_and_blinds,check_hull_design_render,check_hull_proposal_window_count):
         try:

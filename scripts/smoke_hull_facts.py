@@ -199,7 +199,14 @@ def main():
                             sort_keys=True, separators=(',', ':'))
         assert f['fingerprint'] == hashlib.sha256(packed.encode()).hexdigest()[:16]
         # 3a: Blender doors — door_style participates in the canonical hash.
-        assert f['fingerprint'] == 'bc700a15ab6c8ce2'
+        # 2026-10-21: one room fills each storey, so its walls back every
+        # contour edge end to end (lengths 10/8 and 6/8) — no blind windows.
+        assert [[e['rooms'] for e in l['edges']] for l in f['levels']] == [
+            [[[0.0, 10.0]], [[0.0, 8.0]], [[0.0, 10.0]], [[0.0, 8.0]]],
+            [[[0.0, 6.0]], [[0.0, 8.0]], [[0.0, 6.0]], [[0.0, 8.0]]]]
+        # 3a: Blender doors — door_style participates in the canonical hash;
+        # 2026-10-21: the room spans do too.
+        assert f['fingerprint'] == 'd6dd924bb7daad7a'
         assert f['elevator'] is None
         check_storeys(hull_facts, gap_house, stepped_house, compose_scene)
         moved = copy.deepcopy(loc)
