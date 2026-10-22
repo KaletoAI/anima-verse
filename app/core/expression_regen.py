@@ -872,7 +872,10 @@ def generate_expression_image(character_name: str,
                               occasion: str = "",
                               record_provenance: bool = False,
                               bare_prompt: Optional[str] = None,
-                              mesh_input_profile: Optional[Dict[str, Any]] = None) -> Optional[Path]:
+                              mesh_input_profile: Optional[Dict[str, Any]] = None,
+                              backend: str = "",
+                              dialog_loras: Optional[list] = None,
+                              negative_prompt: str = "") -> Optional[Path]:
     """Generate an expression/pose variant.
 
     Character + equipped items + pose + expression -> text-prompt-based
@@ -912,6 +915,11 @@ def generate_expression_image(character_name: str,
       only the service use-case style is prepended.
     - ``record_provenance`` freezes the explicit reference for the backend
       and certifies its hash and the final processed image bytes in the sidecar.
+    - ``backend`` / ``dialog_loras`` / ``negative_prompt``: the image dialog's
+      picks for this one render. ``backend`` is explicit (that backend or an
+      error, no routing); ``dialog_loras`` REPLACE every stored LoRA list and
+      survive ``bare_prompt`` (``[]`` = none); empty ``negative_prompt`` keeps
+      the use-case negative.
 
     Returns the path to the generated image, or None on failure.
     """
@@ -1135,6 +1143,15 @@ def generate_expression_image(character_name: str,
     if outfit_h:
         payload["override_height"] = outfit_h
 
+    if backend:
+        payload["backend"] = backend
+        # The stored model belongs to the character's OWN backend match; on
+        # another explicit pick it would name a model that backend lacks.
+        from app.imagegen.routing import is_character_match
+        if model_override and not is_character_match(_occasion, character_name, backend):
+            model_override = ""
+    if negative_prompt:
+        payload["negative_prompt"] = negative_prompt
     if model_override:
         payload["model_override"] = model_override
     # LoRAs: character override + slot-override LoRAs of ACTIVE (empty,
@@ -1148,7 +1165,13 @@ def generate_expression_image(character_name: str,
     if _mesh_input:
         from app.core.body_slots import filter_mesh_input_loras
         _merged_loras = filter_mesh_input_loras(_merged_loras, _render_profile)
-    if _merged_loras and bare_prompt is None:
+    if dialog_loras is not None:
+        # Picked in the dialog for THIS render: the gate rejects an
+        # unassociated LoRA on an explicit backend instead of dropping it.
+        if dialog_loras:
+            payload["loras"] = list(dialog_loras)
+            payload["loras_explicit"] = True
+    elif _merged_loras and bare_prompt is None:
         payload["loras"] = _merged_loras
     payload["image_use_case"] = image_use_case
     # Fabric only exists in the picture when something is actually worn —

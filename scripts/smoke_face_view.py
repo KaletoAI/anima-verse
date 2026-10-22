@@ -190,7 +190,8 @@ def render_contract(refs, profile, sig, meta):
             assert info['views']['face']['info']['filename'] == 'face_view.png'
             assert info['face_view'] == {'exists': True, 'stale': False, 'rendering': False,
                 'created_at': '2026-10-16T12:00:00Z', 'width': 32, 'height': 32,
-                'url': '/characters/demo/model-refs/face_view'}
+                'url': '/characters/demo/model-refs/face_view',
+                'prompt': mr.FACE_VIEW_PROMPT_DEFAULT, 'profile_url': '/characters/demo/images/profile.png'}
         from app.routes.characters import get_character_model_ref_image
         from starlette.requests import Request
         response = get_character_model_ref_image('demo', 'face_view', Request({'type': 'http', 'headers': []}))

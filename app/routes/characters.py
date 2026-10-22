@@ -1395,7 +1395,10 @@ async def generate_character_model_refs(character_name: str,
     ``{"kinds": ["pose"]}`` narrows to specific images — each tab sends its
     own kind, so wardrobe (pose) and 3D (tpose) generate independently.
     Without kinds the per-image auto toggles decide. ``view`` selects exactly
-    main or one body-form T-pose view, leaving other renders untouched."""
+    main or one body-form T-pose view, leaving other renders untouched.
+    With ``view: "face"`` the image dialog may add ``prompt``, ``backend``
+    (explicit, no fallback), ``loras`` and ``negative_prompt`` — for this
+    run only, nothing is stored."""
     from app.core.model_refs import (
         REF_KINDS, tpose_views_for_character, current_outfit_state, find_ref_image,
         trigger_now,
@@ -1427,13 +1430,51 @@ async def generate_character_model_refs(character_name: str,
         if not kinds:
             raise HTTPException(status_code=422,
                                 detail=f"kinds must contain one of {list(REF_KINDS)}")
+    dialog_keys = ("prompt", "backend", "loras", "negative_prompt")
+    face_render = None
+    if isinstance(body, dict) and any(k in body for k in dialog_keys):
+        if view != "face":
+            raise HTTPException(status_code=422,
+                                detail="prompt/backend/loras/negative_prompt require view 'face'")
+        face_render = await _face_dialog_render(body)
     if view == "face":
         from app.core.model_refs import current_profile_image
         if current_profile_image(character_name) is None:
             raise HTTPException(status_code=409,
                                 detail="No profile picture. Set a profile picture, then render the face view")
-    trigger_now(character_name, kinds=kinds, tpose_view=view)
+    trigger_now(character_name, kinds=kinds, tpose_view=view, face_render=face_render)
     return {"status": "generating"}
+
+
+async def _face_dialog_render(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate the image dialog's picks for one face view render. The render
+    runs in a background thread, so a dead explicit backend (503) or a LoRA
+    the library does not associate with it (400) is answered HERE."""
+    for key in ("prompt", "backend", "negative_prompt"):
+        if not isinstance(body.get(key) or "", str):
+            raise HTTPException(status_code=422, detail=f"{key} must be a string")
+    loras = body.get("loras")
+    if loras is not None:
+        if not isinstance(loras, list) or not all(
+                isinstance(l, dict) and isinstance(l.get("name"), str) and l["name"].strip()
+                and isinstance(l.get("strength", 1.0), (int, float)) for l in loras):
+            raise HTTPException(status_code=422,
+                                detail="loras must be a list of {name, strength}")
+        loras = [{"name": l["name"].strip(), "strength": float(l.get("strength", 1.0))}
+                 for l in loras]
+    backend_pick = (body.get("backend") or "").strip()
+    if backend_pick:
+        from app.core.explicit_backend import require_explicit_backend_async
+        from app.core.lora_library import LoraNotAllowedError, assert_loras_allowed
+        backend = await require_explicit_backend_async(backend_pick, has_input_image=True)
+        try:
+            assert_loras_allowed(backend, loras or [])
+        except LoraNotAllowedError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    return {"prompt": (body.get("prompt") or "").strip(), "backend": backend_pick,
+            # [] = the dialog chose no LoRA (still a dialog pick); None = none sent.
+            "loras": loras if loras is not None else [],
+            "negative_prompt": (body.get("negative_prompt") or "").strip()}
 
 
 @router.post("/{character_name}/model-refs/auto")

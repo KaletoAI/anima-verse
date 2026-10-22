@@ -6,6 +6,8 @@
  *
  * Backend: GET /characters/{name}/model-refs (info),
  * GET .../model-refs/{tpose|pose} (image), POST .../model-refs/generate.
+ * The face view's own button opens the image dialog (backend, LoRAs, prompt
+ * for that one run); every other button fires directly.
  * The pair is also generated automatically after outfit changes (debounced).
  * ``refreshKey`` (e.g. the equipped signature) reloads + cache-busts when the
  * outfit changes, so the preview follows the current combination.
@@ -24,6 +26,8 @@ import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { useEnlarge } from '../../components/ZoomButton'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
+import { ImageGenDialog } from '../../components/ImageGenDialog'
+import type { ImageGenSubmit } from '../../components/ImageGenDialog'
 
 interface RefInfo {
   filename?: string
@@ -45,7 +49,12 @@ interface KindStatus {
 }
 
 interface RefsInfo {
-  face_view?: { exists: boolean; stale: boolean; rendering: boolean; created_at?: string; width?: number; height?: number; url: string }
+  face_view?: {
+    exists: boolean; stale: boolean; rendering: boolean; created_at?: string; width?: number; height?: number; url: string
+    /** Dialog prefill: the face prompt a render would use, and its reference. */
+    prompt?: string
+    profile_url?: string
+  }
   signature?: string
   tpose?: RefInfo | null
   pose?: RefInfo | null
@@ -214,6 +223,7 @@ export function FieldModelRefs({
   // The user's own click: immediate feedback, cleared once the backend
   // reports our kinds idle again.
   const [busy, setBusy] = useState(false)
+  const [faceDialogOpen, setFaceDialogOpen] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Poll generation: a tick whose generation is stale (stopped/restarted
   // meanwhile, or the component is gone) drops its result.
@@ -303,6 +313,28 @@ export function FieldModelRefs({
       setBusy(false)
     }
   }, [busy, enc, kindList, info.auto, startPoll, t, toast])
+
+  // The face view renders through the image dialog: its backend, LoRAs and
+  // prompt apply to this one run only (the automatic render stays routed).
+  const generateFace = useCallback(async (p: ImageGenSubmit) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await apiPost(`/characters/${enc}/model-refs/generate`, {
+        kinds: ['tpose'], view: 'face',
+        prompt: p.prompt,
+        backend: p.backend || '',
+        loras: p.loras || [],
+        negative_prompt: p.negative_prompt || '',
+      })
+      toast(t('Generating…'))
+      startPoll(1000)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      setBusy(false)
+    }
+  }, [busy, enc, startPoll, t, toast])
+  const closeFaceDialog = useCallback(() => setFaceDialogOpen(false), [])
 
   // Per-image toggle for the automatic outfit-change render (persisted per
   // character); the Generate button fires exactly the checked ones.
@@ -460,7 +492,7 @@ export function FieldModelRefs({
                                   className="ga-btn ga-btn-sm"
                                   style={{ fontSize: 10, padding: '1px 5px' }}
                                   disabled={view === 'face' ? busy || !!info.face_view?.rendering : blocked || !info.tpose}
-                                  onClick={() => generate(view)}
+                                  onClick={() => (view === 'face' ? setFaceDialogOpen(true) : generate(view))}
                                   aria-label={`${t('Regenerate')} · ${viewLabel(view)}`}
                                 >
                                   {t('Regenerate')}
@@ -474,7 +506,7 @@ export function FieldModelRefs({
                                 type="button"
                                 className="ga-btn ga-btn-sm"
                                 disabled={view === 'face' ? busy || !!info.face_view?.rendering : blocked || !info.tpose}
-                                onClick={() => generate(view)}
+                                onClick={() => (view === 'face' ? setFaceDialogOpen(true) : generate(view))}
                                 aria-label={`${t('Regenerate')} · ${viewLabel(view)}`}
                               >
                                 {t('Regenerate')}
@@ -546,6 +578,19 @@ export function FieldModelRefs({
             ))
           : null}
       </div>
+      <ImageGenDialog
+        open={faceDialogOpen}
+        title={`${t('Generate face view')} · ${character}`}
+        defaultPrompt={info.face_view?.prompt || ''}
+        sourceImageUrl={info.face_view?.profile_url || undefined}
+        defaultUseSource
+        requireSourceReference
+        sourceReferenceLabel={t('Profile picture as reference')}
+        occasion="tpose_view"
+        occasionCharacter={character}
+        onSubmit={generateFace}
+        onClose={closeFaceDialog}
+      />
     </div>
   )
 }

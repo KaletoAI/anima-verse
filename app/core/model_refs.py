@@ -248,6 +248,11 @@ def get_tpose_prompt() -> str:
     return override or TPOSE_PROMPT_DEFAULT
 
 
+def get_face_view_prompt() -> str:
+    """Face view prompt: admin override (image_generation.face_view_prompt) or built-in."""
+    return str(_cfg("face_view_prompt", "") or "").strip() or FACE_VIEW_PROMPT_DEFAULT
+
+
 def get_animal_pose_prompt() -> str:
     """Mesh-input pose for NON-humanoid characters: admin override
     (image_generation.animal_pose_prompt) or built-in."""
@@ -1050,7 +1055,8 @@ def schedule_outfit_render(character_name: str) -> None:
 
 def trigger_now(character_name: str, kinds: Optional[tuple] = None, *,
                 tpose_view: Optional[str] = None, force: bool = True,
-                blocking: bool = False, pieces=None, items=None, signature=None) -> None:
+                blocking: bool = False, pieces=None, items=None, signature=None,
+                face_render: Optional[dict] = None) -> None:
     """Manual trigger (UI button): fires the render immediately — no debounce,
     force=True so a fresh render replaces the cached one of the current
     combination. ``kinds`` narrows to specific images (each tab passes its
@@ -1059,7 +1065,9 @@ def trigger_now(character_name: str, kinds: Optional[tuple] = None, *,
     the T-pose pass to one view while retaining its lock and status lane.
     ``blocking=True`` waits in the T-pose lane for a switch-triggered input
     pass; ``force=False`` then reuses cached views. The optional outfit triple
-    captures its intended signature and superseded requests are skipped."""
+    captures its intended signature and superseded requests are skipped.
+    ``face_render`` (only with ``tpose_view="face"``) carries the image
+    dialog's one-off choices for this run — see ``generate_face_view``."""
     if blocking:
         selected = tuple(kinds) if kinds is not None else tuple(
             k for k, enabled in get_auto_kinds(character_name).items() if enabled)
@@ -1081,7 +1089,7 @@ def trigger_now(character_name: str, kinds: Optional[tuple] = None, *,
                     _running.pop(key, None)
         return
     if tpose_view == "face":
-        _start_face_view(character_name, force=force)
+        _start_face_view(character_name, force=force, render=face_render)
         return
     auto = get_auto_kinds(character_name)
     auto_kinds = tuple(k for k in REF_KINDS if auto.get(k))
@@ -1133,7 +1141,12 @@ def face_view_info(character_name: str) -> dict:
             "stale": bool(path and (not profile_hash or meta.get("reference_sha256") != profile_hash)),
             "rendering": get_render_status(character_name)["face_view"]["running"],
             "created_at": meta.get("created_at", ""), "width": None, "height": None,
-            "url": f"/characters/{quote(character_name, safe='')}/model-refs/face_view"}
+            "url": f"/characters/{quote(character_name, safe='')}/model-refs/face_view",
+            # Prefill of the image dialog: the prompt a render would use and
+            # the reference it slots.
+            "prompt": get_face_view_prompt(),
+            "profile_url": (f"/characters/{quote(character_name, safe='')}/images/"
+                            f"{quote(profile.name, safe='')}" if profile else "")}
     if path:
         try:
             with Image.open(path) as image:
@@ -1143,8 +1156,14 @@ def face_view_info(character_name: str) -> dict:
     return info
 
 
-def generate_face_view(character_name: str, force: bool = False) -> Optional[Path]:
-    """One profile-based, bare head render per character, serialized independently."""
+def generate_face_view(character_name: str, force: bool = False,
+                       render: Optional[dict] = None) -> Optional[Path]:
+    """One profile-based, bare head render per character, serialized independently.
+
+    ``render`` = the image dialog's choices for THIS run only (nothing is
+    stored): ``prompt`` replaces the configured face prompt, ``backend`` is an
+    explicit pick (no fallback), ``loras`` / ``negative_prompt`` go to the
+    service as picked. Absent = the automatic render (routing, no LoRAs)."""
     import hashlib
     from app.core.expression_regen import generate_expression_image
     from app.core.face_retexture import read_meta
@@ -1161,20 +1180,24 @@ def generate_face_view(character_name: str, force: bool = False) -> Optional[Pat
             return path
         with _lock:
             _running[key] = utc_now()
+        render = render or {}
         try:
             return generate_expression_image(
                 character_name, mood="", pose_key="", equipped_pieces={}, equipped_items=[],
-                bare_prompt=str(_cfg("face_view_prompt", "") or "").strip() or FACE_VIEW_PROMPT_DEFAULT,
+                bare_prompt=str(render.get("prompt") or "").strip() or get_face_view_prompt(),
                 image_use_case="face_view", occasion="tpose_view",
                 override_width=1024, override_height=1024,
                 output_stem=get_model_refs_dir(character_name) / "face_view",
-                apply_state_modifiers=False, reference_image=profile, record_provenance=True)
+                apply_state_modifiers=False, reference_image=profile, record_provenance=True,
+                backend=str(render.get("backend") or "").strip(),
+                dialog_loras=render.get("loras"),
+                negative_prompt=str(render.get("negative_prompt") or "").strip())
         finally:
             with _lock:
                 _running.pop(key, None)
 
 
-def _start_face_view(character_name: str, force: bool) -> None:
+def _start_face_view(character_name: str, force: bool, render: Optional[dict] = None) -> None:
     with _lock:
         if not force and (_face_workers.get(character_name, 0) or
                           (character_name, "face_view") in _running):
@@ -1191,7 +1214,7 @@ def _start_face_view(character_name: str, force: bool) -> None:
 
     def run():
         try:
-            generate_face_view(character_name, force)
+            generate_face_view(character_name, force, render)
         except Exception as exc:
             logger.warning("Face view for %s failed: %s", character_name, exc)
         finally:

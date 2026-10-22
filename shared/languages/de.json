@@ -2646,6 +2646,8 @@
     "from profile picture": "aus dem Profilbild",
     "The profile picture changed — regenerate": "Profilbild geändert — neu rendern",
     "stale": "veraltet",
+    "Generate face view": "Gesichtsansicht generieren",
+    "Profile picture as reference": "Profilbild als Referenz",
     "Skin tone match": "Hautton-Abgleich",
     "Pulls the face's overall skin colour and brightness toward the model's own face skin, so the projection blends in without a seam. Runs on the hub (needs GLBFaceRetexture 1.1.1).": "Gleicht Hautton und Helligkeit an die Gesichtshaut des Modells an, damit die Projektion ohne Kante übergeht. Läuft auf dem Hub (GLBFaceRetexture 1.1.1 nötig).",
     "the face retexture backend does not support tone match (needs node GLBFaceRetexture >= 1.1)": "Das Backend unterstützt keinen Hautton-Abgleich (GLBFaceRetexture ab 1.1 nötig).",
