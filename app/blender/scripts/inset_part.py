@@ -39,7 +39,7 @@ DEFAULTS = {
     'nub_scale': .5,             # 0 = just below the rim, 1 = 1.5x larger and standing out past the ridges
     'pocket': {'s0': .048, 's1': .094, 'hw': .0022, 'depth': .02, 'pow': .5},
     'tone': {'ridge': [.97, .9, .88], 'inner': [.82, .56, .6], 'folds': [.9, .66, .7], 'nub': [.92, .62, .66], 'pocket': [.45, .22, .26], 'centre': [.96, .9, .9]},
-    'edge': [.0007, .0022, .005], 'bake': 512,
+    'edge': [.0007, .0022, .005], 'bake': 512, 'fill_iterations': 1500,
 }
 
 
@@ -66,6 +66,8 @@ def parameters(raw):
         raise ValueError('Scales must be between zero and one')
     if not isinstance(p['bake'], int) or p['bake'] <= 0:
         raise ValueError('Bake size must be a positive integer')
+    if not isinstance(p['fill_iterations'], int) or p['fill_iterations'] <= 0:
+        raise ValueError('Fill iterations must be a positive integer')
     if not -180 <= p['theta'][0] < p['theta'][1] <= 180:
         raise ValueError('Invalid theta interval')
     for section in ('region', 'ridges', 'cleft', 'inner', 'pocket'):
@@ -113,15 +115,23 @@ def build_part(group, output):
     bvh = BVHTree.FromObject(body, dg)
 
     def outer_hit(centre, direction):
-        """First surface seen from outside, with its normal oriented outward."""
-        origin = centre + direction * .4
-        local_direction = Ni3 @ (-direction)
-        hit = bvh.ray_cast(Mi @ origin, local_direction.normalized(),
-                           .4 * local_direction.length)
+        """Cast from inside, continuing through nearby walls to the outer skin."""
+        local_direction = Ni3 @ direction
+        local_length = local_direction.length
+        local_direction.normalize()
+        hit = bvh.ray_cast(Mi @ centre, local_direction)
         if hit[0] is None:
             return None, None
+        point = M @ hit[0]
         normal = (N3 @ hit[1]).normalized()
-        return M @ hit[0], normal if normal.dot(direction) > 0 else -normal
+        for _ in range(3):
+            hit = bvh.ray_cast(Mi @ (point + direction * 1e-4),
+                               local_direction, .015 * local_length)
+            if hit[0] is None:
+                break
+            point = M @ hit[0]
+            normal = (N3 @ hit[1]).normalized()
+        return point, normal if normal.dot(direction) > 0 else -normal
 
     # First locate the lowest outer midline point from the original centre.
     low_points = [outer_hit(c, Vector((0, -math.cos(t), -math.sin(t))))[0]
@@ -368,6 +378,11 @@ def build_part(group, output):
     tint *= (1 - np.clip(FQ['nub'], 0, 1)[:, None] * (1 - lin(T['nub']) / lin(T['inner'])).clip(-1, 1))
     tint *= (1 - np.clip(FQ['pocket'] * 1.5, 0, 1)[:, None] * (1 - lin(T['pocket'])))
     tint[border] = 1
+    clean = sstep((FQ['m'] - .35) / .5)
+    clean[border] = 0
+    clean_attribute = me.attributes.new('Clean', 'FLOAT', 'POINT')
+    for i, value in enumerate(clean):
+        clean_attribute.data[i].value = float(value)
     ca = me.color_attributes.new('Tint', 'FLOAT_COLOR', 'POINT')
     for i, t in enumerate(tint):
         ca.data[i].color = (*t, 1)
@@ -379,7 +394,7 @@ def build_part(group, output):
     for poly in me.polygons:
         poly.use_smooth = True
 
-    # Bake body texture x tint onto an own UV map, on the separate patch object.
+    # Bake raw colour, tint, clean factor and coverage on the chart UV map.
     bpy.context.view_layer.objects.active = part
     for o in bpy.context.scene.objects:
         o.select_set(o is part)
@@ -403,15 +418,63 @@ def build_part(group, output):
     uvn = Nd('ShaderNodeUVMap'); uvn.uv_map = 'body'
     tex = Nd('ShaderNodeTexImage'); tex.image = img
     att = Nd('ShaderNodeAttribute'); att.attribute_name = 'Tint'
-    mul = Nd('ShaderNodeMix'); mul.data_type = 'RGBA'; mul.blend_type = 'MULTIPLY'; mul.inputs['Factor'].default_value = 1
     nt.links.new(uvn.outputs['UV'], tex.inputs['Vector'])
-    nt.links.new(tex.outputs['Color'], mul.inputs[6]); nt.links.new(att.outputs['Color'], mul.inputs[7])
-    nt.links.new(mul.outputs[2], emit.inputs['Color']); nt.links.new(emit.outputs['Emission'], out.inputs['Surface'])
-    tb = Nd('ShaderNodeTexImage'); tb.image = bimg; nt.nodes.active = tb
+    nt.links.new(emit.outputs['Emission'], out.inputs['Surface'])
+    cla = Nd('ShaderNodeAttribute'); cla.attribute_name = 'Clean'
+    white = Nd('ShaderNodeRGB'); white.outputs[0].default_value = (1, 1, 1, 1)
     me.materials.append(mat)
     sc = bpy.context.scene
     sc.render.engine = 'CYCLES'; sc.cycles.device = 'CPU'; sc.cycles.samples = 1; sc.render.bake.margin = 24
-    bpy.ops.object.bake(type='EMIT')
+    BS = P['bake']
+
+    def bake_layer(socket):
+        """Read each emission layer back in the same image space."""
+        image = bpy.data.images.new('layer', BS, BS, alpha=False)
+        image.generated_color = (0, 0, 0, 1)
+        node = Nd('ShaderNodeTexImage'); node.image = image; nt.nodes.active = node
+        nt.links.new(socket, emit.inputs['Color'])
+        try:
+            bpy.ops.object.bake(type='EMIT')
+            pixels = np.empty(BS * BS * 4, np.float32)
+            image.pixels.foreach_get(pixels)
+            return pixels.reshape(BS, BS, 4)
+        finally:
+            nt.nodes.remove(node)
+            bpy.data.images.remove(image)
+
+    raw = bake_layer(tex.outputs['Color'])
+    tint_px = bake_layer(att.outputs['Color'])
+    clean_px = bake_layer(cla.outputs['Fac'])[..., 0]
+    cover = bake_layer(white.outputs[0])[..., 0] > .5
+
+    # Average 4x4 blocks; pad only to preserve arbitrary positive bake sizes.
+    G = (BS + 3) // 4
+    def small(values):
+        padding = [(0, G * 4 - BS), (0, G * 4 - BS)] + [(0, 0)] * (values.ndim - 2)
+        padded = np.pad(values, padding, mode='edge')
+        return padded.reshape(G, 4, G, 4, *values.shape[2:]).mean((1, 3))
+
+    rs, cs = small(raw[..., :3]), small(clean_px)
+    vs = small(cover.astype(float)) > .5
+    unknown = vs & (cs > .5)
+    known = vs & ~unknown
+    f = rs.copy()
+    if unknown.any():
+        f[unknown] = rs[known].mean(0) if known.any() else rs[unknown].mean(0)
+    wv = vs.astype(float)[..., None]
+    # Jacobi: each unknown uses four covered neighbours from the previous step.
+    for _ in range(P['fill_iterations']):
+        acc = np.zeros_like(f); cnt = np.zeros_like(wv)
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            acc += np.roll(np.roll(f * wv, dy, 0), dx, 1)
+            cnt += np.roll(np.roll(wv, dy, 0), dx, 1)
+        f = np.where(unknown[..., None], acc / np.maximum(cnt, 1e-6), f)
+    fill = np.repeat(np.repeat(f, 4, 0), 4, 1)[:BS, :BS]
+    cw = clean_px[..., None]
+    final = (raw[..., :3] * (1 - cw) + fill * cw) * tint_px[..., :3]
+    outpx = np.ones((BS, BS, 4), np.float32)
+    outpx[..., :3] = final
+    bimg.pixels.foreach_set(outpx.ravel())
     bimg.pack()
     nt.nodes.clear()
     out = Nd('ShaderNodeOutputMaterial'); bsdf = Nd('ShaderNodeBsdfPrincipled'); tb = Nd('ShaderNodeTexImage'); tb.image = bimg
@@ -419,6 +482,7 @@ def build_part(group, output):
     bsdf.inputs['Roughness'].default_value = .55
     me.uv_layers.remove(me.uv_layers['body'])
     me.uv_layers['bake'].name = uvname
+    me.attributes.remove(clean_attribute)
     while me.color_attributes:
         me.color_attributes.remove(me.color_attributes[0])
 

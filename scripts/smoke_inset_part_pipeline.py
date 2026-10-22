@@ -25,9 +25,10 @@ def main():
         from app.blender import refine
         from app.core.rig_contract import BASE_JOINT_NAMES
         from scripts.smoke_extension_rig_p0 import glb
+        assert extension_rig.PART_BUILDS['inset_part'] == 3
         old_inset = extension_rig.extension_rig_fingerprint([{'id': 'inset', 'op': 'inset_part'}])
         attached_identity = extension_rig.extension_rig_fingerprint([{'id': 'part', 'op': 'attached_part'}])
-        with patch.dict(extension_rig.PART_BUILDS, {'inset_part': 1}):
+        with patch.dict(extension_rig.PART_BUILDS, {'inset_part': 2}):
             assert extension_rig.extension_rig_fingerprint([{'id': 'inset', 'op': 'inset_part'}]) != old_inset
             assert extension_rig.extension_rig_fingerprint([{'id': 'part', 'op': 'attached_part'}]) == attached_identity
         clean = glb(['mixamorig:' + name for name in BASE_JOINT_NAMES])

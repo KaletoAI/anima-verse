@@ -73,7 +73,7 @@ def extension_bone_names(character_name, profile=None):
 
 # Bump an operation when its builder changes geometry for the same declaration;
 # defaults live in the Blender scripts, so only that part variant rebuilds.
-PART_BUILDS = {"attached_part": 3, "inset_part": 2}
+PART_BUILDS = {"attached_part": 3, "inset_part": 3}
 
 
 def extension_rig_fingerprint(groups, overrides=None):

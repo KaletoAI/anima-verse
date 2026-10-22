@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Synthetic closed skin fixture, generated entirely in temporary storage.
+"""Usage: ./.venv/bin/python scripts/smoke_inset_part_blender.py
+
+Synthetic closed skin fixture, generated entirely in temporary storage.
 
 A 150 mm sphere under Hips provides a continuous midline and two skinned legs.
 A UV-island seam crosses the patch; a GLB roundtrip creates coincident copies.
@@ -9,8 +11,8 @@ With pocket starting at s=.07, the cleft centre s=.05 has depth 9 mm, within
 10 percent after the small mound/ridge contributions. A welded border has
 one vertex per position, so opposing 30 degree walk/spread poses cannot crack.
 
-The inward shell is 5 mm under the 150 mm outer sphere. Outside rays must
-therefore give midline |r| < 1 mm, never the inner shell's 5 mm error.
+The inward shell is 5 mm under the 150 mm outer sphere. Inside rays
+continuing through the 5 mm gap must therefore give midline |r| < 1 mm, never the inner shell's 5 mm error.
 For the round sphere L=.15*55*pi/180=.14399 m; the front corner is
 y=-.15*cos(50)=-.09642, z=1.02-.15*sin(50)=.90509 (2 mm sampling tolerance).
 A missing back corner uses .138 m and scale 1; a missing front corner fails.
@@ -20,6 +22,19 @@ midpoint is the underside midpoint minus .013 m, and its length is .075 m.
 For the round sphere its angle is 77.5-.013/.15*180/pi=72.534 degrees,
 giving y=-.04502, z=.87691. Arc lengths on the short ellipse integrate
 sqrt(.06**2*sin(t)**2+.15**2*cos(t)**2) between the two sampled endpoints.
+The tall variant stretches only the upper half to 750 mm and widens Y
+by 1+2*(z-1.02)/.15: at -70 degrees
+the outer hit is over 400 mm from the chart centre, while the lower half
+and its placement stay unchanged. The fill variant has a green stripe at
+|x| < 4 mm, z in [.88,.895], surrounded by constant (.65,.48,.38).
+With unit tint, a constant boundary has the same constant harmonic fill;
+fully clean, fully covered pixels must match that tone within .025 per channel
+and raw stripe pixels must differ by > .1. The ramp and zero-clean border
+must preserve raw pixels according to their blend weights. The same
+expectations hold for 256 and 257 pixel bakes (partial 4x4 edge blocks).
+Unit-tint pixels below 1 indicate partial raster coverage and are excluded
+from the constant-tone check. Written RGB channels round to 8 bits, so the
+blend has at most .5/255 error per channel.
 UV coverage samples use strict triangle interiors, excluding shared edges;
 a height field has at most one covering triangle at every sampled texel.
 """
@@ -45,6 +60,7 @@ def probe(directory):
     import _common
     import inset_part
     _common.reset_scene()
+    bake_size = 257 if '--fill-odd' in sys.argv else 256
     arm = bpy.data.objects.new('Rig', bpy.data.armatures.new('Rig'))
     bpy.context.collection.objects.link(arm)
     bpy.context.view_layer.objects.active = arm
@@ -62,12 +78,22 @@ def probe(directory):
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     if '--short' in sys.argv:
         for v in body.data.vertices: v.co.y *= .4
+    if '--tall' in sys.argv:
+        for v in body.data.vertices:
+            if v.co.z > 1.02:
+                v.co.y *= 1 + 2*(v.co.z-1.02)/.15
+                v.co.z = 1.02 + 5*(v.co.z-1.02)
     # Add an inward shell before the source UV seam roundtrip.
     bpy.ops.mesh.primitive_uv_sphere_add(segments=128, ring_count=96, radius=.145, location=(0, 0, 1.02))
     shell = bpy.context.object
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     if '--short' in sys.argv:
         for v in shell.data.vertices: v.co.y *= .4
+    if '--tall' in sys.argv:
+        for v in shell.data.vertices:
+            if v.co.z > 1.02:
+                v.co.y *= 1 + 2*(v.co.z-1.02)/.15
+                v.co.z = 1.02 + 5*(v.co.z-1.02)
     bm = bmesh.new(); bm.from_mesh(shell.data)
     bmesh.ops.reverse_faces(bm, faces=bm.faces[:]); bm.to_mesh(shell.data); bm.free()
     body.select_set(True); bpy.context.view_layer.objects.active = body; bpy.ops.object.join()
@@ -91,7 +117,18 @@ def probe(directory):
     body.parent = arm
     body.modifiers.new('Armature', 'ARMATURE').object = arm
     image = bpy.data.images.new('Skin', 32, 32)
-    image.generated_color = (.65, .48, .38, 1); image.pack()
+    image.generated_color = (.65, .48, .38, 1)
+    if '--fill' in sys.argv or '--fill-odd' in sys.argv:
+        bpy.data.images.remove(image)
+        image = bpy.data.images.new('Skin', 512, 512)
+        yy, xx = np.mgrid[:512, :512]
+        u, v = (xx+.5)/512, (yy+.5)/512
+        pixels = np.empty((512,512,4), np.float32)
+        pixels[:] = (.65,.48,.38,1)
+        stripe = ((abs(u-.25)<.005)|(abs(u-.75)<.005)) & (v>(.88-.2)/1.1) & (v<(.895-.2)/1.1)
+        pixels[stripe] = (.05,.95,.05,1)
+        image.pixels.foreach_set(pixels.ravel())
+    image.pack()
     mat = bpy.data.materials.new('Skin'); mat.use_nodes = True
     tex = mat.node_tree.nodes.new('ShaderNodeTexImage'); tex.image = image
     bsdf = next(n for n in mat.node_tree.nodes if n.type == 'BSDF_PRINCIPLED')
@@ -123,6 +160,8 @@ def probe(directory):
     assert any(count > 1 and abs(key[0]) == 0 for key, count in seam_positions.items())
     source_faces = [tuple(p.vertices) for p in me.polygons]
     group = {'id': 'inset', 'op': 'inset_part', 'chains': [], 'params': {'pocket': {'s0': .07}, 'bake': 64}}
+    if '--fill' in sys.argv or '--fill-odd' in sys.argv:
+        group['params'].update(bake=bake_size, tone={k: [1,1,1] for k in inset_part.DEFAULTS['tone']})
     try:
         inset_part.build_part(dict(group, params={'under': [1000, 1001]}), Path(directory) / 'missing.glb')
     except ValueError as error:
@@ -140,6 +179,32 @@ def probe(directory):
         metrics = inset_part.build_part(group, Path(directory) / 'model.glb')
     finally:
         sys.setprofile(None)
+    if '--tall' in sys.argv:
+        assert np.linalg.norm(captured['prof'][0] - np.array(captured['c'])) > .4
+    if '--fill' in sys.argv or '--fill-odd' in sys.argv:
+        baked = np.array(captured['bimg'].pixels[:]).reshape(bake_size,bake_size,4)[..., :3]
+        # z=.887 is inside the stripe and the fully clean central chart.
+        index = int(np.argmin(abs(captured['Q'][:,2]-.887) + 20*abs(captured['u_q'])))
+        uv_point = (captured['su'][index]-captured['lo'])/captured['span'] + .01
+        x, y = (uv_point*bake_size).astype(int)
+        assert np.max(abs(baked[y,x]-np.array([.65,.48,.38]))) < .025, baked[y,x]
+        raw = captured['raw'][..., :3]
+        clean = captured['clean_px']
+        covered = captured['cover'] & (captured['tint_px'][...,:3].min(2) > .999)
+        tone = np.array([.65,.48,.38])
+        inside = covered & (clean > .999)
+        assert inside.sum() > 100
+        assert np.max(abs(raw[inside]-tone)) > .1, 'Stripe must reach the raw bake'
+        assert np.max(abs(baked[inside]-tone)) < .025, np.max(abs(baked[inside]-tone))
+        border_px = covered & (clean < 1e-6)
+        assert border_px.any(), ('no zero-clean pixels', float(clean[covered].min()))
+        assert np.all(captured['clean'][captured['border']] == 0)
+        assert np.max(abs(baked[border_px]-raw[border_px])) < 1e-6
+        ramp = covered & (clean > .05) & (clean < .95)
+        assert ramp.any(), 'no ramp pixels'
+        expected = (raw*(1-clean[...,None]) + captured['fill']*clean[...,None])*captured['tint_px'][...,:3]
+        assert np.max(abs(baked[covered]-expected[covered])) < .5/255 + 1e-6, ('blend error', np.max(abs(baked[covered]-expected[covered])))
+        print('PASS stripe fill, constant interior within .025, raw border and clean ramp')
     assert metrics['inner_wall_faces_removed'] > 0, metrics
     assert np.all(captured['fac_b'][captured['near']] > .2)
     assert np.max(np.abs(captured['r_b'][(np.abs(captured['u_b']) < 1e-6) & captured['near']])) < .001
@@ -259,5 +324,5 @@ if __name__ == '__main__':
     else:
         with tempfile.TemporaryDirectory(prefix='inset-smoke-') as directory:
             subprocess.run([str(BLENDER), '-b', '-noaudio', '--python-exit-code', '1', '-t', '2', '-P', __file__, '--', '--fixture', directory], check=True)
-            for variant in ('--short', '--fallback'):
+            for variant in ('--short', '--fallback', '--tall', '--fill', '--fill-odd'):
                 subprocess.run([str(BLENDER), '-b', '-noaudio', '--python-exit-code', '1', '-t', '2', '-P', __file__, '--', '--fixture', variant, directory], check=True)
