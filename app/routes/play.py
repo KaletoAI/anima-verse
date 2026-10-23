@@ -631,8 +631,13 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
         # same statement, and the UI has one sentence for both.
         return {"journey": None, "reason": "unknown_target"}
 
-    from app.models.rules import check_leave
+    from app.models.rules import check_followers_leave, check_leave
     leave_ok, leave_reason = check_leave(avatar, target_location_id=target_id)
+    if leave_ok:
+        # The party travels with the avatar — a follower held by a leave rule
+        # holds the whole party.
+        leave_ok, leave_reason = check_followers_leave(
+            avatar, target_location_id=target_id)
     if not leave_ok:
         logger.info("Travel refused (leave rule): %s -> %s: %s",
                     avatar, target_id, leave_reason)
@@ -1186,9 +1191,14 @@ def _play_pos_report(avatar: str, body: Dict[str, Any]) -> Dict[str, Any]:
             # danger rule that holds the avatar in place must hold it when it
             # WALKS out too, or the movement channel quietly undoes what
             # ``/play/notices`` is telling the player at that very moment.
-            from app.models.rules import check_leave
+            from app.models.rules import check_followers_leave, check_leave
             leave_ok, leave_reason = check_leave(avatar,
                                                  target_location_id=derived_id)
+            if leave_ok:
+                # Stepping out drags the party along — a confined follower
+                # holds it at the boundary like the avatar's own rule would.
+                leave_ok, leave_reason = check_followers_leave(
+                    avatar, target_location_id=derived_id)
             if not leave_ok:
                 logger.info("pos refused (leave rule): %s out of %s: %s",
                             avatar, current_id, leave_reason)
