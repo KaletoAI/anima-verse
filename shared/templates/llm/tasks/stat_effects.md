@@ -19,6 +19,8 @@ This is an ONGOING activity. Return integer deltas PER HOUR of doing this activi
 {% else %}
 This is a SIGNIFICANT event / turning point. Large swings are allowed and often correct (up to about -90..+90) when a value's description implies it — e.g. an energy-like value collapsing at total exhaustion, or a value whose own description marks this kind of beat as its sharp turning point. Aspects that are only mildly touched still get small deltas.
 {% endif %}
+- Consider both directions: comfort or encouragement raises a courage-like value; a calm pause or a meal restores an energy-like value; boredom lowers an attention-like value, while excitement raises it.
+- Values drift back to their rest value on their own — do not push them there yourself.
 - Only include values that are meaningfully affected. Omit unaffected values (never return 0).
 - If nothing meaningfully changes, return {"stats": {}}.
 

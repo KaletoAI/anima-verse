@@ -43,6 +43,8 @@ Evaluate "stats": how this single scene beat affects {{ target_name }}'s status 
 Rules for "stats":
 - Return an object mapping value-name → integer delta for the ONE chat beat below (NOT an hour). Use SMALL deltas for ordinary beats, roughly -10..+10.
 - EXCEPTION — significant turning points may swing BIG (up to about -90..+90) when the beat clearly is one: total exhaustion or collapse, deep restorative rest, or a moment a value's own description marks as its sharp turning point. Let each value's own description above guide direction and size.
+- Consider both directions: comfort or encouragement raises a courage-like value; a calm pause or a meal restores an energy-like value; boredom lowers an attention-like value, while excitement raises it.
+- Values drift back to their rest value on their own — do not push them there yourself.
 - Only include values that are meaningfully affected by what happened. Omit unaffected values (do not return 0).
 - Judge each value from the text and its own description above, not from fixed rules — e.g. a demanding physical action lowers an energy-like value, rest raises it, a frightening beat lowers a courage-like value.
 - If nothing meaningfully changes, return an empty object.

@@ -190,3 +190,38 @@ def delete_setting(name: str) -> bool:
     """Restore a known setting's shared seed."""
     _check_setting(name)
     return _delete('setting', name)
+
+
+_chat_cap_lock = RLock()
+_chat_movement: dict[tuple[str, str], tuple[int, int]] = {}
+
+
+def cap_chat_deltas(name: str, deltas: dict[str, int]) -> dict[str, int]:
+    """Limit absolute ordinary chat movement per stat and game hour.
+
+    Turning points (magnitude at least 30) bypass and do not consume the
+    budget. Only the current hour is retained for each character/stat.
+    """
+    from app.core.timeutils import game_time
+    limit = get_setting("chat_cap_per_hour")
+    if limit == 0:
+        return dict(deltas)
+    hour = game_time().total_seconds // 3600
+    result = {}
+    with _chat_cap_lock:
+        for key, raw in deltas.items():
+            try:
+                delta = round_half_away(float(raw))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if abs(delta) >= 30:
+                result[key] = delta
+                continue
+            previous_hour, used = _chat_movement.get((name, key), (hour, 0))
+            if previous_hour != hour:
+                used = 0
+            allowed = min(abs(delta), max(0, limit - used))
+            if allowed:
+                result[key] = allowed if delta > 0 else -allowed
+            _chat_movement[(name, key)] = (hour, used + allowed)
+    return result

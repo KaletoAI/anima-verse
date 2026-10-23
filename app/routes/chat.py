@@ -697,7 +697,7 @@ def _extract_context_from_last_chat(agent_name: str,
     # Recognises three formats:
     #   <tool name="X">...</tool>     — the canonical tool tag
     #   *ToolName: ...*               — a degenerate marker (asterisks)
-    #   [Tool-Aufruf: X(...)]         — narrative bracket notation
+    #   [Tool Call: X(...)] / [Tool-Aufruf: X(...)] — narrative bracket notation
     _TOOL_MARKER_PATTERNS = [
         re.compile(r'<tool\s+name="[^"]+">[\s\S]*?</tool>', re.IGNORECASE),
         re.compile(r'\*\s*(?:OutfitChange|ChangeOutfit|SetActivity|TalkTo|SendMessage|SetLocation)\s*[:\(][^\*\n]*\*', re.IGNORECASE),
@@ -892,7 +892,9 @@ def _extract_context_from_last_chat(agent_name: str,
             if isinstance(stats_raw, dict) and stats_raw:
                 try:
                     from app.models.character import adjust_status_effects
-                    applied = adjust_status_effects(target_name, stats_raw, source="chat")
+                    from app.core.stat_rules import cap_chat_deltas
+                    capped = cap_chat_deltas(target_name, stats_raw)
+                    applied = adjust_status_effects(target_name, capped, source="chat")
                     if applied:
                         logger.info("Chat-Kontext [%s]: Stats %s", target_name,
                                      ", ".join(f"{k} {v['old']}->{v['new']}"
