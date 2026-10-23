@@ -781,8 +781,7 @@ def apply_effects(character_name: str,
         # Read AND write under the per-character profile lock (DATA-3). The
         # deltas below are a read-modify-write of ``status_effects`` AND the
         # save rewrites the whole profile_json blob — two lost updates in one.
-        # Pure computation inside, no nested profile writer, so the
-        # non-re-entrant lock is safe.
+        # History and sync run only after releasing the profile lock.
         with keyed_lock("character_profile", character_name):
             profile = get_character_profile(character_name)
             status = profile.get("status_effects", {}) or {}
@@ -803,31 +802,30 @@ def apply_effects(character_name: str,
 
             if changed:
                 profile["status_effects"] = status
-                save_character_profile(character_name, profile)
+                if not save_character_profile(character_name, profile):
+                    return {}
+        if changes:
+            from app.models.character import record_state_change
+            from app.core import sync_topics
+            record_state_change(character_name, "effects", source,
+                                metadata={"changes": changes, "source": source})
+            sync_topics.changed_at(character_name, topics=("presence", "self"))
     except Exception as e:
-        logger.warning("Effects anwenden fehlgeschlagen: %s", e)
+        logger.warning("Applying effects failed: %s", e)
 
     return changes
 
 
 # key: "character_name" -> GameTime of the last tick (RAM only, never persisted)
 _LAST_HOURLY_TICK: Dict[str, GameTime] = {}
+# Fractional pull remainder, RAM only, keyed by character and stat.
+_HOURLY_PULL_CARRY: Dict[tuple[str, str], float] = {}
 
 def apply_hourly_status_tick(character_name: str):
-    """Apply the hourly change to all status values.
+    """Apply rules once per game hour, anchoring the first sight to now.
 
-    Reads ``bar_hourly`` from the template per trait field.
-    Positive = rises per hour, negative = falls per hour, 0 = no change.
-    The character config can override the template value via {stat_key}_hourly.
-
-    Called by the ThoughtLoop (every 60 s), but performs the change only once
-    per GAME hour per character.
-
-    The stamp lives in RAM only, so the FIRST sight of a character after a
-    server start is anchored to ``now`` instead of counting as "an hour is
-    overdue" — otherwise every restart would charge a full hour of
-    ``bar_hourly`` immediately, and a developer restarting every ten game
-    minutes would get the decay six times over (SIM-3).
+    Fixed and matching conditional rates add to a rounded rest-value pull.
+    Fractional pull remainders survive subsequent ticks in RAM only.
     """
     tick_key = character_name
     # Hourly = one GAME hour (factor >1 -> decay ticks faster in real time).
@@ -865,91 +863,72 @@ def apply_hourly_status_tick(character_name: str):
 
     try:
         from app.core.keyed_lock import keyed_lock
-        # Read AND write under the per-character profile lock (DATA-3):
-        # the tick is a read-modify-write of ``status_effects`` and the
-        # save rewrites the whole profile_json blob with it. Everything
-        # inside only READS (config, template, current location), so the
-        # non-re-entrant lock cannot be re-taken here.
+        from app.core.stat_rules import rules_for_character, round_half_away
+        from app.models.character import (
+            get_character_profile, get_character_config, save_character_profile,
+            get_character_current_location, get_character_current_room,
+            record_state_change,
+        )
+        from app.core import sync_topics
+
+        # Resolve conditions before the profile lock: state expressions may
+        # acquire other locks, including the places lock (which comes first).
+        profile = get_character_profile(character_name)
+        config = get_character_config(character_name)
+        rules = rules_for_character(character_name, profile=profile, config=config)
+        location = get_character_current_location(character_name)
+        room = get_character_current_room(character_name)
+        rate_parts = {}
+        for key, rule in rules.items():
+            parts = []
+            if rule["per_hour"]:
+                parts.append({"label": "Base", "delta": rule["per_hour"]})
+            for rate in rule["rates"]:
+                condition = rate["condition"]
+                if evaluate_condition(condition, character_name, location, room)[0]:
+                    parts.append({"label": rate["label"] or condition,
+                                  "delta": rate["per_hour"]})
+            rate_parts[key] = parts
+
+        changes = {}
+        history_parts = {}
+        pending_carry = {}
         with keyed_lock("character_profile", character_name):
-            from app.models.character import get_character_profile, get_character_config, save_character_profile
-            from app.models.character_template import get_template
-
+            # Re-read for the actual RMW so concurrent effects are retained.
             profile = get_character_profile(character_name)
-            config = get_character_config(character_name)
-            status = profile.get("status_effects", {})
-
-            if not status:
-                return  # No initialized status values
-
-            # Load the template for bar_hourly values.
-            template_name = profile.get("template", "human-default")
-            template = get_template(template_name)
-            if not template:
-                return
-
-            # Collect awake and optional sleeping rates from template fields.
-            # Sleeping recovery uses the state flag rather than activity text.
-            # Include fields that declare only a sleeping rate.
-            stat_rates = {}  # stat_key -> (awake, sleeping_or_None)
-            for section in template.get("sections", []):
-                for field in section.get("fields", []):
-                    if field.get("store") != "status_effects":
-                        continue
-                    stat_key = field.get("key", "")
-                    if not stat_key:
-                        continue
-                    awake = field.get("bar_hourly", 0)
-                    sleeping = field.get("bar_hourly_sleeping", None)
-                    if awake or sleeping is not None:
-                        stat_rates[stat_key] = (awake, sleeping)
-
-            if not stat_rates:
-                return
-
-            # Resting means sleeping or absent from the map. An uncontrolled
-            # offmap avatar recovers using the template sleeping rate.
-            from app.models.character import get_character_current_location
-            is_sleeping = bool(profile.get("is_sleeping"))
-            is_offmap = not (get_character_current_location(character_name) or "").strip()
-            resting = is_sleeping or is_offmap
-            changed = False
-            for stat_key, (awake, sleeping) in stat_rates.items():
-                if stat_key not in status:
+            status = profile.get("status_effects", {}) or {}
+            for key, rule in rules.items():
+                if key not in status:
                     continue
-
-                # Use the sleeping rate while resting, if defined; otherwise the awake rate.
-                use_sleep = resting and sleeping is not None
-                base = sleeping if use_sleep else awake
-                # Character config overrides the template rate.
-                override_key = f"{stat_key}_hourly_sleeping" if use_sleep else f"{stat_key}_hourly"
-                try:
-                    hourly = int(config.get(override_key, base))
-                except (ValueError, TypeError):
-                    hourly = base
-
-                if not hourly:
-                    continue
-
-                current = status[stat_key]
-                new_val = max(0, min(100, current + hourly))
-                if new_val != current:
-                    status[stat_key] = new_val
-                    changed = True
-                    logger.debug("Hourly tick %s: %s %d -> %d (%+d/h%s)",
-                                 character_name, stat_key, current, new_val, hourly,
-                                 ", sleeping" if use_sleep else "")
-
-            if changed:
+                old = status[key]
+                parts = list(rate_parts[key])
+                carry_key = (character_name, key)
+                if rule["baseline"] is not None and rule["pull"]:
+                    exact = (_HOURLY_PULL_CARRY.get(carry_key, 0.0)
+                             + (rule["baseline"] - old) * rule["pull"])
+                    pull_delta = round_half_away(exact)
+                    pending_carry[carry_key] = exact - pull_delta
+                    parts.append({"label": "Rest value", "delta": pull_delta})
+                else:
+                    pending_carry[carry_key] = 0.0
+                new = max(0, min(100, old + sum(part["delta"] for part in parts)))
+                if new != old:
+                    status[key] = new
+                    changes[key] = {"old": old, "new": new}
+                    history_parts[key] = parts
+            if changes:
                 profile["status_effects"] = status
-                save_character_profile(character_name, profile)
-                logger.info("Hourly status tick fuer %s angewendet", character_name)
+                if not save_character_profile(character_name, profile):
+                    return
+            # A rounded zero still accumulates its fractional remainder.
+            _HOURLY_PULL_CARRY.update(pending_carry)
 
-        # (Force rules now run centrally in world_admin_tick
-        # -> periodic_jobs._sub_force_rules; activity effects are gone —
-        # the activity library was removed. Only the bar_hourly drift
-        # above is left here.)
+        if changes:
+            record_state_change(character_name, "effects", "hourly", metadata={
+                "changes": changes, "source": "hourly", "parts": history_parts})
+            sync_topics.changed_at(character_name, topics=("presence", "self"))
     except Exception as e:
-        logger.warning("Hourly status tick fehlgeschlagen fuer %s: %s", character_name, e)
+        logger.warning("Hourly status tick failed for %s: %s", character_name, e)
 
     # Clean up expired conditions.
     cleanup_expired_conditions(character_name)

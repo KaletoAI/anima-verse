@@ -42,9 +42,9 @@
           "editor_visible": false,
           "bar_color": "#00BCD4",
           "bar_label": "AUF",
-          "bar_hourly": -2,
-          "hint": "0-100. Changes -2/h naturally. Affects discovery of secrets and hidden activities.",
-          "hint_de": "0-100. Aendert sich -2/h natuerlich. Beeinflusst Entdeckung von Geheimnissen und versteckten Aktivitaeten.",
+          "bar_hourly": 0,
+          "hint": "0-100. Returns toward 50 by 10% of the difference per hour. Affects discovery of secrets and hidden activities.",
+          "hint_de": "0-100. Kehrt pro Stunde um 10% der Differenz zum Ruhewert 50 zurück. Beeinflusst die Entdeckung von Geheimnissen und versteckten Aktivitäten.",
           "in_prompt": true,
           "prompt_label": "Attention",
           "prompt_self_only": true,
@@ -58,7 +58,9 @@
               "max": 30,
               "text": "unaufmerksam"
             }
-          ]
+          ],
+          "bar_baseline": 50,
+          "bar_pull": 0.1
         },
         {
           "key": "courage",
@@ -70,9 +72,9 @@
           "editor_visible": false,
           "bar_color": "#FF9800",
           "bar_label": "MUT",
-          "bar_hourly": -1,
-          "hint": "0-100. Changes -1/h naturally. Affects access to dangerous locations.",
-          "hint_de": "0-100. Aendert sich -1/h natuerlich. Beeinflusst Zugang zu gefaehrlichen Orten.",
+          "bar_hourly": 0,
+          "hint": "0-100. Returns slowly toward the character rest value (default 50), by 4% of the difference per hour. Affects access to dangerous locations.",
+          "hint_de": "0-100. Kehrt langsam zum persönlichen Ruhewert (Standard 50) zurück, pro Stunde um 4% der Differenz. Beeinflusst den Zugang zu gefährlichen Orten.",
           "in_prompt": true,
           "prompt_label": "Courage",
           "prompt_self_only": true,
@@ -86,7 +88,9 @@
               "max": 30,
               "text": "aengstlich"
             }
-          ]
+          ],
+          "bar_baseline": 50,
+          "bar_pull": 0.04
         },
         {
           "key": "stamina",
@@ -99,9 +103,8 @@
           "bar_color": "#4CAF50",
           "bar_label": "ENE",
           "bar_hourly": -2,
-          "bar_hourly_sleeping": 20,
-          "hint": "0-100. Changes -2/h naturally, +20/h while sleeping or away. At 0 the character collapses.",
-          "hint_de": "0-100. Aendert sich -2/h natuerlich, +20/h im Schlaf oder abwesend. Bei 0 bricht der Character zusammen.",
+          "hint": "0-100. Falls by 2/h awake; recovers 20/h sleeping at home or awake offmap, 8/h sleeping elsewhere. At 0 the character collapses.",
+          "hint_de": "0-100. Sinkt wach um 2/h; erholt sich im Schlaf zuhause oder wach abseits der Karte um 20/h, im Schlaf anderswo um 8/h. Bei 0 bricht der Character zusammen.",
           "in_prompt": true,
           "prompt_label": "Stamina",
           "prompt_self_only": true,
@@ -111,7 +114,33 @@
               "max": 20,
               "text": "erschoepft"
             }
+          ],
+          "bar_rates": [
+            {
+              "condition": "is_sleeping AND at_home",
+              "per_hour": 22,
+              "label": "Sleep at home"
+            },
+            {
+              "condition": "is_sleeping AND NOT at_home",
+              "per_hour": 10,
+              "label": "Sleep elsewhere"
+            },
+            {
+              "condition": "offmap AND NOT is_sleeping",
+              "per_hour": 22,
+              "label": "Away from the map"
+            }
           ]
+        },
+        {
+          "key": "courage_baseline",
+          "label": "Courage rest value",
+          "type": "number",
+          "store": "config",
+          "llm_generable": false,
+          "hint": "0-100. Where courage settles over time. Empty = template default (50).",
+          "placeholder": "50"
         }
       ]
     }

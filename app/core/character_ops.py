@@ -1024,7 +1024,7 @@ def build_memory_history(character_name: str,
 
 
 # ===========================================================================
-# 5a Runde B — simple-domain + soul/status/template/create logic cores
+# 5a Round B — simple-domain + soul/status/template/create logic cores
 # Moved 1:1 out of app/routes/characters.py; routes remain thin adapters.
 # ===========================================================================
 
@@ -2162,6 +2162,7 @@ def apply_template_switch(character_name: str, data: Dict[str, Any]) -> Dict[str
             if store == "status_effects":
                 status.pop(key, None)
                 config.pop(key + "_hourly", None)
+                config.pop(key + "_baseline", None)
             elif store == "config":
                 config.pop(key, None)
             else:
