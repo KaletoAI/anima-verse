@@ -210,7 +210,7 @@ SCHEMA_STATEMENTS = [
     # plan-room-conversation phase 1: `utterances` are canonical truth
     # (one row per speech act); `perceptions` fan out to each perceiver,
     # filtered at write time. Secret content lives ONLY in `utterances`;
-    # whisper_meta perceptions carry no content.
+    # whisper_meta and inattentive_meta perceptions carry no content.
     """CREATE TABLE IF NOT EXISTS utterances (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
         ts           TEXT NOT NULL,
@@ -231,8 +231,8 @@ SCHEMA_STATEMENTS = [
         perceiver    TEXT NOT NULL,
         utterance_id INTEGER NOT NULL,
         ts           TEXT NOT NULL,
-        kind         TEXT NOT NULL,            -- spoken_self | in_room | whisper_meta | distant_shout | nearby
-        content      TEXT NOT NULL DEFAULT '', -- fuer diesen Perceiver gefiltert; '' bei whisper_meta
+        kind         TEXT NOT NULL,            -- spoken_self | in_room | whisper_meta | inattentive_meta | distant_shout | nearby
+        content      TEXT NOT NULL DEFAULT '', -- filtered for this perceiver; contentless kinds use ''
         meta         TEXT DEFAULT '{}',
         FOREIGN KEY(utterance_id) REFERENCES utterances(id) ON DELETE CASCADE
     )""",
@@ -303,7 +303,7 @@ SCHEMA_STATEMENTS = [
         character_name TEXT NOT NULL,
         kind           TEXT NOT NULL,          -- daily | weekly | monthly | history
         date_key       TEXT NOT NULL,          -- game calendar key: Y0002-D109 (daily) | Y0002-W016 (weekly) | Y0002-S01 (monthly/season); literal 'current' for kind='history'
-        partner        TEXT NOT NULL DEFAULT '', -- Konversationspartner (Charaktername) — leer fuer kind='history' (sliding window)
+        partner        TEXT NOT NULL DEFAULT '', -- conversation partner name; empty for kind='history' (sliding window)
         content        TEXT NOT NULL,
         meta           TEXT DEFAULT '{}',
         UNIQUE(character_name, kind, date_key, partner),
@@ -612,7 +612,7 @@ SCHEMA_STATEMENTS = [
         model          TEXT DEFAULT '',
         workflow       TEXT DEFAULT '',
         created_at     TEXT NOT NULL,
-        sidecar_json   TEXT DEFAULT '{}'       -- voller Sidecar-Inhalt als Blob fuer Queries
+        sidecar_json   TEXT DEFAULT '{}'       -- full sidecar content as a queryable blob
     )""",
     "CREATE INDEX IF NOT EXISTS idx_image_char ON image_metadata (character_name, directory)",
     "CREATE INDEX IF NOT EXISTS idx_image_created ON image_metadata (created_at)",

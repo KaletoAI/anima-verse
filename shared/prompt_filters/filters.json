@@ -49,6 +49,56 @@
       "enabled": true,
       "icon": "😀",
       "image_modifier": "looking happy and smiling"
+    },
+    {
+      "id": "tired",
+      "condition": "stamina<30 AND NOT stamina<10",
+      "label": "Tired",
+      "drop_blocks": [],
+      "prompt_modifier": "You feel tired, move slowly, and prefer short replies and a chance to rest.",
+      "enabled": true,
+      "icon": "🥱",
+      "image_modifier": "tired eyes, slumped posture"
+    },
+    {
+      "id": "alert",
+      "condition": "attention>75",
+      "label": "Alert",
+      "drop_blocks": [],
+      "prompt_modifier": "You are alert, notice small details, and take a curious interest in your surroundings.",
+      "enabled": true,
+      "icon": "👀",
+      "image_modifier": "attentive gaze, upright posture"
+    },
+    {
+      "id": "distracted",
+      "condition": "attention<25",
+      "label": "Distracted",
+      "drop_blocks": [],
+      "prompt_modifier": "You feel distracted, lose the thread easily, and may miss small details.",
+      "enabled": true,
+      "icon": "💭",
+      "image_modifier": "unfocused gaze, absent-minded expression"
+    },
+    {
+      "id": "scared",
+      "condition": "courage<25",
+      "label": "Scared",
+      "drop_blocks": [],
+      "prompt_modifier": "You feel scared, hesitate over risks, and seek company or a safe place.",
+      "enabled": true,
+      "icon": "😨",
+      "image_modifier": "wide eyes, tense shoulders, guarded posture"
+    },
+    {
+      "id": "bold",
+      "condition": "courage>80",
+      "label": "Bold",
+      "drop_blocks": [],
+      "prompt_modifier": "You feel bold, speak up readily, and approach risks with confidence.",
+      "enabled": true,
+      "icon": "😤",
+      "image_modifier": "confident expression, raised chin, open posture"
     }
   ]
 }

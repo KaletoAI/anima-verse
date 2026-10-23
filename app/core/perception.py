@@ -58,6 +58,8 @@ _VALID_VOLUMES = {VOLUME_WHISPER, VOLUME_NORMAL, VOLUME_SHOUT}
 KIND_SPOKEN_SELF = "spoken_self"
 KIND_IN_ROOM = "in_room"
 KIND_WHISPER_META = "whisper_meta"
+KIND_INATTENTIVE_META = "inattentive_meta"
+CONTENTLESS_KINDS = frozenset({KIND_WHISPER_META, KIND_INATTENTIVE_META})
 KIND_DISTANT_SHOUT = "distant_shout"
 # Heard in the open: no room, no walls — just close enough (E6).
 KIND_NEARBY = "nearby"
@@ -175,13 +177,15 @@ def compute_earshot(*, speaker: str, volume: str,
                     location_others: Sequence[str],
                     nearby: Sequence[str] = (),
                     inside_location: bool = False,
-                    addressed_far: Sequence[str] = ()) -> List[EarshotTarget]:
+                    addressed_far: Sequence[str] = (),
+                    inattentive: Sequence[str] = ()) -> List[EarshotTarget]:
     """Who perceives a speech act how? PURE — no DB.
 
     Args:
+        inattentive:      room listeners missing unaddressed normal speech.
         speaker:          name of the speaker.
         volume:           whisper | normal | shout (unknown -> normal).
-        addressees:       those spoken to directly (only whisper cares).
+        addressees:       those spoken to directly (always receive content).
         room_members:     names in the same room (the speaker may be among them).
         location_others:  names in OTHER rooms of the same location.
         nearby:           names within the hearing radius in the open. These
@@ -205,6 +209,7 @@ def compute_earshot(*, speaker: str, volume: str,
     """
     vol = volume if volume in _VALID_VOLUMES else VOLUME_NORMAL
     addr = {a for a in (addressees or [])}
+    distracted = set(inattentive)
 
     targets: List[EarshotTarget] = [EarshotTarget(speaker, KIND_SPOKEN_SELF, True)]
     seen = {speaker}
@@ -221,7 +226,9 @@ def compute_earshot(*, speaker: str, volume: str,
                 add(m, KIND_IN_ROOM, True)
             else:
                 add(m, KIND_WHISPER_META, False)
-        else:  # normal + shout: the room hears the full content
+        elif vol == VOLUME_NORMAL and m in distracted and m not in addr:
+            add(m, KIND_INATTENTIVE_META, False)
+        else:  # Shouts and addressed normal speech carry full content.
             add(m, KIND_IN_ROOM, True)
 
     if vol == VOLUME_SHOUT:
@@ -604,6 +611,30 @@ def announce_action(character_name: str, text: str,
         logger.debug("announce_action failed for %s: %s", character_name, e)
 
 
+def inattentive_listeners(room_members: Sequence[str]) -> List[str]:
+    """Resolve the configured gate using current effective listener stats.
+
+    A player-controlled character is never gated: the player must always read
+    what is said in the avatar's room.
+    """
+    from app.core.stat_rules import get_setting
+    from app.core.stat_boosts import effective_stat
+    from app.models.account import is_player_controlled
+    from app.models.character import get_character_profile
+
+    gate = get_setting("perception_gate")
+    if not gate.get("enabled") or not gate.get("stat"):
+        return []
+    result = []
+    for name in room_members:
+        if is_player_controlled(name):
+            continue
+        value = effective_stat(get_character_profile(name), gate["stat"])
+        if value is not None and value < gate["below"]:
+            result.append(name)
+    return result
+
+
 def record_utterance(*, speaker: str, content: str,
                      volume: str = VOLUME_NORMAL,
                      addressees: Optional[Sequence[str]] = None,
@@ -682,7 +713,9 @@ def record_utterance(*, speaker: str, content: str,
                                   location_others=location_others,
                                   nearby=nearby,
                                   inside_location=bool(loc),
-                                  addressed_far=addressed_far)
+                                  addressed_far=addressed_far,
+                                  inattentive=inattentive_listeners(room_members)
+                                  if vol == VOLUME_NORMAL else ())
 
         # Utterance meta: source + optional markers (e.g. event_verdict/reason),
         # so the objective observer view (which reads utterances) sees them too.
@@ -716,7 +749,7 @@ def record_utterance(*, speaker: str, content: str,
         for t in targets:
             # Speaker + addressees are NOT secret (one hears/sees who speaks
             # and whom they address). Only the content is secret — and it is
-            # empty for whisper_meta. That lets the subjective view render
+            # empty for all CONTENTLESS_KINDS. That lets the subjective view render
             # "X says: …" without whispered content ever leaking.
             pmeta = {"speaker": speaker}
             if addr:

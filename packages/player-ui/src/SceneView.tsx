@@ -19,7 +19,7 @@ export interface SceneLine {
   ts: string
   speaker?: string
   content?: string
-  /** perception kind (spoken_self|in_room|nearby|whisper_meta|distant_shout) or
+  /** perception kind (spoken_self|in_room|nearby|whisper_meta|inattentive_meta|distant_shout) or
    *  'utterance' for objective rows. `nearby` = heard out in the open, where
    *  the hearing radius takes the room's place (E6). */
   kind?: string
@@ -192,7 +192,9 @@ function SceneRow({ line, onOpenImage, highlighted, onRowHover }: {
 
   let body: ReactNode
 
-  if (line.meta?.relationship) {
+  if (line.kind === 'inattentive_meta') {
+    body = <em style={{ opacity: 0.65 }}>{speaker} {t('says something you do not catch.')}</em>
+  } else if (line.meta?.relationship) {
     // Relationship change (display-only, never in LLM transcripts): subtle
     // rosé meta line — "💞 Kai ⇄ Bianca Voss: neutral → acquaintance".
     body = (

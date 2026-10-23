@@ -249,7 +249,7 @@ def _prompt_filter_block_keys() -> List[str]:
 # Fields of a prompt filter that a world row can silently hide when it
 # overrides a shared entry (the overlay replaces by id, it does not merge).
 _MASKABLE_FILTER_FIELDS = ("icon", "label", "condition", "drop_blocks",
-                           "prompt_modifier", "image_modifier", "bone_pose")
+                           "prompt_modifier", "image_modifier", "bone_pose", "stat_boosts")
 
 
 @router.get("/prompt-filters/data")
@@ -734,13 +734,14 @@ def _prompt_filters_move_sync(filter_id: str, user, body: Any):
                 INSERT INTO prompt_filters (id, condition, label, drop_blocks,
                                             prompt_modifier, enabled, meta,
                                             icon, image_modifier, bone_pose)
-                VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     condition=excluded.condition,
                     label=excluded.label,
                     drop_blocks=excluded.drop_blocks,
                     prompt_modifier=excluded.prompt_modifier,
                     enabled=excluded.enabled,
+                    meta=excluded.meta,
                     icon=excluded.icon,
                     image_modifier=excluded.image_modifier,
                     bone_pose=excluded.bone_pose
@@ -752,6 +753,7 @@ def _prompt_filters_move_sync(filter_id: str, user, body: Any):
                     _json.dumps(drops if isinstance(drops, list) else [], ensure_ascii=False),
                     (clean.get("prompt_modifier") or "").strip(),
                     1 if clean.get("enabled", True) else 0,
+                    _json.dumps({"stat_boosts": clean.get("stat_boosts") or {}}, ensure_ascii=False),
                     (clean.get("icon") or "").strip(),
                     (clean.get("image_modifier") or "").strip(),
                     _json.dumps(clean.get("bone_pose") or {}, ensure_ascii=False),

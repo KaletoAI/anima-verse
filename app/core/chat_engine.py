@@ -14,7 +14,7 @@ from datetime import datetime
 from app.core.timeutils import utc_now_iso
 
 from app.core.log import get_logger
-from app.core.perception import STORYTELLER_SPEAKER
+from app.core.perception import CONTENTLESS_KINDS, STORYTELLER_SPEAKER
 
 logger = get_logger("chat_engine")
 
@@ -91,7 +91,7 @@ def _messages_from_room_stream(responder: str,
         sp = (row.get("speaker") or meta.get("speaker") or "").strip()
         content = (row.get("content") or "").strip()
         kind = row.get("kind") or ""
-        if not content or kind == "whisper_meta":
+        if not content or kind in CONTENTLESS_KINDS:
             continue
         if sp and sp == responder:
             out.append({"role": "assistant", "content": content})
@@ -592,8 +592,8 @@ def build_chat_context(
         )
         tool_format = get_format_for_model(tool_model_name)
 
-    # rp_first-Tool-Phase: System-Prompt + Tool-Klassen vorbereiten, damit
-    # run_chat_turn nach der RP-Antwort narrative Aktionen ausführen kann.
+    # Prepare the system prompt and tool classes for narrative actions
+    # after the roleplay reply in run_chat_turn.
     tool_system_content = ""
     deferred_tools: set = set()
     content_tools: set = set()
@@ -1188,17 +1188,13 @@ def clean_response(full_response: str) -> str:
     """Strip meta-tags from response for saving to history."""
     clean = full_response
     clean = re.sub(r'!\[([^\]]*)\]\(data:image/[^)]+\)', '', clean)
-    # Mood-Marker (Zustand, kein Gesprächsinhalt) — sprach-robust: EN „I feel"
-    # UND lokalisiert „Ich fühle …" (RP-Modell schreibt deutsch). Sonst leakte
-    # „**Ich fühle aggressiv**" in Utterance + History.
+    # Strip English and localized mood markers before storing speech/history.
     clean = re.sub(r'\n?\s*\*\*\s*(?:I\s+feel|Ich\s+f[üu]hle)\s+[^*]+\*\*\s*', '', clean, flags=re.IGNORECASE)
     clean = re.sub(r'\n?\s*\*\*I\s+am\s+at\s+[^*]+\*\*\s*', '', clean, flags=re.IGNORECASE)
     clean = re.sub(r'\n?\s*\*\*I\s+do\s+[^*]+\*\*\s*', '', clean, flags=re.IGNORECASE)
     from app.core.intent_engine import strip_intent_tags
     clean = strip_intent_tags(clean)
-    # Vereinheitlichte [INTENT:]-Marker (plan-intents-unified.md) — im Room-/
-    # C2C-Pfad laeuft die Bereinigung ueber clean_response, nicht ueber
-    # _strip_tool_hallucinations; ohne dies leakten Marker in Utterance/History.
+    # Strip unified intent markers on room and character-to-character paths.
     from app.models.intents import strip_intent_markers
     clean = strip_intent_markers(clean)
     # Strip tool hallucinations — and INLINE tool calls of the single chat
@@ -1210,10 +1206,7 @@ def clean_response(full_response: str) -> str:
         clean = re.sub(r'<tool\s+name="[^"]*">[^<]*', '', clean)
     clean = re.sub(r'<tool_call>.*?</tool_call>', '', clean, flags=re.DOTALL)
     clean = re.sub(r'</?tool_(?:call|result)>', '', clean)
-    # LLM-Tokenizer-Artefakte entfernen — JEDES <|...|> (auch lowercase wie
-    # <|python_tag|>, <|reserved_special_token_72|>) + <SPECIAL_28>. Frueher nur
-    # GROSSBUCHSTABEN-<|...|> → lowercase-Tokens leakten in den Room-Stream und
-    # wurden beim naechsten Turn als Kontext zurueckgefuettert (Kaskade).
+    # Strip all tokenizer artifacts, including lowercase tokens, before reuse.
     clean = re.sub(r'<\|[^|>]{0,60}\|>', '', clean)
     clean = re.sub(r'<SPECIAL_\d+>', '', clean)
     return clean.strip()
@@ -1337,15 +1330,15 @@ def post_process_response(
     except Exception as e:
         logger.error("Mood extraction error: %s", e)
 
-    # Location extraction (Location- oder Raum-Wechsel)
+    # Extract location or room changes
     try:
         loc_change = _extract_location(character_name, full_response)
         if loc_change:
             if loc_change.get("id"):
-                # Echter Location-Wechsel — Frontend aktualisiert Hintergrund + Sidebar
+                # Location change updates the background and sidebar
                 result["location"] = loc_change.get("name")
             elif loc_change.get("room") and loc_change.get("location_id"):
-                # Reiner Raum-Wechsel — Location-ID mitsenden fuer Hintergrund-Update
+                # Include the location id for a room background update
                 result["location"] = loc_change["location_id"]
             if loc_change.get("room"):
                 result["room"] = loc_change["room"]
@@ -1360,9 +1353,7 @@ def post_process_response(
     except Exception as e:
         logger.error("Activity extraction error: %s", e)
 
-    # Intent-Marker (Vorhaben & Aufgaben): [INTENT:…] (neu) / [INTENT_DONE:…] /
-    # [INTENT_PROGRESS:…]. Ersetzt die alten Assignment-Marker UND den toten
-    # intent_engine-Pfad — eine vereinheitlichte Quelle (plan-intents-unified.md).
+    # Apply unified intent creation, completion and progress markers.
     try:
         from app.models.character_template import feature_disabled as _off
         if not _off(character_name, "intents_enabled"):
@@ -1375,32 +1366,25 @@ def post_process_response(
         logger.error("Intent marker extraction error: %s", e)
 
     # Background extraction: memory + categories + relationships
-    # Nur bei substantiellen Antworten (kurze/leere Antworten ueberspringen)
+    # Skip short or empty responses
     if len(cleaned) < 20:
         logger.debug("[%s] Antwort zu kurz (%d Zeichen) — Background-Extraktion uebersprungen",
                       character_name, len(cleaned))
         return result
 
-    # Im Thought-Modus ist user_input synthetisch — fuer Memory-Extraction
-    # leeren, damit die Template-Zeile "Player (User): ..." nicht mit einer
-    # System-Instruktion gefuellt wird (sonst extrahiert der LLM Bogus-
-    # Memories ueber den vermeintlichen User-Befehl).
+    # Omit synthetic thought instructions from memory extraction input.
     _is_thought = bool(extraction_context and extraction_context.get("source") == "thought")
     _mem_user_input = "" if _is_thought else user_input
 
-    # Partner-Name fuer Extraction: nie generische Sentinel ("user"/"Player")
-    # weiterreichen — die Extraction skippt dann sauber statt sie als Adressat
-    # in Memory-Texten zu materialisieren.
+    # Never treat generic player sentinels as named extraction partners.
     _extract_partner = (user_display_name or "").strip()
     if _extract_partner.lower() in {"user", "player", "spieler"}:
         _extract_partner = ""
 
     def _background_extraction():
-        # Memory extraction — NUR aus Gedanken (thought). Gespräch-Memories
-        # kommen ausschließlich aus der Szenen-Konsolidierung (consolidate_scene
-        # legt pro Szene ein Episodic-Memory je Teilnehmer an). Die alte
-        # Per-Turn-Extraktion war redundant zu den Szenen UND die Müll-Quelle
-        # (z.B. „X will use Y to steal…") — sie ist für Gespräche raus.
+        # Extract memories only from thoughts. Conversation memories come
+        # from scene consolidation, one episodic memory per participant.
+        # Per-turn extraction duplicated scenes and produced unreliable memories.
         # (plan-history-consolidation-cleanup.md, Phase 2)
         from app.models.character_template import feature_disabled as _off
         # Feature gates. They sit BEFORE the LLM calls, not just before the
@@ -1421,9 +1405,7 @@ def post_process_response(
             except Exception as e:
                 logger.error("[%s] Memory extraction error: %s", character_name, e)
 
-        # Relationship update — im Thought-Modus skippen, da Gedanken keine
-        # Interaktion mit dem User sind (sonst falsche Closeness-Increments
-        # und ein zweiter LLM-Call mit synthetischem User-Input).
+        # Thoughts are not user interactions and must not update closeness.
         if _is_thought:
             return
         if _off(character_name, "relationships_enabled"):
@@ -1564,11 +1546,8 @@ def post_process_response(
         logger.error("[%s] Instagram extraction error: %s", character_name, e)
 
     # Chat context extraction (activity + outfit from response).
-    # Im Thought-Modus ist user_input eine synthetische System-Instruktion
-    # ("Think about your task…") und stammt NICHT vom Avatar — daher
-    # wird sie aus updated_history weggelassen, damit die Avatar-Outfit-
-    # Extraktion nicht mit Unsinn gefuettert wird. Agent-Side-Extraction aus
-    # dem Thought-Response bleibt aktiv.
+    # Omit synthetic thought instructions from avatar outfit extraction;
+    # extraction from the character response remains active.
     try:
         is_thought = bool(extraction_context and extraction_context.get("source") == "thought")
         updated_history = list(full_chat_history)

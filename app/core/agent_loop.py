@@ -46,7 +46,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from app.core.config_schema import field_default
 from app.core.log import get_logger
-from app.core.perception import STORYTELLER_SPEAKER
+from app.core.perception import CONTENTLESS_KINDS, STORYTELLER_SPEAKER
 
 logger = get_logger("agent_loop")
 
@@ -753,6 +753,14 @@ class AgentLoop:
                                if c not in _room]
         else:
             in_earshot = nearby_in_the_open(speaker)
+        # Apply the same content gate before selecting any reaction, including
+        # the backstop's visible winddown. Open-world listeners are unaffected.
+        if location_id and volume not in ("whisper", "shout"):
+            from app.core.perception import inattentive_listeners
+            muted = set(inattentive_listeners(characters_in_room(location_id, room_id)))
+            addressed = set(addressees or [])
+            in_earshot = [c for c in in_earshot
+                          if c == speaker or c not in muted or c in addressed]
         # The bucket the SPEAKER acts in — outside that is its open-world
         # cell, so two conversations far apart keep separate budgets.
         key = self._room_key(location_id, room_id, speaker)
@@ -1777,7 +1785,7 @@ class AgentLoop:
                 meta = row.get("meta") or {}
                 sp = (row.get("speaker") or meta.get("speaker") or "").strip()
                 content = (row.get("content") or "").strip()
-                if not content or (row.get("kind") or "") == "whisper_meta":
+                if not content or (row.get("kind") or "") in CONTENTLESS_KINDS:
                     continue
                 if not sp or sp == STORYTELLER_SPEAKER:
                     continue  # narrator events are perception, not a conversation partner

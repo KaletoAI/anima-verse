@@ -182,7 +182,7 @@ def last_shared_utterance_ts(character: str,
     asking "is somebody talking to this character right now" has to ask the
     perception stream — see ``agent_loop._minutes_since_last_chat_with_avatar``.
 
-    Every perception row counts, ``whisper_meta`` included: the bare fact that
+    Every perception row counts, ``whisper_meta`` and ``inattentive_meta`` included: the bare fact that
     a partner is speaking in this character's earshot is exactly the situation
     in which the world must not walk the character away. It errs towards
     "leave them standing", which is the harmless direction.
@@ -251,7 +251,7 @@ def get_character_room_stream(perceiver: str, location_id: str, room_id: str,
     """
     conn = get_connection()
     # Include u.volume (whisper/normal/shout) — NOT secret content, just the
-    # volume; the content itself stays filtered in p.content (whisper_meta = empty).
+    # volume; the content itself stays filtered in p.content (contentless kinds = empty).
     # u.game_ts travels with it so a stream row carries the WORLD time it was
     # spoken at, not just the system stamp in p.ts.
     source_column = ", json_extract(u.meta, '$.source') AS source" if include_source else ""
