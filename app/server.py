@@ -105,6 +105,7 @@ except Exception as _fje:
 # Import routers
 from app.routes import auth, characters, chat, scheduler, instagram, world, templates, story, story_dev, world_dev, tts, queue as queue_route, logs, admin, notifications, dashboard, events, intents, diary
 from app.routes import admin_settings
+from app.routes import stat_rules
 from app.routes import assets
 from app.routes import clip_catalog_loops
 from app.routes import game_audio
@@ -902,6 +903,8 @@ app.include_router(logs.router)
 app.include_router(dashboard.router)
 app.include_router(admin.router)
 app.include_router(admin_settings.router)
+app.include_router(stat_rules.router)
+app.include_router(stat_rules.world_router)
 app.include_router(notifications.router, tags=["notifications"])
 app.include_router(events.router, tags=["events"])
 from app.routes import rules

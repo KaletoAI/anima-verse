@@ -76,19 +76,12 @@ def get_available_models() -> Dict[str, Any]:
 
 @router.get("/list")
 def list_characters() -> Dict[str, Any]:
-    """Listet alle verfuegbaren Characters (NPCs im System — nicht gefiltert).
+    """List all available characters, including temporary NPCs.
 
-    Jeder Eintrag ist ``{name, template, temporary}``. Das Template faehrt mit,
-    damit Oberflaechen nach der ART des Characters filtern koennen, ohne pro
-    Zeile ein /profile nachzuladen — temporaere NPCs fahren in dieser Antwort
-    mit und werden im Frontend ueber ``temporary`` getrennt dargestellt.
-
-    Avatar-Auswahl (wer der User spielen KANN) laeuft ueber /account/characters
-    und ist dort nach allowed_characters + playable_avatar gefiltert.
-
-    ONE query for the whole roster (DATA-11): all three fields come out of the
-    ``characters`` table, so this must not load a profile per character.
-    """
+    Each row contains name, template and temporary, allowing the UI to filter
+    by template without loading individual profiles. Avatar selection uses
+    /account/characters and filters allowed_characters and playable_avatar.
+    Use one roster query (DATA-11); never load a profile per character."""
     return {"characters": _roster_rows()}
 
 
@@ -156,37 +149,31 @@ def _roster_rows() -> List[Dict[str, Any]]:
 
 @router.get("/at-location")
 def characters_at_location(location: str, room: str = "") -> Dict[str, Any]:
-    """Gibt alle Characters zurueck die sich am angegebenen Ort befinden.
+    """Return characters at a location ID or name.
 
-    - `location`: ID oder Name der Location.
-    - `room` (optional): wenn gesetzt, bekommen Characters ein `same_room`-
-      Flag (true wenn sie in genau diesem Raum sind). Es wird **nicht**
-      gefiltert — Frontend kann ausgegraut darstellen wer in einem anderen
-      Raum derselben Location ist.
-    """
+    An optional room adds a same_room flag without filtering the result,
+    so the UI can dim characters in other rooms at the same location."""
     return character_ops.build_characters_at_location(location, room)
 
 
 @router.get("/chatbots")
 def list_chatbots() -> Dict[str, Any]:
-    """Listet alle Chatbots (Characters ohne Location-System).
+    """List chatbots whose templates disable locations.
 
-    Ein Chatbot ist ein Character dessen Template `locations_enabled: false`
-    hat — er hat keine Weltposition und ist immer ansprechbar.
-    """
+    These characters have no world position and are always available."""
     return character_ops.build_chatbots_list()
 
 
 @router.get("/animate/services")
 def list_animate_services() -> List[Dict[str, Any]]:
-    """Liefert die verfuegbaren Animation-Services fuer das Frontend."""
+    """Return available animation services for the frontend."""
     from app.skills.animate import get_animate_services
     return get_animate_services()
 
 
 @router.post("/create")
 async def create_character(request: Request) -> Dict[str, Any]:
-    """Erstellt einen neuen Character mit leerem Profil und zugewiesenem Template"""
+    """Create a character with an empty profile and the assigned template."""
     try:
         return await character_ops.create_character_core(request)
     except HTTPException:
@@ -197,8 +184,7 @@ async def create_character(request: Request) -> Dict[str, Any]:
 
 @router.get("/{character_name}/profile-image-prompt")
 def profile_image_prompt(character_name: str) -> Dict[str, Any]:
-    """Aufgeloester Face Prompt als Default-Prompt fuer den Profilbild-Dialog
-    (identisch zum Fallback in generate-profile-image)."""
+    """Resolve the face prompt used by the profile image dialog, matching generate-profile-image."""
     from app.models.character import get_character_profile
     from app.models.character_template import get_template
     profile = get_character_profile(character_name) or {}
@@ -208,25 +194,23 @@ def profile_image_prompt(character_name: str) -> Dict[str, Any]:
 
 @router.get("/{character_name}/current-location")
 def get_character_current_location_route(character_name: str) -> Dict[str, Any]:
-    """Gibt den aktuellen virtuellen Aufenthaltsort zurueck"""
+    """Return the current virtual location."""
     return character_ops.build_current_location_payload(character_name)
 
 
 @router.get("/{character_name}/notice")
 def get_character_notice_route(character_name: str) -> Dict[str, Any]:
-    """Liefert die persistenten Hinweise fuer den Avatar-Header-Banner.
+    """Return persistent notices for the avatar header.
 
-    - ``force_warning``: aktive Force-Regel (rule_name + message + go_to + set_activity)
-      ODER ``None``. Fuer den Avatar wird die Regel NICHT automatisch ausgefuehrt.
-    - ``critical_events``: ungeloeste Events der Kategorien ``disruption``/``danger``
-      an der aktuellen Avatar-Location, neueste zuerst.
-    """
+    force_warning contains the active force rule or None; avatars do not
+    automatically execute it. critical_events contains unresolved disruption
+    and danger events at the current location, newest first."""
     return character_ops.build_character_notice(character_name)
 
 
 @router.post("/{character_name}/current-location")
 async def update_character_current_location(character_name: str, request: Request) -> Dict[str, Any]:
-    """Aktualisiert den aktuellen virtuellen Aufenthaltsort"""
+    """Update the current virtual location."""
     try:
         return await character_ops.apply_current_location(character_name, request)
     except HTTPException:
@@ -263,7 +247,7 @@ async def place_character_on_map(
 
 @router.get("/{character_name}/current-activity")
 def get_effective_activity_route(character_name: str) -> Dict[str, Any]:
-    """Gibt die aktuelle Aktivitaet zurueck"""
+    """Return the current activity."""
     activity = get_effective_activity(character_name)
     return {"character": character_name, "current_activity": activity or ""}
 
@@ -370,14 +354,14 @@ async def act_route(character_name: str, request: Request) -> Dict[str, Any]:
 
 @router.get("/{character_name}/current-feeling")
 def get_character_current_feeling_route(character_name: str) -> Dict[str, Any]:
-    """Gibt das aktuelle Gefuehl zurueck"""
+    """Return the current feeling."""
     feeling = get_character_current_feeling(character_name)
     return {"character": character_name, "current_feeling": feeling or ""}
 
 
 @router.post("/{character_name}/current-feeling")
 async def update_character_current_feeling(character_name: str, request: Request) -> Dict[str, Any]:
-    """Aktualisiert das aktuelle Gefuehl"""
+    """Update the current feeling."""
     import asyncio
     data = await request.json()
     return await asyncio.to_thread(_update_character_current_feeling_sync,
@@ -421,15 +405,14 @@ def get_status_effects_route(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# === Template-Wechsel ===
+# === Template changes ===
 
 @router.post("/{character_name}/switch-template")
 async def switch_template_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Template-Wechsel mit Diff: Zeigt neue/wegfallende Felder und fuehrt Migration durch.
+    """Preview or apply a template change.
 
-    mode="diff": Gibt nur den Diff zurueck (keine Aenderung)
-    mode="apply": Fuehrt den Wechsel durch (neue Defaults setzen, alte Felder loeschen)
-    """
+    Mode diff returns added and removed fields without changes. Mode apply
+    sets new defaults and removes obsolete fields."""
     import asyncio
     data = await request.json()
     return await asyncio.to_thread(_switch_template_route_sync,
@@ -553,8 +536,7 @@ def get_outfit_lora_options(character_name: str = "",
 
 @router.get("/outfit-rules")
 def get_outfit_rules_route() -> Dict[str, Any]:
-    """Deprecated: outfit_types-Regeln durch Decency ersetzt (Variante A).
-    Liefert leer, damit alte UI-Fetches kein 404 sehen."""
+    """Deprecated: decency replaced outfit_types rules. Return an empty result for old UI requests."""
     return {"outfit_types": {}}
 
 
@@ -570,7 +552,7 @@ def clear_expression_cache_route(character_name: str) -> Dict[str, Any]:
 
 @router.delete("/{character_name}")
 def delete_character_route(character_name: str) -> Dict[str, Any]:
-    """Loescht einen Character vollstaendig (DB + Storage-Verzeichnis)."""
+    """Delete a character from the database and storage directory."""
     if not character_name:
         raise HTTPException(status_code=400, detail="character_name fehlt")
     success = delete_character(character_name)
@@ -617,7 +599,7 @@ def set_outfit_lock_route(character_name: str,
 
 @router.get("/{character_name}/decency-exempt")
 def get_decency_exempt_route(character_name: str) -> Dict[str, Any]:
-    """Gibt den decency_exempt-Status zurueck (Decency-Override auf nude_ok)."""
+    """Return decency_exempt, which overrides decency to nude_ok."""
     from app.models.character import get_state_flags
     return {"character": character_name,
             "exempt": bool(get_state_flags(character_name).get("decency_exempt"))}
@@ -625,8 +607,8 @@ def get_decency_exempt_route(character_name: str) -> Dict[str, Any]:
 
 @router.post("/{character_name}/decency-exempt")
 async def set_decency_exempt_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Setzt/entfernt decency_exempt. Gesetzt = Decency-Regeln aufgehoben
-    (nude_ok), unabhaengig von Anwesenheit. Compliance reagiert sofort."""
+    """Set or clear decency_exempt. When set, decency rules allow nude_ok
+    regardless of presence; compliance reacts immediately."""
     import asyncio
     data = await request.json()
     return await asyncio.to_thread(_set_decency_exempt_route_sync,
@@ -1006,7 +988,7 @@ def _set_outfit_imagegen_route_sync(character_name: str,
 
 @router.get("/{character_name}/profile")
 def get_profile_route(character_name: str) -> Dict[str, Any]:
-    """Gibt das vollstaendige Character-Profil zurueck"""
+    """Return the complete character profile."""
     return character_ops.build_profile_payload(character_name)
 
 
@@ -1049,7 +1031,7 @@ def get_belongings_route(character_name: str) -> Dict[str, Any]:
 
 @router.post("/{character_name}/profile")
 async def update_profile_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Aktualisiert Character-Profil Felder (bulk update)"""
+    """Update character profile fields in bulk."""
     import asyncio
     data = await request.json()
     return await asyncio.to_thread(_update_profile_route_sync,
@@ -1072,14 +1054,14 @@ def _update_profile_route_sync(character_name: str,
 
 @router.get("/{character_name}/config")
 def get_config_route(character_name: str) -> Dict[str, Any]:
-    """Gibt die Character-Config zurueck (TTS, Extraction, etc.)"""
+    """Return character configuration, including TTS and extraction."""
     config = get_character_config(character_name)
     return {"character": character_name, "config": config}
 
 
 @router.post("/{character_name}/config")
 async def update_config_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Aktualisiert Character-Config Felder (bulk update)"""
+    """Update character configuration fields in bulk."""
     import asyncio
     data = await request.json()
     return await asyncio.to_thread(_update_config_route_sync,
@@ -1147,7 +1129,7 @@ async def upload_character_image(character_name: str, request: Request) -> Dict[
 
 @router.get("/{character_name}/images")
 def get_character_images_list(character_name: str) -> Dict[str, Any]:
-    """Gibt Liste aller Bilder zurueck"""
+    """Return all character images."""
     try:
         images = get_character_images(character_name)
         profile_image = get_character_profile_image(character_name)
@@ -2339,7 +2321,7 @@ def stop_character_outfit_batch(character_name: str) -> Dict[str, Any]:
 
 @router.post("/{character_name}/profile-image/{image_filename}")
 def set_character_profile_image_endpoint(character_name: str, image_filename: str) -> Dict[str, Any]:
-    """Setzt das Profilbild"""
+    """Set the profile image."""
     try:
         if set_character_profile_image(character_name, image_filename):
             return {
@@ -2357,7 +2339,7 @@ def set_character_profile_image_endpoint(character_name: str, image_filename: st
 
 @router.delete("/{character_name}/images/{image_filename}")
 def delete_character_image_endpoint(character_name: str, image_filename: str) -> Dict[str, Any]:
-    """Loescht ein Bild"""
+    """Delete an image."""
     try:
         if ".." in image_filename or "/" in image_filename:
             raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
@@ -2378,7 +2360,7 @@ def delete_character_image_endpoint(character_name: str, image_filename: str) ->
 
 @router.delete("/{character_name}/images/{image_filename}/animation")
 def delete_image_animation(character_name: str, image_filename: str) -> Dict[str, Any]:
-    """Loescht nur die Animation (Video) eines Bildes, nicht das Bild selbst."""
+    """Delete the animation video of an image while keeping the image."""
     if ".." in image_filename or "/" in image_filename:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
 
@@ -2455,17 +2437,15 @@ def get_character_silhouette(character_name: str):
 
 @router.get("/{character_name}/soul/files")
 def get_soul_files(character_name: str) -> Dict[str, Any]:
-    """Listet die fuer diesen Character verfuegbaren Soul-MD-Dateien auf.
+    """List available soul Markdown files, respecting template feature gates.
 
-    Berucksichtigt Template-Feature-Gates. Gibt pro Datei: section-id,
-    file_default lock-status, ob die Datei existiert.
-    """
+    Each entry includes section ID, file_default lock status and file existence."""
     return character_ops.build_soul_files(character_name)
 
 
 @router.get("/{character_name}/soul/file/{section_id}")
 def get_soul_file(character_name: str, section_id: str) -> Dict[str, Any]:
-    """Liefert Inhalt + parsed Sections einer Soul-MD-Datei."""
+    """Return the content and parsed sections of a soul Markdown file."""
     return character_ops.read_soul_file(character_name, section_id)
 
 
@@ -2519,7 +2499,7 @@ def _toggle_character_skill_sync(character_name: str, skill_name: str,
 
 @router.get("/{character_name}/skills/{skill_name}")
 def get_character_skill_config_route(character_name: str, skill_name: str) -> Dict[str, Any]:
-    """Gibt die character-spezifische Skill-Konfiguration zurueck"""
+    """Return character-specific skill configuration."""
     try:
         config = get_character_skill_config(character_name, skill_name)
         return {
@@ -2533,7 +2513,7 @@ def get_character_skill_config_route(character_name: str, skill_name: str) -> Di
 
 @router.post("/{character_name}/skills/{skill_name}")
 async def update_character_skill_config_route(character_name: str, skill_name: str, request: Request) -> Dict[str, Any]:
-    """Speichert die character-spezifische Skill-Konfiguration (Merge)."""
+    """Merge character-specific skill configuration."""
     import asyncio
     data = await request.json()
     return await asyncio.to_thread(_update_character_skill_config_route_sync,
@@ -2551,7 +2531,7 @@ def _update_character_skill_config_route_sync(character_name: str,
         if not isinstance(config, dict):
             raise HTTPException(status_code=400, detail="config muss ein Objekt sein")
 
-        # Merge: Bestehende Config laden und nur uebergebene Felder updaten
+        # Merge supplied fields into the existing configuration
         existing = get_character_skill_config(character_name, skill_name)
         if existing:
             existing.update(config)
@@ -2736,7 +2716,7 @@ async def import_character(
 
 @router.delete("/{character_name}/knowledge/{entry_id}")
 def delete_single_knowledge(character_name: str, entry_id: str) -> Dict[str, Any]:
-    """Loescht einen einzelnen Memory-Eintrag."""
+    """Delete a single memory entry."""
     from app.models.memory import delete_memory
     if delete_memory(character_name, entry_id):
         return {"status": "success", "deleted": entry_id}
@@ -2745,7 +2725,7 @@ def delete_single_knowledge(character_name: str, entry_id: str) -> Dict[str, Any
 
 @router.delete("/{character_name}/knowledge")
 def clear_character_knowledge(character_name: str) -> Dict[str, Any]:
-    """Loescht alle Memory-Eintraege eines Characters."""
+    """Delete all memory entries of a character."""
     from app.models.memory import clear_memories
     m_count = clear_memories(character_name)
     return {"status": "success", "deleted_count": m_count}
@@ -2758,42 +2738,38 @@ def clear_character_knowledge(character_name: str) -> Dict[str, Any]:
 
 @router.get("/{character_name}/memory/today")
 def memory_today(character_name: str) -> Dict[str, Any]:
-    """Tab "Heute": Status, 24h-Lanes, Top-K aktuell relevante Memories.
+    """Today tab: status, 24-hour lanes and the most relevant memories.
 
-    Read-only — kein access_count-Bump beim Anzeigen.
+    Reading this payload does not increment access_count.
     """
     return character_ops.build_memory_today(character_name)
 
 
 @router.get("/{character_name}/debug-activity")
 def debug_activity(character_name: str) -> Dict[str, Any]:
-    """Game-Admin-Debug: warum verhaelt sich ein (Nicht-Avatar-)Character so?
+    """Explain a non-avatar character's behavior for Game-Admin debugging.
 
-    Aggregiert read-only: aktuelles Gefuehl + Quelle, juengste Mood-/State-/Thought-
-    Aktivitaet und aktive Block-/Force-Regeln zu einer „Why"-Begruendung. Keine
-    Avatar-Bindung — der Name kommt aus dem Pfad.
+    Aggregate current feeling and source, recent mood/state/thought activity,
+    and active block/force rules. Read-only; the path supplies the character.
     """
     return character_ops.build_debug_activity(character_name)
 
 
 @router.get("/{character_name}/memory/locations")
 def memory_locations(character_name: str) -> Dict[str, Any]:
-    """Tab "Bekannte Orte": Karte mit allen Welt-Orten + bekannt/aktuell/Besuchszahlen.
+    """Return all world locations with known, current and visit information.
 
-    Liefert sowohl alle Welt-Orte (fuer Layout-Kontext) als auch die
-    Auswahl, die der Character laut `known_locations` kennt. Frontend
-    entscheidet, ob es nur die bekannten oder alles zeigt.
-    """
+    Include both layout context and the known_locations selection; the UI
+    decides whether to show all locations or only known ones."""
     return character_ops.build_memory_locations(character_name)
 
 
 @router.put("/{character_name}/known-locations")
 async def set_known_locations_route(character_name: str, request: Request) -> Dict[str, Any]:
-    """Setzt die known_locations-Liste eines Characters (Editor, voller Soll-State).
+    """Replace known_locations with the complete editor selection.
 
-    Body: {"known_locations": ["loc_id", ...]}. Leere Liste = kennt nichts
-    (strict mode bleibt aktiv). Auto-Discovery beim Betreten ergaenzt spaeter.
-    """
+    Body: {"known_locations": ["loc_id", ...]}. An empty list keeps strict
+    mode active with no known locations. Entering a location discovers it later."""
     import asyncio
     data = await request.json()
     return await asyncio.to_thread(_set_known_locations_route_sync,
@@ -2929,3 +2905,8 @@ def memory_history(character_name: str,
     """
     return character_ops.build_memory_history(
         character_name, kind=kind, limit=limit, offset=offset, lang=lang)
+
+
+@router.get('/{character_name}/stat-history')
+def get_stat_history(character_name: str, limit: int = Query(50, ge=1, le=200)):
+    return character_ops.build_stat_history(character_name, limit)

@@ -225,3 +225,145 @@ def cap_chat_deltas(name: str, deltas: dict[str, int]) -> dict[str, int]:
                 result[key] = allowed if delta > 0 else -allowed
             _chat_movement[(name, key)] = (hour, used + allowed)
     return result
+
+
+CATEGORIES = ['ambient', 'social', 'disruption', 'danger']
+OCCASIONS = ['intent_done', 'gift_received']
+
+
+def build_admin_payload() -> dict:
+    """Build the world values editor payload from declared template fields."""
+    from app.models.character_template import list_templates, get_template
+    from app.core.dependencies import get_skill_manager
+    seeds = {}
+    names = {}
+    for entry in sorted(list_templates() or [], key=lambda entry: entry['name']):
+        template = get_template(entry['name']) or {}
+        for section in template.get('sections', []) or []:
+            for field in section.get('fields', []) or []:
+                if field.get('store') == 'status_effects' and field.get('key'):
+                    key = field['key']
+                    seeds.setdefault(key, field_rule(field))
+                    names.setdefault(key, field.get('label') or key)
+    overrides = world_stat_overrides()
+    return {
+        'stats': [{'key': key, 'name': names.get(key, key),
+                   'shipped': seeds.get(key), 'override': overrides.get(key),
+                   'effective': overrides.get(key, seeds.get(key)),
+                   'source': 'world' if key in overrides else 'shared'}
+                  for key in sorted(seeds.keys() | overrides.keys())],
+        'settings': settings_with_source(),
+        'skills': [{'id': skill.SKILL_ID, 'name': skill.name}
+                   for skill in get_skill_manager().skills],
+        'categories': list(CATEGORIES), 'occasions': list(OCCASIONS),
+    }
+
+
+def _integer(value, low, high):
+    return type(value) is int and low <= value <= high
+
+
+def validate_rule(rule) -> list[str]:
+    """Reject malformed rule shapes, ranges and condition references."""
+    import re
+    from app.core.activity_engine import validate_condition_references
+    errors = []
+    if not isinstance(rule, dict):
+        return ['Rule must be an object']
+    for key, low, high in (('per_hour', -100, 100), ('baseline', 0, 100)):
+        if key in rule and not (key == 'baseline' and rule[key] is None):
+            if not _integer(rule[key], low, high):
+                errors.append(f'{key} must be an integer in {low}..{high}')
+    pull = rule.get('pull', 0)
+    if type(pull) not in (int, float) or not 0 <= pull <= 1 or not math.isfinite(pull):
+        errors.append('pull must be a finite number in 0..1')
+    for collection in ('rates', 'thresholds'):
+        entries = rule.get(collection, [])
+        if not isinstance(entries, list):
+            errors.append(f'{collection} must be a list')
+            continue
+        for index, entry in enumerate(entries):
+            prefix = f'{collection}[{index}]'
+            if not isinstance(entry, dict):
+                errors.append(f'{prefix} must be an object')
+                continue
+            for text_key in ('label', 'text'):
+                if text_key in entry and not isinstance(entry[text_key], str):
+                    errors.append(f'{prefix}.{text_key} must be a string')
+            if collection == 'rates':
+                if not _integer(entry.get('per_hour'), -100, 100):
+                    errors.append(f'{prefix}.per_hour must be an integer in -100..100')
+                condition = entry.get('condition')
+                if not isinstance(condition, str) or not condition.strip():
+                    errors.append(f'{prefix}.condition must be a non-empty string')
+                    continue
+                for atom in re.split(r'\b(?:AND|OR)\b', condition, flags=re.IGNORECASE):
+                    atom = re.sub(r'^NOT\s+', '', atom.strip(), flags=re.IGNORECASE).strip()
+                    if not atom or atom.upper() == 'NOT':
+                        errors.append(f'{prefix}.condition has an empty atom')
+                    elif re.search(r'[<>=]', atom) and not re.fullmatch(r'[^<>=]+[<>=]-?\d+', atom):
+                        errors.append(f'{prefix}.condition has an invalid comparison: {atom}')
+                errors.extend(validate_condition_references(condition))
+            else:
+                if not any(bound in entry for bound in ('min', 'max')):
+                    errors.append(f'{prefix} needs a min or max bound')
+                for bound in ('min', 'max'):
+                    if bound in entry and not _integer(entry[bound], 0, 100):
+                        errors.append(f'{prefix}.{bound} must be an integer in 0..100')
+                if 'min' in entry and 'max' in entry and all(type(entry[b]) is int for b in ('min', 'max')):
+                    if entry['min'] > entry['max']:
+                        errors.append(f'{prefix}.min must not exceed max')
+                if 'need' in entry:
+                    need = entry['need']
+                    if not isinstance(need, dict) or not isinstance(need.get('text'), str) or need.get('urgency') not in ('urgent', 'felt'):
+                        errors.append(f'{prefix}.need requires text and urgency urgent or felt')
+    return errors
+
+
+def validate_setting(name: str, value) -> list[str]:
+    """Validate the complete replacement value for a known stat setting."""
+    if name not in shipped_settings():
+        return [f'Unknown stat setting: {name}']
+    if name == 'chat_cap_per_hour':
+        valid = _integer(value, 0, 100)
+    elif name == 'perception_gate':
+        valid = (isinstance(value, dict) and set(value) == {'enabled', 'stat', 'below'}
+                 and type(value['enabled']) is bool and isinstance(value['stat'], str)
+                 and bool(value['stat'].strip()) and _integer(value['below'], 0, 100))
+    else:
+        valid = isinstance(value, dict)
+        if valid:
+            if name == 'rewards':
+                valid = set(value) == set(OCCASIONS)
+            elif name == 'event_effects':
+                valid = set(value) <= set(CATEGORIES)
+            low = 0 if name == 'skill_costs' else -100
+            valid = valid and all(
+                isinstance(key, str) and bool(key.strip()) and isinstance(stats, dict)
+                and all(isinstance(stat, str) and bool(stat.strip()) and _integer(delta, low, 100)
+                        for stat, delta in stats.items())
+                for key, stats in value.items())
+    return [] if valid else [f'Invalid value for {name}']
+
+
+def describe_source(source: str, metadata: dict | None = None) -> str:
+    """Explain a history source using its recorded parts, without stat names."""
+    if source == 'hourly':
+        parts = []
+        for entries in ((metadata or {}).get('parts') or {}).values():
+            for part in entries:
+                delta = part.get('delta', 0)
+                if not delta:
+                    continue
+                text = f"{part.get('label', '')} {'+' if delta > 0 else '−'}{abs(delta)}"
+                if text not in parts:
+                    parts.append(text)
+        # Explain active sources before the common base drift.
+        parts.sort(key=lambda text: text.startswith('Base '))
+        return ', '.join(parts) or source
+    labels = {'chat': 'Chat', 'activity': 'Activity', 'event_resolved': 'Event resolved',
+              'intent_done': 'Plan done', 'gift_received': 'Gift'}
+    for prefix, label in (('item:', ''), ('skill:', 'Skill '), ('spell:', ''), ('event:', 'Event')):
+        if source.startswith(prefix):
+            return label if prefix == 'event:' else label + source[len(prefix):]
+    return labels.get(source, source)

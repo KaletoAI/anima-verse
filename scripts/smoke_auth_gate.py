@@ -472,6 +472,17 @@ print()
 print("B) character filter (SEC-6)")
 sens = auth_dependency._is_sensitive_character_path
 chars = auth_dependency._extract_characters_from_path
+check("sensitive /characters/Kira/stat-history", sens("/characters/Kira/stat-history"), True)
+check("user GET other stat-history", status("GET", "/characters/Kira/stat-history", "user"), 403)
+check("user GET own stat-history", status("GET", "/characters/Mara/stat-history", "user"), 200)
+check("user GET stat keys", status("GET", "/world/stat-keys", "user"), 200)
+for method, path in (("GET", "/admin/stat-rules"),
+                     ("PUT", "/admin/stat-rules/stat/energy"),
+                     ("DELETE", "/admin/stat-rules/stat/energy"),
+                     ("PUT", "/admin/stat-rules/setting/chat_cap_per_hour"),
+                     ("DELETE", "/admin/stat-rules/setting/chat_cap_per_hour")):
+    check(f"user {method} {path}", status(method, path, "user"), 403)
+    check(f"admin {method} {path}", status(method, path, "admin"), 200)
 check("sensitive /characters/Kira/export", sens("/characters/Kira/export"), True)
 check("chars /characters/Kira/export", chars("/characters/Kira/export"), ["Kira"])
 check("sensitive /secrets/Kira", sens("/secrets/Kira"), True)

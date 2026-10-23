@@ -2511,7 +2511,7 @@ async def write_soul_file(character_name: str, section_id: str, request) -> Dict
 
 
 def build_current_location_payload(character_name: str) -> Dict[str, Any]:
-    """Gibt den aktuellen virtuellen Aufenthaltsort zurueck"""
+    """Return the current virtual location."""
     from app.models.character import get_character_current_location
     from app.models.world import get_location_name as _get_loc_name, get_room_by_id, _load_world_data
     from app.models.character_template import is_feature_enabled
@@ -3166,3 +3166,27 @@ def wipe_character_memory(character_name: str) -> Dict[str, Any]:
 
     from app.core.character_reset import SCOPE_MEMORY, reset_character
     return reset_character(character_name, scope=SCOPE_MEMORY)
+
+
+def build_stat_history(character_name: str, limit: int = 50) -> dict:
+    """Return the newest effects rows with recorded causes and game stamps."""
+    import json
+    from app.core.db import get_connection
+    from app.core.stat_rules import describe_source
+    rows = get_connection().execute(
+        "SELECT id, ts, game_ts, state_json FROM state_history "
+        "WHERE character_name=? AND json_valid(state_json) "
+        "AND json_extract(state_json, '$.type')='effects' "
+        "ORDER BY ts DESC, id DESC LIMIT ?", (character_name, limit)).fetchall()
+    result = []
+    for row in rows:
+        state = json.loads(row['state_json'])
+        metadata = state.get('metadata') or {}
+        source = metadata.get('source') or state.get('value') or ''
+        entry = {'id': row['id'], 'ts': row['ts'], 'game_ts': row['game_ts'],
+                 'source': source, 'label': describe_source(source, metadata),
+                 'changes': metadata.get('changes') or {}}
+        if 'parts' in metadata:
+            entry['parts'] = metadata['parts']
+        result.append(entry)
+    return {'rows': result}
