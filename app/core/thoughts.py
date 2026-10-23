@@ -352,7 +352,7 @@ class ThoughtRunner:
         tools_dict = {}
         for t in agent_tools:
             _orig_func = t.func
-            def _make_ctx_wrapper(fn, _agent=character_name, _uid=""):
+            def _make_ctx_wrapper(fn, _tool=t.name, _agent=character_name, _uid=""):
                 def wrapper(raw_input):
                     import json
                     ctx = {"input": raw_input, "agent_name": _agent, "user_id": _uid}
@@ -366,7 +366,8 @@ class ThoughtRunner:
                                         ctx[k] = v
                         except Exception:
                             pass
-                    return fn(json.dumps(ctx))
+                    from app.core.skill_gate import run_tool
+                    return run_tool(_agent, _tool, lambda: fn(json.dumps(ctx)))
                 return wrapper
             tools_dict[t.name] = _make_ctx_wrapper(_orig_func)
 

@@ -124,6 +124,9 @@ export interface SceneData {
   bg_version?: string
   bg_id?: string
   capabilities?: string[]
+  capability_blocks?: Record<string, string>
+  capability_costs?: Record<string, Record<string, number>>
+  capability_actions?: Record<string, string>
 }
 
 /** The fields of the host dialog's submit payload the scene-photo request uses.
@@ -341,6 +344,10 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
   // conversation (+ person descriptions) and opens the image-gen dialog
   // (model/LoRA/prompt editable); step 2 generates into the avatar's
   // gallery + narrator line in the chat (present characters can react).
+  const photoSkill = data?.capability_actions?.scene_photo || ''
+  const photoBlock = data?.capability_blocks?.[photoSkill] || ''
+  const photoCost = Object.entries(data?.capability_costs?.[photoSkill] || {})
+    .map(([stat, amount]) => `${amount} ${stat}`).join(', ')
   const [photoBusy, setPhotoBusy] = useState(false)
   const [photoDlg, setPhotoDlg] = useState<PhotoDlgInfo | null>(draft.photoDlg)
   draft.photoDlg = photoDlg  // write-through, like the composer state above
@@ -742,10 +749,13 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
               onClick={() => setPickerOpen(true)} disabled={sending}>🖼</button>
             <button type="button" className="player-chip" title={t('Give a gift')}
               onClick={() => setGiftOpen(true)} disabled={sending || present.length === 0}>🎁</button>
-            {photoDialog && hasCapability('image_generation') && (
-              <button type="button" className="player-chip" style={{ marginLeft: 12 }}
-                title={t('Take a photo of the current moment (saved to your gallery)')}
-                onClick={takePhoto} disabled={photoBusy}>
+            {photoDialog && hasCapability(photoSkill) && (
+              <button type="button" className="player-chip"
+                title={[photoBlock || t('Take a photo of the current moment (saved to your gallery)'),
+                  photoCost ? `${t('Cost')}: ${photoCost}` : ''].filter(Boolean).join(' — ')}
+                style={{ marginLeft: 12, ...(photoBlock ? { opacity: 0.45, cursor: 'default',
+                  textDecoration: 'line-through', border: '1px solid var(--danger, #da3633)' } : {}) }}
+                onClick={takePhoto} disabled={photoBusy || !!photoBlock}>
                 {photoBusy ? '⌛' : '📷'}
               </button>
             )}

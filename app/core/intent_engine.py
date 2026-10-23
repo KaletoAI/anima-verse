@@ -203,7 +203,12 @@ def _dispatch_intent(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"success": False,
                 "error": f"no loaded skill declares intent '{intent_type}'"}
     try:
-        return skill.handle_intent(intent_type, payload)
+        from app.core.skill_gate import run_gated
+        result = run_gated(payload.get('agent_name', ''), skill.SKILL_ID,
+                           lambda: skill.handle_intent(intent_type, payload))
+        if isinstance(result, str):
+            return {'success': False, 'error': result}
+        return result
     except Exception as e:
         logger.error("Intent %s failed in %s: %s", intent_type, skill.name, e,
                      exc_info=True)

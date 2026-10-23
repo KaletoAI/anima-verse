@@ -56,6 +56,7 @@ def _avatar_in_room(character_name: str) -> str:
 
 class TakePhotoSkill(PluginSkill):
     """Character takes a photo — thin wrapper over the image service."""
+    PLAYER_ACTION = "scene_photo"
 
     SKILL_ID = "image_generation"
     DEFERRED = True  # image is generated after the chat reply

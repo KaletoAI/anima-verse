@@ -12,7 +12,7 @@ import { ExportButton, ImportButton, PublishButton } from '../../components/Impo
 import { roomLabel } from '../world/worldTypes'
 
 type RuleType = 'block' | 'force' | 'discover'
-type TargetScope = 'location' | 'any_room' | 'danger_level'
+type TargetScope = 'location' | 'any_room' | 'danger_level' | 'skill'
 
 interface ForceAction {
   go_to?: 'stay' | 'home'
@@ -25,6 +25,7 @@ interface RuleTarget {
   scope?: TargetScope
   location?: string
   rooms?: string[]
+  skills?: string[]
   action?: 'enter' | 'leave'
   min_danger_level?: number
 }
@@ -56,6 +57,7 @@ interface DraftRule {
   target_scope: TargetScope
   target_location: string
   target_rooms: string[]
+  target_skills: string[]
   target_action: 'enter' | 'leave'
   target_min_danger: number
   force_go_to: 'stay' | 'home'
@@ -76,6 +78,7 @@ const EMPTY_DRAFT: DraftRule = {
   target_scope: 'location',
   target_location: '',
   target_rooms: [],
+  target_skills: [],
   target_action: 'enter',
   target_min_danger: 3,
   force_go_to: 'stay',
@@ -99,6 +102,7 @@ function ruleToDraft(r: Rule): DraftRule {
     target_scope: target.scope || 'location',
     target_location: target.location || '',
     target_rooms: [...(target.rooms || [])],
+    target_skills: [...(target.skills || [])],
     target_action: target.action || 'enter',
     target_min_danger: target.min_danger_level ?? 3,
     force_go_to: force.go_to || 'stay',
@@ -131,6 +135,9 @@ function draftToRule(d: DraftRule): Rule {
     if (d.target_scope === 'location') {
       target.location = d.target_location
       if (d.target_rooms.length) target.rooms = d.target_rooms
+    } else if (d.target_scope === 'skill') {
+      target.skills = d.target_skills
+      delete target.action
     } else if (d.target_scope === 'danger_level') {
       target.min_danger_level = d.target_min_danger
     }
@@ -156,6 +163,7 @@ export function RulesTab() {
   const [rules, setRules] = useState<Rule[] | null>(null)
   const [draft, setDraft] = useState<DraftRule | null>(null)
   const [locations, setLocations] = useState<LocationRef[]>([])
+  const [skills, setSkills] = useState<{ id: string; name: string }[]>([])
   const [characters, setCharacters] = useState<CharacterRef[]>([])
 
   const reload = useCallback(async () => {
@@ -172,6 +180,7 @@ export function RulesTab() {
   }, [reload])
 
   useEffect(() => {
+    apiGet<{ id: string; name: string }[]>('/rules/skill-options').then(setSkills).catch(() => setSkills([]))
     loadLocations().then(setLocations).catch(() => setLocations([]))
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
   }, [])
@@ -379,6 +388,7 @@ export function RulesTab() {
             />
             <RuleForm
               draft={draft}
+              skills={skills}
               locations={locations}
               characters={characters}
               onUpdate={update}
@@ -410,12 +420,13 @@ export function RulesTab() {
 
 interface RuleFormProps {
   draft: DraftRule
+  skills: { id: string; name: string }[]
   locations: LocationRef[]
   characters: CharacterRef[]
   onUpdate: <K extends keyof DraftRule>(key: K, value: DraftRule[K]) => void
 }
 
-function RuleForm({ draft, locations, characters, onUpdate }: RuleFormProps) {
+function RuleForm({ draft, locations, characters, skills, onUpdate }: RuleFormProps) {
   const { t } = useI18n()
   const selectedLocation = locations.find((l) => l.id === draft.target_location)
   const rooms = selectedLocation?.rooms || []
@@ -495,10 +506,11 @@ function RuleForm({ draft, locations, characters, onUpdate }: RuleFormProps) {
             >
               <option value="location">{t('Place / Room')}</option>
               <option value="any_room">{t('Any room (anywhere)')}</option>
+              <option value="skill">{t('Skill')}</option>
               <option value="danger_level">{t('Danger level')}</option>
             </select>
           </Field>
-          <Field label={t('Action')}>
+          {draft.target_scope !== 'skill' && <Field label={t('Action')}>
             <select
               className="ga-input"
               value={draft.target_action}
@@ -507,8 +519,17 @@ function RuleForm({ draft, locations, characters, onUpdate }: RuleFormProps) {
               <option value="enter">{t('Enter')}</option>
               <option value="leave">{t('Leave')}</option>
             </select>
-          </Field>
+          </Field>}
         </div>
+      ) : null}
+
+      {draft.type === 'block' && draft.target_scope === 'skill' ? (
+        <Field label={t('Skills')} hint={t('Select the skills this rule blocks. Use state:<id> to check an active state.')}>
+          <select className="ga-input" multiple size={6} value={draft.target_skills}
+            onChange={(e) => onUpdate('target_skills', Array.from(e.target.selectedOptions, (o) => o.value))}>
+            {skills.map((skill) => <option key={skill.id} value={skill.id}>{skill.name}</option>)}
+          </select>
+        </Field>
       ) : null}
 
       {draft.type === 'block' && draft.target_scope === 'location' ? (

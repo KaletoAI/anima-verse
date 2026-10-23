@@ -165,7 +165,11 @@ async def lifespan(app: FastAPI):
     from app.core.users import ensure_default_admin
     ensure_default_admin()
 
-    # Migration: add persistent location ids and clean up filesystem storage
+    # Remove obsolete state prompt drops before any runtime prompt reads.
+    from app.core.skill_drop_migration import migrate_skill_drop_blocks_once
+    migrate_skill_drop_blocks_once()
+
+    # Add persistent location IDs and clean up legacy filesystem storage.
     from app.models.world import migrate_location_ids
     migrate_location_ids()
 

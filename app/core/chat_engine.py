@@ -568,7 +568,7 @@ def build_chat_context(
         _tool_initiator = speaker if speaker else "user"
         for t in agent_tools:
             _orig_func = t.func
-            def _make_ctx_wrapper(fn, _agent=character_name, _uid=owner_id, _init=_tool_initiator):
+            def _make_ctx_wrapper(fn, _tool=t.name, _agent=character_name, _uid=owner_id, _init=_tool_initiator):
                 def wrapper(raw_input):
                     ctx = {"input": raw_input, "agent_name": _agent, "user_id": _uid,
                            "initiator": _init, "skip_daily_limit": True}
@@ -581,7 +581,8 @@ def build_chat_context(
                                         ctx[k] = v
                         except Exception:
                             pass
-                    return fn(json.dumps(ctx))
+                    from app.core.skill_gate import run_tool
+                    return run_tool(_agent, _tool, lambda: fn(json.dumps(ctx)))
                 return wrapper
             tools_dict[t.name] = _make_ctx_wrapper(_orig_func)
         max_iterations = 3

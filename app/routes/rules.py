@@ -1,4 +1,4 @@
-"""API-Routes fuer das Rules-System (Blockade + Zwangs-Regeln)."""
+"""HTTP routes for world block and force rules."""
 import io
 from typing import Any, Dict
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Query
@@ -10,25 +10,32 @@ router = APIRouter(prefix="/rules", tags=["rules"])
 
 
 # --- Rules CRUD ---
-# (Status-Modifier wurden in /admin/prompt-filters konsolidiert — Zustaende-Tab
-#  im Game Admin nutzt jetzt direkt die prompt_filters-Tabelle.)
+# State modifiers live in /admin/prompt-filters; the admin states tab uses that table.
 
 
 def _normalize_target(value: Any) -> str:
-    """Akzeptiert ``shared`` / ``world`` (alles andere → world)."""
+    """Accept shared or world; any other value means world."""
     v = (str(value or "")).strip().lower()
     return "shared" if v == "shared" else "world"
 
 
 @router.get("")
 def list_rules_route() -> Dict[str, Any]:
-    """Listet alle Regeln (Shared baseline + Welt-Overlay, mit ``_origin``)."""
+    """List the merged shared baseline and world overlay with origin markers."""
     return {"rules": load_rules()}
+
+
+@router.get("/skill-options")
+def skill_options_route() -> list[dict]:
+    """Loaded skill IDs and names for the admin rule target selector."""
+    from app.core.dependencies import get_skill_manager
+    return [{"id": skill.SKILL_ID, "name": skill.name}
+            for skill in get_skill_manager().skills if skill.SKILL_ID]
 
 
 @router.get("/{rule_id}")
 def get_rule_route(rule_id: str) -> Dict[str, Any]:
-    """Gibt eine einzelne Regel zurueck."""
+    """Return one rule by ID."""
     rule = get_rule(rule_id)
     if not rule:
         raise HTTPException(status_code=404, detail="Regel nicht gefunden")
@@ -37,11 +44,7 @@ def get_rule_route(rule_id: str) -> Dict[str, Any]:
 
 @router.post("")
 async def create_rule_route(request: Request) -> Dict[str, Any]:
-    """Erstellt eine neue Regel.
-
-    Body: ``{"rule": {...}, "target": "world"|"shared"}`` — ``target`` defaults
-    to ``world``. ``shared`` schreibt in ``shared/rules/rules.json``.
-    """
+    """Create a rule. Body contains rule and target (world or shared)."""
     import asyncio
     data = await request.json()
     return await asyncio.to_thread(_create_rule_route_sync, data)
@@ -59,12 +62,7 @@ def _create_rule_route_sync(data: Any) -> Dict[str, Any]:
 
 @router.put("/{rule_id}")
 async def update_rule_route(rule_id: str, request: Request) -> Dict[str, Any]:
-    """Aktualisiert eine Regel.
-
-    Body: ``{"rule": {...}, "target": "world"|"shared"}``. ``world`` legt
-    automatisch einen Override an, falls die Rule bisher nur in der Shared-
-    Baseline existiert.
-    """
+    """Update a rule; world writes may create an override of a shared entry."""
     import asyncio
     data = await request.json()
     return await asyncio.to_thread(_update_rule_route_sync, rule_id, data)
@@ -82,13 +80,7 @@ def _update_rule_route_sync(rule_id: str, data: Any) -> Dict[str, Any]:
 
 @router.delete("/{rule_id}")
 def delete_rule_route(rule_id: str, target: str = "") -> Dict[str, Any]:
-    """Loescht eine Regel.
-
-    Query-Parameter ``target``:
-      - leer (default): Auto — Welt-Override zuerst, sonst Shared-Eintrag.
-      - ``world``: nur den Welt-Eintrag entfernen (Shared bleibt sichtbar).
-      - ``shared``: den Shared-Eintrag entfernen (gilt fuer alle Welten).
-    """
+    """Delete from world, shared, or automatically choose a world override first."""
     target_norm = (target or "").strip().lower()
     if target_norm not in ("", "world", "shared"):
         raise HTTPException(status_code=400, detail="target muss world|shared|leer sein")
@@ -122,7 +114,7 @@ async def import_rule_route(
 ) -> Dict[str, Any]:
     """Import a single-rule ZIP.
 
-    Player-reachable (POST /rules/import is not on the admin list), so the
+    Writes under /rules require admin access. The
     body is capped by `server.max_upload_mb` (SEC-7) instead of being read
     whole into memory.
     """

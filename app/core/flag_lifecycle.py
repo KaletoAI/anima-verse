@@ -95,6 +95,8 @@ def _clear_via_verb(spec, character_name: str, reason: str) -> None:
         skill = None
     if skill is not None:
         try:
+            # Lifecycle cleanup must always run, even when the character is
+            # blocked or exhausted. Deliberately bypass gates and skill costs.
             skill.execute(json.dumps({"agent_name": character_name}))
             logger.info("flag %s auto-cleared for %s via %s (%s)",
                         spec.flag, character_name, skill.name, reason)

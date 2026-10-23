@@ -1550,7 +1550,8 @@ def _build_chat_prompt(character_name: str,
         scenes_block=scenes_block,
         history_summary_block=history_summary_block)
     from app.core.hooks import emit
-    package_moment = []
+    from app.core.skill_gate import prompt_lines
+    package_moment = prompt_lines(character_name)
     emit("character.prompt_context", character_name=character_name, mode="chat",
          blocks=package_moment)
     moment = render(

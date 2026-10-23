@@ -131,7 +131,7 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "outfit_decision_block": _build_outfit_decision_block(character_name),
         "arc_block": _build_arc_block(character_name),
         "retrospective_block": _build_retrospective_block(character_name),
-        "skill_context_blocks": "",  # set below from _skill_block_parts (fine-grained drops)
+        "skill_context_blocks": "",  # joined package contributions
         # Additional context — currently rendered in agent_thought_in_chat.md.
         # Agent_thought.md ignores them silently (no template reference).
         "effects_block": "",  # filled by prompt_filters after building
@@ -210,13 +210,9 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
             "execute the corresponding tool." + _own_turn_rule
             + " If nothing relevant, reply only with: SKIP.")
 
-    # Skill prompt contributions as (package_id, text) parts → the joined string
-    # (skill_context_blocks) plus an internal parts list for fine-grained
-    # skill:<pkg> drop-block filtering in prompt_filters. The underscore key is
-    # internal — the agent_thought.md template never references it (StrictUndefined).
-    _skill_parts = _build_skill_context_blocks(character_name)
-    ctx["_skill_block_parts"] = _skill_parts
-    ctx["skill_context_blocks"] = "\n\n".join(t for _, t in _skill_parts)
+    # Join package contributions; rule gates own skill availability.
+    ctx["skill_context_blocks"] = "\n\n".join(
+        text for _, text in _build_skill_context_blocks(character_name))
 
     # State-driven filters: drop blocks + inject modifier text based on
     # active conditions/stats (drunk, exhausted, …). Replaces the old
@@ -226,6 +222,10 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         apply_filters(character_name, ctx, location_id=location_id)
     except Exception as e:
         logger.debug("prompt_filters apply failed for %s: %s", character_name, e)
+
+    from app.core.skill_gate import prompt_lines
+    ctx["effects_block"] = "\n".join(filter(None, [
+        ctx.get("effects_block", ""), *prompt_lines(character_name, turn="thought", check_limits=True)]))
 
     # has_assignments may have changed if the filter dropped assignments_block
     ctx["has_assignments"] = bool(ctx["assignments_block"])
@@ -298,14 +298,11 @@ def _build_state_flags_block(character_name: str) -> str:
 
 
 def _build_skill_context_blocks(character_name: str) -> List[Tuple[str, str]]:
-    """Prompt contributions of the character's active skills as
-    ``(package_id, block_text)`` parts (generic).
+    """Package prompt contributions from currently available character skills.
 
-    Each skill may return a self-contained section via
-    thought_context_block() — e.g. the instagram package's pending block.
-    The package_id lets prompt_filters drop a single package's block via a
-    ``skill:<pkg>`` drop-block entry (fine-grained), while the joined string
-    stays ``skill_context_blocks`` (coarse, drops all). Knows no skill content (R1)."""
+    Return (package_id, block_text) pairs, joined into skill_context_blocks.
+    Rules own skill availability; states can still drop the combined block.
+    """
     try:
         from app.core.dependencies import get_skill_manager
         skills = get_skill_manager()._get_agent_skills(

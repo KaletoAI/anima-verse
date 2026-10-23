@@ -2842,6 +2842,7 @@
     "Applied once per event and character. Use world defaults or override each category; an empty override applies nothing.": "Wirkt einmal pro Ereignis und Charakter. Weltstandards verwenden oder je Kategorie überschreiben; ein leerer Override bewirkt nichts.",
     "Override world effects": "Welteffekte überschreiben",
     "No immediate effects.": "Keine Soforteffekte.",
-    "Add effect": "Effekt hinzufügen"
+    "Add effect": "Effekt hinzufügen",
+    "Select the skills this rule blocks. Use state:<id> to check an active state.": "Wähle die Fähigkeiten, die diese Regel sperrt. Mit state:<id> prüfst du einen aktiven Zustand."
   }
 }

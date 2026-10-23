@@ -213,41 +213,11 @@ _PROMPT_FILTER_BLOCK_KEYS = [
 ]
 
 
-def _skill_block_package_ids() -> List[str]:
-    """Package ids of loaded skills that contribute a ``thought_context_block``
-    — the targets for fine-grained ``skill:<pkg>`` drop-block addressing."""
-    try:
-        from app.core.dependencies import get_skill_manager
-        from app.skills.base import BaseSkill
-        from app.plugins.registry import package_of_skill
-    except Exception:
-        return []
-    ids: List[str] = []
-    seen: set = set()
-    for skill in getattr(get_skill_manager(), "skills", []):
-        try:
-            if type(skill).thought_context_block is BaseSkill.thought_context_block:
-                continue  # not overridden → no contribution
-            sid = getattr(skill, "SKILL_ID", "") or ""
-            pkg = package_of_skill(sid)
-            pid = pkg.id if pkg else sid
-            if pid and pid not in seen:
-                seen.add(pid)
-                ids.append(pid)
-        except Exception:
-            continue
-    return ids
-
-
 def _prompt_filter_block_keys() -> List[str]:
-    """Static block keys + dynamic ``skill:<pkg>`` entries (one per loaded
-    package that contributes a thought_context_block)."""
-    return _PROMPT_FILTER_BLOCK_KEYS + [f"skill:{pid}"
-                                        for pid in _skill_block_package_ids()]
+    """Prompt blocks that states may hide; skills are blocked through rules."""
+    return list(_PROMPT_FILTER_BLOCK_KEYS)
 
 
-# Fields of a prompt filter that a world row can silently hide when it
-# overrides a shared entry (the overlay replaces by id, it does not merge).
 _MASKABLE_FILTER_FIELDS = ("icon", "label", "condition", "drop_blocks",
                            "prompt_modifier", "image_modifier", "bone_pose", "stat_boosts")
 
@@ -364,7 +334,7 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
             {"code": "offmap", "text": "No current location and no metre position"},
             {"code": "travelling", "text": "A journey is in progress"},
             {"code": "location_danger>N / <N / =N", "text": "Danger level of the character's own current location (0 without one)"},
-            {"code": "state:<id>", "text": "Enabled state active by profile tag or expression; cyclic references return false"},
+            {"code": "state:<id>", "text": "Enabled state active by profile tag or expression; cyclic references return false. Use a block rule with target Skill to disable selected skills"},
             {"code": "present:Name", "text": "Name is in the same room"},
             {"code": "npc_present", "text": "Any non-avatar character is here"},
             {"code": "relationship:Name>N, romantic:Name>N", "text": "Name or 'any'"},

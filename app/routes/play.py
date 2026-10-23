@@ -163,11 +163,45 @@ def _player_capabilities(avatar: str) -> list:
     try:
         from app.core.dependencies import get_skill_manager
         sm = get_skill_manager()
-        skills = sm._get_agent_skills(avatar, check_limits=False)
+        skills = sm._get_agent_skills(avatar, check_limits=False, apply_gate=False)
         return sorted({getattr(s, "SKILL_ID", "") for s in skills} - {""})
     except Exception as e:
         logger.debug("player capabilities failed for %s: %s", avatar, e)
         return []
+
+
+def _player_skill_payload(avatar: str) -> dict:
+    """Keep capabilities visible and describe transient blocks and costs."""
+    from app.core.dependencies import get_skill_manager
+    from app.core.skill_gate import blocked_skills, costs
+    capabilities = _player_capabilities(avatar)
+    return {"capabilities": capabilities,
+            "capability_actions": {skill.PLAYER_ACTION: skill.SKILL_ID
+                for skill in get_skill_manager().skills
+                if getattr(skill, "PLAYER_ACTION", "")},
+            "capability_blocks": blocked_skills(avatar, capabilities),
+            "capability_costs": {sid: costs(sid) for sid in capabilities if costs(sid)}}
+
+
+def _player_action_gate(avatar: str, action: str):
+    """Resolve the route's skill through its package declaration, then check
+    only rule blocks and cost shortfalls. Whether the route is available at
+    all stays the route's own business (party follower, capability panels):
+    without a declaring package nothing is gated or charged."""
+    from app.core.dependencies import get_skill_manager
+    from app.core.skill_gate import blocked_reason
+    sm = get_skill_manager()
+    skill = next((skill for skill in sm.skills
+                  if getattr(skill, "PLAYER_ACTION", "") == action), None)
+    if skill is None:
+        return None
+    reason = blocked_reason(avatar, skill.SKILL_ID)
+    if reason:
+        # Same 403 shape as the route's other refusals: the client reads
+        # detail.message.
+        raise HTTPException(status_code=403, detail={
+            "reason": "skill_blocked", "message": reason})
+    return skill
 
 
 @router.get("/play/scene")
@@ -425,7 +459,7 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
         # still. The worldmap payload carries the same journey for EVERY
         # character, in metres, for the map to draw (E3 Task 6).
         "travel": _travel_block(avatar, lang),
-        "capabilities": _player_capabilities(avatar),
+        **_player_skill_payload(avatar),
     }
 
 
@@ -623,6 +657,7 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
             "reason": "party_follower",
             "message": t("You are part of a party and your leader takes you "
                          "along — you cannot move on your own.", lang)})
+    skill = _player_action_gate(avatar, "travel")
 
     target = get_location_by_id(target_id)
     if not target:
@@ -690,6 +725,9 @@ async def play_travel(request: Request, user=Depends(get_current_user)):
         set_is_sleeping(avatar, False)
         logger.info("travel: %s woke up by setting off for %s",
                     avatar, target_id)
+    if skill is not None:
+        from app.core.skill_gate import charge
+        charge(avatar, skill.SKILL_ID)
     return {"journey": _travel_block(avatar, lang), "reason": ""}
 
 
@@ -1396,6 +1434,7 @@ async def play_scene_photo_prepare(user=Depends(get_current_user)):
     avatar = (get_active_character() or "").strip()
     if not avatar:
         raise HTTPException(status_code=404, detail="no active avatar")
+    skill = _player_action_gate(avatar, "scene_photo")
     result = await asyncio.to_thread(prepare_scene_photo, avatar)
     if not result.get("ok"):
         raise HTTPException(status_code=502,
@@ -1416,6 +1455,7 @@ async def play_scene_photo(request: Request, user=Depends(get_current_user)):
     avatar = (get_active_character() or "").strip()
     if not avatar:
         raise HTTPException(status_code=404, detail="no active avatar")
+    skill = _player_action_gate(avatar, "scene_photo")
     try:
         body = await request.json()
     except Exception:
@@ -1438,6 +1478,9 @@ async def play_scene_photo(request: Request, user=Depends(get_current_user)):
     if not result.get("ok"):
         raise HTTPException(status_code=502,
                             detail=result.get("error", "photo failed"))
+    if skill is not None:
+        from app.core.skill_gate import charge
+        charge(avatar, skill.SKILL_ID)
     return result
 
 

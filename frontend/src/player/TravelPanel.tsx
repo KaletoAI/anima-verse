@@ -69,7 +69,7 @@ interface Picked { id: string; name: string; distance_m: number | null }
 export function TravelPanel({
   rooms, currentRoomId, currentLocationId, travel, busy,
   onTravel, onCancelTravel, onEnterRoom, labelMode = 'all', autoFit = false,
-  partyFollower = false, partyLeaderName = '',
+  partyFollower = false, partyLeaderName = '', blockedReason = '',
 }: {
   rooms: RoomInfo[]
   currentRoomId: string
@@ -91,6 +91,7 @@ export function TravelPanel({
    *  chips off), the leader pulls it along. */
   partyFollower?: boolean
   partyLeaderName?: string
+  blockedReason?: string
 }) {
   const { t } = useI18n()
   // Same key + interval as MapPanel: the hub shares one in-flight request and
@@ -209,14 +210,17 @@ export function TravelPanel({
                     {Math.round(picked.distance_m)} m
                   </span>
                 )}
-                <button onClick={() => onTravel(picked.id)} disabled={busy}
+                <button onClick={() => onTravel(picked.id)} disabled={busy || !!blockedReason}
+                  title={blockedReason || undefined}
                   style={{
                     flex: '0 0 auto', padding: '2px 8px', borderRadius: 10,
-                    fontSize: '0.92em', cursor: busy ? 'default' : 'pointer',
+                    fontSize: '0.92em', cursor: busy || blockedReason ? 'default' : 'pointer',
+                    opacity: blockedReason ? 0.45 : 1,
+                    textDecoration: blockedReason ? 'line-through' : 'none',
                     border: '1px solid var(--border, #30363d)',
                     background: 'var(--bg-hover, #1f2937)', color: 'inherit',
                   }}>
-                  {t('Travel')}
+                  {blockedReason ? '🔒 ' : ''}{t('Travel')}
                 </button>
               </>
             ) : (

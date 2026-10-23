@@ -435,6 +435,7 @@ export function PlayerApp() {
           currentLocationId={data?.location_id || ''}
           travel={data?.travel || null}
           busy={moving}
+          blockedReason={data?.capability_blocks?.[data?.capability_actions?.travel || ''] || ''}
           onTravel={handleTravel}
           onCancelTravel={handleCancelTravel}
           onEnterRoom={handleEnterRoom}
@@ -613,6 +614,7 @@ export function PlayerApp() {
           currentLocationId={data?.location_id || ''}
           travel={data?.travel || null}
           busy={moving}
+          blockedReason={data?.capability_blocks?.[data?.capability_actions?.travel || ''] || ''}
           onTravel={handleTravel}
           onCancelTravel={handleCancelTravel}
           onEnterRoom={handleEnterRoom}

@@ -1,15 +1,7 @@
-"""Rules Engine — Konfigurierbare Zugangs- und Zwangsregeln pro Welt.
+"""World rules: configurable location and skill blocks and forced actions.
 
-Zwei Regeltypen:
-- block: Verhindert Zugang zu Ort/Raum wenn Bedingung erfuellt
-- force: Erzwingt Aktion (Ortswechsel + Aktivitaet) wenn Bedingung erfuellt
-
-Regeln nutzen die gleiche Condition-Syntax wie Aktivitaeten
-(stamina>20, courage<30, NOT alone AND night, etc.)
-
-Storage: the ``rules`` table in ``world.db`` (+ shared baseline
-``shared/rules/rules.json``)
-"""
+Conditions use the activity expression syntax. Rules are stored in world.db
+with a shared baseline from shared/rules/rules.json."""
 import json
 import uuid
 from pathlib import Path
@@ -36,21 +28,19 @@ def _user_lang() -> str:
 
 
 def _get_shared_rules_path() -> Path:
-    """Shared baseline: globale Regeln die in allen Welten gelten — solange
-    nicht per id-overlay in der Welt ueberschrieben."""
+    """Shared baseline, overlaid by world rules with matching IDs."""
     return Path(__file__).resolve().parent.parent.parent / "shared" / "rules" / "rules.json"
 
 
 def _load_shared_rules() -> List[Dict[str, Any]]:
-    """Liest Regeln aus shared/rules/rules.json. Leerer Fallback wenn die
-    Datei fehlt oder defekt ist."""
+    """Read shared rules, returning an empty list for missing or invalid data."""
     path = _get_shared_rules_path()
     if not path.exists():
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         rules = data.get("rules", []) if isinstance(data, dict) else []
-        # Origin-Marker damit das UI shared/world unterscheiden kann
+        # Origin marker lets the UI distinguish shared and world entries.
         for r in rules:
             r["_origin"] = "shared"
         return rules
@@ -71,7 +61,7 @@ def _save_shared_rules(rules: List[Dict[str, Any]]):
 
 
 def _load_world_rules() -> List[Dict[str, Any]]:
-    """Liest die Welt-spezifischen Regeln aus der DB."""
+    """Read world-specific rules from the database."""
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -98,15 +88,9 @@ def _load_world_rules() -> List[Dict[str, Any]]:
 
 
 def load_rules() -> List[Dict[str, Any]]:
-    """Merged shared-baseline + world-overlay. Welt-Eintraege ueberschreiben
-    Shared-Eintraege bei id-Match — analog zum Items/Activities-Pattern.
+    """Merge the shared baseline with the world overlay by ID.
 
-    Origin-Marker im Eintrag:
-      "_origin": "shared"           — kommt aus shared/rules/rules.json
-      "_origin": "world"            — kommt aus world.db, kein shared-Konflikt
-      "_origin": "world override"   — Welt-Eintrag der eine Shared-Rule mit
-                                       gleicher id ueberschreibt
-    """
+    Each entry carries an _origin: shared, world, or world override."""
     shared = _load_shared_rules()
     world = _load_world_rules()
     if not world:
@@ -188,16 +172,10 @@ def save_rules(rules: List[Dict[str, Any]], target_dir: str = "world"):
     _rules_changed(old_rules, rules)
 
 
-# Default-Rules-Seed: bei Welt-Init oder bei expliziter Migration werden
-# Sleep- und Wake-Rules angelegt falls sie noch nicht existieren. Damit
-# kommen frische Welten direkt mit funktionierender Erschoepfungs-/
-# Aufwach-Logik. Bestehende Welten bleiben unangetastet (Idempotenz via
-# id-Match — wer eine eigene Rule mit derselben id angelegt hat behaelt sie).
-#
-# Die Seed-Daten leben in ``shared/rules/_defaults.json`` (Daten in Shared,
-# nicht inline in Code).
+# Seed missing default rules during initialization or explicit migration.
+# Existing IDs remain untouched. Seed data lives in shared/rules/_defaults.json.
 def _load_default_rules() -> List[Dict[str, Any]]:
-    """Liest die Seed-Defaults aus ``shared/rules/_defaults.json``."""
+    """Read seed defaults from shared/rules/_defaults.json."""
     path = _get_shared_rules_path().parent / "_defaults.json"
     if not path.exists():
         logger.warning("Seed-File fehlt: %s — keine Defaults", path)
@@ -211,23 +189,12 @@ def _load_default_rules() -> List[Dict[str, Any]]:
 
 
 def ensure_default_rules() -> int:
-    """Stellt sicher dass die Default-Sleep/Wake-Rules in der Shared-Baseline
-    (``shared/rules/rules.json``) existieren — von dort sind sie automatisch
-    in jeder Welt verfuegbar (es sei denn, eine Welt ueberschreibt sie per
-    id-overlay in der DB).
+    """Ensure default sleep/wake rules exist in the shared baseline.
 
-    Idempotent: pruefen ob eine Rule mit der ID schon im shared-File
-    eingetragen ist; nur fehlende werden ergaenzt.
-
-    Seed-Quelle: ``shared/rules/_defaults.json``.
-
-    Returns: Anzahl neu angelegter Rules (0 wenn alles schon da war).
-    """
+    Add only missing IDs from shared/rules/_defaults.json. World overrides
+    remain authoritative. Return the number added."""
     try:
-        # Nur shared-baseline pruefen — wenn eine Welt die Rule explizit
-        # geloescht hat (DB-Override mit z.B. enabled=False), bleibt die
-        # User-Entscheidung erhalten weil load_world_rules() fuer den
-        # Override-Pfad sorgt.
+        # Check only shared data; world overrides preserve user decisions.
         shared = _load_shared_rules()
         shared_ids = {(r.get("id") or "").strip() for r in shared}
         added = 0
@@ -247,16 +214,9 @@ def ensure_default_rules() -> int:
 
 
 def add_rule(rule: Dict[str, Any], target_dir: str = "world") -> Dict[str, Any]:
-    """Fuegt eine neue Regel hinzu (Upsert nach id).
+    """Upsert a rule by ID into the world or shared layer.
 
-    target_dir:
-      "world"  — Default. Rule landet in der Welt-DB; nur in dieser Welt.
-      "shared" — Rule landet in shared/rules/rules.json; gilt fuer alle Welten.
-
-    Falls die id im Ziel-Layer schon existiert wird der Eintrag ersetzt — das
-    erlaubt dem UI, eine Rule per "Speicherort wechseln" zu verschieben (alte
-    Seite via DELETE entfernen, neue Seite via POST setzen).
-    """
+    Moving a rule requires deleting its old layer and posting to the new one."""
     if not rule.get("id"):
         rule["id"] = f"rule_{uuid.uuid4().hex[:8]}"
     rule_id = rule["id"]
@@ -278,13 +238,9 @@ def add_rule(rule: Dict[str, Any], target_dir: str = "world") -> Dict[str, Any]:
 
 def update_rule(rule_id: str, updates: Dict[str, Any],
                 target_dir: str = "world") -> Optional[Dict[str, Any]]:
-    """Aktualisiert eine bestehende Regel.
+    """Update a rule in the requested layer.
 
-    target_dir:
-      "world"  — die Welt-DB-Version updaten (legt sie als Override an
-                 wenn die ID nur in shared existiert).
-      "shared" — die shared-baseline-Version updaten.
-    """
+    A world update creates an override if the ID exists only in shared data."""
     if target_dir == "shared":
         rules = _load_shared_rules()
         for r in rules:
@@ -296,7 +252,7 @@ def update_rule(rule_id: str, updates: Dict[str, Any],
                 return r
         return None
 
-    # World-Update: vorhandenen Welt-Eintrag updaten oder als Override anlegen
+    # Update an existing world entry or create an override.
     world_rules = _load_world_rules()
     for r in world_rules:
         if r.get("id") == rule_id:
@@ -305,7 +261,7 @@ def update_rule(rule_id: str, updates: Dict[str, Any],
             save_rules(world_rules, target_dir="world")
             logger.info("Rule aktualisiert: %s", rule_id)
             return r
-    # Shared-Eintrag wird per Welt-Override veraendert: kopieren + updates
+    # Copy the shared entry and apply updates as a world override.
     shared = _load_shared_rules()
     for r in shared:
         if r.get("id") == rule_id:
@@ -320,13 +276,10 @@ def update_rule(rule_id: str, updates: Dict[str, Any],
 
 
 def delete_rule(rule_id: str, target_dir: str = "") -> bool:
-    """Loescht eine Regel.
+    """Delete a rule from the requested layer.
 
-    target_dir:
-      ""       — Auto: bevorzugt Welt-Eintrag (Override) loeschen, sonst Shared.
-      "world"  — nur den Welt-Eintrag entfernen (Shared bleibt → Rule erscheint wieder).
-      "shared" — den Shared-Eintrag entfernen (gilt fuer alle Welten).
-    """
+    An empty target chooses a world override first, then shared. Deleting only
+    a world override reveals the shared entry again."""
     if target_dir == "world":
         world_rules = _load_world_rules()
         new = [r for r in world_rules if r.get("id") != rule_id]
@@ -344,7 +297,7 @@ def delete_rule(rule_id: str, target_dir: str = "") -> bool:
             return True
         return False
 
-    # Auto-Modus: Welt zuerst, sonst Shared
+    # Automatic mode: world first, then shared.
     if delete_rule(rule_id, target_dir="world"):
         return True
     return delete_rule(rule_id, target_dir="shared")
@@ -355,15 +308,10 @@ def add_event_rule(event_id: str,
     message: str,
     action: str = "leave",
     name: str = "") -> Optional[Dict[str, Any]]:
-    """Erzeugt eine temporaere Block-Regel an einen Event gekoppelt.
+    """Create a temporary block tied to an event lifetime.
 
-    Lebensdauer = Event-Lebensdauer. Wenn das Event geloest wird oder
-    abgelaeuft, ruft der Cleanup-Hook ``delete_rules_by_event`` und die
-    Regel verschwindet automatisch.
-
-    action: "leave" (Standard) — Avatar/NPCs koennen den Ort nicht
-    verlassen; "enter" — niemand kommt rein; "both" — beide Richtungen.
-    """
+    Event resolution or expiry calls delete_rules_by_event. Action leave blocks
+    exits, enter blocks entry, and both blocks both directions."""
     if not event_id or not location_id:
         return None
 
@@ -389,10 +337,7 @@ def add_event_rule(event_id: str,
 
 
 def delete_rules_by_event(event_id: str) -> int:
-    """Loescht alle Regeln die an ein Event gekoppelt sind.
-
-    Returns: Anzahl geloeschter Regeln.
-    """
+    """Delete event-bound rules and return the number deleted."""
     if not event_id:
         return 0
     deleted = 0
@@ -490,6 +435,8 @@ def check_access(character_name: str,
         # rules authored in the UI would have no effect.
         target = rule.get("target", {})
         scope = target.get("scope", "")
+        if scope == "skill":
+            continue
         t_loc, t_rooms = _rule_location_rooms(target)
 
         matched = False
@@ -540,10 +487,10 @@ def check_access(character_name: str,
                             logger.info("Rule blockiert %s: %s (alle Raeume)",
                                          character_name, rule.get("name", "?"))
                             return False, message
-                        # mindestens ein Raum OK → Regel skippen
+                        # At least one room is accessible; skip this rule.
                         continue
                 else:
-                    # Keine Condition → any_room blockt grundsaetzlich
+                    # No condition: the rule matches every room.
                     matched = True
         elif scope == "danger_level":
             min_danger = int(target.get("min_danger", target.get("min_danger_level", 0)) or 0)
@@ -553,8 +500,7 @@ def check_access(character_name: str,
         if not matched:
             continue
 
-        # Bedingung pruefen — wenn Bedingung WAHR, wird blockiert
-        # room_id an evaluate_condition durchreichen fuer room_has_item:X
+        # A true condition blocks access. Pass the room for room_has_item atoms.
         condition = rule.get("condition", "")
         if condition:
             passed, _ = evaluate_condition(condition, character_name, location_id, room_id)
@@ -614,6 +560,8 @@ def check_leave(character_name: str, *,
 
         target = rule.get("target", {}) or {}
         scope = target.get("scope", "")
+        if scope == "skill":
+            continue
         t_loc, rule_room_ids = _rule_location_rooms(target)
         matched = False
         if scope in ("room", "location") and rule_room_ids and cur_room \
@@ -633,7 +581,7 @@ def check_leave(character_name: str, *,
             matched = True
         elif scope == "any_room" and cur_room:
             matched = True
-        # danger_level fuer leave ist nicht sinnvoll — uebersprungen
+        # Danger-level targets do not apply to leaving.
         if not matched:
             continue
 
@@ -674,28 +622,19 @@ def check_followers_leave(leader: str, *,
 
 
 # ============================================================
-# ZWANGS-REGELN: Erzwungene Aktionen pruefen
+# FORCE RULES: check forced actions
 # ============================================================
 
 def check_force_rules(character_name: str) -> Optional[Dict[str, Any]]:
-    """Prueft alle Zwangs-Regeln fuer einen Character.
-
-    Returns: force_action Dict wenn eine Regel greift, sonst None.
-    Nur die erste matchende Regel wird zurueckgegeben.
-    """
+    """Return the first matching forced action, or None."""
     from app.core.activity_engine import evaluate_condition
     from app.models.character import get_character_current_location
 
     location_id = get_character_current_location(character_name) or ""
 
-    # Regeln in zwei Buckets: char-spezifisch (rule.character == character_name)
-    # vor globalen (rule.character leer/None). Damit gewinnt z.B. eine
-    # "Ondina — Day"-Regel die "go_to=home, set_activity=sleeping" sagt
-    # ueber die globale "Aufwachen wenn ausgeschlafen"-Regel — sonst
-    # weckt der Default-Wake-Trigger den Char gleich wieder auf.
-    # Regeln mit character != character_name werden komplett uebersprungen
-    # (vorher: check_force_rules ignorierte das Feld → fremde Char-Rules
-    # wurden auf jeden Char angewendet).
+    # Character-specific rules take precedence over global defaults, so a
+    # personal sleep rule cannot be undone immediately by a global wake rule.
+    # Rules naming a different character do not apply.
     _all_rules = [r for r in load_rules() if r.get("type") == "force" and r.get("condition")]
     _own_rules: List[Dict[str, Any]] = []
     _global_rules: List[Dict[str, Any]] = []
@@ -705,7 +644,7 @@ def check_force_rules(character_name: str) -> Optional[Dict[str, Any]]:
             _global_rules.append(r)
         elif rc == character_name:
             _own_rules.append(r)
-        # Sonst: gehoert einem anderen Char — uebersprungen
+        # Otherwise it belongs to another character; skip it.
     ordered_rules = _own_rules + _global_rules
 
     for rule in ordered_rules:
@@ -716,10 +655,8 @@ def check_force_rules(character_name: str) -> Optional[Dict[str, Any]]:
         force = rule.get("force_action", {})
         if not force:
             continue
-        # Bereits im erzwungenen Zustand? (Flags stimmen schon ueberein.)
-        # Char-spezifisch: dann globale Regeln BLOCKIEREN (sonst kann z.B. der
-        # Default-Wake-Trigger den char-spezifischen Sleep-Modus aushebeln).
-        # Global: nur weiterspringen.
+        # Matching flags mean this action is already applied. A personal
+        # rule suppresses global defaults; a global rule simply yields.
         _set_flags = force.get("set_flags") or {}
         already_applied = False
         if _set_flags:
@@ -747,9 +684,7 @@ def check_force_rules(character_name: str) -> Optional[Dict[str, Any]]:
             "rule_id": rule.get("id", ""),
             "rule_name": localized(rule, "name", _lang),
             "go_to": force.get("go_to", "stay"),
-            # B1: orthogonale State-Flags direkt setzbar (z.B. {"is_sleeping": false}
-            # zum Wecken, {"is_sleeping": true} fuer einen Schlafzauber) — der Flag
-            # ist die Autoritaet, unabhaengig vom Activity-String.
+            # Orthogonal state flags are authoritative, independent of activity text.
             "set_flags": force.get("set_flags") or {},
             "message": localized(rule, "message", _lang),
         }
@@ -759,16 +694,7 @@ def check_force_rules(character_name: str) -> Optional[Dict[str, Any]]:
 
 def resolve_force_destination(character_name: str,
     go_to: str) -> Tuple[str, str]:
-    """Loest das Ziel einer Zwangs-Regel auf.
-
-    go_to Optionen:
-    - "stay": Bleiben wo man ist
-    - "sleep_location": Character-spezifischer Schlafplatz
-    - "home": Home-Location des Characters
-    - Location-ID: Direkt zu dieser Location
-
-    Returns: (location_id, room_id)
-    """
+    """Resolve stay, home, sleep_location, or a location ID into location/room IDs."""
     from app.models.character import (
         get_character_config, get_character_current_location,
         get_character_current_room)
@@ -781,7 +707,7 @@ def resolve_force_destination(character_name: str,
     config = get_character_config(character_name)
 
     if go_to in ("sleep_location", "home"):
-        # Home-Location = Schlafplatz
+        # Home location is also the sleeping place.
         home_loc = config.get("home_location", "")
         home_room = config.get("home_room", "")
         if home_loc:
@@ -795,7 +721,7 @@ def resolve_force_destination(character_name: str,
 
 
 # ============================================================
-# DISCOVER-REGELN: Entdecken angrenzender Locations
+# DISCOVER RULES: reveal adjacent locations
 # ============================================================
 
 def check_discover_rules(character_name: str) -> Optional[Dict[str, Any]]:
@@ -928,7 +854,7 @@ def check_discover_rules(character_name: str) -> Optional[Dict[str, Any]]:
 # ============================================================
 
 def _get_target_danger_level(location_id: str, room_id: str = "") -> int:
-    """Ermittelt den danger_level eines Ziels (Raum ueberschreibt Location)."""
+    """Return target danger, with the room overriding its location."""
     try:
         from app.models.world import get_location_by_id
         location = get_location_by_id(location_id)

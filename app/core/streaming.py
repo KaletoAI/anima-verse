@@ -1,18 +1,8 @@
-"""Streaming Agent - Kapselt LLM-Streaming, Tool-Erkennung und Agent-Loop.
+"""Streaming agent: LLM streaming, tool detection, and execution events.
 
-Liefert strukturierte Events statt roher SSE-Strings, damit die
-Chat-Route nur noch als duenner Consumer/Formatter agiert.
-
-Vier Modi (automatisch erkannt via determine_mode()):
-- no_tools: Reiner Chat, kein Tool-Support (1 LLM-Call)
-- single:   Chat-LLM macht alles (1-2 Calls)
-- dual:     Tool-LLM entscheidet, Chat-LLM antwortet (1-2 Calls)
-- rp_first: Chat-LLM antwortet zuerst (sauberes RP), dann entscheidet
-            Tool-LLM basierend auf RP-Antwort + User-Input ueber Tools.
-            Post-RP Tools (Image, Outfit) → ausfuehren, anhaengen.
-            Pre-RP Tools (Suche) → ausfuehren, RP-Antwort verwerfen,
-            Chat-LLM nochmal mit Tool-Ergebnissen.
-"""
+Routes consume structured events. Modes: no_tools (chat only), single (one
+LLM), dual (tool and chat LLMs), and rp_first (narrative then tool decisions).
+Content tools can trigger a narrative retry with their results."""
 import asyncio
 import re
 import time
@@ -26,7 +16,7 @@ from app.utils.llm_logger import get_model_name
 
 logger = get_logger("agent_loop")
 
-# Regex fuer LLM-Tokenizer-Artefakte (z.B. <SPECIAL_28> von Mistral-Modellen)
+# Match tokenizer artifacts emitted by LLMs.
 _SPECIAL_TOKEN_RE = re.compile(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>')
 
 # Intent / EventResolved markers in tool-LLM answers. The intent pattern
@@ -77,7 +67,7 @@ def _extract_markers(tool_response: str, rp_response: str = "") -> str:
         markers.append(m.group(0))
     for m in _EVENT_RESOLVED_RE.finditer(tool_response):
         markers.append(m.group(0))
-    # Fallback-Marker: nur wenn im RP fehlend
+    # Fallback markers apply only when absent from the narrative.
     if not _MOOD_MARKER_RE.search(rp_response):
         mm = _MOOD_MARKER_RE.search(tool_response)
         if mm:
@@ -95,8 +85,7 @@ def _extract_markers(tool_response: str, rp_response: str = "") -> str:
 # ---------------------------------------------------------------------------
 # Search-Intent Keywords (User-Input Detection)
 # ---------------------------------------------------------------------------
-# Erkennt ob der User nach realen/aktuellen Informationen fragt.
-# Wenn erkannt, wird ein Forcing-Hint zum System-Prompt hinzugefuegt.
+# Detect requests for current information and add a search hint.
 
 _SEARCH_INTENT_KEYWORDS_DE = [
     "was ist passiert", "was passiert", "was gibt es neues",
@@ -139,13 +128,10 @@ _SEARCH_INTENT_HINT = (
 # ---------------------------------------------------------------------------
 
 def _inject_rp_context(tool_input: str, rp_response: str, user_input: str = "") -> str:
-    """Injiziert die RP-Antwort und die User-Eingabe in den Tool-Input.
+    """Inject the narrative response and user input into tool input.
 
-    rp_response: Character-Antwort → Quelle fuer Character-Outfit-Aenderungen.
-    user_input: User-Eingabe → Quelle fuer Avatar-Outfit-Aenderungen (z.B.
-    "Ich ziehe die Jacke aus"). Ohne user_input kann der Extractor im
-    Image-Skill Avatar-Aenderungen nur aus der Character-Antwort ableiten.
-    """
+    The response describes character changes; the user input supplies avatar
+    changes that cannot be inferred from the character response alone."""
     if not rp_response and not user_input:
         return tool_input
 
@@ -305,7 +291,7 @@ def _attachment_sends_last(
     )
 
 
-# Sentinel fuer Stream-Ende (safe_anext)
+# End-of-stream sentinel for safe_anext.
 _STREAM_END = object()
 
 
@@ -811,13 +797,13 @@ class ToolErrorEvent:
 
 @dataclass
 class ToolEndEvent:
-    """Tool-Ausfuehrung beendet."""
+    """Tool execution finished."""
     tool_name: str
 
 
 @dataclass
 class DeferredToolEvent:
-    """Signalisiert dass ein Deferred Tool nach der Chat-Antwort ausgefuehrt wird."""
+    """A deferred tool will execute after the chat response."""
     tool_name: str
 
 
@@ -838,13 +824,13 @@ class HeartbeatEvent:
 
 @dataclass
 class RetryHintEvent:
-    """Signalisiert dem Frontend dass die Antwort verworfen und neu generiert wird."""
+    """Tell the frontend that the response is discarded and regenerated."""
     reason: str = ""
 
 
 @dataclass
 class ExtractionEvent:
-    """Extrahierte Marker aus Tool-LLM (Intent, Assignment) die an full_response angehaengt werden."""
+    """Extracted tool-LLM intent and assignment markers appended to the response."""
     markers: str = ""
 
 
@@ -943,13 +929,7 @@ class StreamLoopDetector:
 # ---------------------------------------------------------------------------
 
 class StreamingAgent:
-    """Fuehrt LLM-Streaming mit Tool-Erkennung aus.
-
-    Drei Modi (via mode-Parameter):
-    - no_tools: Reiner Chat, kein Tool-Support
-    - single:   Ein LLM macht alles (Chat + Tools)
-    - dual:     Tool-LLM entscheidet, Chat-LLM antwortet
-    """
+    """Stream LLM responses with tool detection in the selected mode."""
 
     def __init__(
         self,
@@ -969,8 +949,8 @@ class StreamingAgent:
         suppress_move_in_conversation: bool = False,
         user_turn_suffix: str = ""):
         self.llm = llm
-        self.tool_llm = tool_llm or llm  # Fallback auf Chat-LLM wenn kein Tool-LLM konfiguriert
-        self.tool_system_content = tool_system_content  # Minimaler System-Prompt fuer Tool-LLM
+        self.tool_llm = tool_llm or llm  # Use the chat LLM when no tool LLM is configured.
+        self.tool_system_content = tool_system_content  # Minimal tool-LLM system prompt.
         self.tool_format = tool_format
         self.tools_dict = tools_dict
         self.tool_executor = tool_executor
@@ -1097,7 +1077,7 @@ class StreamingAgent:
         _search_hint = (_SEARCH_INTENT_HINT.format(tool=self._search_intent_tool())
                         if self._detect_search_intent(user_input) else "")
 
-        # Phase 1: LLM-Call mit Tool-Instruktionen
+        # Phase 1: call the LLM with tool instructions.
         state1 = _StreamState()
         async for event in self._stream_llm_response(
             state1, self.llm, system_content + _search_hint, history, user_input,
@@ -1105,7 +1085,7 @@ class StreamingAgent:
             yield event
 
         if not state1.tool_matches:
-            # Keine Tools — fertig (1 Call)
+            # No tools; finished after one call.
             async for event in self._run_deferred_tools(state1.response, user_input=user_input):
                 yield event
             logger.info("Beendet: 1 Iteration (keine Tools), %.2fs", time.monotonic() - _start)
@@ -1118,15 +1098,14 @@ class StreamingAgent:
             yield event
 
         if not tool_results:
-            # Nur Deferred Tools erkannt — kein 2. LLM-Call noetig
-            # RP-Kontext fuer Deferred Tools ist die Phase-1-Antwort
+            # Only deferred tools: no second LLM call needed.
+            # Use the phase-one response as their narrative context.
             async for event in self._run_deferred_tools(state1.response, pending_deferred, user_input=user_input):
                 yield event
             logger.info("Beendet: 1 Iteration (nur deferred), %.2fs", time.monotonic() - _start)
             return
 
-        # max_iterations=1: Tools ausgefuehrt, kein Follow-up-Call
-        # (z.B. fast=True Forced-Thoughts — nur Tool-Effekt zaehlt)
+        # At one iteration, tools run without a follow-up response.
         if self.max_iterations <= 1:
             async for event in self._run_deferred_tools(state1.response, pending_deferred, user_input=user_input):
                 yield event
@@ -1134,7 +1113,7 @@ class StreamingAgent:
                         time.monotonic() - _start)
             return
 
-        # Phase 2: LLM-Call mit Tool-Ergebnissen im System-Prompt + Original user_input
+        # Phase 2: pass tool results and the original user input to the LLM.
         tool_context = self._format_tool_context(tool_results)
         enhanced_system = system_content + "\n\n" + tool_context
         state2 = _StreamState()
@@ -1143,7 +1122,7 @@ class StreamingAgent:
             llm_label="LLM", detect_tools=False, iteration=2):
             yield event
 
-        # Deferred Tools mit Phase-2-Antwort als RP-Kontext
+        # Use the phase-two response as context for deferred tools.
         async for event in self._run_deferred_tools(state2.response, pending_deferred, user_input=user_input):
             yield event
         logger.info("Beendet: 2 Iterationen, %.2fs", time.monotonic() - _start)
@@ -1439,7 +1418,7 @@ class StreamingAgent:
             async for event in self._execute_tools(side_fx_matches, _dummy_results, _dummy_deferred):
                 yield event
 
-        # Post-RP Tools (DEFERRED): ausfuehren mit RP-Kontext
+        # Execute deferred tools with narrative context.
         if post_rp_matches:
             pending_deferred = []
             for tm in post_rp_matches:
@@ -1552,7 +1531,7 @@ class StreamingAgent:
             if _attempt > 0:
                 logger.debug("Leere Antwort — retry %d/%d nach %ds (Model-Loading?)",
                              _attempt, _EMPTY_RETRIES, _RETRY_WAIT)
-                # Warten mit Heartbeats
+                # Keep sending heartbeats while waiting.
                 _waited = 0
                 while _waited < _RETRY_WAIT:
                     _sleep = min(_HEARTBEAT_INTERVAL, _RETRY_WAIT - _waited)
@@ -1571,12 +1550,9 @@ class StreamingAgent:
             unsent_buffer = ""
             _loop_det = StreamLoopDetector()
 
-            # Stream-Init. Hinweis: astream() ist ein Async-Generator — der
-            # eigentliche create(stream=True)-Call (und damit z.B. ein Gateway-
-            # 503 "No healthy backend for model X" oder ein Connection-Error)
-            # faellt erst beim ersten __anext__ an, nicht hier. Der Provider-
-            # Fallback sitzt deshalb unten im Chunk-Error-Handler, solange noch
-            # kein Chunk beim Client angekommen ist.
+            # astream is an async generator; connection errors occur on the first
+            # __anext__, not initialization. Provider fallback belongs in the
+            # chunk error handler and is safe until the client receives a chunk.
             _tried_models: set = set()  # (provider, model) pairs already failed
             try:
                 _aiter = active_llm.astream(stream_messages).__aiter__()
@@ -1589,7 +1565,7 @@ class StreamingAgent:
             _stream_done = False
             _pending_task = None
             while not _stream_done:
-                # Task nur erstellen wenn keiner laeuft
+                # Create a task only when none is running.
                 if _pending_task is None:
                     _pending_task = asyncio.create_task(_safe_anext(_aiter))
                 done, _ = await asyncio.wait(
@@ -1666,21 +1642,21 @@ class StreamingAgent:
                     break
 
                 if tool_call_detected:
-                    # Halluzinierten Content nach Tool-Call verwerfen
+                    # Discard hallucinated content following a tool call.
                     continue
 
                 if detect_tools:
-                    # --- Tool-Detection mit Buffer ---
+                    # Detect tool calls with an incremental buffer.
                     unsent_buffer += chunk.content
 
-                    # Inkrementelle Tool-Pattern-Erkennung
+                    # Incremental tool pattern detection.
                     tool_check = find_stream_tool_call(
                         self.tool_format, iteration_response, self.tools_dict
                     )
                     if tool_check:
                         tool_call_detected = True
                         tool_call_end_pos = tool_check.end()
-                        # Nur Text VOR dem Tool-Call senden
+                        # Send only text preceding the tool call.
                         tool_start_in_response = tool_check.start()
                         safe_chars = tool_start_in_response - count_sent
                         if safe_chars > 0:
@@ -1708,13 +1684,9 @@ class StreamingAgent:
             # --- Retry-Check ---
             if iteration_response:
                 if iteration_response.strip().upper() != "SKIP":
-                    break  # Gueltige Chat-Antwort
-                # SKIP-Behandlung context-abhaengig:
-                # - In Chat (log_task='chat_stream' o.ae.) ist SKIP unerwartet
-                #   und meist Model-Loading-Artefakt → retry
-                # - In Thought-Turns (log_task='thought*') ist SKIP eine
-                #   bewusste Entscheidung des Agents (siehe in_chat-Template:
-                #   "Default action: SKIP") → akzeptieren ohne retry
+                    break  # Valid chat response.
+                # SKIP is unexpected in chat and may be a model-loading artifact.
+                # In thought turns it is an intentional decision; accept it.
                 if (self.log_task or "").startswith("thought"):
                     break
                 logger.warning("LLM antwortete mit 'SKIP' — retry (%d/%d)",
@@ -1760,10 +1732,7 @@ class StreamingAgent:
                 self.tool_format, iteration_response, self.tools_dict
             )
             if state.tool_matches:
-                # Singleton-Tools (State-Setter): mehrere Calls in einem
-                # Stream sind sinnlos — nur der letzte gewinnt sowieso
-                # (z.B. SetActivity:kuss + SetActivity:flirten → flirten).
-                # Wir reduzieren auf den letzten Call pro Singleton-Name.
+                # Only the last call for each singleton state setter has an effect.
                 state.tool_matches = _dedupe_singleton_tools(state.tool_matches)
                 logger.info("%d Tool-Match(es) erkannt", len(state.tool_matches))
 
@@ -2093,8 +2062,15 @@ class StreamingAgent:
         tool_matches: List[Tuple[str, str]],
         tool_results: List[Tuple[str, str]],
         pending_deferred: List[Tuple[str, str]]) -> AsyncGenerator[StreamEvent, None]:
-        """Fuehrt Tools aus. Yields Events, befuellt tool_results und pending_deferred."""
+        """Execute tools, yielding events and collecting results and deferred calls."""
         for tool_name, tool_input_text in tool_matches:
+            from app.core.skill_gate import tool_blocked_reason
+            reason = tool_blocked_reason(self.agent_name, tool_name)
+            if reason:
+                result = f"Error: {reason}"
+                tool_results.append((tool_name, result))
+                yield ToolResultEvent(tool_name=tool_name, result=result)
+                continue
             if tool_name not in self.tools_dict:
                 available = ", ".join(self.tools_dict.keys())
                 logger.warning("Tool '%s' halluziniert (verfuegbar: %s)", tool_name, available)
@@ -2117,9 +2093,8 @@ class StreamingAgent:
                 logger.info("Tool DEFERRED: %s (runs after the chat reply)", tool_name)
                 continue
 
-            # A: Wer in einem in-person-Gespräch gerade geantwortet hat, geht
-            # nicht im selben Turn weg (SetLocation aus der RP-Prosa). Teleport
-            # (Spell) ist davon NICHT betroffen.
+            # Do not leave while answering an in-person conversation.
+            # Packages declare which verbs this suppression applies to.
             if self.suppress_move_in_conversation and tool_name in _suppress_in_person_tool_names():
                 logger.info("%s unterdrueckt — Antwort im selben in-person-Turn "
                             "(man geht nicht weg, waehrend man spricht)", tool_name)
@@ -2135,7 +2110,9 @@ class StreamingAgent:
                     tool_result = await self.tool_executor(tool_name, tool_input_text)
                 else:
                     tool_func = self.tools_dict[tool_name]
-                    tool_result = await asyncio.to_thread(tool_func, tool_input_text)
+                    from app.core.skill_gate import run_tool
+                    tool_result = await asyncio.to_thread(
+                        run_tool, self.agent_name, tool_name, lambda: tool_func(tool_input_text))
 
                 result_preview = tool_result[:200] if len(tool_result) > 200 else tool_result
                 logger.debug("Ergebnis: %s", result_preview)
@@ -2187,7 +2164,9 @@ class StreamingAgent:
                     tool_result = await self.tool_executor(tool_name, enriched_input)
                 else:
                     tool_func = self.tools_dict[tool_name]
-                    tool_result = await asyncio.to_thread(tool_func, enriched_input)
+                    from app.core.skill_gate import run_tool
+                    tool_result = await asyncio.to_thread(
+                        run_tool, self.agent_name, tool_name, lambda: tool_func(enriched_input))
                 yield ToolEndEvent(tool_name=tool_name)
                 yield ToolResultEvent(tool_name=tool_name, result=tool_result)
                 if is_error_result(tool_result):
@@ -2234,8 +2213,8 @@ class StreamingAgent:
         parts.append(
             "Falls eine CAPTION enthalten ist, behandle sie NICHT als Beschreibung einer Aktion."
         )
-        # Roleplay: Tool-Fehler stillschweigend behandeln (in-character bleiben).
-        # Chatbots: Fehler normal kommunizieren (der User will wissen wenn etwas schiefging).
+        # Roleplay: handle tool errors while staying in character.
+        # Chatbots: tell the user when a tool failed.
         try:
             if self.agent_name:
                 from app.models.character_template import is_roleplay_character

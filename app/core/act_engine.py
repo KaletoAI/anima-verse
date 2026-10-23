@@ -363,13 +363,16 @@ async def _run_storyteller_agent(
             sid = getattr(skill, "SKILL_ID", "")
             if not sid or sid not in enabled_skill_ids:
                 continue
+            from app.core.skill_gate import blocked_reason
+            if blocked_reason(actor, sid):
+                continue
             # Override per-character limits: storyteller tools carry
             # ``skip_daily_limit=True`` (otherwise e.g. the outfit cap hits).
             t_spec = skill.as_tool(character_name=actor)
             t_name = t_spec.name
             t_orig = t_spec.func
 
-            def _make_wrapper(fn, _agent=actor):
+            def _make_wrapper(fn, _sid=sid, _agent=actor):
                 def wrapper(raw_input):
                     ctx = {"input": raw_input, "agent_name": _agent,
                            "user_id": "", "skip_daily_limit": True}
@@ -378,7 +381,8 @@ async def _run_storyteller_agent(
                         for k, v in parsed.items():
                             if k not in ("agent_name", "user_id"):
                                 ctx[k] = v
-                    return fn(_json.dumps(ctx))
+                    from app.core.skill_gate import run_gated
+                    return run_gated(_agent, _sid, lambda: fn(_json.dumps(ctx)))
                 return wrapper
 
             tools_dict[t_name] = _make_wrapper(t_orig)
@@ -548,12 +552,10 @@ def _subject_mood_text(actor: str) -> str:
 
 
 def _equipped_item_names(actor: str) -> str:
-    """Liefert die echten Item-Namen der aktuell equipped Pieces als
-    komma-separierten String. Nutzt ``item.name`` aus der DB — NICHT die
-    Prompt-Fragmente von ``build_equipped_outfit_prompt`` (die enthalten
-    visuelle Beschreibungen wie 'Green Wood Silk Cloak', die nicht
-    zwingend mit dem Item-Namen identisch sind).
-    """
+    """Return actual equipped item names as a comma-separated string.
+
+    Read item.name from the database; visual prompt fragments may describe
+    an item differently and are unsuitable as item identifiers."""
     try:
         from app.models.character import get_character_profile
         from app.models.inventory import get_item
@@ -565,7 +567,7 @@ def _equipped_item_names(actor: str) -> str:
         items = profile.get("equipped_items") or []
         ids_seen: set = set()
         names: List[str] = []
-        # Pieces zuerst, in Slot-Reihenfolge, jede item_id nur einmal
+        # Equipped pieces first, in slot order, each item ID once.
         for slot, iid in pieces.items():
             if not iid or iid in ids_seen:
                 continue

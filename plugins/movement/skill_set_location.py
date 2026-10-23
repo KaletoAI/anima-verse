@@ -37,6 +37,7 @@ class SetLocationSkill(PluginSkill):
     requested place is validated against the world's locations; the room and
     the pose follow from the input or from the location's arrival rule.
     """
+    PLAYER_ACTION = "travel"
     SUPPRESS_IN_PERSON = True
     SINGLETON = True
 

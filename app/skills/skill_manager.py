@@ -120,7 +120,8 @@ class SkillManager:
         }
 
     def _get_agent_skills(self, character_name: str,
-                          check_limits: bool = True, turn: str = "") -> List:
+                          check_limits: bool = True, turn: str = "",
+                          apply_gate: bool = True) -> List:
         """Filter visible skills by character overrides and package defaults.
 
         Proactive calls also apply runtime limits; chat calls skip those limits.
@@ -163,6 +164,12 @@ class SkillManager:
                 continue
 
             result.append(skill)
+        if apply_gate and result:
+            # One rules/profile load for the whole list, not one per skill.
+            from app.core.skill_gate import blocked_skills
+            blocked = blocked_skills(character_name,
+                                     [getattr(s, 'SKILL_ID', '') for s in result])
+            result = [s for s in result if getattr(s, 'SKILL_ID', '') not in blocked]
         return result
 
     def get_agent_tools(self, character_name: str,
