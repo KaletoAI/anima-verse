@@ -777,16 +777,7 @@
     "shaking hands": {
       "prompt": "two people shaking hands, firm handshake, standing face to face, friendly eye contact",
       "label_de": "Händeschütteln",
-      "synonyms": [
-        "handshake",
-        "shake hands",
-        "händeschütteln",
-        "hände schütteln",
-        "die hand geben",
-        "begrüßung per handschlag",
-        "sich die hand geben",
-        "jemandem die hand schütteln"
-      ],
+      "synonyms": [],
       "animation": "handshake",
       "solo": false,
       "group": "stand",
@@ -972,6 +963,29 @@
         "innig küssen"
       ],
       "animation": "kissing",
+      "group": "stand",
+      "solo": false,
+      "places": 2,
+      "yaw_offset": 0
+    },
+    "greeting handshake": {
+      "prompt": "two people shaking hands in greeting, standing face to face, right hands clasped, a slight nod, friendly eye contact",
+      "synonyms": [
+        "handshake",
+        "shake hands",
+        "händeschütteln",
+        "hände schütteln",
+        "die hand geben",
+        "begrüßung per handschlag",
+        "sich die hand geben",
+        "jemandem die hand schütteln",
+        "hand geben",
+        "handschlag",
+        "zur begrüßung die hand geben",
+        "shaking hands in greeting",
+        "greet with a handshake"
+      ],
+      "animation": "greeting-handshake",
       "group": "stand",
       "solo": false,
       "places": 2,
