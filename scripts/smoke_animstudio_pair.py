@@ -13,7 +13,9 @@ from animation-studio/rig_rest.json.
 [1] frame: d = 0.5 m, s = 0.2 m, nothing keyed. A's Hips head (rest
     (0, 113.03, 0)) sits at (-25, 113.03, +10), B's at (+25, 113.03, -10);
     A's front (0, 0, 1) points along D_a = Ry(90): (1, 0, 0), B's along
-    (-1, 0, 0). Tolerance 1e-6 cm.
+    (-1, 0, 0). Tolerance 1e-6 cm. A negative stagger s = -0.2 m moves
+    each to its own LEFT: A's hips at (-25, 113.03, -10), B's at
+    (+25, 113.03, +10).
 [2] partner goal: d = 0.4, s = 0. A's right hand aims at B's Spine2 with
     offset (0, 0, 0.10) m (10 cm in front of B's chest). B's Spine2 head
     h = rest head -> (-h.z, h.y, h.x) + (20, 0, 0); the offset turns with B
@@ -32,18 +34,21 @@ from animation-studio/rig_rest.json.
       FAILS; head centres 15 - 1.0 = 14 cm < 18 -> pair_heads FAILS.
 [4] validation: a PartnerTarget on "LeftHand" (not a torso bone) raises
     StudioError; a PartnerTarget in a SOLO Animation raises StudioError at
-    compile; a take_over synonym that is not among the synonyms raises
+    compile; validate_pair accepts stagger -0.5 and 0.5 and refuses 0.6
+    and -0.6 (bounds -0.5..0.5); a take_over synonym that is not among the synonyms raises
     StudioError on publish.
 [5] publish of a fake pair build (kind "demo-hug", key "hug-demo",
-    synonyms ("hug demo", "umarmen"), take_over ("umarmen",)) into a temp
-    git repo with a copy of the shipped catalog, where the working tree
-    adds a LOCAL synonym "local-extra" to "comforting" (never committed):
+    synonyms ("hug demo", "umarmen-demo"), take_over ("umarmen-demo",))
+    into a temp git repo with a copy of the shipped catalog plus a
+    smoke-owned entry "demo-owner" (synonyms "trösten-demo",
+    "umarmen-demo"), where the working tree adds a LOCAL synonym
+    "local-extra" to "demo-owner" (never committed):
     - the library holds demo-hug__a.fbx, demo-hug__b.fbx, demo-hug.json;
     - HEAD's entry "hug-demo" = solo false, places 2, yaw_offset 0,
       animation "demo-hug";
-    - HEAD's "comforting" = the shipped synonyms minus "umarmen" (no
-      "local-extra"); the working tree's "comforting" keeps "local-extra"
-      and lost "umarmen";
+    - HEAD's "demo-owner" = ["trösten-demo"] (no "local-extra"); the
+      working tree's "demo-owner" keeps "local-extra" and lost
+      "umarmen-demo";
     - the commit touches exactly: catalog, the two halves, the sidecar,
       the source.
 """
@@ -74,7 +79,7 @@ from animstudio import StudioError, rig                               # noqa: E4
 from animstudio.checks import pair_checks                             # noqa: E402
 from animstudio.compile import compile_anim, compile_pair             # noqa: E402
 from animstudio.dsl import (Animation, Catalog, PairAnimation, PartnerTarget, Pose,  # noqa: E402
-                            Role)
+                            Role, validate_pair)
 
 FAIL = []
 CAT_REL = "shared/templates/pose/pose_catalog.json"
@@ -106,6 +111,9 @@ try:
     near("[1] B hips", fb.pos["Hips"], (25.0, hy, -10.0), 1e-6)
     near("[1] A front", fa.D["Hips"] @ np.array([0.0, 0.0, 1.0]), (1, 0, 0), 1e-9)
     near("[1] B front", fb.D["Hips"] @ np.array([0.0, 0.0, 1.0]), (-1, 0, 0), 1e-9)
+    cp = compile_pair(pair(0.5, -0.2), REST)
+    near("[1] A hips s<0", cp.pair_frames("a")[0].pos["Hips"], (-25.0, hy, -10.0), 1e-6)
+    near("[1] B hips s<0", cp.pair_frames("b")[0].pos["Hips"], (25.0, hy, 10.0), 1e-6)
 
     # [2]
     h = REST.head["Spine2"]
@@ -140,6 +148,14 @@ try:
         FAIL.append("[4] solo PartnerTarget accepted")
     except StudioError:
         pass
+    for s_m, ok in ((-0.5, True), (0.5, True), (0.6, False), (-0.6, False)):
+        try:
+            validate_pair(pair(0.4, s_m))
+            if not ok:
+                FAIL.append(f"[4] stagger {s_m} accepted")
+        except StudioError as e:
+            if ok:
+                FAIL.append(f"[4] stagger {s_m} refused: {e}")
 
     # [5]
     from app.core import pose_catalog as pc
@@ -148,17 +164,21 @@ try:
     (REPO / "shared/templates/pose").mkdir(parents=True)
     (REPO / "shared/models/clips").mkdir(parents=True)
     (REPO / "shared/models/clips-licensed").mkdir(parents=True)
-    shutil.copy(ROOT / "shared/templates/pose/pose_catalog.json", REPO / CAT_REL)
+    # The shipped catalog plus a smoke-owned owner entry, so the take-over
+    # does not depend on which synonyms the real catalog holds today.
+    doc = json.loads((ROOT / CAT_REL).read_text())
+    doc["entries"]["demo-owner"] = {"prompt": "a person demo-owner someone",
+                                    "synonyms": ["trösten-demo", "umarmen-demo"],
+                                    "animation": "idle", "group": "stand"}
+    (REPO / CAT_REL).write_text(json.dumps(doc, ensure_ascii=False, indent=2))
     git("init", "-q")
     git("config", "user.email", "smoke@example.invalid")
     git("config", "user.name", "smoke")
     git("add", CAT_REL)
     git("commit", "-qm", "seed")
-    shipped = json.loads((REPO / CAT_REL).read_text())["entries"]["comforting"]["synonyms"]
-    if "umarmen" not in shipped:
-        FAIL.append("[5] precondition: 'umarmen' is no longer a synonym of 'comforting'")
+    shipped = json.loads((REPO / CAT_REL).read_text())["entries"]["demo-owner"]["synonyms"]
     doc = json.loads((REPO / CAT_REL).read_text())
-    doc["entries"]["comforting"]["synonyms"].append("local-extra")
+    doc["entries"]["demo-owner"]["synonyms"].append("local-extra")
     (REPO / CAT_REL).write_text(json.dumps(doc, ensure_ascii=False, indent=2))
     pc.catalog_path = lambda a, _o=pc.catalog_path: (REPO / CAT_REL) if a == "pose" else _o(a)
     pc.reload_catalogs()
@@ -170,7 +190,7 @@ try:
             "from animstudio.dsl import Catalog, PairAnimation, Role\n"
             f"ANIM = PairAnimation(kind={kind!r}, duration_s=1.0, loop=False, distance_m=0.4,\n"
             "    catalog=Catalog(key='hug-demo', group='stand', prompt='two people hugging',\n"
-            f"        synonyms=('hug demo', 'umarmen'), take_over={tuple(take_over)!r}),\n"
+            f"        synonyms=('hug demo', 'umarmen-demo'), take_over={tuple(take_over)!r}),\n"
             "    a=Role(), b=Role())\n")
         out = animstudio.OUT / kind
         out.mkdir(parents=True, exist_ok=True)
@@ -188,9 +208,9 @@ try:
         FAIL.append("[4] stray take_over accepted")
     except StudioError:
         pass
-    fake_pair("demo-hug", ("umarmen",))
+    fake_pair("demo-hug", ("umarmen-demo",))
     r = P.publish("demo-hug", repo=REPO)
-    if r["moved"] != {"comforting": ["umarmen"]}:
+    if r["moved"] != {"demo-owner": ["umarmen-demo"]}:
         FAIL.append(f"[5] moved {r['moved']}")
     lib = REPO / "shared/models/clips"
     for name in ("demo-hug__a.fbx", "demo-hug__b.fbx", "demo-hug.json"):
@@ -201,11 +221,11 @@ try:
     if (e.get("solo"), e.get("places"), e.get("yaw_offset"), e.get("animation")) != \
             (False, 2, 0, "demo-hug"):
         FAIL.append(f"[5] HEAD entry {e}")
-    if head["comforting"]["synonyms"] != [x for x in shipped if x != "umarmen"]:
-        FAIL.append(f"[5] HEAD comforting {head['comforting']['synonyms']}")
-    wt = json.loads((REPO / CAT_REL).read_text())["entries"]["comforting"]["synonyms"]
-    if "local-extra" not in wt or "umarmen" in wt:
-        FAIL.append(f"[5] working-tree comforting {wt}")
+    if head["demo-owner"]["synonyms"] != [x for x in shipped if x != "umarmen-demo"]:
+        FAIL.append(f"[5] HEAD demo-owner {head['demo-owner']['synonyms']}")
+    wt = json.loads((REPO / CAT_REL).read_text())["entries"]["demo-owner"]["synonyms"]
+    if "local-extra" not in wt or "umarmen-demo" in wt:
+        FAIL.append(f"[5] working-tree demo-owner {wt}")
     changed = sorted(git("show", "--name-only", "--format=", "HEAD").split())
     want_files = sorted([CAT_REL, "shared/models/clips/demo-hug__a.fbx",
                          "shared/models/clips/demo-hug__b.fbx",

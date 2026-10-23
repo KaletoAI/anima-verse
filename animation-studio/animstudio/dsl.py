@@ -161,7 +161,8 @@ class PairAnimation:
     +distance_m / 2 facing -X (``distance_m`` = hips apart along their
     facing), each ``stagger_m / 2`` to its OWN right (A towards +Z, B
     towards -Z) — the lateral offset that lets two heads pass each other in
-    an embrace. Each role's own clip space (X its left, Z its front) is
+    an embrace. A negative stagger moves each to its own LEFT, so the two
+    right hands meet right of each body's midline (a handshake). Each role's own clip space (X its left, Z its front) is
     turned into that frame. The bake then turns the whole pair so that +X
     runs from A's hips to B's (spec docs/schnittstellen-3d.md § A8a), so
     with a stagger both face a little off that line. ``anchor_s`` is the
@@ -189,8 +190,8 @@ def validate_pair(pair: PairAnimation) -> None:
         raise StudioError("pair clips support catalog.group 'stand' only")
     if not 0.1 <= pair.distance_m <= 2.0:
         raise StudioError("distance_m must be within 0.1..2.0")
-    if not 0.0 <= pair.stagger_m <= 0.5:
-        raise StudioError("stagger_m must be within 0..0.5")
+    if not -0.5 <= pair.stagger_m <= 0.5:
+        raise StudioError("stagger_m must be within -0.5..0.5")
     if not 0.0 <= pair.anchor_s <= pair.duration_s:
         raise StudioError("anchor_s must lie within [0, duration]")
     for role in ("a", "b"):
