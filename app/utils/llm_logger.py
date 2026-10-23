@@ -55,7 +55,8 @@ def _sampler_info(llm: Any) -> Dict[str, float]:
     if llm is None:
         return {}
     out: Dict[str, float] = {}
-    for attr in ("temperature", "frequency_penalty", "top_p"):
+    for attr in ("temperature", "frequency_penalty", "top_p",
+                 "repetition_penalty"):
         value = getattr(llm, attr, None)
         if value is None:
             continue

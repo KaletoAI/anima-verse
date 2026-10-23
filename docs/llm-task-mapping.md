@@ -18,6 +18,17 @@ resolves it against the `llm_routing` list in the world's `config.json`.
  "chat_template": "", "tasks": [{"task": "chat_stream", "order": 1}]}
 ```
 
+An entry may also carry `repetition_penalty` (empty/0 = not sent). It goes out
+via `extra_body` because it is a vLLM / llama.cpp parameter, not an OpenAI
+one — leave it empty for OpenAI, Anthropic and backends that reject unknown
+fields. Unlike `chat.frequency_penalty`, which vLLM applies only to the tokens
+of the reply being written, it also counts the prompt, so it is the sampler
+that keeps a character from copying its own earlier replies out of the history.
+The reactive anti-loop (`chat.anti_rep_rp_step`, ceiling `chat.anti_rep_rp_max`)
+raises it per detected repetition, only on entries that set it. Measured value
+for a 111B RP model: 1.03 base, ceiling 1.05; from 1.08 on marker lines break
+and replies drift into English.
+
 ### Cache lanes — how many calls a model runs at once
 
 `max_concurrent` on an entry (admin label **"Lanes"**, LLMs page) is not a

@@ -446,7 +446,8 @@ def build_chat_context(
     _llm_overrides: Dict[str, Any] = anti_repetition_overrides(
         _rep_source,
         float(getattr(_chat_instance, "temperature", 0.7)),
-        agent_name=character_name)
+        agent_name=character_name,
+        base_repetition_penalty=getattr(_chat_instance, "repetition_penalty", None))
     llm = _chat_instance.create_llm(**_llm_overrides) if _chat_instance else None
 
     # History window (time-based)

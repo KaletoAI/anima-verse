@@ -101,8 +101,9 @@ def _within_max_age(rows: list) -> list:
     return fresh
 
 
-def thought_anti_repetition_overrides(character_name: str,
-                                      base_temperature: float) -> Dict[str, Any]:
+def thought_anti_repetition_overrides(
+        character_name: str, base_temperature: float,
+        base_repetition_penalty: Optional[float] = None) -> Dict[str, Any]:
     """Reactive temperature bump for a thought turn — same net as in the chat.
 
     The chat path counts repetitions over its message list; a thought turn has
@@ -139,7 +140,8 @@ def thought_anti_repetition_overrides(character_name: str,
               for r in reversed(rows) if (r.get("content") or "").strip()]
     return anti_repetition_overrides(recent, base_temperature,
                                      agent_name=character_name,
-                                     with_frequency_penalty=False)
+                                     with_frequency_penalty=False,
+                                     base_repetition_penalty=base_repetition_penalty)
 
 
 def _cascade_brake_tool_names() -> frozenset:
@@ -343,7 +345,8 @@ class ThoughtRunner:
         _narrator_inst = _tool_inst if _is_fast else _thought_inst
         if _narrator_inst:
             _anti_rep = thought_anti_repetition_overrides(
-                character_name, float(getattr(_narrator_inst, "temperature", 0.7)))
+                character_name, float(getattr(_narrator_inst, "temperature", 0.7)),
+                getattr(_narrator_inst, "repetition_penalty", None))
             if _anti_rep:
                 llm = _narrator_inst.create_llm(**_anti_rep)
 
