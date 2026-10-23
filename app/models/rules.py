@@ -650,6 +650,29 @@ def check_leave(character_name: str, *,
     return True, ""
 
 
+def check_followers_leave(leader: str, *,
+                          target_location_id: str = "",
+                          target_room_id: str = "") -> Tuple[bool, str]:
+    """``check_leave`` for every party follower of ``leader``.
+
+    A leader's move drags its followers along (party drag), so a follower
+    confined to its place must hold the whole party there — otherwise a
+    leave rule only binds a character until someone takes it along. The
+    NPC paths get this from ``movement_authority`` (every member passes the
+    gate); the avatar's own move routes ask here. The reason names the
+    follower, in the same ``"<name>: <reason>"`` form as movement_authority.
+    """
+    from app.core.party_engine import party_followers
+    for follower in party_followers(leader):
+        if not follower or follower == leader:
+            continue
+        ok, reason = check_leave(follower, target_location_id=target_location_id,
+                                 target_room_id=target_room_id)
+        if not ok:
+            return False, f"{follower}: {reason}"
+    return True, ""
+
+
 # ============================================================
 # ZWANGS-REGELN: Erzwungene Aktionen pruefen
 # ============================================================

@@ -2602,9 +2602,13 @@ async def apply_current_location(character_name: str, request) -> Dict[str, Any]
     # Block rules: the avatar cannot enter blocked locations or rooms.
     # Use the same gates as the NPC SetLocation skill.
     if _is_avatar and (location_to_save != old_loc or (room and room != old_room)):
-        from app.models.rules import check_leave, check_access
+        from app.models.rules import check_access, check_followers_leave, check_leave
         if old_loc and location_to_save != old_loc:
             ok_leave, leave_msg = check_leave(character_name)
+            if ok_leave:
+                # The location write drags the party along (party drag).
+                ok_leave, leave_msg = check_followers_leave(
+                    character_name, target_location_id=location_to_save)
             if not ok_leave:
                 raise HTTPException(status_code=403,
                     detail={"reason": "block_leave", "message": leave_msg})
@@ -2782,9 +2786,13 @@ async def apply_place_on_map(character_name: str, data: Dict[str, Any]) -> Dict[
     # Block rules: the avatar may not be put into a blocked location/room —
     # the same gates its own move walks through.
     if _is_avatar and (location_to_save != old_loc or (room and room != old_room)):
-        from app.models.rules import check_leave, check_access
+        from app.models.rules import check_access, check_followers_leave, check_leave
         if old_loc and location_to_save != old_loc:
             ok_leave, leave_msg = check_leave(character_name)
+            if ok_leave:
+                # The location write drags the party along (party drag).
+                ok_leave, leave_msg = check_followers_leave(
+                    character_name, target_location_id=location_to_save)
             if not ok_leave:
                 raise HTTPException(status_code=403,
                     detail={"reason": "block_leave", "message": leave_msg})
