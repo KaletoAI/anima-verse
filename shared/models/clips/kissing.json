@@ -1,0 +1,63 @@
+{
+ "kind": "kissing",
+ "pair": true,
+ "roles": [
+  "a",
+  "b"
+ ],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 151,
+ "duration_s": 5.033,
+ "loop": false,
+ "speed": 1.0,
+ "geometry": {
+  "anchor_frame": 75,
+  "anchor_s": 2.5,
+  "root_distance_m": 0.44,
+  "floor_shift_cm": -0.01,
+  "roles": {
+   "a": {
+    "start_xz_m": [
+     -0.22,
+     -0.0
+    ],
+    "anchor_xz_m": [
+     -0.22,
+     -0.0
+    ]
+   },
+   "b": {
+    "start_xz_m": [
+     0.22,
+     0.0
+    ],
+    "anchor_xz_m": [
+     0.22,
+     0.0
+    ]
+   }
+  },
+  "hips_scale": [
+   1.0,
+   1.0
+  ],
+  "contact": {
+   "hands": [
+    "RightArm",
+    "LeftHand"
+   ],
+   "actor_distance_m": 0.128,
+   "rig_distance_m": 0.128,
+   "shift_m": 0.0
+  },
+  "rig_floor_shift_cm": -0.0,
+  "rig_floor_min_cm": -0.0
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/kissing.py",
+  "spec_sha": "93b220dd330aeaa0baa41bf6aba773ecdf404f1c47902b6d5147d208f10d22ae"
+ }
+}

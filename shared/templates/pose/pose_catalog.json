@@ -953,6 +953,29 @@
       "solo": false,
       "places": 2,
       "yaw_offset": 0
+    },
+    "kissing": {
+      "prompt": "two people kissing, standing close, one with hands on the other's waist, the other with arms around the partner's neck, eyes closed",
+      "synonyms": [
+        "kiss",
+        "kissing",
+        "kiss each other",
+        "a kiss",
+        "romantic kiss",
+        "küssen",
+        "kuss",
+        "sich küssen",
+        "einen kuss geben",
+        "jemanden küssen",
+        "küsst",
+        "ein kuss",
+        "innig küssen"
+      ],
+      "animation": "kissing",
+      "group": "stand",
+      "solo": false,
+      "places": 2,
+      "yaw_offset": 0
     }
   }
 }
