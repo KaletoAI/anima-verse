@@ -5318,8 +5318,15 @@ async function startApp(username: string, role: string) {
     // placed inside. Tying the switch to the interior alone meant the room
     // there never changed on foot, which left the prompt scoped to a room the
     // player cannot reach.
+    //
+    // The same holds for a BUILDING's always-visible outdoor zones (a garden
+    // pool beside a villa): the opening rule above closes the interior as soon
+    // as the figure stands in such a zone, so tying the switch to the interior
+    // left the avatar on the ground there for good. With the interior closed,
+    // the candidate filter below offers exactly those zones.
     const interiorUp = !!tile && tile.fadeTarget === 1;
-    if (!tile || !(interiorUp || tile.modelIsShellArea) || state.movementLocked) {
+    if (!tile || !(interiorUp || tile.modelIsShellArea || tile.alwaysVisibleRooms.size > 0)
+        || state.movementLocked) {
       roomWalk = idleRoomWalk();
       return;
     }
