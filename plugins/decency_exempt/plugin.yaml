@@ -9,10 +9,12 @@ skills:
     class: DecencyExemptSkill
     params: {active: true}
     always_load: true
+    default_enabled: true
   - skill_id: require_decency
     class: DecencyExemptSkill
     params: {active: false}
     always_load: true
+    default_enabled: true
 
 templates:
   llm: templates/llm

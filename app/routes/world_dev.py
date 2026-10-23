@@ -1507,6 +1507,11 @@ def _apply_character_internal(char_data: Dict[str, Any],
     if config_changed:
         save_character_config(char_name, config)
 
+    # Same starting repertoire as a character created in the Characters tab.
+    if _is_new:
+        from app.core.character_ops import seed_default_skills
+        seed_default_skills(char_name)
+
     outfits_applied = []
     apply_warnings: List[str] = []
     raw_outfits = char_data.get("outfits", []) or []

@@ -5,6 +5,7 @@ description: Sets the character's current pose (catalog key + display detail)
 skills:
   - skill_id: set_pose
     always_load: true
+    default_enabled: true
     singleton: true        # replaces the class attribute (F7)
 
 templates:

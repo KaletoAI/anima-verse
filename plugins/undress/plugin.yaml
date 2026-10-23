@@ -9,10 +9,12 @@ skills:
     class: UndressSkill
     params: {dressed: false}
     always_load: true
+    default_enabled: true
   - skill_id: get_dressed
     class: UndressSkill
     params: {dressed: true}
     always_load: true
+    default_enabled: true
 
 templates:
   llm: templates/llm

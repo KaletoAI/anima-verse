@@ -16,6 +16,7 @@ skills:
     module: skill_set_location.py
     class: CancelTravelSkill
     always_load: true
+    default_enabled: true
 
 templates:
   llm: templates/llm

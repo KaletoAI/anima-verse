@@ -18,7 +18,9 @@ class ReadItemSkill(PluginSkill):
         self._defaults = {"enabled": True}
 
     def default_enabled_for(self, character_name: str) -> bool:
-        return self.enabled and bool(self.ctx.get_config("skills.read_item.enabled", True))
+        # A temporary NPC keeps no memories, so what it read would be lost.
+        return (self.enabled and bool(self.ctx.get_config("skills.read_item.enabled", True))
+                and not character.is_temporary_npc(character_name))
 
     def _candidates(self, name):
         """Cheap availability checks: never evaluate a page provider here."""
