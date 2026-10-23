@@ -1,3 +1,4 @@
+import { StatRatesEditor } from './StatRatesEditor'
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPut } from '../../lib/api'
@@ -160,6 +161,7 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
             {kitCatalog?.room_types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
           </select>
         </Field>}
+        <StatRatesEditor value={draft.stat_rates || []} onChange={rates => upd('stat_rates', rates)} />
         <Field label={t('Description')}>
           <textarea
             className="ga-textarea"

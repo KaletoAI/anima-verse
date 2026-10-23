@@ -230,7 +230,13 @@ export interface FurnitureKitCatalog {
   missing_roles: Record<string, Record<string, string[]>>
 }
 
+export interface StatRate {
+  stat: string
+  per_hour: number
+}
+
 export interface Room {
+  stat_rates?: StatRate[]
   room_type?: string
   id?: string
   name?: string
@@ -442,6 +448,7 @@ export interface NpcSlot {
 }
 
 export interface Location {
+  stat_rates?: StatRate[]
   id: string
   name: string
   description?: string

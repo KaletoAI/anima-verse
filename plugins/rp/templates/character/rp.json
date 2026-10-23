@@ -102,7 +102,19 @@
             }
           ],
           "bar_baseline": 50,
-          "bar_pull": 0.04
+          "bar_pull": 0.04,
+          "bar_rates": [
+            {
+              "condition": "location_danger>2",
+              "per_hour": -3,
+              "label": "Dangerous place"
+            },
+            {
+              "condition": "relationship:any>60",
+              "per_hour": 1,
+              "label": "Good company"
+            }
+          ]
         },
         {
           "key": "stamina",
@@ -156,6 +168,16 @@
               "condition": "offmap AND NOT is_sleeping",
               "per_hour": 22,
               "label": "Away from the map"
+            },
+            {
+              "condition": "travelling",
+              "per_hour": -6,
+              "label": "Travelling"
+            },
+            {
+              "condition": "location_danger>2",
+              "per_hour": -2,
+              "label": "Dangerous place"
             }
           ]
         },

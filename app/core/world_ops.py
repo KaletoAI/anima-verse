@@ -2134,9 +2134,28 @@ def _sanitize_opening(raw: Any) -> Optional[Dict[str, Any]]:
     return out
 
 
+def _sanitize_stat_rates(rates: Any) -> List[Dict[str, Any]]:
+    """Keep at most ten valid, bounded hourly stat rates."""
+    result = []
+    for rate in rates if isinstance(rates, list) else []:
+        if not isinstance(rate, dict) or not isinstance(rate.get("stat"), str):
+            continue
+        stat = rate["stat"].strip()
+        if not stat:
+            continue
+        try:
+            amount = int(rate.get("per_hour"))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        result.append({"stat": stat, "per_hour": max(-50, min(50, amount))})
+        if len(result) == 10:
+            break
+    return result
+
+
 def _sanitize_rooms_layout(rooms: Any) -> Any:
-    """Apply the layout sanitizer to every room dict in place (rooms pass
-    through add_location verbatim otherwise). Invalid layouts are dropped.
+    """Sanitize layouts and stat rates in every room dict in place (rooms
+    pass through add_location verbatim otherwise). Invalid layouts are dropped.
 
     A CORRIDOR ROOM CARRIES NO LAYOUT AT ALL (spec § 2.1): its storey plate
     and hull are the location's, so anything a call puts under ``layout``
@@ -2153,7 +2172,11 @@ def _sanitize_rooms_layout(rooms: Any) -> Any:
     if not isinstance(rooms, list):
         return rooms
     for room in rooms:
-        if not isinstance(room, dict) or "layout" not in room:
+        if not isinstance(room, dict):
+            continue
+        if "stat_rates" in room:
+            room["stat_rates"] = _sanitize_stat_rates(room["stat_rates"])
+        if "layout" not in room:
             continue
         if is_floor_room(str(room.get("id") or "")):
             # A corridor has no geometry of its own (spec § 2.1): whatever an
@@ -2244,7 +2267,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                             create_new=bool(data.get("create_new")))
 
     # Set extra fields directly in the location
-    _has_extra = (danger_level is not None or event_settings is not None
+    _has_extra = ("stat_rates" in data or danger_level is not None or event_settings is not None
                   or outfit_type is not None or knowledge_item_id is not None
                   or entry_room is not None or indoor is not None
                   or default_door_prop_id is not None
@@ -2265,6 +2288,8 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
             _evict_corridors: List[str] = []
             for _l in wdata.get("locations", []):
                 if _l.get("id") == location.get("id"):
+                    if "stat_rates" in data:
+                        _l["stat_rates"] = _sanitize_stat_rates(data["stat_rates"])
                     if danger_level is not None:
                         try:
                             _l["danger_level"] = max(0, min(5, int(danger_level)))
@@ -2410,7 +2435,7 @@ def update_location_with_extras(location_id: str,
                 location_id=location_id)  # update by id — unambiguous with duplicate names
 
     # Set extra fields (incl. knowledge_item_id) directly in the location
-    _has_extra = (danger_level is not None or event_settings is not None
+    _has_extra = ("stat_rates" in data or danger_level is not None or event_settings is not None
                   or outfit_type is not None or knowledge_item_id is not None
                   or entry_room is not None or indoor is not None
                   or default_door_prop_id is not None
@@ -2432,6 +2457,8 @@ def update_location_with_extras(location_id: str,
             _evict_corridors: List[str] = []
             for _l in wdata.get("locations", []):
                 if _l.get("id") == location_id:
+                    if "stat_rates" in data:
+                        _l["stat_rates"] = _sanitize_stat_rates(data["stat_rates"])
                     if danger_level is not None:
                         try:
                             _l["danger_level"] = max(0, min(5, int(danger_level)))

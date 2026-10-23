@@ -878,6 +878,9 @@ def apply_hourly_status_tick(character_name: str):
         rules = rules_for_character(character_name, profile=profile, config=config)
         location = get_character_current_location(character_name)
         room = get_character_current_room(character_name)
+        from app.models.world import get_location_by_id, get_room_by_id
+        place = get_location_by_id(location) if location else None
+        room_data = get_room_by_id(place, room) if place and room else None
         rate_parts = {}
         for key, rule in rules.items():
             parts = []
@@ -888,6 +891,12 @@ def apply_hourly_status_tick(character_name: str):
                 if evaluate_condition(condition, character_name, location, room)[0]:
                     parts.append({"label": rate["label"] or condition,
                                   "delta": rate["per_hour"]})
+            for source, prefix in ((place, "Place"), (room_data, "Room")):
+                if source:
+                    for rate in source.get("stat_rates", []):
+                        if rate.get("stat") == key:
+                            parts.append({"label": f"{prefix}: {source.get('name', '')}",
+                                          "delta": rate["per_hour"]})
             rate_parts[key] = parts
 
         changes = {}

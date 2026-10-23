@@ -1,3 +1,4 @@
+import { StatRatesEditor } from './StatRatesEditor'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
@@ -200,6 +201,7 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
         default_door_style: draft.default_door_style || '',
         default_window_style: draft.default_window_style || '',
         danger_level: draft.danger_level,
+        stat_rates: draft.stat_rates || [],
         indoor: draft.indoor || '',
         decency: draft.decency,
         style_hint: draft.style_hint,
@@ -283,9 +285,11 @@ export function LocationEditor({ location, items, allLocations, onChanged, onDir
         </Field>
       </div>
 
+      <StatRatesEditor value={draft.stat_rates || []} onChange={rates => upd('stat_rates', rates)} />
+
       <div className="ga-form-row">
         <Field label={t('Danger level')}
-          hint={t('Drives stamina/stat drain per GAME hour (game clock) and danger-based rules; higher = more dangerous.')}>
+          hint={t('Used by character template rates and danger-based rules; higher = more dangerous.')}>
           <select
             className="ga-input"
             value={draft.danger_level ?? 0}

@@ -8,6 +8,10 @@
     }
   },
   "translations": {
+    "Used by character template rates and danger-based rules; higher = more dangerous.": "Wird von Raten der Charaktervorlage und gefahrenbasierten Regeln verwendet; höher = gefährlicher.",
+    "Per hour": "Pro Stunde",
+    "Added each game hour. Up to 10 rates, from -50 to 50 per hour.": "Werden jede Spielstunde addiert. Bis zu 10 Raten von -50 bis 50 pro Stunde.",
+    "Stat rates": "Wert-Raten",
     "Actions": "Aktionen",
     "Add rate": "Rate hinzufügen",
     "Add skill": "Fähigkeit hinzufügen",
@@ -523,7 +527,6 @@
     "Draw the placed locations. Switch them off to reach ground and relief points that lie under a building.": "Die platzierten Orte zeichnen. Ausschalten, um an Gelände- und Höhenpunkte zu kommen, die unter einem Gebäude liegen.",
     "Draw this area over the ones around it": "Diese Fläche über die umliegenden zeichnen",
     "Draw this area under the ones around it": "Diese Fläche unter die umliegenden zeichnen",
-    "Drives stamina/stat drain per GAME hour (game clock) and danger-based rules; higher = more dangerous.": "Steuert Stamina-/Stat-Drain pro SPIEL-Stunde (Spieluhr) und gefahrbasierte Regeln; höher = gefährlicher.",
     "Drop": "Ablegen",
     "Drop blocks": "Drop-Blöcke",
     "drunk": "betrunken",
