@@ -825,10 +825,6 @@
         "hände auf die schultern",
         "reassure",
         "jemanden trösten",
-        "umarmen",
-        "jemanden umarmen",
-        "eine umarmung",
-        "in den arm nehmen",
         "beruhigen"
       ],
       "animation": "comfort",
@@ -933,6 +929,30 @@
       "animation": "forehead-wiping",
       "solo": true,
       "group": "stand"
+    },
+    "hugging": {
+      "prompt": "two people hugging in greeting, arms wrapped around each other, one arm over the shoulder and one around the waist, heads side by side, warm smiles",
+      "synonyms": [
+        "hug",
+        "hugging",
+        "embrace",
+        "hug hello",
+        "greeting hug",
+        "umarmen",
+        "umarmung",
+        "jemanden umarmen",
+        "eine umarmung",
+        "in den arm nehmen",
+        "zur begrüßung umarmen",
+        "umarmt",
+        "sich umarmen",
+        "fest umarmen"
+      ],
+      "animation": "greeting-hug",
+      "group": "stand",
+      "solo": false,
+      "places": 2,
+      "yaw_offset": 0
     }
   }
 }
