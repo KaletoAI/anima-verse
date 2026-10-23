@@ -407,6 +407,7 @@ export type {
 } from '@anima/scene-render'
 
 export interface EventSettings {
+  stat_effects?: Record<string, Record<string, number>>
   event_probability?: number
   max_concurrent_events?: number
   event_cooldown_hours?: number

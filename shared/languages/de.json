@@ -2837,6 +2837,11 @@
     "Window style used by every window of this place that names none.": "Fensterstil für alle Fenster dieses Ortes ohne eigenen Stil.",
     "says something you do not catch.": "sagt etwas, das du nicht mitbekommst.",
     "No recent changes": "Keine kürzlichen Änderungen",
-    "back to normal": "wieder normal"
+    "back to normal": "wieder normal",
+    "Immediate stat effects": "Sofortige Werte-Effekte",
+    "Applied once per event and character. Use world defaults or override each category; an empty override applies nothing.": "Wirkt einmal pro Ereignis und Charakter. Weltstandards verwenden oder je Kategorie überschreiben; ein leerer Override bewirkt nichts.",
+    "Override world effects": "Welteffekte überschreiben",
+    "No immediate effects.": "Keine Soforteffekte.",
+    "Add effect": "Effekt hinzufügen"
   }
 }

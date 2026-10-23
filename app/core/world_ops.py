@@ -2134,6 +2134,30 @@ def _sanitize_opening(raw: Any) -> Optional[Dict[str, Any]]:
     return out
 
 
+def _sanitize_event_settings(settings: Any) -> Dict[str, Any]:
+    """Keep category absence distinct from an explicitly empty effects map."""
+    if not isinstance(settings, dict):
+        return {}
+    result = dict(settings)
+    if "stat_effects" in result:
+        raw = result["stat_effects"]
+        sanitized = {}
+        if isinstance(raw, dict):
+            for category, effects in raw.items():
+                if category not in ("ambient", "social", "disruption", "danger") or not isinstance(effects, dict):
+                    continue
+                sanitized[category] = {}
+                for key, amount in effects.items():
+                    if not isinstance(key, str) or not key.strip():
+                        continue
+                    try:
+                        sanitized[category][key.strip()] = max(-100, min(100, int(amount)))
+                    except (TypeError, ValueError, OverflowError):
+                        continue
+        result["stat_effects"] = sanitized
+    return result
+
+
 def _sanitize_stat_rates(rates: Any) -> List[Dict[str, Any]]:
     """Keep at most ten valid, bounded hourly stat rates."""
     result = []
@@ -2296,7 +2320,7 @@ def create_location_with_extras(data: Dict[str, Any]) -> Dict[str, Any]:
                         except (TypeError, ValueError):
                             pass
                     if event_settings is not None:
-                        _l["event_settings"] = event_settings
+                        _l["event_settings"] = _sanitize_event_settings(event_settings)
                     if outfit_type is not None:
                         _l["outfit_type"] = (outfit_type or "").strip()
                     if decency is not None:
@@ -2465,7 +2489,7 @@ def update_location_with_extras(location_id: str,
                         except (TypeError, ValueError):
                             pass
                     if event_settings is not None:
-                        _l["event_settings"] = event_settings
+                        _l["event_settings"] = _sanitize_event_settings(event_settings)
                     if outfit_type is not None:
                         _l["outfit_type"] = (outfit_type or "").strip()
                     if decency is not None:

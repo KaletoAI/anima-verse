@@ -1,15 +1,15 @@
-"""Inventory System - Gegenstaende, Raum-Items und Character-Inventar.
+"""Inventory system: item definitions, room items and character inventories.
 
-Drei Ebenen:
-1. Item-Definitionen (user-level): Was existiert in der Welt → world.db:items
-2. Raum-Items: Welche Items liegen wo (in locations/rooms) → world.db:rooms meta
-3. Character-Inventar: Was traegt ein Character bei sich → world.db:inventory_items
+Three levels:
+1. User-level item definitions: world.db:items
+2. Room placements: world.db:rooms metadata
+3. Carried items: world.db:inventory_items
 
 Storage:
-- Item-Definitionen: world.db:items (Welt) + shared/items/*.json (global)
-- Item-Bilder: storage/items/{item_id}/image.png (bleibt auf Disk)
-- Character-Inventar: world.db:inventory_items, equipped_pieces, equipped_items
-- Raum-Items: Eingebettet in world.db:rooms meta (via world-Funktionen)
+- Definitions: world.db:items (world) and shared/items/*.json (global)
+- Images: storage/items/{item_id}/image.png on disk
+- Inventories: world.db:inventory_items, equipped_pieces, equipped_items
+- Room items: world.db:rooms metadata through world functions
 """
 import json
 import random
@@ -34,14 +34,14 @@ VALID_ITEM_CATEGORIES = (
 VALID_RARITIES = ("common", "rare", "unique")
 VALID_OBTAIN_METHODS = ("found", "given", "crafted", "purchased", "quest_reward", "manual")
 
-# Body-Slots fuer Outfit-Pieces. Reihenfolge ist die Prompt-Assembly-Reihenfolge.
+# Outfit body slots, ordered as in prompt assembly.
 VALID_PIECE_SLOTS = (
     "underwear_top", "underwear_bottom", "legs",
     "top", "bottom", "outer", "feet", "neck", "head")
 
 
 # ============================================================
-# 1. ITEM-DEFINITIONEN (user-level)
+# 1. ITEM DEFINITIONS (user-level)
 # ============================================================
 
 def _get_items_file() -> Path:
@@ -148,9 +148,9 @@ def is_shared_item(item_id: str) -> bool:
 
 
 def get_item_image_path(item_id: str) -> str:
-    """Liefert den absoluten Pfad zum Item-Bild oder leer wenn nicht vorhanden.
+    """Return the absolute item image path, or an empty string if absent.
 
-    Sucht erst im World-Item-Dir, dann (falls Shared-Item) im shared/items-Dir.
+    Search the world item directory first, then shared/items for shared items.
     """
     item = get_item(item_id)
     if not item:
@@ -164,7 +164,7 @@ def get_item_image_path(item_id: str) -> str:
 
 
 def _load_items() -> List[Dict[str, Any]]:
-    """Laedt alle Item-Definitionen aus der DB."""
+    """Load all item definitions from the database."""
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -202,7 +202,7 @@ def _load_items() -> List[Dict[str, Any]]:
         return items
     except Exception as e:
         logger.warning("Fehler beim Laden der Items aus DB: %s", e)
-        # Fallback: JSON-Datei
+        # Fallback: JSON file.
         path = _get_items_file()
         if not path.exists():
             return []
@@ -261,13 +261,12 @@ def _save_items(items: List[Dict[str, Any]]) -> bool:
 
 
 def list_items() -> List[Dict[str, Any]]:
-    """Listet alle Item-Definitionen."""
+    """List all item definitions."""
     return _load_items()
 
 
 def get_item(item_id: str) -> Optional[Dict[str, Any]]:
-    """Gibt ein einzelnes Item zurueck. Sucht erst in den World-Items,
-    dann in den globalen Shared-Items."""
+    """Return an item, looking in world items before the global shared library."""
     try:
         conn = get_connection()
         row = conn.execute(
@@ -311,10 +310,10 @@ def get_item(item_id: str) -> Optional[Dict[str, Any]]:
 
 
 def resolve_item_id(token: str) -> Optional[str]:
-    """Loest einen Token (ID, Name oder 'item_<Name>') zur echten Item-ID auf.
+    """Resolve an ID, name or item_<name> token to an actual item ID.
 
-    Reihenfolge: exakte ID → exakter Name (case-insensitive) → Token ohne
-    'item_'-Prefix als Name. Gibt None zurueck, wenn nichts passt.
+    Try exact ID, case-insensitive exact name, then the name without item_.
+    Return None when nothing matches.
     """
     if not token:
         return None
@@ -340,14 +339,11 @@ def resolve_item_id(token: str) -> Optional[str]:
 
 
 def _clean_piece_slots(raw) -> List[str]:
-    """Normalisiert die Slot-Liste eines Outfit-Pieces.
+    """Normalize the slot list of an outfit piece.
 
-    Symmetrisch — kein primary/additional. Ein Piece belegt alle Slots
-    in der Liste gleichberechtigt.
-
-    - Nur gueltige Slots aus VALID_PIECE_SLOTS
-    - Dedup, Reihenfolge stabil
-    - Leere Liste ist erlaubt (Aufrufer entscheidet ob das ein Fehler ist)
+    All slots are equal; there is no primary/additional distinction.
+    Keep only VALID_PIECE_SLOTS and deduplicate in input order.
+    An empty list is allowed; the caller decides whether it is an error.
     """
     if not raw:
         return []
@@ -371,7 +367,7 @@ def _clean_piece_slots(raw) -> List[str]:
 
 
 def _piece_slots(item: Optional[Dict[str, Any]]) -> List[str]:
-    """Extrahiert die slot-Liste eines Items. Liefert [] wenn kein outfit_piece."""
+    """Return the item slot list, or [] when it is not an outfit piece."""
     if not item:
         return []
     op = item.get("outfit_piece") or {}
@@ -387,11 +383,11 @@ def _normalize_outfit_types(raw) -> List[str]:
 
 
 def _clean_piece_lora(raw) -> Dict[str, Any]:
-    """Normalisiert das LoRA eines Outfit-Pieces (maximal EINS pro Piece).
+    """Normalize an outfit piece LoRA, at most one per piece.
 
     Schema: {"name": str, "strength": float, "workflow": str}.
-    workflow="" heisst universell (passt zu allen Workflows).
-    Accepts dict (new format) oder list (legacy — nimmt ersten Eintrag).
+    An empty workflow applies universally. Accept a dict or the first
+    element of a legacy list.
     """
     entry = raw
     if isinstance(raw, list):
@@ -410,11 +406,9 @@ def _clean_piece_lora(raw) -> Dict[str, Any]:
 
 
 def _slugify_item_id(text: str) -> str:
-    """Macht aus 'Holographic Projector' -> 'item_holographic_projector'.
+    """Convert a display name into a lowercase item_ ID using [a-z0-9_].
 
-    Stellt sicher, dass die ID format-konform ist (lowercase, [a-z0-9_]+,
-    Prefix ``item_``). Faellt auf uuid zurueck, wenn der Name nach dem
-    Saeubern leer ist (z.B. nur Sonderzeichen).
+    Fall back to a UUID when cleaning the name leaves no characters.
     """
     import re as _re
     cleaned = _re.sub(r"[^a-z0-9]+", "_", (text or "").lower()).strip("_")
@@ -426,12 +420,10 @@ def _slugify_item_id(text: str) -> str:
 
 
 def _validate_item_id(item_id: str) -> str:
-    """Wirft ValueError wenn die ID nicht ``[a-z][a-z0-9_]*`` matched.
+    """Raise ValueError unless the ID matches [a-z][a-z0-9_]*.
 
-    Wir erzwingen kein ``item_``-Prefix, weil Rules-Conditions die ID
-    sowieso wortwoertlich akzeptieren (``has_item:meinitem`` matched
-    ueber resolve_item_id). Aber Whitespace, Caps und Sonderzeichen
-    waeren in URLs/Conditions ein Bug.
+    The item_ prefix is optional because rule conditions resolve literal
+    IDs. Whitespace, capitals and special characters break URLs/conditions.
     """
     import re as _re
     if not _re.match(r"^[a-z][a-z0-9_]*$", item_id):
@@ -522,15 +514,15 @@ def add_item(name: str,
         "properties": properties or {
             "enables_locations": [],
             "enables_activities": [],
-            # stat_bonuses: generisches Dict wie {"stamina": 5, "courage": 10}.
-            # Keine hartcodierten Stat-Namen — jeder im Template definierte Stat kann
-            # hier vergeben werden wenn Item-Gameplay implementiert wird.
+            # stat_bonuses is a generic mapping from template stat keys to amounts.
+            # No stat names are hardcoded; any stat defined by the template can
+            # be assigned here when item gameplay is implemented.
             "stat_bonuses": {},
             "uses": None,
         },
         "created_at": utc_now_iso(),
     }
-    # Piece-spezifisches Sub-Dict nur setzen wenn Kategorie passt
+    # Set category-specific piece metadata only for matching items.
     if category == "outfit_piece" and outfit_piece:
         slots = _clean_piece_slots(outfit_piece.get("slots"))
         if not slots:
@@ -647,12 +639,12 @@ def update_item(item_id: str,
                 item.pop(key, None)
         return item
 
-    # Shared-Items: in shared/items/items.json schreiben
+    # Write shared items to shared/items/items.json.
     if is_shared_item(item_id):
         shared = _load_shared_items()
         for idx, item in enumerate(shared):
             if item.get("id") == item_id:
-                # _shared-Flag ist Run-Time-Marker, nicht Teil der Persistenz.
+                # The _shared flag is a runtime marker, not persisted data.
                 item.pop("_shared", None)
                 _before = _render_relevant_fields(item)
                 shared[idx] = _apply_updates(item)
@@ -678,13 +670,11 @@ def update_item(item_id: str,
 
 
 def delete_item(item_id: str) -> bool:
-    """Loescht ein Item und entfernt es aus allen Raeumen und Inventaren.
-    Funktioniert fuer World- und Shared-Items.
-    """
-    # Shared-Items: aus shared/items/items.json + Bild-Verzeichnis loeschen.
-    # Inventar-Bezuege koennen nicht entfernt werden — Shared-Items kennen keine
-    # einzelne Welt; jede betroffene Welt erhaelt 'phantom' Item-Refs (haben dort
-    # ohnehin keine Wirkung mehr, da get_item nichts mehr findet).
+    """Delete a world or shared item and remove room and inventory references."""
+    # Delete shared items from shared/items/items.json and the image directory.
+    # Inventory references cannot be removed because shared items belong
+    # to no particular world. Affected worlds retain phantom references,
+    # which have no effect because get_item no longer finds the item.
     if is_shared_item(item_id):
         shared = _load_shared_items()
         new_shared = [s for s in shared if s.get("id") != item_id]
@@ -730,9 +720,9 @@ def _remove_item_media(root: Path, item_id: str) -> None:
 
 
 def move_item_to_shared(item_id: str) -> Dict[str, Any]:
-    """Verschiebt ein World-Item in die Shared-Library (inkl. Bild-Verzeichnis).
+    """Move a world item into the shared library, including its image directory.
 
-    Returns {"status": "ok"|"error", "reason"?}
+    Return {"status": "ok"|"error", "reason"?}.
     """
     import shutil
     if is_shared_item(item_id):
@@ -746,13 +736,13 @@ def move_item_to_shared(item_id: str) -> Dict[str, Any]:
     if not target:
         return {"status": "error", "reason": "not_found"}
 
-    # 1) Shared-Liste aktualisieren
+    # 1) Update the shared list.
     shared = _load_shared_items()
     shared = [s for s in shared if s.get("id") != item_id]
     shared.append(target)
     _save_shared_items(shared)
 
-    # 2) Bild-Verzeichnis uebertragen (copy, dann source loeschen)
+    # 2) Copy the image directory, then delete the source.
     src = _get_item_dir(item_id)
     dst = _get_shared_item_dir(item_id, create=True)
     if src.exists():
@@ -766,9 +756,9 @@ def move_item_to_shared(item_id: str) -> Dict[str, Any]:
         except OSError:
             pass
 
-    # 3) Aus der World entfernen — _save_items ist UPSERT, also explizit DELETE.
-    # Sonst bleibt der DB-Eintrag haengen und get_item liefert das Item
-    # weiter als World-Item zurueck (Bild-Pfad falsch, Move-Buttons falsch).
+    # 3) Delete explicitly from the world because _save_items performs UPSERT.
+    # Otherwise get_item still returns a world item with the wrong image
+    # path and incorrect move controls.
     try:
         with transaction() as conn:
             conn.execute("DELETE FROM items WHERE id=?", (item_id,))
@@ -780,7 +770,7 @@ def move_item_to_shared(item_id: str) -> Dict[str, Any]:
 
 
 def move_item_to_world(item_id: str) -> Dict[str, Any]:
-    """Verschiebt ein Shared-Item in die World des Users (inkl. Bild)."""
+    """Move a shared item into the user world, including its image."""
     import shutil
     shared_item = get_shared_item(item_id)
     if not shared_item:
@@ -789,11 +779,11 @@ def move_item_to_world(item_id: str) -> Dict[str, Any]:
     if any(it.get("id") == item_id for it in items):
         return {"status": "error", "reason": "already_in_world"}
 
-    # 1) In World-Liste einfuegen (exact copy, kein _shared-Flag)
+    # 1) Add an exact copy to the world list without the _shared flag.
     items.append({k: v for k, v in shared_item.items() if k != "_shared"})
     _save_items(items)
 
-    # 2) Bild-Verzeichnis uebertragen
+    # 2) Transfer the image directory.
     src = _get_shared_item_dir(item_id)
     dst = _get_item_dir(item_id, create=True)
     if src.exists():
@@ -807,14 +797,14 @@ def move_item_to_world(item_id: str) -> Dict[str, Any]:
         except OSError:
             pass
 
-    # 3) Aus Shared entfernen
+    # 3) Remove from shared storage.
     _save_shared_items([s for s in _load_shared_items() if s.get("id") != item_id])
     logger.info("Item %s -> world (%s) verschoben", item_id)
     return {"status": "ok", "item_id": item_id}
 
 
 def set_item_image(item_id: str, image_filename: str) -> bool:
-    """Setzt das Bild eines Items (World oder Shared)."""
+    """Set the image of a world or shared item."""
     if is_shared_item(item_id):
         shared = _load_shared_items()
         for item in shared:
@@ -867,10 +857,10 @@ def replace_item_image(item_id: str, new_name: str) -> bool:
 
 
 def set_item_image_meta(item_id: str, meta: Dict[str, Any]) -> bool:
-    """Speichert Erzeugungs-Metadaten (backend, model) eines Item-Bildes.
+    """Store image generation metadata such as backend and model.
 
-    Analog zu set_gallery_image_meta fuer Ortsbilder — wird vom
-    Generate-Dialog im Game-Admin als Caption unter dem Bild angezeigt.
+    Like set_gallery_image_meta, the Game Admin generation dialog displays
+    this metadata as a caption below the image.
     """
     if is_shared_item(item_id):
         shared = _load_shared_items()
@@ -890,11 +880,11 @@ def set_item_image_meta(item_id: str, meta: Dict[str, Any]) -> bool:
 
 
 # ============================================================
-# 2. RAUM-ITEMS (in world.json eingebettet)
+# 2. ROOM ITEMS (embedded in world.json)
 # ============================================================
 
 def get_room_items(location_id: str, room_id: str) -> List[Dict[str, Any]]:
-    """Gibt Items in einem Raum zurueck."""
+    """Return the items in a room."""
     from app.models.world import get_location_by_id, get_room_by_id
     location = get_location_by_id(location_id)
     if not location:
@@ -1057,25 +1047,16 @@ def remove_item_from_room(location_id: str,
 
 def find_item_location(item_id: str,
                         exclude_character: str = "") -> Optional[Dict[str, Any]]:
-    """Findet wo ein Item aktuell physisch liegt — Anker-Lookup fuer
-    Teleport-Spells.
+    """Find an item physical location for teleport spell anchor lookup.
 
-    Sucht in dieser Reihenfolge:
-        1. Character-Inventare (inventory_items table)
-        2. Raum-Items (locations.rooms[].items)
-
-    ``exclude_character`` filtert einen Character-Inhaber heraus — wird
-    vom Spell-Engine genutzt, damit ein Caster nicht "zu sich selbst"
-    teleportiert wenn er zufaellig auch den Anker traegt.
-
-    Returns:
-        - {"kind": "character", "character": <name>} wenn Item im Inventar
-        - {"kind": "room", "location_id": <id>, "room_id": <id>} wenn im Raum
-        - None wenn nirgends gefunden
+    Search character inventories before room placements. exclude_character
+    excludes a holder so a caster carrying the anchor does not teleport to
+    itself. Return {"kind": "character", "character": name},
+    {"kind": "room", "location_id": id, "room_id": id}, or None.
     """
     if not item_id:
         return None
-    # 1) Character-Inventar
+    # 1) Character inventories.
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -1091,7 +1072,7 @@ def find_item_location(item_id: str,
             return {"kind": "character", "character": holder}
     except Exception as e:
         logger.debug("find_item_location DB-Fehler: %s", e)
-    # 2) Raum-Items
+    # 2) Room items.
     try:
         from app.models.world import list_locations
         for loc in list_locations() or []:
@@ -1109,11 +1090,11 @@ def find_item_location(item_id: str,
 
 
 # ============================================================
-# 3. CHARACTER-INVENTAR
+# 3. CHARACTER INVENTORY
 # ============================================================
 
 def _load_inventory(character_name: str) -> Dict[str, Any]:
-    """Laedt das Inventar eines Characters aus der DB."""
+    """Load a character inventory from the database."""
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -1135,7 +1116,7 @@ def _load_inventory(character_name: str) -> Dict[str, Any]:
                 **meta,
             }
             inventory.append(entry)
-        # max_slots aus character_state holen wenn vorhanden
+        # Read max_slots from character_state when available.
         max_slots = 20
         try:
             row = conn.execute(
@@ -1206,21 +1187,19 @@ def _save_inventory(character_name: str, data: Dict[str, Any]):
 
 def get_character_inventory(character_name: str,
                             include_equipped: bool = True) -> Dict[str, Any]:
-    """Gibt das vollstaendige Inventar eines Characters zurueck.
+    """Return the complete inventory enriched with item details.
 
-    Enriched die Eintraege mit Item-Details (Name, Beschreibung, Bild,
-    Outfit-Piece-Slot, prompt_fragment).
-
-    include_equipped: wenn False, werden equipped Pieces und equipped Items
-        herausgefiltert (fuer die Standard-Inventar-Anzeige).
+    Details include name, description, image, outfit slots and prompt_fragment.
+    include_equipped=False excludes worn pieces and equipment from the
+    standard inventory display.
     """
     data = _load_inventory(character_name)
     inventory = data.get("inventory", [])
 
-    # Equipped-Set fuer Filter / Marker
+    # Equipped set for filters and markers.
     equipped_set = set(get_equipped_item_ids(character_name))
 
-    # Enrichment: Item-Details hinzufuegen
+    # Enrich with item details.
     enriched = []
     phantom_ids: List[str] = []
     for entry in inventory:
@@ -1229,8 +1208,8 @@ def get_character_inventory(character_name: str,
             continue
         item = get_item(iid)
         if not item:
-            # Phantom: Item-Definition geloescht aber Inventar-Eintrag noch da.
-            # Nicht in der UI zeigen + zur Auto-Cleanup-Liste merken.
+            # The definition was deleted but a phantom inventory entry remains.
+            # Hide it from the UI and schedule automatic cleanup.
             phantom_ids.append(iid)
             continue
         enriched_entry = {**entry}
@@ -1250,9 +1229,9 @@ def get_character_inventory(character_name: str,
         enriched_entry["equipped"] = (iid in equipped_set)
         enriched.append(enriched_entry)
 
-    # Phantom-Eintraege wegraeumen — passieren z.B. wenn Items in Game Admin
-    # geloescht werden ohne die Inventare zu cleanen. Best-effort, Fehler
-    # ignoriert: ein Lese-Endpoint soll nie an einer Mutation scheitern.
+    # Clean phantom references left when Game Admin deletes definitions
+    # without cleaning inventories. This is best effort: a read endpoint
+    # must not fail because of a cleanup mutation.
     if phantom_ids:
         try:
             with transaction() as conn:
@@ -1279,17 +1258,12 @@ def add_to_inventory(character_name: str,
     obtained_from: str = "",
     obtained_method: str = "manual",
     locked: Optional[bool] = None) -> bool:
-    """Fuegt ein Item zum Character-Inventar hinzu.
+    """Add an item to a character inventory.
 
-    locked: wenn True, das Item kann nicht entfernt/abgegeben werden ohne
-        admin force-removal. Default None heisst: kein Lock.
-
-    Effekte (apply_condition, stat_changes, mood_influence) feuern NICHT
-    beim Hinzufuegen — nur ueber explizites :func:`consume_item`. Damit
-    laesst sich ein Trank im Game Admin oder per Geschenk uebergeben ohne
-    dass die Wirkung sofort eintritt; der Empfaenger entscheidet selbst
-    wann er ihn anwendet (oder das Force-Cast-Pattern in :func:`give_item`
-    konsumiert direkt nach dem Add).
+    locked=True prevents removal without admin force; None means unlocked.
+    Effects apply only through explicit consume_item, so gifts and admin
+    additions remain passive until consumed. The give_item force mode
+    consumes the item immediately after adding it.
     """
     item = get_item(item_id)
     if not item:
@@ -1298,16 +1272,16 @@ def add_to_inventory(character_name: str,
     if obtained_method not in VALID_OBTAIN_METHODS:
         obtained_method = "manual"
 
-    # Locked-Flag — nur per Call-Override (z.B. give_item mode=force).
-    # Item-seitige Default-Bindung wurde entfernt.
+    # The locked flag is a call override, such as give_item mode=force.
+    # Item-level default binding was removed.
     if locked is None:
         locked = False
 
     data = _load_inventory(character_name)
     inventory = data.get("inventory", [])
 
-    # Stackable? Bestehenden Eintrag erhoehen — aber nicht wenn locked
-    # gesetzt ist (force-cast braucht eigene Instanz).
+    # Increase an existing stack unless locked:
+    # forced casts require a separate instance.
     if item.get("stackable") and not locked:
         for entry in inventory:
             if entry.get("item_id") == item_id:
@@ -1316,7 +1290,7 @@ def add_to_inventory(character_name: str,
                 _save_inventory(character_name, data)
                 return True
 
-    # Slot-Limit pruefen — Outfit-Pieces sind Garderobe und zaehlen nicht mit
+    # Check slot capacity; wardrobe pieces do not count toward the limit.
     if item.get("category") != "outfit_piece":
         max_slots = data.get("max_slots", 20)
         non_piece_count = 0
@@ -1328,7 +1302,7 @@ def add_to_inventory(character_name: str,
             logger.warning("Inventar voll fuer %s (%d/%d)", character_name, non_piece_count, max_slots)
             return False
 
-    # Neuer Eintrag
+    # New entry.
     new_entry: Dict[str, Any] = {
         "item_id": item_id,
         "quantity": max(1, quantity),
@@ -1347,13 +1321,13 @@ def add_to_inventory(character_name: str,
                 item_id, character_name,
                 " (locked)" if locked else "")
 
-    # apply_condition / Effects fliessen NICHT beim Hinzufuegen — nur via
-    # consume_item. Force-Cast in give_item ruft consume_item explizit
-    # auf, gifted/manual Items bleiben passiv im Inventar bis der Owner
-    # sie konsumiert.
+    # Adding an item does not apply effects or conditions; only
+    # consume_item does. Forced give_item casts call it explicitly,
+    # while gifted or manually added items remain passive until
+    # the owner consumes them.
 
-    # Secret-Reveal-Trigger: Wenn Item ein Geheimnis enthuellt + nicht via "manual" admin
-    # (manual=Admin-UI direkt zugewiesen, kein narrativer Pickup)
+    # Reveal item secrets except for manual admin assignments.
+    # Manual assignments are not narrative pickups.
     if obtained_method != "manual":
         _trigger_secret_reveal(item, character_name)
 
@@ -1365,19 +1339,12 @@ def give_item(from_character: str,
               item_id: str,
               mode: str = "gift",
               consume_source: bool = False) -> bool:
-    """Transfer-Verb: legt das Item beim Ziel an, optional als Magie-Effekt.
+    """Give an item to a target, optionally applying it immediately as magic.
 
-    mode:
-      - ``gift``   — normales Geben. Item geht ins Inventar des Ziels und
-                     bleibt dort liegen — Empfaenger entscheidet ob/wann
-                     er es konsumiert.
-      - ``force``  — fuer Magie/Zauber: Item wird beim Ziel SOFORT
-                     konsumiert. effects (stat changes + apply_condition)
-                     greifen direkt; das Item taucht nur kurz im Inventar
-                     auf und ist dann weg. Kein Lock noetig.
-
-    consume_source: wenn True und ``from_character`` das Item besitzt, wird
-        bei ihm 1 Stueck abgezogen (Schriftrolle/Trank verbraucht sich).
+    mode="gift" leaves the item in the recipient inventory until consumed.
+    mode="force" consumes it immediately, applying effects and conditions
+    without leaving an item behind. No lock is needed.
+    consume_source=True deducts one item when from_character owns it.
     """
     if not item_id or not to_character:
         return False
@@ -1386,7 +1353,7 @@ def give_item(from_character: str,
         try:
             remove_from_inventory(from_character, item_id, quantity=1, force=True)
         except TypeError:
-            # Fallback falls force-Param noch nicht da ist
+            # Fallback when the force parameter is unavailable.
             remove_from_inventory(from_character, item_id, quantity=1)
 
     is_force = mode == "force"
@@ -1401,9 +1368,9 @@ def give_item(from_character: str,
         return False
 
     if is_force:
-        # Sofort beim Empfaenger konsumieren — Effects + Condition feuern,
-        # Item verschwindet aus dem Inventar. Damit ist die Magie-Wirkung
-        # direkt aktiv und es bleibt kein "geisterndes" Item liegen.
+        # Consume immediately for the recipient, applying effects and conditions
+        # and removing the item. This activates the magic immediately
+        # without leaving a stray inventory entry.
         try:
             consume_item(to_character, item_id)
         except Exception as e:
@@ -1417,11 +1384,10 @@ def remove_from_inventory(character_name: str,
     item_id: str,
     quantity: int = 1,
     force: bool = False) -> bool:
-    """Entfernt ein Item aus dem Character-Inventar.
+    """Remove an item from a character inventory.
 
-    force: wenn True, wird auch ein ``locked`` markiertes Item entfernt
-    (z.B. fuer Cleanup-Job nach TTL-Ablauf, oder Story-Engine-Override).
-    Standard False: locked Items koennen vom Owner nicht abgelegt werden.
+    force=True also removes locked items, for TTL cleanup or story overrides.
+    By default the owner cannot discard locked items.
     """
     data = _load_inventory(character_name)
     inventory = data.get("inventory", [])
@@ -1447,7 +1413,7 @@ def remove_from_inventory(character_name: str,
 def update_inventory_entry(character_name: str,
     item_id: str,
     updates: Dict[str, Any]) -> bool:
-    """Aktualisiert einen Inventar-Eintrag (equipped, notes)."""
+    """Update an inventory entry, including equipped state and notes."""
     data = _load_inventory(character_name)
     inventory = data.get("inventory", [])
 
@@ -1466,19 +1432,14 @@ def find_inventory_piece_by_name_slot(character_name: str,
     name: str,
     slot: str,
     prompt_fragment: str = "") -> Optional[str]:
-    """Sucht im Character-Inventar ein outfit_piece mit matchendem Slot.
+    """Find an outfit piece with a matching slot in the inventory.
 
-    Match-Reihenfolge (alle case-insensitive, getrimmt):
-      1. Name-Match: exakt gleich (klassischer Pfad).
-      2. Prompt-Fragment-Match: falls prompt_fragment uebergeben — Substring
-         in beide Richtungen ('white blouse' ist in 'white blouse with deep
-         neckline, silk' enthalten und umgekehrt). Dedupe-Schutz gegen
-         LLM-Naming-Drift wenn der Name leicht variiert ('Deep Cleavage' vs.
-         'Cleverage') aber die Bild-Beschreibung praktisch identisch ist.
-
-    Slot-Match: der Slot muss in item.outfit_piece.slots enthalten sein
-    (Multi-Slot-Pieces matchen fuer jeden ihrer Slots).
-    Liefert die item_id des ersten Treffers oder None.
+    Try an exact name, then a supplied prompt fragment as a substring in
+    either direction. Comparisons are trimmed and case-insensitive; short
+    fragments are rejected to avoid unrelated matches. Fragment matching
+    tolerates LLM naming drift for equivalent image descriptions.
+    The requested slot must occur in outfit_piece.slots, including mirrored
+    slots. Return the first matching item ID or None.
     """
     if not name or not slot:
         return None
@@ -1486,7 +1447,7 @@ def find_inventory_piece_by_name_slot(character_name: str,
     target_frag = (prompt_fragment or "").strip().lower()
     data = _load_inventory(character_name)
 
-    # Pass 1: exakter Name-Match (schnell, keine false positives)
+    # Pass 1: exact name match, fast and without false positives.
     for entry in data.get("inventory", []) or []:
         iid = entry.get("item_id", "")
         if not iid:
@@ -1499,8 +1460,8 @@ def find_inventory_piece_by_name_slot(character_name: str,
         if (item.get("name") or "").strip().lower() == target_name:
             return iid
 
-    # Pass 2: Prompt-Fragment-Substring-Match (nur wenn fragment uebergeben).
-    # Schutz vor zu kurzem Fragment (z.B. "red" matcht zu vieles).
+    # Pass 2: prompt-fragment substring match when a fragment is supplied.
+    # Reject short fragments that would match too many items.
     if target_frag and len(target_frag) >= 12:
         for entry in data.get("inventory", []) or []:
             iid = entry.get("item_id", "")
@@ -1523,7 +1484,7 @@ def find_inventory_piece_by_name_slot(character_name: str,
 
 
 def has_item(character_name: str, item_id: str) -> bool:
-    """Prueft ob ein Character ein bestimmtes Item besitzt."""
+    """Check whether a character owns an item."""
     try:
         conn = get_connection()
         row = conn.execute(
@@ -1539,9 +1500,9 @@ def has_item(character_name: str, item_id: str) -> bool:
     return any(e.get("item_id") == item_id for e in data.get("inventory", []))
 
 
-# --- Item-Verhalten: Konsum, Transfer, Geheimnis-Enthuellung ---
+# --- Item behavior: consumption, transfer, secret reveals ---
 
-# rarity → strength_delta beim Verschenken
+# Gift rarity maps to relationship strength_delta.
 GIFT_RELATIONSHIP_BOOST = {
     "generic": 1,
     "common": 5,
@@ -1551,7 +1512,7 @@ GIFT_RELATIONSHIP_BOOST = {
 
 
 def _trigger_secret_reveal(item: Dict[str, Any], knower: str) -> None:
-    """Wenn das Item ein Geheimnis enthuellt, markiere es als bekannt."""
+    """Mark a secret as known when the item reveals it."""
     reveals = item.get("reveals_secret") or {}
     if not isinstance(reveals, dict):
         return
@@ -1560,7 +1521,7 @@ def _trigger_secret_reveal(item: Dict[str, Any], knower: str) -> None:
     if not owner or not secret_id:
         return
     if owner == knower:
-        return  # Eigenes Geheimnis kann man nicht "entdecken"
+        return  # Characters cannot discover their own secrets.
     try:
         from app.models.secrets import add_known_by
         add_known_by(owner, secret_id, knower, discovered=True)
@@ -1571,14 +1532,11 @@ def _trigger_secret_reveal(item: Dict[str, Any], knower: str) -> None:
 
 
 def apply_item_effects(character_name: str, item_id: str, giver: str = "") -> Dict[str, Any]:
-    """Wendet die effects + apply_condition eines Items auf einen Character
-    an, OHNE das Inventar zu beruehren.
+    """Apply item effects and apply_condition without changing inventory.
 
-    Wird von consume_item aufgerufen NACH dem qty-Decrement, und vom
-    Self-Cast-Pfad in spell_engine.execute_cast statt der give_item-Dance
-    (der durch UNIQUE(character_name, item_id) korrumpiert).
-
-    Returns: {"success": bool, "changes": dict, "condition_applied": str|None}
+    Called after consume_item decrements quantity, and directly for self-casts
+    to avoid the give_item path conflicting with UNIQUE(character_name, item_id).
+    Return {"success": bool, "changes": dict, "condition_applied": str|None}.
     """
     item = get_item(item_id)
     if not item:
@@ -1589,8 +1547,8 @@ def apply_item_effects(character_name: str, item_id: str, giver: str = "") -> Di
     if isinstance(effects, dict) and effects:
         try:
             from app.core.activity_engine import apply_effects
-            # apply_condition / condition_duration_hours sind item-spezifische Felder —
-            # apply_effects ignoriert sie (verarbeitet nur *_change und mood_influence).
+            # apply_condition and condition_duration_hours are item-specific;
+            # apply_effects processes only *_change and mood_influence.
             changes = apply_effects(character_name, effects, source=f"item:{item.get('name', item_id)}")
         except Exception as e:
             logger.warning("Effects fuer Item %s anwenden fehlgeschlagen: %s", item_id, e)
@@ -1634,16 +1592,15 @@ def apply_item_effects(character_name: str, item_id: str, giver: str = "") -> Di
 
 
 def consume_item(character_name: str, item_id: str) -> Dict[str, Any]:
-    """Verbraucht ein Item (qty -1, Eintrag entfernt wenn 0) und wendet
-    optionale Effects an (gleiches Format wie Activity-Effects).
+    """Consume one item, remove an empty entry and apply optional activity-format effects.
 
-    Returns: {"success": bool, "changes": dict, "condition_applied": str|None}
+    Return {"success": bool, "changes": dict, "condition_applied": str|None}.
     """
     item = get_item(item_id)
     if not item:
         return {"success": False, "changes": {}, "condition_applied": None}
-    # Schenkenden (obtained_from) aus dem Eintrag merken, BEVOR remove ihn loescht —
-    # die Condition soll wissen, von wem das Item kam.
+    # Remember obtained_from before removal deletes the inventory entry
+    # so the condition records who supplied the item.
     giver = ""
     try:
         for _e in (_load_inventory(character_name).get("inventory") or []):
@@ -1665,7 +1622,7 @@ def transfer_item(from_character: str,
     to_character: str,
     item_id: str,
     quantity: int = 1) -> bool:
-    """Bewegt ein Item zwischen Character-Inventaren."""
+    """Move an item between character inventories."""
     if from_character == to_character:
         return False
     if not has_item(from_character, item_id):
@@ -1676,7 +1633,7 @@ def transfer_item(from_character: str,
     if not item.get("transferable", True):
         logger.info("Item %s ist nicht uebertragbar", item_id)
         return False
-    # Erst zum Ziel hinzufuegen, dann beim Sender entfernen — falls Ziel-Inventar voll, abbrechen
+    # Add to the target before removing from the sender; abort if the target is full.
     added = add_to_inventory(to_character, item_id, quantity=quantity,
         obtained_from=from_character, obtained_method="gift")
     if not added:
@@ -1687,9 +1644,9 @@ def transfer_item(from_character: str,
 def gift_item(from_character: str,
     to_character: str,
     item_id: str) -> Dict[str, Any]:
-    """Verschenkt ein Item: Transfer + Beziehungs-Boost + Memory + ggf. Secret-Reveal.
+    """Give an item with a relationship boost, memory and optional secret reveal.
 
-    Returns: {success, boost, item_name, error?}
+    Return {success, boost, item_name, error?}.
     """
     item = get_item(item_id)
     if not item:
@@ -1701,7 +1658,7 @@ def gift_item(from_character: str,
     rarity = (item.get("rarity") or "common").lower()
     boost = GIFT_RELATIONSHIP_BOOST.get(rarity, 2)
 
-    # Beziehungs-Boost
+    # Relationship boost.
     try:
         from app.models.relationship import record_interaction
         record_interaction(from_character, to_character,
@@ -1713,7 +1670,7 @@ def gift_item(from_character: str,
     except Exception as e:
         logger.warning("Gift-Beziehungs-Update fehlgeschlagen: %s", e)
 
-    # Memory beim Beschenkten
+    # Store a memory for the recipient.
     try:
         from app.models.memory import add_memory
         add_memory(to_character,
@@ -1723,7 +1680,13 @@ def gift_item(from_character: str,
     except Exception as e:
         logger.debug("Memory-Eintrag fuer Geschenk fehlgeschlagen: %s", e)
 
-    # Secret-Reveal beim Beschenkten (falls Item evidence-Type)
+    try:
+        from app.core.stat_rewards import apply_reward
+        apply_reward(to_character, "gift_received")
+    except Exception as e:
+        logger.warning("Gift reward for %s failed: %s", to_character, e)
+
+    # Reveal recipient secrets for evidence items.
     _trigger_secret_reveal(item, to_character)
 
     return {
@@ -1859,7 +1822,7 @@ def drop_item(character_name: str,
     if not has_item(character_name, item_id):
         return {"success": False, "error": "Item nicht im Inventar"}
 
-    # Falls das Piece aktuell angelegt ist: erst ausziehen
+    # Take the piece off first if currently worn.
     if item.get("category") == "outfit_piece":
         equipped = get_equipped_pieces(character_name)
         for slot, eid in (equipped or {}).items():
@@ -1871,11 +1834,11 @@ def drop_item(character_name: str,
         if item_id in eqi:
             unequip_item(character_name, item_id, source="dropped")
 
-    # In den Raum legen
+    # Place in the room.
     if not add_item_to_room(location_id, room_id, item_id, quantity=quantity):
         return {"success": False, "error": "Konnte Item nicht im Raum ablegen"}
 
-    # Aus Inventar entfernen
+    # Remove from inventory.
     remove_from_inventory(character_name, item_id, quantity=quantity)
 
     item_name = item.get("name", item_id)
@@ -1893,11 +1856,11 @@ def drop_item(character_name: str,
 
 
 # ============================================================
-# 4. EQUIPPED-STATE (Outfit-Pieces + sonstige Ausruestung)
+# 4. EQUIPPED STATE (outfit pieces and other equipment)
 # ============================================================
 
 def _get_equipped(profile: Dict[str, Any]) -> Dict[str, Any]:
-    """Liefert (equipped_pieces dict, equipped_items list) als Defaults."""
+    """Return default (equipped_pieces dict, equipped_items list)."""
     return {
         "equipped_pieces": dict(profile.get("equipped_pieces") or {}),
         "equipped_items": list(profile.get("equipped_items") or []),
@@ -1905,23 +1868,23 @@ def _get_equipped(profile: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def get_equipped_pieces(character_name: str) -> Dict[str, str]:
-    """Slot -> item_id Mapping der angelegten Outfit-Pieces."""
+    """Map worn outfit piece slots to item IDs."""
     from app.models.character import get_character_profile
     profile = get_character_profile(character_name)
     return dict(profile.get("equipped_pieces") or {})
 
 
 def get_equipped_items(character_name: str) -> List[str]:
-    """Liste der angelegten Nicht-Piece-Items (Hammer, Brille, etc.)."""
+    """List equipped non-piece items such as tools and glasses."""
     from app.models.character import get_character_profile
     profile = get_character_profile(character_name)
     return list(profile.get("equipped_items") or [])
 
 
 def get_equipped_item_ids(character_name: str) -> List[str]:
-    """Vereinte Liste aller equipped Item-IDs (Pieces + Items).
+    """Return all equipped IDs, combining outfit pieces and other equipment.
 
-    Wird vom Inventar-Filter genutzt um equipped Items auszublenden.
+    The inventory filter uses this list to hide equipped items.
     """
     pieces = get_equipped_pieces(character_name)
     items = get_equipped_items(character_name)
@@ -2054,9 +2017,9 @@ def equip_piece(character_name: str, item_id: str,
     state = _get_equipped(profile)
     eq = state["equipped_pieces"]
 
-    # Verdraengte Pieces sammeln: jedes Item, das aktuell in einem unserer
-    # Ziel-Slots sitzt (und nicht wir selbst sind), wird komplett ausgezogen —
-    # inklusive aller seiner Mirror-Slots.
+    # Collect displaced pieces: any other item occupying one of the
+    # target slots is removed completely, including every mirrored
+    # slot occupied by that item.
     displaced: List[str] = []
     for s in slots:
         occ = eq.get(s, "")
@@ -2068,8 +2031,8 @@ def equip_piece(character_name: str, item_id: str,
             if eq.get(s) == displaced_id:
                 eq.pop(s, None)
 
-    # Falls wir uns selbst woanders gespiegelt haben (z.B. Schema-Drift):
-    # alte Eintraege loeschen, dann frisch alle Slots setzen.
+    # Clear stale mirrors caused by schema drift before setting
+    # all current slots afresh.
     for s in list(eq.keys()):
         if eq.get(s) == item_id and s not in slots:
             eq.pop(s, None)
@@ -2180,7 +2143,7 @@ def unequip_item(character_name: str, item_id: str,
 
 
 # ============================================================
-# 4b. ZENTRALER EQUIP-DIFF
+# 4b. CENTRAL EQUIPMENT DIFF
 # ============================================================
 
 def apply_equipped_pieces(character_name: str, *,
@@ -2224,7 +2187,7 @@ def apply_equipped_pieces(character_name: str, *,
     skipped: List[Dict[str, Any]] = []
 
     rs = list(remove_slots or [])
-    # remove_slots: das gesamte Item aus dem Slot entfernen (inkl. Mirror-Slots).
+    # remove_slots removes the entire item, including mirrored slots.
     for slot in rs:
         iid = target_pieces.get(slot)
         if not iid:
@@ -2234,25 +2197,25 @@ def apply_equipped_pieces(character_name: str, *,
             target_pieces.pop(s, None)
 
     if pieces is not None:
-        # 1) Pieces, die nicht mehr im Soll-State sind, raeumen wir vollstaendig
-        #    weg — inklusive aller Mirror-Slots des betroffenen Items.
+        # 1) Completely remove pieces absent from the target state,
+        # including every mirrored slot of each affected item.
         wanted_ids = {iid for iid in pieces.values() if iid}
         for slot in list(target_pieces.keys()):
             iid = target_pieces.get(slot)
             if not iid:
                 continue
             if iid in wanted_ids:
-                continue  # Item bleibt, evtl. mit anderen Slots — gleich neu setzen
+                continue  # The item stays, possibly in different slots; set it again below.
             if slot in pieces or slot in rs:
-                # Slot wird gleich ueberschrieben/geleert — Cleanup uebernimmt das
+                # The slot is about to be replaced or cleared; cleanup handles it.
                 continue
             for s in [s for s, x in list(target_pieces.items()) if x == iid]:
                 cleared.append({"slot": s, "item_id": iid})
                 target_pieces.pop(s, None)
 
-        # 2) Pro Item dedup, dann Multi-Slot-Pieces ZUERST verarbeiten —
-        #    sonst kann ein Single-Slot-Piece einen Mirror-Slot eines Multi-Slot-
-        #    Pieces "stehlen" und das Multi-Slot-Piece bricht auseinander.
+        # 2) Deduplicate per item, then process multi-slot pieces first
+        # so a single-slot piece cannot steal a mirrored slot and
+        # break apart a multi-slot piece.
         item_entries: List[Dict[str, Any]] = []
         seen_ids: set = set()
         for slot, iid in pieces.items():
@@ -2272,11 +2235,11 @@ def apply_equipped_pieces(character_name: str, *,
                 continue
             item_entries.append({"iid": iid, "input_slot": slot, "slots": item_slots_list})
 
-        # Multi-Slot zuerst, dann Single-Slot (stable bei gleicher slot-count
-        # ueber input-Reihenfolge).
+        # Multi-slot pieces precede single-slot pieces, retaining input
+        # order when slot counts match.
         item_entries.sort(key=lambda e: -len(e["slots"]))
 
-        locked: Dict[str, str] = {}  # slot -> piece_id (gewinnender Anspruch)
+        locked: Dict[str, str] = {}  # slot -> piece_id for the winning claim.
         for e in item_entries:
             iid = e["iid"]
             item_slots_list = e["slots"]
@@ -2288,15 +2251,15 @@ def apply_equipped_pieces(character_name: str, *,
                 skipped.append({"item_id": iid, "slot": e["input_slot"],
                                 "reason": "slot_conflict_with_multi_slot"})
                 continue
-            # Verdraengen: bestehende Items, die in einem Ziel-Slot sitzen,
-            # komplett ausziehen (auch ihre Mirror-Slots).
+            # Remove existing items occupying target slots completely,
+            # including their mirrored slots.
             for ts in item_slots_list:
                 occ = target_pieces.get(ts)
                 if occ and occ != iid:
                     for s in [s for s, x in list(target_pieces.items()) if x == occ]:
                         cleared.append({"slot": s, "item_id": occ})
                         target_pieces.pop(s, None)
-            # Eigene Stale-Mirrors raeumen (Schema-Drift), dann frisch setzen.
+            # Clear stale mirrors from schema drift, then set current slots.
             for s in [s for s, x in list(target_pieces.items()) if x == iid and s not in item_slots_list]:
                 target_pieces.pop(s, None)
             for ts in item_slots_list:
@@ -2378,13 +2341,13 @@ def apply_equipped_pieces(character_name: str, *,
 
 
 # ============================================================
-# 5. OUTFIT-TYPE COMPLIANCE — entfernt (May 2026)
+# 5. OUTFIT-TYPE COMPLIANCE — removed (May 2026)
 # ============================================================
-# Die alte outfit_type-basierte Compliance (apply_outfit_type_compliance,
+# The former outfit_type compliance (apply_outfit_type_compliance,
 # auto_fill_missing_slots, _piece_matches_type, _piece_is_strict_type)
-# wurde durch das Decency-Modell in `app/core/outfit_compliance.py`
-# ersetzt — Plan: development_instructions/plan-outfit-system-rethink.md.
+# was replaced by the decency model in app/core/outfit_compliance.py.
+# Plan: development_instructions/plan-outfit-system-rethink.md.
 #
-# Ehemalige Inhalte:
-# Compliance + Auto-Fill leben jetzt in app/core/outfit_compliance.py.
-# Bei Bedarf: Aufrufstellen nutzen `apply_outfit_compliance(character_name)`.
+# Former contents:
+# Compliance and automatic filling now live in app/core/outfit_compliance.py.
+# Call sites use apply_outfit_compliance(character_name) when needed.

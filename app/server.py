@@ -141,6 +141,8 @@ async def lifespan(app: FastAPI):
     global _scheduler_manager
 
     # Startup
+    from app.core.stat_rewards import register_hooks
+    register_hooks()
     # Delete temporary files
     from app.routes.story import clear_story_tmp
     clear_story_tmp()

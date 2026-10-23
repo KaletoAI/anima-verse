@@ -1,21 +1,19 @@
-"""Random Event Generator — Erzeugt automatische Ereignisse an Locations.
+"""Random event generator: create automatic events at locations.
 
-Wird aus dem ThoughtLoop stuendlich aufgerufen (alle 60 Ticks bei
-60s Tick-Intervall = 1x pro Stunde pro User).
+Called hourly from ThoughtLoop (every 60 ticks at a 60-second interval,
+once per hour per user). LLM-generated events are stored through
+app/models/events.py and injected into the system prompt.
 
-Events werden per LLM generiert und ueber das bestehende Event-System
-(app/models/events.py) gespeichert + im System-Prompt injiziert.
+Configuration:
+    EVENT_GENERATION_ENABLED=true (default: true)
+    EVENT_BASE_PROBABILITY=0.10 (default: 10% per hour per location)
 
-Konfiguration:
-    EVENT_GENERATION_ENABLED=true          (default: true)
-    EVENT_BASE_PROBABILITY=0.10            (default: 10% pro Stunde pro Location)
-
-Pro Location konfigurierbar via event_settings in world.json:
-    event_probability       — Wahrscheinlichkeit pro stuendlichem Check (0.0–1.0)
-    allowed_categories      — Liste erlaubter Kategorien
-    event_blacklist         — verbotene Event-Begriffe
-    max_concurrent_events   — max. parallele Events pro Location
-    event_cooldown_hours    — Mindestzeit zwischen Events in Stunden
+Per-location event_settings in world.json:
+    event_probability: probability per hourly check (0.0–1.0)
+    allowed_categories: allowed category list
+    event_blacklist: forbidden event terms
+    max_concurrent_events: maximum simultaneous events per location
+    event_cooldown_hours: minimum hours between events
 """
 import os
 import random
@@ -51,7 +49,7 @@ def resolution_cooldown_min() -> int:
 def resolution_proactive_enabled() -> bool:
     return os.environ.get("EVENT_RESOLUTION_PROACTIVE", "true").lower() in ("true", "1", "yes")
 
-# Kategorie-Definitionen mit Basis-Gewichten und TTL
+# Category definitions with base weights and TTL.
 CATEGORIES = {
     "ambient": {
         "weight": 40,
@@ -76,8 +74,7 @@ CATEGORIES = {
 }
 
 def default_event_settings() -> Dict[str, Any]:
-    """Default-Settings fuer Locations ohne eigene event_settings. event_probability
-    spiegelt den aktuellen EVENT_BASE_PROBABILITY-Wert wider (live-getter)."""
+    """Default settings for locations without overrides; probability reflects the live base value."""
     return {
         "event_probability": base_probability(),
         "allowed_categories": list(CATEGORIES.keys()),
@@ -125,13 +122,13 @@ def check_and_generate():
         if not chars:
             return
 
-        # Feature-Gate: Characters die random_events NICHT wollen, bekommen keine
+        # Feature gate: exclude characters that disable random events.
         from app.models.character_template import is_feature_enabled as _feat
         chars = [c for c in chars if _feat(c, "random_events_enabled")]
         if not chars:
             return
 
-        # Besetzte Locations ermitteln (mit Characters)
+        # Find occupied locations.
         occupied: Dict[str, List[str]] = {}
         for char in chars:
             loc = get_character_current_location(char)
@@ -141,7 +138,7 @@ def check_and_generate():
         if not occupied:
             return
 
-        # Pro besetzte Location pruefen
+        # Check each occupied location.
         locations = {loc.get("id"): loc for loc in list_locations()}
         for loc_id, char_names in occupied.items():
             loc_data = locations.get(loc_id)
@@ -154,10 +151,7 @@ def check_and_generate():
 
 
 def check_escalation():
-    """Prueft ob disruption/danger Events ohne Reaktion eskaliert werden muessen.
-
-    Aufgerufen alle 5 Minuten aus ThoughtLoop._tick().
-    """
+    """Check whether unanswered disruption/danger events need escalation. Called every five minutes from ThoughtLoop._tick()."""
     if not is_enabled():
         return
 
@@ -171,7 +165,7 @@ def check_escalation():
             if cat not in ("disruption", "danger"):
                 continue
 
-            # Schon eskaliert? (hat ein Folge-Event)
+            # Already escalated into a follow-up event?
             event_id = event.get("id", "")
             already_escalated = any(
                 e.get("escalation_of") == event_id for e in all_events
@@ -193,26 +187,26 @@ def check_escalation():
                 half_ttl = GameDuration.of(hours=ttl_hours / 2)
                 started_g = GameTime.parse(event.get("game_ts", ""))
                 if game_time() - started_g < half_ttl:
-                    continue  # Noch nicht alt genug
+                    continue  # Not old enough yet.
             except (ValueError, TypeError):
                 continue
 
-            # Chat-Aktivitaet seit Event pruefen (an dieser Location)
+            # Check location chat activity since the event.
             location_id = event.get("location_id", "")
             if not location_id:
                 continue
 
             had_interaction = _had_chat_since(location_id, created)
             if had_interaction:
-                continue  # Jemand hat reagiert (Chat)
+                continue  # Someone reacted in chat.
 
-            # Auch ein Loesungsversuch (erfolgreich ODER fehlgeschlagen)
-            # zaehlt als Reaktion und blockiert die Eskalation.
+            # A resolution attempt, whether successful or failed,
+            # also counts as a reaction and prevents escalation.
             resolution = event.get("resolution") or {}
             if resolution.get("attempts"):
-                continue  # Schon mindestens einmal versucht
+                continue  # Already attempted at least once.
 
-            # Eskalieren
+            # Escalate.
             _escalate_event(event)
 
     except Exception as e:
@@ -224,7 +218,7 @@ def check_escalation():
 # ---------------------------------------------------------------------------
 
 def _get_event_settings(location: Dict[str, Any]) -> Dict[str, Any]:
-    """Liest event_settings aus Location, mit Defaults."""
+    """Read location event_settings with defaults."""
     settings = location.get("event_settings", {})
     result = default_event_settings()
     result.update({k: v for k, v in settings.items() if v is not None})
@@ -232,19 +226,19 @@ def _get_event_settings(location: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _get_category_weights(location: Dict[str, Any], settings: Dict[str, Any]) -> Dict[str, int]:
-    """Berechnet Kategorie-Gewichte basierend auf danger_level."""
+    """Calculate category weights based on danger_level."""
     from app.core.danger_system import get_danger_level
 
     weights = {k: v["weight"] for k, v in CATEGORIES.items()}
     danger = get_danger_level(location)
 
-    # Danger-Level verschiebt Gewichte zu disruption/danger
+    # Higher danger levels shift weights toward disruption/danger.
     if danger >= 2:
         weights["danger"] += danger * 5
         weights["disruption"] += danger * 3
         weights["ambient"] = max(5, weights["ambient"] - danger * 3)
 
-    # Nur erlaubte Kategorien
+    # Keep only allowed categories.
     allowed = settings.get("allowed_categories", list(CATEGORIES.keys()))
     weights = {k: v for k, v in weights.items() if k in allowed}
 
@@ -252,7 +246,7 @@ def _get_category_weights(location: Dict[str, Any], settings: Dict[str, Any]) ->
 
 
 def _pick_category(weights: Dict[str, int]) -> str:
-    """Waehlt eine Kategorie nach Gewichtung."""
+    """Choose a category by weight."""
     cats = list(weights.keys())
     w = [weights[c] for c in cats]
     return random.choices(cats, weights=w, k=1)[0]
@@ -261,21 +255,56 @@ def _pick_category(weights: Dict[str, int]) -> str:
 _ENTRY_ROLL_LAST: Dict[Tuple[str, str], datetime] = {}
 
 
+def _apply_event_stat_effects(event: dict, name: str, location: dict) -> None:
+    """Apply the effective category map once per persisted event and character."""
+    from app.core.stat_rules import get_setting
+    from app.models.character import adjust_status_effects
+    from app.models.events import add_stat_hit
+    category = event.get("category", "")
+    overrides = (location.get("event_settings") or {}).get("stat_effects") or {}
+    effects = (overrides[category] if category in overrides
+               else (get_setting("event_effects") or {}).get(category, {}))
+    if effects and any(effects.values()) and add_stat_hit(event["id"], name):
+        adjust_status_effects(name, effects, source=f"event:{category}")
+
+
+def _apply_event_to_occupants(event: dict, location: dict) -> None:
+    """Use the current roster, independently of the prompt's character limit."""
+    from app.models.character import list_available_characters, get_character_current_location
+    for name in list_available_characters():
+        if get_character_current_location(name) == event.get("location_id"):
+            _apply_event_stat_effects(event, name, location)
+
+
+def apply_active_event_effects(character: str, location_id: str, location: dict) -> None:
+    """Apply existing unresolved location events independently of random rolls."""
+    from app.models.events import list_events
+    for event in list_events(location_id=location_id):
+        if event.get("location_id") == location_id and not event.get("resolved"):
+            _apply_event_stat_effects(event, character, location)
+
+
+def on_character_entered_room(*, character: str, location_id: str, room_id: str) -> None:
+    """Cover NPC moves and party followers through the durable entry hook."""
+    from app.models.world import get_location_by_id
+    location = get_location_by_id(location_id)
+    if location:
+        apply_active_event_effects(character, location_id, location)
+
+
 def try_roll_on_entry(character_name: str, loc_id: str, location: Dict[str, Any]) -> None:
-    """Sofort-Roll wenn ein Character eine Location betritt.
+    """Roll immediately when a character enters a location.
 
-    - Globaler Master-Switch ``EVENT_ENTRY_ROLL_ENABLED``.
-    - Per-(character, location) Cooldown ``EVENT_ENTRY_ROLL_COOLDOWN_MINUTES``
-      gegen Wuerfel-Spam beim schnellen Rein-Raus.
-    - Skip wenn an der Location bereits ein ungeloestes danger-Event steht
-      (kein Doppel-Wolf).
-    - Bei Treffer wird ``_generate_event`` mit Jitter (0..N s) im Hintergrund-
-      Thread gefeuert, damit der Move-Handler nicht blockiert.
-
-    Designentscheidung: nur Avatar — NPC-Walk-Step-Trigger heute bewusst aus.
+    EVENT_ENTRY_ROLL_ENABLED controls the feature globally.
+    EVENT_ENTRY_ROLL_COOLDOWN_MINUTES limits repeated entry rolls per
+    character and location. Existing unresolved danger events suppress rolls.
+    A successful roll starts _generate_event in a background thread after
+    0..N seconds of jitter so the move handler does not block.
+    Avatar entry rolls are enabled; NPC walking-step triggers are disabled.
     """
     if not loc_id or not location:
         return
+    apply_active_event_effects(character_name, loc_id, location)
     if os.environ.get("EVENT_ENTRY_ROLL_ENABLED", "1") not in ("1", "true", "True"):
         return
     if os.environ.get("EVENT_GENERATION_ENABLED", "1") not in ("1", "true", "True"):
@@ -292,12 +321,12 @@ def try_roll_on_entry(character_name: str, loc_id: str, location: Dict[str, Any]
         return
     _ENTRY_ROLL_LAST[key] = utc_now()
 
-    # Skip wenn an der Location bereits ein aktives ungeloestes
-    # disruption/danger-Event steht (Constraint "ein blockendes Event pro
-    # Location"). Ambient/social-Events sind erlaubt und blocken nicht.
-    # list_events liefert auch globale Events (location_id=None) mit —
-    # explizit auf die eigene Location filtern, sonst blockt ein globales
-    # danger-Event jeden Entry-Roll weltweit.
+    # Skip when an unresolved disruption/danger event is active locally.
+    # Only one blocking event is allowed per location.
+    # Ambient/social events do not block further rolls.
+    # list_events also returns global events (location_id=None);
+    # filter explicitly by this location so a global danger event
+    # does not block entry rolls everywhere.
     try:
         from app.models.events import list_events
         for e in list_events(location_id=loc_id) or []:
@@ -339,20 +368,20 @@ def try_roll_on_entry(character_name: str, loc_id: str, location: Dict[str, Any]
 
 
 def _try_generate_for_location(loc_id: str, location: Dict[str, Any], char_names: List[str]):
-    """Versucht ein Event fuer eine Location zu generieren."""
+    """Try to generate an event for a location."""
     settings = _get_event_settings(location)
 
-    # 1. Wahrscheinlichkeits-Check
+    # 1. Check probability.
     prob = settings.get("event_probability", base_probability())
     if random.random() > prob:
         return
 
-    # 2. Constraint: max ein aktives ungeloestes disruption/danger Event pro
-    #    Location. Ambient/social duerfen daneben spawnen — sie blocken nichts
-    #    und tragen zur Atmosphaere bei. list_events liefert auch globale
-    #    Events (location_id=None) mit — die zaehlen hier NICHT, sonst wuerde
-    #    ein einziges globales danger-Event jeden Location-Spawn weltweit
-    #    blockieren.
+    # 2. Allow at most one active unresolved disruption/danger event
+    # per location. Ambient/social events may coexist because they
+    # provide atmosphere without blocking. list_events includes global
+    # events (location_id=None), which must not count here:
+    # a single global danger event must not block generation
+    # at every location.
     from app.models.events import list_events
     active_all = list_events(location_id=loc_id)
     active_local = [e for e in active_all if e.get("location_id") == loc_id]
@@ -360,15 +389,15 @@ def _try_generate_for_location(loc_id: str, location: Dict[str, Any], char_names
            for e in active_local):
         return
 
-    # 3. Max-Concurrent-Check (vor allem fuer ambient/social-Spam-Vermeidung) —
-    #    ebenfalls strikt auf die eigene Location bezogen.
+    # 3. Check the local concurrent-event limit, especially to prevent
+    # ambient/social event spam.
     max_concurrent = settings.get("max_concurrent_events", 1)
     if len(active_local) >= max_concurrent:
         return
     active = active_local
 
-    # 4. Cooldown-Check (min Zeit seit letztem Event, in Stunden)
-    # Legacy: event_cooldown_minutes weiterhin unterstuetzt
+    # 4. Check minimum hours since the latest event.
+    # Legacy event_cooldown_minutes remains supported.
     cooldown_hours = settings.get("event_cooldown_hours")
     if cooldown_hours is None:
         legacy_min = settings.get("event_cooldown_minutes")
@@ -385,17 +414,17 @@ def _try_generate_for_location(loc_id: str, location: Dict[str, Any], char_names
         except (ValueError, TypeError):
             pass
 
-    # 5. Kategorie wuerfeln
+    # 5. Roll the category.
     weights = _get_category_weights(location, settings)
     if not weights:
         return
     category = _pick_category(weights)
 
-    # 6. Event per LLM generieren — mit kleiner Wahrscheinlichkeit ein Secret-Hint-Event
+    # 6. Generate through the LLM, occasionally producing a secret hint.
     reveal_chance = float(settings.get("secret_reveal_chance", 0.08))
     if reveal_chance > 0 and random.random() < reveal_chance:
         if _try_generate_secret_hint_event(loc_id, location, char_names, settings):
-            return  # Hint-Event generiert
+            return  # Hint event generated.
     _generate_event(loc_id, location, category, char_names, active, settings)
 
 
@@ -403,22 +432,19 @@ def _try_generate_secret_hint_event(loc_id: str,
     location: Dict[str, Any],
     char_names: List[str],
     settings: Dict[str, Any]) -> bool:
-    """Generiert ein Event das auf ein Geheimnis eines anwesenden Characters hinweist.
+    """Generate a subtle hint about a secret of a character present here.
 
-    Waehlt einen zufaelligen Character mit mindestens einem Geheimnis am Ort
-    (dessen Geheimnis nicht zu viele bereits kennen) und generiert einen
-    subtilen Hinweis (kein Komplett-Reveal). Die anderen Anwesenden werden
-    als hinted-to markiert.
-
-    Returns True wenn ein Hint-Event erzeugt wurde.
+    Choose a character whose secret is not already widely known, generate
+    a hint without revealing it fully, and mark the other occupants as hinted-to.
+    Return True when a hint event was created.
     """
     if len(char_names) < 2:
-        return False  # Braucht mindestens Ziel + Beobachter
+        return False  # Requires a target and at least one observer.
 
     from app.models.secrets import list_secrets, is_record
     from app.models.events import add_event
 
-    # Character mit Geheimnissen sammeln
+    # Collect characters with secrets.
     candidates = []
     for c in char_names:
         try:
@@ -431,14 +457,14 @@ def _try_generate_secret_hint_event(loc_id: str,
     if not candidates:
         return False
 
-    # Zufaellig waehlen, severity-gewichtet
+    # Choose a random character, then weight secrets by severity.
     target_char, target_secrets = random.choice(candidates)
-    # Severity als Gewicht (hoehere severity = spannenderer Hint)
+    # Higher severity gives a secret more weight.
     weights = [max(1, int(s.get("severity", 2))) for s in target_secrets]
     secret = random.choices(target_secrets, weights=weights, k=1)[0]
 
-    # Prompt fuer subtilen Hinweis — Sprache des betroffenen Characters
-    # (Welt-Narration, nicht die User-UI-Sprache).
+    # Prompt a subtle hint in the target character language
+    # for world narration rather than the user interface.
     from app.core.llm_router import llm_call
     from app.core.i18n import language_name
     from app.models.character import get_character_language
@@ -466,16 +492,17 @@ def _try_generate_secret_hint_event(loc_id: str,
         if not text or len(text) < 10:
             return False
 
-        # Event speichern mit Secret-Metadaten (Hint, keine volle Enthuellung)
-        add_event(text, location_id=loc_id,
+        # Store secret metadata for the hint, without a full reveal.
+        event = add_event(text, location_id=loc_id,
             ttl_hours=4, category="social",
             metadata={
                 "hints_at_secret_id": secret.get("id", ""),
                 "secret_owner": target_char,
                 "observers": observers,
             })
-        # Hinweis: Observers werden NICHT zu known_by hinzugefuegt — sie sehen nur
-        # den Event-Text als Hint und muessen selbst die Verbindung ziehen.
+        _apply_event_to_occupants(event, location)
+        # Observers are not added to known_by: they only see the hint
+        # and must infer the connection themselves.
         logger.info("Secret-Hint-Event @ %s: %s fuer %s (Ziel: %s)",
                     location.get("name", loc_id), text[:60], target_char, observers)
         return True
@@ -490,20 +517,20 @@ def _generate_event(loc_id: str,
     char_names: List[str],
     active_events: List[Dict[str, Any]],
     settings: Dict[str, Any]):
-    """Generiert ein Event per LLM und speichert es."""
+    """Generate an event through the LLM and store it."""
     from app.core.llm_router import llm_call
     from app.models.events import add_event
     from app.models.character import get_character_current_feeling
     from app.core.danger_system import get_hazards
 
-    # Kontext sammeln
+    # Gather context.
     loc_name = location.get("name", loc_id)
     loc_desc = location.get("description", "")
     rooms = [r.get("name", "") for r in location.get("rooms", []) if r.get("name")]
     hazards = get_hazards(location)
     hazard_texts = [h.get("name", h.get("description", "")) for h in hazards if isinstance(h, dict)]
 
-    # Characters mit Mood
+    # Characters and moods.
     char_infos = []
     for c in char_names[:5]:
         mood = get_character_current_feeling(c) or ""
@@ -516,7 +543,7 @@ def _generate_event(loc_id: str,
     current_time = _now.time_hhmm()
     time_desc = _now.day_bucket()
 
-    # Letztes Event (Repeat-Vermeidung)
+    # Previous event, to avoid repetition.
     last_event = ""
     if active_events:
         last_event = active_events[-1].get("text", "")
@@ -570,7 +597,7 @@ def _generate_event(loc_id: str,
         blacklist_block=f"Do NOT mention: {', '.join(blacklist)}" if blacklist else "",
         language_name=lang_name)
 
-    # LLM aufrufen
+    # Call the LLM.
     try:
         response = llm_call(
             task="random_event",
@@ -579,7 +606,7 @@ def _generate_event(loc_id: str,
             agent_name="system")
 
         raw = (response.content or "").strip()
-        # LLM-Artefakte bereinigen
+        # Clean LLM artifacts.
         raw = re.sub(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>', '', raw).strip()
 
         text, image_prompt = _parse_event_payload(raw)
@@ -588,15 +615,15 @@ def _generate_event(loc_id: str,
             logger.debug("LLM-Event-Text zu kurz oder leer")
             return
 
-        # Blacklist pruefen
+        # Check the blacklist.
         text_lower = text.lower()
         for bl in blacklist:
             if bl.lower() in text_lower:
                 logger.info("Event geblockt (Blacklist '%s'): %s", bl, text[:60])
                 return
 
-        # Event speichern (image_prompt landet im metadata-Block — keine
-        # Schema-Migration noetig, payload ist freier JSON-blob).
+        # Store the event; image_prompt belongs in metadata, so the free-form
+        # JSON payload needs no schema migration.
         ttl = cat_info.get("ttl_hours", 6)
         metadata: Dict[str, Any] = {}
         if image_prompt:
@@ -604,11 +631,12 @@ def _generate_event(loc_id: str,
         event = add_event(text, location_id=loc_id,
                          ttl_hours=ttl, category=category,
                          metadata=metadata or None)
+        _apply_event_to_occupants(event, location)
         logger.info("Random Event [%s] @ %s: %s", category, loc_name, text[:80])
 
-        # danger-Events blockieren das Verlassen der Location, bis sie geloest
-        # sind (Avatar steckt fest, NPCs versuchen ueber random_events.resolve
-        # zu loesen, Pathfinder routet drum herum).
+        # Danger events block leaving until resolved. The avatar remains
+        # there while NPCs attempt resolution through random_events.resolve;
+        # pathfinding routes around the blocked location.
         if category == "danger" and event and event.get("id") and loc_id:
             try:
                 from app.models.rules import add_event_rule
@@ -621,9 +649,9 @@ def _generate_event(loc_id: str,
             except Exception as _e:
                 logger.debug("add_event_rule fehlgeschlagen: %s", _e)
 
-        # Bild-Generierung: nur fuer disruption/danger und nur wenn die
-        # Location ein background_image hat. Fehlt das BG, entsteht das
-        # Event normal — nur die Bild-Ueberlagerung entfaellt.
+        # Generate images only for disruption/danger at locations with a
+        # background_image. Without a background the event still exists,
+        # but no image overlay is generated.
         if event and category in ("disruption", "danger") and image_prompt:
             try:
                 from app.core.event_images import trigger_event_image
@@ -636,16 +664,16 @@ def _generate_event(loc_id: str,
 
 
 def _parse_event_payload(raw: str) -> Tuple[str, str]:
-    """Parst das JSON-Output des Event-Generator-LLMs.
+    """Parse JSON output from the event generator LLM.
 
-    Bei Parse-Fehler oder Fallback-Modus (kein JSON) wird der gesamte
-    Text als Event-Text interpretiert und kein image_prompt zurueckgegeben.
+    On a parse failure or non-JSON fallback, use the entire output as event
+    text and return no image_prompt.
     """
     import json as _json
 
-    # Quick-Path: gueltiges JSON-Objekt
+    # Fast path: valid JSON object.
     text = raw
-    # Markdown-Fences abstreifen falls vorhanden
+    # Strip Markdown fences if present.
     fence = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
     if fence:
         text = fence.group(1).strip()
@@ -660,7 +688,7 @@ def _parse_event_payload(raw: str) -> Tuple[str, str]:
         except Exception:
             pass
 
-    # Regex-Salvage: einzelnes Objekt im Output suchen
+    # Recover a single JSON object from surrounding output.
     m = re.search(r'\{[^{}]*"text"\s*:\s*"[^"]*"[^{}]*\}', text, re.DOTALL)
     if m:
         try:
@@ -672,13 +700,13 @@ def _parse_event_payload(raw: str) -> Tuple[str, str]:
         except Exception:
             pass
 
-    # Fallback: kein JSON erkannt — gesamter Text als Event-Text, kein Bild.
+    # Fallback: use the whole non-JSON output as event text, without an image.
     fallback_text = raw.strip().strip('"').strip("'").strip()
     return fallback_text, ""
 
 
 def _escalate_event(event: Dict[str, Any]):
-    """Eskaliert ein unbeantwortetes disruption/danger Event."""
+    """Escalate an unanswered disruption/danger event."""
     from app.core.llm_router import llm_call
     from app.core.prompt_templates import render_task
     from app.models.events import add_event
@@ -688,7 +716,7 @@ def _escalate_event(event: Dict[str, Any]):
     old_text = event.get("text", "")
     location_id = event.get("location_id", "")
 
-    # Sprache des Accounts
+    # Account language.
     from app.core.i18n import language_name
     from app.models.account import get_language_settings
     _lang = get_language_settings()["system_language"]
@@ -713,9 +741,13 @@ def _escalate_event(event: Dict[str, Any]):
 
         if text and len(text) >= 5:
             ttl = CATEGORIES.get(new_cat, {}).get("ttl_hours", 8)
-            add_event(text, location_id=location_id,
+            escalated = add_event(text, location_id=location_id,
                      ttl_hours=ttl, category=new_cat,
                      escalation_of=event.get("id"))
+            from app.models.world import get_location_by_id
+            location = get_location_by_id(location_id) if location_id else None
+            if location:
+                _apply_event_to_occupants(escalated, location)
             logger.info("Event eskaliert [%s→%s]: %s → %s",
                         old_cat, new_cat, old_text[:40], text[:40])
 
@@ -724,7 +756,7 @@ def _escalate_event(event: Dict[str, Any]):
 
 
 def _had_chat_since(location_id: str, since: datetime) -> bool:
-    """Prueft ob seit einem Zeitpunkt Chat-Aktivitaet an einer Location stattfand."""
+    """Check whether chat activity occurred at a location after a timestamp."""
     try:
         from app.models.character import list_available_characters, get_character_current_location
         from app.models.chat import get_chat_history
@@ -736,7 +768,7 @@ def _had_chat_since(location_id: str, since: datetime) -> bool:
             history = get_chat_history(char)
             if not history:
                 continue
-            # Letzte Nachricht pruefen
+            # Check the most recent message.
             last = history[-1] if history else None
             if last:
                 try:
@@ -755,7 +787,7 @@ def _had_chat_since(location_id: str, since: datetime) -> bool:
 # ---------------------------------------------------------------------------
 
 def _on_resolution_cooldown(event: Dict[str, Any], cooldown_min: Optional[int] = None) -> bool:
-    """True wenn das Event noch im Resolution-Cooldown ist (letzter Versuch zu jung)."""
+    """Whether the most recent resolution attempt is still within the cooldown."""
     if cooldown_min is None:
         cooldown_min = resolution_cooldown_min()
     try:
@@ -772,13 +804,11 @@ def validate_solution(event: Dict[str, Any],
     solution_text: str,
     actor_name: str,
     actors_joint: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Laesst das Tool-LLM pruefen ob die Lösung plausibel das Event aufloest.
+    """Ask the tool LLM whether the proposed solution plausibly resolves the event.
 
-    Character-Traits (aus den `hint_thresholds` der Stat-Felder im Template)
-    fliessen als Kontext mit ein — ein mutiger/aufmerksamer Character hat bei
-    Grenzfaellen bessere Karten, ein aengstlicher/unaufmerksamer scheitert eher.
-
-    Returns dict: {"resolved": bool, "reason": str}
+    Character traits from template stat hint_thresholds provide context:
+    attentive or brave characters fare better in borderline cases.
+    Return {"resolved": bool, "reason": str}.
     """
     import json as _json
     from app.core.llm_router import llm_call
@@ -805,7 +835,7 @@ def validate_solution(event: Dict[str, Any],
             agent_name=actor_name)
         raw = (response.content or "").strip()
         raw = re.sub(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>', '', raw).strip()
-        # JSON extrahieren (LLM gibt manchmal Prosa davor/danach)
+        # Extract JSON because the LLM may wrap it in prose.
         m = re.search(r'\{[^{}]*"resolved"[^{}]*\}', raw, re.DOTALL)
         payload = _json.loads(m.group(0)) if m else _json.loads(raw)
         return {
@@ -818,10 +848,10 @@ def validate_solution(event: Dict[str, Any],
 
 
 def try_resolve_events():
-    """Proaktive Event-Aufloesung: Characters versuchen offene Events zu loesen.
+    """Proactive resolution: characters attempt to solve open events.
 
-    Aufgerufen alle 5 Minuten aus ThoughtLoop._tick(). Wahlt pro Call
-    hoechstens 1 Event (globale Rate-Limitierung).
+    Called every five minutes from ThoughtLoop._tick(). Select at most one
+    event per call as a global rate limit.
     """
     if not resolution_proactive_enabled():
         return
@@ -833,7 +863,7 @@ def try_resolve_events():
             is_character_sleeping)
         from app.models.account import is_player_controlled
 
-        # Offene disruption/danger Events ohne aktiven Cooldown
+        # Unresolved disruption/danger events without an active cooldown.
         candidates = []
         for evt in get_all_events():
             if evt.get("category") not in ("disruption", "danger"):
@@ -848,14 +878,14 @@ def try_resolve_events():
         if not candidates:
             return
 
-        # Danger vor Disruption, sonst juengstes zuerst
+        # Danger before disruption, otherwise newest first.
         candidates.sort(key=lambda e: (0 if e.get("category") == "danger" else 1,
                                         e.get("created_at", "")), reverse=False)
         event = candidates[0]
         location_id = event["location_id"]
 
-        # Characters an dieser Location (player-controlled ausgeschlossen
-        # damit wir nicht dem User seine Chat-Antwort vorwegnehmen)
+        # Characters at this location, excluding player-controlled ones
+        # so the proactive solver does not preempt the user chat reply.
         from app.models.character_template import is_feature_enabled as _feat
         actors = []
         for c in list_available_characters():
@@ -876,7 +906,7 @@ def try_resolve_events():
         if not actors:
             return
 
-        # Primary + optional zweiter Helfer (Multi-Char-Kooperation)
+        # Primary actor plus an optional helper for joint resolution.
         primary = actors[0]
         joint = actors[1:2] if len(actors) > 1 else []
 
@@ -905,7 +935,7 @@ def try_resolve_events():
 
 def _generate_solution_rp(actor: str, event: Dict[str, Any],
     joint: Optional[List[str]] = None) -> str:
-    """Laesst den Character (RP-LLM) beschreiben wie er das Event loest. Kurze Antwort."""
+    """Ask the character roleplay LLM for a short account of how it resolves the event."""
     from app.models.character import get_character_personality, get_character_language
     from app.core.llm_router import llm_call
 
@@ -932,7 +962,7 @@ def _generate_solution_rp(actor: str, event: Dict[str, Any],
             agent_name=actor)
         text = (response.content or "").strip()
         text = re.sub(r'<SPECIAL_\d+>|<\|[A-Z_]+\|>', '', text).strip()
-        # Marker entfernen (falls RP-LLM **I feel X** anhaengt)
+        # Remove markers appended by the roleplay LLM.
         text = re.sub(r'\n?\s*\*\*I\s+(feel|do|am\s+at)\s+[^*]+\*\*', '', text, flags=re.IGNORECASE).strip()
         return text
     except Exception as e:
@@ -944,10 +974,10 @@ def _diary_log_resolution(actor: str, event: Dict[str, Any],
     solution_text: str, success: bool,
     joint: Optional[List[str]] = None,
     reason: str = ""):
-    """Erfasst den Loesungsversuch als episodische Memory.
+    """Record the resolution attempt as episodic memory.
 
-    Die Daily-Summary (Diary) wird automatisch aus Memories aggregiert —
-    daher reicht ein Memory-Eintrag pro beteiligtem Character.
+    Daily diary summaries aggregate memories automatically, so one memory
+    entry per participating character is sufficient.
     """
     try:
         from app.models.memory import add_memory
@@ -969,7 +999,7 @@ def _diary_log_resolution(actor: str, event: Dict[str, Any],
 
 def _notify_resolution(actor: str, event: Dict[str, Any],
     solution_text: str, joint: Optional[List[str]] = None):
-    """Sendet eine Proactive-Notification dass das Event geloest wurde."""
+    """Send a proactive notification that the event was resolved."""
     try:
         from app.models.notifications import create_notification
         joint_txt = f" (mit {', '.join(joint)})" if joint else ""

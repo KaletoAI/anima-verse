@@ -155,10 +155,13 @@ def _update_event(event: Dict[str, Any]) -> bool:
                 return False
             old_location = conn.execute("SELECT json_extract(payload, '$.location_id') FROM events WHERE id=?", (row_id,)).fetchone()[0]
             conn.execute(
-                "UPDATE events SET ts=?, game_ts=?, payload=? WHERE id=?",
+                "UPDATE events SET ts=?, game_ts=?, payload=CASE "
+                "WHEN json_type(payload, '$.metadata.stat_hit')='array' "
+                "THEN json_set(?, '$.metadata.stat_hit', json_extract(payload, '$.metadata.stat_hit')) "
+                "ELSE ? END WHERE id=?",
                 (event.get("created_at", utc_now_iso()),
                  event.get("game_ts", "") or "",
-                 json.dumps(event, ensure_ascii=False), row_id),
+                 json.dumps(event, ensure_ascii=False), json.dumps(event, ensure_ascii=False), row_id),
             )
         _events_changed([old_location, event.get("location_id")])
         return True
@@ -346,6 +349,32 @@ RESOLVED_TTL_HOURS = 2  # a resolved event stays visible for 2 more GAME hours
 
 def resolve_event(event_id: str,
     resolved_by: str = "", resolved_text: str = "") -> Optional[Dict[str, Any]]:
+    """Serialize resolution so simultaneous attempts reward only once."""
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("world_event", event_id):
+        return _resolve_event(event_id, resolved_by, resolved_text)
+
+
+def add_stat_hit(event_id: str, name: str) -> bool:
+    """Atomically persist a character's first immediate-effects claim."""
+    if not name:
+        return False
+    with transaction() as conn:
+        row_id = _row_id_for(conn, event_id)
+        if row_id is None:
+            return False
+        written = conn.execute(
+            "UPDATE events SET payload=json_insert("
+            "json_set(payload, '$.metadata.stat_hit', "
+            "json(COALESCE(json_extract(payload, '$.metadata.stat_hit'), '[]'))), "
+            "'$.metadata.stat_hit[#]', ?) WHERE id=? AND NOT EXISTS ("
+            "SELECT 1 FROM json_each(events.payload, '$.metadata.stat_hit') WHERE value=?)",
+            (name, row_id, name)).rowcount
+    return bool(written)
+
+
+def _resolve_event(event_id: str,
+    resolved_by: str = "", resolved_text: str = "") -> Optional[Dict[str, Any]]:
     """Marks an event as resolved.
 
     - only disruption/danger events can be resolved
@@ -372,6 +401,8 @@ def resolve_event(event_id: str,
 
     if not _update_event(evt):
         return None
+    from app.core.stat_rewards import on_event_resolved
+    on_event_resolved(evt, resolved_by)
     logger.info("Event resolved: %s by %s — %s", event_id, resolved_by, resolved_text[:60])
     # Clean up the coupled block rules immediately — the way is clear as
     # soon as it is resolved, not only after the resolved TTL.
@@ -408,24 +439,26 @@ def record_attempt(event_id: str,
     of who tried what and when the server saw it, not something the world
     reads back.
     """
-    evt = get_event(event_id)
-    if evt is None:
-        return None
-    now = utc_now()
-    resolution = evt.setdefault("resolution", {"attempts": [], "last_attempt_at": None})
-    resolution["attempts"].append({
-        "when": now.isoformat(),
-        "who": who,
-        "text": (text or "")[:500],
-        "outcome": outcome,
-        "reason": (reason or "")[:200],
-        "joint_with": joint_with or [],
-    })
-    resolution["last_attempt_at"] = now.isoformat()
-    if not _update_event(evt):
-        return None
-    logger.info("Event attempt %s: %s by %s (%s)", event_id, outcome, who, reason[:60])
-    return evt
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("world_event", event_id):
+        evt = get_event(event_id)
+        if evt is None:
+            return None
+        now = utc_now()
+        resolution = evt.setdefault("resolution", {"attempts": [], "last_attempt_at": None})
+        resolution["attempts"].append({
+            "when": now.isoformat(),
+            "who": who,
+            "text": (text or "")[:500],
+            "outcome": outcome,
+            "reason": (reason or "")[:200],
+            "joint_with": joint_with or [],
+        })
+        resolution["last_attempt_at"] = now.isoformat()
+        if not _update_event(evt):
+            return None
+        logger.info("Event attempt %s: %s by %s (%s)", event_id, outcome, who, reason[:60])
+        return evt
 
 
 def update_event_fields(event_id: str, **fields) -> Optional[Dict[str, Any]]:
@@ -434,17 +467,19 @@ def update_event_fields(event_id: str, **fields) -> Optional[Dict[str, Any]]:
     Used e.g. for image_path / resolved_image_path when an event spawns or is
     resolved. A value of None deletes the field.
     """
-    evt = get_event(event_id)
-    if evt is None:
-        return None
-    for k, v in fields.items():
-        if v is None:
-            evt.pop(k, None)
-        else:
-            evt[k] = v
-    if not _update_event(evt):
-        return None
-    return evt
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("world_event", event_id):
+        evt = get_event(event_id)
+        if evt is None:
+            return None
+        for k, v in fields.items():
+            if v is None:
+                evt.pop(k, None)
+            else:
+                evt[k] = v
+        if not _update_event(evt):
+            return None
+        return evt
 
 
 def event_exists(event_id: str) -> Optional[bool]:
