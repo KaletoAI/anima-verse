@@ -1,6 +1,7 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/I18nProvider'
 import { useMoods } from '../lib/moods'
+import { apiGet } from '../lib/api'
 
 /**
  * Two-column editor for activity / item effects.
@@ -16,17 +17,14 @@ import { useMoods } from '../lib/moods'
  * are quick-insert helpers, not validation: any key and any mood can be
  * typed straight into the textarea.
  */
-const FALLBACK_STATS = [
-  'stamina',
-  'courage',
-  'stress',
-  'lust',
-  'attention',
-  'inhibition',
-  'submission',
-  'popularity',
-  'trustworthiness',
-]
+// Share the in-flight request across all editor instances; retry after failures.
+let statKeysRequest: Promise<string[]> | undefined
+function loadStatKeys() {
+  statKeysRequest ??= apiGet<{ keys: string[] }>('/world/stat-keys')
+    .then(result => result.keys)
+    .catch(error => { statKeysRequest = undefined; throw error })
+  return statKeysRequest
+}
 
 export function EffectsEditor({
   value,
@@ -40,9 +38,14 @@ export function EffectsEditor({
   placeholder?: string
 }) {
   const { t } = useI18n()
-  // Stats are still the hard-coded canonical set from the character
-  // templates; moods come from the shared catalog on the server.
-  const stats = FALLBACK_STATS
+  const [stats, setStats] = useState<string[]>([])
+  const [statsError, setStatsError] = useState(false)
+  useEffect(() => {
+    let alive = true
+    loadStatKeys().then(keys => { if (alive) setStats(keys) })
+      .catch(() => { if (alive) setStatsError(true) })
+    return () => { alive = false }
+  }, [])
   const moods = useMoods()
   const taRef = useRef<HTMLTextAreaElement | null>(null)
 
@@ -78,13 +81,14 @@ export function EffectsEditor({
         className="ga-textarea ga-effects-textarea"
         rows={rows}
         value={value}
-        placeholder={placeholder ?? 'stamina_change: -10\ncourage_change: 5\nmood_influence: relaxed'}
+        placeholder={placeholder ?? t('Effects as key: value, one per line')}
         onChange={(e) => onChange(e.target.value)}
         style={{ fontFamily: 'monospace' }}
       />
       <div className="ga-effects-helpers">
         <div className="ga-effects-helper">
           <div className="ga-effects-helper-title">{t('Stats')}</div>
+          {statsError && <div className="ga-hint" role="status">{t('Could not load stat keys.')}</div>}
           <div className="ga-effects-helper-list">
             {stats.map((s) => (
               <button

@@ -1,3 +1,4 @@
+import { ValuesPane } from './ValuesPane'
 import { MotionNumberInput } from '../characters/MotionNumberInput'
 import { MotionPreviewHint } from '../characters/MotionPreviewHint'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -90,6 +91,25 @@ function asDraft(f: PromptFilter): DraftState {
 const OVERRIDE = 'world override'
 
 export function StatesTab() {
+  const { t } = useI18n()
+  const [subtab, setSubtab] = useState(() => {
+    try { return localStorage.getItem('ga-states-subtab') === 'values' ? 'values' : 'states' }
+    catch { return 'states' }
+  })
+  return <>
+    <nav className="ga-subtabs" aria-label={t('States')}>
+      {(['states', 'values'] as const).map(id => <button type="button" key={id}
+        className={`ga-btn ga-btn-sm${subtab === id ? ' ga-btn-primary' : ''}`}
+        aria-pressed={subtab === id} onClick={() => {
+          setSubtab(id)
+          try { localStorage.setItem('ga-states-subtab', id) } catch { /* Storage can be disabled. */ }
+        }}>{id === 'states' ? t('States') : t('Values')}</button>)}
+    </nav>
+    {subtab === 'values' ? <ValuesPane /> : <StatesPane />}
+  </>
+}
+
+function StatesPane() {
   const { t } = useI18n()
   const { toast } = useToast()
   const [data, setData] = useState<FiltersData | null>(null)

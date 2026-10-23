@@ -23,6 +23,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
+import { StatHistory } from './StatHistory'
 import { Field } from '../../components/Field'
 
 interface BarMeta {
@@ -56,6 +57,7 @@ export function StatsPanel({
   const [sel, setSel] = useState('')
   const [local, setLocal] = useState('')
   const [loaded, setLoaded] = useState(false)
+  const [historyRevision, setHistoryRevision] = useState(0)
 
   useEffect(() => {
     let alive = true
@@ -125,6 +127,7 @@ export function StatsPanel({
         fields: { status_effects: next },
       })
       setServer(next)
+      setHistoryRevision(n => n + 1)
       toast(t('Saved'))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
@@ -133,7 +136,8 @@ export function StatsPanel({
   }
 
   if (loaded && !keys.length) {
-    return <div className="ga-hint">{t('This character has no status values.')}</div>
+    return <><div className="ga-hint">{t('This character has no status values.')}</div>
+      <StatHistory character={character} revision={`${savedSignal}:${discardSignal}:${historyRevision}`} label={label} /></>
   }
 
   return (
@@ -175,6 +179,7 @@ export function StatsPanel({
         </span>}
         </div>
       </Field>
+      <StatHistory character={character} revision={`${savedSignal}:${discardSignal}:${historyRevision}`} label={label} />
     </>
   )
 }
