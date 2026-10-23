@@ -531,6 +531,12 @@ FACE_TARGET_NOTE_KEY = "face_target_note"
 #: collapses into nothing or a "reduction" that reduces nothing.
 LOD_RATIO_MIN = 0.02
 LOD_RATIO_MAX = 0.95
+#: At or below this many triangles a prop gets NO automatic distance mesh: the
+#: full mesh serves at range too (the client falls back to it, so the bytes
+#: are not fetched twice). A mesh this small costs nothing at range, and
+#: Decimate takes the silhouette first (measured 2026-10-23: a hand-built
+#: arcade 508 → 127 triangles lost its columns, a gate 432 → 108 its arch).
+LOD_SKIP_MAX_TRIS = 2000
 
 #: How much of a placed prop's DEPTH survives its cut (§ B2 addendum
 #: 2026-08-23) — a fraction, 1.0 = the whole prop. The floor never reaches 0:
@@ -4952,6 +4958,12 @@ def save_uploaded_glb(prop_id: str, contents: bytes,
            if inherited and any(inherited.values()) else {}),
     })
     g.select(target.name, tier)
+    if (normalize_tier(tier) or DEFAULT_TIER) == DEFAULT_TIER:
+        # The CPU distance mesh of the superseded file shows the OLD object;
+        # the next payload asks again — and a new file deserves a fresh
+        # verdict, so a remembered skip or failure is forgotten too.
+        _drop_stale_low(g)
+        _lod_failed.discard(_lod_key(safe_prop_id(prop_id), variant))
     logger.info("Prop %s: model uploaded (%d bytes) -> %s",
                 safe_prop_id(prop_id), len(contents), target.name)
     _store_bbox(prop_id, variant, landing=True)
@@ -5114,15 +5126,19 @@ def _lod_ratio_for(prop_id: str, variant: Any, src: Path) -> float:
     The variant's ``target_faces_low`` is an ABSOLUTE triangle count, Blender
     reduces by FRACTION — so the target only means anything against the
     source's own count: ``target / source_tris``, clamped to
-    ``[LOD_RATIO_MIN, LOD_RATIO_MAX]``. Without a target (or without a
-    readable source count) the configured per-kind ratio stands, which is what
-    every prop did before the field existed.
+    ``[LOD_RATIO_MIN, LOD_RATIO_MAX]``. A source with a known count at most
+    ``LOD_SKIP_MAX_TRIS``, or already within its target, answers ``1.0`` —
+    deliberately outside the clamp: it needs no distance mesh at all.
+    Otherwise, without a target or a readable source count the configured
+    per-kind ratio stands.
     """
     from app.blender import refine
     target = variant_face_targets(prop_id, variant)[TARGET_FACES_LOW_KEY]
-    if target:
-        tris = _source_triangles(src)
-        if tris > 0:
+    tris = _source_triangles(src)
+    if tris > 0:
+        if tris <= LOD_SKIP_MAX_TRIS or (target and tris <= target):
+            return 1.0
+        if target:
             return max(LOD_RATIO_MIN, min(target / tris, LOD_RATIO_MAX))
     return float(refine.lod_ratio("prop"))
 
@@ -5276,6 +5292,9 @@ def build_low_tier(prop_id: str, ratio: float = 0.0, force: bool = False,
     # becomes a fraction against THAT file's triangle count.
     ratio = float(ratio or _lod_ratio_for(pid, variant, src))
     out["ratio"] = ratio
+    if ratio >= 1.0:
+        out["error"] = "the full mesh is small enough to serve at range"
+        return out
     if LOW_TIER in g.tiers() and not force:
         out["error"] = "low tier already exists"
         return out
@@ -5340,12 +5359,13 @@ def request_low_tier(prop_id: str, variant: Any = None) -> None:
         src = g.find(DEFAULT_TIER, fallback=False) if g else None
         if not src or src.suffix.lower() != ".glb" or LOW_TIER in g.tiers():
             return
-        # A mesh the store itself calls unreducible never becomes a low
-        # variant; remembering it is what keeps the probe off the polled path.
-        if not shrink_capability(src)["shrinkable"]:
+        # A mesh small enough to serve at range, or one the store itself
+        # calls unreducible, never becomes a low variant; remembering it is
+        # what keeps the probe off the polled path (a full upload forgets it).
+        ratio = _lod_ratio_for(pid, variant, src)
+        if ratio >= 1.0 or not shrink_capability(src)["shrinkable"]:
             _lod_failed.add(key)
             return
-        ratio = _lod_ratio_for(pid, variant, src)
 
         def _run() -> None:
             try:

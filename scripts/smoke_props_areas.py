@@ -1321,8 +1321,10 @@ def part3() -> None:
     print("\n[17] a new file of a variant starts from the rotation of the one it replaces")
     store.save_uploaded_glb(pid, PLAIN_GLB, variant=1)
     newest = full_file(pid, 1)
-    check("the new upload is a fourth file of variant 1 (upload, split, low, upload)",
-          len(store.model_gallery(pid, 1).files()) == 4
+    check("the new upload drops the stale CPU low file: upload, split, upload = 3 files",
+          len(store.model_gallery(pid, 1).files()) == 3
+          and not low.exists()
+          and "low" not in store.model_gallery(pid, 1).tiers()
           and newest not in (upload_v1, split_v1, low),
           str([f.name for f in store.model_gallery(pid, 1).files()]))
     check("…whose sidecar starts with the previous file's rotation y 180",

@@ -132,7 +132,9 @@ at — so the automatic improvement re-meshed on the backend default and the
 distance mesh on a fixed fraction. Section [21] derives the three readers by
 hand: generation (and the improvement, which goes through it) takes
 `target_faces_high` where the caller names none, the distance mesh turns
-`target_faces_low` into `target / source triangles` clamped to [0.02, 0.95],
+`target_faces_low` into `target / source triangles` clamped to [0.02, 0.95]
+when reduction is needed; an already-in-budget source answers 1.0 and gets no
+distance mesh at all (the full mesh serves at range),
 and a target over the alias' ceiling runs CLAMPED with the file saying so.
 
 Usage:  ./.venv/bin/python scripts/smoke_prop_variants.py
@@ -1165,7 +1167,7 @@ def season_section() -> None:
 #                                           this is what proves the target
 #                                           drives it and not the config)
 #         low    100 →  100/8000  = 0.0125 → clamped to 0.02
-#         low 60,000 → 60000/8000 = 7.5    → clamped to 0.95
+#         low 60,000 ≥ 8000               → 1.0: no distance mesh, nothing built
 #         no target  → the configured 0.25
 #
 #     8,000 is read off the FILE (24,000 indices / 3), so a sidecar that
@@ -1427,12 +1429,13 @@ def face_targets_section() -> None:
               str(store._source_triangles(store.model_path(torch, variant=0))))
 
         for low, want in ((2000, 0.25), (4000, 0.5), (100, 0.02),
-                          (60000, 0.95)):
+                          (60000, 1.0)):
             store.set_variant_face_targets(torch, 0, low=low)
             RATIOS.clear()
             out = store.build_low_tier(torch, force=True, variant=0)
             check(f"low target {low} on 8,000 triangles → ratio {want}",
-                  out.get("ok") and RATIOS == [want],
+                  (not out.get("ok") and RATIOS == []) if want == 1.0
+                  else (out.get("ok") and RATIOS == [want]),
                   f"{RATIOS} / {out.get('error')}")
             check(f"...and the answer reports that ratio ({want})",
                   round(float(out.get("ratio") or 0), 6) == want,

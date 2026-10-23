@@ -38,6 +38,15 @@ Expected behaviour, derived from the design decisions of
     demand builds), and a candidate that is rejected AFTER taking its slot
     (no mesh at all) hands it back.
 
+Small meshes get NO automatic distance mesh (props.LOD_SKIP_MAX_TRIS = 2000;
+the client falls back to the full URL, so a copy would only be fetched twice).
+By hand: 2000 <= 2000 -> ratio 1.0, nothing built, no low tier; 2001 > 2000
+and no target -> the configured 0.25 reduces; 3000 > 2000 but <= a target of
+3000 -> 1.0 again; an explicit 0.5 on the 2000-triangle prop reduces as asked.
+The automatic path remembers the skip, and a full upload forgets it again and
+drops a CPU-built (source "lod") low file, while an uploaded low file stays.
+The older stub sources have unknown counts (0) and keep today's reduction.
+
 Usage:  ./.venv/bin/python scripts/smoke_model_lod.py
 """
 import os
@@ -62,7 +71,7 @@ db.init_schema()
 
 from app.blender import refine  # noqa: E402
 from app.core import location_model3d, props  # noqa: E402
-from app.core.model_store import read_sidecar  # noqa: E402
+from app.core.model_store import read_sidecar, write_sidecar  # noqa: E402
 
 FAILURES = []
 # Every call the stores made into the reduction, as (source file name, ratio).
@@ -369,6 +378,74 @@ def main() -> int:
     info = location_model3d.get_building_info(loc_id)
     check("the building panel payload carries the Blender gate",
           "usable" in (info.get("blender") or {}), str(info.get("blender")))
+
+    print("\n[11] small meshes and meshes within budget get no distance mesh")
+    refine.auto_lod_enabled = lambda: False
+
+    def measured_prop(name, tris):
+        subject = props.create_prop(name=name)["id"]
+        props.save_uploaded_glb(subject, b"glTF-measured")
+        source = props.model_path(subject, "full")
+        write_sidecar(source, {**read_sidecar(source), "tris": tris})
+        return subject, source
+
+    def low_tier(subject):
+        return "low" in props.model_gallery(subject).tiers()
+
+    small, source = measured_prop("Small", 2000)
+    CALLS.clear()
+    result = props.build_low_tier(small)
+    check("2000 triangles: ratio 1.0, nothing built, no low tier",
+          not result["ok"] and result["ratio"] == 1.0 and CALLS == []
+          and not low_tier(small), str(result))
+    CALLS.clear()
+    result = props.build_low_tier(small, ratio=0.5, force=True)
+    check("an explicit ratio still reduces the small prop as asked",
+          result["ok"] and CALLS == [(source.name, 0.5)] and low_tier(small),
+          str(CALLS))
+    budget, _ = measured_prop("Within budget", 3000)
+    props.set_variant_face_targets(budget, 0, low=3000)
+    CALLS.clear()
+    result = props.build_low_tier(budget)
+    check("3000 triangles within a target of 3000: 1.0, nothing built",
+          not result["ok"] and result["ratio"] == 1.0 and CALLS == []
+          and not low_tier(budget), str(result))
+
+    # Both props exist BEFORE the switch: with it on, the upload's own
+    # payload would already ask for a distance mesh of the uncounted stub.
+    quiet, _ = measured_prop("Small on demand", 2000)
+    big, big_source = measured_prop("Just over", 2001)
+    refine.auto_lod_enabled = lambda: True
+    try:
+        CALLS.clear()
+        props.request_low_tier(quiet)
+        key = props._lod_key(quiet)
+        check("on demand a 2000-triangle prop builds nothing and is remembered",
+              CALLS == [] and not low_tier(quiet) and key in props._lod_failed
+              and key not in props._lod_building, str(CALLS))
+        CALLS.clear()
+        props.request_low_tier(big)
+        check("on demand 2001 triangles reduce at the configured 0.25",
+              wait_for(lambda: low_tier(big)) and CALLS == [(big_source.name, 0.25)],
+              str(CALLS))
+        wait_for(lambda: props._lod_key(big) not in props._lod_building)
+    finally:
+        refine.auto_lod_enabled = lambda: False
+
+    print("\n[12] a full upload drops the CPU low mesh and forgets the skip")
+    stale = props.model_path(small, "low")
+    props.save_uploaded_glb(small, b"glTF-new-full")
+    check("full upload removes the CPU low file and its selection",
+          not stale.exists() and not low_tier(small))
+    props.save_uploaded_glb(quiet, b"glTF-bigger-full")
+    check("...and forgets a remembered skip, so the new file is judged afresh",
+          props._lod_key(quiet) not in props._lod_failed)
+    props.save_uploaded_glb(small, b"glTF-admin-low", tier="low")
+    uploaded = props.model_path(small, "low")
+    props.save_uploaded_glb(small, b"glTF-next-full")
+    check("an uploaded low file survives a later full upload",
+          uploaded.exists() and props.model_path(small, "low") == uploaded
+          and read_sidecar(uploaded).get("source") == "upload")
 
     print(f"\n{'FAILED: ' + ', '.join(FAILURES) if FAILURES else 'all checks passed'}")
     return 1 if FAILURES else 0
