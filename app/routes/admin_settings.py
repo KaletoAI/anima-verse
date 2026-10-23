@@ -54,7 +54,7 @@ def users_page():
 
 @router.get("/llm-stats", response_class=HTMLResponse)
 def llm_stats_page():
-    """Serve the LLM-Stats admin HTML page (read-only Auswertung)."""
+    """Serve the LLM-Stats admin HTML page (read-only report)."""
     return HTMLResponse(
         content=_build_llm_stats_html(),
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
@@ -95,7 +95,7 @@ def llm_stats_data(
     if not to_str:
         to_str = utc_now_iso()
     if not from_str:
-        # Default-Fenster: letzte 24h
+        # Default window: last 24 hours
         try:
             to_dt = parse_iso(to_str)
         except Exception:
@@ -360,6 +360,11 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
             {"code": "gender=male, template!=human-roleplay", "text": "Profile field equals / differs (string compare, any top-level profile field)"},
             {"code": "is_male, is_female", "text": "Shorthand for gender=male / gender=female"},
             {"code": "alone, night, day", "text": "Time / presence (day/night accept +/-minutes)"},
+            {"code": "at_home", "text": "At the configured home; an offmap home requires no location and no metre position"},
+            {"code": "offmap", "text": "No current location and no metre position"},
+            {"code": "travelling", "text": "A journey is in progress"},
+            {"code": "location_danger>N / <N / =N", "text": "Danger level of the character's own current location (0 without one)"},
+            {"code": "state:<id>", "text": "Enabled state active by profile tag or expression; cyclic references return false"},
             {"code": "present:Name", "text": "Name is in the same room"},
             {"code": "npc_present", "text": "Any non-avatar character is here"},
             {"code": "relationship:Name>N, romantic:Name>N", "text": "Name or 'any'"},
@@ -467,7 +472,7 @@ def help_topics(user=Depends(require_admin)):
     try:
         from app.core.stat_hints import get_all_stat_keys
         keys = get_all_stat_keys()
-        stat_code = ", ".join(f"{k}>N" for k in keys[:6]) if keys else "stat>N (e.g. stamina>50)"
+        stat_code = ", ".join(f"{k}>N" for k in keys[:6]) if keys else "stat>N (e.g. value>50)"
         change_code = ", ".join(f"{k}_change: +N" for k in keys[:4]) if keys else "stat_change: +/-N"
         repl = {"__STATS__": stat_code, "__STAT_CHANGES__": change_code}
         try:

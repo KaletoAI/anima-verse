@@ -89,6 +89,42 @@ Stat-Namen.
 | Aktivitäts-Tick (automatisch) | Der Agent-Loop bewertet die LAUFENDE Freitext-Aktivität gegen alle Stats — kein Library-Lookup; für jedes Paket nutzbar (Workout ⇒ Stamina-Deklaration + Hints genügen) |
 | `app.models.character.adjust_status_effects(character_name, deltas, source='')` | Direkte Deltas ohne LLM-Runde (clamped 0–100) |
 
+## Stat rules — `app.core.stat_rules` ⚠
+
+Rules resolve template seeds, whole-entry world overrides and character config.
+Only keys declared by the character's template are returned. Character config
+`<key>_hourly` and `<key>_baseline` numbers (numeric strings accepted) override the corresponding values;
+empty or null baseline values keep the resolved default. Settings use the shared
+`shared/stats/settings.json` seed and whole-value world overrides.
+
+| Function | Semantics |
+|---|---|
+| `field_rule(field) -> dict` | Normalize `bar_hourly`, `bar_baseline`, `bar_pull` (clamped 0..1), `bar_rates`, and `hint_thresholds` |
+| `template_rules(template) -> dict` | Template seeds keyed by stat |
+| `rules_for_template(template) -> dict` | Seeds replaced by world entries for declared keys |
+| `rules_for_character(name, *, profile=None, config=None) -> dict` | Effective rules including character config |
+| `seed_rule(key) -> dict | None` | Seed from the first declaring template, sorted by name |
+| `world_stat_overrides() -> dict` | Normalized world entries |
+| `save_stat_override(key, rule) -> bool` | Save a complete replacement entry |
+| `delete_stat_override(key) -> bool` | Restore the template seed |
+| `shipped_settings() -> dict` | Shared settings seed |
+| `get_setting(name)` | Effective setting; unknown names raise `ValueError` |
+| `settings_with_source() -> dict` | Each setting's `value`, `shipped`, and `source` (`shared` or `world`) |
+| `save_setting(name, value) -> bool` | Save a whole-value override; reject unknown names |
+| `delete_setting(name) -> bool` | Restore the shared setting; reject unknown names |
+| `round_half_away(x) -> int` | Nearest integer, ties away from zero |
+| `invalidate()` | Clear the storage-directory/shared-file snapshot; saves and deletes call this automatically |
+
+## Active states — `app.core.prompt_filters` ⚠
+
+| Function | Semantics |
+|---|---|
+| `is_state_active(name, state_id, *, profile=None) -> bool` | Enabled state active through its profile tag OR expression, using the same evaluator as triggered filters. A ContextVar guard returns false for a state already being evaluated, including indirect cycles. |
+
+Condition expressions also accept `at_home`, `offmap`, `travelling`,
+`location_danger>N` (also `<` and `=`), and `state:<id>`. Location atoms read the
+character's own current location/position, even during target access checks.
+
 ## Body-Slots — `app.core.body_slots` ✅ (Spezies-Pakete)
 
 | Funktion | Semantik |

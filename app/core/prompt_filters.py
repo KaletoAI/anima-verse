@@ -133,7 +133,7 @@ def load_filters() -> List[Dict[str, Any]]:
 
 
 def _evaluate(condition: str, character_name: str, location_id: str = "") -> bool:
-    """Reuse the existing condition evaluator (stamina<10, has_condition:X, …)."""
+    """Reuse the existing condition evaluator (stat<10, condition:X, …)."""
     if not condition:
         return False
     try:
@@ -258,7 +258,31 @@ def triggered_state_labels(character_name: str,
     return [l for l in out if l]
 
 
-def _triggered_filters(character_name: str, location_id: str = "", profile=None):
+_state_evaluations = ContextVar("state_evaluations", default=frozenset())
+
+
+def is_state_active(name: str, state_id: str, *, profile: dict | None = None) -> bool:
+    """Check an enabled state's tag or expression, guarding cyclic references."""
+    state_id = state_id.strip().lower()
+    key = (name, state_id)
+    active = _state_evaluations.get()
+    if not state_id or key in active:
+        return False
+    token = _state_evaluations.set(active | {key})
+    try:
+        definitions = [state for state in load_filters()
+                       if (state.get("id") or "").strip().lower() == state_id]
+        from app.models.character import get_character_profile, get_character_current_location
+        if profile is None:
+            profile = get_character_profile(name) or {}
+        location_id = get_character_current_location(name, profile=profile)
+        return any(_triggered_filters(name, location_id, profile=profile,
+                                      _definitions=definitions))
+    finally:
+        _state_evaluations.reset(token)
+
+
+def _triggered_filters(character_name: str, location_id: str = "", profile=None, *, _definitions=None):
     """Share profile fields and expression results across all state definitions."""
     if profile is None:
         from app.models.character import get_character_profile
@@ -275,7 +299,9 @@ def _triggered_filters(character_name: str, location_id: str = "", profile=None)
             match = re.fullmatch(r"([a-z_]+)([><=])(\d+)", raw)
             if raw.startswith("condition:"):
                 result = _has_tag_condition(character_name, raw.split(":", 1)[1], profile)
-            elif match and match[1] not in {"mood", "relationship", "romantic"}:
+            elif raw.startswith("state:"):
+                result = is_state_active(character_name, raw.split(":", 1)[1].strip(), profile=profile)
+            elif match and match[1] not in {"mood", "relationship", "romantic", "location_danger"}:
                 from app.core.stat_boosts import effective_stat
                 value = effective_stat(profile, match[1])
                 if value is None:
@@ -298,7 +324,7 @@ def _triggered_filters(character_name: str, location_id: str = "", profile=None)
             atoms[text] = not result if negated else result
         return atoms[text]
 
-    for state in load_filters():
+    for state in load_filters() if _definitions is None else _definitions:
         if not state.get("enabled", True):
             continue
         fid = (state.get("id") or "").strip()

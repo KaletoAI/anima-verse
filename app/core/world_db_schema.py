@@ -60,6 +60,13 @@ def rooms_rebuild_needed(table_info) -> bool:
 
 
 SCHEMA_STATEMENTS = [
+    """CREATE TABLE IF NOT EXISTS stat_overrides (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        data TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT,
+        PRIMARY KEY(scope, key)
+    )""",
     # Hub operations (docs/hub-job-resume.md): one row per long AI-hub job
     # chain in flight — frozen inputs, stage state, owner. Deleted once the
     # result is published; a row that survives a restart is what gets

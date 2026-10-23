@@ -1,0 +1,9 @@
+{
+  "settings": {
+    "chat_cap_per_hour": 15,
+    "rewards": {"intent_done": {"courage": 2}, "gift_received": {"courage": 3}},
+    "skill_costs": {"act": {"stamina": 5}, "image_generation": {"attention": 4}, "instagram": {"attention": 4}},
+    "perception_gate": {"enabled": true, "stat": "attention", "below": 20},
+    "event_effects": {"danger": {"courage": -15}, "disruption": {}, "social": {}, "ambient": {}}
+  }
+}

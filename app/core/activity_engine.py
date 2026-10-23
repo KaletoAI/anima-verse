@@ -27,10 +27,10 @@ def evaluate_condition(
     condition: str, character_name: str,
     location_id: str = "",
     room_id: str = "") -> Tuple[bool, str]:
-    """Wertet eine Condition-String aus.
+    """Evaluate a condition expression.
 
     Returns:
-        (passed: bool, reason: str) - reason ist leer wenn passed=True
+        (passed: bool, reason: str) - reason is empty when passed=True
     """
     global _last_matched_partner
     _last_matched_partner = None
@@ -38,13 +38,12 @@ def evaluate_condition(
     if not condition or not condition.strip():
         return True, ""
 
-    # OR-verknuepfte Gruppen zuerst splitten, dann AND innerhalb jeder Gruppe
-    # Beispiel: "alone AND night OR alone AND day" → Gruppe1: alone AND night, Gruppe2: alone AND day
+    # Split OR groups first, then AND conditions within each group.
     or_groups = [g.strip() for g in re.split(r"\s+OR\s+", condition, flags=re.IGNORECASE)]
 
     last_reason = ""
     for group in or_groups:
-        # AND-verknuepfte Bedingungen innerhalb einer Gruppe
+        # AND conditions within one group
         and_parts = [p.strip() for p in re.split(r"\s+AND\s+", group, flags=re.IGNORECASE)]
         group_passed = True
         group_reason = ""
@@ -60,14 +59,14 @@ def evaluate_condition(
             return True, ""
         last_reason = group_reason
 
-    # Keine OR-Gruppe hat bestanden
+    # No OR group passed
     return False, last_reason
 
 
 def _evaluate_single_condition(
     condition: str, character_name: str,
     location_id: str, room_id: str = "") -> Tuple[bool, str]:
-    """Wertet eine einzelne Condition aus."""
+    """Evaluate a single condition."""
     cond = condition.strip()
 
     # --- NOT prefix ---
@@ -89,10 +88,9 @@ def _evaluate_single_condition(
 def _evaluate_single_condition_inner(
     cond: str, character_name: str,
     location_id: str, room_id: str = "") -> Tuple[bool, str]:
-    """Wertet eine einzelne Condition aus (ohne NOT-Handling)."""
+    """Evaluate a single condition without NOT handling."""
 
-    # --- always / true: bedingungslos wahr (z.B. fuer eine harte Block-Regel,
-    # die einen Ort generell unbetretbar macht). ---
+    # Unconditional truth, for example for an unconditional access block.
     if cond in ("always", "true"):
         return True, ""
 
@@ -172,7 +170,7 @@ def _evaluate_single_condition_inner(
                 return True, ""
             return False, f"Nur tagsueber verfuegbar (day{lbl_offset})"
 
-    # --- present:Name --- (Ziel-Character im selben Raum/Ort)
+    # --- present:Name --- (target character in the same room/location)
     present_match = re.match(r"present:(.+)", cond)
     if present_match:
         return _check_present(character_name, present_match.group(1).strip(),
@@ -202,25 +200,57 @@ def _evaluate_single_condition_inner(
         return _check_relationship(character_name, location_id,
                                    target_char, operator, threshold, field="romantic")
 
-    # --- {stat}>N / {stat}<N / {stat}=N — generisch fuer beliebige im Template
-    # definierten Stat-Felder (store=status_effects). Reihenfolge: NACH den
-    # spezifischen Praefixen (mood:, relationship:, etc.), sonst wuerde dies
-    # "condition:drunk" o.ae. fehl-matchen.
+    # These atoms always inspect the character, even in target-access checks.
+    if cond in ("at_home", "offmap"):
+        from app.models.character import (
+            OFFMAP_SLEEP_SENTINEL, get_character_config,
+            get_character_current_location, get_character_pos,
+        )
+        current = get_character_current_location(character_name)
+        if cond == "offmap":
+            passed = not current and get_character_pos(character_name) is None
+        else:
+            home = (get_character_config(character_name) or {}).get("home_location") or ""
+            if home == OFFMAP_SLEEP_SENTINEL:
+                passed = not current and get_character_pos(character_name) is None
+            else:
+                passed = bool(home) and home == current
+        return bool(passed), "" if passed else f"Condition '{cond}' not met"
+
+    if cond == "travelling":
+        from app.core.travel_engine import get_journey
+        passed = get_journey(character_name) is not None
+        return passed, "" if passed else "No journey in progress"
+
+    danger_match = re.fullmatch(r"location_danger([><=])(\d+)", cond)
+    if danger_match:
+        from app.models.character import get_character_current_location
+        from app.models.world import get_location_by_id
+        from app.core.danger_system import get_danger_level
+        current = get_character_current_location(character_name)
+        location = get_location_by_id(current) if current else None
+        level = get_danger_level(location) if location else 0
+        passed = _compare(level, danger_match[1], int(danger_match[2]))
+        return passed, "" if passed else "Location danger condition not met"
+
+    if cond.startswith("state:"):
+        from app.core.prompt_filters import is_state_active
+        passed = is_state_active(character_name, cond.split(":", 1)[1].strip())
+        return passed, "" if passed else "State is not active"
+
+    # Generic comparisons for template-defined status fields follow specific atoms.
     stat_match = re.match(r"([a-z_]+)([><=])(\d+)$", cond)
     if stat_match:
         stat_name = stat_match.group(1)
-        # Reservierte Namen ausschliessen (haben eigene Handler oben)
+        # Exclude reserved names with dedicated handlers.
         if stat_name not in ("mood", "relationship", "romantic", "has_item", "condition",
                              "event_active", "has_secret", "alone", "night", "day", "npc_present",
-                             "current_activity"):
+                             "current_activity", "location_danger"):
             operator = stat_match.group(2)
             threshold = int(stat_match.group(3))
             return _check_status_effect(character_name, stat_name, operator, threshold)
 
-    # --- State-Flags: is_sleeping / is_wet / is_intimate (Boolean) ---
-    # B1: regelbasiertes Bedingen auf den orthogonalen Zustands-Flags — der Flag
-    # ist die Autoritaet (nicht der Activity-String). "is_sleeping" → True wenn
-    # gesetzt; "NOT is_sleeping" via NOT-Prefix.
+    # Boolean state flags are authoritative, independently of activity text.
     # State flags: core is_sleeping plus every flag DECLARED by a skill
     # package (registry) — no flag names hardcoded here (R1).
     _declared_flags = {"is_sleeping"}
@@ -259,10 +289,8 @@ def _evaluate_single_condition_inner(
             logger.debug("current_activity-Check fehlgeschlagen: %s", e)
             return False, f"Pose muss '{target}' sein"
 
-    # --- schedule:X (aktueller Tagesablauf-Slot) ---
-    # Beispiel: "schedule:sleeping" matched wenn der aktuelle Stunden-Slot
-    # in daily_schedule.slots als sleep-Slot markiert ist (sleep=True oder
-    # activity="__sleep__" o.ae.). "schedule:awake" matched die Negation.
+    # schedule:X matches the current daily schedule slot.
+    # sleeping matches sleep slots; awake matches their negation.
     sched_match = re.match(r"schedule:(.+)", cond)
     if sched_match:
         target = sched_match.group(1).strip().lower()
@@ -270,8 +298,7 @@ def _evaluate_single_condition_inner(
             from app.models.character import get_character_daily_schedule
             schedule = get_character_daily_schedule(character_name) or {}
             if not schedule.get("enabled", False):
-                # Kein aktiver Schedule — schedule-Bedingungen matchen nicht
-                # (weder sleeping noch awake werden erzwungen).
+                # Without a schedule, neither sleeping nor awake matches.
                 return False, "Tagesablauf nicht aktiv"
             current_hour = game_time().hour  # daily schedule = in-game hours
             slot = next((s for s in schedule.get("slots", [])
@@ -290,7 +317,7 @@ def _evaluate_single_condition_inner(
                 if not is_sleep:
                     return True, ""
                 return False, "Schedule sagt Schlafen"
-            # Sonst: target gegen slot.activity matchen (z.B. "schedule:Working")
+            # Otherwise match the target against slot.activity.
             slot_act = (slot.get("activity") if slot else "") or ""
             if slot_act.lower() == target:
                 return True, ""
@@ -299,7 +326,7 @@ def _evaluate_single_condition_inner(
             logger.debug("schedule-condition Fehler: %s", e)
             return False, f"Schedule-Bedingung nicht auswertbar: {target}"
 
-    # --- condition:X (active_conditions im Profil) ---
+    # --- condition:X (profile active_conditions) ---
     cond_match = re.match(r"condition:(.+)", cond)
     if cond_match:
         cond_name = cond_match.group(1).strip().lower()
@@ -313,7 +340,7 @@ def _evaluate_single_condition_inner(
         except Exception:
             return False, f"Zustand nicht aktiv: {cond_name}"
 
-    # --- has_item:<id|name> --- (Character-Inventar)
+    # --- has_item:<id|name> --- (character inventory)
     item_match = re.match(r"has_item:(.+)", cond)
     if item_match:
         token = item_match.group(1).strip()
@@ -336,7 +363,7 @@ def _evaluate_single_condition_inner(
         except Exception:
             return True, ""
 
-    # --- room_has_item:<id|name> --- (Ziel-Raum enthaelt Item)
+    # --- room_has_item:<id|name> --- (target room contains item)
     room_item_match = re.match(r"room_has_item:(.+)", cond)
     if room_item_match:
         token = room_item_match.group(1).strip()
@@ -352,7 +379,7 @@ def _evaluate_single_condition_inner(
             for ri in room_items:
                 if ri.get("item_id") == resolved_id:
                     return True, ""
-                # Name-Match fallback
+                # Name-match fallback
                 it = _get_item(ri.get("item_id", ""))
                 if it and (it.get("name") or "").strip().lower() == token.lower():
                     return True, ""
@@ -373,13 +400,13 @@ def _evaluate_single_condition_inner(
 
     # --- npc_present ---
     if cond == "npc_present":
-        # Placeholder fuer NPC-System
+        # Placeholder for the NPC system
         return True, ""
 
     # --- event_active:category ---
     event_match = re.match(r"event_active:(.+)", cond)
     if event_match:
-        # Placeholder fuer Event-Kategorien
+        # Placeholder for event categories
         return True, ""
 
     # --- is_male / is_female — shorthand for gender=male / gender=female ---
@@ -446,13 +473,13 @@ def _evaluate_single_condition_inner(
             logger.debug("profile-field condition '%s' failed: %s", cond, e)
             return False, f"Bedingung nicht auswertbar: {cond}"
 
-    # Unbekannte Condition: durchlassen mit Warnung
+    # Unknown condition: pass with a warning
     logger.warning("Unbekannte Condition: '%s'", cond)
     return True, ""
 
 
 def _check_alone(character_name: str, location_id: str) -> Tuple[bool, str]:
-    """Prueft ob der Character allein an der Location ist."""
+    """Check whether the character is alone at the location."""
     if not location_id:
         return True, ""
     try:
@@ -472,9 +499,8 @@ def _check_alone(character_name: str, location_id: str) -> Tuple[bool, str]:
 
 def _check_present(character_name: str, target_name: str,
                    location_id: str, room_id: str = "") -> Tuple[bool, str]:
-    """Prueft ob ``target_name`` im selben Raum wie ``character_name`` ist
-    (bzw. am selben Ort, wenn kein Raum bekannt). Fuer Presence-gekoppelte
-    Effekte: ``condition:charmed AND present:Lirien``."""
+    """Check whether the target is in the same room, or at the same location
+    when no room is known, for presence-dependent effects."""
     if not target_name:
         return False, "present: kein Zielname"
     try:
@@ -495,7 +521,7 @@ def _check_present(character_name: str, target_name: str,
 
 
 def _check_mood(character_name: str, target_mood: str) -> Tuple[bool, str]:
-    """Prueft ob der aktuelle Mood dem Ziel entspricht."""
+    """Check whether the current mood matches the target."""
     try:
         from app.models.character import get_character_current_feeling
         current = (get_character_current_feeling(character_name) or "").lower()
@@ -509,12 +535,10 @@ def _check_mood(character_name: str, target_mood: str) -> Tuple[bool, str]:
 def _check_relationship(character_name: str, location_id: str,
     target_char: str, operator: str, threshold: int,
     field: str = "strength") -> Tuple[bool, str]:
-    """Prueft eine Beziehungs-Bedingung.
+    """Check a relationship condition against a named character or "any".
 
-    - target_char kann ein Name oder "any" sein
-    - Prueft ob der Ziel-Character am gleichen Ort ist
-    - field: "strength" (Freundschaft 0-100) oder "romantic" (romantic_tension 0-100, intern 0-1)
-    - Bei Erfolg wird der gematchte Partner-Name in _last_matched_partner gespeichert
+    Candidates must share the location. Strength uses 0-100; romantic
+    tension is scaled from 0-1 to 0-100. A match sets _last_matched_partner.
     """
     global _last_matched_partner
     try:
@@ -523,7 +547,7 @@ def _check_relationship(character_name: str, location_id: str,
 
         label = "Romantik" if field == "romantic" else "Beziehung"
 
-        # Kandidaten bestimmen
+        # Select candidates
         if target_char.lower() == "any":
             all_chars = list_available_characters()
             candidates = [
@@ -534,7 +558,7 @@ def _check_relationship(character_name: str, location_id: str,
             if not candidates:
                 return False, f"Kein anderer Character am gleichen Ort"
         else:
-            # Konkreter Name: muss am gleichen Ort sein
+            # A named target must be at the same location.
             char_loc = get_character_current_location(target_char)
             if char_loc != location_id:
                 return False, f"{target_char} ist nicht am gleichen Ort"
@@ -570,7 +594,7 @@ def _compare(value: int, operator: str, threshold: int) -> bool:
     return False
 
 
-# Letzter gematchter Partner (fuer partner_activity)
+# Last matched partner (for partner_activity)
 _last_matched_partner: Optional[str] = None
 
 
@@ -608,22 +632,19 @@ def _check_has_secret(character_name: str) -> Tuple[bool, str]:
 
 
 # ============================================================
-# 7. STUNDENTIMER — Decay/Regen fuer alle Status-Werte
+# 7. HOURLY TIMER — decay/regeneration for all status values
 # ============================================================
 
 def validate_condition_references(condition: str) -> List[str]:
-    """Prueft die Referenzen einer Filter-/Regel-Condition mit DENSELBEN Resolvern
-    wie die Live-Evaluierung (``evaluate_condition``): ``has_item:`` ueber
-    ``resolve_item_id``/``get_item`` (id<->name), ``present:``/``relationship:``/
-    ``romantic:`` ueber die Character-Liste. Nur Existenz-Check (keine Auswertung) —
-    so kann die Editor-Validierung nicht von der Laufzeit-Pruefung wegdriften.
+    """Validate filter/rule references using the same resolvers as runtime.
 
-    Liefert Klartext-Warnungen fuer unaufloesbare Referenzen.
+    Resolve item ids/names and character names without evaluating conditions.
+    Return readable warnings for unresolved references.
     """
     warns: List[str] = []
     if not condition:
         return warns
-    # Gleiche Zerlegung wie evaluate_condition: OR -> AND -> optionales NOT.
+    # Same splitting as evaluate_condition: OR -> AND -> optional NOT.
     for group in re.split(r"\s+OR\s+", condition, flags=re.IGNORECASE):
         for part in re.split(r"\s+AND\s+", group, flags=re.IGNORECASE):
             atom = part.strip()
@@ -731,27 +752,18 @@ def cleanup_expired_conditions(character_name: str,
 def apply_effects(character_name: str,
     effects: Dict[str, Any],
     source: str = "") -> Dict[str, Any]:
-    """Zentrale Funktion: Wendet ein Effects-Dict auf einen Character an.
+    """Apply immediate mood influence and generic ``*_change`` stat deltas.
 
-    Verarbeitet ``mood_influence`` (sofort) + alle ``*_change``-Keys als
-    Stat-Deltas (geclamped 0-100). ``apply_condition``/``condition_duration_hours``
-    werden hier NICHT verarbeitet — der Aufrufer (z.B. apply_item_effects) macht
-    das. Status-Werte liegen in ``character_state.meta.status_effects`` und werden
-    transparent ueber get_/save_character_profile gelesen/geschrieben.
-
-    War in ff1f7d1 (Activity-Library-Entfernung) versehentlich geloescht worden,
-    obwohl apply_item_effects + danger_system sie noch importieren — der
-    ImportError wurde im try/except verschluckt, sodass Item-/Spell-Effekte und
-    Danger-Drain still NICHTS bewirkten.
-
-    Returns dict with applied changes: {"stamina": {"old": 80, "new": 65}, ...}
+    Stat values are clamped to 0-100 and stored through the character profile.
+    The caller handles condition application and duration. Returns applied
+    changes keyed by stat, each containing ``old`` and ``new`` values.
     """
     if not effects or not isinstance(effects, dict):
         return {}
 
     log_prefix = f"[{source}] " if source else ""
 
-    # Mood-Einfluss (sofort wirksam)
+    # Apply mood influence immediately.
     mood = effects.get("mood_influence")
     if mood:
         try:
@@ -761,7 +773,7 @@ def apply_effects(character_name: str,
         except Exception as e:
             logger.warning("Mood setzen fehlgeschlagen: %s", e)
 
-    # Generische Status-Effects: Jeder Key mit "_change" Suffix wird angewendet
+    # Apply generic status effects for each key ending in "_change".
     from app.models.character import get_character_profile, save_character_profile
     changes: Dict[str, Any] = {}
     try:
@@ -779,7 +791,7 @@ def apply_effects(character_name: str,
             for key, delta in effects.items():
                 if not key.endswith("_change") or not delta:
                     continue
-                stat_key = key[:-7]  # "stamina_change" -> "stamina"
+                stat_key = key[:-7]  # Strip the effect suffix.
                 current = status.get(stat_key, 100)
                 new_val = max(0, min(100, current + int(delta)))
                 if new_val != current:
@@ -867,20 +879,17 @@ def apply_hourly_status_tick(character_name: str):
             status = profile.get("status_effects", {})
 
             if not status:
-                return  # Keine Status-Werte initialisiert
+                return  # No initialized status values
 
-            # Template laden fuer bar_hourly Werte
+            # Load the template for bar_hourly values.
             template_name = profile.get("template", "human-default")
             template = get_template(template_name)
             if not template:
                 return
 
-            # Pro Stat-Feld die Stunden-Rate sammeln: Wach (``bar_hourly``) UND
-            # optional Schlaf (``bar_hourly_sleeping``). Letzteres ERSETZT die mit den
-            # Activities abgeschaffte aktivitaets-basierte Schlaf-Auffuellung — jetzt
-            # ZUSTANDS-getrieben (is_sleeping), von Activities entkoppelt, aber weiter
-            # rein TEMPLATE-getrieben (kein Hardcoding). Stats mit nur einem Schlaf-Wert
-            # (bar_hourly=0) werden ebenfalls erfasst.
+            # Collect awake and optional sleeping rates from template fields.
+            # Sleeping recovery uses the state flag rather than activity text.
+            # Include fields that declare only a sleeping rate.
             stat_rates = {}  # stat_key -> (awake, sleeping_or_None)
             for section in template.get("sections", []):
                 for field in section.get("fields", []):
@@ -897,11 +906,8 @@ def apply_hourly_status_tick(character_name: str):
             if not stat_rates:
                 return
 
-            # Ruhephase = schlafend ODER offmap/abwesend. Ein gesteuerter Avatar wird
-            # vom Spieler nie schlafen gelegt — die Erholung passiert, waehrend niemand
-            # ihn steuert und er von der Karte verschwunden ist (current_location leer).
-            # Solange zaehlt die Zeit wie Schlaf, damit Energie sich erholt statt zu
-            # verfallen. Template-getrieben ueber bar_hourly_sleeping (kein Hardcoding).
+            # Resting means sleeping or absent from the map. An uncontrolled
+            # offmap avatar recovers using the template sleeping rate.
             from app.models.character import get_character_current_location
             is_sleeping = bool(profile.get("is_sleeping"))
             is_offmap = not (get_character_current_location(character_name) or "").strip()
@@ -911,10 +917,10 @@ def apply_hourly_status_tick(character_name: str):
                 if stat_key not in status:
                     continue
 
-                # Im Ruhezustand den Schlaf-Wert nehmen (falls definiert), sonst Wach-Wert.
+                # Use the sleeping rate while resting, if defined; otherwise the awake rate.
                 use_sleep = resting and sleeping is not None
                 base = sleeping if use_sleep else awake
-                # Character-Override: config.{stat}_hourly[_sleeping] ueberschreibt Template.
+                # Character config overrides the template rate.
                 override_key = f"{stat_key}_hourly_sleeping" if use_sleep else f"{stat_key}_hourly"
                 try:
                     hourly = int(config.get(override_key, base))
@@ -945,5 +951,5 @@ def apply_hourly_status_tick(character_name: str):
     except Exception as e:
         logger.warning("Hourly status tick fehlgeschlagen fuer %s: %s", character_name, e)
 
-    # Abgelaufene Conditions aufraeumen (drunk, exhausted, charmed, etc.)
+    # Clean up expired conditions.
     cleanup_expired_conditions(character_name)
