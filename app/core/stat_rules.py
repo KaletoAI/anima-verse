@@ -2,6 +2,7 @@
 from copy import deepcopy
 import json
 import math
+import sqlite3
 from pathlib import Path
 from threading import RLock
 
@@ -71,7 +72,14 @@ def _load_snapshot():
         if key != _snapshot_key:
             shipped = json.loads(_SHARED_FILE.read_text(encoding='utf-8'))['settings']
             overrides = {'stat': {}, 'setting': {}}
-            for row in get_connection().execute('SELECT scope, key, data FROM stat_overrides'):
+            try:
+                rows = get_connection().execute(
+                    'SELECT scope, key, data FROM stat_overrides').fetchall()
+            except sqlite3.OperationalError:
+                # A world DB without the table (not migrated yet, or a test DB
+                # with a partial schema) simply has no overrides.
+                rows = []
+            for row in rows:
                 if row['scope'] in overrides:
                     overrides[row['scope']][row['key']] = json.loads(row['data'])
             _snapshot = (shipped, overrides)
