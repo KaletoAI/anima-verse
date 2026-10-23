@@ -8,6 +8,8 @@ slots and the hourly stat tick are things the world experiences, so they run
 on the game clock, never on system time.
 """
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from app.core.game_time import GameTime
 from app.core.npc_windows import is_night
@@ -598,15 +600,33 @@ def _compare(value: int, operator: str, threshold: int) -> bool:
 _last_matched_partner: Optional[str] = None
 
 
+# State conditions (prompt filters) must not fire on a stat the character
+# does not have; rule conditions keep the historic "missing counts as 100".
+_MISSING_STAT_FAILS: ContextVar[bool] = ContextVar("missing_stat_fails", default=False)
+
+
+@contextmanager
+def missing_stats_fail():
+    """Within this block a comparison on a missing stat is not met."""
+    token = _MISSING_STAT_FAILS.set(True)
+    try:
+        yield
+    finally:
+        _MISSING_STAT_FAILS.reset(token)
+
+
 def _check_status_effect(character_name: str,
     stat_name: str, operator: str, threshold: int) -> Tuple[bool, str]:
-    """Compare an effective stat; missing stats retain the default of 100."""
+    """Compare an effective stat; missing stats count as 100, or as not met
+    inside ``missing_stats_fail()``."""
     try:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name)
         from app.core.stat_boosts import effective_stat
         value = effective_stat(profile, stat_name)
         if value is None:
+            if _MISSING_STAT_FAILS.get():
+                return False, f"{stat_name}: not a value of this character"
             value = 100
         if operator == ">" and value > threshold:
             return True, ""

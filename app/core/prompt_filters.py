@@ -137,8 +137,10 @@ def _evaluate(condition: str, character_name: str, location_id: str = "") -> boo
     if not condition:
         return False
     try:
-        from app.core.activity_engine import evaluate_condition
-        passed, _ = evaluate_condition(condition, character_name, location_id)
+        from app.core.activity_engine import evaluate_condition, missing_stats_fail
+        # A state never fires on a stat the character does not have.
+        with missing_stats_fail():
+            passed, _ = evaluate_condition(condition, character_name, location_id)
         return bool(passed)
     except Exception as e:
         logger.debug("evaluate_condition('%s') failed for %s: %s",
@@ -305,9 +307,11 @@ def _triggered_filters(character_name: str, location_id: str = "", profile=None,
                 from app.core.stat_boosts import effective_stat
                 value = effective_stat(profile, match[1])
                 if value is None:
-                    value = 100
-                threshold = int(match[3])
-                result = {">": value > threshold, "<": value < threshold, "=": int(value) == threshold}[match[2]]
+                    # A state never fires on a stat the character does not have.
+                    result = False
+                else:
+                    threshold = int(match[3])
+                    result = {">": value > threshold, "<": value < threshold, "=": int(value) == threshold}[match[2]]
             elif raw in flags:
                 result = bool(profile.get(raw))
             elif raw.startswith("mood:"):

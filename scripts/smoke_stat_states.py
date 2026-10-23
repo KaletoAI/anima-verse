@@ -55,6 +55,14 @@ def main():
                 active = {f['id'] for f in pf._triggered_filters('demo', profile={'status_effects': stats})}
                 assert (fid in active) == triggered, (fid, value, active)
         print('PASS shipped shape, validation, strict boundaries and exclusive energy bands')
+        # A character without these values never shows the band states
+        # (a missing stat must not read as 100 in a state condition).
+        active = {f['id'] for f in pf._triggered_filters('demo', profile={'status_effects': {}})}
+        assert not active & {'tired', 'alert', 'distracted', 'scared', 'bold'}, active
+        assert not pf._evaluate('attention>75', 'demo')
+        from app.core.activity_engine import evaluate_condition
+        assert evaluate_condition('attention>75', 'demo')[0], 'rules keep missing=100'
+        print('PASS no band state for a character without the values; rules unchanged')
         shared = Path(tmp) / 'filters.json'
         shared.write_text(json.dumps({'filters': [{'id': 'boosted', 'stat_boosts': {'x': 5}}]}))
         with patch.object(pf, '_SHARED_FILE', shared):
