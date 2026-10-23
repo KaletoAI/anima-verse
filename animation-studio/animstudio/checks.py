@@ -147,3 +147,81 @@ def run_checks(anim: Animation, compiled: Compiled, measure: Dict,
         ok = LIE_HIPS_CM[0] <= hips <= LIE_HIPS_CM[1]
         out.append(Check("lie_height", ok, round(hips, 1), f"hips {LIE_HIPS_CM} cm"))
     return out
+
+
+# --- pair clips -------------------------------------------------------------
+#
+# The bodies are read from the COMPILED frames in the pair frame (rotations
+# and heads of every bone; the bake only shifts both halves by the same
+# floor). A torso is a stack of elliptic cross-sections riding on its spine
+# bones — deliberately SMALLER than a real body (half-width TORSO_A_CM,
+# half-depth TORSO_B_CM against the rig's shoulder joints at ±12 cm), so a
+# failure means a limb or a chest really is inside the other figure.
+
+TORSO_A_CM = 11.0
+TORSO_B_CM = 9.0
+#: Bone -> (lowest, highest) local height of its cross-section (cm along
+#: the bone's rest +Y from its head): the pelvis reaches below the Hips head.
+TORSO_SPANS = {"Hips": (-8.0, 7.3), "Spine": (0.0, 7.4), "Spine1": (0.0, 8.6),
+               "Spine2": (0.0, 20.8)}
+HEAD_R_CM = 9.0
+HEAD_GAP_CM = 2.0 * HEAD_R_CM
+#: Arm segments sampled against the partner (shoulder -> elbow -> wrist ->
+#: knuckles).
+ARM_CHAIN = ("Arm", "ForeArm", "Hand", "HandMiddle1")
+SAMPLES = 6
+
+
+def _inside(frame, pt, a: float, b: float) -> float:
+    """How deep ``pt`` lies inside ``frame``'s torso (> 0 = inside; the
+    elliptic radius minus 1, negated), max over the spine sections."""
+    import numpy as np
+    worst = -1e9
+    for bone, (lo, hi) in TORSO_SPANS.items():
+        q = frame.D[bone].T @ (np.asarray(pt) - frame.pos[bone])
+        if lo <= q[1] <= hi:
+            worst = max(worst, 1.0 - math.hypot(q[0] / a, q[2] / b))
+    return worst
+
+
+def _head_center(frame):
+    return (frame.pos["Head"] + frame.pos["HeadTop_End"]) / 2.0
+
+
+def pair_checks(pair_frames: Dict[str, List]) -> List[Check]:
+    """``pair_frames`` = role -> compiled frames in the pair frame."""
+    import numpy as np
+    A, B = pair_frames["a"], pair_frames["b"]
+    arm_in, chest_in, head_gap, arm_head = -1e9, -1e9, 1e9, 1e9
+    where = {"arm": "", "chest": ""}
+    for i, (fa, fb) in enumerate(zip(A, B)):
+        for me, other, role in ((fa, fb, "a"), (fb, fa, "b")):
+            for S in ("Left", "Right"):
+                chain = [me.pos[f"{S}{j}"] for j in ARM_CHAIN]
+                for p0, p1 in zip(chain, chain[1:]):
+                    for k in range(SAMPLES + 1):
+                        pt = p0 + (p1 - p0) * (k / SAMPLES)
+                        d = _inside(other, pt, TORSO_A_CM, TORSO_B_CM)
+                        if d > arm_in:
+                            arm_in, where["arm"] = d, f"{role} {S} arm, frame {i}"
+                        arm_head = min(arm_head, float(np.linalg.norm(pt - _head_center(other))))
+            # My chest line against the other's torso grown by my own
+            # cross-section: two bodies facing each other touch when their
+            # spine lines are a + a' / b + b' apart.
+            for bone in ("Spine1", "Spine2"):
+                for k in range(SAMPLES + 1):
+                    up = TORSO_SPANS[bone][1] * k / SAMPLES
+                    pt = me.pos[bone] + me.D[bone] @ np.array([0.0, up, 0.0])
+                    d = _inside(other, pt, 2 * TORSO_A_CM, 2 * TORSO_B_CM)
+                    if d > chest_in:
+                        chest_in, where["chest"] = d, f"{role} {bone}, frame {i}"
+        head_gap = min(head_gap, float(np.linalg.norm(_head_center(fa) - _head_center(fb))))
+    return [
+        Check("pair_arms", arm_in <= 0.0, round(max(arm_in, -1.0), 3),
+              "<= 0 (no arm inside the partner's torso)", where["arm"] if arm_in > 0 else ""),
+        Check("pair_chests", chest_in <= 0.0, round(max(chest_in, -1.0), 3),
+              "<= 0 (chests touch, never overlap)", where["chest"] if chest_in > 0 else ""),
+        Check("pair_heads", head_gap >= HEAD_GAP_CM, round(head_gap, 1), f">= {HEAD_GAP_CM} cm"),
+        Check("pair_arm_head", arm_head >= HEAD_R_CM, round(arm_head, 1),
+              f">= {HEAD_R_CM} cm (no arm through the partner's head)"),
+    ]

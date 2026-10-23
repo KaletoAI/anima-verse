@@ -7,12 +7,14 @@ space) and pos = the bone's head in cm — exactly what ``_cmu.Pose`` carries
 """
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
 from animstudio import rig
-from animstudio.dsl import FADE_S, Animation, _layers, target_at, validate, values_at
+from animstudio import StudioError
+from animstudio.dsl import (FADE_S, Animation, PairAnimation, _layers, target_at, validate,
+                            validate_pair, values_at)
 import sys as _sys
 from animstudio import REPO
 
@@ -70,7 +72,7 @@ def _chain_ik(rest, D, pos, upper, lower, end, target, pole_point, weight, keep_
     _repose(rest, D, pos, upper)
 
 
-def _weight(span, t, duration):
+def _weight(span, t, duration, fade=FADE_S):
     if span is None:
         return 1.0
     a, b = span
@@ -78,10 +80,13 @@ def _weight(span, t, duration):
         return 0.0
     w = 1.0
     if a > 0:
-        w = min(w, (t - a) / FADE_S)
+        w = min(w, (t - a) / fade)
     if b < duration:
-        w = min(w, (b - t) / FADE_S)
-    return max(0.0, min(1.0, w))
+        w = min(w, (b - t) / fade)
+    w = max(0.0, min(1.0, w))
+    # Smoothstep for the long fades of a PartnerTarget: a linear ramp starts
+    # and stops the arm with a jerk.
+    return w if fade <= FADE_S else w * w * (3.0 - 2.0 * w)
 
 
 def _bend(pos, a, b, c):
@@ -147,7 +152,13 @@ def _angle_deg(A: np.ndarray, B: np.ndarray) -> float:
     return math.degrees(math.acos(max(-1.0, min(1.0, (tr - 1.0) / 2.0))))
 
 
-def compile_anim(anim: Animation, rest: rig.Rest) -> Compiled:
+#: Per frame index: the partner's torso as (D, pos) in THIS figure's clip
+#: space (rotations relative to the rest, heads in cm).
+PartnerFn = Callable[[int], Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]]
+
+
+def compile_anim(anim: Animation, rest: rig.Rest, partner: Optional[PartnerFn] = None
+                 ) -> Compiled:
     validate(anim)
     n = int(round(anim.duration_s * anim.fps))
     frames: List[Frame] = []
@@ -190,12 +201,21 @@ def compile_anim(anim: Animation, rest: rig.Rest) -> Compiled:
                     err = float(np.linalg.norm(pos[f"{S}Foot"] - anchors[S]))
                     key = f"{s}_foot"
                     ik_err[key] = max(ik_err.get(key, 0.0), err)
-            elif type(goal).__name__ == "HandTarget":
+            elif type(goal).__name__ in ("HandTarget", "PartnerTarget"):
                 S = "Left" if goal.side == "l" else "Right"
-                w = _weight(goal.span, t, anim.duration_s)
+                partnered = type(goal).__name__ == "PartnerTarget"
+                if partnered and partner is None:
+                    raise StudioError("PartnerTarget needs a pair clip (PairAnimation)")
+                w = _weight(goal.span, t, anim.duration_s,
+                            goal.fade_s if partnered else FADE_S)
                 if w <= 0.0:
                     continue
-                target = np.array(target_at(anim, goal, t), float) * 100.0
+                if partnered:
+                    pD, ppos = partner(i)
+                    target = ppos[goal.bone] + pD[goal.bone] @ (
+                        np.array(target_at(anim, goal, t), float) * 100.0)
+                else:
+                    target = np.array(target_at(anim, goal, t), float) * 100.0
                 pole_dir = np.array(goal.pole, float)
                 pole = pos[f"{S}Arm"] + 50.0 * pole_dir / (np.linalg.norm(pole_dir) or 1.0)
                 _chain_ik(rest, D, pos, f"{S}Arm", f"{S}ForeArm", f"{S}Hand",
@@ -225,8 +245,69 @@ def compile_anim(anim: Animation, rest: rig.Rest) -> Compiled:
     return compiled
 
 
-def take_document(rest: rig.Rest, compiled: Compiled) -> dict:
-    """What proc_clip reads (short Mixamo names; proc_clip maps them)."""
+def role_transform(pair: PairAnimation, role: str) -> Tuple[np.ndarray, np.ndarray]:
+    """(R, t): a role's own clip space -> the authoring frame (cm). A faces
+    +X from x = -d/2, B faces -X from x = +d/2 (Ry(±90) turns +Z onto ±X,
+    and the own right -X onto +Z for A, -Z for B), each s/2 to its right."""
+    half, side = pair.distance_m * 50.0, pair.stagger_m * 50.0
+    if role == "a":
+        return rig.axis_rot("y", 90.0), np.array([-half, 0.0, side])
+    return rig.axis_rot("y", -90.0), np.array([half, 0.0, -side])
+
+
+def to_pair(frame: "Frame", R: np.ndarray, t: np.ndarray) -> "Frame":
+    return Frame({b: R @ M for b, M in frame.D.items()},
+                 {b: R @ p + t for b, p in frame.pos.items()})
+
+
+@dataclass
+class CompiledPair:
+    a: Compiled
+    b: Compiled
+    transforms: Dict[str, Tuple[np.ndarray, np.ndarray]]
+
+    def pair_frames(self, role: str) -> List[Frame]:
+        R, t = self.transforms[role]
+        return [to_pair(f, R, t) for f in (self.a if role == "a" else self.b).frames]
+
+
+def compile_pair(pair: PairAnimation, rest: rig.Rest) -> CompiledPair:
+    """Both roles: each in its own clip space, each hand goal on the partner
+    resolved from the partner's DOF-only torso pose (FK of its values — no
+    IK goal moves a torso bone), carried into this role's space."""
+    validate_pair(pair)
+    n = int(round(pair.duration_s * pair.fps))
+    tf = {r: role_transform(pair, r) for r in ("a", "b")}
+    torso: Dict[str, List[Tuple[Dict, Dict]]] = {}
+    for r in ("a", "b"):
+        anim = pair.role_anim(r)
+        R, t = tf[r]
+        frames = []
+        for i in range(n + 1):
+            values = values_at(anim, i / pair.fps)
+            D, pos = fk(rest, local_rotations(values), values.get("hips_drop_cm", 0.0))
+            frames.append(({b: R @ D[b] for b in D}, {b: R @ pos[b] + t for b in pos}))
+        torso[r] = frames
+
+    def partner_of(role: str) -> PartnerFn:
+        other = "b" if role == "a" else "a"
+        R, t = tf[role]
+        Ri = R.T
+
+        def fn(i: int):
+            D, pos = torso[other][i]
+            return ({b: Ri @ M for b, M in D.items()},
+                    {b: Ri @ (p - t) for b, p in pos.items()})
+        return fn
+
+    out = {r: compile_anim(pair.role_anim(r), rest, partner_of(r)) for r in ("a", "b")}
+    return CompiledPair(a=out["a"], b=out["b"], transforms=tf)
+
+
+def take_document(rest: rig.Rest, compiled: Compiled,
+                  transform: Optional[Tuple[np.ndarray, np.ndarray]] = None) -> dict:
+    """What proc_clip reads (short Mixamo names; proc_clip maps them).
+    ``transform`` (R, t) puts a pair role into the pair frame."""
     names = rig.CORE_BONES + (rig.FINGER_BONES if compiled.fingers else [])
     bones = {}
     for b in names:
@@ -248,5 +329,6 @@ def take_document(rest: rig.Rest, compiled: Compiled) -> dict:
         "bones": bones,
         "lhipjoint_cm": lhip,
         "frames": [{b: {"rot": f.D[b].tolist(), "pos": f.pos[b].tolist()} for b in names}
-                   for f in compiled.frames],
+                   for f in (compiled.frames if transform is None
+                             else [to_pair(f, *transform) for f in compiled.frames])],
     }

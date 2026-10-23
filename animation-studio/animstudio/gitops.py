@@ -24,7 +24,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import List, NamedTuple
+from typing import Dict, List, NamedTuple, Optional
 
 from animstudio import StudioError
 
@@ -72,9 +72,12 @@ def _sync_index(repo: Path, sha: str, paths: List[str], created: bool) -> str:
 
 
 def commit_with_entry(repo: Path, catalog_rel: str, key: str, entry: dict,
-                      add_paths: List[str], message: str) -> CommitResult:
+                      add_paths: List[str], message: str,
+                      strip: Optional[Dict[str, List[str]]] = None) -> CommitResult:
     """One commit on HEAD: HEAD's catalog + ``entries[key] = entry`` and the
-    working-tree state of ``add_paths`` (repo-relative).
+    working-tree state of ``add_paths`` (repo-relative). ``strip`` = owner
+    key -> synonyms removed from HEAD's version of that entry (a take_over:
+    the owner's OTHER working-tree edits stay uncommitted).
 
     When the resulting tree equals HEAD's, no commit is made (a rerun after a
     landed commit is harmless). Raises StudioError when no commit landed;
@@ -92,7 +95,12 @@ def commit_with_entry(repo: Path, catalog_rel: str, key: str, entry: dict,
         try:
             _git(repo, "read-tree", head, env=env)
             doc = json.loads(_git(repo, "show", f"{head}:{catalog_rel}"))
-            doc.setdefault("entries", {})[key] = entry
+            entries = doc.setdefault("entries", {})
+            entries[key] = entry
+            for owner, gone in (strip or {}).items():
+                if owner in entries:
+                    entries[owner]["synonyms"] = [x for x in entries[owner].get("synonyms", [])
+                                                  if x not in gone]
             blob = _git(repo, "hash-object", "-w", "--stdin",
                         input_text=json.dumps(doc, ensure_ascii=False, indent=2)).strip()
             _git(repo, "update-index", "--add", "--cacheinfo", f"100644,{blob},{catalog_rel}",

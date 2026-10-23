@@ -92,11 +92,36 @@ class FeetPlanted:
 
 
 @dataclass(frozen=True)
+class PartnerTarget:
+    """PAIR clips only: the hand's head (wrist) reaches a point on the
+    PARTNER's body — ``offset`` (metres) in the frame of the partner's torso
+    bone ``bone`` (X the partner's left, Y up, Z the partner's front, turned
+    with that bone), so the hand stays on the partner's back while both
+    bodies move. Only torso bones (``PARTNER_BONES``): their pose comes from
+    DOFs alone, never from an IK goal, so the two figures can aim at each
+    other without a cycle. ``span`` / ``pole`` as in HandTarget; ``fade_s``
+    is the fade at each inner span edge (default FADE_S)."""
+    side: str
+    bone: str
+    offset: Union[Point, Sequence[Tuple[float, Point]]]
+    span: Optional[Tuple[float, float]] = None
+    pole: Tuple[float, float, float] = (0.0, -1.0, -1.0)
+    fade_s: float = FADE_S
+
+
+#: The partner bones a PartnerTarget may name (no IK ever moves them).
+PARTNER_BONES = ("Hips", "Spine", "Spine1", "Spine2", "Neck", "Head")
+
+
+@dataclass(frozen=True)
 class Catalog:
     key: str
     group: str
     prompt: str
     synonyms: Sequence[str] = ()
+    #: Synonyms of THIS pose that today belong to another pose and are moved
+    #: here deliberately on publish (e.g. "umarmen" from "comforting").
+    take_over: Sequence[str] = ()
 
 
 @dataclass
@@ -116,6 +141,63 @@ class Animation:
     #: type expects ~20 (root_drop is calibrated on the shipped clips). For
     #: group "lie" set ~16; everything else keeps 0.
     lift_cm: float = 0.0
+
+
+@dataclass
+class Role:
+    """One half of a pair, authored in its OWN clip space (front +Z) like a
+    solo clip; the pair puts it into the shared frame."""
+    base: Pose = field(default_factory=Pose)
+    keys: List[Key] = field(default_factory=list)
+    layers: List = field(default_factory=list)
+    ik: List = field(default_factory=list)
+
+
+@dataclass
+class PairAnimation:
+    """Two figures, one clip pair ``<kind>__a`` / ``<kind>__b``.
+
+    Authoring frame: A stands at x = -distance_m / 2 facing +X, B at
+    +distance_m / 2 facing -X (``distance_m`` = hips apart along their
+    facing), each ``stagger_m / 2`` to its OWN right (A towards +Z, B
+    towards -Z) — the lateral offset that lets two heads pass each other in
+    an embrace. Each role's own clip space (X its left, Z its front) is
+    turned into that frame. The bake then turns the whole pair so that +X
+    runs from A's hips to B's (spec docs/schnittstellen-3d.md § A8a), so
+    with a stagger both face a little off that line. ``anchor_s`` is the
+    moment the sidecar names as the contact (the full embrace)."""
+    kind: str
+    duration_s: float
+    loop: bool
+    catalog: Catalog
+    a: Role
+    b: Role
+    distance_m: float
+    stagger_m: float = 0.0
+    anchor_s: float = 0.0
+    fps: int = 30
+
+    def role_anim(self, role: str) -> Animation:
+        r = self.a if role == "a" else self.b
+        return Animation(kind=self.kind, duration_s=self.duration_s, loop=self.loop,
+                         catalog=self.catalog, base=r.base, keys=r.keys, layers=r.layers,
+                         ik=r.ik, fps=self.fps)
+
+
+def validate_pair(pair: PairAnimation) -> None:
+    if pair.catalog.group != "stand":
+        raise StudioError("pair clips support catalog.group 'stand' only")
+    if not 0.1 <= pair.distance_m <= 2.0:
+        raise StudioError("distance_m must be within 0.1..2.0")
+    if not 0.0 <= pair.stagger_m <= 0.5:
+        raise StudioError("stagger_m must be within 0..0.5")
+    if not 0.0 <= pair.anchor_s <= pair.duration_s:
+        raise StudioError("anchor_s must lie within [0, duration]")
+    for role in ("a", "b"):
+        try:
+            validate(pair.role_anim(role))
+        except StudioError as e:
+            raise StudioError(f"role {role}: {e}")
 
 
 def _layers(anim: Animation) -> List[Oscillator]:
@@ -165,10 +247,18 @@ def validate(anim: Animation) -> None:
         sides = getattr(goal, "sides", None) or (getattr(goal, "side", None),)
         if any(s not in ("l", "r") for s in sides):
             raise StudioError(f"ik {type(goal).__name__}: side must be 'l' or 'r'")
+        if isinstance(goal, PartnerTarget):
+            if goal.bone not in PARTNER_BONES:
+                raise StudioError(f"ik PartnerTarget {goal.side}: bone must be one of "
+                                  f"{PARTNER_BONES}")
+            _validate_target(anim, goal.side, goal.offset, "PartnerTarget")
+            if not 0.05 <= goal.fade_s <= 2.0:
+                raise StudioError(f"ik PartnerTarget {goal.side}: fade_s must be 0.05..2.0")
         span = getattr(goal, "span", None)
         if span is not None:
-            _validate_span(anim, goal.side, span)
-        if hasattr(goal, "at"):
+            _validate_span(anim, goal.side, span, getattr(goal, "fade_s", FADE_S),
+                           type(goal).__name__)
+        if isinstance(goal, HandTarget):
             _validate_target(anim, goal.side, goal.at)
     for o in _layers(anim):
         if not _known(o.dof):
@@ -177,22 +267,23 @@ def validate(anim: Animation) -> None:
             raise StudioError(f"layer {o.dof}: period_s must be > 0")
 
 
-def _validate_span(anim: Animation, side: str, span) -> None:
-    """A HandTarget span must lie inside the clip, must not snap at a loop's
+def _validate_span(anim: Animation, side: str, span, fade: float = FADE_S,
+                   what: str = "HandTarget") -> None:
+    """A hand-goal span must lie inside the clip, must not snap at a loop's
     seam and must be long enough to reach full weight past its fades."""
     a, b = (float(v) for v in span)
     dur = anim.duration_s
     if not 0.0 <= a < b <= dur:
-        raise StudioError(f"ik HandTarget {side}: span ({a:g}, {b:g}) must satisfy "
+        raise StudioError(f"ik {what} {side}: span ({a:g}, {b:g}) must satisfy "
                           f"0 <= a < b <= duration ({dur:g})")
     at_start, at_end = abs(a) < 1e-9, abs(b - dur) < 1e-9
     if anim.loop and at_start != at_end:
-        raise StudioError(f"ik HandTarget {side}: span ({a:g}, {b:g}) touches only one end "
+        raise StudioError(f"ik {what} {side}: span ({a:g}, {b:g}) touches only one end "
                           "of a loop - the hand snaps at the seam (cover both ends or neither)")
     inner = (not at_start) + (not at_end)
-    if b - a < inner * FADE_S - 1e-9:
-        raise StudioError(f"ik HandTarget {side}: span ({a:g}, {b:g}) is shorter than its "
-                          f"{inner} fade(s) of {FADE_S}s - it never reaches full weight")
+    if b - a < inner * fade - 1e-9:
+        raise StudioError(f"ik {what} {side}: span ({a:g}, {b:g}) is shorter than its "
+                          f"{inner} fade(s) of {fade:g}s - it never reaches full weight")
 
 
 def _is_point(v) -> bool:
@@ -200,11 +291,11 @@ def _is_point(v) -> bool:
             and all(isinstance(c, (int, float)) and not isinstance(c, bool) for c in v))
 
 
-def _validate_target(anim: Animation, side: str, at) -> None:
+def _validate_target(anim: Animation, side: str, at, what: str = "HandTarget") -> None:
     """A point, or keys ``(t, point)`` with increasing times inside the clip."""
     if _is_point(at):
         return
-    where = f"ik HandTarget {side}"
+    where = f"ik {what} {side}"
     if not isinstance(at, (tuple, list)) or not at:
         raise StudioError(f"{where}: at must be a point (x, y, z) or a non-empty "
                           "list of (t, (x, y, z)) keys")
@@ -222,11 +313,13 @@ def _validate_target(anim: Animation, side: str, at) -> None:
         last = t
 
 
-def target_at(anim: Animation, goal: "HandTarget", t: float) -> Point:
-    """The target point (metres) of ``goal`` at time ``t``."""
-    if _is_point(goal.at):
-        return tuple(float(c) for c in goal.at)
-    keys = [(float(kt), tuple(float(c) for c in kp)) for kt, kp in goal.at]
+def target_at(anim: Animation, goal, t: float) -> Point:
+    """The target point (metres) of a HandTarget (``at``) or the offset of a
+    PartnerTarget at time ``t``."""
+    at = goal.offset if isinstance(goal, PartnerTarget) else goal.at
+    if _is_point(at):
+        return tuple(float(c) for c in at)
+    keys = [(float(kt), tuple(float(c) for c in kp)) for kt, kp in at]
     if anim.loop:
         keys.append((anim.duration_s, keys[0][1]))
     if t <= keys[0][0]:

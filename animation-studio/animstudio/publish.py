@@ -24,11 +24,33 @@ WORLD_NOTE = ("a world can override pose {key!r} through its world layer - "
               "publish checks only the shared catalog")
 
 
+def _is_pair(anim) -> bool:
+    from animstudio.dsl import PairAnimation
+    return isinstance(anim, PairAnimation)
+
+
 def catalog_entry(anim) -> Dict:
     c = anim.catalog
-    return {"prompt": str(c.prompt).strip(),
-            "synonyms": [s.strip().lower() for s in c.synonyms if str(s).strip()],
-            "animation": anim.kind, "group": c.group, "solo": True}
+    entry = {"prompt": str(c.prompt).strip(),
+             "synonyms": [s.strip().lower() for s in c.synonyms if str(s).strip()],
+             "animation": anim.kind, "group": c.group, "solo": not _is_pair(anim)}
+    if _is_pair(anim):
+        # The pair takes one place of two slots; clip +X lies along the
+        # facing of a marker (docs/schnittstellen-3d.md § A8a).
+        entry.update(places=2, yaw_offset=0)
+    return entry
+
+
+def clip_files(anim) -> List[str]:
+    """The library files of one clip: the FBX (both halves of a pair) and
+    the sidecar."""
+    k = anim.kind
+    return ([f"{k}__a.fbx", f"{k}__b.fbx", f"{k}.json"] if _is_pair(anim)
+            else [f"{k}.fbx", f"{k}.json"])
+
+
+def taken_over(anim) -> List[str]:
+    return [s.strip().lower() for s in anim.catalog.take_over if str(s).strip()]
 
 
 def _own_existing(kind: str) -> bool:
@@ -39,7 +61,7 @@ def _own_existing(kind: str) -> bool:
             continue
         if e["source"] != "free":
             return False
-        side = Path(e["path"]).with_suffix(".json")
+        side = Path(e["path"]).parent / f"{kind}.json"   # a pair's halves share it
         try:
             src = json.loads(side.read_text(encoding="utf-8")).get("source") or {}
         except (OSError, ValueError):
@@ -62,31 +84,43 @@ def _check_kind(anim, replace: bool) -> None:
                               + ("" if replace else " (use --replace for an own studio clip)"))
 
 
-def _check_catalog(anim, replace: bool) -> None:
-    """The key and every synonym are free in the pose catalog (both stores)."""
+def _check_catalog(anim, replace: bool) -> Dict[str, List[str]]:
+    """The key and every synonym are free in the pose catalog (both stores)
+    — except a synonym named in ``catalog.take_over``, which moves here from
+    its owner on publish. Returns owner key -> the synonyms it gives up."""
     from app.core import pose_catalog as pc
     key = anim.catalog.key.strip().lower()
     if not key or "/" in key:
         raise StudioError("catalog key must be non-empty and contain no '/'")
     entry = catalog_entry(anim)
+    take = taken_over(anim)
+    stray = [t for t in take if t not in entry["synonyms"]]
+    if stray:
+        raise StudioError(f"take_over {stray} must also be synonyms of {key!r}")
     catalog = pc.get_catalog("pose")
     if key in catalog and not (replace and catalog[key].get("animation") == anim.kind):
         raise StudioError(f"catalog key {key!r} exists already")
+    moves: Dict[str, List[str]] = {}
     for alias in [key] + entry["synonyms"]:
         for other, e in catalog.items():
             if other == key:
                 continue
+            if alias in take and alias != other and alias in e.get("synonyms", []):
+                moves.setdefault(other, []).append(alias)
+                continue
             if alias == other or alias in e.get("synonyms", []):
                 raise StudioError(f"{alias!r} already belongs to {other!r}")
+    return moves
 
 
-def _undo_catalog(pc, cat_path: Path, before: bytes, written: bytes, key: str,
-                  old_entry: Optional[dict]) -> None:
+def _undo_catalog(pc, cat_path: Path, before: bytes, written: bytes,
+                  old_entries: Dict[str, Optional[dict]]) -> None:
     """Takes back our catalog write. Call WITHOUT the file lock held.
 
     Untouched since our write -> the original bytes come back exactly. Some
-    other writer (the Poses tab) came in between -> only our key is undone in
-    the current document, their write stays."""
+    other writer (the Poses tab) came in between -> only our keys (the new
+    one and the owners a take_over touched) are undone in the current
+    document, their write stays."""
     with pc.catalog_file_lock("pose"):
         try:
             current = cat_path.read_bytes()
@@ -100,10 +134,11 @@ def _undo_catalog(pc, cat_path: Path, before: bytes, written: bytes, key: str,
             return
         doc = json.loads(current.decode("utf-8"))
         entries = doc.setdefault("entries", {})
-        if old_entry is None:
-            entries.pop(key, None)
-        else:
-            entries[key] = old_entry
+        for key, old_entry in old_entries.items():
+            if old_entry is None:
+                entries.pop(key, None)
+            else:
+                entries[key] = old_entry
         pc.write_shared_document("pose", doc)
 
 
@@ -142,22 +177,23 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
             except ValueError:
                 raise StudioError(f"{p} lies outside the repository {repo} - "
                                   "cannot commit it (publish with --no-commit?)")
-        commit_paths = [rel(cat_path), rel(lib / f"{kind}.fbx"), rel(lib / f"{kind}.json"),
-                        rel(animstudio.ANIMS / f"{kind}.py")]
+        commit_paths = ([rel(cat_path)] + [rel(lib / f) for f in clip_files(anim)]
+                        + [rel(animstudio.ANIMS / f"{kind}.py")])
     lib.mkdir(parents=True, exist_ok=True)
     written: List[Path] = []
     backups: Dict[Path, bytes] = {}
     key = anim.catalog.key.strip().lower()
     entry = catalog_entry(anim)
-    cat_undo = None               # (before, written, old entry) once we wrote
+    cat_undo = None               # (before, written, old entries) once we wrote
+    moves: Dict[str, List[str]] = {}
     try:
-        for suffix in (".fbx", ".json"):
-            dst = lib / f"{kind}{suffix}"
+        for name in clip_files(anim):
+            dst = lib / name
             if dst.exists():
                 backups[dst] = dst.read_bytes()
             from app.core.http_files import atomic_replace, sibling_stage
             with sibling_stage(dst) as tmp:
-                shutil.copyfile(out / f"{kind}{suffix}", tmp)
+                shutil.copyfile(out / name, tmp)
                 atomic_replace(tmp, dst)
             written.append(dst)
         reload_clip_caches()
@@ -167,14 +203,19 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
             # written in between; get_catalog sees it through the file stamp).
             # Only the catalog half: the clip files are already ours here,
             # the kind check would now find them.
-            _check_catalog(anim, replace)
+            moves = _check_catalog(anim, replace)
             before = cat_path.read_bytes()
             doc = json.loads(before.decode("utf-8"))
             entries = doc.setdefault("entries", {})
-            old_entry = entries.get(key)
+            olds = {k: (json.loads(json.dumps(entries[k])) if k in entries else None)
+                    for k in [key, *moves]}
             entries[key] = entry
+            for owner, gone in moves.items():
+                if owner in entries:
+                    entries[owner]["synonyms"] = [x for x in entries[owner].get("synonyms", [])
+                                                  if x not in gone]
             pc.write_shared_document("pose", doc)
-            cat_undo = (before, cat_path.read_bytes(), old_entry)
+            cat_undo = (before, cat_path.read_bytes(), olds)
         pc.reload_catalogs()
         problems = pc.validate_catalog("pose")
         if problems:
@@ -191,17 +232,18 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
         if cat_undo is not None:
             # The write's ``with`` has been left: taking the lock again here
             # is not a nested acquisition.
-            _undo_catalog(pc, cat_path, cat_undo[0], cat_undo[1], key, cat_undo[2])
+            _undo_catalog(pc, cat_path, cat_undo[0], cat_undo[1], cat_undo[2])
         pc.reload_catalogs()
         raise
     files = [str(p) for p in written]
     result = {"kind": kind, "key": key, "files": files, "commit": "", "commit_created": False,
-              "warning": "", "note": WORLD_NOTE.format(key=key)}
+              "warning": "", "note": WORLD_NOTE.format(key=key), "moved": moves}
     if commit:
         from animstudio.gitops import commit_with_entry
         msg = f"feat(clips): {kind} — procedural clip + pose '{key}' (animation-studio)"
         if trailer:
             msg += "\n\n" + trailer
-        res = commit_with_entry(repo, commit_paths[0], key, entry, commit_paths[1:], msg)
+        res = commit_with_entry(repo, commit_paths[0], key, entry, commit_paths[1:], msg,
+                                strip=moves)
         result.update(commit=res.sha, commit_created=res.created, warning=res.warning)
     return result

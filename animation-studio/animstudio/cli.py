@@ -90,6 +90,8 @@ def main(argv=None) -> int:
             else:
                 tail = f", nothing new to commit - HEAD {r['commit']} already has it"
             print(f"published {r['kind']} as pose '{r['key']}'{tail}")
+            for owner, gone in r.get("moved", {}).items():
+                print(f"moved from '{owner}': {', '.join(gone)}")
             print(f"note: {r['note']}")
             if r["warning"]:
                 print(f"warning: {r['warning']}", file=sys.stderr)
