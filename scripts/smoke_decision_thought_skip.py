@@ -138,7 +138,6 @@ def run(inbox="", hint="", decided=None, result=None):
         lst.clear()
     loop = al.AgentLoop()
     loop._maybe_active_conversation_chime = lambda name: None
-    loop._maybe_auto_sleep = lambda name: None
     if hint:
         loop._bump_hints["Kira"] = hint
     asyncio.run(loop._run_turn("Kira"))

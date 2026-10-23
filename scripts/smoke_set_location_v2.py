@@ -78,12 +78,8 @@ Hand-derived expectations:
       carries "m to go", the ETA and the CancelTravel nudge, and the word
       "cell" appears nowhere.
 
- [10] The AgentLoop auto-sleep, BEHAVIOURALLY (the method swallows every
-      exception, so a source grep would prove nothing): an exhausted
-      character (stamina < 10) away from its home_location journeys home
-      → outcome ``auto_sleep_walking`` with a real journey on the profile;
-      a home that cannot be walked to (ISLE behind the water) → outcome
-      ``auto_sleep_no_path``, ``is_sleeping`` set, no journey.
+ [10] Force rules start the journey home before applying sleep; an
+      unreachable home applies sleep in place without a journey.
 
  [12] ``accessible_when`` is a WALL for the SKILL too (E7 cleanup). VAULT is
       known, placed and reachable, but carries
@@ -465,45 +461,48 @@ check_true("no cell wording is left", "cell" not in section.lower(), section)
 travel_engine.cancel_journey("prompt_npc")
 check("no section without a journey", travel_section("prompt_npc"), "")
 
-# ── [10] the AgentLoop auto-sleep ───────────────────────────────────────
-print("[10] the AgentLoop auto-sleep journeys home — or sleeps in place")
-from app.core.agent_loop import get_agent_loop  # noqa: E402
+# ── [10] force-rule journeys ────────────────────────────────────────────
+print("[10] force rules journey home — or sleep in place")
+from app.core.periodic_jobs import _sub_force_rules  # noqa: E402
+from app.models.rules import load_rules, save_rules  # noqa: E402
 from app.models.character import (get_character_config,  # noqa: E402
                                   save_character_config)
 
-loop = get_agent_loop()
+_saved_rules = load_rules()
+save_rules([{"id": "smoke_home", "name": "Sleep at home", "type": "force",
+             "condition": "always", "character": "tired_npc",
+             "force_action": {"go_to": "home", "set_flags": {"is_sleeping": True}}},
+            {"id": "smoke_stuck", "name": "Sleep in place", "type": "force",
+             "condition": "always", "character": "stuck_npc",
+             "force_action": {"go_to": "home", "set_flags": {"is_sleeping": True}}}])
 
 
-def exhaust(name: str, home_id: str) -> None:
-    """An exhausted character (stamina 5) whose home is ``home_id``."""
-    profile = get_character_profile(name)
-    profile["status_effects"] = dict(profile.get("status_effects") or {},
-                                     stamina=5)
-    profile["is_sleeping"] = False
-    save_character_profile(name, profile)
+def force_home(name: str, home_id: str) -> None:
+    """Configure the destination used by the character's force rule."""
     save_character_config(name, dict(get_character_config(name),
                                      home_location=home_id))
 
 
 new_npc("tired_npc", HOME, 0.0, 0.0, [HOME, MARKET, ISLE])
-exhaust("tired_npc", MARKET)
-result = loop._maybe_auto_sleep("tired_npc") or {}
-check("a walkable home starts the journey home", result.get("outcome"),
-      "auto_sleep_walking")
-check_true("… and a real journey is on the profile",
+force_home("tired_npc", MARKET)
+_sub_force_rules()
+check_true("a walkable home starts a real journey",
            travel_engine.get_journey("tired_npc") is not None)
-check("… and the character is NOT asleep yet",
+check("the character has not jumped home",
+      get_character_current_location("tired_npc"), HOME)
+check("the character is NOT asleep yet",
       bool(get_character_profile("tired_npc").get("is_sleeping")), False)
 
 new_npc("stuck_npc", HOME, 0.0, 0.0, [HOME, MARKET, ISLE])
-exhaust("stuck_npc", ISLE)                    # known + placed, behind water
-result = loop._maybe_auto_sleep("stuck_npc") or {}
-check("an unreachable home sleeps in place", result.get("outcome"),
-      "auto_sleep_no_path")
-check("… the character sleeps",
+force_home("stuck_npc", ISLE)  # Known and placed, behind water.
+_sub_force_rules()
+check("an unreachable home sleeps in place",
+      get_character_current_location("stuck_npc"), HOME)
+check("the character sleeps",
       bool(get_character_profile("stuck_npc").get("is_sleeping")), True)
-check("… and no journey was left behind",
+check("no journey was left behind",
       travel_engine.get_journey("stuck_npc"), None)
+save_rules(_saved_rules)
 
 # ── [12] accessible_when is a wall for the skill too ────────────────────
 print("[12] accessible_when refuses the skill — and the key lifts it")

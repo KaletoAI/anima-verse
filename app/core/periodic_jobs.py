@@ -131,7 +131,9 @@ def _sub_force_rules():
     """Check each character's force rules on every world-admin tick.
 
     Threshold changes take effect within minutes instead of waiting for
-    the hourly status tick."""
+    the hourly status tick. A follower sent home leaves the party before
+    starting an independent journey; followers otherwise move with their leader.
+    """
     try:
         from app.models.rules import (
             check_force_rules, resolve_force_destination)
@@ -139,7 +141,6 @@ def _sub_force_rules():
             list_available_characters,
             get_character_current_location, get_character_current_room,
             get_effective_activity,
-            save_character_current_location,
             save_character_current_room,
             enter_offmap_sleep, wake_from_offmap,
             OFFMAP_SLEEP_SENTINEL,
@@ -187,9 +188,31 @@ def _sub_force_rules():
                     dest_loc = ""  # Do not write another current location.
                     dest_room = ""
 
-                if dest_loc:
-                    save_character_current_location(name, dest_loc)
-                if dest_room:
+                journey_started = False
+                if dest_loc and dest_loc != _before_loc:
+                    # Offmap characters sleep where they are. Never pull them
+                    # onto the map merely because a force rule names a home.
+                    from app.models.rules import check_leave
+                    from app.core.travel_engine import get_journey, start_journey
+                    from app.core.party_engine import is_party_follower, leave_party
+                    from app.models.character import get_character_pos
+                    leave_ok, _ = check_leave(name)
+                    # On the map = in a location OR at a metre point in the
+                    # open; only a character with neither is offmap.
+                    on_map = bool(_before_loc) or get_character_pos(name) is not None
+                    if on_map and leave_ok:
+                        journey = get_journey(name, profile=_before_prof)
+                        if journey and journey.get("target") == dest_loc:
+                            continue
+                        if is_party_follower(name):
+                            leave_party(name)
+                        journey, reason = start_journey(
+                            name, dest_loc, target_room=dest_room)
+                        journey_started = journey is not None
+                        if not journey_started:
+                            logger.info("Force-rule journey failed for %s: %s", name, reason)
+                    # Failed starts and confinement apply flags at the origin.
+                elif dest_room and dest_room != _before_room:
                     save_character_current_room(name, dest_room)
 
                 # State flags are authoritative (is_sleeping wakes/sleeps).
@@ -197,7 +220,7 @@ def _sub_force_rules():
                 # Waking also restores a character from off-map sleep.
                 _flags_changed = False
                 _set_flags = force.get("set_flags") or {}
-                if _set_flags:
+                if _set_flags and not journey_started:
                     from app.models.character import (
                         set_is_sleeping, set_is_wet, set_is_intimate,
                         set_decency_exempt, set_state_flag, get_state_flags)
@@ -246,13 +269,15 @@ def _sub_force_rules():
                 _changed = (_before_loc != _after_loc
                             or _before_room != _after_room
                             or _before_act != _after_act
-                            or _flags_changed)
+                            or _flags_changed
+                            or journey_started)
                 if not _changed:
                     continue
 
                 record_state_change(
                     name, "forced_action",
-                    force.get("message") or force.get("rule_name") or "",
+                    (f"journey to {dest_loc}" if journey_started else
+                     force.get("message") or force.get("rule_name") or ""),
                     metadata={"rule": force.get("rule_name", ""),
                               "go_to": go_to,
                               "flags": force.get("set_flags", {})})

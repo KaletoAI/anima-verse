@@ -1876,21 +1876,8 @@ class AgentLoop:
                                  "tools": [], "intents": []}
                     return
 
-                # Deterministic auto-sleep: on exhaustion (stamina<10) the loop
-                # sends the char home / offmap on its own, without consulting
-                # the LLM thought. Prevents an exhausted character standing
-                # around on the map forever because the LLM never turns the
-                # "go home" instruction into a tool call.
-                _auto_sleep = self._maybe_auto_sleep(character_name)
-                if _auto_sleep:
-                    outcome = _auto_sleep["outcome"]
-                    turn_info = {"preview": _auto_sleep["preview"],
-                                 "tools": _auto_sleep.get("tools", []),
-                                 "intents": []}
-                    return
-
                 # Activity stat tick: the RUNNING activity influences status
-                # values over time (gym drains stamina, resting restores) —
+                # values over time (exercise drains, resting restores) —
                 # cheap interval gate here, LLM round in a background thread
                 # (plan-activity-stat-effects.md component 2).
                 try:
@@ -2013,118 +2000,6 @@ class AgentLoop:
             finally:
                 self._record_turn(character_name, started_at, outcome, turn_info)
                 self._current_agent = ""
-
-    def _maybe_auto_sleep(self, character_name: str) -> Optional[Dict[str, Any]]:
-        """On exhaustion (stamina<10) send the character home autonomously.
-
-        Three paths:
-          1. home_location=__offmap__ → enter_offmap_sleep directly
-          2. already at home_location → set activity to Sleeping
-          3. elsewhere → start a timed journey home (travel ticker drives
-             the movement; the next check here settles the sleep)
-
-        Returns dict {outcome, preview, tools} when it acted, else None.
-        Idempotent per tick: already home → sleep, journey home running →
-        no-op, offmap → continue.
-        """
-        try:
-            from app.models.character import (
-                get_character_profile, get_character_config,
-                get_character_current_location, OFFMAP_SLEEP_SENTINEL,
-                enter_offmap_sleep, set_is_sleeping)
-            profile = get_character_profile(character_name) or {}
-            stamina = (profile.get("status_effects") or {}).get("stamina")
-            if stamina is None or stamina >= 10:
-                return None  # not exhausted
-
-            cfg = get_character_config(character_name) or {}
-            home_loc = (cfg.get("home_location") or "").strip()
-            if not home_loc:
-                return None  # no home_location -> nothing we can do
-
-            cur_loc = (get_character_current_location(character_name) or "").strip()
-            already_offmap = not cur_loc
-
-            # Path 1: home is offmap
-            if home_loc == OFFMAP_SLEEP_SENTINEL:
-                if already_offmap:
-                    set_is_sleeping(character_name, True)
-                    logger.info("Auto-sleep: %s already offmap, activity=Sleeping",
-                                character_name)
-                    return {"outcome": "auto_sleep_offmap_continue",
-                            "preview": f"already offmap, sleeping (stamina={stamina})",
-                            "tools": ["Sleep"]}
-                if enter_offmap_sleep(character_name):
-                    set_is_sleeping(character_name, True)
-                    logger.info("Auto-sleep: %s exhausted (stamina=%s) -> offmap",
-                                character_name, stamina)
-                    return {"outcome": "auto_sleep_offmap",
-                            "preview": f"exhausted (stamina={stamina}) → offmap sleep",
-                            "tools": ["SetLocation", "Sleep"]}
-
-            # Path 2/3: home is a regular location
-            if cur_loc == home_loc:
-                # Already home — set activity to Sleeping
-                set_is_sleeping(character_name, True)
-                logger.info("Auto-sleep: %s at home, activity=Sleeping",
-                            character_name)
-                return {"outcome": "auto_sleep_at_home",
-                        "preview": f"home & exhausted (stamina={stamina}) → sleeping",
-                        "tools": ["Sleep"]}
-
-            # Leave gate: a confined character cannot walk home even when
-            # exhausted — sleeps in place instead.
-            try:
-                from app.models.rules import check_leave
-                _auto_leave_ok, _auto_leave_reason = check_leave(character_name)
-            except Exception:
-                _auto_leave_ok, _auto_leave_reason = True, ""
-            if not _auto_leave_ok:
-                set_is_sleeping(character_name, True)
-                logger.info("Auto-sleep: %s confined (%s) -> sleeping in place",
-                            character_name, _auto_leave_reason)
-                return {"outcome": "auto_sleep_confined",
-                        "preview": f"exhausted (stamina={stamina}) → confined, sleeping in place",
-                        "tools": ["Sleep"]}
-
-            # Elsewhere — start a timed journey home. Arrival is handled by
-            # the travel ticker; the NEXT auto-sleep check (stamina still
-            # low, now at home) flips the character to sleeping.
-            # Guard: if a journey home is already running, leave it alone —
-            # restarting would reset started_at_game on every loop pick
-            # (~30s) and the character would never walk a single metre.
-            # Journeying toward somewhere ELSE is re-pointed home.
-            from app.core.travel_engine import get_journey, start_journey
-            j = get_journey(character_name)
-            if j and j.get("target") == home_loc:
-                return {"outcome": "auto_sleep_walking",
-                        "preview": f"exhausted (stamina={stamina}) → journey home in progress",
-                        "tools": []}
-            # The home ROOM rides along: without it the arrival lands on
-            # the ground, and the character falls asleep outside its door.
-            j, reason = start_journey(
-                character_name, home_loc,
-                target_room=(cfg.get("home_room") or "").strip())
-            if j is None:
-                # No way home at all — unknown, unplaced or unwalkable target
-                # (the reason is logged, the outcome is the same): sleep in
-                # place instead of pacing the loop forever.
-                set_is_sleeping(character_name, True)
-                logger.warning(
-                    "Auto-sleep: no way home for %s (%s) — sleeping in place",
-                    character_name, reason)
-                return {"outcome": "auto_sleep_no_path",
-                        "preview": f"exhausted (stamina={stamina}) → no path home, sleeping in place",
-                        "tools": ["Sleep"]}
-            logger.info("Auto-sleep: %s journeys home to %s (%d waypoints)",
-                        character_name, home_loc, len(j["waypoints"]))
-            return {"outcome": "auto_sleep_walking",
-                    "preview": f"exhausted (stamina={stamina}) → journeying home",
-                    "tools": ["SetLocation"]}
-        except Exception as e:
-            logger.debug("_maybe_auto_sleep failed for %s: %s",
-                         character_name, e)
-            return None
 
     def _record_turn(self, name: str, started_at: datetime, outcome: str,
                      turn_info: Optional[Dict[str, Any]] = None) -> None:
