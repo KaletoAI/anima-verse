@@ -5,6 +5,8 @@
  * Outfit and inventory live in the Belongings panel.
  * Source: GET /play/self · setter: POST /play/self/mood.
  */
+import { useToast } from './Toast'
+import { StatHistoryPopover, type StatChange } from './StatHistoryPopover'
 import { StatFill } from './StatBoost'
 import { statTitle, conditionTitle, type StatBoost, type BoostCondition } from './statBoosts'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -19,6 +21,8 @@ import { transparentPortraitUrl } from './thumbs'
 interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
 interface SelfData {
   avatar: string
+  stat_changes: StatChange[]
+  stat_bands: Record<string, string>
   mood: string
   activity: string
   status_effects: Record<string, number>
@@ -33,6 +37,39 @@ export function SelfPanel() {
   const enlarge = useEnlarge()
   const { data, refresh } = usePoll<SelfData>(
     'play-self', () => apiGet<SelfData>('/play/self'), SYNC_ENDPOINTS.self)
+  const { toast } = useToast()
+  const seen = useRef<{ avatar: string; id: number; bands: Record<string, string> } | null>(null)
+  const [history, setHistory] = useState<{ avatar: string; stat: string; anchor: HTMLElement } | null>(null)
+  const closeHistory = useCallback(() => setHistory(null), [])
+  useEffect(() => {
+    if (!data) return
+    const previous = seen.current
+    const rows = data.stat_changes || []
+    const bands = data.stat_bands || {}
+    const newest = Math.max(0, ...rows.map(row => row.id))
+    seen.current = { avatar: data.avatar, id: previous?.avatar === data.avatar ? Math.max(previous.id, newest) : newest, bands }
+    if (!data.avatar || !previous || previous.avatar !== data.avatar) return
+    const name = (key: string) => {
+      const meta = data.bar_meta?.[key]
+      return (lang === 'de' ? meta?.name_de || meta?.name : meta?.name) || key
+    }
+    for (const row of rows) {
+      if (row.id <= previous.id) continue
+      const change = Object.entries(row.changes).find(([, value]) => Math.abs(value.new - value.old) >= 10)
+      if (change) {
+        const [key, value] = change
+        const delta = value.new - value.old
+        toast(`${name(key)} ${delta < 0 ? '−' : '+'}${Math.abs(delta)}: ${row.label}`, 'info')
+        return
+      }
+    }
+    for (const key of new Set([...Object.keys(previous.bands), ...Object.keys(bands)])) {
+      if ((bands[key] || '') !== (previous.bands[key] || '')) {
+        toast(`${name(key)}: ${bands[key] || t('back to normal')}`, 'info')
+        return
+      }
+    }
+  }, [data, lang, t, toast])
   const [moodDraft, setMoodDraft] = useState('')
   const [activityDraft, setActivityDraft] = useState('')
   const [activityFocused, setActivityFocused] = useState(false)
@@ -148,8 +185,10 @@ export function SelfPanel() {
                 </div>
               )
               return (
-                <div key={key} title={statTitle(t, full, pct, boost)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <button type="button" key={key} title={statTitle(t, full, pct, boost)}
+                  aria-label={full} aria-haspopup="dialog" aria-expanded={history?.avatar === data.avatar && history.stat === key}
+                  onClick={event => setHistory({ avatar: data.avatar, stat: key, anchor: event.currentTarget })}
+                  style={{ display: 'flex', alignItems: 'center', gap: 4, border: 0, padding: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', minWidth: 0 }}>
                   {!compact && (
                     <span style={{ width: 26, opacity: 0.8, fontSize: '0.6em', textTransform: 'uppercase' }}>
                       {m.label || key.slice(0, 3)}
@@ -159,12 +198,18 @@ export function SelfPanel() {
                   {!compact && (
                     <span style={{ minWidth: 20, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: '0.6em', opacity: 0.7 }}>{value}</span>
                   )}
-                </div>
+                </button>
               )
             })}
           </div>
         )}
       </div>
+
+      {history && history.avatar === data.avatar && (
+        <StatHistoryPopover stat={history.stat}
+          name={(lang === 'de' ? data.bar_meta[history.stat]?.name_de || data.bar_meta[history.stat]?.name : data.bar_meta[history.stat]?.name) || history.stat}
+          rows={data.stat_changes || []} anchor={history.anchor} onClose={closeHistory} />
+      )}
 
       {/* Mood */}
       <label style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>

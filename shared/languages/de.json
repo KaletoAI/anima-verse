@@ -2832,6 +2832,8 @@
     "Building default": "Gebäudestandard",
     "Default window": "Standardfenster",
     "Window style used by every window of this place that names none.": "Fensterstil für alle Fenster dieses Ortes ohne eigenen Stil.",
-    "says something you do not catch.": "sagt etwas, das du nicht mitbekommst."
+    "says something you do not catch.": "sagt etwas, das du nicht mitbekommst.",
+    "No recent changes": "Keine kürzlichen Änderungen",
+    "back to normal": "wieder normal"
   }
 }

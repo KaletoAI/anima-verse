@@ -2282,7 +2282,7 @@ def play_self(user=Depends(get_current_user)):
     from app.models.account import get_active_character
     empty = {"avatar": "", "mood": "", "activity": "", "status_effects": {},
              "stat_boosts": {}, "bar_meta": {}, "conditions": [], "outfit": "", "profile_image": "",
-             "outfit_sets": []}
+             "outfit_sets": [], "stat_changes": [], "stat_bands": {}}
     avatar = (get_active_character() or "").strip()
     if not avatar:
         return empty
@@ -2302,6 +2302,16 @@ def play_self(user=Depends(get_current_user)):
         out["stat_boosts"] = s.get("stat_boosts", {}) or {}
     except Exception as e:
         logger.debug("play_self status-effects failed: %s", e)
+    try:
+        from app.core.character_ops import build_stat_history
+        from app.core.stat_hints import stat_bands
+        out["stat_changes"] = [
+            {key: row[key] for key in ("id", "game_ts", "label", "changes")}
+            for row in build_stat_history(avatar, limit=10)["rows"]
+        ]
+        out["stat_bands"] = {band["key"]: band["label"] for band in stat_bands(avatar)}
+    except Exception as e:
+        logger.debug("play_self stat feedback failed: %s", e)
     try:
         from app.core.character_ops import build_active_conditions
         out["conditions"] = build_active_conditions(avatar).get("conditions", []) or []
