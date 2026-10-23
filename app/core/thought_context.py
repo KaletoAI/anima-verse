@@ -154,6 +154,15 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         "tools_hint": tools_hint,
         "has_assignments": False,  # set below if assignments_block non-empty
     }
+    from app.core.stat_hints import stat_bands
+    ctx["needs_urgent"] = []
+    ctx["needs_felt"] = []
+    for band in stat_bands(character_name, profile=profile):
+        need = band["need"] or {}
+        urgency = need.get("urgency")
+        if urgency in ("urgent", "felt") and need.get("text"):
+            ctx[f"needs_{urgency}"].append(
+                f"{need['text']} ({band['name']} {band['value']}/100)")
     ctx["has_assignments"] = bool(ctx["assignments_block"])
 
     # Closing action instruction — MODE-AWARE (this is why an rp_first RP

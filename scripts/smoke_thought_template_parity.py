@@ -54,6 +54,8 @@ IN_CHAT = "chat/agent_thought_in_chat.md"
 
 # Blocks the in-chat turn deliberately does without, each with its reason.
 DELIBERATE = {
+    "needs_urgent": "needs drive autonomous decisions; the in-chat turn stays conversation-focused",
+    "needs_felt": "same — new need-driven initiatives wait for the regular thought turn",
     "action_instruction": "the in-chat turn has its own closing instruction (default: SKIP)",
     "general_task": "same — the standing task drives initiatives, which are off here",
     "outfit_decision_block": "no outfit changes while a conversation runs",
@@ -101,7 +103,8 @@ check("[2] no stale entry in the list", sorted(set(DELIBERATE) - missing), [])
 
 # [3]
 ctx = {n: f"<{n}>" for n in (regular | in_chat)}
-ctx.update(character_name="Rosi", alone_here=False, birthday_today=False, rhythm_sleep_now=False)
+ctx.update(character_name="Rosi", alone_here=False, birthday_today=False, rhythm_sleep_now=False,
+           needs_urgent=[], needs_felt=[])
 for tpl in (REGULAR, IN_CHAT):
     out = render(tpl, **{k: v for k, v in ctx.items() if k in names(tpl)})
     check(f"[3] {tpl} renders", "<skill_context_blocks>" in out, True)

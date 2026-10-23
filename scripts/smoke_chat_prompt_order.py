@@ -4,7 +4,7 @@
 Usage:
     ./.venv/bin/python scripts/smoke_chat_prompt_order.py
 
-Pure: no server, no world, no LLM. It renders both reply templates and the
+No server or LLM; stat rules use an isolated temporary world. It renders both reply templates and the
 scene state, checks the thought prompt's cache boundary, and runs pure helpers.
 
 THE CONTRACT (header of shared/templates/llm/chat/reply_base.md)
@@ -80,16 +80,25 @@ on the last user turn, BEHIND the history. Derived expectations:
         b: prompt_volatile true                    -> volatile
         c: store status_effects                    -> volatile (default rule)
         d: store status_effects, prompt_volatile false -> stable (flag wins)
-    volatile=False -> ["A: 1", "D: 4"]; volatile=True -> ["B: 2", "C: 3"];
+    volatile=False -> ["A: 1", "D: 4/100"]; volatile=True -> ["B: 2", "C: 3/100"];
     volatile=None  -> all four, in template order.
 """
 import ast
 import sys
+import os
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+_TEMP = tempfile.TemporaryDirectory(prefix="chat-prompt-order-")
+os.environ.update(STORAGE_DIR=_TEMP.name, INSTANCE_DIR=_TEMP.name)
+from app.core import paths
+paths.init(Path(_TEMP.name))
+paths.init_instance(Path(_TEMP.name))
+from app.core.db import init_schema
+init_schema()
 from app.core.prompt_templates import render  # noqa: E402
 
 FAILURES = []
@@ -209,9 +218,9 @@ tpl = {"sections": [{"fields": [
      "prompt_volatile": False},
 ]}]}
 data = {"a": "1", "b": "2", "status_effects": {"c": 3, "d": 4}}
-check("[7] stable", build_prompt_section(tpl, data, volatile=False), ["A: 1", "D: 4"])
-check("[7] volatile", build_prompt_section(tpl, data, volatile=True), ["B: 2", "C: 3"])
-check("[7] all", build_prompt_section(tpl, data), ["A: 1", "B: 2", "C: 3", "D: 4"])
+check("[7] stable", build_prompt_section(tpl, data, volatile=False), ["A: 1", "D: 4/100"])
+check("[7] volatile", build_prompt_section(tpl, data, volatile=True), ["B: 2", "C: 3/100"])
+check("[7] all", build_prompt_section(tpl, data), ["A: 1", "B: 2", "C: 3/100", "D: 4/100"])
 
 # [8]
 thought_src = (ROOT / "app/core/thoughts.py").read_text()

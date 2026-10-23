@@ -471,7 +471,11 @@ def build_prompt_section(
 
     Returns a list of "Label: value" strings.
     """
+    from app.core.stat_hints import active_band
+    from app.core.stat_rules import rules_for_character, rules_for_template
+
     lines = []
+    stat_rules = None
     for field in get_prompt_fields(template):
         if volatile is not None and is_prompt_volatile(field) != volatile:
             continue
@@ -516,6 +520,14 @@ def build_prompt_section(
                 continue
 
         label = field.get("prompt_label") or field.get("label", key)
+        if is_stat:
+            if stat_rules is None:
+                stat_rules = (rules_for_character(character_name, profile=data)
+                              if character_name else rules_for_template(template))
+            band = active_band(stat_rules.get(key, {}), value)
+            note = f" — {band['text']}" if band and band.get("text") else ""
+            lines.append(f"{label}: {value}/100{note}")
+            continue
 
         # Special handling
         prompt_format = field.get("prompt_format")

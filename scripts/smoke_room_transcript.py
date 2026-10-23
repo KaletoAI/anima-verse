@@ -192,8 +192,13 @@ def test_template_render():
     from app.core.prompt_templates import _env, render
 
     def _names(tpl: str):
-        return meta.find_undeclared_variables(
-            _env.parse(_env.loader.get_source(_env, tpl)[0]))
+        tree = _env.parse(_env.loader.get_source(_env, tpl)[0])
+        names = set(meta.find_undeclared_variables(tree))
+        # A child template also needs the variables used by its parent.
+        for parent in meta.find_referenced_templates(tree):
+            if parent is not None:
+                names.update(_names(parent))
+        return names
 
     stream_names = _names("chat/chat_stream.md")
     moment_names = _names("chat/chat_moment.md")

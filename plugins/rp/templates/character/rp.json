@@ -51,12 +51,18 @@
           "llm_generable": true,
           "hint_thresholds": [
             {
-              "min": 70,
-              "text": "aufmerksam"
+              "min": 75,
+              "label": "alert",
+              "text": "alert: notices details, curious about the surroundings",
+              "need": {
+                "text": "look around and explore something new",
+                "urgency": "felt"
+              }
             },
             {
-              "max": 30,
-              "text": "unaufmerksam"
+              "max": 25,
+              "label": "distracted",
+              "text": "distracted: loses the thread, misses details"
             }
           ],
           "bar_baseline": 50,
@@ -81,12 +87,18 @@
           "llm_generable": true,
           "hint_thresholds": [
             {
-              "min": 70,
-              "text": "mutig"
+              "min": 80,
+              "label": "bold",
+              "text": "bold: takes risks and speaks up"
             },
             {
-              "max": 30,
-              "text": "aengstlich"
+              "max": 25,
+              "label": "scared",
+              "text": "scared: hesitant, avoids risks and dangerous places",
+              "need": {
+                "text": "seek company or a safe place",
+                "urgency": "felt"
+              }
             }
           ],
           "bar_baseline": 50,
@@ -111,8 +123,22 @@
           "llm_generable": true,
           "hint_thresholds": [
             {
-              "max": 20,
-              "text": "erschoepft"
+              "max": 30,
+              "label": "tired",
+              "text": "tired: moves slowly, keeps sentences short, would like to sit down",
+              "need": {
+                "text": "rest a while — sit down somewhere or take a break",
+                "urgency": "felt"
+              }
+            },
+            {
+              "max": 10,
+              "label": "exhausted",
+              "text": "exhausted: barely keeps going, thinks only of sleep",
+              "need": {
+                "text": "go home and sleep",
+                "urgency": "urgent"
+              }
             }
           ],
           "bar_rates": [

@@ -12,50 +12,46 @@ def _iter_template_fields(template: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
             yield field
 
 
-def get_stat_hints(character_name: str) -> List[str]:
-    """Collect template hints whose thresholds match effective stats."""
-    try:
-        from app.models.character import get_character_profile
-        from app.models.character_template import get_template
-    except Exception:
-        return []
+def active_band(rule: dict, value: int) -> dict | None:
+    """Select the smallest matching maximum, else the largest minimum."""
+    thresholds = rule.get("thresholds") or []
+    maxima = [band for band in thresholds if "max" in band and value <= band["max"]]
+    if maxima:
+        return min(maxima, key=lambda band: band["max"])
+    minima = [band for band in thresholds if "min" in band and value >= band["min"]]
+    return max(minima, key=lambda band: band["min"]) if minima else None
 
-    profile = get_character_profile(character_name) or {}
+
+def stat_bands(name: str, *, profile: dict | None = None) -> list[dict]:
+    """Describe active bands for declared, present stats using resolved rules."""
+    from app.models.character import get_character_profile
+    from app.models.character_template import get_template
     from app.core.stat_boosts import effective_stats
-    status = effective_stats(profile)
-    template_name = profile.get("template", "") or ""
-    if not template_name:
-        return []
-    template = get_template(template_name)
-    if not template:
-        return []
+    from app.core.stat_rules import rules_for_character
 
-    hints: List[str] = []
+    if profile is None:
+        profile = get_character_profile(name) or {}
+    template = get_template(profile.get("template") or "") or {}
+    rules = rules_for_character(name, profile=profile)
+    values = effective_stats(profile)
+    result = []
     for field in _iter_template_fields(template):
-        if field.get("store") != "status_effects":
-            continue
-        thresholds = field.get("hint_thresholds") or []
-        if not thresholds:
-            continue
         key = field.get("key")
-        if not key:
+        if field.get("store") != "status_effects" or key not in values:
             continue
-        default = field.get("default", 100)
-        try:
-            value = int(status[key]["value"] if key in status else default)
-        except (TypeError, ValueError):
-            continue
-        for t in thresholds:
-            if not isinstance(t, dict):
-                continue
-            text = (t.get("text") or "").strip()
-            if not text:
-                continue
-            if "min" in t and value >= int(t["min"]):
-                hints.append(text)
-            elif "max" in t and value <= int(t["max"]):
-                hints.append(text)
-    return hints
+        value = values[key]["value"]
+        band = active_band(rules.get(key, {}), value)
+        if band is not None:
+            result.append({"key": key, "name": field.get("label") or key,
+                           "value": value, "label": band.get("label") or "",
+                           "text": band.get("text") or "", "need": band.get("need")})
+    return result
+
+
+def get_stat_hints(character_name: str) -> List[str]:
+    """Return active band labels (or their text) for event character hints."""
+    return [band["label"] or band["text"] for band in stat_bands(character_name)
+            if band["label"] or band["text"]]
 
 
 def template_stat_keys(template: Dict[str, Any]) -> set:

@@ -107,11 +107,11 @@ def main():
             assert get_character_profile('demo')['status_effects']['attention'] == 100
             print('PASS [g]')
             profile['status_effects']['attention'] = 50
-            assert build_prompt_section(template, profile, volatile=True) == ['Attention: 90']
+            assert build_prompt_section(template, profile, volatile=True) == ['Attention: 90/100']
             profile['active_conditions'] = []
             profile['status_effects']['attention'] = 0
             profile['attention'] = 77
-            assert build_prompt_section(template, profile, volatile=True) == ['Attention: 0']
+            assert build_prompt_section(template, profile, volatile=True) == ['Attention: 0/100']
             print('PASS [h]')
             for boosts in ({'attention': 300}, {'nonexistent': 5}):
                 try:
