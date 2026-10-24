@@ -580,7 +580,7 @@
         "eine serie schauen",
         "vor dem fernseher sitzen"
       ],
-      "animation": "sit",
+      "animation": "lounging",
       "group": "seat"
     },
     "thinking": {
@@ -730,7 +730,7 @@
         "video aufnehmen",
         "mit der kamera filmen"
       ],
-      "animation": "idle",
+      "animation": "photographing",
       "group": "stand"
     },
     "changing_clothes": {
