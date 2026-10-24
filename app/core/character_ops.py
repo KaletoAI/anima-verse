@@ -3119,7 +3119,7 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
     return {"status": "success", "image": image_filename, "image_url": image_url}
 
 
-def regenerate_image_worker(character_name, image_path, prompt, improvement_request, backend_name, agent_config, loras, model_override, character_names, room_id, original_location_id, negative_prompt_override, _track_id, create_new, use_room, use_source_as_reference, _tq):
+def regenerate_image_worker(character_name, image_path, prompt, improvement_request, backend_name, agent_config, loras, model_override, character_names, room_id, original_location_id, original_room_id, negative_prompt_override, _track_id, create_new, use_room, use_source_as_reference, _tq):
     from app.skills.image_regenerate import regenerate_image
     from app.models.character import add_character_image_prompt
     from pathlib import Path
@@ -3129,7 +3129,7 @@ def regenerate_image_worker(character_name, image_path, prompt, improvement_requ
             improvement_request=improvement_request, backend_name=backend_name,
             agent_config=agent_config, loras=loras, model_override=model_override,
             character_names=character_names, room_id=room_id,
-            location_id=original_location_id,
+            location_id=original_location_id, source_room_id=original_room_id,
             negative_prompt_override=negative_prompt_override, track_id=_track_id,
             create_new=bool(create_new), use_room=bool(use_room),
             use_source_as_reference=use_source_as_reference,

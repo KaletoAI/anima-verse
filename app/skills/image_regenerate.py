@@ -147,6 +147,7 @@ def regenerate_image(character_name: str,
     character_names: Optional[list] = None,
     room_id: str = "",
     location_id: str = "",
+    source_room_id: str = "",
     negative_prompt_override: str = "",
     track_id: str = "",
     create_new: bool = False,
@@ -163,6 +164,13 @@ def regenerate_image(character_name: str,
         output_path: the image file to overwrite (or to derive the new name from)
         original_prompt: the stored image prompt
         improvement_request: optional improvement wish (rewritten via LLM)
+        room_id: a room picked in the dialog — overrides the prompt's
+            setting AND the room reference (strict, no location fallback)
+        location_id: the location the source image was rendered at
+        source_room_id: the room the source image was rendered in (its
+            meta). Without a ``room_id`` override the room reference follows
+            ``location_id`` + this room, never the default image of the
+            character's CURRENT location.
         backend_name: explicit — exactly this backend, no fallback; empty =
             the ``occasion`` chain of the image routing
         agent_config: per-character config (LLM override)
@@ -333,6 +341,17 @@ def regenerate_image(character_name: str,
                                         "room %s — no ref_image_room (the "
                                         "background comes from the text prompt)",
                                         character_name, room_id)
+                elif location_id:
+                    # No room override: the reference shows where the source
+                    # image was rendered (location + room from its meta).
+                    # _collect_location above resolved the character's CURRENT
+                    # place, which is a different picture once it has moved.
+                    from app.models.world import get_background_path
+                    _bg = get_background_path(location_id, room=source_room_id)
+                    _regen_pv.ref_image_room = str(_bg) if _bg and _bg.exists() else ""
+                    logger.info("Room reference from the source image [%s/%s]: %s",
+                                location_id, source_room_id or "-",
+                                _bg.name if _bg else "none")
 
                 # Room reference only when selected in the dialog — otherwise free
                 # the slot (e.g. for the self-reference or another person).

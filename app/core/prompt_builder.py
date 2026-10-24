@@ -921,8 +921,10 @@ class PromptBuilder:
         elif location_name:
             variables.prompt_location = location_name
 
-        # Room Reference-Bild (Slot 4)
-        bg_path = get_background_path(raw_location)
+        # Room reference image: the character's room (its own images, else the
+        # location default — get_background_path decides), the same place the
+        # setting text above names.
+        bg_path = get_background_path(raw_location, room=current_room_id or "")
         if bg_path and bg_path.exists():
             variables.ref_image_room = str(bg_path)
 

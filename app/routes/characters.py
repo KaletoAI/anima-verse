@@ -2606,6 +2606,7 @@ def _regenerate_character_image_sync(character_name: str, image_name: str,
     from app.models.character import get_single_image_meta
     _img_meta = get_single_image_meta(character_name, image_name) or {}
     original_location_id = _img_meta.get("location", "")
+    original_room_id = _img_meta.get("room_id", "")
     agent_config = get_character_config(character_name)
     if backend_name:
         # A dead explicit pick is the caller's answer (503), not a track
@@ -2627,7 +2628,8 @@ def _regenerate_character_image_sync(character_name: str, image_name: str,
         target=character_ops.regenerate_image_worker,
         args=(character_name, image_path, prompt, improvement_request,
               backend_name, agent_config, loras, model_override, character_names, room_id,
-              original_location_id, negative_prompt_override, _track_id, create_new,
+              original_location_id, original_room_id, negative_prompt_override,
+              _track_id, create_new,
               use_room, use_source_as_reference, _tq),
         daemon=True).start()
     return {"status": "started", "image": image_name, "track_id": _track_id}

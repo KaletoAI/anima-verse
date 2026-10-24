@@ -304,6 +304,7 @@ def _regenerate_post_image_sync(post_id: str, data: Any):
     use_source_as_reference = bool(data.get("use_source_as_reference", False))
     # The original location from the image meta
     original_location_id = (img_meta or {}).get("location", "")
+    original_room_id = (img_meta or {}).get("room_id", "")
     agent_config = get_character_config(character_name)
     if backend_name:
         # A dead explicit pick is the caller's answer (503), not a track
@@ -327,7 +328,7 @@ def _regenerate_post_image_sync(post_id: str, data: Any):
                 improvement_request=improvement_request, backend_name=backend_name,
                 agent_config=agent_config, loras=loras, model_override=model_override,
                 character_names=character_names, room_id=room_id,
-                location_id=original_location_id,
+                location_id=original_location_id, source_room_id=original_room_id,
                 negative_prompt_override=negative_prompt_override, track_id=_track_id,
                 create_new=bool(create_new), use_room=bool(use_room),
                 use_source_as_reference=use_source_as_reference,
