@@ -1508,7 +1508,9 @@ def _apply_character_internal(char_data: Dict[str, Any],
         save_character_config(char_name, config)
 
     # Same starting repertoire as a character created in the Characters tab.
-    if _is_new:
+    # A temporary NPC gets its closed list from npc_ops.activate_default_skills.
+    from app.models.character import is_temporary_npc
+    if _is_new and not is_temporary_npc(char_name):
         from app.core.character_ops import seed_default_skills
         seed_default_skills(char_name)
 

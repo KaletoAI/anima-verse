@@ -18,6 +18,8 @@ character starts with):
     set the Characters-tab creation writes.
 [c] Applying the same character again leaves its skill files alone: a skill
     switched off in between stays off.
+[d] A temporary NPC applied through the same path gets no default skill files
+    (its closed list comes from npc_ops.activate_default_skills).
 """
 import json
 import os
@@ -82,6 +84,9 @@ def main():
             sleep = get_character_skills_dir("Mira") / "sleep.json"
             assert json.loads(sleep.read_text()) == {"enabled": False}
             print("PASS [c]")
+            _apply_character_internal({"character_name": "Tamsin"}, "npc-temporary")
+            assert list(get_character_skills_dir("Tamsin").glob("*.json")) == []
+            print("PASS [d]")
     print("PASS smoke_new_character_skills")
 
 

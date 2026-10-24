@@ -180,6 +180,12 @@ CELLAR = world.get_location_by_id(LOC_ID)["rooms"][1]["id"]
 # a held-back NPC would only make the placement noise.
 _cfg = config.get_all()
 _cfg.setdefault("npc", {})["require_assets"] = False
+# Packages are opt-in per world: enable every package this repo ships (the
+# symlinked private packs may be absent, so they stay out of the list).
+_REPO_PLUGINS = Path(__file__).resolve().parents[1] / "plugins"
+_cfg.setdefault("packages", {})["enabled"] = ",".join(sorted(
+    d.name for d in _REPO_PLUGINS.iterdir()
+    if not d.is_symlink() and (d / "plugin.yaml").is_file()))
 config.save(_cfg, STORAGE / "config.json")
 
 
@@ -230,6 +236,7 @@ class FakeSearxSkill:
 
     SKILL_ID = "searx"
     ALWAYS_LOAD = False
+    TURN_KINDS = ()
     name = "Searx"
 
     def visible_for(self, character_name: str) -> bool:
