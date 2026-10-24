@@ -358,7 +358,7 @@
       "group": "stand"
     },
     "relaxing": {
-      "prompt": "reclined on couch, legs stretched out, hands behind head, laid-back posture",
+      "prompt": "reclined on a couch with the hands clasped behind the head, elbows out, eyes half closed, completely at ease",
       "synonyms": [
         "entspannen",
         "entspannend",
@@ -370,10 +370,15 @@
         "ausspannen",
         "eine pause machen",
         "es sich gemütlich machen",
-        "die füße hochlegen"
+        "die füße hochlegen",
+        "die seele baumeln lassen",
+        "hände hinter dem kopf",
+        "kicking back",
+        "taking it easy"
       ],
-      "animation": "sit",
-      "group": "seat"
+      "animation": "relaxing",
+      "group": "seat",
+      "solo": true
     },
     "studying": {
       "prompt": "sitting hunched over books at a desk, writing with a pen, the chin resting on the other hand",
