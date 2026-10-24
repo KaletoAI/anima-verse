@@ -271,7 +271,7 @@
       "solo": true
     },
     "painting": {
-      "prompt": "standing at easel, brush in one hand, palette in other, stepping back to look",
+      "prompt": "standing at an easel painting, a brush in one hand, a palette in the other, concentrated",
       "synonyms": [
         "malen",
         "malend",
@@ -279,10 +279,15 @@
         "malt",
         "zeichnet",
         "ein bild malen",
-        "skizzieren"
+        "skizzieren",
+        "an der staffelei",
+        "ein gemälde malen",
+        "painting a picture",
+        "at the easel"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "painting",
+      "group": "stand",
+      "solo": true
     },
     "gaming": {
       "prompt": "sitting leaning forward with a game controller in both hands, elbows near the knees, intense focus on a screen",
