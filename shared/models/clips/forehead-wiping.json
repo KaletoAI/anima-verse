@@ -67,7 +67,11 @@
     "hub_job": "58a0444b4e6b49d7b60c504f9c741987",
     "backend": "motion-kimodo",
     "model_revision": "Kimodo-SOMA-RP-v1",
-    "variant_index": 0
+    "variant_index": 0,
+    "loop_blended": {
+      "forehead-wiping.fbx": 8
+    },
+    "loop_blended_at": "2026-10-24"
   },
   "license": "NVIDIA-Open-Model-License",
   "credit": "NVIDIA Kimodo (SOMA-RP)"

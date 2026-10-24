@@ -4,23 +4,44 @@
  "roles": [],
  "fps": 30,
  "source_fps": 120.0,
- "frames": 415,
- "duration_s": 13.833,
- "loop": false,
+ "frames": 100,
+ "duration_s": 3.333,
+ "loop": true,
  "speed": 1.0,
  "geometry": {
-  "floor_shift_cm": 2.84,
+  "floor_shift_cm": -2.22,
+  "loop": {
+   "min_s": 3.0,
+   "cut_frames": [
+    40,
+    140
+   ],
+   "cut_s": [
+    1.333,
+    4.667
+   ],
+   "seam_distance": 0.986,
+   "blend_frames": 8
+  },
   "hips_scale": [
    1.1139
   ],
-  "rig_floor_shift_cm": -19.37,
-  "rig_floor_min_cm": -18.63,
+  "rig_floor_shift_cm": -14.36,
+  "rig_floor_min_cm": -13.2,
   "root_motion": {
    "mode": "strip",
    "travel_m": [
     0.0,
-    0.0
-   ]
+    -0.0
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     2.533,
+     2.633
+    ]
+   ],
+   "max_drift_cm": 3.79
   }
  },
  "source": {
@@ -28,6 +49,24 @@
   "takes": [
    "126_04"
   ],
-  "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
+  "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217.",
+  "roll_repair_reason": "CMU/ASF gives the radius no twist dof, so the source folds all pronation into the humerus (forearm roll exactly 0); the balanced split hands it back",
+  "roll_repaired": true,
+  "roll_repaired_at": "2026-10-24",
+  "roll_repaired_files": [
+   "breast-stroke.fbx"
+  ],
+  "roll_moved_deg": {
+   "breast-stroke.fbx": {
+    "L": 29.0,
+    "R": -7.75
+   }
+  },
+  "roll_target_deg": {
+   "breast-stroke.fbx": {
+    "L": -29.0,
+    "R": 7.75
+   }
+  }
  }
 }

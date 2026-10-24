@@ -36,6 +36,10 @@
       0.0,
       0.0
     ],
-    "rest_file": ""
+    "rest_file": "",
+    "loop_blended": {
+      "cleaning-table.fbx": 8
+    },
+    "loop_blended_at": "2026-10-24"
   }
 }
