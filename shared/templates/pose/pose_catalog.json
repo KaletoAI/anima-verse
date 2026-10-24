@@ -543,7 +543,7 @@
       "group": "seat"
     },
     "thinking": {
-      "prompt": "standing with the weight on one leg, one arm folded across the chest, the other hand supporting the chin, gaze lowered in thought",
+      "prompt": "standing deep in thought, one hand on the chin, the other arm across the body, head tilted, looking up",
       "synonyms": [
         "denken",
         "gedanken machen",
@@ -553,9 +553,13 @@
         "grübelt",
         "überlegen",
         "in gedanken versunken",
-        "nachdenklich"
+        "nachdenklich",
+        "überlegt",
+        "hand am kinn",
+        "pondering",
+        "lost in thought"
       ],
-      "animation": "idle",
+      "animation": "thinking",
       "group": "stand",
       "solo": true
     },
