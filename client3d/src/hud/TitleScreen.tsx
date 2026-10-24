@@ -33,7 +33,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore,
   type FormEvent } from 'react';
 import { useI18n } from '@anima/player-ui';
-import { getBootState, subscribeBoot, type BootState } from '../game/boot';
+import type { BootState } from '../game/boot';
+import { getBoot, subscribeBoot } from './bus';
 // The screen is up before the HUD is, so it brings its own styles: structure
 // then look, the same order Hud.tsx uses (both are already in the graph when
 // mount.tsx pulls Hud first, so nothing is loaded twice).
@@ -74,7 +75,7 @@ function prefersReducedMotion(): boolean {
 
 export function TitleScreen({ needsLogin, onLogin, onEnter, onDone }: TitleScreenProps) {
   const { t } = useI18n();
-  const boot = useSyncExternalStore<BootState>(subscribeBoot, getBootState);
+  const boot = useSyncExternalStore(subscribeBoot, getBoot).state;
   const [entered, setEntered] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');

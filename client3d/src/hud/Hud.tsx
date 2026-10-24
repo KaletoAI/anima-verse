@@ -26,7 +26,6 @@
  * itself when something is said and withdraws when the room stays silent; see
  * the block around CHAT_IDLE_MS below. Self/Others stay purely manual.
  */
-import { getBootState, subscribeBoot } from '../game/boot';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   SYNC_ENDPOINTS, apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
@@ -44,7 +43,6 @@ import { PerfOverlay } from './PerfOverlay';
 import { ttsSpeak, ttsStatus } from '../api';
 import { elevatorOptions, elevatorSoleOption } from '../game/elevator';
 import { nearestOffer } from '../game/offers';
-import { getAudio } from '../game/audio';
 import { loadPrefs, loadScatterPrefs, savePrefs, saveScatterPrefs, PREFS_KEY,
   SCATTER_PREFS_KEY, type Prefs, type ScatterPrefs } from '../game/prefs';
 import { SHOW_ALL_KEY } from '../game/prefs';
@@ -53,7 +51,7 @@ import {
   afterOwnLine, createVoiceover, newSceneLines, roomChanged, sceneStampOf,
   speakableLines, type SceneSnapshot, type Voiceover,
 } from '../game/voiceover';
-import { isTypingTarget } from '../scene/engine';
+import { isTypingTarget } from './dom';
 import {
   CHAT_ALPHA_DEFAULT, CHAT_ALPHA_KEY, CHAT_MIN_H, CHAT_MIN_W,
   CHAT_PORTRAITS_KEY, CHAT_SIZE_KEY, CHAT_VIEWPORT_MARGIN_W,
@@ -62,7 +60,7 @@ import {
   readChatAlpha, readChatSize, readPortraitCount, rowAtCenter, writeChatSize,
   type ChatSize, type RowExtent,
 } from './chatPanel';
-import { gameActions, getGameState, setGameState, setPerfEnabled, subscribeGameState, uiActions } from './bus';
+import { gameActions, getBoot, subscribeBoot, setHudUiState, getGameState, setGameState, setPerfEnabled, subscribeGameState, uiActions } from './bus';
 import '@anima/player-ui/panels.css';
 import './hud.css';
 // Load order matters: the fantasy theme redefines the custom properties and
@@ -140,10 +138,6 @@ function readDockWidth(): number | null {
   return Math.round(raw);
 }
 
-/** The prefs fields that are a volume. Each is named exactly like the audio
- *  bus it drives, so applying one is a lookup and not a mapping table. */
-const VOLUME_FIELDS = ['master', 'music', 'ambient', 'tts'] as const;
-
 /** Quiet time after which an unpinned chat panel withdraws. Long enough to
  *  read the line that brought it up and start typing, short enough that a
  *  silent room clears the view without anyone reaching for the rail. Roughly
@@ -174,7 +168,7 @@ export function Hud({ avatar, username, role }: {
 }) {
   const { t } = useI18n();
   const game = useSyncExternalStore(subscribeGameState, getGameState);
-  const boot = useSyncExternalStore(subscribeBoot, getBootState);
+  const boot = useSyncExternalStore(subscribeBoot, getBoot).state;
   const [open, setOpen] = useState<Record<PanelId, boolean>>({
     chat: true, self: false, others: false, menu: false,
     belongings: false, mind: false, phone: false, news: false, tasks: false,
@@ -212,35 +206,53 @@ export function Hud({ avatar, username, role }: {
   // The menu is a rail panel like the others, so its OPEN state lives here
   // with theirs — one place, one shape. The vanilla side (M, Esc) reaches it
   // through `uiActions`, the same direction the F key already uses for the
-  // chat; nothing about the menu goes into the game state, because the game
-  // does not care whether a menu is open.
+  // chat. A separate UI snapshot tells the scene which HUD owns a key.
   //
-  // `closeMenu` answers whether it actually closed something: that is what
-  // lets the Esc chain in main.ts hand the key on to the mode exit when no
-  // menu is open, without ever reading React state.
-  const menuOpen = useRef(open.menu);
-  menuOpen.current = open.menu;
+  // Publish menu ownership separately from the command that closes it.
+  useEffect(() => {
+    setHudUiState({ menuOpen: open.menu });
+  }, [open.menu]);
   useEffect(() => {
     uiActions.toggleMenu = () => toggle('menu');
-    uiActions.closeMenu = () => {
-      if (!menuOpen.current) return false;
-      setOpen((o) => ({ ...o, menu: false }));
-      return true;
-    };
+    uiActions.closeMenu = () => { setOpen((o) => ({ ...o, menu: false })); };
     return () => { uiActions.toggleMenu = undefined; uiActions.closeMenu = undefined; };
   }, [toggle]);
 
+  /** Focus and portalled overlays belong to the HUD. Publish plain flags so
+   *  scene keyboard decisions also work with an embedded browser bridge. */
+  useEffect(() => {
+    const updateFocus = (e?: FocusEvent) => {
+      setHudUiState({ typing: isTypingTarget({ target: e?.type === 'focusout'
+        ? e.relatedTarget : document.activeElement } as Event) });
+    };
+    const updateOverlays = () => {
+      setHudUiState({ overlayOpen: !!document.querySelector(
+        '.lb-overlay, .ga-modal-backdrop, .player-gallery-overlay') });
+    };
+    updateFocus();
+    updateOverlays();
+    document.addEventListener('focusin', updateFocus);
+    document.addEventListener('focusout', updateFocus);
+    const observer = new MutationObserver(updateOverlays);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+    return () => {
+      document.removeEventListener('focusin', updateFocus);
+      document.removeEventListener('focusout', updateFocus);
+      observer.disconnect();
+      setHudUiState({ menuOpen: false, typing: false, overlayOpen: false, hitRects: [] });
+    };
+  }, []);
+
   // The local settings of this browser. Loaded once — `localStorage` has no
-  // other writer in this tab — and applied to the audio engine right here, so
+  // other writer in this tab — and sent to the scene audio handler here, so
   // the stored volumes hold from the first note on and not only after somebody
   // opens the menu.
   const [prefs, setPrefsState] = useState<Prefs>(
     () => loadPrefs(localStorage.getItem(PREFS_KEY)));
   useEffect(() => {
-    const audio = getAudio();
-    for (const field of VOLUME_FIELDS) audio.setVolume(field, prefs[field]);
+    gameActions.setVolumes?.(prefs);
     // Mount only: every later change goes through `setPrefs` below, which
-    // applies exactly the field that moved instead of re-ramping all four.
+    // lets the scene apply only the volumes that changed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   /**
@@ -263,10 +275,7 @@ export function Hud({ avatar, username, role }: {
     // side effects, and an updater may be run more than once per change.
     const next = { ...prefsRef.current, ...patch };
     prefsRef.current = next;
-    const audio = getAudio();
-    for (const field of VOLUME_FIELDS) {
-      if (patch[field] !== undefined) audio.setVolume(field, next[field]);
-    }
+    gameActions.setVolumes?.(next);
     localStorage.setItem(PREFS_KEY, savePrefs(next));
     gameActions.applyAudioPrefs?.(next);
     setPrefsState(next);
@@ -718,9 +727,9 @@ export function Hud({ avatar, username, role }: {
   if (!voice.current) {
     voice.current = createVoiceover({
       synth: (line) => ttsSpeak(line.text, line.speaker, username),
-      play: (url) => getAudio().speak(url),
+      play: async (url) => { await gameActions.speak?.(url); },
       // SPEECH ONLY — music and the ambience bed keep playing.
-      stop: () => getAudio().stopSpeech(),
+      stop: () => gameActions.stopSpeech?.(),
     });
   }
   useEffect(() => {

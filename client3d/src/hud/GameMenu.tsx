@@ -30,8 +30,8 @@
  */
 import { useEffect, useState } from 'react';
 import { useI18n } from '@anima/player-ui';
+import { gameActions } from './bus';
 import { listPlayableCharacters, switchCharacter } from '../api';
-import { markResume } from '../main';
 import { checkScatterPrefs, DEFAULT_SCATTER_PREFS, SCATTER_PREF_MAX_M,
   SCATTER_PREF_MIN_M } from '../game/prefs';
 import { CHAT_ALPHA_MIN } from './chatPanel';
@@ -45,11 +45,11 @@ export interface GameMenuProps {
   prefs: Prefs;
   /** merge, store and (for volumes) apply — `Hud.tsx` owns all three steps */
   onChange: (patch: Partial<Prefs>) => void;
-  /** the performance readout is shown (Etappe 5). NOT part of `Prefs`: that
+  /** the performance readout is shown (Stage 5). NOT part of `Prefs`: that
    *  object and its storage key are the AUDIO settings, this is a view one. */
   perfOn: boolean;
   onPerfChange: (on: boolean) => void;
-  /** the minimap is shown in the embodied mode (Etappe 5). A view setting like
+  /** the minimap is shown in the embodied mode (Stage 5). A view setting like
    *  `perfOn`, with its own storage key — see `Hud.tsx`. */
   minimapOn: boolean;
   onMinimapChange: (on: boolean) => void;
@@ -67,7 +67,7 @@ export interface GameMenuProps {
    *  `checkScatterPrefs`, and a refused one stays in the field with a hint
    *  under it instead of reaching the world. */
   onScatterChange: (prefs: ScatterPrefs) => void;
-  /** the signed-in account may see the unfiltered map (Etappe 5) — the entry
+  /** the signed-in account may see the unfiltered map (Stage 5) — the entry
    *  below exists only for one, and the server refuses the view for anybody
    *  else anyway */
   isAdmin: boolean;
@@ -227,7 +227,7 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
       await switchCharacter(name);
       // The world that stands belongs to the character just left, so it is
       // rebuilt from scratch — with the marker, so boot walks past the gate.
-      markResume();
+      gameActions.markResume?.();
       location.reload();
       // No `setSwitching('')` on this path: the page is going away, and
       // unlocking the rows would only invite a second click into the reload.

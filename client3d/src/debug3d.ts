@@ -29,7 +29,8 @@
  */
 import * as THREE from 'three';
 import { setSurfaceSky } from '@anima/scene-render';
-import { isTypingTarget, type Engine } from './scene/engine';
+import type { Engine } from './scene/engine';
+import { isTypingTarget } from './hud/dom';
 import type { Ground } from './scene/ground';
 import type { Tile } from './scene/tiles';
 import type { Resident } from './scene/places';
@@ -483,7 +484,7 @@ export function initIsolation(deps: IsolationDeps): void {
 
   /**
    * THE WATER AT THE CAMERA TARGET — one line, and the reason it exists is
-   * "Prüfe am Verbraucher": every water finding so far has travelled as a
+   * "Verify at the consumer": every water finding so far has travelled as a
    * sentence ("the river does not flow"), and the numbers that would settle it
    * live in three rasters nobody can read from a screenshot.
    *

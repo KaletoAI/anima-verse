@@ -17,6 +17,7 @@
  * says: `movementLocked` + `partyLeader` (E3-T3), `groundRoomId`,
  * `floorRoomIds` and the two lock maps of task C2).
  */
+import type { BootState, bootReport } from '../game/boot';
 import type { ElevatorState } from '../game/elevator';
 import type { MinimapState } from '../game/minimap';
 import type { PerfStats } from '../game/perfstats';
@@ -88,7 +89,7 @@ export interface HudGameState {
   stairs: StairPrompt | null;
   /** adjacent location the avatar could enter (standing near a boundary
    *  opening, or next to a location without authored openings) — the
-   *  "Betreten" offer of Etappe 3, with its measured distance. A LOCKED
+   *  "Enter" offer of Stage 3, with its measured distance. A LOCKED
    *  neighbour is deliberately not published here: it shows no chip, so it
    *  must not be able to win the key either (main.ts answers it with the
    *  server's refusal when nothing else stands). */
@@ -97,6 +98,10 @@ export interface HudGameState {
 
 /** Actions the React side calls INTO the vanilla app; main.ts registers them. */
 export interface HudGameActions {
+  setVolumes?: (prefs: Prefs) => void;
+  speak?: (url: string) => void;
+  stopSpeech?: () => void;
+  markResume?: () => void;
   zoomTo?: (charName: string) => void;
   /** show a line as a speech bubble over that figure's head (stage 6). The
    *  HUD owns the transcript poll, the scene owns the figures — so this is
@@ -160,9 +165,8 @@ export interface HudUiActions {
   toast?: (msg: string, translate?: boolean) => void;
   /** M opens and closes the game menu (E4-T4) */
   toggleMenu?: () => void;
-  /** Esc: close the menu IF it is open, and say whether it was — the caller
-   *  hands the key on to the mode exit when it was not. */
-  closeMenu?: () => boolean;
+  /** Esc closes the menu; the UI state decides whether it owns the key. */
+  closeMenu?: () => void;
 }
 
 const state: HudGameState = {
@@ -189,7 +193,7 @@ export function subscribeGameState(fn: () => void): () => void {
   return () => { listeners.delete(fn); };
 }
 
-// --- Performance readout (Etappe 5, plan-3d-lod-und-betreten.md) ------------
+// --- Performance readout (Stage 5, plan-3d-lod-und-betreten.md) ------------
 //
 // A SECOND store next to the game state, with its own listener set, because
 // this one ticks several times a second: publishing it through `setGameState`
@@ -224,7 +228,7 @@ export function setPerfEnabled(on: boolean): void {
 /** Asked by main.ts before it measures — see the note above. */
 export function perfEnabled(): boolean { return perfOn; }
 
-// --- Minimap (Etappe 5, task 3) ---------------------------------------------
+// --- Minimap (Stage 5, task 3) ---------------------------------------------
 //
 // A THIRD store, for the same reason the perf readout got the second one: this
 // slice is republished up to four times a second while one walks, and pushing
@@ -252,4 +256,44 @@ export function getMinimap(): MinimapState { return minimap; }
 export function subscribeMinimap(fn: () => void): () => void {
   minimapListeners.add(fn);
   return () => { minimapListeners.delete(fn); };
+}
+
+/** Boot has its own snapshot because progress and measurements change independently
+ *  of the running world. Only main.ts reads the scene's boot store. */
+export interface HudBoot { state: BootState; report: ReturnType<typeof bootReport> | null }
+let boot: HudBoot = { state: { percent: 0, label: 'world', note: null, stages: [] }, report: null };
+const bootListeners = new Set<() => void>();
+export function setBoot(next: HudBoot): void {
+  boot = { ...next };
+  for (const fn of bootListeners) fn();
+}
+export function getBoot(): HudBoot { return boot; }
+export function subscribeBoot(fn: () => void): () => void {
+  bootListeners.add(fn);
+  return () => { bootListeners.delete(fn); };
+}
+
+/** Window CSS pixels; populated by the HUD once pointer routing needs them. */
+export interface HudRect { x: number; y: number; w: number; h: number }
+export interface HudUiState {
+  menuOpen: boolean; typing: boolean; overlayOpen: boolean; hitRects: HudRect[];
+}
+let hudUi: HudUiState = { menuOpen: false, typing: false, overlayOpen: false, hitRects: [] };
+const hudUiListeners = new Set<() => void>();
+export function setHudUiState(patch: Partial<HudUiState>): void {
+  hudUi = { ...hudUi, ...patch };
+  for (const fn of hudUiListeners) fn();
+}
+export function getHudUiState(): HudUiState { return hudUi; }
+export function subscribeHudUiState(fn: () => void): () => void {
+  hudUiListeners.add(fn);
+  return () => { hudUiListeners.delete(fn); };
+}
+
+/** Preserve keyboard ownership without asking the scene to inspect HUD DOM. */
+export function keyForScene(ui: HudUiState): boolean { return !ui.typing && !ui.overlayOpen; }
+export function escTarget(ui: HudUiState, elevatorOpen: boolean): 'ignore' | 'elevator' | 'menu' | 'mode' {
+  if (!keyForScene(ui)) return 'ignore';
+  if (elevatorOpen) return 'elevator';
+  return ui.menuOpen ? 'menu' : 'mode';
 }

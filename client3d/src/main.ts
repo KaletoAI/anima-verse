@@ -12,7 +12,7 @@ installSkinnedNormalCorrection(THREE);
 import * as api from './api';
 import { pollCore, syncHub, SYNC_ENDPOINTS } from '@anima/player-ui';
 import { initDebug3d, initIsolation } from './debug3d';
-import { Engine, isTypingTarget, MIN_DIST } from './scene/engine';
+import { Engine, MIN_DIST } from './scene/engine';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { FigureLibrary } from './scene/figures';
 import { animFamily } from './scene/clipCoverage';
@@ -50,6 +50,7 @@ import {
 } from './game/perfstats';
 import { loadPrefs, loadScatterPrefs, PREFS_KEY, scatterLodCfgOf,
   SCATTER_PREFS_KEY } from './game/prefs';
+import type { Prefs } from './game/prefs';
 import { SHOW_ALL_KEY } from './game/prefs';
 import { hillshadeImage, MAP_RELIEF_Z_FACTOR } from '@anima/scene-render';
 import type { MinimapArea, MinimapDot, MinimapRelief } from './game/minimap';
@@ -75,9 +76,9 @@ import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocati
 import { figureTransition, pickablePlaceFor, PLACE_PICK_RADIUS_M, placementOf, pollIsStale,
   type ShownPlacement } from './game/placement';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
-import { markBootStart, withPhase, reportBootStage, setBootNote } from './game/boot';
+import { markBootStart, withPhase, reportBootStage, setBootNote, getBootState, bootReport, subscribeBoot, subscribeBootReport } from './game/boot';
 import { mountHud, mountTitle } from './hud/mount';
-import { gameActions, getGameState, perfEnabled, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
+import { setBoot, escTarget, keyForScene, getHudUiState, gameActions, getGameState, perfEnabled, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
 import type { ModelTier, ScenePayload } from './api';
 import { createGround } from './scene/ground';
 import { createBackdrop } from './scene/backdrop';
@@ -396,9 +397,24 @@ const titleSink: WaitSink = {
  */
 const RESUME_KEY = 'av3d.resume';
 
-/** Set the marker, for a caller that is about to `location.reload()` — the key
- *  itself stays here, so there is only ever one spelling of it. */
-export function markResume(): void {
+/** Forward both boot streams before either the title or HUD mounts. */
+const publishHudBoot = () => setBoot({ state: getBootState(), report: bootReport() });
+subscribeBoot(publishHudBoot);
+subscribeBootReport(publishHudBoot);
+publishHudBoot();
+gameActions.markResume = markResume;
+let hudVolumes: Prefs | null = null;
+gameActions.setVolumes = (prefs) => {
+  for (const field of ['master', 'music', 'ambient', 'tts'] as const) {
+    if (hudVolumes === null || hudVolumes[field] !== prefs[field]) getAudio().setVolume(field, prefs[field]);
+  }
+  hudVolumes = { ...prefs };
+};
+gameActions.speak = (url) => getAudio().speak(url);
+gameActions.stopSpeech = () => getAudio().stopSpeech();
+
+/** Set the resume marker before reloading; keep its spelling in one place. */
+function markResume(): void {
   sessionStorage.setItem(RESUME_KEY, '1');
 }
 
@@ -2217,23 +2233,16 @@ async function startApp(username: string, role: string) {
   window.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (pendingArrivalTakeControl || pendingTakeControl) cancelPendingControl();
-    if (isTypingTarget(e)) return;
-    if (document.querySelector(
-      '.lb-overlay, .ga-modal-backdrop, .player-gallery-overlay')) return;
-    // The storey choice comes FIRST: it is part of the HUD's bottom stack and
-    // not a document.body overlay, so the guard above cannot see it — and Esc
-    // must close the choice one has just opened, not throw the player out of
-    // the mode with it.
-    if (getGameState().elevatorOpen) {
+    const target = escTarget(getHudUiState(), getGameState().elevatorOpen);
+    if (target === 'ignore') return;
+    if (target === 'elevator') {
       setGameState({ elevatorOpen: false });
       return;
     }
-    // Then the game menu (E4-T4), for the same reason and one step later: it
-    // is a panel of the HUD, so the overlay guard above cannot see it, and it
-    // is opened DELIBERATELY — a key that closed the menu and left the mode in
-    // one press would answer a question nobody asked. `closeMenu` says whether
-    // there was anything to close, so the key falls through when there was not.
-    if (uiActions.closeMenu?.()) return;
+    if (target === 'menu') {
+      uiActions.closeMenu?.();
+      return;
+    }
     if (getGameState().mode === 'embodied') exitEmbodied(embody);
   }, true);
 
@@ -2241,7 +2250,7 @@ async function startApp(username: string, role: string) {
   // Guarded like Esc and F: inside a form field it types an m. Modifier
   // combinations belong to the browser (Ctrl+M, Cmd+M are window commands).
   window.addEventListener('keydown', (e) => {
-    if (e.key.toLowerCase() !== 'm' || isTypingTarget(e)) return;
+    if (e.key.toLowerCase() !== 'm' || !keyForScene(getHudUiState())) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     uiActions.toggleMenu?.();
   });
@@ -6118,7 +6127,7 @@ async function startApp(username: string, role: string) {
   // Guarded like Esc: while the focus sits in the chat composer, F types an f.
   // Modifier combinations belong to the browser (Ctrl+F is the page search).
   window.addEventListener('keydown', (e) => {
-    if (e.key.toLowerCase() !== 'f' || isTypingTarget(e)) return;
+    if (e.key.toLowerCase() !== 'f' || !keyForScene(getHudUiState())) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const state = getGameState();
     const offer = nearestOffer(state);

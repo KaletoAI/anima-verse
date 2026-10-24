@@ -19,8 +19,8 @@
  */
 import { useSyncExternalStore } from 'react';
 import { useI18n } from '@anima/player-ui';
-import { bootReport, subscribeBootReport, type LongTaskSummary } from '../game/boot';
-import { getPerfStats, subscribePerfStats } from './bus';
+import type { LongTaskSummary } from '../game/boot';
+import { getBoot, subscribeBoot, getPerfStats, subscribePerfStats } from './bus';
 
 /** Grouped digits in the viewer's locale ("1,234,567" / "1.234.567"). Exact
  *  numbers, never rounded to "1.2M": these are read to compare one view
@@ -39,7 +39,7 @@ function Row({ label, value, wide }: { label: string; value: string; wide?: bool
 
 export function PerfOverlay() {
   const { t } = useI18n();
-  const boot = useSyncExternalStore(subscribeBootReport, bootReport);
+  const boot = useSyncExternalStore(subscribeBoot, getBoot).report;
   const stats = useSyncExternalStore(subscribePerfStats, getPerfStats);
   // Nothing measured yet (the first tick is up to a second away) — show the
   // frame instead of popping in, so switching it on has an immediate answer.
@@ -81,14 +81,14 @@ export function PerfOverlay() {
       <Row label={t('Movement sync')} value={s ? `corr ${s.posCorr} · 409 ${s.pos409} · back ${s.travBack} · fwd ${s.travFwd} · err ${s.travErrMaxM.toFixed(2)} m · arrive ${s.arrive} · place ${s.place}` : dash} wide />
       <Row label={t('Boot')} value="" wide />
       <Row label={t('Boot stages (ms)')}
-        value={Object.entries(boot.stages).map(([stage, ms]) =>
+        value={Object.entries(boot?.stages ?? {}).map(([stage, ms]) =>
           `${stage} ${ms === null ? dash : num(ms)}`).join(' · ')} wide />
       <Row label={`${t('Boot phases (ms)')} — ${t('Summed elapsed durations; concurrent runs may overlap')}`}
-        value={Object.entries(boot.phases).map(([phase, ms]) => `${phase} ${num(ms)}`).join(' · ')} wide />
-      <Row label={t('Long tasks: count, total, max @ phase')} value={longTasks(boot.longTasks)} wide />
-      <Row label={t('Long task max by phase (ms)')} value={Object.entries(boot.longTaskMaxByPhase)
+        value={Object.entries(boot?.phases ?? {}).map(([phase, ms]) => `${phase} ${num(ms)}`).join(' · ')} wide />
+      <Row label={t('Long tasks: count, total, max @ phase')} value={longTasks(boot?.longTasks ?? null)} wide />
+      <Row label={t('Long task max by phase (ms)')} value={Object.entries(boot?.longTaskMaxByPhase ?? {})
         .map(([phase, ms]) => `${phase} ${Math.round(ms)}`).join(' · ') || t('n/a')} wide />
-      <Row label={t('Long tasks after visible (5 s)')} value={longTasks(boot.afterVisible)} wide />
+      <Row label={t('Long tasks after visible (5 s)')} value={longTasks(boot?.afterVisible ?? null)} wide />
     </div>
   );
 }

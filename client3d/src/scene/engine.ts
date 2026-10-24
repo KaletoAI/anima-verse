@@ -1,3 +1,4 @@
+import { isTypingTarget } from '../hud/dom';
 import { createPropLightPool } from './lightPool';
 import { FOG_NEAR_M, FOG_FAR_M } from './fogConstants';
 import * as THREE from 'three';
@@ -28,15 +29,6 @@ export { MIN_DIST } from './cameraFraming';
  * the bare left button now orbits.
  */
 const ORBIT_DRAG_PX = 4;
-
-/**
- * True while the key event came out of a form field — typing must never reach
- * the camera. Shared with `main.ts`, which guards its own Esc handler with the
- * exact same rule (E3-T2), so there is ONE definition of "the user is typing".
- */
-export function isTypingTarget(e: Event): boolean {
-  return !!(e.target as HTMLElement)?.closest?.('input, textarea, select, [contenteditable]');
-}
 
 /**
  * The vectors `frame()` works in, allocated ONCE (review finding UI-11) —

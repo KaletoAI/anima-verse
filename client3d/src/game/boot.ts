@@ -10,12 +10,8 @@
  * `reportBootStage` at the points it actually reaches, `TitleScreen`
  * subscribes and renders.
  *
- * DELIBERATELY NOT ON THE HUD BUS (`hud/bus.ts`): that bus carries GAME state
- * of a running world (selection, mode, elevator) and is written by three known
- * owners. Boot progress exists only before the game does and is gone once the
- * title fades — mixing it in would put a field into every HUD snapshot that is
- * dead for the whole session. Same shape though (snapshot + listeners), so the
- * React side reads it with `useSyncExternalStore` exactly like the other one.
+ * main.ts forwards both snapshots to the HUD bus, so React consumes only
+ * serialisable bus values while this store owns progress and measurements.
  *
  * The arithmetic is pure and dependency-free; the hand-derived cases live in
  * `client3d/scripts/smoke_walk_math.mjs`.
