@@ -1,0 +1,40 @@
+{
+ "kind": "reading",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 241,
+ "duration_s": 8.033,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": 0.01,
+  "hips_scale": [
+   1.0
+  ],
+  "rig_floor_shift_cm": -0.0,
+  "rig_floor_min_cm": 0.0,
+  "root_motion": {
+   "mode": "strip",
+   "travel_m": [
+    0.0,
+    0.0
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     8.0
+    ]
+   ],
+   "max_drift_cm": 0.0
+  }
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/reading.py",
+  "spec_sha": "570b547b1af59cd8215cb02ef0a0b375deecd01d42845dfefd7fe61e423b384a"
+ }
+}

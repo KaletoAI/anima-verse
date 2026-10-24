@@ -64,7 +64,7 @@
       "solo": true
     },
     "reading": {
-      "prompt": "sitting with book in hands, head tilted slightly down, focused posture, legs tucked",
+      "prompt": "sitting and reading a book held open in both hands, head bowed over the pages, absorbed",
       "synonyms": [
         "lesen",
         "lesend",
@@ -72,10 +72,14 @@
         "ein buch lesen",
         "liest ein buch",
         "zeitung lesen",
-        "in einem buch blättern"
+        "in einem buch blättern",
+        "in einem buch lesen",
+        "schmökern",
+        "reading a book"
       ],
-      "animation": "sit",
-      "group": "seat"
+      "animation": "reading",
+      "group": "seat",
+      "solo": true
     },
     "cooking": {
       "prompt": "standing at the stove cooking, stirring a pot with a wooden spoon, the other hand on the pot handle, steam rising",
