@@ -51,6 +51,13 @@ Fields marked `[config]` are stored in the config; all others go into the profil
   then face shape, distinct features, hair colour/length/style, eye colour, skin
   tone, baseline expression. No body, no clothing. Example:
   `"{gender}, {age} years old, square jaw, broken nose, short grey hair, brown eyes, tanned skin"`.
+- `body_slots` — only when the field list above has a **Body (`body_slots`)**
+  block, and then REQUIRED: every slot and attribute there that applies to the
+  NPC's gender. Hair colour/length, eye colour, skin tone and build then go into
+  the slots and NOT into `character_appearance` / `face_appearance` — those keep
+  only what no slot covers (face shape, distinct marks, hairstyle, expression).
+  Example: `"{gender}, {age} years old, square jaw, broken nose, close-cropped hair"`
+  with `"body_slots": {"hair": {"color": "gray", "length": "short"}, "eyes": {"color": "brown"}, "skin": {"tone": "tan"}}`.
 - `outfit_description` — ENGLISH prompt text describing the ONE outfit this NPC
   wears, as a comma-separated list of garments:
   `"grey linen apron over a rolled-up white shirt, dark trousers, worn boots"`.

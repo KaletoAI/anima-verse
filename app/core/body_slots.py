@@ -146,6 +146,52 @@ def llm_fillable_attributes(spec) -> Dict[str, Dict[str, Any]]:
             and decl.get("llm_generable", True) is not False}
 
 
+def _format_conditions(conditions: Dict[str, Any]) -> str:
+    """`` (only when gender=male)`` for an ``applies_to`` map, else "".
+    An ``attributes.<key>`` condition reads as the sibling attribute's name;
+    a null entry ("or still unset") is not worth a word to the LLM."""
+    parts = []
+    for key, values in (conditions or {}).items():
+        shown = [str(v) for v in values if v is not None]
+        if shown:
+            parts.append(f"{key.removeprefix('attributes.')}={'/'.join(shown)}")
+    return f" (only when {', '.join(parts)})" if parts else ""
+
+
+def llm_slot_block(template_name: str) -> str:
+    """The `body_slots` block of an LLM field list (World-Dev character, temp
+    NPC): every slot the species packages declare for the template, with the
+    attributes an LLM may fill. Empty without species packages. Body details
+    live in these slots, not in template fields — without this block the LLM
+    never learns of them and the character starts with an empty body editor."""
+    lines: List[str] = []
+    for spec in template_slot_specs(template_name):
+        attrs = llm_fillable_attributes(spec)
+        if not attrs:
+            continue
+        lines.append(f"- `{spec.id}`{_format_conditions(spec.applies_to)}:")
+        for key, decl in attrs.items():
+            options = [str(o) for o in (decl.get("options") or [])]
+            if options:
+                type_info = "one of: " + " | ".join(options)
+                if decl.get("allow_custom"):
+                    type_info += " (another short English value is allowed)"
+            else:
+                type_info = "short English text"
+            cond = _format_conditions(decl.get("applies_to") or {})
+            lines.append(f"  - `{key}`{cond}: {type_info}")
+    if not lines:
+        return ""
+    return (
+        f"### Body (`body_slots`, template `{template_name}`)\n\n"
+        "Nested object `\"body_slots\": {\"<slot>\": {\"<attribute>\": \"<value>\"}}`. "
+        "Set EVERY slot and attribute below that applies to the character — skip one "
+        "only when its \"only when\" condition does not hold. Values in English. "
+        "These details render from the slots into every image prompt, so do NOT "
+        "repeat them in `character_appearance` / `face_appearance`.\n\n"
+        + "\n".join(lines))
+
+
 # ---------------------------------------------------------------------------
 # Values (per character, in the profile — master data, not runtime state)
 # ---------------------------------------------------------------------------

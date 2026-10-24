@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Smoke: World-Dev knows the species body slots (prompt + apply + patch).
+"""Smoke: World-Dev and temp NPCs know the species body slots (prompt + apply + patch).
 
 Body details (hair, eyes, build, …) are not template fields — species packages
 declare them as body slots, and the template only carries the empty
 ``body_editor`` section. World-Dev used to read nothing but template fields, so
 the LLM never heard of the slots and every World-Dev character started with an
-empty body editor.
+empty body editor. The temp-NPC generator builds its own field list
+(``npc_ops.npc_generable_fields``) and had the same gap.
 
 A FAKE species package is registered (no dependency on the private packs):
 
-    id smoke_species, apply_to ["human-roleplay"], body_slots:
+    id smoke_species, apply_to ["human-roleplay", "npc-temporary"], body_slots:
       hair         color  select [blonde, red], allow_custom
                    length select [short, long]
                    lora   lora_select
@@ -37,7 +38,7 @@ WHAT IS CHECKED, and where every expected value comes from
       ``animal-default`` does not match ``apply_to`` → the block is "".
       An attribute condition {"attributes.type": ["vagina", None]} renders as
       " (only when type=vagina)": the prefix goes, the null entry is dropped
-      (checked through ``_format_conditions`` directly).
+      (checked through ``body_slots._format_conditions`` directly).
       The block is part of ``_format_generable_fields_for_templates`` — that
       is what fills ``{generable_fields}`` in the character schema.
 
@@ -51,14 +52,20 @@ WHAT IS CHECKED, and where every expected value comes from
       by hand: copper-red is custom but allowed → stored; medium is not in
       [short, long] and length has no allow_custom → skipped; lora is not
       offered → skipped; amber is not in [blue, green] → skipped; shape is
-      llm_generable: false → skipped (eyes stores nothing); facial_hair applies only to gender=male → skipped; tail is no
-      slot → skipped. Stored: {"hair": {"color": "copper-red"}}, 6 warnings.
+      llm_generable: false → skipped (eyes stores nothing); facial_hair
+      applies only to gender=male → skipped; tail is no slot → skipped. Stored: {"hair": {"color": "copper-red"}}, 6 warnings.
 
   (c) THE PROFILE PATCH with {age: 30, body_slots: {hair: {length: long}}}:
       the slot merges per attribute → {"hair": {"color": "copper-red",
       "length": "long"}}, age 30, applied_fields ["age", "body_slots"], no
       warning. A patch with ONLY body_slots {eyes: {color: green}} adds
       {"eyes": {"color": "green"}} and reports ["body_slots"].
+
+  (d) THE TEMP-NPC FIELD LIST: ``npc_generable_fields()`` (template "" →
+      ``npc-temporary``) ends with the very block of (a), only the header
+      names ``npc-temporary``: the template field lines, one blank line, then
+      ``llm_slot_block("npc-temporary")``. Its slot lines equal those of (a)
+      — same package, same declarations.
 
 Usage:
     ./.venv/bin/python scripts/smoke_world_dev_body_slots.py
@@ -83,9 +90,11 @@ from app.plugins import registry  # noqa: E402
 from app.plugins.registry import BodySlotSpec, Package  # noqa: E402
 from app.models.character import get_character_profile  # noqa: E402
 from app.models.character_template import clear_template_cache  # noqa: E402
+from app.core.body_slots import _format_conditions, llm_slot_block  # noqa: E402
+from app.core.npc_ops import npc_generable_fields  # noqa: E402
 from app.routes.world_dev import (  # noqa: E402
     _apply_character_internal, _apply_profile_patch_data_sync,
-    _format_body_slots_for_template, _format_conditions, _format_generable_fields_for_templates)
+    _format_generable_fields_for_templates)
 
 FAILS = []
 
@@ -100,7 +109,7 @@ def check(label, got, want):
 
 registry.clear_registry()
 registry.register_package(Package(
-    id="smoke_species", dir=STORAGE, manifest={}, apply_to=["human-roleplay"],
+    id="smoke_species", dir=STORAGE, manifest={}, apply_to=["human-roleplay", "npc-temporary"],
     body_slots=[
         BodySlotSpec(id="hair", package_id="smoke_species", attributes={
             "color": {"type": "select", "options": ["blonde", "red"], "allow_custom": True},
@@ -122,7 +131,7 @@ registry.register_package(Package(
 clear_template_cache()
 
 # (a) prompt block
-block = _format_body_slots_for_template("human-roleplay")
+block = llm_slot_block("human-roleplay")
 check("(a) slot lines", [line for line in block.splitlines() if line.startswith(("- ", "  - "))], [
     "- `hair`:",
     "  - `color`: one of: blonde | red (another short English value is allowed)",
@@ -133,7 +142,7 @@ check("(a) slot lines", [line for line in block.splitlines() if line.startswith(
     "  - `style`: one of: short beard",
 ])
 check("(a) header", block.splitlines()[0], "### Body (`body_slots`, template `human-roleplay`)")
-check("(a) animal-default has no block", _format_body_slots_for_template("animal-default"), "")
+check("(a) animal-default has no block", llm_slot_block("animal-default"), "")
 check("(a) attribute condition", _format_conditions({"attributes.type": ["vagina", None]}),
       " (only when type=vagina)")
 check("(a) block is part of {generable_fields}",
@@ -168,6 +177,16 @@ patch = _apply_profile_patch_data_sync({"character_name": NAME, "fields": {
 check("(c) body_slots-only patch", get_character_profile(NAME).get("body_slots"),
       {"hair": {"color": "copper-red", "length": "long"}, "eyes": {"color": "green"}})
 check("(c) body_slots-only applied fields", patch["applied_fields"], ["body_slots"])
+
+# (d) temp-NPC field list
+npc_block = llm_slot_block("npc-temporary")
+npc_fields = npc_generable_fields("")
+check("(d) npc header", npc_block.splitlines()[0],
+      "### Body (`body_slots`, template `npc-temporary`)")
+check("(d) npc slot lines equal (a)",
+      [line for line in npc_block.splitlines() if line.startswith(("- ", "  - "))],
+      [line for line in block.splitlines() if line.startswith(("- ", "  - "))])
+check("(d) npc field list ends with the block", npc_fields.endswith("\n\n" + npc_block), True)
 
 print("\nFAILED: " + ", ".join(FAILS) if FAILS else "\nall checks passed")
 sys.exit(1 if FAILS else 0)

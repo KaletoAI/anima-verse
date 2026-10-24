@@ -50,6 +50,7 @@ def _format_generable_fields_for_templates(selected_template: str = "") -> str:
     If selected_template is set, only that template's fields are shown.
     Otherwise all templates are listed.
     """
+    from app.core.body_slots import llm_slot_block
     from app.models.character_template import get_template
 
     if selected_template:
@@ -107,7 +108,7 @@ def _format_generable_fields_for_templates(selected_template: str = "") -> str:
 
         if fields_desc:
             sections.append(f"### {label} (`{tname}`)\n\n" + "\n".join(fields_desc))
-        body_slots = _format_body_slots_for_template(tname)
+        body_slots = llm_slot_block(tname)
         if body_slots:
             sections.append(body_slots)
 
@@ -120,53 +121,6 @@ def _format_generable_fields_for_templates(selected_template: str = "") -> str:
     header = "### Immer verfuegbare Felder\n\n" + "\n".join(always)
 
     return header + "\n\n" + "\n\n".join(sections)
-
-
-def _format_conditions(conditions: Dict[str, Any]) -> str:
-    """`` (only when gender=male)`` for an ``applies_to`` map, else "".
-    An ``attributes.<key>`` condition reads as the sibling attribute's name;
-    a null entry ("or still unset") is not worth a word to the LLM."""
-    parts = []
-    for key, values in (conditions or {}).items():
-        shown = [str(v) for v in values if v is not None]
-        if shown:
-            parts.append(f"{key.removeprefix('attributes.')}={'/'.join(shown)}")
-    return f" (only when {', '.join(parts)})" if parts else ""
-
-
-def _format_body_slots_for_template(template_name: str) -> str:
-    """The `body_slots` block of the field list: every slot the species
-    packages declare for the template, with the attributes an LLM may fill.
-    Empty without species packages. Body details live in these slots, not in
-    template fields — without this block the LLM never learns of them and a
-    World-Dev character starts with an empty body editor."""
-    from app.core.body_slots import llm_fillable_attributes, template_slot_specs
-    lines: List[str] = []
-    for spec in template_slot_specs(template_name):
-        attrs = llm_fillable_attributes(spec)
-        if not attrs:
-            continue
-        lines.append(f"- `{spec.id}`{_format_conditions(spec.applies_to)}:")
-        for key, decl in attrs.items():
-            options = [str(o) for o in (decl.get("options") or [])]
-            if options:
-                type_info = "one of: " + " | ".join(options)
-                if decl.get("allow_custom"):
-                    type_info += " (another short English value is allowed)"
-            else:
-                type_info = "short English text"
-            cond = _format_conditions(decl.get("applies_to") or {})
-            lines.append(f"  - `{key}`{cond}: {type_info}")
-    if not lines:
-        return ""
-    return (
-        f"### Body (`body_slots`, template `{template_name}`)\n\n"
-        "Nested object `\"body_slots\": {\"<slot>\": {\"<attribute>\": \"<value>\"}}`. "
-        "Set EVERY slot and attribute below that applies to the character — skip one "
-        "only when its \"only when\" condition does not hold. Values in English. "
-        "These details render from the slots into every image prompt, so do NOT "
-        "repeat them in `character_appearance` / `face_appearance`.\n\n"
-        + "\n".join(lines))
 
 
 def _apply_body_slots(char_name: str, raw: Any) -> List[str]:

@@ -108,7 +108,11 @@ def npc_generable_fields(template: str = "") -> str:
         # A template without generable fields cannot produce an NPC; say so
         # loudly in the prompt rather than sending an empty section.
         return "(no generable fields — the NPC template is broken)"
-    return "\n".join(lines)
+    # The species body slots: not template fields, so the loop above cannot
+    # see them. The apply (``_apply_character_internal``) stores them.
+    from app.core.body_slots import llm_slot_block
+    body_slots = llm_slot_block(npc_template_name(template))
+    return "\n".join(lines) + (f"\n\n{body_slots}" if body_slots else "")
 
 
 #: `render_task` renders FIRST and splits on `## system` / `## user` AFTERWARDS,
