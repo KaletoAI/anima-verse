@@ -176,6 +176,54 @@ function SpellCostEditor({ value, onChange }: {
   </Field>
 }
 
+function PassiveBonusesEditor({ rows, when, onRows, onWhen }: {
+  rows: DraftItem['bonus_rows']
+  when: DraftItem['bonus_when']
+  onRows: (rows: DraftItem['bonus_rows']) => void
+  onWhen: (when: DraftItem['bonus_when']) => void
+}) {
+  const { t } = useI18n()
+  const [keys, setKeys] = useState<string[]>([])
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    let active = true
+    apiGet<{ keys: string[] }>('/world/stat-keys')
+      .then(data => { if (active) setKeys(data.keys) })
+      .catch(() => { if (active) setFailed(true) })
+    return () => { active = false }
+  }, [])
+  return <div className="ga-section">
+    <div className="ga-form-section-label">{t('Passive bonuses')}</div>
+    <Field label={t('Bonus applies')}>
+      <select className="ga-input" value={when}
+        onChange={e => onWhen(e.target.value as DraftItem['bonus_when'])}>
+        <option value="equipped">{t('While equipped')}</option>
+        <option value="carried">{t('While carried')}</option>
+      </select>
+    </Field>
+    {failed && <p role="alert">{t('Could not load stat keys.')}</p>}
+    {rows.map((row, index) => <div className="ga-form-row" key={index}>
+      <select className="ga-input" aria-label={t('Stat')} value={row.stat}
+        onChange={e => onRows(rows.map((value, i) => i === index ? { ...row, stat: e.target.value } : value))}>
+        <option value="">{t('Select stat')}</option>
+        {row.stat && !keys.includes(row.stat) && <option value={row.stat}>{row.stat}</option>}
+        {keys.filter(key => key === row.stat || !rows.some(value => value.stat === key))
+          .map(key => <option key={key} value={key}>{key}</option>)}
+      </select>
+      <input className="ga-input" type="number" min={-100} max={100} step={1}
+        aria-label={t('Bonus amount')} value={row.amount}
+        onChange={e => onRows(rows.map((value, i) => i === index
+          ? { ...row, amount: Math.max(-100, Math.min(100, Math.trunc(Number(e.target.value) || 0))) } : value))} />
+      <button type="button" className="ga-btn ga-btn-sm"
+        onClick={() => onRows(rows.filter((_, i) => i !== index))}>{t('Remove')}</button>
+    </div>)}
+    <button type="button" className="ga-btn ga-btn-sm"
+      onClick={() => onRows([...rows, { stat: keys.find(key => !rows.some(row => row.stat === key)) || '', amount: 0 }])}>
+      {t('Add bonus')}
+    </button>
+  </div>
+}
+
 interface SpellFieldsProps {
   extras: Record<string, unknown>
   items: Item[]
@@ -474,6 +522,9 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
           onToggleListItem={onToggleListItem}
         />
       ) : null}
+
+      <PassiveBonusesEditor rows={draft.bonus_rows} when={draft.bonus_when}
+        onRows={rows => onUpdate('bonus_rows', rows)} onWhen={when => onUpdate('bonus_when', when)} />
 
       {isSpell ? (
         <SpellFields

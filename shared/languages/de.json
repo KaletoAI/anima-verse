@@ -2859,6 +2859,12 @@
     "Spell success chance, capped at 100%.": "Erfolgschance von Zaubern, begrenzt auf 100 %.",
     "Relative weight of regular autonomous thought turns.": "Relatives Gewicht regulärer selbstständiger Gedanken-Turns.",
     "Matching rule factors multiply. Each factor ranges from 0.1 to 5.": "Faktoren zutreffender Regeln werden multipliziert. Jeder Faktor liegt zwischen 0,1 und 5.",
-    "Modified quantity": "Stellgröße"
+    "Modified quantity": "Stellgröße",
+    "Passive bonuses": "Passive Boni",
+    "Bonus applies": "Bonus gilt",
+    "While equipped": "Wenn ausgerüstet",
+    "While carried": "Im Inventar",
+    "Bonus amount": "Bonushöhe",
+    "Add bonus": "Bonus hinzufügen"
   }
 }

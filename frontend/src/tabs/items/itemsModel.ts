@@ -19,7 +19,14 @@ export interface OutfitPieceMeta {
   partially_covers?: string[]
 }
 
+export interface ItemProperties {
+  stat_bonuses?: Record<string, number>
+  bonus_when?: 'equipped' | 'carried'
+  [key: string]: unknown
+}
+
 export interface Item {
+  properties?: ItemProperties
   id: string
   owner?: string
   pages_source?: string
@@ -68,6 +75,9 @@ export interface Owner {
 }
 
 export interface DraftItem {
+  properties: ItemProperties
+  bonus_rows: { stat: string; amount: number }[]
+  bonus_when: 'equipped' | 'carried'
   id: string
   owner: string
   pages_source: string
@@ -200,6 +210,9 @@ export const VALID_PIECE_SLOTS = [
 ]
 
 export const EMPTY_DRAFT: DraftItem = {
+  properties: {},
+  bonus_rows: [],
+  bonus_when: 'equipped',
   id: '',
   owner: '',
   pages_source: '',
@@ -235,6 +248,9 @@ export function itemToDraft(it: Item): DraftItem {
     if (v !== undefined && v !== null && v !== '') extras[k] = v
   }
   return {
+    properties: { ...it.properties },
+    bonus_rows: Object.entries(it.properties?.stat_bonuses || {}).map(([stat, amount]) => ({ stat, amount })),
+    bonus_when: it.properties?.bonus_when || 'equipped',
     id: it.id,
     owner: it.owner || '',
     pages_source: it.pages_source || '',
@@ -263,6 +279,11 @@ export function itemToDraft(it: Item): DraftItem {
 
 export function draftToBody(d: DraftItem): Record<string, unknown> {
   const body: Record<string, unknown> = {
+    properties: {
+      ...d.properties,
+      stat_bonuses: Object.fromEntries(d.bonus_rows.filter(row => row.stat).map(row => [row.stat, row.amount])),
+      bonus_when: d.bonus_when,
+    },
     owner: d.owner.trim(),
     pages_source: d.pages_source.trim(),
     portable: d.portable,

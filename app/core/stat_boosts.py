@@ -1,22 +1,46 @@
-"""Effective stat values derived from base stats and timed state boosts."""
+"""Effective stat values derived from base stats, timed state boosts and passive items."""
 from app.core.game_time import GameTime
 from app.core.timeutils import game_time
 
 
+def _item_boosts(profile: dict) -> dict[str, list[dict]]:
+    """Use profile equipment and cached definitions; only carried mode reads inventory."""
+    from app.core.motion_item_cache import passive_bonus_snapshot
+    from app.models.inventory import get_carried_item_ids
+    definitions, carried_ids = passive_bonus_snapshot()
+    equipped = set(profile.get('equipped_items') or [])
+    equipped.update((profile.get('equipped_pieces') or {}).values())
+    eligible = {iid for iid in equipped if
+                (definitions.get(iid, {}).get('properties') or {}).get('bonus_when', 'equipped') == 'equipped'}
+    name = profile.get('character_name')
+    if carried_ids and name:
+        eligible.update(get_carried_item_ids(name) & carried_ids)
+    result: dict[str, list[dict]] = {}
+    for iid in sorted(eligible):
+        item = definitions.get(iid)
+        if not item:
+            continue
+        for key, amount in ((item.get('properties') or {}).get('stat_bonuses') or {}).items():
+            result.setdefault(key, []).append({
+                'condition': iid, 'label': item.get('name') or iid,
+                'amount': amount, 'remaining_hours': 0.0, 'source': 'item'})
+    return result
+
+
 def active_boosts(profile: dict, *, now: GameTime | None = None) -> dict[str, list[dict]]:
-    """Collect boosts from enabled, unexpired active condition entries.
+    """Collect passive item boosts and enabled, unexpired active conditions.
 
     Expiry matches condition cleanup: strictly beyond the duration expires;
     an unreadable start remains active. No expression-triggered state boosts.
     """
+    result = _item_boosts(profile)
     conditions = profile.get('active_conditions') or []
     if not conditions:
-        return {}
+        return result
     from app.core.prompt_filters import load_filters
     definitions = {f['id'].strip().lower(): f for f in load_filters()
                    if f.get('enabled', True)}
     now = now if now is not None else game_time()
-    result: dict[str, list[dict]] = {}
     for entry in conditions:
         if not isinstance(entry, dict):
             continue

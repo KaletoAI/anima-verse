@@ -91,7 +91,7 @@ def _get_item_dir(item_id: str, *, create: bool = False) -> Path:
     return item_dir
 
 
-# Shared-Items (cross-world library)
+# Shared items (cross-world library)
 from app.core.paths import get_shared_dir as _get_shared_dir
 
 
@@ -442,6 +442,21 @@ def _motion_damping(value):
     return float(value)
 
 
+def _validate_passive_bonuses(properties):
+    """Reject malformed passive stat mappings before replacing item properties."""
+    if not isinstance(properties, dict):
+        raise ValueError("properties must be an object")
+    bonuses = properties.get("stat_bonuses", {})
+    if not isinstance(bonuses, dict) or any(
+        not isinstance(key, str) or not key.strip()
+        or isinstance(amount, bool) or not isinstance(amount, int)
+        or not -100 <= amount <= 100 for key, amount in bonuses.items()
+    ):
+        raise ValueError("stat_bonuses must map non-empty stat keys to integers in -100..100")
+    if properties.get("bonus_when", "equipped") not in ("equipped", "carried"):
+        raise ValueError("bonus_when must be equipped or carried")
+
+
 def add_item(name: str,
     description: str = "",
     category: str = "tool",
@@ -472,6 +487,8 @@ def add_item(name: str,
     if rarity not in VALID_RARITIES:
         rarity = "common"
 
+    if properties is not None:
+        _validate_passive_bonuses(properties)
     items = _load_items()
     existing_ids = {it.get("id") for it in items}
     try:
@@ -516,7 +533,7 @@ def add_item(name: str,
             "enables_activities": [],
             # stat_bonuses is a generic mapping from template stat keys to amounts.
             # No stat names are hardcoded; any stat defined by the template can
-            # be assigned here when item gameplay is implemented.
+            # receive passive bonuses while equipped or carried.
             "stat_bonuses": {},
             "uses": None,
         },
@@ -585,6 +602,8 @@ def update_item(item_id: str,
     ``_render_relevant_fields``) — here rather than in the route, so that a
     piece edit through any path leaves no stale T-pose or mesh behind.
     """
+    if "properties" in updates:
+        _validate_passive_bonuses(updates["properties"])
     # Spell-only metadata (see spell_engine.build_spell_catalog). Anything
     # carrying an incantation is treated as a castable spell, so these keys
     # may only persist on items with category "spell" — otherwise a copied
@@ -661,7 +680,7 @@ def update_item(item_id: str,
                 return {**shared[idx], "_shared": True}
         return None
 
-    # World-Items: DB / items.json
+    # World items: DB / items.json
     items = _load_items()
     for item in items:
         if item.get("id") == item_id:
@@ -1193,6 +1212,15 @@ def _save_inventory(character_name: str, data: Dict[str, Any]):
         return
     from app.core import sync_topics
     sync_topics.avatars([character_name], "self")
+
+
+def get_carried_item_ids(character_name: str) -> set[str]:
+    """Read owned item IDs once, without profile reads or definition enrichment."""
+    rows = get_connection().execute(
+        "SELECT item_id FROM inventory_items WHERE character_name=? AND quantity>0",
+        (character_name,),
+    ).fetchall()
+    return {row[0] for row in rows}
 
 
 def get_character_inventory(character_name: str,
