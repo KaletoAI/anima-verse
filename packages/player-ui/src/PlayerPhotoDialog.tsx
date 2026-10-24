@@ -9,7 +9,7 @@
  * the same flow, reduced to what a player decides in the moment.
  *
  * FIELD INVENTORY — `ScenePhotoSubmit` (ScenePanel.tsx) has six fields; this
- * dialog surfaces five of them and deliberately leaves one to the admin dialog:
+ * dialog surfaces all of them:
  *   · `prompt`          → textarea, prefilled with the distilled `ctl.prompt`
  *   · `character_names` → one toggle chip per name (`ctl.subjects` pre-selected)
  *   · `use_room`        → checkbox, on by default (matches the server default,
@@ -23,8 +23,14 @@
  *                         `GET /world/imagegen-options?occasion=photo`, the same
  *                         answer the /play dialog reads (already filtered to
  *                         ordinary image generators by the server).
- *   · `loras`           → NOT offered — picking LoRAs is authoring (the LoRA
- *                         library is an admin surface, scoped per backend)
+ *   · `loras`           → four slots (name + strength) of the CURRENT
+ *                         backend's LoRA-library entries — under Auto the
+ *                         backend Auto resolves to. Only when that backend has
+ *                         LoRAs; a backend switch clears picks it does not
+ *                         offer. Sent only when anything is picked (else
+ *                         null = the backend's/character's own defaults). An
+ *                         explicit backend gates the picks hard (400), Auto
+ *                         drops one the routed backend does not know.
  * Nothing beyond those fields belongs here; image size and the reference-slot
  * budget are admin-dialog territory and are not part of this payload at all.
  *
@@ -50,7 +56,21 @@ import { useI18n } from './I18nProvider'
 import type { PhotoDialogControl, ScenePhotoSubmit } from './ScenePanel'
 
 /** One backend entry of `GET /world/imagegen-options` — the fields read here. */
-interface BackendOption { name: string; label?: string; available?: boolean }
+interface BackendOption {
+  name: string
+  label?: string
+  available?: boolean
+  has_loras?: boolean
+  /** This backend's LoRAs from the LoRA library; `missing` = vanished from
+   *  its listing but still offered. */
+  lora_options?: Array<{ name: string; missing?: boolean }>
+}
+
+interface LoraSlot { name: string; strength: number }
+
+const LORA_SLOTS = 4
+const emptySlots = (): LoraSlot[] =>
+  Array.from({ length: LORA_SLOTS }, () => ({ name: '', strength: 1.0 }))
 
 interface BackendOptions {
   options?: BackendOption[]
@@ -74,6 +94,7 @@ export function PlayerPhotoDialog({
   const [useRoom, setUseRoom] = useState(true)
   const [backend, setBackend] = useState('')  // '' = Auto (routing)
   const [backends, setBackends] = useState<BackendOptions | null>(null)
+  const [loraSlots, setLoraSlots] = useState<LoraSlot[]>(emptySlots)
   const [busy, setBusy] = useState(false)
   // The host unmounts this dialog inside its own onSubmit (ScenePanel clears
   // the prepared payload first), so the promise usually resolves after unmount.
@@ -95,6 +116,21 @@ export function PlayerPhotoDialog({
             ...list.filter((o) => o.available === false)]
   }, [backends])
   const mediaOff = backends?.media_generation_enabled === false
+  // The backend the LoRAs belong to: the pick, or what Auto resolves to.
+  const current = useMemo(
+    () => backendList.find((o) => o.name === (backend || backends?.resolved || '')) || null,
+    [backendList, backend, backends])
+  const loraOptions = useMemo(
+    () => (current?.has_loras ? current.lora_options || [] : []), [current])
+  // A backend switch clears the picks the new backend does not offer.
+  useEffect(() => {
+    const offered = new Set(loraOptions.map((l) => l.name))
+    setLoraSlots((prev) => (prev.every((s) => !s.name || offered.has(s.name))
+      ? prev
+      : prev.map((s) => (!s.name || offered.has(s.name) ? s : { name: '', strength: 1.0 }))))
+  }, [loraOptions])
+  const setSlot = (i: number, patch: Partial<LoraSlot>) =>
+    setLoraSlots((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)))
 
   // Everyone offerable: the distiller's subjects may name someone the scene
   // payload no longer lists, and dropping such a name silently would change
@@ -119,9 +155,11 @@ export function PlayerPhotoDialog({
   const submit = useCallback(async () => {
     if (busy || !prompt.trim() || noneSelected || mediaOff) return
     setBusy(true)
+    const picked = loraOptions.length ? loraSlots.filter((s) => s.name) : []
     const payload: ScenePhotoSubmit = {
       prompt: prompt.trim(),
       backend,
+      loras: picked.length ? picked : null,
       character_names: selected,
       use_room: useRoom,
       negative_prompt: negative.trim(),
@@ -131,7 +169,7 @@ export function PlayerPhotoDialog({
     } finally {
       if (alive.current) setBusy(false)
     }
-  }, [busy, prompt, selected, useRoom, negative, noneSelected, mediaOff, backend, onSubmit])
+  }, [busy, prompt, selected, useRoom, negative, noneSelected, mediaOff, backend, loraOptions, loraSlots, onSubmit])
 
   // Esc closes — same one-liner the Lightbox uses, and the only Esc mechanism
   // in this package. A generation in flight is not interrupted by it.
@@ -196,6 +234,31 @@ export function PlayerPhotoDialog({
               </div>
             )}
           </label>
+
+          {loraOptions.length > 0 && (
+            <div className="ga-field" style={{ marginBottom: 10 }}>
+              <span className="ga-field-caption">{t('LoRAs')}</span>
+              <div className="player-photo-loras">
+                {loraSlots.map((slot, i) => (
+                  <div key={i} className="player-photo-lora-row">
+                    <select className="ga-input" value={slot.name} disabled={busy}
+                      onChange={(e) => setSlot(i, { name: e.target.value })}>
+                      <option value="">{t('None')}</option>
+                      {loraOptions.map((l) => (
+                        <option key={l.name} value={l.name}>
+                          {l.name}{l.missing ? ` ${t('(missing)')}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <input type="number" className="ga-input player-photo-lora-strength"
+                      min={-2} max={2} step={0.05} title={t('Strength')}
+                      disabled={busy || !slot.name} value={slot.strength}
+                      onChange={(e) => setSlot(i, { strength: parseFloat(e.target.value) || 0 })} />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <label className="player-photo-check">
             <input type="checkbox" checked={useRoom} disabled={busy}

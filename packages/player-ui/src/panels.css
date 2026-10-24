@@ -291,6 +291,13 @@
 }
 .player-photo-chip:disabled { opacity: 0.5; cursor: default; }
 
+/* LoRA slots: name select + strength. Own classes for the same reason as the
+   chips — the admin's .ga-imagegen-lora-* rules do not reach the 3D HUD. */
+.player-photo-loras { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }
+.player-photo-lora-row { display: flex; gap: 6px; align-items: center; }
+.player-photo-lora-row select { flex: 1 1 auto; min-width: 0; }
+.player-photo-lora-strength { width: 72px; flex-shrink: 0; }
+
 /* Why Generate is disabled — see the "nobody is not expressible" note in
    PlayerPhotoDialog.tsx. */
 .player-photo-hint {
