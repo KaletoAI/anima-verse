@@ -518,7 +518,7 @@
       "group": "seat"
     },
     "presenting": {
-      "prompt": "standing in front of audience, one hand gesturing, other holding notes, confident posture",
+      "prompt": "standing and giving a presentation, notes in one hand, the other pointing to a screen, confident",
       "synonyms": [
         "praesentieren",
         "vortragen",
@@ -526,9 +526,12 @@
         "präsentieren",
         "einen vortrag halten",
         "eine präsentation halten",
-        "vor publikum sprechen"
+        "vor publikum sprechen",
+        "eine rede halten",
+        "giving a talk",
+        "giving a presentation"
       ],
-      "animation": "idle",
+      "animation": "presenting",
       "group": "stand",
       "solo": true
     },
