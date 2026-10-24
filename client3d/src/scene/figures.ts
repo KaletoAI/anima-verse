@@ -28,6 +28,7 @@ import type { RootPath, RootTurn } from './bridgeTravel';
 import { BRIDGE_FADE_IN_S, clipBridgeLift, fadeCarry, liftAt } from './bridgeLift';
 import type { BridgeLift } from './bridgeLift';
 import { relockRootPaths } from './footLockMeasure';
+import { restEyePoint } from './cameraFraming';
 
 export { clipRootPath, clipRootTurn, rootPathAt, setClipRootPath, setClipRootTurn };
 export type { RootPath, RootTurn };
@@ -1964,6 +1965,19 @@ export class Figure {
    *  gets its feet wet costs one object. */
   private readonly ghost = new SubmergedGhost(this.root);
 
+  /** FIRST PERSON WITH THE OWN BODY (`setFirstPerson`). The head bone is
+   *  shrunk to nothing for the render — face, hair and every bone hanging off
+   *  the head go with it, the rest of the body stays — and the lens rides on
+   *  it (`firstPersonEye`). `head` is null on a rig without one (procedural
+   *  animals): such a figure is hidden whole in first person, as before. */
+  private head: THREE.Bone | null = null;
+  private readonly headScale = new THREE.Vector3(1, 1, 1);
+  /** Eye offset from the head joint in the HEAD BONE's rest frame, in world
+   *  metres (`cameraFraming.restEyePoint`). */
+  private readonly eyeLocal = new THREE.Vector3();
+  private firstPerson = false;
+  private headShrunk = false;
+
   constructor(model: LoadedModel) {
     this.motionState = model.motion;
     this.height = model.height;
@@ -1989,6 +2003,22 @@ export class Figure {
     this.groundY = inst.position.y;
     this.travelBase = { x: inst.position.x, z: inst.position.z };
     this.root.add(inst);
+    this.root.updateMatrixWorld(true);
+    const rigBones: Record<string, THREE.Bone> = {};
+    inst.traverse((o) => {
+      const key = (o as THREE.Bone).isBone ? normBoneName(o.name) : '';
+      if ((key === 'head' || key === 'headtop_end') && !rigBones[key]) rigBones[key] = o as THREE.Bone;
+    });
+    const head = rigBones.head ?? null;
+    if (head) {
+      this.head = head;
+      this.headScale.copy(head.scale);
+      const h = head.getWorldPosition(new THREE.Vector3());
+      const c = rigBones.headtop_end?.getWorldPosition(new THREE.Vector3()) ?? null;
+      const eye = restEyePoint([h.x, h.y, h.z], c ? [c.x, c.y, c.z] : null, this.height);
+      const q = head.getWorldQuaternion(new THREE.Quaternion()).invert();
+      this.eyeLocal.set(eye[0] - h.x, eye[1] - h.y, eye[2] - h.z).applyQuaternion(q);
+    }
     this.secondary = createSecondaryMotion(THREE, this.root, this.motion, model.template);
     this.secondaryRev = this.motion?.rev;
     this.secondaryFar = model.tier === 'low';
@@ -2581,6 +2611,9 @@ export class Figure {
   private walkPhase = Math.random() * Math.PI * 2;
 
   update(dt: number, options: { frozen?: boolean; far?: boolean; realDelta?: number } = {}) {
+    // The head is shrunk only for the render: everything below — the mixer,
+    // the lift, the secondary motion — works on the real pose.
+    this.restoreHead();
     // Without clips: procedural animation — walking swings the detected leg
     // chains (a trot), standing breathes/bobs lightly, so the figure does not
     // look like a statue (UniRig animal rigs have no clips).
@@ -2699,5 +2732,43 @@ export class Figure {
     this.secondaryPosition.copy(position);
     this.secondaryPlaced = true;
     this.secondary.update(realDelta, { frozen: options.frozen, far: options.far ?? this.secondaryFar });
+    if (this.firstPerson && this.head) {
+      this.head.scale.copy(this.headScale).multiplyScalar(1e-3);
+      this.headShrunk = true;
+    }
+  }
+
+  /** Can this figure be its own first-person body (it has a head bone)? */
+  get hasHead(): boolean {
+    return this.head !== null;
+  }
+
+  /** Draw the figure as the camera's own body: headless, from the next
+   *  `update` on. Switching it off gives the head back at once — a figure
+   *  that is not updated every frame must not stay headless. */
+  setFirstPerson(on: boolean) {
+    this.firstPerson = on && this.head !== null;
+    if (!this.firstPerson) this.restoreHead();
+  }
+
+  private restoreHead() {
+    if (!this.headShrunk || !this.head) return;
+    this.head.scale.copy(this.headScale);
+    this.headShrunk = false;
+  }
+
+  /** The first-person lens in world coordinates: the rest-pose eye offset
+   *  carried by the head bone's CURRENT position and turn, so sitting, lying
+   *  or dancing moves the view with the head. The bone's own scale (shrunk
+   *  for the render) does not enter. Null without a head bone. */
+  firstPersonEye(out: THREE.Vector3): THREE.Vector3 | null {
+    if (!this.head) return null;
+    this.head.updateWorldMatrix(true, false);
+    this.head.matrixWorld.decompose(EYE_SCRATCH.pos, EYE_SCRATCH.quat, EYE_SCRATCH.scale);
+    return out.copy(this.eyeLocal).applyQuaternion(EYE_SCRATCH.quat).add(EYE_SCRATCH.pos);
   }
 }
+
+const EYE_SCRATCH = {
+  pos: new THREE.Vector3(), quat: new THREE.Quaternion(), scale: new THREE.Vector3(),
+};

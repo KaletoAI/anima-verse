@@ -44,6 +44,7 @@ const SCRATCH = {
   fwd: new THREE.Vector3(),
   right: new THREE.Vector3(),
   off: new THREE.Vector3(),
+  look: new THREE.Vector3(),
   sunOff: new THREE.Vector3(),
   surfaceSky: new THREE.Color(),
 };
@@ -601,6 +602,12 @@ export class Engine {
     this.viewApplied = { dx: this.viewDx, dy: this.viewDy, w, h };
   }
 
+  private placeFirstPerson(at: THREE.Vector3, viewDir: THREE.Vector3) {
+    this.target.copy(at);
+    this.camera.position.copy(at);
+    this.camera.lookAt(SCRATCH.look.copy(at).add(viewDir));
+  }
+
   private frame() {
     const dt = Math.min(this.clock.getDelta(), 0.1);
     // ONE time value for everything that moves by itself: the water surfaces
@@ -653,9 +660,8 @@ export class Engine {
     if (firstPerson && followAt) {
       // Place the lens at the actual eyes, without the chase lag behind a
       // walking avatar. Keep the orbit's view direction, now looking ahead.
-      this.target.copy(followAt);
-      this.camera.position.copy(followAt);
-      this.camera.lookAt(off.negate().add(followAt));
+      // Placed again after the frame hooks, once the figure has its pose.
+      this.placeFirstPerson(followAt, off.negate());
     } else {
       this.camera.position.copy(this.target).add(off.multiplyScalar(orbitDist));
       this.camera.lookAt(this.target);
@@ -676,6 +682,14 @@ export class Engine {
     this.sun.position.copy(this.sun.target.position).add(sunOff);
 
     for (const fn of this.frameHooks) fn(dt);
+    // The own body is drawn in first person and the lens rides on its head
+    // (`npcs.lensOf`): the figures were posed and moved by the hooks above,
+    // so the follow point is asked again — the one from the top of the frame
+    // lags a pose behind, and a walking body would run ahead of its own eyes.
+    if (firstPerson) {
+      const at = this.follow?.();
+      if (at) this.placeFirstPerson(at, off);
+    }
     this.renderer.render(this.scene, this.camera);
     this.labelRenderer.render(this.scene, this.camera);
   }

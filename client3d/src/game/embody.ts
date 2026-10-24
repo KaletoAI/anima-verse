@@ -29,7 +29,8 @@
  * `npcs.eyeOf` (0.94 · height, 1.60 m on a 1.70 m figure). Third person keeps
  * a 2 m stand-off from it, with the near pitch flattened to 8°. Zooming
  * further in requests first person rather than pushing through the head:
- * the engine places the lens at the eyes and the view hides the avatar.
+ * the engine places the lens at the eyes of the head bone (`npcs.lensOf`)
+ * and the avatar is drawn headless as the own body (`Figure.setFirstPerson`).
  * The switch waits 180 ms, entering at <= 1.2 m and leaving at >= 1.8 m.
  * These are virtual zoom distances; the first-person lens stays at the eyes.
  */

@@ -13,6 +13,7 @@ import * as api from './api';
 import { pollCore, syncHub, SYNC_ENDPOINTS } from '@anima/player-ui';
 import { initDebug3d, initIsolation } from './debug3d';
 import { Engine, MIN_DIST } from './scene/engine';
+import { viewHeading } from './scene/cameraFraming';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { FigureLibrary } from './scene/figures';
 import { animFamily } from './scene/clipCoverage';
@@ -2179,7 +2180,9 @@ async function startApp(username: string, role: string) {
     // `firstMap` on purpose: the deps object is built before `lastMap` exists,
     // and the avatar of a session does not change under us.
     avatarPos: () => npcs.positionOf(firstMap.avatar),
-    avatarEye: () => npcs.eyeOf(firstMap.avatar),
+    // First person rides on the head bone (the own body is drawn and may sit
+    // or dance); third person aims at the standing eye height.
+    avatarEye: () => engine.firstPerson ? npcs.lensOf(firstMap.avatar) : npcs.eyeOf(firstMap.avatar),
   };
   /** Has the player been told, THIS time in the mode, what the zoom wall is?
    *  One sentence per session in control: the wall itself is the answer from
@@ -6391,7 +6394,7 @@ async function startApp(username: string, role: string) {
       }
     }
     npcs.tick(dt, engine.dist, (lastMap ?? firstMap).game_rate === 0,
-      engine.firstPerson ? avatarName : null);
+      engine.firstPerson ? { name: avatarName, viewYaw: viewHeading(engine.yaw) } : null);
     bob += dt * 2.2;
     for (const pin of eventPins.values()) {
       pin.position.y += Math.sin(bob) * 0.008;

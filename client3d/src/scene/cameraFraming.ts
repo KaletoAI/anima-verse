@@ -108,3 +108,52 @@ export function basePitchDeg(dist: number,
 export function eyeHeight(heightM: number): number {
   return heightM * EYE_FRACTION;
 }
+
+/**
+ * THE FIRST-PERSON LENS ON THE HEAD BONE. In first person the own body stays
+ * drawn, so the lens has to sit where its eyes are in the CURRENT pose —
+ * `eyeHeight` above the feet is a standing eye, and a seated avatar looked
+ * down on its own lap from 1.60 m. The lens is therefore fixed to the head
+ * bone, at an offset measured once in the rest pose:
+ * - height: `EYE_HEAD_FRACTION` of the way from the head joint (the skull
+ *   base on a Mixamo rig) to the crown end bone; without a crown bone the
+ *   standing `eyeHeight`,
+ * - forward: `EYE_FORWARD_FRACTION` of the standing height ahead of the head
+ *   joint, along the figure's own +Z (glTF front) — 0.094 m on a 1.70 m figure,
+ *   the distance from the neck axis to the eyes.
+ */
+export const EYE_HEAD_FRACTION = 0.45;
+export const EYE_FORWARD_FRACTION = 0.055;
+
+/** Rest-pose eye point of a figure, in its own frame (feet at y = 0, facing
+ *  +Z): `head` is the head joint, `crown` the crown end bone or null. */
+export function restEyePoint(head: [number, number, number],
+                             crown: [number, number, number] | null,
+                             heightM: number): [number, number, number] {
+  const y = crown ? head[1] + (crown[1] - head[1]) * EYE_HEAD_FRACTION : eyeHeight(heightM);
+  return [head[0], y, head[2] + heightM * EYE_FORWARD_FRACTION];
+}
+
+/** How far the view may turn from a STANDING body in first person before the
+ *  body turns after it, in degrees. Inside it only the head looks around; past
+ *  it the body turns to the view, so looking back never looks through one's
+ *  own back. An animation (dancing, sitting, a bridge) is never turned: there
+ *  only the view moves and the clip plays on. */
+export const BODY_TURN_DEG = 60;
+
+/** The facing yaw (three.js Y rotation, 0 = +Z, as `Figure.faceTowards`
+ *  writes it) the camera looks along, for the engine's orbit yaw: the camera
+ *  sits at `(sin yaw, ·, cos yaw)` from its target and looks back at it. */
+export function viewHeading(cameraYaw: number): number {
+  return Math.atan2(-Math.sin(cameraYaw), -Math.cos(cameraYaw));
+}
+
+/** The yaw a standing first-person body turns to, or null while the view is
+ *  within `BODY_TURN_DEG` of it. Both yaws may be unwrapped. */
+export function bodyYawForView(bodyYaw: number, viewYaw: number,
+                               thresholdDeg = BODY_TURN_DEG): number | null {
+  let d = (viewYaw - bodyYaw) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return Math.abs(d) > thresholdDeg * Math.PI / 180 ? viewYaw : null;
+}

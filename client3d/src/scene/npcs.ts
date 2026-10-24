@@ -10,7 +10,7 @@ import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   terrainPace, wadeGate,
   type GroundScope, type GroundSink, type GroundWater } from '../game/walk';
 import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
-import { eyeHeight } from './cameraFraming';
+import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
 import type { PlaceEntry } from './placeSlot';
@@ -274,7 +274,9 @@ export class NpcManager {
   group = new THREE.Group();
   private npcs = new Map<string, Npc>();
   private avatarName = '';
-  /** The camera's own figure is neither drawn nor picked in first person. */
+  /** The camera's own figure in first person: never picked, never labelled;
+   *  drawn headless as the own body where its rig has a head bone
+   *  (`Figure.setFirstPerson`), hidden whole where it has none. */
   private firstPersonName: string | null = null;
   /** figure the PLAYER steers (E3-T3); its placement comes from main.ts */
   private playerDriven: string | null = null;
@@ -407,6 +409,15 @@ export class NpcManager {
     const p = npc.root.position.clone();
     p.y += eyeHeight(npc.figure?.height ?? BASE_FIGURE_HEIGHT_M);
     return p;
+  }
+
+  /** Where a first-person lens sits for this figure: on its head bone
+   *  (`Figure.firstPersonEye`), so it follows the pose — seated, lying,
+   *  dancing. A figure without a head bone, or not loaded yet, falls back to
+   *  the standing `eyeOf`. */
+  lensOf(name: string): THREE.Vector3 | null {
+    const npc = this.npcs.get(name);
+    return npc?.figure?.firstPersonEye(new THREE.Vector3()) ?? this.eyeOf(name);
   }
 
   /** Scale a figure is DRAWN at, or null when it is not on the map (E3-T5).
@@ -1270,7 +1281,12 @@ export class NpcManager {
     return moveClip(gm.anim, running, raw.scope);
   }
 
-  tick(dt: number, camDist: number, frozen = false, firstPersonName: string | null = null) {
+  /** `firstPerson` names the camera's own figure while the view is first
+   *  person, with the facing yaw the view looks along
+   *  (`cameraFraming.viewHeading`) — the standing body turns after it. */
+  tick(dt: number, camDist: number, frozen = false,
+       firstPerson: { name: string; viewYaw: number } | null = null) {
+    const firstPersonName = firstPerson?.name ?? null;
     this.firstPersonName = firstPersonName;
     const now = performance.now();
     for (const npc of this.npcs.values()) {
@@ -1283,9 +1299,12 @@ export class NpcManager {
     const spriteScale = THREE.MathUtils.clamp(camDist * 0.055, 1.7, 3.4);
     const faceTo = this.facingTargets();
     for (const npc of this.npcs.values()) {
-      const visible = npc.name !== firstPersonName;
+      const own = npc.name === firstPersonName;
+      const ownBody = own && !!npc.figure?.hasHead;
+      const visible = !own || ownBody;
       for (const child of npc.root.children) child.visible = visible;
-      const labelVisible = visible && camDist < 55;
+      npc.figure?.setFirstPerson(ownBody);
+      const labelVisible = !own && camDist < 55;
       if (npc.interaction && this.tickInteraction(npc, dt, labelVisible, frozen)) continue;
       // Server journey (§ A11): walk along the route instead of npc.target.
       // Metres along the polyline carry the whole journey: the server target
@@ -1582,6 +1601,7 @@ export class NpcManager {
           standGm.water, standSink);
         this.easeRootY(npc, goalY, dt);
       }
+      const standingClip = standingClipFor(npc.animation, standIdle);
       if (!moving && npc.figure) {
         // Standing: the marker's facing beats looking at the neighbours, and
         // where NEITHER says anything the figure keeps the way it is already
@@ -1590,12 +1610,22 @@ export class NpcManager {
         // direction, the avatar included: let go of the key and it turned away
         // from where it had just gone. "Nobody said which way" is not a
         // direction, so nothing is written.
-        const target = faceTo.get(npc.name);
-        const dir = npc.face
-          ? npc.face.clone()
-          : target
-            ? target.clone().sub(npc.root.position).setY(0)
-            : null;
+        // The own body in FIRST PERSON follows the VIEW instead of the
+        // neighbours while it simply stands: within `BODY_TURN_DEG` only the
+        // head looks around, past it the body turns after it. An animation —
+        // dancing, a seat, a bridge — is never turned: the clip plays on and
+        // only the view moves.
+        const viewDriven = ownBody && !npc.face && standingClip === locomotionClip('idle');
+        const viewYaw = viewDriven && firstPerson
+          ? bodyYawForView(npc.figure.root.rotation.y, firstPerson.viewYaw) : null;
+        const target = viewDriven ? undefined : faceTo.get(npc.name);
+        const dir = viewYaw !== null
+          ? new THREE.Vector3(Math.sin(viewYaw), 0, Math.cos(viewYaw))
+          : npc.face
+            ? npc.face.clone()
+            : target
+              ? target.clone().sub(npc.root.position).setY(0)
+              : null;
         // Not while a bridge holds the facing: the body getting up is the
         // clip's, and the frame after it ends asks again.
         if (dir && !npc.figure.holdsFacing) npc.figure.faceTowards(dir);
@@ -1613,8 +1643,8 @@ export class NpcManager {
         // comes from the catalog or not at all. This is the ONE clip decision
         // of every figure, the player's avatar included: it is steered
         // through this same loop. The order is `standingClipFor`'s, hand-checked
-        // in smoke_places_client.mjs [10] — the expression is not repeated here.
-        const standingClip = standingClipFor(npc.animation, standIdle);
+        // in smoke_places_client.mjs [10] — the expression is not repeated here
+        // (`standingClip`, above the facing).
         // The second argument is the gate of the clip ground offset (see the
         // traveller branch above): a clip the GROUND named — moving or
         // standing — has the ground as its reference, an activity clip does

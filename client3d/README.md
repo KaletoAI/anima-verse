@@ -28,8 +28,12 @@ Recherche-Protokolle aus dem Juli 2026.
   ein Klick und damit der Geh-Befehl.
 - **Ich-Perspektive:** beim Steuern des Avatars weit genug heranzoomen.
   Die Kamera wechselt nach 180 ms anhaltender Nähe bei ≤ 1,2 m virtueller
-  Zoomdistanz auf Augenhöhe; der eigene Avatar samt Labels wird ausgeblendet.
-  Herauszoomen ab ≥ 1,8 m wechselt ebenfalls nach 180 ms zurück. Der Bereich
+  Zoomdistanz auf Augenhöhe. Der eigene Körper bleibt sichtbar, nur der Kopf
+  (samt Haaren) wird ausgeblendet, und die Kamera sitzt an den Augen des
+  Kopf-Bones — sie folgt also Sitzen, Liegen oder Tanzen. Im Stehen dreht der
+  Körper nach, sobald der Blick mehr als 60° von ihm abweicht; während einer
+  Animation bewegt sich nur der Blick. Labels der eigenen Figur bleiben aus;
+  ein Rig ohne Head-Bone wird wie früher ganz ausgeblendet. Herauszoomen ab ≥ 1,8 m wechselt ebenfalls nach 180 ms zurück. Der Bereich
   dazwischen hält die Perspektive stabil. Mausdrehen, Q/E und Bewegung bleiben
   verfügbar; Esc verlässt die Avatar-Steuerung wie bisher.
 - **Keine Auswahl-/Identitätsringe:** Characters und Avatar haben keine
