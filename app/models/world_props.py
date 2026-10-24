@@ -408,10 +408,6 @@ def _prop_facts(prop_id: str) -> Dict[str, Any]:
         # existing client caches valid (§ B2 addendum).
         maps.append(variant_urls(base if pos == 0 else f"{base}?variant={idx}",
                                  entry.get("tiers") or []))
-    # The orientation fix is the FILE's (v2 E1); this block carries ONE
-    # `fix_euler` per prop, so it is the PRIMARY variant's — the same file
-    # the bare URL serves.
-    rot = prop_store.file_areas(prop_store.model_path(prop_id))["rotation"]
     # ONE scale number per published variant, in the same order as the URL maps
     # (2026-08-24): a variant may override the prop's dims, and a placement
     # that shows the sapling variant must be scaled to the sapling. The
@@ -429,8 +425,11 @@ def _prop_facts(prop_id: str) -> Dict[str, Any]:
     return {
         "name": str(meta.get("name") or prop_id),
         "max_list": max_list,
-        "fix_euler": {a: _finite(rot.get(a)) or 0.0 for a in ("x", "y", "z")},
         "variant_maps": maps,
+        "entries": entries,
+        "bbox": meta.get("bbox"),
+        "rotations": [prop_store.file_areas(prop_store.model_path(
+            prop_id, variant=e["variant"]))["rotation"] for e in entries],
         "sink_list": sink_list,
     }
 
@@ -501,12 +500,24 @@ def _build_payload_rows() -> List[Dict[str, Any]]:
             # it is not drawing.
             "max_m": facts["max_list"][idx],
             "measure": "xyz",
-            "fix_euler": facts["fix_euler"],
+            "fix_euler": {a: _finite(facts["rotations"][idx].get(a)) or 0.0
+                          for a in ("x", "y", "z")},
             # The PRIMARY variant's tier map — unchanged for every prop that
             # has one variant, which is every prop until an admin adds a
             # second one.
             "variants": maps[0],
         }
+        from app.core.room_recipe import compose_prop_light
+        entry = facts["entries"][idx]
+        dims = entry.get("dims") or {}
+        light = compose_prop_light(
+            entry.get("light"), bbox=facts["bbox"],
+            rotation=facts["rotations"][idx],
+            dims=[_finite(dims.get(k)) or 1.0 for k in
+                  ("width_m", "depth_m", "height_m")],
+            placement_yaw=row["yaw_deg"])
+        if light:
+            spec["light"] = light
         # Only a prop that really HAS more than one variant says so: a
         # one-element list beside an identical `variants` map would be the
         # same fact twice in every payload of every world.

@@ -469,6 +469,27 @@ def compose_prop_marker(*, bbox: List[float], rotation: Any,
     return out
 
 
+def compose_prop_light(light: Any, *, bbox: Any, rotation: Any,
+                       dims: List[float],
+                       placement_yaw: float) -> Optional[Dict[str, Any]]:
+    """Use the marker frame for a variant's placement-relative light point.
+
+    ``height_m`` is measured from the placed object's BASE, not from the
+    floor: the renderer adds it to the object's position, which already
+    carries the placement ``offset_y`` (and the prop's ground offset), so
+    the offset is composed as 0 here instead of being counted twice."""
+    from app.core.props import sanitize_light
+    clean = sanitize_light(light)
+    if clean is None or not bbox:
+        return None
+    point = compose_prop_marker(
+        bbox=bbox, rotation=rotation, dims=dims, frac=clean.pop("at"),
+        facing=None, placement_yaw=placement_yaw,
+        placement_offset_y=0.0)
+    clean.update(offset_m=point["offset_m"], height_m=point["height_m"])
+    return clean
+
+
 def _square(cx: float, cy: float, half: float) -> List[List[float]]:
     """Axis-aligned keep-out square around a point (§ B5a: hand-checkable)."""
     return [[cx - half, cy - half], [cx + half, cy - half],

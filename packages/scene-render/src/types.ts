@@ -273,9 +273,22 @@ export interface SceneSurface {
   extent_snapped: [number, number, number]
 }
 
+/** Composed placement-relative light point and its rendering parameters. */
+export interface ScenePropLight {
+  color: string
+  intensity: number
+  range_m: number
+  flicker: 'none' | 'candle' | 'fire'
+  when: 'always' | 'night'
+  glow_m: number
+  offset_m: [number, number]
+  height_m: number
+}
+
 /** ONE placement spec for building, room diorama and prop alike — the food of
  *  the contract's single place() routine (§ B2). */
 export interface SceneModelSpec {
+  light?: ScenePropLight
   role: 'building' | 'room' | 'prop'
   /** Building spec only: what the model IS. `shell` = a building that stands
    *  on the ground and fades out like a roof when zooming in; `ground` = an
@@ -557,6 +570,7 @@ export interface SceneOpening {
 /** Room vocabulary in PLAN FRACTIONS — what the 2D editor needs for DRAWING;
  *  in the 3D client only a room directory (storey, outdoor flag). */
 export interface SceneRoom {
+  ambience?: { daylight: number; tint: string | null }
   room_id: string
   level: number
   always_visible: boolean

@@ -2177,6 +2177,32 @@ def _sanitize_stat_rates(rates: Any) -> List[Dict[str, Any]]:
     return result
 
 
+def sanitize_ambience(raw: Any) -> Optional[Dict[str, Any]]:
+    """Normalize room ambience; malformed input never prevents a save."""
+    import math
+    import re
+    if raw is None:
+        return None
+    try:
+        if not isinstance(raw, dict):
+            raise ValueError("expected an object")
+        daylight = float(raw.get("daylight", 1.0))
+        if not math.isfinite(daylight):
+            raise ValueError("daylight must be finite")
+    except (TypeError, ValueError, OverflowError) as exc:
+        logger.warning("room ambience dropped: %s", exc)
+        return None
+    daylight = min(1.0, max(0.0, daylight))
+    tint = raw.get("tint")
+    if tint is not None:
+        if isinstance(tint, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", tint):
+            tint = tint.lower()
+        else:
+            logger.warning("room ambience: invalid tint dropped: %r", tint)
+            tint = None
+    return None if daylight == 1.0 and tint is None else {"daylight": daylight, "tint": tint}
+
+
 def _sanitize_rooms_layout(rooms: Any) -> Any:
     """Sanitize layouts and stat rates in every room dict in place (rooms
     pass through add_location verbatim otherwise). Invalid layouts are dropped.
@@ -2198,6 +2224,12 @@ def _sanitize_rooms_layout(rooms: Any) -> Any:
     for room in rooms:
         if not isinstance(room, dict):
             continue
+        if "ambience" in room:
+            ambience = sanitize_ambience(room["ambience"])
+            if ambience is None:
+                room.pop("ambience", None)
+            else:
+                room["ambience"] = ambience
         if "stat_rates" in room:
             room["stat_rates"] = _sanitize_stat_rates(room["stat_rates"])
         if "layout" not in room:

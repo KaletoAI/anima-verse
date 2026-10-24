@@ -141,7 +141,8 @@ logger = get_logger(__name__)
 #: be re-fetched.
 #: 15 (2026-10-19): Blender door models, casing anchors and double leaves.
 #: 16 (2026-10-21): Blender window models with glass pane fallback.
-SCENE_RECIPE_VERSION = 16
+#: 17 (2026-10-24): Prop variant lights and room ambience.
+SCENE_RECIPE_VERSION = 17
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -3350,6 +3351,13 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
             "bottom_y": _r(floor_y + _num(placement.get("ground_offset_m"))
                            + _num(placement.get("offset_y"))),
         }
+        from app.core.room_recipe import compose_prop_light
+        light = compose_prop_light(
+            entry.get("light"), bbox=prop.get("bbox"),
+            rotation=entry.get("rotation"), dims=dims,
+            placement_yaw=_num(placement.get("yaw")))
+        if light:
+            spec["light"] = light
         # Only a prop that really HAS more than one variant says so: a
         # one-element list beside an identical `variants` map would be the
         # same fact twice in every payload of every world.
@@ -4761,6 +4769,10 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
             "outline": r.get("outline") or [],
             "openings": r.get("openings") or [],
         }
+        source_room = next((room for room in rooms
+                            if room.get("id") == block["room_id"]), {})
+        if source_room.get("ambience") is not None:
+            block["ambience"] = source_room["ambience"]
         # Zone on the model surface instead of a built room — the consumer
         # takes centre/rect/y from HERE, because there is no plate to read
         # them off (area location, plan-area-locations.md).

@@ -579,6 +579,7 @@ def get_world_props_route() -> Dict[str, Any]:
     from app.models import world_props
     facts: Dict[str, Dict[str, Any]] = {}
     rows = world_props.list_world_props()
+    lights = {r["id"]: r.get("light") for r in world_props.payload_rows()}
     for row in rows:
         pid = row["prop_id"]
         if pid not in facts:
@@ -597,6 +598,8 @@ def get_world_props_route() -> Dict[str, Any]:
                 "variants": len(stores),
                 "stores": stores,
             }
+        if lights.get(row["id"]):
+            row["light"] = lights[row["id"]]
         row["name"] = facts[pid]["name"]
         row["variant_count"] = facts[pid]["variants"]
         row["variant_indices"] = facts[pid]["stores"]

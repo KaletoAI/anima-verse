@@ -2977,6 +2977,8 @@ Figur, nicht den Abstand. Beides wäre IK, nicht Teil des Piloten.
 
 ## A9a. Welt-Props — einzeln gesetzte Props auf der Weltebene (E2.2)
 
+Since v17, each world-props item may carry the same composed `light` block as a prop spec (§ C3), resolved only for its server-selected shown variant and yaw (`height_m` from the object's base, § C3); `sig` changes after light edits. There is one optional `light` per spec; `variants` and every `model_variants` tier map remain URL-only.
+
 Beschlossen 2026-08-19, Programm „Prop-Welt statt Dioramen", Etappe 2 Nr. 2.
 Die gemalte Fläche (§ A9, `meta.scatter`) sagt, wie DICHT ein Boden etwas
 wachsen lässt — eine Statistik. Eine Statistik kann nicht sagen „DIESER
@@ -5880,6 +5882,7 @@ Admin-Regler weg: der Sanitizer verwirft das Feld, es hat keinen Schreiber.
                openings,                   # normalisiert INKL. gespiegelter —
                                            # Ghost-Öffnungen kommen von HIER,
                                            # nie aus lokaler Spiegel-Logik
+               ambience?,                  # v17 daylight share and tint (§ C3)
                overlay? } ],               # NUR Flächen-Locations: Outdoor-Raum
                                            # AUSSERHALB des Grundrisses = Zone
                                            # AUF dem Modell — {centre:[x,z],
@@ -8742,6 +8745,37 @@ Tastendruck im Lageplan-Editor.
 | Dass ein Landen den Bake auslöst — mit Attrappe statt Blender, damit die LOD-Kette ohne ihn läuft | `scripts/smoke_model_lod.py` |
 | Verify-Zeile `surface_scale` je Spec mit Raster: die gemessene Skala des platzierten Objekts gegen `max_m / extent_snapped` — die einzige Stelle, an der eine Loader-Abweichung Blender ↔ three sichtbar würde („Prüfe am Verbraucher") | `client3d/src/scene/sceneRecipe.ts`, `?debug3d=1` |
 | Verify-Zeile `surface_box` daneben: die EXAKTE Box der Fix-Gruppe (outer → yawG → fitG → fix, in Modell-Einheiten vor Yaw und Skala) gegen `box_max − box_min` und `box_min[1]` der Datei, als größte Abweichung der vier Zahlen. `surface_scale` vergleicht nur die größte Seite — ein Mesh, dessen Box in den anderen Achsen oder in der Unterkante abweicht, kommt dort grün durch, während jede Raster-Lesung um genau diese Differenz danebenliegt | ebenda |
+
+### Prop lights (v17)
+
+`SCENE_RECIPE_VERSION = 17` covers prop lights and room ambience together.
+A prop spec whose shown variant has a light carries:
+
+```json
+"light": {"color":"#ffb35c","intensity":2.0,"range_m":4.0,
+          "flicker":"candle","when":"always","glow_m":0.12,
+          "offset_m":[0,0],"height_m":2.0}
+```
+
+`color` is `#rrggbb`, `intensity` is candela (decay 2), `range_m` is metres,
+`flicker` is `none|candle|fire`, `when` is `always|night`, and `glow_m` is the
+halo radius in metres. Absent means no light. Each spec carries only the server-selected shown
+variant's optional `light`. `variants` and every `model_variants` tier map
+remain URL-only; light objects never appear inside them.
+
+`room_recipe.compose_prop_marker` composes the light's raw-box fractions `at`
+with the variant's bbox, orientation fix and real dims and the placement yaw,
+yielding `offset_m: [dx,dz]` and `height_m`. Unlike a marker, `height_m` is
+measured from the placed object's BASE (`bottom_y`), with the placement
+`offset_y` composed as 0, because the base already carries it. The renderer
+adds `offset_m` (world x/z, already yawed) and `height_m` to the placed
+object's position in world space AFTER relift, so the light follows the model.
+
+Room entries `rooms[].ambience` optionally carry `{daylight, tint}` in v17:
+`daylight` is clamped to 0..1; `tint` is lowercase `#rrggbb` or null. Neutral
+(1, null) is omitted. Room ambience dims/tints sun, sky and fill, with point
+lights and halos unaffected. Light and ambience edits invalidate the scene
+fingerprint; light edits also invalidate the world-props signature.
 
 ## C4. Plätze und Marker
 

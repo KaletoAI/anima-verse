@@ -770,6 +770,9 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             markers = sanitize_markers(entry.get(MARKERS_KEY))
             if markers:
                 rec[MARKERS_KEY] = markers
+            light = sanitize_light(entry.get("light"))
+            if light:
+                rec["light"] = light
             values = _coerce_slot_values(entry.get(SLOT_VALUES_KEY))
             if values:
                 rec[SLOT_VALUES_KEY] = values
@@ -1248,6 +1251,35 @@ def _sanitize_rotation(raw: Any, cur: Optional[Dict[str, Any]] = None) -> Dict[s
         v = round(v % 360, 1)
         rot[axis] = int(v) if float(v).is_integer() else v
     return rot
+
+
+def sanitize_light(raw: Any) -> Optional[Dict[str, Any]]:
+    """Normalize one variant light; invalid colour or geometry drops it."""
+    if (not isinstance(raw, dict)
+            or not re.fullmatch(r"#[0-9a-fA-F]{6}", str(raw.get("color") or ""))):
+        return None
+
+    def number(value: Any, default: float, low: float, high: float) -> float:
+        try:
+            value = float(value)
+        except (TypeError, ValueError, OverflowError):
+            value = default
+        if not math.isfinite(value):
+            value = default
+        return min(high, max(low, value))
+
+    at = raw.get("at", [0.5, 0.9, 0.5])
+    if not isinstance(at, (list, tuple)) or len(at) != 3:
+        return None
+    return {
+        "color": raw["color"].lower(),
+        "intensity": number(raw.get("intensity"), 1.5, 0.05, 100.0),
+        "range_m": number(raw.get("range_m"), 4.0, 0.5, 40.0),
+        "at": [number(v, d, -0.5, 2.0) for v, d in zip(at, [0.5, 0.9, 0.5])],
+        "flicker": raw.get("flicker") if raw.get("flicker") in ("none", "candle", "fire") else "none",
+        "when": raw.get("when") if raw.get("when") in ("always", "night") else "always",
+        "glow_m": number(raw.get("glow_m"), 0.10, 0.0, 2.0),
+    }
 
 
 def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
@@ -3339,6 +3371,9 @@ def _published_entry(meta: Dict[str, Any], index: int,
             entry[key] = _variant_entry(meta, index).get(key)
         if file[LEAF_BBOX_KEY]:
             entry[LEAF_BBOX_KEY] = file[LEAF_BBOX_KEY]
+    light = sanitize_light(_variant_entry(meta, index).get("light"))
+    if light:
+        entry["light"] = light
     if markers:
         own = variant_markers(meta, index)
         if own:
@@ -3500,6 +3535,7 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
             "description": entry.get(DESCRIPTION_KEY, ""),
             "ground_offset_m": entry.get(GROUND_OFFSET_KEY, GROUND_OFFSET_DEFAULT),
             "markers": entry.get(MARKERS_KEY, []),
+            "light": sanitize_light(entry.get("light")),
             # The picture assignment of THIS variant, its pane defaults (v2
             # E1), the name it is listed under, and whether its copied frame
             # is out of date (R4).
@@ -3762,12 +3798,22 @@ def _apply_variant_face_targets(entry: Dict[str, Any], targets: Any) -> None:
             entry.pop(key, None)
 
 
-#: The six fields a variant owns, by the name a batch body calls them — the
+def _apply_variant_light(entry: Dict[str, Any], raw: Any) -> None:
+    """Store or clear the light owned by this mesh variant."""
+    light = sanitize_light(raw)
+    if light:
+        entry["light"] = light
+    else:
+        entry.pop("light", None)
+
+
+#: The fields a variant owns, by the name a batch body calls them — the
 #: dims travel as ONE `dims` object because the trio is one statement (a prop
 #: is scaled uniformly, so the three numbers say how big AND what shape), and
 #: the two face budgets as ONE `face_targets` object for the same reason: high
 #: and low describe one object at two distances.
 VARIANT_PATCH_APPLIERS = {
+    "light": _apply_variant_light,
     "dims": _apply_variant_dims,
     "description": _apply_variant_description,
     "ground_offset_m": _apply_variant_ground_offset,
@@ -5696,6 +5742,7 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
             # hand, and this is the same answer every other unqualified read
             # gives (2026-08-25). Its subject is on the lean record above.
             "markers": variant_markers(meta, primary),
+            "light": sanitize_light(_variant_entry(meta, primary).get("light")),
             "has_source": has_source,
             "created_at": meta.get("created_at") or "",
             "source": meta.get("source") or "",

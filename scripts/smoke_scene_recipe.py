@@ -5457,8 +5457,8 @@ def test_surface_specs() -> None:
     """
     print("\n[7i] baked model surfaces (v6)")
     from app.core import props as prop_store
-    check("code_version 16 (Blender windows + corridors[] + entrance sentence)",
-          scene_recipe.SCENE_RECIPE_VERSION == 16,
+    check("code_version 17 (prop lights + room ambience)",
+          scene_recipe.SCENE_RECIPE_VERSION == 17,
           str(scene_recipe.SCENE_RECIPE_VERSION))
 
     # ── the room diorama ─────────────────────────────────────────────────
