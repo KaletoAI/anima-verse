@@ -718,17 +718,22 @@
       "solo": true
     },
     "monitoring": {
-      "prompt": "sitting upright with focused gaze, hands resting lightly on desk or device, legs firmly on the floor",
+      "prompt": "sitting alert at a desk watching several screens, one hand on the mouse, eyes scanning",
       "synonyms": [
         "überwachen",
         "beobachten",
         "beobachtet",
         "überwacht",
         "im auge behalten",
-        "kontrollieren"
+        "kontrollieren",
+        "bildschirme beobachten",
+        "monitore überwachen",
+        "watching the screens",
+        "monitoring screens"
       ],
-      "animation": "sit",
-      "group": "seat"
+      "animation": "monitoring",
+      "group": "seat",
+      "solo": true
     },
     "flirting": {
       "prompt": "standing flirtatiously, weight on one leg, playing with the hair, head tilted, a coy smile",

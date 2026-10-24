@@ -1,0 +1,40 @@
+{
+ "kind": "monitoring",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 241,
+ "duration_s": 8.033,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": 0.01,
+  "hips_scale": [
+   1.0
+  ],
+  "rig_floor_shift_cm": -0.0,
+  "rig_floor_min_cm": 0.0,
+  "root_motion": {
+   "mode": "strip",
+   "travel_m": [
+    0.0,
+    0.0
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     8.0
+    ]
+   ],
+   "max_drift_cm": 0.0
+  }
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/monitoring.py",
+  "spec_sha": "4b3246d4b399c3c1027571d4b914c24a6a45881cea53f3df428a179fd8b7e40c"
+ }
+}
