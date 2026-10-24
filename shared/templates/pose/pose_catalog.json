@@ -864,7 +864,7 @@
       "group": "stand"
     },
     "dancing together": {
-      "prompt": "two people dancing salsa together as a couple, close hold, hips moving, facing each other",
+      "prompt": "a couple dancing salsa together in closed hold, one hand on the partner's back, the other hands clasped, hips swaying",
       "label_de": "Tanzen",
       "synonyms": [
         "salsa",
@@ -875,9 +875,10 @@
         "paartanz",
         "salsa tanzen",
         "miteinander tanzen",
-        "mit jemandem tanzen"
+        "mit jemandem tanzen",
+        "dancing salsa together"
       ],
-      "animation": "salsa",
+      "animation": "dancing-together",
       "solo": false,
       "group": "stand",
       "places": 2,
