@@ -518,16 +518,21 @@
       "solo": true
     },
     "driving": {
-      "prompt": "sitting with hands on steering wheel, upright posture, eyes forward, seatbelt on",
+      "prompt": "sitting behind the steering wheel driving a car, both hands on the wheel, eyes on the road",
       "synonyms": [
         "fahren",
         "autofahren",
         "fährt",
         "auto fahren",
-        "am steuer sitzen"
+        "am steuer sitzen",
+        "lenken",
+        "am lenkrad",
+        "steering",
+        "driving a car"
       ],
-      "animation": "sit",
-      "group": "seat"
+      "animation": "driving",
+      "group": "seat",
+      "solo": true
     },
     "photography": {
       "prompt": "standing and taking a photo, a camera held up to the eye with both hands, one knee slightly bent, focused",
