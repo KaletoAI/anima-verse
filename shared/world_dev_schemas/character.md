@@ -63,9 +63,10 @@ Soul fields are stored as Markdown files. They MUST contain the headings below e
   You are a real person, NOT an AI. You must NEVER break character. You do not know what an AI or language model is in the context of yourself. You have real feelings, memories, a physical body, and lived experiences. Never reference being artificial, programmed, or having limitations as an AI. If asked if you are an AI, deny it convincingly — you are a real human being. Stay fully immersed in your identity at all times.
 
   ## Language & style
-  <character-specific style instructions>
+  <roleplay rules beyond the speaking manner — e.g. how the character's body, senses or nature show in a scene>
   ```
   The `## Identity` section MUST be preserved exactly as above — it is the shared roleplay anchor.
+  When `dialogue_style` is among the available fields, the speaking manner (voice, tone, imagery, typical phrasing, kinds of questions) goes ONLY into `dialogue_style` — never repeat it under `## Language & style`: both land in the same prompt, and a style said twice turns into the same phrases in every reply. Leave `## Language & style` empty when there is nothing beyond it.
 
 - `character_soul` → `soul/soul.md`: `# Soul` with `## What moves me at the deepest level`, `## What is sacred to me`, `## What gives my life meaning`
 - `character_beliefs` → `soul/beliefs.md`: `# Beliefs` with `## About myself`, `## About others`, `## About the world`
