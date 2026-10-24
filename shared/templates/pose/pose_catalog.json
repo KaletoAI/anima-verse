@@ -121,7 +121,7 @@
       "solo": true
     },
     "walking": {
-      "prompt": "mid-stride walking pose, arms naturally swinging, upright posture, looking ahead",
+      "prompt": "walking at an easy pace, arms swinging naturally, upright posture, looking ahead",
       "synonyms": [
         "gehen",
         "gehend",
@@ -130,9 +130,13 @@
         "geht",
         "spazieren gehen",
         "einen spaziergang machen",
-        "zu fuß gehen"
+        "zu fuß gehen",
+        "laufen gehen",
+        "schlendern",
+        "strolling",
+        "walking along"
       ],
-      "animation": "walk",
+      "animation": "walking",
       "solo": true,
       "group": "stand"
     },
