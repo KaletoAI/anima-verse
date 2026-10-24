@@ -62,14 +62,12 @@ two React shells, `/static`, `/i18n`, the login round trip and `/health` are rea
 as do the global queue controls. A player still reads all of it, and keeps every write that belongs
 to playing — chat, movement, own inventory and outfit, gifts, scene photos, cancelling own tasks.
 
-**Three frontends, one project:**
+**Two browser interfaces, plus server-rendered administration:**
 
-- **React / Vite SPA** (`frontend/`, built to `static/game_admin/`, two pages from one project):
-  - **Player UI** at **`/play`** — the actual game: chat, a schematic metre map with travel,
-    self/others, inventory, mind, gallery, phone, news, quests, tasks. `/` redirects here.
-  - **Game-Admin** at **`/game-admin`** — world building in 20 tabs (characters, locations/rooms,
-    map, terrain, props, items, rules, states, events, scheduler, improvements, marketplace,
-    poses, world-dev, observer, mind …).
+- **Game-Admin** at **`/game-admin`** — the React / Vite SPA (`frontend/`, built to
+  `static/game_admin/`) for world building in 20 tabs (characters, locations/rooms,
+  map, terrain, props, items, rules, states, events, scheduler, improvements, marketplace,
+  poses, world-dev, observer, mind …).
 - **Server-rendered admin pages** (Python) — `/admin/settings`, `/admin/users`, `/admin/models`,
   `/admin/agent-loop`, `/admin/templates`, `/admin/llm-stats`, `/logs/llm`,
   `/logs/image-prompts`, `/dashboard`. These are server-rendered administration pages: `/admin/settings` edits instance settings,
@@ -79,12 +77,13 @@ to playing — chat, movement, own inventory and outfit, gifts, scene photos, ca
   **Media Generation** (*General & defaults · Backends · LoRA library · Scene
   rendering · Reference renders & sizes · Blender refinement (3D) · Analysis & rebuild prompts*).
   Saving stays section-wide, the URL hash (`#image_generation/blender`) survives a reload.
-- **3D client** (`client3d/`, Three.js + a small React HUD) — a zoomable Age-of-Empires-style view
-  of the world that resolves buildings into walkable floor plans as you zoom in, with the same
-  player panels docked beside it. It runs as its own process (`./start.sh --with-3d`, port 5183)
-  and talks to the backend over the HTTP API only, so it can just as well run on a different
-  machine. Everything geometric that both renderers need lives in `packages/scene-render`; the
-  player panels both surfaces show live in `packages/player-ui`.
+- **3D player client** at **`/play`** (`client3d/`, Three.js + React HUD) — a zoomable
+  world map that resolves buildings into walkable floor plans as you zoom in, with chat,
+  self/others, inventory, mind, gallery, phone, news, quests and tasks in the HUD.
+  `/` redirects here. FastAPI serves its committed build from `static/client3d/`, so only
+  Python needs to run. Optional development with HMR uses `./start.sh --with-3d` or
+  `npm run dev:client3d` on port 5183. Shared player panels and character forms live in
+  `packages/player-ui`; geometry shared with the admin preview lives in `packages/scene-render`.
 
 **Three nouns, kept distinct:** a **Character** is any entity; an **Agent** is an LLM-driven chat
 partner / NPC; an **Avatar** is a character the user has taken over and now controls directly (it
@@ -244,7 +243,7 @@ stops acting autonomously).
   background, head and neck only (shoulders only for long hair), the face evenly lit from the
   front without shadows (they would bake into the 3D face texture). The rules also apply to custom
   styles without changing the Face Prompt or other render occasions.
-  The player and 3D clients display identity portraits as background-free cutouts with the full
+  The 3D player client displays identity portraits as background-free cutouts with the full
   hairstyle visible. Existing portraits are processed on first display; PNG variants live in
   the character's `.cache/portraits`, outside the gallery. Originals remain unchanged for
   reference generation. `?transparent=1` selects the cutout on character image and thumbnail
@@ -508,7 +507,7 @@ npm install                  # once, from the repository root
 npm run dev:admin            # Vite dev server on :5173 (= npm run dev -w frontend)
 npm run build:admin          # tsc -b && vite build → static/game_admin/
 npm run dev:client3d         # 3D client on :5183
-npm run build:client3d       # tsc --noEmit && vite build → client3d/dist/
+npm run build:client3d       # tsc --noEmit && vite build → static/client3d/
 npm run build                # both apps
 
 npm run lint -w frontend     # the only lint script; covers frontend/ and packages/*/src

@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useToast } from '../../lib/Toast'
-import { usePoll } from '../../player/usePolling'
+import { usePoll } from '@anima/player-ui'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { clockSettings, formatDateTime, formatTime,
   useClockSettings } from '../../lib/clockFormat'

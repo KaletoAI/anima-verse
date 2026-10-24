@@ -5,8 +5,8 @@
  * groups thumbnails per character. Picking one hands its display URL back to
  * the composer, which attaches it as `image_url` on the next send.
  *
- * Rendered via a portal — the composer lives inside react-grid-layout's
- * transform context, where a position:fixed modal would otherwise be clipped.
+ * Rendered via a portal — the composer lives inside a host panel that may
+ * transform or clip, where a position:fixed modal would otherwise be clipped.
  */
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'

@@ -3485,7 +3485,7 @@ damit KEINEN Leser mehr — weder `path` noch `progress_cells`.
   Travellers are collected before grouping by location, including journeys
   with an empty `location_id`. Fogged foreign travellers without a route
   retain their existing dead reckoning.
-* `frontend/src/player/MapPanel.tsx` — **erledigt (E5 Task 1).** Der
+* The former 2D player MapPanel (removed in plan-native-client Task 8) — **erledigt (E5 Task 1).** Der
   Spieler-Panel ist als Schemakarte der Meter-Welt neu gebaut: Grundrisse in
   echter Größe, gemaltes Gelände, Figuren an ihrem `pos` — und die Reise als
   Linie. Der Typ kommt aus `frontend/src/tabs/map/mapTypes.ts`
@@ -5544,7 +5544,7 @@ ein Boden Wasser ist, entscheidet die **Material-KLASSE** der Surface-Bibliothek
 
 ### A16.10 Die 2D-Karten schattieren das Relief
 
-Spielerkarte (`frontend/src/player/MapPanel.tsx`) und Minimap des 3D-Clients
+Die ehemalige 2D-Spielerkarte (entfernt in plan-native-client Task 8) und die Minimap des 3D-Clients
 (`client3d/src/hud/Minimap.tsx`) legen dieselbe Schattierung über ihre
 Terrain-Farben: `hillshadeImage()` aus `@anima/scene-render` — Normale aus dem
 Höhen-Gradienten, Licht aus Nordwest (Azimut 315°, Höhe 45°), neutrales Grau

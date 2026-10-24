@@ -35,16 +35,17 @@
  * The HMR websocket is not a path question: the proxy entry sets no `ws`, so
  * the upgrade never reaches it.
  *
- * THE PAGE/API COLLISION. In production the player PAGE is `/play` and the
- * player API lives under `/play/…` (`/play/say`, `/play/locations/…/scene`).
- * In dev the page is the Vite entry `play.html`. So an entry `x.html` is
+ * THE PAGE/API COLLISION. A page and an API can share a prefix — in
+ * production the player PAGE is `/play` and the player API lives under
+ * `/play/…` (`/play/say`, `/play/locations/…/scene`). So an entry `x.html` is
  * served at `/x.html`, `/x` and `/x/` (exactly — nothing after the slash) and
  * every deeper `/x/…` goes to the backend. `index.html` additionally answers
  * `/`. Aliases cover what does not follow from a file name, e.g. the
  * Game-Admin page `/game-admin` → `index.html`. That also makes the backend's
- * login redirect work in dev: the auth gate answers a navigation with
- * `302 /play?return=…`, the browser follows it on :5173 and lands on the dev
- * page instead of the built bundle.
+ * login redirect work in dev: the auth gate answers an admin navigation with
+ * `302 /game-admin?return=…`, the browser follows it on :5173 and lands on the
+ * dev page instead of the built bundle. Neither app has an entry for `/play`
+ * any more: it is the backend's page (the built 3D client) in both.
  *
  * Note that `/static/…` is a BACKEND path in both apps (the frontend's HTML
  * entries link the theme CSS and the favicon from there, and the shared

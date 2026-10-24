@@ -1,17 +1,15 @@
 @import './character/character.css';
 
 /* Structure styles of the shared player panels (scene/self/others + EmptyState).
-   Moved verbatim out of frontend/src/player/player.css in plan-3d-game stage 2
+   Originally moved from the retired 2D player stylesheet in plan-3d-game stage 2
    task 4 — colours stay `var(--x, <today's hex>)`, so a host can retheme the
-   panels by setting the variables (client3d does that under #hud) while /play
-   keeps exactly the values it had.
+   panels by setting the variables (client3d does that under #hud) with the shared defaults as fallbacks.
 
    Load order rule: a host loads panels.css BEFORE its own stylesheet, so
    app-specific overrides still win.
 
-   NOT here on purpose: `.player-panel*` (the /play window chrome) and the
-   `.player-chip*` family — other /play panels use those, so they stay in
-   player.css. `.ga-input` lives in the game-admin stylesheet. */
+   Host window chrome stays in the host stylesheet.
+   `.ga-input` lives in the game-admin stylesheet. */
 
 /* Scene panel: header fixed · transcript scrolls · composer pinned to the
    bottom. Only the transcript gets the scrollbar, the input stays visible. */
@@ -208,7 +206,7 @@
 }
 
 /* Task panel: the "still running" pulse. Moved verbatim out of
-   frontend/src/player/player.css with TaskPanel in stage 6. */
+   the retired 2D player stylesheet with TaskPanel in stage 6. */
 .player-task-pulse {
   animation: player-task-pulse 1.4s ease-in-out infinite;
 }
@@ -323,7 +321,7 @@
 }
 
 /* ---- Instagram feed panel (stage 6) ----
-   Moved verbatim out of frontend/src/player/player.css together with
+   Originally moved from the retired 2D player stylesheet together with
    InstagramPanel: the panel is the only user of these classes, so they follow
    it into the package and the 3D HUD gets the same feed without copying CSS. */
 .ig-feed { display: flex; flex-direction: column; gap: 14px; }

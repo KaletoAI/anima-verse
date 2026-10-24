@@ -4,8 +4,8 @@
  * items in a grid, and gifts the chosen one to a selected recipient via
  * POST /inventory/characters/{avatar}/{item_id}/give → relationship boost.
  *
- * Portal-rendered: the composer lives inside react-grid-layout's transform
- * context, where a position:fixed modal would otherwise be clipped.
+ * Portal-rendered: the composer lives inside a host panel that may transform
+ * or clip, where a position:fixed modal would otherwise be clipped.
  */
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'

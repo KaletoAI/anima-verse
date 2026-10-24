@@ -39,12 +39,11 @@ A) Every route the backend serves is FORWARDED, by BOTH apps. Expected value =
        frontend  /              the backend redirects it to /play; in dev it is
                                 the Game-Admin entry (index.html), which is
                                 what http://localhost:5173/ has always opened
-       frontend  /play          the player shell; in dev it is play.html
        frontend  /game-admin    the admin shell; in dev it is index.html
        client3d  /              the world map (index.html)
 
-   client3d has no `play.html` and no Game-Admin, so `/play` and `/game-admin`
-   are plain API/pages of the backend there.
+   Both apps forward `/play` to the built 3D player shell on the backend.
+   client3d also forwards `/game-admin` to the backend.
 
 B) The paths VITE must keep, hand-derived from what a dev server serves:
    its own namespaces (`/@…`, `/__…`), the source tree (`/src/…`), the
@@ -68,7 +67,7 @@ E) No explicit prefix list remains in either config. `server.proxy` must have
    copy is how the two dev servers drifted apart in the first place.
 
 F) The frontend's `base` must be conditional on the command. `/static/…` is a
-   backend path (the theme CSS and the favicon both HTML entries link), so the
+   backend path (the HTML entry links the theme CSS and favicon there), so the
    dev server cannot also serve its own files under `/static/game_admin/`.
 
 G) One environment-variable convention for the backend address: both
@@ -96,7 +95,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 from smoke_docs_readme import real_routes  # noqa: E402  (same route collector)
 
 # The production PAGE paths that are a Vite HTML entry in dev, per app (A).
-PAGES_FRONTEND = {"/": "/index.html", "/play": "/play.html", "/game-admin": "/index.html"}
+PAGES_FRONTEND = {"/": "/index.html", "/game-admin": "/index.html"}
 PAGES_CLIENT3D = {"/": "/index.html"}
 
 _failures = []
@@ -186,9 +185,8 @@ TABLE_FRONTEND = [
     # B) what Vite owns
     ("/", "/index.html"),
     ("/index.html", "/index.html"),
-    ("/play.html", "/play.html"),
+    ("/play.html", None),
     ("/src/main.tsx", "/src/main.tsx"),
-    ("/src/player/main.tsx", "/src/player/main.tsx"),
     ("/@vite/client", "/@vite/client"),
     ("/@react-refresh", "/@react-refresh"),
     ("/@fs/repo/packages/player-ui/src/api.ts", "/@fs/repo/packages/player-ui/src/api.ts"),
@@ -197,9 +195,9 @@ TABLE_FRONTEND = [
     ("/__open-in-editor", "/__open-in-editor"),
     ("/silhouette.svg", "/silhouette.svg"),          # frontend/public/
     # C) the page/API collision
-    ("/play", "/play.html"),
-    ("/play/", "/play.html"),
-    ("/play?return=%2Fplay", "/play.html?return=%2Fplay"),
+    ("/play", None),
+    ("/play/", None),
+    ("/play?return=%2Fplay", None),
     ("/play/scene", None),
     ("/play/say", None),
     ("/play/locations/7/scene", None),
@@ -377,7 +375,7 @@ def check_configs():
           re.search(r"base:\s*command === 'serve'", src) is not None)
 
     linked = set()
-    for page in ("index.html", "play.html"):
+    for page in ("index.html",):
         linked |= set(re.findall(r'(?:href|src)="(/static/[^"]+)"',
                                  (FRONTEND / page).read_text(encoding="utf-8")))
     check(f"frontend: the HTML entries link backend /static files ({len(linked)})",

@@ -1,0 +1,2 @@
+import{n as e}from"./rolldown-runtime-BpQH8Ho1.js";var t=e({clone:()=>n});function n(e){let t=new Map,n=new Map,i=e.clone();return r(e,i,function(e,r){t.set(r,e),n.set(e,r)}),i.traverse(function(e){if(!e.isSkinnedMesh)return;let r=e,i=t.get(e),a=i.skeleton.bones;r.skeleton=i.skeleton.clone(),r.bindMatrix.copy(i.bindMatrix),r.skeleton.bones=a.map(function(e){return n.get(e)}),r.bind(r.skeleton,r.bindMatrix)}),i}function r(e,t,n){n(e,t);for(let i=0;i<e.children.length;i++)r(e.children[i],t.children[i],n)}export{n,t};
+//# sourceMappingURL=SkeletonUtils-hu3CjD5y.js.map

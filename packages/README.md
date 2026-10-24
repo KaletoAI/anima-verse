@@ -22,9 +22,8 @@ the consuming app's Vite build compiles them and the consuming app's `tsc` type-
 The player-facing React panels plus the plumbing they need: the API client, the i18n provider, the
 toast, the polling hook and the queue hook.
 
-Both player surfaces show the **same** panels. `/play` arranges them as tiles in a
-react-grid-layout; the 3D client docks one column of them beside the world. Neither owns the panel —
-this package does, so a fix lands in both at once.
+The 3D player's HUD docks these panels beside the world. Game-Admin also uses
+shared character forms and plumbing. This package owns their common behavior.
 
 Exports (`packages/player-ui/src/index.ts`):
 
@@ -37,15 +36,13 @@ Exports (`packages/player-ui/src/index.ts`):
   `I18nProvider` + `useI18n`, `usePolling`, `useQueue`, `thumbs`, `clockFormat`/`clockSettings`,
   `icons`.
 - **Styles** — `@anima/player-ui/panels.css`. It is themeable: every colour is a CSS custom
-  property, and each app brings its own theme (`frontend/src/player/player.css`,
-  `client3d/src/hud/hud.css` + `theme-fantasy.css`, loaded after it).
+  property, and each app brings its own theme (`client3d/src/hud/hud.css` + `theme-fantasy.css`, loaded after it).
 
 Two conventions matter when touching a panel:
 
-- **A panel bound to a skill declares it.** `PANEL_META` in `frontend/src/player/panelRegistry.ts`
-  and `PANELS` in `client3d/src/hud/Hud.tsx` carry a `requires` field with a skill id (e.g.
+- **A panel bound to a skill declares it.** `PANELS` in `client3d/src/hud/Hud.tsx` carries a `requires` field with a skill id (e.g.
   `instagram`, `send_message`). `GET /play/scene` reports the world's capabilities, and a panel
-  whose skill package is not installed disappears from the launcher in **both** apps. That is what
+  whose skill package is not installed disappears from the HUD launcher. That is what
   makes a package's deletion test hold all the way into the UI.
 - **The package never imports an app.** It receives everything through props and the shared API
   client; `react` and `react-dom` are peer dependencies supplied by the consumer.
@@ -98,7 +95,7 @@ Two details set this package apart from its neighbours:
   workspace link, so a fresh checkout's dev server works before the first `npm install`.
 
 Each app binds the rule to its own pages in its own `dev-proxy-rule.js` (`frontend/`: `index.html`
-at `/` and `/game-admin`, `play.html` at `/play`; `client3d/`: `index.html`, `figure-test.html`,
+at `/` and `/game-admin`; `client3d/`: `index.html`, `figure-test.html`,
 `floorplan.html`). `scripts/smoke_vite_proxy.py` runs every route of the FastAPI decorators through
 both bindings.
 

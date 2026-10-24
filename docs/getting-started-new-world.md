@@ -132,9 +132,9 @@ a hosted OpenAI-compatible cloud) in the [README](../README.md#getting-started).
    profile styles; the current outfit does not fill the profile style's `{fabric}` slot. For
    uploads, choose the same composition. Existing images are not changed automatically.
 
-7. **Take over the character as your avatar.** Open `/play`. With no avatar set and more than one
-   playable character, the **Choose your avatar** screen appears; with exactly one it is picked
-   automatically, and the toolbar lets you switch later. From then on that character is *you*:
+7. **Take over the character as your avatar.** Open `/play` and enter the 3D world.
+   In the HUD menu, find the Character section and use Take over beside a playable character.
+   The world reloads for that avatar. From then on that character is *you*:
    their location, mood and outfit follow your decisions and they no longer act autonomously. Only
    templates with the `playable_avatar` feature (`human-roleplay`, `animal-default`) can be
    controlled; `human-default` and `npc-temporary` are NPC-only.

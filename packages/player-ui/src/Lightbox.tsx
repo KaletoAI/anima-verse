@@ -43,7 +43,7 @@ function LightboxHost() {
   }, [])
   if (!item) return null
   // Portal to document.body: that way the overlay (position:fixed) escapes any
-  // transformed ancestor (react-grid-layout panels use CSS transform).
+  // transformed or clipping ancestor of the host panel.
   return createPortal(<LightboxOverlay item={item} onClose={() => setItem(null)} />, document.body)
 }
 

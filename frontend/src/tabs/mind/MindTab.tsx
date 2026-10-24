@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { MindPanel } from '../../player/MindPanel'
+import { MindPanel } from '@anima/player-ui'
 import { DecencyExemptToggle } from '../../components/DecencyExemptToggle'
 import { clockSettings, formatDate, formatTime, sameZoneDay,
   useClockSettings } from '../../lib/clockFormat'

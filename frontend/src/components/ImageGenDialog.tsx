@@ -637,9 +637,9 @@ export function ImageGenDialog({
   if (!open) return null
 
   // Render via portal to document.body so the fixed-position modal escapes any
-  // transformed ancestor (e.g. react-grid-layout panels in /play, which use CSS
-  // transform — a fixed child would otherwise be positioned relative to the
-  // panel and appear clipped/offscreen as an "empty window").
+  // transformed or clipping ancestor — a fixed child would otherwise be
+  // positioned relative to that ancestor and appear clipped/offscreen as an
+  // "empty window".
   return createPortal(
     <div
       className="ga-modal-backdrop"

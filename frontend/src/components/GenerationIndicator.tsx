@@ -1,6 +1,6 @@
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
-import { usePoll } from '../player/usePolling'
+import { usePoll } from '@anima/player-ui'
 
 /**
  * Compact header indicator for running/pending generations (image/video/TTS/

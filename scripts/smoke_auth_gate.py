@@ -135,8 +135,6 @@ F) NO PLAYER SURFACE POSTS TO AN ADMIN-ONLY PATH — a source scan, not a
 
      packages/player-ui/src/**            the shared player panels, incl. the
                                           character forms of AvatarSettingsPanel
-     frontend/src/player/**               the /play shell
-     frontend/src/components/ImageGenDialog.tsx   slotted into /play
      client3d/src/**                      the 3D client
 
    and asserts that none of their URL literals is admin-only under the rules
@@ -145,15 +143,8 @@ F) NO PLAYER SURFACE POSTS TO AN ADMIN-ONLY PATH — a source scan, not a
    ``/queue/tasks/X``. A future player feature that posts to /world therefore
    fails this smoke instead of silently 403ing in the browser.
 
-   One documented exemption, verified by hand in the source:
-     POST /world/compose-preview (ImageGenDialog) — both call sites are
-     guarded by ``composeKey``, which is empty unless the ``composeRequest``
-     prop is passed. The only caller that passes it is
-     frontend/src/tabs/world/LocationGallery.tsx (Game-Admin); the three
-     ImageGenDialog instantiations in frontend/src/player/PlayerApp.tsx do not.
-   Not in the scanned set, for the same kind of reason: GameClock posts
-   /world/game-time, but /play renders it ``readOnly`` (PlayerApp.tsx), which
-   draws a plain <span> and no editor.
+   Game-Admin-only components such as ImageGenDialog and GameClock are not
+   player surfaces and are excluded from this scan. No exemption is needed.
 
 Usage:  ./.venv/bin/python scripts/smoke_auth_gate.py
 """
@@ -635,20 +626,11 @@ REPO = Path(__file__).resolve().parents[1]
 # Every file a logged-in player's browser can execute — see section F.
 PLAYER_TREES = [
     REPO / "packages" / "player-ui" / "src",
-    REPO / "frontend" / "src" / "player",
     REPO / "client3d" / "src",
 ]
-PLAYER_FILES = [
-    REPO / "frontend" / "src" / "components" / "ImageGenDialog.tsx",
-]
-# Write calls whose URL IS admin-only but which no player can trigger. Each
-# entry needs a reason that was verified in the source, not a hunch.
-SCAN_EXEMPT = {
-    ("POST", "/world/compose-preview"):
-        "ImageGenDialog: guarded by composeKey, set only via the composeRequest "
-        "prop — passed by tabs/world/LocationGallery.tsx (Game-Admin), never by "
-        "the three ImageGenDialog sites in player/PlayerApp.tsx",
-}
+PLAYER_FILES = []
+# No admin-only write call is reachable from the player surfaces.
+SCAN_EXEMPT = {}
 
 _CALL_RE = re.compile(
     r"(?:api(?P<api>Post|Put|Patch|Delete|Upload)\s*(?:<[^()]*?>)?\s*\(|fetch\s*\()")
@@ -716,8 +698,9 @@ for (method, url), where in sorted(found.items()):
     offenders.append(f"{method} {url}  <- {', '.join(sorted(where))}")
 
 print(f"  scanned {len(sources)} files, {len(found)} distinct write calls")
-# A lower bound so a broken regex cannot pass by finding nothing. Counted on
-# 2026-09-21: 55 distinct (method, url) write pairs across 146 scanned files.
+# A lower bound so a broken regex cannot pass by finding nothing.
+# After the 2D client removal, the shared panels and 3D client still make
+# at least 40 distinct (method, url) write calls.
 check("write calls found (>= 40)", len(found) >= 40, True)
 check("player writes hitting an admin-only path", offenders, [])
 # The exemption list must not rot: every entry has to still be found and still

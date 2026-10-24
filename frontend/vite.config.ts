@@ -3,17 +3,9 @@ import react from '@vitejs/plugin-react'
 import { viteDevTarget } from './dev-proxy-rule.js'
 
 // Built assets are served by the FastAPI server out of static/game_admin/.
-// Two pages share this output (same frontend/ project, separate pages/routes):
-//   index.html -> Game-Admin SPA   (served at /game-admin)
-//   play.html  -> Player UI        (served at /play)
-// The matching base path makes the hashed asset URLs resolve under
-// /static/game_admin/ for both.
-//
-// In DEV the base is `/` instead. The dev server has to forward `/static/…`
-// to the backend (both HTML entries link the theme CSS and the favicon from
-// there), and it cannot do that while it serves its own files under the same
-// prefix. `/` is also what the dev pages are documented as: the Game-Admin at
-// http://localhost:5173/, the player at http://localhost:5173/play.
+// The single entry is the Game-Admin SPA, served at /game-admin.
+// The matching base path resolves built assets under /static/game_admin/.
+// In dev the base is `/` so /static/ requests can reach the backend.
 const PROD_BASE = '/static/game_admin/'
 
 // Where the dev server sends everything it does not serve itself. Same
@@ -31,7 +23,6 @@ export default defineConfig(({ command, isPreview }) => ({
       // Relative paths resolve from the Vite root (this frontend/ dir).
       input: {
         index: 'index.html',
-        play: 'play.html',
       },
     },
   },

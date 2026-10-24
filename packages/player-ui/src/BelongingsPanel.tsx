@@ -117,8 +117,8 @@ interface ItemDetail {
 /**
  * Item detail + the targeted actions (Give / Drop / Cast).
  *
- * Portal-rendered to document.body: the panel lives inside react-grid-layout's
- * transform context, where a position:fixed modal would be clipped.
+ * Portal-rendered to document.body: the panel lives inside a host panel that
+ * may transform or clip, where a position:fixed modal would be clipped.
  */
 function ItemDetailModal({ itemId, slotLabels, onClose, onChanged }: {
   itemId: string
