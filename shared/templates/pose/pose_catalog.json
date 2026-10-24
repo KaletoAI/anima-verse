@@ -43,7 +43,7 @@
         "standing around"
       ],
       "_default": true,
-      "animation": "standing",
+      "animation": "idle",
       "group": "stand",
       "solo": true
     },
