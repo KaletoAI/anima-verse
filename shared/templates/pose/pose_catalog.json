@@ -510,7 +510,7 @@
       "group": "seat"
     },
     "photography": {
-      "prompt": "standing with camera raised to eye, one knee slightly bent, focused stance",
+      "prompt": "standing and taking a photo, a camera held up to the eye with both hands, one knee slightly bent, focused",
       "synonyms": [
         "fotografieren",
         "fotos machen",
@@ -526,9 +526,12 @@
         "fotografiert",
         "ein foto machen",
         "bilder machen",
-        "knipsen"
+        "knipsen",
+        "ein bild knipsen",
+        "taking a picture",
+        "photographing"
       ],
-      "animation": "idle",
+      "animation": "photographing",
       "solo": true,
       "group": "stand"
     },

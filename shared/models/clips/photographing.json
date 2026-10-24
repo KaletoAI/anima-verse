@@ -1,0 +1,46 @@
+{
+ "kind": "photographing",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 181,
+ "duration_s": 6.033,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": 1.06,
+  "hips_scale": [
+   1.0
+  ],
+  "foot_plant": {
+   "LeftFoot": {
+    "frames": 181,
+    "max_cm": 0.62
+   }
+  },
+  "rig_floor_shift_cm": -0.0,
+  "rig_floor_min_cm": 0.0,
+  "root_motion": {
+   "mode": "strip",
+   "travel_m": [
+    0.0,
+    0.0
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     6.0
+    ]
+   ],
+   "max_drift_cm": 0.0
+  }
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/photographing.py",
+  "spec_sha": "8a30afe44f97da0ebb486c2c086b869debfbf40fb59ba652977e193f1589427d"
+ }
+}
