@@ -554,7 +554,7 @@
       "solo": true
     },
     "kneeling": {
-      "prompt": "down on the floor on both knees, torso leaning forward, hands resting on the ground in front of the knees",
+      "prompt": "kneeling upright on the floor, shins on the ground, hands resting on the thighs, calm posture",
       "synonyms": [
         "knien",
         "kniend",
@@ -563,10 +563,15 @@
         "kniet",
         "auf den knien",
         "sich hinknien",
-        "auf dem boden knien"
+        "auf dem boden knien",
+        "hinknien",
+        "kniet sich hin",
+        "kneeling down",
+        "on one's knees"
       ],
-      "animation": "crawling",
-      "group": "ground"
+      "animation": "kneeling",
+      "group": "ground",
+      "solo": true
     },
     "celebrating": {
       "prompt": "standing with legs slightly apart, arms raised high in a celebratory gesture, energetic stance",
