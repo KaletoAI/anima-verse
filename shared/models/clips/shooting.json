@@ -1,0 +1,40 @@
+{
+ "kind": "shooting",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 145,
+ "duration_s": 4.833,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": 3.49,
+  "hips_scale": [
+   1.0
+  ],
+  "rig_floor_shift_cm": 0.0,
+  "rig_floor_min_cm": 0.0,
+  "root_motion": {
+   "mode": "strip",
+   "travel_m": [
+    0.0,
+    0.0
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     4.8
+    ]
+   ],
+   "max_drift_cm": 0.0
+  }
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/shooting.py",
+  "spec_sha": "650667d6ec8281a66a6a7a184260bc277d123b11b6966243465a9a2ab9d2613e"
+ }
+}

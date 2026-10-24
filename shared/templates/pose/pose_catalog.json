@@ -802,15 +802,20 @@
       "solo": true
     },
     "shooting": {
-      "prompt": "standing with knees slightly bent and feet shoulder-width apart, firearm held with both hands extended forward at shoulder height, elbows tucked in",
+      "prompt": "standing in an aiming stance, a handgun held with both hands at eye level, arms extended, knees slightly bent, focused",
       "synonyms": [
         "schießen",
         "schießt",
         "zielen",
-        "mit der waffe zielen"
+        "mit der waffe zielen",
+        "anlegen",
+        "die waffe anlegen",
+        "aiming",
+        "aiming a gun"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "shooting",
+      "group": "stand",
+      "solo": true
     },
     "commanding_attention": {
       "prompt": "standing tall with shoulders back, feet planted firmly in a wide stance, arms held open and deliberate at the sides",
