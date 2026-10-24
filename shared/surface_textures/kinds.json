@@ -181,5 +181,30 @@
   "facade_module_modern": {
     "name": "Modern Facade Module",
     "description": "front elevation of exactly one storey and one window bay of a modern apartment building: light grey precast concrete wall, one large dark window with a slim anthracite frame centred; flat orthographic view, no perspective, edges continue seamlessly left/right and top/bottom"
+  },
+  "rime_ice": {
+    "name": "Rime Ice",
+    "description": "pale blue-white rime ice and feathery frost crystals coating rough dark rock, seen straight on",
+    "material": {
+      "class": "gloss",
+      "tint": "#e8f2ff",
+      "map_strength": 1.0,
+      "roughness": 0.3,
+      "metalness": 0.05
+    }
+  },
+  "frozen_floor": {
+    "name": "Frozen Floor",
+    "description": "thick milky blue-white ice sheet over dark stone with trapped air bubbles, fine cracks and frost crystals, seen straight from above",
+    "material": {
+      "class": "ice",
+      "tint": "#cfe3f5",
+      "map_strength": 0.6,
+      "wave_m": 4.0,
+      "speed": 0.0,
+      "flow_speed": 0.0,
+      "sky_mix": 0.7,
+      "roughness": 0.05
+    }
   }
 }
