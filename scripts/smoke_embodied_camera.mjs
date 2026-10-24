@@ -54,15 +54,22 @@
  * ---------------------------------------------------------------------------
  * [2] THE EMBODIED NEAR END
  * ---------------------------------------------------------------------------
- * Two numbers go with it: the camera may not come closer than
- * EMBODY_MIN_DIST = 2 m (0.8 m from the eyes is inside the head), and the near
- * end of the pitch curve flattens to EMBODY_NEAR_PITCH_DEG = 8°, so
+ * Three numbers go with it. Since the first-person view (b3834f7d) the
+ * REQUESTED zoom and the LENS have separate floors: the wheel may ask for as
+ * little as EMBODY_MIN_DIST = MIN_DIST = 0.8 m, because only below the 1.2 m
+ * entry threshold of `FirstPersonZoom` does first person begin
+ * (`smoke_first_person.mjs`); the third-person lens itself never comes closer
+ * than THIRD_PERSON_MIN_DIST = 2 m (`Engine.frame`: orbitDist =
+ * max(dist, THIRD_PERSON_MIN_DIST) while following — 0.8 m from the eyes is
+ * inside the head). The near end of the pitch curve flattens to
+ * EMBODY_NEAR_PITCH_DEG = 8°, so
  *
  *     pitch(2, 8)  = 8 + 54·sqrt(1.2/149.2) = 8 + 54·0.0896822 = 12.8428°
  *     pitch(7, 8)  = 8 + 54·0.2038503                          = 19.0079°
  *     pitch(34, 8) = 8 + 54·sqrt(33.2/149.2) = 8 + 54·0.4717...= 33.4729°
  *
- * and, with aimY = 1.598 (a 1.70 m figure), the picture at the zoom floor is
+ * and, with aimY = 1.598 (a 1.70 m figure), the picture at the third-person
+ * lens floor (2 m) is
  *
  *     camY = 1.598 + 2·sin 12.8428° = 1.598 + 0.4446 = 2.0426 m
  *     head   off(1.70)  = −2.88°   (just above the centre)
@@ -170,13 +177,15 @@ check('old aim-at-feet, 3 m: head outside the half-frame',
   Math.abs(-33.86) > HALF_FRAME, true);
 
 console.log('[2] the embodied near end');
-check('EMBODY_MIN_DIST', F.EMBODY_MIN_DIST, 2.0);
+check('EMBODY_MIN_DIST (requested zoom floor) = MIN_DIST', F.EMBODY_MIN_DIST, 0.8);
+check('EMBODY_MIN_DIST below the 1.2 m first-person entry', F.EMBODY_MIN_DIST <= 1.2, true);
+check('THIRD_PERSON_MIN_DIST (lens floor)', F.THIRD_PERSON_MIN_DIST, 2.0);
 check('EMBODY_NEAR_PITCH_DEG', F.EMBODY_NEAR_PITCH_DEG, 8);
 check('pitch(2, 8)', F.basePitchDeg(2, F.EMBODY_NEAR_PITCH_DEG), 12.8428, 1e-3);
 check('pitch(7, 8)', F.basePitchDeg(7, F.EMBODY_NEAR_PITCH_DEG), 19.0079, 1e-3);
 check('pitch(34, 8)', F.basePitchDeg(34, F.EMBODY_NEAR_PITCH_DEG), 33.4729, 1e-3);
 
-const floor = shot(F, F.EMBODY_MIN_DIST, F.EMBODY_NEAR_PITCH_DEG, 1.70);
+const floor = shot(F, F.THIRD_PERSON_MIN_DIST, F.EMBODY_NEAR_PITCH_DEG, 1.70);
 check('zoom floor: camY', floor.camY, 2.0426, 1e-3);
 check('zoom floor: head off centre', floor.head, -2.88, 5e-3);
 check('zoom floor: feet off centre', floor.feet, 33.49, 5e-3);
@@ -188,7 +197,7 @@ check('zoom floor: horizon inside the half-frame',
 // The camera must not stand in the head: 2 m at 12.84° leaves 1.95 m of
 // horizontal air behind a figure whose crown is 1.70 m up, and 0.34 m above it.
 check('zoom floor: horizontal distance behind the figure',
-  F.EMBODY_MIN_DIST * Math.cos((floor.pitch * Math.PI) / 180), 1.9500, 1e-3);
+  F.THIRD_PERSON_MIN_DIST * Math.cos((floor.pitch * Math.PI) / 180), 1.9500, 1e-3);
 check('zoom floor: camera above the crown', floor.camY - 1.70, 0.3426, 1e-3);
 
 const entry = shot(F, 7, F.EMBODY_NEAR_PITCH_DEG, 1.70);
