@@ -218,7 +218,7 @@
       "group": "seat"
     },
     "exercising": {
-      "prompt": "athletic stance, arms flexed, feet shoulder-width apart, dynamic energy",
+      "prompt": "doing bodyweight squats, arms stretched forward, athletic clothes, focused",
       "synonyms": [
         "trainieren",
         "trainierend",
@@ -231,10 +231,14 @@
         "workout",
         "übungen machen",
         "sich aufwärmen",
-        "fitness"
+        "fitness",
+        "kniebeugen",
+        "kniebeugen machen",
+        "squats"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "exercising",
+      "group": "stand",
+      "solo": true
     },
     "meditating": {
       "prompt": "sitting cross-legged on the floor in meditation, upright back, hands resting palms up on the knees, eyes closed, serene expression",

@@ -1,0 +1,50 @@
+{
+ "kind": "exercising",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 145,
+ "duration_s": 4.833,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": -0.39,
+  "hips_scale": [
+   1.0
+  ],
+  "foot_plant": {
+   "LeftFoot": {
+    "frames": 145,
+    "max_cm": 0.4
+   },
+   "RightFoot": {
+    "frames": 145,
+    "max_cm": 0.4
+   }
+  },
+  "rig_floor_shift_cm": -0.4,
+  "rig_floor_min_cm": -0.0,
+  "root_motion": {
+   "mode": "strip",
+   "travel_m": [
+    0.0,
+    0.0
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     4.8
+    ]
+   ],
+   "max_drift_cm": 0.0
+  }
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/exercising.py",
+  "spec_sha": "deb2bd42a6125974788a8872e2c5c2f30d7ccd69997a5c1a1f3370a76014a0ff"
+ }
+}
