@@ -122,6 +122,11 @@ class Catalog:
     #: Synonyms of THIS pose that today belong to another pose and are moved
     #: here deliberately on publish (e.g. "umarmen" from "comforting").
     take_over: Sequence[str] = ()
+    #: ``key`` is an EXISTING pose that this clip replaces: publish re-points
+    #: it (prompt, animation, group new; its synonyms and other fields such
+    #: as ``label_de`` kept, the new synonyms added) instead of refusing the
+    #: taken key.
+    repoint: bool = False
 
 
 @dataclass

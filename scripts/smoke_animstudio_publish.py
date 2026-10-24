@@ -54,6 +54,14 @@ By hand:
     nothing written.
 [11] repo = a directory the library does not lie in (commit=True) ->
     StudioError before anything is written (not a ValueError traceback).
+[12] Catalog(repoint=True): kind "demo-sit", key "sitting" (an existing
+    pose, group seat), synonyms ("hinhocken", "sitzen"): the shipped entry
+    keeps every field it had except prompt/animation (now "demo-sit",
+    prompt 'Bowing politely'), its synonyms come first unchanged and only
+    "hinhocken" is appended ("sitzen" is already its own); the result names
+    repointed_from = the shipped animation ("sit") and old_clip_users = the
+    other shipped poses that still play "sit" (sorted). Repoint of a key
+    that does not exist ("no-such-pose") -> StudioError, nothing written.
 """
 import json
 import os
@@ -91,14 +99,14 @@ def git(*args, cwd=REPO):
                           text=True).stdout
 
 
-def fake_build(kind, key, synonyms, group="stand"):
+def fake_build(kind, key, synonyms, group="stand", repoint=False):
     src = animstudio.ANIMS / f"{kind}.py"
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_text(
         "from animstudio.dsl import Animation, Catalog\n"
         f"ANIM = Animation(kind={kind!r}, duration_s=1.0, loop=False,\n"
         f"    catalog=Catalog(key={key!r}, group={group!r}, prompt='Bowing politely',\n"
-        f"                    synonyms={tuple(synonyms)!r}))\n")
+        f"                    synonyms={tuple(synonyms)!r}, repoint={repoint!r}))\n")
     out = animstudio.OUT / kind
     out.mkdir(parents=True, exist_ok=True)
     (out / f"{kind}.fbx").write_bytes(b"FBX-" + kind.encode())
@@ -328,6 +336,29 @@ try:
     if (REPO / CAT_REL).read_bytes() != cat_before or \
             sorted(p.name for p in lib.iterdir()) != lib_before:
         FAIL.append("[11] something was written")
+    # [12]
+    shipped = json.loads((REPO / CAT_REL).read_text())["entries"]
+    old = shipped["sitting"]
+    fake_build("demo-sit", "sitting", ["hinhocken", "sitzen"], group="seat", repoint=True)
+    r12 = P.publish("demo-sit", repo=REPO, commit=False)
+    e12 = json.loads((REPO / CAT_REL).read_text())["entries"]["sitting"]
+    want = {**old, "prompt": "Bowing politely", "animation": "demo-sit", "group": "seat",
+            "solo": True, "synonyms": old["synonyms"] + ["hinhocken"]}
+    if e12 != want:
+        FAIL.append(f"[12] entry {e12} != {want}")
+    users = sorted(k for k, v in shipped.items() if v.get("animation") == old["animation"]
+                   and k != "sitting")
+    if r12.get("repointed_from") != old["animation"] or r12.get("old_clip_users") != users:
+        FAIL.append(f"[12] result {r12.get('repointed_from')} {r12.get('old_clip_users')}")
+    fake_build("demo-none", "no-such-pose", [], repoint=True)
+    cat12 = (REPO / CAT_REL).read_bytes()
+    try:
+        P.publish("demo-none", repo=REPO, commit=False)
+        FAIL.append("[12] repoint of a missing key accepted")
+    except StudioError:
+        pass
+    if (REPO / CAT_REL).read_bytes() != cat12 or (lib / "demo-none.fbx").exists():
+        FAIL.append("[12] something was written for the missing key")
 except Exception as e:                                                # noqa: BLE001
     import traceback
     traceback.print_exc()

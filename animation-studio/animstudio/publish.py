@@ -41,6 +41,26 @@ def catalog_entry(anim) -> Dict:
     return entry
 
 
+def repointed_entry(anim, existing: Dict) -> Dict:
+    """``Catalog(repoint=True)``: the existing entry of the key with this
+    clip's prompt/animation/group (and pair fields), every field it carried
+    otherwise kept, its synonyms first and the new ones appended."""
+    new = catalog_entry(anim)
+    merged = json.loads(json.dumps(existing))
+    if new["solo"]:
+        merged.pop("places", None)
+        merged.pop("yaw_offset", None)
+    syn = list(merged.get("synonyms") or [])
+    merged.update({k: v for k, v in new.items() if k != "synonyms"})
+    merged["synonyms"] = syn + [s for s in new["synonyms"] if s not in syn]
+    return merged
+
+
+def clip_users(entries: Dict, kind: str) -> List[str]:
+    """The pose keys whose entry plays clip ``kind``."""
+    return sorted(k for k, e in entries.items() if (e or {}).get("animation") == kind)
+
+
 def clip_files(anim) -> List[str]:
     """The library files of one clip: the FBX (both halves of a pair) and
     the sidecar."""
@@ -98,8 +118,12 @@ def _check_catalog(anim, replace: bool) -> Dict[str, List[str]]:
     if stray:
         raise StudioError(f"take_over {stray} must also be synonyms of {key!r}")
     catalog = pc.get_catalog("pose")
-    if key in catalog and not (replace and catalog[key].get("animation") == anim.kind):
-        raise StudioError(f"catalog key {key!r} exists already")
+    if anim.catalog.repoint:
+        if key not in catalog:
+            raise StudioError(f"repoint: there is no pose {key!r} to re-point")
+    elif key in catalog and not (replace and catalog[key].get("animation") == anim.kind):
+        raise StudioError(f"catalog key {key!r} exists already "
+                          "(Catalog(repoint=True) re-points an existing pose to this clip)")
     moves: Dict[str, List[str]] = {}
     for alias in [key] + entry["synonyms"]:
         for other, e in catalog.items():
@@ -184,6 +208,7 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
     backups: Dict[Path, bytes] = {}
     key = anim.catalog.key.strip().lower()
     entry = catalog_entry(anim)
+    old_clip = ""
     cat_undo = None               # (before, written, old entries) once we wrote
     moves: Dict[str, List[str]] = {}
     try:
@@ -209,6 +234,11 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
             entries = doc.setdefault("entries", {})
             olds = {k: (json.loads(json.dumps(entries[k])) if k in entries else None)
                     for k in [key, *moves]}
+            if anim.catalog.repoint:
+                if key not in entries:
+                    raise StudioError(f"repoint: pose {key!r} is not in the shared catalog")
+                old_clip = str(entries[key].get("animation") or "")
+                entry = repointed_entry(anim, entries[key])
             entries[key] = entry
             for owner, gone in moves.items():
                 if owner in entries:
@@ -237,10 +267,17 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
         raise
     files = [str(p) for p in written]
     result = {"kind": kind, "key": key, "files": files, "commit": "", "commit_created": False,
-              "warning": "", "note": WORLD_NOTE.format(key=key), "moved": moves}
+              "warning": "", "note": WORLD_NOTE.format(key=key), "moved": moves,
+              "repointed_from": old_clip if old_clip != kind else "",
+              # the replaced clip's remaining users (empty: no pose plays it now)
+              "old_clip_users": (clip_users(pc.get_catalog("pose"), old_clip)
+                                 if old_clip and old_clip != kind else [])}
     if commit:
         from animstudio.gitops import commit_with_entry
-        msg = f"feat(clips): {kind} — procedural clip + pose '{key}' (animation-studio)"
+        msg = (f"feat(clips): {kind} — procedural clip + pose '{key}' (animation-studio)"
+               if not result["repointed_from"] else
+               f"feat(clips): {kind} — procedural clip, pose '{key}' re-pointed from "
+               f"'{result['repointed_from']}' (animation-studio)")
         if trailer:
             msg += "\n\n" + trailer
         res = commit_with_entry(repo, commit_paths[0], key, entry, commit_paths[1:], msg,

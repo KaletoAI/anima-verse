@@ -92,6 +92,11 @@ def main(argv=None) -> int:
             print(f"published {r['kind']} as pose '{r['key']}'{tail}")
             for owner, gone in r.get("moved", {}).items():
                 print(f"moved from '{owner}': {', '.join(gone)}")
+            if r.get("repointed_from"):
+                users = r.get("old_clip_users") or []
+                print(f"re-pointed from clip '{r['repointed_from']}'"
+                      + (f" (still played by: {', '.join(users)})" if users
+                         else " - no pose plays it any more"))
             print(f"note: {r['note']}")
             if r["warning"]:
                 print(f"warning: {r['warning']}", file=sys.stderr)
