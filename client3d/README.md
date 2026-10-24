@@ -87,11 +87,11 @@ steht in [`dev-proxy-rule.js`](dev-proxy-rule.js) — die gemeinsame Regel aus
 `packages/dev-proxy-rule/`, hier an die Seiten dieses Clients gebunden:
 
 ```
-/@…  /__…  /src/…  /node_modules/…  index.html  figure-test.html  floorplan.html  public/
+/@…  /__…  /src/…  /node_modules/…  index.html  figure-test.html  floorplan.html  hud.html  public/
 ```
 
-Die drei HTML-Einstiege beantwortet Vite auch ohne Endung (`/floorplan`,
-`/figure-test`), `index.html` zusätzlich unter `/`; `public/` ist vor allem
+Die vier HTML-Einstiege beantwortet Vite auch ohne Endung (`/floorplan`,
+`/figure-test`, `/hud`), `index.html` zusätzlich unter `/`; `public/` ist vor allem
 `/models/…` (Manifest und Test-Meshes). Alles andere geht ans Backend — auch
 `/play/…`, `/static/…` und `/game-admin`, denn eine Player- oder Admin-Seite
 hat dieser Client nicht. (`scripts/smoke_vite_proxy.py` prüft die Regel gegen
@@ -100,12 +100,13 @@ hält README und Config zusammen.)
 
 ## Seiten
 
-Drei HTML-Einstiege, alle drei im Build (`rollupOptions.input`):
+Vier HTML-Einstiege, alle vier im Build (`rollupOptions.input`):
 
 | Seite | Einstieg | Wofür |
 |---|---|---|
 | `index.html` | `src/main.ts` | die Weltkarte — die eigentliche Anwendung |
 | `floorplan.html` | `src/floorplan.ts` | EINE Location isoliert, Innenansicht aufgedeckt, gepollt: `?location=<id-oder-name>[&verify=1]`. Gedacht als iframe neben dem Grundriss-Editor des Game-Admin; rendert ausschließlich aus dem Szenen-Rezept (§ B1), zeigt also dasselbe Bild wie die Admin-Vorschau über `/play/scene-preview` (§ B3) |
+| `hud.html` | `src/hudPage.tsx` | das HUD allein auf transparentem Grund — die Seite, die ein nativer Host lädt. Spricht mit der Szene nur über das Bridge-Protokoll (`src/hud/bridge.ts`, `postMessage`); `index.html?hud=iframe` legt es als iframe über den Browser-Client und prüft so die Grenze. Ohne Sitzung zeigt es selbst die Anmeldung |
 | `figure-test.html` | `src/figureTest.ts` | eine Figur isoliert, groß und neutral beleuchtet: `?model=<charakter>&clip=<kind>`, dazu `&diag=1` für die numerische Ausgabe (steht die Figur aufrecht: SpineUp-Y ≈ 1) |
 
 Beide Diagnoseseiten brauchen eine bestehende Anmeldung im 3D-Client.
