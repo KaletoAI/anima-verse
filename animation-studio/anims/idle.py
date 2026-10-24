@@ -6,14 +6,16 @@ head looks about a little; a slow breath over everything.
 Replaces the CMU `idle` (same kind) for the pose `standing`; `idle` is also the
 idle role's default kind in the game (`shared/config/locomotion_clips.json`).
 The knees stay a little soft (hips median ~110 cm, like the clip it
-replaces): the bridge clips hand over into this stance — a straight-legged
-idle (hips 112.3) made the feet skid 1.4 cm in the first frame after
-get-up-chair (client3d/scripts/smoke_bridge_root.mjs [B14]).
+replaces) and the thighs unturned: the bridge clips hand over into this
+stance. Largest foot step in the first frame after get-up-chair on the
+reference rig (client3d/scripts/smoke_bridge_root.mjs [B14]): straight legs
+(hips 112.3) 1.61 cm, toes out by hip_rot 6 1.61 cm, this stance 1.25 cm,
+the CMU idle it replaces 1.69 cm.
 """
 from animstudio.dsl import Animation, Breath, Catalog, FeetPlanted, Key, Oscillator, Pose
 from animstudio.rig import RELAXED
 
-STAND = Pose(**RELAXED) | Pose(l_hip_abduct=5, r_hip_abduct=5, l_hip_rot=6, r_hip_rot=6,
+STAND = Pose(**RELAXED) | Pose(l_hip_abduct=5, r_hip_abduct=5,
                                hips_drop_cm=2.0, l_arm_twist=10, r_arm_twist=10,
                                # the planted feet keep their frame-0 rotation: the
                                # ankle cancels the soft knee (7) so the soles lie flat

@@ -9,21 +9,21 @@
  "loop": true,
  "speed": 1.0,
  "geometry": {
-  "floor_shift_cm": -0.13,
+  "floor_shift_cm": -0.02,
   "hips_scale": [
    1.0
   ],
   "foot_plant": {
    "LeftFoot": {
     "frames": 301,
-    "max_cm": 0.14
+    "max_cm": 0.03
    },
    "RightFoot": {
     "frames": 301,
-    "max_cm": 0.14
+    "max_cm": 0.03
    }
   },
-  "rig_floor_shift_cm": -0.14,
+  "rig_floor_shift_cm": -0.03,
   "rig_floor_min_cm": -0.0,
   "root_motion": {
    "mode": "strip",
@@ -45,6 +45,6 @@
   "format": "procedural",
   "author": "animation-studio",
   "spec": "animation-studio/anims/idle.py",
-  "spec_sha": "2b678625f2116186b13e5a3e8d6b9bcc0e21492d739bfdd19ce06b25feecbf80"
+  "spec_sha": "3e6776efca829450010ac656959192e1cf3045bcc55524081183b9a8d5bdd41f"
  }
 }
