@@ -780,7 +780,7 @@
       "solo": true
     },
     "freshening_up": {
-      "prompt": "standing upright, leaning slightly toward a mirror, hands engaged in grooming or washing",
+      "prompt": "standing in front of a mirror freshening up, fixing the hair, checking the face",
       "synonyms": [
         "sich frisch machen",
         "freshening up",
@@ -788,10 +788,15 @@
         "sich zurechtmachen",
         "sich schminken",
         "haare richten",
-        "sich kämmen"
+        "sich kämmen",
+        "sich herrichten",
+        "vor dem spiegel",
+        "fixing one's hair",
+        "checking the mirror"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "freshening-up",
+      "group": "stand",
+      "solo": true
     },
     "lying": {
       "prompt": "lying flat with limbs sprawled loosely, arms resting at the sides, head tilted back",
