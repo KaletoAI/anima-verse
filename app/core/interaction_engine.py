@@ -7,10 +7,10 @@ make sense played at ONE anchor, in lockstep. This module owns that state:
     profile["interaction"] = {
         "id": "…",                    # shared by both participants
         "invite_id": "…",             # optional question that consented to this pair
-        "kind": "handshake",          # the pair clip kind
+        "kind": "greeting-handshake", # the pair clip kind
         "role": "a" | "b",            # which half this character plays
         "partner": "<character>",
-        "pose_key": "shaking hands",  # the catalog key that named the clip
+        "pose_key": "greeting handshake",  # the catalog key that named the clip
         "anchor": {"x": 12.3, "z": -4.5, "yaw": 1.57,    # world metres / rad
                    "place_id": "sofa/s"},                # the PLACE it sits on, or None
         "started_at_game": "Y0002-D109T14:23:45",        # canonical GAME stamp
