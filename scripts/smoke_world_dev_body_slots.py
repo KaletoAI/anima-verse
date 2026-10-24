@@ -14,6 +14,7 @@ A FAKE species package is registered (no dependency on the private packs):
                    length select [short, long]
                    lora   lora_select
       eyes         color  select [blue, green]
+                   shape  select [round, almond], llm_generable: false
       facial_hair  applies_to gender=male; style select [short beard]
       chest        applies_to gender=male; no attributes
 
@@ -43,15 +44,15 @@ WHAT IS CHECKED, and where every expected value comes from
   (b) THE APPLY of a new female ``human-roleplay`` character with
 
           hair        {color: copper-red, length: medium, lora: x.safetensors}
-          eyes        {color: amber}
+          eyes        {color: amber, shape: almond}
           facial_hair {style: short beard}
           tail        {length: long}
 
       by hand: copper-red is custom but allowed → stored; medium is not in
       [short, long] and length has no allow_custom → skipped; lora is not
-      offered → skipped; amber is not in [blue, green] → skipped (eyes stores
-      nothing); facial_hair applies only to gender=male → skipped; tail is no
-      slot → skipped. Stored: {"hair": {"color": "copper-red"}}, 5 warnings.
+      offered → skipped; amber is not in [blue, green] → skipped; shape is
+      llm_generable: false → skipped (eyes stores nothing); facial_hair applies only to gender=male → skipped; tail is no
+      slot → skipped. Stored: {"hair": {"color": "copper-red"}}, 6 warnings.
 
   (c) THE PROFILE PATCH with {age: 30, body_slots: {hair: {length: long}}}:
       the slot merges per attribute → {"hair": {"color": "copper-red",
@@ -108,6 +109,8 @@ registry.register_package(Package(
         }),
         BodySlotSpec(id="eyes", package_id="smoke_species", attributes={
             "color": {"type": "select", "options": ["blue", "green"]},
+            "shape": {"type": "select", "options": ["round", "almond"],
+                      "llm_generable": False},
         }),
         BodySlotSpec(id="facial_hair", package_id="smoke_species",
                      applies_to={"gender": ["male"]}, attributes={
@@ -142,14 +145,14 @@ result = _apply_character_internal({
     "character_name": NAME, "template": "human-roleplay", "gender": "female",
     "body_slots": {
         "hair": {"color": "copper-red", "length": "medium", "lora": "x.safetensors"},
-        "eyes": {"color": "amber"},
+        "eyes": {"color": "amber", "shape": "almond"},
         "facial_hair": {"style": "short beard"},
         "tail": {"length": "long"},
     },
 }, created_by="smoke")
 check("(b) stored slots", get_character_profile(NAME).get("body_slots"),
       {"hair": {"color": "copper-red"}})
-check("(b) warning count", len(result["warnings"]), 5)
+check("(b) warning count", len(result["warnings"]), 6)
 
 # (c) profile patch
 patch = _apply_profile_patch_data_sync({"character_name": NAME, "fields": {

@@ -137,11 +137,13 @@ def template_slot_specs(template_name: str) -> List[Any]:
 def llm_fillable_attributes(spec) -> Dict[str, Dict[str, Any]]:
     """The attributes of a slot an LLM may propose values for: everything but
     ``lora_select`` (LoRA names come from the backend library, not from a
-    model's imagination) and the ``mesh_part`` switch (it schedules a mesh
-    regeneration — a deliberate user action)."""
+    model's imagination), the ``mesh_part`` switch (it schedules a mesh
+    regeneration — a deliberate user action) and what the manifest marks
+    ``llm_generable: false`` (left to the user in the editor)."""
     switch = spec.mesh_part.switch if spec.mesh_part else None
     return {key: decl for key, decl in spec.attributes.items()
-            if key != switch and str(decl.get("type", "select")) != "lora_select"}
+            if key != switch and str(decl.get("type", "select")) != "lora_select"
+            and decl.get("llm_generable", True) is not False}
 
 
 # ---------------------------------------------------------------------------
