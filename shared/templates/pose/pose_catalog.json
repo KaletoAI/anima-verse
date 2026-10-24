@@ -725,7 +725,7 @@
       "group": "lie"
     },
     "washing_dishes": {
-      "prompt": "standing at sink, legs slightly apart, arms extended forward with elbows bent, hands scrubbing under running water",
+      "prompt": "standing at the kitchen sink washing dishes, one hand holding a wet plate, the other scrubbing it with a sponge, sleeves rolled up",
       "synonyms": [
         "abwaschen",
         "washing knives in the kitchen sink",
@@ -734,9 +734,13 @@
         "spült das geschirr",
         "das geschirr abwaschen",
         "am spülbecken stehen",
-        "abwasch machen"
+        "abwasch machen",
+        "teller spülen",
+        "abspülen",
+        "washing dishes",
+        "doing the dishes"
       ],
-      "animation": "standing washing",
+      "animation": "washing-dishes",
       "group": "stand",
       "solo": true
     },
