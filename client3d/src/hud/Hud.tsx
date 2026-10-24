@@ -31,7 +31,7 @@ import {
   SYNC_ENDPOINTS, apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
   ScenePanel, SelfPanel, OthersPanel, PartyStrip,
   BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
-  GalleryPanel, InstagramPanel,
+  GalleryPanel, InstagramPanel, NoticeBanner, useOpenTopics,
   PlayerPhotoDialog, SCENE_ROW_ID_ATTR,
   type SceneData, type SceneLine, type IconName,
 } from '@anima/player-ui';
@@ -179,6 +179,7 @@ export function Hud({ avatar, username, role }: {
     belongings: false, mind: false, phone: false, news: false, tasks: false,
     quests: false, gallery: false, instagram: false,
   });
+  const unread = useOpenTopics(open.instagram);
   /** `open.chat` for callbacks that must not re-subscribe on every toggle. */
   const chatOpen = useRef(open.chat);
   chatOpen.current = open.chat;
@@ -253,7 +254,7 @@ export function Hud({ avatar, username, role }: {
   useEffect(() => {
     const selector = '.hud-rail, .hud-dock, .hud-panel, .hud-mode, .hud-party, '
       + '.hud-travel, .hud-talk, .hud-elevator, .hud-plaque, .hud-minimap, .ga-toast, '
-      + '.hud-top, .hud-hints, .info-panel, .open-view-badge';
+      + '.hud-top, .hud-hints, .info-panel, .open-view-badge, .hud-notices';
     let frame = 0;
     const observed = new Set<Element>();
     const measure = () => {
@@ -1033,6 +1034,7 @@ export function Hud({ avatar, username, role }: {
           <button className="hud-logout" onClick={() => gameActions.backToTitle?.()}>{t('Log out')}</button>
         </div>
       </div>
+      <div className="hud-notices"><NoticeBanner /></div>
       <div className="hud-hints">{game.mode === 'embodied'
         ? t('🖱 Drag: turn/tilt the view · Click on the ground: walk there · Wheel: zoom · WASD: move · Q/E: 45° turn · Esc: hand back control')
         : t('🖱 Drag: pan · Middle or Shift+drag: turn/tilt · Wheel: zoom (closest = figures) · Q/E: 45° turn · Click: open place')}</div>
@@ -1081,6 +1083,9 @@ export function Hud({ avatar, username, role }: {
             onClick={() => toggle(p.id)} aria-pressed={open[p.id]}
             title={t(p.title)} aria-label={t(p.title)}>
             <Icon name={p.icon} size={20} />
+            {(p.id === 'phone' || p.id === 'instagram') && unread[p.id] > 0 && (
+              <span className="hud-unread-badge">{unread[p.id]}</span>
+            )}
           </button>
         ))}
       </nav>

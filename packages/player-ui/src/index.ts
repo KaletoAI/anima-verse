@@ -37,3 +37,6 @@ export { PlayerPhotoDialog } from './PlayerPhotoDialog';
 export * from './pollCore';
 export * from './syncHub';
 export * from './syncEndpoints';
+
+export * from './NoticeBanner';
+export * from './openTopics';

@@ -1430,3 +1430,35 @@
 }
 #hud .hud-travel button:disabled { opacity: 0.5; cursor: default; }
 #hud .hud-minimap canvas { pointer-events: auto; cursor: pointer; }
+
+/* Notices clear the status line, mode chip and party strip above them.
+   The banner overflows its zero-height root; hitRects measures its children. */
+#hud .hud-notices {
+  position: absolute;
+  top: 130px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, 70vw);
+}
+
+/* Match the 2D launcher's unread badge without importing its layout rules. */
+#hud .hud-rail button { position: relative; }
+#hud .hud-unread-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: #e0443e;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 1.5px var(--bg, #0d1117);
+  pointer-events: none;
+}

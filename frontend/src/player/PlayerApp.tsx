@@ -27,7 +27,7 @@ import { TaskPanel } from './TaskPanel'
 import { NewsPanel } from './NewsPanel'
 // New in stage 6 and package-only from the start — no re-export stub needed,
 // the panel never lived in frontend/.
-import { SYNC_ENDPOINTS, QuestsPanel } from '@anima/player-ui'
+import { SYNC_ENDPOINTS, QuestsPanel, NoticeBanner, useOpenTopics } from '@anima/player-ui'
 import { LayoutsPanel } from './LayoutsPanel'
 import { SelfPanel } from './SelfPanel'
 import { OthersPanel } from './OthersPanel'
@@ -37,7 +37,6 @@ import { AvatarSettingsPanel } from './AvatarSettingsPanel'
 import { GalleryPanel } from './GalleryPanel'
 import { InstagramPanel } from './InstagramPanel'
 import { PhonePanel } from './PhonePanel'
-import { NoticeBanner } from './NoticeBanner'
 import { GameClock } from '../components/GameClock'
 import { Icon, type IconName } from './icons'
 import { LightboxProvider } from './Lightbox'
@@ -77,14 +76,12 @@ export function PlayerApp() {
   const [frozenWidth, setFrozenWidth] = useState(0)              // reference width at the moment of freezing
   const [width, setWidth] = useState(1200)
   // "Open topics" badges: unread phone messages + new IG posts.
-  const [phoneUnread, setPhoneUnread] = useState(0)
-  const [igNew, setIgNew] = useState(0)
+  const { phone: phoneUnread, instagram: igNew } = useOpenTopics(open.includes('instagram'))
   const [expanded, setExpanded] = useState<string | null>(null)  // panel enlarged in the view-only overlay
   const [expandSeq, setExpandSeq] = useState(0)  // forces a fresh remount of the overlay content on every open (zoom reset)
   const openExpanded = useCallback((id: string) => { setExpanded(id); setExpandSeq((s) => s + 1) }, [])
   const [bgPanel, setBgPanel] = useState<string>('')             // panel id serving as the full-screen background ('' = none)
   const [mapLabelMode, setMapLabelMode] = useState<LabelMode>(loadLabelMode)  // Map labels: all/none
-  const igSeenRef = useRef<string | null>(null)  // id of the last IG post seen
   const rootRef = useRef<HTMLDivElement | null>(null)
   const layoutLoaded = useRef(false)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -173,33 +170,6 @@ export function PlayerApp() {
     setOpen(next)
     if (layoutLoaded.current) persist()
   }, [persist])
-  // Badges: remember the seen IG id once, then poll slowly (open topics).
-  useEffect(() => {
-    try { igSeenRef.current = localStorage.getItem('play.ig.seen') } catch { /* ignore */ }
-  }, [])
-
-  // Fetch payloads only; usePoll validates their generation before applying them.
-  const fetchBadges = useCallback(async () => {
-    const messages = await apiGet<{ conversations?: Array<{ unread?: number }> }>('/play/messages').catch(() => null)
-    const feed = await apiGet<{ posts?: Array<{ id: string }> }>('/instagram/feed?limit=50').catch(() => null)
-    return { messages, feed }
-  }, [])
-  const { data: badges, refresh: refreshBadges } = usePoll('play-badges', fetchBadges, SYNC_ENDPOINTS.badges)
-  useEffect(() => {
-    if (!badges) return
-    if (badges.messages) setPhoneUnread((badges.messages.conversations || []).reduce((s, c) => s + (c.unread || 0), 0))
-    if (!badges.feed) return
-    const posts = badges.feed.posts || []
-    const newest = posts[0]?.id || null
-    if (openRef.current.includes('instagram') || !igSeenRef.current) {
-      igSeenRef.current = newest
-      if (newest) { try { localStorage.setItem('play.ig.seen', newest) } catch { /* ignore */ } }
-      setIgNew(0)
-    } else {
-      const idx = posts.findIndex(p => p.id === igSeenRef.current)
-      setIgNew(idx < 0 ? Math.min(posts.length, 99) : idx)
-    }
-  }, [badges])
   const togglePanel = useCallback((id: string) => {
     const isOpen = openRef.current.includes(id)
     setOpenAnd(isOpen
@@ -207,9 +177,7 @@ export function PlayerApp() {
       : [...openRef.current, id])
     // Re-activating brings the panel to the front (last in the z-stack).
     if (!isOpen) setOrder((o) => (o[o.length - 1] === id ? o : [...o.filter((x) => x !== id), id]))
-    // Opening IG marks it seen at once (badge gone) and refreshes the count.
-    if (!isOpen && id === 'instagram') { setIgNew(0); refreshBadges() }
-  }, [setOpenAnd, refreshBadges])
+  }, [setOpenAnd])
   const closePanel = useCallback((id: string) => {
     setOpenAnd(openRef.current.filter((x) => x !== id))
   }, [setOpenAnd])

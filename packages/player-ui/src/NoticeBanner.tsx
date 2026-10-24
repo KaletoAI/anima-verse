@@ -5,10 +5,10 @@
  * A notification is marked read with a click (POST /notifications/{id}/read);
  * "Mark all as read" clears them in one go (POST /notifications/read-all).
  */
-import { SYNC_ENDPOINTS } from '@anima/player-ui'
+import { SYNC_ENDPOINTS } from './syncEndpoints'
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
-import { useI18n } from '../i18n/I18nProvider'
-import { apiGet, apiPost } from '../lib/api'
+import { useI18n } from './I18nProvider'
+import { apiGet, apiPost } from './api'
 import { usePoll } from './usePolling'
 
 interface NoticeEvent { id: string; category: string; text: string }
@@ -86,7 +86,7 @@ export function NoticeBanner() {
       display: 'flex', flexDirection: 'column', alignItems: 'center',
       gap: 6, paddingTop: 6, pointerEvents: 'none',
     }}>
-      {/* Force-Regel als zentrierter, schlanker Separator. */}
+      {/* Force rule as a slim, centred separator. */}
       {n.force_warning && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 10, width: 'min(560px, 70vw)', maxWidth: '100%',
