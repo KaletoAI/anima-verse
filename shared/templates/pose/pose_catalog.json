@@ -765,16 +765,19 @@
       "group": "stand"
     },
     "recovering": {
-      "prompt": "slumped in a chair with a relaxed posture, arms resting loosely on the knees, legs gently crossed",
+      "prompt": "sitting slumped back, exhausted, catching breath, hands resting on the thighs, flushed face",
       "synonyms": [
         "erholen",
         "ausruhen",
         "ruht sich aus",
         "sich erholen",
         "verschnaufen",
-        "erschöpft sitzen"
+        "erschöpft sitzen",
+        "nach luft schnappen",
+        "durchschnaufen",
+        "catching breath"
       ],
-      "animation": "sitting-in-chair",
+      "animation": "recovering",
       "group": "seat",
       "solo": true
     },
