@@ -416,6 +416,24 @@ def speech_turn_note(tools: Dict[str, Any], is_thought: bool) -> str:
         f"the room, never for the conversation partner.\n")
 
 
+def tool_state_note(agent_name: str, tools: Dict[str, Any],
+                    indent: str = "   ") -> str:
+    """Which package-declared states are running right now ('' when no
+    offered verb ends one) — for the tool-decision prompt. The lines come
+    from the flag-lifecycle executor, which knows no flag by name."""
+    try:
+        from app.core.flag_lifecycle import decision_state_lines
+        lines = decision_state_lines(agent_name, list(tools or {}))
+    except Exception as exc:  # noqa: BLE001 — the prompt works without it
+        logger.debug("tool state note failed for %s: %s", agent_name, exc)
+        return ""
+    if not lines:
+        return ""
+    body = "".join(f"{indent}{line}\n" for line in lines)
+    return (f"{indent}CURRENT STATES (as the server has them right now — they decide "
+            f"which of these tools can still do anything):\n{body}")
+
+
 def tool_decision_guardrails(tools: Dict[str, Any],
                              *, with_markers: bool = True) -> str:
     """Anti-hallucination rules for the tool-decision prompt (A3.2b/F2).
@@ -1177,6 +1195,7 @@ class StreamingAgent:
                 f"Available action → tool mapping (these are the ONLY tools this character has — "
                 f"never call anything that is not listed):\n"
                 f"{_action_lines}\n"
+                f"{tool_state_note(self.agent_name, _tools)}"
                 f"{_guardrails}\n"
                 f"Call every tool that genuinely applies; multiple tools are fine. "
                 f"But pure talk, a feeling, or a trivial gesture is NOT an action — do not call a tool for it. "
@@ -1265,6 +1284,7 @@ class StreamingAgent:
             f"\"heads to the kitchen\"). This list is the character's COMPLETE tool inventory — "
             f"never call a tool that is not on it:\n"
             f"{_action_lines}\n"
+            f"{tool_state_note(self.agent_name, _tools)}"
             f"{_speech_note}"
             f"   For a REAL action listed above, narrative description IS the signal — do not skip the "
             f"tool just because it was only described. Call every tool that genuinely applies; "

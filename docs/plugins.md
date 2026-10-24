@@ -927,6 +927,14 @@ gesetzte Flags die `prompt_when_set`-Zeile in den Situationskontext des Charakte
 LLM-Tool-Call. Ein `ttl_minutes`-Feld im `config_schema` des Pakets
 (`skills.<paket>.ttl_minutes`) überschreibt den Manifest-Default zur Laufzeit.
 
+Auch der Prompt der **Tool-Entscheidung** (rp_first-Chat und Thought-Zug) bekommt
+den Zustand: `flag_lifecycle.decision_state_lines` schreibt für jedes Flag, dessen
+`cleared_by`-Verb angeboten wird, eine Zeile unter `CURRENT STATES` — gesetzt
+(„IS active … call it only when the text shows that state ending“) wie ungesetzt
+(„NOT active — nothing to end“). Ohne diese Zeile beendete das Tool-LLM Zustände,
+die nie begonnen hatten. Ein Flag ohne `cleared_by` oder mit nicht angebotenem
+Verb erscheint dort nicht.
+
 ## Skill-Klasse
 
 ```python

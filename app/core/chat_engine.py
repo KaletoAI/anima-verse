@@ -216,7 +216,8 @@ def _rp_tool_decision_input(user_input: str, rp_response: str,
     """
     from app.core.streaming import (action_mapping_lines, decision_tools,
                                     intent_marker_help, pose_keep_rule,
-                                    speech_turn_note, tool_decision_guardrails)
+                                    speech_turn_note, tool_decision_guardrails,
+                                    tool_state_note)
     tools_dict = decision_tools(tools_dict, suppress_in_person=in_person)
     try:
         from app.routes.chat import _marker_travel_refusal
@@ -266,6 +267,7 @@ def _rp_tool_decision_input(user_input: str, rp_response: str,
         f"\"let's go to the forest edge\"). This list is the character's COMPLETE tool "
         f"inventory — never call a tool that is not on it:\n"
         f"{action_mapping_lines(tools_dict)}\n"
+        f"{tool_state_note(agent_name, tools_dict, indent='  ')}"
         f"{speech_turn_note(tools_dict, False)}"
         f"Call every tool that applies; multiple are fine. Do NOT skip a tool because "
         f"the action was \"only described\" narratively — that IS the signal.\n"

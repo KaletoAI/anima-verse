@@ -85,6 +85,54 @@ def situation_lines(character_name: str) -> List[str]:
     return lines
 
 
+def decision_state_lines(character_name: str, tool_names) -> List[str]:
+    """State lines for the TOOL DECISION prompt — set AND unset flags.
+
+    ``situation_lines`` speaks to the character and only names set flags.
+    The tool LLM that turns the character's prose into calls saw neither
+    (0 of 3005 logged decisions, 2026-10-24), so it could not tell whether a
+    state is running: it ended states that were never started (and an end
+    verb may carry side effects of its own) and started them where the prose
+    did not call for it. Here every flag whose clearing verb is among the
+    offered tools gets one line either way. A flag whose verb is not on offer
+    stays out — the decision prompt names no tool the character lacks.
+    """
+    specs = [s for s in _specs() if s.cleared_by]
+    offered = set(tool_names or ())
+    if not specs or not character_name or not offered:
+        return []
+    try:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    except Exception:
+        return []
+    lines: List[str] = []
+    for spec in specs:
+        clear_tool = _clear_tool_name(spec)
+        if clear_tool not in offered:
+            continue
+        if bool(profile.get(spec.flag)):
+            cue = ""
+            if spec.prompt_when_set:
+                try:
+                    cue = spec.prompt_when_set.format(
+                        name=character_name, clear_tool=clear_tool)
+                except (KeyError, IndexError):
+                    cue = spec.prompt_when_set
+                cue = f' (the character\'s own cue: "{cue}")'
+            lines.append(
+                f"- {clear_tool}: the state it ends IS active for "
+                f"{character_name} right now{cue}. Call {clear_tool} only when "
+                f"the text shows that state ending. The tool that starts this "
+                f"state would change nothing — it is already running.")
+        else:
+            lines.append(
+                f"- {clear_tool}: the state it ends is NOT active for "
+                f"{character_name} — there is nothing to end, never call "
+                f"{clear_tool} this turn.")
+    return lines
+
+
 def _clear_via_verb(spec, character_name: str, reason: str) -> None:
     """End a flag by invoking the declaring package's clear verb — same
     code path and side effects as an LLM tool call."""
