@@ -101,18 +101,25 @@ def run_checks(anim: Animation, compiled: Compiled, measure: Dict,
                      "0", "; ".join(compiled.loop_problems)))
     low = min(p[1] for f in frames for p in f.values())
     out.append(Check("floor", low >= FLOOR_CM, round(low, 2), f">= {FLOOR_CM} cm"))
+    # An in-place gait: the floor runs back (-Z) at treadmill_mps, so a ball
+    # that stays on it moves back by that much per second.
+    belt = anim.treadmill_mps * 100.0 / FPS
     worst = 0.0
     for S in ("Left", "Right"):
         run_start = None
-        for f in frames:
+        for i, f in enumerate(frames):
             ball = f[f"{S}ToeBase"]
             if ball[1] <= CONTACT_CM:
                 if run_start is None:
-                    run_start = ball
-                worst = max(worst, math.hypot(ball[0] - run_start[0], ball[2] - run_start[2]))
+                    run_start = (i, ball)
+                i0, b0 = run_start
+                worst = max(worst, math.hypot(ball[0] - b0[0],
+                                              ball[2] - (b0[2] - belt * (i - i0))))
             else:
                 run_start = None
-    out.append(Check("foot_slide", worst <= SLIDE_CM, round(worst, 2), f"<= {SLIDE_CM} cm"))
+    out.append(Check("foot_slide", worst <= SLIDE_CM, round(worst, 2), f"<= {SLIDE_CM} cm",
+                     f"against a floor running back at {anim.treadmill_mps:g} m/s"
+                     if anim.treadmill_mps else ""))
     group = anim.catalog.group
     if group == "stand":
         gap = max(min(f["LeftToeBase"][1], f["RightToeBase"][1],

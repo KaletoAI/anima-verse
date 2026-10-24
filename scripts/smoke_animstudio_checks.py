@@ -29,6 +29,13 @@ one check trips; the expectation is written next to it:
 - sidecar fps 120                                     -> sidecar fails
   (and duration 0.333 != round(10/120, 3) = 0.083 — one check, one fail)
 - sidecar duration_s 1.0 (10/30 = 0.333)              -> sidecar fails
+- a gait in place, treadmill_mps 1.25: both balls in contact move back
+  1.25 * 100 / 30 = 4.1667 cm per frame for 10 frames -> ok (they stay on
+  the moving floor); the same frames with treadmill 0 -> foot_slide fails
+  (9 * 4.1667 = 37.5 cm); with treadmill 1.25 but the left ball moving
+  back 4.5 cm per frame -> foot_slide fails (9 * 0.3333 = 3.0 > 2.0); and
+  the still frames of the first case with treadmill 1.25 -> foot_slide fails
+  (a still ball slides 37.5 cm against the moving floor)
 """
 import sys
 from pathlib import Path
@@ -53,8 +60,8 @@ def frame(**over):
     return f
 
 
-def anim(group="stand", loop=False):
-    return Animation(kind="s", duration_s=1.0, loop=loop,
+def anim(group="stand", loop=False, treadmill=0.0):
+    return Animation(kind="s", duration_s=1.0, loop=loop, treadmill_mps=treadmill,
                      catalog=Catalog(key="s", group=group, prompt="p"))
 
 
@@ -108,6 +115,17 @@ for label, over in (("frames", {"frames": 11}), ("loop", {"loop": True}),
                     ("fps", {"fps": 120}), ("duration", {"duration_s": 1.0})):
     expect(f"sidecar_{label}", run_checks(anim(), comp(), still, {**side_ok, **over}),
            ["sidecar"])
+
+belt = [frame(LeftToeBase=[9, 1, 12 - 125.0 / 30 * i], RightToeBase=[-9, 1, 12 - 125.0 / 30 * i])
+        for i in range(10)]
+expect("treadmill", run_checks(anim(treadmill=1.25), comp(), {"tracks": 22, "frames": belt}), [])
+expect("treadmill_off", run_checks(anim(), comp(), {"tracks": 22, "frames": belt}),
+       ["foot_slide"])
+fast = [frame(LeftToeBase=[9, 1, 12 - 4.5 * i], RightToeBase=[-9, 1, 12 - 125.0 / 30 * i])
+        for i in range(10)]
+expect("treadmill_fast", run_checks(anim(treadmill=1.25), comp(), {"tracks": 22, "frames": fast}),
+       ["foot_slide"])
+expect("treadmill_still", run_checks(anim(treadmill=1.25), comp(), still), ["foot_slide"])
 
 from animstudio import StudioError                                    # noqa: E402
 

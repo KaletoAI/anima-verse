@@ -92,6 +92,25 @@ class FeetPlanted:
 
 
 @dataclass(frozen=True)
+class FootTarget:
+    """The ankle (the Foot bone's head) reaches ``at`` — metres in clip
+    space, a point or keys exactly like ``HandTarget.at`` (smoothstep
+    between keys; key it every frame for a straight, even path) — for the
+    whole clip; the knee bends toward ``pole`` (default forward). The foot
+    takes a WORLD rotation of its own instead of following the leg:
+    ``yaw`` degrees toes outward, then ``pitch`` degrees toes up (a number,
+    or keys ``((t, deg), ...)`` eased like ``at``). The toes keep their own
+    ``<s>_toes_flex`` relative to the foot; ``<s>_ankle_flex`` has no
+    effect. For a gait in place (walking, running): with
+    ``Animation.treadmill_mps`` the planted foot moves back at that speed."""
+    side: str
+    at: Union[Point, Sequence[Tuple[float, Point]]]
+    pitch: Union[float, Sequence[Tuple[float, float]]] = 0.0
+    yaw: float = 0.0
+    pole: Tuple[float, float, float] = (0.0, 0.0, 1.0)
+
+
+@dataclass(frozen=True)
 class PartnerTarget:
     """PAIR clips only: the hand's head (wrist) reaches a point on the
     PARTNER's body — ``offset`` (metres) in the frame of the partner's torso
@@ -150,6 +169,11 @@ class Animation:
     #: type expects ~20 (root_drop is calibrated on the shipped clips). For
     #: group "lie" set ~16; everything else keeps 0.
     lift_cm: float = 0.0
+    #: m/s of an IN-PLACE gait (walking, running): the clip stays on the
+    #: spot, so a planted foot moves back (-Z) at the speed the figure travels;
+    #: the foot_slide check measures it against a floor running back at this
+    #: speed instead of a still one. 0 = the floor stands still.
+    treadmill_mps: float = 0.0
 
 
 @dataclass
@@ -239,6 +263,12 @@ def validate(anim: Animation) -> None:
         raise StudioError("catalog.key must not contain '/'")
     if not 0.0 <= anim.lift_cm <= 40.0:
         raise StudioError("lift_cm must be within 0..40")
+    if not 0.0 <= anim.treadmill_mps <= 8.0:
+        raise StudioError("treadmill_mps must be within 0..8")
+    planted = {s for g in anim.ik if isinstance(g, FeetPlanted) for s in g.sides}
+    footed = [g.side for g in anim.ik if isinstance(g, FootTarget)]
+    if planted & set(footed) or len(footed) != len(set(footed)):
+        raise StudioError("one foot takes one goal: FeetPlanted or a single FootTarget per side")
     last = -1.0
     for k in anim.keys:
         if k.ease not in EASES:
@@ -272,6 +302,13 @@ def validate(anim: Animation) -> None:
                            type(goal).__name__)
         if isinstance(goal, HandTarget):
             _validate_target(anim, goal.side, goal.at)
+        if isinstance(goal, FootTarget):
+            _validate_target(anim, goal.side, goal.at, "FootTarget")
+            if not isinstance(goal.pitch, (int, float)):
+                _validate_target(anim, goal.side,
+                                 [(k[0], (float(k[1]), 0.0, 0.0)) if isinstance(k, (tuple, list))
+                                  and len(k) == 2 and isinstance(k[1], (int, float)) else k
+                                  for k in goal.pitch], "FootTarget pitch")
     for o in _layers(anim):
         if not _known(o.dof):
             raise StudioError(f"layer: unknown DOF {o.dof!r}")
@@ -326,9 +363,21 @@ def _validate_target(anim: Animation, side: str, at, what: str = "HandTarget") -
 
 
 def target_at(anim: Animation, goal, t: float) -> Point:
-    """The target point (metres) of a HandTarget (``at``) or the offset of a
-    PartnerTarget at time ``t``."""
-    at = goal.offset if isinstance(goal, PartnerTarget) else goal.at
+    """The target point (metres) of a HandTarget / FootTarget (``at``) or
+    the offset of a PartnerTarget at time ``t``."""
+    return _eased(anim, goal.offset if isinstance(goal, PartnerTarget) else goal.at, t)
+
+
+def pitch_at(anim: Animation, goal: FootTarget, t: float) -> float:
+    """A FootTarget's pitch (degrees toes up) at time ``t``."""
+    if isinstance(goal.pitch, (int, float)):
+        return float(goal.pitch)
+    return _eased(anim, [(kt, (kv, 0.0, 0.0)) for kt, kv in goal.pitch], t)[0]
+
+
+def _eased(anim: Animation, at, t: float) -> Point:
+    """A point, or keys ``(t, point)`` eased with smoothstep, held outside
+    them and closed back to the first key on a loop."""
     if _is_point(at):
         return tuple(float(c) for c in at)
     keys = [(float(kt), tuple(float(c) for c in kp)) for kt, kp in at]

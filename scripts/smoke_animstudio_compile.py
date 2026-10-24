@@ -104,6 +104,18 @@ Stage 11 - planted feet keep FRAME-0 world rotation: hips_drop 3 cm,
   head on its frame-0 position in every frame (0.01 cm). Before the fix the
   foot turned with the yaw: the ball, ~11 cm ahead of the ankle, orbited it
   by 2 * 11 * sin(10 deg) ~ 3.8 cm.
+Stage 12 - FootTarget (a gait in place): left ankle target (0.10, 0.25,
+  0.20) m = (10, 25, 20) cm — 78.4 cm from the rest hip joint (9.97, 100.72,
+  -0.28), inside the leg's 93.5 cm reach, so the Foot head sits on it
+  (0.01 cm, ik l_foot < 0.01). The foot's world rotation is the given one,
+  not the leg's: yaw 5 (toes out), pitch 15 (toes up) -> D[LeftFoot] =
+  Ry(+5) @ Rx(-15), the right foot (mirror) Ry(-5) @ Rx(-15) (1e-9); with
+  l_toes_flex 20 the toes keep their local rotation, D[LeftToeBase] =
+  D[LeftFoot] @ Rx(-20) (toes_flex is ToeBase x * -1). Keyed pitch
+  ((0, 0), (1, 30)) over 1 s: frame 15 (t = 0.5) is smoothstep(0.5) = 0.5
+  -> 15 deg. validate refuses a FootTarget and FeetPlanted on the same side,
+  two FootTargets on one side and treadmill_mps 9 (> 8); a FootTarget on
+  the left with FeetPlanted(("r",)) is fine.
 """
 import ast
 import math
@@ -374,6 +386,44 @@ for s_, S_ in (("l", "Left"), ("r", "Right")):
     for b in (f"{S_}Foot", f"{S_}ToeBase"):
         check(all(near(f.D[b], f0.D[b], 1e-9) for f in c.frames), f"stage 11 {b} turns")
 print("OK stage 11" if not FAIL else "FAIL stage 11")
+
+# Stage 12 - FootTarget
+from animstudio.dsl import FootTarget                               # noqa: E402
+
+T12 = np.array([10.0, 25.0, 20.0])
+c = compile_anim(Animation(kind="s", duration_s=1.0, loop=False, catalog=CAT,
+                           base=Pose(l_toes_flex=20),
+                           ik=[FootTarget("l", at=(0.10, 0.25, 0.20), pitch=15, yaw=5),
+                               FootTarget("r", at=(-0.10, 0.0731, -0.03), pitch=15, yaw=5)]),
+                 rest)
+f0 = c.frames[0]
+check(near(f0.pos["LeftFoot"], T12, 0.01), f"stage 12 ankle {f0.pos['LeftFoot']} vs {T12}")
+check(c.ik_error_cm["l_foot"] < 0.01, "stage 12 ik error")
+check(near(f0.D["LeftFoot"], rig.axis_rot("y", 5) @ rig.axis_rot("x", -15), 1e-9),
+      "stage 12 left foot rotation")
+check(near(f0.D["RightFoot"], rig.axis_rot("y", -5) @ rig.axis_rot("x", -15), 1e-9),
+      "stage 12 right foot rotation")
+check(near(f0.D["LeftToeBase"], f0.D["LeftFoot"] @ rig.axis_rot("x", -20), 1e-9),
+      "stage 12 toes keep their local rotation")
+c = compile_anim(Animation(kind="s", duration_s=1.0, loop=False, catalog=CAT,
+                           ik=[FootTarget("l", at=(0.10, 0.25, 0.20),
+                                          pitch=((0.0, 0.0), (1.0, 30.0)))]), rest)
+check(near(c.frames[15].D["LeftFoot"], rig.axis_rot("x", -15), 1e-9), "stage 12 keyed pitch")
+for ik, label in (([FootTarget("l", at=T12 / 100), FeetPlanted()], "with FeetPlanted"),
+                  ([FootTarget("l", at=T12 / 100), FootTarget("l", at=T12 / 100)], "twice")):
+    try:
+        validate(Animation(kind="s", duration_s=1.0, loop=False, catalog=CAT, ik=ik))
+        FAIL.append(f"stage 12 validate accepted a FootTarget {label}")
+    except StudioError:
+        pass
+try:
+    validate(Animation(kind="s", duration_s=1.0, loop=False, catalog=CAT, treadmill_mps=9.0))
+    FAIL.append("stage 12 validate accepted treadmill_mps 9")
+except StudioError:
+    pass
+validate(Animation(kind="s", duration_s=1.0, loop=False, catalog=CAT,
+                   ik=[FootTarget("l", at=(0.10, 0.25, 0.20)), FeetPlanted(("r",))]))
+print("OK stage 12" if not FAIL else "FAIL stage 12")
 
 print("FAIL:\n" + "\n".join(FAIL) if FAIL else "OK smoke_animstudio_compile")
 sys.exit(1 if FAIL else 0)

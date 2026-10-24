@@ -13,8 +13,8 @@ import numpy as np
 
 from animstudio import rig
 from animstudio import StudioError
-from animstudio.dsl import (FADE_S, Animation, PairAnimation, _layers, target_at, validate,
-                            validate_pair, values_at)
+from animstudio.dsl import (FADE_S, Animation, PairAnimation, _layers, pitch_at, target_at,
+                            validate, validate_pair, values_at)
 import sys as _sys
 from animstudio import REPO
 
@@ -201,6 +201,26 @@ def compile_anim(anim: Animation, rest: rig.Rest, partner: Optional[PartnerFn] =
                     err = float(np.linalg.norm(pos[f"{S}Foot"] - anchors[S]))
                     key = f"{s}_foot"
                     ik_err[key] = max(ik_err.get(key, 0.0), err)
+            elif type(goal).__name__ == "FootTarget":
+                S = "Left" if goal.side == "l" else "Right"
+                target = np.array(target_at(anim, goal, t), float) * 100.0
+                pole_dir = np.array(goal.pole, float)
+                pole = pos[f"{S}Leg"] + 50.0 * pole_dir / (np.linalg.norm(pole_dir) or 1.0)
+                _chain_ik(rest, D, pos, f"{S}UpLeg", f"{S}Leg", f"{S}Foot",
+                          target, pole, 1.0, keep_end=False)
+                # The foot's own world rotation (toes out, then up); the
+                # toes keep their local rotation relative to it.
+                below = _subtree(rest, f"{S}Foot")[1:]
+                local = {b: D[rest.parent[b]].T @ D[b] for b in below}
+                m = 1.0 if goal.side == "l" else -1.0
+                D[f"{S}Foot"] = rig.axis_rot("y", m * goal.yaw) @ rig.axis_rot(
+                    "x", -pitch_at(anim, goal, t))
+                for b in below:
+                    D[b] = D[rest.parent[b]] @ local[b]
+                _repose(rest, D, pos, f"{S}Foot")
+                err = float(np.linalg.norm(pos[f"{S}Foot"] - target))
+                key = f"{goal.side}_foot"
+                ik_err[key] = max(ik_err.get(key, 0.0), err)
             elif type(goal).__name__ in ("HandTarget", "PartnerTarget"):
                 S = "Left" if goal.side == "l" else "Right"
                 partnered = type(goal).__name__ == "PartnerTarget"
