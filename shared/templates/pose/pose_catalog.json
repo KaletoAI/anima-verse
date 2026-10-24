@@ -721,16 +721,21 @@
       "group": "seat"
     },
     "flirting": {
-      "prompt": "leaning slightly forward with an open posture, one hand gently touching the hair, relaxed crossed legs",
+      "prompt": "standing flirtatiously, weight on one leg, playing with the hair, head tilted, a coy smile",
       "synonyms": [
         "flirten",
         "flirtend",
         "flirtet",
         "schöne augen machen",
-        "kokettieren"
+        "kokettieren",
+        "anbandeln",
+        "mit den haaren spielen",
+        "flirting with someone",
+        "playing with the hair"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "flirting",
+      "group": "stand",
+      "solo": true
     },
     "filming": {
       "prompt": "standing upright with slight forward lean, holding a camera steady with both hands at eye level, legs shoulder-width apart for balance",

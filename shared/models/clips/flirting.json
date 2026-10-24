@@ -1,0 +1,40 @@
+{
+ "kind": "flirting",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 145,
+ "duration_s": 4.833,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": 2.83,
+  "hips_scale": [
+   1.0
+  ],
+  "rig_floor_shift_cm": -0.0,
+  "rig_floor_min_cm": 0.0,
+  "root_motion": {
+   "mode": "strip",
+   "travel_m": [
+    0.0,
+    0.0
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     4.8
+    ]
+   ],
+   "max_drift_cm": 0.0
+  }
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/flirting.py",
+  "spec_sha": "b8ca2cbc6dc1228894b8a5eaa049f0173376ebce6a1085c974643de8ea5f0c04"
+ }
+}
