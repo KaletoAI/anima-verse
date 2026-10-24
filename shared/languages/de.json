@@ -8,6 +8,18 @@
     }
   },
   "translations": {
+    "All triggers": "Alle Auslöser",
+    "Search": "Suche",
+    "Created": "Erstellt",
+    "Expired": "Abgelaufen",
+    "standing": "Dauerhaft",
+    "now": "Jetzt",
+    "at_location": "An einem Ort",
+    "at_time": "Zu einem Zeitpunkt",
+    "human": "Mensch",
+    "Reset filters": "Filter zurücksetzen",
+    "{shown} of {total}": "{shown} von {total}",
+    "No intents match the filters.": "Keine Intents passen zu den Filtern.",
     "Prop light": "Prop-Licht",
     "Light preset": "Lichtvorlage",
     "Candle": "Kerze",

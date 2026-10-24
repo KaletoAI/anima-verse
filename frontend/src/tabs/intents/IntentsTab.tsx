@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { CleanupDialog } from './CleanupDialog'
 import { cleanupCounts } from './cleanup'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
@@ -29,6 +29,7 @@ interface Intent {
   status: string
   location_id?: string
   outfit_hint?: string
+  created_at?: string
   expires_at?: string
   action?: { type?: string; destination?: { location_id: string; room_id?: string }; scope?: 'pair' | 'party'; after_arrival?: { type: 'pair'; pose_key: string } }
   meta?: { progress_type?: string; repeat_state?: { day: string; log: Array<{ day: string; result: 'done' | 'missed'; count: number }> }; expired_reason?: string; travel?: { phase?: string; reason?: string; expected_members?: string[]; destination_label?: string } }
@@ -146,8 +147,92 @@ function triggerSummary(it: Intent, locName: (id: string) => string, t: (s: stri
   const k = it.trigger?.kind || 'standing'
   if (k === 'at_location') return `@ ${locName(it.trigger?.location_id || it.location_id || '')}`
   if (k === 'at_time') return `⏰ ${gameStampLabel(it.trigger?.run_date)}`
-  if (k === 'now') return 'now'
-  return 'standing'
+  if (k === 'now') return t('now')
+  return t('standing')
+}
+
+const SORT_COLUMNS = ['title', 'owner', 'source', 'trigger', 'priority', 'expires', 'progress', 'status', 'created'] as const
+type SortColumn = typeof SORT_COLUMNS[number]
+const STATUSES = ['active', 'done', 'expired', 'cancelled', 'all'] as const
+const TRIGGERS = ['standing', 'now', 'at_location', 'at_time', 'daily'] as const
+interface IntentView {
+  character: string
+  status: typeof STATUSES[number]
+  source: '' | 'human' | 'character'
+  trigger: string
+  search: string
+  sort: { column: SortColumn; direction: 'asc' | 'desc' } | null
+}
+const DEFAULT_VIEW: IntentView = { character: '', status: 'active', source: '', trigger: '', search: '', sort: null }
+const VIEW_KEY = 'ga.intents.view'
+
+function loadIntentView(): IntentView {
+  try {
+    const raw = window.localStorage.getItem(VIEW_KEY)
+    if (!raw) return DEFAULT_VIEW
+    const p = JSON.parse(raw)
+    return {
+      character: typeof p.character === 'string' ? p.character : '',
+      status: STATUSES.includes(p.status) ? p.status : 'active',
+      source: ['human', 'character'].includes(p.source) ? p.source : '',
+      trigger: TRIGGERS.includes(p.trigger) ? p.trigger : '',
+      search: typeof p.search === 'string' ? p.search : '',
+      sort: p.sort && SORT_COLUMNS.includes(p.sort.column) && ['asc', 'desc'].includes(p.sort.direction)
+        ? { column: p.sort.column, direction: p.sort.direction } : null,
+    }
+  } catch { return DEFAULT_VIEW }
+}
+
+function saveIntentView(view: IntentView): void {
+  try {
+    window.localStorage.setItem(VIEW_KEY, JSON.stringify(view))
+  } catch { /* Filtering still works when browser storage is unavailable. */ }
+}
+
+function intentOwner(it: Intent): string {
+  return it.owner || Object.keys(it.participants || {})[0] || '—'
+}
+
+function triggerBucket(it: Intent): string {
+  return it.trigger?.repeat === 'daily' ? 'daily' : it.trigger?.kind || 'standing'
+}
+
+function intentProgress(it: Intent): number {
+  return Math.max(0, ...Object.values(it.participants || {}).map((p) => p.progress?.length || 0))
+}
+
+function compareString(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+function compareIntents(a: Intent, b: Intent, sort: IntentView['sort'], locName: (id: string) => string): number {
+  const fallback = () => a.priority - b.priority || compareString(b.created_at || '', a.created_at || '') || compareString(a.id, b.id)
+  if (!sort) return fallback()
+  let result = 0
+  switch (sort.column) {
+    case 'title': result = a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }); break
+    case 'owner': result = intentOwner(a).localeCompare(intentOwner(b), undefined, { sensitivity: 'base' }); break
+    case 'source': result = compareString(a.source, b.source); break
+    case 'status': result = compareString(a.status, b.status); break
+    case 'priority': result = a.priority - b.priority; break
+    case 'created': result = compareString(a.created_at || '', b.created_at || ''); break
+    case 'expires':
+      if (!!a.expires_at !== !!b.expires_at) return a.expires_at ? -1 : 1
+      result = compareString(a.expires_at || '', b.expires_at || '')
+      break
+    case 'progress':
+      if ((!!a.target_count && a.target_count > 0) !== (!!b.target_count && b.target_count > 0)) return (a.target_count || 0) > 0 ? -1 : 1
+      result = (a.target_count ? intentProgress(a) / a.target_count : 0) - (b.target_count ? intentProgress(b) / b.target_count : 0)
+      break
+    case 'trigger': {
+      const ak = triggerBucket(a), bk = triggerBucket(b)
+      result = TRIGGERS.indexOf(ak as typeof TRIGGERS[number]) - TRIGGERS.indexOf(bk as typeof TRIGGERS[number])
+      if (!result && ak === 'at_time') result = compareString(a.trigger?.run_date || '', b.trigger?.run_date || '')
+      if (!result && ak === 'at_location') result = locName(a.trigger?.location_id || a.location_id || '').localeCompare(locName(b.trigger?.location_id || b.location_id || ''))
+      break
+    }
+  }
+  return (sort.direction === 'asc' ? result : -result) || fallback()
 }
 
 export function IntentsTab() {
@@ -162,7 +247,8 @@ export function IntentsTab() {
   const [progressTypes, setProgressTypes] = useState<string[]>([])
   const [actionTypes, setActionTypes] = useState<string[]>([])
   const [sharedActivityOptions, setSharedActivityOptions] = useState<string[]>([])
-  const [showAll, setShowAll] = useState(false)
+  const [view, setView] = useState<IntentView>(loadIntentView)
+  useEffect(() => { saveIntentView(view) }, [view])
   const [cleanupOpen, setCleanupOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [form, setForm] = useState<FormState>(INITIAL_FORM)
@@ -179,15 +265,38 @@ export function IntentsTab() {
     [locations],
   )
 
+  const characterNames = useMemo(() => [...new Set([
+    ...(intents || []).flatMap((it) => [it.owner, ...Object.keys(it.participants || {})]),
+    view.character,
+  ].filter(Boolean))].sort((a, b) => a.localeCompare(b)), [intents, view.character])
+
+  const visibleIntents = useMemo(() => (intents || []).filter((it) => {
+    const names = [it.owner, ...Object.keys(it.participants || {})]
+    return (!view.character || names.some((name) => name?.toLowerCase() === view.character.toLowerCase()))
+      && (view.status === 'all' || it.status === view.status)
+      && (!view.source || it.source === view.source)
+      && (!view.trigger || triggerBucket(it) === view.trigger)
+      && `${it.title || ''} ${it.description || ''}`.toLowerCase().includes(view.search.toLowerCase())
+  }).sort((a, b) => compareIntents(a, b, view.sort, locName)), [intents, view, locName])
+
+  const sortHeader = (column: SortColumn, label: string) => (
+    <th aria-sort={view.sort?.column === column ? (view.sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}>
+      <button type="button" style={{ background: 'none', border: 0, padding: 0, color: 'inherit', font: 'inherit', cursor: 'pointer' }}
+        onClick={() => setView((v) => ({ ...v, sort: { column, direction: v.sort?.column === column && v.sort.direction === 'asc' ? 'desc' : 'asc' } }))}>
+        {t(label)}{view.sort?.column === column ? (view.sort.direction === 'asc' ? ' ▲' : ' ▼') : ''}
+      </button>
+    </th>
+  )
+
   const reload = useCallback(async () => {
     try {
-      const data = await apiGet<Intent[]>(`/intents${showAll ? '' : '?status=active'}`)
+      const data = await apiGet<Intent[]>(`/intents${view.status === 'active' ? '?status=active' : ''}`)
       setIntents(data || [])
       setError(null)
     } catch (e) {
       setError((e as Error).message)
     }
-  }, [showAll])
+  }, [view.status])
 
   useEffect(() => {
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
@@ -412,55 +521,75 @@ export function IntentsTab() {
       <h2 style={{ fontSize: 16, marginBottom: 6 }}>{t('Intents — Plans & Tasks')}</h2>
 
       <section className="ga-sched-section">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
           <h3 style={{ margin: 0 }}>{t('All intents')}</h3>
           <button type="button" className="ga-btn ga-btn-sm" onClick={() => setCleanupOpen(true)}>
             {t('Clean up…')}
           </button>
-          <label className="ga-sched-muted" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
-            {t('show inactive too')}
-          </label>
         </div>
         <p className="ga-sched-muted">
           {t(
             'One store for human-assigned tasks and character-owned plans. Characters create their own via reflection and in-chat decisions; admins can add, complete or remove any intent here.',
           )}
         </p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <select className="ga-input" style={{ width: 'auto', maxWidth: '100%' }} aria-label={t('Character')} value={view.character} onChange={(e) => setView((v) => ({ ...v, character: e.target.value }))}>
+            <option value="">{t('All characters')}</option>
+            {characterNames.map((name) => <option key={name} value={name}>{characters.find((c) => c.name === name)?.display_name || name}</option>)}
+          </select>
+          <select className="ga-input" style={{ width: 'auto', maxWidth: '100%' }} aria-label={t('Status')} value={view.status} onChange={(e) => setView((v) => ({ ...v, status: e.target.value as IntentView['status'] }))}>
+            <option value="active">{t('Active')}</option><option value="done">{t('Done')}</option>
+            <option value="expired">{t('Expired')}</option><option value="cancelled">{t('Cancelled')}</option><option value="all">{t('All')}</option>
+          </select>
+          <select className="ga-input" style={{ width: 'auto', maxWidth: '100%' }} aria-label={t('Source')} value={view.source} onChange={(e) => setView((v) => ({ ...v, source: e.target.value as IntentView['source'] }))}>
+            <option value="">{t('All sources')}</option><option value="human">{t('human')}</option><option value="character">{t('character')}</option>
+          </select>
+          <select className="ga-input" style={{ width: 'auto', maxWidth: '100%' }} aria-label={t('Trigger')} value={view.trigger} onChange={(e) => setView((v) => ({ ...v, trigger: e.target.value }))}>
+            <option value="">{t('All triggers')}</option>
+            <option value="standing">{t('standing')}</option><option value="now">{t('now')}</option>
+            <option value="at_location">{t('at_location')}</option><option value="at_time">{t('at_time')}</option><option value="daily">{t('daily')}</option>
+          </select>
+          <input className="ga-input" style={{ width: 'auto', maxWidth: '100%' }} type="search" aria-label={t('Search')} placeholder={t('Search')} value={view.search} onChange={(e) => setView((v) => ({ ...v, search: e.target.value }))} />
+          <span className="ga-sched-muted">{t('{shown} of {total}').replace('{shown}', String(visibleIntents.length)).replace('{total}', String(intents?.length || 0))}</span>
+          <button type="button" className="ga-btn ga-btn-sm" onClick={() => setView(DEFAULT_VIEW)}>{t('Reset filters')}</button>
+        </div>
         <table className="ga-sched-table">
           <thead>
             <tr>
-              <th>{t('Title')}</th>
-              <th>{t('Owner')}</th>
-              <th>{t('Source')}</th>
-              <th>{t('Trigger')}</th>
-              <th>{t('Priority')}</th>
-              <th>{t('Expires')}</th>
-              <th>{t('Progress')}</th>
+              {sortHeader('title', 'Title')}
+              {sortHeader('owner', 'Owner')}
+              {sortHeader('source', 'Source')}
+              {sortHeader('trigger', 'Trigger')}
+              {sortHeader('priority', 'Priority')}
+              {sortHeader('expires', 'Expires')}
+              {sortHeader('progress', 'Progress')}
               <th>{t('Last 7 days')}</th>
-              <th>{t('Status')}</th>
+              {sortHeader('status', 'Status')}
+              {sortHeader('created', 'Created')}
               <th />
             </tr>
           </thead>
           <tbody>
             {error ? (
               <tr>
-                <td colSpan={10}>error: {error}</td>
+                <td colSpan={11}>error: {error}</td>
               </tr>
             ) : intents === null ? (
               <tr>
-                <td colSpan={10} className="ga-sched-muted">
+                <td colSpan={11} className="ga-sched-muted">
                   {t('Loading…')}
                 </td>
               </tr>
             ) : intents.length === 0 ? (
               <tr>
-                <td colSpan={10} className="ga-sched-muted">
+                <td colSpan={11} className="ga-sched-muted">
                   {t('No intents yet.')}
                 </td>
               </tr>
+            ) : visibleIntents.length === 0 ? (
+              <tr><td colSpan={11} className="ga-sched-muted">{t('No intents match the filters.')}</td></tr>
             ) : (
-              intents.map((it) => {
+              visibleIntents.map((it) => {
                 const active = it.status === 'active'
                 const parts = Object.keys(it.participants || {})
                 const owner = it.owner || parts[0] || '—'
@@ -492,7 +621,7 @@ export function IntentsTab() {
                     </td>
                     <td>
                       <span className={it.source === 'human' ? 'ga-tag ga-tag-admin' : 'ga-tag'}>
-                        {it.source}
+                        {t(it.source)}
                       </span>
                     </td>
                     <td>{triggerSummary(it, locName, t)}</td>
@@ -514,6 +643,7 @@ export function IntentsTab() {
                         ? ` — ${t(EXPIRY_REASON_LABELS[it.meta.expired_reason] || it.meta.expired_reason)}`
                         : ''}
                     </td>
+                    <td className="ga-sched-muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{it.created_at?.slice(0, 16).replace('T', ' ') || '—'}</td>
                     <td className="ga-or-actions-col">
                       <button className="ga-btn ga-btn-sm" disabled={!!it.action?.type} onClick={() => handleEdit(it)}>
                         {t('Edit')}
