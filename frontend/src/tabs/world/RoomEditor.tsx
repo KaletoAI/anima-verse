@@ -12,6 +12,9 @@ import { RoomItems } from './RoomItems'
 import { BuildingModelPanel } from './BuildingModelPanel'
 import { PromptChangedBadge } from './LocationEditor'
 
+type Ambience = { daylight: number; tint: string | null }
+type RoomDraft = Room & { ambience?: Ambience }
+
 // ── Room editor ────────────────────────────────────────────────────────────
 
 interface RoomEditorProps {
@@ -25,7 +28,7 @@ interface RoomEditorProps {
 export function RoomEditor({ location, room, items, onChanged, onDeleted }: RoomEditorProps) {
   const { t } = useI18n()
   const { toast } = useToast()
-  const [draft, setDraft] = useState<Room>(() => ({ ...room }))
+  const [draft, setDraft] = useState<RoomDraft>(() => ({ ...room }))
   // Two tabs, mirroring the location editor: General (fields + items) and
   // 3D world (the room model). One draft spans both — Save persists it all.
   const [tab, setTab] = useState<'general' | '3d'>('general')
@@ -44,7 +47,7 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
     return () => { stale = true }
   }, [location.id, room.id, t, toast])
 
-  const upd = useCallback(<K extends keyof Room>(k: K, v: Room[K]) => {
+  const upd = useCallback(<K extends keyof RoomDraft>(k: K, v: RoomDraft[K]) => {
     setDraft((prev) => ({ ...prev, [k]: v }))
   }, [])
 
@@ -161,6 +164,27 @@ export function RoomEditor({ location, room, items, onChanged, onDeleted }: Room
             {kitCatalog?.room_types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
           </select>
         </Field>}
+        <section>
+          <div className="ga-form-section-label">{t('Ambience')}</div>
+          <div className="ga-form-row">
+            <Field label={t('Daylight')}>
+              <input type="range" min={0} max={100} step={1}
+                aria-label={t('Daylight')}
+                value={Math.round((draft.ambience?.daylight ?? 1) * 100)}
+                onChange={(e) => upd('ambience', { daylight: Number(e.target.value) / 100, tint: draft.ambience?.tint ?? null })} />
+              <span>{Math.round((draft.ambience?.daylight ?? 1) * 100)} %</span>
+            </Field>
+            <Field label={t('Tint')}>
+              <input type="color" aria-label={t('Tint')} value={draft.ambience?.tint || '#ffffff'}
+                disabled={!draft.ambience?.tint}
+                onChange={(e) => upd('ambience', { daylight: draft.ambience?.daylight ?? 1, tint: e.target.value })} />
+              <label className="ga-form-check"><input type="checkbox" checked={!draft.ambience?.tint}
+                onChange={(e) => upd('ambience', { daylight: draft.ambience?.daylight ?? 1, tint: e.target.checked ? null : '#ffffff' })} />
+                <span>{t('No tint')}</span></label>
+            </Field>
+          </div>
+          <button type="button" className="ga-btn ga-btn-sm" onClick={() => upd('ambience', undefined)}>{t('Reset')}</button>
+        </section>
         <StatRatesEditor value={draft.stat_rates || []} onChange={rates => upd('stat_rates', rates)} />
         <Field label={t('Description')}>
           <textarea

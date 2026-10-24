@@ -251,7 +251,7 @@ export interface TilePlacement {
 
 export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel, previewTilt = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
-  placement, onBounds, markers, dimsOverlay,
+  placement, onBounds, markers, lightPoint, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
   picking = false, onPickPoint,
   frontal = false, onFrontalChange, keepCamera = false,
@@ -292,6 +292,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
       group?: string; capacity?: number; spacing_m?: number; facing?: number
       slot_axis?: number
       previewKind?: string; previewYawOffset?: number; rootDrop?: number }>
+    /** Object-local light dot, refreshed live independently of the scale kit. */
+    lightPoint?: { at: [number, number, number]; color: string }
     /** Height of a 1.7 m preview figure in MESH units (the caller derives
      *  it from bbox ÷ dims). > 0 shows a posed test figure at every marker
      *  — a sit marker is only judgeable with someone sitting there. */
@@ -440,6 +442,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   onBoundsRef.current = onBounds
   // Marker/dims overlay + pick mode — all live-applied via refs so none of
   // them re-runs the loader effect.
+  const lightPointRef = useRef(lightPoint)
+  lightPointRef.current = lightPoint
   const markersRef = useRef(markers)
   markersRef.current = markers
   const dimsOverlayRef = useRef(dimsOverlay)
@@ -623,7 +627,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   // Live overlay refresh (markers moved/added, dims typed, a sink dialled)
   // without reload — a typed number must show up while it is being typed.
   useEffect(() => { overlayFnRef.current?.() },
-    [markers, dimsOverlay, figureHeight, scaleFigure, groundOffsetM])
+    [markers, lightPoint, dimsOverlay, figureHeight, scaleFigure, groundOffsetM])
   // Switching the scale kit on widens what has to be in view.
   useEffect(() => { refitFnRef.current?.() }, [scaleFigure])
   // The armed pick tool reads as a crosshair on the canvas.
@@ -1699,6 +1703,18 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             }
             // Numbered marker dots at their raw-box fractions.
             const r = rawMaxDim * 0.025
+            const light = lightPointRef.current
+            if (light) {
+              const dot = new THREE.Mesh(
+                new THREE.SphereGeometry(r, 10, 10),
+                new THREE.MeshBasicMaterial({ color: light.color, depthTest: false }))
+              dot.renderOrder = 3
+              dot.position.set(
+                rawBox.min.x + light.at[0] * rawSize.x,
+                rawBox.min.y + light.at[1] * rawSize.y,
+                rawBox.min.z + light.at[2] * rawSize.z)
+              markerGroup.add(dot)
+            }
             // The markers belong to the scale kit (user 2026-09-08): the
             // checkbox that hides the 1.70 m figure hides the numbered dots
             // and the posed preview figures with it — on a wall mirror they

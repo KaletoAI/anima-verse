@@ -76,9 +76,19 @@ import {
 } from './variantFields'
 import type { DimKey } from './dims'
 import type {
-  PropAreasInfo, PropFull, PropMarker, PropSlotValues, PropSourceImage,
+  PropAreasInfo, PropFull, PropLight, PropMarker, PropSlotValues, PropSourceImage,
   PropVariant, PropView,
 } from './propTypes'
+
+// Starting values from the prop-lights spec, section 7.1.
+const LIGHT_PRESETS: Array<{ name: string; light: Omit<PropLight, 'at'> }> = [
+  { name: 'Candle', light: { color: '#ffb35c', intensity: 1.5, range_m: 4, flicker: 'candle', when: 'always', glow_m: 0.10 } },
+  { name: 'Oil lamp', light: { color: '#ffc070', intensity: 2.5, range_m: 5, flicker: 'candle', when: 'always', glow_m: 0.14 } },
+  { name: 'Fire', light: { color: '#ff8a3c', intensity: 8, range_m: 9, flicker: 'fire', when: 'always', glow_m: 0.5 } },
+  { name: 'Ceiling lamp', light: { color: '#fff0d0', intensity: 6, range_m: 8, flicker: 'none', when: 'always', glow_m: 0.2 } },
+  { name: 'Street lamp', light: { color: '#ffd9a0', intensity: 15, range_m: 14, flicker: 'none', when: 'night', glow_m: 0.3 } },
+  { name: 'Crystal', light: { color: '#8fd8ff', intensity: 2, range_m: 4, flicker: 'none', when: 'always', glow_m: 0.25 } },
+]
 
 /**
  * The scale kit of the 3D preview — the 1.70 m reference figure beside the
@@ -350,7 +360,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
    *  over the canvas and swallows every click the pick is waiting for, and a
    *  ring that closes would hand the canvas back to a pick armed minutes
    *  ago, which then drops a marker on the next click. */
-  const [placing, setPlacing] = useState<'add' | number | null>(null)
+  const [placing, setPlacing] = useState<'add' | 'light' | number | null>(null)
   // A prop or variant switch puts another mesh under the camera: the view
   // state means nothing there, and the previous variant index means something
   // else on the next prop.
@@ -391,7 +401,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   /** Arm or disarm the marker pick — the other half of the exclusion: it
    *  drops a running ring, and while a ring IS running every pick button is
    *  disabled, so the two modes are never both offered. */
-  const armPlacing = useCallback((which: 'add' | number) => {
+  const armPlacing = useCallback((which: 'add' | 'light' | number) => {
     setPlacing((cur) => (cur === which ? null : which))
     setDrawKind('')
   }, [])
@@ -882,6 +892,13 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
       : (variant === 0 ? prop.markers || [] : [])
   ), [shownVariant, variant, prop.markers])
 
+  const light = shownVariant?.light ?? null
+  const lightPreset = !light ? '' : LIGHT_PRESETS.find(({ light: preset }) =>
+    (Object.keys(preset) as Array<keyof typeof preset>).every((key) => preset[key] === light[key]))?.name || 'Custom'
+  const editLight = (patch: Partial<PropLight>) => {
+    if (light) queueVariant(variant, { light: { ...light, ...patch } })
+  }
+
   // The place types a new marker is offered, in picker order; a new marker
   // takes the first of them.
   const groupOptions = useMemo(() => groupKeys(groups), [groups])
@@ -966,14 +983,16 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   // one). Reading `placing` instead of updating through it keeps the write
   // out of a state updater, which React may run more than once.
   const onPickPoint = useCallback((at: [number, number, number]) => {
-    if (placing === 'add') {
+    if (placing === 'light') {
+      if (light) queueVariant(variant, { light: { ...light, at } })
+    } else if (placing === 'add') {
       saveMarkers([...markers, { id: newId(), group: firstGroup, at }])
       setSelectedMarker(markers.length)
-    } else if (placing !== null && markers[placing]) {
+    } else if (typeof placing === 'number' && markers[placing]) {
       saveMarkers(markers.map((m, idx) => (idx === placing ? { ...m, at } : m)))
     }
     setPlacing(null)
-  }, [placing, markers, firstGroup, saveMarkers])
+  }, [placing, markers, firstGroup, saveMarkers, light, queueVariant, variant])
 
   return (
     <>
@@ -1172,6 +1191,66 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             worldSeasons={worldSeasons}
             currentSeason={currentSeason}
           />
+
+          {shownVariant && <section>
+            <div className="ga-form-section-label">{t('Prop light')}</div>
+            <Field label={t('Light preset')}>
+              <select className="ga-input" value={lightPreset} onChange={(e) => {
+                const preset = LIGHT_PRESETS.find((p) => p.name === e.target.value)
+                setPlacing(null)
+                queueVariant(variant, { light: e.target.value === '' ? null : {
+                  ...(preset?.light || light || LIGHT_PRESETS[0].light),
+                  at: light?.at || [0.5, 0.9, 0.5],
+                } })
+              }}>
+                <option value="">{t('None')}</option>
+                {LIGHT_PRESETS.map((p) => <option key={p.name} value={p.name}>{t(p.name)}</option>)}
+                <option value="Custom">{t('Custom')}</option>
+              </select>
+            </Field>
+            {light && <>
+              <div className="ga-form-row">
+                <Field label={t('Color')}><input type="color" value={light.color}
+                  onChange={(e) => editLight({ color: e.target.value })} /></Field>
+                {([
+                  ['intensity', 'Intensity', 0.05, 100, 0.05],
+                  ['range_m', 'Range (m)', 0.5, 40, 0.1],
+                  ['glow_m', 'Halo size (m)', 0, 2, 0.01],
+                ] as const).map(([key, label, min, max, step]) => <Field key={key} label={t(label)}>
+                  <input className="ga-input" type="number" min={min} max={max} step={step} value={light[key]}
+                    onChange={(e) => { if (e.target.value !== '' && Number.isFinite(e.target.valueAsNumber))
+                      editLight({ [key]: Math.min(max, Math.max(min, e.target.valueAsNumber)) }) }} />
+                </Field>)}
+              </div>
+              <div className="ga-form-row">
+                <Field label={t('Flicker')}><select className="ga-input" value={light.flicker}
+                  onChange={(e) => editLight({ flicker: e.target.value as PropLight['flicker'] })}>
+                  <option value="none">{t('None')}</option><option value="candle">{t('Candle')}</option><option value="fire">{t('Fire')}</option>
+                </select></Field>
+                <Field label={t('When')}><select className="ga-input" value={light.when}
+                  onChange={(e) => editLight({ when: e.target.value as PropLight['when'] })}>
+                  <option value="always">{t('Always')}</option><option value="night">{t('Night')}</option>
+                </select></Field>
+              </div>
+              <div className="ga-form-row">
+                {['Light point u', 'Light point v', 'Light point w'].map((label, i) => <Field key={label} label={t(label)}>
+                  <input className="ga-input" type="number" min={-0.5} max={2} step={0.01} value={light.at[i]}
+                    onChange={(e) => {
+                      if (e.target.value === '' || !Number.isFinite(e.target.valueAsNumber)) return
+                      const at = [...light.at] as PropLight['at']
+                      at[i] = Math.min(2, Math.max(-0.5, e.target.valueAsNumber))
+                      editLight({ at })
+                    }} />
+                </Field>)}
+              </div>
+              <button type="button" className={`ga-btn ga-btn-sm${placing === 'light' ? ' ga-btn-primary' : ''}`}
+                disabled={!(shownHasMesh || previewFile) || !!drawKind}
+                onClick={() => armPlacing('light')}>{placing === 'light' ? t('Click the model…') : t('Place in viewer')}</button>
+            </>}
+            <button type="button" className="ga-btn ga-btn-sm" onClick={() => {
+              for (const v of variants) queueVariant(v.index, { light: light ? { ...light, at: [...light.at] } : null })
+            }}>{t('Apply to all variants')}</button>
+          </section>}
 
           {/* THE SELECTED VARIANT'S PLACES, dialled against the viewer
               opposite: they are the variant's own (at = a fraction of ITS
@@ -1939,6 +2018,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               // (else the place type's default). `root_drop` comes from the
               // pose catalog because this prop is UNCOMPOSED — the payload's
               // `root_offset` only exists for a placed one.
+              lightPoint={light || undefined}
               markers={markers.map((m) => {
                 const entry = previewEntry(poseCatalog, m.group,
                                            m.id ? previewPose[m.id] : undefined)

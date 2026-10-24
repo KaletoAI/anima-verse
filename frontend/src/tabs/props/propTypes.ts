@@ -1,3 +1,13 @@
+export interface PropLight {
+  color: string
+  intensity: number
+  range_m: number
+  at: [number, number, number]
+  flicker: 'none' | 'candle' | 'fire'
+  when: 'always' | 'night'
+  glow_m: number
+}
+
 /**
  * Shared types + vocabulary of the prop library (plan-room-props.md).
  * Split out of PropsTab so the container, the create form and the detail
@@ -122,6 +132,7 @@ export interface PropFull {
   measured?: { tris?: number; verts?: number; uv_layers?: number; vertex_colors?: number }
   /** The PRIMARY variant's object-local markers. Edited per variant. */
   markers?: PropMarker[]
+  light?: PropLight | null
   has_source?: boolean
   created_at?: string
   source?: string
@@ -214,6 +225,7 @@ export interface PropVariantTier {
   /** Its object-local markers (absent = none). Full records only — the lean
    *  client library gets `marker_count` and nothing else. */
   markers?: PropMarker[]
+  light?: PropLight | null
   /** The key surfaces THIS variant's mesh carries. The Areas tab reads the
    *  richer `GET …/areas?variant=` (outlines, mesh layout, Blender state);
    *  this is the same list on the record, so a reader that only needs "has it
@@ -331,6 +343,7 @@ export interface PropVariant {
   /** Its object-local place markers — fractions of THIS mesh's bounding
    *  box, which is why they cannot be shared with another version. */
   markers: PropMarker[]
+  light?: PropLight | null
   /** WHAT this variant shows in the prop's picture areas, keyed by area id
    *  (spec-picture-props.md § 1, D2). Empty/absent = an ordinary model
    *  variant; a filled map makes it a PICTURE variant, whose mesh is a COPY
