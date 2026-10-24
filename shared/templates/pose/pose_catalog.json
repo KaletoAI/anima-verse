@@ -888,16 +888,21 @@
       "solo": true
     },
     "commanding_attention": {
-      "prompt": "standing tall with shoulders back, feet planted firmly in a wide stance, arms held open and deliberate at the sides",
+      "prompt": "standing tall in a wide stance, chest out, pointing firmly forward, commanding attention",
       "synonyms": [
         "autoritaet",
         "autorität",
         "das kommando übernehmen",
         "sich durchsetzen",
-        "streng auftreten"
+        "streng auftreten",
+        "befehlen",
+        "anweisungen geben",
+        "giving orders",
+        "taking charge"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "commanding",
+      "group": "stand",
+      "solo": true
     },
     "dancing together": {
       "prompt": "a couple dancing salsa together in closed hold, one hand on the partner's back, the other hands clasped, hips swaying",
