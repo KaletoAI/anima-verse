@@ -276,14 +276,14 @@ learning. Returns `{caught_by: owner}` when the owner catches, otherwise `{}`.
 
 `app.core.reading_watch.register() -> None` idempotently registers room entry,
 world tick and `respond_finished` handlers. Startup calls it once.
-`check_session(session: dict, watchers: list[str]) -> dict` checks live room
+`app.core.reading_watch.check_session(session: dict, watchers: list[str]) -> dict` checks live room
 presence, distraction and `inventory.notice_reading_difficulty` (default 60),
 claims each notice once, then dispatches effects outside locks/transactions.
-`watching_owner(reader: str, item: dict) -> str` returns the present owner when
+`app.core.reading_watch.watching_owner(reader: str, item: dict) -> str` returns the present owner when
 a same-day catch blocks reopening, otherwise an empty string.
 
 Owner catches mark sessions caught and narrate in the reader's language. The
-`item_caught_today(reader, item_id, game_day)` primary key limits memories,
+primary key (reader, item_id, game_day) of the `item_caught_today` table limits memories,
 relationship changes and reply chains to once per game day. Owner sentiment
 toward reader drops by 0.3. NPC owners reply first; `respond_finished` (except
 `superseded`) triggers the NPC reader's free response. Avatars never get LLM
