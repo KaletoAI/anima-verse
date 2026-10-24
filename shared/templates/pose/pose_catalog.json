@@ -933,16 +933,20 @@
       "group": "stand"
     },
     "lounging": {
-      "prompt": "slouched deep into a sofa, back sunk into the cushions, legs stretched out, arms spread along the backrest",
+      "prompt": "slouched deep into a sofa, arms spread along the backrest, legs apart, relaxed, half watching something",
       "synonyms": [
         "zurückgelehnt sitzen",
         "lümmeln",
         "fläzen",
         "sich zurücklehnen",
         "leaning back on couch",
-        "settling back slouching on sofa"
+        "settling back slouching on sofa",
+        "auf dem sofa lümmeln",
+        "abhängen",
+        "lounging on the sofa",
+        "slouching"
       ],
-      "animation": "sit",
+      "animation": "lounging",
       "solo": true,
       "group": "seat"
     },
