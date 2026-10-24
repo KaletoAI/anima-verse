@@ -1,0 +1,37 @@
+{
+  "comment": "Fallback models for dev/offline operation (demo world). Character models and animation clips normally come from the server (AV3D-5: /characters/{name}/model3d, /assets/animation-clips); this manifest is only used when the server supplies none.",
+  "defaultHeight": 1.7,
+  "models": [
+    {
+      "name": "Soldier",
+      "url": "Soldier.glb"
+    },
+    {
+      "name": "Xbot",
+      "url": "Xbot.glb"
+    },
+    {
+      "name": "Robot",
+      "url": "RobotExpressive.glb",
+      "height": 1.55
+    },
+    {
+      "name": "T3mia",
+      "url": "Test3_mia.glb",
+      "height": 1.7,
+      "assignOnly": true
+    }
+  ],
+  "assignments": {
+    "Noor Halvorsen": "Xbot",
+    "Isa Fenwick": "Xbot",
+    "Baz Okonkwo": "Soldier",
+    "Mira Sol": "Xbot",
+    "Teodor Lind": "Soldier"
+  },
+  "clipFiles": {
+    "walk": "Walking.fbx",
+    "sit": "Sitting.fbx",
+    "idle": "Idle.fbx"
+  }
+}

@@ -441,8 +441,8 @@ def wants_html(method: str, accept: str) -> bool:
 def login_redirect_target(path: str) -> str:
     """Where an anonymous navigation is sent so the user can sign in.
 
-    Both shells render <AuthGate>, and its login form reads ``?return=`` and
-    navigates there after a successful login.
+    /game-admin's AuthGate honours ``?return=`` after a successful login.
+    /play ignores it because login always starts the game.
     """
     from urllib.parse import quote
     base = "/game-admin" if any(_under(path, p) for p in _ADMIN_PREFIXES) else "/play"

@@ -4,8 +4,8 @@ Deliberately separate from the Game Admin: the player UI is in-world and
 user-gated (not admin). It shows the *perceived* current room scene of the
 active avatar.
 
-The built shell lives (like game-admin) under ``static/game_admin/play.html``
-— the same ``frontend/`` build, but its own page/route.
+The built 3D shell lives under ``static/client3d/index.html`` and is built
+from the ``client3d/`` workspace.
 """
 import json
 import threading
@@ -27,7 +27,7 @@ logger = get_logger("play")
 
 router = APIRouter()
 
-_SHELL = Path("static/game_admin/play.html")
+_SHELL = Path("static/client3d/index.html")
 
 
 def _expr_version(name: str) -> str:
@@ -142,12 +142,12 @@ def _bg_id(location_id: str, room: str) -> str:
 @router.get("/play", include_in_schema=False)
 def play_page():
     # Serve the static shell without auth; it contains no secrets.
-    # The SPA's AuthGate shows login when needed. Server auth here would
+    # The 3D client's title screen shows login when needed. Server auth here would
     # return 401 JSON before the SPA loads. All data routes remain gated.
     if not _SHELL.is_file():
         return HTMLResponse(
             "<h1>Player UI build missing</h1>"
-            "<p>From the repo root: <code>cd frontend &amp;&amp; npm run build</code></p>",
+            "<p>From the repo root: <code>npm run build -w client3d</code></p>",
             status_code=503)
     # no-cache: a cached shell keeps loading the OLD hashed bundle after a
     # deploy (ETag revalidation makes this cheap).

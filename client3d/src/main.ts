@@ -89,6 +89,13 @@ import { createWorldProps } from './scene/worldProps';
 import { ageAtReceiptS, createErrWindow, maxErr, clampProgress, pointAtDistance, polylineLength, type MetrePoint } from './scene/travelPath';
 import type { MapCharacter, MapTravel, PlaceOffer, WorldBounds, WorldLocation, WorldMap } from './types';
 
+// Ignore the server's generic login redirect: after login the game always starts.
+const bootUrl = new URL(location.href);
+if (bootUrl.searchParams.has('return')) {
+  bootUrl.searchParams.delete('return');
+  history.replaceState(history.state, '', bootUrl.pathname + bootUrl.search + bootUrl.hash);
+}
+
 // --- THE CELL WORLD IS GONE (E4, tasks 2–6) ---------------------------------
 //
 // Nothing in this file reads a grid key any more, and the `v1()` cast that

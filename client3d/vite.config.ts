@@ -6,9 +6,12 @@ import { viteDevTarget } from './dev-proxy-rule.js';
 // environment variable as frontend's config, so one name covers both clients.
 const target = process.env.ANIMA_API ?? 'http://localhost:8000';
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  base: command === 'build' ? '/static/client3d/' : '/',
   plugins: [react()],
   build: {
+    outDir: '../static/client3d',
+    emptyOutDir: true,
     rollupOptions: {
       // Multi-page: ship the diagnostic and preview pages as well.
       // `dev-proxy-rule.js` keeps the same entries — they are the pages
@@ -46,4 +49,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

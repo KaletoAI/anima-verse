@@ -130,7 +130,7 @@ interface Manifest {
   models: ManifestModel[];
   assignments?: Record<string, string>;
   /** Mixamo animation files (FBX/GLB), directly usable on Mixamo rigs:
-   *  {"run": "/models/StandardRun.fbx", ...} — key = clip category */
+   *  {"run": "StandardRun.fbx", ...} — key = clip category */
   clipFiles?: Record<string, string>;
 }
 
@@ -899,8 +899,21 @@ export class FigureLibrary {
     try {
       const manifestP = (async (): Promise<Manifest> => {
         try {
-          const res = await fetch('/models/manifest.json');
-          if (res.ok) return await res.json();
+          const manifestUrl = new URL(import.meta.env.BASE_URL + 'models/manifest.json', location.href);
+          const res = await fetch(manifestUrl);
+          if (res.ok) {
+            const manifest: Manifest = await res.json();
+            for (const entry of manifest.models) {
+              entry.url = new URL(entry.url, manifestUrl).href;
+              if (entry.texture) entry.texture = new URL(entry.texture, manifestUrl).href;
+            }
+            if (manifest.clipFiles) {
+              for (const [kind, url] of Object.entries(manifest.clipFiles)) {
+                manifest.clipFiles[kind] = new URL(url, manifestUrl).href;
+              }
+            }
+            return manifest;
+          }
         } catch { /* Optional offline manifest. */ }
         return { models: [] };
       })();
