@@ -11,12 +11,13 @@ export default defineConfig({
   build: {
     rollupOptions: {
       // Multi-page: ship the diagnostic and preview pages as well.
-      // `dev-proxy-rule.js` keeps the same three entries — they are the pages
+      // `dev-proxy-rule.js` keeps the same entries — they are the pages
       // Vite answers in dev.
       input: {
         main: 'index.html',
         figureTest: 'figure-test.html',
         floorplan: 'floorplan.html',
+        hud: 'hud.html',
       },
     },
   },
@@ -27,7 +28,7 @@ export default defineConfig({
       // ONE catch-all context (a `^`-prefixed key is matched as a regexp, and
       // every request path starts with `/`). There is deliberately no list of
       // backend prefixes any more — `dev-proxy-rule.js` names the few paths
-      // VITE owns (its namespaces, the source tree, the three HTML entries,
+      // VITE owns (its namespaces, the source tree, the HTML entries,
       // `public/`), and everything else is the backend's. The old list was
       // sixteen prefixes against ~38 the client and the shared panels call,
       // and a missing prefix does not 404: Vite answers the API call with its

@@ -60,7 +60,8 @@ import {
   readChatAlpha, readChatSize, readPortraitCount, rowAtCenter, writeChatSize,
   type ChatSize, type RowExtent,
 } from './chatPanel';
-import { gameActions, getBoot, subscribeBoot, setHudUiState, getGameState, setGameState, setPerfEnabled, subscribeGameState, uiActions } from './bus';
+import { mergeRects } from './bridge';
+import { gameActions, getHudUiState, getBoot, subscribeBoot, setHudUiState, setPerfStats, getGameState, setGameState, subscribeGameState, uiActions } from './bus';
 import '@anima/player-ui/panels.css';
 import './hud.css';
 // Load order matters: the fantasy theme redefines the custom properties and
@@ -243,6 +244,39 @@ export function Hud({ avatar, username, role }: {
     };
   }, []);
 
+  /** Measure only non-modal surfaces. Portalled overlays own the full window
+   *  through overlayOpen, never through a full-screen hit rectangle. */
+  useEffect(() => {
+    const selector = '.hud-rail, .hud-dock, .hud-panel, .hud-mode, .hud-party, '
+      + '.hud-talk, .hud-elevator, .hud-plaque, .hud-minimap, .ga-toast';
+    let frame = 0;
+    const observed = new Set<Element>();
+    const measure = () => {
+      frame = 0;
+      const nodes = new Set(document.querySelectorAll(selector));
+      for (const node of observed) if (!nodes.has(node)) { resize.unobserve(node); observed.delete(node); }
+      const rects = [];
+      for (const node of nodes) {
+        if (!observed.has(node)) { observed.add(node); resize.observe(node); }
+        const { x, y, width: w, height: h } = node.getBoundingClientRect();
+        if (w > 0 && h > 0 && getComputedStyle(node).visibility !== 'hidden') rects.push({ x, y, w, h });
+      }
+      const next = mergeRects(rects);
+      if (JSON.stringify(next) !== JSON.stringify(getHudUiState().hitRects)) setHudUiState({ hitRects: next });
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    const resize = new ResizeObserver(schedule);
+    const mutations = new MutationObserver(schedule);
+    mutations.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+    window.addEventListener('resize', schedule);
+    schedule();
+    return () => {
+      cancelAnimationFrame(frame);
+      resize.disconnect(); mutations.disconnect();
+      window.removeEventListener('resize', schedule);
+    };
+  }, []);
+
   // The local settings of this browser. Loaded once — `localStorage` has no
   // other writer in this tab — and sent to the scene audio handler here, so
   // the stored volumes hold from the first note on and not only after somebody
@@ -288,12 +322,15 @@ export function Hud({ avatar, username, role }: {
    *
    * One boolean, so no `loadPrefs`-style reader is needed: anything that is
    * not the string "1" means off, which is also what an empty store and a
-   * hand-edited value give. `setPerfEnabled` is what actually gates the
+   * hand-edited value give. `HudUiState.perfOn` is what actually gates the
    * measuring in `main.ts` — while this is off, nothing is traversed at all.
+   * Switching it off also drops the last numbers, so re-opening never shows a
+   * frozen picture from minutes ago.
    */
   const [perfOn, setPerfOn] = useState(() => localStorage.getItem(PERF_KEY) === '1');
   useEffect(() => {
-    setPerfEnabled(perfOn);
+    setHudUiState({ perfOn });
+    if (!perfOn) setPerfStats(null);
     localStorage.setItem(PERF_KEY, perfOn ? '1' : '0');
   }, [perfOn]);
 
@@ -303,7 +340,7 @@ export function Hud({ avatar, username, role }: {
    * tests for "0" rather than for "1": a fresh browser has nothing stored, and
    * a map one has to go and switch on is a map nobody finds.
    *
-   * There is no `setMinimapEnabled` counterpart to `setPerfEnabled`: the slice
+   * There is no `setMinimapEnabled` counterpart to `HudUiState.perfOn`: the slice
    * is published on its own store, so with the canvas unmounted nothing is
    * subscribed and a publish reaches nobody. `main.ts` gates on the embodied
    * mode, this gates on the switch, and the two together are the condition.

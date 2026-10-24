@@ -77,8 +77,10 @@ import { figureTransition, pickablePlaceFor, PLACE_PICK_RADIUS_M, placementOf, p
   type ShownPlacement } from './game/placement';
 import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
 import { markBootStart, withPhase, reportBootStage, setBootNote, getBootState, bootReport, subscribeBoot, subscribeBootReport } from './game/boot';
+import { connectSceneSide, pointInRects, postMessageTransport } from './hud/bridge';
+import { subscribeHudUiState } from './hud/bus';
 import { mountHud, mountTitle } from './hud/mount';
-import { setBoot, escTarget, keyForScene, getHudUiState, gameActions, getGameState, perfEnabled, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
+import { setBoot, escTarget, keyForScene, getHudUiState, gameActions, getGameState, setGameState, setMinimap, setPerfStats, subscribeGameState, uiActions } from './hud/bus';
 import type { ModelTier, ScenePayload } from './api';
 import { createGround } from './scene/ground';
 import { createBackdrop } from './scene/backdrop';
@@ -538,6 +540,44 @@ async function boot() {
   });
 }
 
+/** Debug the native boundary with two independent browser realms. Keys focused
+ *  in the iframe stay there; scene listeners continue reading the mirrored bus. */
+function mountHudFrame(): void {
+  const frame = document.createElement('iframe');
+  frame.title = 'Anima Verse HUD';
+  frame.src = import.meta.env.BASE_URL + 'hud.html';
+  frame.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;border:0;background:transparent;z-index:20;pointer-events:none';
+  let x = -1, y = -1;
+  const route = () => {
+    const ui = getHudUiState();
+    frame.style.pointerEvents = ui.overlayOpen || pointInRects(ui.hitRects, x, y) ? 'auto' : 'none';
+  };
+  const move = (event: MouseEvent) => { x = event.clientX; y = event.clientY; route(); };
+  window.addEventListener('pointermove', move);
+  const unsubscribe = subscribeHudUiState(route);
+  let disconnect = () => {};
+  let child: Window | null = null;
+  frame.addEventListener('load', () => {
+    disconnect();
+    child?.removeEventListener('mousemove', move);
+    child = frame.contentWindow;
+    if (!child) return;
+    disconnect = connectSceneSide(postMessageTransport(child, location.origin));
+    // While the pointer is inside an iframe the parent receives no movement.
+    // Same-origin access lets its mousemove listener apply the identical rule
+    // and hand input back to the canvas when the pointer leaves HUD surfaces.
+    child.addEventListener('mousemove', move);
+    route();
+  });
+  window.addEventListener('pagehide', () => {
+    disconnect(); unsubscribe();
+    window.removeEventListener('pointermove', move);
+    child?.removeEventListener('mousemove', move);
+    frame.remove();
+  }, { once: true });
+  document.body.appendChild(frame);
+}
+
 async function startApp(username: string, role: string) {
   markBootStart();
   // --- Knowledge filter (stage 5): the ONE switch that decides which view is
@@ -676,7 +716,8 @@ async function startApp(username: string, role: string) {
   // Registered BEFORE the mount below: the HUD reports its panel from an
   // effect, and a handler that arrived afterwards would miss that first one.
   gameActions.setChatBox = (box) => { engine.obstruction = box; };
-  mountHud({ username, avatar: firstMap.avatar, role });   // React HUD island (E2-T5)
+  if (new URLSearchParams(location.search).get('hud') === 'iframe') mountHudFrame();
+  else mountHud({ username, avatar: firstMap.avatar, role });   // React HUD island (E2-T5)
   npcs.setAvatar(firstMap.avatar);
 
   // Two sources, one rule: the WORLDMAP row is authoritative for placement and
@@ -1109,13 +1150,13 @@ async function startApp(username: string, role: string) {
   //    choice: a traversal per frame would distort the very figure it
   //    measures.
   //  - `renderer.info` is free to read and is picked up by the publisher.
-  // Nothing is measured at all while the readout is off (`perfEnabled`) —
+  // Nothing is measured at all while the readout is off (`HudUiState.perfOn`) —
   // a display nobody looks at may not cost a frame.
   let fpsMeter = newFpsMeter();
   let fpsNow = 0;
   let worstFrame = { lastFrameAt: null as number | null, worstFrameMs: 0 };
   engine.addFrameHook((dt) => {
-    if (perfEnabled()) {
+    if (getHudUiState().perfOn) {
       fpsNow = pushFrame(fpsMeter, dt);
       pushWorstFrame(worstFrame, performance.now());
       return;
@@ -1148,11 +1189,11 @@ async function startApp(username: string, role: string) {
    * the billboard binning) and re-fills their instance buffers, so it is the
    * one place the scatter can cost a whole frame at once — a pass is invisible
    * in an average and plainly visible as a stutter. Only when somebody is
-   * looking (`perfEnabled`): a display nobody reads may not cost a frame,
+   * looking (`HudUiState.perfOn`): a display nobody reads may not cost a frame,
    * which is this readout's own rule.
    */
   function runScatterLod(): void {
-    const t0 = perfEnabled() ? performance.now() : 0;
+    const t0 = getHudUiState().perfOn ? performance.now() : 0;
     terrainGround.tickScatterLod(engine.camera);
     // …the closing stamp is taken either way: the throttle of the movement
     // driver needs it, and only the SUBTRACTION is the readout's.
@@ -1207,7 +1248,7 @@ async function startApp(username: string, role: string) {
   // may stand for a second (they change about that often), but an FPS reading
   // that only moved once a second would feel broken while the picture stutters.
   setInterval(() => {
-    if (!perfEnabled()) return;
+    if (!getHudUiState().perfOn) return;
     const info = engine.renderer.info;
     syncCounters.travErrMaxM = maxErr(errWindow, performance.now());
     setPerfStats({
@@ -1241,7 +1282,7 @@ async function startApp(username: string, role: string) {
       posDirty = true;
     }
     tickModelTiers();
-    if (perfEnabled()) measurePerfHeavy();
+    if (getHudUiState().perfOn) measurePerfHeavy();
   }, LOD_TICK_MS);
 
   /** Threshold quads per location, one child group per storey. The group hangs
@@ -2109,6 +2150,7 @@ async function startApp(username: string, role: string) {
     return true;
   };
   gameActions.sayBubble = (name, text) => npcs.say(name, text);
+  gameActions.clearSelection = () => { setGameState({ selected: null }); };
   gameActions.zoomTo = (name) => {
     // While a follow target is set (embodied mode) the camera belongs to the
     // followed figure: a fly-to would be dragged back by the chase every

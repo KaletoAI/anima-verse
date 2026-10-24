@@ -10,10 +10,10 @@
  *   calls (e.g. a key press opening the chat).
  *
  * Deliberately dependency-free: no React import here, so scene code may import
- * it without pulling the HUD bundle in. Game state has three writers, each
+ * it without pulling the HUD bundle in. Game state has two writers, each
  * owning a disjoint set of fields: `main.ts` with its mode helper
- * `game/embody.ts` (mode, selection, talk target, elevator, stairs), `CharacterPlaque.tsx` (one
- * field — clearing the selection) and `Hud.tsx` (what the `/play/scene` poll
+ * `game/embody.ts` (mode, selection, talk target, elevator, stairs) and
+ * `Hud.tsx` (what the `/play/scene` poll
  * says: `movementLocked` + `partyLeader` (E3-T3), `groundRoomId`,
  * `floorRoomIds` and the two lock maps of task C2).
  */
@@ -96,12 +96,16 @@ export interface HudGameState {
   enterOffer: { name: string; dist: number } | null;
 }
 
+/** Hud.tsx is the single writer of these fields; the scene owns the rest. */
+export const HUD_OWNED_FIELDS = ['movementLocked','partyLeader','groundRoomId','floorRoomIds','lockedRooms','lockedLoc','lockedLocations'] as const satisfies readonly (keyof HudGameState)[];
+
 /** Actions the React side calls INTO the vanilla app; main.ts registers them. */
 export interface HudGameActions {
   setVolumes?: (prefs: Prefs) => void;
-  speak?: (url: string) => void;
+  speak?: (url: string) => void | Promise<void>;
   stopSpeech?: () => void;
   markResume?: () => void;
+  clearSelection?: () => void;
   zoomTo?: (charName: string) => void;
   /** show a line as a speech bubble over that figure's head (stage 6). The
    *  HUD owns the transcript poll, the scene owns the figures — so this is
@@ -200,13 +204,12 @@ export function subscribeGameState(fn: () => void): () => void {
 // would re-render the chat, the plaque and the rail along with it — the
 // display would cost more than what it measures.
 //
-// The switch travels the other way (React -> vanilla) and is a plain flag
-// rather than an action: `main.ts` asks before it measures, so a hidden
+// The switch travels the other way (React -> vanilla) in HudUiState.
+// `main.ts` asks before it measures, so a hidden
 // overlay costs nothing at all, not even the traversal.
 
 let perf: PerfStats | null = null;
 const perfListeners = new Set<() => void>();
-let perfOn = false;
 
 /** main.ts publishes a fresh readout (null = nothing measured right now). */
 export function setPerfStats(next: PerfStats | null): void {
@@ -218,15 +221,6 @@ export function subscribePerfStats(fn: () => void): () => void {
   perfListeners.add(fn);
   return () => { perfListeners.delete(fn); };
 }
-
-/** The HUD switches the readout on and off; switching it off also clears the
- *  last numbers, so re-opening never shows a frozen picture from minutes ago. */
-export function setPerfEnabled(on: boolean): void {
-  perfOn = on;
-  if (!on) setPerfStats(null);
-}
-/** Asked by main.ts before it measures — see the note above. */
-export function perfEnabled(): boolean { return perfOn; }
 
 // --- Minimap (Stage 5, task 3) ---------------------------------------------
 //
@@ -276,9 +270,9 @@ export function subscribeBoot(fn: () => void): () => void {
 /** Window CSS pixels; populated by the HUD once pointer routing needs them. */
 export interface HudRect { x: number; y: number; w: number; h: number }
 export interface HudUiState {
-  menuOpen: boolean; typing: boolean; overlayOpen: boolean; hitRects: HudRect[];
+  menuOpen: boolean; typing: boolean; overlayOpen: boolean; perfOn: boolean; hitRects: HudRect[];
 }
-let hudUi: HudUiState = { menuOpen: false, typing: false, overlayOpen: false, hitRects: [] };
+let hudUi: HudUiState = { menuOpen: false, typing: false, overlayOpen: false, perfOn: false, hitRects: [] };
 const hudUiListeners = new Set<() => void>();
 export function setHudUiState(patch: Partial<HudUiState>): void {
   hudUi = { ...hudUi, ...patch };

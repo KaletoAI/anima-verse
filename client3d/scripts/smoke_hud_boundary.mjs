@@ -27,7 +27,7 @@ const game = { ...bus.getGameState(), mode: 'embodied', selected: { char: { name
   floorRoomIds: { 0: 'hall' }, lockedRooms: { vault: 'Locked' }, lockedLoc: 'home', lockedLocations: { away: 'Locked' },
   elevator: { dist: 1, levels: [0, 1], current: 0 }, elevatorOpen: true,
   stairs: { dist: 1, dir: 'up', dest: { level: 1, x: 1, y: 3, z: 2 } }, enterOffer: { name: 'away', dist: 2 } };
-const ui = { menuOpen: true, typing: false, overlayOpen: false, hitRects: [{ x: 1, y: 2, w: 3, h: 4 }, { x: 5, y: 6, w: 7, h: 8 }] };
+const ui = { perfOn: false, menuOpen: true, typing: false, overlayOpen: false, hitRects: [{ x: 1, y: 2, w: 3, h: 4 }, { x: 5, y: 6, w: 7, h: 8 }] };
 const boot = { state: { percent: 0, label: 'world', note: null, stages: [] }, report: { stages: { world: 1, scenes: 2, tiles: 3, visible: 4, figures: 5, arrival: 6 }, phases: { 'clip:download': 1, 'clip:parse': 2, 'clip:fit': 3, 'model:download': 4, 'model:build': 5, 'scene:fetch': 6, 'arrival:mount': 7, 'ground:fetch': 8, 'ground:build': 9 }, longTasks: null, longTaskMaxByPhase: {}, afterVisible: null } };
 for (const [set, get, value] of [[bus.setGameState, bus.getGameState, game], [bus.setHudUiState, bus.getHudUiState, ui], [bus.setBoot, bus.getBoot, boot]]) {
   set(value);

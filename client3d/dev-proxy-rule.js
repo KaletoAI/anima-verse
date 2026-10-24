@@ -13,14 +13,14 @@
  * `./public/` is `client3d/public/`, which holds `/models/manifest.json` and
  * the test meshes: those must stay Vite's, they have no backend route.
  *
- * The entries are the three of `build.rollupOptions.input`. This client has
+ * The entries match `build.rollupOptions.input`. This client has
  * no `play.html`, so `/play` and `/play/…` are backend API here, as are
  * `/game-admin` and `/static/…` (the shared `BelongingsPanel` falls back to
  * `/static/game_admin/silhouette.svg`).
  */
 import { createDevTarget } from '../packages/dev-proxy-rule/index.js'
 
-export const ENTRIES = ['index.html', 'figure-test.html', 'floorplan.html']
+export const ENTRIES = ['index.html', 'figure-test.html', 'floorplan.html', 'hud.html']
 
 /** The path Vite serves for a request, or `null` when it is the backend's. */
 export const viteDevTarget = createDevTarget({

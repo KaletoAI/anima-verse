@@ -16,7 +16,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import { useI18n, Icon, transparentPortraitUrl } from '@anima/player-ui';
-import { gameActions, getGameState, setGameState, subscribeGameState, uiActions } from './bus';
+import { gameActions, getGameState, subscribeGameState, uiActions } from './bus';
 
 export function CharacterPlaque() {
   const { t } = useI18n();
@@ -96,7 +96,7 @@ export function CharacterPlaque() {
         </div>
       </div>
 
-      <button className="hud-plaque-close" onClick={() => setGameState({ selected: null })}
+      <button className="hud-plaque-close" onClick={() => gameActions.clearSelection?.()}
         title={t('Close')} aria-label={t('Close')}>
         <Icon name="close" size={14} />
       </button>
