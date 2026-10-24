@@ -194,7 +194,7 @@ async function main() {
 
   console.log('\n[6] track shape + the admin-preview application on a real GLB');
   const shape = {};
-  for (const name of ['greeting-handshake__a', 'greeting-handshake__b', 'salsa__a', 'salsa__b', 'dance']) {
+  for (const name of ['greeting-handshake__a', 'greeting-handshake__b', 'dancing-together__a', 'dancing-together__b', 'dance']) {
     const obj = fbx.parse(arrayBufferOf(await readFile(join(CLIP_DIR, `${name}.fbx`))), '');
     const clip = obj.animations[0];
     const pos = clip.tracks.filter((t) => t.name.endsWith('.position'));
@@ -247,7 +247,7 @@ async function main() {
   };
   // the harness reference: the free library's own idle (CMU), present in git
   shape.idle = fbx.parse(arrayBufferOf(await readFile(join(CLIP_DIR, 'idle.fbx'))), '').animations[0];
-  for (const name of ['idle', 'greeting-handshake__a', 'salsa__b', 'dance']) {
+  for (const name of ['idle', 'greeting-handshake__a', 'dancing-together__b', 'dance']) {
     const e = adminApply(shape[name]);
     check(`${name} applied admin-style keeps the skeleton intact`,
       e.height > bind.height * 0.7 && e.height < bind.height * 1.3 && e.span < 2.6,
