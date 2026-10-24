@@ -1,6 +1,6 @@
 /**
- * AvatarSettingsPanel — the user's own avatar in /play: edit appearance, soul
- * and preferences. Uses the same template-driven column renderer as the
+ * AvatarSettingsPanel — the user's own avatar in the player HUD: edit
+ * appearance, soul and preferences. Uses the same template-driven column renderer as the
  * Game-Admin (`TemplateTab`) — same layout, filtered down to the columns and
  * fields a user may touch.
  *
@@ -315,7 +315,7 @@ export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
   }, [lang])
 
   // The appearance selects use no dynamic sources; TTS voices/speakers cannot be
-  // loaded in /play → the current value stays, the choice is limited.
+  // loaded by a player → the current value stays, the choice is limited.
   // The world calendar is the exception: `season_day` fields (the identity
   // column carries one) are an empty dropdown without it, so the same list the
   // game clock ships is loaded here too.

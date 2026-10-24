@@ -3,10 +3,10 @@
  * (plan-3d-game stage 6, task 4).
  *
  * ScenePanel does not own a photo dialog: it offers the `photoDialog` slot and
- * hands in a `PhotoDialogControl`. /play fills that slot with the game-admin
- * `ImageGenDialog` (model/LoRA/size/reference budget — an authoring tool). The
- * 3D HUD has no game-admin bundle, so it fills the same slot with THIS dialog:
- * the same flow, reduced to what a player decides in the moment.
+ * hands in a `PhotoDialogControl`. The 3D HUD has no game-admin bundle (whose
+ * `ImageGenDialog` is an authoring tool: model/LoRA/size/reference budget), so
+ * it fills the slot with THIS dialog: the same flow, reduced to what a player
+ * decides in the moment.
  *
  * FIELD INVENTORY — `ScenePhotoSubmit` (ScenePanel.tsx) has six fields; this
  * dialog surfaces all of them:
@@ -21,7 +21,7 @@
  *                         fallback; any other entry is an explicit pick that
  *                         renders there or nowhere. The list is
  *                         `GET /world/imagegen-options?occasion=photo`, the same
- *                         answer the /play dialog reads (already filtered to
+ *                         answer the admin dialog reads (already filtered to
  *                         ordinary image generators by the server).
  *   · `loras`           → four slots (name + strength) of the CURRENT
  *                         backend's LoRA-library entries — under Auto the
@@ -43,8 +43,8 @@
  * genuinely without people is therefore not orderable here.
  *
  * Portal-rendered onto document.body like GiftPicker/ChatGalleryPicker: the
- * composer sits inside a transformed layout container (react-grid-layout in
- * /play, the HUD dock in client3d) where a position:fixed modal would clip.
+ * composer sits inside the HUD dock, a clipping container where a
+ * position:fixed modal would clip.
  * The `.ga-modal-backdrop` class is load-bearing beyond looks — the 3D client's
  * global Esc chain (client3d/src/main.ts) skips its own handling while such a
  * backdrop is in the document, so Esc closes this dialog and nothing else.

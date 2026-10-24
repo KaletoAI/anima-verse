@@ -1,7 +1,8 @@
 /**
- * NoticeBanner — the persistent notice banner of /play (B tier 1).
+ * NoticeBanner — the persistent notice banner of the player HUD (B tier 1).
  * Source: GET /play/notices (critical events on the spot, a movement block,
- * unread notifications). Renders nothing when nothing is pending.
+ * unread notifications). Renders nothing when nothing is pending. Party
+ * membership is NOT shown here: the HUD's PartyStrip is its one place.
  * A notification is marked read with a click (POST /notifications/{id}/read);
  * "Mark all as read" clears them in one go (POST /notifications/read-all).
  */
@@ -17,7 +18,6 @@ interface ForceWarning {
   rule_id: string; rule_name: string; message: string
   go_to: string; go_to_location_id: string; go_to_room_id: string; set_activity: string
 }
-interface PartyInfo { role: 'leader' | 'follower'; leader: string; members: string[] }
 interface Notices {
   avatar: string
   events: NoticeEvent[]
@@ -25,10 +25,9 @@ interface Notices {
   force_warning: ForceWarning | null
   notifications: NoticeItem[]
   unread_count: number
-  party: PartyInfo | null
 }
 
-const EMPTY: Notices = { avatar: '', events: [], leave_blocked: null, force_warning: null, notifications: [], unread_count: 0, party: null }
+const EMPTY: Notices = { avatar: '', events: [], leave_blocked: null, force_warning: null, notifications: [], unread_count: 0 }
 
 export function NoticeBanner() {
   const { t } = useI18n()
@@ -36,7 +35,7 @@ export function NoticeBanner() {
   const { data } = usePoll<Notices>(
     'play-notices', () => apiGet<Notices>('/play/notices'), SYNC_ENDPOINTS.notices)
 
-  // Polled state is authoritative; dismiss/leaveParty below patch it
+  // Polled state is authoritative; the dismiss actions below patch it
   // optimistically until the next poll (same net behavior as before).
   useEffect(() => { if (data) setN(data) }, [data])
 
@@ -53,13 +52,8 @@ export function NoticeBanner() {
     setN((prev) => ({ ...prev, notifications: [], unread_count: 0 }))
   }, [])
 
-  const leaveParty = useCallback(async () => {
-    try { await apiPost('/play/party/leave', {}) } catch { /* ignore */ }
-    setN((prev) => ({ ...prev, party: null }))
-  }, [])
-
   const hasAny = n.events.length > 0 || !!n.leave_blocked || !!n.force_warning
-    || n.notifications.length > 0 || !!n.party
+    || n.notifications.length > 0
   if (!hasAny) return null
 
   // Opaque background and coloured edge keep scene text from showing through.
@@ -74,7 +68,7 @@ export function NoticeBanner() {
   })
 
   const hasLeftItems = !!n.leave_blocked || n.events.length > 0
-    || n.notifications.length > 0 || !!n.party
+    || n.notifications.length > 0
 
   // Overlay: a zero-height container overflows downwards, centred over the
   // top panel edge, preserving the layout even with multiple notices.
@@ -104,22 +98,6 @@ export function NoticeBanner() {
           display: 'flex', flexDirection: 'column', gap: 4,
           width: 'min(560px, 70vw)', maxWidth: '100%',
         }}>
-          {n.party && (
-            <div style={row('#78aaff')}>
-              <span>👥</span>
-              <span style={{ flex: 1 }}>
-                {n.party.role === 'follower'
-                  ? `${t('You are in a party, following')} ${n.party.leader}`
-                  : `${t('You lead a party with')} ${n.party.members.join(', ')}`}
-              </span>
-              <button onClick={leaveParty}
-                style={{ border: '1px solid rgba(255,255,255,0.25)', background: 'transparent',
-                         color: 'inherit', cursor: 'pointer', borderRadius: 6,
-                         padding: '1px 8px', fontSize: '0.92em' }}>
-                {t('Leave party')}
-              </button>
-            </div>
-          )}
           {n.leave_blocked && (
             <div style={row('#e05656')}>
               <span>🚫</span>

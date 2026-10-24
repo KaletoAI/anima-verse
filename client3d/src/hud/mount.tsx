@@ -79,7 +79,7 @@ export function mountHud(opts: { username: string; avatar: string; role: string 
   }
   root = createRoot(host);
   // ToastProvider is mandatory: ScenePanel calls useToast() and throws on
-  // mount without it. Same provider nesting as /play (frontend player/main).
+  // mount without it.
   // LightboxProvider mounts the ONE host the package's `openLightbox`
   // singleton hands its item to — without it every call is silently a no-op
   // (ScenePanel opens chat images through it). It portals to document.body,

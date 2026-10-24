@@ -1,11 +1,11 @@
 /**
- * ScenePanel — the chat/scene surface of /play (perceived room scene, composer,
- * attachments, scene-photo flow, party invites). Extracted from PlayerApp
- * (plan-3d-game stage 2, task 3).
+ * ScenePanel — the chat/scene surface of the player client (perceived room
+ * scene, composer, attachments, scene-photo flow, party invites). Extracted
+ * from the former 2D player (plan-3d-game stage 2, task 3).
  *
- * Contract of the cut: PlayerApp keeps the ONE `/play/scene` poll, the
- * capability derivation and the outer `.player-panel` chrome (header, z-order,
- * react-grid-layout behaviour). This component owns the inner body: data and
+ * Contract of the cut: the host (today the 3D HUD, `client3d/src/hud/Hud.tsx`)
+ * keeps the ONE `/play/scene` poll, the capability derivation and the outer
+ * panel chrome. This component owns the inner body: data and
  * refresh come in via props, actions (say, photo, gift, follow, party
  * respond) live here. No poll of its own — `useQueue` below joins the shared
  * 'queue-status' feed that TaskPanel & co. already share via the poll hub.
@@ -159,13 +159,13 @@ export interface PhotoDialogControl {
 }
 
 export interface ScenePanelProps {
-  /** The `/play/scene` payload — PlayerApp owns the single poll. */
+  /** The `/play/scene` payload — the host owns the single poll. */
   data: SceneData | null
   /** Force a poll refresh after own actions (say, photo, gift, party). */
   refreshScene: () => Promise<void>
   /** Active avatar name (sender for the gift/photo flows). */
   avatar: string
-  /** Capability gate (PlayerApp keeps the derivation from the scene payload). */
+  /** Capability gate (the host keeps the derivation from the scene payload). */
   hasCapability: (skillId: string) => boolean
   /** A room/step change is in flight (shared with the move pad). */
   moving: boolean
@@ -211,15 +211,12 @@ type AttachInfo = { image_id?: string; image_url?: string; preview: string; uplo
 /** Prepared scene-photo dialog payload (from /play/scene-photo/prepare). */
 type PhotoDlgInfo = { prompt: string; subjects: string[]; present: string[] }
 
-// Module-level draft cache (same pattern as the Lightbox singleton): /play
-// remounts the whole grid subtree on every `openKey` change (panel toggles,
-// the Others panel appearing/disappearing, background toggle), which unmounts
-// this component. Before the extraction this transient composer state lived in
-// PlayerApp and therefore survived those remounts — the cache restores exactly
-// that behaviour, keeping the panel self-contained for the 3D HUD island.
-// Keyed by avatar: a full PlayerApp remount (avatar gate, page load) mounts the
-// panel with avatar '' first, which discards the cache — the draft did not
-// survive a PlayerApp remount before the cut either. Never persisted anywhere.
+// Module-level draft cache (same pattern as the Lightbox singleton): the host
+// unmounts this component whenever its panel closes (the HUD's chat panel
+// withdraws by itself in auto mode). The cache keeps the transient composer
+// state across those remounts, so the panel stays self-contained.
+// Keyed by avatar: a full host remount (avatar gate, page load) mounts the
+// panel with avatar '' first, which discards the cache. Never persisted anywhere.
 // Async flows and the cache: send() clears the LOCAL state before its request
 // — the event-handler render write-throughs the cleared values, so any later
 // mount starts empty (no cache mutation can achieve this: a mounted instance
@@ -256,7 +253,7 @@ function resetDraft(avatar: string) {
 export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, onEnterRoom,
   photoDialog, highlightedId, onRowHover, transcriptAside }: ScenePanelProps) {
   const { t } = useI18n()
-  // Different avatar than the cached draft (incl. the '' of a fresh PlayerApp
+  // Different avatar than the cached draft (incl. the '' of a fresh host
   // mount) → drop the cache BEFORE the initializers below read it.
   if (draft.avatar !== avatar) resetDraft(avatar)
   const [text, setText] = useState(draft.text)
@@ -497,8 +494,8 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
 
   // `id` is carried through: it is the stable key of a row and what a host
   // addresses a row by (`data-scene-id`). `volume` stays dropped on purpose —
-  // handing it over would switch on SceneView's whisper/shout formatting for
-  // /play, which is a change of its own and not asked for here.
+  // handing it over would switch on SceneView's whisper/shout formatting,
+  // which is a change of its own and not asked for here.
   const lines: SceneLine[] = (data?.scene || []).map((p) => ({
     id: p.id, ts: p.ts, content: p.content, kind: p.kind, meta: p.meta,
   }))

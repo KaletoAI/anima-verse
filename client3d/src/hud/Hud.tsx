@@ -11,13 +11,12 @@
  * tasks) to that rail. They are the identical components out of
  * `@anima/player-ui` and poll themselves, so the frame is all this file adds;
  * `requires` on a rail entry hides the button when the bound skill package is
- * gone, the same gating /play does.
+ * gone.
  *
- * This container owns the ONE `/play/scene` poll (same contract as PlayerApp
- * in /play): ScenePanel receives data + refresh as props and never polls
- * itself. The `photoDialog` slot is filled with `PlayerPhotoDialog` (stage 6),
- * the package's slim player-side dialog — the big game-admin `ImageGenDialog`
- * that /play slots in stays where it is. Gallery regeneration, Instagram
+ * This container owns the ONE `/play/scene` poll: ScenePanel receives data +
+ * refresh as props and never polls itself. The `photoDialog` slot is filled
+ * with `PlayerPhotoDialog` (stage 6), the package's slim player-side dialog —
+ * the big game-admin `ImageGenDialog` stays in the admin. Gallery regeneration, Instagram
  * regeneration/animation and profile portraits use slim player dialogs too.
  * One character-form host provides the portrait dialog throughout this HUD.
  *
@@ -76,8 +75,8 @@ type PanelId = 'chat' | 'self' | 'others' | 'menu'
   | 'belongings' | 'mind' | 'phone' | 'news' | 'tasks' | 'quests' | 'gallery'
   | 'instagram' | 'avatar';
 
-/** `requires` = the skill id the panel is bound to, exactly as in /play's
- *  PANEL_META: without the skill package the button is gone, so removing a
+/** `requires` = the skill id the panel is bound to: without the skill
+ *  package the button is gone, so removing a
  *  package degrades the HUD by itself instead of leaving a dead button. */
 const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: string }> = [
   { id: 'chat', icon: 'chat', title: 'Chat' },
@@ -86,11 +85,10 @@ const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: str
   { id: 'others', icon: 'others', title: 'Others' },
   { id: 'belongings', icon: 'backpack', title: 'Inventory' },
   { id: 'mind', icon: 'brain', title: 'Mind' },
-  // Like /play's PANEL_META, the gallery carries no `requires`: looking at the
+  // The gallery carries no `requires`: looking at the
   // avatar's own images is not bound to a skill package.
   { id: 'gallery', icon: 'gallery', title: 'Gallery' },
-  // Bound to the instagram skill package, exactly as in /play's PANEL_META:
-  // no package, no feed, no button.
+  // Bound to the instagram skill package: no package, no feed, no button.
   { id: 'instagram', icon: 'instagram', title: 'Instagram', requires: 'instagram' },
   { id: 'phone', icon: 'phone', title: 'Phone', requires: 'send_message' },
   { id: 'news', icon: 'news', title: 'News' },
@@ -633,9 +631,9 @@ export function Hud({ avatar, username, role }: {
   const inRoom = (data?.present_detail || []).map((p) => p.name);
   const avatarName = data?.avatar || avatar;
 
-  // Party follower (E3-T3): SAME derivation as /play (PlayerApp hands
-  // `party.role === 'follower'` to the MovePad). The vanilla side reads it off
-  // the bus and stops steering; the server refuses the step regardless.
+  // Party follower (E3-T3): `party.role === 'follower'` locks movement. The
+  // vanilla side reads it off the bus and stops steering; the server refuses
+  // the step regardless.
   // The ROLE locks the movement, not the leader's name — a party whose leader
   // the payload leaves empty still carries its followers along, and deriving
   // the lock from the name handed those keys back (E3-T5 fix). The name is
@@ -1240,8 +1238,8 @@ export function Hud({ avatar, username, role }: {
               </div>
             </section>
           )}
-          {/* The content panels (stage 6). They are the SAME components /play
-              renders — they poll themselves and take no scene data, so there
+          {/* The content panels (stage 6), shared from @anima/player-ui —
+              they poll themselves and take no scene data, so there
               is nothing to wire beyond the frame. Only one of them is ever
               mounted at a time (CONTENT_PANELS), which also keeps their polls
               from all running at once. */}

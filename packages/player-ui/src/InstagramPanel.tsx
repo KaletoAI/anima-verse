@@ -241,8 +241,8 @@ export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanel
 
   // The three deletions ask INSIDE the post they belong to — the same inline
   // confirmation strip GalleryPanel uses. A native `window.confirm` is no
-  // option here: this panel runs in the /play grid AND in the 3D client's HUD,
-  // where a browser dialog blocks the render loop and is suppressed outright
+  // option here: this panel runs in the 3D client's HUD, where a browser
+  // dialog blocks the render loop and is suppressed outright
   // while the pointer is locked — the click then appears to do nothing.
   // At most one strip is open, and it is always the one of `pending.postId`.
   const [pending, setPending] = useState<

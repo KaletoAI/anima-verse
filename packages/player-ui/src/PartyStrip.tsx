@@ -9,7 +9,7 @@
  * invite banner, and a second place to answer the same invite would let one
  * invitation be answered twice from two surfaces.
  *
- * Used by the 3D HUD only — /play keeps its own strip in NoticeBanner.
+ * The HUD's one party surface; NoticeBanner deliberately shows no party line.
  */
 import { useState } from 'react'
 import { useI18n } from './I18nProvider'

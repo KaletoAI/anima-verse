@@ -134,9 +134,9 @@ function StatBars({ c }: { c: CharState }) {
 
 /** The "do something together" popover of ONE card.
  *
- *  Rendered into document.body: the panel lives in the /play react-grid
- *  layout, where an absolutely positioned child is clipped away by the grid
- *  item. Anchored to the button that opened it.
+ *  Rendered into document.body: the panel lives in a scrolling host panel,
+ *  where an absolutely positioned child is clipped away. Anchored to the
+ *  button that opened it.
  */
 function PairMenu({ anchorEl, poses, onPick, onClose, t }: {
   anchorEl: HTMLElement

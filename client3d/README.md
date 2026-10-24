@@ -56,13 +56,14 @@ Recherche-Protokolle aus dem Juli 2026.
 ## Starten
 
 ```bash
-# Alles in einem Rutsch, aus dem Wurzelverzeichnis des Repos:
-./start.sh --with-3d --world demo    # Backend :8000 + 3D-Client :5183
+# Spielen: nur der Server, /play liefert den gebauten Client aus static/client3d/
+./start.sh --world demo              # http://localhost:8000/play
 
-# Oder getrennt:
+# Entwickeln mit HMR, aus dem Wurzelverzeichnis des Repos:
+./start.sh --with-3d --world demo    # Backend :8000 + Vite-Dev-Server :5183
 npm install                          # EINMAL im Wurzelverzeichnis, für alle Workspaces
 npm run dev -w client3d              # http://localhost:5183, Login mit Backend-Benutzer
-npm run build -w client3d            # tsc --noEmit && vite build -> client3d/dist/
+npm run build -w client3d            # tsc --noEmit && vite build -> static/client3d/ (committet)
 ```
 
 **Auf einem anderen Rechner** (Backend läuft woanders):

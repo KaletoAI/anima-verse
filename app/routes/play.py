@@ -2527,13 +2527,11 @@ def play_notices(user=Depends(get_current_user)):
     movement restrictions and unread notifications."""
     from app.models.account import get_active_character
     out = {"avatar": "", "events": [], "leave_blocked": None,
-           "force_warning": None, "notifications": [], "unread_count": 0,
-           "party": None}
+           "force_warning": None, "notifications": [], "unread_count": 0}
     avatar = (get_active_character() or "").strip()
     if not avatar:
         return out
     out["avatar"] = avatar
-    out["party"] = _party_block(avatar)
     # An active force rule is a hint with an Apply action for the avatar,
     # never an automatically executed command.
     try:
