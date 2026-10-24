@@ -15,7 +15,7 @@
  * `from` the live transition table (`shared/config/clip_transitions.json`,
  * read at run time) names for get-up-bed whose .fbx exists AND is tracked by
  * git; otherwise the tracked `laying`. The sitting clip likewise for
- * get-up-chair, fallback `sitting-in-chair`. No tracked clip → the bed or
+ * get-up-chair, fallback `recovering`. No tracked clip → the bed or
  * chair part is SKIPPED with a message. The run prints which it used.
  *
  * ===========================================================================
@@ -363,7 +363,7 @@ async function main() {
   // The clips the bridges leave: named by the live table, tracked, or the
   // tracked fallback (`bridgeSources.mjs`); null = that part is skipped.
   const bedFrom = bridgeSourceClip(ROOT, 'get-up-bed', 'laying');
-  const chairFrom = bridgeSourceClip(ROOT, 'get-up-chair', 'sitting-in-chair');
+  const chairFrom = bridgeSourceClip(ROOT, 'get-up-chair', 'recovering');
   const FROM = { 'get-up-bed': bedFrom?.kind, 'get-up-chair': chairFrom?.kind };
   for (const [kind, src] of [['get-up-bed', bedFrom], ['get-up-chair', chairFrom]]) {
     console.log(src ? `\n[V] ${kind} leaves ${src.kind} — ${src.note}` : `\n[V] ${kind}: SKIPPED (see above)`);

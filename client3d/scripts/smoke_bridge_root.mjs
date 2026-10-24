@@ -401,7 +401,7 @@ const RELOCK_MAX_MS = 100;
  *  The state left is the clip the live transition table names for the
  *  bridge, if its file exists and is tracked by git, else the tracked
  *  fallback (`bridgeSources.mjs`); a bridge with neither is skipped. */
-const CHAIR_FROM = bridgeSourceClip(ROOT, 'get-up-chair', 'sitting-in-chair');
+const CHAIR_FROM = bridgeSourceClip(ROOT, 'get-up-chair', 'recovering');
 const BED_FROM = bridgeSourceClip(ROOT, 'get-up-bed', 'laying');
 const BRIDGES = [
   CHAIR_FROM && { kind: 'get-up-chair', from: CHAIR_FROM.kind, note: CHAIR_FROM.note,

@@ -19,7 +19,7 @@
       "accel": 0.0
     },
     {
-      "from": "sitting-in-chair",
+      "from": "recovering",
       "to": "*",
       "kind": "get-up-chair",
       "accel": 0.0
