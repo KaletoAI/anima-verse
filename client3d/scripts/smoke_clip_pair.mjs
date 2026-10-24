@@ -1,35 +1,37 @@
 #!/usr/bin/env node
 /**
  * Smoke check for PAIR CLIPS at the consumer (§ B5a: numbers, no screenshots):
- * the two halves of a CMU-converted pair clip loaded with three's own
+ * the two halves of a converted pair clip loaded with three's own
  * FBXLoader, the root path the client extracts from them, and the anchor
  * transformation the server and the client agree on (§ A8a).
  *
  * Usage:  node client3d/scripts/smoke_clip_pair.mjs
  *         (needs three, esbuild and the converted clips in shared/models/clips:
- *          handshake__a.fbx / handshake__b.fbx / handshake.json)
+ *          greeting-handshake__a.fbx / __b.fbx / greeting-handshake.json — the
+ *          animation studio's handshake, anims/greeting-handshake.py)
  *
  * Hand-derived expectations
  * -------------------------
- * The converter (`app/blender/scripts/cmu_clip.py`) writes both halves in ONE
- * frame: origin at the XZ midpoint of the two roots at the anchor frame, +X
- * pointing from A to B. The sidecar states that frame's numbers; the
- * handshake's are `root_distance_m` at `anchor_s` 1.1 with A at
- * (−d/2, 0) and B at (+d/2, 0) (rounded to 3 decimals in the file). So:
+ * The converter (`app/blender/scripts/cmu_clip.py`, `run_takes`) writes both
+ * halves in ONE frame: origin at the XZ midpoint of the two roots at the
+ * anchor frame, +X pointing from A to B. The sidecar states that frame's
+ * numbers. The studio handshake stands still: hips 0.72 m apart along their
+ * facing with a stagger of −0.14 m (each 7 cm to its own left), so the roots
+ * are hypot(0.72, 0.14) = 0.7335 m apart — `root_distance_m` 0.734 at
+ * `anchor_s` 1.5, A at (−d/2, 0) and B at (+d/2, 0) (3 decimals). So:
  *
  *   [1] naming/role: `parse` of the two file names yields the halves, the
- *       client indexes them as `handshake__a` / `handshake__b`
+ *       client indexes them as `greeting-handshake__a` / `__b`
  *       (`isPairClipName` true; `idle` false, `a__b` style names that are
  *       not a/b roles false).
  *
  *   [2] the root path of each half, read from the raw hips position track in
- *       Mixamo centimetres → metres: at `anchor_s` A sits at x = −d/2 (0.317 after the contact fit) and
+ *       Mixamo centimetres → metres: at `anchor_s` A sits at x = −d/2 = −0.367 and
  *       B at x = +d/2 (±0.02 m — the sidecar rounds, and the client
  *       interpolates between 30 fps keys), both at z = 0 (±0.02); the two
- *       roots `root_distance_m` apart (±0.03). At t = 0 they are 1.98 m minus
- *       the contact-fit shift apart (the actors started 1.98 m apart; the
- *       converter moves both halves `contact.shift_m` towards each other so
- *       the rig's hands meet as the actors' did): the walk-up.
+ *       roots `root_distance_m` = 0.734 = hypot(0.72, 0.14) apart (±0.03).
+ *       The studio clip has no walk-up: at t = 0 the roots are already
+ *       where they are at the anchor (±0.02), the sidecar's start positions.
  *
  *   [3] the anchor transformation, the SAME formula on both sides
  *       (`interaction_engine._rotate` ↔ `npcs.tickInteraction`):
@@ -51,8 +53,8 @@
  *       (the interaction itself has no clock end, § A8a).
  *
  *   [6] TRACK SHAPE — the Mixamo library's: rotation tracks plus ONE
- *       position track (the hips), no scale tracks. Checked on all three
- *       converted clips. And the consequence, measured the way the ADMIN
+ *       position track (the hips), no scale tracks. Checked on the converted
+ *       pair halves and `dance`. And the consequence, measured the way the ADMIN
  *       PREVIEW applies a clip (every track but the hips position, straight
  *       onto a metre-scaled GLB, `Model3DViewer.tsx`): on `Test3_mia.glb`
  *       the posed skeleton's body length (longest extent of the joint cloud
@@ -124,12 +126,12 @@ function place(anchor, yaw, p) {
 async function main() {
   const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
   const { extractRootPath, isPairClipName, rootPathAt } = await loadClient();
-  const side = JSON.parse(await readFile(join(CLIP_DIR, 'handshake.json'), 'utf8'));
+  const side = JSON.parse(await readFile(join(CLIP_DIR, 'greeting-handshake.json'), 'utf8'));
   const geo = side.geometry;
 
   console.log('[1] naming');
-  check('handshake__a is a pair half', isPairClipName('handshake__a'));
-  check('handshake__b is a pair half', isPairClipName('handshake__b'));
+  check('greeting-handshake__a is a pair half', isPairClipName('greeting-handshake__a'));
+  check('greeting-handshake__b is a pair half', isPairClipName('greeting-handshake__b'));
   check('idle is not', !isPairClipName('idle'));
   check('x__c is not (only a/b are roles)', !isPairClipName('x__c'));
 
@@ -137,9 +139,9 @@ async function main() {
   const fbx = new FBXLoader();
   const paths = {};
   for (const role of ['a', 'b']) {
-    const obj = fbx.parse(arrayBufferOf(await readFile(join(CLIP_DIR, `handshake__${role}.fbx`))), '');
+    const obj = fbx.parse(arrayBufferOf(await readFile(join(CLIP_DIR, `greeting-handshake__${role}.fbx`))), '');
     const clip = obj.animations?.[0];
-    check(`handshake__${role}: one animation with tracks`, !!clip && clip.tracks.length > 8,
+    check(`greeting-handshake__${role}: one animation with tracks`, !!clip && clip.tracks.length > 8,
       clip ? `${clip.tracks.length} tracks, ${clip.duration.toFixed(3)} s` : 'none');
     paths[role] = { path: extractRootPath(clip), duration: clip.duration };
   }
@@ -155,16 +157,15 @@ async function main() {
   near('roots root_distance_m apart at the anchor', Math.hypot(a.x - b.x, a.z - b.z), geo.root_distance_m, 0.03);
   const a0 = rootPathAt(paths.a.path, 0);
   const b0 = rootPathAt(paths.b.path, 0);
-  // The walk-up: the actors started 1.98 m apart; minus the contact-fit shift
-  // (`geometry.contact.shift_m`, 0.106 m — both halves moved towards each
-  // other so the rig's hands meet like the actors') that is what the sidecar
-  // states as the start distance.
-  const startD = Math.hypot(geo.roles.a.start_xz_m[0] - geo.roles.b.start_xz_m[0],
-    geo.roles.a.start_xz_m[1] - geo.roles.b.start_xz_m[1]);
-  near('the take starts 1.98 m minus the contact shift apart', Math.hypot(a0.x - b0.x, a0.z - b0.z),
-    1.98 - (geo.contact?.shift_m ?? 0), 0.05);
-  near('… which is the sidecar start distance', Math.hypot(a0.x - b0.x, a0.z - b0.z), startD, 0.03);
-  check('A starts on the −X side, B on +X', a0.x < -0.5 && b0.x > 0.5, `${a0.x.toFixed(2)} / ${b0.x.toFixed(2)}`);
+  // No walk-up: the studio halves stand still, so t = 0 is the anchor pose.
+  near('root_distance_m = hypot(0.72, 0.14)', geo.root_distance_m, Math.hypot(0.72, 0.14), 0.001);
+  near('A at t = 0 where it is at the anchor: x', a0.x, a.x, 0.02);
+  near('A at t = 0 where it is at the anchor: z', a0.z, a.z, 0.02);
+  near('B at t = 0 where it is at the anchor: x', b0.x, b.x, 0.02);
+  near('B at t = 0 where it is at the anchor: z', b0.z, b.z, 0.02);
+  near('… which is the sidecar start of A', a0.x, geo.roles.a.start_xz_m[0], 0.02);
+  near('… and of B', b0.x, geo.roles.b.start_xz_m[0], 0.02);
+  check('A on the −X side, B on +X', a0.x < -0.3 && b0.x > 0.3, `${a0.x.toFixed(2)} / ${b0.x.toFixed(2)}`);
 
   console.log('\n[3] the anchor transformation (server yaw convention)');
   const anchor = { x: 10, z: 22 };
@@ -193,7 +194,7 @@ async function main() {
 
   console.log('\n[6] track shape + the admin-preview application on a real GLB');
   const shape = {};
-  for (const name of ['handshake__a', 'handshake__b', 'salsa__a', 'salsa__b', 'dance']) {
+  for (const name of ['greeting-handshake__a', 'greeting-handshake__b', 'salsa__a', 'salsa__b', 'dance']) {
     const obj = fbx.parse(arrayBufferOf(await readFile(join(CLIP_DIR, `${name}.fbx`))), '');
     const clip = obj.animations[0];
     const pos = clip.tracks.filter((t) => t.name.endsWith('.position'));
@@ -246,7 +247,7 @@ async function main() {
   };
   // the harness reference: the free library's own idle (CMU), present in git
   shape.idle = fbx.parse(arrayBufferOf(await readFile(join(CLIP_DIR, 'idle.fbx'))), '').animations[0];
-  for (const name of ['idle', 'handshake__a', 'salsa__b', 'dance']) {
+  for (const name of ['idle', 'greeting-handshake__a', 'salsa__b', 'dance']) {
     const e = adminApply(shape[name]);
     check(`${name} applied admin-style keeps the skeleton intact`,
       e.height > bind.height * 0.7 && e.height < bind.height * 1.3 && e.span < 2.6,
@@ -255,7 +256,7 @@ async function main() {
   // RED counter-probe: one centimetre translation track on the spine — what
   // the old export wrote for every bone — and the skeleton runs away.
   {
-    const clip = shape.handshake__a;
+    const clip = shape['greeting-handshake__a'];
     // Centimetre values on a metre skeleton = 100x the bone's own rest
     // offset (the real Rosi model of the finding has metre bones; the public
     // test rigs here carry centimetre bones, so the factor is applied to the

@@ -7,7 +7,7 @@
  *
  * Usage:  node client3d/scripts/smoke_bridge_lift.mjs
  *         (bundles the client modules itself; part [V] reads the clips
- *          idle, walk, get-up-bed, get-up-chair, the pair half handshake__a
+ *          idle, walk, get-up-bed, get-up-chair, the pair half greeting-handshake__a
  *          and the two clips the bridges leave from shared/models/clips —
  *          READ ONLY)
  *
@@ -187,7 +187,7 @@
  *      (the same Δ and D).
  * [P] A PAIR CLIP TAKES THE FIGURE MID-BRIDGE (final review, finding 1), NPC,
  *     bed 0.46, three rigs: PAIR_AT_S = 0.8 s into get-up-bed the server hands
- *     the NPC the interaction `handshake`, role a (anchor on the ground, no
+ *     the NPC the interaction `greeting-handshake`, role a (anchor on the ground, no
  *     place → `tickInteraction` puts the root on the anchor's floor, y = 0).
  *     `playPair` fades the bridge out over 0.25 s; three.js then disables the
  *     action (weight 0), so its time stands still and "finished" never comes.
@@ -212,14 +212,14 @@
  *          got the same interaction, at the same phase, within 1 mm. The
  *          brief asked for "feet within ±2 cm of the anchor floor"; that
  *          absolute bound does not hold for the clip itself — the control's
- *          lowest foot at phase 0.3 s is 4.30 / 4.69 / 3.80 cm over its root
- *          (INFO; the handshake steps in) — so the floor is measured THROUGH
+ *          lowest foot at phase 0.3 s may sit over its root (INFO; the CMU
+ *          handshake stepped in, 4.30 / 4.69 / 3.80 cm) — so the floor is measured THROUGH
  *          the control, which stands on it. Before (figures.ts of 819f1571): 49.13 / 49.52 / 48.60 cm
  *          (= control + 44.8 cm).
  *     [P4] the interaction ends PAIR_END_S = 0.5 s after the takeover (well
  *          before the old deadline): two frames later the figure plays what
  *          `tick` asks for (walk to its stand point, then idle), not the pair
- *          half — `play` is not blocked. Before: handshake__a on every frame.
+ *          half — `play` is not blocked. Before: the pair half on every frame.
  * INFO: per rig the measured endLift (world cm) and firstContactS.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -250,7 +250,7 @@ const V4_AFTER_S = 1.0;
 const V4_ROOT_TOL = 0.01;
 const V4_FOOT_TOL = 0.02;
 const RED_MAX = -0.25;
-const PAIR_CLIP = 'handshake__a';  // tracked pair half (smoke_clip_pair)
+const PAIR_CLIP = 'greeting-handshake__a';  // tracked pair half (smoke_clip_pair)
 const PAIR_AT_S = 0.8;            // bridge clip time the pair takes the figure
 const PAIR_FADE_S = 0.25;         // playPair's crossfade
 const PAIR_CHECK_S = 0.3;         // when [P2]/[P3] measure, after the takeover

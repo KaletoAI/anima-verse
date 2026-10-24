@@ -399,7 +399,7 @@ try:
     # Unknown / empty key -> the default entry's prompt (no admin override set
     # in the temp world, so default_pose_prompt() is the catalog default).
     assert default_pose_prompt() == _STANDING, default_pose_prompt()
-    assert get_pose_prompt("digging") == _STANDING, get_pose_prompt("digging")
+    assert get_pose_prompt("no_such_pose") == _STANDING, get_pose_prompt("no_such_pose")
     assert get_pose_prompt("") == _STANDING, get_pose_prompt("")
 
     assert resolve_pose_animation("sitting") == "sit", resolve_pose_animation("sitting")
