@@ -5,29 +5,38 @@ head looks about a little; a slow breath over everything.
 
 Replaces the CMU `idle` (same kind) for the pose `standing`; `idle` is also the
 idle role's default kind in the game (`shared/config/locomotion_clips.json`).
+The knees stay a little soft (hips median ~110 cm, like the clip it
+replaces): the bridge clips hand over into this stance — a straight-legged
+idle (hips 112.3) made the feet skid 1.4 cm in the first frame after
+get-up-chair (client3d/scripts/smoke_bridge_root.mjs [B14]).
 """
 from animstudio.dsl import Animation, Breath, Catalog, FeetPlanted, Key, Oscillator, Pose
 from animstudio.rig import RELAXED
 
 STAND = Pose(**RELAXED) | Pose(l_hip_abduct=5, r_hip_abduct=5, l_hip_rot=6, r_hip_rot=6,
-                               hips_drop_cm=1, l_arm_twist=10, r_arm_twist=10,
+                               hips_drop_cm=2.0, l_arm_twist=10, r_arm_twist=10,
+                               # the planted feet keep their frame-0 rotation: the
+                               # ankle cancels the soft knee (7) so the soles lie flat
+                               l_ankle_flex=7, r_ankle_flex=7,
                                l_arm_azim=4, r_arm_azim=4)
 # weight on the LEFT leg: the right knee softens, the pelvis tips to the
 # left (body_roll +), the chest leans back right, the left arm hangs a
 # little further out
-LEFT = Pose(body_roll=1.6, spine_tilt=-2.4, r_knee_flex=9, l_knee_flex=1, hips_drop_cm=1.6,
+LEFT = Pose(body_roll=1.6, spine_tilt=-2.4, r_knee_flex=12, l_knee_flex=5, hips_drop_cm=2.6,
             neck_tilt=1.0)
-RIGHT = Pose(body_roll=-1.6, spine_tilt=2.4, l_knee_flex=9, r_knee_flex=1, hips_drop_cm=1.6,
+RIGHT = Pose(body_roll=-1.6, spine_tilt=2.4, l_knee_flex=12, r_knee_flex=5, hips_drop_cm=2.6,
              neck_tilt=-1.0)
-EVEN = Pose(body_roll=0, spine_tilt=0, l_knee_flex=3, r_knee_flex=3, hips_drop_cm=1,
+EVEN = Pose(body_roll=0, spine_tilt=0, l_knee_flex=7, r_knee_flex=7, hips_drop_cm=2.0,
             neck_tilt=0)
 
 ANIM = Animation(
     kind="idle", duration_s=10.0, loop=True,
     catalog=Catalog(
         key="standing", group="stand", repoint=True,
-        prompt="standing relaxed, arms hanging loosely at the sides, weight on one leg, "
-               "calm and at ease",
+        # The catalog's DEFAULT pose: its prompt is every render's fallback
+        # pose (pose_catalog.default_pose_prompt), so it stays as it was.
+        prompt="standing with one hand on hip, weight shifted to one leg, shoulder slightly "
+               "raised, chin up",
         synonyms=("locker stehen", "entspannt stehen", "standing around")),
     base=STAND | EVEN,
     keys=[Key(0.0, EVEN | Pose(neck_rot=0, neck_flex=0)),
