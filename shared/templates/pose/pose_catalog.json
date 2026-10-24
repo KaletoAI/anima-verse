@@ -428,16 +428,21 @@
       "group": "stand"
     },
     "bathing": {
-      "prompt": "standing in bathtub, washing own body",
+      "prompt": "sitting in a bathtub with the knees drawn up, washing one forearm with a cloth, relaxed, steam rising",
       "synonyms": [
         "baden",
         "badend",
         "badet",
         "ein bad nehmen",
-        "sich waschen"
+        "sich waschen",
+        "in der badewanne sitzen",
+        "in der wanne",
+        "badet in der wanne",
+        "taking a bath",
+        "in the bathtub"
       ],
-      "animation": "standing wash-self",
-      "group": "stand",
+      "animation": "bathing",
+      "group": "ground",
       "solo": true
     },
     "yoga": {

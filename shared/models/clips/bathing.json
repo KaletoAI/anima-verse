@@ -1,0 +1,50 @@
+{
+ "kind": "bathing",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 181,
+ "duration_s": 6.033,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": -1.11,
+  "hips_scale": [
+   1.0
+  ],
+  "foot_plant": {
+   "LeftFoot": {
+    "frames": 181,
+    "max_cm": 3.51
+   },
+   "RightFoot": {
+    "frames": 181,
+    "max_cm": 3.51
+   }
+  },
+  "rig_floor_shift_cm": -3.51,
+  "rig_floor_min_cm": 0.0,
+  "root_motion": {
+   "mode": "strip",
+   "travel_m": [
+    0.0,
+    0.0
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     6.0
+    ]
+   ],
+   "max_drift_cm": 0.0
+  }
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/bathing.py",
+  "spec_sha": "ebfd197e7a090e3b97bddadaaa62f6f22a30f373013b37bd3361804905c95e55"
+ }
+}
