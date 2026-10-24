@@ -736,7 +736,7 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "name": path.stem,
         "filename": path.name,
         # Percent-encoded PER SEGMENT: clip file names are free text and do
-        # contain spaces ("standing washing.fbx"), so the raw rel is not a
+        # contain spaces ("standing wash-self.fbx"), so the raw rel is not a
         # usable URL. Clients take this string as it is — they never encode
         # it a second time and never rebuild it from name + set.
         "url": "/assets/animation-clips/"
