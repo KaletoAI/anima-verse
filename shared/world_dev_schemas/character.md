@@ -245,10 +245,11 @@ on pieces. Do NOT invent new types.
 
 {existing_outfit_types}
 
-## Existing locations (for outfit assignments)
+## Existing locations (for outfits, home and daily schedule)
 
 {existing_locations}
 
+{home_schedule_block}
 ## Existing characters
 
 {existing_characters}

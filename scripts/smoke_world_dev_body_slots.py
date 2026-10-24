@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Smoke: World-Dev and temp NPCs know the species body slots (prompt + apply + patch).
+"""Smoke: World-Dev and temp NPCs know the species body slots (prompt + apply + patch);
+World-Dev also sets home, daily schedule, start place and chat mode.
 
 Body details (hair, eyes, build, …) are not template fields — species packages
 declare them as body slots, and the template only carries the empty
@@ -67,6 +68,33 @@ WHAT IS CHECKED, and where every expected value comes from
       ``llm_slot_block("npc-temporary")``. Its slot lines equal those of (a)
       — same package, same declarations.
 
+  (e) HOME, DAILY SCHEDULE, START PLACE, CHAT MODE. Two places: "Waldgasthaus"
+      (rooms Gästezimmer, Schankstube) and "Kontor" (room Büro). A new
+      character with
+
+          home_location "waldgasthaus", home_room "Gästezimmer",
+          daily_schedule [0 sleep, 9 Kontor "arbeitet", 12 "Kaixai Tower",
+                          13 "Wald", 25 Kontor, 19 Waldgasthaus "isst"]
+
+      by hand: the home matches case-insensitively → home_location = id of
+      Waldgasthaus, home_room = id of Gästezimmer. 12 names no place → hour
+      left free (warning); 13 "Wald" is only a SUBSTRING of Waldgasthaus and
+      must not match (warning) — ``resolve_location`` would have matched it;
+      25 is outside 0-23 (warning). Stored slots, sorted: 0 sleep, 9 Kontor,
+      19 Waldgasthaus. known_locations = [Waldgasthaus, Kontor] (home first,
+      then the schedule's places in input order, no duplicate). The character
+      stands in Waldgasthaus / Gästezimmer, chat_mode is "rp_first",
+      3 warnings.
+      An EDIT apply with home_location "Kontor" re-homes it (Kontor, no room)
+      but does not move it (still Waldgasthaus / Gästezimmer) and keeps
+      known_locations [Waldgasthaus, Kontor]. A profile patch {home_room:
+      "Büro"} refers to the current home → home_room = id of Büro,
+      applied_fields ["home_room"], no warning; {home_room: "Keller"} → 1
+      warning, home_room unchanged. An edit with the SAME home "Kontor" and no
+      room keeps Büro.
+      The prompt block is "" without context locations and names
+      `home_location` / `daily_schedule` with them.
+
 Usage:
     ./.venv/bin/python scripts/smoke_world_dev_body_slots.py
 """
@@ -92,9 +120,12 @@ from app.models.character import get_character_profile  # noqa: E402
 from app.models.character_template import clear_template_cache  # noqa: E402
 from app.core.body_slots import _format_conditions, llm_slot_block  # noqa: E402
 from app.core.npc_ops import npc_generable_fields  # noqa: E402
+from app.models import world  # noqa: E402
+from app.models.character import (get_character_config,  # noqa: E402
+                                  get_character_daily_schedule)
 from app.routes.world_dev import (  # noqa: E402
     _apply_character_internal, _apply_profile_patch_data_sync,
-    _format_generable_fields_for_templates)
+    _format_generable_fields_for_templates, _format_home_schedule_block)
 
 FAILS = []
 
@@ -187,6 +218,71 @@ check("(d) npc slot lines equal (a)",
       [line for line in npc_block.splitlines() if line.startswith(("- ", "  - "))],
       [line for line in block.splitlines() if line.startswith(("- ", "  - "))])
 check("(d) npc field list ends with the block", npc_fields.endswith("\n\n" + npc_block), True)
+
+# (e) home, daily schedule, start place, chat mode
+INN = world.add_location("Waldgasthaus", "An inn at the edge of the wood.",
+                         rooms=[{"name": "Gästezimmer"}, {"name": "Schankstube"}])["id"]
+OFFICE = world.add_location("Kontor", "An office.", rooms=[{"name": "Büro"}])["id"]
+
+
+def room_id(loc_id, name):
+    return next(r["id"] for r in world.get_location_by_id(loc_id)["rooms"]
+                if r.get("name") == name)
+
+
+GUEST, DESK = room_id(INN, "Gästezimmer"), room_id(OFFICE, "Büro")
+check("(e) no block without context", _format_home_schedule_block([]), "")
+_hb = _format_home_schedule_block([INN])
+check("(e) block names the fields", ("`home_location`" in _hb, "`daily_schedule`" in _hb),
+      (True, True))
+WANDERER = "Smoke Wanderer"
+result = _apply_character_internal({
+    "character_name": WANDERER, "template": "human-roleplay", "gender": "female",
+    "home_location": "waldgasthaus", "home_room": "Gästezimmer",
+    "daily_schedule": [
+        {"hour": 0, "sleep": True},
+        {"hour": 9, "location": "Kontor", "role": "arbeitet"},
+        {"hour": 12, "location": "Kaixai Tower", "role": "x"},
+        {"hour": 13, "location": "Wald", "role": "y"},
+        {"hour": 25, "location": "Kontor", "role": "z"},
+        {"hour": 19, "location": "Waldgasthaus", "role": "isst"},
+    ],
+}, created_by="smoke")
+cfg = get_character_config(WANDERER)
+profile = get_character_profile(WANDERER)
+check("(e) home", (cfg.get("home_location"), cfg.get("home_room")), (INN, GUEST))
+check("(e) schedule", get_character_daily_schedule(WANDERER)["slots"], [
+    {"hour": 0, "sleep": True, "location": "", "role": ""},
+    {"hour": 9, "location": OFFICE, "role": "arbeitet", "sleep": False},
+    {"hour": 19, "location": INN, "role": "isst", "sleep": False},
+])
+check("(e) known_locations", cfg.get("known_locations"), [INN, OFFICE])
+check("(e) placed at home", (profile.get("current_location"), profile.get("current_room")),
+      (INN, GUEST))
+check("(e) chat_mode", cfg.get("chat_mode"), "rp_first")
+check("(e) warning count", len(result["warnings"]), 3)
+
+_apply_character_internal({"character_name": WANDERER, "template": "human-roleplay",
+                           "home_location": "Kontor"}, created_by="smoke")
+cfg = get_character_config(WANDERER)
+profile = get_character_profile(WANDERER)
+check("(e) edit re-homes", (cfg.get("home_location"), cfg.get("home_room")), (OFFICE, ""))
+check("(e) edit does not move", (profile.get("current_location"), profile.get("current_room")),
+      (INN, GUEST))
+check("(e) edit keeps known_locations", cfg.get("known_locations"), [INN, OFFICE])
+
+patch = _apply_profile_patch_data_sync({"character_name": WANDERER,
+                                        "fields": {"home_room": "Büro"}})
+check("(e) patch room of current home", get_character_config(WANDERER).get("home_room"), DESK)
+check("(e) patch applied fields", (patch["applied_fields"], patch["warnings"]),
+      (["home_room"], []))
+patch = _apply_profile_patch_data_sync({"character_name": WANDERER,
+                                        "fields": {"home_room": "Keller"}})
+check("(e) unknown room", (len(patch["warnings"]),
+                           get_character_config(WANDERER).get("home_room")), (1, DESK))
+_apply_character_internal({"character_name": WANDERER, "template": "human-roleplay",
+                           "home_location": "Kontor"}, created_by="smoke")
+check("(e) same home keeps the room", get_character_config(WANDERER).get("home_room"), DESK)
 
 print("\nFAILED: " + ", ".join(FAILS) if FAILS else "\nall checks passed")
 sys.exit(1 if FAILS else 0)

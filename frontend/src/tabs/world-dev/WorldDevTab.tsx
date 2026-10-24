@@ -54,6 +54,22 @@ interface ExtractedData {
   profile_patch_data?: Record<string, unknown>
 }
 
+/** One line on what a character draft brings besides its texts: home, daily
+ *  schedule and body slots — the parts an apply also places and stores. */
+function characterDraftSummary(data: Record<string, unknown>,
+                               t: (s: string) => string): string {
+  const home = typeof data.home_location === 'string' ? data.home_location : ''
+  const room = typeof data.home_room === 'string' ? data.home_room : ''
+  const slots = Array.isArray(data.daily_schedule) ? data.daily_schedule.length : 0
+  const body = data.body_slots && typeof data.body_slots === 'object'
+    ? Object.keys(data.body_slots as object).length : 0
+  return [
+    t('Home') + ': ' + (home ? (room ? `${home} · ${room}` : home) : '—'),
+    t('Daily schedule') + ': ' + t('{n} slots').replace('{n}', String(slots)),
+    t('Body slots') + ': ' + String(body),
+  ].join('  ·  ')
+}
+
 interface TemplateInfo {
   name: string
   label: string
@@ -197,6 +213,9 @@ export function WorldDevTab() {
   const [streaming, setStreaming] = useState(false)
   const [pending, setPending] = useState('')
   const [extracted, setExtracted] = usePersistentState<ExtractedData>('worlddev.extracted', {})
+  // What the last apply skipped (unknown place, invalid body value, …) —
+  // stays until the next apply; a toast would be gone before it is read.
+  const [applyWarnings, setApplyWarnings] = useState<string[]>([])
   const [draft, setDraft] = usePersistentState('worlddev.draft', '')
   const [usage, setUsage] = usePersistentState<UsageStats | null>('worlddev.usage', null)
 
@@ -461,9 +480,14 @@ export function WorldDevTab() {
           break
       }
       try {
-        await apiPost(path, body)
-        toast(t('Applied'))
+        const res = await apiPost<{ warnings?: string[] }>(path, body)
+        const warnings = Array.isArray(res?.warnings) ? res.warnings : []
+        setApplyWarnings(warnings)
+        toast(warnings.length
+          ? t('Applied with {n} warnings').replace('{n}', String(warnings.length))
+          : t('Applied'))
       } catch (e) {
+        setApplyWarnings([])
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
@@ -1120,6 +1144,19 @@ export function WorldDevTab() {
               {validating ? t('Validating…') : t('Validate (find gaps)')}
             </button>
           </div>
+          {extracted.character_data ? (
+            <div className="ga-form-hint">{characterDraftSummary(extracted.character_data, t)}</div>
+          ) : null}
+          {applyWarnings.length > 0 ? (
+            <>
+              <div className="ga-form-section-label">
+                {t('Warnings')} ({applyWarnings.length})
+              </div>
+              <ul className="ga-form-hint">
+                {applyWarnings.map((w, i) => <li key={i}>{w}</li>)}
+              </ul>
+            </>
+          ) : null}
         </div>
       ) : null}
 

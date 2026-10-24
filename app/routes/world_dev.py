@@ -168,6 +168,208 @@ def _apply_body_slots(char_name: str, raw: Any) -> List[str]:
     return warnings
 
 
+_HOME_SCHEDULE_KEYS = ("home_location", "home_room", "daily_schedule")
+
+
+def _format_home_schedule_block(location_ids: list) -> str:
+    """`{home_schedule_block}` of the character schema: home + daily schedule,
+    restricted to the places the user marked as context. Empty without context
+    locations — then a new character stays unplaced, as before."""
+    if not location_ids:
+        return ""
+    return (
+        "## Home & daily schedule\n\n"
+        "Use ONLY the places listed under \"Existing locations\" above — by their exact "
+        "name — and only their rooms, by the exact room name. Set:\n\n"
+        "- `home_location`: the place where the character lives and sleeps. The "
+        "character starts there.\n"
+        "- `home_room` (optional): one room of that place.\n"
+        "- `daily_schedule`: a list of slots, one per game hour 0-23: "
+        "`{\"hour\": 9, \"location\": \"<place name>\", \"role\": \"<what the character "
+        "does there, in the character's language>\"}`, or `{\"hour\": 23, \"sleep\": true}` "
+        "for the sleeping hours. Cover the whole day; an hour left out is decided freely "
+        "by the character. It must fit the character's tasks and rhythm.\n")
+
+
+def _resolve_world_location(identifier: Any) -> Optional[Dict[str, Any]]:
+    """A location by exact id or exact (case-insensitive) name. Deliberately no
+    substring match (``resolve_location`` has one): an LLM naming a place that
+    does not exist must become a warning, not the nearest similar name."""
+    from app.models.world import list_locations
+    ident = str(identifier or "").strip()
+    if not ident:
+        return None
+    locations = list_locations()
+    for loc in locations:
+        if loc.get("id") == ident:
+            return loc
+    folded = ident.casefold()
+    for loc in locations:
+        if str(loc.get("name") or "").strip().casefold() == folded:
+            return loc
+    return None
+
+
+def _resolve_room_id(location: Dict[str, Any], identifier: Any) -> str:
+    """A named room of the location by id or case-insensitive name; "" when
+    none matches. The reserved ground/corridor rooms carry no name and are
+    never a home room."""
+    ident = str(identifier or "").strip()
+    if not ident:
+        return ""
+    folded = ident.casefold()
+    for room in location.get("rooms") or []:
+        name = str(room.get("name") or "").strip()
+        if name and (room.get("id") == ident or name.casefold() == folded):
+            return str(room.get("id") or "")
+    return ""
+
+
+def _home_schedule_for_edit(char_name: str) -> Dict[str, Any]:
+    """The character's current home and daily schedule in the draft's own
+    shape — place and room NAMES, as the LLM writes them — for the edit
+    context. Empty keys are left out."""
+    from app.models.character import get_character_daily_schedule
+    from app.models.world import get_location_by_id
+
+    def place_name(loc_id: str) -> str:
+        loc = get_location_by_id(loc_id) if loc_id else None
+        return str((loc or {}).get("name") or loc_id or "")
+
+    out: Dict[str, Any] = {}
+    cfg = get_character_config(char_name) or {}
+    home_id = str(cfg.get("home_location") or "").strip()
+    home = get_location_by_id(home_id) if home_id else None
+    if home:
+        out["home_location"] = home.get("name") or home_id
+        room_id = str(cfg.get("home_room") or "").strip()
+        room = next((r for r in home.get("rooms") or [] if r.get("id") == room_id), None)
+        if room and room.get("name"):
+            out["home_room"] = room["name"]
+    schedule = get_character_daily_schedule(char_name) or {}
+    if schedule.get("enabled") and schedule.get("slots"):
+        out["daily_schedule"] = [
+            {"hour": s["hour"], "sleep": True} if s.get("sleep") else
+            {"hour": s["hour"], "location": place_name(s.get("location") or ""),
+             "role": s.get("role") or ""}
+            for s in schedule["slots"]]
+    return out
+
+
+def _apply_home_and_schedule(char_name: str, data: Dict[str, Any],
+                             is_new: bool) -> List[str]:
+    """Home, daily schedule and known places from a World-Dev draft.
+
+    Writes only what the draft carries. ``known_locations`` gains the home and
+    every schedule place — for a NEW character that is the whole list, an edit
+    only adds. Only a new character is placed at its home; an edit never moves
+    anybody. A temporary NPC is left alone (its home and rhythm come from its
+    slot; ``npc_ops`` places it). Returns warnings for everything skipped."""
+    from app.models.character import (add_known_location, is_temporary_npc,
+                                      save_character_current_location,
+                                      save_character_current_room,
+                                      save_character_daily_schedule,
+                                      set_known_locations)
+    if not any(data.get(k) for k in _HOME_SCHEDULE_KEYS):
+        return []
+    if is_temporary_npc(char_name):
+        return ["Home and daily schedule are ignored for a temporary NPC."]
+    warnings: List[str] = []
+    places: List[str] = []
+
+    home = None
+    home_room = ""
+    if data.get("home_location"):
+        home = _resolve_world_location(data["home_location"])
+        if home is None:
+            warnings.append(f"Home '{data['home_location']}' is no place of this "
+                            "world — skipped.")
+        else:
+            places.append(home["id"])
+            if data.get("home_room"):
+                home_room = _resolve_room_id(home, data["home_room"])
+                if not home_room:
+                    warnings.append(f"Room '{data['home_room']}' does not exist in "
+                                    f"{home.get('name')} — home without a room.")
+            cfg = get_character_config(char_name)
+            # The same home again without a room (an edit draft that left the
+            # room out) keeps the room; a NEW home starts without the old one.
+            if not data.get("home_room") and cfg.get("home_location") == home["id"]:
+                home_room = str(cfg.get("home_room") or "")
+            cfg["home_location"] = home["id"]
+            cfg["home_room"] = home_room
+            save_character_config(char_name, cfg)
+    elif data.get("home_room"):
+        # A room alone (a patch) refers to the home the character already has.
+        cfg = get_character_config(char_name)
+        current = _resolve_world_location(cfg.get("home_location"))
+        home_room = _resolve_room_id(current, data["home_room"]) if current else ""
+        if home_room:
+            cfg["home_room"] = home_room
+            save_character_config(char_name, cfg)
+        else:
+            warnings.append(f"Room '{data['home_room']}' is not a room of the "
+                            "character's home — skipped.")
+
+    raw_slots = data.get("daily_schedule")
+    if raw_slots:
+        slots: Dict[int, Dict[str, Any]] = {}
+        for raw in raw_slots if isinstance(raw_slots, list) else []:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                hour = int(raw.get("hour"))
+            except (TypeError, ValueError):
+                warnings.append(f"Schedule slot without a valid hour — skipped: {raw}")
+                continue
+            if not 0 <= hour <= 23:
+                warnings.append(f"Schedule hour {hour} is outside 0-23 — skipped.")
+                continue
+            if raw.get("sleep"):
+                slots[hour] = {"hour": hour, "location": "", "role": "", "sleep": True}
+                continue
+            role = str(raw.get("role") or "").strip()
+            loc_id = ""
+            if raw.get("location"):
+                loc = _resolve_world_location(raw["location"])
+                if loc is None:
+                    warnings.append(f"Schedule {hour}:00 — '{raw['location']}' is no "
+                                    "place of this world, hour left free.")
+                    continue
+                loc_id = loc["id"]
+                if loc_id not in places:
+                    places.append(loc_id)
+            if not loc_id and not role:
+                continue
+            slots[hour] = {"hour": hour, "location": loc_id, "role": role, "sleep": False}
+        if not isinstance(raw_slots, list):
+            warnings.append("daily_schedule is not a list — skipped.")
+        elif slots:
+            schedule = {"enabled": True, "slots": [slots[h] for h in sorted(slots)]}
+            if save_character_daily_schedule(char_name, schedule):
+                try:
+                    from app.scheduler.scheduler_manager import get_scheduler_manager
+                    get_scheduler_manager().sync_daily_schedule(char_name, schedule)
+                except Exception as e:  # the row is stored; the marker is cosmetic
+                    logger.warning("WorldDev: schedule marker for %s failed: %s",
+                                   char_name, e)
+            else:
+                warnings.append("Daily schedule was not stored.")
+
+    if places:
+        if is_new:
+            set_known_locations(char_name, places)
+        else:
+            for loc_id in places:
+                add_known_location(char_name, loc_id)
+
+    if is_new and home is not None:
+        save_character_current_location(char_name, home["id"])
+        if home_room:
+            save_character_current_room(char_name, home_room)
+    return warnings
+
+
 def _format_existing_outfit_types() -> str:
     """Deprecated: decency and style_hint replaced outfit_types.
     World Dev no longer assigns outfit_types."""
@@ -693,13 +895,16 @@ async def world_dev_chat(request: Request):
                 surface_kinds = format_surface_kinds()
             else:
                 layout_location = layout_rooms = surface_kinds = ""
-            system_prompt = _load_schema(
-                schema,
+            # ONE kwargs set: the edit path below re-renders the schema with
+            # another template and must fill every placeholder again.
+            schema_kwargs = dict(
                 existing_locations=existing_locations,
                 existing_characters=existing_characters,
                 existing_outfit_types=existing_outfit_types,
                 generable_fields=generable_fields,
                 selected_template=selected_template_text,
+                home_schedule_block=(_format_home_schedule_block(context_location_ids)
+                                     if schema == "character" else ""),
                 terrain_kinds=terrain_kinds,
                 placeable_locations=placeable_locations,
                 world_bounds=world_bounds_text,
@@ -708,6 +913,7 @@ async def world_dev_chat(request: Request):
                 layout_rooms=layout_rooms,
                 surface_kinds=surface_kinds,
                 world_setup_block=world_setup_block)
+            system_prompt = _load_schema(schema, **schema_kwargs)
         except FileNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
 
@@ -728,13 +934,9 @@ async def world_dev_chat(request: Request):
                         # Rebuild generable fields + template text for correct template
                         generable_fields = _format_generable_fields_for_templates(character_template)
                         selected_template_text = _selected_template_note(character_template)
-                        system_prompt = _load_schema(
-                            schema,
-                            existing_locations=existing_locations,
-                            existing_characters=existing_characters,
-                            existing_outfit_types=existing_outfit_types,
-                            generable_fields=generable_fields,
-                            selected_template=selected_template_text)
+                        schema_kwargs.update(generable_fields=generable_fields,
+                                             selected_template=selected_template_text)
+                        system_prompt = _load_schema(schema, **schema_kwargs)
 
                     # Also inject config fields into edit data
                     edit_config = get_character_config(edit_location_id)
@@ -750,6 +952,7 @@ async def world_dev_chat(request: Request):
                                  "current_feeling", "current_outfit", "location_changed_at"}
                     edit_data = {k: v for k, v in profile.items() if k not in skip_keys}
                     edit_data.update(config_inject)
+                    edit_data.update(_home_schedule_for_edit(edit_location_id))
                     edit_context = (
                         "\n\n## Aktuell zu bearbeitender Character\n\n"
                         "Der Benutzer moechte folgenden bestehenden Character bearbeiten. "
@@ -1553,12 +1756,21 @@ def _apply_character_internal(char_data: Dict[str, Any],
         config["known_locations"] = []
         config_changed = True
 
+    # Without an explicit mode a character runs `single` (dependencies.
+    # get_chat_mode), which an RP model cannot drive: it announces a move and
+    # never calls the tool. A new World-Dev character starts in `rp_first`; a
+    # temporary NPC keeps the NPC pipeline's own setup.
+    from app.models.character import is_temporary_npc
+    if (_is_new and not config.get("chat_mode")
+            and not is_temporary_npc(char_name)):
+        config["chat_mode"] = "rp_first"
+        config_changed = True
+
     if config_changed:
         save_character_config(char_name, config)
 
     # Same starting repertoire as a character created in the Characters tab.
     # A temporary NPC gets its closed list from npc_ops.activate_default_skills.
-    from app.models.character import is_temporary_npc
     if _is_new and not is_temporary_npc(char_name):
         from app.core.character_ops import seed_default_skills
         seed_default_skills(char_name)
@@ -1578,6 +1790,9 @@ def _apply_character_internal(char_data: Dict[str, Any],
         raw_outfits = []
     for outfit in raw_outfits:
         outfits_applied.append(_apply_one_outfit(char_name, outfit))
+    # After the outfits: placing a new character at home runs the outfit
+    # compliance of that place, which needs the wardrobe to exist.
+    apply_warnings.extend(_apply_home_and_schedule(char_name, char_data, _is_new))
 
     logger.info("WorldDev: Character '%s' (template=%s) applied", char_name, template)
     return {"status": "success", "character": char_name, "template": template,
@@ -1808,6 +2023,9 @@ def _apply_profile_patch_data_sync(data: Any):
     # the patch would replace the whole slot object and skip its validation.
     fields = dict(fields)
     body_slots = fields.pop("body_slots", None)
+    # Home and schedule are config + the daily_schedules table, not profile
+    # fields — they take the same route as in the full character apply.
+    home_schedule = {k: fields.pop(k) for k in _HOME_SCHEDULE_KEYS if k in fields}
     with keyed_lock("character_profile", char_name):
         profile = get_character_profile(char_name)
         if not profile.get("character_name"):
@@ -1838,9 +2056,11 @@ def _apply_profile_patch_data_sync(data: Any):
         sync_topics.profile_patched(char_name, {k: before[k] for k in applied}, applied)
     # After the profile save, which would otherwise write the pre-patch slots back.
     warnings = _apply_body_slots(char_name, body_slots)
+    warnings += _apply_home_and_schedule(char_name, home_schedule, is_new=False)
     applied_fields = list(applied.keys())
     if body_slots:
         applied_fields.append("body_slots")
+    applied_fields += [k for k in _HOME_SCHEDULE_KEYS if home_schedule.get(k)]
     logger.info("WorldDev: profile patch for '%s' (%d fields)", char_name, len(applied_fields))
     return {"status": "success", "character": char_name,
             "applied_fields": applied_fields, "warnings": warnings}
@@ -2324,6 +2544,9 @@ def _preview_json_sync(data: Any):
         info["template"] = normalized.get("template", "")
         info["outfits"] = len(normalized.get("outfits", []) or [])
         info["soul_md_files"] = list((normalized.get("_extra_soul_md") or {}).keys())
+        info["home_location"] = str(normalized.get("home_location") or "")
+        info["schedule_slots"] = len(normalized.get("daily_schedule") or [])
+        info["body_slots"] = len(normalized.get("body_slots") or {})
     elif detected == "location":
         info["name"] = normalized.get("name", "")
         info["rooms"] = len(normalized.get("rooms", []) or [])
