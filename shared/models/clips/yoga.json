@@ -104,6 +104,10 @@
    "111_41"
   ],
   "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217.",
+  "window_s": [
+   11.0,
+   21.3
+  ],
   "roll_repair_reason": "CMU/ASF gives the radius no twist dof, so the source folds all pronation into the humerus (forearm roll exactly 0); the balanced split hands it back",
   "roll_repaired": true,
   "roll_repaired_at": "2026-10-24",
@@ -121,10 +125,6 @@
     "L": -21.5,
     "R": 38.75
    }
-  },
-  "window_s": [
-   11.0,
-   21.3
-  ]
+  }
  }
 }

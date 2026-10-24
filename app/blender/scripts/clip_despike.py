@@ -24,9 +24,10 @@ verification limit that breaks fails the run and declares no file.
 What is repaired: every bone's PARENT-relative rotation keys
 (``rotation_quaternion``), one series per bone, through the same
 ``_cmu.despike`` the converter uses — a joint that turns more than the
-threshold into a frame and back out of it, landing where it started. Only
-that bone's key at that frame changes; what hangs on it follows, nothing
-else moves. Track shape and axes are ``cmu_clip``'s (``_export``), so the
+threshold into a frame and back out of it, landing where it started. The
+joints below a repaired one get their keys on those frames interpolated
+too (``_cmu.blend_frames``): they were solved against the glitching parent
+and would otherwise carry the glitch on. Nothing else moves. Track shape and axes are ``cmu_clip``'s (``_export``), so the
 file goes back into the library as it came out (``clip_roll`` does the same).
 """
 import sys
@@ -70,20 +71,14 @@ def _process(slot: str, src: str, args: dict):
     _action, frames = clip_roll._frames_of(arm)
     before = clip_roll._sample(arm, frames)
     fcs = curves(arm)
-    repaired = {}
-    for pb in arm.pose.bones:
-        path = f'pose.bones["{pb.name}"].rotation_quaternion'
+
+    def tracks_of(name):
+        path = f'pose.bones["{name}"].rotation_quaternion'
         tracks = [fcs.find(path, index=i) for i in range(4)]
-        if any(t is None for t in tracks):
-            continue
-        qs = [[t.evaluate(f) for t in tracks] for f in frames]
-        fixed = _cmu.despike(qs, max_deg)
-        if not fixed:
-            continue
-        repaired[pb.name] = fixed
-        if dry:
-            continue
-        for k in fixed:
+        return None if any(t is None for t in tracks) else tracks
+
+    def write(tracks, qs, ks):
+        for k in ks:
             f = frames[k]
             for i, t in enumerate(tracks):
                 kp = next((x for x in t.keyframe_points if abs(x.co[0] - f) < 1e-6), None)
@@ -93,6 +88,29 @@ def _process(slot: str, src: str, args: dict):
                 kp.handle_left[1] = kp.handle_right[1] = qs[k][i]
         for t in tracks:
             t.update()
+
+    # Read every series first: a child is blended from its ORIGINAL keys.
+    series = {}
+    for pb in arm.pose.bones:
+        tracks = tracks_of(pb.name)
+        if tracks is not None:
+            series[pb.name] = (tracks, [[t.evaluate(f) for t in tracks] for f in frames])
+    repaired = {}
+    for name, (tracks, qs) in series.items():
+        fixed = _cmu.despike(qs, max_deg)
+        if fixed:
+            repaired[name] = fixed
+    if not dry:
+        for name, fixed in repaired.items():
+            write(series[name][0], series[name][1], fixed)
+        # the joints below a repaired one follow it on those frames
+        # (``_cmu.blend_frames``: their keys compensated the glitching parent)
+        for name, fixed in repaired.items():
+            for child in arm.data.bones[name].children_recursive:
+                if child.name in series and child.name not in repaired:
+                    tracks, qs = series[child.name]
+                    _cmu.blend_frames(qs, fixed)
+                    write(tracks, qs, fixed)
 
     data = {"frames": len(frames), "fps": fps, "max_deg": max_deg, "dry_run": dry,
             "repaired": {n[len(PREFIX):] if n.startswith(PREFIX) else n: v

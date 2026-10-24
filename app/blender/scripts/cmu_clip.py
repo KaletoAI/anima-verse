@@ -686,15 +686,37 @@ def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
                     keys.setdefault((lpath, i), []).append(v)
     if despiked is not None:
         despiked.clear()
-    for path in [k[0] for k in keys if k[0].endswith("rotation_quaternion") and k[1] == 0]:
+    rot_paths = [k[0] for k in keys if k[0].endswith("rotation_quaternion") and k[1] == 0]
+    by_bone = {path.split('"')[1]: path for path in rot_paths}
+
+    def series(path):
         comps = [keys[(path, c)] for c in range(4)]
-        qs = [[comps[c][f] for c in range(4)] for f in range(nframes)]
-        fixed = _cmu.despike(qs)
-        for f in fixed:
+        return comps, [[comps[c][f] for c in range(4)] for f in range(nframes)]
+
+    def store(comps, qs, frames):
+        for f in frames:
             for c in range(4):
                 comps[c][f] = qs[f][c]
-        if fixed and despiked is not None:
-            despiked[_short(path.split('"')[1])] = fixed
+
+    repaired = {}
+    for path in rot_paths:
+        comps, qs = series(path)
+        fixed = _cmu.despike(qs)
+        store(comps, qs, fixed)
+        if fixed:
+            repaired[path.split('"')[1]] = fixed
+            if despiked is not None:
+                despiked[_short(path.split('"')[1])] = fixed
+    # The joints below a repaired one follow it on the same frames
+    # (``_cmu.blend_frames``) — their keys compensated the glitching parent.
+    for name, frames in repaired.items():
+        for child in arm.data.bones[name].children_recursive:
+            path = by_bone.get(child.name)
+            if path is None:
+                continue
+            comps, qs = series(path)
+            _cmu.blend_frames(qs, frames)
+            store(comps, qs, frames)
     if loop and nframes > 2 * LOOP_BLEND_FRAMES:
         # Ease the tail into the head: the last K keys blend towards key 0
         # (quaternions slerped per bone, the hips location lerped), so frame

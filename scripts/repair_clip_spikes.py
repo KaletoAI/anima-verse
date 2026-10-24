@@ -87,7 +87,7 @@ def main() -> int:
     a = ap.parse_args()
 
     if a.files:
-        clips = [Path(f) for f in a.files]
+        clips = [Path(f).resolve() for f in a.files]
         untracked = sorted(set(clips) - set(tracked(clips)))
         if untracked:
             print("refused (not tracked by git): " + ", ".join(map(str, untracked)))

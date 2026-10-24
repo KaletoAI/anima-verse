@@ -33,6 +33,10 @@ Threshold SPIKE_DEG = 10, CALM = 0.5, SNAP_FACTOR = 2, SNAP_SPREAD = 3.
 [7] a flip is no snap: 0 0 0 0 0 120 120 120 120 120 → the step of 120 is
     above SNAP_MAX_DEG 90 (a wrong solution, spreading it would make a
     spin) → returns [] and nothing changes.
+[8] blend_frames (the joints below a repaired one): 0 10 99 30 40 with
+    frame 2 → slerp between frames 1 and 3 at (2−1)/(3−1) = 0.5 → 20;
+    0 99 99 30 40 with frames 1, 2 → between frames 0 and 3: 10 and 20;
+    99 10 20 with frame 0 (no left neighbour) → frame 1's value 10.
 """
 import math
 import sys
@@ -72,6 +76,15 @@ case("4 snap", [0, 0, 0, 0, 0, 40, 40, 40, 40, 40], [3, 4, 5, 6],
 case("5 edge", [30, 0, 0, 0, 0], [0], [0] * 5)
 case("6 below threshold", [0, 0, 0, 8, 0, 0, 0], [], [0, 0, 0, 8, 0, 0, 0])
 case("7 flip", [0] * 5 + [120] * 5, [], [0] * 5 + [120] * 5)
+for label, degs, frames, want in (("8a blend one", [0, 10, 99, 30, 40], [2], [0, 10, 20, 30, 40]),
+                                  ("8b blend run", [0, 99, 99, 30, 40], [1, 2], [0, 10, 20, 30, 40]),
+                                  ("8c blend edge", [99, 10, 20], [0], [10, 10, 20])):
+    qs = series(degs)
+    _cmu.blend_frames(qs, frames)
+    a = angles(qs)
+    print(f"[{label}] angles {[round(x, 3) for x in a]}")
+    if any(abs(x - y) > 1e-6 for x, y in zip(a, want)):
+        FAIL.append(f"{label}: {a} (want {want})")
 
 if FAIL:
     print("FAIL smoke_clip_despike")

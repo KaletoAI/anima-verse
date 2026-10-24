@@ -681,6 +681,31 @@ def despike(qs: List[List[float]], max_deg: float = SPIKE_DEG) -> List[int]:
     return sorted(set(fixed))
 
 
+def blend_frames(qs: List[List[float]], frames) -> None:
+    """Replaces the keys at ``frames`` IN PLACE by interpolating (slerp, by
+    time) between the nearest frames outside the set — for the joints BELOW
+    a repaired one: their parent-relative keys were solved against the
+    glitching parent, so leaving them would move the glitch down the chain
+    (a repaired knee made the foot jump instead)."""
+    bad = set(frames)
+    n = len(qs)
+    for f in sorted(bad):
+        a = f - 1
+        while a >= 0 and a in bad:
+            a -= 1
+        b = f + 1
+        while b < n and b in bad:
+            b += 1
+        if a < 0 and b >= n:
+            continue
+        if a < 0:
+            qs[f] = list(qs[b])
+        elif b >= n:
+            qs[f] = list(qs[a])
+        else:
+            qs[f] = _q_blend(qs[a], qs[b], (f - a) / (b - a))
+
+
 def resample_indices(n_frames: int, source_fps: float, fps: float,
                      start_s: float = 0.0, end_s: Optional[float] = None,
                      speed: float = 1.0) -> List[int]:
