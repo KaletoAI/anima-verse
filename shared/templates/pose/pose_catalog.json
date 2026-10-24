@@ -28,7 +28,7 @@
   },
   "entries": {
     "standing": {
-      "prompt": "standing with one hand on hip, weight shifted to one leg, shoulder slightly raised, chin up",
+      "prompt": "standing relaxed, arms hanging loosely at the sides, weight on one leg, calm and at ease",
       "synonyms": [
         "stehen",
         "stehend",
@@ -37,10 +37,13 @@
         "am fenster stehen",
         "vor dem fenster stehen",
         "an der tür stehen",
-        "herumstehen"
+        "herumstehen",
+        "locker stehen",
+        "entspannt stehen",
+        "standing around"
       ],
       "_default": true,
-      "animation": "idle",
+      "animation": "standing",
       "group": "stand",
       "solo": true
     },
