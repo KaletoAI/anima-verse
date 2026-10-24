@@ -824,15 +824,20 @@
       "solo": true
     },
     "holding_knife": {
-      "prompt": "standing upright with a relaxed posture, holding a knife firmly in one hand while the other arm rests naturally at the side",
+      "prompt": "standing at a kitchen counter chopping vegetables with a knife on a cutting board",
       "synonyms": [
         "holding a knife in the kitchen",
         "messer halten",
         "hält ein messer",
-        "mit dem messer hantieren"
+        "mit dem messer hantieren",
+        "gemüse schneiden",
+        "klein schneiden",
+        "chopping vegetables",
+        "cutting vegetables"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "chopping",
+      "group": "stand",
+      "solo": true
     },
     "recovering": {
       "prompt": "sitting slumped back, exhausted, catching breath, hands resting on the thighs, flushed face",
