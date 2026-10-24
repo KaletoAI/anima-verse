@@ -643,7 +643,7 @@
       "group": "stand"
     },
     "serving": {
-      "prompt": "standing upright behind a counter, leaning slightly forward with hands resting on the surface, ready stance",
+      "prompt": "waiter serving, a tray balanced on one hand, the other hand setting a glass down on a table, polite smile",
       "synonyms": [
         "bedienen",
         "serving customers",
@@ -652,10 +652,14 @@
         "gäste bedienen",
         "kunden bedienen",
         "servieren",
-        "am tresen bedienen"
+        "am tresen bedienen",
+        "ein getränk servieren",
+        "kellnern",
+        "waiting tables"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "serving",
+      "group": "stand",
+      "solo": true
     },
     "monitoring": {
       "prompt": "sitting upright with focused gaze, hands resting lightly on desk or device, legs firmly on the floor",
