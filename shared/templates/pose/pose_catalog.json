@@ -136,7 +136,7 @@
         "strolling",
         "walking along"
       ],
-      "animation": "walking",
+      "animation": "walk",
       "solo": true,
       "group": "stand"
     },
