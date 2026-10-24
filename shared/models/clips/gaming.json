@@ -1,0 +1,40 @@
+{
+ "kind": "gaming",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 181,
+ "duration_s": 6.033,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": 1.84,
+  "hips_scale": [
+   1.0
+  ],
+  "rig_floor_shift_cm": -0.0,
+  "rig_floor_min_cm": 0.0,
+  "root_motion": {
+   "mode": "strip",
+   "travel_m": [
+    0.0,
+    0.0
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     6.0
+    ]
+   ],
+   "max_drift_cm": 0.0
+  }
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/gaming.py",
+  "spec_sha": "5af986d5de05e817abf89d4c925ca100846a727e60ecda707c77a76b6c0047bf"
+ }
+}

@@ -285,7 +285,7 @@
       "group": "stand"
     },
     "gaming": {
-      "prompt": "sitting forward on chair, controller in hands, elbows on knees, intense focus",
+      "prompt": "sitting leaning forward with a game controller in both hands, elbows near the knees, intense focus on a screen",
       "synonyms": [
         "spielen",
         "spielend",
@@ -294,10 +294,14 @@
         "zockt",
         "videospiele spielen",
         "am computer spielen",
-        "konsole spielen"
+        "konsole spielen",
+        "an der konsole",
+        "playing video games",
+        "console gaming"
       ],
-      "animation": "sit",
-      "group": "seat"
+      "animation": "gaming",
+      "group": "seat",
+      "solo": true
     },
     "cleaning": {
       "prompt": "standing and tidying up, upper body bent forward, one hand reaching down to pick something up, the other holding a cloth",
