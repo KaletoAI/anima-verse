@@ -423,16 +423,21 @@
       "solo": true
     },
     "playing": {
-      "prompt": "playful dynamic pose, arms outstretched, light bouncy stance",
+      "prompt": "fooling around, bouncing on the spot with flapping arms and a goofy grin",
       "synonyms": [
         "herumtoben",
         "herumalbern",
         "tobt herum",
         "herumblödeln",
-        "albern sein"
+        "albern sein",
+        "rumalbern",
+        "quatsch machen",
+        "fooling around",
+        "goofing around"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "playing",
+      "group": "stand",
+      "solo": true
     },
     "talking": {
       "prompt": "standing and talking, one hand gesturing with an open palm, engaged expression, mid-sentence",
