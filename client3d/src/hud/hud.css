@@ -14,7 +14,7 @@
 #hud {
   position: fixed;
   inset: 0;
-  z-index: 20; /* above the vanilla top bar (z 10); picker modals portal to body at z 2000 */
+  z-index: 20; /* above the world; picker modals portal to body at z 2000 */
   pointer-events: none;
   color: var(--text, #c9d1d9);
   font-family: system-ui, -apple-system, sans-serif;
@@ -29,7 +29,7 @@
 }
 
 /* ---- Mode chip: the one sign of the embodied mode (E3-T2) ----
-   Centred below the vanilla top bar (z 10), and a real button — hence the
+   Centred below the top bar (z 10), and a real button — hence the
    pointer exception above. */
 #hud .hud-mode {
   position: absolute;
@@ -41,9 +41,8 @@
 /* ---- Party strip: who travels with the avatar (Etappe 6) ----
    Top centre, in a lane of its OWN below both things that already sit there:
    the mode chip (top 58px, ends ~81px, embodied only) and the open-view badge
-   (style.css, top 46px, ends ~79px, overview only). The two modes are
-   mutually exclusive but the strip shows in BOTH, and the badge lives outside
-   #hud where a :has() dodge cannot see it — so the strip clears the lower of
+   (hud.css, top 46px, ends ~79px, overview only). The two modes are
+   mutually exclusive but the strip shows in BOTH, so it clears the lower of
    the two edges unconditionally instead of dodging one of them. It is z 20
    over the badge's z 10 and takes the pointer, so an overlap would swallow
    clicks on the badge's ✕.
@@ -583,7 +582,7 @@
 }
 #hud .hud-plaque-close:hover { opacity: 1; }
 
-/* Self/Others: right dock column next to the rail, below the vanilla top
+/* Self/Others: right dock column next to the rail, below the top
    bar. The column itself stays drag-through; only the panels catch. */
 #hud .hud-dock {
   position: absolute;
@@ -599,13 +598,10 @@
   pointer-events: none;
 }
 
-/* The dock steps aside while the vanilla info panel is open.
-   The panel (client3d/src/style.css, frozen) sits at right:12 / width:300, so
-   it owns 12..312px from the right edge; the dock at right:62 covers 62..382
-   with pointer-events:auto on its panels and swallows the panel's zoom button.
-   The panel element is permanent and only toggles [hidden], so :has() can
-   react to it — no JS wiring between the vanilla app and the React island, and
-   the frozen file stays untouched.
+/* The dock steps aside while the location info panel is mounted.
+   The panel sits at right:12 / width:300, so it owns 12..312px from
+   the right edge; the dock at right:62 covers 62..382 and can swallow the
+   panel's zoom button. :has() follows the panel's presence within the HUD.
 
    The shift is CLAMPED, because moving the dock right out of the info panel's
    way pushes it into the chat panel on the left (left:12 / width up to 840, so
@@ -621,7 +617,7 @@
                 so a narrow window is never made worse than it already was.
    This is layout, not ornament: it stays here and not in theme-fantasy.css,
    so dropping or swapping the theme cannot bring the click-block back. */
-#hud:has(~ .info-panel:not([hidden])) .hud-dock {
+#hud:has(.info-panel) .hud-dock {
   --dock-right: clamp(62px, 100vw - 1184px, 324px);
 }
 /* Inventory and Mind get half again (user finding, stage 6 part 1): the
@@ -976,7 +972,7 @@
    of ownership question nobody wants to answer later. The id keeps every
    selector as tightly scoped as the `#hud` ones — nothing can reach /play.
 
-   It sits above the vanilla top bar (z 10) and the HUD (z 20) because it
+   It sits above the top bar (z 10) and the HUD (z 20) because it
    covers the world while the world is still being built; the portalled picker
    modals (z 2000) stay above it, which cannot happen during boot anyway.
 
@@ -1121,7 +1117,7 @@
 }
 
 /* ---- Performance readout (Etappe 5, plan-3d-lod-und-betreten.md) ----
-   Top-left under the vanilla top bar (z 10, ~40px): the mode chip is centred,
+   Top-left under the top bar (z 10, ~40px): the mode chip is centred,
    the info panel sits right, the chat docks bottom-left — this corner is the
    only one nothing else claims.
 
@@ -1204,11 +1200,206 @@
    reading aid one can have back by closing it. The dock's rule above stays as
    it is: it is a shift because a dock that vanished would take the chat with
    it. */
-#hud:has(~ .info-panel:not([hidden])) .hud-minimap {
+#hud:has(.info-panel) .hud-minimap {
   display: none;
 }
 /* …and with the map gone the dock takes its place back: the 238px above are
    the room the minimap needs, and it is not there to need it. */
-#hud:has(.hud-minimap):has(~ .info-panel:not([hidden])) .hud-dock {
+#hud:has(.hud-minimap):has(.info-panel) .hud-dock {
   top: 52px;
 }
+
+/* These surfaces used the scene page's reset before the migration. Keep
+   their geometry identical in the standalone HUD without styling the world. */
+:where(#hud) :where(.hud-top, .hud-hints, .info-panel, .open-view-badge, .place-menu),
+:where(#hud) :where(.hud-top, .hud-hints, .info-panel, .open-view-badge, .place-menu) * {
+  box-sizing: border-box; margin: 0; padding: 0;
+}
+
+/* ---------- HUD ---------- */
+.hud-top {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  background: linear-gradient(rgba(16, 19, 24, 0.92), rgba(16, 19, 24, 0.75));
+  border-bottom: 1px solid rgba(242, 205, 110, 0.35);
+  color: #e8e2d5;
+  z-index: 10;
+}
+.hud-title {
+  font-family: Georgia, serif;
+  font-variant: small-caps;
+  font-size: 17px;
+  letter-spacing: 0.08em;
+  color: #f2d98c;
+}
+.hud-right { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.hud-status {
+  width: 9px; height: 9px; border-radius: 50%; display: inline-block;
+  background: #666;
+}
+.hud-status.ok { background: #6fbf5a; box-shadow: 0 0 5px #6fbf5a; }
+.hud-status.err { background: #d9534f; box-shadow: 0 0 5px #d9534f; }
+.hud-clock { color: #f2d98c; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hud-logout {
+  background: transparent;
+  border: 1px solid rgba(242, 205, 110, 0.5);
+  color: #f2d98c;
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.hud-logout:hover { background: rgba(242, 205, 110, 0.15); }
+
+.hud-hints {
+  position: fixed;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: #cfc8b8;
+  background: rgba(16, 19, 24, 0.8);
+  border: 1px solid rgba(242, 205, 110, 0.25);
+  border-radius: 16px;
+  padding: 5px 16px;
+  z-index: 10;
+  white-space: nowrap;
+}
+
+/* ---------- Info-Panel ---------- */
+.info-panel {
+  position: fixed;
+  top: 56px;
+  right: 12px;
+  width: 300px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  background: rgba(22, 26, 33, 0.94);
+  border: 1px solid rgba(242, 205, 110, 0.4);
+  border-radius: 8px;
+  padding: 14px 16px;
+  color: #e8e2d5;
+  z-index: 10;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+.info-panel h2 {
+  font-family: Georgia, serif;
+  font-variant: small-caps;
+  font-size: 19px;
+  color: #f2d98c;
+  margin-bottom: 6px;
+  padding-right: 24px;
+}
+.info-panel h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #a99f8a;
+  margin: 12px 0 4px;
+}
+.info-panel .desc { font-size: 13px; line-height: 1.45; color: #cfc8b8; }
+.info-panel ul { list-style: none; }
+.info-panel li { font-size: 13px; padding: 2px 0; }
+.info-panel .who { color: #a99f8a; font-size: 12px; }
+.panel-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  background: none;
+  border: none;
+  color: #a99f8a;
+  font-size: 15px;
+  cursor: pointer;
+}
+.panel-close:hover { color: #f2d98c; }
+.panel-zoom {
+  margin-top: 14px;
+  width: 100%;
+  background: rgba(242, 205, 110, 0.12);
+  border: 1px solid rgba(242, 205, 110, 0.5);
+  color: #f2d98c;
+  border-radius: 5px;
+  padding: 7px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.panel-zoom:hover { background: rgba(242, 205, 110, 0.25); }
+
+.open-view-badge {
+  position: fixed;
+  top: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(22, 26, 33, 0.92);
+  border: 1px solid rgba(242, 205, 110, 0.4);
+  border-radius: 16px;
+  padding: 5px 8px 5px 14px;
+  color: #f2d98c;
+  font-size: 13px;
+  z-index: 10;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+.open-view-badge .ovb-close {
+  background: none;
+  border: none;
+  color: #a99f8a;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.open-view-badge .ovb-close:hover { color: #f2d98c; }
+
+
+/* ---------- Seat menu (a clicked free place, plan-posen-plaetze.md § 4) ---------- */
+.place-menu {
+  position: fixed;
+  min-width: 140px;
+  background: rgba(22, 26, 33, 0.96);
+  border: 1px solid rgba(242, 205, 110, 0.4);
+  border-radius: 6px;
+  padding: 6px 0;
+  color: #e8e2d5;
+  z-index: 20;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+  font-size: 13px;
+}
+.place-menu-title {
+  padding: 2px 12px 6px;
+  color: #a99f8a;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(242, 205, 110, 0.2);
+  margin-bottom: 4px;
+}
+.place-menu-pose {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: #e8e2d5;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.place-menu-pose.default { font-weight: bold; color: #f2d98c; }
+.place-menu-pose:hover { background: rgba(242, 205, 110, 0.15); }
+
+/* Migrated surfaces are interactive within the pointer-transparent HUD. */
+#hud .hud-top, #hud .hud-hints, #hud .info-panel, #hud .open-view-badge,
+#hud .place-menu-backdrop { pointer-events: auto; }
+#hud .place-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  background: transparent;
+  z-index: 2000;
+}
+.place-menu { max-width: 100vw; max-height: 100vh; overflow: auto; }

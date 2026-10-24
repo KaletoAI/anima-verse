@@ -84,8 +84,7 @@ export function mountHud(opts: { username: string; avatar: string; role: string 
   // singleton hands its item to — without it every call is silently a no-op
   // (ScenePanel opens chat images through it). It portals to document.body,
   // so its position in the chain only decides that it exists.
-  // `opts.username` is not shown anywhere (the vanilla top bar already carries
-  // the login name) — it is the identity `/tts/speak` is asked with (E4-T6).
+  // `opts.username` labels the top bar and identifies `/tts/speak` (E4-T6).
   // `opts.role` gates the admin entry of the game menu (Etappe 5): a switch
   // only an administrator may use is only offered to one.
   root.render(

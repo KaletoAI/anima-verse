@@ -23,11 +23,17 @@ import type { MinimapState } from '../game/minimap';
 import type { PerfStats } from '../game/perfstats';
 import type { Prefs, ScatterPrefs } from '../game/prefs';
 import type { StairPrompt } from '../game/stairs';
-import type { MapCharacter } from '../types';
+import type { InfoPanelData } from '../game/infoPanel';
+import type { MapCharacter, PlaceOffer } from '../types';
 
 export type GameMode = 'overview' | 'embodied';
 
 export interface HudGameState {
+  clock: string;
+  connection: 'ok' | 'lost';
+  info: InfoPanelData | null;
+  openView: string | null;
+  placeMenu: { x: number; y: number; offer: PlaceOffer } | null;
   mode: GameMode;
   /** selected figure (worldmap snapshot, refreshed on every poll) or null */
   selected: { char: MapCharacter; isAvatar: boolean } | null;
@@ -101,6 +107,10 @@ export const HUD_OWNED_FIELDS = ['movementLocked','partyLeader','groundRoomId','
 
 /** Actions the React side calls INTO the vanilla app; main.ts registers them. */
 export interface HudGameActions {
+  infoAction?: (id: string, kind: 'zoom' | 'lookInside' | 'closeView') => void;
+  closeInfo?: () => void;
+  closeOpenView?: () => void;
+  pickPlacePose?: (poseKey: string | null) => void;
   setVolumes?: (prefs: Prefs) => void;
   speak?: (url: string) => void | Promise<void>;
   stopSpeech?: () => void;
@@ -174,6 +184,7 @@ export interface HudUiActions {
 }
 
 const state: HudGameState = {
+  clock: '', connection: 'ok', info: null, openView: null, placeMenu: null,
   mode: 'overview', selected: null, talkTarget: null,
   movementLocked: false, partyLeader: '', groundRoomId: '', floorRoomIds: {},
   lockedRooms: {}, lockedLocations: {}, lockedLoc: '',

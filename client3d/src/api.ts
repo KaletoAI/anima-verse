@@ -1,6 +1,6 @@
 import type { MotionPayload } from "./types";
 import type {
-  AtLocationChar, AuthUser, PosReport, TerrainPayload, WorldLocation, WorldMap,
+  AtLocationChar, AuthUser, PlaceOffer, PosReport, TerrainPayload, WorldLocation, WorldMap,
 } from './types';
 // Imported locally as well: the re-export further down only exposes the types
 // outwards, the parsing helpers here need them in their own scope.
@@ -280,20 +280,6 @@ export async function postActivity(body: { activity?: string; place_id?: string;
   }
   if (!res.ok) throw await refusal(res);
   return res.json() as Promise<{ ok: boolean; place: unknown }>;
-}
-
-/** One place of the avatar's room as `GET /play/places` offers it: how many
- *  slots are free and WHICH (`free_slots` index the scene payload's
- *  `slots[]`), and the solo poses of its group a click may pick — the
- *  group's default first. `label` of a pose is its key today. */
-export interface PlaceOffer {
-  id: string;
-  label: string;
-  group: string;
-  capacity: number;
-  free: number;
-  free_slots: number[];
-  poses: { key: string; label: string }[];
 }
 
 /** The places of the avatar's current room (plan-posen-plaetze.md § 4,

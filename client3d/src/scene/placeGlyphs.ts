@@ -24,7 +24,7 @@
  * loaded its interior yet.
  */
 import * as THREE from 'three';
-import type { PlaceOffer } from '../api';
+import type { PlaceOffer } from '../types';
 import type { PlacePick } from '../game/placement';
 import type { PlaceEntry } from './placeSlot';
 

@@ -21,7 +21,7 @@ import { buildGlyphs, clearPropHighlight, disposeGlyphs, highlightProp, hitPlace
   hitProp, pickableProps, type PickableProp, type PlacedPropRef,
   type PropHighlight } from './scene/placeGlyphs';
 import { installSpotHighlight, setSpot } from './scene/spotHighlight';
-import { openPlaceMenu } from './game/placeMenu';
+import { infoPanelData } from './game/infoPanel';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
   gateStandY, groundScope, groundStoreyFloors, locomotionClip, slideBlocked,
@@ -75,7 +75,7 @@ import { declaredFloorAt, WALK_CLEARANCE_M } from './game/ground';
 import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocation';
 import { figureTransition, pickablePlaceFor, PLACE_PICK_RADIUS_M, placementOf, pollIsStale,
   type ShownPlacement } from './game/placement';
-import { bootStatus, createHud, InfoPanel, OpenViewBadge } from './ui';
+import { bootStatus } from './ui';
 import { markBootStart, withPhase, reportBootStage, setBootNote, getBootState, bootReport, subscribeBoot, subscribeBootReport } from './game/boot';
 import { connectSceneSide, pointInRects, postMessageTransport } from './hud/bridge';
 import { subscribeHudUiState } from './hud/bus';
@@ -86,7 +86,7 @@ import { createGround } from './scene/ground';
 import { createBackdrop } from './scene/backdrop';
 import { createWorldProps } from './scene/worldProps';
 import { ageAtReceiptS, createErrWindow, maxErr, clampProgress, pointAtDistance, polylineLength, type MetrePoint } from './scene/travelPath';
-import type { MapCharacter, MapTravel, WorldBounds, WorldLocation, WorldMap } from './types';
+import type { MapCharacter, MapTravel, PlaceOffer, WorldBounds, WorldLocation, WorldMap } from './types';
 
 // --- THE CELL WORLD IS GONE (E4, tasks 2–6) ---------------------------------
 //
@@ -687,7 +687,6 @@ async function startApp(username: string, role: string) {
     if (figures.state === 'loading' || !npcBootReady) return;
     if (lastMap) npcs.update(computeNpcStates(lastMap), npcUpdateOpts());
   };
-  const panel = new InfoPanel();
 
   // Logging out reloads, and that is the whole way back to the title: the
   // reload runs `boot()` again, `authStatus` now says "not signed in" and the
@@ -709,7 +708,6 @@ async function startApp(username: string, role: string) {
     }
   };
   gameActions.backToTitle = () => void backToTitle();
-  const hud = createHud({ username, avatar: firstMap.avatar, onLogout: backToTitle });
   // The chat window covers the picture; the camera aims beside it. Straight
   // through to the engine, which reads the box once per frame — the HUD sends
   // one on every drag step, and buffering them here would only add a lag.
@@ -979,14 +977,15 @@ async function startApp(username: string, role: string) {
    *  their authored cutouts without hiding the rest of the site. */
   const openable = (tile: Tile) =>
     !!tile.interior && (tile.isBuilding || !!tile.modelIsShellArea || !!tile.modelIsGround);
-  const badge = new OpenViewBadge();
+
   /** The floating close control shows exactly while a view is open in the
    *  OVERVIEW. Embodied it stays hidden: there the avatar's location owns the
    *  state and an explicit close would be reopened the very next frame. */
   function refreshOpenBadge() {
     const tile = openLocationId ? places.get(openLocationId) : null;
-    if (tile && getGameState().mode !== 'embodied') badge.show(tile.loc.name);
-    else badge.hide();
+    const name = tile?.loc.name || '';
+    const openView = name.trim() ? name : null;
+    if (getGameState().openView !== openView) setGameState({ openView });
   }
   function openLocation(id: string) {
     if (openLocationId === id) return;
@@ -1002,7 +1001,7 @@ async function startApp(username: string, role: string) {
     openLocationId = null;
     refreshOpenBadge();
   }
-  badge.onClose = () => closeOpenLocation();
+  gameActions.closeOpenView = () => closeOpenLocation();
   subscribeGameState(refreshOpenBadge);
 
   // --- Resolution tiers (Stage 3, Nos. 4 + 5) -------------------------------
@@ -2063,33 +2062,33 @@ async function startApp(username: string, role: string) {
   }
   engine.onPick = (id) => {
     if (!id) {
-      panel.hide();
+      setGameState({ info: null });
       return;
     }
     const tile = places.get(id);
     if (!tile) return;
     const chars = (lastMap?.characters ?? []).filter((c) => c.location_id === id);
-    panel.show(tile.loc, chars, lastMap?.events_by_location?.[id] ?? [], roomOf,
-      { openable: !!residency.get(id) && openable(residency.get(id)!.tile), open: openLocationId === id });
+    setGameState({ info: infoPanelData(tile.loc, chars, lastMap?.events_by_location?.[id] ?? [], roomOf,
+      { openable: !!residency.get(id) && openable(residency.get(id)!.tile), open: openLocationId === id }) });
   };
   /** Fly-in distance of the panel buttons: never FARTHER than where the camera
    *  already stands. `flyTo` sets the distance unconditionally, so a fixed
    *  OPEN_FLY_DIST pushed a camera that was already closer back out — "look
    *  inside" would zoom OUT. */
   const flyInDist = () => Math.min(engine.targetDist, OPEN_FLY_DIST);
-  panel.onZoomTo = (id) => {
+  gameActions.closeInfo = () => setGameState({ info: null });
+  gameActions.infoAction = (id, kind) => {
     const tile = places.get(id);
-    if (tile) engine.flyTo(tile.center.clone(), flyInDist());
+    if (kind === 'closeView') closeOpenLocation();
+    else if (tile) {
+      engine.flyTo(tile.center.clone(), flyInDist());
+      if (kind === 'lookInside') openLocation(id);
+    }
+    const info = getGameState().info;
+    if (info?.id === id && info.view) {
+      setGameState({ info: { ...info, view: { ...info.view, open: openLocationId === id } } });
+    }
   };
-  // "Look inside" (stage 3): the old fly-to stays part of it — fly in AND
-  // open the detail view. Pure view state, no server call.
-  panel.onLookInside = (id) => {
-    const tile = places.get(id);
-    if (!tile) return;
-    engine.flyTo(tile.center.clone(), flyInDist());
-    openLocation(id);
-  };
-  panel.onCloseView = () => closeOpenLocation();
 
   // --- Figure selection (E3-T1) --------------------------------------------
   // Figure picking runs before the tile pick: a hit figure gets the plaque
@@ -2491,8 +2490,13 @@ async function startApp(username: string, role: string) {
       syncStreamPins();
       mapPolledAt = polledAt;
       mapStamp += 1;
-      hud.setOnline(true);
-      hud.setClock(map.game_time?.label_display ?? map.game_time?.label ?? '');
+      // One publish, and only on a change: every setGameState re-renders the
+      // HUD and, behind a bridge, crosses it — a poll that only repeats the
+      // same clock string must cost neither.
+      const clock = map.game_time?.label_display ?? map.game_time?.label ?? '';
+      if (getGameState().connection !== 'ok' || getGameState().clock !== clock) {
+        setGameState({ connection: 'ok', clock });
+      }
       // The GAME clock in seconds goes to the ground on every poll: a scatter
       // row that reshuffles takes its epoch from it (`reshuffleEpoch`), and
       // the ground re-samples only when an epoch really turns — the same
@@ -2523,7 +2527,7 @@ async function startApp(username: string, role: string) {
       announceSceneProblems(map); // what the composer found wrong (§ 4.3)
     } catch (error) {
       // Preserve the original poll's handling of failures during application.
-      if (!api.isAuthError(error)) hud.setOnline(false);
+      if (!api.isAuthError(error) && getGameState().connection !== 'lost') setGameState({ connection: 'lost' });
       return;
     }
     // The metre side of the payload: the world frame, the places as the
@@ -2567,7 +2571,7 @@ async function startApp(username: string, role: string) {
     (data, error) => {
       if (error) {
         // An expired session opens the login gate without marking the server offline.
-        if (!api.isAuthError(error)) hud.setOnline(false);
+        if (!api.isAuthError(error) && getGameState().connection !== 'lost') setGameState({ connection: 'lost' });
         return;
       }
       if (data) applyWorldMap(data as PolledMap);
@@ -3620,10 +3624,8 @@ async function startApp(username: string, role: string) {
     for (let i = placeable.length - 1; i >= 0; i -= 1) {
       if (!keep.has(placeable[i].id)) placeable.splice(i, 1);
     }
-    // The panel may be showing one of the places that just went; it carries no
-    // location of its own to compare, and a view switch is a fine moment to
-    // close it either way.
-    panel.hide();
+    // A view switch closes information that may describe a removed place.
+    setGameState({ info: null });
     engine.setPickables([...residency.values()].map(({ tile }) => tile.group));
     return true;
   }
@@ -3904,7 +3906,7 @@ async function startApp(username: string, role: string) {
   // state of the rings and the menu; the functions live with the place
   // reconcile below.
   /** The last answer of `GET /play/places` and the room it was given for. */
-  let placeOffers: api.PlaceOffer[] = [];
+  let placeOffers: PlaceOffer[] = [];
   let placeOffersRoom = '';
   /** What the inventory depends on, as one string; a poll whose signature
    *  matches does not ask the server again. */
@@ -5027,30 +5029,38 @@ async function startApp(username: string, role: string) {
   function openPlaceMenuFor(placeId: string, x: number, y: number): void {
     const offer = placeOffers.find((p) => p.id === placeId);
     if (!offer || !offer.poses.length) return;
-    openPlaceMenu(x, y, offer, (pose) => {
-      void api.postActivity({ place_id: placeId, pose })
-        .then(() => {
-          // The server has seated the avatar: from this moment no position
-          // report may go out (a report is how a seat is RELEASED) and
-          // whatever the figure was walking towards is void. The figure is
-          // put on the slot by `reconcileAvatarPlace` — from a poll asked
-          // AFTER this answer (the stamp below), and one is asked right away.
-          avatarSeated = true;
-          seatedKey = '';
-          ownSeatChangeAt = performance.now();
-          cancelRoute();
-          void pollCore().refresh('c3d-worldmap');
-        })
-        .catch((e) => {
-          if (api.isAuthError(e)) return;
-          if (e instanceof api.ApiError && e.status === 409) {
-            uiActions.toast?.('Place is taken', true);
-          } else {
-            uiActions.toast?.(e instanceof Error ? e.message : String(e));
-          }
-        });
-    });
+    setGameState({ placeMenu: { x, y, offer } });
   }
+  gameActions.pickPlacePose = (pose) => {
+    const menu = getGameState().placeMenu;
+    setGameState({ placeMenu: null });
+    // Return keyboard control from the iframe popover to the scene window.
+    window.focus();
+    if (!menu || pose === null) return;
+    const placeId = menu.offer.id;
+    if (!menu.offer.poses.some(p => p.key === pose)) return;
+    void api.postActivity({ place_id: placeId, pose })
+      .then(() => {
+        // The server has seated the avatar: from this moment no position
+        // report may go out (a report is how a seat is RELEASED) and
+        // whatever the figure was walking towards is void. The figure is
+        // put on the slot by `reconcileAvatarPlace` — from a poll asked
+        // AFTER this answer (the stamp below), and one is asked right away.
+        avatarSeated = true;
+        seatedKey = '';
+        ownSeatChangeAt = performance.now();
+        cancelRoute();
+        void pollCore().refresh('c3d-worldmap');
+      })
+      .catch((e) => {
+        if (api.isAuthError(e)) return;
+        if (e instanceof api.ApiError && e.status === 409) {
+          uiActions.toast?.('Place is taken', true);
+        } else {
+          uiActions.toast?.(e instanceof Error ? e.message : String(e));
+        }
+      });
+  };
 
   // --- Changing rooms on foot (E3-T6) ---------------------------------------
   // Inside an open interior the avatar's room is no longer a click on a room

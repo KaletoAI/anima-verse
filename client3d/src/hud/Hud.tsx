@@ -38,6 +38,8 @@ import {
 import { CharacterPlaque } from './CharacterPlaque';
 import { ChatPortraits } from './ChatPortraits';
 import { GameMenu } from './GameMenu';
+import { InfoPanel } from './InfoPanel';
+import { PlaceMenu } from './PlaceMenu';
 import { Minimap } from './Minimap';
 import { PerfOverlay } from './PerfOverlay';
 import { ttsSpeak, ttsStatus } from '../api';
@@ -248,7 +250,8 @@ export function Hud({ avatar, username, role }: {
    *  through overlayOpen, never through a full-screen hit rectangle. */
   useEffect(() => {
     const selector = '.hud-rail, .hud-dock, .hud-panel, .hud-mode, .hud-party, '
-      + '.hud-talk, .hud-elevator, .hud-plaque, .hud-minimap, .ga-toast';
+      + '.hud-talk, .hud-elevator, .hud-plaque, .hud-minimap, .ga-toast, '
+      + '.hud-top, .hud-hints, .info-panel, .open-view-badge';
     let frame = 0;
     const observed = new Set<Element>();
     const measure = () => {
@@ -1013,6 +1016,25 @@ export function Hud({ avatar, username, role }: {
 
   return (
     <>
+      <div className="hud-top">
+        <div className="hud-title">⚜ Anima Verse — {t('World map')}</div>
+        <div className="hud-right">
+          <span className={`hud-status ${game.connection === 'ok' ? 'ok' : 'err'}`}
+            aria-label={t('Connection')} title={game.connection === 'ok' ? t('Connected') : t('Backend unreachable')} />
+          <span className="hud-clock" title={t('Game time')}>{game.clock ? `🕰 ${game.clock}` : ''}</span>
+          <span className="hud-user">{avatar ? `${username} · ${t('Avatar')}: ${avatar}` : username}</span>
+          <button className="hud-logout" onClick={() => gameActions.backToTitle?.()}>{t('Log out')}</button>
+        </div>
+      </div>
+      <div className="hud-hints">{game.mode === 'embodied'
+        ? t('🖱 Drag: turn/tilt the view · Click on the ground: walk there · Wheel: zoom · WASD: move · Q/E: 45° turn · Esc: hand back control')
+        : t('🖱 Drag: pan · Middle or Shift+drag: turn/tilt · Wheel: zoom (closest = figures) · Q/E: 45° turn · Click: open place')}</div>
+      {game.info && <InfoPanel info={game.info} />}
+      {game.openView?.trim() && game.mode !== 'embodied' && <div className="open-view-badge">
+        <span className="ovb-name">{game.openView}</span>
+        <button className="ovb-close" title={t('Close view')} onClick={() => gameActions.closeOpenView?.()}>✕</button>
+      </div>}
+      {game.placeMenu && <PlaceMenu menu={game.placeMenu} />}
       {/* Performance readout (stage 5): shown while the menu switch is on,
           top-left and read-only — see PerfOverlay.tsx. */}
       {perfOn && <PerfOverlay />}
@@ -1024,7 +1046,7 @@ export function Hud({ avatar, username, role }: {
       {game.mode === 'embodied' && minimapOn && <Minimap />}
 
       {/* Mode indicator (E3-T2): the ONLY sign of the embodied mode in the HUD
-          chrome — one chip below the vanilla top bar that also leaves again.
+          chrome — one chip below the top bar that also leaves again.
           Layout and the pointer exception live in hud.css with every other
           surface (E3-T5 fix: they used to be inline styles under a class the
           stylesheet never defined, which left the pointer rule in hud.css

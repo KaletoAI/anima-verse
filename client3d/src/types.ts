@@ -827,3 +827,17 @@ export interface MotionPayload {
     freetext_clothing_gain: number;
   }>;
 }
+
+/** One place of the avatar's room as `GET /play/places` offers it: how many
+ *  slots are free and WHICH (`free_slots` index the scene payload's
+ *  `slots[]`), and the solo poses of its group a click may pick — the
+ *  group's default first. `label` of a pose is its key today. */
+export interface PlaceOffer {
+  id: string;
+  label: string;
+  group: string;
+  capacity: number;
+  free: number;
+  free_slots: number[];
+  poses: { key: string; label: string }[];
+}
