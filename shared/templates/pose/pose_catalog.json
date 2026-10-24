@@ -388,7 +388,6 @@
         "redend",
         "sprechen",
         "unterhalten",
-        "telefonieren",
         "chatting",
         "speaking",
         "kleine gespräche",
@@ -774,16 +773,6 @@
       "animation": "idle",
       "group": "stand"
     },
-    "shaking hands": {
-      "prompt": "two people shaking hands, firm handshake, standing face to face, friendly eye contact",
-      "label_de": "Händeschütteln",
-      "synonyms": [],
-      "animation": "handshake",
-      "solo": false,
-      "group": "stand",
-      "places": 2,
-      "yaw_offset": 0
-    },
     "dancing together": {
       "prompt": "two people dancing salsa together as a couple, close hold, hips moving, facing each other",
       "label_de": "Tanzen",
@@ -846,7 +835,8 @@
         "lehnt sich an",
         "an der wand lehnen",
         "an der theke lehnen",
-        "am türrahmen lehnen / leaning against wall",
+        "am türrahmen lehnen",
+        "leaning against wall",
         "leaning on counter",
         "leaning against doorframe"
       ],
@@ -860,7 +850,8 @@
         "zurückgelehnt sitzen",
         "lümmeln",
         "fläzen",
-        "sich zurücklehnen / leaning back on couch",
+        "sich zurücklehnen",
+        "leaning back on couch",
         "settling back slouching on sofa"
       ],
       "animation": "sit",
@@ -873,7 +864,7 @@
         "am handy",
         "aufs handy schauen",
         "am handy scrollen",
-        "telefonieren im stehen / holding phone",
+        "holding phone",
         "reading phone",
         "scrolling phone",
         "texting"
@@ -886,7 +877,8 @@
       "prompt": "sitting upright at a table, forearms resting on the tabletop, hands loosely folded in front",
       "synonyms": [
         "am schreibtisch sitzen",
-        "am tresen sitzen / sitting at desk",
+        "am tresen sitzen",
+        "sitting at desk",
         "sitting at table",
         "sitting at the counter",
         "am tisch sitzen"
@@ -990,6 +982,86 @@
       "solo": false,
       "places": 2,
       "yaw_offset": 0
+    },
+    "phone call": {
+      "prompt": "standing and talking on the phone, holding a phone to one ear, the other arm relaxed, attentive expression",
+      "label_de": "Telefonieren",
+      "synonyms": [
+        "telefonieren",
+        "telefonieren im stehen",
+        "am telefon",
+        "telefoniert",
+        "ein telefonat führen",
+        "mit jemandem telefonieren",
+        "handy am ohr",
+        "anrufen",
+        "jemanden anrufen",
+        "talking on the phone",
+        "phone call",
+        "on the phone"
+      ],
+      "animation": "phone-call",
+      "group": "stand",
+      "solo": true
+    },
+    "digging": {
+      "prompt": "standing and digging with a shovel, pushing the blade into the ground and lifting the soil",
+      "label_de": "Graben",
+      "synonyms": [
+        "umgraben",
+        "schaufeln",
+        "graben",
+        "ein loch graben",
+        "den garten umgraben",
+        "digging",
+        "shoveling"
+      ],
+      "animation": "digging",
+      "group": "stand",
+      "solo": true
+    },
+    "cleaning windows": {
+      "prompt": "standing at a window and wiping the glass with a cloth in circular motions at head height",
+      "label_de": "Fenster putzen",
+      "synonyms": [
+        "fenster putzen",
+        "die fenster putzen",
+        "scheiben putzen",
+        "fensterputzen",
+        "cleaning windows",
+        "wiping windows"
+      ],
+      "animation": "cleaning-window",
+      "group": "stand",
+      "solo": true
+    },
+    "sleeping on back": {
+      "prompt": "lying on the back asleep, head on a pillow, eyes closed, one knee slightly bent, arms relaxed",
+      "label_de": "Auf dem Rücken schlafen",
+      "synonyms": [
+        "auf dem rücken schlafen",
+        "schläft auf dem rücken",
+        "auf dem rücken liegend schlafen",
+        "sleeping on back"
+      ],
+      "animation": "sleeping-back",
+      "group": "lie",
+      "solo": true
+    },
+    "picking up": {
+      "prompt": "crouching down to pick something up from the floor, then standing up holding it out",
+      "label_de": "Etwas aufheben",
+      "synonyms": [
+        "etwas aufheben",
+        "hebt etwas auf",
+        "vom boden aufheben",
+        "aufheben",
+        "picking something up",
+        "picking up"
+      ],
+      "animation": "picking-up",
+      "group": "stand",
+      "solo": true
     }
   }
 }
