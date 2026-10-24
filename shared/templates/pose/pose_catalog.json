@@ -209,7 +209,7 @@
       "group": "stand"
     },
     "working": {
-      "prompt": "sitting at desk, hands on keyboard, slightly hunched forward, focused posture",
+      "prompt": "sitting at a desk working on a computer, hands on the keyboard, eyes on the screen, focused",
       "synonyms": [
         "arbeiten",
         "arbeitend",
@@ -220,10 +220,14 @@
         "am schreibtisch arbeiten",
         "am computer arbeiten",
         "büroarbeit",
-        "akten bearbeiten"
+        "akten bearbeiten",
+        "tippen",
+        "typing",
+        "working on a laptop"
       ],
-      "animation": "sit",
-      "group": "seat"
+      "animation": "typing",
+      "group": "seat",
+      "solo": true
     },
     "exercising": {
       "prompt": "doing bodyweight squats, arms stretched forward, athletic clothes, focused",
